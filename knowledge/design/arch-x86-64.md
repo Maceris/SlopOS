@@ -12,16 +12,18 @@ for what any later architecture note needs to cover.
   at runtime with `CPUID`; older CPUs are rejected at boot with a clear message.
 - **Required features:** NX (for W^X), SYSCALL/SYSRET, APIC, invariant TSC (or fall
   back to HPET/LAPIC timer calibration).
-- **XCR0:** enable only x87/SSE/AVX state by default to keep per-thread save areas small
-  (see `threads.md`).
+- **XCR0:** enable only x87/SSE/AVX state by default to keep per-thread save areas small;
+  AVX-512/AMX are a per-process opt-in (`../decisions/0023`).
 - **Use if present:** PCID (cheaper address-space switches), SMEP/SMAP (kernel can't
-  execute or casually read user memory), FSGSBASE, x2APIC, RDRAND, 5-level paging (later),
+  execute or casually read user memory), FSGSBASE, x2APIC, RDRAND, AES-NI + PCLMULQDQ + VAES (reported in
+  `CpuFeatures`, `../decisions/0019`), 5-level paging (later),
   IOMMU (Intel VT-d / AMD-Vi) — required before untrusted drivers get DMA.
 
 ## Boot Path
 
 1. OVMF (UEFI) → Limine.
-2. Limine loads the kernel ELF into the higher half, sets up long mode, a basic page table,
+2. Limine loads the kernel ELF into the higher half at a randomized base (KASLR,
+   `../decisions/0021`), sets up long mode, a basic page table,
    and passes the memory map, framebuffer, RSDP, SMP info and modules.
 3. Kernel entry (`arch/x86_64`) converts Limine's structures into the portable `BootInfo`
    and calls the portable kernel entry point.
@@ -36,7 +38,7 @@ for what any later architecture note needs to cover.
 | Timer | LAPIC timer, TSC-deadline if available | Calibrate against HPET or PIT at boot |
 | Paging | 4-level page tables, 4 KiB / 2 MiB / 1 GiB pages | NX bit for W^X; PCID for TLB tagging |
 | Syscalls | `SYSCALL`/`SYSRET`, MSRs `STAR`/`LSTAR`/`FMASK` | `SWAPGS` to reach per-CPU data |
-| Per-CPU data | `GS` base → `PerCpu` struct | Natural home for the kernel's `context` (see Hemera feedback) |
+| Per-CPU data | `GS` base → `PerCpu` struct | Holds the CPU's prebuilt kernel `Context` (`kernel.md` §3) |
 | SMP | Limine MP feature now; INIT-SIPI-SIPI later | |
 | FPU/SIMD state | `XSAVE`/`XRSTOR`, lazy or eager | Kernel itself should avoid SIMD (see below) |
 | Platform discovery | ACPI: RSDP → XSDT → MADT, MCFG, HPET | Parsed in user space (L3), except the bits the kernel needs to start CPUs |

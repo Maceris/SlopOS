@@ -66,7 +66,15 @@ when relevant.
   in the kernel, and typed device-class protocols above user-space drivers (`knowledge/design/layers.md`).
 - x86-64 first, kept portable; minimum CPU **x86-64-v3**; QEMU + virtio + Limine for development.
 - Position-independent code everywhere (ASLR; kernel as relocatable PIE).
-- Cheap threads: one kernel stack per CPU, small thread objects, no TLS (`knowledge/design/threads.md`).
+- Cheap threads: one kernel stack per CPU, small thread objects, no TLS, AVX-512 opt-in
+  (`knowledge/decisions/0023`).
+- Limine to boot (`0020`); KASLR on by default (`0021`); targets x86-64, then AArch64 and
+  RISC-V, 64-bit only (`0022`); AES instructions detected at boot, never required (`0019`).
+- Performance over determinism: direct shared-memory IPC by default, replay is opt-in
+  (`0024`). Raw syscalls are the stable interface; every stable surface lives in one
+  generated ABI package, unstable until a declared ABI v1 (`0025`, `knowledge/design/system-abi.md`).
+- Proposed, not yet decided: kernel scope, async shared-ring IPC with ports, user-space
+  scheduling policy (`knowledge/design/kernel.md`, `ipc.md`, `scheduling.md`).
 
 ## Writing Hemera: Things That Are Easy to Get Wrong
 

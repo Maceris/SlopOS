@@ -14,6 +14,12 @@ system as built lives in `../docs/` instead.
 | `design/layers.md` | The layered architecture (L0 boot → L6 apps) and its two hardware boundaries |
 | `design/arch-x86-64.md` | What the boot and arch layers must handle on x86-64 |
 | `design/threads.md` | Making threads cheap: memory and creation cost |
+| `design/kernel.md` | What the kernel does (and doesn't), per-CPU state, syscall interception |
+| `design/ipc.md` | Shared-ring channels, ports, handle transfer, replay |
+| `design/scheduling.md` | CPU budgets, scheduler policy in user space, budget lending |
+| `design/system-abi.md` | The Hemera-native system ABI: syscalls, process start, libraries, C interop |
+| `design/security.md` | The security design: threat model, capabilities, users, grants (overview of decisions 0008–0018) |
+| `design/services.md` | The user-space system services: what each does, what it holds, whether it's trusted |
 | `../std_proposal/` | Working copy of Hemera `std`; *the* `std` for SlopOS development |
 | `hemera-proposals/` | Language/library proposals written so they can be moved into the Hemera repo |
 | `hemera-feedback.md` | Log of where Hemera helped, hurt or was missing something. The experiment's real output |

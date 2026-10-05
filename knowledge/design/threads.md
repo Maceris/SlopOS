@@ -1,6 +1,6 @@
 # Threads
 
-Status: **proposed**
+Status: **decided** (`../decisions/0023-cheap-threads.md`); remaining questions at the end.
 
 Requirement: threads should be cheap. Creating one should take little memory and little
 time, so programs can use them freely instead of reaching for thread pools by reflex.
@@ -20,7 +20,7 @@ Using Linux as the reference point (rough, order-of-magnitude figures):
 
 ## How SlopOS Makes Each One Cheap
 
-### 1. No per-thread kernel stack — **[leaning]**
+### 1. No per-thread kernel stack — **[decided]**
 Use **one kernel stack per CPU** (seL4's model). The kernel never blocks in the middle
 of a system call; an operation either completes, or the thread's state records what it's
 waiting for and the kernel returns to the scheduler. Microkernel operations are short and
@@ -30,41 +30,42 @@ Cost: kernel code must be written in "run to completion or record a continuation
 and long kernel operations need explicit preemption points. A good stress test of
 Hemera's control flow (`defer`, tagged unions for continuation states).
 
-### 2. Small thread control block — **[leaning]**
+### 2. Small thread control block — **[decided]**
 Target **≤ 1 KiB** of kernel memory for the TCB excluding vector state: saved general
 registers, scheduling fields, IPC state, capability to its address space and its context.
 Allocated from a slab, so creation is a free-list pop.
 
-### 3. Vector state sized to what we enable — **[leaning]**
+### 3. Vector state sized to what we enable — **[decided]**
 With x86-64-v3, user space gets AVX2. The XSAVE area for x87 + SSE + AVX is roughly
 1 KiB. AVX-512 (not part of v3) would more than double it per thread. **Proposal: only
 enable the state components in `XCR0` that v3 guarantees**, at least initially, keeping
-the save area ~1 KiB. Enabling AVX-512 later could be a per-process opt-in.
+the save area ~1 KiB. AVX-512 (and later AMX) is a per-process opt-in (`0023`).
 
 Eager save/restore (not lazy switching — lazy FPU switching was the LazyFP
 vulnerability, CVE-2018-3665). Use `XSAVEOPT`/`XSAVEC` so unused components cost little.
 
-### 4. User space owns user stacks — **[leaning]**
+### 4. User space owns user stacks — **[decided]**
 The kernel doesn't allocate user stacks. Thread creation takes a stack pointer the caller
 already set up, so the runtime picks the size: a few KiB for a small worker, megabytes
 for deep recursion. The standard runtime reserves address space and commits pages on
 demand with a guard page below.
 
-### 5. No thread-local storage needed — **[leaning]**, Hemera synergy
+### 5. No thread-local storage needed — **[decided]**, Hemera synergy
 Hemera has no mutable globals, so there are no thread-local globals (no `errno`, no TLS
 image to copy). Per-thread state is the **context**, which is passed in a register on
 every call. Starting a thread = setting the instruction pointer, stack pointer, and the
 context register. **TLS setup cost disappears.**
 
-### 6. One simple creation call — **[leaning]**
+### 6. One simple creation call — **[decided]**
 ```
 thread_create :: fn(
     space: AddressSpaceCap,
     entry: rawptr,
     stack: rawptr,
     context: rawptr,
-    memory: MemoryCap,        // kernel memory for the TCB comes from the caller's budget
-) -> Result[ThreadCap, ThreadError]
+    memory: MemoryBudget,     // kernel memory for the TCB comes from the caller's budget
+    cpu: CpuBudget?,          // proposed: null = inherit the creator's binding
+) -> Result[Thread, ThreadError]
 ```
 No `clone` flag matrix, no signal masks (no signals). The TCB memory is charged to
 the caller's memory capability (seL4 retype / Genode model), so creation is both cheap
@@ -87,8 +88,7 @@ workloads need only one kernel thread per core.
 These are goals to measure against once something runs, not claims.
 
 ## Open Questions
-- Single kernel stack per CPU: are any kernel operations (e.g. large capability revocation)
-  too long to be atomic? How are they split?
-- Should AVX-512 / AMX state be per-process opt-in, or never?
-- Scheduler: what's the simplest policy that's fair enough? (Priority round-robin first.)
+- Long kernel operations (destroying a large subtree, large unmaps): proposed split in
+  `kernel.md` §2, "Long operations".
+- Scheduler policy: proposed in `scheduling.md`.
 - Does the kernel need to know a thread's stack bounds at all (for diagnostics), or only user space?

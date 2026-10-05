@@ -63,10 +63,10 @@ initial modules (the first user-space programs), and the kernel's own load addre
 
 - The kernel never parses firmware-specific structures itself; it consumes `BootInfo`.
   Different firmware (UEFI, BIOS, U-Boot) means a different loader, not a different kernel.
-- **First step:** use the [Limine](https://github.com/limine-bootloader/limine) boot
+- **First step** (`../decisions/0020`): use the [Limine](https://github.com/limine-bootloader/limine) boot
   protocol. It provides long mode, a higher-half mapping, the memory map, framebuffer,
   SMP startup and modules, so we can get to Hemera code without writing a loader.
-- **Later, as a language test:** our own UEFI loader in Hemera. The compiler already maps
+- **Later, optional, as a language test:** our own UEFI loader in Hemera. The compiler already maps
   an `UEFI` OS type and COFF output in its LLVM backend, so this is a realistic second
   target that exercises the compiler without the kernel's extra demands.
 
@@ -114,9 +114,10 @@ Portable Hemera, written only against L1. Responsibilities, and nothing else:
 
 - **Address spaces and memory objects.** Kernel tracks physical memory ownership; user
   space decides what to map where (via capabilities to memory objects).
-- **Threads and scheduling.** Minimal policy (priority round-robin to start).
-- **IPC.** Synchronous call/reply for small messages and asynchronous channels for events
-  (open question which is primitive); shared memory for bulk data.
+- **Threads and scheduling.** Dispatch and budget enforcement only; policy is set from user
+  space (`scheduling.md`, proposed).
+- **IPC.** Asynchronous channels over shared-memory rings, with ports as the single wait
+  mechanism; blocking and RPC are library code on top (`ipc.md`, proposed).
 - **Capabilities.** Per-process handle table; every kernel object is reached via a handle.
 - **Interrupt routing.** An IRQ becomes a message to whichever driver holds the capability
   for it. The kernel never runs driver code.

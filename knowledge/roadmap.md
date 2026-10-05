@@ -67,7 +67,7 @@ Stresses: atomics and fences, the per-CPU `context.user_data` approach, endian-s
 
 - Thread objects (≤ 1 KiB target), XSAVE state, context switch.
 - One kernel stack per CPU ("run to completion or record a continuation").
-- Per-CPU run queues, priority round-robin, idle and preemption.
+- Per-CPU run queues, CPU budgets (`design/scheduling.md`), idle and preemption.
 
 Spec: `design/threads.md`.
 Stresses: tagged unions as continuation state, `defer`, calling convention vs. context
@@ -78,7 +78,8 @@ switching, how Hemera's stack-copying fibers coexist with kernel threads.
 - Per-process handle tables, rights, revocation.
 - Kernel objects: address space, thread, memory object, channel/endpoint, IRQ, I/O port
   range, MMIO range.
-- IPC: synchronous call/reply and shared-memory rings.
+- IPC: shared-ring channels, ports, handle transfer (`design/ipc.md`); syscall
+  interception (`design/kernel.md` §4).
 - System call ABI; typed message stubs generated at compile time from Hemera types.
 
 Stresses: `distinct` handle types, compile-time code generation from `TypeInfo`/`FunctionInfo`,
@@ -121,7 +122,8 @@ Stresses: volatile MMIO, fences (`hemera-proposals/atomics.md` D), protocol unio
 - Networking: virtio-net + a TCP/IP stack.
 - Display: virtio-gpu (2D), compositor, trusted input path.
 - A Hemera UEFI bootloader (replacing Limine).
-- A second architecture (AArch64), proving the layering.
+- A second architecture (AArch64), proving the layering. Proposed to start right after M3
+  instead (`decisions/0022`).
 
 ---
 

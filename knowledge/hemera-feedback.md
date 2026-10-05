@@ -43,7 +43,12 @@ functions and `x86_intrcc`, so a `#naked` or `#calling_convention(...)` directiv
 | Racy plain memory accesses | UB, defined as relaxed, or a `shared[T]` type? | `hemera-proposals/atomics.md` §3 |
 | Typed `ptr[T]` atomics / generic atomics | Minor: `rawptr` + casts works. Collapsing the many per-type names into generic `atomic_add[T]` would test constrained generics | `hemera-proposals/atomics.md` §4 |
 | Un-suffixed atomic ordering | Assumed sequentially consistent; worth stating in the intrinsics docs | — |
-| Context in a register | Could a target say "context lives at `gs:[0]`" in the kernel instead of passing it on every call? | §2 below |
+| Clock/time follow-ups | `Context.clock`/`random` adopted; still open: threads inherit the parent's `random` pointer; `MonotonicTime` unit unstated; `Instant.seconds` is unsigned (no pre-1970 times) | `hemera-proposals/context-clock-random.md`, "After adoption" |
+| Context extensions | `user_data: rawptr` is one slot shared by every user-space library; proposal: a typed, scoped `pNext`-style chain | `hemera-proposals/context-extensions.md` |
+| Callbacks from C | With no TLS, a C → Hemera callback thunk has no ambient place to find a `Context`. How does Hemera on Linux/Windows handle it? | `design/system-abi.md` §8 |
+| Fibers vs. hardware CFI | Thawing frames patches return addresses, which x86 CET shadow stacks and AArch64 pointer authentication reject. The fiber runtime may need reworking to run on consumer OSes that enable them; separate discussion (`open-questions.md`, *Hemera*) | `design/system-abi.md` §9 |
+| Stack probes | User space owns stacks (`decisions/0023`); guard pages need probes in frames larger than a page. Should the Hemera convention require them? | `design/system-abi.md` §3 |
+| Frozen ABI version | SlopOS needs a named, frozen calling-convention version for separately compiled libraries | `design/system-abi.md` §7 |
 | Fibers in freestanding builds | Stack-copying fibers can't run in the kernel; keep fiber machinery out of freestanding builds (ties to `std` tiers) | §2 below |
 | Target enums | `OperatingSystem` still lacks `UEFI` (for a Hemera bootloader) and eventually `SlopOS`; `Architecture` lacks `riscv64`; no raw/flat binary output type | — |
 | Compile-time side effects and trust | `docs/compilation.md`: compiling untrusted code is unsafe. Process spawning at compile time makes it worse; gate it explicitly | `hemera-proposals/build-programs.md` §5 |
@@ -61,8 +66,11 @@ Context for the open items, and choices SlopOS relies on.
   }
   ```
   The IDT and GDT still live at fixed addresses the CPU knows, which is "global" to the
-  hardware even if no Hemera code treats it so. Friction to watch: every subsystem shares one
-  `rawptr` extension point.
+  hardware even if no Hemera code treats it so. This is sound because a kernel entry never
+  leaves its CPU (`decisions/0023`). Each `PerCpu` holds a prebuilt `Context`, so entry stubs
+  pass a pointer to it and the "context at `gs:[0]`" idea isn't needed (`design/kernel.md` §3).
+  The kernel is `user_data`'s only user. The shared-`rawptr` friction shows up in user space:
+  `hemera-proposals/context-extensions.md`.
 - **Fibers.** `std/fiber` copies stack frames out and back in, relying on the frame layout in
   `calling_convention.md`. With no signals in SlopOS, user stacks are never interrupted
   asynchronously, so this is safer than on Unix. Paired with async completion queues it could
@@ -77,6 +85,7 @@ Context for the open items, and choices SlopOS relies on.
 
 Changes made to Hemera in response to SlopOS (newest first):
 
+- 2026-10-03 — `Context.clock: ptr[Clock]` and `Context.random: ptr[Random]`; `Instant` (wall clock), `MonotonicTime`, `Duration`, `ClockError` in `base/runtime` (`hemera-proposals/context-clock-random.md`).
 - 2026-10-01 — Declaration directives after the name (`main #export :: fn() {}`); `#export` documented.
 - 2026-10-01 — `--package=<name>:<path>` to remap `base`/`std`/`user`/`vendor` (e.g. to `std_proposal`); path parsing bugs fixed.
 - 2026-10-01 — `rawptr` atomics; atomic load/store for `int`/`uint`/`uintptr`; `compiler_fence_acquire_release`.

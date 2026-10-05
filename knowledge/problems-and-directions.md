@@ -2,10 +2,10 @@
 
 A brainstorm, not a spec. Each section names what goes wrong today, why it went wrong
 (usually: a decision that made sense in 1970 or 1995 and can no longer be undone), and
-clean-slate directions SlopOS could take. Nothing here is decided — decisions go in
-`decisions/`, unresolved questions in `open-questions.md`.
+clean-slate directions SlopOS could take. Items marked **[decided]** link to their record;
+decisions go in `decisions/`, unresolved questions in `open-questions.md`.
 
-Status markers: **[leaning]** = seems right, **[explore]** = worth prototyping, **[unsure]** = real tension.
+Status markers: **[decided]** = recorded in `decisions/`, **[leaning]** = seems right, **[explore]** = worth prototyping, **[unsure]** = real tension.
 
 ---
 
@@ -51,10 +51,15 @@ path-based access checks (TOCTOU races, symlink attacks).
 - **[leaning]** *The powerbox pattern.* When a program wants "a file", the trusted
   system file picker hands it a capability to exactly the file the user chose. The user's
   click *is* the permission grant, so there's no permission dialog to fatigue them.
-- **[explore]** *Principal = (user, program)* rather than just user.
-- **[explore]** *Revocation.* Capabilities need to be revocable (wrap in a forwarder the
-  granter can cut). Cost: an indirection per call.
-- **[unsure]** How does a shell work? Typing `grep foo ~/notes/*.md` implicitly grants
+- **[decided]** *No kernel principal.* Users are sessions in the ownership tree, with a
+  limited administrator and per-user encryption (`decisions/0016`); servers authorize by
+  connection only (`decisions/0014`).
+- **[decided]** *Revocation.* Destroying an object revokes every handle to it, transitively;
+  to revoke one recipient, destroy an owned child object or close its connection. No
+  per-call cost (`decisions/0008`, `decisions/0010`).
+- **[decided]** Command-line arguments are grants, globs become a `FileSet`, and programs
+  can ask the powerbox for more at runtime, on the console or in a GUI (`decisions/0018`).
+  Still **[unsure]**: how does a shell work in detail? Typing `grep foo ~/notes/*.md` implicitly grants
   grep read access to those files — that's actually a nice model (the shell is the
   powerbox), but scripts and globbing need thought.
 
@@ -81,8 +86,9 @@ majority of kernel bugs.
   Hemera, but Hemera has `rawptr`, `bit_cast` and compile-time execution — isolation
   would only be as sound as a verifier we don't have. Probably: MMU isolation first,
   keep this as a later optimization for trusted-by-construction code.
-- **[unsure]** How small is "micro"? seL4-minimal (no scheduler policy in kernel?) vs
-  QNX-pragmatic.
+- **[leaning]** How small is "micro": a responsibility list modelled on existing
+  microkernels and their missteps, with scheduling policy in user space
+  (`design/kernel.md`, `design/scheduling.md`).
 
 ---
 
@@ -158,9 +164,8 @@ installed into a *single shared global location*. Both are lies about compatibil
   `libfoo#abc123` means every app pins the vulnerable hash. Need a policy mechanism:
   "hash X is replaced by hash Y for anyone whose interface check passes", recorded and
   reversible.
-- **[unsure]** The OS ABI. Hemera has its own calling convention (implicit context pointer).
-  Do we make the *system* ABI Hemera-native (simpler, the point of the project) and keep a
-  C-ABI shim for ported code?
+- **[leaning]** The OS ABI is Hemera-native, with generated thunks for C, avoiding the
+  C ABI's known flaws (`design/system-abi.md`).
 
 ---
 
@@ -238,7 +243,8 @@ queryable ("find all photos from 2023" = walk the disk).
 **Directions.**
 - **[leaning]** *Completion-based, async-first syscall interface.* A submission/completion
   queue per thread (io_uring-shaped) is *the* interface; blocking calls are a library
-  convenience on top.
+  convenience on top. Proposed shape: channel rings are the queues, ports the wait
+  mechanism (`design/ipc.md` §3).
 - **[leaning]** *No signals.* Everything (child exit, timer, "please terminate",
   hardware events) is a message on a channel the process chose to listen on.
 - **[leaning]** *Spawn, not fork.* Create an empty process, hand it capabilities and a
@@ -319,6 +325,10 @@ bolted on. Reproducing a bug often means guessing at the state.
   process through capabilities and messages, a process's execution can be recorded and
   replayed deterministically. Hemera's no-mutable-globals rule makes this unusually
   plausible. Ambitious, but a genuinely differentiating feature.
+  Direction set in `decisions/0009`: all nondeterminism arrives as syscall results, and a
+  debugger-style syscall interception facility records and replays them.
+  Replay is opt-in: performance wins over determinism, so IPC is direct shared memory by
+  default and goes through syscalls only for recorded processes (`decisions/0024`).
 
 ---
 
