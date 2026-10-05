@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-10-04
+See also: `0027` (no ABI is frozen until the OS design is thorough and development is under way)
 
 ## Context
 A system ABI can be stable at the raw-syscall level (Linux) or only at a system library that

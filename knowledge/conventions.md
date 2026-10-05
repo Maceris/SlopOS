@@ -40,7 +40,7 @@ the API we expect, marked `//HEMERA(guess)`, and list the need in
 - Every such struct gets a compile-time layout check next to its definition:
   ```
   GdtEntry :: struct #packed { /* ... */ }
-  #run assert(size_of(GdtEntry) == 8)        //SPEC: Intel SDM Vol. 3A §3.4.5
+  #assert size_of(GdtEntry) == 8             //SPEC: Intel SDM Vol. 3A §3.4.5
   ```
   This stresses compile-time execution and catches layout mistakes the day the compiler works.
 - Bit-packed fields: integers + generated/handwritten accessors on a `distinct` type for now

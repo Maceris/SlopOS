@@ -58,7 +58,9 @@ and process control, and granting authority. Services are listed in `design/serv
 
 Answered: AES (`decisions/0019`), bootloader (`0020`), KASLR (`0021`), target architectures
 (`0022`: x86-64, AArch64, RISC-V, 64-bit only), threads (`0023`), replay vs. direct IPC
-(`0024`), stable raw syscalls and the ABI package (`0025`). The rest have recommendations in
+(`0024`), stable raw syscalls and the ABI package (`0025`), the carrier register and
+stack-limit checks at thread start (`0026`), and when ABIs freeze (`0027`: not until the OS
+design is thorough and development is under way). The rest have recommendations in
 `design/kernel.md`, `design/ipc.md`, `design/scheduling.md` and `design/system-abi.md`. Each
 needs confirming before it becomes a decision.
 
@@ -78,22 +80,55 @@ needs confirming before it becomes a decision.
   loans and priced requests as options. Confirm the default.
 - **Per-CPU state** (`design/kernel.md` §3): `context.user_data` → `PerCpu` with a prebuilt
   `Context`, and global state in one boot-allocated `Kernel`. Confirm. User-space friction:
-  `hemera-proposals/context-extensions.md`.
+  `hemera-proposals/context-extensions.md`. Since 2026-10-04 Hemera says *where code runs*
+  doesn't belong in the context but in the carrier block; the kernel's case holds because an
+  entry never leaves its CPU. Alternative: find `PerCpu` as `kernel.cpus[carrier.index]`.
+- **The carrier register in the kernel** (`design/kernel.md` §3, `0026`). Every Hemera
+  prologue reads `[r14]`, so kernel entry must load a per-CPU `CarrierBlock` (save the user's
+  `r14`, never trust it, restore it on exit). Open: does `PerCpu` embed the `CarrierBlock`;
+  what the stack-limit check does in the kernel (there's no `morestack`: trap, or call the
+  assertion handler); and how IST stacks (NMI, #DF, #MC) and nested interrupts swap
+  `stack_limit`, since the check compares against the normal kernel stack's limit.
+- **Kernel frame sizes.** Stack arrays can now be passed as views, so more code will put
+  buffers on the stack. The kernel has one fixed stack per CPU: a house-rule check (`0007`)
+  for a maximum kernel frame size?
+- **A per-thread pointer for foreign callbacks** (`0026` item 3). Hemera reloads the carrier
+  pointer from OS thread-local storage when foreign code calls back into Hemera. Add one
+  kernel-saved per-thread register value (FS base / `TPIDR_EL0` / `tp`) only for that, or
+  declare foreign callbacks unsupported until there's ported C code (no external C is linked
+  into SlopOS today)?
+- **Hardware control-flow integrity for SlopOS itself.** Hemera's fibers now work under CET
+  shadow stacks, IBT, AArch64 GCS, PAC and BTI. Does SlopOS enable them, for user space and
+  for the kernel? Shadow stacks are per thread and must be created by the kernel (special
+  pages), which conflicts with "user space owns stacks" and the per-thread memory target
+  (`0023`); CET isn't part of x86-64-v3 (`0003`), so it would need runtime detection like
+  AES (`0019`); context switches would save the CET state. The threat model (`0013`) doesn't
+  cover exploit mitigations yet. Likely its own decision.
+- **Unwinding fibers from outside the process.** Debuggers, profilers and crash reporters
+  using `0017`'s `inspect`/`read_memory` must understand Hemera's resume loop
+  (`.loop_return`, `FiberResumeState`) and stack segments. That layout is private to the
+  runtime, so these tools pin the runtime version they understand?
 - **System ABI conventions** (`design/system-abi.md` §§2–8): Hemera-native calling
   convention, register convention for syscalls, startup block contents, C thunks. Confirm.
+- **`#escaping` in syscall declarations.** Pointers the kernel keeps after a call returns
+  (`thread_create`'s `entry`, `stack` and `start`) should be `#escaping` parameters in the ABI
+  package, so `std` can't hand the kernel a pointer into its stack. Pointers the kernel only
+  uses during the call (`port_wait`'s `out`) stay non-escaping. Write the rule down for the
+  stub generator, and check it with a house rule?
 - **Second architecture timing** (`decisions/0022`): start AArch64 right after M3, as
   proposed, or later?
 
 ## Hemera
 
-- **Fiber runtime vs. hardware control-flow integrity.** Thawing frozen frames patches return
-  addresses (`calling_convention.md`), which x86 CET shadow stacks and AArch64 pointer
-  authentication reject. Consumer OSes increasingly enable these, so the fiber runtime may
-  need reworking to run on them at all. Needs a separate discussion of the fiber design
-  (`design/system-abi.md` §9, `hemera-feedback.md`).
-
 - Bitfields: integers + masks (current plan) vs. explicit-position bitfields (`hemera-proposals/bitfields.md`).
 - Racy plain memory accesses: UB, defined as relaxed, or a `shared[T]` type? (`hemera-proposals/atomics.md` §3)
+- Do runtime panics (bounds checks, divide by zero) go through `context.assertion_handler`,
+  like `assert`? The kernel's panic path depends on it (`hemera-feedback.md` item 3).
+- Context extensions (`hemera-proposals/context-extensions.md`): threads and fibers created
+  inside a scope copy the context, including the chain pointer, and can outlive the scope, so
+  extension nodes can't be freed when it ends. Immortal, arena-owned, or reference-counted?
+- Carrier register on RISC-V: Hemera defines `r14` (x86-64) and `x28` (AArch64) only, and
+  SlopOS targets riscv64 (`0022`).
 
 ## Layering (`design/layers.md`)
 
@@ -119,6 +154,17 @@ needs confirming before it becomes a decision.
 - Canonical wire format: raw Hemera layout with relative pointers, or a separate encoding?
 - Schema evolution rules when producer and consumer disagree on a type's version.
 - How do generic tools (pagers, viewers, queries) display values they have no compiled type for?
+- Fiber stacks vs. message sizes. A fiber's first stack segment is 1 KiB, and further
+  segments are sized to the frame that needs them. Copying a large message (up to 64 KiB,
+  `design/ipc.md` §2) into a stack buffer on a fiber forces a large segment allocation.
+  Hemera's memory budget assumes about 1 KiB of frames at a typical wait; measure `std`'s
+  receive and decode path against that, and keep large receive buffers per connection on the
+  heap?
+- Per-carrier state in `std` (allocator caches, a `Random` per carrier, the scheduler's
+  port). Hemera's pattern is a no-yield region indexed by `current_thread_index()`. Who
+  assigns that index on SlopOS (`std`'s thread entry stub), and is it dense enough to index
+  arrays? Is the per-thread page shared with the kernel (`design/scheduling.md` §3) separate
+  from the carrier block, or reached from it?
 
 ## Storage
 
@@ -136,8 +182,15 @@ needs confirming before it becomes a decision.
 
 ## Hemera Threads
 
+Raised with Hemera's 2026-10-04 fiber redesign. Notes in *italics* are SlopOS's view.
+
 * Should plain threads grow their stacks with segments too, instead of treating the limit as an error?
+  *SlopOS leans yes: user space owns stacks (`0023`), and segmented thread stacks would let
+  threads start as small as fibers instead of a 4 KiB page.*
 * A `park` and/or waiter API that guarantees suspends where yield does not?
+  *SlopOS's ports supply the waiter registration: `park` binds the fiber's key on the
+  scheduler's port, and when it returns false the caller waits with `port_wait` on its
+  thread's own port (`design/ipc.md` §4).*
 * Windows: the stack bounds in the thread environment block are used by structured exception handling and some APIs.
   Either update them on every switch (as Windows' own fibers do), or rely only on vectored exception handlers
   (as Go does).

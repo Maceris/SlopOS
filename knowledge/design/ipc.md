@@ -75,7 +75,10 @@ MessageHeader :: struct {
 ### Untrusted peer memory
 The peer can write its ring at any time, including while a message is being read.
 - **`std` copies each message out of the ring into private memory before decoding it**, and
-  bounds-checks `head`/`tail`/`size` against the ring size. This is one copy, the same
+  bounds-checks `head`/`tail`/`size` against the ring size. Since Hemera allows stack
+  buffers to be passed as views, small messages can be copied into a stack buffer. Large ones
+  shouldn't be on a fiber, whose stack segments are 1 KiB (`../open-questions.md`, *IPC and
+  data*). This is one copy, the same
   number a kernel-copying design makes, but done by the receiver.
 - Double-fetch bugs (reading a length twice, from memory the attacker controls) are the
   classic failure of shared-memory IPC, in Xen and virtio backends among others. All ring
@@ -198,8 +201,11 @@ PacketData :: union {
 - `call(request) -> response`, which matches responses by request ID, as idempotent
   protocols need anyway (`0017`).
 
-On a fiber, waiting yields to the scheduler. On a plain thread, waiting is `port_wait` on
-the thread's own port.
+On a fiber, waiting goes through the scheduler's `park` (Hemera `docs/multitasking.md`,
+*Waiting*), not `fiber_yield`, which is only a hint and may return at once. `park` binds the
+fiber's key on the scheduler's port and suspends it. When the fiber can't be suspended (a
+plain thread, foreign frames on the stack, a no-yield region), `park` says so and waiting is
+`port_wait` on the thread's own port.
 
 ## 5. Fast Path for Synchronous RPC
 

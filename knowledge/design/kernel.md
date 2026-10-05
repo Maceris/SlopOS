@@ -138,6 +138,31 @@ PerCpu :: struct #align(64) { // one per CPU, in a per-CPU area (randomized, 002
 - **What breaks the invariant:** kernel code that runs on behalf of one CPU on another (IPIs,
   TLB shootdown handlers). Those run as their own entry on the target CPU, with that CPU's
   context, so the rule holds.
+- **Hemera's view since 2026-10-04:** *where code is running* (which OS thread) doesn't belong
+  in the context but in the runtime's carrier block, because a fiber can move between threads.
+  The kernel's use of `user_data` for the CPU is sound only because of the invariant above.
+  If that ever weakens, the alternative is `kernel.cpus[intrinsics.carrier().index]`.
+
+### The carrier register in the kernel
+Every Hemera function's prologue compares the stack pointer against `stack_limit`, the first
+field of the carrier block pointed to by `r14` (`x28` on AArch64), so the kernel needs a
+carrier block per CPU (`../decisions/0026`). Proposed:
+- `PerCpu` embeds the CPU's `runtime.CarrierBlock` (64-byte aligned, `stack_limit` first),
+  with `stack_limit` a guard distance above the bottom of the CPU's kernel stack.
+- **Every entry from user mode** saves the user's `r14`, loads `&PerCpu.carrier` (found
+  through `GS`, like the context), and restores the user's value on the way out. The user's
+  value is never trusted, and the kernel's never leaks to user space (it would reveal a
+  kernel address, `../decisions/0021`). Entries from kernel mode keep `r14` as it is.
+- **A failed stack check in the kernel** can't call `morestack` (no allocation on interrupt
+  paths, one fixed stack per CPU). It should stop the kernel with a stack trace instead. That
+  makes kernel stack overflow deterministic, which a guard page alone doesn't. Needs a
+  freestanding option on the Hemera side (`../hemera-feedback.md` item 10).
+- **IST stacks** (NMI, #DF, #MC) and other separate exception stacks: their entry stubs must
+  save `stack_limit`, set it for the stack they switched to, and restore it on exit, the way
+  `morestack` does. Otherwise the check compares against the wrong stack's limit.
+- `assert` uses the carrier block too (it enters a no-yield region), so the kernel's assertion
+  handler works only after the carrier register is loaded. The boot CPU's very first code
+  must set it up before calling any checked function.
 
 ## 4. Syscall Interception
 
@@ -214,3 +239,6 @@ sees. Processes using direct access aren't strictly replayable.
   exception port for now?
 - Does the kernel parse the ACPI MADT itself to start CPUs, or is Limine's SMP information
   enough? (Already open under *Layering*.)
+- The carrier register in the kernel (§3): embedding `CarrierBlock` in `PerCpu`, the
+  behaviour of a failed stack check, and IST stacks. Also open in `../open-questions.md`.
+- A house rule for maximum kernel frame size, now that stack arrays can be passed as views.

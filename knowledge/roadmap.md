@@ -35,12 +35,16 @@ system in Hemera, compile-time reflection over packages (house-rule checks), tes
 - GDT + TSS (with interrupt stacks), IDT, exception handlers decoding faults into a
   portable `Fault` union.
 - 16550 serial output and a framebuffer text console (PSF2 font parsing, scrolling).
-- Kernel `Logger` implementation and a panic handler that prints a stack trace (using
-  `Context.stack_trace`).
+- Kernel `Logger` implementation and an assertion handler (`context.assertion_handler`) that
+  prints a stack trace (using `intrinsics.capture_stack_trace`, addresses relative to the
+  image base, `decisions/0021`).
+- The boot CPU's carrier block and carrier register, set up before any checked function runs,
+  and loaded on every kernel entry (`design/kernel.md` §3).
 
 Specs: Intel SDM Vol. 3A (ch. 3, 5, 6, 7), PSF2 font format, 16550 UART.
 Stresses: privileged-instruction intrinsics, interrupt calling convention / naked functions,
-early-boot context (no allocator yet), `Logger`, formatting without allocation, panics.
+early-boot context (no allocator yet), `Logger`, formatting without allocation, panics,
+the carrier block and prologue stack check in a freestanding build.
 
 ## M2 — Memory (L1, L2)
 
@@ -71,7 +75,8 @@ Stresses: atomics and fences, the per-CPU `context.user_data` approach, endian-s
 
 Spec: `design/threads.md`.
 Stresses: tagged unions as continuation state, `defer`, calling convention vs. context
-switching, how Hemera's stack-copying fibers coexist with kernel threads.
+switching, IST stacks and the carrier block's `stack_limit`, how `std`'s thread entry stub
+sets up the carrier register (`decisions/0026`).
 
 ## M5 — Capabilities and IPC (L2)
 

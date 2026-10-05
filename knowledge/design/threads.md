@@ -1,6 +1,7 @@
 # Threads
 
-Status: **decided** (`../decisions/0023-cheap-threads.md`); remaining questions at the end.
+Status: **decided** (`../decisions/0023-cheap-threads.md`, amended by `../decisions/0026`);
+remaining questions at the end.
 
 Requirement: threads should be cheap. Creating one should take little memory and little
 time, so programs can use them freely instead of reaching for thread pools by reflex.
@@ -47,14 +48,19 @@ vulnerability, CVE-2018-3665). Use `XSAVEOPT`/`XSAVEC` so unused components cost
 ### 4. User space owns user stacks — **[decided]**
 The kernel doesn't allocate user stacks. Thread creation takes a stack pointer the caller
 already set up, so the runtime picks the size: a few KiB for a small worker, megabytes
-for deep recursion. The standard runtime reserves address space and commits pages on
-demand with a guard page below.
+for deep recursion. Overflow is caught by Hemera's stack-limit check in every function
+prologue, against the limit in the thread's carrier block, so Hemera code needs no guard page
+and no stack probes (`0026`). The runtime can still commit pages on demand; a guard page
+matters only for foreign code running on the thread's own stack.
 
 ### 5. No thread-local storage needed — **[decided]**, Hemera synergy
 Hemera has no mutable globals, so there are no thread-local globals (no `errno`, no TLS
 image to copy). Per-thread state is the **context**, which is passed in a register on
-every call. Starting a thread = setting the instruction pointer, stack pointer, and the
-context register. **TLS setup cost disappears.**
+every call. Per-thread *execution* state (stack limit, current fiber, scheduler hooks) is
+Hemera's carrier block, kept in a reserved register (`r14` on x86-64, `x28` on AArch64).
+Starting a thread = setting the instruction pointer, stack pointer and one argument; `std`'s
+entry stub sets up the carrier block, carrier register and context before any Hemera code
+runs (`0026`). **TLS setup cost disappears.**
 
 ### 6. One simple creation call — **[decided]**
 ```
@@ -72,17 +78,19 @@ the caller's memory capability (seL4 retype / Genode model), so creation is both
 and accounted for (see `../problems-and-directions.md` §11).
 
 ### 7. Even cheaper: fibers on top — **[explore]**
-Hemera's `std/fiber` copies stack frames out on yield and back on resume, so a
-suspended fiber costs only the stack it actually used. Combined with async completion
-queues (submit I/O, yield, completion resumes the fiber), most "many concurrent tasks"
-workloads need only one kernel thread per core.
+Hemera's fibers (Hemera `docs/multitasking.md`) each have their own small segmented stack:
+one allocation of about 1.4 KiB (the fiber, its root context and a 1 KiB first segment),
+plus a 1 KiB segment for each further segment its frames reach into. Hemera's target is a
+million idle fibers in 1.5 GB. Frames never move, and yields and resumes cost about a
+function call. Combined with ports (submit I/O, `park`, the completion packet resumes the
+fiber), most "many concurrent tasks" workloads need only one kernel thread per core.
 
 ## Target Numbers (aspirational)
 
 | | Target |
 |---|---|
 | Kernel memory per thread | ≤ ~2 KiB (TCB + vector state) |
-| Minimum user stack | 4 KiB (one page), runtime's choice |
+| Minimum user stack | runtime's choice: 4 KiB (one page) for plain threads today; 1 KiB segments for fibers, and for threads too if Hemera adopts segmented thread stacks (`../open-questions.md`, *Hemera Threads*) |
 | Creation | a single syscall, no page-table changes, no memory zeroing beyond the TCB |
 
 These are goals to measure against once something runs, not claims.
@@ -91,4 +99,6 @@ These are goals to measure against once something runs, not claims.
 - Long kernel operations (destroying a large subtree, large unmaps): proposed split in
   `kernel.md` §2, "Long operations".
 - Scheduler policy: proposed in `scheduling.md`.
-- Does the kernel need to know a thread's stack bounds at all (for diagnostics), or only user space?
+- Answered: the kernel doesn't need a thread's stack bounds. The runtime keeps them in the
+  carrier block (`native_stack_limit`), and overflow is a deterministic error in user space
+  (`0026`).

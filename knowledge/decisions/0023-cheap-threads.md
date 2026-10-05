@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-10-04
+Amended by: `0026` (carrier register and stack-limit checks at thread start; items 5 and 6, and the stack-probe consequence)
 
 ## Context
 `../design/threads.md` set the requirement that threads be cheap in memory and creation

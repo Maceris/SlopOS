@@ -110,6 +110,9 @@ Glitch-free audio depends more on the kernel's worst-case latency than on the po
     and if the handle is stale or lacks the right, falls back to the thread's own budget.
     No syscall per fiber switch. An invalid handle costs the thread its loan, never the
     kernel's safety.
+  - The fiber scheduler writes the binding on its resume path, just before
+    `intrinsics.fiber_resume`, and finds its own state through the carrier block
+    (`scheduler_data`).
 
 ## 4. Lending Budgets for Calls
 
@@ -156,4 +159,7 @@ idempotence (`0017`) and protocol tags, all under *IPC and data* in `../open-que
   an OS policy.
 - Do CPU budgets need CPU affinity (pin to a set of CPUs), or is that a later hint?
 - Per-thread page for the budget binding (§3): also the place for other cheap per-thread
-  state the kernel reads (for example a fiber scheduler's "don't preempt me" hint)?
+  state the kernel reads (for example a fiber scheduler's "don't preempt me" hint)? Is it
+  separate from Hemera's carrier block (which is private to the program's `std`), or reached
+  from it? Note that Hemera's no-yield regions only stop fiber switches, not kernel
+  preemption.

@@ -52,11 +52,18 @@ with_extension :: fn[T](value: ptr[T], body: fn()) { ... }   // push_context wit
 - **Lookup is O(chain length).** Chains are short (a handful of nodes), and a hot path can
   look its extension up once and pass the pointer down. Alternatively, a tiny inline cache
   in the node.
-- **Node lifetime.** Hemera forbids pointers to stack variables, so a node can't live on the
-  stack frame that pushes it. It must come from `context.allocator` or a scoped arena:
-  one allocation per push. A `#scoped` or stack-pinned allocation, valid exactly as long as
-  the pushed context, would remove that cost, but would need language support. Fibers that
-  freeze frames to the heap complicate any stack-based answer.
+- **Node lifetime.** Since 2026-10-04 Hemera allows pointers to the stack, and fiber frames
+  never move, but `push_context` overrides must be unrestricted values (Hemera
+  `docs/memory.md`, *Contexts*), so a node on the pushing frame's stack still can't be
+  installed. It must come from `context.allocator` or an arena: one allocation per push.
+  Worse, threads and fibers created inside the scope copy the context, chain pointer included,
+  and can outlive the scope, so a node can't be freed when the scope ends. Options: nodes are
+  immortal (allocated once per extension type and reused), owned by an arena that outlives
+  every fiber the scope creates, or reference-counted.
+- **Context size now costs per fiber.** Every fiber embeds a copy of its root context in its
+  ~1.4 KiB block (Hemera `docs/multitasking.md`, *Memory Budget*), so growing `Context`
+  costs memory per idle fiber as well as an ABI change. One `extensions` pointer is cheaper
+  than any number of new fields.
 - **Is `typeid` stable across separately compiled libraries?** It must be, for a library's
   extension to be found by code compiled separately. On SlopOS, content hashes of type
   definitions would work.

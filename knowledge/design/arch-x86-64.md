@@ -38,7 +38,7 @@ for what any later architecture note needs to cover.
 | Timer | LAPIC timer, TSC-deadline if available | Calibrate against HPET or PIT at boot |
 | Paging | 4-level page tables, 4 KiB / 2 MiB / 1 GiB pages | NX bit for W^X; PCID for TLB tagging |
 | Syscalls | `SYSCALL`/`SYSRET`, MSRs `STAR`/`LSTAR`/`FMASK` | `SWAPGS` to reach per-CPU data |
-| Per-CPU data | `GS` base → `PerCpu` struct | Holds the CPU's prebuilt kernel `Context` (`kernel.md` §3) |
+| Per-CPU data | `GS` base → `PerCpu` struct | Holds the CPU's prebuilt kernel `Context` (`kernel.md` §3). `r14` (the carrier register) is loaded from it on every entry from user mode (`kernel.md` §3) |
 | SMP | Limine MP feature now; INIT-SIPI-SIPI later | |
 | FPU/SIMD state | `XSAVE`/`XRSTOR`, lazy or eager | Kernel itself should avoid SIMD (see below) |
 | Platform discovery | ACPI: RSDP → XSDT → MADT, MCFG, HPET | Parsed in user space (L3), except the bits the kernel needs to start CPUs |

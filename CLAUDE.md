@@ -67,12 +67,14 @@ when relevant.
 - x86-64 first, kept portable; minimum CPU **x86-64-v3**; QEMU + virtio + Limine for development.
 - Position-independent code everywhere (ASLR; kernel as relocatable PIE).
 - Cheap threads: one kernel stack per CPU, small thread objects, no TLS, AVX-512 opt-in
-  (`knowledge/decisions/0023`).
+  (`knowledge/decisions/0023`). Threads start in a `std` entry stub that sets up Hemera's
+  carrier register; overflow is caught by Hemera's prologue stack check, not guard pages (`0026`).
 - Limine to boot (`0020`); KASLR on by default (`0021`); targets x86-64, then AArch64 and
   RISC-V, 64-bit only (`0022`); AES instructions detected at boot, never required (`0019`).
 - Performance over determinism: direct shared-memory IPC by default, replay is opt-in
   (`0024`). Raw syscalls are the stable interface; every stable surface lives in one
   generated ABI package, unstable until a declared ABI v1 (`0025`, `knowledge/design/system-abi.md`).
+  Nothing is frozen until the OS design is thorough and development is under way (`0027`).
 - Proposed, not yet decided: kernel scope, async shared-ring IPC with ports, user-space
   scheduling policy (`knowledge/design/kernel.md`, `ipc.md`, `scheduling.md`).
 
@@ -87,18 +89,30 @@ when relevant.
   globals at runtime. A global must resolve to a constant at compile time, but computing it
   can run arbitrary code (including reading the compiler-provided compilation context, e.g.
   `OS`, `TARGET_ARCH`); anything depending on it waits until it's computed.
-- Per-call state goes through the implicit `context` (allocator, logger, ...). Programs can't
-  add fields; use `context.user_data: rawptr` (kernel: points at the per-CPU block).
+- Per-call state goes through the implicit `context` (allocator, logger, clock, random,
+  assertion handler, ...). Programs can't add fields; use `context.user_data: rawptr`
+  (kernel: points at the per-CPU block).
+- The context is **read-only**. Replace it for a scope with
+  `push_context name (field = value, ...) { }`; overrides can't point into the stack.
+- Where code is running (OS thread, carrier) is not in the context: it's the runtime's carrier
+  block, in a reserved register (`r14`/`x28`), reached by `base`/`std` with
+  `intrinsics.carrier()` (`knowledge/decisions/0026`).
 - Ignore return values with `_`: `_, ok = f()`.
 - Declaration directives go right after the name: `main #export :: fn() { }`.
-- `&x` can't be taken on stack variables.
+- Pointers into the stack (`&x`, stack arrays passed as views, `any` from locals) are allowed,
+  but the compiler checks they can't outlive the frame. A parameter whose pointer is kept
+  after the call must be marked `#escaping` (`name #escaping : string`); a struct that holds
+  stack pointers and is passed by pointer must be `#scoped`. Contexts, threads and fibers
+  can't be given stack pointers. See Hemera's `docs/memory.md`.
+- Runtime `assert(cond, message)` calls `context.assertion_handler`, which must end the
+  program; `#assert expr` checks at compile time.
 - Integer overflow wraps (two's complement) and does not panic.
 - Atomics are intrinsics in `base`: `atomic_load_*`/`atomic_store_*`, `interlocked_*`, with
   suffixes `_acquire`, `_release`, `_acquire_release`, `_no_fence` (none = sequentially
   consistent). Fences: `fence_*` and `compiler_fence_*`. Compare-exchange returns
   `(old, success)`; increment/decrement return the old value.
 - Use explicit-endian types (`u32le`) for externally defined layouts, and add a compile-time
-  size check (`#run assert(size_of(T) == N)`) next to every hardware/binary struct.
+  size check (`#assert size_of(T) == N`) next to every hardware/binary struct.
 - Follow Hemera's `docs/coding_guidelines.md`: a function does exactly one thing.
 
 When unsure about syntax or semantics, check the Hemera docs, then guess and mark it

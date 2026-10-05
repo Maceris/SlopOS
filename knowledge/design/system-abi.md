@@ -3,6 +3,10 @@
 Status: **partly decided.**
 - *Decided* (`../decisions/0025`): raw syscalls are the stable interface; every stable
   surface lives in one ABI package; stability starts at a declared ABI v1.
+- *Decided* (`../decisions/0026`): threads start in an entry stub of their own `std`, which
+  sets up the carrier register; stack overflow is caught by Hemera's prologue check.
+- *Decided* (`../decisions/0027`): nothing here is frozen until the OS design is thorough and
+  development is under way.
 - *Proposed*: the rest of this note, including the Hemera-native conventions.
 
 Answers *"Is the system ABI Hemera-native, with a C-ABI shim only for ported code?"*, and
@@ -29,8 +33,8 @@ freestanding **ABI package** (`0025`). If it's not in this table, it isn't stabl
 | **Port packets** | `Packet`, `PacketData` variants and their tags, `Signals` bits | ABI package | `ipc.md` §3 |
 | **Startup block** | Layout, relative-pointer encoding, the ABI-version field, where grants and typed arguments sit | ABI package | §6 |
 | **`CpuFeatures`** | Feature enum values | ABI package | `0019` |
-| **Process start** | Initial registers: entry, stack pointer, context register, startup-block argument | ABI package (documented with the startup block) | §6 |
-| **Calling convention version** | `hemera-abi-v1`, for separately compiled libraries | Hemera's `calling_convention.md`, pinned by version | §7 |
+| **Process start** | Initial registers: entry, stack pointer, startup-block argument; everything else zeroed (`0026`) | ABI package (documented with the startup block) | §6 |
+| **Calling convention version** | The pinned Hemera convention version, for separately compiled libraries | Hemera's `calling_convention.md`, pinned by version (not frozen, `0027`) | §7 |
 
 **Not stable:** kernel internals; the layout of anything a process reaches only through a
 syscall; `std`'s own API. `std` is versioned like any content-addressed library: programs pin
@@ -63,7 +67,7 @@ defined in the ABI package.
 |---|---|
 | User ↔ kernel (syscalls) | A register convention generated from the typed syscall table (§4) |
 | Process start | Hemera calling convention: context register, stack pointer, one startup argument (§6) |
-| Program ↔ separately compiled library | The Hemera calling convention, frozen per ABI version (§7) |
+| Program ↔ separately compiled library | The Hemera calling convention, pinned per version (§7) |
 | Process ↔ process | Not a calling convention: typed messages over channel rings (`ipc.md`) |
 | Hemera ↔ C (ported code, a future POSIX personality) | Generated thunks (§8) |
 
@@ -80,8 +84,8 @@ defined in the ABI package.
 | Varargs (`printf`, `ioctl`, `fcntl`) | C, POSIX | None. `ioctl`-style escape hatches are typed protocol requests instead |
 | Struct-passing rules so intricate that compilers disagree (SysV classification, MSVC rules) | C ABIs | One rule set, written down in Hemera's `calling_convention.md`, with tests generated from `TypeInfo` |
 | Signals interrupting arbitrary code, `EINTR` | POSIX | No signals, no `EINTR` (`../problems-and-directions.md` §9, `kernel.md` §4) |
-| No stack probes, so a large frame can jump the guard page (Stack Clash, 2017) | SysV/Linux, until `-fstack-clash-protection` | Stack probes for frames larger than a page are required by the ABI. User space owns stacks (`0023`), so guard pages only work with probes |
-| Frame pointers omitted, so profilers and crash reports can't unwind (Fedora and Ubuntu turned them back on in 2023–24) | SysV/Linux | Hemera's frame layout always has a base pointer and a frame-size word (`calling_convention.md`), so unwinding always works |
+| No stack probes, so a large frame can jump the guard page (Stack Clash, 2017) | SysV/Linux, until `-fstack-clash-protection` | Every Hemera prologue checks the stack pointer (or where its frame will end) against the carrier block's `stack_limit`, so overflow is a deterministic error and no frame can skip past the limit. No guard pages or probes needed for Hemera code (`0026`) |
+| Frame pointers omitted, so profilers and crash reports can't unwind (Fedora and Ubuntu turned them back on in 2023–24) | SysV/Linux | Every Hemera function keeps a base pointer (`calling_convention.md`), across stack segments and suspended fibers, so unwinding always works |
 | The only stable interface is a private system library, so every program depends on one shared, mutable library | macOS, Windows | Raw syscalls are stable (`0025`), so programs can embed their own content-addressed `std` |
 
 ## 4. The Syscall ABI
@@ -120,9 +124,11 @@ turns out to matter. It would then join the table in §1.
 
 ## 6. Process Start and the Startup Block
 
-A new process starts as a call to its entry function under the Hemera convention:
-- The **context register** points at a `Context` that `std`'s startup code builds before
-  calling the program's exported entry function.
+A new process starts in its own `std`'s entry stub (`0026`), which runs before any Hemera
+function:
+- The stub sets up the initial thread's **carrier block** and **carrier register**, then
+  builds the `Context` and calls the program's exported entry function with it. The carrier
+  block's layout is private to the program's `std`, so it isn't part of the startup block.
 - **One argument** points at the **startup block**: a structure made of relative pointers
   (`relptr`), written by the process manager into a memory object mapped into the new
   process. It holds:
@@ -137,31 +143,42 @@ A new process starts as a call to its entry function under the Hemera convention
 
 - Content-addressed libraries (`../problems-and-directions.md` §5) are called with the
   Hemera convention.
-- The convention is still marked work-in-progress on the Hemera side, so SlopOS **names a
-  frozen version** (`hemera-abi-v1`) and includes it in what a library's content hash and
-  interface check cover. Libraries built for different ABI versions are different hashes,
-  never silently mixed.
-- The `Context` layout is part of this ABI, since every call passes it. Adding a field to
-  `Context` is an ABI version change. That's one more reason to keep extensions out of the
+- The convention is still evolving on the Hemera side (it changed substantially on
+  2026-10-04: return values through pointers, no frame-size word, a reserved carrier register,
+  a stack check in every prologue). SlopOS **names and pins the version** it builds against
+  (`hemera-abi-v1` once there is one) and includes it in what a library's content hash and
+  interface check cover. Libraries built for different versions are different hashes, never
+  silently mixed. The pin is **not a freeze**: SlopOS follows Hemera's changes until it
+  declares ABI v1 (`0027`).
+- The `Context` layout is part of this ABI, since every call passes it. Changing its fields
+  is an ABI version change (the 2026-10-04 redesign removed `stack_trace`, `thread_index` and
+  the fiber fields, and added `assertion_handler`). Every fiber also embeds a copy, so its
+  size counts against each fiber's memory. Both are reasons to keep extensions out of the
   struct itself (`../hemera-proposals/context-extensions.md`).
 
 ## 8. Calling C, and Being Called From C
 
-Thunks are generated at compile time from `FunctionInfo`:
-- **Hemera → C:** the thunk keeps the context register in a callee-saved register across the
-  C call (or spills it), and translates the argument and return layout.
-- **C → Hemera (callbacks):** the thunk needs a `Context` to pass, and with no thread-local
-  storage there's nowhere ambient to find one. Options:
-  - Require the C API to have a user-data pointer (most callback APIs do) and pass the
-    context through it.
-  - Generate per-callback trampolines that embed a context pointer. These need writable then
-    executable memory, which conflicts with W^X unless the trampolines are allocated from a
-    pre-built pool.
-  - Recorded as Hemera feedback: how does Hemera on Linux and Windows solve this today?
+Hemera specifies these shims itself (Hemera `docs/calling_convention.md`, *Calls to Foreign
+Code*):
+- **Hemera → C:** the shim increments the carrier's `foreign_depth` and saves the current
+  context pointer in the carrier block, switches from a fiber's segment to the carrier
+  thread's own stack, calls with the platform convention, and undoes both. Yields decline
+  while foreign frames are on the stack.
+- **C → Hemera (callbacks):** the entry shim saves the foreign code's value of the carrier
+  register, reloads the carrier pointer from OS thread-local storage (creating a carrier block
+  if the thread has never run Hemera code), and uses the context the outgoing shim saved, or a
+  default one on a foreign thread.
+- **On SlopOS** the callback path needs somewhere to find the carrier pointer, and SlopOS has
+  no TLS (`0023`, `0026`). Either one kernel-saved per-thread pointer only for this, or no
+  foreign callbacks until ported C code exists (`../open-questions.md`, *Kernel*). Calls from
+  Hemera into C need nothing extra.
 
 ## 9. Open Questions
 - Where the ABI package lives: inside `std_proposal`'s SlopOS OS layer, or in `src/` next to
   `protocols/` (`0025`; decided with package structure under *Scope*).
-- Hardware control-flow integrity versus Hemera's fibers: thawing frames patches return
-  addresses, which x86 CET shadow stacks and AArch64 pointer authentication reject. Left for
-  a separate discussion of the fiber runtime (`../open-questions.md`, *Hemera*).
+- Answered: hardware control-flow integrity no longer conflicts with Hemera's fibers (Hemera's
+  2026-10-04 redesign). Whether SlopOS enables CET, GCS, PAC and BTI is open
+  (`../open-questions.md`, *Kernel*).
+- `#escaping` on syscall parameters the kernel keeps after the call (`../open-questions.md`,
+  *Kernel*).
+- A per-thread pointer for foreign callbacks (§8).

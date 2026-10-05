@@ -249,8 +249,8 @@ queryable ("find all photos from 2023" = walk the disk).
   hardware events) is a message on a channel the process chose to listen on.
 - **[leaning]** *Spawn, not fork.* Create an empty process, hand it capabilities and a
   context, start it.
-- **[explore]** Hemera's fibers (see `calling_convention.md`) + completion queues = cheap
-  structured concurrency in user space.
+- **[explore]** Hemera's fibers (see Hemera's `multitasking.md`: about 1.4 KiB per idle
+  fiber, frames never move) + completion queues = cheap structured concurrency in user space.
 
 ---
 

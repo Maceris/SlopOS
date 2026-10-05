@@ -86,9 +86,11 @@ settled by using `Instant` as the wall-clock type and adding `MonotonicTime`; an
 `std_proposal/time` now uses `Instant` instead of its old `Time { nanoseconds: i64 }`.
 
 Still open, all small:
-- **Threads share the generator.** `thread_create` copies `context` whole, so a new thread
-  gets the parent's `random` pointer and shares its mutable state. Fork a per-thread generator
-  when `thread_start` is implemented (see "Thread safety" above).
+- **Threads share the generator.** Answered on the Hemera side (2026-10-04) by a rule rather
+  than forking: threads and fibers copy the creator's context, and anything reachable from it
+  must be thread-safe or owned by the new thread or fiber (Hemera `docs/multitasking.md`,
+  *Contexts*). So `std`'s default `Random` must be thread-safe, for example by keeping
+  generator state per carrier inside a no-yield region.
 - **`MonotonicTime` has no stated unit.** Presumably nanoseconds (an `i64` of nanoseconds
   covers about 292 years). Worth a comment, and eventually a way to subtract two readings
   into a `Duration`.
