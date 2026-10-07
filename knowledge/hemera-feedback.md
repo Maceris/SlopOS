@@ -42,9 +42,9 @@ functions and `x86_intrcc`, so a `#naked` or `#calling_convention(...)` directiv
 | Builds of many outputs | Proposal: build package registering targets via a compiler API | `hemera-proposals/build-programs.md` (B1–B10) |
 | Bitfields | Undecided; plan is integers + masks, logging how much it hurts | `hemera-proposals/bitfields.md` |
 | Racy plain memory accesses | UB, defined as relaxed, or a `shared[T]` type? | `hemera-proposals/atomics.md` §3 |
-| Typed `ptr[T]` atomics / generic atomics | Minor: `rawptr` + casts works. Collapsing the many per-type names into generic `atomic_add[T]` would test constrained generics | `hemera-proposals/atomics.md` §4 |
+| Generic atomics | Minor: collapsing the many per-type names into generic `atomic_add[T]` would test constrained generics. (No `ptr[T]` atomics by design: no pointer arithmetic on `ptr[T]`, so `rawptr` is the atomic pointer type.) | `hemera-proposals/atomics.md` §1 |
 | Un-suffixed atomic ordering | Assumed sequentially consistent; worth stating in the intrinsics docs | — |
-| Clock/time follow-ups | `Context.clock`/`random` adopted; still open: `MonotonicTime` unit unstated; `Instant.seconds` is unsigned (no pre-1970 times). Threads sharing the parent's `random` is now covered by Hemera's rule that anything reachable from an inherited context must be thread-safe | `hemera-proposals/context-clock-random.md`, "After adoption" |
+| Clock/time follow-ups | `Context.clock`/`random` adopted; still open: no way to subtract two `MonotonicTime` readings into a `Duration` | `hemera-proposals/context-clock-random.md`, "Still open" |
 | Context extensions | `user_data: rawptr` is one slot shared by every user-space library; proposal: a typed, scoped `pNext`-style chain. Since every fiber embeds a copy of `Context`, keeping it small matters more now; nodes need a lifetime that outlives fibers created in their scope | `hemera-proposals/context-extensions.md` |
 | Calling-convention version | SlopOS names and pins the calling-convention version it builds against (`hemera-abi-v1`), but freezes nothing until its own design is thorough (`decisions/0027`). The 2026-10-04 redesign is the kind of change that pinning makes visible | `design/system-abi.md` §7 |
 | Fibers in freestanding builds | Fibers no longer copy frames, but they need an allocator for segments and a scheduler on the carrier. The kernel runs to completion (`decisions/0023`), so fiber machinery stays out of freestanding builds anyway (ties to `std` tiers) | §2 below |
@@ -98,6 +98,7 @@ Changes made to Hemera in response to SlopOS (newest first):
   - `context.assertion_handler` and `intrinsics.trap()` (most of item 3); `intrinsics.capture_stack_trace` replaces `Context.stack_trace`.
   - The context is read-only; `push_context name (field = value)` replaces assigning fields. `thread_index` and the fiber fields left `Context` for the runtime's `CarrierBlock`.
   - Pointers to the stack are allowed again, checked at compile time with `#escaping` parameters and `#scoped` structs.
+- 2026-10-03 — `_weak` compare-exchange (`hemera-proposals/atomics.md`).
 - 2026-10-03 — `Context.clock: ptr[Clock]` and `Context.random: ptr[Random]`; `Instant` (wall clock), `MonotonicTime`, `Duration`, `ClockError` in `base/runtime` (`hemera-proposals/context-clock-random.md`).
 - 2026-10-01 — Declaration directives after the name (`main #export :: fn() {}`); `#export` documented.
 - 2026-10-01 — `--package=<name>:<path>` to remap `base`/`std`/`user`/`vendor` (e.g. to `std_proposal`); path parsing bugs fixed.

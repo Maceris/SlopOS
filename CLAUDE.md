@@ -110,7 +110,8 @@ when relevant.
 - Atomics are intrinsics in `base`: `atomic_load_*`/`atomic_store_*`, `interlocked_*`, with
   suffixes `_acquire`, `_release`, `_acquire_release`, `_no_fence` (none = sequentially
   consistent). Fences: `fence_*` and `compiler_fence_*`. Compare-exchange returns
-  `(old, success)`; increment/decrement return the old value.
+  `(old, success)` and has a `_weak` form; increment/decrement return the old value.
+  No atomics on `ptr[T]`; use `rawptr`.
 - Use explicit-endian types (`u32le`) for externally defined layouts, and add a compile-time
   size check (`#assert size_of(T) == N`) next to every hardware/binary struct.
 - Follow Hemera's `docs/coding_guidelines.md`: a function does exactly one thing.
