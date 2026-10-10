@@ -14,15 +14,16 @@ Pure code that everything else depends on, and that can be tested on a host.
 
 - **Build package** for the targets: kernel (`OS == .None`), user space (`OS == .SlopOS`),
   host (tests). Hemera has no build system, so this is a Hemera program registering targets
-  through the compiler API (`hemera-proposals/build-programs.md`).
-- **`std_proposal`**: split into tiers (freestanding / allocating / os); add containers that
+  through the compiler API in `base/compiler` (`hemera-proposals/build-programs.md`,
+  `decisions/0028`).
+- **Hemera `std`**: split into tiers (freestanding / allocating / os); add containers that
   work without an allocator (intrusive lists, fixed-capacity arrays, bitmaps, ring buffers)
   and formatting into a fixed buffer; fix `SharedPtr` to use atomics.
 - **Boot protocol types**: the portable `BootInfo` type and the Limine protocol structures.
 - **Arch interface** (L1 ↔ L2): the `arch_interface` package of `---` declarations that
   `arch/x86_64` must implement.
 - **House-rule checks**: arch interface conformance and `std` tier
-  enforcement, written against the expected reflection API (`decisions/0007`).
+  enforcement, registered with `compiler.add_check` (`decisions/0007`, `0029`).
 
 Specs: Limine boot protocol.
 Stresses: generics, `distinct`, `#packed`/`#align`, compile-time layout asserts, build

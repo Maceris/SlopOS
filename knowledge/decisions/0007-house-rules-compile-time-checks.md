@@ -18,7 +18,7 @@ information), and the API for it is a work in progress.
 - **Arch interface:** an `arch_interface` package declares the required functions (bodiless
   `---` declarations, as `base` does for intrinsics). A check verifies that the selected
   `arch/*` package defines every one with an identical signature.
-- **`std` tiers:** each `std_proposal` package declares its tier as a compile-time constant.
+- **`std` tiers:** each `std` package declares its tier as a compile-time constant.
   A check verifies that nothing imports a package from a higher tier than it allows (e.g.
   the kernel only uses freestanding and allocating packages).
 - Checks live together in one package (location decided with the package structure) and

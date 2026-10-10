@@ -31,5 +31,5 @@ server connections the program was granted (no ambient authority). `context` is 
 
 ## Still open
 - **Hemera:** no way to subtract two `MonotonicTime` readings into a `Duration`.
-- **SlopOS:** `std_proposal/time.now()` is still a stub. It should read
+- **SlopOS:** `std/time`'s `now()` is still a stub. It should read
   `context.clock.wall` and decide what to do with `ClockError`.

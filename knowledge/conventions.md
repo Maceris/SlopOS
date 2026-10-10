@@ -13,7 +13,7 @@ Every marker is greppable, so the feedback log can be regenerated from the sourc
 | `//HEMERA(gap): ...` | The language can't express this yet. Code is written the way it *should* look. | `//HEMERA(gap): needs an interrupt calling convention` |
 | `//HEMERA(guess): ...` | Syntax or semantics aren't documented; this is our best guess. | `//HEMERA(guess): directive placement after loop` |
 | `//HEMERA(friction): ...` | Works, but is clumsy. Worth a language/library change? | `//HEMERA(friction): unused 'old' just to test CAS success` |
-| `//STD(missing): ...` | Calls a `std`/`base` function that doesn't exist yet. Signature is a proposal. | `//STD(missing): formatting into a fixed buffer, no allocator` |
+| `//STD(missing): ...` | Calls a `std`/`base` function that doesn't exist yet. Signature is a proposal. Prefer writing it in Hemera's `std`/`base`; use the marker only when deferring. | `//STD(missing): formatting into a fixed buffer, no allocator` |
 | `//SPEC: ...` | Where the hardware/format definition comes from. Required on every hardware structure. | `//SPEC: Intel SDM Vol. 3A §4.5, Table 4-20` |
 | `//TODO(name): ...` | Ordinary unfinished work (same style as the Hemera repo). | |
 
@@ -29,10 +29,12 @@ Every marker is greppable, so the feedback log can be regenerated from the sourc
 ## House Rules Are Checks
 
 Project rules are enforced by `#run` code that reflects over packages and reports compile
-errors (`decisions/0007`), not just written down. When adding a rule, add a check in
-the house-rules checks package (or, if the reflection API can't express it yet, write the check against
-the API we expect, marked `//HEMERA(guess)`, and list the need in
-`hemera-proposals/reflection-checks.md`).
+errors (`decisions/0007`), not just written down. When adding a rule, add a function to
+the house-rules checks package and call it from `check_program`, which the build package
+registers with `compiler.add_check` (`decisions/0029`). The API is Hemera's
+`base/compiler`; if it can't express a rule yet, write the check against the API we expect,
+marked `//HEMERA(gap)` or `//HEMERA(guess)`, and list the need in
+`hemera-proposals/reflection-checks.md`.
 
 ## Hardware and Binary Structures
 - Use explicit-endian types (`u32le`) for anything whose layout is defined externally (disk,
@@ -58,10 +60,23 @@ the API we expect, marked `//HEMERA(guess)`, and list the need in
 
 ## Where Library Code Lives
 
-- **`std_proposal/`** (repo root) is SlopOS's working copy of Hemera `std`, and *is* `std`
-  for this project. General-purpose code SlopOS needs (containers, fixed-buffer formatting,
-  allocators, the `OS == .SlopOS` branches) goes there, written as real `std` code. See
-  `../std_proposal/README.md` and `decisions/0006-std-proposal.md`.
-- **The Hemera repo is never modified from this project.** Needed changes to `base`, the
-  compiler or the docs are recorded in `hemera-feedback.md` / `hemera-proposals/` and made
-  on the Hemera side.
+- **Hemera's `std/`** is the `std` SlopOS uses (`decisions/0030`). General-purpose code SlopOS
+  needs (containers, fixed-buffer formatting, allocators, the `OS == .SlopOS` branches) goes
+  there, written as real `std` code following Hemera's conventions. SlopOS-specific code stays
+  in `src/`.
+- **`std` tiers.** The kernel builds with `OS == .None`, so every `std` package declares what
+  it needs as `PACKAGE_TIER :: tiers.Tier.<Tier>`, from a small freestanding `tiers` package:
+
+  | Tier | Needs | Usable in kernel? | Examples |
+  |---|---|---|---|
+  | `Freestanding` | nothing but `base` | yes | `atomic`, `memory/result`, string utilities, containers, fixed-buffer formatting |
+  | `Allocating` | an `Allocator` in `context` | yes, once the kernel heap exists | `string_builder`, dynamic containers, `SharedPtr` |
+  | `Os` | system calls | no | `io`, `os`, `time`, threads, the `fiber` scheduler |
+
+  The tier check (`decisions/0029`, `hemera-proposals/reflection-checks.md`) rejects any
+  import of a higher tier, inside `std` and from SlopOS. The `Os` tier gets an
+  `OS == .SlopOS` branch next to Linux/Mac/Windows (roadmap M6).
+- **The Hemera repo outside `apps/` may be changed.** `base/`, `std/`, `examples/` and `docs/`
+  are edited directly and committed in the Hemera repo, with `docs/` updated alongside. The
+  compiler (`apps/`) is not changed from this project: what it must implement is recorded in
+  `hemera-feedback.md` and, when it needs a design, `hemera-proposals/`.

@@ -20,8 +20,7 @@ system as built lives in `../docs/` instead.
 | `design/system-abi.md` | The Hemera-native system ABI: syscalls, process start, libraries, C interop |
 | `design/security.md` | The security design: threat model, capabilities, users, grants (overview of decisions 0008–0018) |
 | `design/services.md` | The user-space system services: what each does, what it holds, whether it's trusted |
-| `../std_proposal/` | Working copy of Hemera `std`; *the* `std` for SlopOS development |
-| `hemera-proposals/` | Language/library proposals written so they can be moved into the Hemera repo |
+| `hemera-proposals/` | Designs for Hemera changes: what SlopOS needs, and what the compiler (`apps/`, not changed from this project) must implement |
 | `hemera-feedback.md` | Log of where Hemera helped, hurt or was missing something. The experiment's real output |
 | `prior-art.md` | Other systems and papers worth studying |
 

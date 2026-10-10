@@ -14,4 +14,5 @@ Whether or not this entire project is a joke depends entirely on if you think it
 * `docs` - Official user and developer documentation: specifications, API documentation, architecture diagrams
 * `CLAUDE.md` - Summary of goals and rules for working on the project
 * `src` - Project source code
-* `std_proposal` - Working copy of the Hemera standard library; the `std` used by this project (see `std_proposal/README.md`)
+
+SlopOS uses Hemera's own standard library, and general-purpose code it needs is written there.

@@ -5,9 +5,9 @@ Running list of unresolved questions only. When one is answered, record the answ
 
 ## Executables, libraries and program reuse
 
-- What does an executable look like? Current idea: the compiler is pointed at a package
-  and looks for `main`; a library `#export`s the functions it exposes. What does a
-  *service* look like: how does it declare the protocols it offers?
+- What does a *service* look like: how does it declare the protocols it offers?
+  (Executables and libraries are settled: a target names its entry function, `main` by
+  default, libraries have none and `#export` their interface; `decisions/0028`.)
 - Is a program's exported entry-point signature its manifest (static authority)? E.g.
   `search :: fn(pattern: Regex, files: FileSet)` would declare exactly what it receives at
   launch, and the shell would derive launch grants from the parameter types
@@ -177,8 +177,7 @@ needs confirming before it becomes a decision.
 - Package structure and naming for `src/`: to be drafted after the OS design is more
   refined, informed by the architecture and Hemera's style. Includes where the build package
   lives (`hemera-proposals/build-programs.md`) and where the ABI package lives
-  (`decisions/0025`: in `std_proposal`'s SlopOS OS layer, or in `src/` next to `protocols/`).
-- Per-target build settings: typed values or strings? (`hemera-proposals/build-programs.md` §3)
+  (`decisions/0025`: in Hemera `std`'s SlopOS OS layer, or in `src/` next to `protocols/`).
 
 ## Hemera Threads
 

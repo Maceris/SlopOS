@@ -53,7 +53,7 @@ user/kernel boundary, which is a house-rule check (`0007`).
 - The ABI package must stay small and freestanding (tier `Freestanding`, no allocation), so
   the kernel can import it.
 - Where it lives is decided with package structure (open under *Scope*). Two candidates:
-  inside `std_proposal` under the `OS == .SlopOS` OS layer (as Zig's `std.os.linux` holds
+  inside Hemera's `std` under the `OS == .SlopOS` OS layer (as Zig's `std.os.linux` holds
   Linux's syscall definitions), or in `src/` next to `protocols/`.
 - Every syscall, ring field and packet variant added after v1 is permanent, so the design
   notes for each are reviewed before v1 is declared.

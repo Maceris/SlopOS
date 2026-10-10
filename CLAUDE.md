@@ -19,23 +19,29 @@ documented and proposed, and every gap or friction found is recorded as feedback
   anything.** Start with `knowledge/README.md`.
 - `docs/` — official user/developer documentation of the system as specified or built.
 - `src/` — SlopOS source code.
-- `std_proposal/` — working copy of Hemera's `std`. **It is `std` for this project.**
 
-The Hemera repository (language docs in `docs/`, `base/`, compiler in `apps/compiler`) is
-a separate repository, used as reference. Ask for the path to the Hemera repository folder
+The Hemera repository is separate: language docs in `docs/`, `base/`, the standard library
+in `std/`, `examples/`, and the compiler, formatter and language server in `apps/`. SlopOS
+uses Hemera's `std` directly and changes `base/`, `std/`, `examples/` and `docs/` as part of
+this project (`knowledge/decisions/0030`). Ask for the path to the Hemera repository folder
 when relevant.
 
 ## Hard Rules
 
-1. **Never modify the Hemera repository.** Needed language, `base`, compiler or doc changes
-   go in `knowledge/hemera-feedback.md` or as a proposal in `knowledge/hemera-proposals/`.
-   The Hemera side makes them in parallel.
+1. **Never modify Hemera's `apps/`** (compiler, formatter, language server). `base/`, `std/`,
+   `examples/` and `docs/` may be changed directly, following Hemera's conventions and
+   committed in the Hemera repo (`knowledge/decisions/0030`). Keep `docs/` in step with every
+   `base`/`std` change. Anything the compiler must implement (new intrinsics or builtins,
+   reflection data, directives, syntax or semantics) also goes in
+   `knowledge/hemera-feedback.md`, with a design in `knowledge/hemera-proposals/` when it's
+   more than a line; language semantics are proposed there before `docs/` changes.
 2. **Real implementations, narrow scope, full depth** (`knowledge/decisions/0005`). Cut
    features, never quality: follow the real specs and cite them (`//SPEC:`), use the
    algorithms a production system would, handle every error path, be SMP-safe from the start.
    No toy versions, no fake stubs. Unimplemented paths return an explicit `NotSupported` error.
-3. **General-purpose library code goes in `std_proposal/`**, written as real `std` code and
-   tagged with its tier (freestanding / allocating / os).
+3. **General-purpose library code goes in Hemera's `std/`**, written as real `std` code and
+   tagged with its tier (freestanding / allocating / os). SlopOS-specific code stays in
+   SlopOS, except the `OS == .SlopOS` branches of `std`.
 4. **Mark language issues in the code** (`knowledge/conventions.md`):
    `//HEMERA(gap)`, `//HEMERA(guess)`, `//HEMERA(friction)`, `//STD(missing)`, `//SPEC:`.
    Write code the way it *should* look when the language falls short, and mark it.
@@ -44,10 +50,11 @@ when relevant.
 6. No external C code linked into SlopOS. Limine (bootloader) is treated like firmware.
 7. **House rules are enforced by compile-time checks** (`knowledge/decisions/0007`): `#run`
    code reflecting over packages, kept together in one checks package. This replaces language features
-   like `implements` (e.g. the arch interface) and enforces `std` tiers (each `std_proposal`
-   package declares `PACKAGE_TIER`). The reflection API is still being designed; write checks
-   against the expected API, mark guesses, and add needs to
-   `knowledge/hemera-proposals/reflection-checks.md`.
+   like `implements` (e.g. the arch interface) and enforces `std` tiers (each Hemera `std`
+   package declares `PACKAGE_TIER`). The reflection and build API is in Hemera's
+   `base/compiler` (`package.hsc`, `build.hsc`); checks are `CheckFunction`s registered by
+   the build package with `add_check` (proposed: `knowledge/decisions/0029`). Mark guesses,
+   and add missing needs to `knowledge/hemera-proposals/reflection-checks.md`.
 
 ## Guidelines
 
@@ -76,7 +83,8 @@ when relevant.
   generated ABI package, unstable until a declared ABI v1 (`0025`, `knowledge/design/system-abi.md`).
   Nothing is frozen until the OS design is thorough and development is under way (`0027`).
 - Proposed, not yet decided: kernel scope, async shared-ring IPC with ports, user-space
-  scheduling policy (`knowledge/design/kernel.md`, `ipc.md`, `scheduling.md`).
+  scheduling policy (`knowledge/design/kernel.md`, `ipc.md`, `scheduling.md`); one build
+  package using Hemera's compiler API (`0028`); house-rule checks run on every target (`0029`).
 
 ## Writing Hemera: Things That Are Easy to Get Wrong
 
@@ -121,8 +129,8 @@ When unsure about syntax or semantics, check the Hemera docs, then guess and mar
 
 ## Building
 
-Not possible yet. When it is, point the compiler at `std_proposal` with
-`--package=std:<path to std_proposal>`.
+Not possible yet. When it is, the compiler finds `base` and `std` in the Hemera repo, so no
+`--package` remapping is needed.
 The latest debug build of the Hemera compiler should already be on the
 system path, runnable with `hemera`. While it is not expected to work
 properly for the majority of this project's lifecycle, the help text

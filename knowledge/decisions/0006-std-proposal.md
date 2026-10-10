@@ -1,6 +1,6 @@
 # 0006: `std_proposal` — A Working Copy of `std` Inside SlopOS
 
-Status: accepted
+Status: superseded by 0030
 Date: 2026-10-01
 
 ## Context

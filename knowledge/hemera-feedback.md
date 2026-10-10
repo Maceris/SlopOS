@@ -6,6 +6,9 @@ impossible. Entries are currently **design pressure** from planning; once code e
 come from marker comments in the source (`grep -rn "HEMERA(\|STD(" src/`, see `conventions.md`).
 
 Detailed designs live in `hemera-proposals/`; this file is the index and status board.
+Since `decisions/0030`, SlopOS changes Hemera's `base/`, `std/`, `examples/` and `docs/`
+directly; those changes are logged here too, with the reason. Compiler work (`apps/`) is
+never done from this project, so it stays an open item until the compiler does it.
 Severity: **blocker** / **friction** / **nice**.
 
 ---
@@ -19,11 +22,11 @@ GDT/IDT, prints to the serial port and framebuffer, handles a timer interrupt, a
 
 | # | Need | State | Severity |
 |---|------|-------|----------|
-| 1 | Freestanding build: no runtime, custom entry symbol | `OperatingSystem.None` exists; no-runtime build and entry selection still needed (entry per target: `hemera-proposals/build-programs.md`) | blocker |
-| 2 | `std` usable without an OS | Tiers in `std_proposal/`; upstream `base/runtime/thread.hsc` still hits `#else //TODO error, unsupported` on an unknown OS | blocker |
+| 1 | Freestanding build: no runtime, custom entry symbol | `OperatingSystem.None` and a per-target entry (`BuildOptions.entry`) exist; a no-runtime build is still needed | blocker |
+| 2 | `std` usable without an OS | Tiers designed (`conventions.md`, *Where Library Code Lives*) but not yet in Hemera's `std`; `base/runtime/thread.hsc` still hits `#else //TODO error, unsupported` on an unknown OS. Both are fixable from SlopOS now (`decisions/0030`) | blocker |
 | 3 | User-supplied panic handler | `context.assertion_handler` and `intrinsics.trap()` (works freestanding) now cover `assert`. Still unstated: whether runtime panics (divide by zero, bounds) go through the same handler | friction |
-| 4 | ELF output + section placement / linker script | Backend has ELF object format; linking story unclear | blocker |
-| 5 | Codegen flags: no red zone, no SIMD/float in kernel, target CPU `x86-64-v3` | `cpu_features` option exists and could disable SSE/AVX; red zone needs a flag | blocker |
+| 4 | ELF output + section placement / linker script | `target_options.linker_script` exists in `BuildOptions`; how the compiler links (which linker, ELF executable output for `.None`) is still unstated | blocker |
+| 5 | Codegen flags: no red zone, no SIMD/float in kernel, target CPU `x86-64-v3` | **Resolved** 2026-10-05: `target_options.red_zone`, `cpu`, `cpu_features`, `code_model`, `relocation_model` | — |
 | 6 | Privileged instructions (`lgdt`, `lidt`, `out`, `cli`, `hlt`, `rdmsr`, `mov cr3`...) | None in `base/intrinsics` | blocker |
 | 7 | Interrupt entry stubs: naked functions / interrupt calling convention | Not in docs; `calling_convention.md` WIP | blocker (stopgap: link a hand-written `.S`) |
 | 8 | Volatile MMIO reads/writes | Not present | blocker for drivers |
@@ -38,8 +41,8 @@ functions and `x86_intrcc`, so a `#naked` or `#calling_convention(...)` directiv
 
 | Topic | State | Details |
 |---|---|---|
-| Compile-time reflection over packages | API in progress on the Hemera side; needed for all house-rule checks (`decisions/0007`) and `std` tier enforcement | `hemera-proposals/reflection-checks.md` (R1–R9) |
-| Builds of many outputs | Proposal: build package registering targets via a compiler API | `hemera-proposals/build-programs.md` (B1–B10) |
+| Compile-time reflection over packages | Mostly adopted (2026-10-05): `package_info`, `ProgramInfo`, `add_check`, `report_error`. Still missing: `offset_of` and struct layout in type info (R8), function bodies (R9); new: `type_info_of` returns `TypeInfo` by value so variant fields are unreachable (N1), checks can't use a target's values as the build's types (N2), no package location (N3), `any` equality (N4), whether a function has a body (N5) | `hemera-proposals/reflection-checks.md`; `decisions/0029` |
+| Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`. Still open: target enums (below), `root` vs canonical package paths, documenting parse-once/parallel builds (B10); to write: `os.run_process` in Hemera's `std/os` | `hemera-proposals/build-programs.md` §7; `decisions/0028` |
 | Bitfields | Undecided; plan is integers + masks, logging how much it hurts | `hemera-proposals/bitfields.md` |
 | Racy plain memory accesses | UB, defined as relaxed, or a `shared[T]` type? | `hemera-proposals/atomics.md` §3 |
 | Generic atomics | Minor: collapsing the many per-type names into generic `atomic_add[T]` would test constrained generics. (No `ptr[T]` atomics by design: no pointer arithmetic on `ptr[T]`, so `rawptr` is the atomic pointer type.) | `hemera-proposals/atomics.md` §1 |
@@ -51,7 +54,7 @@ functions and `x86_intrcc`, so a `#naked` or `#calling_convention(...)` directiv
 | Carrier pointer without TLS | Hemera loads the carrier pointer from OS thread-local storage when a thread starts and when foreign code calls back. SlopOS has no TLS: thread start uses an entry stub (`decisions/0026`); foreign callbacks would need one per-thread pointer | `open-questions.md`, *Kernel* |
 | Unwinding suspended fibers out of process | Debuggers and profilers need the resume-loop protocol (`.loop_return`, `FiberResumeState`) and segment chaining; in-process there's `capture_fiber_stack_trace`. Is the layout documented as something tools may rely on per runtime version? | `open-questions.md`, *Kernel* |
 | Target enums | `OperatingSystem` still lacks `UEFI` (for a Hemera bootloader) and eventually `SlopOS`; `Architecture` lacks `riscv64`, which also needs a carrier register; no raw/flat binary output type | — |
-| Compile-time side effects and trust | `docs/compilation.md`: compiling untrusted code is unsafe. Process spawning at compile time makes it worse; gate it explicitly | `hemera-proposals/build-programs.md` §5 |
+| Compile-time side effects and trust | Gate adopted: `--allow-run` grants running processes and writing outside the output folder, read with `build_permissions()`. Open: the grant reaches `#run` code in every imported package, not only the build package's; SlopOS would prefer it scoped or passed explicitly | `hemera-proposals/build-programs.md` §5, §7 |
 
 ## 2. Design Notes
 
@@ -91,6 +94,12 @@ Context for the open items, and choices SlopOS relies on.
 
 Changes made to Hemera in response to SlopOS (newest first):
 
+- 2026-10-05 — Builds and compile-time reflection (`base/compiler/build.hsc`, `package.hsc`, `function.hsc`, `types.hsc`; `hemera-proposals/build-programs.md`, `reflection-checks.md`):
+  - Build packages register targets, steps and checks (`add_target`, `add_step`, `add_check`) with command-line options as defaults; per-target string settings (`target_setting`); entry per target (was part of item 1).
+  - `BuildOptions` gained name, root, output path, entry, package paths, CPU and features, code and relocation models, red zone and linker script (was item 5, and part of item 4).
+  - `--allow-run` and `build_permissions()` gate processes and writes outside the output folder at compile time.
+  - `PackageInfo`, `ImportInfo`, `ConstantInfo`, `TypeDeclaration`, `ProgramInfo`, `find_packages`, `package_info`, `find_constant`, `find_function`; `report_error`/`report_warning` that keep going.
+  - Type info: `FunctionInfo.is_exported`, `is_escaping` on parameters and function types, `TypeInfoStruct.is_scoped`.
 - 2026-10-04 — Fiber, stack and calling-convention redesign (Hemera `docs/multitasking.md`, `docs/calling_convention.md`, `docs/memory.md`):
   - Fibers no longer copy frames; resuming re-enters frames with real calls, so fibers work with CET shadow stacks, IBT, GCS, PAC and BTI (was *Fibers vs. hardware CFI*).
   - A stack-limit check in every prologue replaces guard pages and stack probes for Hemera code (was *Stack probes*).
@@ -101,7 +110,7 @@ Changes made to Hemera in response to SlopOS (newest first):
 - 2026-10-03 — `_weak` compare-exchange (`hemera-proposals/atomics.md`).
 - 2026-10-03 — `Context.clock: ptr[Clock]` and `Context.random: ptr[Random]`; `Instant` (wall clock), `MonotonicTime`, `Duration`, `ClockError` in `base/runtime` (`hemera-proposals/context-clock-random.md`).
 - 2026-10-01 — Declaration directives after the name (`main #export :: fn() {}`); `#export` documented.
-- 2026-10-01 — `--package=<name>:<path>` to remap `base`/`std`/`user`/`vendor` (e.g. to `std_proposal`); path parsing bugs fixed.
+- 2026-10-01 — `--package=<name>:<path>` to remap `base`/`std`/`user`/`vendor`; path parsing bugs fixed.
 - 2026-10-01 — `rawptr` atomics; atomic load/store for `int`/`uint`/`uintptr`; `compiler_fence_acquire_release`.
 - 2026-10-01 — `_` to ignore return values (`docs/functions.md`).
 - 2026-10-01 — Arch interfaces and house rules: compile-time reflection checks rather than an `implements` feature (`decisions/0007`).

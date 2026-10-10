@@ -219,7 +219,7 @@ src/
   drivers/      L3 drivers, one package each
   protocols/    device-class + service protocol types, shared by both sides
   services/     L4
-  (runtime)     L5 lives in ../std_proposal as the OS == .SlopOS branches of std
+  (runtime)     L5 lives in Hemera's std as its OS == .SlopOS branches
   apps/         L6
 ```
 
