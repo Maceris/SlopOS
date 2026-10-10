@@ -23,13 +23,13 @@ GDT/IDT, prints to the serial port and framebuffer, handles a timer interrupt, a
 | # | Need | State | Severity |
 |---|------|-------|----------|
 | 1 | Freestanding build: no runtime, custom entry symbol | `OperatingSystem.None` and a per-target entry (`BuildOptions.entry`) exist; a no-runtime build is still needed | blocker |
-| 2 | `std` usable without an OS | Tiers designed (`conventions.md`, *Where Library Code Lives*) but not yet in Hemera's `std`; `base/runtime/thread.hsc` still hits `#else //TODO error, unsupported` on an unknown OS. Both are fixable from SlopOS now (`decisions/0030`) | blocker |
+| 2 | `std` usable without an OS | **Resolved** 2026-10-09: tiers in Hemera's `std` (`PACKAGE_TIER` in each package's `package_info.hsc`); `base/runtime/thread.hsc` has `.None`, `.SlopOS` and `.UEFI` branches | — |
 | 3 | User-supplied panic handler | `context.assertion_handler` and `intrinsics.trap()` (works freestanding) now cover `assert`. Still unstated: whether runtime panics (divide by zero, bounds) go through the same handler | friction |
 | 4 | ELF output + section placement / linker script | `target_options.linker_script` exists in `BuildOptions`; how the compiler links (which linker, ELF executable output for `.None`) is still unstated | blocker |
 | 5 | Codegen flags: no red zone, no SIMD/float in kernel, target CPU `x86-64-v3` | **Resolved** 2026-10-05: `target_options.red_zone`, `cpu`, `cpu_features`, `code_model`, `relocation_model` | — |
-| 6 | Privileged instructions (`lgdt`, `lidt`, `out`, `cli`, `hlt`, `rdmsr`, `mov cr3`...) | None in `base/intrinsics` | blocker |
+| 6 | Privileged instructions (`lgdt`, `lidt`, `out`, `cli`, `hlt`, `rdmsr`, `mov cr3`...) | **Declared** 2026-10-09 in `base/intrinsics/x86_64`, imported by `base/intrinsics/platform.hsc` when `TARGET_ARCH == .x86_64`: interrupts, descriptor tables, `load_segments`, I/O ports, MSRs, control registers, `invlpg`, `cpuid`, `rdtsc`. The compiler still has to implement them | blocker |
 | 7 | Interrupt entry stubs: naked functions / interrupt calling convention | Not in docs; `calling_convention.md` WIP | blocker (stopgap: link a hand-written `.S`) |
-| 8 | Volatile MMIO reads/writes | Not present | blocker for drivers |
+| 8 | Volatile MMIO reads/writes | **Declared** 2026-10-09: `intrinsics.volatile_load_u8`...`_u64` and `volatile_store_*` (`base/intrinsics/volatile.hsc`). The compiler still has to implement them | blocker for drivers |
 | 9 | A context before any allocator exists | `Context` requires `allocator`, `logger`, `clock`, `random` and now `assertion_handler`. Early boot could use a panicking allocator and a serial logger, but `push_context` overrides can't point into the stack, so their state can't live on the boot stack: use memory reached through a pointer (a Limine-provided region) or constant data | friction |
 | 10 | Carrier block in freestanding builds | Every prologue reads `stack_limit` at `[r14]`, and `assert` calls `intrinsics.carrier()`. The kernel needs: a way to provide a carrier block per CPU (loaded at every entry), a freestanding option for what a failed stack check does (no `morestack`: trap or assert), a way for IST/exception-stack entry stubs to swap `stack_limit`, and possibly a pointer slot in `CarrierBlock` for freestanding programs' own per-CPU data | blocker |
 
@@ -41,19 +41,19 @@ functions and `x86_intrcc`, so a `#naked` or `#calling_convention(...)` directiv
 
 | Topic | State | Details |
 |---|---|---|
-| Compile-time reflection over packages | Mostly adopted (2026-10-05): `package_info`, `ProgramInfo`, `add_check`, `report_error`. Still missing: `offset_of` and struct layout in type info (R8), function bodies (R9); new: `type_info_of` returns `TypeInfo` by value so variant fields are unreachable (N1), checks can't use a target's values as the build's types (N2), no package location (N3), `any` equality (N4), whether a function has a body (N5) | `hemera-proposals/reflection-checks.md`; `decisions/0029` |
-| Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`. Still open: target enums (below), `root` vs canonical package paths, documenting parse-once/parallel builds (B10); to write: `os.run_process` in Hemera's `std/os` | `hemera-proposals/build-programs.md` §7; `decisions/0028` |
+| Compile-time reflection over packages | Adopted (2026-10-05); the rest declared 2026-10-09: `offset_of` and struct layout (R8), calls and used types (R9), `type_info_of` returning a pointer (N1), `PackageInfo.location` (N3), `has_body` (N5). Still open: the compiler filling them in, and bodies for `reflection.enum_member_name` (N2) and `reflection.equal` (N4) | `hemera-proposals/reflection-checks.md`; `decisions/0029` |
+| Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`. Still open: `riscv64` (below), `root` vs canonical package paths, documenting parse-once/parallel builds (B10); `os.run_process` is declared in `std/os/process.hsc` with the `--allow-run` check, but doesn't start processes yet | `hemera-proposals/build-programs.md` §7; `decisions/0028` |
 | Bitfields | Undecided; plan is integers + masks, logging how much it hurts | `hemera-proposals/bitfields.md` |
 | Racy plain memory accesses | UB, defined as relaxed, or a `shared[T]` type? | `hemera-proposals/atomics.md` §3 |
 | Generic atomics | Minor: collapsing the many per-type names into generic `atomic_add[T]` would test constrained generics. (No `ptr[T]` atomics by design: no pointer arithmetic on `ptr[T]`, so `rawptr` is the atomic pointer type.) | `hemera-proposals/atomics.md` §1 |
-| Un-suffixed atomic ordering | Assumed sequentially consistent; worth stating in the intrinsics docs | — |
-| Clock/time follow-ups | `Context.clock`/`random` adopted; still open: no way to subtract two `MonotonicTime` readings into a `Duration` | `hemera-proposals/context-clock-random.md`, "Still open" |
+| Un-suffixed atomic ordering | **Resolved** 2026-10-09: stated as sequentially consistent at the top of `base/intrinsics/atomics.hsc` | — |
+| Clock/time follow-ups | `Context.clock`/`random` adopted; `runtime.duration_between(start, end: MonotonicTime) -> Duration` added 2026-10-09. Still open: `std/time`'s `now()` is a stub | `hemera-proposals/context-clock-random.md`, "Still open" |
 | Context extensions | `user_data: rawptr` is one slot shared by every user-space library; proposal: a typed, scoped `pNext`-style chain. Since every fiber embeds a copy of `Context`, keeping it small matters more now; nodes need a lifetime that outlives fibers created in their scope | `hemera-proposals/context-extensions.md` |
 | Calling-convention version | SlopOS names and pins the calling-convention version it builds against (`hemera-abi-v1`), but freezes nothing until its own design is thorough (`decisions/0027`). The 2026-10-04 redesign is the kind of change that pinning makes visible | `design/system-abi.md` §7 |
 | Fibers in freestanding builds | Fibers no longer copy frames, but they need an allocator for segments and a scheduler on the carrier. The kernel runs to completion (`decisions/0023`), so fiber machinery stays out of freestanding builds anyway (ties to `std` tiers) | §2 below |
 | Carrier pointer without TLS | Hemera loads the carrier pointer from OS thread-local storage when a thread starts and when foreign code calls back. SlopOS has no TLS: thread start uses an entry stub (`decisions/0026`); foreign callbacks would need one per-thread pointer | `open-questions.md`, *Kernel* |
 | Unwinding suspended fibers out of process | Debuggers and profilers need the resume-loop protocol (`.loop_return`, `FiberResumeState`) and segment chaining; in-process there's `capture_fiber_stack_trace`. Is the layout documented as something tools may rely on per runtime version? | `open-questions.md`, *Kernel* |
-| Target enums | `OperatingSystem` still lacks `UEFI` (for a Hemera bootloader) and eventually `SlopOS`; `Architecture` lacks `riscv64`, which also needs a carrier register; no raw/flat binary output type | — |
+| Target enums | `OperatingSystem.SlopOS`, `.UEFI` and `OutputType.FlatBinary` added 2026-10-09 (the compiler still has to support them). `Architecture` still lacks `riscv64`, which needs a carrier register in the calling convention first | — |
 | Compile-time side effects and trust | Gate adopted: `--allow-run` grants running processes and writing outside the output folder, read with `build_permissions()`. Open: the grant reaches `#run` code in every imported package, not only the build package's; SlopOS would prefer it scoped or passed explicitly | `hemera-proposals/build-programs.md` §5, §7 |
 
 ## 2. Design Notes
@@ -93,6 +93,15 @@ Context for the open items, and choices SlopOS relies on.
 ## 3. Resolved
 
 Changes made to Hemera in response to SlopOS (newest first):
+
+- 2026-10-09 — Made from SlopOS under `decisions/0030`. Items marked "the compiler still has to" are declarations only:
+  - `std` tiers: a `tiers` package, and every `std` package declares `PACKAGE_TIER` in its `package_info.hsc` (a new convention for package docs and constants, `docs/packages.md`). Was item 2.
+  - `std/time` uses `runtime.Instant`; `runtime.duration_between` turns two `MonotonicTime` readings into a `Duration`.
+  - Reflection: `offset_of`, struct layout in `TypeInfoStruct`/`StructMember`, `type_info_of` returns a pointer, `PackageInfo.location`, `FunctionInfo.has_body`, `calls`, `used_types`; `reflection.enum_member_name` and `reflection.equal` (bodies still to write).
+  - `base/intrinsics/x86_64` privileged instructions, imported per architecture by `base/intrinsics/platform.hsc` (item 6) and `intrinsics.volatile_*` (item 8).
+  - `OperatingSystem.SlopOS`, `.UEFI`, `OutputType.FlatBinary`; `thread.hsc` branches for them.
+  - `os.run_process` (`ProcessResult`, `ProcessError`), which reports a compile error without `--allow-run`.
+  - Un-suffixed atomics documented as sequentially consistent.
 
 - 2026-10-05 — Builds and compile-time reflection (`base/compiler/build.hsc`, `package.hsc`, `function.hsc`, `types.hsc`; `hemera-proposals/build-programs.md`, `reflection-checks.md`):
   - Build packages register targets, steps and checks (`add_target`, `add_step`, `add_check`) with command-line options as defaults; per-target string settings (`target_setting`); entry per target (was part of item 1).

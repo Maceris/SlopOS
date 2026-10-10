@@ -170,14 +170,14 @@ All present in `build.hsc`:
 | B5 | Post-build steps with dependencies on target outputs | **Done**: `add_step`, `BuildNode`, `TargetOutput` |
 | B6 | Entry function per target; `#export` for public interfaces | **Done**: `entry`, `#export`, `FunctionInfo.is_exported` |
 | B7 | Build code observes each target's type-checked program | **Done**: `add_check`, `CheckFunction`, `ProgramInfo` |
-| B8 | Process spawning in `std`, gated at compile time | **Gate done** (`--allow-run`, `build_permissions()`); `os.run_process` still to write in Hemera's `std/os` |
+| B8 | Process spawning in `std`, gated at compile time | **Gate done** (`--allow-run`, `build_permissions()`); `os.run_process` declared in Hemera's `std/os/process.hsc` and checks the gate, but doesn't start processes yet |
 | B9 | The `BuildOptions` fields in §6 | **Done** |
 | B10 | Parse once, type check per distinct target configuration, build in parallel | Per-target type checking is implied by `TargetSetting`'s comment; sharing parsed files and building in parallel isn't documented. Worth stating in Hemera's `docs/compilation.md` |
 
 Still open on the Hemera side:
 
-- **Target enums:** `OperatingSystem` has no `SlopOS` (or `UEFI`), `Architecture` has no
-  `riscv64`, and `OutputType` has no raw/flat binary (`../hemera-feedback.md`, *Target enums*).
+- **Target enums:** `OperatingSystem.SlopOS`, `.UEFI` and `OutputType.FlatBinary` are declared
+  (2026-10-09); `Architecture` still has no `riscv64` (`../hemera-feedback.md`, *Target enums*).
 - **Permission scope:** `--allow-run` is granted to the whole build, so `#run` code in any
   package the build package imports gets it too. SlopOS would prefer the grant to reach
   only the build package's own code, or to be a value build code passes on explicitly

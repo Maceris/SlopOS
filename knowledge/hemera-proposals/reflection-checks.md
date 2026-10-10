@@ -59,7 +59,7 @@ The kernel selects an implementation by importing it as `arch`:
 
 ```
 #if TARGET_ARCH == .x86_64 {
-    import x86_64 as arch from "../arch"                        //HEMERA(guess): import inside #if
+    import x86_64 as arch from "../arch/x86_64"
 }
 ```
 
