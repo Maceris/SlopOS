@@ -50,8 +50,7 @@ package and each target are type checked separately and don't share types.
 
 ## Consequences
 - The build package is ordinary Hemera code and a stress test of the compiler API.
-- User-space targets can't be expressed until `OperatingSystem.SlopOS` exists. The enum member
-  can be added to `base/compiler/target.hsc` from here (`0030`), but the compiler must support
-  the target (`../hemera-feedback.md`, *Target enums*); written as `//HEMERA(gap)` until then.
+- User-space targets use `OperatingSystem.SlopOS`, added to `base/compiler/target.hsc` on
+  2026-10-09 (`0030`). Building them still needs the compiler to support the target.
 - Running the system in QEMU from the build requires `--allow-run`; compiling never does.
 - `os.run_process` has to be written in Hemera's `std/os` before any step can run a tool.

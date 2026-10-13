@@ -1,6 +1,11 @@
 # Proposal: Typed Context Extensions (a `pNext`-Style Chain)
 
-Status: **draft**, for discussion on the Hemera side. Raised by SlopOS's question about the
+Status: **adopted** 2026-10-12, with changes: the key is a `type` (no `typeid` needed), nodes
+can live on the pushing frame's stack, and threads and fibers copy the chain when created
+instead of nodes being immortal. Hemera's `base/runtime/context.hsc` (`ContextExtension`,
+`extension_node`, `get_extension`, `copy_extensions`) and `docs/multitasking.md`
+(*Context Extensions*) are the reference; the rest of this document is the original draft.
+ Raised by SlopOS's question about the
 friction of every subsystem sharing `Context.user_data: rawptr` (`../hemera-feedback.md` §2,
 `../design/kernel.md` §3).
 
@@ -23,7 +28,7 @@ A chain of typed extension nodes, as in Vulkan's `pNext` chains, but scoped like
 `Context`:
 ```
 ContextExtension :: struct {
-    type: typeid,                   //HEMERA(guess): name of the runtime type identifier
+    type: typeid,                   // adopted as key: type, see the status above
     next: ptr[ContextExtension]?,
     data: rawptr,
 }

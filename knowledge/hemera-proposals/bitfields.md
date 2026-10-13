@@ -1,6 +1,6 @@
 # Notes: Bitfields
 
-Status: undecided in Hemera. Current plan: fixed-width integers + shifts/masks; C-style
+Status: **decided for now** (2026-10-12): no bitfields in Hemera. Fixed-width integers + shifts/masks; C-style
 unions for byte-granularity overlays. These notes record what SlopOS will need either way.
 
 ## Where SlopOS hits bit-packed data

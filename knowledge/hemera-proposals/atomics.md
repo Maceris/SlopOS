@@ -132,8 +132,7 @@ release_reference :: fn(object: ptr[mut SharedObject]) {
 }
 ```
 
-(Separately: `SharedPtr.count` in `std/memory/shared_ptr.hsc` is a plain `u16` updated
-with `+=`, so it isn't thread-safe today.)
+`std/memory/shared_ptr.hsc` uses exactly this pattern since 2026-10-12.
 
 ### Example D: virtio queues (drivers) — the case for a full fence
 
@@ -217,7 +216,7 @@ preempt_disable :: fn(cpu: ptr[mut PerCpu]) {
 }
 ```
 
-## 3. Open Language Question: Racy Plain Accesses
+## 3. Racy Plain Accesses (decided: option 2)
 
 Hemera wants as little undefined behavior as possible. In LLVM, a plain load that races
 with a store returns `undef`, and in C/C++ the whole program is undefined. Options:
@@ -227,13 +226,13 @@ with a store returns `undef`, and in C/C++ the whole program is undefined. Optio
 3. Make shared mutable memory a distinct type (e.g. `shared[T]`) that only allows atomic
    access. Most explicit; more typing.
 
-Worth deciding before much lock-free code exists.
+**Decided 2026-10-12: option 2.** Hemera's `docs/memory.md` (*Data Races*) defines racy plain
+accesses: register-sized values behave like `_no_fence` atomics, larger ones may tear.
 
 ## 4. Notes After Adoption
 
-- `_weak` compare-exchange exists only in the sequentially consistent ordering, and no
-  compare-exchange takes a separate failure ordering. Retry loops that only need
-  `_acquire` (like the spinlock) use the strong form for now; revisit if LL/SC targets
-  show a measurable cost.
+- `_weak` compare-exchange exists in every ordering since 2026-10-12
+  (`_weak_acquire`, ...), so retry loops like the spinlock can use it. No compare-exchange
+  takes a separate failure ordering; revisit if LL/SC targets show a measurable cost.
 - **Minor friction:** the spinlock still needs a `with` block to hold `acquired` across the
   loop condition. Fine, but worth watching as more lock-free code gets written.

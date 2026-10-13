@@ -1,6 +1,6 @@
 # 0030: Use Hemera's `std` Directly, and Change the Hemera Repo Outside `apps/`
 
-Status: accepted
+Status: accepted, amended 2026-10-12 (compiler changes on request, see the end)
 Date: 2026-10-09
 Supersedes: `0006`
 
@@ -52,3 +52,15 @@ back and forth became the bottleneck.
   (`0029`) runs over Hemera's `std` itself.
 - Marker comments still apply: `//STD(missing)` now means "not written yet" rather than "waiting
   on upstream", and should be rare, since the fix is usually to write it in `std/`.
+
+## Amendment (2026-10-12): Compiler Changes on Request
+The Hemera author asked for parser fixes from this project, and the result was worth it: the parser
+had silently stopped checking most of its smoke test, and fixing it surfaced syntax mistakes in
+`base` and `std`. So:
+- **`apps/` (the compiler, formatter and language server) is changed only when the Hemera author
+  explicitly asks for it**, for that specific change. It is never changed on this project's own
+  initiative, and one request doesn't carry over to later work.
+- Without such a request, everything above still applies: compiler work is recorded in
+  `hemera-feedback.md` and, when it needs a design, `hemera-proposals/`.
+- Compiler changes come with tests in `apps/compiler/test`, and are logged in
+  `hemera-feedback.md` like any other change to Hemera.

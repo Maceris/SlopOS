@@ -32,5 +32,6 @@ server connections the program was granted (no ambient authority). `context` is 
 ## Still open
 - ~~**Hemera:** no way to subtract two `MonotonicTime` readings into a `Duration`.~~ Done
   2026-10-09: `runtime.duration_between(start, end)`.
-- **SlopOS:** `std/time`'s `now()` is still a stub. It should read
-  `context.clock.wall` and decide what to do with `ClockError`.
+- ~~**SlopOS:** `std/time`'s `now()` is still a stub.~~ Done 2026-10-12: it returns
+  `context.clock.wall`'s `Result[Instant, ClockError]`, and the default logger leaves the
+  time out on an error.

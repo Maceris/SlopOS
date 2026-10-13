@@ -78,5 +78,6 @@ marked `//HEMERA(gap)` or `//HEMERA(guess)`, and list the need in
   `OS == .SlopOS` branch next to Linux/Mac/Windows (roadmap M6).
 - **The Hemera repo outside `apps/` may be changed.** `base/`, `std/`, `examples/` and `docs/`
   are edited directly and committed in the Hemera repo, with `docs/` updated alongside. The
-  compiler (`apps/`) is not changed from this project: what it must implement is recorded in
+  compiler (`apps/`) is changed only when the Hemera author asks for that specific change
+  (`decisions/0030`, amendment); otherwise what it must implement is recorded in
   `hemera-feedback.md` and, when it needs a design, `hemera-proposals/`.

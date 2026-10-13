@@ -53,14 +53,14 @@ build :: fn() {
     kernel.target_options.cpu = "x86-64-v3"                     // decisions/0003
     kernel.target_options.cpu_features = "-sse,-sse2,-avx,-avx2"
     kernel.target_options.linker_script = "src/kernel/kernel.ld"
-    append(&kernel.settings, compiler.TargetSetting.{build_settings.LOG_LEVEL, "debug"})  //HEMERA(guess): dynamic array append
+    array_add(&kernel.settings, compiler.TargetSetting.{build_settings.LOG_LEVEL, "debug"})
     _ = compiler.add_target(kernel)
 
     for program in compiler.find_packages("src", declares = "PROGRAM_KIND") {
         options := compiler.command_line_options()
         options.name = program.name
-        options.root = program.path                             //HEMERA(guess): root accepts the canonical (absolute) path find_packages returns
-        options.target_options.os = .SlopOS                     //HEMERA(gap): no OperatingSystem.SlopOS yet
+        options.root = program.path                             // root accepts the canonical path
+        options.target_options.os = .SlopOS
         options.target_options.output_type = output_type_for(&program)
         _ = compiler.add_target(options)
     }
@@ -176,13 +176,10 @@ All present in `build.hsc`:
 
 Still open on the Hemera side:
 
-- **Target enums:** `OperatingSystem.SlopOS`, `.UEFI` and `OutputType.FlatBinary` are declared
-  (2026-10-09); `Architecture` still has no `riscv64` (`../hemera-feedback.md`, *Target enums*).
-- **Permission scope:** `--allow-run` is granted to the whole build, so `#run` code in any
-  package the build package imports gets it too. SlopOS would prefer the grant to reach
-  only the build package's own code, or to be a value build code passes on explicitly
-  (permissions as capabilities). Not urgent while every dependency is first-party.
-- **`root` paths:** `root` is "relative to the build package", while `PackageInfo.path` is
-  canonical. Either `root` should accept canonical paths, or `PackageInfo` could also carry
-  the path relative to the folder given to `find_packages`.
+- ~~**Target enums**~~: `OperatingSystem.SlopOS`, `.UEFI` and `OutputType.FlatBinary` (2026-10-09),
+  `Architecture.riscv64` (2026-10-12).
+- ~~**Permission scope**~~: done 2026-10-12. `--allow-run` only covers execution the build
+  package started (its `#run` code, steps and checks); `#run` code in imported packages gets
+  nothing (Hemera `docs/compilation.md`, *Compile-Time Permissions*).
+- ~~**`root` paths**~~: done 2026-10-12, `root` accepts canonical paths.
 - **B10 documentation** (above).

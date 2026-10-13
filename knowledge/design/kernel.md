@@ -105,7 +105,7 @@ are the same thing for the whole entry.
 Kernel :: struct {            // one, allocated at boot; shared and internally synchronized
     pools: ObjectPools,
     frames: FrameAllocator,
-    cpus: PerCpu[],           //HEMERA(guess): slice type spelling
+    cpus: PerCpu[],           // an array view
     ...
 }
 

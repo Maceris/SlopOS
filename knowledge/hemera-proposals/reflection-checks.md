@@ -31,9 +31,9 @@ New needs found while rewriting the sketches against the real API:
 | # | Need | Why | State |
 |---|---|---|---|
 | N1 | `type_info_of` should return `ptr[TypeInfo]`, not `TypeInfo` by value | Everywhere else (`StructMember.member_type`, `TypeInfoPointer.base_type`...) type info is a `ptr[TypeInfo]` cast to the variant struct (`TypeInfoEnum`, `TypeInfoStruct`). A by-value `TypeInfo` is only `variant` and `size`, so the variant's fields are unreachable. Probably an oversight | **Declared**: `type_info_of : fn[T](T: type) -> ptr[TypeInfo]` |
-| N2 | Read a target's constant from a check defined in the build package | A `CheckFunction` lives in the build program, but `ConstantInfo.value` in a target's `ProgramInfo` has the *target's* types, and "a type from one doesn't exist in the other" (`TargetSetting`'s comment). So the tier check can't cast `PACKAGE_TIER` to its own `tiers.Tier`. Suggested: a `std` helper `reflection.enum_member_name(value: any) -> string?` (needs N1), so checks compare by name. Alternative: a compiler function converting a value to the same declaration (same package path and name, same layout) in the calling program. Also worth stating: `type` values from one target compare correctly *with each other* inside a check (the arch-interface check relies on it) | **Declared**: `reflection.enum_member_name(value: any) -> string?`, body still a TODO. `ConstantInfo`'s comment now states the cross-program rule, including that `type` values from one program compare correctly |
+| N2 | Read a target's constant from a check defined in the build package | A `CheckFunction` lives in the build program, but `ConstantInfo.value` in a target's `ProgramInfo` has the *target's* types, and "a type from one doesn't exist in the other" (`TargetSetting`'s comment). So the tier check can't cast `PACKAGE_TIER` to its own `tiers.Tier`. Suggested: a `std` helper `reflection.enum_member_name(value: any) -> string?` (needs N1), so checks compare by name. Alternative: a compiler function converting a value to the same declaration (same package path and name, same layout) in the calling program. Also worth stating: `type` values from one target compare correctly *with each other* inside a check (the arch-interface check relies on it) | **Done** 2026-10-12: `reflection.enum_member_name(value: any) -> string?`, using `TypeInfoEnum.values`. `ConstantInfo`'s comment now states the cross-program rule, including that `type` values from one program compare correctly |
 | N3 | A location for a package itself | "`atomic` has no `PACKAGE_TIER`" has nowhere to point. `PackageInfo` could carry its package statement's `SourceCodeLocation` (from the first file). Until then, checks build one from `files[0]`, line 1 | **Declared**: `PackageInfo.location` |
-| N4 | Compare two `any` values for equality | Default parameter values are `any?`; R3 needs to compare them. A `std` `reflection.equal(a, b: any) -> bool` (deep for structs and arrays) would do | **Declared**: `reflection.equal(a, b: any) -> bool`, body still a TODO |
+| N4 | Compare two `any` values for equality | Default parameter values are `any?`; R3 needs to compare them. A `std` `reflection.equal(a, b: any) -> bool` (deep for structs and arrays) would do | **Done** 2026-10-12: `reflection.equal(a, b: any) -> bool`, following Odin's `reflect.equal` |
 | N5 | Whether a function has a body | The arch interface is bodiless `---` declarations; an implementation that's also `---` should be rejected. `FunctionInfo` could carry `has_body` (or `is_declaration`) | **Declared**: `FunctionInfo.has_body` |
 
 ## Sketch 1: Arch Interface
@@ -80,7 +80,7 @@ check_arch_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     interface := package_named(program, "arch_interface") or_return true     // target has no arch layer
     for &importer in program.packages {
         for &edge in importer.imports {
-            if edge.alias != "arch" {
+            if edge.alias_ != "arch" {
                 continue
             }
             implementation := package_at(program, edge.path) or_continue
@@ -124,7 +124,7 @@ signatures_match :: fn(a, b: ptr[compiler.FunctionInfo]) -> bool {
     for &parameter, index in a.parameters {
         other := &b.parameters[index]
         if parameter.name != other.name
-            || parameter.type_ != other.type_                   //HEMERA(guess): == on type values is exact (distinct types differ)
+            || parameter.type_ != other.type_                   // exact: even plain aliases differ
             || parameter.is_escaping != other.is_escaping
             || parameter.is_varargs != other.is_varargs
             || !reflection.equal(parameter.default_value, other.default_value) {
@@ -191,7 +191,7 @@ check_tiers :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.Prog
         for &edge in importer.imports {
             imported := package_at(program, edge.path) or_continue
             imported_tier := package_tier(target, imported) or_continue  // a missing tier is reported on that package's own turn
-            if cast[uint](imported_tier) > cast[uint](importer_tier) {    //HEMERA(guess): enum to backing integer cast
+            if cast[uint](imported_tier) > cast[uint](importer_tier) {    // the backing integers
                 compiler.report_error(edge.location,
                     "% (tier %) imports % (tier %)",
                     importer.name, importer_tier, imported.name, imported_tier)

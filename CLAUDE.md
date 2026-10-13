@@ -23,12 +23,13 @@ documented and proposed, and every gap or friction found is recorded as feedback
 The Hemera repository is separate: language docs in `docs/`, `base/`, the standard library
 in `std/`, `examples/`, and the compiler, formatter and language server in `apps/`. SlopOS
 uses Hemera's `std` directly and changes `base/`, `std/`, `examples/` and `docs/` as part of
-this project (`knowledge/decisions/0030`). Ask for the path to the Hemera repository folder
+this project, and `apps/` only on request (`knowledge/decisions/0030`). Ask for the path to the Hemera repository folder
 when relevant.
 
 ## Hard Rules
 
-1. **Never modify Hemera's `apps/`** (compiler, formatter, language server). `base/`, `std/`,
+1. **Don't modify Hemera's `apps/`** (compiler, formatter, language server) unless the user
+   explicitly asks for that specific change (`knowledge/decisions/0030`, amendment). `base/`, `std/`,
    `examples/` and `docs/` may be changed directly, following Hemera's conventions and
    committed in the Hemera repo (`knowledge/decisions/0030`). Keep `docs/` in step with every
    `base`/`std` change. Anything the compiler must implement (new intrinsics or builtins,
