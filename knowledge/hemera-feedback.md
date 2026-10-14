@@ -78,6 +78,14 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-14 — Compiler Phase 1, the carrier register and stack check in LLVM (`compiler-plan.md`,
+  on request): reserving the carrier register needs no patch (`+reserve-r14` on x86-64 in the in-tree
+  LLVM, `+reserve-x28` on AArch64, `+reserve-x27` on RISC-V); `carrier()`/`set_carrier()` lower to
+  `llvm.read_register`/`write_register`. The prologue check against `[r14]` needs a ~60-line patch to
+  LLVM's segmented-stack prologue, kept as a patch file in Hemera's `apps/compiler/third-party/patches/llvm/`.
+  No change to Hemera's calling convention is needed. Still to do: Hemera's `morestack` protocol,
+  the `.AssertionHandler` failure mode, size thresholds, and AArch64/RISC-V prologues.
+
 - 2026-10-13 — Compiler Phase 0 (`compiler-plan.md`, on request): fixed directives tested backwards,
   the wrong work-target union member, imports never followed (now resolved under `docs/packages.md`),
   a wrong loop index, and invalid MLIR for functions. Found while testing: the lexer read past the end

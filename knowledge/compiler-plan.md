@@ -78,28 +78,54 @@ and a declaration), and parser scenarios `top_level_if.hsc` and `trailing_commen
 
 ## Phase 1: Spike the Carrier Register and Stack Check in LLVM
 
-The highest-risk item, and independent of the front end, so it can run early or in parallel.
+**Done** 2026-10-14. Result: both are possible with no change to the calling convention, using a
+feature LLVM already has and a ~60-line patch.
 
 Hemera's calling convention reserves a carrier register (`r14` on x86-64, `x28` on AArch64, `s11` on
 RISC-V) and puts a stack-limit check against `[carrier]` in every prologue
 (`docs/calling_convention.md`).
-- LLVM has reserved-register features on AArch64 and RISC-V (the kind behind Clang's `-ffixed-x18`;
-  whether they cover `x28` and `s11` is part of the spike), but **x86-64 has no option to reserve an
-  arbitrary general register**.
-- LLVM's segmented-stack prologue (`"split-stack"`) compares against a thread-local slot, not
-  against a register-relative address.
 
-- [ ] Hand-write LLVM IR for two functions and compile it with the in-tree `llc`, to find out what
-  it takes to (a) keep `r14` out of register allocation on x86-64, and (b) emit
-  `cmp rsp, [r14]` / `jb .grow` in the prologue. Likely a small patch to the LLVM fork: a new calling
-  convention, or a reserved-register feature, plus a change to `X86FrameLowering`.
-- [ ] Check the same on AArch64 (`x28`) to confirm the cheaper path there.
-- [ ] Write down the patch's size and how it will be carried across LLVM updates.
+- [x] **Reserving the carrier register needs no patch.**
+  - **x86-64:** the in-tree LLVM has `+reserve-r8` to `+reserve-r15` (upstream since 2026-03, PR
+    #180242; Visual Studio's clang 19 predates it). Under register pressure without it, `r14` is
+    saved and used; with `+reserve-r14` it's neither saved nor used.
+  - **AArch64:** `+reserve-x28` (LLVM reserves `x1`–`x7`, `x9`–`x15`, `x18`, `x20`–`x28`).
+  - **RISC-V:** `+reserve-x27` (`s11`) exists, but this build of LLVM only includes the X86, AArch64
+    and ARM targets (`LLVM_TARGETS_TO_BUILD`), so RISC-V must be added before that port.
+- [x] **`intrinsics.carrier()` and `set_carrier()`** lower to `llvm.read_register` and
+  `llvm.write_register` with `!"r14"` (x86-64 accepts `r14` by name) or `!"x28"`: one `mov` each.
+- [x] **The prologue check needs a patch** to `X86FrameLowering::adjustForSegmentedStacks`. LLVM's
+  `"split-stack"` prologue already has Hemera's shape (compare `rsp` for small frames, `lea` the
+  frame's end for large ones, branch out of line), but reads the limit from thread-local storage
+  at a fixed offset per OS, refuses every other OS (including `x86_64-unknown-none`), and calls
+  libgcc's `__morestack`. The patch, `apps/compiler/third-party/patches/llvm/0001-x86-split-stack-limit-register.patch`
+  in the Hemera repo, adds function attributes:
+  - `"split-stack-limit-register"="r14"` and `"split-stack-limit-offset"="0"`: compare against
+    `[r14 + 0]`, on any platform;
+  - `"split-stack-failure"="trap"`: `ud2` instead of calling `__morestack`, for `.Trap`.
 
-**Done when:** there's a known way to get both, or a concrete reason the calling convention needs
-to change (which then goes back to the language design).
+  On `x86_64-unknown-none` it produces the documented prologue (`cmp rsp, [r14]` / `lea r11, [rsp -
+  FRAME]; cmp r11, [r14]` / `jbe` to an out-of-line `ud2`), passes the machine verifier, carries its
+  own lit test, and leaves LLVM's existing segmented-stack tests passing.
+- [x] **How it's carried:** a patch file applied to the unchanged upstream submodule
+  (`git apply`), checked with `git apply --check` after each LLVM update. 58 lines of code plus a
+  39-line test, in one function that changes rarely upstream. A fork of `llvm-project` is the
+  alternative if patches multiply.
 
----
+**Still to do in the patch, for Phase 6 and later** (none changes the language):
+- [ ] **Hemera's `morestack` protocol** (`docs/calling_convention.md`, *Growing the Stack*): a minimal
+  frame, the body's address in `rax`, `call morestack`, `ret PARAM_BYTES`, instead of libgcc's
+  `__morestack` (frame size in `r10`, argument size in `r11`). Only the out-of-line block changes.
+- [ ] **`.AssertionHandler`:** call a named function instead of trapping.
+- [ ] **Thresholds:** LLVM compares `rsp` directly for frames under 256 bytes and checks every function
+  with a frame; Hemera's convention uses `STACK_SMALL` (128) with a 256-byte `STACK_GUARD`, and skips
+  leaf functions whose frame fits in 128 bytes. Either add attributes for both, or adjust Hemera's
+  constants to LLVM's (a 512-byte guard would keep the reasoning).
+- [ ] **AArch64 and RISC-V have no segmented-stack prologue in LLVM at all** (only x86 and 32-bit ARM
+  do), so their check is new code in `AArch64FrameLowering` and `RISCVFrameLowering`: larger than the
+  x86 patch, and needed when those ports start (after M3).
+- [ ] **Applying the patch in the build:** CMake could apply `third-party/patches/llvm/*.patch` before
+  configuring LLVM, so a fresh clone builds the patched compiler without a manual step.
 
 ## Phase 2: Packages, Names and `#if`
 
