@@ -142,6 +142,11 @@ PerCpu :: struct #align(64) { // one per CPU, in a per-CPU area (randomized, 002
   in the context but in the runtime's carrier block, because a fiber can move between threads.
   The kernel's use of `user_data` for the CPU is sound only because of the invariant above.
   If that ever weakens, the alternative is `kernel.cpus[intrinsics.carrier().index]`.
+- **Proposed 2026-10-13 (`layers.md`, L1): reach `PerCpu` through the carrier, not the context.**
+  Hemera added `CarrierBlock.program_data` for exactly this ("a kernel's per-CPU block"). The
+  kernel runs one carrier per CPU, so `intrinsics.carrier().program_data` is the CPU's `PerCpu`
+  without relying on the invariant above, and `context.user_data` stays free. The prebuilt
+  per-CPU `Context` is unchanged; entry stubs still push it.
 
 ### The carrier register in the kernel
 Every Hemera function's prologue compares the stack pointer against `stack_limit`, the first

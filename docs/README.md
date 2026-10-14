@@ -30,6 +30,11 @@ docs/
   guides/         building, running, writing drivers and services
 ```
 
-Nothing has graduated here yet. The first candidates are the layer model
-(`../knowledge/design/layers.md`, once accepted) and the `BootInfo` and arch-interface
-specifications from roadmap milestone M0.
+## Contents
+
+| Document | Status |
+|---|---|
+| `architecture/layers.md` | The layer model (L0–L6) and its interfaces. Specified, not implemented |
+| `specs/boot_info.md` | The boot handoff from L0 to the kernel core, and its Limine implementation. Draft |
+
+Next candidate: the arch-interface specification from roadmap milestone M0.

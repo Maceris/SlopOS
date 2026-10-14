@@ -30,5 +30,10 @@ memory map (`../design/layers.md`). Writing that first would delay everything el
 - The project depends on the Limine protocol's continued compatibility. Its revisions are
   versioned, so the `BootInfo` conversion can check them.
 - KASLR is provided by Limine for the kernel image (`0021`).
+
+## Amendment (2026-10-13)
+`0002`, as revised and accepted on 2026-10-13, moves the conversion from `arch/x86_64` to a
+boot adapter, `boot/limine`, shared by every architecture. Limine's structures stop there
+instead. The conversion is specified in `../../docs/specs/boot_info.md`.
 - A loader written in Hemera needs `OperatingSystem.UEFI` on the Hemera side
   (`../hemera-feedback.md`, "Target enums").

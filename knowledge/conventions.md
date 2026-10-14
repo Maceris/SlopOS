@@ -24,7 +24,7 @@ Every marker is greppable, so the feedback log can be regenerated from the sourc
   `docs/formatting.md`.
 - Packages follow `docs/packages.md`: a folder per package, `package` statement in every file.
 - No mutable globals, so all state is reached through parameters or `context`
-  (kernel: `context.user_data` → `PerCpu`, see `hemera-feedback.md`).
+  (kernel: `intrinsics.carrier().program_data` → `PerCpu`, `../docs/architecture/layers.md` L1).
 
 ## House Rules Are Checks
 

@@ -71,7 +71,7 @@ when relevant.
 - Typed everything at boundaries: syscalls return `Result`, IPC carries Hemera types,
   programs export typed functions instead of parsing `argv`.
 - Layers L0 (boot) → L6 (apps), with two hardware boundaries: a compile-time arch interface
-  in the kernel, and typed device-class protocols above user-space drivers (`knowledge/design/layers.md`).
+  in the kernel, and typed device-class protocols above user-space drivers (`docs/architecture/layers.md`).
 - x86-64 first, kept portable; minimum CPU **x86-64-v3**; QEMU + virtio + Limine for development.
 - Position-independent code everywhere (ASLR; kernel as relocatable PIE).
 - Cheap threads: one kernel stack per CPU, small thread objects, no TLS, AVX-512 opt-in

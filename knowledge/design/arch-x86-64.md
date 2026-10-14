@@ -25,8 +25,9 @@ for what any later architecture note needs to cover.
 2. Limine loads the kernel ELF into the higher half at a randomized base (KASLR,
    `../decisions/0021`), sets up long mode, a basic page table,
    and passes the memory map, framebuffer, RSDP, SMP info and modules.
-3. Kernel entry (`arch/x86_64`) converts Limine's structures into the portable `BootInfo`
-   and calls the portable kernel entry point.
+3. Kernel entry (`boot/limine`, L0) sets up the boot CPU's carrier block and a constant
+   context, converts Limine's structures into the portable `BootInfo`, and calls the portable
+   kernel entry point (`layers.md` L0).
 
 ## What `arch/x86_64` Has To Implement
 
@@ -38,7 +39,7 @@ for what any later architecture note needs to cover.
 | Timer | LAPIC timer, TSC-deadline if available | Calibrate against HPET or PIT at boot |
 | Paging | 4-level page tables, 4 KiB / 2 MiB / 1 GiB pages | NX bit for W^X; PCID for TLB tagging |
 | Syscalls | `SYSCALL`/`SYSRET`, MSRs `STAR`/`LSTAR`/`FMASK` | `SWAPGS` to reach per-CPU data |
-| Per-CPU data | `GS` base → `PerCpu` struct | Holds the CPU's prebuilt kernel `Context` (`kernel.md` §3). `r14` (the carrier register) is loaded from it on every entry from user mode (`kernel.md` §3) |
+| Per-CPU data | `GS` base → the CPU's carrier block, embedded in its `PerCpu` | Read only at entry from user mode (after `swapgs`), to load `r14` (the carrier register) and push the CPU's prebuilt kernel `Context`. Kernel code then reaches `PerCpu` through the carrier (`kernel.md` §3, `layers.md` L1) |
 | SMP | Limine MP feature now; INIT-SIPI-SIPI later | |
 | FPU/SIMD state | `XSAVE`/`XRSTOR`, lazy or eager | Kernel itself should avoid SIMD (see below) |
 | Platform discovery | ACPI: RSDP → XSDT → MADT, MCFG, HPET | Parsed in user space (L3), except the bits the kernel needs to start CPUs |
@@ -55,4 +56,6 @@ for what any later architecture note needs to cover.
   `invlpg`, `lgdt`/`lidt`/`ltr`, `swapgs`, `rdtsc`, `hlt`, `pause`, `cli`/`sti`,
   `xsave`/`xrstor`, `iretq`, `sysretq`.
 
-All of these are tracked in `../hemera-feedback.md`.
+Most of these are declared in Hemera's `intrinsics.x86_64` (`base/intrinsics/x86_64`).
+Still missing: `xsave`/`xrstor`/`xsetbv`, `rdseed`, `iretq`/`sysretq` and `SYSCALL` entry
+(`../hemera-feedback.md`, *Kernel entry and return to user mode*).

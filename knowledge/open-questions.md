@@ -130,9 +130,14 @@ needs confirming before it becomes a decision.
 - Carrier register on RISC-V: Hemera defines `r14` (x86-64) and `x28` (AArch64) only, and
   SlopOS targets riscv64 (`0022`).
 
-## Layering (`design/layers.md`)
+## Layering (`../docs/architecture/layers.md`)
 
-- Exact contents of the arch interface: what's in L1 vs. portable L2?
+- Exact contents of the arch interface: what's in L1 vs. portable L2? Narrowed 2026-10-13:
+  per-CPU state, time conversion and thread switching are portable (`design/layers.md`, L1).
+- How kernel entry and return to user mode get written where Hemera's interrupt functions
+  don't reach (x86-64 `SYSCALL`, `sysretq`/`iretq` with a full register set, `XSAVE`, AArch64
+  and RISC-V vectors): new intrinsics and calling conventions, or a small assembly file per
+  architecture linked into the kernel (`hemera-feedback.md`).
 - Does the kernel parse any ACPI itself (needed to start CPUs and find the APIC), or does
   the bootloader provide enough?
 - Platform service: one process for ACPI + PCIe, or separate?

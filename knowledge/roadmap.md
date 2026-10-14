@@ -4,7 +4,7 @@ Milestones of real subsystems (see `decisions/0005-scope-real-implementations.md
 by dependency. Each lists what gets built, the specs it follows, and **what it stresses in
 Hemera**, since that's the actual output of the project.
 
-Layer references (L0–L6) are from `design/layers.md`.
+Layer references (L0–L6) are from `../docs/architecture/layers.md`.
 
 ---
 
@@ -19,7 +19,8 @@ Pure code that everything else depends on, and that can be tested on a host.
 - **Hemera `std`**: split into tiers (freestanding / allocating / os); add containers that
   work without an allocator (intrusive lists, fixed-capacity arrays, bitmaps, ring buffers)
   and formatting into a fixed buffer; fix `SharedPtr` to use atomics.
-- **Boot protocol types**: the portable `BootInfo` type and the Limine protocol structures.
+- **Boot protocol types**: the portable `BootInfo` type (`../docs/specs/boot_info.md`) and the
+  Limine protocol structures.
 - **Arch interface** (L1 ↔ L2): the `arch_interface` package of `---` declarations that
   `arch/x86_64` must implement.
 - **House-rule checks**: arch interface conformance and `std` tier

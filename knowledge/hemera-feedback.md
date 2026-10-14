@@ -23,14 +23,16 @@ Severity: **blocker** / **friction** / **nice**.
 The smallest kernel that proves the toolchain: Limine loads a Hemera ELF, it sets up a
 GDT/IDT, prints to the serial port and framebuffer, handles a timer interrupt, and halts.
 
-Nothing open: everything M1 needs from Hemera is now in its docs or `.hsc` files (see
-Resolved, 2026-10-12). Items 1–10 are referred to by number there and elsewhere.
+Nothing open: everything M1 needs from Hemera is now in its docs or `.hsc` files. Items 1–10
+(Resolved, 2026-10-12) are referred to by number there and elsewhere; data written by the
+bootloader was found and resolved on 2026-10-13.
 
 ### Language and library design
 
 | Topic | State | Details |
 |---|---|---|
 | Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`. Still open: documenting parse-once/parallel builds (B10); `os.run_process`'s body (`std/os/process.hsc` only checks `--allow-run` so far) | `hemera-proposals/build-programs.md` §7; `decisions/0028` |
+| Kernel entry and return to user mode (needed from M4, **blocker** for user space) | Open, found reviewing `design/layers.md` (2026-10-13). `#calling_convention(.interrupt)` covers x86-64 IDT entries only. Not expressible in Hemera yet: x86-64 `SYSCALL` entry (no frame pushed, stack pointer still the user's, needs `swapgs` and a stack switch before anything else); returning to user mode with a full register set (`sysretq`, `iretq`); `XSAVE`/`XRSTOR`/`XSETBV` for thread vector state (M4); `RDSEED` (kernel entropy, `0021`); AArch64 exception vectors (a 2 KiB-aligned table of 128-byte entries) and RISC-V trap entry, for the second architecture after M3 (`0022`). Options: more `intrinsics.x86_64` functions plus a `.syscall` calling convention and per-architecture `.exception` conventions; or `TargetOptions` accepting assembly or object files to link, with a small `.S` file per architecture; or, as a stopgap on x86-64, syscalls through an interrupt gate (`int`), which `.interrupt` already covers, at a speed cost | `design/layers.md` L1, *Kernel entry* |
 | Shared ownership like C++'s `shared_ptr` | `std/memory`'s `SharedPtr[T]` holds a `ptr[mut T]` for now. To brainstorm: what language or compiler features would make a shared pointer work like C++'s. Starting points: sharing an immutable value (`shared_ptr<const T>`), which needs mutability as something a generic can take, or a separate read-only wrapper; counting copies automatically, which needs copy and destroy hooks, or move-only types, since today every owner calls `increment`/`decrement` by hand; using it like the value (`shared.field`), since `.` only dereferences real pointers; allocating the count with the value (`make_shared`); weak references | — |
 
 ## 2. Design Notes
@@ -38,13 +40,16 @@ Resolved, 2026-10-12). Items 1–10 are referred to by number there and elsewher
 Context for the open items, and choices SlopOS relies on.
 
 - **No mutable globals vs. kernel state.** Page tables, run queues, the IDT and the physical
-  memory allocator are threaded through `context`: `context.user_data` points at the CPU's
-  `PerCpu` block, reached via one typed accessor so the cast lives in one place:
+  memory allocator are reached through the CPU's `PerCpu` block. Since 2026-10-13 (proposed,
+  `design/layers.md` L1) that's through the carrier block, which in the kernel is one per CPU,
+  reached via one typed accessor so the cast lives in one place:
   ```
   per_cpu :: fn() -> ptr[mut PerCpu] {
-      return cast[ptr[mut PerCpu]](context.user_data)
+      return cast[ptr[mut PerCpu]](intrinsics.carrier().program_data)
   }
   ```
+  Before, it was `context.user_data`, which is sound only while a kernel entry never leaves its
+  CPU; the carrier is right by definition, and leaves `user_data` free.
   The IDT and GDT still live at fixed addresses the CPU knows, which is "global" to the
   hardware even if no Hemera code treats it so. This is sound because a kernel entry never
   leaves its CPU (`decisions/0023`). Each `PerCpu` holds a prebuilt `Context`, so entry stubs
@@ -71,6 +76,20 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-13 — Data written by the bootloader (`hemera-proposals/externally-initialized-data.md`):
+  - `#externally_initialized` on top-level constants: always emitted, never folded, read-only to the
+    program, an error to read at compile time (LLVM's `externally_initialized` plus `@llvm.used`).
+  - `#section(name)`, only together with `#externally_initialized`; every other constant goes in
+    read-only data.
+  - Array literals in Jai's syntax, `u64.[a, b]`, typed as a static array of that many elements.
+  - Documented in Hemera's `docs/directives.md` (*Constants*), `docs/types.md` (*Static Arrays*) and
+    `docs/faq.md`.
+  - Parser (on request): array literals (`array_literal` in `docs/grammar.txt`, an `ARRAY_LITERAL`
+    node), and `#externally_initialized`/`#section` added to the directives allowed on
+    declarations. Tests: `valid_scenarios/array_literals.hsc`, `externally_initialized.hsc`,
+    `E3012_05`, `E3022_05`. Checking that `#section` comes with `#externally_initialized` is left
+    to semantic analysis.
 
 Changes made to Hemera in response to SlopOS (newest first):
 
