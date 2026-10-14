@@ -1,6 +1,6 @@
 # 0022: Target Architectures: x86-64 First, Then AArch64 and RISC-V, 64-Bit Only
 
-Status: accepted (order and timing of the later architectures: proposed)
+Status: accepted (order and timing of the later architectures confirmed 2026-10-13: AArch64 right after M3)
 Date: 2026-10-04 (revised the same day: "ARM" meant AArch64; 64-bit only)
 
 ## Context

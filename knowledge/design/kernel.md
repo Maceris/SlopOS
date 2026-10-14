@@ -1,6 +1,7 @@
 # The Kernel: Scope, Per-CPU State, and Syscall Interception
 
-Status: **proposed**. Answers the *Kernel* open questions on scope, per-CPU state and
+Status: **accepted** 2026-10-13: scope and objects in `../decisions/0034`, syscall interception in
+`0036`. Answers the *Kernel* open questions on scope, per-CPU state and
 syscall interception. IPC and ports are in `ipc.md`, scheduling in `scheduling.md`, and the
 system ABI in `system-abi.md`. Thread decisions are in `../decisions/0023`.
 
@@ -238,7 +239,6 @@ channel ends that lack the `map` right, so it reads through syscalls that interc
 sees. Processes using direct access aren't strictly replayable.
 
 ## 5. Open Questions
-- Is `Process` one type for process, job and session, or several?
 - Fault delivery: does a page fault on uncommitted memory go to a per-memory-object pager
   port (Zircon-style user pagers, for memory-mapped files later), or only to the process's
   exception port for now?

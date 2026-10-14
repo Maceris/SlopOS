@@ -1,6 +1,6 @@
 # The System ABI
 
-Status: **partly decided.**
+Status: **accepted** 2026-10-13 (`../decisions/0025`, `0038`), apart from the remaining open questions in §9.
 - *Decided* (`../decisions/0025`): raw syscalls are the stable interface; every stable
   surface lives in one ABI package; stability starts at a declared ABI v1.
 - *Decided* (`../decisions/0026`): threads start in an entry stub of their own `std`, which
@@ -179,6 +179,5 @@ Code*):
 - Answered: hardware control-flow integrity no longer conflicts with Hemera's fibers (Hemera's
   2026-10-04 redesign). Whether SlopOS enables CET, GCS, PAC and BTI is open
   (`../open-questions.md`, *Kernel*).
-- `#escaping` on syscall parameters the kernel keeps after the call (`../open-questions.md`,
-  *Kernel*).
-- A per-thread pointer for foreign callbacks (§8).
+- ~~`#escaping` on syscall parameters~~ and ~~a per-thread pointer for foreign callbacks~~:
+  decided in `0038` (marked and checked; no C callbacks for now).

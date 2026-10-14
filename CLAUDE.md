@@ -83,9 +83,13 @@ when relevant.
   (`0024`). Raw syscalls are the stable interface; every stable surface lives in one
   generated ABI package, unstable until a declared ABI v1 (`0025`, `knowledge/design/system-abi.md`).
   Nothing is frozen until the OS design is thorough and development is under way (`0027`).
-- Proposed, not yet decided: kernel scope, async shared-ring IPC with ports, user-space
-  scheduling policy (`knowledge/design/kernel.md`, `ipc.md`, `scheduling.md`); one build
-  package using Hemera's compiler API (`0028`); house-rule checks run on every target (`0029`).
+- Kernel scope and object types (`0034`), async shared-ring IPC with ports (`0035`), syscall
+  interception at entry and exit only (`0036`), user-space scheduling policy with per-connection
+  budget lending (`0037`), system ABI conventions (`0038`).
+- Layer model, `BootInfo`, arch interface and package structure (`0002`, `0031`–`0033`), specified
+  in `docs/architecture/layers.md` and `docs/specs/`.
+- Proposed, not yet decided: one build package using Hemera's compiler API (`0028`); house-rule
+  checks run on every target (`0029`).
 
 ## Writing Hemera: Things That Are Easy to Get Wrong
 

@@ -48,9 +48,6 @@ and process control, and granting authority. Services are listed in `design/serv
 - **Remote login protocol.** Implement SSH (RFC 4251–4254) for interoperability with
   existing clients, or a native protocol that carries typed values and capabilities to the
   remote side? Either way it plugs into the account service and session manager.
-- **Which kernel object types exist?** Proposed list in `design/kernel.md` §2. Proposed
-  there: no separate notification objects (channel signals and `port_wake` cover them),
-  and timers are deadlines bound to ports (`design/ipc.md` §3). Awaiting confirmation.
 - **Account database at rest** (`design/services.md`): what key protects the account
   service's own volume, given it must be readable before anyone logs in?
 
@@ -65,45 +62,20 @@ design is thorough and development is under way), `BootInfo` (`0031`) and the ar
 `PerCpu` embeds; a failed stack check in the kernel calls the assertion handler; entry stubs set
 `stack_limit` for IST stacks (`../docs/architecture/layers.md`, `../docs/specs/arch_interface.md`).
 Out-of-process fiber unwinding relies on the calling convention version (Hemera's
-`docs/calling_convention.md`, *Version*). The rest have recommendations in
-`design/kernel.md`, `design/ipc.md`, `design/scheduling.md` and `design/system-abi.md`. Each
-needs confirming before it becomes a decision.
+`docs/calling_convention.md`, *Version*).
+Confirmed 2026-10-13: kernel scope and objects (`0034`), IPC and ports (`0035`), syscall
+interception (`0036`), scheduling and lending (`0037`), system ABI conventions with `#escaping` and
+no C callbacks for now (`0038`), and AArch64 right after M3 (`0022`).
 
-- **Kernel scope** (`design/kernel.md` §2): confirm the responsibility table and the
-  proposed object list. Is `Process` one type for process, job and session?
-- **IPC primitive** (`design/ipc.md`): asynchronous shared-ring channels, kernel doorbells and
-  handle transfer, messages up to half the ring (cap 64 KiB). Confirm, including the default
-  ring size.
-- **Ports** (`design/ipc.md` §3): one port object; readiness packets for channels, completion
-  packets for kernel events; the channel rings serve as submission/completion queues. Confirm.
-- **Syscall interception** (`design/kernel.md` §4): stops only at syscall entry and exit,
-  `Continue`/`Skip`, no cancellation of blocked waits. Confirm.
-- **Scheduling** (`design/scheduling.md`): a fixed kernel dispatcher whose parameters are set
-  by a user-space scheduler service; priority on the budget; `Demote` only at first; soft
-  real-time (glitch-free audio) as the latency goal. Confirm.
-- **Budget lending** (`design/scheduling.md` §4): per-connection loans by default, per-request
-  loans and priced requests as options. Confirm the default.
-- **A per-thread pointer for foreign callbacks** (`0026` item 3). Hemera reloads the carrier
-  pointer from OS thread-local storage when foreign code calls back into Hemera. Add one
-  kernel-saved per-thread register value (FS base / `TPIDR_EL0` / `tp`) only for that, or
-  declare foreign callbacks unsupported until there's ported C code (no external C is linked
-  into SlopOS today)?
 - **Hardware control-flow integrity for SlopOS itself.** Hemera's fibers now work under CET
   shadow stacks, IBT, AArch64 GCS, PAC and BTI. Does SlopOS enable them, for user space and
   for the kernel? Shadow stacks are per thread and must be created by the kernel (special
   pages), which conflicts with "user space owns stacks" and the per-thread memory target
   (`0023`); CET isn't part of x86-64-v3 (`0003`), so it would need runtime detection like
   AES (`0019`); context switches would save the CET state. The threat model (`0013`) doesn't
-  cover exploit mitigations yet. Likely its own decision.
-- **System ABI conventions** (`design/system-abi.md` §§2–8): Hemera-native calling
-  convention, register convention for syscalls, startup block contents, C thunks. Confirm.
-- **`#escaping` in syscall declarations.** Pointers the kernel keeps after a call returns
-  (`thread_create`'s `entry`, `stack` and `start`) should be `#escaping` parameters in the ABI
-  package, so `std` can't hand the kernel a pointer into its stack. Pointers the kernel only
-  uses during the call (`port_wait`'s `out`) stay non-escaping. Write the rule down for the
-  stub generator, and check it with a house rule?
-- **Second architecture timing** (`decisions/0022`): start AArch64 right after M3, as
-  proposed, or later?
+  cover exploit mitigations yet. Likely its own decision. Deferred (2026-10-13): nothing before
+  M4 needs it, and kernel shadow stacks would also need the entry paths to switch them
+  (`hemera-proposals/kernel-entry.md`, *Open Questions*).
 
 ## Layering (`../docs/architecture/layers.md`)
 

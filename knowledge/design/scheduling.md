@@ -1,6 +1,6 @@
 # Scheduling and CPU Budgets
 
-Status: **proposed**. Answers the *Kernel* open questions on scheduler policy and CPU-budget
+Status: **accepted** 2026-10-13 (`../decisions/0037`), except the open questions in §5. Answers the *Kernel* open questions on scheduler policy and CPU-budget
 scheduling, including lending a client's budget to a server. Builds on `0011` (separate CPU
 budget objects) and `0023` (cheap threads). The starting direction was scheduler policy
 outside the kernel, in the spirit of Linux's `sched_ext`.
@@ -154,9 +154,6 @@ A protocol type declares which level it uses. This belongs with how protocol typ
 idempotence (`0017`) and protocol tags, all under *IPC and data* in `../open-questions.md`.
 
 ## 5. Open Questions
-- Level 1 (per-connection loan) as the default for lending: right default? Servers may refuse
-  connections for their own reasons, including a missing loan. That's server behaviour, not
-  an OS policy.
 - Do CPU budgets need CPU affinity (pin to a set of CPUs), or is that a later hint?
 - Per-thread page for the budget binding (§3): also the place for other cheap per-thread
   state the kernel reads (for example a fiber scheduler's "don't preempt me" hint)? Is it

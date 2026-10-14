@@ -1,6 +1,6 @@
 # IPC: Shared-Ring Channels and Ports
 
-Status: **proposed**. Built on the direction from the open questions: asynchronous IPC as the
+Status: **accepted** 2026-10-13 (`../decisions/0035`). Built on the direction from the open questions: asynchronous IPC as the
 primitive, blocking as a layer on top, and memory-mapped ring buffers as the normal
 transport. Related: one channel per connection (`0010`), receives charged to budgets
 (`0011`), replay through syscalls (`0009`), the completion-queue direction
