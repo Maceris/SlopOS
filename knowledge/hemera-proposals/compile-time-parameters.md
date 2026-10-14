@@ -8,8 +8,10 @@ Status: **adopted** 2026-10-13, with these answers to the open questions:
   shows what's common.
 
 Done so far: `x86_64.entry_points` and `new`/`new_aligned`/`new_array`/`new_array_aligned` follow
-rule 3 (`T: type`). Not done yet: a generics section in Hemera's docs, and value parameters in
-generic lists (`struct[T, capacity: usize]`), which need a grammar and parser change.
+rule 3 (`T: type`), Hemera's `docs/types.md` has a *Generics* section covering all of it, and the
+parser and `docs/grammar.txt` handle value parameters and arguments in generic lists
+(`struct[T, capacity: usize]`, `Ring[u8, 4096]`) and literals of generic and package-qualified types
+(`Pair[int, string].{...}`, `runtime.Context.{...}`).
 
 Raised by `kernel-entry.md` (*Open Questions*): `x86_64.entry_points`
 needs its handler at compile time, and AArch64's `mrs`/`msr` and RISC-V's CSR instructions encode

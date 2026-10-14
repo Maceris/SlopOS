@@ -33,7 +33,6 @@ bootloader was found and resolved on 2026-10-13.
 |---|---|---|
 | Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`. Still open: documenting parse-once/parallel builds (B10); `os.run_process`'s body (`std/os/process.hsc` only checks `--allow-run` so far) | `hemera-proposals/build-programs.md` §7; `decisions/0028` |
 | Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 resolved 2026-10-13 (see Resolved). The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md`, *Other Architectures* |
-| Compile-time constant arguments (**friction**) | Adopted 2026-10-13: through generics (Hemera's equivalent of Jai's `$`). A generic parameter with the same name as a value parameter makes it compile-time; integers, enums, booleans and functions only; redundant explicit generics allowed with a warning. Done: `x86_64.entry_points`, and `new` and friends take `T: type`. To do: a generics section in Hemera's docs, and `name: type` values in generic lists (grammar and parser) | `hemera-proposals/compile-time-parameters.md` |
 | Shared ownership like C++'s `shared_ptr` | `std/memory`'s `SharedPtr[T]` holds a `ptr[mut T]` for now. To brainstorm: what language or compiler features would make a shared pointer work like C++'s. Starting points: sharing an immutable value (`shared_ptr<const T>`), which needs mutability as something a generic can take, or a separate read-only wrapper; counting copies automatically, which needs copy and destroy hooks, or move-only types, since today every owner calls `increment`/`decrement` by hand; using it like the value (`shared.field`), since `.` only dereferences real pointers; allocating the count with the value (`make_shared`); weak references | — |
 
 ## 2. Design Notes
@@ -77,6 +76,17 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-13 — Compile-time constant arguments and generics (`hemera-proposals/compile-time-parameters.md`):
+  a generic parameter with the same name as a value parameter makes it compile-time (integers, enums,
+  booleans and functions); redundant explicit generics allowed with a warning. `docs/types.md`
+  (*Generics*) documents binding, compile-time parameters and values in generic lists.
+  `x86_64.entry_points` and `new` and friends (`T: type`) follow it. Parser (on request): value
+  parameters (`struct[T, capacity: usize]`) and value arguments (`Ring[u8, 4096]`, `Settings[true,
+  .Fast]`), and struct and array literals of generic and package-qualified types
+  (`Pair[int, string].{...}`, `runtime.Context.{...}`). `Bits[64]` stays an array dimension in the
+  parser; the type checker reads it as an argument if `Bits` is generic. Tests:
+  `valid_scenarios/generics.hsc`, `E3017_11`.
 
 - 2026-10-13 — Pushing a complete context (`hemera-proposals/push-complete-context.md`):
   `push_context name from value { }` pushes a copy of a whole `runtime.Context`; it doesn't combine
