@@ -17,7 +17,7 @@ open question of whether settings are typed or strings: they are strings, becaus
 package and each target are type checked separately and don't share types.
 
 ## Decision
-- **One build package** builds everything. Its location is decided with the package structure
+- **One build package** builds everything (in `src/build/`, `0033`). Its location is decided with the package structure
   (`../open-questions.md`, *Scope*). There are no makefiles or scripts, and other Hemera code is
   never compiled through a `hemera` subprocess.
 - **Discovery, not lists.** Every program package (driver, service, program, test) declares

@@ -77,6 +77,15 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-13 — Package structure (`decisions/0033`):
+  - Imports take paths below built-in locations (`import slop_os from "std/os"`); `docs/packages.md`
+    now also says what each kind of `from` names: a built-in location names the folder containing the
+    package, a relative path names the package's own folder. Test: `valid_scenarios/imports.hsc`
+    (the parser already accepted any string).
+  - `std/os/slop_os/` holds the SlopOS ABI package (`slop_os`, freestanding, empty so far).
+  - `TargetOptions.max_frame_size`: a compile error for larger stack frames (`docs/compilation.md`),
+    since a house-rule check can't see frame sizes.
+
 - 2026-10-13 — Compile-time constant arguments and generics (`hemera-proposals/compile-time-parameters.md`):
   a generic parameter with the same name as a value parameter makes it compile-time (integers, enums,
   booleans and functions); redundant explicit generics allowed with a warning. `docs/types.md`

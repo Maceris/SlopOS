@@ -59,8 +59,13 @@ and process control, and granting authority. Services are listed in `design/serv
 Answered: AES (`decisions/0019`), bootloader (`0020`), KASLR (`0021`), target architectures
 (`0022`: x86-64, AArch64, RISC-V, 64-bit only), threads (`0023`), replay vs. direct IPC
 (`0024`), stable raw syscalls and the ABI package (`0025`), the carrier register and
-stack-limit checks at thread start (`0026`), and when ABIs freeze (`0027`: not until the OS
-design is thorough and development is under way). The rest have recommendations in
+stack-limit checks at thread start (`0026`), when ABIs freeze (`0027`: not until the OS
+design is thorough and development is under way), `BootInfo` (`0031`) and the arch interface
+(`0032`). Per-CPU state goes through the carrier block (`intrinsics.carrier().program_data`), which
+`PerCpu` embeds; a failed stack check in the kernel calls the assertion handler; entry stubs set
+`stack_limit` for IST stacks (`../docs/architecture/layers.md`, `../docs/specs/arch_interface.md`).
+Out-of-process fiber unwinding relies on the calling convention version (Hemera's
+`docs/calling_convention.md`, *Version*). The rest have recommendations in
 `design/kernel.md`, `design/ipc.md`, `design/scheduling.md` and `design/system-abi.md`. Each
 needs confirming before it becomes a decision.
 
@@ -78,20 +83,6 @@ needs confirming before it becomes a decision.
   real-time (glitch-free audio) as the latency goal. Confirm.
 - **Budget lending** (`design/scheduling.md` §4): per-connection loans by default, per-request
   loans and priced requests as options. Confirm the default.
-- **Per-CPU state** (`design/kernel.md` §3): `context.user_data` → `PerCpu` with a prebuilt
-  `Context`, and global state in one boot-allocated `Kernel`. Confirm. User-space friction:
-  `hemera-proposals/context-extensions.md`. Since 2026-10-04 Hemera says *where code runs*
-  doesn't belong in the context but in the carrier block; the kernel's case holds because an
-  entry never leaves its CPU. Alternative: find `PerCpu` as `kernel.cpus[carrier.index]`.
-- **The carrier register in the kernel** (`design/kernel.md` §3, `0026`). Every Hemera
-  prologue reads `[r14]`, so kernel entry must load a per-CPU `CarrierBlock` (save the user's
-  `r14`, never trust it, restore it on exit). Open: does `PerCpu` embed the `CarrierBlock`;
-  what the stack-limit check does in the kernel (there's no `morestack`: trap, or call the
-  assertion handler); and how IST stacks (NMI, #DF, #MC) and nested interrupts swap
-  `stack_limit`, since the check compares against the normal kernel stack's limit.
-- **Kernel frame sizes.** Stack arrays can now be passed as views, so more code will put
-  buffers on the stack. The kernel has one fixed stack per CPU: a house-rule check (`0007`)
-  for a maximum kernel frame size?
 - **A per-thread pointer for foreign callbacks** (`0026` item 3). Hemera reloads the carrier
   pointer from OS thread-local storage when foreign code calls back into Hemera. Add one
   kernel-saved per-thread register value (FS base / `TPIDR_EL0` / `tp`) only for that, or
@@ -104,10 +95,6 @@ needs confirming before it becomes a decision.
   (`0023`); CET isn't part of x86-64-v3 (`0003`), so it would need runtime detection like
   AES (`0019`); context switches would save the CET state. The threat model (`0013`) doesn't
   cover exploit mitigations yet. Likely its own decision.
-- **Unwinding fibers from outside the process.** Debuggers, profilers and crash reporters
-  using `0017`'s `inspect`/`read_memory` must understand Hemera's resume loop
-  (`.loop_return`, `FiberResumeState`) and stack segments. That layout is private to the
-  runtime, so these tools pin the runtime version they understand?
 - **System ABI conventions** (`design/system-abi.md` §§2–8): Hemera-native calling
   convention, register convention for syscalls, startup block contents, C thunks. Confirm.
 - **`#escaping` in syscall declarations.** Pointers the kernel keeps after a call returns
@@ -118,29 +105,13 @@ needs confirming before it becomes a decision.
 - **Second architecture timing** (`decisions/0022`): start AArch64 right after M3, as
   proposed, or later?
 
-## Hemera
-
-- Bitfields: integers + masks (current plan) vs. explicit-position bitfields (`hemera-proposals/bitfields.md`).
-- Racy plain memory accesses: UB, defined as relaxed, or a `shared[T]` type? (`hemera-proposals/atomics.md` §3)
-- Do runtime panics (bounds checks, divide by zero) go through `context.assertion_handler`,
-  like `assert`? The kernel's panic path depends on it (`hemera-feedback.md` item 3).
-- Context extensions (`hemera-proposals/context-extensions.md`): threads and fibers created
-  inside a scope copy the context, including the chain pointer, and can outlive the scope, so
-  extension nodes can't be freed when it ends. Immortal, arena-owned, or reference-counted?
-- Carrier register on RISC-V: Hemera defines `r14` (x86-64) and `x28` (AArch64) only, and
-  SlopOS targets riscv64 (`0022`).
-
 ## Layering (`../docs/architecture/layers.md`)
 
-- Exact contents of the arch interface: what's in L1 vs. portable L2? Narrowed 2026-10-13:
-  per-CPU state, time conversion and thread switching are portable (`design/layers.md`, L1).
-- How kernel entry and return to user mode get written where Hemera's interrupt functions
-  don't reach (x86-64 `SYSCALL`, `sysretq`/`iretq` with a full register set, `XSAVE`, AArch64
-  and RISC-V vectors): new intrinsics and calling conventions, or a small assembly file per
-  architecture linked into the kernel (`hemera-feedback.md`). Answered for x86-64: compiler-generated
-  entry paths, no assembly (`hemera-proposals/kernel-entry.md`); AArch64 and RISC-V follow after M3.
-- Does the kernel parse any ACPI itself (needed to start CPUs and find the APIC), or does
-  the bootloader provide enough?
+Answered: the arch interface's contents (`../docs/specs/arch_interface.md`); kernel entry on
+x86-64 (Hemera entry functions; AArch64 and RISC-V are tracked in `hemera-feedback.md`); the kernel
+parses no ACPI (Limine starts the CPUs, device interrupts are message-signaled first, `0031`,
+`0032`).
+
 - Platform service: one process for ACPI + PCIe, or separate?
 - How does the platform service describe wired interrupt controllers (I/O APIC, GIC
   distributor, PLIC) to the kernel, so it can route wired IRQs? The arch interface covers only
@@ -183,13 +154,6 @@ needs confirming before it becomes a decision.
 - How much of a path-based tree do we need for interop (FAT, git, network shares)?
 - Transactions / snapshots in the filesystem layer or a layer above?
 
-## Scope
-
-- Package structure and naming for `src/`: to be drafted after the OS design is more
-  refined, informed by the architecture and Hemera's style. Includes where the build package
-  lives (`hemera-proposals/build-programs.md`) and where the ABI package lives
-  (`decisions/0025`: in Hemera `std`'s SlopOS OS layer, or in `src/` next to `protocols/`).
-
 ## Hemera Threads
 
 Raised with Hemera's 2026-10-04 fiber redesign. Notes in *italics* are SlopOS's view.
@@ -197,16 +161,11 @@ Raised with Hemera's 2026-10-04 fiber redesign. Notes in *italics* are SlopOS's 
 * Should plain threads grow their stacks with segments too, instead of treating the limit as an error?
   *SlopOS leans yes: user space owns stacks (`0023`), and segmented thread stacks would let
   threads start as small as fibers instead of a 4 KiB page.*
-* A `park` and/or waiter API that guarantees suspends where yield does not?
-  *SlopOS's ports supply the waiter registration: `park` binds the fiber's key on the
-  scheduler's port, and when it returns false the caller waits with `port_wait` on its
-  thread's own port (`design/ipc.md` §4).*
 * Windows: the stack bounds in the thread environment block are used by structured exception handling and some APIs.
   Either update them on every switch (as Windows' own fibers do), or rely only on vectored exception handlers
   (as Go does).
 * Windows: whether the thread-local storage slot for the carrier pointer can be at a fixed offset.
 * LLVM: reserving the carrier register, and emitting this prologue and this `morestack` protocol.
-* Debuggers and profilers need to know that a return into the resume loop continues in the fiber's resume state.
 * While a fiber is suspended, its return addresses are in ordinary memory and are trusted when it resumes.
   IBT/BTI limit where they can lead to, and the runtime could also check them against a table of call sites.
   A hardened mode with a shadow stack per fiber is possible, at a much higher memory cost.

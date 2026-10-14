@@ -315,7 +315,7 @@ Programs as packages exporting typed functions; shell builds CLIs from signature
 
 ## Build Shape (illustrative only)
 
-Package structure and naming are deliberately undecided. They'll be drafted once the OS
+Superseded by `../decisions/0033` (2026-10-13), which sets the real layout. Package structure and naming were deliberately undecided at the time. They'll be drafted once the OS
 design is more refined, informed by both this architecture and Hemera's style (see
 `../open-questions.md`). The sketch below only shows how the layers might map to folders.
 

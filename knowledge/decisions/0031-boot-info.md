@@ -1,6 +1,6 @@
 # 0031: The Shape of BootInfo
 
-Status: proposed
+Status: accepted (2026-10-13)
 Date: 2026-10-13
 Related: `0002` (layers, L0 per boot protocol), `0012` (root task), `0020` (Limine), `0021` (KASLR)
 

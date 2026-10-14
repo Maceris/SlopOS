@@ -174,8 +174,8 @@ Code*):
   Hemera into C need nothing extra.
 
 ## 9. Open Questions
-- Where the ABI package lives: inside Hemera `std`'s SlopOS OS layer, or in `src/` next to
-  `protocols/` (`0025`; decided with package structure under *Scope*).
+- ~~Where the ABI package lives~~: decided in `0033`, Hemera's `std/os/slop_os/` (package
+  `slop_os`).
 - Answered: hardware control-flow integrity no longer conflicts with Hemera's fibers (Hemera's
   2026-10-04 redesign). Whether SlopOS enables CET, GCS, PAC and BTI is open
   (`../open-questions.md`, *Kernel*).

@@ -31,8 +31,8 @@ of many outputs is an ordinary Hemera program, without a separate build language
   (`reflection-checks.md`, `../decisions/0029-house-rule-checks-in-build.md`).
 - **Settings** are per-target strings that the target reads with `compiler.target_setting`.
 
-Folder paths below (`src/kernel`, `src`) are placeholders until the package structure is
-drafted (`../open-questions.md`, *Scope*).
+Folder paths below (`src/kernel`, `src`) were placeholders written before the package structure
+was decided (`../decisions/0033`).
 
 ```
 package build
