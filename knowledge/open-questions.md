@@ -86,34 +86,9 @@ IOMMUs (`0039`). Protocol versioning moved to *IPC and data*.
 
 ## IPC and data
 
-- Should channels carry a protocol identifier? A message involves three layers: kernel
-  transport (bytes + handles, never inspected), the *connection protocol* (which request and
-  response unions a connection speaks, e.g. `Dir` vs `ReadOnlyDir`, which is also how
-  server-side rights are expressed, `decisions/0015`), and the *data encoding* (how values
-  are laid out). An identifier would name the connection protocol only. Leaning: an opaque
-  64-bit tag set at channel creation, never interpreted by the kernel, checked by `std` when
-  a handle arrives as `Channel[P]`. It catches wiring mistakes early without a handshake, but
-  isn't security (the creator picks it). What the tag *means* (exact type hash, or name +
-  major version) depends on schema evolution, so decide them together.
-- How does a protocol type declare that it's idempotent, so `std` can reconnect and retry
-  automatically (`decisions/0017`)?
-- Canonical wire format: raw Hemera layout with relative pointers, or a separate encoding?
-- Schema evolution rules when producer and consumer disagree on a type's version.
-  Decide together with device-class protocol versioning: what happens when `block` gains a new
-  request? Leaning: variants are append-only, a server answers an unknown variant with
-  `.Unsupported`, and clients ask with a `Features` request.
-- How do generic tools (pagers, viewers, queries) display values they have no compiled type for?
-- Fiber stacks vs. message sizes. A fiber's first stack segment is 1 KiB, and further
-  segments are sized to the frame that needs them. Copying a large message (up to 64 KiB,
-  `design/ipc.md` §2) into a stack buffer on a fiber forces a large segment allocation.
-  Hemera's memory budget assumes about 1 KiB of frames at a typical wait; measure `std`'s
-  receive and decode path against that, and keep large receive buffers per connection on the
-  heap?
-- Per-carrier state in `std` (allocator caches, a `Random` per carrier, the scheduler's
-  port). Hemera's pattern is a no-yield region indexed by `current_thread_index()`. Who
-  assigns that index on SlopOS (`std`'s thread entry stub), and is it dense enough to index
-  arrays? Is the per-thread page shared with the kernel (`design/scheduling.md` §3) separate
-  from the carrier block, or reached from it?
+Nothing open. Answered: wire format, schema evolution and protocol versioning, protocol tags,
+idempotence and lending metadata, and values without a compiled type (`decisions/0040`,
+`design/protocols.md`); receive buffers and per-carrier state in `std` (`0041`).
 
 ## Storage
 

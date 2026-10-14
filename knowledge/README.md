@@ -16,6 +16,7 @@ system as built lives in `../docs/` instead.
 | `design/threads.md` | Making threads cheap: memory and creation cost |
 | `design/kernel.md` | What the kernel does (and doesn't), per-CPU state, syscall interception |
 | `design/ipc.md` | Shared-ring channels, ports, handle transfer, replay |
+| `design/protocols.md` | Protocol wire format, evolution rules, tags, idempotence and schemas |
 | `design/scheduling.md` | CPU budgets, scheduler policy in user space, budget lending |
 | `design/system-abi.md` | The Hemera-native system ABI: syscalls, process start, libraries, C interop |
 | `design/security.md` | The security design: threat model, capabilities, users, grants (overview of decisions 0008–0018) |

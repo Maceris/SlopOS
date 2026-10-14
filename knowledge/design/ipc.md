@@ -75,10 +75,10 @@ MessageHeader :: struct {
 ### Untrusted peer memory
 The peer can write its ring at any time, including while a message is being read.
 - **`std` copies each message out of the ring into private memory before decoding it**, and
-  bounds-checks `head`/`tail`/`size` against the ring size. Since Hemera allows stack
-  buffers to be passed as views, small messages can be copied into a stack buffer. Large ones
-  shouldn't be on a fiber, whose stack segments are 1 KiB (`../open-questions.md`, *IPC and
-  data*). This is one copy, the same
+  bounds-checks `head`/`tail`/`size` against the ring size. Messages up to 256 bytes are
+  copied into a stack buffer, larger ones into a per-connection heap buffer, so they never land on
+  a fiber's 1 KiB stack segment (`../decisions/0041`). A generated validator then checks the
+  message before it's used (`protocols.md`, `../decisions/0040`). This is one copy, the same
   number a kernel-copying design makes, but done by the receiver.
 - Double-fetch bugs (reading a length twice, from memory the attacker controls) are the
   classic failure of shared-memory IPC, in Xen and virtio backends among others. All ring

@@ -150,8 +150,8 @@ Two cases the levels cover without extra kernel features:
 - **Passive servers** (seL4's term): a server whose own budget only covers housekeeping, and
   which does client work only on loans. It never runs unless a client pays.
 
-A protocol type declares which level it uses. This belongs with how protocol types declare
-idempotence (`0017`) and protocol tags, all under *IPC and data* in `../open-questions.md`.
+A protocol declares which level it uses in its `PROTOCOL` constant, next to its idempotence
+function (`protocols.md` §4, `../decisions/0040`).
 
 ## 5. Open Questions
 - Do CPU budgets need CPU affinity (pin to a set of CPUs), or is that a later hint?

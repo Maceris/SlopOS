@@ -25,7 +25,6 @@ See `../design/scheduling.md` §1: all policy in the kernel, every decision in u
 (scheduler activations), and verified policy code in the kernel (`sched_ext`).
 
 ## Consequences
-- How a protocol type declares its lending level belongs with protocol tags and idempotence
-  (`../open-questions.md`, *IPC and data*).
+- A protocol declares its lending level in its `PROTOCOL` constant (`0040`).
 - CPU affinity for budgets, and the per-thread page shared with the kernel, stay open
   (`../design/scheduling.md` §5).

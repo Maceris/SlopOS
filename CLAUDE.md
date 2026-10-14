@@ -87,6 +87,9 @@ when relevant.
   interception at entry and exit only (`0036`), user-space scheduling policy with per-connection
   budget lending (`0037`), system ABI conventions (`0038`). The platform service registers
   interrupt controllers and IOMMUs with the kernel, which drives them (`0039`).
+- Protocols travel in Hemera's own layout, validated on arrival, with append-only evolution and
+  per-channel protocol tags (`0040`, `knowledge/design/protocols.md`); `std` keeps large messages
+  off fiber stacks and assigns dense carrier indices (`0041`).
 - Layer model, `BootInfo`, arch interface and package structure (`0002`, `0031`–`0033`), specified
   in `docs/architecture/layers.md` and `docs/specs/`.
 - Proposed, not yet decided: one build package using Hemera's compiler API (`0028`); house-rule

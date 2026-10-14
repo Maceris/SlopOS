@@ -211,7 +211,9 @@ User-space processes.
 | `entropy` | Random bytes |
 | `serial` | A byte stream, for consoles |
 
-A protocol is a Hemera `union` of requests and a `union` of responses. Variants with several
+A protocol is a Hemera `union` of requests and a `union` of responses. Messages travel in the
+types' own layout, checked on arrival, and protocols only ever grow by appending (`0040`; details
+in `../../knowledge/design/protocols.md`, to become a specification). Variants with several
 fields carry a struct:
 
 ```
