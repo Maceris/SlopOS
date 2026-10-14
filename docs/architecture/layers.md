@@ -92,7 +92,8 @@ kernel's entry point, which:
 
 1. points a carrier block on the boot stack at the end of that stack and loads it with
    `intrinsics.set_carrier`;
-2. pushes a context built from constants (`runtime.FAILING_ALLOCATOR`, an early serial logger);
+2. pushes a context made of constants (`push_context boot from runtime.MINIMAL_CONTEXT`, with an early serial
+   logger);
 3. builds a `BootInfo` without an allocator (`../specs/boot_info.md`);
 4. calls the portable `kernel.boot(boot_info)`, which is `#never_returns`.
 
@@ -160,14 +161,14 @@ carrier block or a context. Each stub (detailed in `../specs/arch_interface.md`,
    register when entered from user mode;
 2. loads the carrier block with `intrinsics.set_carrier`, setting `stack_limit` for the stack
    in use (including IST and other separate exception stacks);
-3. pushes the CPU's prebuilt context, `PerCpu.context`;
+3. pushes the CPU's prebuilt context with `push_context ... from PerCpu.context`;
 4. calls the portable L2 handler.
 
 The user's carrier register is restored on return and its value is never trusted (`0026`).
 
 On x86-64, the stubs are Hemera entry functions (`#calling_convention(.entry)` and
-`.syscall_entry`). AArch64 and RISC-V entry, and pushing a complete prebuilt context, have no Hemera
-mechanism yet (`../../knowledge/hemera-feedback.md`).
+`.syscall_entry`). AArch64 and RISC-V entry have no Hemera mechanism yet
+(`../../knowledge/hemera-feedback.md`).
 
 ## L2 — Microkernel Core
 

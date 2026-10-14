@@ -34,7 +34,6 @@ bootloader was found and resolved on 2026-10-13.
 | Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`. Still open: documenting parse-once/parallel builds (B10); `os.run_process`'s body (`std/os/process.hsc` only checks `--allow-run` so far) | `hemera-proposals/build-programs.md` §7; `decisions/0028` |
 | Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 resolved 2026-10-13 (see Resolved). The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md`, *Other Architectures* |
 | Compile-time constant arguments (**friction**) | Adopted 2026-10-13: through generics (Hemera's equivalent of Jai's `$`). A generic parameter with the same name as a value parameter makes it compile-time; integers, enums, booleans and functions only; redundant explicit generics allowed with a warning. Done: `x86_64.entry_points`, and `new` and friends take `T: type`. To do: a generics section in Hemera's docs, and `name: type` values in generic lists (grammar and parser) | `hemera-proposals/compile-time-parameters.md` |
-| Pushing a complete context (**blocker** for kernel entry) | Open, found writing `docs/calling_convention.md` (*Entry Functions*). `push_context` copies the *current* context with some fields overridden, but entry, interrupt and freestanding entry functions have no current context, and the kernel wants to push a prebuilt one (`PerCpu.context`, `design/kernel.md` §3). `docs/compilation.md` says to "push_context a context built from constants" without a syntax for it. Needs a form that pushes a whole `Context` value | — |
 | Shared ownership like C++'s `shared_ptr` | `std/memory`'s `SharedPtr[T]` holds a `ptr[mut T]` for now. To brainstorm: what language or compiler features would make a shared pointer work like C++'s. Starting points: sharing an immutable value (`shared_ptr<const T>`), which needs mutability as something a generic can take, or a separate read-only wrapper; counting copies automatically, which needs copy and destroy hooks, or move-only types, since today every owner calls `increment`/`decrement` by hand; using it like the value (`shared.field`), since `.` only dereferences real pointers; allocating the count with the value (`make_shared`); weak references | — |
 
 ## 2. Design Notes
@@ -78,6 +77,14 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-13 — Pushing a complete context (`hemera-proposals/push-complete-context.md`):
+  `push_context name from value { }` pushes a copy of a whole `runtime.Context`; it doesn't combine
+  with overrides. Freestanding entry points, interrupt functions and entry functions have no context
+  until they push one, and can only call intrinsics before that (`docs/control_flow.md`).
+  `runtime.MINIMAL_CONTEXT` (failing allocator, `DISCARDING_LOGGER`, `NO_CLOCK`, `NO_RANDOM`, the trap
+  assertion handler) replaces "a context built from constants" in `docs/compilation.md`. Parser (on
+  request): the `from` form; tests in `valid_scenarios/push_context.hsc` and `E3018_10`.
 
 - 2026-10-13 — Kernel entry and return to user mode on x86-64 (`hemera-proposals/kernel-entry.md`):
   `#calling_convention(.entry)` and `.syscall_entry` with compiler-generated entry paths

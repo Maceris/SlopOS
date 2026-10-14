@@ -485,8 +485,9 @@ resume from either place.
 
 On x86-64, entry stubs are Hemera entry functions (`#calling_convention(.entry)` and
 `.syscall_entry`, Hemera `docs/calling_convention.md`, *Entry Functions*), whose compiler-generated
-code does step 1. AArch64 and RISC-V entry, and pushing a complete prebuilt context in step 3, aren't
-expressible in Hemera yet (`../../knowledge/hemera-feedback.md`).
+code does step 1. Step 3 is `push_context cpu_context from` the recorded context (Hemera
+`docs/control_flow.md`, *Pushing a Whole Context*). AArch64 and RISC-V entry aren't expressible in
+Hemera yet (`../../knowledge/hemera-feedback.md`).
 
 ## x86-64
 

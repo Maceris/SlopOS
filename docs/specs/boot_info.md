@@ -25,8 +25,8 @@ At that point:
 - **The carrier register** points at a carrier block on the boot stack, with `stack_limit` set
   for that stack. To switch to its own per-CPU carrier block, the kernel copies the current
   `intrinsics.carrier().stack_limit` into it before calling `intrinsics.set_carrier`.
-- **The context** is the constant boot context: `runtime.FAILING_ALLOCATOR` and an early
-  serial logger.
+- **The context** is the constant boot context: `runtime.MINIMAL_CONTEXT`, pushed with
+  `push_context ... from`, with an early serial logger in place of its discarding one.
 - **Paging is on**, with the bootloader's page tables. The kernel image is mapped at
   `kernel_image.virtual_base`, and all memory in the memory map except `Reserved` and
   `Defective` regions is mapped at `direct_map_offset` plus its physical address.
