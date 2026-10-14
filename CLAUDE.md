@@ -93,6 +93,9 @@ when relevant.
 - A user's volume stays unlocked from first login until shutdown; shared volumes rotate keys on
   member removal; the account database is unencrypted (`0042`). Trusted path: a reserved status
   line and secure attention key; SSH first, a native remote protocol later (`0043`).
+- A program's typed entry point is its manifest; services offer `Listener[P]` and depend on
+  `Channel[P]`; the system configuration is a type-checked Hemera value (`0044`). Libraries are
+  content-addressed, with compiler-checked compatibility and policy-based fix substitution (`0045`).
 - Layer model, `BootInfo`, arch interface and package structure (`0002`, `0031`–`0033`), specified
   in `docs/architecture/layers.md` and `docs/specs/`.
 - Proposed, not yet decided: one build package using Hemera's compiler API (`0028`); house-rule

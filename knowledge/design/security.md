@@ -74,8 +74,9 @@ the shell, logging.
   console (terminal service) or, later, in the GUI; both use the same protocol. Prompts name
   the requester by its connection label. During a console prompt, keystrokes go only to the
   powerbox.
-- *Proposed:* the shell derives grants from a program's typed parameters (a `ReadOnlyFile`
-  parameter is opened read-only). Waits on what executables look like.
+- The shell derives grants from a program's typed parameters: a `ReadOnlyFile` parameter is
+  opened read-only, a `FileSet` becomes a directory plus filter. The entry signature is the
+  program's manifest (`0044`).
 
 ## 7. Rules for servers (`0010`, `0014`)
 - Authorize a request **only by the connection it arrived on**: its protocol and the rights
@@ -139,8 +140,6 @@ Timing and covert channels; transient-execution attacks; network capabilities (f
 protection from a malicious administrator replacing system software; code signing (for now).
 
 ## 13. Open items
-- Executables, libraries and typed entry points, which decide static authority and shell
-  grants.
 - Service details in `services.md` (powerbox per session).
 - ~~Whether AES instructions become part of the CPU baseline~~: no; detected at boot with a
   software fallback (`0019`).

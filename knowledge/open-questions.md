@@ -5,22 +5,10 @@ Running list of unresolved questions only. When one is answered, record the answ
 
 ## Executables, libraries and program reuse
 
-- What does a *service* look like: how does it declare the protocols it offers?
-  (Executables and libraries are settled: a target names its entry function, `main` by
-  default, libraries have none and `#export` their interface; `decisions/0028`.)
-- Is a program's exported entry-point signature its manifest (static authority)? E.g.
-  `search :: fn(pattern: Regex, files: FileSet)` would declare exactly what it receives at
-  launch, and the shell would derive launch grants from the parameter types
-  (`design/security.md` §6). Runtime grants go through the powerbox (`decisions/0018`).
-- Is the system configuration that wires services together a Hemera value computed at
-  compile time, so the compiler type-checks the wiring? (`hemera-proposals/build-programs.md`)
-- How do libraries work? How are they shared and versioned? How do we avoid DLL hell
-  and bloated static binaries? → see `problems-and-directions.md` §5 (content addressing)
-- Can we avoid libc-style version breakage from limited forwards/backwards compatibility?
-  → §5 (compiler-checked interface compatibility)
-- Can a program call another program's functions (e.g. grep's search) directly, and is that
-  linked in-process or called out-of-process over IPC? → §4. Linked code gets all of the
-  caller's authority (`decisions/0013`).
+Nothing open. Answered 2026-10-13: typed entry points as manifests, services, the system
+configuration as a compile-time value, and calling other programs (`decisions/0044`); content-addressed
+libraries, compatibility checks and fix substitution (`0045`). Executables and libraries themselves
+were settled in `0028`.
 
 ## Security and capabilities
 

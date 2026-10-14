@@ -126,7 +126,7 @@ Text as the default data format is explicitly something we don't want.
 help text, validation and completion, inconsistently. Nothing is discoverable by machines.
 
 **Directions.**
-- **[leaning]** *Programs export typed functions, not `main(argc, argv)`.*
+- **[decided, `decisions/0044`]** *Programs export typed functions, not `main(argc, argv)`.*
   ```
   search :: fn(pattern: Regex, files: File[], ignore_case := false, max := 0) -> Stream[Match]
   ```
@@ -136,7 +136,7 @@ help text, validation and completion, inconsistently. Nothing is discoverable by
 - **[leaning]** *This also answers an early question: can my program just call grep's search functions?*
   If `grep` is a package exporting `search`, then the CLI, other programs, and scripts are
   all just callers of the same function. The unit of reuse becomes the function, not the process.
-- **[unsure]** In-process vs out-of-process call. Linking grep's `search` into my program
+- **[decided, `0044`: both, chosen by the caller]** In-process vs out-of-process call. Linking grep's `search` into my program
   means trusting grep's code with my authority. Calling it as a separate process via typed
   IPC keeps isolation but costs a context switch per call. Maybe both, chosen by the caller.
 - **[explore]** Multiple entry points per program (subcommands become just more exported functions).
@@ -153,14 +153,14 @@ Containers "solved" this by shipping an entire OS per app.
 installed into a *single shared global location*. Both are lies about compatibility.
 
 **Directions.**
-- **[leaning]** *Content-addressed libraries.* A library is identified by the hash of its
+- **[decided, `decisions/0045`]** *Content-addressed libraries.* A library is identified by the hash of its
   contents (Nix, Unison, Git). Two apps depending on the same hash share one copy on disk
   and in memory; different hashes coexist without conflict. You get static linking's
   determinism with dynamic linking's sharing.
-- **[explore]** *Compiler-checked compatibility.* Since everything is Hemera, the toolchain
+- **[decided, `0045`]** *Compiler-checked compatibility.* Since everything is Hemera, the toolchain
   can diff the exported type signatures of two library versions and *know* whether the
   change is compatible, rather than trusting a semver number.
-- **[explore]** *Security-fix substitution.* The hole in content addressing: a CVE in
+- **[decided, `0045`]** *Security-fix substitution.* The hole in content addressing: a CVE in
   `libfoo#abc123` means every app pins the vulnerable hash. Need a policy mechanism:
   "hash X is replaced by hash Y for anyone whose interface check passes", recorded and
   reversible.
