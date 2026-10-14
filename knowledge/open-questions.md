@@ -68,7 +68,7 @@ beneath directory handles, and transactions and snapshots are in the filesystem 
 
 ## Hemera Threads
 
-* Segmented stacks for plain threads: proposed in `hemera-proposals/segmented-thread-stacks.md`.
-  The Hemera-only questions from the fiber redesign (Windows' thread environment block and
+* Nothing open. Segmented stacks for plain threads were adopted
+  (`hemera-proposals/segmented-thread-stacks.md`). The Hemera-only questions from the fiber redesign (Windows' thread environment block and
   thread-local storage, LLVM support, return addresses of suspended fibers) moved to Hemera's
   `docs/multitasking.md`, *Open Questions*.

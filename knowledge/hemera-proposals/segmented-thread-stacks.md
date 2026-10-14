@@ -1,6 +1,9 @@
 # Proposal: Segmented Stacks for Plain Threads
 
-Status: **proposed** 2026-10-13. Raised with Hemera's fiber redesign (2026-10-04), from SlopOS's
+Status: **adopted** 2026-10-13. Hemera's `docs/multitasking.md` (*Stacks*, *Foreign Code*,
+*Signals*), `docs/calling_convention.md` and `base/runtime/thread.hsc` (`ThreadStack`,
+`SegmentedStack`, default 1 KiB first segment and 64 KiB native stack) are the reference; the
+rest of this document is the original draft. Raised with Hemera's fiber redesign (2026-10-04), from SlopOS's
 open question *Should plain threads grow their stacks with segments too?*
 
 ## Problem
