@@ -29,27 +29,8 @@ handles and lifetime, the ambient floor and replay, revocation and rights, budge
 task, the threat model, server authorization, handle types, users and encryption, restart
 and process control, and granting authority. Services are listed in `design/services.md`.
 
-- **Unlocking encrypted volumes without a password** (`decisions/0016`). Key-based remote
-  login and a user's background work can't unwrap a volume key, because verifying a
-  signature yields no secret. Options: require the volume to be unlocked already by another
-  session; credentials that can decrypt (the client unwraps the volume key); ask for the
-  password once per boot; or keep a machine-held key for selected background work (weaker
-  against disk theft and the administrator). Possibly different answers for remote login
-  and background work.
-- **Persistent grants and sharing** (`design/security.md` §8, proposed): stored links kept
-  by the storage service in the recipient's namespace, and shared volumes whose key is
-  wrapped for each member. Make it a decision? When a member is removed from a shared
-  volume, is deleting their link and wrapped key enough, or must the volume be re-keyed
-  (expensive: re-encrypt everything, or encrypt only new data with a new key)?
-- **Genuine prompts on the console** (`decisions/0018`). How does the terminal service show
-  that a prompt is the powerbox's and not a program's output: a reserved status line, a
-  secure attention key, a per-user secret phrase shown with each prompt? What does that
-  look like over remote login, where everything shares one byte stream?
-- **Remote login protocol.** Implement SSH (RFC 4251–4254) for interoperability with
-  existing clients, or a native protocol that carries typed values and capabilities to the
-  remote side? Either way it plugs into the account service and session manager.
-- **Account database at rest** (`design/services.md`): what key protects the account
-  service's own volume, given it must be readable before anyone logs in?
+Answered 2026-10-13: unlocking without a password, sharing and member removal, and the account
+database (`decisions/0042`); genuine prompts and the remote login protocol (`0043`). Nothing open.
 
 ## Kernel
 

@@ -64,8 +64,8 @@ takes "a login succeeded" and turns it into capabilities, which is why it's in t
 | **Events / log** | L4 | Structured, typed events; logging destinations handed out at launch (`0009`) | Its own storage | no |
 
 ## Open
-- Does the account service own its database volume directly, and what key protects it at
-  rest (a machine key, or a key unlocked at boot)?
+- Does the account service own its database volume directly? (It isn't encrypted, `0042`.)
 - Is the powerbox one service per session or one system service handling all sessions?
-- Is the terminal service also what remote login attaches to, so remote shells get the
-  same console prompts?
+- Is the terminal service also what remote login attaches to? Remote prompts are settled
+  (`0043`: outside the stream over the native protocol, none over SSH); where sessions attach
+  isn't.

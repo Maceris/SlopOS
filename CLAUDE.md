@@ -90,6 +90,9 @@ when relevant.
 - Protocols travel in Hemera's own layout, validated on arrival, with append-only evolution and
   per-channel protocol tags (`0040`, `knowledge/design/protocols.md`); `std` keeps large messages
   off fiber stacks and assigns dense carrier indices (`0041`).
+- A user's volume stays unlocked from first login until shutdown; shared volumes rotate keys on
+  member removal; the account database is unencrypted (`0042`). Trusted path: a reserved status
+  line and secure attention key; SSH first, a native remote protocol later (`0043`).
 - Layer model, `BootInfo`, arch interface and package structure (`0002`, `0031`–`0033`), specified
   in `docs/architecture/layers.md` and `docs/specs/`.
 - Proposed, not yet decided: one build package using Hemera's compiler API (`0028`); house-rule

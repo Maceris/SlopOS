@@ -85,7 +85,7 @@ the shell, logging.
 - Narrower authority is a **new connection speaking a narrower protocol**.
 - Labels describe connections for audit, quotas and prompts; they never grant anything.
 
-## 8. Persistence and sharing (*proposed*)
+## 8. Persistence and sharing (`0042`)
 Kernel handles don't survive a reboot. Authority that must persist is rebuilt or stored:
 - **System wiring** is rebuilt from the declarative system configuration at boot.
 - **User grants that must persist** ("this editor may reopen this file", "user B may use
@@ -96,6 +96,8 @@ Kernel handles don't survive a reboot. Authority that must persist is rebuilt or
   and delete the links it issued, which revokes them.
 - **Shared areas between users** are separate volumes with their own volume key, wrapped
   for each member. Granting access is a link in the member's namespace plus a wrapped key.
+- **Removing a member** deletes their link and wrapped key, and moves the volume to a new key
+  generation for everything written afterwards. Old data is re-encrypted only on request.
 
 ## 9. Users, sessions and encryption (`0016`)
 - The kernel has no users. A **session** is an ownership-tree node with the user's starting
@@ -110,6 +112,13 @@ Kernel handles don't survive a reboot. Authority that must persist is rebuilt or
 - **Per-user encryption:** each user's volume has a random key, stored only wrapped by keys
   derived from the user's credentials. Only the storage service holds raw `block`
   capabilities; anything else gets them only by explicit configuration.
+- **Unlocking** (`0042`): a volume stays unlocked from the user's first login until shutdown, so
+  key-based logins and background work use it. Before then, the native remote protocol and FIDO2
+  keys can unwrap it; an SSH key login starts with the volume locked until the password is entered.
+- **The account database** isn't encrypted: it holds only slow password hashes, public keys and
+  wrapped volume keys (`0042`).
+- **Trusted path** (`0043`): a reserved status line and a secure attention key on the console;
+  prompts outside the stream over the native remote protocol; no interactive powerbox over SSH.
 
 ## 10. Restart and reconnection (`0017`)
 Clients reach services through connectors owned by the supervisor. On `ObjectGone`, `std`
@@ -130,12 +139,8 @@ Timing and covert channels; transient-execution attacks; network capabilities (f
 protection from a malicious administrator replacing system software; code signing (for now).
 
 ## 13. Open items
-- Key-based remote login and background work when an encrypted volume is locked (`0016`).
-- How the console marks genuine prompts, locally and over remote login (`0018`).
-- Persistence and sharing (§8) as a decision; re-keying a shared volume after removing a member.
-- The final list of kernel object types (proposed in `kernel.md` §2).
 - Executables, libraries and typed entry points, which decide static authority and shell
   grants.
-- Service details in `services.md` (account database protection, powerbox per session).
+- Service details in `services.md` (powerbox per session).
 - ~~Whether AES instructions become part of the CPU baseline~~: no; detected at boot with a
   software fallback (`0019`).
