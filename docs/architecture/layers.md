@@ -94,7 +94,7 @@ kernel's entry point, which:
    `intrinsics.set_carrier`;
 2. pushes a context built from constants (`runtime.FAILING_ALLOCATOR`, an early serial logger);
 3. builds a `BootInfo` without an allocator (`../specs/boot_info.md`);
-4. calls the portable `kernel.boot(boot_info)`, which never returns.
+4. calls the portable `kernel.boot(boot_info)`, which is `#never_returns`.
 
 `BootInfo` holds the memory map, the kernel image's location, the CPUs and how to start them,
 the boot modules, framebuffers, firmware tables, and the command line. It's specified in
@@ -148,13 +148,12 @@ Rules:
   - **Threads** have no kernel stacks to switch between: there is one kernel stack per CPU
     (`0023`). A thread's state is its saved user registers and vector state.
 
-The function signatures are specified in the arch-interface specification (`../specs/`, not
-yet written).
+The function signatures are specified in `../specs/arch_interface.md`.
 
 ### Kernel Entry
 
 Interrupt, exception and syscall entry stubs are the only kernel code that runs without a
-carrier block or a context. Each stub:
+carrier block or a context. Each stub (detailed in `../specs/arch_interface.md`, *Entry Stubs*):
 
 1. finds this CPU's carrier block through the architecture's per-CPU register (x86-64: the `gs`
    base after `swapgs`; AArch64: `TPIDR_EL1`; RISC-V: `sscratch`), and saves the user's carrier

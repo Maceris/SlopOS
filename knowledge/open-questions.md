@@ -141,6 +141,11 @@ needs confirming before it becomes a decision.
 - Does the kernel parse any ACPI itself (needed to start CPUs and find the APIC), or does
   the bootloader provide enough?
 - Platform service: one process for ACPI + PCIe, or separate?
+- How does the platform service describe wired interrupt controllers (I/O APIC, GIC
+  distributor, PLIC) to the kernel, so it can route wired IRQs? The arch interface covers only
+  message-signaled interrupts so far (`../docs/specs/arch_interface.md`).
+- The IOMMU interface: per platform rather than per architecture (VT-d, AMD-Vi, SMMU, RISC-V
+  IOMMU). Needed before untrusted drivers get DMA (M7).
 - Device-class protocol versioning: what happens when `block` gains a new request?
 
 ## IPC and data

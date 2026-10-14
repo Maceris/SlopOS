@@ -22,7 +22,7 @@ Pure code that everything else depends on, and that can be tested on a host.
 - **Boot protocol types**: the portable `BootInfo` type (`../docs/specs/boot_info.md`) and the
   Limine protocol structures.
 - **Arch interface** (L1 ↔ L2): the `arch_interface` package of `---` declarations that
-  `arch/x86_64` must implement.
+  `arch/x86_64` must implement (`../docs/specs/arch_interface.md`).
 - **House-rule checks**: arch interface conformance and `std` tier
   enforcement, registered with `compiler.add_check` (`decisions/0007`, `0029`).
 

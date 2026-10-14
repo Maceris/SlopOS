@@ -141,6 +141,12 @@ signatures_match :: fn(a, b: ptr[compiler.FunctionInfo]) -> bool {
 }
 ```
 
+**Per-architecture types** (`../decisions/0032`): `arch_interface` declares types like
+`UserRegisters` as empty structs, and each architecture defines its own. `signatures_match`
+therefore compares a parameter or result type exactly, except that an empty struct declared in
+`arch_interface` matches a struct of the same name declared in the implementation, and the
+check also requires the implementation to declare each one. Not yet in the sketch above.
+
 ## Sketch 2: `std` Tiers
 
 Each Hemera `std` package declares its tier as a constant. The `Tier` enum lives in a tiny

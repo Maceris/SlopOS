@@ -36,5 +36,4 @@ docs/
 |---|---|
 | `architecture/layers.md` | The layer model (L0–L6) and its interfaces. Specified, not implemented |
 | `specs/boot_info.md` | The boot handoff from L0 to the kernel core, and its Limine implementation. Draft |
-
-Next candidate: the arch-interface specification from roadmap milestone M0.
+| `specs/arch_interface.md` | The boundary between the arch layer and the kernel core, in both directions. Specified, not implemented |

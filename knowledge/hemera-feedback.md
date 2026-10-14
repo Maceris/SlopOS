@@ -77,6 +77,17 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-13 — Functions that never return (`hemera-proposals/no-return.md`):
+  - `#never_returns`, on a declaration after the name or in a function type after the signature,
+    part of the function's type. Checked in the body; code after a call is unreachable; the
+    caller's `defer`s don't run; lowered to LLVM's `noreturn` plus `unreachable` after every call.
+    No `or_else` fallback. `FunctionInfo.never_returns`, `TypeInfoFunction.never_returns`.
+  - Marked: `intrinsics.trap`, `runtime.AssertionHandler` and `trap_assertion_handler`, `os.exit`
+    (which traps until it's implemented). Documented in `docs/directives.md`.
+  - Parser (on request): `#never_returns` on declarations, and at the end of a function signature,
+    where it's the only directive taken, so a following `#if` still starts a statement. Test:
+    `valid_scenarios/never_returns.hsc`.
+
 - 2026-10-13 — Data written by the bootloader (`hemera-proposals/externally-initialized-data.md`):
   - `#externally_initialized` on top-level constants: always emitted, never folded, read-only to the
     program, an error to read at compile time (LLVM's `externally_initialized` plus `@llvm.used`).

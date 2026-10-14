@@ -17,7 +17,7 @@ specification changes together with both, and the struct carries no version numb
 L0's entry point calls the kernel core's portable entry with a read-only pointer:
 
 ```
-boot :: fn(boot_info: ptr[BootInfo])
+boot #never_returns :: fn(boot_info: ptr[BootInfo])
 ```
 
 At that point:
@@ -30,7 +30,6 @@ At that point:
 - **Paging is on**, with the bootloader's page tables. The kernel image is mapped at
   `kernel_image.virtual_base`, and all memory in the memory map except `Reserved` and
   `Defective` regions is mapped at `direct_map_offset` plus its physical address.
-- `boot` never returns.
 
 ## Types
 
@@ -64,7 +63,7 @@ BootInfo :: struct {
     // Every CPU, the boot CPU first. A CPU's index here is its kernel CPU index.
     cpus : BootCpu[],
     // Starts one of cpus. Null when there is only one CPU.
-    start_cpu : fn(cpu: ptr[BootCpu], carrier: ptr[mut runtime.CarrierBlock], entry: fn())?,
+    start_cpu : fn(cpu: ptr[BootCpu], carrier: ptr[mut runtime.CarrierBlock], entry: (fn() #never_returns))?,
     // The boot modules, the root task first.
     modules : BootModule[],
     // Linear RGB framebuffers. Empty when there are none.
@@ -119,6 +118,17 @@ MemoryKind :: enum #backed_by(u8) {
 KernelImage :: struct {
     physical : PhysicalRange,
     virtual_base : VirtualAddress,
+    // The image's loaded segments, so the kernel can map each with the right protection.
+    segments : ImageSegment[],
+}
+
+// One loaded segment of the kernel image, from its ELF program headers.
+ImageSegment :: struct {
+    virtual_base : VirtualAddress,
+    // In bytes, in memory.
+    size : u64,
+    writable : bool,
+    executable : bool,
 }
 
 BootCpu :: struct {
@@ -208,7 +218,7 @@ them go. `KernelImage`, `BootModule`, `Framebuffer`, `FirmwareReserved`, `Reserv
   1. sets `carrier.stack_limit` for the boot stack the bootloader gave that CPU;
   2. loads `carrier` with `intrinsics.set_carrier`;
   3. pushes the constant boot context;
-  4. calls `entry`, which never returns.
+  4. calls `entry`.
 
   `entry` finds its CPU's `PerCpu` through `intrinsics.carrier().program_data`, which the
   kernel sets before calling `start_cpu`. Each CPU's boot stack is in `BootReclaimable` memory.
@@ -238,6 +248,7 @@ supported architecture (`0020`, `0022`).
 | Memory map | yes | `memory_map` |
 | HHDM | yes | `direct_map_offset` |
 | Executable address | yes | `kernel_image` |
+| Executable file | yes | `kernel_image.segments` |
 | MP (x86-64: x2APIC flag set) | yes | `cpus`, `start_cpu` |
 | Module | yes, with at least one module | `modules` |
 | Paging mode: 4-level (Sv48 on RISC-V) | yes | The bootloader's page tables |
@@ -259,7 +270,7 @@ reports which one through the early logger and halts.
 | `BootInfo` | From Limine |
 |---|---|
 | `memory_map` | Memory map entries. `USABLE` → `Usable`; `BOOTLOADER_RECLAIMABLE` → `BootReclaimable`; `EXECUTABLE_AND_MODULES` → `KernelImage` for the range containing the executable's physical base, `BootModule` for the rest; `FRAMEBUFFER` → `Framebuffer`; `ACPI_RECLAIMABLE` → `FirmwareTables`; `ACPI_NVS` → `FirmwareReserved`; `BAD_MEMORY` → `Defective`; `RESERVED`, `RESERVED_MAPPED` and unknown types → `Reserved`. Then the arrays L0 builds are carved out of a `Usable` region and listed as `BootReclaimable`. |
-| `kernel_image` | Executable address response, with the size of the memory map entry at the physical base |
+| `kernel_image` | Executable address response, with the size of the memory map entry at the physical base. `segments` are the `PT_LOAD` program headers of the executable file response's ELF image, offset by the difference between `virtual_base` and the image's link address |
 | `cpus` | MP response, with the boot CPU moved first. `hardware_id` is `lapic_id`, `mpidr` or `hartid`; `boot_handle` points at the CPU's `limine_mp_info` |
 | `start_cpu` | Writes `extra_argument`, then `goto_address` (atomically) in the CPU's `limine_mp_info`, pointing at L0's secondary entry |
 | `modules` | Module response, in the order the boot configuration lists them. `name` is the last component of `path`; `command_line` is `string` |
@@ -269,7 +280,7 @@ reports which one through the early logger and halts.
 | `firmware` | `X86_BIOS` → `Bios`, `EFI64` → `Uefi`, `EFI32` → `Uefi32`, `SBI` → `Sbi` |
 
 L0 needs no allocator. Strings point into the bootloader's responses. The arrays (memory
-map, CPUs, modules, framebuffers) are sized from the response counts and placed in memory carved
+map, segments, CPUs, modules, framebuffers) are sized from the response counts and placed in memory carved
 from the first `Usable` region big enough.
 
 ### Request Blocks
