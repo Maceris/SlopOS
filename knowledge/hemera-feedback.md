@@ -78,6 +78,30 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-14 — Compiler Phase 2, packages, names and `#if` (`compiler-plan.md`, on request): a name
+  registry with lookup through imports, waiting on names, `#if` chains evaluated at compile time,
+  and stopping with cycles and undeclared names reported when nothing can make progress. `std`
+  resolves in full. Changes outside the compiler, with reasons:
+  - `base/builtin/builtin.hsc`: added `i128`/`u128` (and their `be`/`le` forms) and `char`, which
+    the docs and `std` use but `base` didn't declare.
+  - `std/string/string_builder.hsc`: `package string_builder` → `package string`, its folder's
+    package.
+  - `std/logger/default_logger.hsc`, `std/fiber/fiber_queue.hsc`: `import runtime from "base"`,
+    for `Logger`/`LogLevel` and `Fiber`.
+  - No overloading (names are unique in a package, per `docs/packages.md`, *Name Collision*):
+    `std/string/string_builder.hsc`'s `append` overloads became `append_chars`,
+    `append_substring` and `append_char`, and their calls in `std/formatting` and `std/logger`.
+  - `Optional` and `Result` moved from `base/runtime/core.hsc` to `base/builtin/builtin.hsc`,
+    as `docs/types.md` describes them as built in.
+  - Parser: a parameter's default can be any expression (it was only literals, which silently cut
+    off any file using `allocator := context.allocator`, such as `base/runtime/alloc.hsc`); the right side
+    of an assignment can be a typed literal; union payload types are children of their parentheses.
+  - `docs/packages.md`, *Name Collision*: builtins follow the same rules, as if every file imported
+    them. A package can declare a builtin's name, and reaches the builtin as `base.Result`.
+  - `docs/packages.md`, *Names and `#if`*: a name waits only for the undecided `#if` chains that
+    could change what it refers to, so chains are decided in the order their names need, and chains
+    needing each other are a circular dependency.
+
 - 2026-10-14 — Compiler Phase 1, the carrier register and stack check in LLVM (`compiler-plan.md`,
   on request): reserving the carrier register needs no patch (`+reserve-r14` on x86-64 in the in-tree
   LLVM, `+reserve-x28` on AArch64, `+reserve-x27` on RISC-V); `carrier()`/`set_carrier()` lower to

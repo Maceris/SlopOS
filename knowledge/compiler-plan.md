@@ -129,47 +129,90 @@ RISC-V) and puts a stack-limit check against `[carrier]` in every prologue
 
 ## Phase 2: Packages, Names and `#if`
 
-The foundation of the type checker.
+**Done** 2026-10-14. The foundation of the type checker.
 
-- [ ] **Import resolution** (`docs/packages.md`, *Imports*): built-in locations with subfolders
-  (`"std/os"`), relative paths naming the package folder, `./` for shadowed locations, aliases with
-  `as`, default `std`. Create `IMPORT` work per import, fill `ImportInfo.package`, report missing
-  packages.
-- [ ] **Symbol tables:** per-file and per-package identifiers (`FileInfo.identifiers`,
-  `PackageInfo.identifiers`), duplicate detection, package-qualified lookup (`runtime.Fiber`).
-- [ ] **Waiting on names:** work that needs a name not yet declared parks until it is, and is
-  woken when it's declared (the out-of-order compilation model). `Dependencies`,
-  `WorkTracking.blocked` and `parked_work` exist unused. Parked work records exactly what it waits
-  on (a name in a scope, a type's layout, a constant's value), so the waits form a graph.
-- [ ] **Detecting that compilation can't continue** (Hemera `docs/packages.md`, *Circular
-  Imports*): the compiler must notice when no work can ever make progress, and stop with errors
-  instead of hanging.
-  - **When:** every queue is empty, no worker is running anything, and some work is still parked.
-    The scheduler checks this when its last active worker goes idle (`threads_running`,
-    `parked_work`).
-  - **What to report:**
-    - **Cycles:** find the cycles in the wait graph (strongly connected components), and report
-      each one with the location of every step, like "`A` needs `B`, which needs `A`".
-    - **Names that are never declared:** parked work waiting on a name nothing will declare.
-    - Anything still parked after those, as an internal error, so a scheduler bug can't look like
-      a hang.
-  - **Then** stop compilation, since nothing parked can resume.
-  - **Cycles that must not be reported,** because they don't block anything: circular imports
-    (`docs/packages.md`), mutually recursive functions (a call needs the callee's signature, not
-    its body), and types that refer to each other through pointers (a pointer's layout doesn't
-    depend on what it points to). A struct containing itself by value is a real cycle, since its
-    size depends on itself.
-  - The same check covers later sources of waiting: `#run` needing a type that depends on that
-    `#run`'s result, `#if` conditions that depend on declarations inside them, and generic
-    instances that need themselves.
-- [ ] **`#if` / `#else_if` / `#else`:** a small evaluator for constant expressions over built-in
-  constants (`TARGET_ARCH`, `OS`) and named constants, including `#if` around imports and
-  definitions. Not the `#run` interpreter.
-- [ ] **Tests:** `test/front_end/` with valid and error scenarios, in the style of the parser's.
+- [x] **Import resolution** (`docs/packages.md`, *Imports*): built-in locations with subfolders,
+  relative paths, aliases, default `std`, missing packages reported (from Phase 0), now including
+  imports inside a top-level `#if`.
+  - **Imports from `base` aren't loaded:** `base` is the interface to what the compiler provides, so
+    `import runtime from "base"` resolves to a compiler-provided package without reading its files.
+- [x] **The name registry** (`src/front_end/names.cpp`): every top-level declaration, keyed by
+  package and name, with its file and node.
+  - **Names are unique in a package,** functions included: there's no overloading. Duplicates are
+    E4009. (Monomorphized instances, and the same name in different packages, are told apart by
+    internal mangled names when lowering, Phase 5.)
+  - **Lookup** (`docs/packages.md`, *Name Collision*): unqualified, a name is a generic parameter,
+    the package's own declaration (which always wins), an imported package, or a name declared by
+    exactly one of the file's imports and the builtins, which count as an import every file has.
+    Declared by two of those and not the package, it's ambiguous (E4012) and must be qualified
+    (`runtime.Fiber`, or `base.Result` for the builtin).
+  - **The package's own declaration can be in a file not parsed yet, or an `#if` not decided yet**
+    (`docs/packages.md`, *Names and `#if`*). A name the package doesn't declare waits until its files
+    are parsed and no undecided `#if` chain in it has a branch declaring the name. If the name isn't
+    found in the imports or builtins either, it also waits for undecided chains in the same file with
+    an import in a branch, since what that package declares isn't known until it's loaded. A name
+    found while such a chain may still add an import is checked again once all work is done, and
+    reported as ambiguous if the new import declares it too. `#if` conditions use the same rules, so
+    chains are decided in the order their names need; chains needing each other are a cycle (E4007).
+- [x] **Waiting on names:** each declaration gets a `TYPE_CHECK` work that walks it and asks for
+  every name it uses. A name not yet declared parks the work on that name; declaring it wakes the
+  work.
+  - **Need levels:** a name is needed either *declared* or *resolved* (everything it uses is itself
+    there). Pointers, views, `&` and function signatures only need their names declared, so mutually
+    recursive functions and types that point at each other don't wait on each other. A struct field
+    by value and a constant's value need theirs resolved.
+  - **Waits** are on `NAME_DECLARED` (package, name) or `DECLARATION_RESOLVED` (a declaration).
+    Parked work is requeued when its key is satisfied, including when an import makes the name
+    visible.
+- [x] **Detecting that compilation can't continue:** the scheduler keeps an exact count of work
+  queued or running. When it reaches 0 with work still parked, nothing can resume, so it reports:
+  - **cycles**, as E4007 with each step, including `#if` chains and what in them may provide a
+    name ("This #if needs BAR, which the #if on line 7 may import (import foo, line 8); ...");
+  - **names that are never declared**, as E4008;
+  - **anything else still parked**, as E4011, so a scheduler bug can't look like a hang.
 
-**Done when:** every package of `base` and `std` loads with its imports, `#if` picks the right
-blocks for a given target, and a program that can't make progress stops with its cycles and
-undeclared names reported, rather than hanging.
+  Compilation then stops.
+- [x] **`#if` / `#else_if` / `#else`:** an `IF_ELSE` work evaluates the chain with a small constant
+  evaluator: booleans, integers, comparisons, `and`/`or`/`not`, named constants, and `TARGET_ARCH`
+  and `OS` from the command line. The chosen branch's imports and definitions are then processed
+  like the file's own. A condition that needs a declaration inside its own branch is a cycle; a
+  condition that isn't a boolean is E4010.
+- [x] **Tests:** `test/front_end/` scenarios for each of the above, and `ResolvesStd`, which
+  resolves every `std` package.
+
+**Done when:** every package of `std` loads with its imports, `#if` picks the right blocks for a
+given target, and a program that can't make progress stops with its cycles and undeclared names
+reported, rather than hanging. (`base` isn't loaded but must still parse, which a parser test
+checks.)
+
+- [x] **Found while testing:**
+  - **The scheduler's per-thread queues raced:** a thread stealing work and the queue's owner both
+    updated its head and tail without synchronizing, so one work could run twice or an empty slot be
+    read (intermittent crashes). All general work now goes through the shared, thread-safe queue;
+    a thread is woken whenever work is queued. Per-thread queues can come back with a proper
+    work-stealing deque if profiling ever asks for it.
+  - **A counter leak** left the "threads searching" count high, so idle threads slept for their
+    full timeout and tests took seconds.
+  - **The lexer freed shared strings:** it interned each comment's text, then deleted it from the
+    shared string table, which another thread lexing the same comment could still be using.
+  - **The parser dropped the rest of a file silently** on some failures, such as a parameter
+    default that wasn't a literal (`allocator := context.allocator`, used throughout `base`). A
+    default is now any expression, the right side of an assignment can be a typed literal
+    (`x = Type.{}`), and a failure that doesn't report its own error now reports E3017.
+  - **The package-name check (E4006)** read the name from the wrong node, so it never fired.
+  - **Union payload types** are now children of their parentheses in the AST, like a call's.
+  - **Fixes to `std`:** `string_builder.hsc` declared `package string_builder` in the `string`
+    folder, and two files used `runtime` names without importing it. Its four `append` functions
+    overloaded each other, so three were renamed: `append_chars` (pointer and length),
+    `append_substring` (string, start, length) and `append_char`.
+  - **`Optional` and `Result`** moved from `base/runtime/core.hsc` to `base/builtin`, since
+    `docs/types.md` describes them as built in.
+  - The compiler, like the test executable, now reports debug-runtime assertions on stderr instead
+    of in a dialog.
+
+**Left for later phases:** names used in a file that imports `base` are accepted unchecked if
+nothing else declares them, until the compiler has `base`'s declarations itself (Phase 3).
+Statement bodies aren't walked yet, only declarations (Phase 4).
 
 ---
 
