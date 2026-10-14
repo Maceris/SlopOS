@@ -78,6 +78,13 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-13 — Compiler Phase 0 (`compiler-plan.md`, on request): fixed directives tested backwards,
+  the wrong work-target union member, imports never followed (now resolved under `docs/packages.md`),
+  a wrong loop index, and invalid MLIR for functions. Found while testing: the lexer read past the end
+  of the file after a trailing comment on the last line (aborting the compiler, which is built
+  without exceptions); a top-level `#if` before any definition could only hold imports. New
+  `test/front_end` tests.
+
 - 2026-10-13 — Segmented stacks for plain threads (`hemera-proposals/segmented-thread-stacks.md`):
   threads run Hemera code on segments like fibers (1 KiB first segment by default), with a native
   stack only for foreign calls, signals and fiber schedulers. Where the system doesn't give every

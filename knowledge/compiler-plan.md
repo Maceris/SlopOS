@@ -36,23 +36,43 @@ patching it is possible.
 
 ## Phase 0: Fix Known Bugs
 
-Small, independent, and worth doing before anything builds on them.
+**Done** 2026-10-13. Small, independent, and worth doing before anything builds on them.
 
-- [ ] **Top-level directives are tested backwards** (`src/front_end/work.cpp`, `work_parse`, around
+- [x] **Top-level directives are tested backwards** (`src/front_end/work.cpp`, `work_parse`, around
   line 235). `compare()` returns 0 for equal strings, but it's used as if it returned true, so any
   directive other than exactly `#if` takes the `#if` branch, and `#else` and `#run` are never
   recognized.
-- [ ] **`work_type_check` reads the wrong union member** for `DEFINITION` targets (`work.cpp`, around
+- [x] **`work_type_check` reads the wrong union member** for `DEFINITION` targets (`work.cpp`, around
   line 281): it passes `target.value.file_location`, but the target holds `.node`.
-- [ ] **Imports are never followed** (`work.cpp`, `work_parse`, around line 199): `ImportInfo` is
+- [x] **Imports are never followed** (`work.cpp`, `work_parse`, around line 199): `ImportInfo` is
   filled in, but no `IMPORT` work is created, so only the input package is ever loaded. (Fixed
   properly in Phase 2.)
-- [ ] **Wrong loop index** in `mlir_process_block_in_function` (`mlir_generation.cpp`, line 36):
+- [x] **Wrong loop index** in `mlir_process_block_in_function` (`mlir_generation.cpp`, line 36):
   `child->children[i]` should be `[j]`.
-- [ ] **Invalid IR** from `mlir_process_function`: it inserts a `return` at the start of the entry
+- [x] **Invalid IR** from `mlir_process_function`: it inserts a `return` at the start of the entry
   block, then appends the body as further blocks, and names every function `func_I_guess`.
 
-**Done when:** each has a regression test where one is practical.
+- [x] **Found while testing:**
+  - **The lexer read past the end of the file** after a comment that follows code on the last line:
+    `std::getline` empties its string even when no line is left, so the comment's text was copied
+    from an empty line ("invalid string position"). The compiler is built without exceptions, so on
+    a worker thread this aborted the whole compiler.
+  - **A top-level `#if` before any definition could only hold imports**, since the parser handled it
+    as part of the import section. A top-level `#if` block now holds imports and definitions in any
+    order, wherever it is (`top_level_block` in the grammar).
+  - **`std::filesystem` calls that throw** in import handling now use their `error_code` forms, for
+    the same reason as the lexer bug.
+  - `main.cpp` now loads the HMIR dialect, which code generation emits; and the test executable
+    reports debug-runtime assertions on stderr instead of in a dialog.
+
+Imports are resolved under `docs/packages.md`'s rules (built-in locations with subfolders, relative
+paths, `std` by default) and their packages loaded; imports inside a top-level `#if` wait for Phase 2.
+A `return` inside a nested scope isn't emitted yet: it needs an HMIR op, since `func.return` must be
+directly in its function (Phase 5).
+
+**Done when:** each has a regression test where one is practical. Tests: `test/front_end/`
+(imports followed, a missing import, an `#if` chain, `#else` without `#if`, valid IR for functions
+and a declaration), and parser scenarios `top_level_if.hsc` and `trailing_comment.hsc`.
 
 ---
 
