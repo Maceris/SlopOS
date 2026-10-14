@@ -61,9 +61,8 @@ idempotence and lending metadata, and values without a compiled type (`decisions
 
 ## Storage
 
-- Files as byte streams, typed values, or both?
-- How much of a path-based tree do we need for interop (FAT, git, network shares)?
-- Transactions / snapshots in the filesystem layer or a layer above?
+Nothing open. Answered 2026-10-13: files are bytes with an optional schema hash, trees exist only
+beneath directory handles, and transactions and snapshots are in the filesystem (`decisions/0046`).
 
 ## Hemera Threads
 

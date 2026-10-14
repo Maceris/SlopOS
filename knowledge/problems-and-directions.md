@@ -216,16 +216,16 @@ famously hard to get right (the write-temp/fsync/rename/fsync-dir dance). Metada
 queryable ("find all photos from 2023" = walk the disk).
 
 **Directions.**
-- **[leaning]** *Per-process namespaces* (Plan 9): each process sees only what it was given,
+- **[decided, `decisions/0046`]** *Per-process namespaces* (Plan 9): each process sees only what it was given,
   composed from capabilities. There is no `/` everyone shares.
-- **[leaning]** *Handle-relative operations only* (`openat`-style everywhere), so there is
+- **[decided, `0046`]** *Handle-relative operations only* (`openat`-style everywhere), so there is
   no ambient path resolution.
-- **[explore]** *Transactions / copy-on-write / snapshots* as the primitive, so "atomically
+- **[decided, `0046`: in the native filesystem]** *Transactions / copy-on-write / snapshots* as the primitive, so "atomically
   replace this file" and "roll back" are single operations.
 - **[explore]** *Typed, queryable metadata* (BeOS/BFS attributes and live queries).
   Files could carry their Hemera type.
-- **[explore]** Objects vs files: is a "file" just a persisted typed value?
-- **[unsure]** Interop with the outside world (FAT USB sticks, git repos, network shares)
+- **[decided, `0046`: bytes with an optional schema hash]** Objects vs files: is a "file" just a persisted typed value?
+- **[decided, `0046`: they are `Dir` servers]** Interop with the outside world (FAT USB sticks, git repos, network shares)
   requires path-based trees somewhere. A compatibility view over the native model?
 
 ---
