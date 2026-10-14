@@ -32,6 +32,9 @@ system in Hemera, compile-time reflection over packages (house-rule checks), tes
 
 ## M1 — Boot to Console (L0, L1)
 
+Building it needs the compiler work in `compiler-plan.md` (Phases 0–6).
+
+
 - Kernel entry from Limine; convert responses to `BootInfo`.
 - `CPUID` check for x86-64-v3; refuse to boot otherwise, with a message.
 - GDT + TSS (with interrupt stacks), IDT, exception handlers decoding faults into a

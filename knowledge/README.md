@@ -7,6 +7,7 @@ system as built lives in `../docs/` instead.
 | File | What it's for |
 |------|---------------|
 | `roadmap.md` | Milestones of real subsystems, and what each stresses in Hemera |
+| `compiler-plan.md` | Ordered plan for Hemera compiler work up to type checking and a booting M1 kernel |
 | `conventions.md` | How to write Hemera before the compiler can build it (marker comments, layout asserts) |
 | `problems-and-directions.md` | Brainstorm: what's wrong with modern OSes, and clean-slate alternatives |
 | `open-questions.md` | Unresolved questions; delete an entry once it's answered in `decisions/` |
