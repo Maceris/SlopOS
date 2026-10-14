@@ -89,6 +89,9 @@ ArchSystem :: struct {}
 
 // One address space's page-table root and address-space tag.
 PageTable :: struct {}
+
+// One wired interrupt controller the platform service registered (0039), like an I/O APIC.
+InterruptController :: struct {}
 ```
 
 ### CPU Setup
@@ -316,6 +319,65 @@ interrupt_pending : fn() -> bool : ---
 idle #never_returns : fn() : ---
 ```
 
+### Wired Interrupts
+
+Interrupt lines on controllers the platform service describes to the kernel (`0039`). L2 maps each
+controller's registers, picks an `InterruptId` and a CPU for each line, and keeps a level-triggered
+line masked from its interrupt until its driver acknowledges it.
+
+```
+// Kinds of wired interrupt controller. An architecture supports only some of them.
+ControllerKind :: enum #backed_by(u8) {
+    // x86-64
+    IoApic,
+    // AArch64: a GIC distributor's shared peripheral interrupts
+    GicDistributor,
+    // RISC-V
+    Plic,
+    Aplic,
+}
+
+Trigger :: enum #backed_by(u8) {
+    Edge,
+    Level,
+}
+
+Polarity :: enum #backed_by(u8) {
+    ActiveHigh,
+    ActiveLow,
+}
+
+ControllerError :: enum #backed_by(u8) {
+    // This architecture doesn't support the kind.
+    UnsupportedKind,
+    // The registers don't identify a controller of that kind.
+    NotFound,
+}
+
+/*
+ * Set up a controller whose registers L2 mapped at registers, with every line masked.
+ * Returns how many lines it has.
+ */
+init_interrupt_controller : fn(
+    controller: ptr[mut InterruptController],
+    kind: ControllerKind,
+    registers: VirtualAddress,
+) -> Result[u32, ControllerError] : ---
+
+// Deliver line as id on the CPU with this hardware ID, still masked.
+route_wired : fn(
+    controller: ptr[mut InterruptController],
+    line: u32,
+    cpu_hardware_id: u64,
+    id: InterruptId,
+    trigger: Trigger,
+    polarity: Polarity,
+) : ---
+
+mask_wired : fn(controller: ptr[mut InterruptController], line: u32) : ---
+unmask_wired : fn(controller: ptr[mut InterruptController], line: u32) : ---
+```
+
 ### Timer
 
 Each CPU has a counter and a one-shot deadline in counter units. L2 turns counter values into
@@ -502,6 +564,7 @@ How `arch/x86_64` meets the interface (`../../knowledge/design/arch-x86-64.md`):
 | `AddressSpaceTag` | PCID, 4096 tags (1 without PCID) |
 | Paging | 4-level page tables; `Device` uses PAT uncached, `WriteCombining` the PAT WC entry |
 | Interrupts | x2APIC (xAPIC if absent). Device IDs are vectors 48–239 |
+| Wired interrupts | I/O APICs (`ControllerKind.IoApic`); the legacy 8259 PIC is masked and ignored |
 | Timer | TSC with TSC-deadline, frequency from the hint, `CPUID` leaf `0x15`, or calibration against the PIT |
 | Entry | One `.entry` function for every vector, separate ones on IST stacks for the critical events (the NMI one returns), and a `.syscall_entry` function |
 | `return_to_user` | `x86_64.return_to_user` |
@@ -511,12 +574,9 @@ How `arch/x86_64` meets the interface (`../../knowledge/design/arch-x86-64.md`):
 
 ## Not Covered
 
-- **Wired interrupts** (I/O APIC, GIC SPIs, PLIC): routing them needs the platform's description
-  of its interrupt controllers, which comes from ACPI or the devicetree in user space. How the
-  platform service hands that to the kernel is open.
-- **IOMMU domains:** IOMMUs differ per platform rather than per architecture (Intel VT-d,
-  AMD-Vi, Arm SMMU, the RISC-V IOMMU), so they'll get their own interface, needed before
-  untrusted drivers get DMA (roadmap M7).
+- **IOMMUs** are driven by the kernel behind a separate interface, `iommu_interface`, since they
+  differ per platform rather than per architecture (Intel VT-d, AMD-Vi, Arm SMMU, the RISC-V IOMMU)
+  and an architecture may need several (`0039`). Specified before roadmap M7.
 - **Cache maintenance for DMA** on architectures where devices aren't cache-coherent.
 - **Debug registers** for hardware breakpoints and watchpoints.
 - **Reading and writing a stopped thread's full register set** for debuggers (`0017`), which

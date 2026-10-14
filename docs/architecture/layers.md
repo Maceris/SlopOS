@@ -183,7 +183,8 @@ It provides mechanism only; policy lives in user space.
 - **Capabilities**: per-process handle tables, rights and revocation (`0008`, `0010`).
 - **Interrupt routing**: an IRQ becomes a packet on the port of the driver holding its
   capability. The kernel runs no driver code.
-- **Device access**: device memory objects, I/O port ranges (x86-64), IRQs and IOMMU domains.
+- **Device access**: device memory objects, I/O port ranges (x86-64), IRQs and IOMMU domains. The
+  kernel drives interrupt controllers and IOMMUs that the platform service registers (`0039`).
 - **Process control**: inspection, interception and termination (`0017`).
 - **Starting user space**: the kernel starts one process, the root task, and gives it every
   resource (`0012`).
@@ -192,9 +193,11 @@ It provides mechanism only; policy lives in user space.
 
 User-space processes.
 
-- **The platform service** discovers hardware (ACPI on x86-64, devicetree on AArch64 and
-  RISC-V, PCIe enumeration) and starts drivers, giving each one the capabilities for its own
-  device only.
+- **The platform service** discovers hardware from the static firmware tables (ACPI on x86-64,
+  devicetree on AArch64 and RISC-V) and by enumerating PCIe, and starts drivers, giving each one
+  the capabilities for its own device only. It registers interrupt controllers and IOMMUs with
+  the kernel, which parses no firmware tables itself (`0039`). ACPI's AML, when needed, runs in a
+  separate service.
 - **Drivers** implement device-class protocols. Nothing above L3 depends on which device or
   architecture is underneath.
 

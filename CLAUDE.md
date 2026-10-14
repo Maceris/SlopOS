@@ -85,7 +85,8 @@ when relevant.
   Nothing is frozen until the OS design is thorough and development is under way (`0027`).
 - Kernel scope and object types (`0034`), async shared-ring IPC with ports (`0035`), syscall
   interception at entry and exit only (`0036`), user-space scheduling policy with per-connection
-  budget lending (`0037`), system ABI conventions (`0038`).
+  budget lending (`0037`), system ABI conventions (`0038`). The platform service registers
+  interrupt controllers and IOMMUs with the kernel, which drives them (`0039`).
 - Layer model, `BootInfo`, arch interface and package structure (`0002`, `0031`–`0033`), specified
   in `docs/architecture/layers.md` and `docs/specs/`.
 - Proposed, not yet decided: one build package using Hemera's compiler API (`0028`); house-rule

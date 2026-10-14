@@ -19,7 +19,8 @@ bug or compromise there can break the guarantees of `security.md`.
 
 | Service | Layer | Does | Holds | TCB |
 |---|---|---|---|---|
-| **Platform service** | L3 | Parses ACPI or devicetree, enumerates PCIe, starts drivers with only their own device's capabilities | Device memory, IRQs, I/O ports for all devices until handed out | yes |
+| **Platform service** | L3 | Parses the static firmware tables (ACPI or devicetree), enumerates PCIe, registers interrupt controllers and IOMMUs with the kernel, starts drivers with only their own device's capabilities (`0039`) | Device memory, IRQs, I/O ports for all devices until handed out; the capability to register platform hardware | yes |
+| **ACPI service** | L3 | Later: runs ACPI's AML (legacy interrupt routing, power management, battery, embedded controller) for the platform service (`0039`) | The ACPI namespace's device memory and I/O ports | partly |
 | **Drivers** | L3 | One per device; implement device-class protocols | Their own device's MMIO, IRQs, DMA buffers in an IOMMU domain | no (confined by the IOMMU) |
 | **Clock** | L3/L4 | Wall-clock time: RTC, later NTP (`0009`) | RTC device | no |
 | **Entropy** | L3/L4 | Random bytes for seeding `std` generators (`0009`) | Hardware RNG device, boot seed | partly (keys depend on it) |

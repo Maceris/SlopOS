@@ -79,18 +79,10 @@ no C callbacks for now (`0038`), and AArch64 right after M3 (`0022`).
 
 ## Layering (`../docs/architecture/layers.md`)
 
-Answered: the arch interface's contents (`../docs/specs/arch_interface.md`); kernel entry on
-x86-64 (Hemera entry functions; AArch64 and RISC-V are tracked in `hemera-feedback.md`); the kernel
-parses no ACPI (Limine starts the CPUs, device interrupts are message-signaled first, `0031`,
-`0032`).
-
-- Platform service: one process for ACPI + PCIe, or separate?
-- How does the platform service describe wired interrupt controllers (I/O APIC, GIC
-  distributor, PLIC) to the kernel, so it can route wired IRQs? The arch interface covers only
-  message-signaled interrupts so far (`../docs/specs/arch_interface.md`).
-- The IOMMU interface: per platform rather than per architecture (VT-d, AMD-Vi, SMMU, RISC-V
-  IOMMU). Needed before untrusted drivers get DMA (M7).
-- Device-class protocol versioning: what happens when `block` gains a new request?
+Nothing open. Answered: the arch interface's contents (`../docs/specs/arch_interface.md`); kernel
+entry on x86-64 (Hemera entry functions; AArch64 and RISC-V are tracked in `hemera-feedback.md`);
+the kernel parses no firmware tables (`0031`); platform discovery, wired interrupt controllers and
+IOMMUs (`0039`). Protocol versioning moved to *IPC and data*.
 
 ## IPC and data
 
@@ -107,6 +99,9 @@ parses no ACPI (Limine starts the CPUs, device interrupts are message-signaled f
   automatically (`decisions/0017`)?
 - Canonical wire format: raw Hemera layout with relative pointers, or a separate encoding?
 - Schema evolution rules when producer and consumer disagree on a type's version.
+  Decide together with device-class protocol versioning: what happens when `block` gains a new
+  request? Leaning: variants are append-only, a server answers an unknown variant with
+  `.Unsupported`, and clients ask with a `Features` request.
 - How do generic tools (pagers, viewers, queries) display values they have no compiled type for?
 - Fiber stacks vs. message sizes. A fiber's first stack segment is 1 KiB, and further
   segments are sized to the frame that needs them. Copying a large message (up to 64 KiB,
