@@ -45,6 +45,8 @@ no C callbacks for now (`0038`), and AArch64 right after M3 (`0022`).
   cover exploit mitigations yet. Likely its own decision. Deferred (2026-10-13): nothing before
   M4 needs it, and kernel shadow stacks would also need the entry paths to switch them
   (`hemera-proposals/kernel-entry.md`, *Open Questions*).
+  Related on the Hemera side: return addresses of suspended fibers (Hemera
+  `docs/multitasking.md`, *Open Questions*).
 
 ## Layering (`../docs/architecture/layers.md`)
 
@@ -66,16 +68,7 @@ beneath directory handles, and transactions and snapshots are in the filesystem 
 
 ## Hemera Threads
 
-Raised with Hemera's 2026-10-04 fiber redesign. Notes in *italics* are SlopOS's view.
-
-* Should plain threads grow their stacks with segments too, instead of treating the limit as an error?
-  *SlopOS leans yes: user space owns stacks (`0023`), and segmented thread stacks would let
-  threads start as small as fibers instead of a 4 KiB page.*
-* Windows: the stack bounds in the thread environment block are used by structured exception handling and some APIs.
-  Either update them on every switch (as Windows' own fibers do), or rely only on vectored exception handlers
-  (as Go does).
-* Windows: whether the thread-local storage slot for the carrier pointer can be at a fixed offset.
-* LLVM: reserving the carrier register, and emitting this prologue and this `morestack` protocol.
-* While a fiber is suspended, its return addresses are in ordinary memory and are trusted when it resumes.
-  IBT/BTI limit where they can lead to, and the runtime could also check them against a table of call sites.
-  A hardened mode with a shadow stack per fiber is possible, at a much higher memory cost.
+* Segmented stacks for plain threads: proposed in `hemera-proposals/segmented-thread-stacks.md`.
+  The Hemera-only questions from the fiber redesign (Windows' thread environment block and
+  thread-local storage, LLVM support, return addresses of suspended fibers) moved to Hemera's
+  `docs/multitasking.md`, *Open Questions*.
