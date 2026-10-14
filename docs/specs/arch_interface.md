@@ -483,10 +483,10 @@ Interrupts stay disabled throughout. Saved registers stay where the stub put the
 switches threads, it copies them into the thread's control block, and `return_to_user` can
 resume from either place.
 
-**Not yet expressible in Hemera:** on x86-64, interrupt functions cover IDT entries, but not
-`SYSCALL` entry, `return_to_user`, `XSAVE`-family instructions, `RDSEED`, or AArch64 and
-RISC-V entry (`../../knowledge/hemera-feedback.md`, *Kernel entry and return to user mode*).
-The interface doesn't depend on how stubs are written.
+On x86-64, entry stubs are Hemera entry functions (`#calling_convention(.entry)` and
+`.syscall_entry`, Hemera `docs/calling_convention.md`, *Entry Functions*), whose compiler-generated
+code does step 1. AArch64 and RISC-V entry, and pushing a complete prebuilt context in step 3, aren't
+expressible in Hemera yet (`../../knowledge/hemera-feedback.md`).
 
 ## x86-64
 
@@ -494,14 +494,18 @@ How `arch/x86_64` meets the interface (`../../knowledge/design/arch-x86-64.md`):
 
 | Interface | x86-64 |
 |---|---|
-| `ArchSystem` | The IDT |
-| `ArchCpu` | The GDT and TSS (with IST entries for the critical stacks), and the carrier block and context for entry stubs |
+| `ArchSystem` | The IDT, filled from `x86_64.entry_points` |
+| `UserRegisters` | `x86_64.RegisterFrame` |
+| `ArchCpu` | `x86_64.SyscallScratch` first (the `gs` base points here), then the GDT and TSS (with IST entries for the critical stacks), and the carrier block and context for entry stubs |
 | `init_cpu` | `lgdt`, `ltr`, `lidt`; `EFER.NXE`, `EFER.SCE`; `STAR`/`LSTAR`/`FMASK`; `CR4.SMEP`, `CR4.SMAP`, `CR4.PCIDE` (if present), `CR4.OSXSAVE`; `XCR0` for x87, SSE and AVX; `IA32_KERNEL_GS_BASE` → the `ArchCpu` |
 | `AddressSpaceTag` | PCID, 4096 tags (1 without PCID) |
 | Paging | 4-level page tables; `Device` uses PAT uncached, `WriteCombining` the PAT WC entry |
 | Interrupts | x2APIC (xAPIC if absent). Device IDs are vectors 48–239 |
 | Timer | TSC with TSC-deadline, frequency from the hint, `CPUID` leaf `0x15`, or calibration against the PIT |
-| `hardware_entropy` | `RDSEED` |
+| Entry | One `.entry` function for every vector, separate ones on IST stacks for the critical events (the NMI one returns), and a `.syscall_entry` function |
+| `return_to_user` | `x86_64.return_to_user` |
+| Vector state | `xsavec`/`xsaveopt` and `xrstor`; `xsetbv` when the thread's state components change (`0023`) |
+| `hardware_entropy` | `rdseed` |
 | `early_console_write` | 16550 UART at I/O port `0x3F8` |
 
 ## Not Covered

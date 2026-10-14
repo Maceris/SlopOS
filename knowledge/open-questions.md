@@ -137,7 +137,8 @@ needs confirming before it becomes a decision.
 - How kernel entry and return to user mode get written where Hemera's interrupt functions
   don't reach (x86-64 `SYSCALL`, `sysretq`/`iretq` with a full register set, `XSAVE`, AArch64
   and RISC-V vectors): new intrinsics and calling conventions, or a small assembly file per
-  architecture linked into the kernel (`hemera-feedback.md`).
+  architecture linked into the kernel (`hemera-feedback.md`). Answered for x86-64: compiler-generated
+  entry paths, no assembly (`hemera-proposals/kernel-entry.md`); AArch64 and RISC-V follow after M3.
 - Does the kernel parse any ACPI itself (needed to start CPUs and find the APIC), or does
   the bootloader provide enough?
 - Platform service: one process for ACPI + PCIe, or separate?

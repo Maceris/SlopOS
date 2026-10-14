@@ -165,10 +165,9 @@ carrier block or a context. Each stub (detailed in `../specs/arch_interface.md`,
 
 The user's carrier register is restored on return and its value is never trusted (`0026`).
 
-**Not yet expressible in Hemera:** x86-64 IDT entries are interrupt functions
-(`#calling_convention(.interrupt)`). `SYSCALL` entry, returning to user mode, vector state
-saving and AArch64 and RISC-V exception vectors have no Hemera mechanism yet
-(`../../knowledge/hemera-feedback.md`).
+On x86-64, the stubs are Hemera entry functions (`#calling_convention(.entry)` and
+`.syscall_entry`). AArch64 and RISC-V entry, and pushing a complete prebuilt context, have no Hemera
+mechanism yet (`../../knowledge/hemera-feedback.md`).
 
 ## L2 — Microkernel Core
 

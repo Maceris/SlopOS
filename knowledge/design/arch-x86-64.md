@@ -56,6 +56,6 @@ for what any later architecture note needs to cover.
   `invlpg`, `lgdt`/`lidt`/`ltr`, `swapgs`, `rdtsc`, `hlt`, `pause`, `cli`/`sti`,
   `xsave`/`xrstor`, `iretq`, `sysretq`.
 
-Most of these are declared in Hemera's `intrinsics.x86_64` (`base/intrinsics/x86_64`).
-Still missing: `xsave`/`xrstor`/`xsetbv`, `rdseed`, `iretq`/`sysretq` and `SYSCALL` entry
-(`../hemera-feedback.md`, *Kernel entry and return to user mode*).
+All of these are declared in Hemera's `intrinsics.x86_64` (`base/intrinsics/x86_64`), with
+`SYSCALL` entry and `iretq`/`sysretq` covered by entry functions and `return_to_user` (Hemera
+`docs/calling_convention.md`, *Entry Functions*).

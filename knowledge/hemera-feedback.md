@@ -32,7 +32,9 @@ bootloader was found and resolved on 2026-10-13.
 | Topic | State | Details |
 |---|---|---|
 | Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`. Still open: documenting parse-once/parallel builds (B10); `os.run_process`'s body (`std/os/process.hsc` only checks `--allow-run` so far) | `hemera-proposals/build-programs.md` §7; `decisions/0028` |
-| Kernel entry and return to user mode (needed from M4, **blocker** for user space) | Open, found reviewing `design/layers.md` (2026-10-13). `#calling_convention(.interrupt)` covers x86-64 IDT entries only. Not expressible in Hemera yet: x86-64 `SYSCALL` entry (no frame pushed, stack pointer still the user's, needs `swapgs` and a stack switch before anything else); returning to user mode with a full register set (`sysretq`, `iretq`); `XSAVE`/`XRSTOR`/`XSETBV` for thread vector state (M4); `RDSEED` (kernel entropy, `0021`); AArch64 exception vectors (a 2 KiB-aligned table of 128-byte entries) and RISC-V trap entry, for the second architecture after M3 (`0022`). Options: more `intrinsics.x86_64` functions plus a `.syscall` calling convention and per-architecture `.exception` conventions; or `TargetOptions` accepting assembly or object files to link, with a small `.S` file per architecture; or, as a stopgap on x86-64, syscalls through an interrupt gate (`int`), which `.interrupt` already covers, at a speed cost | `design/layers.md` L1, *Kernel entry* |
+| Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 resolved 2026-10-13 (see Resolved). The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md`, *Other Architectures* |
+| Compile-time constant arguments (**friction**) | Adopted 2026-10-13: through generics (Hemera's equivalent of Jai's `$`). A generic parameter with the same name as a value parameter makes it compile-time; integers, enums, booleans and functions only; redundant explicit generics allowed with a warning. Done: `x86_64.entry_points`, and `new` and friends take `T: type`. To do: a generics section in Hemera's docs, and `name: type` values in generic lists (grammar and parser) | `hemera-proposals/compile-time-parameters.md` |
+| Pushing a complete context (**blocker** for kernel entry) | Open, found writing `docs/calling_convention.md` (*Entry Functions*). `push_context` copies the *current* context with some fields overridden, but entry, interrupt and freestanding entry functions have no current context, and the kernel wants to push a prebuilt one (`PerCpu.context`, `design/kernel.md` §3). `docs/compilation.md` says to "push_context a context built from constants" without a syntax for it. Needs a form that pushes a whole `Context` value | — |
 | Shared ownership like C++'s `shared_ptr` | `std/memory`'s `SharedPtr[T]` holds a `ptr[mut T]` for now. To brainstorm: what language or compiler features would make a shared pointer work like C++'s. Starting points: sharing an immutable value (`shared_ptr<const T>`), which needs mutability as something a generic can take, or a separate read-only wrapper; counting copies automatically, which needs copy and destroy hooks, or move-only types, since today every owner calls `increment`/`decrement` by hand; using it like the value (`shared.field`), since `.` only dereferences real pointers; allocating the count with the value (`make_shared`); weak references | — |
 
 ## 2. Design Notes
@@ -76,6 +78,14 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-13 — Kernel entry and return to user mode on x86-64 (`hemera-proposals/kernel-entry.md`):
+  `#calling_convention(.entry)` and `.syscall_entry` with compiler-generated entry paths
+  (`docs/calling_convention.md`, *Entry Functions*); in `intrinsics.x86_64`: `RegisterFrame` (part of
+  the convention version), `SYSCALL_VECTOR`, `SyscallScratch`, `entry_points`, `return_to_user`,
+  `read_gs_base`, `xsave`/`xsavec`/`xsaveopt`/`xrstor`, `xgetbv`/`xsetbv`, `rdseed`, `rdrand`. No
+  inline assembly. The parser already accepted both conventions; test:
+  `valid_scenarios/entry_functions.hsc`.
 
 - 2026-10-13 — Functions that never return (`hemera-proposals/no-return.md`):
   - `#never_returns`, on a declaration after the name or in a function type after the signature,
