@@ -78,6 +78,14 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-14 — Compiler Phase 5, lowering on a hosted program (`compiler-plan.md`, on request): a
+  program with structs, unions, loops, `match`, `switch`, `defer`, generics, optionals and calls
+  compiles to an executable that runs with the expected exit code. Changes outside code generation:
+  - Parser: additive and multiplicative operators group left to right, as `docs/operators.md`
+    expects; `10 - 3 - 2` was parsed as `10 - (3 - 2)`.
+  - HMIR: an `if` op, and `continue` takes a depth, for a `switch` lowered to a loop.
+  - Linking: a hosted program starts at the compiler's `hemera_entry` and needs only kernel32.
+
 - 2026-10-14 — Compiler Phase 4, expressions and statements (`compiler-plan.md`, on request):
   function bodies type-check, with mutability, return and reachability checks; `base` and `std`
   pass. Decided: `new` returns `ptr[mut T]` (failure goes to the assertion handler); stubs call

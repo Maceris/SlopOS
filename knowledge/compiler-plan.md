@@ -373,18 +373,43 @@ indexes are in bounds (run-time bounds checks until then), `#run`, reflection, v
 
 ## Phase 5: Lowering, Proven on a Hosted Program
 
-- [ ] Generate MLIR from the checked AST: functions with the context as an implicit first argument,
-  locals, control flow through HMIR (`scope`, `loop`, `defer`, `break`, `continue`) and the standard
-  dialects (`arith`, `cf`, `func`, `memref` or `llvm`), struct and array values, calls.
-- [ ] Lower HMIR (after the existing `defer` pass) and the standard dialects to MLIR's LLVM dialect,
-  then translate to LLVM IR. Replace `fill_out_dummy_module` in `src/main.cpp`.
-- [ ] Constants as LLVM globals (read-only data), including function pointers and nested structs.
-- [ ] A hosted test on Windows: a program whose entry returns an exit code, linked with `lld-link`
-  and run by the test suite. The minimal startup code it needs (or `startup_code = false` with a
-  hand-written entry) is part of this step.
+**Done** 2026-10-14: `test/back_end/scenarios/hosted` compiles, links and runs with exit code 42
+(`Hosted.RunsProgram`), at `-O0` and `-O2`.
 
-**Done when:** a small Hemera program with structs, loops, `match`, `defer` and calls compiles,
-links and runs with the expected exit code.
+- [x] **Generate MLIR from the checked AST** (`src/middle_end/generate.cpp`), from what the checker
+  records for each body: what every expression is, each name's head, each local where it's
+  defined, a cast's target, and the branch each `#if` picked. Starting from `main`, each function,
+  instance and constant is generated the first time it's used.
+  - The LLVM dialect directly, not `arith`/`cf`/`memref`. Values are laid out like their types:
+    structs are packed LLVM structs with padding as bytes, so offsets match `docs/types.md`;
+    strings and views are `{count, ptr}`; a union is its tag, then bytes.
+  - Every function takes the context, a pointer, first; several results come back as a struct.
+  - Every local is a stack slot (`alloca` in the entry block), which LLVM promotes to registers.
+  - Control flow is HMIR: `scope`, `loop`, `if` (new), `defer`, `break`, `continue` (now with a
+    depth) and `return`. A `switch` is a loop that runs once, so `break` leaves it and `continue`
+    counts past it. `match` is a chain of `if`s.
+- [x] **Lowering:** `hemera-defer`, then `hemera-lower-control-flow` (new), which turns HMIR into
+  `llvm.br`/`llvm.cond_br`/`llvm.return`; then the module is translated to LLVM IR. This replaces
+  `fill_out_dummy_module`. `-S` writes the `.ll`; `-s` the `.mlir`.
+- [x] **Constants as globals:** a typed constant is a read-only internal global, made when first
+  used. Its initializer is built from values only (a constant using another inlines its value),
+  and `#section` and `#externally_initialized` carry over. String literals are private globals with
+  a null after them.
+- [x] **Hosted entry:** `hemera_entry` makes a zeroed context, calls `main` (`fn()` or `fn() -> int`)
+  and exits with its result through `ExitProcess`. Returning from the entry only ends the thread,
+  so a loader worker thread's code could become the process's. It defines `_fltused`, which LLVM
+  refers to in code using floating point on Windows. It links with
+  `lld-link /entry:hemera_entry /subsystem:console /nodefaultlib kernel32.lib`.
+- [x] **Parser fix found by the test:** `+ - | ~` and `* / % %% & << >> >>>` grouped to the right
+  (`10 - 3 - 2` was 9); they group to the left now.
+
+**Not generated yet** (E5002 says which): functions defined inside functions, struct fields'
+default values, comparing strings, structs and type values, matching strings, joining strings,
+`#run`, `type_of`, `type_info_of`, `min_value`/`max_value`, `any`'s type, calls to bodiless
+functions other than `trap`, parameter defaults beyond literals, constants, `#caller_location` and
+context fields, and constants whose value needs memory (like a union holding values). No
+divide-by-zero check, no stack probes (big frames would need `__chkstk`), and `std`'s stubs, like
+`println`, still trap.
 
 ---
 
