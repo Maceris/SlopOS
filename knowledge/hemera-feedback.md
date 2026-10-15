@@ -78,6 +78,14 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-15 — Compiler Phase 6, the freestanding slice (`compiler-plan.md`, on request): a Limine
+  kernel built by Hemera boots in QEMU, with intrinsics, interrupt functions, `push_context ...
+  from` and prologue stack checks; `tools/boot.py` runs it. Changes outside the compiler:
+  - Hemera `docs/compilation.md`: *Target Options on the Command Line*, the flags standing in for
+    `TargetOptions` until the build package works.
+  - Hemera's LLVM patch (`apps/compiler/third-party/patches/llvm`): no `.note.GNU-split-stack` for
+    a stack limit in a register.
+
 - 2026-10-14 — Compiler Phase 5, lowering on a hosted program (`compiler-plan.md`, on request): a
   program with structs, unions, loops, `match`, `switch`, `defer`, generics, optionals and calls
   compiles to an executable that runs with the expected exit code. Changes outside code generation:

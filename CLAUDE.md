@@ -146,8 +146,11 @@ When unsure about syntax or semantics, check the Hemera docs, then guess and mar
 
 ## Building
 
-Not possible yet. When it is, the compiler finds `base` and `std` in the Hemera repo, so no
-`--package` remapping is needed.
+Freestanding kernels compile, link and boot (`knowledge/compiler-plan.md`, Phase 6), but most of
+SlopOS's code still needs more of the compiler. The compiler finds `base` and `std` in the Hemera
+repo, so no `--package` remapping is needed. `tools/boot.py` builds a kernel package with the
+freestanding flags, boots it in QEMU through Limine, and returns the code the kernel wrote to
+QEMU's debug exit port; it finds QEMU, Limine and xorriso through `QEMU`, `LIMINE` and `XORRISO`.
 The latest debug build of the Hemera compiler should already be on the
 system path, runnable with `hemera`. While it is not expected to work
 properly for the majority of this project's lifecycle, the help text
