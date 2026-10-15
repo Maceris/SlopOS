@@ -78,6 +78,21 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-14 — Compiler Phase 4, expressions and statements (`compiler-plan.md`, on request):
+  function bodies type-check, with mutability, return and reachability checks; `base` and `std`
+  pass. Decided: `new` returns `ptr[mut T]` (failure goes to the assertion handler); stubs call
+  `todo()`. Changes outside the compiler, with reasons:
+  - `base/builtin/builtin.hsc`: `todo`, a builtin that never returns, for code still to write.
+    `docs/functions.md`, *Functions Still to Write*, describes it.
+  - `base/runtime/alloc.hsc`: `new` returns `ptr[mut T]` and calls the assertion handler on
+    failure (`docs/types.md` says so too); `new_array` returns its result; stubs call `todo()`.
+  - `base/runtime/alloc.hsc`, `core.hsc`: alignments are `usize`, like `align_of`.
+  - `base/compiler/code.hsc`: `SourceCodeLocation` is an alias of `runtime`'s, which was declared
+    separately, so `#caller_location` fits both.
+  - `std`: the 134 stubs call `todo()`; the scheduler's optional fiber; `formatting` imports
+    `runtime`; `delete` is `free`; `create_default_logger` returns its logger; `Instant.{0, 0}`;
+    `printf`'s parameter renamed; casts between `int`, `i32` and `usize`; `as_string`'s two results.
+
 - 2026-10-14 — Compiler Phase 3, declarations and types (`compiler-plan.md`, on request): base is
   built into the compiler and compiled like any package; every declaration in `base` and `std`
   resolves to type information with its memory layout. Changes outside the compiler, with reasons:

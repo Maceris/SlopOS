@@ -280,24 +280,82 @@ tests pass for the documented layouts (`StringView`, `ArrayView`, `ResizableArra
 
 ## Phase 4: Expressions and Statements
 
-- [ ] Literals and untyped constants; the implicit-casting rules (`docs/types.md`, *Implicit
-  Casting*); operators (`docs/operators.md`), including greedy continuation across line breaks
-  (already in the parser).
-- [ ] Calls: positional and named arguments, defaults, `#caller_location`, varargs, generics.
-- [ ] Member access with automatic dereference, indexing and slicing, `cast`/`bit_cast`/`auto_cast`,
-  struct and array literals (including generic and package-qualified types), enum shorthand.
-- [ ] `match` (with exhaustiveness), `switch`, `if` as an expression, optionals and `Result`,
-  `or_return`/`or_else`/`or_break`/`or_continue`, `is_some`/`is_none`.
-- [ ] Definitions (`::`, `:=`, `: T :`, `: T =`), assignment with **mutability checks**
-  (`ptr[mut T]`), `defer`, `loop`/`for`/`with`, `break`/`continue`.
-- [ ] `push_context` (overrides and `from`); the read-only context; functions without a context
-  (`docs/control_flow.md`).
-- [ ] Return checking: every path returns a value of the right types; `#never_returns` bodies can't
-  finish, and code after their calls is unreachable.
-- [ ] Builtins: `size_of`, `align_of`, `offset_of`, `type_of`, `type_info_of` (types only for now),
-  `#assert`.
-- [ ] Run type checking on all of `base` and `std` in a test, the way the parser test parses them,
-  and on SlopOS's `src/`.
+**Mostly done** 2026-10-14: `base`, `std` and the examples type-check, and the error scenarios
+report what `docs/` says. What's left is at the end.
+
+- [x] **Literals and untyped constants:** an integer, float, string, boolean or null takes the type
+  it's used as, and a constant like `LIMIT :: 10` is untyped the same way. Also the implicit-casting
+  rules, and the operators, including the pipe `|>`. Raw and relative pointers allow arithmetic.
+- [x] **Calls:** positional and named arguments, defaults, `#caller_location`, varargs (and passing
+  a varargs view on), and generic functions.
+  - **Generic calls** bind each generic parameter explicitly (`empty[string]()`), from a
+    compile-time parameter (`new(T)`), or by matching argument types (`T` in `ptr[T]`, `T[]`,
+    `Pair[T, U]`, `T?`). Giving one twice is warning W4000.
+  - **Instances:** each binding makes an instance of the function, whose body is checked with its
+    parameters bound.
+- [x] **Values:** member access, through one pointer automatically; indexing and slicing; `cast`,
+  `bit_cast` (same size), `auto_cast`; struct literals (in order, or by name) and array literals,
+  generic and package-qualified; enum shorthand, and `.Variant(values)` for unions.
+- [x] **Control flow and optionals:**
+  - `match`, which must cover every value its subject can be (E4026), and `switch`;
+  - `if` as an expression;
+  - optionals and `Result`: `?`, `or_return`, `or_else`, `or_break`, `or_continue`, `is_some`,
+    `is_none`.
+- [x] **Statements:** definitions (`::`, `:=`, `: T :`, `: T =`, `: T`, several names), assignment
+  (several targets, chained, compound) with mutability checks, `defer`, `loop`/`with`/`while`,
+  `for` over ranges and arrays (`&` by reference, with an index), `break`/`continue`.
+  - **What can be changed:** a constant can't, and neither can anything reached through `ptr[T]`
+    without `mut`. Elements of views and dynamic arrays can, since they live elsewhere; a static
+    array's follow its variable.
+  - **The context is read-only:** `&` on it gives a pointer without `mut`.
+- [x] **`push_context`**, with overrides or `from`, and functions without a context: entry and
+  interrupt functions (`#calling_convention`, after the name) can't use `context`, and can only call
+  intrinsics, until they push one (E4027).
+- [x] **Return checking:**
+  - every path that finishes returns the results;
+  - a `#never_returns` function can't finish;
+  - code after `return`, `break`, `continue` or a never-returning call is unreachable (E4025);
+  - a loop without a condition or a break never finishes.
+- [x] **Builtins:** `size_of`, `align_of`, `offset_of`, `type_of`, `type_info_of` (also of a type
+  value, like an `any`'s `type_`), `types_are_aliases`, `max_value`/`min_value`, `#assert`,
+  `#is_compile_time`, and `todo()` (below).
+- [x] **Tests:** `ResolvesStd` and `ResolvesBase` now type-check every body, `ChecksBodies` covers the
+  valid forms, and `ReportsBodyErrors` has one scenario per rule (19). SlopOS's `src/` has no code
+  yet.
+
+**Decided while doing this** (2026-10-14):
+- **`new` returns `ptr[mut T]`**, as `docs/types.md` says, and calls the assertion handler if it
+  can't allocate. `new_aligned` and `new_array` still return the error.
+- **Stubs call `todo()`,** a builtin in `base/builtin` that never returns, so an empty body with
+  results is an error. The 134 stubs in `std` call it now.
+
+**Found in `base` and `std`:**
+- **`base`:**
+  - `new_array` didn't return its result.
+  - Alignments were `int`, while `align_of` is `usize`.
+  - `SourceCodeLocation` was declared twice; `compiler`'s is now an alias of `runtime`'s.
+- **`std`:**
+  - The scheduler used an optional fiber as a fiber.
+  - `formatting` didn't import `runtime`.
+  - `delete` (which doesn't exist; it's `free`).
+  - `create_default_logger` didn't return its logger.
+  - `Instant.{0}` gave one of two fields.
+  - `printf`'s parameter `format` hid the function `format`.
+  - Mixed `int`/`i32`/`usize` without casts.
+
+**Compiler changes along the way:**
+- The parser now takes a parenthesized operand after a unary operator (`!(a == b)`), wraps a switch
+  case's statements in a block, and gives `#assert` its condition.
+- Reports drop exact repeats, since work that waits starts over and finds the same errors again.
+- `base/runtime` is loaded into every program, for `context`.
+
+**Left for later in Phase 4:**
+- `#if` inside a function body;
+- values as compile-time arguments (`buffer(16)`);
+- `_` and `$1` in a piped call;
+- counting `break 2` against the loops it's in;
+- `#assert` on what the constant evaluator can't compute yet, like `size_of` (it's checked as a
+  boolean, but not evaluated).
 
 **Deferred to later phases:** `#escaping` and stack-pointer escape analysis, `#scoped`, proving
 indexes are in bounds (run-time bounds checks until then), `#run`, reflection, value generics.
