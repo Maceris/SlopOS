@@ -218,22 +218,63 @@ Statement bodies aren't walked yet, only declarations (Phase 4).
 
 ## Phase 3: Declarations and Types
 
-- [ ] Primitive types, including explicit-endian integers (`docs/types.md`).
-- [ ] `struct` (fields, defaults, `using`, `#packed`, `#align`, `#union`, `#scoped`), `union`
-  (tagged), `enum` (`#backed_by`, member values), `alias`, `distinct alias`.
-- [ ] Pointers (`ptr[T]`, `ptr[mut T]`, `rawptr`, relative pointers), optionals (`T?`), arrays
-  (fixed, views, dynamic), `string`, `any`, `type`.
-- [ ] Function types: parameters (named, defaults, `#escaping`, `#caller_location`, varargs),
-  results (several, named), `#never_returns`, `#calling_convention(...)`.
-- [ ] Generics: type parameters on structs, unions and functions; instantiation; the three binding
-  rules (`docs/types.md`, *Generics*). Value parameters can wait.
-- [ ] Constants with types, untyped constants, `---` declarations, `#externally_initialized`,
-  `#section`.
-- [ ] Memory layout (size, alignment, offsets) for every type, as `docs/types.md` (*Memory Layout*)
-  specifies, since `size_of`, layout asserts and code generation all need it.
+**Done** 2026-10-14, except what's left for Phase 4 at the end.
+
+- [x] **Base is built into the compiler** (decided 2026-10-14): the build embeds `base/*.hsc` in the
+  compiler (`src/front_end/embed_base.cmake`, each file in parts of 4 KiB), and an import from
+  `base` compiles that copy like any package, without reading the disk. Relative imports inside base
+  (`import x86_64 from "./x86_64"`) stay inside it. `base/builtin` describes the compiler's own names
+  and isn't compiled, except `generic_types.hsc`, which holds `Optional` and `Result` (moved there
+  from `builtin.hsc`) and is loaded into every program.
+- [x] **Primitive types** with sizes and alignments in bytes, for 64-bit targets.
+- [x] **`struct`** (fields, defaults, `using`, anonymous structs, `#packed`, `#align`, `#union`,
+  `#scoped`), **`union`** (tagged), **`enum`** (`#backed_by`, member values), **`alias`**,
+  **`distinct alias`**, and `X :: Y`, an alias when `Y` is a type.
+- [x] **Pointers** (`ptr[T]`, `ptr[mut T]`, `rawptr`, relative pointers), **optionals** (`T?`, an
+  instance of `Optional`), **arrays** (fixed, views, dynamic), `string`, `cstring`, `any`, `type`.
+- [x] **Function types**: parameters (named, defaults, `#escaping`, varargs), results (several,
+  named), `#never_returns`, `#calling_convention(...)`.
+- [x] **Generic types**: each set of arguments makes an instance (`Pair[int, string]`), resolved by its
+  own work, with its parameters bound. Aliases that aren't distinct give the same instance.
+- [x] **Constants** with types, untyped constants, `---` declarations, `#externally_initialized`
+  and `#section` (only together; reading one at compile time is an error).
+- [x] **Memory layout** for every type (decided 2026-10-14, now in `docs/types.md`, *Memory Layout*):
+  - structs are C-like;
+  - `#align(n)` only raises the alignment, and sets it exactly with `#packed`;
+  - a tagged union is the smallest unsigned tag at offset 0, then each variant's values like
+    struct fields, all variants overlapping;
+  - `char` is one byte.
+- [x] **How it works:**
+  - **Classifying:** when a declaration is declared, its syntax says what it is: a type (struct,
+    union, enum, alias or function type), a generic type, a function, or a value. A type's
+    `TypeInfo` exists from then on, so pointers can refer to it before its layout is known.
+  - **Recorded lookups:** the name walker records what each name resolved to, and an evaluator
+    (`src/front_end/declarations.cpp`) builds the types from that once everything held by value is
+    resolved. A value that turns out to name a type, like `X :: Y`, is only known to be a type once
+    it's resolved, so a pointer to it waits for that.
+  - **One object per type:** types made from others (pointers, arrays, function types, anonymous
+    structs) are one object each. Making them anew on each attempt multiplied `Optional`
+    instances of function types endlessly.
+- [x] **Fixes to `base` and `std` found by this:**
+  - `compiler.TypeInfoUnion` used a `Map` type that doesn't exist; it now has `variants: UnionVariant[]`
+    (each with its value types and offsets) and its `tag_type`.
+  - `std/fiber/scheduler.hsc` imported a nonexistent `base/array`; it now imports `runtime`.
+  - `std/string/string_conversion.hsc` used `ptr` and the relative pointers without a target; those
+    functions are now generic (`ptr_to_string :: fn[T](value: ptr[T])`).
+- [x] **Tests:** layouts for the documented types (`string` and `runtime.StringView`, views,
+  `ResizableArray` and `T[..]`, `any`), the struct examples in `docs/types.md`, unions, enums,
+  optionals, aliases, function types, constants, generic instances, type errors. `ResolvesStd` and
+  `ResolvesBase` check every declaration has its type information.
 
 **Done when:** every declaration in `base` and `std` resolves to type information, and layout
 tests pass for the documented layouts (`StringView`, `ArrayView`, `ResizableArray`, `any`).
+
+**Left for Phase 4**, since each needs expressions typed:
+- a parameter's or field's type from its default, like `allocator := context.allocator` (left null);
+- untyped constants, and constants whose value is an expression (left null);
+- generic functions, instantiated for each call, and the three binding rules;
+- values in generic lists (`Ring[u8, 4096]`), which nothing in `base` or `std` uses yet;
+- `same_type` comparing pointers and arrays structurally, so `ptr[index]` is `ptr[int]`.
 
 ---
 

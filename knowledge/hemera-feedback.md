@@ -78,6 +78,21 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-14 — Compiler Phase 3, declarations and types (`compiler-plan.md`, on request): base is
+  built into the compiler and compiled like any package; every declaration in `base` and `std`
+  resolves to type information with its memory layout. Changes outside the compiler, with reasons:
+  - `docs/types.md`, *Memory Layout*: sizes, C-like struct layout, `#align` only raising the
+    alignment, tagged unions as a tag then each variant's values, enums the size of their backing
+    type (all decided 2026-10-14); `char` is one byte of UTF-8; `c128` is 2 `i64`s, not 2 `i128`s.
+    `docs/directives.md`, `#align`, to match.
+  - `base/builtin/generic_types.hsc`: `Optional` and `Result`, out of `builtin.hsc`, which isn't
+    compiled.
+  - `base/compiler/types.hsc`: `TypeInfoUnion.variants` is a `UnionVariant[]` (types and offsets),
+    replacing a `Map` that doesn't exist, plus `tag_type`.
+  - `std/fiber/scheduler.hsc`: imports `runtime`, not a nonexistent `base/array`.
+  - `std/string/string_conversion.hsc`: the pointer conversions are generic (`ptr[T]`), since a bare
+    `ptr` isn't a type.
+
 - 2026-10-14 — Compiler Phase 2, packages, names and `#if` (`compiler-plan.md`, on request): a name
   registry with lookup through imports, waiting on names, `#if` chains evaluated at compile time,
   and stopping with cycles and undeclared names reported when nothing can make progress. `std`
