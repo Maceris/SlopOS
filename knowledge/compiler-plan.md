@@ -280,8 +280,8 @@ tests pass for the documented layouts (`StringView`, `ArrayView`, `ResizableArra
 
 ## Phase 4: Expressions and Statements
 
-**Mostly done** 2026-10-14: `base`, `std` and the examples type-check, and the error scenarios
-report what `docs/` says. What's left is at the end.
+**Done** 2026-10-14: `base`, `std` and the examples type-check, and the error scenarios report what
+`docs/` says. SlopOS's `src/` has no code yet.
 
 - [x] **Literals and untyped constants:** an integer, float, string, boolean or null takes the type
   it's used as, and a constant like `LIMIT :: 10` is untyped the same way. Also the implicit-casting
@@ -349,13 +349,19 @@ report what `docs/` says. What's left is at the end.
 - Reports drop exact repeats, since work that waits starts over and finds the same errors again.
 - `base/runtime` is loaded into every program, for `context`.
 
-**Left for later in Phase 4:**
-- `#if` inside a function body;
-- values as compile-time arguments (`buffer(16)`);
-- `_` and `$1` in a piped call;
-- counting `break 2` against the loops it's in;
-- `#assert` on what the constant evaluator can't compute yet, like `size_of` (it's checked as a
-  boolean, but not evaluated).
+- [x] **Finished afterwards** (the same day):
+  - **`#if` in a function body:** its conditions are decided at compile time, and only the branch
+    it picks is checked, as if written in place.
+  - **Compile-time values** (`buffer(16)`): a function's generic parameter named by a
+    non-`type` parameter takes a constant, an integer, enum or boolean (not a variable, E4010).
+    Each value makes its own instance, where the parameter is a constant that can size an array.
+    One value in brackets after a type that isn't generic, like `u8[count]`, is an array's count.
+  - **Piped calls:** `_` fills in the piped values in order, `$1` and `$2` by number, and
+    otherwise they all come first. The call's arguments are inside its parentheses.
+  - **`break 2`** must be inside two loops or switches; `continue` only counts loops.
+  - **`#assert`** evaluates `size_of`, `align_of` and `offset_of`, in a body or at the top level.
+  - **Fixed:** a race where `base.Result` and `T?` could look for `base/builtin`'s generic types
+    before it was loaded; and an ambiguity reported twice when a declaration was retried.
 
 **Deferred to later phases:** `#escaping` and stack-pointer escape analysis, `#scoped`, proving
 indexes are in bounds (run-time bounds checks until then), `#run`, reflection, value generics.
