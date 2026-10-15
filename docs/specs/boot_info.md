@@ -5,7 +5,8 @@ image's location, the CPUs and how to start them, the boot modules, framebuffers
 tables, and a few optional values the bootloader may know. It is the only boot data the kernel
 core reads; no bootloader structure reaches L2 (`../architecture/layers.md`, L0).
 
-Status: **draft**, not implemented. Choices and alternatives are in
+Status: **draft**, implemented in `src/boot_info` and `src/boot/limine` (roadmap M1), apart from
+`start_cpu`. Choices and alternatives are in
 `../../knowledge/decisions/0031-boot-info.md` (proposed). Four-digit numbers like `0020` refer to
 decision records in `../../knowledge/decisions/`.
 
@@ -63,7 +64,7 @@ BootInfo :: struct {
     // Every CPU, the boot CPU first. A CPU's index here is its kernel CPU index.
     cpus : BootCpu[],
     // Starts one of cpus. Null when there is only one CPU.
-    start_cpu : fn(cpu: ptr[BootCpu], carrier: ptr[mut runtime.CarrierBlock], entry: (fn() #never_returns))?,
+    start_cpu : StartCpu?,
     // The boot modules, the root task first.
     modules : BootModule[],
     // Linear RGB framebuffers. Empty when there are none.
@@ -76,6 +77,11 @@ BootInfo :: struct {
     // Wall-clock time at boot, in seconds since the Unix epoch, if the bootloader read one.
     boot_wall_time : i64?,
 }
+
+StartCpu :: alias fn(cpu: ptr[BootCpu], carrier: ptr[mut runtime.CarrierBlock], entry: CpuEntry)
+
+// Where a started CPU begins in the kernel.
+CpuEntry :: alias fn() #never_returns
 
 Firmware :: enum #backed_by(u8) {
     Bios,
@@ -226,7 +232,8 @@ them go. `KernelImage`, `BootModule`, `Framebuffer`, `FirmwareReserved`, `Reserv
   CPU's `entry` to report in, with a timeout.
 
 ### Modules
-- `modules[0]` is the root task (`0012`). There is always at least one module.
+- `modules[0]` is the root task (`0012`). The kernel stops if there isn't one when it starts the
+  root task (roadmap M6); until then there may be none.
 - Module contents are passed on to the root task as memory objects, except the root task's own
   module, which the kernel loads.
 
@@ -250,7 +257,7 @@ supported architecture (`0020`, `0022`).
 | Executable address | yes | `kernel_image` |
 | Executable file | yes | `kernel_image.segments` |
 | MP (x86-64: x2APIC flag set) | yes | `cpus`, `start_cpu` |
-| Module | yes, with at least one module | `modules` |
+| Module | no: Limine answers it only when there are modules | `modules` |
 | Paging mode: 4-level (Sv48 on RISC-V) | yes | The bootloader's page tables |
 | Stack size: 64 KiB | yes | Boot stacks of every CPU |
 | Bootloader info | no | `bootloader` |

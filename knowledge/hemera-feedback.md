@@ -23,9 +23,32 @@ Severity: **blocker** / **friction** / **nice**.
 The smallest kernel that proves the toolchain: Limine loads a Hemera ELF, it sets up a
 GDT/IDT, prints to the serial port and framebuffer, handles a timer interrupt, and halts.
 
-Nothing open: everything M1 needs from Hemera is now in its docs or `.hsc` files. Items 1–10
-(Resolved, 2026-10-12) are referred to by number there and elsewhere; data written by the
-bootloader was found and resolved on 2026-10-13.
+That kernel builds and boots now (2026-10-15, `compiler-plan.md` Phase 6). Items 1–10 (Resolved,
+2026-10-12) are referred to by number there and elsewhere; data written by the bootloader was found
+and resolved on 2026-10-13.
+
+Found while writing it, each marked in `src/` (`grep -rn "HEMERA(\|STD(" src/`):
+
+| Issue | Severity | Where |
+|---|---|---|
+| `any` values carry no type information, so a logger can't format its parameters. Kernel code formats numbers itself with `std/text_buffer` and logs plain text | blocker for formatted logging | `kernel/log.hsc`, `boot/limine/entry.hsc` |
+| `capture_stack_trace` isn't generated, so the assertion handler and kernel faults print no stack trace (roadmap M1) | blocker for M1's assertion handler | `kernel/log.hsc`, `kernel/entry` |
+| Entry functions (`.entry`, `.syscall_entry`, `entry_points`) aren't generated: the x86-64 entries are interrupt functions, which can't take entries from user mode, and repeat the lines that find the CPU and push its context, since they have no context to call a helper with | blocker for M4–M6 | `arch/x86_64/entries.hsc` |
+| No calling convention for a function a bootloader calls with the C convention and no carrier or context, other than the program's entry: Limine starts the other CPUs that way (`start_cpu`) | blocker for M3 | `boot/limine/convert.hsc` |
+| No way to make an array view or a string from an address and a count: `std/raw` does it with `bit_cast` and the view layout | gap | Hemera `std/raw` |
+| No documented layout for `ptr[T]?` that matches a nullable C pointer, so bootloader structures use `rawptr` | gap | `boot/limine/protocol.hsc` |
+| `==` on strings isn't generated | gap | `kernel/command_line.hsc` |
+| Slicing a string gives `char[]`, not a string; an untyped string constant can't be indexed | gap, friction | `kernel/command_line.hsc`, `boot/limine/convert.hsc`, Hemera `std/text_buffer` |
+| A union variant can't hold a generic type (`User(ptr[mut T])`) or a name from another package (`Ipi(arch_interface.IpiKind)`); they go through aliases | gap | `kernel/entry` |
+| No way to read the stack pointer: L0 works out the boot stack's limit from a local's address | gap | `boot/limine/entry.hsc` |
+| A value isn't accepted for a parameter of its optional type (`SourceCodeLocation` for `SourceCodeLocation?`), though the checker's own rules say it fits | friction (bug) | `kernel/log.hsc` |
+| `or_else` doesn't take a call that never returns as its default | friction | `boot/limine/convert.hsc` |
+| An element of an array literal can't be written `.{...}`; an `if` expression can't be a call's argument | friction | `arch/x86_64/features.hsc`, several |
+| `Result[void, E]` doesn't parse, so the arch interface's `map` and `protect` return `MapError?` and `UnmapError?`; `ipc.md` still writes `Result[void, ...]` | design question | `docs/specs/arch_interface.md` |
+| `all`, `register` and `from` are keywords, which natural field and parameter names run into (`TlbBatch.all` became `flush_all`, `interrupt`'s `from` became `interrupted`) | nice | specs |
+| No enum value names, so the baseline check writes each feature's name out | friction | `arch/x86_64/features.hsc` |
+| No portable spin-wait hint in `base` (x86 `pause`, Arm `yield`), so the ticket lock is in the kernel rather than `std/concurrency` | nice (`STD(missing)`) | `kernel/spin_lock.hsc` |
+| The compiler finds `std` only with `--install-path`; `tools/boot.py` passes the Hemera repository | friction | `tools/boot.py` |
 
 ### Language and library design
 
@@ -77,6 +100,19 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-15 — The first M1 kernel (`compiler-plan.md` Phase 6, on request): `src/` boots from BIOS
+  and UEFI through Limine, builds `BootInfo`, sets up the GDT, TSS, IDT and x2APIC, logs to the
+  serial port, handles timer interrupts and halts; `tools/boot.py --expect 0` is its test. What it
+  found is in *Needed to boot a kernel* above. Changes in Hemera:
+  - Compiler, four bugs (asked for): `else if` attached its block to the `else`, so the block was
+    never checked and generating it crashed; a varargs view passed on was only recognized as the
+    last argument, against `docs/functions.md` (which `runtime.log_*` relies on); `_ = f()` crashed
+    the parser's caller (the target node was lost); a call in a constant's value crashed code
+    generation, and is reported as needing compile-time execution now.
+  - `std/raw` (views and strings over memory from outside Hemera) and `std/text_buffer` (text in a
+    fixed buffer), both freestanding; `CpuFeatures` in `std/os/slop_os` (`decisions/0019`).
+  - Hemera `docs/packages.md`: the two packages in the tier table.
 
 - 2026-10-15 — Compiler Phase 6, the freestanding slice (`compiler-plan.md`, on request): a Limine
   kernel built by Hemera boots in QEMU, with intrinsics, interrupt functions, `push_context ...

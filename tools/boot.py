@@ -1,12 +1,19 @@
 """
 Boots a kernel in QEMU through Limine, for end-to-end tests (knowledge/compiler-plan.md, Phase 6).
 
+    python tools/boot.py --expect 0
     python tools/boot.py --kernel build/kernel.elf
-    python tools/boot.py --package src/kernel --linker-script src/kernel/linker.ld --expect 42
+    python tools/boot.py --package other/kernel --linker-script other/kernel/linker.ld --expect 42
 
-With --package it builds the kernel first with Hemera's compiler (hemera on the PATH), using the
+Without --kernel it builds a kernel package first, SlopOS's boot adapter (src/boot/limine, with its
+x86_64.ld) unless --package says otherwise, with Hemera's compiler (hemera on the PATH) and the
 freestanding flags the kernel needs until the build package works: no startup code, no red zone,
-no SIMD, stack checks that trap.
+no SIMD, stack checks that trap. The compiler finds std through --install-path: HEMERA_INSTALL, or
+the Hemera repository hemera was built in.
+
+The kernel's command line is --command-line, test_exit by default, which makes SlopOS write why it
+stopped to the debug exit device (src/kernel/stop.hsc, StopReason). QEMU's CPU is --cpu, max by
+default, since SlopOS needs x86-64-v3.
 
 The kernel's ELF goes in a Limine ISO, which QEMU boots (BIOS by default, --uefi for UEFI) with the
 serial port captured. A kernel ends the run by writing a code to QEMU's isa-debug-exit device at
@@ -47,7 +54,14 @@ LIMINE_CONFIG = """timeout: 0
 /SlopOS
     protocol: limine
     path: boot():/boot/kernel
+    cmdline: {command_line}
 """
+
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_PACKAGE = ROOT / "src" / "boot" / "limine"
+DEFAULT_LINKER_SCRIPT = DEFAULT_PACKAGE / "x86_64.ld"
+# SlopOS needs x86-64-v3 (knowledge/decisions/0003), which QEMU's default CPU model lacks
+DEFAULT_CPU = "max"
 
 
 def find_tool(variable: str, names: list[str], folders: list[Path]) -> Path:
@@ -87,21 +101,35 @@ def limine_tool(limine: Path) -> Path:
     return find_tool("LIMINE_TOOL", names, [])
 
 
+def hemera_install() -> Path:
+    """The folder holding Hemera's std: HEMERA_INSTALL, or the repository hemera was built in."""
+    configured = os.environ.get("HEMERA_INSTALL")
+    if configured:
+        return Path(configured)
+    found = shutil.which("hemera")
+    if found:
+        for folder in Path(found).resolve().parents:
+            if (folder / "std").is_dir() and (folder / "base").is_dir():
+                return folder
+    sys.exit("boot.py: can't find Hemera's std; set HEMERA_INSTALL to the Hemera repository")
+
+
 def build_kernel(package: Path, linker_script: Path, output: Path) -> None:
     """Builds the kernel package with Hemera's compiler."""
-    command = ["hemera", *KERNEL_FLAGS, f"--linker-script={linker_script}", f"--output={output}", str(package)]
+    command = ["hemera", *KERNEL_FLAGS, f"--install-path={hemera_install()}", f"--linker-script={linker_script}",
+               f"--output={output}", str(package)]
     result = subprocess.run(command)
     if result.returncode != 0:
         sys.exit(f"boot.py: building {package} failed")
 
 
-def make_image(kernel: Path, limine: Path, xorriso: Path, folder: Path) -> Path:
+def make_image(kernel: Path, limine: Path, xorriso: Path, folder: Path, command_line: str) -> Path:
     """An ISO that boots kernel through Limine, from BIOS or UEFI."""
     root = folder / "iso_root"
     (root / "boot" / "limine").mkdir(parents=True)
     (root / "EFI" / "BOOT").mkdir(parents=True)
     shutil.copy(kernel, root / "boot" / "kernel")
-    (root / "boot" / "limine" / "limine.conf").write_text(LIMINE_CONFIG, newline="\n")
+    (root / "boot" / "limine" / "limine.conf").write_text(LIMINE_CONFIG.format(command_line=command_line), newline="\n")
     for name in ["limine-bios.sys", "limine-bios-cd.bin", "limine-uefi-cd.bin"]:
         shutil.copy(limine / name, root / "boot" / "limine" / name)
     shutil.copy(limine / "BOOTX64.EFI", root / "EFI" / "BOOT" / "BOOTX64.EFI")
@@ -117,10 +145,10 @@ def make_image(kernel: Path, limine: Path, xorriso: Path, folder: Path) -> Path:
     return image
 
 
-def run(image: Path, qemu: Path, serial: Path, timeout: float, uefi: bool, extra: list[str]) -> int:
+def run(image: Path, qemu: Path, serial: Path, timeout: float, uefi: bool, cpu: str, extra: list[str]) -> int:
     """Boots the image, and gives the code the kernel wrote to the debug exit device."""
     command = [
-        str(qemu), "-M", "q35", "-m", "256M", "-cdrom", str(image),
+        str(qemu), "-M", "q35", "-m", "256M", "-cpu", cpu, "-cdrom", str(image),
         "-serial", f"file:{serial}", "-display", "none", "-no-reboot",
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
     ]
@@ -137,10 +165,12 @@ def run(image: Path, qemu: Path, serial: Path, timeout: float, uefi: bool, extra
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Boots a kernel in QEMU through Limine.")
-    source = parser.add_mutually_exclusive_group(required=True)
+    source = parser.add_mutually_exclusive_group()
     source.add_argument("--kernel", type=Path, help="the kernel's ELF")
-    source.add_argument("--package", type=Path, help="a kernel package to build first")
+    source.add_argument("--package", type=Path, help="a kernel package to build first (default: SlopOS's)")
     parser.add_argument("--linker-script", type=Path, help="the linker script, with --package")
+    parser.add_argument("--command-line", default="test_exit", help="the kernel's command line")
+    parser.add_argument("--cpu", default=DEFAULT_CPU, help="QEMU's CPU model")
     parser.add_argument("--expect", type=int, help="the exit code the kernel should write; exits 0 if it does")
     parser.add_argument("--timeout", type=float, default=30, help="seconds before giving up")
     parser.add_argument("--uefi", action="store_true", help="boot with UEFI firmware instead of BIOS")
@@ -154,14 +184,18 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="slopos-boot-") as temporary:
         folder = Path(temporary)
         kernel = arguments.kernel
-        if arguments.package is not None:
-            if arguments.linker_script is None:
+        if kernel is None:
+            package = arguments.package or DEFAULT_PACKAGE
+            linker_script = arguments.linker_script
+            if arguments.package is None and linker_script is None:
+                linker_script = DEFAULT_LINKER_SCRIPT
+            if linker_script is None:
                 parser.error("--package needs --linker-script")
             kernel = folder / "kernel.elf"
-            build_kernel(arguments.package.resolve(), arguments.linker_script.resolve(), kernel)
-        image = make_image(kernel.resolve(), limine, xorriso, folder)
+            build_kernel(package.resolve(), linker_script.resolve(), kernel)
+        image = make_image(kernel.resolve(), limine, xorriso, folder, arguments.command_line)
         serial = folder / "serial.txt"
-        code = run(image, qemu, serial, arguments.timeout, arguments.uefi, arguments.qemu_arguments)
+        code = run(image, qemu, serial, arguments.timeout, arguments.uefi, arguments.cpu, arguments.qemu_arguments)
         output = serial.read_text(errors="replace") if serial.exists() else ""
         if arguments.serial is not None:
             arguments.serial.write_text(output)

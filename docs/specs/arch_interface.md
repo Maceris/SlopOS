@@ -7,7 +7,8 @@ The arch interface is the boundary between the arch layer (L1) and the kernel co
 - **`kernel_entry`**: what L2 implements and L1's entry stubs call (system calls, faults,
   interrupts).
 
-Status: **specified**, not implemented. Choices and alternatives are in
+Status: **specified**, partly implemented: `src/arch_interface`, and in `src/arch/x86_64` CPU
+setup, interrupts, the timer and the miscellaneous functions (roadmap M1). Choices and alternatives are in
 `../../knowledge/decisions/0032-arch-interface.md`. Four-digit numbers like `0023` refer
 to decision records in `../../knowledge/decisions/`.
 
@@ -45,6 +46,9 @@ These rules are what keep the interface small.
   direct map. A kernel access can therefore never fault on user memory, so the arch layer keeps
   user-access protection (x86-64 SMAP, AArch64 PAN, RISC-V `sstatus.SUM` clear) on permanently
   and needs no fault recovery.
+- **L1 acknowledges local interrupts itself.** Entry stubs acknowledge the timer and IPIs before
+  calling `kernel_entry.interrupt`; L2 acknowledges device interrupts with `end_of_interrupt`, once
+  it has masked a level-triggered line.
 - **L1 never allocates.** Memory for page tables, stacks, vector state and the per-architecture
   types comes from L2.
 - **L1 holds no policy and no global state.** Its state lives in `ArchSystem` and `ArchCpu`,
@@ -130,7 +134,7 @@ init_system : fn(system: ptr[mut ArchSystem]) : ---
  * Set up the calling CPU: descriptor tables, entry points, the stacks entries use,
  * user-access protection, no-execute, address-space tags, and the default vector state.
  * Records carrier and context in cpu, and cpu in the architecture's per-CPU register
- * (x86-64: IA32_KERNEL_GS_BASE; AArch64: TPIDR_EL1; RISC-V: sscratch), for entry stubs.
+ * (x86-64: the gs base while in the kernel; AArch64: TPIDR_EL1; RISC-V: sscratch), for entry stubs.
  */
 init_cpu : fn(
     system: ptr[ArchSystem],
@@ -188,10 +192,10 @@ FreedTables :: struct {
     frames : PhysicalAddress[4],
 }
 
-// TLB entries to flush. Once full, or with all set, it covers the whole tag.
+// TLB entries to flush. Once full, or with flush_all set, it covers the whole tag.
 TlbBatch :: struct {
     tag : AddressSpaceTag,
-    all : bool,
+    flush_all : bool,
     count : u32,
     addresses : VirtualAddress[16],
 }
@@ -242,7 +246,7 @@ map : fn(
     size: PageSize,
     mapping: Mapping,
     tables: ptr[mut TableFrames],
-) -> Result[void, MapError] : ---
+) -> MapError? : ---
 
 // Unmap one page, returning its physical address.
 unmap : fn(
@@ -259,7 +263,7 @@ protect : fn(
     size: PageSize,
     mapping: Mapping,
     flush: ptr[mut TlbBatch],
-) -> Result[void, UnmapError] : ---
+) -> UnmapError? : ---
 
 Translation :: struct {
     physical_address : PhysicalAddress,
@@ -315,7 +319,7 @@ send_ipi : fn(cpu_hardware_id: u64, kind: IpiKind) : ---
 interrupt_pending : fn() -> bool : ---
 
 // Wait for an interrupt with interrupts enabled. The interrupt enters
-// kernel_entry.interrupt with from = .Idle.
+// kernel_entry.interrupt with interrupted = .Idle.
 idle #never_returns : fn() : ---
 ```
 
@@ -484,8 +488,18 @@ spin_hint : fn() : ---
 // it failed.
 hardware_entropy : fn() -> u64? : ---
 
+// Set up the architecture's early console. Called once, by L0, before anything is written to it.
+early_console_init : fn() : ---
+
 // Write to the architecture's early console, before any driver exists.
 early_console_write : fn(text: string) : ---
+
+/*
+ * Ask the emulator the kernel runs in to exit with code, for tests that boot the kernel. Only
+ * called when the command line asks for it (test_exit), since on real hardware the device it
+ * writes to may be something else entirely.
+ */
+test_exit : fn(code: u32) : ---
 ```
 
 ## `kernel_entry`
@@ -517,7 +531,7 @@ syscall #never_returns : fn(registers: ptr[mut arch.UserRegisters]) : ---
 user_fault #never_returns : fn(registers: ptr[mut arch.UserRegisters], fault: arch_interface.Fault) : ---
 
 // An interrupt from user mode or idle.
-interrupt #never_returns : fn(from: Interrupted, source: InterruptSource) : ---
+interrupt #never_returns : fn(interrupted: Interrupted, source: InterruptSource) : ---
 
 // A fault in kernel code, which is a bug. The kernel stops with a stack trace.
 kernel_fault #never_returns : fn(fault: arch_interface.Fault, instruction_pointer: arch_interface.VirtualAddress) : ---
@@ -560,17 +574,18 @@ How `arch/x86_64` meets the interface (`../../knowledge/design/arch-x86-64.md`):
 | `ArchSystem` | The IDT, filled from `x86_64.entry_points` |
 | `UserRegisters` | `x86_64.RegisterFrame` |
 | `ArchCpu` | `x86_64.SyscallScratch` first (the `gs` base points here), then the GDT and TSS (with IST entries for the critical stacks), and the carrier block and context for entry stubs |
-| `init_cpu` | `lgdt`, `ltr`, `lidt`; `EFER.NXE`, `EFER.SCE`; `STAR`/`LSTAR`/`FMASK`; `CR4.SMEP`, `CR4.SMAP`, `CR4.PCIDE` (if present), `CR4.OSXSAVE`; `XCR0` for x87, SSE and AVX; `IA32_KERNEL_GS_BASE` → the `ArchCpu` |
+| `init_cpu` | `lgdt`, `ltr`, `lidt`; `EFER.NXE`, `EFER.SCE`; `STAR`/`LSTAR`/`FMASK`; `CR4.SMEP`, `CR4.SMAP`, `CR4.PCIDE` (if present), `CR4.OSXSAVE`; `XCR0` for x87, SSE and AVX; the gs base (`IA32_GS_BASE`) → the `ArchCpu`, which `swapgs` moves to `IA32_KERNEL_GS_BASE` while in user mode |
 | `AddressSpaceTag` | PCID, 4096 tags (1 without PCID) |
 | Paging | 4-level page tables; `Device` uses PAT uncached, `WriteCombining` the PAT WC entry |
 | Interrupts | x2APIC (xAPIC if absent). Device IDs are vectors 48–239 |
 | Wired interrupts | I/O APICs (`ControllerKind.IoApic`); the legacy 8259 PIC is masked and ignored |
 | Timer | TSC with TSC-deadline, frequency from the hint, `CPUID` leaf `0x15`, or calibration against the PIT |
-| Entry | One `.entry` function for every vector, separate ones on IST stacks for the critical events (the NMI one returns), and a `.syscall_entry` function |
+| Entry | One `.entry` function for every vector, separate ones on IST stacks for the critical events (the NMI one returns), and a `.syscall_entry` function. Every vector runs on an IST stack: the kernel stack's own slot for the rest, so an entry from idle starts again at its top. Until the compiler generates entry functions, these are interrupt functions, which only cover entries from kernel mode |
 | `return_to_user` | `x86_64.return_to_user` |
 | Vector state | `xsavec`/`xsaveopt` and `xrstor`; `xsetbv` when the thread's state components change (`0023`) |
 | `hardware_entropy` | `rdseed` |
-| `early_console_write` | 16550 UART at I/O port `0x3F8` |
+| `early_console_write` | 16550 UART at I/O port `0x3F8`, 115200 baud, 8N1 |
+| `test_exit` | QEMU's `isa-debug-exit` device at I/O port `0xf4` |
 
 ## Not Covered
 

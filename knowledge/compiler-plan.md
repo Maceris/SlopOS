@@ -421,7 +421,7 @@ What `docs/specs/boot_info.md`, `docs/specs/arch_interface.md` and roadmap M1 us
 small Limine kernel that sets up a carrier block and a context, checks atomics, volatile accesses,
 the carrier register and x86-64 instructions, loads an IDT, and ends in an interrupt function
 entered through a stack check that traps. `tools/boot.py` boots it from BIOS and UEFI, exit code
-42. What's left is the M1 kernel itself.
+42. The M1 kernel boots too (below), so Phase 6 is done.
 
 - [x] **Target:** command-line flags for what the build package will set (Hemera
   `docs/compilation.md`, *Target Options on the Command Line*): `--os=none` (ELF, linked with
@@ -460,7 +460,15 @@ entered through a stack check that traps. `tools/boot.py` boots it from BIOS and
 - [x] **Harness:** `tools/boot.py` (this repo): builds a kernel package or takes an ELF, makes a
   Limine ISO with xorriso, boots it in QEMU (BIOS or `--uefi`) with serial captured, and turns
   `isa-debug-exit` back into the kernel's exit code; `--expect` makes it a test.
-- [ ] **The M1 kernel** (`src/`), with what roadmap M1 lists.
+- [x] **The M1 kernel** (`src/`), 2026-10-15: `boot/limine` builds `BootInfo` from Limine's
+  responses; `arch/x86_64` sets up the GDT, TSS (with IST stacks), IDT, x2APIC and its timer
+  (TSC-deadline, or the APIC timer measured against the TSC), checks the x86-64-v3 baseline, and
+  decodes faults into `Fault`; `kernel` keeps per-CPU state behind the carrier block, logs through a
+  locked console, and halts after three timer interrupts. `tools/boot.py --expect 0` boots it from
+  BIOS (and `--uefi`); `--command-line "test_exit test_fault"` expects 1, `--cpu qemu64` expects 2.
+  Writing it took four compiler fixes (`hemera-feedback.md`, Resolved 2026-10-15).
+  - Still in roadmap M1: the framebuffer console (PSF2), and a stack trace from the assertion
+    handler and kernel faults, which needs `capture_stack_trace` in the compiler.
 
 **Done when:** the M1 kernel boots in QEMU from a Hemera build: Limine requests answered,
 `BootInfo` built, GDT, TSS and IDT loaded, serial output, a timer interrupt handled, halt.
