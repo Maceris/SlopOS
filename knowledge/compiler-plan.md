@@ -561,8 +561,13 @@ In the order SlopOS needs them:
    `append_format` and `append_value` (floats formatted with integers only, for soft-float
    kernels), and the kernel's and the boot adapter's loggers format their parameters. Not filled
    in yet: `StructMember.value`, members' default values.
-2. **Starting other CPUs** (M3): Limine's MP start with a `#calling_convention(.c) #no_context`
-   entry, which B made possible.
+2. [x] **Starting other CPUs** (done 2026-10-16): Limine starts each CPU at
+   `limine_boot.cpu_entry`, `#calling_convention(.c) #no_context`, which loads the carrier block
+   the kernel gave `start_cpu`, pushes the boot context and calls `kernel.cpu_started`. The kernel
+   starts them one at a time, each reporting in within a second, and `stop` stops them all with
+   the Stop IPI. Each CPU's `PerCpu` and stacks live in its boot-stack frame until M2's frame
+   allocator. Found on the way: a definition dropping a value with `_` (`_, ok :: f()`) wasn't
+   generated; fixed.
 3. **Entry functions** (`.entry`, `.syscall_entry`, `entry_points`, `return_to_user`), for M4–M6.
    The kernel's interrupt functions then become one `.entry` function, without their repeated
    setup.

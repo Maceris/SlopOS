@@ -160,6 +160,8 @@ def main() -> int:
     parser.add_argument("--command-line", default="test_exit", help="the kernel's command line")
     parser.add_argument("--cpu", default=DEFAULT_CPU, help="QEMU's CPU model")
     parser.add_argument("--expect", type=int, help="the exit code the kernel should write; exits 0 if it does")
+    parser.add_argument("--expect-line", action="append", default=[],
+                        help="a line the serial output should contain, with --expect; may be repeated")
     parser.add_argument("--timeout", type=float, default=30, help="seconds before giving up")
     parser.add_argument("--uefi", action="store_true", help="boot with UEFI firmware instead of BIOS")
     parser.add_argument("--serial", type=Path, help="also keep the serial output in this file")
@@ -191,7 +193,11 @@ def main() -> int:
     description = {TIMED_OUT: "timed out", NO_EXIT_CODE: "ended without an exit code"}.get(code, f"exited with {code}")
     print(f"boot.py: the kernel {description}", file=sys.stderr)
     if arguments.expect is not None:
-        return 0 if code == arguments.expect else 1
+        lines = output.splitlines()
+        missing = [line for line in arguments.expect_line if line not in lines]
+        for line in missing:
+            print(f"boot.py: the serial output has no line {line!r}", file=sys.stderr)
+        return 0 if code == arguments.expect and not missing else 1
     return code
 
 

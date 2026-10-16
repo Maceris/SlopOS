@@ -32,7 +32,7 @@ them is `compiler-plan.md`, Phase 7:
 
 | Issue | Severity | Where |
 |---|---|---|
-| Entry functions (`.entry`, `.syscall_entry`, `entry_points`) aren't generated: the x86-64 entries are interrupt functions, which can't take entries from user mode, and repeat the lines that find the CPU and push its context, since they have no context to call a helper with | blocker for M4–M6 | `arch/x86_64/entries.hsc` |
+| Entry functions (`.entry`, `.syscall_entry`, `entry_points`) aren't generated: the x86-64 entries are interrupt functions, which can't take entries from user mode, and each one sets up its CPU and pushes its context itself (sharing a `#no_context` helper) | blocker for M4–M6 | `arch/x86_64/entries.hsc` |
 | Format strings have no options, like hexadecimal or a width, so the stack trace appends its offsets with `text_buffer` (pointers do format in hexadecimal) | friction | `kernel/stack_trace.hsc` |
 | A constant's value can't call a function until there's compile-time execution, so the Limine requests' headers are written out | gap | `boot/limine/requests.hsc` |
 | An optional function type with a result can't be written in place: `(fn(n: int) -> int)?` doesn't parse, and `fn(n: int) -> int?` makes the result optional; it takes an alias | friction | Hemera's hosted test |
@@ -87,6 +87,10 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-16 — `compiler-plan.md` Phase 7, C2, done: the other CPUs start through Limine at a
+  `#calling_convention(.c) #no_context` entry, with no workaround needed. Found and fixed on the
+  way: `_, ok :: f()` (a definition dropping a value with `_`) wasn't generated.
 
 - 2026-10-16 — `compiler-plan.md` Phase 7, C1, done: type information at run time. Each type used
   as a value or in an `any` has a descriptor, `value.type == int` compares types, and

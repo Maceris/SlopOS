@@ -32,9 +32,14 @@ interrupt #never_returns :: fn(from: Interrupted, source: InterruptSource) {
     match source {
         case Timer => kernel.handle_timer()
         case Spurious => arch.idle()
+        case Ipi(kind) => {
+            if kind == .Stop {
+                arch.halt()
+            }
+        }
         case _ => {}
     }
-    //TODO(claude): IPIs (M3), device interrupts (M3, M7) and interrupts from user mode (M6)
+    //TODO(claude): the other IPIs (M3, M4), device interrupts (M3, M7) and interrupts from user mode (M6)
     runtime.log_error("an interrupt arrived that the kernel doesn't handle yet")
     arch.idle()
 }

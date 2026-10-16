@@ -2,8 +2,8 @@
  * The kernel core (L2): portable, using only the arch layer, BootInfo and std's freestanding and
  * allocating tiers (docs/architecture/layers.md, L2).
  *
- * So far it boots one CPU, sets up its entries and timer, and halts after a few timer interrupts
- * (roadmap M1).
+ * So far it boots, sets up the boot CPU's entries and timer, starts the other CPUs, which go idle,
+ * and halts after a few timer interrupts (roadmap M1, M3).
  */
 package kernel
 
@@ -32,6 +32,9 @@ Kernel :: struct {
     counter_frequency : u64,
     // Where the kernel image is, for stack traces relative to it.
     image_base : u64,
+    // Every CPU, the boot CPU first. The first online_cpus of them are running.
+    cpus : boot_info.BootCpu[],
+    online_cpus : u32,
     options : Options,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : concurrency.SpinLock,
@@ -87,13 +90,22 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     kernel : Kernel
     cpu : PerCpu
     stack_memory : CpuStackMemory
+    // What the other CPUs start with, one at a time
+    cpu_start : CpuStart
+    start_carrier : runtime.CarrierBlock
     kernel.features = features
     kernel.options = options
     kernel.image_base = cast[u64](info.kernel_image.virtual_base)
-    start_boot_cpu(&kernel, &cpu, &stack_memory)
+    kernel.cpus = info.cpus[0..<1]
+    kernel.online_cpus = 1
+    set_up_cpu(&kernel, &cpu, &stack_memory, 0)
+    arch.init_system(&kernel.arch)
+    arch.init_cpu(&kernel.arch, &cpu.arch, &cpu.carrier, &cpu.context, &cpu.stacks)
+    runtime.log_info("boot CPU set up: descriptor tables, entries and local APIC")
     start_framebuffer_console(&kernel, info)
     push_context cpu_context from cpu.context {
         start_timer(&kernel, info.counter_frequency_hint)
+        start_cpus(&kernel, info, &cpu_start, &start_carrier)
         if kernel.options.test_fault {
             runtime.log_info("test_fault: running an invalid instruction")
             intrinsics.trap()
@@ -112,34 +124,6 @@ check_baseline :: fn(options: ptr[Options], features: ptr[slop_os.CpuFeatures]) 
     missing :: arch.missing_baseline_feature(features) or_return void
     runtime.log_fatal("SlopOS needs an x86-64-v3 CPU, and this one lacks %", missing)
     stop_with(options, .CpuUnsupported)
-}
-
-/*
- * Give the boot CPU its own carrier block and context, then set up the architecture's state for it.
- * The carrier block keeps the boot stack's limit until the CPU first enters through the kernel stack.
- */
-start_boot_cpu :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], stack_memory: ptr[mut CpuStackMemory]) {
-    cpu.kernel = kernel
-    cpu.index = 0
-    cpu.carrier.stack_limit = intrinsics.carrier().stack_limit
-    cpu.carrier.index = 0
-    cpu.carrier.program_data = cast[rawptr](cpu)
-    cpu.carrier.native_stack_limit = cpu.carrier.stack_limit
-    intrinsics.set_carrier(&cpu.carrier)
-
-    cpu.context = runtime.MINIMAL_CONTEXT
-    cpu.context.logger = &KERNEL_LOGGER
-    cpu.context.log_level = .INFO
-    cpu.context.assertion_handler = kernel_assertion_handler
-
-    cpu.stacks.kernel = range_of(&stack_memory.kernel[0], KERNEL_STACK_SIZE)
-    cpu.stacks.critical[cast[u8](arch_interface.CriticalEvent.Nmi)] = range_of(&stack_memory.nmi[0], CRITICAL_STACK_SIZE)
-    cpu.stacks.critical[cast[u8](arch_interface.CriticalEvent.DoubleFault)] = range_of(&stack_memory.double_fault[0], CRITICAL_STACK_SIZE)
-    cpu.stacks.critical[cast[u8](arch_interface.CriticalEvent.MachineCheck)] = range_of(&stack_memory.machine_check[0], CRITICAL_STACK_SIZE)
-
-    arch.init_system(&kernel.arch)
-    arch.init_cpu(&kernel.arch, &cpu.arch, &cpu.carrier, &cpu.context, &cpu.stacks)
-    runtime.log_info("boot CPU set up: descriptor tables, entries and local APIC")
 }
 
 /*

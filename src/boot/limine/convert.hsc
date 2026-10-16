@@ -75,6 +75,7 @@ build_boot_info :: fn(info: ptr[mut boot_info.BootInfo]) {
     needed :: carved_size(memory_map_count, size_of(boot_info.MemoryRegion))
         + carved_size(segment_count, size_of(boot_info.ImageSegment))
         + carved_size(cpu_count, size_of(boot_info.BootCpu))
+        + carved_size(cpu_count, size_of(StartingCpu))
         + carved_size(modules.count, size_of(boot_info.BootModule))
         + carved_size(framebuffer_count, size_of(boot_info.Framebuffer))
         + carved_size(name_length, 1)
@@ -86,9 +87,11 @@ build_boot_info :: fn(info: ptr[mut boot_info.BootInfo]) {
     regions :: take[boot_info.MemoryRegion](&carve, memory_map_count)
     info.memory_map = regions[0..<build_memory_map(memory_map, address.physical_base, carved, regions)]
     info.kernel_image = kernel_image(address, info.memory_map, elf, take[boot_info.ImageSegment](&carve, segment_count))
-    info.cpus = cpus(mp, take[boot_info.BootCpu](&carve, cpu_count))
-    //TODO(claude): start_cpu, with an entry #calling_convention(.c) #no_context for Limine to start (M3)
+    info.cpus = cpus(mp, take[boot_info.BootCpu](&carve, cpu_count), take[StartingCpu](&carve, cpu_count))
     info.start_cpu = null
+    if cpu_count > 1 {
+        info.start_cpu = start_cpu
+    }
     info.modules = boot_modules(modules, hhdm.offset, take[boot_info.BootModule](&carve, modules.count))
     info.framebuffers = framebuffers(hhdm.offset, take[boot_info.Framebuffer](&carve, framebuffer_count))
     info.bootloader = join_names(bootloader_name, bootloader_version, take[u8](&carve, name_length))
@@ -169,21 +172,6 @@ kernel_image :: fn(
     }
     image.segments = segments[0..<count]
     return image
-}
-
-// Every CPU, the boot CPU first. boot_handle is its MpInfo, for starting it.
-cpus :: fn(mp: ptr[MpResponse], cpus: boot_info.BootCpu[]) -> boot_info.BootCpu[] {
-    count : usize = 1
-    for cpu in pointers(mp.cpus, mp.cpu_count) {
-        entry :: boot_info.BootCpu.{cast[u64](cpu.lapic_id), cast[rawptr](cpu)}
-        if cpu.lapic_id == mp.bsp_lapic_id {
-            cpus[0] = entry
-            continue
-        }
-        cpus[count] = entry
-        count += 1
-    }
-    return cpus
 }
 
 // The module files, none when Limine didn't answer the module request.

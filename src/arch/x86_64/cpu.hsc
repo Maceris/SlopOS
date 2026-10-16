@@ -3,7 +3,7 @@
  * for the kernel core, which imports this package as arch.
  *
  * Not here yet, with the milestones that need them: paging (M2), wired interrupt controllers and
- * other CPUs (M3), user state, vector state and entry from user mode (M4 to M6).
+ * device interrupts (M3), user state, vector state and entry from user mode (M4 to M6).
  */
 package arch_x86_64
 

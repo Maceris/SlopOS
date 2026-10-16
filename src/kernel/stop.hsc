@@ -22,13 +22,14 @@ StopReason :: enum #backed_by(u8) {
     BootFailed = 5,
 }
 
-// Stop the calling CPU for good.
-//TODO(claude): stop the other CPUs too, with IpiKind.Stop (M3)
+// Stop the kernel for good: every other CPU, then the calling one.
 stop :: fn(reason: StopReason) #never_returns {
     if intrinsics.carrier().program_data == null {
         arch.halt()
     }
-    stop_with(&per_cpu().kernel.options, reason)
+    kernel :: per_cpu().kernel
+    stop_other_cpus(kernel)
+    stop_with(&kernel.options, reason)
 }
 
 stop_with :: fn(options: ptr[Options], reason: StopReason) #never_returns {

@@ -226,8 +226,9 @@ them go. `KernelImage`, `BootModule`, `Framebuffer`, `FirmwareReserved`, `Reserv
   3. pushes the constant boot context;
   4. calls `entry`.
 
-  `entry` finds its CPU's `PerCpu` through `intrinsics.carrier().program_data`, which the
-  kernel sets before calling `start_cpu`. Each CPU's boot stack is in `BootReclaimable` memory.
+  `entry` finds what the kernel prepared for its CPU through `intrinsics.carrier().program_data`,
+  which the kernel sets before calling `start_cpu`. `carrier` must stay valid until `entry` loads
+  a carrier block of its own. Each CPU's boot stack is in `BootReclaimable` memory.
 - `start_cpu` doesn't wait for the CPU to start or report failure. The kernel waits for each
   CPU's `entry` to report in, with a timeout.
 
