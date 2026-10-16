@@ -10,8 +10,8 @@ SlopOS produces many outputs from one source tree: the kernel, drivers, services
 libraries, host-side tests and a boot image. Hemera has adopted the build proposal:
 `base/compiler/build.hsc` lets a package with output type `.Nothing` register targets
 (`add_target`), steps (`add_step`) and checks (`add_check`) from `#run` code, with
-command-line options as defaults, per-target string settings (`target_setting`), package
-discovery by declared constant (`find_packages(folder, declares)`), and a command-line grant
+command-line options as defaults, per-target string settings (`target_setting`), finding
+packages (`subfolders`, `load_package`), and a command-line grant
 (`--allow-run`) for running processes or writing outside the output folder. This answers the
 open question of whether settings are typed or strings: they are strings, because the build
 package and each target are type checked separately and don't share types.
@@ -20,10 +20,16 @@ package and each target are type checked separately and don't share types.
 - **One build package** builds everything (in `src/build/`, `0033`). Its location is decided with the package structure
   (`../open-questions.md`, *Scope*). There are no makefiles or scripts, and other Hemera code is
   never compiled through a `hemera` subprocess.
-- **Discovery, not lists.** Every program package (driver, service, program, test) declares
-  `PROGRAM_KIND :: ProgramKind.<Kind>`, and the build package registers each package
-  `find_packages` returns. Only the kernel and the boot image step are named explicitly.
-  Adding a driver never touches the build package.
+- **Discovery, not lists, by folder** (revised 2026-10-16). The package structure already puts
+  packages in folders by role (`src/drivers/`, `src/services/`, `src/apps/`, `0033`), so the
+  build package lists those folders with `compiler.subfolders`, loads each subfolder with
+  `compiler.load_package`, and decides in its own code what to build from it: its folder, and
+  any constant it declares, read with `find_constant` and compared by name, since a loaded
+  package is checked as its own program. Only the kernel and the boot image step are named
+  explicitly. Adding a driver never touches the build package. This replaces discovery by a
+  declared `PROGRAM_KIND` through `find_packages(folder, declares)`, which needed the found
+  constants typed by the build program; Hemera keeps `find_packages` declared, unimplemented,
+  until there's evidence it's the better path, and may remove it.
 - **Every target starts from `command_line_options()`** and overrides only what it must.
   `base` and `std` come from the Hemera repo, with no remapping (`0030`).
 - **Kernel target:** `os = .None`, `entry = "kernel_entry"`, `relocation_model = .PIE`
@@ -45,6 +51,10 @@ package and each target are type checked separately and don't share types.
   doesn't exist in the target's program anyway.
 - **An explicit list of targets:** simpler to read, but every new driver edits a shared file,
   and it duplicates what each package already says about itself.
+- **`find_packages(folder, declares = "PROGRAM_KIND")`** (this decision's first version, like Go's
+  `package main` with `./...`): the kind in the package itself, typed. But it repeats what the
+  folder already says, and its promise that the found constants have the build program's types
+  means loading packages into a program whose compile-time code is already running.
 - **A separate build tool or makefiles:** a second language to maintain, and it loses typed
   options, integrated errors and shared parsing.
 

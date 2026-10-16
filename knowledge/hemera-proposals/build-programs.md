@@ -22,6 +22,9 @@ of many outputs is an ordinary Hemera program, without a separate build language
   so a target overrides only what differs, and `hemera -O3 build` does the obvious thing.
 - **Discovery:** `compiler.find_packages(folder, declares = "PROGRAM_KIND")` returns every
   package declaring that constant, so adding a driver never touches the build package.
+  *Revised 2026-10-16:* SlopOS finds packages by folder instead, with `compiler.subfolders` and
+  `compiler.load_package`, its build code deciding what to build (`../decisions/0028-build-package.md`);
+  the example below still shows the original.
   The constant's value is evaluated in the build program, so it has the build's types and
   can be cast directly.
 - **Steps** (`add_step`) are Hemera functions run after the targets or steps they depend on,
@@ -165,7 +168,7 @@ All present in `build.hsc`:
 |---|---|---|
 | B1 | Register multiple targets from `#run` code in a `.Nothing` build package | **Done**: `add_target` |
 | B2 | Targets inherit command-line options as defaults | **Done**: `command_line_options()` |
-| B3 | Find packages and read their declared constants | **Done**: `find_packages(folder, declares)`, `find_constant` |
+| B3 | Find packages and read their declared constants | **Done** (revised 2026-10-16): `subfolders(folder)` and `load_package(folder)`, with the build's own code deciding what to build; `find_constant`. `find_packages(folder, declares)` stays declared but unimplemented, and may be removed (`../decisions/0028-build-package.md`) |
 | B4 | Per-target settings readable as compile-time constants | **Done**: `settings`, `target_setting()` (strings, §3) |
 | B5 | Post-build steps with dependencies on target outputs | **Done**: `add_step`, `BuildNode`, `TargetOutput` |
 | B6 | Entry function per target; `#export` for public interfaces | **Done**: `entry`, `#export`, `FunctionInfo.is_exported` |

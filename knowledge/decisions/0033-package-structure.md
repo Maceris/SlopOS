@@ -48,7 +48,8 @@ by `std` too (the clock for `time.now()`, entropy, storage for files).
   as `arch`. Drivers are named after the device, protocols after the device class, services after
   their role.
 - **Tests:** a package's tests are a separate package in its `test/` subfolder, with
-  `PROGRAM_KIND :: .Test`, found by the build package's discovery (`0028`).
+  `PROGRAM_KIND :: .Test`, found by the build package's discovery: a `test` subfolder, loaded
+  with `compiler.load_package` (`0028`).
 - **Kernel frame size:** the kernel target sets Hemera's `TargetOptions.max_frame_size`, a compile
   error for any larger frame. The limit is chosen once M1 code shows real frame sizes (probably
   about 1 KiB, on a 16 KiB kernel stack). It's a compiler option rather than a house-rule check,
