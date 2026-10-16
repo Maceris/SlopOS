@@ -80,7 +80,7 @@ check_arch_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     interface := package_named(program, "arch_interface") or_return true     // target has no arch layer
     for &importer in program.packages {
         for &edge in importer.imports {
-            if edge.alias_ != "arch" {
+            if edge.alias != "arch" {
                 continue
             }
             implementation := package_at(program, edge.path) or_continue
@@ -124,7 +124,7 @@ signatures_match :: fn(a, b: ptr[compiler.FunctionInfo]) -> bool {
     for &parameter, index in a.parameters {
         other := &b.parameters[index]
         if parameter.name != other.name
-            || parameter.type_ != other.type_                   // exact: even plain aliases differ
+            || parameter.type != other.type                   // exact: even plain aliases differ
             || parameter.is_escaping != other.is_escaping
             || parameter.is_varargs != other.is_varargs
             || !reflection.equal(parameter.default_value, other.default_value) {
@@ -133,7 +133,7 @@ signatures_match :: fn(a, b: ptr[compiler.FunctionInfo]) -> bool {
     }
     for &result, index in a.return_values {
         other := &b.return_values[index]
-        if result.type_ != other.type_ || result.name != other.name {
+        if result.type != other.type || result.name != other.name {
             return false
         }
     }
@@ -209,14 +209,14 @@ check_tiers :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.Prog
 }
 
 // The tier of a std package by its PACKAGE_TIER, or the target's tier for anything else.
-package_tier :: fn(target: ptr[compiler.BuildOptions], package_: ptr[compiler.PackageInfo]) -> tiers.Tier? {
-    if !is_std_package(target, package_) {
+package_tier :: fn(target: ptr[compiler.BuildOptions], package: ptr[compiler.PackageInfo]) -> tiers.Tier? {
+    if !is_std_package(target, package) {
         if target.target_options.os == .None {
             return tiers.Tier.Allocating
         }
         return tiers.Tier.Os
     }
-    constant := compiler.find_constant(package_, "PACKAGE_TIER")?
+    constant := compiler.find_constant(package, "PACKAGE_TIER")?
     // The value has the target's tiers.Tier type, not ours (N2), so compare by member name.
     name := reflection.enum_member_name(constant.value)?
     return tier_from_name(name)

@@ -20,9 +20,18 @@ import kernel_entry from "../../kernel/entry"
 //HEMERA(gap): these are interrupt functions, which only work for entries from kernel mode. Entries
 //from user mode need entry functions (#calling_convention(.entry), x86_64.entry_points), which the
 //compiler can't generate yet; with them, one function covers every vector.
-//HEMERA(friction): an interrupt function has no context, so it can't call a helper to find its
-//CPU and push the context: those lines are repeated in every one of them
 //TODO(claude): device vectors (48 to 239) once entry functions give the vector number (M3)
+
+/*
+ * The start of every entry on the kernel stack: find the CPU through the gs base, and load its
+ * carrier block with stack_limit set for the kernel stack. The entry then pushes the CPU's context.
+ */
+enter_on_kernel_stack #no_context :: fn() -> ptr[ArchCpu] {
+    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
+    cpu.carrier.stack_limit = cpu.kernel_stack_limit
+    intrinsics.set_carrier(cpu.carrier)
+    return cpu
+}
 
 // Whether the interrupted code ran in user mode, from the privilege level of its code segment.
 from_user_mode :: fn(frame: ptr[x86_64.InterruptFrame]) -> bool {
@@ -74,9 +83,7 @@ decode_page_fault :: fn(error_code: u64) -> arch_interface.PageFault {
 
 // Vector 0
 divide_error #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .Arithmetic)
     }
@@ -84,9 +91,7 @@ divide_error #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFr
 
 // Vector 1
 debug #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .SingleStep)
     }
@@ -94,9 +99,7 @@ debug #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
 
 // Vector 3
 breakpoint #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .Breakpoint)
     }
@@ -104,9 +107,7 @@ breakpoint #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFram
 
 // Vector 4
 overflow #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .Arithmetic)
     }
@@ -114,9 +115,7 @@ overflow #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]
 
 // Vector 5
 bound_range #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .Protection)
     }
@@ -124,9 +123,7 @@ bound_range #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFra
 
 // Vector 6
 invalid_opcode #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .InvalidInstruction)
     }
@@ -134,9 +131,7 @@ invalid_opcode #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.Interrupt
 
 // Vector 7
 device_not_available #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .FloatingPoint)
     }
@@ -144,9 +139,7 @@ device_not_available #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.Int
 
 // Vector 10
 invalid_tss #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame], error_code: u64) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .Protection)
     }
@@ -154,9 +147,7 @@ invalid_tss #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFra
 
 // Vector 11
 segment_not_present #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame], error_code: u64) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .Protection)
     }
@@ -164,9 +155,7 @@ segment_not_present #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.Inte
 
 // Vector 12
 stack_segment_fault #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame], error_code: u64) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .Protection)
     }
@@ -174,9 +163,7 @@ stack_segment_fault #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.Inte
 
 // Vector 13
 general_protection #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame], error_code: u64) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .Protection)
     }
@@ -184,9 +171,7 @@ general_protection #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.Inter
 
 // Vector 14
 page_fault #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame], error_code: u64) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .Page(decode_page_fault(error_code)))
     }
@@ -194,9 +179,7 @@ page_fault #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFram
 
 // Vector 16
 x87_floating_point #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .FloatingPoint)
     }
@@ -204,9 +187,7 @@ x87_floating_point #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.Inter
 
 // Vector 17
 alignment_check #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame], error_code: u64) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .Alignment)
     }
@@ -214,9 +195,7 @@ alignment_check #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.Interrup
 
 // Vector 19
 simd_floating_point #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .FloatingPoint)
     }
@@ -224,9 +203,7 @@ simd_floating_point #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.Inte
 
 // Vector 20
 virtualization #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .Protection)
     }
@@ -234,9 +211,7 @@ virtualization #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.Interrupt
 
 // Vector 21
 control_protection #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame], error_code: u64) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .Protection)
     }
@@ -244,9 +219,7 @@ control_protection #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.Inter
 
 // Vectors 9, 15 and 22 to 31, which the CPU doesn't raise
 reserved_vector #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         report_fault(frame, .Protection)
     }
@@ -255,9 +228,7 @@ reserved_vector #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.Interrup
 // Local APIC interrupts
 
 timer #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         end_of_interrupt(cast[arch_interface.InterruptId](0))
         interrupt_from(frame, .Timer)
@@ -265,9 +236,7 @@ timer #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
 }
 
 reschedule_ipi #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         end_of_interrupt(cast[arch_interface.InterruptId](0))
         interrupt_from(frame, .Ipi(.Reschedule))
@@ -275,9 +244,7 @@ reschedule_ipi #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.Interrupt
 }
 
 tlb_flush_ipi #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         end_of_interrupt(cast[arch_interface.InterruptId](0))
         interrupt_from(frame, .Ipi(.TlbFlush))
@@ -285,9 +252,7 @@ tlb_flush_ipi #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptF
 }
 
 stop_ipi #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         end_of_interrupt(cast[arch_interface.InterruptId](0))
         interrupt_from(frame, .Ipi(.Stop))
@@ -296,9 +261,7 @@ stop_ipi #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]
 
 // Spurious interrupts aren't acknowledged (Intel SDM Vol. 3A §11.9)
 spurious #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    intrinsics.set_carrier(cpu.carrier)
+    cpu :: enter_on_kernel_stack()
     push_context entry from cpu.context^ {
         interrupt_from(frame, .Spurious)
     }

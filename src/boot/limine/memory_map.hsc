@@ -64,8 +64,7 @@ build_memory_map :: fn(
     regions: boot_info.MemoryRegion[],
 ) -> usize {
     count : usize = 0
-    for i in 0..<response.entry_count {
-        entry :: memory_map_entry(response, i)
+    for entry in pointers(response.entries, response.entry_count) {
         kind :: memory_kind(entry, executable_physical)
         start := align_down(entry.base)
         end := align_up(entry.base + entry.length)
@@ -82,11 +81,6 @@ build_memory_map :: fn(
     }
     count = carve_out(regions, count, carved)
     return merge_adjacent(regions, count)
-}
-
-// The i-th of Limine's memory map entries.
-memory_map_entry :: fn(response: ptr[MemoryMapResponse], i: u64) -> ptr[MemoryMapEntry] {
-    return cast[ptr[MemoryMapEntry]](pointer_at(response.entries, i))
 }
 
 /*
@@ -202,8 +196,7 @@ merge_adjacent :: fn(regions: boot_info.MemoryRegion[], count: usize) -> usize {
 
 // The usable memory BootInfo's arrays go in: the first usable entry with room, past page 0.
 find_carve :: fn(response: ptr[MemoryMapResponse], size: u64) -> boot_info.PhysicalRange? {
-    for i in 0..<response.entry_count {
-        entry :: memory_map_entry(response, i)
+    for entry in pointers(response.entries, response.entry_count) {
         if entry.kind != MEMORY_USABLE {
             continue
         }

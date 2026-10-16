@@ -521,46 +521,36 @@ decide something first. C is larger work.
     frame-pointer chain, so the walker uses `RtlCaptureStackBackTrace` there (Hemera
     `docs/calling_convention.md`).
 
-### B. Decisions first
+### B. Decisions
 
-Each is small to implement once decided. Recommendations first:
+**Decided and done** 2026-10-15, with the Hemera author, each in Hemera's docs and tests:
 
-- **A `Result` without a value.** `Result[void, MapError]` doesn't parse.
-  - *Recommended:* allow `void` as a generic argument, with `Ok` taking no value when `T` is
-    `void`. It reads like the docs and `ipc.md` already write it.
-  - *Or:* keep `E?` for "nothing, or an error", as `arch_interface.map` does now. It needs no
-    language change, but a `?` read as "maybe an error" is the opposite of the usual reading.
-- **Keywords that crowd out names.** `all` and `from` are keywords, so `TlbBatch.all` and a
-  parameter called `from` can't exist.
-  - *Recommended:* make them contextual: `from` is a keyword only after `push_context name`, and
-    `all` only after `break` or `continue`.
-  - *Or:* leave them reserved, and say so in `docs/keywords.md`.
-- **`ptr[T]?` and nullable pointers.** Optionals carry a tag today, so a C structure's pointer can't
-  be `ptr[T]?`.
-  - *Recommended:* `ptr[T]?`, `rawptr?`, `cstring?` and function types' optionals are one pointer,
-    null for `None`. Document it in `docs/types.md`, so foreign layouts can use them. Removes the
-    `rawptr` fields in `boot/limine/protocol.hsc`.
-- **A view from an address and a count.**
-  - *Recommended:* a builtin `view_of(data: ptr[T], count: usize) -> T[]` (and one for strings), in
-    `base/builtin`, documented as unchecked, the way `cast` to a pointer is. The memory-safety
-    analyses (after M1) can then treat every use as a place to prove. `std/raw` becomes thin
-    wrappers, or goes.
-- **Enum value names.**
-  - *Recommended:* a builtin `name_of(value)` for enum values, from the same type information as
-    `any` (C1). Removes `feature_name`.
-- **Two small intrinsics.**
-  - *Recommended:* `intrinsics.stack_pointer()`, for code that sets up its own stack limit (L0's
-    boot stack).
-  - *Recommended:* `intrinsics.spin_hint()` (x86 `pause`, Arm `yield`, RISC-V `pause`), so the
-    ticket lock can move to `std/concurrency`.
-- **Functions something else calls without a carrier or a context.** Limine starts the other CPUs
-  by calling a function with the C convention, like the kernel's own entry. Today only the
-  program's entry (`--entry`) is compiled that way.
-  - *Recommended:* a directive, `#entry_point`, for any function entered from outside Hemera: the
-    platform's C convention, no context and no stack check, and the end of the frame pointer
-    chain. The body sets up a carrier and pushes a context, like `kernel_entry` does. The
-    program's entry becomes one of these, and `--entry` just names which one starts the program.
-    Unblocks `start_cpu` (M3).
+- [x] **Keywords in three tiers** (Hemera `docs/keywords.md`): reserved words; contextual keywords
+  (`alias`, `all`, `as`, `from`, `import`, `in`, `package`), which the lexer reads as identifiers
+  and the parser recognizes where they start their construct; and any word as a member's name
+  (after `.`, fields, named arguments, enum members, union variants). `base`'s underscored names
+  are gone (`type_`, `package_`, `alias_`, `from_`), and `TlbBatch.all` and `interrupt`'s `from`
+  are back.
+- [x] **`null` and pointers:** `null` is only a `rawptr`'s or an optional's; `ptr[T]?`, `cstring?`
+  and optional functions are a single pointer, null for `None` (`rawptr?` keeps its tag, since a
+  `rawptr` can be null itself). Address 0 is reached through a `rawptr`, with
+  `TargetOptions.address_zero_is_memory` (`--address-zero-is-memory`) so LLVM keeps those
+  accesses. `base`'s `fiber_create` returns `ptr[mut Fiber]?` now.
+- [x] **`view_of(data, count)` and `string_of(data, count)`**, builtins in `base/builtin/views.hsc`
+  (`base/builtin` compiles more than its generic types now). `std/raw` became `std/c_string`, for
+  C strings only.
+- [x] **`intrinsics.stack_pointer()` and `intrinsics.spin_hint()`.** The ticket lock moved to
+  `std/concurrency` (`SpinLock`).
+- [x] **`#calling_convention(.c)` and `#no_context`**, following Odin's calling conventions, in
+  place of `#entry_point`: a `#no_context` function is called without a context and has no stack
+  check, and can be called from other code without one. Without startup code, the entry function
+  must be `#no_context`, and keeps its name for the linker. A `.c` function without `#no_context`
+  is an error until callback shims exist.
+- [x] **`Result[void, E]`**: `Ok` holds nothing, and the operators keep their meaning, each with
+  nothing as its value (`?`, `or_return`, `or_break`, `or_continue`; `or_else` takes what to do
+  instead). The arch interface's `map` and `protect` return it.
+- **Enum names** come with C1: std's `reflection.enum_member_name` reads the type information C1
+  generates.
 
 ### C. Larger work
 
@@ -571,7 +561,8 @@ In the order SlopOS needs them:
    `any.type` is real. Then `std/formatting` gets a freestanding core that formats into a
    `TextBuffer`, and the kernel's logger formats its parameters. Unblocks formatted logging and
    `name_of`, and is half of reflection.
-2. **`#entry_point`** (from B), for M3's other CPUs.
+2. **Starting other CPUs** (M3): Limine's MP start with a `#calling_convention(.c) #no_context`
+   entry, which B made possible.
 3. **Entry functions** (`.entry`, `.syscall_entry`, `entry_points`, `return_to_user`), for M4–M6.
    The kernel's interrupt functions then become one `.entry` function, without their repeated
    setup.

@@ -37,20 +37,21 @@ early_log : runtime.LogFunction : fn(format_string: string, params: any..., loca
 }
 
 /*
- * Where Limine enters the kernel, on the boot CPU's boot stack, with interrupts disabled. It runs
- * without a carrier block or a context, so the first thing it does is set both up.
+ * Where Limine enters the kernel, on the boot CPU's boot stack, with interrupts disabled. Limine
+ * calls it with the C convention, without a carrier block or a context, so the first thing it does
+ * is set both up.
  */
-kernel_entry :: fn() #never_returns {
+kernel_entry #calling_convention(.c) #no_context :: fn() #never_returns {
     /*
      * The carrier block lives on the boot stack, which stays in use until the kernel goes idle.
      * Limine gives every CPU a stack of BOOT_STACK_SIZE bytes (the stack size request), and this
-     * runs at its very start, so its lowest address is less than BOOT_STACK_SIZE below this local.
+     * runs at its very start: the stack's top is at most BOOT_STACK_SLACK above the stack pointer
+     * here, so its lowest address is at most BOOT_STACK_SIZE below that, which is where the limit
+     * goes (plus the guard).
      */
-    //HEMERA(gap): no way to read the stack pointer, so the limit is worked out from a local's
-    //address, leaving BOOT_STACK_SLACK for what Limine and this frame already use. This function has
-    //no context yet, so it can't call a function to do it either.
     carrier : runtime.CarrierBlock
-    carrier.stack_limit = cast[rawptr](cast[u64](&carrier) - BOOT_STACK_SIZE + BOOT_STACK_SLACK + runtime.STACK_GUARD)
+    stack :: cast[u64](intrinsics.stack_pointer())
+    carrier.stack_limit = cast[rawptr](stack - BOOT_STACK_SIZE + BOOT_STACK_SLACK + runtime.STACK_GUARD)
     carrier.native_stack_limit = carrier.stack_limit
     intrinsics.set_carrier(&carrier)
     push_context boot from runtime.MINIMAL_CONTEXT {

@@ -14,6 +14,7 @@ import boot_info from "../boot_info"
 import slop_os from "std/os"
 import text_buffer from "std"
 import console from "console"
+import concurrency from "std"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -34,7 +35,7 @@ Kernel :: struct {
     image_base : u64,
     options : Options,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
-    console_lock : SpinLock,
+    console_lock : concurrency.SpinLock,
     // Text on the first framebuffer, if there is one and it could be set up.
     framebuffer_console : console.Console,
     has_framebuffer_console : bool,

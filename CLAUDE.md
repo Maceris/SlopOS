@@ -123,6 +123,13 @@ when relevant.
   block, in a reserved register (`r14`/`x28`), reached by `base`/`std` with
   `intrinsics.carrier()` (`knowledge/decisions/0026`).
 - Ignore return values with `_`: `_, ok = f()`.
+- `ptr[T]`, `cstring` and function values are never null: `null` is only a `rawptr`'s or an
+  optional's, and `ptr[T]?` is a single pointer, null for none. Something that works or fails with
+  nothing to return is `Result[void, E]` (`return .Ok`, `f()?`).
+- Keywords come in three tiers (Hemera `docs/keywords.md`): `alias`, `all`, `as`, `from`, `import`,
+  `in` and `package` are names outside their constructs, and any word is a member's name.
+- Code entered from outside Hemera (a bootloader, another CPU) is `#calling_convention(.c)
+  #no_context`, and sets up its carrier block and context itself.
 - Declaration directives go right after the name: `main #export :: fn() { }`.
 - Pointers into the stack (`&x`, stack arrays passed as views, `any` from locals) are allowed,
   but the compiler checks they can't outlive the frame. A parameter whose pointer is kept

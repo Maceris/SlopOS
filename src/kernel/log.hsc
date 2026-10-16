@@ -4,6 +4,7 @@ import intrinsics from "base"
 import runtime from "base"
 import text_buffer from "std"
 import console from "console"
+import concurrency from "std"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -93,12 +94,12 @@ write_console :: fn(text: string) {
         return void
     }
     kernel :: per_cpu().kernel
-    lock(&kernel.console_lock)
+    concurrency.lock(&kernel.console_lock)
     arch.early_console_write(text)
     if kernel.has_framebuffer_console {
         console.write(&kernel.framebuffer_console, text)
     }
-    unlock(&kernel.console_lock)
+    concurrency.unlock(&kernel.console_lock)
 }
 
 /*

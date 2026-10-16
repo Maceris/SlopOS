@@ -34,14 +34,9 @@ them is `compiler-plan.md`, Phase 7:
 |---|---|---|
 | `any` values carry no type information, so a logger can't format its parameters. Kernel code formats numbers itself with `std/text_buffer` and logs plain text | blocker for formatted logging | `kernel/log.hsc`, `boot/limine/entry.hsc` |
 | Entry functions (`.entry`, `.syscall_entry`, `entry_points`) aren't generated: the x86-64 entries are interrupt functions, which can't take entries from user mode, and repeat the lines that find the CPU and push its context, since they have no context to call a helper with | blocker for M4–M6 | `arch/x86_64/entries.hsc` |
-| No calling convention for a function a bootloader calls with the C convention and no carrier or context, other than the program's entry: Limine starts the other CPUs that way (`start_cpu`) | blocker for M3 | `boot/limine/convert.hsc` |
-| No way to make an array view or a string from an address and a count: `std/raw` does it with `bit_cast` and the view layout | gap | Hemera `std/raw` |
-| No documented layout for `ptr[T]?` that matches a nullable C pointer, so bootloader structures use `rawptr` | gap | `boot/limine/protocol.hsc` |
-| No way to read the stack pointer: L0 works out the boot stack's limit from a local's address | gap | `boot/limine/entry.hsc` |
-| `Result[void, E]` doesn't parse, so the arch interface's `map` and `protect` return `MapError?` and `UnmapError?`; `ipc.md` still writes `Result[void, ...]` | design question | `docs/specs/arch_interface.md` |
-| `all` and `from` are keywords, which natural field and parameter names run into (`TlbBatch.all` became `flush_all`, `interrupt`'s `from` became `interrupted`) | nice | specs |
-| No enum value names, so the baseline check writes each feature's name out | friction | `arch/x86_64/features.hsc` |
-| No portable spin-wait hint in `base` (x86 `pause`, Arm `yield`), so the ticket lock is in the kernel rather than `std/concurrency` | nice (`STD(missing)`) | `kernel/spin_lock.hsc` |
+| No enum value names, so the baseline check writes each feature's name out (std's `reflection.enum_member_name` waits for C1's type information) | friction | `arch/x86_64/features.hsc` |
+| A constant's value can't call a function until there's compile-time execution, so the Limine requests' headers are written out | gap | `boot/limine/requests.hsc` |
+| An optional function type with a result can't be written in place: `(fn(n: int) -> int)?` doesn't parse, and `fn(n: int) -> int?` makes the result optional; it takes an alias | friction | Hemera's hosted test |
 
 ### Language and library design
 
@@ -93,6 +88,15 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-15 — `compiler-plan.md` Phase 7, group B, decided with the Hemera author and done:
+  keywords in three tiers (no more `type_`, `package_`, `alias_`, `from_`), `null` only for
+  `rawptr` and optionals with `ptr[T]?` a single pointer, `view_of` and `string_of` builtins,
+  `stack_pointer` and `spin_hint` intrinsics, `#calling_convention(.c)` with `#no_context`, and
+  `Result[void, E]`. In SlopOS: Limine's structures are typed (`Request[T]`, `ptr[T]?`, `cstring?`),
+  the kernel's entry is `.c` and `#no_context`, the x86-64 entries share a `#no_context` helper,
+  the ticket lock is std's, and the arch interface's `map` and `protect` return `Result[void, E]`.
+  `std/raw` became `std/c_string`.
 
 - 2026-10-15 — `compiler-plan.md` Phase 7, group A (on request): union payloads of any type, a race
   where generic instances like `Result[T, E]` were used before they were laid out (behind both

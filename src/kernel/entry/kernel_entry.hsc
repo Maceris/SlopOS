@@ -28,7 +28,7 @@ InterruptSource :: union {
 }
 
 // An interrupt from user mode or idle.
-interrupt #never_returns :: fn(interrupted: Interrupted, source: InterruptSource) {
+interrupt #never_returns :: fn(from: Interrupted, source: InterruptSource) {
     match source {
         case Timer => kernel.handle_timer()
         case Spurious => arch.idle()

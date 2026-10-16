@@ -123,10 +123,10 @@ FreedTables :: struct {
     frames : PhysicalAddress[4],
 }
 
-// TLB entries to flush. Once full, or with flush_all set, it covers the whole tag.
+// TLB entries to flush. Once full, or with all set, it covers the whole tag.
 TlbBatch :: struct {
     tag : AddressSpaceTag,
-    flush_all : bool,
+    all : bool,
     count : u32,
     addresses : VirtualAddress[16],
 }
@@ -177,7 +177,7 @@ map : fn(
     size: PageSize,
     mapping: Mapping,
     tables: ptr[mut TableFrames],
-) -> MapError? : ---
+) -> Result[void, MapError] : ---
 
 // Unmap one page, returning its physical address.
 unmap : fn(
@@ -194,7 +194,7 @@ protect : fn(
     size: PageSize,
     mapping: Mapping,
     flush: ptr[mut TlbBatch],
-) -> UnmapError? : ---
+) -> Result[void, UnmapError] : ---
 
 Translation :: struct {
     physical_address : PhysicalAddress,
@@ -246,7 +246,7 @@ send_ipi : fn(cpu_hardware_id: u64, kind: IpiKind) : ---
 interrupt_pending : fn() -> bool : ---
 
 // Wait for an interrupt with interrupts enabled. The interrupt enters
-// kernel_entry.interrupt with interrupted = .Idle.
+// kernel_entry.interrupt with from = .Idle.
 idle #never_returns : fn() : ---
 
 // Kinds of wired interrupt controller. An architecture supports only some of them.
