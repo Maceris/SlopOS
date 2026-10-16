@@ -87,6 +87,10 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-16 — Found while testing the frame allocator as a hosted program: a Windows program with
+  a frame bigger than a page didn't link, since LLVM calls `__chkstk` and Hemera links no C
+  library. The compiler now defines `__chkstk` itself, like `memcpy` and `memset`.
+
 - 2026-10-16 — `compiler-plan.md` Phase 7, C3, done: entry functions. The x86-64 entries are one
   `.entry` function through `x86_64.entry_points`, plus a `.syscall_entry` function, so entries from
   user mode are possible and device vectors reach the kernel. Changed in Hemera on the way:

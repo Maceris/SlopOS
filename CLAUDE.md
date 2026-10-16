@@ -166,6 +166,9 @@ in QEMU through Limine with `test_exit` on its command line, and checks the code
 (`src/kernel/stop.hsc`); `--uefi`, `--cpu` and `--command-line` vary the run, and
 `python tools/boot_tests.py` runs every boot test. It finds QEMU, Limine and xorriso through
 `QEMU`, `LIMINE` and `XORRISO`, or the PATH; `HEMERA_INSTALL` overrides where `std` is.
+`python tools/unit_tests.py` builds every `test/` package under `src/` as a hosted program and
+runs it (main returns 0, or the number of the failed check); code that doesn't need ring 0, like
+the frame allocator, is tested this way, over a buffer standing in for physical memory.
 The latest debug build of the Hemera compiler should already be on the
 system path, runnable with `hemera`. While it is not expected to work
 properly for the majority of this project's lifecycle, the help text

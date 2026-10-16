@@ -20,6 +20,8 @@ StopReason :: enum #backed_by(u8) {
     CriticalEvent = 4,
     // The boot adapter couldn't build BootInfo.
     BootFailed = 5,
+    // Too little memory to boot.
+    OutOfMemory = 6,
 }
 
 // Stop the kernel for good: every other CPU, then the calling one.

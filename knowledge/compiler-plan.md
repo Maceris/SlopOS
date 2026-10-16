@@ -565,8 +565,8 @@ In the order SlopOS needs them:
    `limine_boot.cpu_entry`, `#calling_convention(.c) #no_context`, which loads the carrier block
    the kernel gave `start_cpu`, pushes the boot context and calls `kernel.cpu_started`. The kernel
    starts them one at a time, each reporting in within a second, and `stop` stops them all with
-   the Stop IPI. Each CPU's `PerCpu` and stacks live in its boot-stack frame until M2's frame
-   allocator. Found on the way: a definition dropping a value with `_` (`_, ok :: f()`) wasn't
+   the Stop IPI. Each CPU's `PerCpu` and stacks come from the frame allocator (since
+   2026-10-16; at first they lived in each CPU's boot-stack frame). Found on the way: a definition dropping a value with `_` (`_, ok :: f()`) wasn't
    generated; fixed.
 3. [x] **Entry functions** (done 2026-10-16): `.entry` and `.syscall_entry` functions, whose
    generated code is module-level assembly around an ordinary body; `entry_points`, a stub per

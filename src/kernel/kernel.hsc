@@ -13,6 +13,7 @@ import arch_interface from "../arch_interface"
 import boot_info from "../boot_info"
 import slop_os from "std/os"
 import console from "console"
+import frames from "frames"
 import concurrency from "std"
 
 #if TARGET_ARCH == .x86_64 {
@@ -36,6 +37,8 @@ Kernel :: struct {
     cpus : boot_info.BootCpu[],
     online_cpus : u32,
     options : Options,
+    // Every frame of RAM the kernel owns.
+    frames : frames.FrameAllocator,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : concurrency.SpinLock,
     // Text on the first framebuffer, if there is one and it could be set up.
@@ -58,6 +61,8 @@ PerCpu :: struct #align(64) {
     timer_ticks : u64,
     // NMIs this CPU has handled.
     nmi_count : u32,
+    // CPU_WAITING while the boot CPU starts this one, then CPU_ONLINE or CPU_ABANDONED (cpus.hsc).
+    start_state : u32,
 }
 
 // The memory for one CPU's stacks.
@@ -84,36 +89,37 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     features :: arch.detect_features()
     check_baseline(&options, &features)
 
-    /*
-     * Until there's a frame allocator, the kernel's state lives in this frame, which never ends:
-     * after boot, every entry runs on the kernel stacks below.
-     */
-    //TODO(claude): allocate these from the frame allocator (M2), so the boot stack can be reclaimed
-    kernel : Kernel
-    cpu : PerCpu
-    stack_memory : CpuStackMemory
-    // What the other CPUs start with, one at a time
-    cpu_start : CpuStart
-    start_carrier : runtime.CarrierBlock
+    // The kernel's state, in frames from the allocator, which starts out on this stack
+    made := match frames.make(info.memory_map, info.direct_map_offset) {
+        case Ok(allocator) => allocator
+        case Error(error) => out_of_memory(&options, "no usable memory for the frame allocator's state")
+    }
+    kernel :: allocate_object[Kernel](&made) or_else out_of_memory(&options, "no memory for the kernel's state")
+    kernel.frames = made
+    log_memory(&kernel.frames)
     kernel.features = features
     kernel.options = options
     kernel.image_base = cast[u64](info.kernel_image.virtual_base)
     kernel.cpus = info.cpus[0..<1]
     kernel.online_cpus = 1
-    set_up_cpu(&kernel, &cpu, &stack_memory, 0)
+    cpu :: allocate_cpu(kernel, 0) or_else out_of_memory(&options, "no memory for the boot CPU's state")
+    // The boot CPU keeps its boot stack's limit until it first enters through the kernel stack
+    cpu.carrier.stack_limit = intrinsics.carrier().stack_limit
+    cpu.carrier.native_stack_limit = cpu.carrier.stack_limit
+    intrinsics.set_carrier(&cpu.carrier)
     arch.init_system(&kernel.arch)
     arch.init_cpu(&kernel.arch, &cpu.arch, &cpu.carrier, &cpu.context, &cpu.stacks)
     runtime.log_info("boot CPU set up: descriptor tables, entries and local APIC")
-    start_framebuffer_console(&kernel, info)
+    start_framebuffer_console(kernel, info)
     push_context cpu_context from cpu.context {
-        start_timer(&kernel, info.counter_frequency_hint)
-        start_cpus(&kernel, info, &cpu_start, &start_carrier)
+        start_timer(kernel, info.counter_frequency_hint)
+        start_cpus(kernel, info)
         if kernel.options.test_fault {
             runtime.log_info("test_fault: running an invalid instruction")
             intrinsics.trap()
         }
         if kernel.options.test_nmi {
-            test_nmi(&kernel, &cpu)
+            test_nmi(kernel, cpu)
         }
         if kernel.options.test_assert {
             runtime.log_info("test_assert: failing an assertion")
@@ -122,6 +128,24 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         runtime.log_info("idle")
         arch.idle()
     }
+}
+
+/*
+ * A T in frames of its own, zeroed: the kernel's state that lives as long as it does. T's
+ * alignment is at most a frame's.
+ */
+allocate_object :: fn[T](allocator: ptr[mut frames.FrameAllocator]) -> Result[ptr[mut T], frames.FrameError] {
+    address :: frames.allocate_zeroed(allocator, frames.order_for(cast[u64](size_of(T))))?
+    return .Ok(cast[ptr[mut T]](frames.virtual_of(allocator, address)))
+}
+
+log_memory :: fn(allocator: ptr[frames.FrameAllocator]) {
+    runtime.log_info("frames: % MiB free of % MiB", allocator.free_frames / 256, allocator.total_frames / 256)
+}
+
+out_of_memory :: fn(options: ptr[Options], message: string) #never_returns {
+    runtime.log_fatal(message)
+    stop_with(options, .OutOfMemory)
 }
 
 // Raise an NMI, and wait up to a second for this CPU to handle it and come back.
