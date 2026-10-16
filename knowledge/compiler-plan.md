@@ -599,7 +599,7 @@ result's bytes become constants in the program, read through the type's layout.
    when the function is generated; `#is_compile_time` is true in compile-time code. Results:
    numbers, booleans, enums, characters, structs and arrays of them, strings and views (copied
    into the program), and null pointers; anything else that points somewhere is reported. The
-   context is `runtime.MINIMAL_CONTEXT`. Code is entered through a C++ wrapper that saves r14,
+   context was `runtime.MINIMAL_CONTEXT` until step 3. Code is entered through a C++ wrapper that saves r14,
    since ORC doesn't see symbols defined in module-level assembly. Top-level `#run` is reported
    as unsupported until step 2. Found on the way: returning a constant array as a view made a
    view of a copy on the returning function's stack; fixed.
@@ -614,11 +614,17 @@ result's bytes become constants in the program, read through the type's layout.
    members. Found on the way: `?`, `or_break`, `or_continue`, `is_some` and `is_none` read a
    `Result` or optional instance's variants before it was laid out, which failed now and then;
    they wait for it now. Not yet: `#run` inside a type's brackets, which doesn't parse.
-3. **The compile-time context:** a logger that writes through the compiler's diagnostics, an
-   allocator over host memory, failed assertions as build errors, `#is_compile_time`, and the
-   permissions in Hemera `docs/compilation.md`.
+3. [x] **The compile-time context** (done 2026-10-16): `runtime.COMPILE_TIME_CONTEXT`, made of
+   four intrinsics the JIT binds to the compiler (`compile_time_log`, `_allocate`, `_free`,
+   `_fail`). Logs are printed at their line with `%` formatted from the type descriptors (warnings
+   are W4001, errors fail the build as E4029); memory lasts until the code finishes; a failed
+   assertion, trap, bad memory access or division by zero fails the build (E4029) and the compiler
+   carries on, by restoring registers captured before entering the code (no unwind tables to
+   unwind through). Windows only for the crash handling so far.
 4. **Reflection and the build API:** `base/compiler`'s functions, implemented by the compiler and
-   called from compiled code, then the build package (`decisions/0028`) and checks (`0029`).
+   called from compiled code, then the build package (`decisions/0028`) and checks (`0029`), with
+   the permissions in Hemera `docs/compilation.md` (moved here from step 3, since only the build
+   package's own compile-time code gets them).
 
 ## After M1
 
