@@ -652,7 +652,11 @@ result's bytes become constants in the program, read through the type's layout.
      be removed. Not yet:
      build code adding to `BuildOptions.settings`, which needs `array_add` (dynamic arrays aren't
      generated yet).
-   - **4c**: SlopOS's build package and house-rule checks (`decisions/0028`, `0029`).
+   - [x] **4c** (done 2026-10-16): SlopOS's build package (`src/build`) and house-rule checks
+     (`src/checks`): `hemera src/build` builds the kernel and every test program, each checked
+     for std tiers and the arch interface (with `NOT_YET_IMPLEMENTED` gaps, `decisions/0029`), and
+     the tools build through it. Found on the way: `ImportInfo.from` kept the literal's quotes,
+     so the tier rule never saw `std`; fixed in Hemera, with a check in its hosted test.
 
 ## After M1
 

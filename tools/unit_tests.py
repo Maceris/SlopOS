@@ -1,10 +1,9 @@
 """
 Builds and runs every package's tests (decisions/0033, Tests): each test/ folder under src/ is a
 package whose main returns 0 if everything worked, or the number of the first check that failed.
-They're hosted programs, built for this machine with Hemera's compiler (hemera on the PATH, or
-HEMERA), so they test code that doesn't need ring 0, like the frame allocator over a buffer.
-
-Until the build package can discover and run tests itself (decisions/0028), this does.
+They're hosted programs, built for this machine by SlopOS's build package (src/build, targets=tests)
+with Hemera's compiler (hemera on the PATH, or HEMERA), so they test code that doesn't need ring 0,
+like the frame allocator over a buffer.
 """
 
 import os
@@ -26,27 +25,29 @@ def find_hemera() -> str:
 
 def main() -> int:
     hemera = find_hemera()
-    packages = sorted(path for path in (ROOT / "src").rglob("test") if path.is_dir())
-    failed = 0
     with tempfile.TemporaryDirectory(prefix="slopos-tests-") as temporary:
-        for package in packages:
-            name = package.relative_to(ROOT).as_posix()
-            output = Path(temporary) / package.parent.name
-            build = subprocess.run([hemera, f"--output={output}", str(package)], capture_output=True, text=True)
-            if build.returncode != 0:
-                print(f"FAILED: {name} doesn't build")
-                sys.stdout.write(build.stdout)
-                sys.stdout.write(build.stderr)
-                failed += 1
-                continue
-            executable = output.with_suffix(".exe") if sys.platform == "win32" else output
-            code = subprocess.run([str(executable)]).returncode
+        command = [hemera, f"--setting=targets=tests,tests_output={Path(temporary).as_posix()}", str(ROOT / "src" / "build")]
+        if os.environ.get("HEMERA_INSTALL"):
+            command.insert(1, f"--install-path={os.environ['HEMERA_INSTALL']}")
+        if subprocess.run(command).returncode != 0:
+            print("FAILED: the tests don't build")
+            return 1
+        # The build package names each test program after the package it tests, <package>_test
+        suffix = ".exe" if sys.platform == "win32" else ""
+        tests = sorted(path for path in Path(temporary).iterdir() if path.name.endswith("_test" + suffix))
+        failed = 0
+        for test in tests:
+            name = test.name.removesuffix(suffix)
+            code = subprocess.run([str(test)]).returncode
             if code == 0:
                 print(f"passed: {name}")
             else:
                 print(f"FAILED: {name}, check {code}")
                 failed += 1
-    print(f"{len(packages) - failed} of {len(packages)} passed")
+        if not tests:
+            print("FAILED: no tests were built")
+            return 1
+    print(f"{len(tests) - failed} of {len(tests)} passed")
     return 0 if failed == 0 else 1
 
 

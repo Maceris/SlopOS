@@ -160,13 +160,20 @@ When unsure about syntax or semantics, check the Hemera docs, then guess and mar
 
 The kernel in `src/` builds and boots (`knowledge/compiler-plan.md`, Phase 6), though most of
 the planned code still needs more of the compiler. `base` is built into the compiler, and it
-finds `std` in the Hemera repo it was built in. `python tools/boot.py --expect 0` builds
-the kernel (`src/boot/limine`, linked with its `x86_64.ld`) with the freestanding flags, boots it
+finds `std` in the Hemera repo it was built in. `hemera src/build` builds everything through the
+build package (`decisions/0028`): the kernel (`src/boot/limine`, linked with its `x86_64.ld`,
+with the freestanding flags) and every test program, each checked by the house rules in
+`src/checks` (`decisions/0029`). `--setting=targets=kernel` (or `tests`) builds one kind, and
+`kernel_output` and `tests_output` say where they go, as in
+`--setting=targets=kernel,kernel_output=build/kernel.elf`. An architecture lists what it doesn't
+implement of `arch_interface` yet in `NOT_YET_IMPLEMENTED`: take a name off when you implement
+it, or the check fails. `python tools/boot.py --expect 0` builds the kernel that way, boots it
 in QEMU through Limine with `test_exit` on its command line, and checks the code it stopped with
 (`src/kernel/stop.hsc`); `--uefi`, `--cpu` and `--command-line` vary the run, and
 `python tools/boot_tests.py` runs every boot test. It finds QEMU, Limine and xorriso through
 `QEMU`, `LIMINE` and `XORRISO`, or the PATH; `HEMERA_INSTALL` overrides where `std` is.
-`python tools/unit_tests.py` builds every `test/` package under `src/` as a hosted program and
+`python tools/unit_tests.py` builds every `test/` package under `src/` as a hosted program (through
+the build package) and
 runs it (main returns 0, or the number of the failed check); code that doesn't need ring 0, like
 the frame allocator, is tested this way, over a buffer standing in for physical memory.
 The latest debug build of the Hemera compiler should already be on the

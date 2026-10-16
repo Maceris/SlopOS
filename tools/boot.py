@@ -5,11 +5,11 @@ Boots a kernel in QEMU through Limine, for end-to-end tests (knowledge/compiler-
     python tools/boot.py --kernel build/kernel.elf
     python tools/boot.py --package other/kernel --linker-script other/kernel/linker.ld --expect 42
 
-Without --kernel it builds a kernel package first, SlopOS's boot adapter (src/boot/limine, with its
-x86_64.ld) unless --package says otherwise, with Hemera's compiler (hemera on the PATH) and the
-freestanding flags the kernel needs until the build package works: no startup code, no red zone,
-no SIMD, stack checks that trap. The compiler finds std next to itself, or in HEMERA_INSTALL if
-that's set.
+Without --kernel it builds the kernel first, with Hemera's compiler (hemera on the PATH): SlopOS's
+through its build package (src/build, targets=kernel), which also runs the house-rule checks; or,
+with --package, another kernel package directly, with the freestanding flags (no startup code, no
+red zone, no SIMD, stack checks that trap) and --linker-script. The compiler finds std next to
+itself, or in HEMERA_INSTALL if that's set.
 
 The kernel's command line is --command-line, test_exit by default, which makes SlopOS write why it
 stopped to the debug exit device (src/kernel/stop.hsc, StopReason). QEMU's CPU is --cpu, max by
@@ -58,8 +58,7 @@ LIMINE_CONFIG = """timeout: 0
 """
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_PACKAGE = ROOT / "src" / "boot" / "limine"
-DEFAULT_LINKER_SCRIPT = DEFAULT_PACKAGE / "x86_64.ld"
+BUILD_PACKAGE = ROOT / "src" / "build"
 # SlopOS needs x86-64-v3 (knowledge/decisions/0003), which QEMU's default CPU model lacks
 DEFAULT_CPU = "max"
 
@@ -101,14 +100,24 @@ def limine_tool(limine: Path) -> Path:
     return find_tool("LIMINE_TOOL", names, [])
 
 
-def build_kernel(package: Path, linker_script: Path, output: Path) -> None:
-    """Builds the kernel package with Hemera's compiler."""
-    command = ["hemera", *KERNEL_FLAGS, f"--linker-script={linker_script}", f"--output={output}", str(package)]
+def run_hemera(arguments: list[str], what: str) -> None:
+    """Runs Hemera's compiler, stopping if it fails."""
+    command = ["hemera", *arguments]
     if os.environ.get("HEMERA_INSTALL"):
         command.insert(1, f"--install-path={os.environ['HEMERA_INSTALL']}")
     result = subprocess.run(command)
     if result.returncode != 0:
-        sys.exit(f"boot.py: building {package} failed")
+        sys.exit(f"boot.py: building {what} failed")
+
+
+def build_kernel(package: Path, linker_script: Path, output: Path) -> None:
+    """Builds a kernel package directly, with the freestanding flags."""
+    run_hemera([*KERNEL_FLAGS, f"--linker-script={linker_script}", f"--output={output}", str(package)], str(package))
+
+
+def build_slopos_kernel(output: Path) -> None:
+    """Builds SlopOS's kernel through its build package, checks and all."""
+    run_hemera([f"--setting=targets=kernel,kernel_output={output}", str(BUILD_PACKAGE)], "SlopOS's kernel")
 
 
 def make_image(kernel: Path, limine: Path, xorriso: Path, folder: Path, command_line: str) -> Path:
@@ -155,7 +164,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Boots a kernel in QEMU through Limine.")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--kernel", type=Path, help="the kernel's ELF")
-    source.add_argument("--package", type=Path, help="a kernel package to build first (default: SlopOS's)")
+    source.add_argument("--package", type=Path, help="a kernel package to build first (default: SlopOS's, through src/build)")
     parser.add_argument("--linker-script", type=Path, help="the linker script, with --package")
     parser.add_argument("--command-line", default="test_exit", help="the kernel's command line")
     parser.add_argument("--cpu", default=DEFAULT_CPU, help="QEMU's CPU model")
@@ -175,14 +184,13 @@ def main() -> int:
         folder = Path(temporary)
         kernel = arguments.kernel
         if kernel is None:
-            package = arguments.package or DEFAULT_PACKAGE
-            linker_script = arguments.linker_script
-            if arguments.package is None and linker_script is None:
-                linker_script = DEFAULT_LINKER_SCRIPT
-            if linker_script is None:
-                parser.error("--package needs --linker-script")
             kernel = folder / "kernel.elf"
-            build_kernel(package.resolve(), linker_script.resolve(), kernel)
+            if arguments.package is None:
+                build_slopos_kernel(kernel)
+            elif arguments.linker_script is None:
+                parser.error("--package needs --linker-script")
+            else:
+                build_kernel(arguments.package.resolve(), arguments.linker_script.resolve(), kernel)
         image = make_image(kernel.resolve(), limine, xorriso, folder, arguments.command_line)
         serial = folder / "serial.txt"
         code = run(image, qemu, serial, arguments.timeout, arguments.uefi, arguments.cpu, arguments.qemu_arguments)

@@ -1,6 +1,6 @@
 # 0029: House-Rule Checks Run on Every Target, Registered by the Build
 
-Status: proposed
+Status: accepted (implemented 2026-10-16 in `src/checks`)
 Date: 2026-10-09
 Related: `0007` (checks, not conventions), `0028` (build package),
 `../hemera-proposals/reflection-checks.md`
@@ -30,10 +30,18 @@ package and each target are type checked separately, so a constant's value in a 
 - **Checks report every problem** with `compiler.report_error` at the most specific location
   available (an import, a function, a constant) and return `false`; they never stop at the first.
 - **The tier rule is checked per import edge** across the whole program: no package imports a
-  higher tier than its own, and packages outside `std` take the target's tier. That implies the
+  higher tier than its own, and packages outside `std` take the target's tier. `base` counts as
+  Freestanding, since a Freestanding package needs only `base`. A package is `std`'s when an
+  import names it `from "std"` (or `"std/..."`). That implies the
   transitive rule without walking import chains.
 - **The arch-interface rule is generic:** any package imported as `arch` must implement the
-  program's `arch_interface` package.
+  program's `arch_interface` package: every bodiless function with the same signature (names,
+  types, `#escaping`, varargs, results, never-returning), and a type of the same name for each
+  empty struct `arch_interface` leaves to the architecture.
+- **What an architecture doesn't implement yet, it lists** in a `NOT_YET_IMPLEMENTED` array of
+  names (decided with the project author 2026-10-16, after `0005`'s listed gaps). Those may be
+  missing; a listed name that's implemented, or that `arch_interface` doesn't declare, is an
+  error, so the list can't go stale.
 
 ## Alternatives considered
 - **`#run` calls in the checked packages:** values have the right types, but each package must
@@ -44,7 +52,5 @@ package and each target are type checked separately, so a constant's value in a 
 - Adding a rule means adding a function to the checks package and calling it from
   `check_program`.
 - The tier check relies on `type_info_of` returning a pointer and on `std`'s
-  `reflection.enum_member_name` (N1, N2). Both are declared; the helper's body is still to
-  write in Hemera's `std/reflection` (`0030`).
-- Checks only run once the compiler executes registered checks; until then they document intent,
-  as `0007` says.
+  `reflection.enum_member_name` (N1, N2), both working since Phase 8, step 4a.
+- Signatures are compared without parameters' default values, which reflection doesn't give yet.

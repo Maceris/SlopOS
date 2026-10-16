@@ -1,6 +1,6 @@
 # 0028: One Build Package, Using Hemera's Compiler API
 
-Status: proposed
+Status: accepted (implemented 2026-10-16 as `src/build`)
 Date: 2026-10-09
 Related: `../hemera-proposals/build-programs.md` (adopted into Hemera's `base/compiler`),
 `0029` (house-rule checks), `0004` (PIC), `0003` (x86-64-v3)
@@ -63,4 +63,8 @@ package and each target are type checked separately and don't share types.
 - User-space targets use `OperatingSystem.SlopOS`, added to `base/compiler/target.hsc` on
   2026-10-09 (`0030`). Building them still needs the compiler to support the target.
 - Running the system in QEMU from the build requires `--allow-run`; compiling never does.
+- Implemented 2026-10-16 in `src/build`: settings `targets` (`all`, `kernel`, `tests`),
+  `kernel_output` and `tests_output`; tests are found with `compiler.subfolders` (every `test`
+  folder, named `<package>_test`). `tools/boot.py`, `boot_tests.py` and `unit_tests.py` build
+  through it. There are no steps yet, so booting stays in `tools/boot.py`.
 - `os.run_process` has to be written in Hemera's `std/os` before any step can run a tool.

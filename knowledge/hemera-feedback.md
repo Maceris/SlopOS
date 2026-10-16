@@ -86,6 +86,14 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-16 — `compiler-plan.md` Phase 8, step 4c: SlopOS builds through its build package, with
+  the house-rule checks. Fixed in Hemera on the way: reflection's `ImportInfo.from` kept the
+  string literal's quotes (`"\"std\""`), so nothing matched `"std"`. Noticed, not fixed: two
+  builds of the same kernel differ by a few hundred bytes with the same section sizes, so output
+  isn't deterministic yet (likely the order functions are generated in). Building the kernel
+  through the build package also takes longer than directly (about 67s against 24s with the debug
+  compiler), since the build program and its checks are compiled and run first.
+
 - 2026-10-16 — `compiler-plan.md` Phase 8, step 1: compile-time execution through LLVM's ORC JIT.
   Constants whose values call functions are computed while compiling, so the Limine requests'
   headers are built by functions instead of written out. Found and fixed on the way: returning a
