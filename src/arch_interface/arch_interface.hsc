@@ -70,12 +70,13 @@ init_system : fn(system: ptr[mut ArchSystem]) : ---
  * user-access protection, no-execute, address-space tags, and the default vector state.
  * Records carrier and context in cpu, and cpu in the architecture's per-CPU register
  * (x86-64: IA32_KERNEL_GS_BASE; AArch64: TPIDR_EL1; RISC-V: sscratch), for entry stubs.
+ * Keeping carrier and context makes them #escaping (Hemera's docs/memory.md).
  */
 init_cpu : fn(
     system: ptr[ArchSystem],
     cpu: ptr[mut ArchCpu],
-    carrier: ptr[mut runtime.CarrierBlock],
-    context: ptr[runtime.Context],
+    carrier #escaping : ptr[mut runtime.CarrierBlock],
+    context #escaping : ptr[runtime.Context],
     stacks: ptr[CpuStacks],
 ) : ---
 

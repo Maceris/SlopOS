@@ -136,11 +136,16 @@ when relevant.
 - Code entered from outside Hemera (a bootloader, another CPU) is `#calling_convention(.c)
   #no_context`, and sets up its carrier block and context itself.
 - Declaration directives go right after the name: `main #export :: fn() { }`.
-- Pointers into the stack (`&x`, stack arrays passed as views, `any` from locals) are allowed,
-  but the compiler checks they can't outlive the frame. A parameter whose pointer is kept
-  after the call must be marked `#escaping` (`name #escaping : string`); a struct that holds
-  stack pointers and is passed by pointer must be `#scoped`. Contexts, threads and fibers
-  can't be given stack pointers. See Hemera's `docs/memory.md`.
+- Pointers into the stack (`&x`, stack arrays passed as views, any `any`) are allowed, and
+  the compiler checks they can't outlive the frame (error E4030). A parameter whose pointer is
+  kept after the call, stored through a pointer or in something returned and kept, must be
+  marked `#escaping` (`name #escaping : string`), and so must the parameters of whatever passes
+  it on. A struct that holds stack pointers and is passed by pointer must be `#scoped`, like
+  `TextBuffer`; `Allocator` and `SourceCodeLocation` are `#unrestricted`, so they never count.
+  A call's result counts as pointing wherever its non-`#escaping` arguments do, so
+  `allocate(&allocator_on_this_stack)` counts as local even when it hands out physical memory:
+  go through the address (`frames.virtual_of`), or keep the state off the stack (`start_carve`).
+  Contexts, threads and fibers can't be given stack pointers. See Hemera's `docs/memory.md`.
 - Runtime `assert(cond, message)` calls `context.assertion_handler`, which must end the
   program; `#assert expr` checks at compile time.
 - Integer overflow wraps (two's complement) and does not panic.

@@ -51,7 +51,7 @@ read_u32 :: fn(bytes: u8[], offset: usize) -> u32 {
 }
 
 // A font from a PSF2 file's bytes, which it keeps referring to.
-parse_font :: fn(bytes: u8[]) -> Result[Font, FontError] {
+parse_font :: fn(bytes #escaping : u8[]) -> Result[Font, FontError] {
     if bytes.count < PSF2_HEADER_SIZE {
         return .Error(.Truncated)
     }

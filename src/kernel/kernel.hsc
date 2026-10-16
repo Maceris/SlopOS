@@ -94,7 +94,14 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         case Ok(allocator) => allocator
         case Error(error) => out_of_memory(&options, "no usable memory for the frame allocator's state")
     }
-    kernel :: allocate_object[Kernel](&made) or_else out_of_memory(&options, "no memory for the kernel's state")
+    /*
+     * Its frames' address, not allocate_object: made is on this stack, so what allocate_object gives
+     * for it would count as pointing here (Hemera's docs/memory.md, Returning). A frame's address
+     * doesn't, being a physical address in the direct map.
+     */
+    kernel_frames :: frames.allocate_zeroed(&made, frames.order_for(cast[u64](size_of(Kernel))))
+        or_else out_of_memory(&options, "no memory for the kernel's state")
+    kernel :: cast[ptr[mut Kernel]](frames.virtual_of(&made, kernel_frames))
     kernel.frames = made
     log_memory(&kernel.frames)
     kernel.features = features

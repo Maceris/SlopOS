@@ -94,8 +94,8 @@ init_system :: fn(system: ptr[mut ArchSystem]) {
 init_cpu :: fn(
     system: ptr[ArchSystem],
     cpu: ptr[mut ArchCpu],
-    carrier: ptr[mut runtime.CarrierBlock],
-    context: ptr[runtime.Context],
+    carrier #escaping : ptr[mut runtime.CarrierBlock],
+    context #escaping : ptr[runtime.Context],
     stacks: ptr[arch_interface.CpuStacks],
 ) {
     cpu.carrier = carrier

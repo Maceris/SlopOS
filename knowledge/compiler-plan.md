@@ -658,13 +658,41 @@ result's bytes become constants in the program, read through the type's layout.
      the tools build through it. Found on the way: `ImportInfo.from` kept the literal's quotes,
      so the tier rule never saw `std`; fixed in Hemera, with a check in its hosted test.
 
+## Phase 9: Memory-Safety Analyses
+
+Started 2026-10-16, the next item of *After M1*.
+
+1. [x] **Pointers into the stack** (done 2026-10-16; Hemera's `docs/memory.md`): a pass over each
+   checked body (`front_end/stack_pointers.cpp`), after its checking, using only callees'
+   signatures. It walks the body the way the generator does, so it sees the same conversions,
+   tracks each value as unrestricted or local with an origin (a parameter or a block's depth,
+   which the checker now records per local), and reports E4030: returning a pointer into the
+   frame, storing one in a variable that outlives its block or through an ordinary pointer,
+   passing one to an `#escaping` parameter or a `push_context`, and an ordinary pointer or view to
+   something holding one. Variables are flow-insensitive, so it walks until they settle, then
+   reports. A function type whose parameter is `#escaping` no longer fits one whose isn't. New
+   in the language, decided with the Hemera author: `#unrestricted` structs, which never point
+   into the stack, for `Allocator` and `SourceCodeLocation`; without it, everything allocated
+   through an allocator or `loc` parameter was local. What it found: a hosted test returned a
+   string viewing its own stack buffer; std's `TextBuffer` needed `#scoped`; `ThreadFunction`'s
+   data is `#escaping`; SlopOS's `init_cpu`, `start_cpu`, `allocate_cpu`, `start_cpus`, `cpus`
+   and `parse_font` keep parameters they didn't mark; the boot information's carve and the
+   kernel's first allocation went through a pointer to the stack, so they now go through an
+   address. Also documented: converting to `any` copies the value into the frame, so every `any`
+   counts as local. Not checked yet: `?` returning a local error value, casts from a struct to an
+   `#unrestricted` one, compile-time code (`#run`).
+2. **Bounds proofs** (Hemera's `docs/types.md`, *Bounds Checking*): an index must be proven in
+   bounds, from constants, dominating conditions and loops. Its example compares with `<=` where
+   it means `<`.
+
 ## After M1
 
 In roughly the order SlopOS needs them, after Phase 7 (which covers entry functions):
 - **`#run` and compile-time execution**, then **reflection** and the **build API**
   (`base/compiler`), which unlock the build package and house-rule checks (`decisions/0028`, `0029`).
-  In progress as Phase 8.
+  Done as Phase 8.
 - **Memory-safety analyses:** `#escaping`, pointers into the stack, `#scoped`, bounds proofs.
+  In progress as Phase 9.
 - **Value generics** (`docs/types.md`, *Compile-Time Parameters*).
 - **Fibers, `morestack` and segmented stacks** (`docs/multitasking.md`), for user space.
 - **AArch64**, right after M3 (`decisions/0022`), where the carrier register is the cheaper case.

@@ -18,14 +18,16 @@ FREE_FRAMES :: 63
 // What a failed allocation gives in these tests: frame 0 is never free.
 NO_FRAME :: cast[boot_info.PhysicalAddress](0)
 
+// A constant, not on the stack, so the allocator made from it isn't held to main's stack frame
+REGIONS :: boot_info.MemoryRegion.[
+    .{range = .{base = cast[boot_info.PhysicalAddress](0), size = MEMORY_BASE}, kind = .Reserved},
+    .{range = .{base = cast[boot_info.PhysicalAddress](MEMORY_BASE), size = MEMORY_SIZE}, kind = .Usable},
+]
+
 main :: fn() -> int {
     memory : u64[32768]
     direct_map_offset :: cast[u64](&memory[0]) - MEMORY_BASE
-    regions := boot_info.MemoryRegion.[
-        .{range = .{base = cast[boot_info.PhysicalAddress](0), size = MEMORY_BASE}, kind = .Reserved},
-        .{range = .{base = cast[boot_info.PhysicalAddress](MEMORY_BASE), size = MEMORY_SIZE}, kind = .Usable},
-    ]
-    made :: frames.make(regions, direct_map_offset)
+    made :: frames.make(REGIONS, direct_map_offset)
     allocator := match made {
         case Ok(made_allocator) => made_allocator
         case Error(error) => return 1

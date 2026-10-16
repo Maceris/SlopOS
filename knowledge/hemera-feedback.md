@@ -34,6 +34,7 @@ them is `compiler-plan.md`, Phase 7:
 |---|---|---|
 | Format strings have no options, like hexadecimal or a width, so the stack trace appends its offsets with `text_buffer` (pointers do format in hexadecimal) | friction | `kernel/stack_trace.hsc` |
 | An optional function type with a result can't be written in place: `(fn(n: int) -> int)?` doesn't parse, and `fn(n: int) -> int?` makes the result optional; it takes an alias | friction | Hemera's hosted test |
+| Once (2026-10-16), building the kernel through the build package in `boot_tests.py` failed, and the output was lost; 16 builds since, the same way, all succeeded with identical output. Possibly a race in the compiler; capture the output if it happens again | unknown | `tools/boot_tests.py` |
 
 ### Language and library design
 
@@ -85,6 +86,15 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-16 — `compiler-plan.md` Phase 9, step 1: the checks on pointers into the stack
+  (`docs/memory.md`). As written, the Returning rule made everything allocated through an
+  allocator or `loc` parameter local, which broke base's own context and fiber code; Hemera now has
+  `#unrestricted` structs (decided with the Hemera author), and `Allocator` and
+  `SourceCodeLocation` are. The check found a hosted test returning a view of its own stack, and
+  SlopOS functions that keep parameters without `#escaping`. `#escaping` is now part of whether a
+  function type fits another, as documented. Converting to `any` copies the value into the frame,
+  which the docs now say, so every `any` counts as local.
 
 - 2026-10-16 — `compiler-plan.md` Phase 8, step 4c: SlopOS builds through its build package, with
   the house-rule checks. Fixed in Hemera on the way: reflection's `ImportInfo.from` kept the

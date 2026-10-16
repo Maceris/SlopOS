@@ -179,7 +179,7 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
             holds = false
             continue
         }
-        if !signatures_match(&found, required) {
+        if !signatures_match(found, required) {
             compiler.report_error(found.location, "%.% doesn't match the signature arch_interface declares",
                 implementation.name, required.name)
             holds = false
@@ -188,7 +188,8 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
     return holds
 }
 
-signatures_match :: fn(implementation: ptr[compiler.FunctionInfo], interface: ptr[compiler.FunctionInfo]) -> bool {
+// The implementation by value: it came from find_function, so a pointer to it couldn't be passed on
+signatures_match :: fn(implementation: compiler.FunctionInfo, interface: ptr[compiler.FunctionInfo]) -> bool {
     if implementation.parameters.count != interface.parameters.count
         || implementation.return_values.count != interface.return_values.count
         || implementation.never_returns != interface.never_returns {

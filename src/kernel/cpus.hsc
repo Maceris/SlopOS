@@ -25,7 +25,7 @@ CPU_ONLINE : u32 : 1
 CPU_ABANDONED : u32 : 2
 
 // Start every CPU after the boot CPU, on the boot CPU, once its timer runs.
-start_cpus :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
+start_cpus :: fn(kernel #escaping : ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
     kernel.cpus = info.cpus
     kernel.online_cpus = 1
     start_cpu :: info.start_cpu or_return void
@@ -80,7 +80,7 @@ cpu_started :: fn() #never_returns {
  * pointing back at the PerCpu. The carrier block's stack_limit is set once the CPU is on the stack
  * it starts on.
  */
-allocate_cpu :: fn(kernel: ptr[mut Kernel], index: u32) -> Result[ptr[mut PerCpu], frames.FrameError] {
+allocate_cpu :: fn(kernel #escaping : ptr[mut Kernel], index: u32) -> Result[ptr[mut PerCpu], frames.FrameError] {
     cpu :: allocate_object[PerCpu](&kernel.frames)?
     stack_memory :: allocate_object[CpuStackMemory](&kernel.frames)?
     cpu.kernel = kernel

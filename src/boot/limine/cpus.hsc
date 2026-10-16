@@ -22,7 +22,7 @@ StartingCpu :: struct {
 }
 
 // Starts cpu at cpu_entry, which loads carrier and calls entry. Doesn't wait for it.
-start_cpu : boot_info.StartCpu : fn(cpu: ptr[boot_info.BootCpu], carrier: ptr[mut runtime.CarrierBlock], entry: boot_info.CpuEntry) {
+start_cpu : boot_info.StartCpu : fn(cpu: ptr[boot_info.BootCpu], carrier #escaping : ptr[mut runtime.CarrierBlock], entry: boot_info.CpuEntry) {
     starting :: cast[ptr[mut StartingCpu]](cpu.boot_handle)
     starting.carrier = carrier
     starting.entry = entry
@@ -53,7 +53,7 @@ cpu_entry #calling_convention(.c) #no_context :: fn(info: ptr[MpInfo]) #never_re
 }
 
 // Every CPU, the boot CPU first. Each one's boot_handle is its StartingCpu, for start_cpu.
-cpus :: fn(mp: ptr[MpResponse], cpus: boot_info.BootCpu[], starting: StartingCpu[]) -> boot_info.BootCpu[] {
+cpus :: fn(mp: ptr[MpResponse], cpus: boot_info.BootCpu[], starting #escaping : StartingCpu[]) -> boot_info.BootCpu[] {
     count : usize = 1
     for cpu in pointers(mp.cpus, mp.cpu_count) {
         index := count

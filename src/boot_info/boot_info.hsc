@@ -47,7 +47,7 @@ BootInfo :: struct {
  * Starts cpu, which then loads carrier, pushes the constant boot context and calls entry
  * (docs/specs/boot_info.md, CPUs).
  */
-StartCpu :: alias fn(cpu: ptr[BootCpu], carrier: ptr[mut runtime.CarrierBlock], entry: CpuEntry)
+StartCpu :: alias fn(cpu: ptr[BootCpu], carrier #escaping : ptr[mut runtime.CarrierBlock], entry: CpuEntry)
 
 // Where a started CPU begins in the kernel.
 CpuEntry :: alias fn() #never_returns

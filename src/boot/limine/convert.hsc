@@ -20,6 +20,16 @@ Carve :: struct {
 
 ARRAY_ALIGNMENT : u64 : 64
 
+/*
+ * A carve that keeps itself at the start of the memory it carves: what it gives out then comes from
+ * an address in the direct map, not from a Carve on this stack (Hemera's docs/memory.md, Returning).
+ */
+start_carve :: fn(physical: boot_info.PhysicalRange, virtual_base: u64) -> ptr[mut Carve] {
+    carve :: cast[ptr[mut Carve]](virtual_base)
+    carve^ = Carve.{physical, virtual_base, carved_size(1, size_of(Carve))}
+    return carve
+}
+
 // Room for count Ts in carve, aligned for any of BootInfo's arrays.
 take :: fn[T](carve: ptr[mut Carve], count: usize) -> T[] {
     start :: carve.used
@@ -72,7 +82,8 @@ build_boot_info :: fn(info: ptr[mut boot_info.BootInfo]) {
     segment_count :: load_segment_count(elf)
     cpu_count :: cast[usize](mp.cpu_count)
     name_length :: bootloader_name.count + 1 + bootloader_version.count
-    needed :: carved_size(memory_map_count, size_of(boot_info.MemoryRegion))
+    needed :: carved_size(1, size_of(Carve))
+        + carved_size(memory_map_count, size_of(boot_info.MemoryRegion))
         + carved_size(segment_count, size_of(boot_info.ImageSegment))
         + carved_size(cpu_count, size_of(boot_info.BootCpu))
         + carved_size(cpu_count, size_of(StartingCpu))
@@ -81,20 +92,20 @@ build_boot_info :: fn(info: ptr[mut boot_info.BootInfo]) {
         + carved_size(name_length, 1)
     carved :: find_carve(memory_map, align_up(needed))
         or_else kernel.boot_failed(info.command_line, "no usable memory for the boot information")
-    carve := Carve.{carved, cast[u64](carved.base) + hhdm.offset, 0}
+    carve :: start_carve(carved, cast[u64](carved.base) + hhdm.offset)
 
     info.direct_map_offset = hhdm.offset
-    regions :: take[boot_info.MemoryRegion](&carve, memory_map_count)
+    regions :: take[boot_info.MemoryRegion](carve, memory_map_count)
     info.memory_map = regions[0..<build_memory_map(memory_map, address.physical_base, carved, regions)]
-    info.kernel_image = kernel_image(address, info.memory_map, elf, take[boot_info.ImageSegment](&carve, segment_count))
-    info.cpus = cpus(mp, take[boot_info.BootCpu](&carve, cpu_count), take[StartingCpu](&carve, cpu_count))
+    info.kernel_image = kernel_image(address, info.memory_map, elf, take[boot_info.ImageSegment](carve, segment_count))
+    info.cpus = cpus(mp, take[boot_info.BootCpu](carve, cpu_count), take[StartingCpu](carve, cpu_count))
     info.start_cpu = null
     if cpu_count > 1 {
         info.start_cpu = start_cpu
     }
-    info.modules = boot_modules(modules, hhdm.offset, take[boot_info.BootModule](&carve, modules.count))
-    info.framebuffers = framebuffers(hhdm.offset, take[boot_info.Framebuffer](&carve, framebuffer_count))
-    info.bootloader = join_names(bootloader_name, bootloader_version, take[u8](&carve, name_length))
+    info.modules = boot_modules(modules, hhdm.offset, take[boot_info.BootModule](carve, modules.count))
+    info.framebuffers = framebuffers(hhdm.offset, take[boot_info.Framebuffer](carve, framebuffer_count))
+    info.bootloader = join_names(bootloader_name, bootloader_version, take[u8](carve, name_length))
     info.firmware = firmware()
     info.firmware_tables = firmware_tables(hhdm.offset)
     info.bootloader_entropy = bootloader_entropy()
