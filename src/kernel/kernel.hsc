@@ -12,7 +12,6 @@ import runtime from "base"
 import arch_interface from "../arch_interface"
 import boot_info from "../boot_info"
 import slop_os from "std/os"
-import text_buffer from "std"
 import console from "console"
 import concurrency from "std"
 
@@ -111,11 +110,7 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
 // Stops with a message if the CPU lacks part of the baseline (decisions/0003).
 check_baseline :: fn(options: ptr[Options], features: ptr[slop_os.CpuFeatures]) {
     missing :: arch.missing_baseline_feature(features) or_return void
-    storage : u8[160]
-    line := text_buffer.make(storage)
-    text_buffer.append(&line, "SlopOS needs an x86-64-v3 CPU, and this one lacks ")
-    text_buffer.append(&line, missing)
-    runtime.log_fatal(text_buffer.as_string(&line))
+    runtime.log_fatal("SlopOS needs an x86-64-v3 CPU, and this one lacks %", missing)
     stop_with(options, .CpuUnsupported)
 }
 
@@ -168,18 +163,8 @@ start_framebuffer_console :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.Boo
 }
 
 log_framebuffer :: fn(screen: ptr[console.Console]) {
-    storage : u8[96]
-    line := text_buffer.make(storage)
-    text_buffer.append(&line, "framebuffer console: ")
-    text_buffer.append_unsigned(&line, cast[u64](screen.columns))
-    text_buffer.append(&line, "x")
-    text_buffer.append_unsigned(&line, cast[u64](screen.rows))
-    text_buffer.append(&line, " characters on ")
-    text_buffer.append_unsigned(&line, cast[u64](screen.width))
-    text_buffer.append(&line, "x")
-    text_buffer.append_unsigned(&line, cast[u64](screen.height))
-    text_buffer.append(&line, " pixels")
-    runtime.log_info(text_buffer.as_string(&line))
+    runtime.log_info("framebuffer console: %x% characters on %x% pixels", screen.columns, screen.rows, screen.width,
+        screen.height)
 }
 
 range_of :: fn(low: ptr[u8], size: u64) -> arch_interface.StackRange {

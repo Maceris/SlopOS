@@ -549,18 +549,18 @@ decide something first. C is larger work.
 - [x] **`Result[void, E]`**: `Ok` holds nothing, and the operators keep their meaning, each with
   nothing as its value (`?`, `or_return`, `or_break`, `or_continue`; `or_else` takes what to do
   instead). The arch interface's `map` and `protect` return it.
-- **Enum names** come with C1: std's `reflection.enum_member_name` reads the type information C1
-  generates.
 
 ### C. Larger work
 
 In the order SlopOS needs them:
 
-1. **Type information at run time:** each type used as an `any` gets a generated descriptor (the
-   `TypeInfo` that `base/compiler` describes: kind, size, members, an enum's names), so
-   `any.type` is real. Then `std/formatting` gets a freestanding core that formats into a
-   `TextBuffer`, and the kernel's logger formats its parameters. Unblocks formatted logging and
-   `name_of`, and is half of reflection.
+1. [x] **Type information at run time** (done 2026-10-16): every type used as a value or in an
+   `any` gets a read-only descriptor, laid out by `base/compiler`'s own `TypeInfo*` structs, and a
+   type value is its address, so `value.type == int` compares types. `type_of`, `type_info_of` and
+   types as `any` values work. The freestanding formatting core is `std/text_buffer`'s
+   `append_format` and `append_value` (floats formatted with integers only, for soft-float
+   kernels), and the kernel's and the boot adapter's loggers format their parameters. Not filled
+   in yet: `StructMember.value`, members' default values.
 2. **Starting other CPUs** (M3): Limine's MP start with a `#calling_convention(.c) #no_context`
    entry, which B made possible.
 3. **Entry functions** (`.entry`, `.syscall_entry`, `entry_points`, `return_to_user`), for M4–M6.

@@ -117,7 +117,7 @@ missing_baseline_feature :: fn(features: ptr[slop_os.CpuFeatures]) -> string? {
     return null
 }
 
-//HEMERA(friction): no way to get an enum value's name, so the baseline's names are written out
+// Each feature as the CPU manuals name it, which reads better than its enum member's name
 feature_name :: fn(feature: slop_os.CpuFeature) -> string {
     return match feature {
         case .X86Cx16 => "CMPXCHG16B"

@@ -32,9 +32,8 @@ them is `compiler-plan.md`, Phase 7:
 
 | Issue | Severity | Where |
 |---|---|---|
-| `any` values carry no type information, so a logger can't format its parameters. Kernel code formats numbers itself with `std/text_buffer` and logs plain text | blocker for formatted logging | `kernel/log.hsc`, `boot/limine/entry.hsc` |
 | Entry functions (`.entry`, `.syscall_entry`, `entry_points`) aren't generated: the x86-64 entries are interrupt functions, which can't take entries from user mode, and repeat the lines that find the CPU and push its context, since they have no context to call a helper with | blocker for M4–M6 | `arch/x86_64/entries.hsc` |
-| No enum value names, so the baseline check writes each feature's name out (std's `reflection.enum_member_name` waits for C1's type information) | friction | `arch/x86_64/features.hsc` |
+| Format strings have no options, like hexadecimal or a width, so the stack trace appends its offsets with `text_buffer` (pointers do format in hexadecimal) | friction | `kernel/stack_trace.hsc` |
 | A constant's value can't call a function until there's compile-time execution, so the Limine requests' headers are written out | gap | `boot/limine/requests.hsc` |
 | An optional function type with a result can't be written in place: `(fn(n: int) -> int)?` doesn't parse, and `fn(n: int) -> int?` makes the result optional; it takes an alias | friction | Hemera's hosted test |
 
@@ -88,6 +87,14 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-16 — `compiler-plan.md` Phase 7, C1, done: type information at run time. Each type used
+  as a value or in an `any` has a descriptor, `value.type == int` compares types, and
+  `text_buffer.append_format` formats any value without allocating. The kernel's and the boot
+  adapter's loggers format their parameters, and the boot log, timer, baseline check and
+  framebuffer messages use format strings instead of building their text. Found and fixed on the
+  way: comparing type values, and a type as an `any`, weren't generated. Found, not fixed: `for ...
+  #reverse` isn't generated yet (std works around it).
 
 - 2026-10-15 — `compiler-plan.md` Phase 7, group B, decided with the Hemera author and done:
   keywords in three tiers (no more `type_`, `package_`, `alias_`, `from_`), `null` only for

@@ -123,6 +123,11 @@ when relevant.
   block, in a reserved register (`r14`/`x28`), reached by `base`/`std` with
   `intrinsics.carrier()` (`knowledge/decisions/0026`).
 - Ignore return values with `_`: `_, ok = f()`.
+- Log with format strings: `runtime.log_info("% of % pages free", free, total)`. Each `%` is the
+  next parameter (`%1`, `%2` pick one, `%%` is a `%`), formatted from its type information: enum
+  members by name, structs and arrays in full, pointers in hexadecimal (cast an address to
+  `rawptr` to show it that way). Build text by hand with `text_buffer` only when a format string
+  can't say it.
 - `ptr[T]`, `cstring` and function values are never null: `null` is only a `rawptr`'s or an
   optional's, and `ptr[T]?` is a single pointer, null for none. Something that works or fails with
   nothing to return is `Result[void, E]` (`return .Ok`, `f()?`).

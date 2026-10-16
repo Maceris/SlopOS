@@ -1,7 +1,6 @@
 package kernel
 
 import runtime from "base"
-import text_buffer from "std"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -14,12 +13,7 @@ BOOT_TICKS :: 3
 
 start_timer :: fn(kernel: ptr[mut Kernel], hint: u64?) {
     kernel.counter_frequency = arch.init_timer(hint)
-    storage : u8[96]
-    line := text_buffer.make(storage)
-    text_buffer.append(&line, "timer: counter at ")
-    text_buffer.append_unsigned(&line, kernel.counter_frequency / 1000)
-    text_buffer.append(&line, " kHz")
-    runtime.log_info(text_buffer.as_string(&line))
+    runtime.log_info("timer: counter at % kHz", kernel.counter_frequency / 1000)
     set_next_tick(kernel)
 }
 
@@ -31,11 +25,7 @@ set_next_tick :: fn(kernel: ptr[Kernel]) {
 handle_timer :: fn() #never_returns {
     cpu :: per_cpu()
     cpu.timer_ticks += 1
-    storage : u8[64]
-    line := text_buffer.make(storage)
-    text_buffer.append(&line, "timer interrupt ")
-    text_buffer.append_unsigned(&line, cpu.timer_ticks)
-    runtime.log_info(text_buffer.as_string(&line))
+    runtime.log_info("timer interrupt %", cpu.timer_ticks)
     if cpu.timer_ticks >= BOOT_TICKS {
         stop(.Halted)
     }

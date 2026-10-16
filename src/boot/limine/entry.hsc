@@ -7,6 +7,7 @@ package limine_boot
 
 import intrinsics from "base"
 import runtime from "base"
+import text_buffer from "std"
 import boot_info from "../../boot_info"
 import kernel from "../../kernel"
 
@@ -29,11 +30,16 @@ EARLY_LOGGER :: runtime.Logger.{
     name = "early",
 }
 
-//HEMERA(gap): any values carry no type information yet, so parameters can't be formatted
 early_log : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
-    arch.early_console_write("[boot] ")
-    arch.early_console_write(format_string)
-    arch.early_console_write("\n")
+    storage : u8[256]
+    line := text_buffer.make(storage)
+    text_buffer.append(&line, "[boot] ")
+    text_buffer.append_format(&line, format_string, params)
+    if line.truncated {
+        text_buffer.append(&line, "...")
+    }
+    text_buffer.append(&line, "\n")
+    arch.early_console_write(text_buffer.as_string(&line))
 }
 
 /*

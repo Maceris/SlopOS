@@ -19,6 +19,7 @@ log_stack_trace :: fn(skip: usize = 0) {
     if intrinsics.carrier().program_data != null {
         image_base = per_cpu().kernel.image_base
     }
+    //STD(friction): format strings have no hexadecimal option, so the offsets are appended here
     storage : u8[64]
     line := text_buffer.make(storage)
     for i in 0..<count {
@@ -33,6 +34,6 @@ log_stack_trace :: fn(skip: usize = 0) {
             text_buffer.append_address(&line, address)
         }
         // Part of a fatal report already, so without a source location of its own
-        write_log_line("fatal", text_buffer.as_string(&line), 0, null)
+        write_log_line("fatal", null, text_buffer.as_string(&line))
     }
 }

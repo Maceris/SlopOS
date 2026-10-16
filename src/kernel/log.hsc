@@ -15,10 +15,8 @@ import concurrency from "std"
  * its level, and with the source location for warnings and worse. Lines from different CPUs don't
  * mix, since writing a line holds the kernel's console lock.
  *
- * Messages are written as they are, without their parameters.
+ * Each % in the message is replaced by the next parameter (std's text_buffer.append_format).
  */
-//HEMERA(gap): any values carry no type information yet, so parameters can't be formatted. Kernel
-//code formats numbers into the message itself, with text_buffer, until they can.
 KERNEL_LOGGER :: runtime.Logger.{
     data = null,
     trace = log_trace,
@@ -31,41 +29,36 @@ KERNEL_LOGGER :: runtime.Logger.{
 }
 
 log_trace : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
-    write_log_line("trace", format_string, params.count, null)
+    write_log_line("trace", null, format_string, params)
 }
 
 log_debug : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
-    write_log_line("debug", format_string, params.count, null)
+    write_log_line("debug", null, format_string, params)
 }
 
 log_info : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
-    write_log_line("info", format_string, params.count, null)
+    write_log_line("info", null, format_string, params)
 }
 
 log_warn : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
-    write_log_line("warn", format_string, params.count, location)
+    write_log_line("warn", location, format_string, params)
 }
 
 log_error : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
-    write_log_line("error", format_string, params.count, location)
+    write_log_line("error", location, format_string, params)
 }
 
 log_fatal : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
-    write_log_line("fatal", format_string, params.count, location)
+    write_log_line("fatal", location, format_string, params)
 }
 
-write_log_line :: fn(level: string, message: string, parameter_count: usize, location: runtime.SourceCodeLocation?) {
+write_log_line :: fn(level: string, location: runtime.SourceCodeLocation?, format_string: string, params: any...) {
     storage : u8[256]
     line := text_buffer.make(storage)
     text_buffer.append(&line, "[")
     text_buffer.append(&line, level)
     text_buffer.append(&line, "] ")
-    text_buffer.append(&line, message)
-    if parameter_count > 0 {
-        text_buffer.append(&line, " (")
-        text_buffer.append_unsigned(&line, cast[u64](parameter_count))
-        text_buffer.append(&line, " values not shown)")
-    }
+    text_buffer.append_format(&line, format_string, params)
     match location {
         case Some(where) => append_location(&line, where)
         case None => {}
@@ -106,12 +99,7 @@ write_console :: fn(text: string) {
  * A failed assertion stops the kernel: it reports where, with a stack trace, and stops every CPU.
  */
 kernel_assertion_handler : runtime.AssertionHandler : fn(location: runtime.SourceCodeLocation, message: string) #never_returns {
-    storage : u8[256]
-    line := text_buffer.make(storage)
-    text_buffer.append(&line, "assertion failed: ")
-    text_buffer.append(&line, message)
-    append_location(&line, location)
-    runtime.log_fatal(text_buffer.as_string(&line))
+    write_log_line("fatal", location, "assertion failed: %", message)
     // From where the assertion failed (runtime.assert, or the function it was inlined into)
     log_stack_trace()
     stop(.AssertionFailed)
