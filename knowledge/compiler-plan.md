@@ -603,9 +603,17 @@ result's bytes become constants in the program, read through the type's layout.
    since ORC doesn't see symbols defined in module-level assembly. Top-level `#run` is reported
    as unsupported until step 2. Found on the way: returning a constant array as a view made a
    view of a copy on the returning function's stack; fixed.
-2. **During checking:** results the checker needs, like array sizes, `#if` and `#assert`
-   conditions and compile-time arguments, which means waiting until every function the code
-   reaches is checked. Top-level `#run` (the `EXECUTION` work item).
+2. [x] **During checking** (done 2026-10-16): results the checker needs, like array sizes, `#if`
+   and `#assert` conditions and compile-time arguments, from a constant whose value calls a
+   function or from a call or `#run` written in place, and top-level `#run`. An `Evaluation` runs
+   on the LLVM thread as `EXECUTION` work, generating what it reaches with unchecked functions
+   collected rather than reported, and parks until their bodies are checked (`BODY_CHECKED`); what
+   needs its value parks until it has run (`EVALUATION_DONE`). Generating the program reuses the
+   result, so nothing runs twice. Compile-time code that calls a function whose checking needs that
+   code's value is reported as a cycle. Results checking can use: integers, booleans and enum
+   members. Found on the way: `?`, `or_break`, `or_continue`, `is_some` and `is_none` read a
+   `Result` or optional instance's variants before it was laid out, which failed now and then;
+   they wait for it now. Not yet: `#run` inside a type's brackets, which doesn't parse.
 3. **The compile-time context:** a logger that writes through the compiler's diagnostics, an
    allocator over host memory, failed assertions as build errors, `#is_compile_time`, and the
    permissions in Hemera `docs/compilation.md`.
