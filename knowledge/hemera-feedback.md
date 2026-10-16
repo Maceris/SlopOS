@@ -87,6 +87,11 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-16 — Value generics (`docs/types.md`, *Values in Generic Lists*): `Ring[T, capacity]`,
+  inferred and explicit values, values in `#if` and as constants in bodies. Found on the way: the
+  parser rejected any arithmetic in an array size inside a type (`u8[SIZE / 2]`) and in a generic
+  value that starts with a name (`Ring[u8, SIZE * 2]`); both take constant expressions now.
+
 - 2026-10-16 — `compiler-plan.md` Phase 9, step 2: bounds proofs (`docs/types.md`). Every index
   in Hemera's std and in SlopOS is now proven, which found an off-by-one in std's format string
   parsing and made the contracts the kernel relied on explicit as `runtime.assert`s. The idioms

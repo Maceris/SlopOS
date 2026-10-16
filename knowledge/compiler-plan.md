@@ -706,7 +706,15 @@ In roughly the order SlopOS needs them, after Phase 7 (which covers entry functi
   Done as Phase 8.
 - **Memory-safety analyses:** `#escaping`, pointers into the stack, `#scoped`, bounds proofs.
   Done as Phase 9.
-- **Value generics** (`docs/types.md`, *Compile-Time Parameters*).
+- **Value generics** (`docs/types.md`, *Compile-Time Parameters*). Done 2026-10-16: compile-time
+  parameters already worked; values in generic lists now do too. A generic type's arguments are
+  a type or a compile-time value by its parameter (`Ring[u8, 4]`, checked against the declared
+  type), a call binds a value from an argument's type (`capacity` from `ptr[Ring[T, capacity]]`)
+  or explicitly (`filled[4](...)`), and inside the body a value is a constant the generator emits
+  and the bounds proofs know. `Bits[64]` in a type is `Bits`'s argument when `Bits` is generic.
+  The parser now takes constant expressions in array sizes and generic values
+  (`u64[(size + 63) / 64]`, `Ring[u8, SIZE * 2]`), which it rejected before. Not yet: a
+  wrong-kind value is reported at the generic's parameter rather than the use.
 - **Fibers, `morestack` and segmented stacks** (`docs/multitasking.md`), for user space.
 - **AArch64**, right after M3 (`decisions/0022`), where the carrier register is the cheaper case.
 
