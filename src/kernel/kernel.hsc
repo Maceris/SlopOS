@@ -13,6 +13,7 @@ import arch_interface from "../arch_interface"
 import boot_info from "../boot_info"
 import slop_os from "std/os"
 import text_buffer from "std"
+import console from "console"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -29,9 +30,14 @@ Kernel :: struct {
     features : slop_os.CpuFeatures,
     // Of arch.counter(), in Hz.
     counter_frequency : u64,
+    // Where the kernel image is, for stack traces relative to it.
+    image_base : u64,
     options : Options,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : SpinLock,
+    // Text on the first framebuffer, if there is one and it could be set up.
+    framebuffer_console : console.Console,
+    has_framebuffer_console : bool,
 }
 
 /*
@@ -83,12 +89,18 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     stack_memory : CpuStackMemory
     kernel.features = features
     kernel.options = options
+    kernel.image_base = cast[u64](info.kernel_image.virtual_base)
     start_boot_cpu(&kernel, &cpu, &stack_memory)
+    start_framebuffer_console(&kernel, info)
     push_context cpu_context from cpu.context {
         start_timer(&kernel, info.counter_frequency_hint)
         if kernel.options.test_fault {
             runtime.log_info("test_fault: running an invalid instruction")
             intrinsics.trap()
+        }
+        if kernel.options.test_assert {
+            runtime.log_info("test_assert: failing an assertion")
+            runtime.assert(false, "test_assert")
         }
         runtime.log_info("idle")
         arch.idle()
@@ -132,6 +144,40 @@ start_boot_cpu :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], stack_memory
     arch.init_system(&kernel.arch)
     arch.init_cpu(&kernel.arch, &cpu.arch, &cpu.carrier, &cpu.context, &cpu.stacks)
     runtime.log_info("boot CPU set up: descriptor tables, entries and local APIC")
+}
+
+/*
+ * Show the log on the first framebuffer too. Without one, or if it can't be used, the log stays on
+ * the early console.
+ */
+start_framebuffer_console :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
+    if info.framebuffers.count == 0 {
+        runtime.log_info("no framebuffer: the log stays on the serial console")
+        return void
+    }
+    // No other CPU runs yet, so nothing writes to the console while it's set up
+    match console.init_console(&kernel.framebuffer_console, &info.framebuffers[0], info.direct_map_offset) {
+        case Some(error) => runtime.log_warn("the framebuffer can't show the console")
+        case None => {
+            kernel.has_framebuffer_console = true
+            log_framebuffer(&kernel.framebuffer_console)
+        }
+    }
+}
+
+log_framebuffer :: fn(screen: ptr[console.Console]) {
+    storage : u8[96]
+    line := text_buffer.make(storage)
+    text_buffer.append(&line, "framebuffer console: ")
+    text_buffer.append_unsigned(&line, cast[u64](screen.columns))
+    text_buffer.append(&line, "x")
+    text_buffer.append_unsigned(&line, cast[u64](screen.rows))
+    text_buffer.append(&line, " characters on ")
+    text_buffer.append_unsigned(&line, cast[u64](screen.width))
+    text_buffer.append(&line, "x")
+    text_buffer.append_unsigned(&line, cast[u64](screen.height))
+    text_buffer.append(&line, " pixels")
+    runtime.log_info(text_buffer.as_string(&line))
 }
 
 range_of :: fn(low: ptr[u8], size: u64) -> arch_interface.StackRange {

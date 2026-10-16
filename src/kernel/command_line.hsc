@@ -15,6 +15,8 @@ Options :: struct {
      * check that kernel faults are reported and stop the kernel.
      */
     test_fault : bool,
+    // test_assert: once booted, fail an assertion, so a test can check that assertions stop the kernel.
+    test_assert : bool,
 }
 
 parse_command_line :: fn(command_line: string) -> Options {
@@ -44,6 +46,9 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if same_text(word, "test_fault") {
         options.test_fault = true
+    }
+    if same_text(word, "test_assert") {
+        options.test_assert = true
     }
 }
 

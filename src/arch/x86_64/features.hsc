@@ -15,7 +15,7 @@ FeatureBit :: struct {
     feature : slop_os.CpuFeature,
     leaf : u32,
     subleaf : u32,
-    output : CpuidRegister,
+    register : CpuidRegister,
     bit : u32,
 }
 
@@ -92,15 +92,15 @@ detect_features :: fn() -> slop_os.CpuFeatures {
         if bit.leaf > highest {
             continue
         }
-        if (register_of(x86_64.cpuid(bit.leaf, bit.subleaf), bit.output) >> bit.bit) & 1 == 1 {
+        if (register_of(x86_64.cpuid(bit.leaf, bit.subleaf), bit.register) >> bit.bit) & 1 == 1 {
             slop_os.add_feature(&features, bit.feature)
         }
     }
     return features
 }
 
-register_of :: fn(result: x86_64.CpuidResult, output: CpuidRegister) -> u32 {
-    return match output {
+register_of :: fn(result: x86_64.CpuidResult, register: CpuidRegister) -> u32 {
+    return match register {
         case .Eax => result.eax
         case .Ebx => result.ebx
         case .Ecx => result.ecx

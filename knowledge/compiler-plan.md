@@ -467,18 +467,120 @@ entered through a stack check that traps. `tools/boot.py` boots it from BIOS and
   locked console, and halts after three timer interrupts. `tools/boot.py --expect 0` boots it from
   BIOS (and `--uefi`); `--command-line "test_exit test_fault"` expects 1, `--cpu qemu64` expects 2.
   Writing it took four compiler fixes (`hemera-feedback.md`, Resolved 2026-10-15).
-  - Still in roadmap M1: the framebuffer console (PSF2), and a stack trace from the assertion
-    handler and kernel faults, which needs `capture_stack_trace` in the compiler.
+  - Then the rest of roadmap M1: a framebuffer console (`kernel/console`, PSF2 with the Spleen
+    font, scrolling), and stack traces from the assertion handler and kernel faults, through
+    `capture_stack_trace` (now generated: frame pointers everywhere, the entry function ends the
+    chain). `--command-line "test_exit test_assert"` expects 3; `tools/boot_tests.py` runs all five
+    boot tests.
 
 **Done when:** the M1 kernel boots in QEMU from a Hemera build: Limine requests answered,
 `BootInfo` built, GDT, TSS and IDT loaded, serial output, a timer interrupt handled, halt.
 
 ---
 
+## Phase 7: Gaps Found Building M1
+
+Proposed 2026-10-15. Writing the M1 kernel found what the language and compiler still lack
+(`hemera-feedback.md`, *Needed to boot a kernel*). The source marks each one
+(`grep -rn "HEMERA(\|STD(" src/`); fixing one means removing its workaround and marker too.
+`#file_data` is done already (Resolved 2026-10-15). The rest falls into three groups. A is bugs
+and small fixes, where the docs already say what should happen. B needs the Hemera author to
+decide something first. C is larger work.
+
+**Done when:** every row of that table is resolved or moved to a later phase on purpose, and
+`grep -rn "HEMERA(" src/` lists only the gaps those later phases cover.
+
+### A. Bugs and small fixes
+
+In the parser and checker, each with a test. Probably one session for all of them.
+
+- [ ] **Union variants with any type:** `union_body` only takes identifiers in a variant's
+  parentheses, so `User(ptr[mut T])` and `Ipi(arch_interface.IpiKind)` don't parse. Parse each with
+  the type parser. Removes the aliases in `kernel/entry`.
+- [ ] **`Ok(value)` on a `Result` from another package:** "Ok holds 0 values" when `T` and `E` are
+  the other package's types. Probably the generic instance is made before its arguments are
+  resolved. Removes `init_console`'s pointer.
+- [ ] **A value for an optional parameter:** `SourceCodeLocation` isn't accepted for
+  `SourceCodeLocation?`, although `fits()` says a value fits an optional of its type. Find where
+  arguments skip that rule.
+- [ ] **A variant without values, through its union** (`ConsoleError.UnsupportedFramebuffer`) is a
+  value, not a function.
+- [ ] **`or_else` with a call that never returns** as its default (`or_else boot_failed(...)`):
+  `#never_returns` calls fit any type, the way `todo()` does.
+- [ ] **`.{...}` as an array literal's element**, taking the element type from the array; and an
+  `if` expression as a call's argument.
+- [ ] **Strings:** `==` and `!=` (a length check, then `memcmp`); slicing a string gives a string;
+  indexing an untyped string constant. Removes `same_text` and the `bit_cast[string]` slices.
+- [ ] **Large copies:** values bigger than 64 bytes are copied with `memcpy`, like zeroing, rather
+  than as LLVM aggregates. Then `parse_font` can return its `Font` again.
+- [ ] **Finding `std`:** without `--install-path`, look next to the compiler (an installed layout),
+  then in the source tree it was built from. Removes `boot.py`'s `--install-path`.
+
+### B. Decisions first
+
+Each is small to implement once decided. Recommendations first:
+
+- **A `Result` without a value.** `Result[void, MapError]` doesn't parse.
+  - *Recommended:* allow `void` as a generic argument, with `Ok` taking no value when `T` is
+    `void`. It reads like the docs and `ipc.md` already write it.
+  - *Or:* keep `E?` for "nothing, or an error", as `arch_interface.map` does now. It needs no
+    language change, but a `?` read as "maybe an error" is the opposite of the usual reading.
+- **Keywords that crowd out names.** `all` and `from` are keywords, so `TlbBatch.all` and a
+  parameter called `from` can't exist.
+  - *Recommended:* make them contextual: `from` is a keyword only after `push_context name`, and
+    `all` only after `break` or `continue`.
+  - *Or:* leave them reserved, and say so in `docs/keywords.md`.
+- **`ptr[T]?` and nullable pointers.** Optionals carry a tag today, so a C structure's pointer can't
+  be `ptr[T]?`.
+  - *Recommended:* `ptr[T]?`, `rawptr?`, `cstring?` and function types' optionals are one pointer,
+    null for `None`. Document it in `docs/types.md`, so foreign layouts can use them. Removes the
+    `rawptr` fields in `boot/limine/protocol.hsc`.
+- **A view from an address and a count.**
+  - *Recommended:* a builtin `view_of(data: ptr[T], count: usize) -> T[]` (and one for strings), in
+    `base/builtin`, documented as unchecked, the way `cast` to a pointer is. The memory-safety
+    analyses (after M1) can then treat every use as a place to prove. `std/raw` becomes thin
+    wrappers, or goes.
+- **Enum value names.**
+  - *Recommended:* a builtin `name_of(value)` for enum values, from the same type information as
+    `any` (C1). Removes `feature_name`.
+- **Two small intrinsics.**
+  - *Recommended:* `intrinsics.stack_pointer()`, for code that sets up its own stack limit (L0's
+    boot stack).
+  - *Recommended:* `intrinsics.spin_hint()` (x86 `pause`, Arm `yield`, RISC-V `pause`), so the
+    ticket lock can move to `std/concurrency`.
+- **Functions something else calls without a carrier or a context.** Limine starts the other CPUs
+  by calling a function with the C convention, like the kernel's own entry. Today only the
+  program's entry (`--entry`) is compiled that way.
+  - *Recommended:* a directive, `#entry_point`, for any function entered from outside Hemera: the
+    platform's C convention, no context and no stack check, and the end of the frame pointer
+    chain. The body sets up a carrier and pushes a context, like `kernel_entry` does. The
+    program's entry becomes one of these, and `--entry` just names which one starts the program.
+    Unblocks `start_cpu` (M3).
+
+### C. Larger work
+
+In the order SlopOS needs them:
+
+1. **Type information at run time:** each type used as an `any` gets a generated descriptor (the
+   `TypeInfo` that `base/compiler` describes: kind, size, members, an enum's names), so
+   `any.type` is real. Then `std/formatting` gets a freestanding core that formats into a
+   `TextBuffer`, and the kernel's logger formats its parameters. Unblocks formatted logging and
+   `name_of`, and is half of reflection.
+2. **`#entry_point`** (from B), for M3's other CPUs.
+3. **Entry functions** (`.entry`, `.syscall_entry`, `entry_points`, `return_to_user`), for M4–M6.
+   The kernel's interrupt functions then become one `.entry` function, without their repeated
+   setup.
+4. The rest of *After M1*, unchanged.
+
+### Order
+
+A first, since it's quick and every later SlopOS change runs into those bugs. Then the B
+decisions, made together and implemented in one go. Then C1, which most of the kernel's remaining
+workarounds wait on. C2 before M3, and C3 before M4.
+
 ## After M1
 
-In roughly the order SlopOS needs them:
-- **Entry functions** (`.entry`, `.syscall_entry`, `entry_points`, `return_to_user`) for M4–M6.
+In roughly the order SlopOS needs them, after Phase 7 (which covers entry functions):
 - **`#run` and compile-time execution**, then **reflection** and the **build API**
   (`base/compiler`), which unlock the build package and house-rule checks (`decisions/0028`, `0029`).
 - **Memory-safety analyses:** `#escaping`, pointers into the stack, `#scoped`, bounds proofs.

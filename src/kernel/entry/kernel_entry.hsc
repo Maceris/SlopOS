@@ -45,8 +45,7 @@ interrupt #never_returns :: fn(interrupted: Interrupted, source: InterruptSource
     arch.idle()
 }
 
-// A fault in kernel code, which is a bug. The kernel stops.
-//TODO(claude): a stack trace, once the compiler generates intrinsics.capture_stack_trace
+// A fault in kernel code, which is a bug. The kernel stops, with a stack trace.
 kernel_fault #never_returns :: fn(fault: arch_interface.Fault, instruction_pointer: arch_interface.VirtualAddress) {
     storage : u8[160]
     line := text_buffer.make(storage)
@@ -55,6 +54,8 @@ kernel_fault #never_returns :: fn(fault: arch_interface.Fault, instruction_point
     text_buffer.append(&line, " at ")
     text_buffer.append_address(&line, cast[u64](instruction_pointer))
     runtime.log_fatal(text_buffer.as_string(&line))
+    // From the arch layer's entry, through the interrupted code's callers
+    kernel.log_stack_trace()
     kernel.stop(.KernelFault)
 }
 

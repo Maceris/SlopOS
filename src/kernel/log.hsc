@@ -3,6 +3,7 @@ package kernel
 import intrinsics from "base"
 import runtime from "base"
 import text_buffer from "std"
+import console from "console"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -82,25 +83,26 @@ append_location :: fn(line: ptr[mut text_buffer.TextBuffer], location: runtime.S
 }
 
 /*
- * Write text to the early console, holding the console lock once the CPU has a PerCpu. Before
- * that, only the boot CPU runs.
+ * Write text to the early console and the framebuffer console, holding the console lock once the
+ * CPU has a PerCpu. Before that, only the boot CPU runs.
  */
 write_console :: fn(text: string) {
     if intrinsics.carrier().program_data == null {
         arch.early_console_write(text)
         return void
     }
-    console_lock :: &per_cpu().kernel.console_lock
-    lock(console_lock)
+    kernel :: per_cpu().kernel
+    lock(&kernel.console_lock)
     arch.early_console_write(text)
-    unlock(console_lock)
+    if kernel.has_framebuffer_console {
+        console.write(&kernel.framebuffer_console, text)
+    }
+    unlock(&kernel.console_lock)
 }
 
 /*
- * A failed assertion stops the kernel: it reports where, and stops every CPU.
+ * A failed assertion stops the kernel: it reports where, with a stack trace, and stops every CPU.
  */
-//TODO(claude): a stack trace, with addresses relative to the image base (decisions/0021), once the
-//compiler generates intrinsics.capture_stack_trace
 kernel_assertion_handler : runtime.AssertionHandler : fn(location: runtime.SourceCodeLocation, message: string) #never_returns {
     storage : u8[256]
     line := text_buffer.make(storage)
@@ -108,5 +110,7 @@ kernel_assertion_handler : runtime.AssertionHandler : fn(location: runtime.Sourc
     text_buffer.append(&line, message)
     append_location(&line, location)
     runtime.log_fatal(text_buffer.as_string(&line))
+    // From where the assertion failed (runtime.assert, or the function it was inlined into)
+    log_stack_trace()
     stop(.AssertionFailed)
 }

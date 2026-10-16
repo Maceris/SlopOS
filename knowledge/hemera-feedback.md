@@ -27,12 +27,12 @@ That kernel builds and boots now (2026-10-15, `compiler-plan.md` Phase 6). Items
 2026-10-12) are referred to by number there and elsewhere; data written by the bootloader was found
 and resolved on 2026-10-13.
 
-Found while writing it, each marked in `src/` (`grep -rn "HEMERA(\|STD(" src/`):
+Found while writing it, each marked in `src/` (`grep -rn "HEMERA(\|STD(" src/`). The plan for
+them is `compiler-plan.md`, Phase 7:
 
 | Issue | Severity | Where |
 |---|---|---|
 | `any` values carry no type information, so a logger can't format its parameters. Kernel code formats numbers itself with `std/text_buffer` and logs plain text | blocker for formatted logging | `kernel/log.hsc`, `boot/limine/entry.hsc` |
-| `capture_stack_trace` isn't generated, so the assertion handler and kernel faults print no stack trace (roadmap M1) | blocker for M1's assertion handler | `kernel/log.hsc`, `kernel/entry` |
 | Entry functions (`.entry`, `.syscall_entry`, `entry_points`) aren't generated: the x86-64 entries are interrupt functions, which can't take entries from user mode, and repeat the lines that find the CPU and push its context, since they have no context to call a helper with | blocker for M4–M6 | `arch/x86_64/entries.hsc` |
 | No calling convention for a function a bootloader calls with the C convention and no carrier or context, other than the program's entry: Limine starts the other CPUs that way (`start_cpu`) | blocker for M3 | `boot/limine/convert.hsc` |
 | No way to make an array view or a string from an address and a count: `std/raw` does it with `bit_cast` and the view layout | gap | Hemera `std/raw` |
@@ -45,10 +45,13 @@ Found while writing it, each marked in `src/` (`grep -rn "HEMERA(\|STD(" src/`):
 | `or_else` doesn't take a call that never returns as its default | friction | `boot/limine/convert.hsc` |
 | An element of an array literal can't be written `.{...}`; an `if` expression can't be a call's argument | friction | `arch/x86_64/features.hsc`, several |
 | `Result[void, E]` doesn't parse, so the arch interface's `map` and `protect` return `MapError?` and `UnmapError?`; `ipc.md` still writes `Result[void, ...]` | design question | `docs/specs/arch_interface.md` |
-| `all`, `register` and `from` are keywords, which natural field and parameter names run into (`TlbBatch.all` became `flush_all`, `interrupt`'s `from` became `interrupted`) | nice | specs |
+| `all` and `from` are keywords, which natural field and parameter names run into (`TlbBatch.all` became `flush_all`, `interrupt`'s `from` became `interrupted`) | nice | specs |
 | No enum value names, so the baseline check writes each feature's name out | friction | `arch/x86_64/features.hsc` |
 | No portable spin-wait hint in `base` (x86 `pause`, Arm `yield`), so the ticket lock is in the kernel rather than `std/concurrency` | nice (`STD(missing)`) | `kernel/spin_lock.hsc` |
 | The compiler finds `std` only with `--install-path`; `tools/boot.py` passes the Hemera repository | friction | `tools/boot.py` |
+| Matching `Ok(value)` on a `Result[T, E]` returned from another package fails ("Ok holds 0 values"), where `T` and `E` are that package's types | gap (bug) | `kernel/console/console.hsc` |
+| A variant without values, named through its union (`ConsoleError.UnsupportedFramebuffer`), is taken as a function | friction | `kernel/console/console.hsc` |
+| Large values copied whole are generated as LLVM first-class aggregates, which LLVM optimizes slowly; the console fills its structs through pointers. Zeroing large locals is fixed (Resolved 2026-10-15) | friction | `kernel/console/psf2.hsc` |
 
 ### Language and library design
 
@@ -100,6 +103,22 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-15 — `#file_data("path")` (on request): a file's bytes as a `u8[N]` constant, read when
+  compiling, with the path relative to the file using it (Hemera `docs/directives.md`, *Values*).
+  The kernel embeds its console font with it, so `tools/psf_to_hemera.py` and the generated font
+  source are gone.
+
+- 2026-10-15 — The rest of roadmap M1 (on request): a framebuffer console with the Spleen PSF2 font,
+  and stack traces from the assertion handler and kernel faults. Compiler changes, the second and
+  third asked for:
+  - Build time (a 26 KB font constant took minutes): integer array literals of constants are one
+    dense constant; a view of an array points at the array instead of a copy, which is also what
+    `docs/types.md` now says views do (a copy also meant changes through the view were lost);
+    locals bigger than 64 bytes are zeroed with `memset` rather than one huge aggregate store.
+  - `capture_stack_trace` is generated, through a walker the compiler adds; every function keeps
+    its frame pointer, and the program's entry function ends the chain (Hemera
+    `docs/calling_convention.md`, *Walking the Stack*).
 
 - 2026-10-15 — The first M1 kernel (`compiler-plan.md` Phase 6, on request): `src/` boots from BIOS
   and UEFI through Limine, builds `BootInfo`, sets up the GDT, TSS, IDT and x2APIC, logs to the

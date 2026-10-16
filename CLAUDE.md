@@ -151,8 +151,9 @@ the planned code still needs more of the compiler. `base` is built into the comp
 `std` with `--install-path` pointing at the Hemera repo. `python tools/boot.py --expect 0` builds
 the kernel (`src/boot/limine`, linked with its `x86_64.ld`) with the freestanding flags, boots it
 in QEMU through Limine with `test_exit` on its command line, and checks the code it stopped with
-(`src/kernel/stop.hsc`); `--uefi`, `--cpu` and `--command-line` vary the run. It finds QEMU, Limine,
-xorriso and Hemera through `QEMU`, `LIMINE`, `XORRISO` and `HEMERA_INSTALL`, or the PATH.
+(`src/kernel/stop.hsc`); `--uefi`, `--cpu` and `--command-line` vary the run, and
+`python tools/boot_tests.py` runs every boot test. It finds QEMU, Limine, xorriso and Hemera through
+`QEMU`, `LIMINE`, `XORRISO` and `HEMERA_INSTALL`, or the PATH.
 The latest debug build of the Hemera compiler should already be on the
 system path, runnable with `hemera`. While it is not expected to work
 properly for the majority of this project's lifecycle, the help text
