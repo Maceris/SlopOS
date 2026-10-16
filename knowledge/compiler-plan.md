@@ -585,11 +585,39 @@ A first, since it's quick and every later SlopOS change runs into those bugs. Th
 decisions, made together and implemented in one go. Then C1, which most of the kernel's remaining
 workarounds wait on. C2 before M3, and C3 before M4.
 
+## Phase 8: Compile-Time Execution
+
+Started 2026-10-16, the first item of *After M1*. Compile-time code runs through a JIT, as the
+Hemera author intends: the generator generates what an evaluation needs into its own module,
+lowers it with the usual pipeline (with `+reserve-r14`), and LLVM's ORC runs it on the host. The
+result's bytes become constants in the program, read through the type's layout.
+
+1. [x] **After checking** (done 2026-10-16): run while the program is generated, which is enough
+   wherever only code generation needs the value. A constant whose value calls a function is
+   computed once at compile time (SlopOS's Limine request headers are built by `request` and
+   `request_id` now); `#run` in an expression is a constant; a `#run` statement in a function runs
+   when the function is generated; `#is_compile_time` is true in compile-time code. Results:
+   numbers, booleans, enums, characters, structs and arrays of them, strings and views (copied
+   into the program), and null pointers; anything else that points somewhere is reported. The
+   context is `runtime.MINIMAL_CONTEXT`. Code is entered through a C++ wrapper that saves r14,
+   since ORC doesn't see symbols defined in module-level assembly. Top-level `#run` is reported
+   as unsupported until step 2. Found on the way: returning a constant array as a view made a
+   view of a copy on the returning function's stack; fixed.
+2. **During checking:** results the checker needs, like array sizes, `#if` and `#assert`
+   conditions and compile-time arguments, which means waiting until every function the code
+   reaches is checked. Top-level `#run` (the `EXECUTION` work item).
+3. **The compile-time context:** a logger that writes through the compiler's diagnostics, an
+   allocator over host memory, failed assertions as build errors, `#is_compile_time`, and the
+   permissions in Hemera `docs/compilation.md`.
+4. **Reflection and the build API:** `base/compiler`'s functions, implemented by the compiler and
+   called from compiled code, then the build package (`decisions/0028`) and checks (`0029`).
+
 ## After M1
 
 In roughly the order SlopOS needs them, after Phase 7 (which covers entry functions):
 - **`#run` and compile-time execution**, then **reflection** and the **build API**
   (`base/compiler`), which unlock the build package and house-rule checks (`decisions/0028`, `0029`).
+  In progress as Phase 8.
 - **Memory-safety analyses:** `#escaping`, pointers into the stack, `#scoped`, bounds proofs.
 - **Value generics** (`docs/types.md`, *Compile-Time Parameters*).
 - **Fibers, `morestack` and segmented stacks** (`docs/multitasking.md`), for user space.

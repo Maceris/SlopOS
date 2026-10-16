@@ -33,7 +33,6 @@ them is `compiler-plan.md`, Phase 7:
 | Issue | Severity | Where |
 |---|---|---|
 | Format strings have no options, like hexadecimal or a width, so the stack trace appends its offsets with `text_buffer` (pointers do format in hexadecimal) | friction | `kernel/stack_trace.hsc` |
-| A constant's value can't call a function until there's compile-time execution, so the Limine requests' headers are written out | gap | `boot/limine/requests.hsc` |
 | An optional function type with a result can't be written in place: `(fn(n: int) -> int)?` doesn't parse, and `fn(n: int) -> int?` makes the result optional; it takes an alias | friction | Hemera's hosted test |
 
 ### Language and library design
@@ -86,6 +85,11 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-16 — `compiler-plan.md` Phase 8, step 1: compile-time execution through LLVM's ORC JIT.
+  Constants whose values call functions are computed while compiling, so the Limine requests'
+  headers are built by functions instead of written out. Found and fixed on the way: returning a
+  constant array as a view pointed at a copy on the stack.
 
 - 2026-10-16 — Found while testing the frame allocator as a hosted program: a Windows program with
   a frame bigger than a page didn't link, since LLVM calls `__chkstk` and Hemera links no C
