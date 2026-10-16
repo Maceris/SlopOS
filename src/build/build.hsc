@@ -11,6 +11,7 @@
 package build
 
 import compiler from "base"
+import runtime from "base"
 import text_buffer from "std"
 import checks from "../checks"
 
@@ -71,12 +72,15 @@ add_tests :: fn(folder: string) {
 
 // The last part of a path, after its last separator.
 last_part :: fn(path: string) -> string {
-    return path[separator_after(path)..<path.count]
+    after :: separator_after(path)
+    runtime.assert(after <= path.count, "separator_after is inside the path")
+    return path[after..<path.count]
 }
 
 // A path without its last part.
 parent_of :: fn(path: string) -> string {
     after :: separator_after(path)
+    runtime.assert(after <= path.count, "separator_after is inside the path")
     if after == 0 {
         return ""
     }

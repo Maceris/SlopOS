@@ -63,6 +63,7 @@ cpus :: fn(mp: ptr[MpResponse], cpus: boot_info.BootCpu[], starting #escaping : 
         else {
             count += 1
         }
+        runtime.assert(index < cpus.count && index < starting.count, "cpus needs room for every CPU")
         starting[index].info = cast[ptr[mut MpInfo]](cpu)
         cpus[index] = boot_info.BootCpu.{cast[u64](cpu.lapic_id), cast[rawptr](&starting[index])}
     }

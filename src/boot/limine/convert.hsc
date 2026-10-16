@@ -1,6 +1,7 @@
 package limine_boot
 
 import c_string from "std"
+import runtime from "base"
 import boot_info from "../../boot_info"
 import kernel from "../../kernel"
 
@@ -96,7 +97,9 @@ build_boot_info :: fn(info: ptr[mut boot_info.BootInfo]) {
 
     info.direct_map_offset = hhdm.offset
     regions :: take[boot_info.MemoryRegion](carve, memory_map_count)
-    info.memory_map = regions[0..<build_memory_map(memory_map, address.physical_base, carved, regions)]
+    region_count :: build_memory_map(memory_map, address.physical_base, carved, regions)
+    runtime.assert(region_count <= regions.count, "build_memory_map gave more regions than it has room for")
+    info.memory_map = regions[0..<region_count]
     info.kernel_image = kernel_image(address, info.memory_map, elf, take[boot_info.ImageSegment](carve, segment_count))
     info.cpus = cpus(mp, take[boot_info.BootCpu](carve, cpu_count), take[StartingCpu](carve, cpu_count))
     info.start_cpu = null
@@ -128,20 +131,25 @@ bootloader_names :: fn() -> (string, string) {
 
 // "name version", in bytes.
 join_names :: fn(name, version: string, bytes: u8[]) -> string {
-    if name.count == 0 {
+    if name.count == 0 || bytes.count == 0 {
         return ""
     }
+    runtime.assert(name.count + 1 + version.count <= bytes.count, "join_names needs room for both names")
     count : usize = 0
     for character in name {
-        bytes[count] = cast[u8](character)
-        count += 1
+        if count < bytes.count {
+            bytes[count] = cast[u8](character)
+            count += 1
+        }
     }
-    if version.count > 0 {
+    if version.count > 0 && count < bytes.count {
         bytes[count] = cast[u8](' ')
         count += 1
         for character in version {
-            bytes[count] = cast[u8](character)
-            count += 1
+            if count < bytes.count {
+                bytes[count] = cast[u8](character)
+                count += 1
+            }
         }
     }
     return string_of(&bytes[0], count)
@@ -173,6 +181,7 @@ kernel_image :: fn(
         if cast[u32](header.kind) != PT_LOAD {
             continue
         }
+        runtime.assert(count < segments.count, "load_segment_count counts every loadable segment")
         segments[count] = .{
             virtual_base = cast[boot_info.VirtualAddress](cast[u64](header.virtual_address) + slide),
             size = cast[u64](header.memory_size),
@@ -193,6 +202,7 @@ module_files :: fn() -> ptr[File][] {
 }
 
 boot_modules :: fn(files: ptr[File][], hhdm_offset: u64, modules: boot_info.BootModule[]) -> boot_info.BootModule[] {
+    runtime.assert(files.count <= modules.count, "boot_modules needs room for every module")
     for file, i in files {
         modules[i] = .{
             name = file_name(text(file.path)),
@@ -243,6 +253,7 @@ framebuffers :: fn(hhdm_offset: u64, framebuffers: boot_info.Framebuffer[]) -> b
             case Some(data) => edid = view_of(data, cast[usize](framebuffer.edid_size))
             case None => {}
         }
+        runtime.assert(count < framebuffers.count, "rgb_framebuffer_count counts every RGB framebuffer")
         framebuffers[count] = .{
             memory = .{cast[boot_info.PhysicalAddress](framebuffer.address - hhdm_offset), framebuffer.pitch * framebuffer.height},
             width = cast[u32](framebuffer.width),

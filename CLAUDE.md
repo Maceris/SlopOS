@@ -148,6 +148,14 @@ when relevant.
   Contexts, threads and fibers can't be given stack pointers. See Hemera's `docs/memory.md`.
 - Runtime `assert(cond, message)` calls `context.assertion_handler`, which must end the
   program; `#assert expr` checks at compile time.
+- Every index and slice must be proven in bounds at compile time (error E4031; Hemera's
+  `docs/types.md`, *Bounds Checking*). Loop over the elements or a range where you can; check the
+  count first (`if i >= values.count { return }`); state what callers guarantee with
+  `runtime.assert(count <= regions.count, ...)`, which the proof uses. Copy a view reached through
+  a pointer into a local before a loop with calls in it (`cpus :: info.cpus`), since calls forget
+  what's known through pointers. Compare with a bounded value first, since `x + 4 <= n` proves
+  nothing about an `x` that might wrap: `x < n && x + 4 <= n`. Three-way relations (`i + j < n`)
+  aren't tracked: compute the index into a local and check that.
 - Integer overflow wraps (two's complement) and does not panic.
 - Atomics are intrinsics in `base`: `atomic_load_*`/`atomic_store_*`, `interlocked_*`, with
   suffixes `_acquire`, `_release`, `_acquire_release`, `_no_fence` (none = sequentially

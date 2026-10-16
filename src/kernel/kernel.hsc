@@ -107,6 +107,7 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     kernel.features = features
     kernel.options = options
     kernel.image_base = cast[u64](info.kernel_image.virtual_base)
+    runtime.assert(info.cpus.count >= 1, "the boot information lists the boot CPU")
     kernel.cpus = info.cpus[0..<1]
     kernel.online_cpus = 1
     cpu :: allocate_cpu(kernel, 0) or_else out_of_memory(&options, "no memory for the boot CPU's state")

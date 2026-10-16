@@ -22,10 +22,13 @@ log_stack_trace :: fn(skip: usize = 0) {
     //STD(friction): format strings have no hexadecimal option, so the offsets are appended here
     storage : u8[64]
     line := text_buffer.make(storage)
-    for i in 0..<count {
+    for captured, i in addresses {
+        if i >= count {
+            break
+        }
         text_buffer.clear(&line)
         text_buffer.append(&line, "  at ")
-        address :: cast[u64](addresses[i])
+        address :: cast[u64](captured)
         if image_base != 0 && address >= image_base {
             text_buffer.append(&line, "kernel+0x")
             text_buffer.append_unsigned(&line, address - image_base, 16)

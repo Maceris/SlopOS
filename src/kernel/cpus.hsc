@@ -26,18 +26,20 @@ CPU_ABANDONED : u32 : 2
 
 // Start every CPU after the boot CPU, on the boot CPU, once its timer runs.
 start_cpus :: fn(kernel #escaping : ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
-    kernel.cpus = info.cpus
+    // A copy of the view, which the calls below can't change
+    cpus :: info.cpus
+    kernel.cpus = cpus
     kernel.online_cpus = 1
     start_cpu :: info.start_cpu or_return void
     timeout :: kernel.counter_frequency / 1000 * CPU_START_TIMEOUT_MS
-    for index in 1..<info.cpus.count {
+    for index in 1..<cpus.count {
         allocated : ptr[mut PerCpu]? = null
         match allocate_cpu(kernel, cast[u32](index)) {
             case Ok(made) => allocated = made
             case Error(error) => runtime.log_warn("no memory for CPU %, so it and the ones after it are left out", index)
         }
         cpu :: allocated or_break
-        start_cpu(&info.cpus[index], &cpu.carrier, cpu_started)
+        start_cpu(&cpus[index], &cpu.carrier, cpu_started)
         deadline :: arch.counter() + timeout
         loop {
             arch.spin_hint()
@@ -48,7 +50,7 @@ start_cpus :: fn(kernel #escaping : ptr[mut Kernel], info: ptr[boot_info.BootInf
         _, abandoned :: intrinsics.interlocked_compare_exchange_u32(&cpu.start_state, CPU_ABANDONED, CPU_WAITING)
         if abandoned {
             runtime.log_warn("CPU % (hardware ID %) didn't start, so it and the ones after it are left out", index,
-                info.cpus[index].hardware_id)
+                cpus[index].hardware_id)
             break
         }
         kernel.online_cpus += 1

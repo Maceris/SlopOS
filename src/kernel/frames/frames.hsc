@@ -174,7 +174,9 @@ allocate :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[boot_in
         push(allocator, block + (cast[u64](1) << size), size)
     }
     while size > order
-    allocator.states[block] = STATE_ALLOCATED | cast[u8](order)
+    states :: allocator.states
+    runtime.assert(block < cast[u64](states.count), "a free list held a frame the allocator has no state for")
+    states[block] = STATE_ALLOCATED | cast[u8](order)
     allocator.free_frames -= cast[u64](1) << order
     return .Ok(cast[boot_info.PhysicalAddress](block << FRAME_SHIFT))
 }
@@ -192,10 +194,12 @@ allocate_zeroed :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[
  */
 free :: fn(allocator: ptr[mut FrameAllocator], address: boot_info.PhysicalAddress, order: u64) {
     frame :: cast[u64](address) >> FRAME_SHIFT
-    runtime.assert(cast[u64](address) % FRAME_SIZE == 0 && frame < allocator.frame_count, "free takes a frame the allocator owns")
+    // One state per frame: states.count is frame_count
+    states :: allocator.states
+    runtime.assert(cast[u64](address) % FRAME_SIZE == 0 && frame < cast[u64](states.count), "free takes a frame the allocator owns")
     concurrency.lock(&allocator.lock)
     defer concurrency.unlock(&allocator.lock)
-    runtime.assert(order <= MAX_ORDER && allocator.states[frame] == STATE_ALLOCATED | cast[u8](order),
+    runtime.assert(order <= MAX_ORDER && states[frame] == STATE_ALLOCATED | cast[u8](order),
         "free takes an allocated block, with the order it was allocated with")
     release(allocator, frame, order)
 }
@@ -220,18 +224,25 @@ virtual_of :: fn(allocator: ptr[FrameAllocator], address: boot_info.PhysicalAddr
  * free. Takes the lock as held.
  */
 release :: fn(allocator: ptr[mut FrameAllocator], first_frame: u64, first_order: u64) {
+    states :: allocator.states
+    runtime.assert(first_frame < cast[u64](states.count), "release takes a frame the allocator owns")
     allocator.free_frames += cast[u64](1) << first_order
     frame := first_frame
     order := first_order
     loop {
         buddy :: frame ~ (cast[u64](1) << order)
-        if buddy >= allocator.frame_count || allocator.states[buddy] != STATE_FREE | cast[u8](order) {
+        if buddy >= cast[u64](states.count) || states[buddy] != STATE_FREE | cast[u8](order) {
             break
         }
         unlink(allocator, buddy, order)
-        // The higher of the two is inside the merged block now
-        allocator.states[max_of(frame, buddy)] = STATE_NONE
-        frame = min_of(frame, buddy)
+        // The higher of the two is inside the merged block now, which starts at the lower
+        if buddy > frame {
+            states[buddy] = STATE_NONE
+        }
+        else {
+            states[frame] = STATE_NONE
+            frame = buddy
+        }
         order += 1
     }
     while order < MAX_ORDER
@@ -244,6 +255,8 @@ block_of :: fn(allocator: ptr[FrameAllocator], frame: u64) -> ptr[mut FreeBlock]
 
 // Put a free block first on its order's list.
 push :: fn(allocator: ptr[mut FrameAllocator], frame: u64, order: u64) {
+    states :: allocator.states
+    runtime.assert(order <= MAX_ORDER && frame < cast[u64](states.count), "push takes a frame the allocator owns, and an order")
     list :: &allocator.lists[order]
     block :: block_of(allocator, frame)
     block.next = list.first
@@ -253,11 +266,13 @@ push :: fn(allocator: ptr[mut FrameAllocator], frame: u64, order: u64) {
     }
     list.first = frame << FRAME_SHIFT
     list.count += 1
-    allocator.states[frame] = STATE_FREE | cast[u8](order)
+    states[frame] = STATE_FREE | cast[u8](order)
 }
 
 // Take a free block off its order's list.
 unlink :: fn(allocator: ptr[mut FrameAllocator], frame: u64, order: u64) {
+    states :: allocator.states
+    runtime.assert(order <= MAX_ORDER && frame < cast[u64](states.count), "unlink takes a frame the allocator owns, and an order")
     list :: &allocator.lists[order]
     block :: block_of(allocator, frame)
     if block.previous != 0 {
@@ -270,11 +285,12 @@ unlink :: fn(allocator: ptr[mut FrameAllocator], frame: u64, order: u64) {
         block_of(allocator, block.next >> FRAME_SHIFT).previous = block.previous
     }
     list.count -= 1
-    allocator.states[frame] = STATE_NONE
+    states[frame] = STATE_NONE
 }
 
 // The first block on a non-empty list, taken off it: its frame.
 take_first :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> u64 {
+    runtime.assert(order <= MAX_ORDER, "take_first takes an order up to MAX_ORDER")
     frame :: allocator.lists[order].first >> FRAME_SHIFT
     unlink(allocator, frame, order)
     return frame

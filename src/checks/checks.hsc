@@ -190,20 +190,23 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
 
 // The implementation by value: it came from find_function, so a pointer to it couldn't be passed on
 signatures_match :: fn(implementation: compiler.FunctionInfo, interface: ptr[compiler.FunctionInfo]) -> bool {
-    if implementation.parameters.count != interface.parameters.count
-        || implementation.return_values.count != interface.return_values.count
+    // Copies of the views, which types_match can't change, so their counts stay compared
+    parameters :: interface.parameters
+    return_values :: interface.return_values
+    if implementation.parameters.count != parameters.count
+        || implementation.return_values.count != return_values.count
         || implementation.never_returns != interface.never_returns {
         return false
     }
     for &parameter, index in implementation.parameters {
-        other :: &interface.parameters[index]
+        other :: &parameters[index]
         if parameter.name != other.name || !types_match(parameter.type, other.type)
             || parameter.is_escaping != other.is_escaping || parameter.is_varargs != other.is_varargs {
             return false
         }
     }
     for &result, index in implementation.return_values {
-        if !types_match(result.type, interface.return_values[index].type) {
+        if !types_match(result.type, return_values[index].type) {
             return false
         }
     }

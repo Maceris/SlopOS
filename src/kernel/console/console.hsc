@@ -171,7 +171,12 @@ draw_glyph :: fn(console: ptr[Console], glyph: u16, column, row: u32) {
     for y in 0..<console.font.height {
         line :: console.pixels + cast[u64](top + y) * cast[u64](console.pitch)
         for x in 0..<console.font.width {
-            byte :: rows[cast[usize](y * console.font.bytes_per_row + x / 8)]
+            // Inside the glyph's rows for a font parse_font accepted
+            at :: cast[usize](y * console.font.bytes_per_row + x / 8)
+            if at >= rows.count {
+                continue
+            }
+            byte :: rows[at]
             lit :: (byte >> cast[u8](7 - x % 8)) & 1 == 1
             color :: if lit { console.foreground } else { console.background }
             put_pixel(console, line + cast[u64](left + x) * cast[u64](console.bytes_per_pixel), color)

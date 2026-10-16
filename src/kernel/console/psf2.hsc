@@ -4,6 +4,8 @@
  */
 package console
 
+import runtime from "base"
+
 //SPEC: PSF2 font format, as documented with the Linux kbd package (psffontformat, "PSF2")
 
 PSF2_MAGIC :: u8.[0x72, 0xb5, 0x4a, 0x86]
@@ -44,6 +46,7 @@ Font :: struct {
 NO_GLYPH : u16 : 0xffff
 
 read_u32 :: fn(bytes: u8[], offset: usize) -> u32 {
+    runtime.assert(offset < bytes.count && offset + 4 <= bytes.count, "read_u32 reads four bytes that are there")
     return cast[u32](bytes[offset])
         | (cast[u32](bytes[offset + 1]) << 8)
         | (cast[u32](bytes[offset + 2]) << 16)
@@ -76,7 +79,8 @@ parse_font :: fn(bytes #escaping : u8[]) -> Result[Font, FontError] {
         return .Error(.BadGlyphSize)
     }
     glyphs_end :: header_size + cast[usize](font.glyph_count) * cast[usize](font.bytes_per_glyph)
-    if header_size < PSF2_HEADER_SIZE || glyphs_end > bytes.count {
+    // The sum can't wrap for 32-bit counts, but saying so keeps the slice below proven
+    if header_size < PSF2_HEADER_SIZE || glyphs_end < header_size || glyphs_end > bytes.count {
         return .Error(.Truncated)
     }
     font.glyphs = bytes[header_size..<glyphs_end]
@@ -171,8 +175,18 @@ glyph_index :: fn(font: ptr[Font], code_point: u32) -> u16 {
 
 // The rows of a glyph.
 glyph_rows :: fn(font: ptr[Font], glyph: u16) -> u8[] {
-    start :: cast[usize](glyph) * cast[usize](font.bytes_per_glyph)
-    return font.glyphs[start..<start + cast[usize](font.bytes_per_glyph)]
+    glyphs :: font.glyphs
+    size :: cast[usize](font.bytes_per_glyph)
+    start :: cast[usize](glyph) * size
+    // A glyph parse_font counted is inside glyphs; any other has no rows
+    if start >= glyphs.count {
+        return glyphs[0..<0]
+    }
+    end :: start + size
+    if end > glyphs.count {
+        return glyphs[0..<0]
+    }
+    return glyphs[start..<end]
 }
 
 /*
@@ -181,6 +195,9 @@ glyph_rows :: fn(font: ptr[Font], glyph: u16) -> u8[] {
  */
 //SPEC: RFC 3629 (UTF-8), section 3
 decode_utf8 :: fn(bytes: u8[], at: usize) -> (u32, usize) {
+    if at >= bytes.count {
+        return REPLACEMENT_CHARACTER, 1
+    }
     first :: cast[u32](bytes[at])
     if first < 0x80 {
         return first, 1
@@ -210,7 +227,11 @@ decode_utf8 :: fn(bytes: u8[], at: usize) -> (u32, usize) {
         return REPLACEMENT_CHARACTER, 1
     }
     for i in 1..<length {
-        next :: cast[u32](bytes[at + i])
+        index :: at + i
+        if index >= bytes.count {
+            return REPLACEMENT_CHARACTER, 1
+        }
+        next :: cast[u32](bytes[index])
         if (next & 0xc0) != 0x80 {
             return REPLACEMENT_CHARACTER, 1
         }

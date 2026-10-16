@@ -681,9 +681,22 @@ Started 2026-10-16, the next item of *After M1*.
    address. Also documented: converting to `any` copies the value into the frame, so every `any`
    counts as local. Not checked yet: `?` returning a local error value, casts from a struct to an
    `#unrestricted` one, compile-time code (`#run`).
-2. **Bounds proofs** (Hemera's `docs/types.md`, *Bounds Checking*): an index must be proven in
-   bounds, from constants, dominating conditions and loops. Its example compares with `<=` where
-   it means `<`.
+2. [x] **Bounds proofs** (done 2026-10-16; Hemera's `docs/types.md`, *Bounds Checking*): a pass
+   (`front_end/bounds.cpp`) after the stack check proves every index and slice in bounds, or
+   reports E4031. At each point it keeps difference facts (a - b <= c) between integer locals,
+   counts of local arrays and views, paths like `text.count`, and constants, closed like shortest
+   paths; facts come from definitions and assignments, conditions (and early exits),
+   `runtime.assert`, `for` loops and `while` conditions, and types (unsigned, narrow, enums,
+   masks and remainders). Loops go around to a fixpoint, with delayed widening; joins keep what
+   both paths imply. Integers wrap, so `x + c` says something only about a bounded `x`. Calls and
+   stores through pointers forget paths through pointers. What it found: an off-by-one in std's
+   format string parsing (`>` where it needed `>=`), a font's glyph range not checked against a
+   wrapped sum, and contracts the code relied on silently, now asserted: arrays sized by counts
+   computed elsewhere (the boot information's memory map, segments, CPUs, modules, framebuffers),
+   the frame allocator's states having one entry per frame, a double's digits fitting in 36 limbs.
+   The docs' examples are fixed: `known <= count` was meant as `<`, and a slice also needs
+   start <= end. Not tracked: relations of three values (`i + j < n`), and contracts across
+   calls, which take an assert.
 
 ## After M1
 
@@ -692,7 +705,7 @@ In roughly the order SlopOS needs them, after Phase 7 (which covers entry functi
   (`base/compiler`), which unlock the build package and house-rule checks (`decisions/0028`, `0029`).
   Done as Phase 8.
 - **Memory-safety analyses:** `#escaping`, pointers into the stack, `#scoped`, bounds proofs.
-  In progress as Phase 9.
+  Done as Phase 9.
 - **Value generics** (`docs/types.md`, *Compile-Time Parameters*).
 - **Fibers, `morestack` and segmented stacks** (`docs/multitasking.md`), for user space.
 - **AArch64**, right after M3 (`decisions/0022`), where the carrier register is the cheaper case.

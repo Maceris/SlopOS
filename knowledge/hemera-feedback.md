@@ -87,6 +87,12 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-16 — `compiler-plan.md` Phase 9, step 2: bounds proofs (`docs/types.md`). Every index
+  in Hemera's std and in SlopOS is now proven, which found an off-by-one in std's format string
+  parsing and made the contracts the kernel relied on explicit as `runtime.assert`s. The idioms
+  that make code provable are in CLAUDE.md. Fixed in the docs: the example compared with `<=` where
+  it meant `<`, and a slice's start must be at most its end, which the example didn't check.
+
 - 2026-10-16 — `compiler-plan.md` Phase 9, step 1: the checks on pointers into the stack
   (`docs/memory.md`). As written, the Returning rule made everything allocated through an
   allocator or `loc` parameter local, which broke base's own context and fiber code; Hemera now has
