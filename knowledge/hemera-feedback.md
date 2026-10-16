@@ -88,9 +88,14 @@ Context for the open items, and choices SlopOS relies on.
 
 - 2026-10-16 — `compiler-plan.md` Phase 8, step 4c: SlopOS builds through its build package, with
   the house-rule checks. Fixed in Hemera on the way: reflection's `ImportInfo.from` kept the
-  string literal's quotes (`"\"std\""`), so nothing matched `"std"`. Noticed, not fixed: two
-  builds of the same kernel differ by a few hundred bytes with the same section sizes, so output
-  isn't deterministic yet (likely the order functions are generated in). Building the kernel
+  string literal's quotes (`"\"std\""`), so nothing matched `"std"`. Also found: two builds of the
+  same kernel differed by a few hundred bytes. The compiler walked declarations in a map ordered by
+  their names' addresses, which change from run to run, so the globals it keeps (Limine's
+  requests) came out in a different order each time; reflection's lists did too. Fixed by sorting
+  by name, and the object is now named after the root package's folder rather than the output
+  file, so builds are byte-identical wherever they're written and whether or not they go through
+  the build package. Hemera's docs now make that a rule (`docs/compilation.md`, Deterministic
+  Output), and a test builds a kernel four times and compares the bytes. Building the kernel
   through the build package also takes longer than directly (about 67s against 24s with the debug
   compiler), since the build program and its checks are compiled and run first.
 
