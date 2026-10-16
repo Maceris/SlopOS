@@ -142,7 +142,7 @@ Stresses: volatile MMIO, fences (`hemera-proposals/atomics.md` D), protocol unio
 | Milestone | State |
 |---|---|
 | M0 | in progress: `BootInfo`, `arch_interface`, `CpuFeatures`, and freestanding `std` for views over raw memory and fixed-buffer text; the build package and checks wait for `#run` |
-| M1 | done 2026-10-15 (`compiler-plan.md` Phase 6); `tools/boot_tests.py` boots it five ways. Entry from user mode waits for entry functions (M4–M6) |
+| M1 | done 2026-10-15 (`compiler-plan.md` Phase 6); `tools/boot_tests.py` boots it seven ways. Entry from user mode is generated (entry functions, 2026-10-16) and waits for user mode itself (M4–M6) |
 | M2 | not started |
 | M3 | started 2026-10-16: the other CPUs start, go idle and stop with the kernel (the `starts every CPU` boot test, 4 CPUs). ACPI, the I/O APIC, the clock page and TLB shootdown are to come |
 | M4–M9 | not started |

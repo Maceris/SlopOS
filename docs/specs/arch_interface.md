@@ -500,6 +500,12 @@ early_console_write : fn(text: string) : ---
  * writes to may be something else entirely.
  */
 test_exit : fn(code: u32) : ---
+
+/*
+ * Raise an NMI on the calling CPU, for tests of the critical-event entry that resumes what it
+ * interrupted. Only called when the command line asks for it (test_nmi).
+ */
+test_nmi : fn() : ---
 ```
 
 ## `kernel_entry`
@@ -580,12 +586,13 @@ How `arch/x86_64` meets the interface (`../../knowledge/design/arch-x86-64.md`):
 | Interrupts | x2APIC (xAPIC if absent). Device IDs are vectors 48–239 |
 | Wired interrupts | I/O APICs (`ControllerKind.IoApic`); the legacy 8259 PIC is masked and ignored |
 | Timer | TSC with TSC-deadline, frequency from the hint, `CPUID` leaf `0x15`, or calibration against the PIT |
-| Entry | One `.entry` function for every vector, separate ones on IST stacks for the critical events (the NMI one returns), and a `.syscall_entry` function. Every vector runs on an IST stack: the kernel stack's own slot for the rest, so an entry from idle starts again at its top. Until the compiler generates entry functions, these are interrupt functions, which only cover entries from kernel mode |
+| Entry | One `.entry` function for every vector, through `x86_64.entry_points`, which returns only for NMIs, and a `.syscall_entry` function (`STAR`, `LSTAR` and `FMASK` set by `init_cpu`). Every vector runs on an IST stack: the critical events on their own, the rest on the kernel stack's own slot, so an entry from idle starts again at its top |
 | `return_to_user` | `x86_64.return_to_user` |
 | Vector state | `xsavec`/`xsaveopt` and `xrstor`; `xsetbv` when the thread's state components change (`0023`) |
 | `hardware_entropy` | `rdseed` |
 | `early_console_write` | 16550 UART at I/O port `0x3F8`, 115200 baud, 8N1 |
 | `test_exit` | QEMU's `isa-debug-exit` device at I/O port `0xf4` |
+| `test_nmi` | An NMI IPI to the CPU's own x2APIC ID |
 
 ## Not Covered
 

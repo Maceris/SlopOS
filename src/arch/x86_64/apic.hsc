@@ -23,6 +23,7 @@ APIC_BASE_X2APIC_ENABLE : u64 : 1 << 10
 APIC_BASE_ENABLE : u64 : 1 << 11
 IA32_TSC_DEADLINE : u32 : 0x6e0
 
+X2APIC_ID : u32 : 0x802
 X2APIC_EOI : u32 : 0x80b
 X2APIC_SPURIOUS : u32 : 0x80f
 // In-request registers, 8 of them, 32 vectors each
@@ -35,6 +36,8 @@ X2APIC_TIMER_DIVIDE : u32 : 0x83e
 
 SPURIOUS_APIC_ENABLE : u64 : 1 << 8
 LVT_MASKED : u64 : 1 << 16
+// Delivery mode 100b in the interrupt command register
+ICR_DELIVERY_NMI : u64 : 4 << 8
 LVT_TIMER_ONE_SHOT : u64 : 0 << 17
 LVT_TIMER_TSC_DEADLINE : u64 : 2 << 17
 // Divide configuration 1011b: divide by 1
@@ -79,6 +82,12 @@ send_ipi :: fn(cpu_hardware_id: u64, kind: arch_interface.IpiKind) {
     }
     // Fixed delivery, physical destination, edge triggered
     x86_64.wrmsr(X2APIC_ICR, (cpu_hardware_id << 32) | cast[u64](vector))
+}
+
+// An NMI to this CPU, by its own ID: the self shorthand only takes fixed delivery.
+test_nmi :: fn() {
+    self :: x86_64.rdmsr(X2APIC_ID)
+    x86_64.wrmsr(X2APIC_ICR, (self << 32) | ICR_DELIVERY_NMI)
 }
 
 // Whether an interrupt is waiting in the local APIC's in-request registers.

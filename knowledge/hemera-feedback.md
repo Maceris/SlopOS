@@ -32,7 +32,6 @@ them is `compiler-plan.md`, Phase 7:
 
 | Issue | Severity | Where |
 |---|---|---|
-| Entry functions (`.entry`, `.syscall_entry`, `entry_points`) aren't generated: the x86-64 entries are interrupt functions, which can't take entries from user mode, and each one sets up its CPU and pushes its context itself (sharing a `#no_context` helper) | blocker for M4–M6 | `arch/x86_64/entries.hsc` |
 | Format strings have no options, like hexadecimal or a width, so the stack trace appends its offsets with `text_buffer` (pointers do format in hexadecimal) | friction | `kernel/stack_trace.hsc` |
 | A constant's value can't call a function until there's compile-time execution, so the Limine requests' headers are written out | gap | `boot/limine/requests.hsc` |
 | An optional function type with a result can't be written in place: `(fn(n: int) -> int)?` doesn't parse, and `fn(n: int) -> int?` makes the result optional; it takes an alias | friction | Hemera's hosted test |
@@ -87,6 +86,11 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-16 — `compiler-plan.md` Phase 7, C3, done: entry functions. The x86-64 entries are one
+  `.entry` function through `x86_64.entry_points`, plus a `.syscall_entry` function, so entries from
+  user mode are possible and device vectors reach the kernel. Changed in Hemera on the way:
+  `entry_points`'s handler may return (for NMIs), and a function can be a compile-time value.
 
 - 2026-10-16 — `compiler-plan.md` Phase 7, C2, done: the other CPUs start through Limine at a
   `#calling_convention(.c) #no_context` entry, with no workaround needed. Found and fixed on the

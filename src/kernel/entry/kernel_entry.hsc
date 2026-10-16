@@ -2,10 +2,12 @@
  * What the arch layer's entry stubs call (docs/specs/arch_interface.md, kernel_entry): the kernel's
  * side of every entry. Each one runs with the CPU's carrier block loaded and its context pushed.
  *
- * Not here yet: syscall and user_fault, which arrive from user mode through entry functions (M4 to M6).
+ * There's no user mode yet (M4 to M6), so syscall and user_fault, which only come from it, stop the
+ * kernel.
  */
 package kernel_entry
 
+import intrinsics from "base"
 import runtime from "base"
 import arch_interface from "../../arch_interface"
 import text_buffer from "std"
@@ -25,6 +27,20 @@ InterruptSource :: union {
     Ipi(arch_interface.IpiKind),
     Device(arch_interface.InterruptId),
     Spurious,
+}
+
+// A system call from user mode.
+//TODO(claude): system calls (M5)
+syscall #never_returns :: fn(registers: ptr[mut arch.UserRegisters]) {
+    runtime.log_fatal("a system call arrived, and the kernel doesn't take system calls yet")
+    kernel.stop(.KernelFault)
+}
+
+// A fault in user mode.
+//TODO(claude): faults in user threads (M4 to M6)
+user_fault #never_returns :: fn(registers: ptr[mut arch.UserRegisters], fault: arch_interface.Fault) {
+    runtime.log_fatal("a fault arrived from user mode, which the kernel doesn't run yet")
+    kernel.stop(.KernelFault)
 }
 
 // An interrupt from user mode or idle.
@@ -86,6 +102,8 @@ access_name :: fn(access: arch_interface.Access) -> string {
 
 // An NMI, at any time. Returns to the interrupted code.
 nmi :: fn() {
+    cpu :: kernel.per_cpu()
+    intrinsics.atomic_store_u32_release(&cpu.nmi_count, cpu.nmi_count + 1)
     runtime.log_warn("NMI")
 }
 

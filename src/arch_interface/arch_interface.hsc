@@ -400,3 +400,9 @@ early_console_write : fn(text: string) : ---
  * writes to may be something else entirely.
  */
 test_exit : fn(code: u32) : ---
+
+/*
+ * Raise an NMI on the calling CPU, for tests of the critical-event entry that resumes what it
+ * interrupted. Only called when the command line asks for it (test_nmi).
+ */
+test_nmi : fn() : ---

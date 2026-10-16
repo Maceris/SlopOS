@@ -568,9 +568,15 @@ In the order SlopOS needs them:
    the Stop IPI. Each CPU's `PerCpu` and stacks live in its boot-stack frame until M2's frame
    allocator. Found on the way: a definition dropping a value with `_` (`_, ok :: f()`) wasn't
    generated; fixed.
-3. **Entry functions** (`.entry`, `.syscall_entry`, `entry_points`, `return_to_user`), for M4–M6.
-   The kernel's interrupt functions then become one `.entry` function, without their repeated
-   setup.
+3. [x] **Entry functions** (done 2026-10-16): `.entry` and `.syscall_entry` functions, whose
+   generated code is module-level assembly around an ordinary body; `entry_points`, a stub per
+   vector and a table of their addresses; and `return_to_user` (`sysretq` when it can, else
+   `iretq`). A function can now be a compile-time value, which `entry_points(handler)` needs, and
+   its handler may return, so one function serves every vector, returning only for NMIs. The
+   kernel's 26 interrupt functions became `kernel_entry_point`, which also routes device vectors
+   and user-mode entries, and SYSCALL is enabled with `system_call_entry`. Tested: every kernel
+   entry the boot tests make, and an NMI that resumes (`test_nmi`). Not yet run: entries from user
+   mode, SYSCALL and `return_to_user`, which wait for user mode (M4–M6).
 4. The rest of *After M1*, unchanged.
 
 ### Order

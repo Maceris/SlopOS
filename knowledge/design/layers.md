@@ -142,7 +142,7 @@ under the name `arch`:
 
 L1 is written in Hemera on top of the platform intrinsics in Hemera's `base`
 (`intrinsics.x86_64`: `cli`, `lgdt`, `wrmsr`, `write_cr3`, `invlpg`, `cpuid`, ...) and
-interrupt functions (`#calling_convention(.interrupt)`). Those intrinsics exist only when
+entry functions (`#calling_convention(.entry)` and `.syscall_entry`). Those intrinsics exist only when
 compiling for their architecture, so nothing portable can use them by accident.
 
 What the interface covers (draft):

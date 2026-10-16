@@ -1,63 +1,116 @@
 package arch_x86_64
 
 import intrinsics from "base"
-import runtime from "base"
 import x86_64 from "base/intrinsics"
 import arch_interface from "../../arch_interface"
 import kernel_entry from "../../kernel/entry"
 
 /*
- * Entry to the kernel through the IDT, one interrupt function per vector, each decoding its cause
- * into the portable arguments of a kernel_entry function (docs/specs/arch_interface.md, Entry Stubs).
+ * Entry to the kernel (docs/specs/arch_interface.md, Entry Stubs): one entry function for every
+ * vector, through x86_64.entry_points, and one for SYSCALL. Their generated code saves the
+ * interrupted code's registers in a RegisterFrame, with swapgs first when it was in user mode.
+ * These find the CPU through the gs base, load its carrier block with stack_limit set for the
+ * stack they run on, push its context, and decode the cause into kernel_entry's portable
+ * arguments.
  *
- * Each one finds its CPU through the gs base, loads the CPU's carrier block with stack_limit set for
- * the stack it runs on, and pushes the CPU's context. Every vector but the critical events runs on
- * the kernel stack (IST_KERNEL), starting at its top.
+ * Every vector runs on an IST stack: the kernel stack's own slot for most, so an entry from idle
+ * starts again at its top, and stacks of their own for the critical events, which can arrive
+ * while the kernel stack is in use.
  *
  * The local APIC's timer and IPIs are acknowledged here, before the kernel handles them; device
  * interrupts are acknowledged by the kernel, with end_of_interrupt.
  */
-//HEMERA(gap): these are interrupt functions, which only work for entries from kernel mode. Entries
-//from user mode need entry functions (#calling_convention(.entry), x86_64.entry_points), which the
-//compiler can't generate yet; with them, one function covers every vector.
-//TODO(claude): device vectors (48 to 239) once entry functions give the vector number (M3)
+
+NMI_VECTOR : u64 : 2
+DOUBLE_FAULT_VECTOR : u64 : 8
+MACHINE_CHECK_VECTOR : u64 : 18
+FIRST_INTERRUPT_VECTOR : u64 : 32
 
 /*
- * The start of every entry on the kernel stack: find the CPU through the gs base, and load its
- * carrier block with stack_limit set for the kernel stack. The entry then pushes the CPU's context.
+ * Every vector. Only an NMI returns, to whatever it interrupted, which may be anywhere, even an
+ * entry that hasn't loaded the carrier block yet: the generated code restores the interrupted
+ * registers, the carrier register among them, and this restores the carrier block's stack_limit.
  */
-enter_on_kernel_stack #no_context :: fn() -> ptr[ArchCpu] {
+kernel_entry_point #calling_convention(.entry) :: fn(frame: ptr[mut x86_64.RegisterFrame]) {
+    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
+    vector :: frame.vector
+    if vector == NMI_VECTOR {
+        saved_limit :: cpu.carrier.stack_limit
+        cpu.carrier.stack_limit = cpu.critical_stack_limits[cast[u8](arch_interface.CriticalEvent.Nmi)]
+        intrinsics.set_carrier(cpu.carrier)
+        push_context entry from cpu.context^ {
+            kernel_entry.nmi()
+        }
+        cpu.carrier.stack_limit = saved_limit
+        return void
+    }
+    if vector == DOUBLE_FAULT_VECTOR || vector == MACHINE_CHECK_VECTOR {
+        event : arch_interface.CriticalEvent = .DoubleFault
+        if vector == MACHINE_CHECK_VECTOR {
+            event = .MachineCheck
+        }
+        cpu.carrier.stack_limit = cpu.critical_stack_limits[cast[u8](event)]
+        intrinsics.set_carrier(cpu.carrier)
+        push_context entry from cpu.context^ {
+            kernel_entry.fatal_critical(event)
+        }
+    }
+    cpu.carrier.stack_limit = cpu.kernel_stack_limit
+    intrinsics.set_carrier(cpu.carrier)
+    push_context entry from cpu.context^ {
+        dispatch(frame)
+    }
+}
+
+// SYSCALL, from user mode, on the kernel stack the generated code switched to.
+system_call_entry #calling_convention(.syscall_entry) :: fn(frame: ptr[mut x86_64.RegisterFrame]) #never_returns {
     cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
     cpu.carrier.stack_limit = cpu.kernel_stack_limit
     intrinsics.set_carrier(cpu.carrier)
-    return cpu
+    push_context entry from cpu.context^ {
+        kernel_entry.syscall(cast[ptr[mut UserRegisters]](frame))
+    }
 }
 
 // Whether the interrupted code ran in user mode, from the privilege level of its code segment.
-from_user_mode :: fn(frame: ptr[x86_64.InterruptFrame]) -> bool {
+from_user_mode :: fn(frame: ptr[x86_64.RegisterFrame]) -> bool {
     return (frame.cs & 3) == 3
 }
 
-// Entries from user mode need entry functions, which aren't available yet.
-unsupported_user_entry :: fn() #never_returns {
-    runtime.log_fatal("an interrupt or fault arrived from user mode, which needs entry functions")
-    halt()
-}
-
-// A fault, which is a bug in the kernel: it can't arrive from user mode yet.
-report_fault :: fn(frame: ptr[x86_64.InterruptFrame], fault: arch_interface.Fault) #never_returns {
-    if from_user_mode(frame) {
-        unsupported_user_entry()
+// A fault or an interrupt, decoded for kernel_entry.
+dispatch :: fn(frame: ptr[mut x86_64.RegisterFrame]) #never_returns {
+    vector :: frame.vector
+    if vector < FIRST_INTERRUPT_VECTOR {
+        fault :: decode_fault(vector, frame.error_code)
+        if from_user_mode(frame) {
+            kernel_entry.user_fault(cast[ptr[mut UserRegisters]](frame), fault)
+        }
+        kernel_entry.kernel_fault(fault, cast[arch_interface.VirtualAddress](frame.rip))
     }
-    kernel_entry.kernel_fault(fault, cast[arch_interface.VirtualAddress](frame.rip))
-}
-
-// An interrupt, which the kernel only enables while idle.
-interrupt_from :: fn(frame: ptr[x86_64.InterruptFrame], source: kernel_entry.InterruptSource) #never_returns {
+    source :: interrupt_source(vector)
     if from_user_mode(frame) {
-        unsupported_user_entry()
+        kernel_entry.interrupt(.User(cast[ptr[mut UserRegisters]](frame)), source)
     }
     kernel_entry.interrupt(.Idle, source)
+}
+
+//SPEC: Intel SDM Vol. 3A §7.15 (exception and interrupt reference)
+decode_fault :: fn(vector: u64, error_code: u64) -> arch_interface.Fault {
+    return match vector {
+        case 0 => .Arithmetic
+        case 1 => .SingleStep
+        case 3 => .Breakpoint
+        case 4 => .Arithmetic
+        case 6 => .InvalidInstruction
+        case 7 => .FloatingPoint
+        case 14 => .Page(decode_page_fault(error_code))
+        case 16 => .FloatingPoint
+        case 17 => .Alignment
+        case 19 => .FloatingPoint
+        // Bound range, the segment and protection faults, virtualization and control protection,
+        // and the vectors the CPU doesn't raise
+        case _ => .Protection
+    }
 }
 
 // A page fault's error code and address: bit 0 present, bit 1 write, bit 4 instruction fetch.
@@ -77,264 +130,48 @@ decode_page_fault :: fn(error_code: u64) -> arch_interface.PageFault {
     }
 }
 
-// Faults
-//SPEC: Intel SDM Vol. 3A §7.15 (exception and interrupt reference)
-
-
-// Vector 0
-divide_error #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .Arithmetic)
-    }
-}
-
-// Vector 1
-debug #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .SingleStep)
-    }
-}
-
-// Vector 3
-breakpoint #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .Breakpoint)
-    }
-}
-
-// Vector 4
-overflow #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .Arithmetic)
-    }
-}
-
-// Vector 5
-bound_range #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .Protection)
-    }
-}
-
-// Vector 6
-invalid_opcode #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .InvalidInstruction)
-    }
-}
-
-// Vector 7
-device_not_available #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .FloatingPoint)
-    }
-}
-
-// Vector 10
-invalid_tss #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame], error_code: u64) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .Protection)
-    }
-}
-
-// Vector 11
-segment_not_present #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame], error_code: u64) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .Protection)
-    }
-}
-
-// Vector 12
-stack_segment_fault #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame], error_code: u64) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .Protection)
-    }
-}
-
-// Vector 13
-general_protection #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame], error_code: u64) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .Protection)
-    }
-}
-
-// Vector 14
-page_fault #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame], error_code: u64) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .Page(decode_page_fault(error_code)))
-    }
-}
-
-// Vector 16
-x87_floating_point #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .FloatingPoint)
-    }
-}
-
-// Vector 17
-alignment_check #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame], error_code: u64) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .Alignment)
-    }
-}
-
-// Vector 19
-simd_floating_point #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .FloatingPoint)
-    }
-}
-
-// Vector 20
-virtualization #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .Protection)
-    }
-}
-
-// Vector 21
-control_protection #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame], error_code: u64) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .Protection)
-    }
-}
-
-// Vectors 9, 15 and 22 to 31, which the CPU doesn't raise
-reserved_vector #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        report_fault(frame, .Protection)
-    }
-}
-
-// Local APIC interrupts
-
-timer #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        end_of_interrupt(cast[arch_interface.InterruptId](0))
-        interrupt_from(frame, .Timer)
-    }
-}
-
-reschedule_ipi #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        end_of_interrupt(cast[arch_interface.InterruptId](0))
-        interrupt_from(frame, .Ipi(.Reschedule))
-    }
-}
-
-tlb_flush_ipi #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        end_of_interrupt(cast[arch_interface.InterruptId](0))
-        interrupt_from(frame, .Ipi(.TlbFlush))
-    }
-}
-
-stop_ipi #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        end_of_interrupt(cast[arch_interface.InterruptId](0))
-        interrupt_from(frame, .Ipi(.Stop))
-    }
-}
-
-// Spurious interrupts aren't acknowledged (Intel SDM Vol. 3A §11.9)
-spurious #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu :: enter_on_kernel_stack()
-    push_context entry from cpu.context^ {
-        interrupt_from(frame, .Spurious)
-    }
-}
-
-// Critical events, on stacks of their own, since they can arrive at any time
-
 /*
- * An NMI can arrive anywhere, even in an entry before it loaded the carrier, so this one sets
- * stack_limit for its stack and restores both the limit and the interrupted code's carrier register.
+ * An interrupt's source. The timer and IPIs are acknowledged here; spurious interrupts aren't
+ * acknowledged at all (Intel SDM Vol. 3A §11.9). Vectors nothing raises count as spurious.
  */
-nmi #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    interrupted := intrinsics.carrier()
-    saved_limit := cpu.carrier.stack_limit
-    cpu.carrier.stack_limit = cpu.critical_stack_limits[cast[u8](arch_interface.CriticalEvent.Nmi)]
-    intrinsics.set_carrier(cpu.carrier)
-    push_context entry from cpu.context^ {
-        kernel_entry.nmi()
+interrupt_source :: fn(vector: u64) -> kernel_entry.InterruptSource {
+    if vector >= cast[u64](FIRST_DEVICE_VECTOR) && vector < cast[u64](FIRST_DEVICE_VECTOR + DEVICE_VECTOR_COUNT) {
+        return .Device(cast[arch_interface.InterruptId](vector))
     }
-    cpu.carrier.stack_limit = saved_limit
-    intrinsics.set_carrier(interrupted)
+    source : kernel_entry.InterruptSource = .Spurious
+    if vector == cast[u64](TIMER_VECTOR) {
+        source = .Timer
+    }
+    else if vector == cast[u64](RESCHEDULE_VECTOR) {
+        source = .Ipi(.Reschedule)
+    }
+    else if vector == cast[u64](TLB_FLUSH_VECTOR) {
+        source = .Ipi(.TlbFlush)
+    }
+    else if vector == cast[u64](STOP_VECTOR) {
+        source = .Ipi(.Stop)
+    }
+    else {
+        return source
+    }
+    end_of_interrupt(cast[arch_interface.InterruptId](0))
+    return source
 }
 
-double_fault #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame], error_code: u64) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.critical_stack_limits[cast[u8](arch_interface.CriticalEvent.DoubleFault)]
-    intrinsics.set_carrier(cpu.carrier)
-    push_context entry from cpu.context^ {
-        kernel_entry.fatal_critical(.DoubleFault)
-    }
-}
-
-machine_check #calling_convention(.interrupt) :: fn(frame: ptr[x86_64.InterruptFrame]) {
-    cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
-    cpu.carrier.stack_limit = cpu.critical_stack_limits[cast[u8](arch_interface.CriticalEvent.MachineCheck)]
-    intrinsics.set_carrier(cpu.carrier)
-    push_context entry from cpu.context^ {
-        kernel_entry.fatal_critical(.MachineCheck)
-    }
-}
-
-
-// Point every vector the kernel handles at its interrupt function. The rest stay not present.
+// Point every vector at its entry point, on the IST stack it runs on.
 fill_idt :: fn(system: ptr[mut ArchSystem]) {
-    system.idt[0] = gate(cast[u64](divide_error), IST_KERNEL)
-    system.idt[1] = gate(cast[u64](debug), IST_KERNEL)
-    system.idt[3] = gate(cast[u64](breakpoint), IST_KERNEL)
-    system.idt[4] = gate(cast[u64](overflow), IST_KERNEL)
-    system.idt[5] = gate(cast[u64](bound_range), IST_KERNEL)
-    system.idt[6] = gate(cast[u64](invalid_opcode), IST_KERNEL)
-    system.idt[7] = gate(cast[u64](device_not_available), IST_KERNEL)
-    system.idt[10] = gate(cast[u64](invalid_tss), IST_KERNEL)
-    system.idt[11] = gate(cast[u64](segment_not_present), IST_KERNEL)
-    system.idt[12] = gate(cast[u64](stack_segment_fault), IST_KERNEL)
-    system.idt[13] = gate(cast[u64](general_protection), IST_KERNEL)
-    system.idt[14] = gate(cast[u64](page_fault), IST_KERNEL)
-    system.idt[16] = gate(cast[u64](x87_floating_point), IST_KERNEL)
-    system.idt[17] = gate(cast[u64](alignment_check), IST_KERNEL)
-    system.idt[19] = gate(cast[u64](simd_floating_point), IST_KERNEL)
-    system.idt[20] = gate(cast[u64](virtualization), IST_KERNEL)
-    system.idt[21] = gate(cast[u64](control_protection), IST_KERNEL)
-    system.idt[2] = gate(cast[u64](nmi), IST_NMI)
-    system.idt[8] = gate(cast[u64](double_fault), IST_DOUBLE_FAULT)
-    system.idt[18] = gate(cast[u64](machine_check), IST_MACHINE_CHECK)
-    for vector in RESERVED_VECTORS {
-        system.idt[vector] = gate(cast[u64](reserved_vector), IST_KERNEL)
+    points :: x86_64.entry_points(kernel_entry_point)
+    for vector in 0..<256 {
+        stack := IST_KERNEL
+        if cast[u64](vector) == NMI_VECTOR {
+            stack = IST_NMI
+        }
+        else if cast[u64](vector) == DOUBLE_FAULT_VECTOR {
+            stack = IST_DOUBLE_FAULT
+        }
+        else if cast[u64](vector) == MACHINE_CHECK_VECTOR {
+            stack = IST_MACHINE_CHECK
+        }
+        system.idt[vector] = gate(points.addresses[vector], stack)
     }
-    system.idt[TIMER_VECTOR] = gate(cast[u64](timer), IST_KERNEL)
-    system.idt[RESCHEDULE_VECTOR] = gate(cast[u64](reschedule_ipi), IST_KERNEL)
-    system.idt[TLB_FLUSH_VECTOR] = gate(cast[u64](tlb_flush_ipi), IST_KERNEL)
-    system.idt[STOP_VECTOR] = gate(cast[u64](stop_ipi), IST_KERNEL)
-    system.idt[SPURIOUS_VECTOR] = gate(cast[u64](spurious), IST_KERNEL)
 }
-
-RESERVED_VECTORS :: u8.[9, 15, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]

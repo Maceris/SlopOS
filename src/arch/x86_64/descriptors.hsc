@@ -14,7 +14,18 @@ IA32_FS_BASE : u32 : 0xc0000100
 IA32_GS_BASE : u32 : 0xc0000101
 IA32_KERNEL_GS_BASE : u32 : 0xc0000102
 
+EFER_SYSCALL_ENABLE : u64 : 1 << 0
 EFER_NO_EXECUTE_ENABLE : u64 : 1 << 11
+
+/*
+ * SYSCALL loads the kernel's code selector and the data one after it; 64-bit SYSRET loads user code
+ * at the base plus 16 and user data at the base plus 8, so the base sits below user data.
+ */
+//SPEC: Intel SDM Vol. 3A §5.8.8 (fast system calls in 64-bit mode)
+STAR_SYSCALL_SELECTORS : u64 : cast[u64](KERNEL_CODE_SELECTOR) << 32
+STAR_SYSRET_SELECTORS : u64 : cast[u64](USER_DATA_SELECTOR - 8) << 48
+// Flags SYSCALL clears: trap, interrupts, direction and alignment check
+SYSCALL_FLAGS_MASK : u64 : (1 << 8) | (1 << 9) | (1 << 10) | (1 << 18)
 
 CR0_MONITOR_COPROCESSOR : u64 : 1 << 1
 CR0_EMULATION : u64 : 1 << 2
@@ -92,6 +103,7 @@ init_cpu :: fn(
     record_stacks(cpu, stacks)
     load_descriptor_tables(system, cpu)
     enable_cpu_features()
+    enable_system_calls()
     // The gs base after load_segments, which resets it
     x86_64.wrmsr(IA32_GS_BASE, cast[u64](cpu))
     x86_64.wrmsr(IA32_KERNEL_GS_BASE, 0)
@@ -143,7 +155,6 @@ load_descriptor_tables :: fn(system: ptr[ArchSystem], cpu: ptr[mut ArchCpu]) {
  */
 enable_cpu_features :: fn() {
     x86_64.wrmsr(IA32_EFER, x86_64.rdmsr(IA32_EFER) | EFER_NO_EXECUTE_ENABLE)
-    //TODO(claude): EFER.SCE, STAR, LSTAR and FMASK with the .syscall_entry function (M4 to M6)
 
     x86_64.write_cr0((x86_64.read_cr0() & ~CR0_EMULATION) | CR0_MONITOR_COPROCESSOR | CR0_NUMERIC_ERROR)
 
@@ -164,4 +175,12 @@ enable_cpu_features :: fn() {
     }
     x86_64.write_cr4(cr4)
     x86_64.xsetbv(0, XCR0_X87 | XCR0_SSE | XCR0_AVX)
+}
+
+// SYSCALL enters at system_call_entry, with interrupts disabled.
+enable_system_calls :: fn() {
+    x86_64.wrmsr(IA32_STAR, STAR_SYSCALL_SELECTORS | STAR_SYSRET_SELECTORS)
+    x86_64.wrmsr(IA32_LSTAR, cast[u64](system_call_entry))
+    x86_64.wrmsr(IA32_FMASK, SYSCALL_FLAGS_MASK)
+    x86_64.wrmsr(IA32_EFER, x86_64.rdmsr(IA32_EFER) | EFER_SYSCALL_ENABLE)
 }

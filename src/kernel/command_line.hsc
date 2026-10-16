@@ -17,6 +17,8 @@ Options :: struct {
     test_fault : bool,
     // test_assert: once booted, fail an assertion, so a test can check that assertions stop the kernel.
     test_assert : bool,
+    // test_nmi: once booted, raise an NMI, so a test can check that the kernel resumes after one.
+    test_nmi : bool,
 }
 
 parse_command_line :: fn(command_line: string) -> Options {
@@ -48,5 +50,8 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_assert" {
         options.test_assert = true
+    }
+    if word == "test_nmi" {
+        options.test_nmi = true
     }
 }

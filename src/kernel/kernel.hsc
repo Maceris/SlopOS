@@ -56,6 +56,8 @@ PerCpu :: struct #align(64) {
     arch : arch.ArchCpu,
     stacks : arch_interface.CpuStacks,
     timer_ticks : u64,
+    // NMIs this CPU has handled.
+    nmi_count : u32,
 }
 
 // The memory for one CPU's stacks.
@@ -110,6 +112,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
             runtime.log_info("test_fault: running an invalid instruction")
             intrinsics.trap()
         }
+        if kernel.options.test_nmi {
+            test_nmi(&kernel, &cpu)
+        }
         if kernel.options.test_assert {
             runtime.log_info("test_assert: failing an assertion")
             runtime.assert(false, "test_assert")
@@ -117,6 +122,22 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         runtime.log_info("idle")
         arch.idle()
     }
+}
+
+// Raise an NMI, and wait up to a second for this CPU to handle it and come back.
+test_nmi :: fn(kernel: ptr[Kernel], cpu: ptr[mut PerCpu]) {
+    runtime.log_info("test_nmi: raising an NMI")
+    arch.test_nmi()
+    deadline :: arch.counter() + kernel.counter_frequency
+    loop {
+        arch.spin_hint()
+    }
+    while intrinsics.atomic_load_u32_acquire(&cpu.nmi_count) == 0 && arch.counter() < deadline
+    if cpu.nmi_count == 0 {
+        runtime.log_error("test_nmi: no NMI arrived")
+        return void
+    }
+    runtime.log_info("test_nmi: back from the NMI")
 }
 
 // Stops with a message if the CPU lacks part of the baseline (decisions/0003).
