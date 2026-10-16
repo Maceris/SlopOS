@@ -8,8 +8,8 @@ Boots a kernel in QEMU through Limine, for end-to-end tests (knowledge/compiler-
 Without --kernel it builds a kernel package first, SlopOS's boot adapter (src/boot/limine, with its
 x86_64.ld) unless --package says otherwise, with Hemera's compiler (hemera on the PATH) and the
 freestanding flags the kernel needs until the build package works: no startup code, no red zone,
-no SIMD, stack checks that trap. The compiler finds std through --install-path: HEMERA_INSTALL, or
-the Hemera repository hemera was built in.
+no SIMD, stack checks that trap. The compiler finds std next to itself, or in HEMERA_INSTALL if
+that's set.
 
 The kernel's command line is --command-line, test_exit by default, which makes SlopOS write why it
 stopped to the debug exit device (src/kernel/stop.hsc, StopReason). QEMU's CPU is --cpu, max by
@@ -101,23 +101,11 @@ def limine_tool(limine: Path) -> Path:
     return find_tool("LIMINE_TOOL", names, [])
 
 
-def hemera_install() -> Path:
-    """The folder holding Hemera's std: HEMERA_INSTALL, or the repository hemera was built in."""
-    configured = os.environ.get("HEMERA_INSTALL")
-    if configured:
-        return Path(configured)
-    found = shutil.which("hemera")
-    if found:
-        for folder in Path(found).resolve().parents:
-            if (folder / "std").is_dir() and (folder / "base").is_dir():
-                return folder
-    sys.exit("boot.py: can't find Hemera's std; set HEMERA_INSTALL to the Hemera repository")
-
-
 def build_kernel(package: Path, linker_script: Path, output: Path) -> None:
     """Builds the kernel package with Hemera's compiler."""
-    command = ["hemera", *KERNEL_FLAGS, f"--install-path={hemera_install()}", f"--linker-script={linker_script}",
-               f"--output={output}", str(package)]
+    command = ["hemera", *KERNEL_FLAGS, f"--linker-script={linker_script}", f"--output={output}", str(package)]
+    if os.environ.get("HEMERA_INSTALL"):
+        command.insert(1, f"--install-path={os.environ['HEMERA_INSTALL']}")
     result = subprocess.run(command)
     if result.returncode != 0:
         sys.exit(f"boot.py: building {package} failed")

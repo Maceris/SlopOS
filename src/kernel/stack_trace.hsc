@@ -33,6 +33,6 @@ log_stack_trace :: fn(skip: usize = 0) {
             text_buffer.append_address(&line, address)
         }
         // Part of a fatal report already, so without a source location of its own
-        write_log_line("fatal", text_buffer.as_string(&line), 0, #caller_location, false)
+        write_log_line("fatal", text_buffer.as_string(&line), 0, null)
     }
 }

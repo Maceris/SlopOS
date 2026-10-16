@@ -37,21 +37,11 @@ them is `compiler-plan.md`, Phase 7:
 | No calling convention for a function a bootloader calls with the C convention and no carrier or context, other than the program's entry: Limine starts the other CPUs that way (`start_cpu`) | blocker for M3 | `boot/limine/convert.hsc` |
 | No way to make an array view or a string from an address and a count: `std/raw` does it with `bit_cast` and the view layout | gap | Hemera `std/raw` |
 | No documented layout for `ptr[T]?` that matches a nullable C pointer, so bootloader structures use `rawptr` | gap | `boot/limine/protocol.hsc` |
-| `==` on strings isn't generated | gap | `kernel/command_line.hsc` |
-| Slicing a string gives `char[]`, not a string; an untyped string constant can't be indexed | gap, friction | `kernel/command_line.hsc`, `boot/limine/convert.hsc`, Hemera `std/text_buffer` |
-| A union variant can't hold a generic type (`User(ptr[mut T])`) or a name from another package (`Ipi(arch_interface.IpiKind)`); they go through aliases | gap | `kernel/entry` |
 | No way to read the stack pointer: L0 works out the boot stack's limit from a local's address | gap | `boot/limine/entry.hsc` |
-| A value isn't accepted for a parameter of its optional type (`SourceCodeLocation` for `SourceCodeLocation?`), though the checker's own rules say it fits | friction (bug) | `kernel/log.hsc` |
-| `or_else` doesn't take a call that never returns as its default | friction | `boot/limine/convert.hsc` |
-| An element of an array literal can't be written `.{...}`; an `if` expression can't be a call's argument | friction | `arch/x86_64/features.hsc`, several |
 | `Result[void, E]` doesn't parse, so the arch interface's `map` and `protect` return `MapError?` and `UnmapError?`; `ipc.md` still writes `Result[void, ...]` | design question | `docs/specs/arch_interface.md` |
 | `all` and `from` are keywords, which natural field and parameter names run into (`TlbBatch.all` became `flush_all`, `interrupt`'s `from` became `interrupted`) | nice | specs |
 | No enum value names, so the baseline check writes each feature's name out | friction | `arch/x86_64/features.hsc` |
 | No portable spin-wait hint in `base` (x86 `pause`, Arm `yield`), so the ticket lock is in the kernel rather than `std/concurrency` | nice (`STD(missing)`) | `kernel/spin_lock.hsc` |
-| The compiler finds `std` only with `--install-path`; `tools/boot.py` passes the Hemera repository | friction | `tools/boot.py` |
-| Matching `Ok(value)` on a `Result[T, E]` returned from another package fails ("Ok holds 0 values"), where `T` and `E` are that package's types | gap (bug) | `kernel/console/console.hsc` |
-| A variant without values, named through its union (`ConsoleError.UnsupportedFramebuffer`), is taken as a function | friction | `kernel/console/console.hsc` |
-| Large values copied whole are generated as LLVM first-class aggregates, which LLVM optimizes slowly; the console fills its structs through pointers. Zeroing large locals is fixed (Resolved 2026-10-15) | friction | `kernel/console/psf2.hsc` |
 
 ### Language and library design
 
@@ -103,6 +93,14 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-15 — `compiler-plan.md` Phase 7, group A (on request): union payloads of any type, a race
+  where generic instances like `Result[T, E]` were used before they were laid out (behind both
+  "Ok holds 0 values" and the optional parameter that wouldn't take a value), variants without
+  values through their union, `or_else` with a call that never returns, `.{...}` elements and
+  `if` expressions as arguments, string `==` and slices, large copies with `memmove`, and finding
+  `std` without `--install-path`. Also: a crash after errors, and stack traces on Windows. The
+  kernel's workarounds for all of them are gone.
 
 - 2026-10-15 — `#file_data("path")` (on request): a file's bytes as a `u8[N]` constant, read when
   compiling, with the path relative to the file using it (Hemera `docs/directives.md`, *Values*).

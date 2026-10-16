@@ -50,26 +50,21 @@ read_u32 :: fn(bytes: u8[], offset: usize) -> u32 {
         | (cast[u32](bytes[offset + 3]) << 24)
 }
 
-/*
- * Fill font from a PSF2 file's bytes, which it keeps referring to.
- *
- * Fonts are filled in place rather than returned, since copying a Font's quick table around makes
- * the compiler's output much larger.
- */
-//HEMERA(friction): LLVM copes badly with large values copied whole (generated as first-class
-//aggregates); a Result[Font, FontError] took minutes to optimize
-parse_font :: fn(font: ptr[mut Font], bytes: u8[]) -> FontError? {
+// A font from a PSF2 file's bytes, which it keeps referring to.
+parse_font :: fn(bytes: u8[]) -> Result[Font, FontError] {
     if bytes.count < PSF2_HEADER_SIZE {
-        return FontError.Truncated
+        return .Error(.Truncated)
     }
     for byte, i in PSF2_MAGIC {
         if bytes[i] != byte {
-            return FontError.BadMagic
+            return .Error(.BadMagic)
         }
     }
     if read_u32(bytes, 4) != 0 {
-        return FontError.UnsupportedVersion
+        return .Error(.UnsupportedVersion)
     }
+    parsed : Font
+    font :: &parsed
     header_size :: cast[usize](read_u32(bytes, 8))
     flags :: read_u32(bytes, 12)
     font.glyph_count = read_u32(bytes, 16)
@@ -78,11 +73,11 @@ parse_font :: fn(font: ptr[mut Font], bytes: u8[]) -> FontError? {
     font.width = read_u32(bytes, 28)
     font.bytes_per_row = (font.width + 7) / 8
     if font.glyph_count == 0 || font.width == 0 || font.bytes_per_glyph != font.bytes_per_row * font.height {
-        return FontError.BadGlyphSize
+        return .Error(.BadGlyphSize)
     }
     glyphs_end :: header_size + cast[usize](font.glyph_count) * cast[usize](font.bytes_per_glyph)
     if header_size < PSF2_HEADER_SIZE || glyphs_end > bytes.count {
-        return FontError.Truncated
+        return .Error(.Truncated)
     }
     font.glyphs = bytes[header_size..<glyphs_end]
     font.unicode_table = bytes[glyphs_end..<glyphs_end]
@@ -94,7 +89,7 @@ parse_font :: fn(font: ptr[mut Font], bytes: u8[]) -> FontError? {
     if font.replacement == NO_GLYPH {
         font.replacement = 0
     }
-    return null
+    return .Ok(parsed)
 }
 
 // The quick table, from the Unicode table, or glyph i for code point i without one.

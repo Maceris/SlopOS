@@ -10,8 +10,7 @@ log_boot_info :: fn(info: ptr[boot_info.BootInfo]) {
     line := text_buffer.make(storage)
 
     text_buffer.append(&line, "SlopOS, booted by ")
-    bootloader :: if info.bootloader.count > 0 { info.bootloader } else { "an unknown bootloader" }
-    text_buffer.append(&line, bootloader)
+    text_buffer.append(&line, if info.bootloader.count > 0 { info.bootloader } else { "an unknown bootloader" })
     text_buffer.append(&line, " (")
     text_buffer.append(&line, firmware_name(info.firmware))
     text_buffer.append(&line, ")")

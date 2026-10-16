@@ -155,13 +155,14 @@ start_framebuffer_console :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.Boo
         runtime.log_info("no framebuffer: the log stays on the serial console")
         return void
     }
-    // No other CPU runs yet, so nothing writes to the console while it's set up
-    match console.init_console(&kernel.framebuffer_console, &info.framebuffers[0], info.direct_map_offset) {
-        case Some(error) => runtime.log_warn("the framebuffer can't show the console")
-        case None => {
+    match console.make_console(&info.framebuffers[0], info.direct_map_offset) {
+        case Ok(made) => {
+            // No other CPU runs yet, so nothing writes to the console while it's set up
+            kernel.framebuffer_console = made
             kernel.has_framebuffer_console = true
             log_framebuffer(&kernel.framebuffer_console)
         }
+        case Error(error) => runtime.log_warn("the framebuffer can't show the console")
     }
 }
 

@@ -94,11 +94,8 @@ build_boot_info :: fn(info: ptr[mut boot_info.BootInfo]) {
     for size in sizes {
         needed += (cast[u64](size) + ARRAY_ALIGNMENT - 1) & ~(ARRAY_ALIGNMENT - 1)
     }
-    carved := boot_info.PhysicalRange.{}
-    match find_carve(memory_map, align_up(needed)) {
-        case Some(found) => carved = found
-        case None => kernel.boot_failed(info.command_line, "no usable memory for the boot information")
-    }
+    carved :: find_carve(memory_map, align_up(needed))
+        or_else kernel.boot_failed(info.command_line, "no usable memory for the boot information")
     carve := Carve.{carved, cast[u64](carved.base) + hhdm.offset, 0}
 
     info.direct_map_offset = hhdm.offset
@@ -236,8 +233,7 @@ file_name :: fn(path: string) -> string {
             start = i + 1
         }
     }
-    //HEMERA(gap): slicing a string gives char[], not a string
-    return bit_cast[string](path[start..<path.count])
+    return path[start..<path.count]
 }
 
 framebuffer_at :: fn(response: ptr[FramebufferResponse], i: u64) -> ptr[LimineFramebuffer] {
@@ -337,8 +333,7 @@ firmware_tables :: fn(hhdm_offset: u64) -> boot_info.FirmwareTables {
     tables.smbios = null
     if SMBIOS_REQUEST.header.response != null {
         smbios :: cast[ptr[SmbiosResponse]](SMBIOS_REQUEST.header.response)
-        entry :: if smbios.entry_64 != null { smbios.entry_64 } else { smbios.entry_32 }
-        tables.smbios = table_address(entry, hhdm_offset)
+        tables.smbios = table_address(if smbios.entry_64 != null { smbios.entry_64 } else { smbios.entry_32 }, hhdm_offset)
     }
     return tables
 }

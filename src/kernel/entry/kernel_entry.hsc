@@ -15,21 +15,15 @@ import kernel from ".."
     import arch from "../../arch/x86_64"
 }
 
-//HEMERA(gap): a union variant can't hold a generic type like ptr[...] or a name from another
-//package directly, so they go through aliases
-UserRegistersPointer :: alias ptr[mut arch.UserRegisters]
-IpiKind :: alias arch_interface.IpiKind
-InterruptId :: alias arch_interface.InterruptId
-
 Interrupted :: union {
-    User(UserRegistersPointer),
+    User(ptr[mut arch.UserRegisters]),
     Idle,
 }
 
 InterruptSource :: union {
     Timer,
-    Ipi(IpiKind),
-    Device(InterruptId),
+    Ipi(arch_interface.IpiKind),
+    Device(arch_interface.InterruptId),
     Spurious,
 }
 
@@ -64,8 +58,7 @@ append_fault :: fn(line: ptr[mut text_buffer.TextBuffer], fault: arch_interface.
         case Page(page) => {
             text_buffer.append(line, "page fault, ")
             text_buffer.append(line, access_name(page.access))
-            what :: if page.present { " breaking the protection at " } else { " of nothing mapped at " }
-            text_buffer.append(line, what)
+            text_buffer.append(line, if page.present { " breaking the protection at " } else { " of nothing mapped at " })
             text_buffer.append_address(line, cast[u64](page.address))
         }
         case InvalidInstruction => text_buffer.append(line, "invalid instruction")

@@ -35,22 +35,20 @@ FOREGROUND_GREEN : u32 : 0xaa
 FOREGROUND_BLUE : u32 : 0xaa
 
 /*
- * Set console up on framebuffer, which is mapped at direct_map_offset plus its physical address,
- * and clear it to black.
+ * A console on framebuffer, which is mapped at direct_map_offset plus its physical address,
+ * cleared to black.
  */
-//HEMERA(gap): matching Ok(value) on this package's Result[Console, ConsoleError] from another
-//package fails ("Ok holds 0 values"); a Console is also too big to copy around (see parse_font)
-init_console :: fn(console: ptr[mut Console], framebuffer: ptr[boot_info.Framebuffer], direct_map_offset: u64) -> ConsoleError? {
-    font :: &console.font
-    match parse_font(font, FONT_DATA) {
-        case Some(error) => return ConsoleError.Font(error)
-        case None => {}
+make_console :: fn(framebuffer: ptr[boot_info.Framebuffer], direct_map_offset: u64) -> Result[Console, ConsoleError] {
+    made : Console
+    console :: &made
+    match parse_font(FONT_DATA) {
+        case Ok(font) => console.font = font
+        case Error(error) => return .Error(.Font(error))
     }
+    font :: &console.font
     bytes_per_pixel :: (cast[u32](framebuffer.bits_per_pixel) + 7) / 8
     if bytes_per_pixel < 2 || bytes_per_pixel > 4 || framebuffer.width < font.width || framebuffer.height < font.height {
-        //HEMERA(friction): a variant without values, named through its union, is taken as a function
-        unsupported : ConsoleError = .UnsupportedFramebuffer
-        return unsupported
+        return .Error(.UnsupportedFramebuffer)
     }
     console.pixels = direct_map_offset + cast[u64](framebuffer.memory.base)
     console.width = framebuffer.width
@@ -64,7 +62,7 @@ init_console :: fn(console: ptr[mut Console], framebuffer: ptr[boot_info.Framebu
     console.foreground = pixel_value(framebuffer, FOREGROUND_RED, FOREGROUND_GREEN, FOREGROUND_BLUE)
     console.background = pixel_value(framebuffer, 0, 0, 0)
     fill_rows(console, 0, console.height)
-    return null
+    return .Ok(made)
 }
 
 /*

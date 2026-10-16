@@ -10,8 +10,8 @@ package limine_boot
  *
  * Each ID is the common magic followed by the request's own two words.
  */
-//HEMERA(gap): calling a function in a constant's initializer crashes the compiler (no compile-time
-//execution yet), so every header is written out instead of built by a function
+//HEMERA(gap): a constant's value can't call a function until the compiler has compile-time
+//execution, so every header is written out instead of built by a function
 
 REQUESTS_START #externally_initialized #section(".limine_requests_start") : u64[4] : REQUESTS_START_MARKER
 

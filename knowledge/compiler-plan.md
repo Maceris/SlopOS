@@ -492,29 +492,34 @@ decide something first. C is larger work.
 
 ### A. Bugs and small fixes
 
-In the parser and checker, each with a test. Probably one session for all of them.
+**Done** 2026-10-15, each with a check in the compiler's hosted test, and the workarounds gone from
+`src/`:
 
-- [ ] **Union variants with any type:** `union_body` only takes identifiers in a variant's
-  parentheses, so `User(ptr[mut T])` and `Ipi(arch_interface.IpiKind)` don't parse. Parse each with
-  the type parser. Removes the aliases in `kernel/entry`.
-- [ ] **`Ok(value)` on a `Result` from another package:** "Ok holds 0 values" when `T` and `E` are
-  the other package's types. Probably the generic instance is made before its arguments are
-  resolved. Removes `init_console`'s pointer.
-- [ ] **A value for an optional parameter:** `SourceCodeLocation` isn't accepted for
-  `SourceCodeLocation?`, although `fits()` says a value fits an optional of its type. Find where
-  arguments skip that rule.
-- [ ] **A variant without values, through its union** (`ConsoleError.UnsupportedFramebuffer`) is a
-  value, not a function.
-- [ ] **`or_else` with a call that never returns** as its default (`or_else boot_failed(...)`):
-  `#never_returns` calls fit any type, the way `todo()` does.
-- [ ] **`.{...}` as an array literal's element**, taking the element type from the array; and an
-  `if` expression as a call's argument.
-- [ ] **Strings:** `==` and `!=` (a length check, then `memcmp`); slicing a string gives a string;
-  indexing an untyped string constant. Removes `same_text` and the `bit_cast[string]` slices.
-- [ ] **Large copies:** values bigger than 64 bytes are copied with `memcpy`, like zeroing, rather
-  than as LLVM aggregates. Then `parse_font` can return its `Font` again.
-- [ ] **Finding `std`:** without `--install-path`, look next to the compiler (an installed layout),
-  then in the source tree it was built from. Removes `boot.py`'s `--install-path`.
+- [x] **Union variants with any type:** payloads are parsed as types, so `User(ptr[mut T])` and
+  `Ipi(arch_interface.IpiKind)` work.
+- [x] **`Ok(value)` on a `Result` from another package**, and **a value for an optional parameter:**
+  one race. A signature only needs its types declared, so another thread could still be laying
+  out an instance like `Result[Font, FontError]` when a `match`, a call's arguments, or `or_else`
+  looked at its variants. Each now waits until the type is complete. The `Result` case failed about
+  one build in fifteen.
+- [x] **A variant without values, through its union**, is a value of the union. Converting a union
+  value to an optional of it wraps it in `Some` (it was passed through as is).
+- [x] **`or_else` with a call that never returns** as its default.
+- [x] **`.{...}` as an array literal's element** (and anywhere a struct type is expected), and **an
+  `if` expression as a call's argument.**
+- [x] **Strings:** `==` and `!=` (a count check and `memcmp`); a slice of a string is a string; an
+  untyped string constant can be indexed.
+- [x] **Large copies:** assigning or declaring from a value in memory copies with `memmove` above
+  64 bytes. Values passed to and returned from calls are still LLVM aggregates; a `Result[Font,
+  FontError]` costs the kernel build 17 s rather than 10, which is fine.
+- [x] **Finding `std`:** without `--install-path`, the nearest folder holding `std` from the
+  compiler's own folder up.
+- Found on the way, also fixed:
+  - Checking crashed on a member of a value whose type was unknown after an earlier error (a
+    missing package).
+  - `capture_stack_trace` found no frames on Windows at `-O0`: x64 Windows frames don't form a
+    frame-pointer chain, so the walker uses `RtlCaptureStackBackTrace` there (Hemera
+    `docs/calling_convention.md`).
 
 ### B. Decisions first
 

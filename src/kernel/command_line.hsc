@@ -31,8 +31,7 @@ parse_command_line :: fn(command_line: string) -> Options {
         }
         while end < command_line.count && command_line[end] != ' '
         if end > start {
-            //HEMERA(gap): slicing a string gives char[], not a string
-            apply_option(&options, bit_cast[string](command_line[start..<end]))
+            apply_option(&options, command_line[start..<end])
         }
         start = end + 1
     }
@@ -41,26 +40,13 @@ parse_command_line :: fn(command_line: string) -> Options {
 }
 
 apply_option :: fn(options: ptr[mut Options], word: string) {
-    if same_text(word, "test_exit") {
+    if word == "test_exit" {
         options.test_exit = true
     }
-    if same_text(word, "test_fault") {
+    if word == "test_fault" {
         options.test_fault = true
     }
-    if same_text(word, "test_assert") {
+    if word == "test_assert" {
         options.test_assert = true
     }
-}
-
-//HEMERA(gap): comparing strings with == can't be generated yet
-same_text :: fn(a, b: string) -> bool {
-    if a.count != b.count {
-        return false
-    }
-    for character, i in a {
-        if character != b[i] {
-            return false
-        }
-    }
-    return true
 }

@@ -30,30 +30,30 @@ KERNEL_LOGGER :: runtime.Logger.{
 }
 
 log_trace : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
-    write_log_line("trace", format_string, params.count, location, false)
+    write_log_line("trace", format_string, params.count, null)
 }
 
 log_debug : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
-    write_log_line("debug", format_string, params.count, location, false)
+    write_log_line("debug", format_string, params.count, null)
 }
 
 log_info : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
-    write_log_line("info", format_string, params.count, location, false)
+    write_log_line("info", format_string, params.count, null)
 }
 
 log_warn : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
-    write_log_line("warn", format_string, params.count, location, true)
+    write_log_line("warn", format_string, params.count, location)
 }
 
 log_error : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
-    write_log_line("error", format_string, params.count, location, true)
+    write_log_line("error", format_string, params.count, location)
 }
 
 log_fatal : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
-    write_log_line("fatal", format_string, params.count, location, true)
+    write_log_line("fatal", format_string, params.count, location)
 }
 
-write_log_line :: fn(level: string, message: string, parameter_count: usize, location: runtime.SourceCodeLocation, show_location: bool) {
+write_log_line :: fn(level: string, message: string, parameter_count: usize, location: runtime.SourceCodeLocation?) {
     storage : u8[256]
     line := text_buffer.make(storage)
     text_buffer.append(&line, "[")
@@ -65,8 +65,9 @@ write_log_line :: fn(level: string, message: string, parameter_count: usize, loc
         text_buffer.append_unsigned(&line, cast[u64](parameter_count))
         text_buffer.append(&line, " values not shown)")
     }
-    if show_location {
-        append_location(&line, location)
+    match location {
+        case Some(where) => append_location(&line, where)
+        case None => {}
     }
     if line.truncated {
         text_buffer.append(&line, "...")
