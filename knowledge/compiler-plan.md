@@ -621,10 +621,27 @@ result's bytes become constants in the program, read through the type's layout.
    assertion, trap, bad memory access or division by zero fails the build (E4029) and the compiler
    carries on, by restoring registers captured before entering the code (no unwind tables to
    unwind through). Windows only for the crash handling so far.
-4. **Reflection and the build API:** `base/compiler`'s functions, implemented by the compiler and
-   called from compiled code, then the build package (`decisions/0028`) and checks (`0029`), with
-   the permissions in Hemera `docs/compilation.md` (moved here from step 3, since only the build
-   package's own compile-time code gets them).
+4. **Reflection and the build API**, in three parts:
+   - [x] **4a** (done 2026-10-16): `base/compiler`'s functions for the program being compiled.
+     Compile-time code calls one compiler service with the function's name and pointers to its
+     arguments and result; the compiler writes `PackageInfo`, `FunctionInfo`, `ConstantInfo`,
+     `BuildOptions` and the rest field by field, laid out by `base`'s own declarations, in memory
+     that lasts the compilation (`middle_end/reflection.cpp`). Type descriptors in compile-time
+     code are the compiler's too, so a type from reflection equals the same type in code.
+     `package_info`, `find_constant` (values worked out in one run per package), `find_function`
+     (calls and used types from the checked body), `report_error`, `report_warning`,
+     `target_setting` (`--setting=name=value`), `build_permissions` (`--allow-run`, for the root
+     package's code), `command_line_options` and `current_build_options`. Not yet: parameters'
+     default values, `BuildOptions.settings` that build code can grow, `find_packages`. Found on
+     the way: a body counted as failed when any other thread reported an error meanwhile, so
+     compile-time code that called it failed quietly; checking now counts its own thread's errors.
+   - **4b**: build packages. Output type `.Nothing`; `add_target` compiles each target in the same
+     process once the build package is done, with its options, settings and package paths;
+     `add_check` runs the build's checks on each target after it's checked, with its
+     `ProgramInfo`; `add_step` runs steps after what they depend on; `find_packages` loads
+     packages that aren't imported. The JIT'd build code stays loaded across targets, so its
+     functions can be called back.
+   - **4c**: SlopOS's build package and house-rule checks (`decisions/0028`, `0029`).
 
 ## After M1
 
