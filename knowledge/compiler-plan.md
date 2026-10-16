@@ -635,12 +635,21 @@ result's bytes become constants in the program, read through the type's layout.
      default values, `BuildOptions.settings` that build code can grow, `find_packages`. Found on
      the way: a body counted as failed when any other thread reported an error meanwhile, so
      compile-time code that called it failed quietly; checking now counts its own thread's errors.
-   - **4b**: build packages. Output type `.Nothing`; `add_target` compiles each target in the same
-     process once the build package is done, with its options, settings and package paths;
-     `add_check` runs the build's checks on each target after it's checked, with its
-     `ProgramInfo`; `add_step` runs steps after what they depend on; `find_packages` loads
-     packages that aren't imported. The JIT'd build code stays loaded across targets, so its
-     functions can be called back.
+   - [x] **4b** (done 2026-10-16, except `find_packages`): build packages. A program whose
+     compile-time code registers targets produces nothing itself; once it's checked, each target
+     is compiled in the same process (its own program and MLIR context) from its `BuildOptions`
+     (root, output path, entry, settings, package paths, target options), run through the build's
+     checks with its `ProgramInfo` (written in the build's memory, describing the target's
+     declarations), then generated and linked; then the steps run with the targets' outputs. The
+     JIT'd code that registered a check or step stays loaded, and the compiler calls it through a
+     generated C wrapper that gives it a carrier block and the compile-time context. Reflection
+     leaves out constants it can't work out (like a struct holding a function) without reporting
+     them. Hemera's `Build.BuildsTargets` test builds a target with a check and a step. Found on
+     the way: compile-time code run from compile-time code (a `#run` in a constant's value) saw the
+     host's options, not the program's settings. Not yet: `find_packages`, whose found packages'
+     constants are meant to be typed by the build program, which needs a decision;
+     build code adding to `BuildOptions.settings`, which needs `array_add` (dynamic arrays aren't
+     generated yet).
    - **4c**: SlopOS's build package and house-rule checks (`decisions/0028`, `0029`).
 
 ## After M1
