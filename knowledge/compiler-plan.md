@@ -701,7 +701,7 @@ Started 2026-10-16, the next item of *After M1*.
 
 ## Phase 10: Fibers, morestack and Segmented Stacks
 
-Started 2026-10-16. Fibers come up on x86-64 frames that chain through `rbp` first: freestanding,
+**Done** 2026-10-16, with what's left under each step's *Not yet*. Started 2026-10-16. Fibers come up on x86-64 frames that chain through `rbp` first: freestanding,
 tested in SlopOS's kernel under QEMU (decided with the Hemera author), since Windows' frames don't
 always chain and there's no Linux host here.
 
@@ -733,7 +733,17 @@ always chain and there's no Linux host here.
    `morestack`'s return labels). The boot tests check that a trace at the bottom of a fiber is the
    same once it's resumed, ends the suspended fiber's own trace, and on segments has exactly one
    frame per call.
-4. **A scheduler** on fibers in `std/fiber`, and Windows (the frame chain, `docs/multitasking.md`).
+4. [x] **A scheduler, and Windows** (done 2026-10-16): on Windows x64, Hemera's functions use
+   System V's registers (`x86_64_sysvcc`) and the classic `rbp` frame without Windows unwind
+   information (decided with the Hemera author), from a second LLVM patch, `"classic-frame"`. So
+   the fiber switches, `morestack` and the stack walker are shared, and Windows uses the frame
+   chain walker instead of `RtlCaptureStackBackTrace`. `.c` functions, the entry and foreign calls
+   keep Windows' convention. `std/fiber`'s scheduler runs fibers on one carrier, taking turns in
+   order (`spawn`, `run_fibers`, `yield`). The hosted entry now gives the main thread a zeroed
+   carrier block. Hosted test `Hosted.RunsFibers` (built with morestack): three fibers under the
+   scheduler, one yielding from deep calls with the same trace once resumed, one growing onto
+   segments that all come back. Not yet: more than one carrier, `park`, allocating segments, and
+   fibers calling foreign code (the native-stack switch).
 
 ## After M1
 
@@ -752,8 +762,8 @@ In roughly the order SlopOS needs them, after Phase 7 (which covers entry functi
   The parser now takes constant expressions in array sizes and generic values
   (`u64[(size + 63) / 64]`, `Ring[u8, SIZE * 2]`), which it rejected before. Not yet: a
   wrong-kind value is reported at the generic's parameter rather than the use.
-- **Fibers, `morestack` and segmented stacks** (`docs/multitasking.md`), for user space. In progress
-  as Phase 10.
+- **Fibers, `morestack` and segmented stacks** (`docs/multitasking.md`), for user space. Done as
+  Phase 10.
 - **AArch64**, right after M3 (`decisions/0022`), where the carrier register is the cheaper case.
 
 ## Risks

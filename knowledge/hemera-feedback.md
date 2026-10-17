@@ -87,6 +87,15 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-16 — `compiler-plan.md` Phase 10, step 4: fibers and `morestack` on Windows, and a
+  scheduler in `std/fiber`. Decided with the Hemera author: on Windows, Hemera's functions use
+  System V's registers and classic frames without Windows unwind information (a second LLVM patch,
+  `"classic-frame"`), so the switches and walks are the same code everywhere; frame-based SEH and
+  C++ exceptions can't pass through them. Found on the way: `new_aligned`, `new_array_aligned`,
+  `free` and `free_array` were still `todo`, so nothing could allocate through an allocator;
+  comparing an optional with `null` wasn't generated; and hosted programs never set the carrier
+  register, which a stack check reads in `main`'s prologue. All fixed.
+
 - 2026-10-16 — `compiler-plan.md` Phase 10, step 3: stack traces through the fiber resume loop and
   across stack segments, and `capture_fiber_stack_trace`. The docs now say how segments are left
   out (two return addresses, `morestack`'s continuation and then `.grow`'s), and that the switches
