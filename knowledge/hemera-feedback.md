@@ -87,6 +87,11 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-17 — Parameter defaults can be any expression: they're checked with the function
+  (before its parameters exist, with its package's names) and generated at each call that leaves
+  them out, in the caller, with the caller's context (docs/functions.md, *Default Values*). A
+  default that doesn't fit its parameter is E4015.
+
 - 2026-10-17 — Generator gaps found in Phase 11: struct field defaults are now worked out as
   compile-time constants and used by literals that leave the field out and by declared variables
   (docs/types.md said so, but nothing did); a constant of a union with values (`PICKED : Shape :
