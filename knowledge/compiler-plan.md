@@ -775,9 +775,20 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    `RtlCaptureContext` showing the fiber's call ran on the thread's stack (the test fails with the
    switch taken out). Not yet: parameters that don't fit a register, variadic functions,
    callbacks (entry shims), and switching away from a plain thread's segments.
-3. **Threads in hosted programs**: creating threads with their own carrier blocks, a heap, and
-   carriers sleeping on the OS (`WaitOnAddress`, `futex`). Hosted test: a plain main thread and
-   two pools on different threads.
+3. [x] **Threads in hosted programs** (done 2026-10-16): `thread_create`, `thread_start` and
+   `thread_join` on Windows (in `base/runtime/windows.hsc`, through `#foreign`), each thread with
+   its own carrier block inside its `Thread`, entered through a `.c #no_context` function that
+   loads it, sets the stack limits from `GetCurrentThreadStackLimits` and ends with `ExitThread`.
+   Hosted programs' `main` starts with `runtime.HOSTED_CONTEXT`: the process heap as allocator
+   (`HeapAlloc`, any alignment). Pool carriers spin `IDLE_SPINS` times then sleep on the pool's
+   work epoch (`runtime.wait_on_value`, `WaitOnAddress`; a spin without an OS). Hosted test
+   `Hosted.RunsThreads`: a plain main thread, threads 1–2 on one pool and 3–5 on another (asleep
+   before the work arrives), and thread 6 with none; 100 fibers of 50 turns stay on their pool's
+   threads and every thread runs some. 50 runs clean, and 50 more with carriers sleeping at once.
+   Found: union constants with a payload, and struct field defaults in constants, can't be
+   generated (`DEFAULT_THREAD_STACK`), so `thread_create` takes a `ThreadStack?`. Not yet: Linux
+   and macOS threads (`clone`/`futex`), the carrier block in thread-local storage, threads on
+   segments, and allocating segments when a carrier's cache is empty.
 4. **`park` and waking**, and a lock or channel in std built on them.
 
 ## After M1

@@ -87,6 +87,11 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-16 — `compiler-plan.md` Phase 11, step 3: threads in hosted programs on Windows, a heap
+  for `main`, and pool carriers that sleep. Found, not fixed: constants of a union with a payload,
+  and struct field defaults inside a constant, can't be generated, and a parameter's default can
+  only be a literal, `context`, or a simple constant.
+
 - 2026-10-16 — `compiler-plan.md` Phase 11, step 2: foreign functions (`#library`, `#foreign`,
   `#link_name`) called through a shim that runs them on the thread's own stack.
 
