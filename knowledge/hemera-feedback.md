@@ -87,6 +87,11 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-16 — `compiler-plan.md` Phase 10, step 3: stack traces through the fiber resume loop and
+  across stack segments, and `capture_fiber_stack_trace`. The docs now say how segments are left
+  out (two return addresses, `morestack`'s continuation and then `.grow`'s), and that the switches
+  keep a fiber's `state` current, which the docs assumed but nothing did.
+
 - 2026-10-16 — `compiler-plan.md` Phase 10, step 2: `morestack` and stack segments, tested in a
   kernel built with morestack. `docs/calling_convention.md` had `.grow` end with `ret PARAM_BYTES`,
   but on x86-64 the caller pops the parameters, so it's a plain `ret`; and it had the sizes in the

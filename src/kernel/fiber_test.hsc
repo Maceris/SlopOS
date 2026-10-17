@@ -21,6 +21,13 @@ import frames from "frames"
 FiberTest :: struct {
     marks : u8[16],
     count : usize,
+    // Stack traces at the bottom, before suspending and once resumed, and the suspended fiber's from outside
+    before : rawptr[80],
+    before_count : usize,
+    after : rawptr[80],
+    after_count : usize,
+    outside : rawptr[80],
+    outside_count : usize,
 }
 
 // What the fibers write, in the order taking turns gives.
@@ -56,6 +63,10 @@ test_fibers :: fn(kernel #escaping : ptr[mut Kernel]) {
             else {
                 started[i] = true
                 exit = intrinsics.fiber_start(fiber)
+                // Suspended at the bottom of its calls, where its own trace was taken
+                if i == 0 {
+                    test.outside_count = intrinsics.capture_fiber_stack_trace(fiber, test.outside)
+                }
             }
             if exit == .Finished {
                 finished[i] = true
@@ -67,6 +78,11 @@ test_fibers :: fn(kernel #escaping : ptr[mut Kernel]) {
         return void
     }
     runtime.log_info("test_fibers: two fibers took turns")
+    // descend(1) to (3), fiber_a, fiber_run and fiber_entry, which ends the chain
+    if !traces_agree(test, 6) {
+        return void
+    }
+    runtime.log_info("test_fibers: stack traces follow suspended and resumed fibers")
 }
 
 // A fiber in a frame of its own, running function with a copy of this context pointing at test.
@@ -110,7 +126,15 @@ descend :: fn(test: ptr[mut FiberTest], letter: char, depth: u64) -> u64 {
     here :: depth * 10 + 1
     if depth == 0 {
         mark(test, letter)
-        pause()
+        if letter == 'a' {
+            test.before_count = intrinsics.capture_stack_trace(test.before)
+            pause()
+            // Through the frames the resume loop re-entered, the same trace
+            test.after_count = intrinsics.capture_stack_trace(test.after)
+        }
+        else {
+            pause()
+        }
         return 1
     }
     below :: descend(test, letter, depth - 1)
@@ -174,6 +198,7 @@ test_segments :: fn(kernel #escaping : ptr[mut Kernel]) {
     defer arch.unmask_interrupts()
     exit := intrinsics.fiber_start(fiber)
     if exit == .Yielded {
+        test.outside_count = intrinsics.capture_fiber_stack_trace(fiber, test.outside)
         exit = intrinsics.fiber_resume(fiber)
     }
     // All of them back: in the cache, or kept as the spare
@@ -184,6 +209,14 @@ test_segments :: fn(kernel #escaping : ptr[mut Kernel]) {
         return void
     }
     runtime.log_info("test_segments: a fiber grew past its first segment and back, and every segment came back")
+    // climb(1) to (64), fiber_deep, fiber_run and fiber_entry: none of morestack's frames, nor .grow's
+    if test.before_count != 67 {
+        runtime.log_error("test_segments: the trace from the bottom has % frames, not 67", test.before_count)
+        return void
+    }
+    if traces_agree(test, 67) {
+        runtime.log_info("test_segments: stack traces leave out morestack, across segments")
+    }
 }
 
 fiber_deep : runtime.ThreadFunction : fn(data #escaping : any) {
@@ -197,7 +230,9 @@ climb :: fn(test: ptr[mut FiberTest], depth: u64) -> u64 {
     padding[depth % 16] = depth
     if depth == 0 {
         mark(test, 'd')
+        test.before_count = intrinsics.capture_stack_trace(test.before)
         pause()
+        test.after_count = intrinsics.capture_stack_trace(test.after)
         return 0
     }
     return climb(test, depth - 1) + first_nonzero(padding)
@@ -211,4 +246,29 @@ first_nonzero :: fn(values: u64[]) -> u64 {
         }
     }
     return 0
+}
+
+/*
+ * Whether the traces agree: the one before suspending has at least least frames, the one after
+ * resuming is the same, and the suspended fiber's own, taken from outside, ends with it.
+ */
+traces_agree :: fn(test: ptr[FiberTest], least: usize) -> bool {
+    before :: test.before
+    after :: test.after
+    outside :: test.outside
+    count :: test.before_count
+    if count < least || count > before.count || test.after_count != count || test.outside_count < count
+        || test.outside_count > outside.count {
+        runtime.log_error("test_fibers: traces of %, % and % frames", count, test.after_count, test.outside_count)
+        return false
+    }
+    shift :: test.outside_count - count
+    for i in 0..<count {
+        at :: shift + i
+        if at >= outside.count || before[i] != after[i] || before[i] != outside[at] {
+            runtime.log_error("test_fibers: the traces differ at frame %", i)
+            return false
+        }
+    }
+    return true
 }

@@ -725,7 +725,14 @@ always chain and there's no Linux host here.
    suspending at the bottom and resumed back up through the segments, which all come back. Not
    yet: allocating a segment when none is cached, which needs the native stack (it traps), and
    `.AssertionHandler`.
-3. **Stack traces** through the resume loop and across segments (`capture_stack_trace`'s TODO).
+3. [x] **Stack traces** (done 2026-10-16): `capture_stack_trace` follows a re-entered frame through
+   the resume loop (the running fiber's `reentered_return`, found through `r14`) and leaves out
+   `morestack`'s and `.grow`'s frames; `capture_fiber_stack_trace` gives a suspended fiber's trace
+   from outside, its `top_continuation` first. The switches now keep `Fiber.state` current. The
+   generator gives the walks what they need from the assembly (`hemera.fiber_walk`, the loop's and
+   `morestack`'s return labels). The boot tests check that a trace at the bottom of a fiber is the
+   same once it's resumed, ends the suspended fiber's own trace, and on segments has exactly one
+   frame per call.
 4. **A scheduler** on fibers in `std/fiber`, and Windows (the frame chain, `docs/multitasking.md`).
 
 ## After M1
