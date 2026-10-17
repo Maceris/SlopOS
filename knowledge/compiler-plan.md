@@ -810,6 +810,11 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    foreign shim now moves only for the outermost foreign call, and moves a thread on segments
    below `native_sp`. Hosted test: `Hosted.RunsThreads`, now with morestack, has a pool fiber
    recurse 192 KiB and the pool-less thread 4 MiB past its 1 MiB stack, from empty caches.
+6. [x] **Conditions and channels** (done 2026-10-17): `std/concurrency`'s `Condition`
+   (`condition_wait`, `condition_signal`, `condition_broadcast`) and `Channel[T, capacity]`
+   (`channel_send`, `channel_receive`, `channel_close`), on `Mutex` and park/wake. Hosted test: 6
+   producer fibers in one pool send 1,200 values through a channel of 8 to 4 consumer fibers in the
+   other pool and to a plain thread; 50 runs clean.
 
 ## After M1
 
