@@ -385,6 +385,14 @@ halt #never_returns : fn() : ---
 // Hint that the caller is spinning.
 spin_hint : fn() : ---
 
+/*
+ * Stop the calling CPU taking interrupts (NMIs still arrive), and start again. Code running fibers
+ * masks them: while a fiber resumes, its stack holds live frames above the stack pointer, which an
+ * interrupt taken on that stack would overwrite (Hemera's docs/calling_convention.md).
+ */
+mask_interrupts : fn() : ---
+unmask_interrupts : fn() : ---
+
 // One value from the CPU's random source (RDSEED, RNDR, Zkr seed), or null if it has none or
 // it failed.
 hardware_entropy : fn() -> u64? : ---

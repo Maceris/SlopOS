@@ -24,6 +24,8 @@ TESTS = [
     ("refuses a CPU below x86-64-v3", 2, ["--cpu=qemu64"]),
     ("starts every CPU", 0, ["--expect-line=[info] 4 of 4 CPUs online", "--", "-smp", "4"]),
     ("resumes after an NMI", 0, ["--command-line=test_exit test_nmi", "--expect-line=[info] test_nmi: back from the NMI"]),
+    ("switches between fibers", 0, ["--command-line=test_exit test_fibers",
+                                    "--expect-line=[info] test_fibers: two fibers took turns"]),
 ]
 
 

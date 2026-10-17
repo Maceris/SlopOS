@@ -86,6 +86,14 @@ spin_hint :: fn() {
     x86_64.pause()
 }
 
+mask_interrupts :: fn() {
+    x86_64.cli()
+}
+
+unmask_interrupts :: fn() {
+    x86_64.sti()
+}
+
 // A value from RDSEED, or null if the CPU has none or it had nothing ready.
 hardware_entropy :: fn() -> u64? {
     features :: detect_features()

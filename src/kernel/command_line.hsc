@@ -19,6 +19,8 @@ Options :: struct {
     test_assert : bool,
     // test_nmi: once booted, raise an NMI, so a test can check that the kernel resumes after one.
     test_nmi : bool,
+    // test_fibers: once booted, run two fibers taking turns, to check fibers suspend and resume.
+    test_fibers : bool,
 }
 
 parse_command_line :: fn(command_line: string) -> Options {
@@ -53,5 +55,8 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_nmi" {
         options.test_nmi = true
+    }
+    if word == "test_fibers" {
+        options.test_fibers = true
     }
 }

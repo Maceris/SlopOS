@@ -87,6 +87,12 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-16 — `compiler-plan.md` Phase 10, step 1: fibers switch, on x86-64 frames that chain
+  through `rbp`, tested in the kernel. Found: the resume loop leaves a re-entered frame's data
+  below the stack pointer for a moment, so interrupts (or signals without an alternate stack) on a
+  fiber's stack would overwrite it; the docs say so now. Windows' frame pointers don't always
+  chain, which is an open question in `docs/multitasking.md`.
+
 - 2026-10-16 — Value generics (`docs/types.md`, *Values in Generic Lists*): `Ring[T, capacity]`,
   inferred and explicit values, values in `#if` and as constants in bodies. Found on the way: the
   parser rejected any arithmetic in an array size inside a type (`u8[SIZE / 2]`) and in a generic
