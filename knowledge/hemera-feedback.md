@@ -87,6 +87,12 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-17 — Two open questions settled with the Hemera author: `.AssertionHandler` is gone from
+  `StackCheckFailure` (only `.Morestack` and `.Trap`; the compiler had quietly turned it into no
+  check), and on Windows the thread environment block's stack bounds stay the thread's own, since
+  system code only runs there and faults on segments reach vectored handlers first
+  (`docs/calling_convention.md`, *Windows x64*).
+
 - 2026-10-17 — Hosted programs and threads on Linux x86-64 (`compiler-plan.md` Phase 11, step 9),
   without a C library. Found: hosted Linux programs entered at `hemera_entry` with `_start`'s
   stack alignment and nothing to return to, were linked as PIEs nothing relocated, and lost

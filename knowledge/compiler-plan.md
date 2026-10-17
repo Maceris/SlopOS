@@ -117,7 +117,10 @@ RISC-V) and puts a stack-limit check against `[carrier]` in every prologue
   2026-10-16 in Phase 10: `"split-stack-morestack"="symbol"` makes the out-of-line block a minimal
   frame, the frame size in `r10`, the parameters' size in `r11`, the body's address in `rax`, `call
   symbol`, `ret` (x86-64's caller pops the parameters, so no `ret PARAM_BYTES`).
-- [ ] **`.AssertionHandler`:** call a named function instead of trapping.
+- [x] **`.AssertionHandler`** (dropped 2026-10-17, with the Hemera author): a failing prologue has no
+  reliable context (LLVM drops unused context parameters) and only the guard's bytes of stack, so
+  a handler would need its own stack, which `.Trap` already gets from the kernel's fault handler
+  (the "reports a kernel fault" boot test). The compiler had been treating it as no check at all.
 - [x] **Thresholds** (done 2026-10-17): with a limit register, the patch now always compares
   `rsp - FRAME`, whatever the frame's size, so the 256-byte guard only has to hold what growing
   and suspending push (about 64 bytes each); LLVM's compare of `rsp` itself for frames under 256

@@ -85,7 +85,7 @@ check (`../decisions/0029`) enforces it.
 
 | Layers | Target | Build options | `std` tiers |
 |---|---|---|---|
-| L0–L2 | Kernel | `os = .None`, `startup_code = false`, `stack_check_failure = .AssertionHandler`, `red_zone = false`, SIMD off in `cpu_features`, ELF with a `linker_script` | `Freestanding`, `Allocating` (with the kernel's own allocators) |
+| L0–L2 | Kernel | `os = .None`, `startup_code = false`, `stack_check_failure = .Trap` (`.Morestack` for the boot tests that grow fiber stacks), `red_zone = false`, SIMD off in `cpu_features`, ELF with a `linker_script` | `Freestanding`, `Allocating` (with the kernel's own allocators) |
 | L3–L6 | User space | `os = .SlopOS`, startup code from `std` (`../decisions/0026`) | All, including `Os` |
 
 Host tests are a third target, for portable packages that don't need either.
