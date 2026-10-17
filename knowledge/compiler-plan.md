@@ -836,6 +836,16 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    Hosted test: `EnumSystemCodePagesA` calling back from `main` and from a fiber (same counts, the
    caller's `user_data`), and a `CreateThread` thread running a Hemera `.c` function with its own
    carrier block and the heap. Not yet: other systems, and a single-load TLS lookup.
+9. [x] **Hosted programs and threads on Linux** (done 2026-10-17, x86-64, tested on a Debian VM
+   over SSH with `apps/compiler/test/linux_tests.py`): a generated `_start` aligns the stack,
+   calls the entry and ends with `exit_group`; hosted programs link as plain static executables
+   (nothing applies a PIE's relocations without a C library); `main` is never inlined into the
+   entry, whose cleared frame pointer would hide it from stack traces. `base/runtime/linux.hsc`
+   does it all with `intrinsics.x86_64.syscall`: `mmap` pages as `HOSTED_CONTEXT`'s allocator,
+   threads by `clone` (`intrinsics.x86_64.clone_thread`, a generated stub that starts the thread
+   on its mapped stack), joined on the `CLONE_CHILD_CLEARTID` futex, and `wait_on_value` as a
+   private futex. The hosted and threads test programs pass there (threads 20 runs clean, on 2
+   CPUs). Not yet: callbacks from foreign code on Linux, a real allocator, and macOS.
 
 ## After M1
 

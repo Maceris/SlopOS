@@ -87,6 +87,12 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-17 — Hosted programs and threads on Linux x86-64 (`compiler-plan.md` Phase 11, step 9),
+  without a C library. Found: hosted Linux programs entered at `hemera_entry` with `_start`'s
+  stack alignment and nothing to return to, were linked as PIEs nothing relocated, and lost
+  `main` from stack traces when LLVM inlined it into the entry (Windows never did, since the two
+  use different conventions there).
+
 - 2026-10-17 — Parameter defaults can be any expression: they're checked with the function
   (before its parameters exist, with its package's names) and generated at each call that leaves
   them out, in the caller, with the caller's context (docs/functions.md, *Default Values*). A
