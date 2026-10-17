@@ -126,8 +126,10 @@ RISC-V) and puts a stack-limit check against `[carrier]` in every prologue
 - [ ] **AArch64 and RISC-V have no segmented-stack prologue in LLVM at all** (only x86 and 32-bit ARM
   do), so their check is new code in `AArch64FrameLowering` and `RISCVFrameLowering`: larger than the
   x86 patch, and needed when those ports start (after M3).
-- [ ] **Applying the patch in the build:** CMake could apply `third-party/patches/llvm/*.patch` before
-  configuring LLVM, so a fresh clone builds the patched compiler without a manual step.
+- [x] **Applying the patches in the build** (done 2026-10-17): configuring the compiler runs
+  `third-party/patches/llvm/apply_patches.cmake`, which applies each patch in order unless it
+  already reverses cleanly, and stops configuring if one doesn't apply. Tested on a clean copy of
+  the patched files: both apply, and a second run applies nothing.
 
 ## Phase 2: Packages, Names and `#if`
 

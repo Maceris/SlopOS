@@ -87,6 +87,14 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-17 — Generator gaps found in Phase 11: struct field defaults are now worked out as
+  compile-time constants and used by literals that leave the field out and by declared variables
+  (docs/types.md said so, but nothing did); a constant of a union with values (`PICKED : Shape :
+  .Rectangle(3, 4)`, `DEFAULT_THREAD_STACK`) is built as a struct shaped like its variant, since a
+  constant has no memory to build one in. Still not: a parameter default that's an expression
+  rather than a literal, `context` or a named constant. Also: configuring the compiler applies the
+  LLVM patches.
+
 - 2026-10-17 — Callbacks from foreign code into Hemera (`compiler-plan.md` Phase 11, step 8), on
   Windows x64: `.c` functions with a context work, through an entry shim.
 
