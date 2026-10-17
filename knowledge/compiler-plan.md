@@ -845,7 +845,11 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    threads by `clone` (`intrinsics.x86_64.clone_thread`, a generated stub that starts the thread
    on its mapped stack), joined on the `CLONE_CHILD_CLEARTID` futex, and `wait_on_value` as a
    private futex. The hosted and threads test programs pass there (threads 20 runs clean, on 2
-   CPUs). Not yet: callbacks from foreign code on Linux, a real allocator, and macOS.
+   CPUs). Then a real allocator: `PageHeap`, size classes 16 bytes to 2 KiB from 64 KiB chunks,
+   bigger blocks as their own pages, one spin lock; its state is in `intrinsics.process_state()`,
+   the runtime's one process-wide global (which `carrier_slot` moved into). Test `heap`: sizes
+   to 6 KiB, alignments to 4096, from one thread then four, on Windows and Linux. Not yet:
+   callbacks from foreign code on Linux, per-thread caches in the heap, and macOS.
 
 ## After M1
 
