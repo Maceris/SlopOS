@@ -92,7 +92,8 @@ Context for the open items, and choices SlopOS relies on.
   (docs/types.md said so, but nothing did); a constant of a union with values (`PICKED : Shape :
   .Rectangle(3, 4)`, `DEFAULT_THREAD_STACK`) is built as a struct shaped like its variant, since a
   constant has no memory to build one in. Still not: a parameter default that's an expression
-  rather than a literal, `context` or a named constant. Also: configuring the compiler applies the
+  rather than a literal, `context`, a named constant, an enum member or variant without values
+  (`.Fast`, `.None`), or an empty struct literal (`Options.{}`), which work. Also: configuring the compiler applies the
   LLVM patches.
 
 - 2026-10-17 — Callbacks from foreign code into Hemera (`compiler-plan.md` Phase 11, step 8), on
