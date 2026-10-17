@@ -87,6 +87,9 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-16 — `compiler-plan.md` Phase 11, step 2: foreign functions (`#library`, `#foreign`,
+  `#link_name`) called through a shim that runs them on the thread's own stack.
+
 - 2026-10-16 — `compiler-plan.md` Phase 11, step 1: fiber pools shared by several carriers,
   tested on SlopOS's CPUs. Found, not fixed: the bounds proofs treat a `u64` as possibly negative,
   so `(tail + i) % SIZE` isn't proven in bounds while `& MASK` is; `std/fiber` masks.

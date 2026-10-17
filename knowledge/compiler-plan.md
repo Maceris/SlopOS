@@ -764,8 +764,17 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    with an 8-slot ring, to keep the spill and steal paths busy. SlopOS got a kernel heap allocator
    over the frame allocator (`src/kernel/heap.hsc`). Not yet: sleeping when there's nothing to
    run (carriers spin), and `park`.
-2. **Foreign calls**: the native-stack shim from `docs/calling_convention.md` (*Calls to Foreign
-   Code*), `foreign_depth`, and a way to declare foreign functions in Hemera source.
+2. [x] **Foreign calls** (done 2026-10-16): `LIBRARY :: #library("name")` and
+   `f #foreign(LIBRARY) : fn(...) : ---`, with `#link_name("symbol")` (the syntax decided with the
+   Hemera author: a library constant). A foreign function's type is the platform's C convention
+   without a context; the program links each library (`name.lib`, `-lname`). Calls go through a
+   generated shim per function that counts `foreign_depth`, moves to the scheduler's stack on a
+   fiber (with `native_stack_limit`), copies stack arguments (Windows x64 after four, above the
+   shadow space; System V after six integers or eight floats) and calls. Hosted test: kernel32
+   and ntdll functions from `main` and from a fiber, one with arguments on the stack, and
+   `RtlCaptureContext` showing the fiber's call ran on the thread's stack (the test fails with the
+   switch taken out). Not yet: parameters that don't fit a register, variadic functions,
+   callbacks (entry shims), and switching away from a plain thread's segments.
 3. **Threads in hosted programs**: creating threads with their own carrier blocks, a heap, and
    carriers sleeping on the OS (`WaitOnAddress`, `futex`). Hosted test: a plain main thread and
    two pools on different threads.
