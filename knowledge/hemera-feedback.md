@@ -87,6 +87,11 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-17 — Allocating stack segments when a carrier's cache is empty (`compiler-plan.md`
+  Phase 11, step 5): fibers on any thread, and plain threads past their own stack, now grow.
+  Found: LLVM drops unused parameters of internal functions, the context included, so nothing can
+  assume `rdi` holds one at a function's prologue.
+
 - 2026-10-17 — `compiler-plan.md` Phase 11, step 4: `runtime.park` and `runtime.wake`, and a
   `Mutex` in `std/concurrency`. Found and fixed: a `match`'s bound values were the matched
   place's memory rather than copies, so `case Some(waiter) => { here.parking = null; ... waiter }`

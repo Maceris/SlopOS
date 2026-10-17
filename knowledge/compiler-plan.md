@@ -801,6 +801,15 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    fixed: a `match`'s values pointed into the matched place, so changing it in the arm changed them.
    Found: `Fiber` is 240 bytes, so a fiber's block is 1520 of its 1536-byte budget. Not yet: a
    channel, condition variables, and timeouts.
+5. [x] **Allocating segments** (done 2026-10-17): with nothing in the cache, `morestack` calls
+   `runtime.allocate_stack_segment` on the native stack (below the scheduler on a fiber, below the
+   new `native_sp` on a thread already on segments, in place otherwise), saving the argument
+   registers and `xmm0`–`xmm7`, counting it as foreign code and with no stack limit. It uses the
+   carrier's new `segment_allocator`, not the grown function's context: LLVM drops unused context
+   parameters from internal functions, so `rdi` isn't always one (found the hard way). The
+   foreign shim now moves only for the outermost foreign call, and moves a thread on segments
+   below `native_sp`. Hosted test: `Hosted.RunsThreads`, now with morestack, has a pool fiber
+   recurse 192 KiB and the pool-less thread 4 MiB past its 1 MiB stack, from empty caches.
 
 ## After M1
 
