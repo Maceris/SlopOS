@@ -87,6 +87,12 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-17 — `std/containers` (roadmap M0): `FixedArray[T, capacity]`, `RingBuffer[T, capacity]`,
+  `Bitmap[size]` and an intrusive `List` of `ListLink`s, none allocating, in the freestanding
+  tier, tested hosted on Windows and Linux. Found: the bounds proofs forget what they knew about a
+  field once it's assigned, so `array.count -= 1` then `items[array.count]` isn't proven; reading
+  `items[last]` before `array.count = last` is.
+
 - 2026-10-17 — Two open questions settled with the Hemera author: `.AssertionHandler` is gone from
   `StackCheckFailure` (only `.Morestack` and `.Trap`; the compiler had quietly turned it into no
   check), and on Windows the thread environment block's stack bounds stay the thread's own, since
