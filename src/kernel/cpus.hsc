@@ -73,6 +73,9 @@ cpu_started :: fn() #never_returns {
     }
     push_context cpu_context from cpu.context {
         runtime.log_info("CPU % online", cpu.index)
+        if kernel.options.test_pool {
+            join_pool_test(kernel, cpu.index)
+        }
         arch.idle()
     }
 }

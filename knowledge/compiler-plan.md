@@ -745,6 +745,32 @@ always chain and there's no Linux host here.
    segments that all come back. Not yet: more than one carrier, `park`, allocating segments, and
    fibers calling foreign code (the native-stack switch).
 
+## Phase 11: Fiber Pools Across Carriers
+
+Started 2026-10-16. Fiber runtimes that threads opt into: a program can have threads without one,
+and several pools, each shared by its own threads (decided with the Hemera author: the pool logic
+first, tested on SlopOS's CPUs, then threads in hosted programs).
+
+1. [x] **Pools** (done 2026-10-16): `std/fiber`'s `FiberPool` replaces the one-carrier scheduler
+   (`create_fiber_pool`, `spawn`, `close_pool`, `run_carrier`, `destroy_fiber_pool`). Each carrier
+   has a ring of 256 that thieves take from by compare and exchange; the pool has a shared queue
+   behind a spin lock; a carrier takes its share of the shared queue, steals half of another's
+   ring with nothing left, and looks at the shared queue first every 61 turns. Yielded fibers go
+   to the shared queue, and only once they've switched away; fibers spawned on a pool's fiber go
+   to that carrier's ring, which spills half to the shared queue when full. `std/fiber` is now the
+   allocating tier. Boot test `test_pool` (6 CPUs): CPUs 1–2 run one pool and 3–5 another, the
+   boot CPU none; 60 fibers take 16 turns each, staying on their pool's CPUs, every CPU running
+   some, fibers moving between CPUs, a fiber spawning 300 more from inside. Also passed repeatedly
+   with an 8-slot ring, to keep the spill and steal paths busy. SlopOS got a kernel heap allocator
+   over the frame allocator (`src/kernel/heap.hsc`). Not yet: sleeping when there's nothing to
+   run (carriers spin), and `park`.
+2. **Foreign calls**: the native-stack shim from `docs/calling_convention.md` (*Calls to Foreign
+   Code*), `foreign_depth`, and a way to declare foreign functions in Hemera source.
+3. **Threads in hosted programs**: creating threads with their own carrier blocks, a heap, and
+   carriers sleeping on the OS (`WaitOnAddress`, `futex`). Hosted test: a plain main thread and
+   two pools on different threads.
+4. **`park` and waking**, and a lock or channel in std built on them.
+
 ## After M1
 
 In roughly the order SlopOS needs them, after Phase 7 (which covers entry functions):

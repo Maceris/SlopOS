@@ -41,6 +41,8 @@ Kernel :: struct {
     frames : frames.FrameAllocator,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : concurrency.SpinLock,
+    // test_pool's state, as an address, once the boot CPU has set it up for the other CPUs (pool_test.hsc)
+    pool_test : u64,
     // Text on the first framebuffer, if there is one and it could be set up.
     framebuffer_console : console.Console,
     has_framebuffer_console : bool,
@@ -134,6 +136,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         }
         if kernel.options.test_segments {
             test_segments(kernel)
+        }
+        if kernel.options.test_pool {
+            test_pool(kernel)
         }
         if kernel.options.test_assert {
             runtime.log_info("test_assert: failing an assertion")

@@ -87,6 +87,10 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-16 — `compiler-plan.md` Phase 11, step 1: fiber pools shared by several carriers,
+  tested on SlopOS's CPUs. Found, not fixed: the bounds proofs treat a `u64` as possibly negative,
+  so `(tail + i) % SIZE` isn't proven in bounds while `& MASK` is; `std/fiber` masks.
+
 - 2026-10-16 — `compiler-plan.md` Phase 10, step 4: fibers and `morestack` on Windows, and a
   scheduler in `std/fiber`. Decided with the Hemera author: on Windows, Hemera's functions use
   System V's registers and classic frames without Windows unwind information (a second LLVM patch,

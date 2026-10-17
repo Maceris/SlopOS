@@ -27,6 +27,8 @@ TESTS = [
     ("resumes after an NMI", 0, ["--command-line=test_exit test_nmi", "--expect-line=[info] test_nmi: back from the NMI"]),
     ("switches between fibers", 0, ["--command-line=test_exit test_fibers",
                                     "--expect-line=[info] test_fibers: stack traces follow suspended and resumed fibers"]),
+    ("shares fiber pools between CPUs", 0, ["--command-line=test_exit test_pool",
+        "--expect-line=[info] test_pool: two pools shared five CPUs, each fiber staying on its own pool's", "--", "-smp", "6"]),
 ]
 
 # The same, on the kernel built with morestack

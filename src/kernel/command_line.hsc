@@ -23,6 +23,8 @@ Options :: struct {
     test_fibers : bool,
     // test_segments: once booted, run a fiber that grows onto more stack segments (a morestack kernel).
     test_segments : bool,
+    // test_pool: once booted, run two fiber pools on CPUs 1 to 5 (needs 6 CPUs).
+    test_pool : bool,
 }
 
 parse_command_line :: fn(command_line: string) -> Options {
@@ -63,5 +65,8 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_segments" {
         options.test_segments = true
+    }
+    if word == "test_pool" {
+        options.test_pool = true
     }
 }
