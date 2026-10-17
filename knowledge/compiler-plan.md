@@ -789,7 +789,18 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    generated (`DEFAULT_THREAD_STACK`), so `thread_create` takes a `ThreadStack?`. Not yet: Linux
    and macOS threads (`clone`/`futex`), the carrier block in thread-local storage, threads on
    segments, and allocating segments when a carrier's cache is empty.
-4. **`park` and waking**, and a lock or channel in std built on them.
+4. [x] **`park` and waking** (done 2026-10-17): `base/runtime/park.hsc`'s `Waiter`, one in each
+   `Fiber` and each carrier block, with `current_waiter`, `prepare_wait`, `park` and `wake`. A
+   fiber parks through the scheduler's `park_function` (in the carrier block), and the carrier marks
+   it parked only after the switch, by compare and exchange, so a wake during the switch isn't lost;
+   `wake` queues a parked fiber through its `wake_function`, back into its own pool from any thread.
+   Threads, and fibers that can't suspend, block on `wait_on_value`. `std/concurrency`'s `Mutex`
+   hands the lock straight to its first waiter. Tests: the hosted threads test and SlopOS's
+   `test_pool` add to a counter behind one mutex every turn, yielding while holding it (two pools,
+   plus `main` and a plain thread blocking, hosted); 50 hosted runs and 8 boots clean. Found and
+   fixed: a `match`'s values pointed into the matched place, so changing it in the arm changed them.
+   Found: `Fiber` is 240 bytes, so a fiber's block is 1520 of its 1536-byte budget. Not yet: a
+   channel, condition variables, and timeouts.
 
 ## After M1
 

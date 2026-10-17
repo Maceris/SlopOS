@@ -3,6 +3,7 @@ package kernel
 import intrinsics from "base"
 import runtime from "base"
 import fiber from "std"
+import concurrency from "std"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -18,6 +19,9 @@ import fiber from "std"
  * fibers have to move between CPUs. One fiber of the first pool spawns another from inside it, and
  * one of the second spawns CHILD_FIBERS, more than its CPU's own queue holds, so half of that queue
  * moves to the pool's shared queue and the other CPUs take from it.
+ *
+ * Every turn also adds one to a counter behind a std/concurrency Mutex that both pools share,
+ * yielding while holding it, so fibers park waiting for it and are woken by fibers of either pool.
  */
 POOL_CPUS : u32 : 6
 POOL_TURNS :: 16
@@ -50,6 +54,9 @@ PoolTest :: struct {
     children : u64,
     // CPUs that have left their pool
     carriers_done : u64,
+    // Every turn adds one to counter with counter_lock held, yielding in between, so fibers park on it
+    counter_lock : concurrency.Mutex,
+    counter : u64,
 }
 
 test_pool :: fn(kernel #escaping : ptr[mut Kernel]) {
@@ -96,6 +103,11 @@ test_pool :: fn(kernel #escaping : ptr[mut Kernel]) {
     if !first_ok || !second_ok {
         return void
     }
+    if test.counter != (FIRST_POOL_FIBERS + SECOND_POOL_FIBERS) * POOL_TURNS {
+        runtime.log_error("test_pool: the counter behind the mutex is %, not %", test.counter,
+            (FIRST_POOL_FIBERS + SECOND_POOL_FIBERS) * POOL_TURNS)
+        return void
+    }
     if test.children != CHILD_FIBERS + 1 {
         runtime.log_error("test_pool: % fibers spawned from fibers ran, not %", test.children, CHILD_FIBERS + 1)
         return void
@@ -107,7 +119,7 @@ test_pool :: fn(kernel #escaping : ptr[mut Kernel]) {
     runtime.log_info("test_pool: two pools shared five CPUs, each fiber staying on its own pool's")
 }
 
-spawn_into :: fn(pool: ptr[mut fiber.FiberPool], function: runtime.ThreadFunction, count: usize) -> bool {
+spawn_into :: fn(pool #escaping : ptr[mut fiber.FiberPool], function: runtime.ThreadFunction, count: usize) -> bool {
     for i in 0..<count {
         _, error :: fiber.spawn(pool, function)
         if error != null {
@@ -185,6 +197,15 @@ child_worker : runtime.ThreadFunction : fn(data #escaping : any) {
     intrinsics.interlocked_increment_u64(&test.children)
 }
 
+// One more on the counter: read, yield, write, all with the lock held, so others wanting it park.
+add_one :: fn(test: ptr[mut PoolTest]) {
+    concurrency.mutex_lock(&test.counter_lock)
+    defer concurrency.mutex_unlock(&test.counter_lock)
+    before :: test.counter
+    runtime.fiber_yield()
+    test.counter = before + 1
+}
+
 take_turns :: fn(counts: ptr[mut PoolCounts], cpus: u64) {
     previous := per_cpu().index
     for turn in 0..<POOL_TURNS {
@@ -199,6 +220,7 @@ take_turns :: fn(counts: ptr[mut PoolCounts], cpus: u64) {
         intrinsics.interlocked_or_u64(&counts.cpus, bit)
         intrinsics.interlocked_increment_u64(&counts.turns)
         previous = here
+        add_one(cast[ptr[mut PoolTest]](context.user_data))
         runtime.fiber_yield()
     }
 }

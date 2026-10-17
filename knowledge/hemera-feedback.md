@@ -87,6 +87,12 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-17 — `compiler-plan.md` Phase 11, step 4: `runtime.park` and `runtime.wake`, and a
+  `Mutex` in `std/concurrency`. Found and fixed: a `match`'s bound values were the matched
+  place's memory rather than copies, so `case Some(waiter) => { here.parking = null; ... waiter }`
+  read null. Found, not fixed: `Fiber` grew to 240 bytes, which uses the memory budget's slack
+  (1520 of 1536 bytes per fiber).
+
 - 2026-10-16 — `compiler-plan.md` Phase 11, step 3: threads in hosted programs on Windows, a heap
   for `main`, and pool carriers that sleep. Found, not fixed: constants of a union with a payload,
   and struct field defaults inside a constant, can't be generated, and a parameter's default can
