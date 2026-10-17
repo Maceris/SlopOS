@@ -87,6 +87,13 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-17 — A compiler quality pass over gaps found along the way: the bounds proofs now
+  know an unsigned remainder by a constant is below it (wrapped or not), and keep what they knew
+  about an integer field a store changes (`count -= 1` moves it, `count = 3` sets it; other paths
+  are still forgotten, since they may alias); a generic value of the wrong kind is reported at the
+  use (`Ring[u8, true]`), not at the generic; and a callback finds its carrier block in one load
+  from the thread environment block on Windows. Each with a test.
+
 - 2026-10-17 — `std/containers` (roadmap M0): `FixedArray[T, capacity]`, `RingBuffer[T, capacity]`,
   `Bitmap[size]` and an intrusive `List` of `ListLink`s, none allocating, in the freestanding
   tier, tested hosted on Windows and Linux. Found: the bounds proofs forget what they knew about a
