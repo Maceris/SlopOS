@@ -98,7 +98,9 @@ make_fiber :: fn(kernel: ptr[mut Kernel], test #escaping : ptr[mut FiberTest], f
     }
     fiber :: cast[ptr[mut runtime.Fiber]](frames.virtual_of(&kernel.frames, address))
     fiber.function = function
-    fiber.data = null
+    // No data: an empty any
+    nothing : any
+    fiber.data = nothing
     fiber.context = context
     fiber.context.user_data = cast[rawptr](test)
     fiber.state = .NotStarted

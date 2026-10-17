@@ -87,6 +87,11 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-17 — The fiber memory budget (`compiler-plan.md` Phase 11, step 7): `Fiber` is 160
+  bytes, a fiber's block 1440 of 1536. Found: LLVM compared the stack pointer itself against the
+  limit for frames under 256 bytes, which could use most of the 256-byte guard before morestack
+  pushed anything; the limit-register patch now always compares the frame's end.
+
 - 2026-10-17 — Allocating stack segments when a carrier's cache is empty (`compiler-plan.md`
   Phase 11, step 5): fibers on any thread, and plain threads past their own stack, now grow.
   Found: LLVM drops unused parameters of internal functions, the context included, so nothing can

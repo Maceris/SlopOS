@@ -118,10 +118,11 @@ RISC-V) and puts a stack-limit check against `[carrier]` in every prologue
   frame, the frame size in `r10`, the parameters' size in `r11`, the body's address in `rax`, `call
   symbol`, `ret` (x86-64's caller pops the parameters, so no `ret PARAM_BYTES`).
 - [ ] **`.AssertionHandler`:** call a named function instead of trapping.
-- [ ] **Thresholds:** LLVM compares `rsp` directly for frames under 256 bytes and checks every function
-  with a frame; Hemera's convention uses `STACK_SMALL` (128) with a 256-byte `STACK_GUARD`, and skips
-  leaf functions whose frame fits in 128 bytes. Either add attributes for both, or adjust Hemera's
-  constants to LLVM's (a 512-byte guard would keep the reasoning).
+- [x] **Thresholds** (done 2026-10-17): with a limit register, the patch now always compares
+  `rsp - FRAME`, whatever the frame's size, so the 256-byte guard only has to hold what growing
+  and suspending push (about 64 bytes each); LLVM's compare of `rsp` itself for frames under 256
+  bytes could have used ~255 bytes of the guard first. `STACK_SMALL` is gone: LLVM checks every
+  function with a frame.
 - [ ] **AArch64 and RISC-V have no segmented-stack prologue in LLVM at all** (only x86 and 32-bit ARM
   do), so their check is new code in `AArch64FrameLowering` and `RISCVFrameLowering`: larger than the
   x86 patch, and needed when those ports start (after M3).
@@ -815,6 +816,14 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    (`channel_send`, `channel_receive`, `channel_close`), on `Mutex` and park/wake. Hosted test: 6
    producer fibers in one pool send 1,200 values through a channel of 8 to 4 consumer fibers in the
    other pool and to a plain thread; 50 runs clean.
+7. [x] **The fiber memory budget** (done 2026-10-17, choices made with the Hemera author): `Fiber`
+   from 240 to 160 bytes, a fiber's block from 1520 to 1440 of its 1536. `FiberResumeState` keeps
+   only `saved_sp`: `fiber_suspend` pushes the top frame, the carrier's limit and segment next to
+   the registers on the fiber's own stack, and the resume loop's state moved to the carrier block
+   (`resume_frame`, `resume_return`, `resume_parent`). Also `data` as `any`, one `scheduler`
+   pointer (a `FiberScheduler` header at the start of a pool), a 16-byte `Waiter` that finds its
+   fiber by offset (waits are now 32-bit, as futexes are), the extensions as a pointer and a `u32`,
+   and `FiberState` as `u8`. And the guard margin fix above.
 
 ## After M1
 
