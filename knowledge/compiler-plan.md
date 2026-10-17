@@ -824,6 +824,16 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    pointer (a `FiberScheduler` header at the start of a pool), a 16-byte `Waiter` that finds its
    fiber by offset (waits are now 32-bit, as futexes are), the extensions as a pointer and a `u32`,
    and `FiberState` as `u8`. And the guard margin fix above.
+8. [x] **Callbacks from foreign code** (done 2026-10-17, Windows x64): a `.c` function with a
+   context gets an entry shim with its symbol, which keeps foreign code's `r14`, finds the thread's
+   carrier block through a TLS slot (`intrinsics.carrier_slot`, filled by `runtime.register_carrier`
+   from the hosted entry and each thread's entry), making one for a thread Hemera didn't start,
+   and calls the body (`symbol.body`) with the context the enclosing foreign call kept in
+   `foreign_context`, or `HOSTED_CONTEXT`. Calls by name go to the body. Foreign call sites keep
+   the caller's context in the carrier for the call. The `c_needs_no_context` error is gone.
+   Hosted test: `EnumSystemCodePagesA` calling back from `main` and from a fiber (same counts, the
+   caller's `user_data`), and a `CreateThread` thread running a Hemera `.c` function with its own
+   carrier block and the heap. Not yet: other systems, and a single-load TLS lookup.
 
 ## After M1
 
