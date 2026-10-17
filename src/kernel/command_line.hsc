@@ -21,6 +21,8 @@ Options :: struct {
     test_nmi : bool,
     // test_fibers: once booted, run two fibers taking turns, to check fibers suspend and resume.
     test_fibers : bool,
+    // test_segments: once booted, run a fiber that grows onto more stack segments (a morestack kernel).
+    test_segments : bool,
 }
 
 parse_command_line :: fn(command_line: string) -> Options {
@@ -58,5 +60,8 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_fibers" {
         options.test_fibers = true
+    }
+    if word == "test_segments" {
+        options.test_segments = true
     }
 }

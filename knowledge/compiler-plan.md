@@ -113,9 +113,10 @@ RISC-V) and puts a stack-limit check against `[carrier]` in every prologue
   alternative if patches multiply.
 
 **Still to do in the patch, for Phase 6 and later** (none changes the language):
-- [ ] **Hemera's `morestack` protocol** (`docs/calling_convention.md`, *Growing the Stack*): a minimal
-  frame, the body's address in `rax`, `call morestack`, `ret PARAM_BYTES`, instead of libgcc's
-  `__morestack` (frame size in `r10`, argument size in `r11`). Only the out-of-line block changes.
+- [x] **Hemera's `morestack` protocol** (`docs/calling_convention.md`, *Growing the Stack*), done
+  2026-10-16 in Phase 10: `"split-stack-morestack"="symbol"` makes the out-of-line block a minimal
+  frame, the frame size in `r10`, the parameters' size in `r11`, the body's address in `rax`, `call
+  symbol`, `ret` (x86-64's caller pops the parameters, so no `ret PARAM_BYTES`).
 - [ ] **`.AssertionHandler`:** call a named function instead of trapping.
 - [ ] **Thresholds:** LLVM compares `rsp` directly for frames under 256 bytes and checks every function
   with a frame; Hemera's convention uses `STACK_SMALL` (128) with a 256-byte `STACK_GUARD`, and skips
@@ -714,9 +715,16 @@ always chain and there's no Linux host here.
    while the loop re-enters a frame, that frame's data is below the stack pointer, so a kernel
    running fibers has to take interrupts elsewhere or mask them (SlopOS's
    `arch_interface.mask_interrupts`); written into `docs/calling_convention.md`.
-2. **`morestack` and segments**: the LLVM patch's out-of-line block calls Hemera's `morestack`
-   (the protocol in `docs/calling_convention.md`), segments from the carrier's cache, and a fiber
-   test that recurses past its first segment.
+2. [x] **`morestack` and segments** (done 2026-10-16): the LLVM patch's out-of-line block calls
+   Hemera's `morestack` (`"split-stack-morestack"`), which the compiler generates for
+   `stack_check_failure = .Morestack` (`--stack-check=morestack`) on x86-64 targets whose frames
+   chain: it takes the carrier's spare or a cached segment, copies the stack parameters, runs the
+   body there, and keeps the segment as the spare after. The build API's `.Morestack` stays off on
+   Windows. Boot test `test_segments` (on a second kernel, built with the build package's
+   `stack_check=morestack`): a fiber recursing about 11 KiB deep from a 1 KiB first segment,
+   suspending at the bottom and resumed back up through the segments, which all come back. Not
+   yet: allocating a segment when none is cached, which needs the native stack (it traps), and
+   `.AssertionHandler`.
 3. **Stack traces** through the resume loop and across segments (`capture_stack_trace`'s TODO).
 4. **A scheduler** on fibers in `std/fiber`, and Windows (the frame chain, `docs/multitasking.md`).
 

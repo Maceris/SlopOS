@@ -1,6 +1,7 @@
 """
 Builds SlopOS's kernel once, through its build package (src/build), then boots it for each test
-below with tools/boot.py and checks the code it stops with (src/kernel/stop.hsc, StopReason).
+below with tools/boot.py and checks the code it stops with (src/kernel/stop.hsc, StopReason). Tests
+of growing stacks get a second kernel, built with morestack (the build package's stack_check).
 Exits 0 if every test passed.
 
     python tools/boot_tests.py
@@ -28,10 +29,16 @@ TESTS = [
                                     "--expect-line=[info] test_fibers: two fibers took turns"]),
 ]
 
+# The same, on the kernel built with morestack
+MORESTACK_TESTS = [
+    ("grows a fiber's stack onto segments", 0, ["--command-line=test_exit test_segments",
+        "--expect-line=[info] test_segments: a fiber grew past its first segment and back, and every segment came back"]),
+]
 
-def build_kernel(output: Path) -> bool:
+
+def build_kernel(output: Path, stack_check: str = "trap") -> bool:
     """Builds the kernel through the build package, checks and all."""
-    command = ["hemera", f"--setting=targets=kernel,kernel_output={output}", str(ROOT / "src" / "build")]
+    command = ["hemera", f"--setting=targets=kernel,stack_check={stack_check},kernel_output={output}", str(ROOT / "src" / "build")]
     if os.environ.get("HEMERA_INSTALL"):
         command.insert(1, f"--install-path={os.environ['HEMERA_INSTALL']}")
     return subprocess.run(command).returncode == 0
@@ -43,12 +50,20 @@ def main() -> int:
         if not build_kernel(kernel):
             print("FAILED: the kernel doesn't build")
             return 1
-        return run_tests(kernel)
+        morestack_kernel = Path(temporary) / "kernel_morestack.elf"
+        if not build_kernel(morestack_kernel, "morestack"):
+            print("FAILED: the kernel doesn't build with morestack")
+            return 1
+        failed = run_tests(kernel, TESTS) + run_tests(morestack_kernel, MORESTACK_TESTS)
+        count = len(TESTS) + len(MORESTACK_TESTS)
+        print(f"{count - failed} of {count} passed")
+        return 0 if failed == 0 else 1
 
 
-def run_tests(kernel: Path) -> int:
+def run_tests(kernel: Path, tests: list) -> int:
+    """Boots kernel for each test, and gives how many failed."""
     failed = 0
-    for name, expected, arguments in TESTS:
+    for name, expected, arguments in tests:
         result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", "--timeout=60", f"--expect={expected}",
                                  *arguments], capture_output=True, text=True)
         passed = result.returncode == 0
@@ -57,8 +72,7 @@ def run_tests(kernel: Path) -> int:
             failed += 1
             sys.stdout.write(result.stdout)
             sys.stdout.write(result.stderr)
-    print(f"{len(TESTS) - failed} of {len(TESTS)} passed")
-    return 0 if failed == 0 else 1
+    return failed
 
 
 if __name__ == "__main__":

@@ -87,6 +87,11 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-16 — `compiler-plan.md` Phase 10, step 2: `morestack` and stack segments, tested in a
+  kernel built with morestack. `docs/calling_convention.md` had `.grow` end with `ret PARAM_BYTES`,
+  but on x86-64 the caller pops the parameters, so it's a plain `ret`; and it had the sizes in the
+  other registers from LLVM's order, which the patch keeps. Both fixed in the docs.
+
 - 2026-10-16 — `compiler-plan.md` Phase 10, step 1: fibers switch, on x86-64 frames that chain
   through `rbp`, tested in the kernel. Found: the resume loop leaves a re-entered frame's data
   below the stack pointer for a moment, so interrupts (or signals without an alternate stack) on a

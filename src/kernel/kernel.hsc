@@ -132,6 +132,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         if kernel.options.test_fibers {
             test_fibers(kernel)
         }
+        if kernel.options.test_segments {
+            test_segments(kernel)
+        }
         if kernel.options.test_assert {
             runtime.log_info("test_assert: failing an assertion")
             runtime.assert(false, "test_assert")

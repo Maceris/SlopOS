@@ -7,6 +7,8 @@
  * - targets: all (the default), kernel, or tests.
  * - kernel_output: the kernel's ELF, kernel.elf by default.
  * - tests_output: the folder test programs go in, the current folder by default.
+ * - stack_check: what the kernel's prologue checks do without room, trap (the default) or morestack,
+ *   which a boot test of stack segments builds.
  */
 package build
 
@@ -40,6 +42,9 @@ add_kernel :: fn() {
     kernel.target_options.startup_code = false
     kernel.target_options.red_zone = false
     kernel.target_options.stack_check_failure = .Trap
+    if compiler.target_setting("stack_check", default = "trap") == "morestack" {
+        kernel.target_options.stack_check_failure = .Morestack
+    }
     kernel.target_options.cpu_features = "-mmx,-sse,-sse2,-avx,-avx2,+soft-float"
     kernel.target_options.linker_script = "../boot/limine/x86_64.ld"
     target :: compiler.add_target(kernel)
