@@ -902,6 +902,13 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    the stack checker (shorthand variants weren't followed); `optional == value` compared the tag
    as the value; LLVM turned string-end loops into `strlen`/`wcslen` calls (now `no-builtin-*`).
    Tests `Hosted.UsesFilesAndArguments` and `files` on the Linux VM (10/10).
+15. [x] **Language gaps** (done 2026-10-18): open slices (`x[i..]`, `x[..<n]`, `x[..=n]`) now
+   parse to the two-sided range the rest of the compiler expected; nested patterns in a
+   variant's values (`case Error(.NotFound)`, `case Some(Some(x))`, literals and ranges), with
+   coverage worked out per variant (`Some(.None)` + `Some(Some(x))` cover `Some`); and the bounds
+   prover keeps facts about fields through an element at a constant or a local's index
+   (`names[2].count`, `items[i].count`), forgotten when the index moves. `while` was never
+   missing: it's the trailing `loop { } while cond`, checked first.
 
 ## After M1
 
