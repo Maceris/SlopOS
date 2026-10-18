@@ -890,6 +890,18 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    element, so the escape checker sees what's kept. Test `Hosted.UsesDynamicArrays` (a counting
    allocator checks every block comes back), and `arrays` on the Linux VM (9/9). Usable in the
    kernel once it has a heap in its context.
+14. [x] **Files, arguments and environment** (done 2026-10-18, choices made with the Hemera
+   author): `std/os` on Windows (kernel32 wide functions, UTF-8 ↔ UTF-16 in
+   `base/runtime/unicode.hsc`) and Linux (raw system calls, so no libc): `arguments()` (a
+   process-lifetime view; Windows splits `GetCommandLineW` by the MSVC rules), `get_environment`,
+   files (`open`/`read`/`write`/`file_size`/`read_entire_file`/`write_entire_file`), `delete_file`,
+   `rename`, `path_kind`, folders (`make_directory`/`remove_directory`/`list_directory`) and the
+   current directory. The Linux entry now takes argc/argv/envp (from `_start`'s stack, or libc).
+   API returns `Result[T, OsError]`, after adding `-> Result[T, E] #unrestricted` (every result
+   unrestricted); `strings.format`/`clone` switched too. Found and fixed: `.Ok(&local)` escaped
+   the stack checker (shorthand variants weren't followed); `optional == value` compared the tag
+   as the value; LLVM turned string-end loops into `strlen`/`wcslen` calls (now `no-builtin-*`).
+   Tests `Hosted.UsesFilesAndArguments` and `files` on the Linux VM (10/10).
 
 ## After M1
 
