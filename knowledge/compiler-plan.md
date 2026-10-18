@@ -926,6 +926,13 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    be used in a program — an `if` that `#is_compile_time` decides now generates only the branch that
    runs; and `max_value`/`min_value` had no code generation. Generic bodies stay checked per
    instantiation (Hemera generics are templates); constraints were left as a possible design topic.
+18. [x] **Hosted clock and random** (done 2026-10-18): `HOSTED_CONTEXT` now has `SYSTEM_CLOCK`
+   (Windows: performance counter, `GetSystemTimePreciseAsFileTime`; Linux: `clock_gettime`
+   MONOTONIC/REALTIME) and `SYSTEM_RANDOM` (`BCryptGenRandom`; `getrandom`), so `time.now`, logger
+   timestamps and random numbers work in programs. std gains `time.monotonic`/`time.since` and
+   `std/random` (`fill`, `next_u64`, unbiased `below`/`between`), Freestanding tier, so a kernel
+   gets them once it installs a `Random`. Test `system` on Windows and the VM (13/13). Seen once:
+   the Linux `threads` test's "every carrier ran a fiber" check is scheduling-dependent.
 
 ## After M1
 
