@@ -853,6 +853,16 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    the runtime's one process-wide global (which `carrier_slot` moved into). Test `heap`: sizes
    to 6 KiB, alignments to 4096, from one thread then four, on Windows and Linux. Not yet:
    callbacks from foreign code on Linux, per-thread caches in the heap, and macOS.
+10. [x] **Linking C on Linux** (done 2026-10-17; decided with the Hemera author: inferred from
+   `#foreign`, against a sysroot copied from the VM). A hosted Linux program with `#foreign`
+   functions of its own links libc dynamically (`--sysroot`, here `D:/Programs/System
+   Tools/linux-sysroot`: `libc.so.6` copied as `libc.so`, `libm`, `ld-linux`); the generator
+   decides, since a runtime `#if` would count base's own `#foreign` (`intrinsics.uses_c_library`).
+   It starts through `__libc_start_main` from a generated `_start` (no `crt1.o`, which the VM
+   lacks without `libc6-dev`), threads start by `pthread_create` on mapped stacks, base's
+   `pthread_*` shims are `ud2` stubs in programs that don't link C, and callbacks find the carrier
+   in an ELF thread-local slot. Test `libc`: `strlen`, `getpid` and `qsort` with a Hemera
+   comparator from main, two threads and a fiber; 20 runs clean.
 
 ## After M1
 

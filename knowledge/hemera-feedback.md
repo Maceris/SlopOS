@@ -87,6 +87,10 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-17 — Linking C on Linux (`compiler-plan.md` Phase 11, step 10): a hosted Linux program
+  with `#foreign` functions of its own links libc dynamically, starts through it, makes pthreads,
+  and takes callbacks.
+
 - 2026-10-17 — A compiler quality pass over gaps found along the way: the bounds proofs now
   know an unsigned remainder by a constant is below it (wrapped or not), and keep what they knew
   about an integer field a store changes (`count -= 1` moves it, `count = 3` sets it; other paths
