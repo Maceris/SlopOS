@@ -874,6 +874,14 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    `disable-tail-calls`, so traces keep every caller. Tests `Hosted.WritesOutput`,
    `Hosted.ReportsFailedAssertion`, and `output`/`assertion` on the Linux VM (7/7).
    SlopOS's kernel still starts from `MINIMAL_CONTEXT`; its own logger is unchanged.
+12. [x] **std cleanup** (done 2026-10-17, choices made with the Hemera author): `string`,
+   `formatting`, `atomic` and `concurrency/future` removed (stubs, or built on dynamic arrays,
+   which still aren't generated). New `std/strings` (`format`/`clone` from the allocator, `find`,
+   `trim`, `split`, `parse_*`); `std/logger` rewritten (`create(Options)`: time, file:line,
+   function, thread); `std/time` calendar math; `os.exit`; `SharedPtr` fixed. Language: a named
+   result can be `#unrestricted` (`-> (copy #unrestricted : string, ...)`), so allocating
+   functions' results aren't local when their arguments are (Hemera's `docs/memory.md`). Test
+   `Hosted.UsesStdLibrary`, and `library` on the Linux VM (8/8). None of it is used by the kernel.
 
 ## After M1
 
