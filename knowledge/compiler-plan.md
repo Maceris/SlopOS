@@ -909,6 +909,15 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    prover keeps facts about fields through an element at a constant or a local's index
    (`names[2].count`, `items[i].count`), forgotten when the index moves. `while` was never
    missing: it's the trailing `loop { } while cond`, checked first.
+16. [x] **Symbolized stack traces** (done 2026-10-18, all three layers chosen with the Hemera
+   author): `--debug` (`BackendOptions.debug_info`) now emits real debug info, a DISubprogram per
+   Hemera function and a location per statement (DWARF for ELF, CodeView/PDB for PE/COFF, jump
+   tables off there to dodge an LLVM label bug); a table of function starts and names
+   (`intrinsics.function_names`, `runtime.function_at`) names frames at run time; and
+   `hemera --symbolize=<program> <offset>...` gives files and lines with inlined frames via LLVM's
+   symbolizer. Traces print image offsets (`intrinsics.image_base`). Kernel boots 10/10 with
+   debug info on (tried, not enabled). The kernel's `log_stack_trace` already prints
+   `kernel+0x...`, which `hemera --symbolize` accepts; it could use `function_at` for names.
 
 ## After M1
 
