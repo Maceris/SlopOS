@@ -918,6 +918,14 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    symbolizer. Traces print image offsets (`intrinsics.image_base`). Kernel boots 10/10 with
    debug info on (tried, not enabled). The kernel's `log_stack_trace` already prints
    `kernel+0x...`, which `hemera --symbolize` accepts; it could use `function_at` for names.
+17. [x] **Generate-everything sweep** (done 2026-10-18): unused functions turned out to be checked
+   already; what went unnoticed was what can't be *generated*. `--generate-all` generates every
+   declared function; tests build all of std that way, every generic in base/std instantiated
+   (`generics_sweep`), for Windows, Linux (VM) and freestanding ELF. Found and fixed: `#is_compile_time`
+   branches were generated at run time, so `os.run_process` (and `runtime/compile_time.hsc`) couldn't
+   be used in a program — an `if` that `#is_compile_time` decides now generates only the branch that
+   runs; and `max_value`/`min_value` had no code generation. Generic bodies stay checked per
+   instantiation (Hemera generics are templates); constraints were left as a possible design topic.
 
 ## After M1
 
