@@ -863,6 +863,17 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    `pthread_*` shims are `ud2` stubs in programs that don't link C, and callbacks find the carrier
    in an ELF thread-local slot. Test `libc`: `strlen`, `getpid` and `qsort` with a Hemera
    comparator from main, two threads and a fiber; 20 runs clean.
+11. [x] **Hosted output and logging** (done 2026-10-17): `runtime.write_output`/`write_error`
+   (`WriteFile` on Windows, the `write` system call on Linux, nowhere elsewhere, so SlopOS is
+   unaffected) and `base/runtime/output.hsc`'s `OutputBuffer`, a stack buffer with a small `%`
+   formatter, since base can't use `std/text_buffer`. `HOSTED_CONTEXT` now has
+   `STANDARD_LOGGER` (`[info] message` lines on stderr, `log_level = .INFO`) and
+   `printing_assertion_handler` (message, location, return addresses, then exit 134). `std/io`'s
+   `print`/`println`/`printf` and `e` versions work without an allocator. Found: inlined `assert`
+   frames meant the handler can't skip one frame; Hemera functions now also get
+   `disable-tail-calls`, so traces keep every caller. Tests `Hosted.WritesOutput`,
+   `Hosted.ReportsFailedAssertion`, and `output`/`assertion` on the Linux VM (7/7).
+   SlopOS's kernel still starts from `MINIMAL_CONTEXT`; its own logger is unchanged.
 
 ## After M1
 
