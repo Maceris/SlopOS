@@ -882,6 +882,14 @@ first, tested on SlopOS's CPUs, then threads in hosted programs).
    result can be `#unrestricted` (`-> (copy #unrestricted : string, ...)`), so allocating
    functions' results aren't local when their arguments are (Hemera's `docs/memory.md`). Test
    `Hosted.UsesStdLibrary`, and `library` on the Linux VM (8/8). None of it is used by the kernel.
+13. [x] **Dynamic arrays** (done 2026-10-17): `T[..]`'s layout, indexing, `for` and views already
+   worked; `array_add`/`copy`/`reserve`/`remove`/`remove_fast`/`find`/`reset`/`free` and
+   `pop`/`peek` are now Hemera code in `base/runtime/array.hsc` over `ResizableArray`, not
+   intrinsics. An array takes the context's allocator the first time it needs memory and keeps
+   it; growth doubles from 4; `array_find` returns `usize?`. `array_copy` adds element by
+   element, so the escape checker sees what's kept. Test `Hosted.UsesDynamicArrays` (a counting
+   allocator checks every block comes back), and `arrays` on the Linux VM (9/9). Usable in the
+   kernel once it has a heap in its context.
 
 ## After M1
 
