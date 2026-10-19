@@ -1,10 +1,12 @@
 # Proposal: Constraints on Generics
 
-Status: **agreed** 2026-10-18; phase 1 done (*Phases*), phase 2 (checked bodies) next. In Hemera: `#constraint`,
+Status: **agreed** 2026-10-18; phases 1 and 2 done (*Phases*), phase 3 (constraints across base and std) next. In
+Hemera: `#constraint`,
 the first requirements, `T: C` with `&&`/`||`/parentheses, `where` clauses on functions, structs and unions, checking
 where instances are made with E4032 and its reasons, constraints on `array_find` and std's containers,
-`compiler.satisfies`, `require_any`, derived parameters and generic aliases (Hemera's `docs/types.md`, *Constraints*,
-*Derived Parameters* and *Generic Aliases*). What implementing it settled:
+`compiler.satisfies`, `require_any`, derived parameters and generic aliases, and checked bodies: each constrained
+generic function's body checked once with archetypes, E4033 for what isn't promised (Hemera's `docs/types.md`,
+*Constraints*, *Checked Bodies*, *Derived Parameters* and *Generic Aliases*). What implementing it settled:
 - The core constraints (`Equatable`, `Ordered`, `Integer`, `Float`, `Numeric`, `AtLeastOne`, `PowerOfTwo`) are in
   `base/compiler`, not a new `std/constraints`, since base's own generics (`array_find`) need them.
 - `where` is a word only after a signature or generic list, not a keyword, since SlopOS and tests use it as a name.
@@ -15,6 +17,16 @@ where instances are made with E4032 and its reasons, constraints on `array_find`
 - Overriding a derived parameter means giving the ones before it, which isn't warned about as giving them twice.
 - A generic alias's list and `where` sit on the `alias` word: `Named :: alias[V] Pair[string, V] where ...`. When
   what it names fails its own constraints, the error points at the alias's declaration, not the use.
+- Promises are worked out from how constraints are written, not by running them on archetypes: a constraint is made
+  of requirements, so reading them gives the same answer without archetype type values at compile time.
+- Phase 2 decisions, made with the Hemera author: a checked body calling an unconstrained generic (a template) is
+  trusted, its body checked at real instances; value parameters are unknown values of their type, and a type they
+  size (`T[capacity]`) leaves the generic to its instances, as does an `#if` on a parameter; `require_view(C, E)` and
+  `ViewOf(C, E)` were added for `for`, indexing and `count`.
+- A call from a checked body to a constrained generic is proven from the caller's own constraints: the same constraint
+  call, or requirements they promise. `require(...)` on an unknown value can only be proven the first way.
+- `sum`'s total type is its own derived parameter, `Total = E`, since `ViewOf(C, E)` fixes `E` to the elements.
+- Real instances wait for the early check, and aren't checked again when it found errors, so each is reported once.
 
 Directions chosen with the Hemera author:
 - **Checked generics**, or at least a serious attempt: a constrained generic's body is checked
