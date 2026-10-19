@@ -1,6 +1,22 @@
 # Proposal: Constraints on Generics
 
-Status: **agreed** 2026-10-18, ready for phase 1 (*Phases*). Directions chosen with the Hemera author:
+Status: **agreed** 2026-10-18; phase 1 done (*Phases*), phase 2 (checked bodies) next. In Hemera: `#constraint`,
+the first requirements, `T: C` with `&&`/`||`/parentheses, `where` clauses on functions, structs and unions, checking
+where instances are made with E4032 and its reasons, constraints on `array_find` and std's containers,
+`compiler.satisfies`, `require_any`, derived parameters and generic aliases (Hemera's `docs/types.md`, *Constraints*,
+*Derived Parameters* and *Generic Aliases*). What implementing it settled:
+- The core constraints (`Equatable`, `Ordered`, `Integer`, `Float`, `Numeric`, `AtLeastOne`, `PowerOfTwo`) are in
+  `base/compiler`, not a new `std/constraints`, since base's own generics (`array_find`) need them.
+- `where` is a word only after a signature or generic list, not a keyword, since SlopOS and tests use it as a name.
+- `T: Name` in a generic list is a constrained type parameter when `Name` is a `#constraint` function, and a value
+  parameter when it's a type: the checker resolves it, since the two look the same.
+- An instance whose constraints fail isn't checked, so its body can't add errors of its own.
+- A derived value is an untyped constant in the body, like a literal; compile-time code can now return `type`.
+- Overriding a derived parameter means giving the ones before it, which isn't warned about as giving them twice.
+- A generic alias's list and `where` sit on the `alias` word: `Named :: alias[V] Pair[string, V] where ...`. When
+  what it names fails its own constraints, the error points at the alias's declaration, not the use.
+
+Directions chosen with the Hemera author:
 - **Checked generics**, or at least a serious attempt: a constrained generic's body is checked
   against what its constraints promise, before anything instantiates it. What can't be decided that
   way is checked again at instantiation, as today.
@@ -430,5 +446,5 @@ What std needs first, to grow from where real uses show friction or confusion:
 | `require_any(...)` | `Integer(T) \|\| Float(T)`-like alternatives inside a constraint |
 | `require(condition, message, args...)` and `compiler.note(...)` | Value parameters (capacities), and anything else, with its own message |
 
-std's first constraints, in a new `std/constraints` package: `Equatable`, `Ordered`, `Integer`,
-`Float`, `Numeric`, `AtLeastOne` and `PowerOfTwo`.
+The first constraints, in `base/compiler` (so base's own generics can use them): `Equatable`,
+`Ordered`, `Integer`, `Float`, `Numeric`, `AtLeastOne` and `PowerOfTwo`.
