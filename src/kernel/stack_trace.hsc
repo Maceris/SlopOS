@@ -1,7 +1,6 @@
 package kernel
 
 import intrinsics from "base"
-import text_buffer from "std"
 
 // How many frames a stack trace shows.
 STACK_TRACE_FRAMES :: 32
@@ -19,24 +18,17 @@ log_stack_trace :: fn(skip: usize = 0) {
     if intrinsics.carrier().program_data != null {
         image_base = per_cpu().kernel.image_base
     }
-    //STD(friction): format strings have no hexadecimal option, so the offsets are appended here
-    storage : u8[64]
-    line := text_buffer.make(storage)
     for captured, i in addresses {
         if i >= count {
             break
         }
-        text_buffer.clear(&line)
-        text_buffer.append(&line, "  at ")
         address :: cast[u64](captured)
+        // Part of a fatal report already, so without a source location of its own
         if image_base != 0 && address >= image_base {
-            text_buffer.append(&line, "kernel+0x")
-            text_buffer.append_unsigned(&line, address - image_base, 16)
+            write_log_line("fatal", null, "  at kernel+%{#x}", address - image_base)
         }
         else {
-            text_buffer.append_address(&line, address)
+            write_log_line("fatal", null, "  at %{#018x}", address)
         }
-        // Part of a fatal report already, so without a source location of its own
-        write_log_line("fatal", null, text_buffer.as_string(&line))
     }
 }

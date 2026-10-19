@@ -32,7 +32,6 @@ them is `compiler-plan.md`, Phase 7:
 
 | Issue | Severity | Where |
 |---|---|---|
-| Format strings have no options, like hexadecimal or a width, so the stack trace appends its offsets with `text_buffer` (pointers do format in hexadecimal) | friction | `kernel/stack_trace.hsc` |
 | An optional function type with a result can't be written in place: `(fn(n: int) -> int)?` doesn't parse, and `fn(n: int) -> int?` makes the result optional; it takes an alias | friction | Hemera's hosted test |
 | Once (2026-10-16), building the kernel through the build package in `boot_tests.py` failed, and the output was lost; 16 builds since, the same way, all succeeded with identical output. Possibly a race in the compiler; capture the output if it happens again | unknown | `tools/boot_tests.py` |
 
@@ -87,6 +86,15 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-19 — Format string options, chosen with the Hemera author: `%{...}` after a placeholder,
+  like `%{08x}`, `%2{>10}` or `%{.3}` (fill and alignment, `+`, `#` prefix, zero padding, width,
+  precision, and `d`/`x`/`X`/`b`/`o`), the same in base's `output_format`, `text_buffer`'s
+  `append_format` and compile-time messages, from one parser in `base/runtime/format.hsc`. A format
+  string written in place, for a `format_string` parameter followed by `any...`, is checked where
+  it's used (E4034): a placeholder without a value, `%0`, options that aren't well formed, or ones
+  the value's type can't take. Hemera's `docs/format_strings.md`. The stack trace now writes its
+  offsets with `%{#x}` rather than `text_buffer`.
 
 - 2026-10-17 — Linking C on Linux (`compiler-plan.md` Phase 11, step 10): a hosted Linux program
   with `#foreign` functions of its own links libc dynamically, starts through it, makes pthreads,
