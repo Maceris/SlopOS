@@ -1,7 +1,7 @@
 # Proposal: Constraints on Generics
 
-Status: **agreed** 2026-10-18; phases 1 and 2 done (*Phases*), phase 3 (constraints across base and std) next. In
-Hemera: `#constraint`,
+Status: **done** 2026-10-19: phases 1 to 3 are in Hemera (*Phases*); phase 4, finding functions by name, was dropped
+(2026-10-19): functions a generic needs are always passed. In Hemera: `#constraint`,
 the first requirements, `T: C` with `&&`/`||`/parentheses, `where` clauses on functions, structs and unions, checking
 where instances are made with E4032 and its reasons, constraints on `array_find` and std's containers,
 `compiler.satisfies`, `require_any`, derived parameters and generic aliases, and checked bodies: each constrained
@@ -27,6 +27,13 @@ generic function's body checked once with archetypes, E4033 for what isn't promi
   call, or requirements they promise. `require(...)` on an unknown value can only be proven the first way.
 - `sum`'s total type is its own derived parameter, `Total = E`, since `ViewOf(C, E)` fixes `E` to the elements.
 - Real instances wait for the early check, and aren't checked again when it found errors, so each is reported once.
+- Phase 3: std/maps' `HashMap[K: Equatable, V, hash: fn(key: K) -> u64]` with `hash_string` and `hash_integer[T: Integer]`,
+  in its own Allocating package, since `containers` needs no allocator. A generic function's instance, like
+  `hash_integer[int]`, is now a function constant, and a function given is checked against the parameter's signature.
+  The bounds prover learned that `x % n` is less than `n` for any count or local `n`, which hashing into slots needs.
+- Most of base and std only copies `T`, so it stays unconstrained; the containers' functions take a struct that's
+  already constrained. The sweep keeps its instances of constrained generics, since checking a body early doesn't
+  generate it: `--generate-all` still needs an instance to generate.
 
 Directions chosen with the Hemera author:
 - **Checked generics**, or at least a serious attempt: a constrained generic's body is checked
@@ -310,7 +317,10 @@ points : HashMap[Point, int, hash_point]
   whole program assumes one name for every type's hash, which overloading would give and Hemera
   doesn't have.
 
-#### Finding Functions (later)
+#### Finding Functions (dropped)
+
+Dropped 2026-10-19 with the Hemera author: functions a generic needs are always passed, as above. Kept for the record:
+
 
 If passing functions turns out too verbose, a constraint could search the whole program for
 functions by signature and a convention, like `compiler.find_functions(fn(key: K) -> u64,
@@ -377,7 +387,7 @@ format_value :: fn[T](value: T, out: ptr[mut TextBuffer]) {
 3. **Constraints in base and std,** like `array_find`'s `Equatable` and the containers' capacities,
    a `HashMap` taking its hash function, and the sweep's hand-written instances shrinking to the
    unconstrained generics that remain.
-4. **Maybe, later: finding functions,** if passing them turns out too verbose.
+4. ~~**Maybe, later: finding functions,** if passing them turns out too verbose.~~ Dropped (2026-10-19).
 
 ## Derived Parameters
 
