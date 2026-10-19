@@ -1,9 +1,10 @@
 # Proposal: Shared Ownership
 
-Status: **agreed** 2026-10-19, directions chosen with the Hemera author (below). Phases 1 to 4 are in Hemera:
+Status: **done** 2026-10-19: all five phases are in Hemera, with directions chosen with the Hemera author (below):
 `using` on named fields (`docs/types.md`, *Structs*), `mut` in type arguments (*Mutability in Type Arguments*), and
 `#owned` (`docs/memory.md`, *Owned Types*), and std/memory's `SharedPtr`, `LocalPtr` and `WeakPtr` (*Shared
-Ownership*); phase 5, thread binding, next. What implementing them settled:
+Ownership*), and `#thread_bound`/`#crosses_threads` (`docs/multitasking.md`, *Values That Stay on Their Thread*).
+What implementing them settled:
 - A `mut` argument is an alias of its type that remembers it, so it only changes pointers, keeps its own instances
   and constraint runs, and has its own type value, which `compiler.Mutable` reads. Inside the generic, the parameter
   is the plain type.
@@ -35,6 +36,10 @@ Ownership*); phase 5, thread binding, next. What implementing them settled:
 - Found along the way: base's `output_unsigned` printed nothing for 0, since `loop { } while` checks first; it's
   `#at_least_once` now, which the generator didn't implement until then (it's documented in `control_flow.md`), and
   the format scenario checks 0.
+- Thread-bound follows pointers and views too, not only layout: a pointer to a `LocalPtr` handed to another thread
+  lets it share or release one. What's reached through an `any` or a `rawptr`, and context extensions, isn't checked.
+- `channel_send` now gives the value back when the channel is closed (`T?`, null once sent), since the ownership
+  check found a closed channel would leak an `#owned` value; its callers were updated.
 
 `std/memory`'s `SharedPtr[T]` counts its owners by hand: every owner calls `increment` and `decrement`, a missed
 one leaks or frees early, and the value is always `ptr[mut T]`. This proposal makes shared ownership work like
