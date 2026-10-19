@@ -1,8 +1,9 @@
 # Proposal: Shared Ownership
 
-Status: **agreed** 2026-10-19, directions chosen with the Hemera author (below). Phases 1 to 3 are in Hemera:
+Status: **agreed** 2026-10-19, directions chosen with the Hemera author (below). Phases 1 to 4 are in Hemera:
 `using` on named fields (`docs/types.md`, *Structs*), `mut` in type arguments (*Mutability in Type Arguments*), and
-`#owned` (`docs/memory.md`, *Owned Types*); phase 4, std's `SharedPtr`, next. What implementing them settled:
+`#owned` (`docs/memory.md`, *Owned Types*), and std/memory's `SharedPtr`, `LocalPtr` and `WeakPtr` (*Shared
+Ownership*); phase 5, thread binding, next. What implementing them settled:
 - A `mut` argument is an alias of its type that remembers it, so it only changes pointers, keeps its own instances
   and constraint runs, and has its own type value, which `compiler.Mutable` reads. Inside the generic, the parameter
   is the plain type.
@@ -21,6 +22,19 @@ Status: **agreed** 2026-10-19, directions chosen with the Hemera author (below).
   result, gives its bindings ownership.
 - `forget`, `duplicate` and `take` are ordinary functions in base/compiler, whose bodies aren't checked;
   `compiler.release` is resolved by the checker to the function the type names.
+- The handle's field is `shared_value`, not `value`: the struct's own members come before what `using` forwards, so
+  a field called `value` hid the value's own `value`. `memory.pointer_of(&shared)` gives the pointer itself.
+- `SharedPtr` and `WeakPtr` are `#unrestricted`: they point at heap blocks, never into a stack, which the escape
+  analysis couldn't tell from a handle derived from `&buffer`.
+- A generic function named with its arguments and not called, like `release_in_place[T]`, is now a function value of
+  that instance, which `make_shared` stores for an `#owned` value's default destroy.
+- Derived parameters are values or types by how they're written (`atomic = true` is a value), everywhere a
+  generic's arguments are checked.
+- Optional function types still need an alias (`Destroy :: alias fn(value: rawptr)`, then `Destroy?`): the
+  feedback index's open friction.
+- Found along the way: base's `output_unsigned` printed nothing for 0, since `loop { } while` checks first; it's
+  `#at_least_once` now, which the generator didn't implement until then (it's documented in `control_flow.md`), and
+  the format scenario checks 0.
 
 `std/memory`'s `SharedPtr[T]` counts its owners by hand: every owner calls `increment` and `decrement`, a missed
 one leaks or frees early, and the value is always `ptr[mut T]`. This proposal makes shared ownership work like
