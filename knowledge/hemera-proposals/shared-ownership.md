@@ -1,8 +1,8 @@
 # Proposal: Shared Ownership
 
-Status: **agreed** 2026-10-19, directions chosen with the Hemera author (below). Phases 1 and 2 are in Hemera:
-`using` on named fields (`docs/types.md`, *Structs*) and `mut` in type arguments (*Mutability in Type Arguments*);
-phase 3, `#owned`, next. What implementing them settled:
+Status: **agreed** 2026-10-19, directions chosen with the Hemera author (below). Phases 1 to 3 are in Hemera:
+`using` on named fields (`docs/types.md`, *Structs*), `mut` in type arguments (*Mutability in Type Arguments*), and
+`#owned` (`docs/memory.md`, *Owned Types*); phase 4, std's `SharedPtr`, next. What implementing them settled:
 - A `mut` argument is an alias of its type that remembers it, so it only changes pointers, keeps its own instances
   and constraint runs, and has its own type value, which `compiler.Mutable` reads. Inside the generic, the parameter
   is the plain type.
@@ -11,6 +11,16 @@ phase 3, `#owned`, next. What implementing them settled:
   `poke[mut int](...)`, and a written one isn't warned about as given twice.
 - Writing through a `ptr[T]` in a checked body needs `T: compiler.Mutable`, with E4033 saying so.
 - `compiler.Mutable(mut int)` in an expression, like `#assert`, doesn't parse yet: `mut` is only in a type's position.
+- `#owned` is checked by `ownership.cpp`, walking each body like the bounds prover, with E4035. A type parameter in
+  a body checked before any instance counts as copyable: each real instance is checked with its own types, and
+  treating every unconstrained `T` as owned would have broken most constrained generics. `compiler.Copyable` says up
+  front that a generic copies its `T`.
+- Taking an owner's address may fill it, so an empty owner whose address is taken owns from then on: `files :
+  File[..]` filled by `array_add(&files, ...)` has to be released with `array_release`.
+- A `for` loop's element and a `match` on an owner borrow; a `match` on an owned temporary, like `upgrade(&weak)`'s
+  result, gives its bindings ownership.
+- `forget`, `duplicate` and `take` are ordinary functions in base/compiler, whose bodies aren't checked;
+  `compiler.release` is resolved by the checker to the function the type names.
 
 `std/memory`'s `SharedPtr[T]` counts its owners by hand: every owner calls `increment` and `decrement`, a missed
 one leaks or frees early, and the value is always `ptr[mut T]`. This proposal makes shared ownership work like
