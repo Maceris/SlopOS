@@ -29,7 +29,8 @@ generic function's body checked once with archetypes, E4033 for what isn't promi
 - Real instances wait for the early check, and aren't checked again when it found errors, so each is reported once.
 - Phase 3: std/maps' `HashMap[K: Equatable, V, hash: fn(key: K) -> u64]` with `hash_string` and `hash_integer[T: Integer]`,
   in its own Allocating package, since `containers` needs no allocator. A generic function's instance, like
-  `hash_integer[int]`, is now a function constant, and a function given is checked against the parameter's signature.
+  `hash_integer[int]`, is now a function constant, and a function given is checked against the parameter's signature,
+  where the instance is written.
   The bounds prover learned that `x % n` is less than `n` for any count or local `n`, which hashing into slots needs.
 - Most of base and std only copies `T`, so it stays unconstrained; the containers' functions take a struct that's
   already constrained. The sweep keeps its instances of constrained generics, since checking a body early doesn't
