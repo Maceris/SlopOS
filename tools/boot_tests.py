@@ -38,12 +38,29 @@ MORESTACK_TESTS = [
 ]
 
 
+# Where a failed build's output is kept, since a run's own output may be cut short or filtered
+FAILED_BUILD_LOG = ROOT / "build" / "failed_kernel_build.log"
+
+
 def build_kernel(output: Path, stack_check: str = "trap") -> bool:
-    """Builds the kernel through the build package, checks and all."""
+    """
+    Builds the kernel through the build package, checks and all. If it fails, everything the compiler
+    wrote, with its exit code, is printed and kept in FAILED_BUILD_LOG (hemera-feedback.md's build
+    failure seen once, which needs its output to be looked into).
+    """
     command = ["hemera", f"--setting=targets=kernel,stack_check={stack_check},kernel_output={output}", str(ROOT / "src" / "build")]
     if os.environ.get("HEMERA_INSTALL"):
         command.insert(1, f"--install-path={os.environ['HEMERA_INSTALL']}")
-    return subprocess.run(command).returncode == 0
+    result = subprocess.run(command, capture_output=True, text=True)
+    sys.stdout.write(result.stdout)
+    sys.stdout.write(result.stderr)
+    if result.returncode == 0:
+        return True
+    FAILED_BUILD_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(FAILED_BUILD_LOG, "a", encoding="utf-8") as log:
+        log.write(f"--- {' '.join(command)}\nexit code {result.returncode}\n{result.stdout}{result.stderr}\n")
+    print(f"the build's output is kept in {FAILED_BUILD_LOG}")
+    return False
 
 
 def main() -> int:

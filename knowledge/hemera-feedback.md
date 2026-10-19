@@ -32,14 +32,13 @@ them is `compiler-plan.md`, Phase 7:
 
 | Issue | Severity | Where |
 |---|---|---|
-| An optional function type with a result can't be written in place: `(fn(n: int) -> int)?` doesn't parse, and `fn(n: int) -> int?` makes the result optional; it takes an alias | friction | Hemera's hosted test |
-| Once (2026-10-16), building the kernel through the build package in `boot_tests.py` failed, and the output was lost; 16 builds since, the same way, all succeeded with identical output. Possibly a race in the compiler; capture the output if it happens again | unknown | `tools/boot_tests.py` |
+| Once (2026-10-16), building the kernel through the build package in `boot_tests.py` failed, and the output was lost; 16 builds since, the same way, all succeeded with identical output. Possibly a race in the compiler; capture the output if it happens again. Since 2026-10-19 `boot_tests.py` keeps a failed build's output, with its exit code, in `build/failed_kernel_build.log`; 15 more builds that day all succeeded with identical output | unknown | `tools/boot_tests.py` |
 
 ### Language and library design
 
 | Topic | State | Details |
 |---|---|---|
-| Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`. Still open: documenting parse-once/parallel builds (B10); `os.run_process`'s body (`std/os/process.hsc` only checks `--allow-run` so far) | `hemera-proposals/build-programs.md` §7; `decisions/0028` |
+| Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`. Still open: documenting parse-once/parallel builds (B10). `os.run_process` runs processes since 2026-10-19 (Windows and Linux) | `hemera-proposals/build-programs.md` §7; `decisions/0028` |
 | Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 resolved 2026-10-13 (see Resolved). The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md`, *Other Architectures* |
 | Cryptography in `std` (needed with networking and remote login) | Open, from `decisions/0042` and `0043`: X25519, Ed25519, ChaCha20-Poly1305 or AES-GCM (with AES-NI detection, `0019`), a hash (SHA-256 or BLAKE3), and Argon2id. Constant-time implementations; freestanding where possible, so the kernel and boot code can use them | — |
 | Constraints on generics | Done (2026-10-19; finding functions by name dropped); phases 1 to 3 in Hemera (phase 3: std/maps' HashMap taking its hash function) (`#constraint`, requirements, `T: C`, `where`, E4032, constraints on `array_find` and containers, `satisfies`, `require_any`, derived parameters, generic aliases; checked bodies with archetypes, E4033, `require_view`/`ViewOf`), directions chosen with the Hemera author: `#constraint` functions of requirements, structural, checked bodies via archetypes for constrained generics only (unconstrained stay templates), `T: A && (B \|\| C)` and `where`, functions a generic needs passed as compile-time parameters (no overloading, so no name lookup), visible to `#if`, two new error codes. constraint expressions short-circuit like booleans (promises: `&&` adds, `\|\|` keeps what's shared), derived parameters (`E = element_of(C)`) bound in steps, constraints limited to requirements, no defaults picked by the compiler. Phased: gate at instantiation, then checked bodies, then std. aliases for common instances, derived parameters overridable like default arguments, `require_any` in constraint bodies. generic aliases (`alias[V] HashMap[...]`), a first requirement vocabulary and `std/constraints` | `hemera-proposals/generic-constraints.md` |
@@ -86,6 +85,13 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-19 — Small frictions: an optional function type is written in place as `(fn(n: int) -> int)?` (the
+  parentheses make the `?` the function's), in fields, parameters and locals, so an alias like `SharedPtr`'s `Destroy`
+  is a choice, not a need; `mut` can be written in an expression, like `compiler.Mutable(mut Config)` in an `#assert`; and
+  `os.run_process` runs processes on Windows (`CreateProcessW`, pipes read by polling, arguments quoted for the C
+  runtime) and Linux (fork and execve with a PATH search, a close-on-exec pipe for exec failures, poll), tested by
+  running itself with arguments that need quoting.
 
 - 2026-10-19 — Format string options, chosen with the Hemera author: `%{...}` after a placeholder,
   like `%{08x}`, `%2{>10}` or `%{.3}` (fill and alignment, `+`, `#` prefix, zero padding, width,
