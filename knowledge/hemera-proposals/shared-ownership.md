@@ -1,6 +1,7 @@
 # Proposal: Shared Ownership
 
-Status: **agreed** 2026-10-19, directions chosen with the Hemera author (below); phase 1 in progress.
+Status: **agreed** 2026-10-19, directions chosen with the Hemera author (below). Phase 1, `using` on named fields
+(pointers and structs held in place), is in Hemera (`docs/types.md`, *Structs*); phase 2 next.
 
 `std/memory`'s `SharedPtr[T]` counts its owners by hand: every owner calls `increment` and `decrement`, a missed
 one leaks or frees early, and the value is always `ptr[mut T]`. This proposal makes shared ownership work like
