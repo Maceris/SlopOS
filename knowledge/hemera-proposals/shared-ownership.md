@@ -1,7 +1,16 @@
 # Proposal: Shared Ownership
 
-Status: **agreed** 2026-10-19, directions chosen with the Hemera author (below). Phase 1, `using` on named fields
-(pointers and structs held in place), is in Hemera (`docs/types.md`, *Structs*); phase 2 next.
+Status: **agreed** 2026-10-19, directions chosen with the Hemera author (below). Phases 1 and 2 are in Hemera:
+`using` on named fields (`docs/types.md`, *Structs*) and `mut` in type arguments (*Mutability in Type Arguments*);
+phase 3, `#owned`, next. What implementing them settled:
+- A `mut` argument is an alias of its type that remembers it, so it only changes pointers, keeps its own instances
+  and constraint runs, and has its own type value, which `compiler.Mutable` reads. Inside the generic, the parameter
+  is the plain type.
+- `mut` is never inferred: `poke(&number, 1)` binds `T = int` from a `ptr[mut int]`. C++ infers `const`, but here
+  that would double the instances of every generic taking a pointer. It's written where it's wanted, like
+  `poke[mut int](...)`, and a written one isn't warned about as given twice.
+- Writing through a `ptr[T]` in a checked body needs `T: compiler.Mutable`, with E4033 saying so.
+- `compiler.Mutable(mut int)` in an expression, like `#assert`, doesn't parse yet: `mut` is only in a type's position.
 
 `std/memory`'s `SharedPtr[T]` counts its owners by hand: every owner calls `increment` and `decrement`, a missed
 one leaks or frees early, and the value is always `ptr[mut T]`. This proposal makes shared ownership work like
