@@ -41,7 +41,7 @@ them is `compiler-plan.md`, Phase 7:
 |---|---|---|
 | Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`; `os.run_process` runs processes since 2026-10-19 (Windows and Linux). Still open: sharing parsed files between targets and building them in parallel, documented as planned in Hemera's `docs/compilation.md` (2026-10-19); `find_packages` is unimplemented and may be removed | `hemera-proposals/build-programs.md`; `decisions/0028` |
 | Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 resolved 2026-10-13 (see Resolved). The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
-| Cryptography in `std` (needed with networking and remote login) | Open, from `decisions/0042` and `0043`: X25519, Ed25519, ChaCha20-Poly1305 or AES-GCM (with AES-NI detection, `0019`), a hash (SHA-256 or BLAKE3), and Argon2id. Constant-time implementations; freestanding where possible, so the kernel and boot code can use them | — |
+| Cryptography in `std` (needed with networking and remote login) | Planned 2026-10-19, directions chosen with the Hemera author: SHA-256/512, BLAKE2b, BLAKE3, HMAC, HKDF, ChaCha20-Poly1305, AES-256-GCM (hardware from the start, through `vector[T, n]`, `v128` and per-function `#target_features`), X25519, Ed25519 and Argon2id, in one freestanding `std/crypto`; `#constant_time` checked by the compiler, with secrets marked on types (`#secret`). Six phases: vectors, secrets, hashes, encryption, curves, passwords | `hemera-proposals/cryptography.md`; `decisions/0042`, `0043`, `0019` |
 
 ## 2. Design Notes
 
