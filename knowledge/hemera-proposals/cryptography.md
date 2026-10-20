@@ -57,45 +57,28 @@ saves vector state around the call. User space takes the hardware path.
 
 ## 2. Secrets and `#constant_time`
 
-**`#secret` marks a type**: `Key :: distinct u8[32] #secret`, or a struct holding one. A value of a
-secret type is secret, and so is anything computed from one: operators, fields, elements, casts
-and `bit_cast`. Lengths and counts stay public, since they're of public types.
+**Done** 2026-10-19 (Hemera's `docs/memory.md`, *Secrets*; `docs/directives.md`). As built, with the
+boundary rule chosen with the Hemera author (types must say so):
 
-**What a secret can't do**, anywhere, checked by the compiler with its own error code:
-
-- Decide a branch: `if`, `match`, `while` and `for` conditions, `&&` and `||` (they short-circuit),
-  `or_else` and `or_return`.
-- Decide a memory address: an index, a pointer offset, a slice's bounds. A secret array indexed
-  by a public index is fine.
-- Be divided, or divide: `/`, `%` and `%%` take a variable time on most CPUs.
-- Decide a loop's count, or how many times a call happens.
-
-**`#constant_time` marks a function** that takes, returns or computes with secrets. A secret may only
-be given to a `#constant_time` function, or to an intrinsic known to take constant time. So whether a
-function handles secrets is visible in its signature, and std's ordinary helpers can't be handed
-one by accident. A generic instance whose arguments are secret is checked by the same rules.
-
-**A `#constant_time` function that touches no secret is warned about**: once its body is checked, no
-secret parameter (through pointers and fields too), no secret result, and no secret value in its
-body. That catches a marking left behind when a refactor moved the secrets elsewhere, which would
-mislead a reviewer and pay for hardening it doesn't need. Generic declarations aren't warned about,
-since `#constant_time` on one, like `array_copy[T]`, is what lets its secret instances exist, and
-neither are declarations without a body. Not an error, since an unneeded marking is harmless; the
-opposite, a function handling secrets without one, is.
-
-**Leaving secrecy** is explicit: `compiler.declassify(value)` gives the value as its public type.
-It's for results that are public by design, like whether a tag matched after a constant-time
-comparison, and it's easy to find in review.
-
-**What the compiler does in a `#constant_time` function**, since LLVM gives no constant-time
-guarantee and can turn a mask back into a branch: every secret value that feeds a selection goes
-through a value barrier the optimizer can't see through (an empty inline assembly taking it in a
-register, as BoringSSL does by hand), and selections use `compiler.select(condition, a, b)`, generated
-as a `cmov` or a mask, never a branch.
-
-**Also in `base`:** `intrinsics.secure_zero(bytes)`, a wipe the optimizer never removes (a volatile
-`memset`), and secret key types that are `#owned` with a release that wipes them, so a key on the
-stack is wiped on every path out of its scope (`docs/memory.md`, *Owned Types*).
+- `#secret` marks a struct, or a distinct alias (`Word :: distinct alias u32 #secret`), whose public form
+  is what it aliases. A value is secret when its type is, or when it's worked out from a secret: operators,
+  casts, literals holding one, a secret's fields and elements (through pointers too), and locals made from one.
+- A secret can't decide a branch (`if`, `match`, `switch`, `&&`/`||`, `or_else`, `or_return`, `?`), a loop's
+  range, an index or a pointer, and can't be divided or divide. All E4037.
+- **Boundaries are types:** a secret goes only into a parameter, result or assignment of a `#secret` type, or a
+  place already holding secrets (a secret local, a secret's field). `&` of a secret of a public type is an
+  error, since the pointer would lose it. `.count` and `.capacity` are public. Ciphertext written to an output
+  buffer is `compiler.declassify`d.
+- **`#constant_time` is required where it shows:** a function whose parameters or results reach a secret.
+  Any function may hold secrets, and the rules hold everywhere, so `main` making a key needs no marking (the
+  plan's "computes with secrets" would have marked every caller). W4002 warns about a `#constant_time`
+  function with no secret, except a generic's instances.
+- `compiler.declassify` and `compiler.secret`; `intrinsics.select` chooses between integers, bools and enums
+  as well as lanes (rather than a separate `compiler.select`), with its mask passed through an empty assembly
+  block, so it stays `cmp`/`sbb`/`and` with no branch; `intrinsics.secure_zero` is a volatile memset.
+- Intrinsics take secrets anywhere, and give a secret back for one.
+- **Not yet:** value barriers beyond `select`'s own mask, and checking the machine code. The `#owned` key types
+  that wipe themselves come with `std/crypto`.
 
 ## 3. `std/crypto`
 
@@ -134,8 +117,8 @@ crypto.argon2id(password, salt, crypto.Argon2Parameters.{memory_kib = 65536, pas
 
 1. **Vectors** (done 2026-10-19): `vector[T, n]`, `v128`/`v256`/`v512`, `#target_features`, and the x86-64
    AES and carryless-multiply intrinsics (Hemera `docs/types.md`, `docs/directives.md`, `base/intrinsics`).
-2. **Secrets**: `#secret`, `#constant_time` and its checks, `compiler.declassify`, `compiler.select`,
-   value barriers, and `secure_zero` (`docs/directives.md`, a new section in `docs/memory.md`).
+2. **Secrets** (done 2026-10-19): `#secret`, `#constant_time` and its checks, `compiler.declassify` and
+   `secret`, `intrinsics.select` without a branch, and `secure_zero` (`docs/memory.md`, *Secrets*).
 3. **Hashes**: SHA-256, SHA-512, BLAKE2b, BLAKE3, HMAC and HKDF.
 4. **Encryption**: ChaCha20-Poly1305, and AES-256-GCM with both paths.
 5. **Curves**: X25519 and Ed25519, on 64-bit limbs with `u128` products.
