@@ -95,8 +95,7 @@ Context for the open items, and choices SlopOS relies on.
   `select`, `rotate_lanes`, reductions, `rotate_left`/`right` and `byte_swap` on integers too),
   `#target_features` (`docs/directives.md`), and x86_64's AES and carryless multiply, tested against FIPS-197.
   Found along the way: a typed literal couldn't be an operand (`a < Words.{2, 2, 2, 2}`), now it can; and a
-  `for` over a range with `#reverse` can't be generated yet, so walking an array backwards needs unrolling or
-  `loop` for now.
+  `for` with `#reverse` couldn't be generated, now it can (Hemera `docs/control_flow.md`, *Range-based for*).
 
 - 2026-10-19 — Integer literals are checked against the range of the type they become (`small : u8 = 300`, `-1`
   as a `u32`, `0xffff_ffff_ffff_ffff` defaulting to `int`), and arithmetic on known integers and untyped constants is
