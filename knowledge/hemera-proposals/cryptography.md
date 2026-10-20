@@ -151,7 +151,15 @@ crypto.argon2id(password, salt, crypto.Argon2Parameters.{memory_kib = 65536, pas
    flipped bits refused); Wycheproof's files aren't in yet.
    Found: `==` and `!=` on two arrays passed the checker and made invalid LLVM IR; they're now reported as
    not generated yet, like structs.
-6. **Passwords**: Argon2id, its lanes worked one after another until threads are wanted.
+6. **Passwords** (done 2026-10-20): Argon2id, its lanes worked one after another until threads are wanted.
+   `argon2id(password, salt, parameters, blocks, hash)` and `argon2id_keyed`, with a secret key and
+   associated data, return false for parameters RFC 9106 doesn't allow or too few blocks
+   (`argon2_blocks_needed`), and wipe the blocks before returning. Where the second half reads is
+   declassified, by design: that's Argon2id's half that's Argon2d. Tested against RFC 9106's vector and
+   values from Python's argon2-cffi, up to 2 MiB over 3 lanes and hashes of 4 to 1024 bytes.
+   Found and settled: a generic's instance over secrets, like `new_array(Argon2Block, n)`, no longer needs
+   the generic marked `#constant_time`; it's checked by the rules like any function, so misuse is an
+   error in the generic's body. That settles what was an open question, secret types in std's generics.
 
 Each algorithm is tested against its published vectors (FIPS 180-4, RFC 7693, BLAKE3's, RFC 4231,
 RFC 5869, RFC 8439, NIST SP 800-38D, RFC 7748, RFC 8032, RFC 9106) and Wycheproof's edge cases,
@@ -163,8 +171,5 @@ hosted on Windows and Linux, and AES-GCM on both paths.
   barriers keep LLVM from undoing masks, but nothing proves the machine code. A test that the
   `#constant_time` functions' assembly has no conditional branch on a secret, or timing tests like
   dudect, could back it.
-- **Secret types and std's generics.** Copying a key with `array_copy` makes a secret instance of a
-  generic that isn't `#constant_time`. Checking generic instances by the rules (above) covers it,
-  but may need std's basic helpers marked `#constant_time` once they're checked to be.
 - **Vector lanes by a variable index** are a memory access on most targets; with a secret index
   that's the same leak as a table lookup, so it falls under the address rule.
