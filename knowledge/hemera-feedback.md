@@ -41,7 +41,7 @@ them is `compiler-plan.md`, Phase 7:
 |---|---|---|
 | Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`; `os.run_process` runs processes since 2026-10-19 (Windows and Linux). Still open: sharing parsed files between targets and building them in parallel, documented as planned in Hemera's `docs/compilation.md` (2026-10-19); `find_packages` is unimplemented and may be removed | `hemera-proposals/build-programs.md`; `decisions/0028` |
 | Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 resolved 2026-10-13 (see Resolved). The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
-| Cryptography in `std` (needed with networking and remote login) | Planned 2026-10-19, directions chosen with the Hemera author: SHA-256/512, BLAKE2b, BLAKE3, HMAC, HKDF, ChaCha20-Poly1305, AES-256-GCM (hardware from the start, through `vector[T, n]`, `v128` and per-function `#target_features`), X25519, Ed25519 and Argon2id, in one freestanding `std/crypto`; `#constant_time` checked by the compiler, with secrets marked on types (`#secret`). Six phases: vectors, secrets, hashes, encryption, curves, passwords | `hemera-proposals/cryptography.md`; `decisions/0042`, `0043`, `0019` |
+| Cryptography in `std` (needed with networking and remote login) | Planned 2026-10-19, directions chosen with the Hemera author: SHA-256/512, BLAKE2b, BLAKE3, HMAC, HKDF, ChaCha20-Poly1305, AES-256-GCM (hardware from the start, through `vector[T, n]`, `v128` and per-function `#target_features`), X25519, Ed25519 and Argon2id, in one freestanding `std/crypto`; `#constant_time` checked by the compiler, with secrets marked on types (`#secret`). Six phases: vectors (done 2026-10-19), secrets, hashes, encryption, curves, passwords | `hemera-proposals/cryptography.md`; `decisions/0042`, `0043`, `0019` |
 
 ## 2. Design Notes
 
@@ -89,6 +89,14 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-19 — Vectors, phase 1 of cryptography (`hemera-proposals/cryptography.md`): `vector[T, n]` and
+  `v128`/`v256`/`v512` (Hemera `docs/types.md`, *Vectors*), base/intrinsics' vector and bit functions (`splat`,
+  `select`, `rotate_lanes`, reductions, `rotate_left`/`right` and `byte_swap` on integers too),
+  `#target_features` (`docs/directives.md`), and x86_64's AES and carryless multiply, tested against FIPS-197.
+  Found along the way: a typed literal couldn't be an operand (`a < Words.{2, 2, 2, 2}`), now it can; and a
+  `for` over a range with `#reverse` can't be generated yet, so walking an array backwards needs unrolling or
+  `loop` for now.
 
 - 2026-10-19 — Integer literals are checked against the range of the type they become (`small : u8 = 300`, `-1`
   as a `u32`, `0xffff_ffff_ffff_ffff` defaulting to `int`), and arithmetic on known integers and untyped constants is

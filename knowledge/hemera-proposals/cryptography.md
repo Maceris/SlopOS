@@ -23,26 +23,34 @@ X25519, Ed25519 and Argon2id. Nothing here is invented: each follows its RFC or 
 
 ## 1. Vectors
 
-A builtin generic `vector[T, n]`, like Zig's `@Vector`, for `T` an integer, float or `bool`:
+**Done** 2026-10-19 (Hemera's `docs/types.md`, *Vectors*; `docs/directives.md`, `#target_features`). As built:
 
-- Element-wise operators, including shifts and the bitwise ones; comparisons give `vector[bool, n]`.
-- Lanes read and written by index (`v[2]`), literals like `vector[u32, 4].[a, b, c, d]`, and
-  `vector.splat[vector[u32, 4]](x)`.
-- Shuffles with lane indices known at compile time, rotates per lane, and reductions (`+`, `&`, `|`, `~`).
-- Size and alignment are the vector's whole size. Lowered to LLVM vectors, so a target without
-  SIMD, like the kernel built with `-sse`, still runs vector code, one lane at a time.
+- `vector[T, n]` for `T` an integer or float of up to 64 bits, or `bool`, `n` a power of two, at most 64 bytes;
+  aligned to its size. Lowered to LLVM vectors, so a target without SIMD, like the kernel built with `-sse`,
+  still runs vector code, one lane at a time.
+- Literals are `vector[u32, 4].{a, b, c, d}` and `.{}` for zeros, since `T.[...]` is already an array of `T`.
+- Element-wise operators, including shifts and the bitwise ones, with a literal going in every lane;
+  comparisons give `vector[bool, n]`, whose lanes are bytes of 0 or 1. Integer division isn't on vectors
+  yet, since a lane of 0 has nothing like the scalar panic.
+- A lane is chosen by a constant (`v[2]`), never at run time, which also keeps secrets from choosing one.
+- `base/intrinsics`: `splat[V]`, `select`, `rotate_lanes` (a constant count, instead of general shuffles),
+  `reduce_add`/`and`/`or`/`xor`, `any_true`, `all_true`, and `rotate_left`, `rotate_right` and `byte_swap`,
+  which take plain integers too, as SHA and ChaCha need.
 
 `v128`, `v256` and `v512` are bits of that size, `bit_cast` to and from any vector of the same size,
 for intrinsics that don't care about lanes: `aesenc` works on bytes, `pclmulqdq` on `u64`s.
 
 **Target features per function.** AES-NI and PCLMULQDQ aren't in x86-64-v3 (`0003`), so a function
 using them is marked `#target_features("aes,pclmul")` (LLVM's `target-features` attribute) and only
-called once `CpuFeatures` says the CPU has them. The rest of the program stays at its baseline.
+called once `CpuFeatures` says the CPU has them. The rest of the program stays at its baseline. LLVM
+takes a function's features instead of the target's, so the compiler joins them: the target's (like the
+kernel's `-sse`), the reserved carrier register, and the function's.
 
 **Intrinsics** in `base/intrinsics/x86_64`: `aes_encrypt_round`, `aes_encrypt_last`,
-`aes_decrypt_round`, `aes_decrypt_last`, `aes_inverse_mix` and `aes_key_assist[rcon]`, on `v128`;
-`carryless_multiply[selector]` (`pclmulqdq`) on `v128`. Immediates are compile-time parameters,
-like `entry_points`' handler. AArch64's `aese`/`aesmc`/`pmull` follow with the AArch64 port.
+`aes_decrypt_round`, `aes_decrypt_last`, `aes_inverse_mix` and `aes_key_assist(key, round_constant)`, on
+`v128`; `carryless_multiply(a, b, selector)` (`pclmulqdq`). An immediate is a constant argument, which the
+checker requires and the generator puts in the instruction, rather than a compile-time parameter. Tested
+against FIPS-197's AES-128 example. AArch64's `aese`/`aesmc`/`pmull` follow with the AArch64 port.
 
 The kernel is built without SIMD state (`0023`), so kernel code uses the software path unless it
 saves vector state around the call. User space takes the hardware path.
@@ -124,8 +132,8 @@ crypto.argon2id(password, salt, crypto.Argon2Parameters.{memory_kib = 65536, pas
 
 ## Phases
 
-1. **Vectors**: `vector[T, n]`, `v128`/`v256`/`v512`, `#target_features`, and the x86-64 AES and
-   carryless-multiply intrinsics (Hemera `docs/types.md`, `docs/directives.md`, `base/intrinsics`).
+1. **Vectors** (done 2026-10-19): `vector[T, n]`, `v128`/`v256`/`v512`, `#target_features`, and the x86-64
+   AES and carryless-multiply intrinsics (Hemera `docs/types.md`, `docs/directives.md`, `base/intrinsics`).
 2. **Secrets**: `#secret`, `#constant_time` and its checks, `compiler.declassify`, `compiler.select`,
    value barriers, and `secure_zero` (`docs/directives.md`, a new section in `docs/memory.md`).
 3. **Hashes**: SHA-256, SHA-512, BLAKE2b, BLAKE3, HMAC and HKDF.
