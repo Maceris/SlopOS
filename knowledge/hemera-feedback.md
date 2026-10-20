@@ -33,7 +33,7 @@ them is `compiler-plan.md`, Phase 7:
 
 | Issue | Severity | Where |
 |---|---|---|
-| Once (2026-10-16), building the kernel through the build package in `boot_tests.py` failed, and the output was lost; 16 builds since, the same way, all succeeded with identical output. Possibly a race in the compiler; capture the output if it happens again. Since 2026-10-19 `boot_tests.py` keeps a failed build's output, with its exit code, in `build/failed_kernel_build.log`; 15 more builds that day all succeeded with identical output | unknown | `tools/boot_tests.py` |
+| Once (2026-10-16), building the kernel through the build package in `boot_tests.py` failed, and the output was lost. Likely found 2026-10-20: the compiler crashed (an access violation, no output) when indexing through a pointer to an alias another thread hadn't resolved yet, about one build in four of std/crypto's tests; fixed, the checker now waits for it. Watching whether the kernel build fails again; `build/failed_kernel_build.log` keeps its output if so | unknown | `tools/boot_tests.py` |
 
 ### Language and library design
 
@@ -41,7 +41,7 @@ them is `compiler-plan.md`, Phase 7:
 |---|---|---|
 | Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`; `os.run_process` runs processes since 2026-10-19 (Windows and Linux). Still open: sharing parsed files between targets and building them in parallel, documented as planned in Hemera's `docs/compilation.md` (2026-10-19); `find_packages` is unimplemented and may be removed | `hemera-proposals/build-programs.md`; `decisions/0028` |
 | Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 resolved 2026-10-13 (see Resolved). The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
-| Cryptography in `std` (needed with networking and remote login) | Planned 2026-10-19, directions chosen with the Hemera author: SHA-256/512, BLAKE2b, BLAKE3, HMAC, HKDF, ChaCha20-Poly1305, AES-256-GCM (hardware from the start, through `vector[T, n]`, `v128` and per-function `#target_features`), X25519, Ed25519 and Argon2id, in one freestanding `std/crypto`; `#constant_time` checked by the compiler, with secrets marked on types (`#secret`). Six phases: vectors, secrets and hashes (done 2026-10-19), encryption, curves, passwords | `hemera-proposals/cryptography.md`; `decisions/0042`, `0043`, `0019` |
+| Cryptography in `std` (needed with networking and remote login) | Planned 2026-10-19, directions chosen with the Hemera author: SHA-256/512, BLAKE2b, BLAKE3, HMAC, HKDF, ChaCha20-Poly1305, AES-256-GCM (hardware from the start, through `vector[T, n]`, `v128` and per-function `#target_features`), X25519, Ed25519 and Argon2id, in one freestanding `std/crypto`; `#constant_time` checked by the compiler, with secrets marked on types (`#secret`). Six phases: vectors, secrets, hashes and encryption done (2026-10-19 to 20), curves, passwords | `hemera-proposals/cryptography.md`; `decisions/0042`, `0043`, `0019` |
 
 ## 2. Design Notes
 
@@ -89,6 +89,12 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-20 — Encryption, phase 4 of cryptography: ChaCha20-Poly1305 and AES-256-GCM in `std/crypto`, AES-GCM
+  with AES-NI and PCLMULQDQ or in constant-time software, tested against RFC 8439, NIST and Python's
+  `cryptography`. Struct literals take secrets only in `#secret` fields; a pointer to a secret can't be cast to a
+  pointer to what isn't (`rawptr` is the visible way past). A compiler crash found along the way: indexing
+  through a pointer to an alias that another thread hadn't resolved yet.
 
 - 2026-10-19 — Hashes, phase 3 of cryptography: `std/crypto` with SHA-256, SHA-512, HMAC, HKDF, BLAKE2b and
   BLAKE3, public and secret inputs and outputs, all checked by the secret rules, tested against published and

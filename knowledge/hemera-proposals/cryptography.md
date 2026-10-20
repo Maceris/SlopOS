@@ -128,7 +128,18 @@ crypto.argon2id(password, salt, crypto.Argon2Parameters.{memory_kib = 65536, pas
    Found: the bounds prover needed scaled indexes (`4 * i + 3`), bounded products and loop names from 0
    proven non-negative, now in; and `flags & ~MASK` on a `u32` needs `~cast[u32](MASK)`, since an untyped
    `~2` is -3, as in Go.
-4. **Encryption**: ChaCha20-Poly1305, and AES-256-GCM with both paths.
+4. **Encryption** (done 2026-10-20): ChaCha20-Poly1305 and AES-256-GCM, sharing `Key256`, `Nonce96` and `Tag128`.
+   Plaintext is `SecretByte`s, ciphertext public (declassified as it's written), and open checks the tag in
+   constant time before writing anything. AES-GCM uses AES-NI and PCLMULQDQ when `aes_hardware()` says so
+   (Intel's carry-less GHASH), otherwise software: an S-box lookup that reads the whole table through
+   `select`, and GHASH a bit at a time with masks. Both expand the key in software, once. A kernel without
+   vector state calls the `_with` functions with `hardware = false`. Tested against RFC 8439's example, NIST's
+   GCM test case 16 and Python's `cryptography` (24 cases, both AES paths, with tampering refused).
+   Found: struct literals now hold secrets only in `#secret`-typed fields, like assignments, rather than
+   making the whole struct secret; casting a pointer to a secret to a pointer to what isn't is an error,
+   `rawptr` being the visible way past; and a race in the compiler, indexing through a pointer to an alias
+   another thread hadn't resolved yet, which crashed about one build in four of these programs and was
+   likely the once-seen SlopOS kernel build failure.
 5. **Curves**: X25519 and Ed25519, on 64-bit limbs with `u128` products.
 6. **Passwords**: Argon2id, its lanes worked one after another until threads are wanted.
 
