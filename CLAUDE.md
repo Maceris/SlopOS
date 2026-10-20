@@ -55,7 +55,7 @@ when relevant.
    package declares `PACKAGE_TIER`). The reflection and build API is in Hemera's
    `base/compiler` (`package.hsc`, `build.hsc`); checks are `CheckFunction`s registered by
    the build package with `add_check` (proposed: `knowledge/decisions/0029`). Mark guesses,
-   and add missing needs to `knowledge/hemera-proposals/reflection-checks.md`.
+   and log missing needs in `knowledge/hemera-feedback.md`.
 
 ## Guidelines
 

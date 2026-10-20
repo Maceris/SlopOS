@@ -68,7 +68,8 @@ answers them.
 - `std` on SlopOS reads monotonic time through a syscall, wall time through a `clock`
   connection, and randomness from a CSPRNG seeded from an `entropy` connection. Hemera's
   `Context` should carry a clock and a random source so code can be tested and replayed
-  without changes: `../hemera-proposals/context-clock-random.md`.
+  without changes. Adopted 2026-10-03 as `Context.clock` and `Context.random` (Hemera's
+  `base/runtime/time.hsc` and `random.hsc`).
 - Multithreaded processes racing on shared memory are a source of nondeterminism this
   decision doesn't cover. Replaying them needs the schedule recorded too (rr serializes
   threads onto one core). Out of scope for now.

@@ -1,188 +1,28 @@
-# Proposal: Builds as Hemera Programs
+# Builds as Hemera Programs: What's Left
 
-Status: **adopted** into `base/compiler` (2026-10-05). `base/compiler/build.hsc`
-(`BuildOptions`, `add_target`, `add_step`, `add_check`, `target_setting`,
-`BuildPermissions`, `report_error`) and `base/compiler/package.hsc` (`find_packages`,
-`find_constant`, `ProgramInfo`) are the reference for exact names and signatures. This
-document keeps why SlopOS needs it, how SlopOS uses it (`../decisions/0028-build-package.md`)
-and what is still open (§7).
+Status: **adopted** into `base/compiler` (2026-10-05). A build package registers targets, checks
+and steps from its `#run` code; Hemera's `docs/compilation.md` (*Build Packages*, *Compile-Time
+Permissions*) and `base/compiler/build.hsc` and `package.hsc` are the reference, and
+`../decisions/0028-build-package.md` is how SlopOS uses it. `os.run_process` runs other programs
+since 2026-10-19 (Windows and Linux), gated by `--allow-run`. This keeps only what's still open.
 
-## 1. Why
+## Parse Once, Build in Parallel
 
-Hemera has no build system: you point the compiler at a project's root package and its
-imports decide what gets compiled. That covers one program. SlopOS produces many outputs:
-a kernel, drivers, services, programs, libraries, host-side tests and a boot image. A build
-of many outputs is an ordinary Hemera program, without a separate build language.
+Documented 2026-10-19 in Hemera's `docs/compilation.md` (*Build Packages*) as it is today: targets
+are built one at a time, each a program of its own whose files are read, parsed and checked for it,
+with the work inside a target spread across threads. Planned, and stated there:
 
-## 2. The Model (as adopted)
+- **Sharing parsed files between targets.** Each target is still checked on its own, since its
+  `#if` choices, settings and package paths can change what a file means.
+- **Building independent targets at the same time**, with steps still waiting on the targets they
+  depend on.
 
-- A **build package** has output type `.Nothing`. Its `#run` code registers **targets**
-  with `compiler.add_target(options)`, each a root package plus a `BuildOptions`.
-- `compiler.command_line_options()` returns what was given on the command line as defaults,
-  so a target overrides only what differs, and `hemera -O3 build` does the obvious thing.
-- **Discovery:** `compiler.find_packages(folder, declares = "PROGRAM_KIND")` returns every
-  package declaring that constant, so adding a driver never touches the build package.
-  *Revised 2026-10-16:* SlopOS finds packages by folder instead, with `compiler.subfolders` and
-  `compiler.load_package`, its build code deciding what to build (`../decisions/0028-build-package.md`);
-  the example below still shows the original.
-  The constant's value is evaluated in the build program, so it has the build's types and
-  can be cast directly.
-- **Steps** (`add_step`) are Hemera functions run after the targets or steps they depend on,
-  receiving each target's output path (`TargetOutput`).
-- **Checks** (`add_check`) run on every target once it is type checked, receiving its
-  `BuildOptions` and its whole `ProgramInfo`. This is where house-rule checks hook in
-  (`reflection-checks.md`, `../decisions/0029-house-rule-checks-in-build.md`).
-- **Settings** are per-target strings that the target reads with `compiler.target_setting`.
+Neither may change what a build produces (Hemera's `docs/compilation.md`, *Deterministic Output*).
+SlopOS feels this as build time once there are many programs and drivers; nothing is blocked on it.
 
-Folder paths below (`src/kernel`, `src`) were placeholders written before the package structure
-was decided (`../decisions/0033`).
+## `find_packages`
 
-```
-package build
-
-import compiler from "base"
-import checks from "../checks"                                  // placeholder locations
-import build_settings from "../build_settings"
-
-build :: fn() {
-    kernel := compiler.command_line_options()
-    kernel.name = "kernel"
-    kernel.root = "src/kernel"
-    kernel.entry = "kernel_entry"
-    kernel.target_options.os = .None
-    kernel.target_options.output_type = .Executable
-    kernel.target_options.relocation_model = .PIE               // decisions/0004, 0021
-    kernel.target_options.red_zone = false                      // design/arch-x86-64.md
-    kernel.target_options.cpu = "x86-64-v3"                     // decisions/0003
-    kernel.target_options.cpu_features = "-sse,-sse2,-avx,-avx2"
-    kernel.target_options.linker_script = "src/kernel/kernel.ld"
-    array_add(&kernel.settings, compiler.TargetSetting.{build_settings.LOG_LEVEL, "debug"})
-    _ = compiler.add_target(kernel)
-
-    for program in compiler.find_packages("src", declares = "PROGRAM_KIND") {
-        options := compiler.command_line_options()
-        options.name = program.name
-        options.root = program.path                             // root accepts the canonical path
-        options.target_options.os = .SlopOS
-        options.target_options.output_type = output_type_for(&program)
-        _ = compiler.add_target(options)
-    }
-
-    compiler.add_check(checks.check_program)
-    _ = compiler.add_step(pack_boot_image, compiler.all_targets())
-}
-
-#run build()
-```
-
-## 3. Per-Target Settings
-
-Settings are strings (`TargetSetting { name, value: string }`). This answers the question
-this proposal asked (typed `any` or strings): the build package and each target are type
-checked separately, because `OS`, `TARGET_ARCH` and `#if` branches can differ, so a type
-defined in one doesn't exist in the other. Each consumer parses, and reports a bad value
-with `report_error`:
-
-```
-// In the kernel:
-LOG_LEVEL :: #run parse_log_level(compiler.target_setting(build_settings.LOG_LEVEL, default = "info"))
-TRACE_IPC :: #run compiler.target_setting(build_settings.TRACE_IPC, default = "false") == "true"
-
-#if TRACE_IPC {
-    // ...
-}
-```
-
-Anything depending on `LOG_LEVEL` waits until it's computed, as with any other compile-time
-constant. Because settings are per target, the same package can be built with different values
-in one build without conflict. SlopOS keeps setting names as string constants in a small
-`build_settings` package imported on both sides, so a misspelled name fails to compile
-instead of silently reading the default (`../decisions/0028-build-package.md`).
-
-## 4. Programs, Packages and Entry Points
-
-The rule stays "a program has one root package". What generalizes is the entry point, now
-`BuildOptions.entry` ("empty means `main` for executables, and no entry for libraries"):
-
-- **Library packages** have no entry point and can be imported by anything.
-- **Program packages** are the roots of targets. Programs never import other programs (a
-  house-rule check).
-- **The target names its entry function.** The kernel entry is called by Limine with its
-  own convention, drivers start with capabilities rather than `argv`, and libraries have no
-  entry at all. (The kernel still needs a no-runtime build and an entry calling convention:
-  `../hemera-feedback.md` items 1 and 7.)
-- **`#export`** marks a library's or program's public interface, and `FunctionInfo.is_exported`
-  exposes it to compile-time code. SlopOS programs export several typed functions, and the
-  shell builds command-line interfaces from those signatures (`../problems-and-directions.md` §4):
-
-  ```
-  search #export :: fn(pattern: string, files: File[], ignore_case := false) -> Stream[Match] {
-      // ...
-  }
-  ```
-
-- The same root package can be several targets: a driver built for SlopOS and its tests
-  built for the host, for example.
-
-## 5. Running External Programs
-
-1. **Compiling other Hemera code: use the compiler API, never a `hemera` subprocess.** A
-   subprocess loses typed options, integrated errors and shared parsing.
-2. **Running genuinely external tools** (QEMU, the Limine installer, maybe `git` to stamp a
-   version): a normal `std` OS-tier function usable at compile time. It doesn't exist yet;
-   it belongs in Hemera's `std/os` (§7):
-
-   ```
-   os.run_process(program: string, arguments: string[], working_directory: string? = null)
-       -> Result[ProcessResult, ProcessError]
-   ```
-
-**Gating (adopted):** compile-time code can't run processes or write outside the output
-folder unless the command line grants it (`--allow-run`); code reads what it was granted
-with `compiler.build_permissions()`. `os.run_process` at compile time should check it and
-fail with a clear error rather than leave enforcement to each caller.
-
-**Prefer Hemera over external tools when it's real work.** Writing the FAT32 boot image in
-Hemera (roadmap M8) is better dogfooding than calling `mkfs.fat`.
-
-## 6. `BuildOptions` Fields SlopOS Asked For
-
-All present in `build.hsc`:
-
-| SlopOS need | Field |
-|---|---|
-| Many outputs in one build | `name`, `output_path` |
-| The target's entry package | `root` |
-| Kernel/driver/library entry points | `entry` |
-| Remap `base`/`std` per target when needed | `package_paths` (`PackagePath`) |
-| User space x86-64-v3; kernel without SIMD | `target_options.cpu`, `cpu_features` |
-| Red zone off for the kernel | `target_options.red_zone` |
-| Explicit PIC/PIE (`../decisions/0004`) | `target_options.relocation_model`, `code_model` |
-| Kernel layout for Limine | `target_options.linker_script` |
-| Per-target constants (§3) | `settings` |
-| Steps that need other targets' outputs | `add_step(step, after)`, `TargetOutput` |
-
-## 7. Requirements and What's Still Open
-
-| # | Need | State |
-|---|---|---|
-| B1 | Register multiple targets from `#run` code in a `.Nothing` build package | **Done**: `add_target` |
-| B2 | Targets inherit command-line options as defaults | **Done**: `command_line_options()` |
-| B3 | Find packages and read their declared constants | **Done** (revised 2026-10-16): `subfolders(folder)` and `load_package(folder)`, with the build's own code deciding what to build; `find_constant`. `find_packages(folder, declares)` stays declared but unimplemented, and may be removed (`../decisions/0028-build-package.md`) |
-| B4 | Per-target settings readable as compile-time constants | **Done**: `settings`, `target_setting()` (strings, §3) |
-| B5 | Post-build steps with dependencies on target outputs | **Done**: `add_step`, `BuildNode`, `TargetOutput` |
-| B6 | Entry function per target; `#export` for public interfaces | **Done**: `entry`, `#export`, `FunctionInfo.is_exported` |
-| B7 | Build code observes each target's type-checked program | **Done**: `add_check`, `CheckFunction`, `ProgramInfo` |
-| B8 | Process spawning in `std`, gated at compile time | **Gate done** (`--allow-run`, `build_permissions()`); `os.run_process` declared in Hemera's `std/os/process.hsc` and checks the gate, but doesn't start processes yet |
-| B9 | The `BuildOptions` fields in §6 | **Done** |
-| B10 | Parse once, type check per distinct target configuration, build in parallel | Per-target type checking is implied by `TargetSetting`'s comment; sharing parsed files and building in parallel isn't documented. Worth stating in Hemera's `docs/compilation.md` |
-
-Still open on the Hemera side:
-
-- ~~**Target enums**~~: `OperatingSystem.SlopOS`, `.UEFI` and `OutputType.FlatBinary` (2026-10-09),
-  `Architecture.riscv64` (2026-10-12).
-- ~~**Permission scope**~~: done 2026-10-12. `--allow-run` only covers execution the build
-  package started (its `#run` code, steps and checks); `#run` code in imported packages gets
-  nothing (Hemera `docs/compilation.md`, *Compile-Time Permissions*).
-- ~~**`root` paths**~~: done 2026-10-12, `root` accepts canonical paths.
-- **B10 documentation** (above).
+`compiler.find_packages(folder, declares)` is declared but not implemented. SlopOS finds packages by
+folder instead, with `compiler.subfolders` and `compiler.load_package`, its own build code deciding
+what to build (`../decisions/0028-build-package.md`, revised 2026-10-16). It may be removed from
+`base/compiler`.

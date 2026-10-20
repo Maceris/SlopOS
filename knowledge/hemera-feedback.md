@@ -5,7 +5,8 @@ file is where that evidence accumulates: what the language and `std` make easy, 
 impossible. Entries are currently **design pressure** from planning; once code exists, most
 come from marker comments in the source (`grep -rn "HEMERA(\|STD(" src/`, see `conventions.md`).
 
-Detailed designs live in `hemera-proposals/`; this file is the index and status board.
+Designs still open live in `hemera-proposals/`; once one is in Hemera, Hemera's docs are the
+reference and the proposal is removed. This file is the index and status board.
 Since `decisions/0030`, SlopOS changes Hemera's `base/`, `std/`, `examples/` and `docs/`
 directly; those changes are logged here too, with the reason. An item is done once it's
 documented in Hemera's `docs/` or declared in its `.hsc` files, even if the compiler doesn't
@@ -38,11 +39,9 @@ them is `compiler-plan.md`, Phase 7:
 
 | Topic | State | Details |
 |---|---|---|
-| Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`. Still open: documenting parse-once/parallel builds (B10). `os.run_process` runs processes since 2026-10-19 (Windows and Linux) | `hemera-proposals/build-programs.md` §7; `decisions/0028` |
-| Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 resolved 2026-10-13 (see Resolved). The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md`, *Other Architectures* |
+| Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`; `os.run_process` runs processes since 2026-10-19 (Windows and Linux). Still open: sharing parsed files between targets and building them in parallel, documented as planned in Hemera's `docs/compilation.md` (2026-10-19); `find_packages` is unimplemented and may be removed | `hemera-proposals/build-programs.md`; `decisions/0028` |
+| Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 resolved 2026-10-13 (see Resolved). The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
 | Cryptography in `std` (needed with networking and remote login) | Open, from `decisions/0042` and `0043`: X25519, Ed25519, ChaCha20-Poly1305 or AES-GCM (with AES-NI detection, `0019`), a hash (SHA-256 or BLAKE3), and Argon2id. Constant-time implementations; freestanding where possible, so the kernel and boot code can use them | — |
-| Constraints on generics | Done (2026-10-19; finding functions by name dropped); phases 1 to 3 in Hemera (phase 3: std/maps' HashMap taking its hash function) (`#constraint`, requirements, `T: C`, `where`, E4032, constraints on `array_find` and containers, `satisfies`, `require_any`, derived parameters, generic aliases; checked bodies with archetypes, E4033, `require_view`/`ViewOf`), directions chosen with the Hemera author: `#constraint` functions of requirements, structural, checked bodies via archetypes for constrained generics only (unconstrained stay templates), `T: A && (B \|\| C)` and `where`, functions a generic needs passed as compile-time parameters (no overloading, so no name lookup), visible to `#if`, two new error codes. constraint expressions short-circuit like booleans (promises: `&&` adds, `\|\|` keeps what's shared), derived parameters (`E = element_of(C)`) bound in steps, constraints limited to requirements, no defaults picked by the compiler. Phased: gate at instantiation, then checked bodies, then std. aliases for common instances, derived parameters overridable like default arguments, `require_any` in constraint bodies. generic aliases (`alias[V] HashMap[...]`), a first requirement vocabulary and `std/constraints` | `hemera-proposals/generic-constraints.md` |
-| Shared ownership like C++'s `shared_ptr` | Done (2026-10-19): all five phases in Hemera. Directions chosen with the Hemera author: `#owned` types the compiler checks are released or moved (implicit moves, no hidden calls; `compiler.forget`/`duplicate` as escape hatches), `mut` in type arguments (`SharedPtr[mut Buffer]`, converting to read-only by itself), `using` on a pointer field for `shared.field`, and a one-pointer handle to a block with strong and weak counts (`make_shared`). what runs at the final release in the block, defaulting to an `#owned` value's own release; `#thread_bound`/`#crosses_threads` so a non-atomic `LocalPtr` stays on its thread. Phased: `using` on pointers, `mut` arguments, `#owned`, std, thread binding | `hemera-proposals/shared-ownership.md` |
 
 ## 2. Design Notes
 
@@ -64,7 +63,7 @@ Context for the open items, and choices SlopOS relies on.
   leaves its CPU (`decisions/0023`). Each `PerCpu` holds a prebuilt `Context`, so entry stubs
   pass a pointer to it and the "context at `gs:[0]`" idea isn't needed (`design/kernel.md` §3).
   The kernel is `user_data`'s only user. The shared-`rawptr` friction shows up in user space:
-  `hemera-proposals/context-extensions.md`. Since 2026-10-04 the kernel also needs a carrier
+  Hemera's context extensions (`docs/multitasking.md`). Since 2026-10-04 the kernel also needs a carrier
   block per CPU for the prologue stack check (item 10); see `design/kernel.md` §3.
 - **Fibers.** Since 2026-10-04 a fiber has its own small segmented stack (about 1.4 KiB per
   idle fiber, Hemera `docs/multitasking.md`), frames never move, and suspending saves
@@ -81,10 +80,41 @@ Context for the open items, and choices SlopOS relies on.
   `std`'s thread entry stub (`decisions/0026`). Hemera only needs OS thread-local storage
   for foreign callbacks, which SlopOS doesn't have yet. A future thread-local feature would
   add a per-thread cost to every SlopOS thread.
+- **Atomics, watching.** No compare-exchange takes a separate failure ordering; revisit if LL/SC
+  targets show a measurable cost. A spinlock still needs a `with` block to hold `acquired` across
+  the loop condition; fine, but worth watching as more lock-free code gets written.
+- **Segmented stacks, watching.** Threads pay `morestack` at segment boundaries where a fixed stack
+  wouldn't; measure against the spare-segment cache once SlopOS has threads.
 - **Sandboxed compilation.** A SlopOS that compiles software on-device could run `#run` code
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-19 — Integer literals are checked against the range of the type they become (`small : u8 = 300`, `-1`
+  as a `u32`, `0xffff_ffff_ffff_ffff` defaulting to `int`), and arithmetic on known integers and untyped constants is
+  worked out exactly as `docs/operators.md` defines it, so `255 + 1` as a `u8` is an error, `512 / 4` as a `u8` is
+  128 (it used to be worked out in the `u8`, giving 0), and dividing by a known zero is an error (Hemera
+  `docs/types.md`, *Number Formats*). Found writing `os.run_process`, where `0..<0xffff_ffff_ffff_ffff` ran no times.
+  Optional and named function results, like `-> (f: (fn() -> int)?)`, now parse too.
+
+- 2026-10-19 — Build packages' targets documented as they are (Hemera `docs/compilation.md`, *Build Packages*): one
+  at a time, each parsed and checked on its own; sharing parsed files and parallel targets are planned. The
+  adopted proposals were removed from `hemera-proposals/`, Hemera's docs being the reference, leaving only what's
+  open (`build-programs.md`, `kernel-entry.md`) and `bitfields.md`'s decision.
+
+- 2026-10-19 — Shared ownership, all five phases, with directions chosen with the Hemera author: `using` on named
+  fields (`docs/types.md`, *Structs*), `mut` in type arguments (*Mutability in Type Arguments*), `#owned` types the
+  compiler checks are released or moved, with `#release` and `compiler.forget`/`duplicate` (`docs/memory.md`, *Owned
+  Types*), std/memory's `SharedPtr`, `WeakPtr` and `LocalPtr`, one-pointer handles to a block with strong and weak
+  counts and what runs at the final release (*Shared Ownership*), and `#thread_bound`/`#crosses_threads` so a
+  non-atomic `LocalPtr` stays on its thread (`docs/multitasking.md`). Data races through shared mutable pointers
+  (Rust's `Sync`) stay out of scope.
+
+- 2026-10-19 — Constraints on generics, phases 1 to 3 (finding functions by name dropped: functions a generic needs
+  are passed), with directions chosen with the Hemera author: `#constraint` functions of requirements, structural,
+  `T: A && (B || C)` and `where`, checked where instances are made (E4032) and, for constrained generics, in their
+  bodies through archetypes (E4033), `compiler.satisfies` for `#if`, derived parameters and generic aliases, and
+  std/maps' `HashMap` taking its hash function (Hemera `docs/types.md`, *Constraints*, *Checked Bodies*).
 
 - 2026-10-19 — Small frictions: an optional function type is written in place as `(fn(n: int) -> int)?` (the
   parentheses make the `?` the function's), in fields, parameters and locals, so an alias like `SharedPtr`'s `Destroy`
@@ -391,7 +421,7 @@ Context for the open items, and choices SlopOS relies on.
   without exceptions); a top-level `#if` before any definition could only hold imports. New
   `test/front_end` tests.
 
-- 2026-10-13 — Segmented stacks for plain threads (`hemera-proposals/segmented-thread-stacks.md`):
+- 2026-10-13 — Segmented stacks for plain threads (Hemera `docs/multitasking.md`, *Stacks*):
   threads run Hemera code on segments like fibers (1 KiB first segment by default), with a native
   stack only for foreign calls, signals and fiber schedulers. Where the system doesn't give every
   thread a stack, the native stack is allocated on the first foreign call. `ThreadStack.Fixed` keeps
@@ -407,7 +437,7 @@ Context for the open items, and choices SlopOS relies on.
   - `TargetOptions.max_frame_size`: a compile error for larger stack frames (`docs/compilation.md`),
     since a house-rule check can't see frame sizes.
 
-- 2026-10-13 — Compile-time constant arguments and generics (`hemera-proposals/compile-time-parameters.md`):
+- 2026-10-13 — Compile-time constant arguments and generics (Hemera `docs/types.md`, *Generics*):
   a generic parameter with the same name as a value parameter makes it compile-time (integers, enums,
   booleans and functions); redundant explicit generics allowed with a warning. `docs/types.md`
   (*Generics*) documents binding, compile-time parameters and values in generic lists.
@@ -418,7 +448,7 @@ Context for the open items, and choices SlopOS relies on.
   parser; the type checker reads it as an argument if `Bits` is generic. Tests:
   `valid_scenarios/generics.hsc`, `E3017_11`.
 
-- 2026-10-13 — Pushing a complete context (`hemera-proposals/push-complete-context.md`):
+- 2026-10-13 — Pushing a complete context (Hemera `docs/control_flow.md`, *Pushing a Whole Context*):
   `push_context name from value { }` pushes a copy of a whole `runtime.Context`; it doesn't combine
   with overrides. Freestanding entry points, interrupt functions and entry functions have no context
   until they push one, and can only call intrinsics before that (`docs/control_flow.md`).
@@ -426,7 +456,7 @@ Context for the open items, and choices SlopOS relies on.
   assertion handler) replaces "a context built from constants" in `docs/compilation.md`. Parser (on
   request): the `from` form; tests in `valid_scenarios/push_context.hsc` and `E3018_10`.
 
-- 2026-10-13 — Kernel entry and return to user mode on x86-64 (`hemera-proposals/kernel-entry.md`):
+- 2026-10-13 — Kernel entry and return to user mode on x86-64 (Hemera `docs/calling_convention.md`, *Entry Functions*; other architectures in `hemera-proposals/kernel-entry.md`):
   `#calling_convention(.entry)` and `.syscall_entry` with compiler-generated entry paths
   (`docs/calling_convention.md`, *Entry Functions*); in `intrinsics.x86_64`: `RegisterFrame` (part of
   the convention version), `SYSCALL_VECTOR`, `SyscallScratch`, `entry_points`, `return_to_user`,
@@ -434,7 +464,7 @@ Context for the open items, and choices SlopOS relies on.
   inline assembly. The parser already accepted both conventions; test:
   `valid_scenarios/entry_functions.hsc`.
 
-- 2026-10-13 — Functions that never return (`hemera-proposals/no-return.md`):
+- 2026-10-13 — Functions that never return (Hemera `docs/directives.md`, *Functions*):
   - `#never_returns`, on a declaration after the name or in a function type after the signature,
     part of the function's type. Checked in the body; code after a call is unreachable; the
     caller's `defer`s don't run; lowered to LLVM's `noreturn` plus `unreachable` after every call.
@@ -445,7 +475,7 @@ Context for the open items, and choices SlopOS relies on.
     where it's the only directive taken, so a following `#if` still starts a statement. Test:
     `valid_scenarios/never_returns.hsc`.
 
-- 2026-10-13 — Data written by the bootloader (`hemera-proposals/externally-initialized-data.md`):
+- 2026-10-13 — Data written by the bootloader (Hemera `docs/directives.md`, *Constants*):
   - `#externally_initialized` on top-level constants: always emitted, never folded, read-only to the
     program, an error to read at compile time (LLVM's `externally_initialized` plus `@llvm.used`).
   - `#section(name)`, only together with `#externally_initialized`; every other constant goes in
@@ -461,7 +491,7 @@ Context for the open items, and choices SlopOS relies on.
 
 Changes made to Hemera in response to SlopOS (newest first):
 
-- 2026-10-12 — Type and enum semantics, answering the guesses in `hemera-proposals/reflection-checks.md` (Hemera `docs/types.md`):
+- 2026-10-12 — Type and enum semantics, answering SlopOS's reflection guesses (Hemera `docs/types.md`):
   - `==` on `type` values is exact, so even a plain alias differs from what it aliases; `types_are_aliases(a, b)` is the looser comparison the type checker uses.
   - Functions that change a dynamic array take a pointer (`array_add(&names, name)`), since a dynamic array passed by value is a copy of its count, capacity and data; read-only ones take an array view. `new` returns `ptr[mut T]`. Layouts are count first.
   - Pointer mutability (`docs/types.md`, *Mutability*): a struct's mutability covers what it stores inline, and a pointer field's own type decides whether what it points to can change. Fields and locals the runtime, scheduler and logger change through are now `ptr[mut T]` (carrier and fiber segments and links, scheduler queues, `fiber_create`'s result); `SharedPtr.value` is `ptr[mut T]` for now (see *Shared ownership* above). Iterating through a pointer to an array dereferences it explicitly, `for x in names^`.
@@ -473,7 +503,7 @@ Changes made to Hemera in response to SlopOS (newest first):
   - Decided: casts chain without extra parentheses (`cast[ptr[Foo]](data).bar`, `cast[T](x)^`); `or_return` always takes a value (`or_return void`, like `return void`); `match` arms start with `case` like `switch`, with no separators between arms; `alias` is required after `distinct` and optional otherwise (`my_int :: i32`), and a declaration's value can't start with `mut`; types work as values with `mut`, `fn` or several arguments in brackets (`data.type_ != ptr[mut Foo]`, `size_of(Result[int, string])`); line breaks mean nothing, and an expression continues as long as the next token can continue it (`docs/operators.md`, *Line breaks*). `docs/grammar.txt` matches the parser.
   - Tests: `valid_scenarios/` (one file per feature), new error scenarios, and a test that parses every `.hsc` file in `base/` and `std/`. It found and fixed: a stray `;`, `Result::Ok` (now `.Ok(...)`), intrinsics missing `:` before `---`, `default:` in a `switch` (now `case _:`), `match` as a variable name, and keywords as field names (`ImportInfo.alias_`, `TypeInfoAlias.is_distinct`).
 
-- 2026-10-12 — Reflection and context extensions, modeled on Odin (`hemera-proposals/reflection-checks.md`, `context-extensions.md`):
+- 2026-10-12 — Reflection and context extensions, modeled on Odin (Hemera `base/compiler`, `docs/multitasking.md`, *Context Extensions*):
   - `any` is documented as `data: rawptr` and `type_: type`; `TypeInfoEnum.values: u128[]`; memory layouts of strings, views and dynamic arrays (`runtime.StringView`, `ArrayView`, `ResizableArray`, `docs/types.md`).
   - `std/reflection`: `enum_member_name`, `equal` (Odin's `reflect.equal` rules) and `as_string` for strings, booleans and enums are written.
   - `Context.extensions`: a chain of `ContextExtension` nodes keyed by `type`, with `extension_node` and `get_extension(T)`. Nodes can live in the pushing frame; threads and fibers copy the chain when created (`copy_extensions`), instead of nodes being immortal. `user_data` stays (`docs/multitasking.md`, *Context Extensions*; `docs/memory.md`, *Contexts*).
@@ -483,14 +513,14 @@ Changes made to Hemera in response to SlopOS (newest first):
   - Linking: `lld` by default, ELF for `Linux`/`None`/`SlopOS`, PE/COFF for `Windows`/`UEFI`, Mach-O for `Mac` (`docs/compilation.md`, *Linking*). Was item 4.
   - `#calling_convention(.interrupt)` and `x86_64.InterruptFrame` (`docs/calling_convention.md`, *Interrupt Functions*). `#naked` left out: without inline assembly a naked body has nothing to contain. Was item 7.
   - Run-time checks (bounds, division by zero, empty optionals, stack overflow with `.AssertionHandler`) fail through `context.assertion_handler` (`docs/directives.md`). Was item 3.
-  - Racy plain accesses are defined: register-sized values like `_no_fence` atomics, larger ones may tear (`docs/memory.md`, *Data Races*; `atomics.md` §3 option 2).
+  - Racy plain accesses are defined: register-sized values like `_no_fence` atomics, larger ones may tear (`docs/memory.md`, *Data Races*).
   - `--allow-run` only covers execution the build package started (`docs/compilation.md`, *Compile-Time Permissions*).
   - The calling convention is versioned (`hemera-abi-v1`), and fiber resume-loop and segment layouts are stable within a version (`docs/calling_convention.md`, *Version*). Was *Calling-convention version* and *Unwinding suspended fibers out of process*.
-  - Not adopted: bitfields (integers and masks for now, `bitfields.md`) and generic atomics (waits for constrained generics).
+  - Not adopted: bitfields (integers and masks for now, `bitfields.md`) and generic atomics (waited for constrained generics, which exist since 2026-10-19; not taken up yet).
 
 - 2026-10-12 — Made from SlopOS under `decisions/0030`:
   - `time.now()` reads `context.clock.wall` and returns `Result[Instant, ClockError]`; the default logger leaves out the date and time when it fails.
-  - `SharedPtr` is thread-safe: atomic count, release decrement, acquire fence before destroying (`atomics.md` Example C). Its functions now take a pointer.
+  - `SharedPtr` is thread-safe: atomic count, release decrement, acquire fence before destroying. Its functions now take a pointer.
   - `runtime.FAILING_ALLOCATOR`, for a `Context` before any heap exists (item 9).
   - `Architecture.riscv64`, with `s11` as the carrier register (`docs/calling_convention.md`).
   - `BuildOptions.root` documented to accept the canonical paths `find_packages` returns.
@@ -505,7 +535,7 @@ Changes made to Hemera in response to SlopOS (newest first):
   - `os.run_process` (`ProcessResult`, `ProcessError`), which reports a compile error without `--allow-run`.
   - Un-suffixed atomics documented as sequentially consistent.
 
-- 2026-10-05 — Builds and compile-time reflection (`base/compiler/build.hsc`, `package.hsc`, `function.hsc`, `types.hsc`; `hemera-proposals/build-programs.md`, `reflection-checks.md`):
+- 2026-10-05 — Builds and compile-time reflection (`base/compiler/build.hsc`, `package.hsc`, `function.hsc`, `types.hsc`):
   - Build packages register targets, steps and checks (`add_target`, `add_step`, `add_check`) with command-line options as defaults; per-target string settings (`target_setting`); entry per target (was part of item 1).
   - `BuildOptions` gained name, root, output path, entry, package paths, CPU and features, code and relocation models, red zone and linker script (was item 5, and part of item 4).
   - `--allow-run` and `build_permissions()` gate processes and writes outside the output folder at compile time.
@@ -518,14 +548,15 @@ Changes made to Hemera in response to SlopOS (newest first):
   - `context.assertion_handler` and `intrinsics.trap()` (most of item 3); `intrinsics.capture_stack_trace` replaces `Context.stack_trace`.
   - The context is read-only; `push_context name (field = value)` replaces assigning fields. `thread_index` and the fiber fields left `Context` for the runtime's `CarrierBlock`.
   - Pointers to the stack are allowed again, checked at compile time with `#escaping` parameters and `#scoped` structs.
-- 2026-10-03 — `_weak` compare-exchange (`hemera-proposals/atomics.md`).
-- 2026-10-03 — `Context.clock: ptr[Clock]` and `Context.random: ptr[Random]`; `Instant` (wall clock), `MonotonicTime`, `Duration`, `ClockError` in `base/runtime` (`hemera-proposals/context-clock-random.md`).
+- 2026-10-03 — `_weak` compare-exchange (`base/intrinsics/atomics.hsc`).
+- 2026-10-03 — `Context.clock: ptr[Clock]` and `Context.random: ptr[Random]`; `Instant` (wall clock), `MonotonicTime`, `Duration`, `ClockError` in `base/runtime`.
 - 2026-10-01 — Declaration directives after the name (`main #export :: fn() {}`); `#export` documented.
 - 2026-10-01 — `--package=<name>:<path>` to remap `base`/`std`/`user`/`vendor`; path parsing bugs fixed.
 - 2026-10-01 — `rawptr` atomics; atomic load/store for `int`/`uint`/`uintptr`; `compiler_fence_acquire_release`.
 - 2026-10-01 — `_` to ignore return values (`docs/functions.md`).
 - 2026-10-01 — Arch interfaces and house rules: compile-time reflection checks rather than an `implements` feature (`decisions/0007`).
-- 2026-09-30 — Atomic loads/stores, hardware and compiler fences, `_acquire_release`, compare-exchange returning `(old, success)`, increment/decrement returning the old value (`hemera-proposals/atomics.md`).
+- 2026-09-30 — Atomic loads/stores, hardware and compiler fences, `_acquire_release`, compare-exchange returning `(old, success)`, increment/decrement returning the old value (`base/intrinsics/atomics.hsc`); racy plain accesses defined 2026-10-12 (Hemera
+  `docs/memory.md`, *Data Races*).
 - 2026-09-30 — `and`/`or`/`xor` intrinsics take an operand; unsigned fixed-width atomic variants.
 - 2026-09-30 — `Context.user_data: rawptr` as the extension point (programs can't add fields).
 - 2026-09-30 — `OperatingSystem.None` for freestanding targets.

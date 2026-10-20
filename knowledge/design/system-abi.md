@@ -154,7 +154,7 @@ function:
   is an ABI version change (the 2026-10-04 redesign removed `stack_trace`, `thread_index` and
   the fiber fields, and added `assertion_handler`). Every fiber also embeds a copy, so its
   size counts against each fiber's memory. Both are reasons to keep extensions out of the
-  struct itself (`../hemera-proposals/context-extensions.md`).
+  struct itself (Hemera's `docs/multitasking.md`, *Context Extensions*).
 
 ## 8. Calling C, and Being Called From C
 

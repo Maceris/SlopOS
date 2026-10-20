@@ -52,7 +52,7 @@ the hardware.
   budget accounting.
 
 ## Consequences
-- The conformance check (`../hemera-proposals/reflection-checks.md`, Sketch 1) needs the
+- The conformance check (`0029`, in `src/checks`) needs the
   placeholder rule.
 - Interrupt latency in the kernel is bounded by the distance between preemption points, which
   `0023` already requires to be short.

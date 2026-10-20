@@ -24,8 +24,8 @@ information), and the API for it is a work in progress.
 - Checks live together in one package (location decided with the package structure) and
   run as part of the build.
 - Until the reflection API exists, checks are written against the API we expect, marked
-  `//HEMERA(guess)`. Our needs are listed in `../hemera-proposals/reflection-checks.md` as
-  input to that API's design.
+  `//HEMERA(guess)`. Our needs were listed as input to that API's design; all of them are in
+  Hemera's `base/compiler` since 2026-10-16, and that proposal was removed 2026-10-19.
 
 ## Alternatives considered
 - **Language feature (`implements`, package signatures):** compile-time safe, but one feature

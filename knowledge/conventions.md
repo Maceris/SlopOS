@@ -33,8 +33,7 @@ errors (`decisions/0007`), not just written down. When adding a rule, add a func
 the house-rules checks package and call it from `check_program`, which the build package
 registers with `compiler.add_check` (`decisions/0029`). The API is Hemera's
 `base/compiler`; if it can't express a rule yet, write the check against the API we expect,
-marked `//HEMERA(gap)` or `//HEMERA(guess)`, and list the need in
-`hemera-proposals/reflection-checks.md`.
+marked `//HEMERA(gap)` or `//HEMERA(guess)`, and log the need in `hemera-feedback.md`.
 
 ## Hardware and Binary Structures
 - Use explicit-endian types (`u32le`) for anything whose layout is defined externally (disk,
@@ -73,7 +72,7 @@ marked `//HEMERA(gap)` or `//HEMERA(guess)`, and list the need in
   | `Allocating` | an `Allocator` in `context` | yes, once the kernel heap exists | `string_builder`, dynamic containers, `SharedPtr` |
   | `Os` | system calls | no | `io`, `os`, `time`, threads, the `fiber` scheduler |
 
-  The tier check (`decisions/0029`, `hemera-proposals/reflection-checks.md`) rejects any
+  The tier check (`decisions/0029`, `src/checks`) rejects any
   import of a higher tier, inside `std` and from SlopOS. The `Os` tier gets an
   `OS == .SlopOS` branch next to Linux/Mac/Windows (roadmap M6).
 - **The Hemera repo outside `apps/` may be changed.** `base/`, `std/`, `examples/` and `docs/`

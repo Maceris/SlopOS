@@ -66,7 +66,7 @@ Stresses: the `Allocator` interface for real, bit-packed page table entries, ato
 
 - Static ACPI tables the kernel needs: RSDP/XSDT, MADT, HPET.
 - Local APIC / x2APIC, I/O APIC, IRQ routing to (later) driver messages.
-- TSC calibration, monotonic clock, the clock page (seqlock, `hemera-proposals/atomics.md` E).
+- TSC calibration, monotonic clock, the clock page (a seqlock, on Hemera's `base/intrinsics/atomics.hsc`).
 - Bringing up the other CPUs, per-CPU data via `GS`, spinlocks, TLB shootdown.
 
 Specs: ACPI 6.5 (static tables), Intel SDM Vol. 3A ch. 10–11, Intel x2APIC spec.
@@ -112,7 +112,7 @@ Stresses: `std` design, the system ABI, the context register at process start.
 - Supervisor restarts crashed drivers.
 
 Specs: PCIe base spec (config space), virtio 1.2.
-Stresses: volatile MMIO, fences (`hemera-proposals/atomics.md` D), protocol unions, driver isolation.
+Stresses: volatile MMIO, fences (Hemera's `base/intrinsics/atomics.hsc`), protocol unions, driver isolation.
 
 ## M8 — Storage (L4)
 

@@ -49,4 +49,4 @@ is found, and which addresses are physical.
 - The firmware tables reach user space (the platform service) as memory objects; the kernel
   parses none of them.
 - `boot/limine` declares its requests with Hemera's `#externally_initialized` and `#section`
-  (`../hemera-proposals/externally-initialized-data.md`, adopted 2026-10-13).
+  (adopted 2026-10-13; Hemera's `docs/directives.md`, *Constants*).

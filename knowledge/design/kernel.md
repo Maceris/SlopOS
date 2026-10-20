@@ -129,11 +129,13 @@ PerCpu :: struct #align(64) { // one per CPU, in a per-CPU area (randomized, 002
   global variable is involved.
 - **Per-CPU context fields come out naturally:** per-CPU slab caches as `allocator`, a
   per-CPU lock-free log buffer as `logger`, and a per-CPU CSPRNG as `random`. That last one
-  also avoids the shared-generator problem noted in `../hemera-proposals/context-clock-random.md`.
+  also avoids sharing one generator between CPUs, which `std`'s default would have to make
+  thread-safe.
 - **Inside the kernel, the "one `rawptr` shared by every subsystem" friction doesn't arise.**
   The kernel is the only user of `user_data`, and its subsystems are fields of
   `PerCpu`/`Kernel`. The friction is real in *user space*, where `std`, libraries and the
-  program all want a slot. See `../hemera-proposals/context-extensions.md`.
+  program all want a slot. That's what context extensions are for (Hemera's
+  `docs/multitasking.md`, *Context Extensions*).
 - **The "context at `gs:[0]`" feedback item isn't needed.** The context is already passed in
   a register. `GS` is only read at entry.
 - **What breaks the invariant:** kernel code that runs on behalf of one CPU on another (IPIs,
