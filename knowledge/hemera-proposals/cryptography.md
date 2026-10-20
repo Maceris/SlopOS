@@ -119,7 +119,15 @@ crypto.argon2id(password, salt, crypto.Argon2Parameters.{memory_kib = 65536, pas
    AES and carryless-multiply intrinsics (Hemera `docs/types.md`, `docs/directives.md`, `base/intrinsics`).
 2. **Secrets** (done 2026-10-19): `#secret`, `#constant_time` and its checks, `compiler.declassify` and
    `secret`, `intrinsics.select` without a branch, and `secure_zero` (`docs/memory.md`, *Secrets*).
-3. **Hashes**: SHA-256, SHA-512, BLAKE2b, BLAKE3, HMAC and HKDF.
+3. **Hashes** (done 2026-10-19): SHA-256, SHA-512, BLAKE2b, BLAKE3, HMAC and HKDF in `std/crypto`. Each
+   hasher is a plain struct with public counts and a `#secret` state, taking public bytes (`*_update`) or
+   `SecretByte`s (`*_update_secret`), and giving a public digest or a secret one (`*_finish_secret`), which
+   HMAC and HKDF build on; tags are compared with `crypto.equal`. Tested against FIPS 180-4, RFC 4231 and
+   RFC 5869's cases and values from Python's hashlib, hmac and blake3 (41 checks, across BLAKE3's chunks and
+   tree). Bytes go in one at a time for now; faster block paths come once correctness is settled.
+   Found: the bounds prover needed scaled indexes (`4 * i + 3`), bounded products and loop names from 0
+   proven non-negative, now in; and `flags & ~MASK` on a `u32` needs `~cast[u32](MASK)`, since an untyped
+   `~2` is -3, as in Go.
 4. **Encryption**: ChaCha20-Poly1305, and AES-256-GCM with both paths.
 5. **Curves**: X25519 and Ed25519, on 64-bit limbs with `u128` products.
 6. **Passwords**: Argon2id, its lanes worked one after another until threads are wanted.
