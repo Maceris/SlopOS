@@ -140,7 +140,17 @@ crypto.argon2id(password, salt, crypto.Argon2Parameters.{memory_kib = 65536, pas
    `rawptr` being the visible way past; and a race in the compiler, indexing through a pointer to an alias
    another thread hadn't resolved yet, which crashed about one build in four of these programs and was
    likely the once-seen SlopOS kernel build failure.
-5. **Curves**: X25519 and Ed25519, on 64-bit limbs with `u128` products.
+5. **Curves** (done 2026-10-20): X25519 and Ed25519 on 51-bit limbs with `u128` products, sharing the field
+   (`curve25519.hsc`). `x25519` takes the keys and a place for the shared secret and returns false, the
+   secret left zeros, for a low-order point, like `open`'s `bool` rather than a `Result`. Ed25519's
+   points use complete addition, so doubling is the same code, and a scalar is multiplied a bit at a time,
+   choosing with `select`; numbers mod L are reduced a bit at a time too. Signing recomputes the public key
+   from the secret one. Verifying is cofactorless (RFC 8032's), refusing an S not below L and a public key
+   whose y isn't below p. Choices that are secrets are `SecretBool`s, beside `SecretByte`. Tested against
+   RFC 7748's and RFC 8032's inputs, with expected values from Python's `cryptography` (21 checks, with
+   flipped bits refused); Wycheproof's files aren't in yet.
+   Found: `==` and `!=` on two arrays passed the checker and made invalid LLVM IR; they're now reported as
+   not generated yet, like structs.
 6. **Passwords**: Argon2id, its lanes worked one after another until threads are wanted.
 
 Each algorithm is tested against its published vectors (FIPS 180-4, RFC 7693, BLAKE3's, RFC 4231,
