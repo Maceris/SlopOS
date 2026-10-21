@@ -95,8 +95,16 @@ Context for the open items, and choices SlopOS relies on.
   other). Found along the way: a checker race, comparing an optional with what it holds (`error !=
   OsError.AlreadyExists`) before another thread finished the optional's type, a wrong type error in about one
   build in 40 under load, now waited for, with 1,140 parallel builds of every test clean; and an output path in a
-  folder that doesn't exist crashed the compiler, now error E6000. Still slow: a large result returned by value,
-  like an optional of a 1.9 KiB hasher, which LLVM copies a byte at a time (5 s of one test's build).
+  folder that doesn't exist crashed the compiler, now error E6000.
+
+- 2026-10-20 — Large values, as Hemera's `docs/calling_convention.md` (*Large Values*) now says: a result or
+  parameter over 16 bytes goes through a pointer, the result's passed first by the caller, the parameter a copy in
+  the caller's frame; and large values are stored with memset and memmove rather than whole. LLVM had been copying
+  them a value per byte (an optional of a 1.9 KiB hasher was 5,600 instructions), so `std/crypto`'s hash tests build
+  in 1 s rather than 5 (70 on the Debug compiler that morning). The docs had the callee popping its arguments and
+  result pointers among the stack parameters, which wasn't so; they say what's done now. Found along the way:
+  another checker race, `compiler.release` on an `#owned` type before its type or its release function was known,
+  a wrong error in about one build in ten under load, now waited for.
 
 - 2026-10-20 — Encryption, phase 4 of cryptography: ChaCha20-Poly1305 and AES-256-GCM in `std/crypto`, AES-GCM
   with AES-NI and PCLMULQDQ or in constant-time software, tested against RFC 8439, NIST and Python's
