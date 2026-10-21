@@ -165,7 +165,12 @@ Each algorithm is tested against its published vectors (FIPS 180-4, RFC 7693, BL
 RFC 5869, RFC 8439, NIST SP 800-38D, RFC 7748, RFC 8032, RFC 9106) and Wycheproof's edge cases,
 hosted on Windows and Linux, and AES-GCM on both paths.
 
-Since (2026-10-20):
+Since (2026-10-20, 21):
+- **Faster**: bitsliced software AES, ChaCha20 and BLAKE3 in vectors (AVX2 when there), SHA-256 with the SHA
+  extensions, AES-NI pipelined with GHASH reduced once per four blocks, and an Ed25519 base-point table built at
+  compile time. Measured against OpenSSL (through Python) on the same machine: SHA-256 1.5 of 2.3 GB/s, BLAKE3 2.9
+  of 5.2, ChaCha20-Poly1305 1.0 of 1.4, AES-256-GCM 1.4 of 2.3, Ed25519 signing 43 of 25 us. Each path that needs
+  vector state can be turned off for the kernel.
 - **Wycheproof**: 1,556 of its cases (X25519, Ed25519, both AEADs on both AES paths, HMAC and HKDF), every
   one whose sizes the types can hold, generated into one test. They found SHA-512's padding wrong when a
   message left 112 to 119 bytes in its last block (the 16-byte length overlapped it), which broke Ed25519

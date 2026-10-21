@@ -88,6 +88,20 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-21 — Faster `std/crypto`: software AES bitsliced (Boyar and Peralta's S-box circuit, four blocks at once)
+  with GHASH by masked integer multiplies, from under 1 MB/s to about 100; ChaCha20 eight blocks at a time with
+  AVX2, or four in 128-bit vectors, and Poly1305 on 64-bit limbs, together 1 GB/s; BLAKE3's whole chunks eight or
+  four at a time, 2.8 GB/s; SHA-256 with the SHA extensions, 1.5 GB/s; AES-NI four blocks at a time with GHASH's
+  products reduced once per four, 1.4 GB/s; Ed25519 signing with a table of the base point's multiples worked
+  out by `#run` while compiling, 43 us. Each vector or hardware path has a switch for a kernel without vector
+  state (`hardware`, `wide`, the `_with` functions). Compiler changes found by it: the pass builder now gets the
+  target machine, so LLVM costs inlining and vectorizing for x86-64 rather than generically, and inlines across
+  `#target_features` (it couldn't before, which left AVX2 code calling SSE copies); a checker race, indexing a
+  value whose type is an alias another thread hadn't resolved, a crash in about one build in a hundred under load;
+  `x86_64.sha256_rounds2`, `sha256_message1` and `sha256_message2`; and Release builds keep a PDB, for tracing a
+  crash. Found but left: the bounds prover doesn't take `data.count - at >= 16`, only `at + 16 <= data.count`,
+  nor sums of several scaled loop names.
+
 - 2026-10-20 — Compiler speed. A Release compiler, with a Release LLVM, builds SlopOS's kernel in 5 s rather than
   65, its tests in 1.6 s rather than 18.6, and runs Hemera's test suite in about a minute rather than ten: nearly
   all the time had been a Debug LLVM's code generation. `hemera` on the PATH should be `bin/Release`. Debug and
