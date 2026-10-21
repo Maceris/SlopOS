@@ -148,7 +148,7 @@ crypto.argon2id(password, salt, crypto.Argon2Parameters.{memory_kib = 65536, pas
    from the secret one. Verifying is cofactorless (RFC 8032's), refusing an S not below L and a public key
    whose y isn't below p. Choices that are secrets are `SecretBool`s, beside `SecretByte`. Tested against
    RFC 7748's and RFC 8032's inputs, with expected values from Python's `cryptography` (21 checks, with
-   flipped bits refused); Wycheproof's files aren't in yet.
+   flipped bits refused).
    Found: `==` and `!=` on two arrays passed the checker and made invalid LLVM IR; they're now reported as
    not generated yet, like structs.
 6. **Passwords** (done 2026-10-20): Argon2id, its lanes worked one after another until threads are wanted.
@@ -165,11 +165,21 @@ Each algorithm is tested against its published vectors (FIPS 180-4, RFC 7693, BL
 RFC 5869, RFC 8439, NIST SP 800-38D, RFC 7748, RFC 8032, RFC 9106) and Wycheproof's edge cases,
 hosted on Windows and Linux, and AES-GCM on both paths.
 
+Since (2026-10-20):
+- **Wycheproof**: 1,556 of its cases (X25519, Ed25519, both AEADs on both AES paths, HMAC and HKDF), every
+  one whose sizes the types can hold, generated into one test. They found SHA-512's padding wrong when a
+  message left 112 to 119 bytes in its last block (the 16-byte length overlapped it), which broke Ed25519
+  and HMAC-SHA512 for those lengths; fixed, with those lengths added to the hash tests. Building that test
+  also found the compiler storing a large zero value whole, like an empty literal of a 112 KiB struct, which
+  LLVM can't select instructions for; it's a memset now.
+- **The machine code, checked** (ctgrind): `--valgrind-secrets` has `compiler.secret` tell Valgrind's
+  Memcheck a value is undefined and `compiler.declassify` defined again, so Memcheck reports any branch or
+  address that depends on a secret in what really runs. Every constant-time function in `std/crypto` runs
+  clean under it on Linux, and a program that leaks a secret through a `rawptr` is caught (Hemera
+  `docs/memory.md`, *Checking the Machine Code*). Not covered: conditional moves and instructions whose
+  time depends on their operands, which Memcheck doesn't report, and paths the test doesn't take.
+
 ## Open Questions
 
-- **Checking the generated code.** The compiler's rules catch secret-dependent source, and value
-  barriers keep LLVM from undoing masks, but nothing proves the machine code. A test that the
-  `#constant_time` functions' assembly has no conditional branch on a secret, or timing tests like
-  dudect, could back it.
 - **Vector lanes by a variable index** are a memory access on most targets; with a secret index
   that's the same leak as a table lookup, so it falls under the address rule.
