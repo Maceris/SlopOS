@@ -8,7 +8,7 @@ system as built lives in `../docs/` instead.
 |------|---------------|
 | `roadmap.md` | Milestones of real subsystems, and what each stresses in Hemera |
 | `compiler-plan.md` | Ordered plan for Hemera compiler work up to type checking and a booting M1 kernel |
-| `conventions.md` | How to write Hemera before the compiler can build it (marker comments, layout asserts) |
+| `conventions.md` | How SlopOS's Hemera is written (marker comments, layout asserts, house-rule checks) |
 | `problems-and-directions.md` | Brainstorm: what's wrong with modern OSes, and clean-slate alternatives |
 | `open-questions.md` | Unresolved questions; delete an entry once it's answered in `decisions/` |
 | `decisions/` | Numbered decision records: what we chose and why |
@@ -22,7 +22,7 @@ system as built lives in `../docs/` instead.
 | `design/system-abi.md` | The Hemera-native system ABI: syscalls, process start, libraries, C interop |
 | `design/security.md` | The security design: threat model, capabilities, users, grants (overview of decisions 0008–0018) |
 | `design/services.md` | The user-space system services: what each does, what it holds, whether it's trusted |
-| `hemera-proposals/` | Designs for Hemera changes still open: what SlopOS needs, and what the compiler (`apps/`, changed only on request) must implement. Once one is in Hemera, its docs are the reference and the proposal is removed |
+| `hemera-proposals/` | Designs for Hemera changes still open: what SlopOS needs, and what the compiler (`apps/`, built out as SlopOS needs it, `decisions/0047`) must implement. Once one is in Hemera, its docs are the reference and the proposal is removed |
 | `hemera-feedback.md` | Log of where Hemera helped, hurt or was missing something. The experiment's real output |
 | `prior-art.md` | Other systems and papers worth studying |
 

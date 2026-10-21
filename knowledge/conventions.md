@@ -1,8 +1,9 @@
-# Conventions: Writing Hemera Before the Compiler Can Build It
+# Conventions: Writing SlopOS's Hemera
 
-SlopOS code is written now, against a language and standard library that are still being
-designed. These conventions keep that code honest and turn it into searchable evidence
-for `hemera-feedback.md`.
+SlopOS code is written to build and run, against a language, compiler and standard library that
+are still being built; where the compiler falls short, it's extended (`decisions/0047`). These
+conventions keep the code honest and turn what it finds into searchable evidence for
+`hemera-feedback.md`.
 
 ## Marker Comments
 
@@ -10,7 +11,7 @@ Every marker is greppable, so the feedback log can be regenerated from the sourc
 
 | Marker | Meaning | Example |
 |---|---|---|
-| `//HEMERA(gap): ...` | The language can't express this yet. Code is written the way it *should* look. | `//HEMERA(gap): needs an interrupt calling convention` |
+| `//HEMERA(gap): ...` | The language can't express this yet, and fixing that is deliberately left for later (say why). Prefer extending the compiler now (`decisions/0047`). | `//HEMERA(gap): needs an interrupt calling convention` |
 | `//HEMERA(guess): ...` | Syntax or semantics aren't documented; this is our best guess. | `//HEMERA(guess): directive placement after loop` |
 | `//HEMERA(friction): ...` | Works, but is clumsy. Worth a language/library change? | `//HEMERA(friction): unused 'old' just to test CAS success` |
 | `//STD(missing): ...` | Calls a `std`/`base` function that doesn't exist yet. Signature is a proposal. Prefer writing it in Hemera's `std`/`base`; use the marker only when deferring. | `//STD(missing): formatting into a fixed buffer, no allocator` |
@@ -32,8 +33,8 @@ Project rules are enforced by `#run` code that reflects over packages and report
 errors (`decisions/0007`), not just written down. When adding a rule, add a function to
 the house-rules checks package and call it from `check_program`, which the build package
 registers with `compiler.add_check` (`decisions/0029`). The API is Hemera's
-`base/compiler`; if it can't express a rule yet, write the check against the API we expect,
-marked `//HEMERA(gap)` or `//HEMERA(guess)`, and log the need in `hemera-feedback.md`.
+`base/compiler`; if it can't express a rule yet, extend it, or, when that's deliberately left for
+later, mark the check `//HEMERA(gap)` and log the need in `hemera-feedback.md`.
 
 ## Hardware and Binary Structures
 - Use explicit-endian types (`u32le`) for anything whose layout is defined externally (disk,
@@ -77,6 +78,5 @@ marked `//HEMERA(gap)` or `//HEMERA(guess)`, and log the need in `hemera-feedbac
   `OS == .SlopOS` branch next to Linux/Mac/Windows (roadmap M6).
 - **The Hemera repo outside `apps/` may be changed.** `base/`, `std/`, `examples/` and `docs/`
   are edited directly and committed in the Hemera repo, with `docs/` updated alongside. The
-  compiler (`apps/`) is changed only when the Hemera author asks for that specific change
-  (`decisions/0030`, amendment); otherwise what it must implement is recorded in
-  `hemera-feedback.md` and, when it needs a design, `hemera-proposals/`.
+  compiler (`apps/`) is extended as SlopOS needs it, with tests (`decisions/0047`); language
+  design is proposed in `hemera-proposals/` and decided with the Hemera author first.

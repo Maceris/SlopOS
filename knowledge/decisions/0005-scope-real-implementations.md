@@ -1,6 +1,6 @@
 # 0005: Scope — Real Implementations, Narrow Feature Set
 
-Status: accepted
+Status: accepted; writing code before the compiler can build it superseded by 0047
 Date: 2026-09-30
 
 ## Context

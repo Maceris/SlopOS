@@ -1,18 +1,16 @@
 # Hemera Feedback Log
 
 The stated goal of SlopOS is to test how Hemera's design scales in real-world use. This
-file is where that evidence accumulates: what the language and `std` make easy, hard or
-impossible. Entries are currently **design pressure** from planning; once code exists, most
-come from marker comments in the source (`grep -rn "HEMERA(\|STD(" src/`, see `conventions.md`).
+file is where that evidence accumulates: what the language, compiler and `std` make easy, hard or
+impossible, from building and running the code and from marker comments in the source
+(`grep -rn "HEMERA(\|STD(" src/`, see `conventions.md`).
 
 Designs still open live in `hemera-proposals/`; once one is in Hemera, Hemera's docs are the
 reference and the proposal is removed. This file is the index and status board.
 Since `decisions/0030`, SlopOS changes Hemera's `base/`, `std/`, `examples/` and `docs/`
-directly; those changes are logged here too, with the reason. An item is done once it's
-documented in Hemera's `docs/` or declared in its `.hsc` files, even if the compiler doesn't
-implement it yet: most of the OS isn't expected to build with today's compiler anyway.
-Compiler work (`apps/`) is done only when the Hemera author asks for it (`decisions/0030`,
-amendment), and is logged here too.
+directly; those changes are logged here too, with the reason. The compiler (`apps/`) is built out
+as SlopOS needs it (`decisions/0047`), and that's logged here too. An item is done once it's in
+Hemera's `docs/` and works: implemented in the compiler, `base` or `std`, with tests.
 Severity: **blocker** / **friction** / **nice**.
 
 ---
@@ -41,7 +39,7 @@ them is `compiler-plan.md`, Phase 7:
 |---|---|---|
 | Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`; `os.run_process` runs processes since 2026-10-19 (Windows and Linux). Still open: sharing parsed files between targets and building them in parallel, documented as planned in Hemera's `docs/compilation.md` (2026-10-19); `find_packages` is unimplemented and may be removed | `hemera-proposals/build-programs.md`; `decisions/0028` |
 | Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 resolved 2026-10-13 (see Resolved). The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
-| Cryptography in `std` (needed with networking and remote login) | Planned 2026-10-19, directions chosen with the Hemera author: SHA-256/512, BLAKE2b, BLAKE3, HMAC, HKDF, ChaCha20-Poly1305, AES-256-GCM (hardware from the start, through `vector[T, n]`, `v128` and per-function `#target_features`), X25519, Ed25519 and Argon2id, in one freestanding `std/crypto`; `#constant_time` checked by the compiler, with secrets marked on types (`#secret`). Six phases: vectors, secrets, hashes and encryption done (2026-10-19 to 20), curves, passwords | `hemera-proposals/cryptography.md`; `decisions/0042`, `0043`, `0019` |
+| Cryptography in `std` (needed with networking and remote login) | Planned 2026-10-19, directions chosen with the Hemera author: SHA-256/512, BLAKE2b, BLAKE3, HMAC, HKDF, ChaCha20-Poly1305, AES-256-GCM (hardware from the start, through `vector[T, n]`, `v128` and per-function `#target_features`), X25519, Ed25519 and Argon2id, in one freestanding `std/crypto`; `#constant_time` checked by the compiler, with secrets marked on types (`#secret`). All six phases done (2026-10-19 to 20), plus Project Wycheproof's vectors and the machine code checked under Valgrind (`--valgrind-secrets`) | `hemera-proposals/cryptography.md`; `decisions/0042`, `0043`, `0019` |
 
 ## 2. Design Notes
 
@@ -89,6 +87,16 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-20 — Compiler speed. A Release compiler, with a Release LLVM, builds SlopOS's kernel in 5 s rather than
+  65, its tests in 1.6 s rather than 18.6, and runs Hemera's test suite in about a minute rather than ten: nearly
+  all the time had been a Debug LLVM's code generation. `hemera` on the PATH should be `bin/Release`. Debug and
+  Release now build side by side (Hemera's MLIR dialect library had one output for both, so they overwrote each
+  other). Found along the way: a checker race, comparing an optional with what it holds (`error !=
+  OsError.AlreadyExists`) before another thread finished the optional's type, a wrong type error in about one
+  build in 40 under load, now waited for, with 1,140 parallel builds of every test clean; and an output path in a
+  folder that doesn't exist crashed the compiler, now error E6000. Still slow: a large result returned by value,
+  like an optional of a 1.9 KiB hasher, which LLVM copies a byte at a time (5 s of one test's build).
 
 - 2026-10-20 — Encryption, phase 4 of cryptography: ChaCha20-Poly1305 and AES-256-GCM in `std/crypto`, AES-GCM
   with AES-NI and PCLMULQDQ or in constant-time software, tested against RFC 8439, NIST and Python's

@@ -5,12 +5,13 @@ Guidance for working on SlopOS. Details live in `knowledge/`; this is the summar
 ## What This Project Is
 
 SlopOS is a capability-based microkernel operating system written in **Hemera**, a new
-language whose compiler and standard library are still being built. **The real artifact is
-the source code**: a realistic, large-scale stress test of Hemera's design, compiler and
-`std`. Being able to build and run it eventually is a bonus, not the goal.
+language whose compiler and standard library are still being built. It's a realistic,
+large-scale stress test of Hemera's design, compiler and `std`.
 
-Hemera can't compile meaningful programs yet, so code is written against the language as
-documented and proposed, and every gap or friction found is recorded as feedback.
+Hemera's compiler works in part: it builds and boots the kernel. Rather than writing SlopOS
+ahead of a compiler that can't build it, **the compiler is built out as SlopOS needs it**
+(`knowledge/decisions/0047`): SlopOS code is written to build and run, and when the compiler
+falls short, fixing it is part of the work. Every gap or friction found is recorded as feedback.
 
 ## Repository Layout
 
@@ -23,19 +24,19 @@ documented and proposed, and every gap or friction found is recorded as feedback
 The Hemera repository is separate: language docs in `docs/`, `base/`, the standard library
 in `std/`, `examples/`, and the compiler, formatter and language server in `apps/`. SlopOS
 uses Hemera's `std` directly and changes `base/`, `std/`, `examples/` and `docs/` as part of
-this project, and `apps/` only on request (`knowledge/decisions/0030`). Ask for the path to the Hemera repository folder
+this project, and `apps/` (the compiler) as SlopOS needs it (`knowledge/decisions/0030`, `0047`). Ask for the path to the Hemera repository folder
 when relevant.
 
 ## Hard Rules
 
-1. **Don't modify Hemera's `apps/`** (compiler, formatter, language server) unless the user
-   explicitly asks for that specific change (`knowledge/decisions/0030`, amendment). `base/`, `std/`,
-   `examples/` and `docs/` may be changed directly, following Hemera's conventions and
-   committed in the Hemera repo (`knowledge/decisions/0030`). Keep `docs/` in step with every
-   `base`/`std` change. Anything the compiler must implement (new intrinsics or builtins,
-   reflection data, directives, syntax or semantics) also goes in
-   `knowledge/hemera-feedback.md`, with a design in `knowledge/hemera-proposals/` when it's
-   more than a line; language semantics are proposed there before `docs/` changes.
+1. **Build the compiler out as SlopOS needs it** (`knowledge/decisions/0047`). When SlopOS code
+   needs a compiler fix or a documented feature the compiler lacks, do it in Hemera's `apps/`, with
+   tests in `apps/compiler/test`, rather than write code the compiler can't build. **Language design
+   goes to the user first**: new syntax or semantics, or anything changing what Hemera code means,
+   is proposed in `knowledge/hemera-proposals/` and decided before `docs/` or the compiler change.
+   `base/`, `std/`, `examples/` and `docs/` are changed directly, following Hemera's conventions
+   and committed in the Hemera repo (`knowledge/decisions/0030`); keep `docs/` in step with every
+   change. Log every change to Hemera, compiler included, in `knowledge/hemera-feedback.md`.
 2. **Real implementations, narrow scope, full depth** (`knowledge/decisions/0005`). Cut
    features, never quality: follow the real specs and cite them (`//SPEC:`), use the
    algorithms a production system would, handle every error path, be SMP-safe from the start.
@@ -102,6 +103,8 @@ when relevant.
   in `docs/architecture/layers.md` and `docs/specs/`.
 - Proposed, not yet decided: one build package using Hemera's compiler API (`0028`); house-rule
   checks run on every target (`0029`).
+- The compiler is built out as SlopOS needs it, and SlopOS code is written to build and run (`0047`,
+  superseding `0030`'s amendment and part of `0005`).
 
 ## Writing Hemera: Things That Are Easy to Get Wrong
 
@@ -166,13 +169,13 @@ when relevant.
   size check (`#assert size_of(T) == N`) next to every hardware/binary struct.
 - Follow Hemera's `docs/coding_guidelines.md`: a function does exactly one thing.
 
-When unsure about syntax or semantics, check the Hemera docs, then guess and mark it
-`//HEMERA(guess)`.
+When unsure about syntax or semantics, check the Hemera docs and what the compiler accepts. If the
+docs don't settle it, ask, or guess and mark it `//HEMERA(guess)` when it's deliberately left open.
 
 ## Building
 
-The kernel in `src/` builds and boots (`knowledge/compiler-plan.md`, Phase 6), though most of
-the planned code still needs more of the compiler. `base` is built into the compiler, and it
+The kernel in `src/` builds and boots (`knowledge/compiler-plan.md`, Phase 6), and new code is
+expected to build too, with the compiler extended where it can't yet (`knowledge/decisions/0047`). `base` is built into the compiler, and it
 finds `std` in the Hemera repo it was built in. `hemera src/build` builds everything through the
 build package (`decisions/0028`): the kernel (`src/boot/limine`, linked with its `x86_64.ld`,
 with the freestanding flags) and every test program, each checked by the house rules in

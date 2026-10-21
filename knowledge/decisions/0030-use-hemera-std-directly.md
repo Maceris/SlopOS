@@ -1,6 +1,7 @@
 # 0030: Use Hemera's `std` Directly, and Change the Hemera Repo Outside `apps/`
 
-Status: accepted, amended 2026-10-12 (compiler changes on request, see the end)
+Status: accepted, amended 2026-10-12 (compiler changes on request, see the end); the amendment
+superseded by 0047 (the compiler built out as SlopOS needs it)
 Date: 2026-10-09
 Supersedes: `0006`
 
