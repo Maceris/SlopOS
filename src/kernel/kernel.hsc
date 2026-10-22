@@ -2,8 +2,9 @@
  * The kernel core (L2): portable, using only the arch layer, BootInfo and std's freestanding and
  * allocating tiers (docs/architecture/layers.md, L2).
  *
- * So far it boots, sets up the boot CPU's entries and timer, starts the other CPUs, which go idle,
- * and halts after a few timer interrupts (roadmap M1, M3).
+ * So far it boots, sets up the boot CPU's entries, its own page tables and the timer, starts the
+ * other CPUs, which go idle, reclaims boot memory, and halts after a few timer interrupts (roadmap
+ * M1 to M3).
  */
 package kernel
 
@@ -39,6 +40,18 @@ Kernel :: struct {
     options : Options,
     // Every frame of RAM the kernel owns.
     frames : frames.FrameAllocator,
+    // The slab caches behind the kernel heap (heap.hsc).
+    heap : Heap,
+    // The kernel's own address space, which every address space shares as its kernel half (address_space.hsc).
+    page_table : arch.PageTable,
+    // Held while changing page_table.
+    page_table_lock : concurrency.SpinLock,
+    // The bootloader's memory, reclaimed once every CPU is done with it.
+    boot_memory : boot_info.PhysicalRange[],
+    // How many CPUs must leave their boot stacks before boot memory is reclaimed, 0 until it's known.
+    cpus_leaving_boot_stacks : u32,
+    // How many have.
+    cpus_off_boot_stacks : u32,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : concurrency.SpinLock,
     // test_pool's state, as an address, once the boot CPU has set it up for the other CPUs (pool_test.hsc)
@@ -65,6 +78,10 @@ PerCpu :: struct #align(64) {
     nmi_count : u32,
     // CPU_WAITING while the boot CPU starts this one, then CPU_ONLINE or CPU_ABANDONED (cpus.hsc).
     start_state : u32,
+    // Whether an interrupt has taken this CPU to its kernel stack, off its boot stack for good.
+    left_boot_stack : bool,
+    // This CPU's magazines in front of the kernel heap's caches.
+    heap : CpuHeap,
 }
 
 // The memory for one CPU's stacks.
@@ -105,12 +122,13 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         or_else out_of_memory(&options, "no memory for the kernel's state")
     kernel :: cast[ptr[mut Kernel]](frames.virtual_of(&made, kernel_frames))
     kernel.frames = made
+    init_heap(&kernel.heap)
     log_memory(&kernel.frames)
     kernel.features = features
     kernel.options = options
     kernel.image_base = cast[u64](info.kernel_image.virtual_base)
     runtime.assert(info.cpus.count >= 1, "the boot information lists the boot CPU")
-    kernel.cpus = info.cpus[0..<1]
+    keep_boot_info(kernel, info)
     kernel.online_cpus = 1
     cpu :: allocate_cpu(kernel, 0) or_else out_of_memory(&options, "no memory for the boot CPU's state")
     // The boot CPU keeps its boot stack's limit until it first enters through the kernel stack
@@ -120,10 +138,12 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     arch.init_system(&kernel.arch)
     arch.init_cpu(&kernel.arch, &cpu.arch, &cpu.carrier, &cpu.context, &cpu.stacks)
     runtime.log_info("boot CPU set up: descriptor tables, entries and local APIC")
+    start_address_space(kernel, info)
     start_framebuffer_console(kernel, info)
     push_context cpu_context from cpu.context {
         start_timer(kernel, info.counter_frequency_hint)
         start_cpus(kernel, info)
+        leave_boot_stacks(kernel)
         if kernel.options.test_fault {
             runtime.log_info("test_fault: running an invalid instruction")
             intrinsics.trap()
@@ -139,6 +159,14 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         }
         if kernel.options.test_pool {
             test_pool(kernel)
+        }
+        if kernel.options.test_heap {
+            test_heap()
+        }
+        if kernel.options.test_write_code {
+            runtime.log_info("test_write_code: writing to the kernel's code")
+            intrinsics.volatile_store_u8(cast[ptr[mut u8]](cast[u64](boot)), 0xcc)
+            runtime.log_error("test_write_code: the kernel's code is writable")
         }
         if kernel.options.test_assert {
             runtime.log_info("test_assert: failing an assertion")

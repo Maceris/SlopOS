@@ -45,12 +45,17 @@ user_fault #never_returns :: fn(registers: ptr[mut arch.UserRegisters], fault: a
 
 // An interrupt from user mode or idle.
 interrupt #never_returns :: fn(from: Interrupted, source: InterruptSource) {
+    kernel.left_boot_stack()
     match source {
         case Timer => kernel.handle_timer()
         case Spurious => arch.idle()
         case Ipi(kind) => {
             if kind == .Stop {
                 arch.halt()
+            }
+            //TODO(claude): the scheduler (M4). Until then nothing is ever scheduled, so the CPU goes back to idle
+            if kind == .Reschedule {
+                arch.idle()
             }
         }
         case _ => {}

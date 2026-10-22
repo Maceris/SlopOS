@@ -8,7 +8,7 @@ The arch interface is the boundary between the arch layer (L1) and the kernel co
   interrupts).
 
 Status: **specified**, partly implemented: `src/arch_interface`, and in `src/arch/x86_64` CPU
-setup, interrupts, the timer and the miscellaneous functions (roadmap M1). Choices and alternatives are in
+setup, interrupts, the timer and the miscellaneous functions (roadmap M1), and paging (M2). Choices and alternatives are in
 `../../knowledge/decisions/0032-arch-interface.md`. Four-digit numbers like `0023` refer
 to decision records in `../../knowledge/decisions/`.
 
@@ -229,14 +229,34 @@ address_space_tag_count : fn() -> u32 : ---
 supports_page_size : fn(size: PageSize) -> bool : ---
 
 /*
- * Make table an address space whose top-level table is root, a zeroed frame.
- * Copies the kernel half from kernel, or starts the kernel's own table if kernel is null.
+ * How many zeroed frames the kernel's own table needs besides its root: tables for the whole kernel
+ * half, made up front so every address space shares it as it grows (x86-64: 256, one per top-level
+ * entry). 0 where the kernel half has a root of its own (AArch64's TTBR1).
+ */
+kernel_half_frames : fn() -> u32 : ---
+
+/*
+ * Make table the kernel's own address space, which maps the kernel half and nothing else. root is a
+ * zeroed frame, and half the first of kernel_half_frames() contiguous zeroed frames. Tables are
+ * reached through the direct map at direct_map_offset.
+ */
+init_kernel_page_table : fn(
+    table: ptr[mut PageTable],
+    root: PhysicalAddress,
+    half: PhysicalAddress,
+    tag: AddressSpaceTag,
+    direct_map_offset: u64,
+) : ---
+
+/*
+ * Make table an address space whose top-level table is root, a zeroed frame, sharing kernel's
+ * kernel half. It maps user addresses only.
  */
 init_page_table : fn(
     table: ptr[mut PageTable],
     root: PhysicalAddress,
     tag: AddressSpaceTag,
-    kernel: ptr[PageTable]?,
+    kernel: ptr[PageTable],
 ) : ---
 
 map : fn(
@@ -248,7 +268,7 @@ map : fn(
     tables: ptr[mut TableFrames],
 ) -> Result[void, MapError] : ---
 
-// Unmap one page, returning its physical address.
+// Unmap one page, returning its physical address. flush and freed cover one table.
 unmap : fn(
     table: ptr[mut PageTable],
     virtual_address: VirtualAddress,
@@ -273,7 +293,7 @@ Translation :: struct {
 // Where virtual_address is mapped, or null if nothing is mapped there.
 translate : fn(table: ptr[PageTable], virtual_address: VirtualAddress) -> Translation? : ---
 
-// Switch the calling CPU to table.
+// Switch the calling CPU to table. The first switch from the bootloader's tables flushes the whole TLB.
 activate : fn(table: ptr[PageTable]) : ---
 
 // Flush batch from the calling CPU's TLB.
@@ -580,9 +600,10 @@ How `arch/x86_64` meets the interface (`../../knowledge/design/arch-x86-64.md`):
 | `ArchSystem` | The IDT, filled from `x86_64.entry_points` |
 | `UserRegisters` | `x86_64.RegisterFrame` |
 | `ArchCpu` | `x86_64.SyscallScratch` first (the `gs` base points here), then the GDT and TSS (with IST entries for the critical stacks), and the carrier block and context for entry stubs |
-| `init_cpu` | `lgdt`, `ltr`, `lidt`; `EFER.NXE`, `EFER.SCE`; `STAR`/`LSTAR`/`FMASK`; `CR4.SMEP`, `CR4.SMAP`, `CR4.PCIDE` (if present), `CR4.OSXSAVE`; `XCR0` for x87, SSE and AVX; the gs base (`IA32_GS_BASE`) → the `ArchCpu`, which `swapgs` moves to `IA32_KERNEL_GS_BASE` while in user mode |
+| `init_cpu` | `lgdt`, `ltr`, `lidt`; `EFER.NXE`, `EFER.SCE`; `STAR`/`LSTAR`/`FMASK`; `CR4.SMEP`, `CR4.SMAP`, `CR4.PCIDE` (if present), `CR4.PGE`, `CR4.OSXSAVE`; `IA32_PAT`; `XCR0` for x87, SSE and AVX; the gs base (`IA32_GS_BASE`) → the `ArchCpu`, which `swapgs` moves to `IA32_KERNEL_GS_BASE` while in user mode |
 | `AddressSpaceTag` | PCID, 4096 tags (1 without PCID) |
-| Paging | 4-level page tables; `Device` uses PAT uncached, `WriteCombining` the PAT WC entry |
+| Paging | 4-level page tables, reached through the direct map. The kernel's table gets all 256 tables of the kernel half up front, and other address spaces copy its top-level entries. Each non-leaf entry counts the present entries of the table below it in bits 61:52, which the CPU ignores, so `unmap` frees a table that empties without reading it. `init_cpu` sets the PAT (entries 0–3 as at reset, 5 write-combining): `WriteBack` is entry 0, `WriteCombining` 5, `Device` 3 (uncached) |
+| TLB | `CR4.PGE` for global pages. With PCIDs, `activate` keeps a tag's entries, unless `flush_tlb` or `flush_tlb_tag` marked the tag stale while it wasn't the current one; `invlpg` flushes the current tag's addresses and global entries, and `all` flushes everything by toggling `CR4.PGE`. The first `activate` on a CPU does that too, leaving nothing of the bootloader's tables |
 | Interrupts | x2APIC (xAPIC if absent). Device IDs are vectors 48–239 |
 | Wired interrupts | I/O APICs (`ControllerKind.IoApic`); the legacy 8259 PIC is masked and ignored |
 | Timer | TSC with TSC-deadline, frequency from the hint, `CPUID` leaf `0x15`, or calibration against the PIT |

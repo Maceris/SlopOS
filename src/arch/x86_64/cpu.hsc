@@ -2,8 +2,8 @@
  * The x86-64 arch layer (L1): implements arch_interface (docs/specs/arch_interface.md, x86-64)
  * for the kernel core, which imports this package as arch.
  *
- * Not here yet, with the milestones that need them: paging (M2), wired interrupt controllers and
- * device interrupts (M3), user state, vector state and entry from user mode (M4 to M6).
+ * Not here yet, with the milestones that need them: wired interrupt controllers and device
+ * interrupts (M3), user state, vector state and entry from user mode (M4 to M6).
  */
 package arch_x86_64
 
@@ -77,6 +77,12 @@ ArchCpu :: struct #align(64) {
     kernel_stack_limit : rawptr,
     critical_stack_limits : rawptr[3],
     timer : TimerState,
+    // Whether init_cpu turned PCIDs on.
+    pcid : bool,
+    // Still on the bootloader's page tables, until the first activate.
+    bootloader_tables : bool,
+    // One bit per PCID whose entries must be flushed when it's next activated (paging.hsc).
+    stale_tags : u64[64],
 }
 
 // State shared by every CPU (arch_interface.ArchSystem): the IDT. Must not move after init_system.

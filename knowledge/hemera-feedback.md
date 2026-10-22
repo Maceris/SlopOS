@@ -39,6 +39,8 @@ them is `compiler-plan.md`, Phase 7:
 |---|---|---|
 | Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`; `os.run_process` runs processes since 2026-10-19 (Windows and Linux). Still open: sharing parsed files between targets and building them in parallel, documented as planned in Hemera's `docs/compilation.md` (2026-10-19); `find_packages` is unimplemented and may be removed | `hemera-proposals/build-programs.md`; `decisions/0028` |
 | Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 resolved 2026-10-13 (see Resolved). The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
+| Defaults in a function type (found 2026-10-22, M2's heap test) | Open, for the Hemera author. `AllocatorFn` gives `location` a default (`:= #caller_location`), and checking accepts a call through an `Allocator`'s `function` that leaves it out, but generating it fails (E5002, "a call that leaves out a parameter without a default"): the generator finds defaults on the called declaration, and a function value has none. The docs say what a parameter's default means for a function, not for a function type. Either a function type's defaults are part of it and a call through any value of it uses them (and the type would have to keep the expression, not just that there is one), or function types can't have defaults and checking should say so. Until then callers pass it (`src/kernel/heap_test.hsc`, as `std` does) | `HEMERA(gap)` in `src/kernel/heap_test.hsc` |
+| Freeing passes no alignment (2026-10-22, friction) | Open. `base`'s `free` and `free_array` pass the size but alignment 0, so an allocator can't serve an over-aligned block from somewhere it would only find again by alignment. The kernel heap picks a block's class by size alone and refuses alignments beyond a block's natural one. Passing the alignment on free (`align_of(T)`, or what `new_aligned` was given) would lift that | `HEMERA(friction)` in `src/kernel/heap.hsc` |
 | Cryptography in `std` (needed with networking and remote login) | Planned 2026-10-19, directions chosen with the Hemera author: SHA-256/512, BLAKE2b, BLAKE3, HMAC, HKDF, ChaCha20-Poly1305, AES-256-GCM (hardware from the start, through `vector[T, n]`, `v128` and per-function `#target_features`), X25519, Ed25519 and Argon2id, in one freestanding `std/crypto`; `#constant_time` checked by the compiler, with secrets marked on types (`#secret`). All six phases done (2026-10-19 to 20), plus Project Wycheproof's vectors and the machine code checked under Valgrind (`--valgrind-secrets`) | `hemera-proposals/cryptography.md`; `decisions/0042`, `0043`, `0019` |
 
 ## 2. Design Notes
@@ -87,6 +89,18 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-22 — `base`'s `fiber_destroy` freed a fiber with `free(fiber)`, which passes `size_of(Fiber)`, though
+  `fiber_create` allocated `FIBER_BLOCK_SIZE` bytes, the fiber and its first stack segment; so did `fiber_create`'s
+  own error path. Allocating whole frames hid it, since both sizes were one frame; the kernel's slab heap (M2), which
+  tells blocks apart by size, caught it in the pool test. Both now free the whole block (`free_array` of
+  `FIBER_BLOCK_SIZE` bytes).
+- 2026-10-22 — M2's paging needed nothing new from the compiler: page-table entries through `ptr[mut u64]` with
+  release stores, `for level in leaf..=3 #reverse` for walks, and the bounds prover taking `% 512` for table indexes
+  and `count - 1` after `count >= 1 && count <= 4`. Two things it doesn't follow, worked around: a bound on what a
+  call returns (an index helper had to become a helper that returns the entry's address), and `/ 64` on a bounded
+  value (written `>> 6 % 64`). A hosted unit test imports the whole x86-64 arch package and runs its paging over a
+  buffer standing in for physical memory.
 
 - 2026-10-22 — Linking the kernel took 0.14 s, most of it Windows starting cmd.exe to run ld.lld; the compiler runs
   the linker directly now, found on the PATH: 0.03 s. The kernel builds in 1.33 s, the tests in 0.73, Hemera's test

@@ -18,12 +18,17 @@ BOOT = ROOT / "tools" / "boot.py"
 
 # Name, the code expected, and boot.py's arguments
 TESTS = [
-    ("boots and halts (BIOS)", 0, []),
-    ("boots and halts (UEFI)", 0, ["--uefi"]),
+    ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
+    ("boots and halts (UEFI)", 0, ["--uefi", "--expect-line=[info] boot memory reclaimed"]),
     ("reports a kernel fault", 1, ["--command-line=test_exit test_fault"]),
     ("reports a failed assertion", 3, ["--command-line=test_exit test_assert"]),
     ("refuses a CPU below x86-64-v3", 2, ["--cpu=qemu64"]),
-    ("starts every CPU", 0, ["--expect-line=[info] 4 of 4 CPUs online", "--", "-smp", "4"]),
+    ("starts every CPU", 0, ["--expect-line=[info] 4 of 4 CPUs online", "--expect-line=[info] boot memory reclaimed",
+                             "--", "-smp", "4"]),
+    ("keeps the kernel's code read-only", 1, ["--command-line=test_exit test_write_code",
+                                              "--expect-line=[info] test_write_code: writing to the kernel's code"]),
+    ("allocates from the kernel heap", 0, ["--command-line=test_exit test_heap",
+        "--expect-line=[info] test_heap: 200 blocks kept their contents, grown, shrunk and freed"]),
     ("resumes after an NMI", 0, ["--command-line=test_exit test_nmi", "--expect-line=[info] test_nmi: back from the NMI"]),
     ("switches between fibers", 0, ["--command-line=test_exit test_fibers",
                                     "--expect-line=[info] test_fibers: stack traces follow suspended and resumed fibers"]),

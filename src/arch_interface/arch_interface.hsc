@@ -161,14 +161,34 @@ address_space_tag_count : fn() -> u32 : ---
 supports_page_size : fn(size: PageSize) -> bool : ---
 
 /*
- * Make table an address space whose top-level table is root, a zeroed frame.
- * Copies the kernel half from kernel, or starts the kernel's own table if kernel is null.
+ * How many zeroed frames the kernel's own table needs besides its root: tables for the whole kernel
+ * half, made up front so every address space shares it as it grows (x86-64: 256, one per top-level
+ * entry). 0 where the kernel half has a root of its own (AArch64's TTBR1).
+ */
+kernel_half_frames : fn() -> u32 : ---
+
+/*
+ * Make table the kernel's own address space, which maps the kernel half and nothing else. root is a
+ * zeroed frame, and half the first of kernel_half_frames() contiguous zeroed frames. Tables are
+ * reached through the direct map at direct_map_offset.
+ */
+init_kernel_page_table : fn(
+    table: ptr[mut PageTable],
+    root: PhysicalAddress,
+    half: PhysicalAddress,
+    tag: AddressSpaceTag,
+    direct_map_offset: u64,
+) : ---
+
+/*
+ * Make table an address space whose top-level table is root, a zeroed frame, sharing kernel's
+ * kernel half. It maps user addresses only.
  */
 init_page_table : fn(
     table: ptr[mut PageTable],
     root: PhysicalAddress,
     tag: AddressSpaceTag,
-    kernel: ptr[PageTable]?,
+    kernel: ptr[PageTable],
 ) : ---
 
 map : fn(
@@ -180,7 +200,7 @@ map : fn(
     tables: ptr[mut TableFrames],
 ) -> Result[void, MapError] : ---
 
-// Unmap one page, returning its physical address.
+// Unmap one page, returning its physical address. flush and freed cover one table.
 unmap : fn(
     table: ptr[mut PageTable],
     virtual_address: VirtualAddress,
@@ -205,7 +225,7 @@ Translation :: struct {
 // Where virtual_address is mapped, or null if nothing is mapped there.
 translate : fn(table: ptr[PageTable], virtual_address: VirtualAddress) -> Translation? : ---
 
-// Switch the calling CPU to table.
+// Switch the calling CPU to table. The first switch from the bootloader's tables flushes the whole TLB.
 activate : fn(table: ptr[PageTable]) : ---
 
 // Flush batch from the calling CPU's TLB.

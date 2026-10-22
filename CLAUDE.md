@@ -105,6 +105,9 @@ when relevant.
   checks run on every target (`0029`).
 - The compiler is built out as SlopOS needs it, and SlopOS code is written to build and run (`0047`,
   superseding `0030`'s amendment and part of `0005`).
+- The kernel's address space is a direct map of RAM and the image mapped per segment, W^X, shared by
+  every address space as its kernel half; boot memory is reclaimed once every CPU is off it. The heap
+  is slab caches behind per-CPU magazines, every CPU's `Allocator` (`0048`).
 
 ## Writing Hemera: Things That Are Easy to Get Wrong
 

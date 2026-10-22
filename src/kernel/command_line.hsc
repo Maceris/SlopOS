@@ -25,6 +25,13 @@ Options :: struct {
     test_segments : bool,
     // test_pool: once booted, run two fiber pools on CPUs 1 to 5 (needs 6 CPUs).
     test_pool : bool,
+    /*
+     * test_write_code: once booted, write to the kernel's own code, so a test can check that its
+     * page tables keep code read-only (W^X).
+     */
+    test_write_code : bool,
+    // test_heap: once booted, allocate, resize and free blocks of many sizes from the kernel heap.
+    test_heap : bool,
 }
 
 parse_command_line :: fn(command_line: string) -> Options {
@@ -68,5 +75,11 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_pool" {
         options.test_pool = true
+    }
+    if word == "test_write_code" {
+        options.test_write_code = true
+    }
+    if word == "test_heap" {
+        options.test_heap = true
     }
 }

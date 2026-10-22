@@ -27,8 +27,7 @@ CPU_ABANDONED : u32 : 2
 // Start every CPU after the boot CPU, on the boot CPU, once its timer runs.
 start_cpus :: fn(kernel #escaping : ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
     // A copy of the view, which the calls below can't change
-    cpus :: info.cpus
-    kernel.cpus = cpus
+    cpus :: kernel.cpus
     kernel.online_cpus = 1
     start_cpu :: info.start_cpu or_return void
     timeout :: kernel.counter_frequency / 1000 * CPU_START_TIMEOUT_MS
@@ -55,7 +54,7 @@ start_cpus :: fn(kernel #escaping : ptr[mut Kernel], info: ptr[boot_info.BootInf
         }
         kernel.online_cpus += 1
     }
-    runtime.log_info("% of % CPUs online", kernel.online_cpus, info.cpus.count)
+    runtime.log_info("% of % CPUs online", kernel.online_cpus, cpus.count)
 }
 
 /*
@@ -66,6 +65,7 @@ cpu_started :: fn() #never_returns {
     cpu :: per_cpu()
     kernel :: cpu.kernel
     arch.init_cpu(&kernel.arch, &cpu.arch, &cpu.carrier, &cpu.context, &cpu.stacks)
+    arch.activate(&kernel.page_table)
     _, online :: intrinsics.interlocked_compare_exchange_u32(&cpu.start_state, CPU_ONLINE, CPU_WAITING)
     if !online {
         // Too late: the boot CPU went on without it
@@ -98,6 +98,7 @@ allocate_cpu :: fn(kernel #escaping : ptr[mut Kernel], index: u32) -> Result[ptr
     cpu.context.logger = &KERNEL_LOGGER
     cpu.context.log_level = .INFO
     cpu.context.assertion_handler = kernel_assertion_handler
+    cpu.context.allocator = heap_allocator(kernel)
 
     cpu.stacks.kernel = range_of(&stack_memory.kernel[0], KERNEL_STACK_SIZE)
     cpu.stacks.critical[cast[u8](arch_interface.CriticalEvent.Nmi)] = range_of(&stack_memory.nmi[0], CRITICAL_STACK_SIZE)

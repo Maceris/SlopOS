@@ -103,6 +103,7 @@ init_cpu :: fn(
     record_stacks(cpu, stacks)
     load_descriptor_tables(system, cpu)
     enable_cpu_features()
+    init_paging(cpu)
     enable_system_calls()
     // The gs base after load_segments, which resets it
     x86_64.wrmsr(IA32_GS_BASE, cast[u64](cpu))
