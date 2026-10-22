@@ -88,6 +88,16 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-21 — Compiler speed, second round: the kernel builds in 2.7 s rather than 4.8, the tests in 1.3 rather than
+  1.7. `hemera --time-phases` prints each phase's time, which showed most of it was describing the program to the
+  build's check (`src/build`): working out every package's constants took 2.4 s, since a constant holding functions,
+  like a logger, failed its package's whole batch, which was then run one constant at a time, a compile-time run each,
+  and the font's 26 KB of `#file_data` was copied with a store LLVM split into thousands. Now a constant that can't be
+  kept is left out on its own, all packages' constants are worked out in one run, and a large constant is copied from
+  a read-only global: 0.2 s. Checking uses at most 8 threads, which is quicker than 24, since past a few they mostly
+  wait on the names registry. What's left: LLVM's O2 passes and code generation, about 1 s of the kernel's build,
+  spread over the usual passes; the build check itself, 0.35 s; and checking each program, about 0.15 s.
+
 - 2026-10-21 — Faster `std/crypto`, second round. The field's squaring has its own 15-product formula, and adding
   doesn't carry: X25519 42 to 28 us. Ed25519 verifying adds both multiples along one chain of doublings, with
   windows of signed digits (it's public, so needn't be constant time): 102 to 43 us. Signing reduces mod L a byte
