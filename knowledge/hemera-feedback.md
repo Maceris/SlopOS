@@ -88,6 +88,13 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-21 — Parallel code generation: after LLVM simplifies the whole module (inlining across all of it), the
+  compiler splits it into up to 8 parts, and optimizes and generates each on its own thread into its own object
+  file. The kernel builds in 2.2 s rather than 2.7, the tests in 1.2 rather than 1.3, and Hemera's test suite in 47 s
+  rather than 53; the kernel comes out byte for byte the same every time, and the same size as from one part. Found
+  doing it: the module-level assembly the compiler writes (`#foreign` shims, fiber switches) defined its functions
+  locally, which only works in one object file, so the split makes them global.
+
 - 2026-10-21 — Compiler speed, second round: the kernel builds in 2.7 s rather than 4.8, the tests in 1.3 rather than
   1.7. `hemera --time-phases` prints each phase's time, which showed most of it was describing the program to the
   build's check (`src/build`): working out every package's constants took 2.4 s, since a constant holding functions,
