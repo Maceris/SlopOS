@@ -88,6 +88,11 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-21 — The bounds prover's gaps left by the crypto work: a difference compared with a constant
+  (`data.count - at >= 16`) now says `at + 16 <= data.count` once `at <= data.count` is known, so it can't wrap; sums of
+  bounded values (`16 * b + 4 * j + k`) are bounded; and `x %% n`, floored, is never negative for a constant `n > 0`,
+  even of a signed `x` (`%` stays truncated, so still not). Three `%` workarounds in `std/crypto` are gone.
+
 - 2026-10-21 — Faster `std/crypto`: software AES bitsliced (Boyar and Peralta's S-box circuit, four blocks at once)
   with GHASH by masked integer multiplies, from under 1 MB/s to about 100; ChaCha20 eight blocks at a time with
   AVX2, or four in 128-bit vectors, and Poly1305 on 64-bit limbs, together 1 GB/s; BLAKE3's whole chunks eight or
