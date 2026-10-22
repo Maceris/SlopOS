@@ -88,6 +88,15 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-21 — The kernel builds in 1.6 s rather than 2.2, the tests in 0.9 rather than 1.2. The build check
+  (`checks.check_program`) took 0.35 s: each `compiler.find_constant(package, "PACKAGE_TIER")` worked the value out
+  in a compile-time run of its own, though describing the program had just worked out every constant; values are
+  kept now, by declaration, so it takes no time. And compile-time code is compiled with LLVM's quick code generator,
+  since it's unoptimized and mostly runs once: describing the program went from 0.2 s to 0.08, generating the
+  kernel from 0.27 to 0.15. What's left of generating is 19 small runs, one for each Limine request constant
+  (`request[T](...)`), each compiling the compile-time context's logger and allocator again; compiling those once
+  for all runs would take a persistent JIT.
+
 - 2026-10-21 — SHA-512 from 550 to about 600 MB/s (OpenSSL's hand-scheduled assembly does 1,000 here): rounds unrolled
   eight at a time with the working words renamed rather than moved, each round's constant added to its schedule
   word first, majority from the last round's a ~ b, and whole blocks' words read straight from the input. Tried and
