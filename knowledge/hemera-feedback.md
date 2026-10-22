@@ -88,6 +88,12 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-22 — Linking the kernel took 0.14 s, most of it Windows starting cmd.exe to run ld.lld; the compiler runs
+  the linker directly now, found on the PATH: 0.03 s. The kernel builds in 1.33 s, the tests in 0.73, Hemera's test
+  suite in 25 s. `--time-phases` now splits LLVM's time into simplifying the whole module (0.54 s for the kernel,
+  inlining and the rest of O2's simplification) and the parts optimized and assembled at once (0.18 s). The
+  simplification is LLVM's usual spread over its passes, nothing to cut alone; what would is less IR to start with.
+
 - 2026-10-22 — A persistent compile-time JIT: each program has one, every run's module in a library of its own
   that links to the earlier ones, so a function compiled for one run, like the compile-time context's logger and
   allocator, isn't compiled again for the next. Generating the kernel (19 runs, one for each Limine request
