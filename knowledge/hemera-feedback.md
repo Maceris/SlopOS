@@ -88,6 +88,19 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-21 — Faster `std/crypto`, second round. The field's squaring has its own 15-product formula, and adding
+  doesn't carry: X25519 42 to 28 us. Ed25519 verifying adds both multiples along one chain of doublings, with
+  windows of signed digits (it's public, so needn't be constant time): 102 to 43 us. Signing reduces mod L a byte
+  at a time rather than a bit, reads its table without a division per limb, and `Ed25519KeyPair`
+  (`ed25519_key_pair`, `ed25519_sign_with`) keeps the public key signing needs: 45 to 28 us, 15 with a pair.
+  BLAKE2b takes whole blocks straight from the input and compresses with AVX2, a row of v a vector: 495 to 1,250
+  MB/s. Argon2id's compression does the same, 27 to 18 ms, with `argon2id_keyed_with(..., wide = false)` for a
+  kernel. Compiler changes found by it: a constant that's a `#run` ran twice, the second time only to copy out
+  what the first gave, and a static array of numbers from compile-time code was built an element at a time, which
+  LLVM folds into a new array for each, quadratic: a 30 KB table took 1.3 s to build into a program, now 60 ms,
+  as one dense constant. And a directive starting the line after a type alias with one, like `#if` after `Word ::
+  distinct alias u32 #secret`, was read as another of the alias's.
+
 - 2026-10-21 — The bounds prover's gaps left by the crypto work: a difference compared with a constant
   (`data.count - at >= 16`) now says `at + 16 <= data.count` once `at <= data.count` is known, so it can't wrap; sums of
   bounded values (`16 * b + 4 * j + k`) are bounded; and `x %% n`, floored, is never negative for a constant `n > 0`,

@@ -171,6 +171,10 @@ Since (2026-10-20, 21):
   compile time. Measured against OpenSSL (through Python) on the same machine: SHA-256 1.5 of 2.3 GB/s, BLAKE3 2.9
   of 5.2, ChaCha20-Poly1305 1.0 of 1.4, AES-256-GCM 1.4 of 2.3, Ed25519 signing 43 of 25 us. Each path that needs
   vector state can be turned off for the kernel.
+- **Faster, again**: a squaring of its own and uncarried additions in the field, Straus's double multiplication
+  for verifying, a byte-at-a-time reduction mod L, `Ed25519KeyPair` for signing many messages, and AVX2 BLAKE2b
+  and Argon2id. X25519 28 us; Ed25519 signing 28 us, 15 with a key pair (OpenSSL's 25), verifying 43; BLAKE2b
+  1.25 GB/s; Argon2id (16 MiB, 3 passes) 18 ms.
 - **Wycheproof**: 1,556 of its cases (X25519, Ed25519, both AEADs on both AES paths, HMAC and HKDF), every
   one whose sizes the types can hold, generated into one test. They found SHA-512's padding wrong when a
   message left 112 to 119 bytes in its last block (the 16-byte length overlapped it), which broke Ed25519
