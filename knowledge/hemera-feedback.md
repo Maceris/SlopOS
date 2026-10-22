@@ -88,6 +88,14 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-21 — SHA-512 from 550 to about 600 MB/s (OpenSSL's hand-scheduled assembly does 1,000 here): rounds unrolled
+  eight at a time with the working words renamed rather than moved, each round's constant added to its schedule
+  word first, majority from the last round's a ~ b, and whole blocks' words read straight from the input. Tried and
+  dropped: a BMI2 and AVX2 copy of the compression, which LLVM made no faster (rorx, but the same count of other
+  instructions); closing the rest of the gap would take the schedule interleaved into the rounds by hand, in
+  assembly. Software AES (141 MB/s alone, 105 with GHASH) is at its algorithm's cost: about 100 instructions a byte
+  for bitsliced AES on 64-bit words, as BearSSL's ct64; more needs vector registers, which the path exists to avoid.
+
 - 2026-10-21 — Checking a program took about 140 ms, and up to 100 of it was waiting: when the last work
   finished, the thread that noticed stopped, but the others slept on until their 100 ms timeout, which the check
   waited for. Now they're woken: the kernel's check takes 31 ms, the build package's 94, and Hemera's front-end
