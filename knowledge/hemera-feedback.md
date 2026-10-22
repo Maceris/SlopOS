@@ -88,6 +88,15 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-21 — Checking a program took about 140 ms, and up to 100 of it was waiting: when the last work
+  finished, the thread that noticed stopped, but the others slept on until their 100 ms timeout, which the check
+  waited for. Now they're woken: the kernel's check takes 31 ms, the build package's 94, and Hemera's front-end
+  tests run in 4 s rather than 19 (the whole suite in 31 s rather than 47). Checking uses about one thread a
+  physical core (half the logical processors), at most 8, which measured best. Also: the interned strings were
+  found by hash alone, so two names whose hashes collided would have been the same name; they're found by text
+  now, in 64 shards with a lock each. And Windows programs link with `/Brepro`, so they and their PDBs build to
+  the same bytes every time, like ELF ones.
+
 - 2026-10-21 — Parallel code generation: after LLVM simplifies the whole module (inlining across all of it), the
   compiler splits it into up to 8 parts, and optimizes and generates each on its own thread into its own object
   file. The kernel builds in 2.2 s rather than 2.7, the tests in 1.2 rather than 1.3, and Hemera's test suite in 47 s
