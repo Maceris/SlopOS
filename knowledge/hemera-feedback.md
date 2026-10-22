@@ -88,6 +88,12 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-22 — A persistent compile-time JIT: each program has one, every run's module in a library of its own
+  that links to the earlier ones, so a function compiled for one run, like the compile-time context's logger and
+  allocator, isn't compiled again for the next. Generating the kernel (19 runs, one for each Limine request
+  constant) went from 0.15 s to 0.06-0.1; the kernel builds in 1.4 s rather than 1.6, the tests in 0.76 rather
+  than 0.9, and Hemera's test suite in 28 s rather than 32.
+
 - 2026-10-21 — The kernel builds in 1.6 s rather than 2.2, the tests in 0.9 rather than 1.2. The build check
   (`checks.check_program`) took 0.35 s: each `compiler.find_constant(package, "PACKAGE_TIER")` worked the value out
   in a compile-time run of its own, though describing the program had just worked out every constant; values are
