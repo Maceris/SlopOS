@@ -88,6 +88,12 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-22 — A function type's defaults can be any expression, as a function's can: checked with the names the
+  package and file where the type is written see, once, and generated in each caller from what that check found.
+  A named function type's (an alias's, `Handler :: fn(...)`) are checked where it's declared, whether or not a call
+  uses them; one written in place, like a field's, with the first call that leaves one out. Only one piece of work
+  checks each default, so its errors are reported once. Before, a type's default had to be a literal, constant, enum
+  member, `.{}`, `#caller_location` or a context field.
 - 2026-10-22 — A race in checking: about one kernel build in thirty failed with "BootModule has no field name" at
   `modules[i] = .{name = ...}` in `src/boot/limine/convert.hsc`. A `.{...}` literal took the type expected
   there as it was, here a view parameter's elements, and a signature only needs its types declared, so another
