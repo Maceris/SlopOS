@@ -3,8 +3,8 @@
  * allocating tiers (docs/architecture/layers.md, L2).
  *
  * So far it boots, sets up the boot CPU's entries, its own page tables and the timer, starts the
- * other CPUs, which go idle, reclaims boot memory, and halts after a few timer interrupts (roadmap
- * M1 to M3).
+ * other CPUs, reclaims boot memory, runs whatever user threads its tests start, and halts after a few
+ * timer interrupts (roadmap M1 to M4).
  */
 package kernel
 
@@ -15,6 +15,7 @@ import boot_info from "../boot_info"
 import slop_os from "std/os"
 import console from "console"
 import frames from "frames"
+import slab from "slab"
 import concurrency from "std"
 
 #if TARGET_ARCH == .x86_64 {
@@ -70,6 +71,18 @@ Kernel :: struct {
     shootdown_test : u64,
     // test_ioapic's controller (device_test.hsc)
     test_controller : u32,
+    // Where the kernel image's frames start, for mapping its code elsewhere.
+    image_physical : u64,
+    // Threads (threads.hsc): their slab cache, the last ID, and the last CPU one was started on.
+    thread_cache : slab.SlabCache,
+    next_thread_id : u64,
+    next_start_cpu : u32,
+    // The address-space tags in use (spaces.hsc).
+    tags : TagSet,
+    // The boot CPU's tick the kernel stops at (timer.hsc).
+    stop_after_ticks : u64,
+    // test_threads' or test_budgets' state, as an address, while it runs (threads_test.hsc)
+    threads_test : u64,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : concurrency.SpinLock,
     // test_pool's state, as an address, once the boot CPU has set it up for the other CPUs (pool_test.hsc)
@@ -106,6 +119,15 @@ PerCpu :: struct #align(64) {
     flush_requested : u32,
     // Where each of this CPU's device interrupt IDs comes from (interrupts.hsc).
     device_routes : DeviceRoute[MAX_DEVICE_INTERRUPTS],
+    // Its ready threads (scheduler.hsc).
+    run_queue : RunQueue,
+    // The thread it runs, as an address, 0 when idle; that thread's level, IDLE_LEVEL when idle.
+    current : u64,
+    current_level : u32,
+    // The address space active on it, as an address, 0 for the kernel's own.
+    space : u64,
+    // When the current thread last started running, or was last charged.
+    run_start : u64,
 }
 
 // The memory for one CPU's stacks.
@@ -148,6 +170,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     kernel.frames = made
     init_heap(&kernel.heap)
     init_clock(kernel)
+    init_threads(kernel)
+    kernel.stop_after_ticks = BOOT_TICKS
+    kernel.image_physical = cast[u64](info.kernel_image.physical.base)
     log_memory(&kernel.frames)
     kernel.features = features
     kernel.options = options
@@ -177,6 +202,12 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         }
         if kernel.options.test_ioapic {
             test_io_apic(kernel)
+        }
+        if kernel.options.test_threads {
+            test_threads(kernel)
+        }
+        if kernel.options.test_budgets {
+            test_budgets(kernel)
         }
         if kernel.options.test_fault {
             runtime.log_info("test_fault: running an invalid instruction")

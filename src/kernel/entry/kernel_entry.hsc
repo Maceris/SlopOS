@@ -43,35 +43,37 @@ user_fault #never_returns :: fn(registers: ptr[mut arch.UserRegisters], fault: a
     kernel.stop(.KernelFault)
 }
 
-// An interrupt from user mode or idle.
+/*
+ * An interrupt from user mode or idle. What it interrupted in user mode is kept in the CPU's current
+ * thread; then the scheduler picks what runs next: at a tick, the next thread round robin, otherwise a
+ * thread that should run before the current one, or the current one again.
+ */
 interrupt #never_returns :: fn(from: Interrupted, source: InterruptSource) {
     kernel.left_boot_stack()
+    match from {
+        case User(registers) => kernel.save_user_registers(registers)
+        case Idle => {}
+    }
     match source {
-        case Timer => kernel.handle_timer()
-        case Spurious => arch.idle()
+        case Timer => {
+            kernel.handle_timer()
+            kernel.schedule(true)
+        }
         case Ipi(kind) => {
             if kind == .Stop {
                 arch.halt()
             }
             if kind == .TlbFlush {
                 kernel.flush_for_shootdown(kernel.per_cpu())
-                arch.idle()
             }
-            //TODO(claude): the scheduler (M4). Until then nothing is ever scheduled, so the CPU goes back to idle
             if kind == .Reschedule {
                 kernel.read_for_shootdown_test()
-                arch.idle()
             }
         }
-        case Device(id) => {
-            kernel.handle_device_interrupt(id)
-            arch.idle()
-        }
-        case _ => {}
+        case Device(id) => kernel.handle_device_interrupt(id)
+        case Spurious => {}
     }
-    //TODO(claude): interrupts from user mode (M6)
-    runtime.log_error("an interrupt arrived that the kernel doesn't handle yet")
-    arch.idle()
+    kernel.schedule(false)
 }
 
 // A fault in kernel code, which is a bug. The kernel stops, with a stack trace.

@@ -111,6 +111,8 @@ when relevant.
 - Device registers are mapped in the kernel window, at a random address; TLB shootdowns run one at a
   time, with no other lock held; device interrupt IDs are per CPU; the kernel parses no ACPI, and its
   clock is monotonic only (`0049`).
+- Threads are slab objects with eager XSAVE vector state; each CPU has a run queue per priority level and
+  steals when idle; budgets are charged at ticks with sporadic-server refills; no FSGSBASE (`0050`).
 
 ## Writing Hemera: Things That Are Easy to Get Wrong
 

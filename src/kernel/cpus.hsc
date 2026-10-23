@@ -72,6 +72,9 @@ cpu_started :: fn() #never_returns {
         arch.halt()
     }
     push_context cpu_context from cpu.context {
+        // The counter's frequency is known, so this only sets the CPU's timer up
+        _ = arch.init_timer(kernel.counter_frequency)
+        set_next_tick(kernel)
         runtime.log_info("CPU % online", cpu.index)
         if kernel.options.test_pool {
             join_pool_test(kernel, cpu.index)
@@ -94,6 +97,7 @@ allocate_cpu :: fn(kernel #escaping : ptr[mut Kernel], index: u32) -> Result[ptr
     runtime.assert(cast[usize](index) < per_cpus.count, "keep_boot_info makes room for every CPU's PerCpu")
     per_cpus[index] = cast[u64](cpu)
     cpu.start_state = CPU_WAITING
+    cpu.current_level = IDLE_LEVEL
     cpu.carrier.index = cast[usize](index)
     cpu.carrier.program_data = cast[rawptr](cpu)
 

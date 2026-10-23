@@ -44,6 +44,10 @@ Options :: struct {
     test_shootdown : bool,
     // test_ioapic: once booted, route the emulator's test device through its interrupt controller.
     test_ioapic : bool,
+    // test_threads: once booted, run threads in user mode on every CPU, preempted by the timer (needs 2 CPUs).
+    test_threads : bool,
+    // test_budgets: once booted, run a thread with a CPU budget against one without (on 1 CPU).
+    test_budgets : bool,
 }
 
 parse_command_line :: fn(command_line: string) -> Options {
@@ -105,5 +109,11 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_ioapic" {
         options.test_ioapic = true
+    }
+    if word == "test_threads" {
+        options.test_threads = true
+    }
+    if word == "test_budgets" {
+        options.test_budgets = true
     }
 }

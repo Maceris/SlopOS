@@ -2,8 +2,7 @@
  * The x86-64 arch layer (L1): implements arch_interface (docs/specs/arch_interface.md, x86-64)
  * for the kernel core, which imports this package as arch.
  *
- * Not here yet, with the milestones that need them: user state, vector state and entry from user
- * mode (M4 to M6).
+ * Everything arch_interface declares is here.
  */
 package arch_x86_64
 
@@ -83,6 +82,9 @@ ArchCpu :: struct #align(64) {
     bootloader_tables : bool,
     // One bit per PCID whose entries must be flushed when it's next activated (paging.hsc).
     stale_tags : u64[64],
+    // XCR0 now, which restoring a thread's vector state may change, and whether the CPU has XSAVEOPT (vector.hsc).
+    xcr0 : u64,
+    xsaveopt : bool,
 }
 
 // State shared by every CPU (arch_interface.ArchSystem): the IDT. Must not move after init_system.

@@ -33,7 +33,6 @@ CR0_NUMERIC_ERROR : u64 : 1 << 5
 
 CR4_OSFXSR : u64 : 1 << 9
 CR4_OSXMMEXCPT : u64 : 1 << 10
-CR4_FSGSBASE : u64 : 1 << 16
 CR4_PCID : u64 : 1 << 17
 CR4_OSXSAVE : u64 : 1 << 18
 CR4_SMEP : u64 : 1 << 20
@@ -104,6 +103,9 @@ init_cpu :: fn(
     record_stacks(cpu, stacks)
     load_descriptor_tables(system, cpu)
     enable_cpu_features()
+    cpu.xcr0 = XCR0_BASE
+    features :: detect_features()
+    cpu.xsaveopt = has(&features, .X86Xsaveopt)
     init_paging(cpu)
     enable_system_calls()
     // The gs base after load_segments, which resets it
@@ -168,15 +170,17 @@ enable_cpu_features :: fn() {
     if has(&features, .X86Smap) {
         cr4 |= CR4_SMAP
     }
-    if has(&features, .X86FsGsBase) {
-        cr4 |= CR4_FSGSBASE
-    }
+    /*
+     * Not CR4.FSGSBASE: it would let user code set its own fs and gs bases, which every thread switch
+     * would then have to save and restore. Hemera code has no thread-local storage (its carrier is
+     * r14), and the kernel reads its gs base through the MSR (decisions/0050).
+     */
     // PCIDE can only be set while CR3's low 12 bits are 0 (Intel SDM Vol. 3A §4.10.1)
     if has(&features, .X86Pcid) && (x86_64.read_cr3() & 0xfff) == 0 {
         cr4 |= CR4_PCID
     }
     x86_64.write_cr4(cr4)
-    x86_64.xsetbv(0, XCR0_X87 | XCR0_SSE | XCR0_AVX)
+    x86_64.xsetbv(0, XCR0_BASE)
 }
 
 // SYSCALL enters at system_call_entry, with interrupts disabled.

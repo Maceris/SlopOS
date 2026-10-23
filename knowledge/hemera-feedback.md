@@ -88,6 +88,15 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-22 — Entry functions' generated code now clears `RFLAGS.AC` before the body, with `pushfq`, `andq`
+  and `popfq` (`clac` faults on CPUs without SMAP). An interrupt gate leaves AC as user code set it, which with
+  SMAP enabled lets the kernel reach user memory; `SYSCALL` already cleared it through `IA32_FMASK`. Found while
+  writing M4's return to user mode; documented in Hemera's `docs/calling_convention.md` (*Entry Functions*).
+- 2026-10-22 — M4's threads needed nothing else new from Hemera: `.entry` frames kept in thread objects and
+  `return_to_user` from them, `xsave`/`xsaveopt`/`xrstor`/`xsetbv`, and a `#no_context` function as user code. Two
+  small things: `base` has no count-leading-zeros intrinsic (the run queue finds its highest level by halves), and
+  a result named like a local inside its function compiled without complaint.
+
 - 2026-10-22 — The generator keeps scalar locals and parameters that nothing assigns to or takes the address of as
   values, rather than storing each in a stack slot and loading it back. The kernel's unoptimized IR went from 25,023
   instructions to 21,060 (loads 6,884 to 4,768, stores 3,992 to 3,071, allocas 2,729 to 1,808). As measured first,

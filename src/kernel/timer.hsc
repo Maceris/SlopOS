@@ -6,10 +6,10 @@ import runtime from "base"
     import arch from "../arch/x86_64"
 }
 
-// How often the timer interrupts while the kernel has nothing scheduled.
+// How often every CPU's timer interrupts: the scheduler's tick.
 TICKS_PER_SECOND :: 100
-// For now the kernel halts after this many timer interrupts (roadmap M1).
-BOOT_TICKS :: 3
+// For now the kernel halts after this many of the boot CPU's ticks, or a test's own number (Kernel.stop_after_ticks).
+BOOT_TICKS : u64 : 3
 
 start_timer :: fn(kernel: ptr[mut Kernel], hint: u64?) {
     kernel.counter_frequency = arch.init_timer(hint)
@@ -22,14 +22,23 @@ set_next_tick :: fn(kernel: ptr[Kernel]) {
     arch.set_deadline(arch.counter() + kernel.counter_frequency / TICKS_PER_SECOND)
 }
 
-// A timer interrupt, which arrives while the CPU is idle.
-handle_timer :: fn() #never_returns {
+/*
+ * A timer interrupt, from idle or user mode, on any CPU, before the scheduler's tick. The boot CPU
+ * counts them for when the kernel stops.
+ */
+handle_timer :: fn() {
     cpu :: per_cpu()
+    kernel :: cpu.kernel
     cpu.timer_ticks += 1
-    runtime.log_info("timer interrupt %", cpu.timer_ticks)
-    if cpu.timer_ticks >= BOOT_TICKS {
+    set_next_tick(kernel)
+    if cpu.index != 0 {
+        return void
+    }
+    if cpu.timer_ticks <= BOOT_TICKS {
+        runtime.log_info("timer interrupt %", cpu.timer_ticks)
+    }
+    threads_test_tick(kernel, cpu.timer_ticks)
+    if cpu.timer_ticks >= kernel.stop_after_ticks {
         stop(.Halted)
     }
-    set_next_tick(cpu.kernel)
-    arch.idle()
 }

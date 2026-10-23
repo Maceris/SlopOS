@@ -7,9 +7,9 @@ The arch interface is the boundary between the arch layer (L1) and the kernel co
 - **`kernel_entry`**: what L2 implements and L1's entry stubs call (system calls, faults,
   interrupts).
 
-Status: **specified**, partly implemented: `src/arch_interface`, and in `src/arch/x86_64` CPU
-setup, interrupts, the timer and the miscellaneous functions (roadmap M1), paging (M2), and wired
-interrupts (M3). Choices and alternatives are in
+Status: **specified**, and implemented on x86-64 (`src/arch/x86_64`): CPU setup, interrupts, the timer
+and the miscellaneous functions (roadmap M1), paging (M2), wired interrupts (M3), and user and vector
+state (M4). Choices and alternatives are in
 `../../knowledge/decisions/0032-arch-interface.md`. Four-digit numbers like `0023` refer
 to decision records in `../../knowledge/decisions/`.
 
@@ -628,7 +628,10 @@ How `arch/x86_64` meets the interface (`../../knowledge/design/arch-x86-64.md`):
 | Timer | TSC with TSC-deadline, frequency from the hint, `CPUID` leaf `0x15`, or calibration against the PIT |
 | Entry | One `.entry` function for every vector, through `x86_64.entry_points`, which returns only for NMIs, and a `.syscall_entry` function (`STAR`, `LSTAR` and `FMASK` set by `init_cpu`). Every vector runs on an IST stack: the critical events on their own, the rest on the kernel stack's own slot, so an entry from idle starts again at its top |
 | `return_to_user` | `x86_64.return_to_user` |
-| Vector state | `xsavec`/`xsaveopt` and `xrstor`; `xsetbv` when the thread's state components change (`0023`) |
+| System calls | The number in `rax`, arguments in `rdi`, `rsi`, `rdx`, `r10`, `r8` and `r9` (`SYSCALL` takes `rcx` and `r11`), results in `rax`, `rdx` and `r8` (`../../knowledge/design/system-abi.md`) |
+| `init_user_registers` | Every register zero but `rip`, `rsp` and `rdi` (the argument); user code and stack selectors; `rflags` 0x202 |
+| Vector state | A 64-byte header naming its state components, then an XSAVE area in the standard format: x87, SSE and AVX, plus AVX-512's where the CPU has them with `VectorConfig.extended`. `xsaveopt` where the CPU has it, otherwise `xsave`, and `xrstor`; `xsetbv` when the thread's state components change (`0023`, `0050`) |
+| `fs` and `gs` bases | `CR4.FSGSBASE` stays off, so user code can't set them and threads have none to save (`0050`) |
 | `hardware_entropy` | `rdseed` |
 | `early_console_write` | 16550 UART at I/O port `0x3F8`, 115200 baud, 8N1 |
 | `test_exit` | QEMU's `isa-debug-exit` device at I/O port `0xf4` |
