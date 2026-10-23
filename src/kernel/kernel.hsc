@@ -89,6 +89,8 @@ Kernel :: struct {
     syscalls_test : u64,
     // test_ports' state, as an address, while it runs (ports_test.hsc)
     ports_test : u64,
+    // test_channels' state, as an address, while it runs (channels_test.hsc)
+    channels_test : u64,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : concurrency.SpinLock,
     // test_pool's state, as an address, once the boot CPU has set it up for the other CPUs (pool_test.hsc)
@@ -140,6 +142,13 @@ PerCpu :: struct #align(64) {
     // Its armed timers, and when its next tick is (timers.hsc, timer.hsc).
     timers : TimerHeap,
     next_tick : u64,
+    // While ChannelNotifyAndWait notifies: threads it wakes are made ready here (ports.hsc, wake_waiter).
+    handoff : bool,
+    // Destroys running on this CPU, nested; whether the outermost is finishing those left for later, and
+    // those (objects.hsc, destroy_later).
+    destroying : u32,
+    draining : bool,
+    doomed : u64,
 }
 
 // The memory for one CPU's stacks.
@@ -226,6 +235,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         }
         if kernel.options.test_ports {
             test_ports(kernel)
+        }
+        if kernel.options.test_channels {
+            test_channels(kernel)
         }
         if kernel.options.test_fault {
             runtime.log_info("test_fault: running an invalid instruction")

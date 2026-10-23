@@ -29,3 +29,8 @@ message buffers (Zircon), and fixed small messages (MINIX 3).
 ## Consequences
 - IPC performance depends on shared memory and doorbells, not on syscall cost.
 - Recorded processes use the same rings through syscalls (`0024`).
+
+## Amendment (2026-10-22): The Default Ring
+Each ring has 128 bytes of indices besides its bytes, so 2 KiB each way doesn't fit one page. The
+default is **1 KiB each way**, which with both rings' indices fits one page; messages up to 512 bytes
+by default. A channel can still ask for bigger rings (`0053`).

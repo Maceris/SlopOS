@@ -44,8 +44,8 @@ PortsTest :: struct {
 }
 
 // A system call by its number, in user mode.
-call :: fn(number: slop_os.Syscall, a: u64 = 0, b: u64 = 0, c: u64 = 0, d: u64 = 0) -> x86_64.SystemCallResult #no_context {
-    return x86_64.system_call(cast[u64](cast[u32](number)), a, b, c, d)
+call :: fn(number: slop_os.Syscall, a: u64 = 0, b: u64 = 0, c: u64 = 0, d: u64 = 0, e: u64 = 0, f: u64 = 0) -> x86_64.SystemCallResult #no_context {
+    return x86_64.system_call(cast[u64](cast[u32](number)), a, b, c, d, e, f)
 }
 
 user_ports #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #never_returns {

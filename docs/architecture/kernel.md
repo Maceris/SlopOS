@@ -1,6 +1,6 @@
 # The Kernel Core as Built
 
-What the kernel core (L2, `layers.md`) does so far, roadmap M1 to M5's second stage, and where its code is. What's not
+What the kernel core (L2, `layers.md`) does so far, roadmap M1 to M5's third stage, and where its code is. What's not
 built yet is listed at the end. The interfaces it builds on are specified in `../specs/boot_info.md` and
 `../specs/arch_interface.md`; choices and alternatives are in `../../knowledge/decisions/`, cited by
 number.
@@ -63,6 +63,11 @@ the kernel logger, and an assertion handler that stops the kernel.
   the address space's table and the direct map (`src/kernel/user_memory.hsc`).
 - **Timers** (`src/kernel/timers.hsc`): a heap of deadlines per CPU; each CPU's timer is set for its next
   tick or its earliest deadline.
+- **Channels** (`src/kernel/channels.hsc`, `0053`): two end objects sharing a core with the rings' memory,
+  which ends map; doorbells as signals on port bindings, handles moved in batches, kernel-copied reads and
+  writes on the same rings. A mapping is on its address space's list of rings and holds the core until
+  it's unmapped or the space is released. Objects that hold each other, like an end in a batch on
+  another channel, are destroyed one after another (`destroy_later`, `src/kernel/objects.hsc`).
 
 ## Interrupts and Time
 
@@ -95,7 +100,7 @@ the kernel logger, and an assertion handler that stops the kernel.
 
 | What | Roadmap |
 |---|---|
-| Channels and IPC | M5 |
+| Memory objects, memory budgets, IRQ objects, interception, the generated ABI package | M5 |
 | Memory objects and budgets as objects, IRQ objects, the generated ABI package, interception | M5 |
 | Destroying large subtrees with preemption points | M5 |
 | Loading programs, the root task, user space | M6 |

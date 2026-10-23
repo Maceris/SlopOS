@@ -19,6 +19,10 @@ import frames from "frames"
  * Destroying one destroys the threads that run in it. Its tables, its root and its tag go once no CPU
  * can be using them: every CPU switches its page tables away from one it won't run again before its
  * next quiescent point (scheduler.hsc). The tag's entries are flushed from every CPU before it's reused.
+ *
+ * Channel rings mapped in it are on its list of rings (channels.hsc), each holding its channel's memory
+ * until it's unmapped or the space is released, so no thread still running in a dying space can reach
+ * memory that's been freed.
  */
 
 // Tags: 0 is the kernel's own table's (address_space.hsc).
@@ -32,6 +36,8 @@ AddressSpace :: struct #align(16) {
     // The threads that run in it, and the lock for that list.
     threads_lock : concurrency.SpinLock,
     first_thread : u64,
+    // The channel rings mapped in it (RingMapping), under lock.
+    first_ring : u64,
 }
 
 SpaceError :: enum {
@@ -104,10 +110,19 @@ destroy_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace
     }
 }
 
-// Once no CPU can use it: its tables, its root, and its tag, flushed from every CPU first.
+// Once no CPU can use it: the rings mapped in it, its tables, its root, and its tag, flushed from every CPU first.
 release_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace]) {
     if cast[u64](space.table.root) == 0 {
         return void
+    }
+    loop {
+        concurrency.lock(&space.lock)
+        ring :: take_ring(space)
+        concurrency.unlock(&space.lock)
+        if ring == 0 {
+            break
+        }
+        drop_core(kernel, cast[ptr[mut RingMapping]](ring).core)
     }
     freed : arch_interface.FreedTables
     loop {
@@ -196,10 +211,23 @@ free_tag :: fn(kernel: ptr[mut Kernel], tag: arch_interface.AddressSpaceTag) {
 
 /*
  * Map size bytes from physical on at address in a user address space, 4 KiB pages, with mapping, which
- * is a user mapping.
+ * is a user mapping. If it fails, what it mapped is unmapped again.
  */
 map_user :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, physical: u64, size: u64,
     mapping: arch_interface.Mapping) -> Result[void, SpaceError] {
+    mapped, error :: map_pages(kernel, space, address, physical, size, mapping)
+    match error {
+        case Some(failure) => {
+            unmap_user(kernel, space, address, mapped * frames.FRAME_SIZE)
+            return .Error(failure)
+        }
+        case None => return .Ok
+    }
+}
+
+// How many pages it mapped, and why it stopped if it didn't map them all.
+map_pages :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, physical: u64, size: u64,
+    mapping: arch_interface.Mapping) -> (mapped: u64, error: SpaceError?) {
     tables : arch_interface.TableFrames
     concurrency.lock(&space.lock)
     defer {
@@ -215,19 +243,67 @@ map_user :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u
                 case Ok => break
                 case Error(error) => {
                     if error == .AlreadyMapped {
-                        return .Error(.AlreadyMapped)
+                        return page, SpaceError.AlreadyMapped
                     }
                     if error != .NeedTableFrames {
-                        return .Error(.InvalidAddress)
+                        return page, SpaceError.InvalidAddress
                     }
                     if !refill_user_tables(kernel, &tables) {
-                        return .Error(.OutOfMemory)
+                        return page, SpaceError.OutOfMemory
                     }
                 }
             }
         }
     }
-    return .Ok
+    return size / frames.FRAME_SIZE, null
+}
+
+/*
+ * Unmap size bytes at address in a user address space, what of it is mapped, then shoot down the TLB
+ * entries, and only then free the tables it emptied. The space must not be released meanwhile.
+ */
+unmap_user :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, size: u64) {
+    pages :: size / frames.FRAME_SIZE
+    flush : arch_interface.TlbBatch
+    freed : arch_interface.FreedTables
+    page : u64 = 0
+    loop {
+        if page >= pages {
+            break
+        }
+        concurrency.lock(&space.lock)
+        page = unmap_some(&space.table, address, page, pages, &freed, &flush)
+        concurrency.unlock(&space.lock)
+        // Every CPU forgets the old entries before an emptied table can be reused
+        shootdown(kernel, &flush)
+        flush = arch_interface.TlbBatch.{}
+        free_tables(kernel, &freed)
+    }
+}
+
+/*
+ * Unmap pages from page on, until pages or until freed is full: the page it got to. Pages that aren't
+ * mapped are passed over. Takes the space's lock as held.
+ */
+unmap_some :: fn(table: ptr[mut arch.PageTable], address: u64, first: u64, pages: u64, freed: ptr[mut arch_interface.FreedTables],
+    flush: ptr[mut arch_interface.TlbBatch]) -> u64 {
+    page := first
+    loop {
+        if page >= pages {
+            break
+        }
+        result :: arch.unmap(table, cast[arch_interface.VirtualAddress](address + page * frames.FRAME_SIZE), .Size4K, freed, flush)
+        match result {
+            case Ok(physical) => page += 1
+            case Error(error) => {
+                if error == .NeedFreedSpace {
+                    break
+                }
+                page += 1
+            }
+        }
+    }
+    return page
 }
 
 // Zeroed frames for new tables from this CPU's frame cache, false if there are none.

@@ -117,6 +117,9 @@ when relevant.
   a CPU records a quiescent point only after checking what it resumes isn't dying (`0051`).
 - Port bindings are made before anything is delivered (`PortBindWake`, `PortSetTimer`); a woken thread finishes
   its `PortWait` when it next runs; timers are per-CPU heaps with precise deadlines (`0052`).
+- Channel ends share a core holding the ring memory; a mapping holds the core until it's unmapped or its space is
+  released, and closing an end unmaps it. Lock order: core, then port, then run queue; never a space's lock with a
+  core's (`0053`).
 
 ## Writing Hemera: Things That Are Easy to Get Wrong
 

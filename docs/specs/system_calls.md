@@ -31,12 +31,13 @@ each object is its owning one (`0008`).
 - **A closed handle is no longer a handle**: using it fails with `InvalidHandle`, even once its entry is
   reused.
 - **Rights** (`slop_os.Rights`, `0010`): `RIGHT_DUPLICATE` and `RIGHT_TRANSFER` for every kind, then per
-  kind: `RIGHT_SPACE_THREADS` for an address space; `RIGHT_PORT_WAIT` and `RIGHT_PORT_BIND` for a port. An
-  owning handle has every right. Duplicating keeps or drops rights, never adds them.
+  kind: `RIGHT_SPACE_THREADS` and `RIGHT_SPACE_MAP` for an address space; `RIGHT_PORT_WAIT` and
+  `RIGHT_PORT_BIND` for a port; `RIGHT_CHANNEL_MAP` for a channel end. An owning handle has every right.
+  Duplicating keeps or drops rights, never adds them.
 
 Object kinds (`slop_os.ObjectKind`, `0034`): `MemoryBudget`, `CpuBudget`, `Memory`, `AddressSpace`,
 `Thread`, `Process`, `Channel`, `Port`, `Irq`, `IoPortRange`, `IommuDomain`. So far processes, threads,
-address spaces and ports exist.
+address spaces, ports and channels exist.
 
 ## Calls
 
@@ -56,8 +57,18 @@ address spaces and ports exist.
 | 11 | `PortSetTimer` | port, key, deadline | nothing: a timer packet for key at deadline (monotonic nanoseconds), binding key if it isn't yet; setting it again moves it. Needs `RIGHT_PORT_BIND` |
 | 12 | `PortUnbind` | port, key | nothing: the binding goes, with a packet it had queued; needs `RIGHT_PORT_BIND` |
 | 13 | `PortWait` | port, packets, capacity, deadline | how many packets it wrote at packets, up to capacity and 64: at once if any are queued, otherwise once one is, or 0 at deadline (`NO_DEADLINE` for none). Needs `RIGHT_PORT_WAIT` |
+| 14 | `ChannelCreate` | ring bytes | owning handles to a new channel's two ends; rings of ring bytes each way, a power of two from 1 KiB to 128 KiB, 0 for the default 1 KiB |
+| 15 | `ChannelMap` | end, address space, address | nothing: the channel's memory, `channel_memory_size` bytes, mapped read/write at address, page-aligned. Needs `RIGHT_CHANNEL_MAP` and `RIGHT_SPACE_MAP`; one mapping per end |
+| 16 | `ChannelUnmap` | end | nothing: the end's mapping, unmapped |
+| 17 | `ChannelNotify` | end, signals | nothing: `SIGNAL_READABLE` or `SIGNAL_WRITABLE`, raised on the other end |
+| 18 | `ChannelWrite` | end, payload, size, batch | nothing: one message into the end's ring, with handle batch (`NO_BATCH` for none), raising Readable if the reader waits |
+| 19 | `ChannelRead` | end, buffer, capacity | the next message's size, and its flags and batch (batch in the high 16 bits): its payload copied to buffer, raising Writable if the writer waits |
+| 20 | `ChannelSendHandles` | end, handles, count, batch | nothing: count handles (u32s at handles, up to 64) moved out of the caller's table into batch (0 to 15) on the other end. Each needs `RIGHT_TRANSFER` |
+| 21 | `ChannelTakeHandles` | end, batch, handles, capacity | how many: the batch's handles, in the caller's table, written at handles; `NO_HANDLE` for any whose object is gone |
+| 22 | `ChannelNotifyAndWait` | end, signals, port, packets, capacity, deadline | as `ChannelNotify`, then `PortWait`; a thread the notify wakes is made ready on the caller's CPU |
+| 23 | `PortBind` | port, object, signals, key, mode | nothing: a `Signal` packet for key when the object raises any of signals; needs `RIGHT_PORT_BIND`. Mode `Once` (1) disarms it once its packet is queued, and binding the same key to the same object arms it again; `Persistent` (2) doesn't |
 
-Threads, processes, address spaces and ports a call creates are owned by the calling thread's process.
+Threads, processes, address spaces, ports and channels a call creates are owned by the calling thread's process.
 
 ## Ports
 
@@ -74,7 +85,42 @@ waiting on it, with `ObjectGone`.
 | `key: u64` | The binding's key |
 | `kind: PacketKind` (u32) | `Signal` (1), `Timer` (2), `User` (3) |
 | `reserved: u32` | |
-| `data: u64[2]` | `Timer`: the deadline it was set for; `User`: the bits raised since it was last taken |
+| `data: u64[2]` | `Signal`: the signals raised since it was last taken; `Timer`: the deadline it was set for; `User`: the bits raised since it was last taken |
+
+## Channels
+
+A channel has two ends, each an object with a handle of its own, and two rings, one each way, in memory
+both ends' holders can map (`../../knowledge/design/ipc.md` §2, `0035`, `0053`). End A (the first handle
+`ChannelCreate` gives) writes ring 0 and reads ring 1; end B the other way round.
+
+The memory, `channel_memory_size(ring)` bytes:
+
+| Offset | |
+|---|---|
+| 0 | `RingIndices` for ring 0, 128 bytes: `tail` and `producer_waiting` on one cache line, `head` and `consumer_waiting` on the next |
+| 128 | `RingIndices` for ring 1 |
+| 256 (`CHANNEL_RINGS_OFFSET`) | ring 0, ring bytes |
+| 256 + ring bytes | ring 1 |
+
+- **Messages** are an 8-byte `MessageHeader` (`size: u32`, `flags: u16`, `handle_batch: u16`) and the
+  payload, padded to 8 bytes. A payload is at most `channel_max_payload(ring)`: half the ring, and 64 KiB,
+  less the header. Indices are byte counts that wrap; a message is committed by a release store of `tail`.
+- **Waking**: a reader that finds the ring empty sets `consumer_waiting`, fences, looks again, then waits
+  on its port; a writer commits, fences, and calls `ChannelNotify` if it sees `consumer_waiting`. A writer
+  short of room does the same with `producer_waiting`, and the reader raises Writable.
+- **Through the kernel**: without `RIGHT_CHANNEL_MAP`, `ChannelRead` and `ChannelWrite` do the reader's and
+  writer's part on the same memory, including setting the waiting flags when they fail with `Empty` or
+  `Full`, and ringing the doorbell (`0024`).
+- **Signals**: `SIGNAL_READABLE` and `SIGNAL_WRITABLE` are raised by the other end, `SIGNAL_PEER_CLOSED` once
+  it's closed, and stays raised: binding to an end whose peer is closed queues a packet at once. An end
+  can be bound to 4 ports at once.
+- **Handles** go in batches: 16 per end, up to 64 handles each. Sending moves them out of the sender's
+  table; the message naming the batch is the sender's to write. An object whose owning handle is sent
+  stays the sender's process's until the batch is taken; a batch never taken, because its end closed, is
+  dropped, and objects whose owning handles were in it are destroyed. An end can't be sent while its rings
+  are mapped, nor through its own channel, nor mapped while it's in flight.
+- **Closing an end** unmaps its rings, drops its bindings and the batches sent to it, and raises
+  PeerClosed on the other. The memory is freed once both ends are gone and no mapping of it is left.
 
 ## Errors
 
@@ -98,8 +144,28 @@ Calls on a port fail with `slop_os.PortError`, whose tags mean the same where th
 | 8 | `KeyInUse` | The key is bound already, or bound to another kind of binding |
 | 9 | `NoSuchKey` | No binding has that key, or not one of that kind |
 | 10 | `BadBuffer` | Packets would go where the thread can't write; nothing was taken |
+| 11 | `TooManyBindings` | The object has as many bindings as it takes |
+
+Calls on a channel fail with `slop_os.ChannelError`, the same where tags are shared:
+
+| Tag | Error | Why |
+|---|---|---|
+| 1 to 6, 10 | as above | |
+| 12 | `PeerClosed` | The other end is closed (for `ChannelRead`: and nothing is left to read) |
+| 13 | `Full` | No room in the ring for the message |
+| 14 | `Empty` | No message in the ring |
+| 15 | `TooBig` | A payload bigger than `channel_max_payload`, or more than 64 handles |
+| 16 | `BufferTooSmall` | The message, or the batch, doesn't fit; the first value is its size, or its count |
+| 17 | `Mapped` | The end's rings are mapped already, or it can't be sent while they are |
+| 18 | `BadAddress` | Not a page-aligned user address, something is mapped there, or (`ChannelUnmap`) nothing is |
+| 19 | `BatchInUse` | The batch already holds handles not yet taken |
+| 20 | `NoSuchBatch` | No batch by that number, or nothing in it |
+| 21 | `Corrupt` | The other end broke the ring: impossible indices or header |
+| 22 | `NotTransferable` | A handle to one of the channel's own ends |
+| 23 | `InFlight` | The end is in a batch not yet taken |
+| 24 | `InvalidSize` | The ring isn't a power of two from 1 KiB to 128 KiB |
 
 ## Not Yet
 
-Channels and IPC, memory objects and budgets as objects, IRQ objects, process control and interception
-come with the rest of M5 (`../architecture/kernel.md`, Not Built Yet).
+Memory objects and budgets as objects, IRQ objects, process control and interception come with the rest
+of M5 (`../architecture/kernel.md`, Not Built Yet).

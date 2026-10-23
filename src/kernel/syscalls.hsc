@@ -101,18 +101,183 @@ dispatch_syscall :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> arch
         match port_of(process, argument(registers, 0), slop_os.RIGHT_PORT_WAIT) {
             case Ok(port) => {
                 deadline :: ticks_at(kernel, arch.syscall_argument(registers, 3))
-                outcome :: port_wait_begin(kernel, thread, port, arch.syscall_argument(registers, 1),
-                    cast[u32](arch.syscall_argument(registers, 2)), deadline)
-                return match outcome {
-                    case Done(taken) => succeeded(cast[u64](taken), 0)
-                    case Failed(error) => tagged(cast[u64](cast[u32](error)))
-                    case Blocked => null
-                }
+                return wait_result(port_wait_begin(kernel, thread, port, arch.syscall_argument(registers, 1),
+                    cast[u32](arch.syscall_argument(registers, 2)), deadline))
             }
             case Error(error) => return tagged(cast[u64](cast[u32](error)))
         }
     }
+    if number >= cast[u64](cast[u32](slop_os.Syscall.ChannelCreate)) && number <= cast[u64](cast[u32](slop_os.Syscall.PortBind)) {
+        return dispatch_channel_call(kernel, thread, process, cast[slop_os.Syscall](cast[u32](number)))
+    }
     return failed(.NoSuchCall)
+}
+
+// The channel calls, and binding to ports.
+dispatch_channel_call :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], process: ptr[mut Process], call: slop_os.Syscall)
+    -> arch_interface.SyscallResult? {
+    registers :: &thread.registers
+    if call == .ChannelCreate {
+        match create_channel(kernel, cast[u64](process), cast[u32](arch.syscall_argument(registers, 0))) {
+            case Ok(pair) => return owned_pair(kernel, process, pair)
+            case Error(error) => return tagged(cast[u64](cast[u32](error)))
+        }
+    }
+    if call == .PortBind {
+        port := cast[ptr[mut Port]](0)
+        match port_of(process, argument(registers, 0), slop_os.RIGHT_PORT_BIND) {
+            case Ok(found) => port = found
+            case Error(error) => return tagged(cast[u64](cast[u32](error)))
+        }
+        match channel_of(process, argument(registers, 1), cast[slop_os.Rights](0)) {
+            case Ok(end) => {
+                once :: arch.syscall_argument(registers, 4) == cast[u64](cast[u32](slop_os.BindMode.Once))
+                mode :: if once { slop_os.BindMode.Once } else { slop_os.BindMode.Persistent }
+                return port_done(port_bind(kernel, port, end, cast[slop_os.Signals](cast[u32](arch.syscall_argument(registers, 2))),
+                    arch.syscall_argument(registers, 3), mode))
+            }
+            case Error(error) => return tagged(cast[u64](cast[u32](error)))
+        }
+    }
+    right :: if call == .ChannelMap { slop_os.RIGHT_CHANNEL_MAP } else { cast[slop_os.Rights](0) }
+    end := cast[ptr[mut Channel]](0)
+    match channel_of(process, argument(registers, 0), right) {
+        case Ok(found) => end = found
+        case Error(error) => return tagged(cast[u64](cast[u32](error)))
+    }
+    if call == .ChannelMap {
+        return channel_map_call(kernel, process, end, argument(registers, 1), arch.syscall_argument(registers, 2))
+    }
+    if call == .ChannelUnmap {
+        return channel_done(channel_unmap(kernel, end))
+    }
+    if call == .ChannelNotify {
+        return channel_done(channel_notify(kernel, end, cast[slop_os.Signals](cast[u32](arch.syscall_argument(registers, 1)))))
+    }
+    if call == .ChannelWrite {
+        return channel_done(channel_write(kernel, thread, end, arch.syscall_argument(registers, 1),
+            cast[u32](arch.syscall_argument(registers, 2)), cast[u32](arch.syscall_argument(registers, 3))))
+    }
+    if call == .ChannelRead {
+        return read_result(channel_read(kernel, thread, end, arch.syscall_argument(registers, 1), cast[u32](arch.syscall_argument(registers, 2))))
+    }
+    if call == .ChannelSendHandles {
+        return channel_done(channel_send_handles(kernel, thread, end, arch.syscall_argument(registers, 1),
+            cast[u32](arch.syscall_argument(registers, 2)), cast[u32](arch.syscall_argument(registers, 3))))
+    }
+    if call == .ChannelTakeHandles {
+        return take_result(channel_take_handles(kernel, thread, end, cast[u32](arch.syscall_argument(registers, 1)),
+            arch.syscall_argument(registers, 2), cast[u32](arch.syscall_argument(registers, 3))))
+    }
+    return notify_and_wait(kernel, thread, process, end)
+}
+
+/*
+ * ChannelNotifyAndWait: the notify, during which a thread it wakes is made ready on this CPU, to run
+ * here once the caller waits, then PortWait (knowledge/design/ipc.md §5).
+ */
+notify_and_wait :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], process: ptr[mut Process], end: ptr[mut Channel])
+    -> arch_interface.SyscallResult? {
+    registers :: &thread.registers
+    port := cast[ptr[mut Port]](0)
+    match port_of(process, argument(registers, 2), slop_os.RIGHT_PORT_WAIT) {
+        case Ok(found) => port = found
+        case Error(error) => return tagged(cast[u64](cast[u32](error)))
+    }
+    cpu :: per_cpu()
+    cpu.handoff = true
+    notified :: channel_notify(kernel, end, cast[slop_os.Signals](cast[u32](arch.syscall_argument(registers, 1))))
+    cpu.handoff = false
+    match notified {
+        case Some(error) => return tagged(cast[u64](cast[u32](error)))
+        case None => {}
+    }
+    return wait_result(port_wait_begin(kernel, thread, port, arch.syscall_argument(registers, 3),
+        cast[u32](arch.syscall_argument(registers, 4)), ticks_at(kernel, arch.syscall_argument(registers, 5))))
+}
+
+wait_result :: fn(outcome: WaitOutcome) -> arch_interface.SyscallResult? {
+    return match outcome {
+        case Done(taken) => succeeded(cast[u64](taken), 0)
+        case Failed(error) => tagged(cast[u64](cast[u32](error)))
+        case Blocked => null
+    }
+}
+
+// Map end's rings in the address space a handle names, which needs RIGHT_SPACE_MAP.
+channel_map_call :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], end: ptr[mut Channel], space: slop_os.Handle, address: u64)
+    -> arch_interface.SyscallResult {
+    match lookup(&process.table, space) {
+        case Ok(found) => {
+            if found.kind != .AddressSpace {
+                return failed(.WrongKind)
+            }
+            if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_SPACE_MAP) == 0 {
+                return failed(.MissingRight)
+            }
+            return channel_done(channel_map(kernel, end, cast[ptr[mut AddressSpace]](found.object), address))
+        }
+        case Error(error) => return failed(error)
+    }
+}
+
+// The channel end a handle refers to, if the handle has every right in rights.
+channel_of :: fn(process: ptr[mut Process], handle: slop_os.Handle, rights: slop_os.Rights) -> Result[ptr[mut Channel], slop_os.ChannelError] {
+    match lookup(&process.table, handle) {
+        case Ok(found) => {
+            if found.kind != .Channel {
+                return .Error(.WrongKind)
+            }
+            if cast[u32](found.rights) & cast[u32](rights) != cast[u32](rights) {
+                return .Error(.MissingRight)
+            }
+            return .Ok(cast[ptr[mut Channel]](found.object))
+        }
+        case Error(error) => return .Error(if error == .ObjectGone { slop_os.ChannelError.ObjectGone } else { slop_os.ChannelError.InvalidHandle })
+    }
+}
+
+channel_done :: fn(error: slop_os.ChannelError?) -> arch_interface.SyscallResult {
+    return match error {
+        case Some(failure) => tagged(cast[u64](cast[u32](failure)))
+        case None => succeeded(0, 0)
+    }
+}
+
+read_result :: fn(outcome: ReadOutcome) -> arch_interface.SyscallResult {
+    return match outcome {
+        case Read(size, handles) => succeeded(cast[u64](size), cast[u64](handles))
+        case Failed(error, size) => arch_interface.SyscallResult.{tag = cast[u64](cast[u32](error)), values = u64.[cast[u64](size), 0]}
+    }
+}
+
+take_result :: fn(outcome: TakeOutcome) -> arch_interface.SyscallResult {
+    return match outcome {
+        case Taken(count) => succeeded(cast[u64](count), 0)
+        case Failed(error, count) => arch_interface.SyscallResult.{tag = cast[u64](cast[u32](error)), values = u64.[cast[u64](count), 0]}
+    }
+}
+
+// Owning handles in process to both ends of a new channel; without room for them, the channel is destroyed.
+owned_pair :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], pair: ChannelPair) -> arch_interface.SyscallResult {
+    a := slop_os.NO_HANDLE
+    match install_owning(kernel, process, cast[u64](pair.a)) {
+        case Ok(handle) => a = handle
+        case Error(error) => {
+            _ = destroy_object(kernel, cast[u64](pair.a))
+            _ = destroy_object(kernel, cast[u64](pair.b))
+            return failed(error)
+        }
+    }
+    match install_owning(kernel, process, cast[u64](pair.b)) {
+        case Ok(handle) => return succeeded(cast[u64](cast[u32](a)), cast[u64](cast[u32](handle)))
+        case Error(error) => {
+            _ = remove(&process.table, a)
+            _ = destroy_object(kernel, cast[u64](pair.a))
+            _ = destroy_object(kernel, cast[u64](pair.b))
+            return failed(error)
+        }
+    }
 }
 
 // The port a handle refers to, if the handle has right.

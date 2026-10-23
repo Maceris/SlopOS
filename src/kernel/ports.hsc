@@ -19,8 +19,8 @@ import slab from "slab"
  * bits ORed together). Ready bindings are taken first in, first out; waiting threads are woken one per
  * packet, the most recent first.
  *
- * So far: wake bindings (port_wake) and timers. Channels' signals, IRQs and process events come with
- * the objects that raise them.
+ * So far: wake bindings (port_wake), timers, and channel ends' signals (channels.hsc, port_bind). IRQs
+ * and process events come with the objects that raise them.
  *
  * A thread that finds nothing blocks: it saves its vector state, leaves its CPU, and waits on the port.
  * When woken, by a packet, its deadline or the port's destruction, it's made ready, and finishes its
@@ -32,6 +32,7 @@ import slab from "slab"
 BindingKind :: enum #backed_by(u8) {
     Wake,
     Timer,
+    Signal,
 }
 
 // A key's packet slot, from a type-stable pool, so a timer that fires late finds a binding, if not its own.
@@ -44,8 +45,15 @@ Binding :: struct #align(16) {
     queued : bool,
     key : u64,
     port : u64,
-    // Wake bits raised since its packet was taken; a timer's deadline, in nanoseconds.
+    // Wake bits or signals raised since its packet was taken; a timer's deadline, in nanoseconds.
     data : u64,
+    // A signal binding's: the object and its generation, the signals it sees, and whether it's armed,
+    // and disarmed once its packet is queued (BindMode.Once).
+    object : u64,
+    object_generation : u32,
+    signals : u32,
+    armed : bool,
+    once : bool,
     // Its neighbors on the port's ready list.
     ready_next : u64,
     ready_previous : u64,
@@ -277,11 +285,15 @@ take_packets :: fn(port: ptr[mut Port], packets: ptr[mut slop_os.Packet[slop_os.
         index :: cast[usize](taken) % cast[usize](slop_os.MAX_PACKETS_PER_WAIT)
         packets^[index] = slop_os.Packet.{
             key = binding.key,
-            kind = if binding.kind == .Timer { slop_os.PacketKind.Timer } else { slop_os.PacketKind.User },
+            kind = match binding.kind {
+                case .Timer => slop_os.PacketKind.Timer
+                case .Signal => slop_os.PacketKind.Signal
+                case _ => slop_os.PacketKind.User
+            },
             reserved = 0,
             data = u64.[binding.data, 0],
         }
-        if binding.kind == .Wake {
+        if binding.kind != .Timer {
             binding.data = 0
         }
         taken += 1
@@ -327,7 +339,11 @@ unqueue :: fn(port: ptr[mut Port], binding: ptr[mut Binding]) {
     binding.queued = false
 }
 
-// The most recent waiter, woken: made ready, to take what's queued when it runs. Takes the lock as held.
+/*
+ * The most recent waiter, woken: made ready, to take what's queued when it runs, on its own CPU, or on
+ * this one during a handoff (ChannelNotifyAndWait), where the caller is about to wait. Takes the lock
+ * as held.
+ */
 wake_waiter :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
     first :: port.waiters
     if first == 0 {
@@ -336,7 +352,8 @@ wake_waiter :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
     thread :: cast[ptr[mut Thread]](first)
     unlink_waiter(port, thread)
     _ = cancel_timer(kernel, &thread.wait_timer)
-    make_ready(kernel, thread, thread.cpu)
+    cpu :: per_cpu()
+    make_ready(kernel, thread, if cpu.handoff { cpu.index } else { thread.cpu })
 }
 
 push_waiter :: fn(port: ptr[mut Port], thread: ptr[mut Thread]) {

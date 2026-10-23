@@ -1,6 +1,6 @@
 # IPC: Shared-Ring Channels and Ports
 
-Status: **accepted** 2026-10-13 (`../decisions/0035`). Built on the direction from the open questions: asynchronous IPC as the
+Status: **accepted** 2026-10-13 (`../decisions/0035`); built in M5 (`../decisions/0052`, `0053`), which records where the build differs. Built on the direction from the open questions: asynchronous IPC as the
 primitive, blocking as a layer on top, and memory-mapped ring buffers as the normal
 transport. Related: one channel per connection (`0010`), receives charged to budgets
 (`0011`), replay through syscalls (`0009`), the completion-queue direction
@@ -30,7 +30,7 @@ transport. Related: one channel per connection (`0010`), receives charged to bud
 ```
 channel_create :: fn(
     budget: MemoryBudget,   // pays for the object and the ring memory (0011)
-    ring_bytes: u32,        // per direction, power of two, ≥ 2 KiB; default 2 KiB (one page total)
+    ring_bytes: u32,        // per direction, power of two, ≥ 1 KiB; default 1 KiB (one page total, `0053`)
 ) -> Result[ChannelPair, ChannelError]
 
 ChannelPair :: struct { a: Channel, b: Channel }   // 'Channel[P]' once protocol tags are decided
@@ -38,7 +38,7 @@ ChannelPair :: struct { a: Channel, b: Channel }   // 'Channel[P]' once protocol
 - The ring memory is a memory object owned by the channel. Each end's holder maps it with
   `channel_map(end, space) -> Result[RingView, ...]`. Both sides must write indices in both
   rings (the producer's `tail`, the consumer's `head`), so the mapping is read/write in both
-  processes. The default 2 KiB + 2 KiB fits one page, and `std` treats everything the peer
+  processes. The default 1 KiB + 1 KiB, with both rings' indices, fits one page, and `std` treats everything the peer
   can write as untrusted (see "Untrusted peer memory" below).
 - **Bounded by construction.** A full ring makes `send` fail with `Full`. The sender waits for
   the `Writable` signal. Nothing queues in the kernel, unlike Zircon's kernel-copied
@@ -48,7 +48,8 @@ ChannelPair :: struct { a: Channel, b: Channel }   // 'Channel[P]' once protocol
 ```
 RingIndices :: struct #align(64) {          // producer and consumer on separate cache lines
     tail: u32,                // written by producer: bytes committed
-    _pad0: u8[60],
+    producer_waiting: u32,    // producer sets this before waiting for room (added in 0053)
+    _pad0: u8[56],
     head: u32,                // written by consumer: bytes consumed
     consumer_waiting: u32,    // consumer sets this before sleeping (event suppression)
     _pad1: u8[56],
@@ -101,7 +102,7 @@ channel_take_handles :: fn(end: Channel, batch: u16, out: mut Handle[]) -> Resul
 - **Limits:** at most 64 handles per batch.
 
 ### Message size limit
-- Maximum message size is **half the ring** (so 1 KiB with the default ring), capped at
+- Maximum message size is **half the ring** (so 512 bytes with the default ring), capped at
   **64 KiB** whatever the ring size.
 - Anything bigger goes in a shared memory object referenced by the message (a
   `SharedBuffer`, as in `../design/layers.md`). The limit comes from the ring, not a kernel

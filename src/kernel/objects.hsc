@@ -37,6 +37,8 @@ ObjectHeader :: struct {
     // On its CPU's limbo list once destroyed, with the epoch it was destroyed in.
     limbo_next : u64,
     limbo_epoch : u64,
+    // On its CPU's list of objects to destroy once what it's destroying now is done (destroy_later).
+    doomed_next : u64,
 }
 
 // What an owner keeps of what it owns.
@@ -59,6 +61,9 @@ ObjectPools :: struct {
     ports : slab.SlabCache,
     // Port bindings, which aren't objects but are reached the same way (ports.hsc).
     bindings : slab.SlabCache,
+    channels : slab.SlabCache,
+    // What a channel's ends share (channels.hsc).
+    channel_cores : slab.SlabCache,
 }
 
 init_pools :: fn(kernel: ptr[mut Kernel]) {
@@ -67,6 +72,8 @@ init_pools :: fn(kernel: ptr[mut Kernel]) {
     kernel.pools.spaces = object_cache(cast[u64](size_of(AddressSpace)), cast[u64](align_of(AddressSpace)))
     kernel.pools.ports = object_cache(cast[u64](size_of(Port)), cast[u64](align_of(Port)))
     kernel.pools.bindings = object_cache(cast[u64](size_of(Binding)), cast[u64](align_of(Binding)))
+    kernel.pools.channels = object_cache(cast[u64](size_of(Channel)), cast[u64](align_of(Channel)))
+    kernel.pools.channel_cores = slab.make_cache(cast[u64](size_of(ChannelCore)), cast[u64](align_of(ChannelCore)))
 }
 
 object_cache :: fn(size: u64, alignment: u64) -> slab.SlabCache {
@@ -80,6 +87,7 @@ pool_of :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind) -> ptr[mut slab
         case .Process => &kernel.pools.processes
         case .Thread => &kernel.pools.threads
         case .Port => &kernel.pools.ports
+        case .Channel => &kernel.pools.channels
         case _ => &kernel.pools.spaces
     }
 }
@@ -186,6 +194,8 @@ destroy_object :: fn(kernel: ptr[mut Kernel], object: u64) -> bool {
     if !first {
         return false
     }
+    cpu :: per_cpu()
+    cpu.destroying += 1
     intrinsics.atomic_store_u32(&header.generation, header.generation + 1)
     disown(object)
     match header.kind {
@@ -193,10 +203,44 @@ destroy_object :: fn(kernel: ptr[mut Kernel], object: u64) -> bool {
         case .Thread => destroy_thread(kernel, cast[ptr[mut Thread]](object))
         case .AddressSpace => destroy_address_space(kernel, cast[ptr[mut AddressSpace]](object))
         case .Port => destroy_port(kernel, cast[ptr[mut Port]](object))
+        case .Channel => destroy_channel(kernel, cast[ptr[mut Channel]](object))
         case _ => {}
     }
     retire(kernel, object)
+    cpu.destroying -= 1
+    // The outermost destroy finishes what the ones inside it left for later
+    if cpu.destroying == 0 && !cpu.draining {
+        cpu.draining = true
+        loop {
+            doomed :: cpu.doomed
+            if doomed == 0 {
+                break
+            }
+            cpu.doomed = cast[ptr[ObjectHeader]](doomed).doomed_next
+            _ = destroy_object(kernel, doomed)
+        }
+        cpu.draining = false
+    }
     return true
+}
+
+/*
+ * Destroy object, if it's still the one with generation: at once, or, during another destroy on this
+ * CPU, once that's done. So objects that hold one another, a channel end in a batch on another
+ * channel, and so on, are destroyed one after another, never nested deeper than one.
+ */
+destroy_later :: fn(kernel: ptr[mut Kernel], object: u64, generation: u32) {
+    if !is_live(object, generation) {
+        return void
+    }
+    cpu :: per_cpu()
+    if cpu.destroying == 0 && !cpu.draining {
+        _ = destroy_object(kernel, object)
+        return void
+    }
+    header :: cast[ptr[mut ObjectHeader]](object)
+    header.doomed_next = cpu.doomed
+    cpu.doomed = object
 }
 
 /*
@@ -265,6 +309,7 @@ release_object :: fn(kernel: ptr[mut Kernel], object: u64) {
         case .Thread => release_thread(kernel, cast[ptr[mut Thread]](object))
         case .AddressSpace => release_address_space(kernel, cast[ptr[mut AddressSpace]](object))
         case .Port => release_port(kernel, cast[ptr[mut Port]](object))
+        case .Channel => release_channel(kernel, cast[ptr[mut Channel]](object))
         case _ => {}
     }
     // A slot whose generation would wrap is never used again (decisions/0008)

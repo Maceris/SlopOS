@@ -33,6 +33,7 @@ them is `compiler-plan.md`, Phase 7:
 |---|---|---|
 | Once (2026-10-16), building the kernel through the build package in `boot_tests.py` failed, and the output was lost. Likely found 2026-10-20: the compiler crashed (an access violation, no output) when indexing through a pointer to an alias another thread hadn't resolved yet, about one build in four of std/crypto's tests; fixed, the checker now waits for it. Another race found 2026-10-22, about one kernel build in thirty (see Resolved). Watching whether the kernel build fails again; `build/failed_kernel_build.log` keeps its output if so | unknown | `tools/boot_tests.py` |
 | An enum shorthand where an optional is expected (2026-10-22): `return .ObjectGone` from a function returning `PortError?` fails ("Optional[PortError] has no member ObjectGone"), and so does `.Failed(...)` for a `WaitOutcome?`; spelling the type out works. The shorthand could look through an optional to what it holds | friction | `src/kernel/ports.hsc` |
+| A function declared inside a function (2026-10-22): it checks, then fails to generate ("functions defined inside functions can't be generated yet", E5002), along with every use of it. Hoisting it to the package works. Found writing a test helper in `src/kernel/channels_test.hsc` | friction | `src/kernel/channels_test.hsc` (`channel_tag`) |
 
 ### Language and library design
 
