@@ -41,9 +41,8 @@ test_heap :: fn() {
         }
         old_size :: sizes[i]
         size :: heap_test_size(cast[u64](i), 1)
-        //HEMERA(gap): a call through a function value can't leave out a parameter its type gives a default, like AllocatorFn's location
         bytes, error :: context.allocator.function(context.allocator.data, cast[usize](size), 1, cast[rawptr](addresses[i]),
-            cast[usize](old_size), #caller_location)
+            cast[usize](old_size))
         if error != null {
             runtime.log_error("test_heap: no memory to resize a block to % bytes", size)
             return void
@@ -63,8 +62,7 @@ test_heap :: fn() {
             runtime.log_error("test_heap: block % lost its contents after resizing", i)
             return void
         }
-        _, freed :: context.allocator.function(context.allocator.data, 0, 0, cast[rawptr](addresses[i]), cast[usize](sizes[i]),
-            #caller_location)
+        _, freed :: context.allocator.function(context.allocator.data, 0, 0, cast[rawptr](addresses[i]), cast[usize](sizes[i]))
     }
     runtime.log_info("test_heap: % blocks kept their contents, grown, shrunk and freed", HEAP_TEST_BLOCKS)
 }
