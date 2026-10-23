@@ -49,29 +49,32 @@ MemoryTest :: struct {
 
 user_memory #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #never_returns {
     base :: cast[u64](page)
-    space :: page^[MEMORY_SLOT_SPACE]
-    budget :: page^[TEST_SLOT_BUDGET]
-    read :: cast[u64](cast[u32](slop_os.PROTECTION_READ))
-    read_write :: cast[u64](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    write_execute :: cast[u64](cast[u32](slop_os.PROTECTION_WRITE) | cast[u32](slop_os.PROTECTION_EXECUTE))
-    given :: call(.MemoryBudgetInfo, budget)
-    page^[8] = given.rax
-    page^[9] = given.rdx
+    space :: handle_at[slop_os.AddressSpace](page^[MEMORY_SLOT_SPACE])
+    budget :: handle_at[slop_os.MemoryBudget](page^[TEST_SLOT_BUDGET])
+    read :: slop_os.PROTECTION_READ
+    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
+    write_execute :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_WRITE) | cast[u32](slop_os.PROTECTION_EXECUTE))
+    given :: slop_os.memory_budget_info(budget)
+    page^[8] = tag_of(given)
+    given_info :: given or_else slop_os.BudgetInfo.{}
+    page^[9] = given_info.limit
     // A child budget, too small for some memory, and memory of no whole number of pages
-    child :: call(.MemoryBudgetCreate, budget, CHILD_LIMIT)
-    page^[10] = child.rax
-    fresh :: call(.MemoryBudgetInfo, child.rdx)
-    page^[11] = fresh.rdx
-    page^[12] = fresh.r8
-    page^[13] = call(.MemoryCreate, child.rdx, 2 * CHILD_LIMIT).rax
-    page^[14] = call(.MemoryCreate, child.rdx, 1000).rax
-    memory :: call(.MemoryCreate, child.rdx, MEMORY_SIZE)
-    page^[15] = memory.rax
+    made_child :: slop_os.memory_budget_create(budget, CHILD_LIMIT)
+    page^[10] = tag_of(made_child)
+    child :: made_child or_else handle_at[slop_os.MemoryBudget](0)
+    fresh :: slop_os.memory_budget_info(child) or_else slop_os.BudgetInfo.{}
+    page^[11] = fresh.limit
+    page^[12] = fresh.used
+    page^[13] = tag_of(slop_os.memory_create(child, 2 * CHILD_LIMIT))
+    page^[14] = tag_of(slop_os.memory_create(child, 1000))
+    made :: slop_os.memory_create(child, MEMORY_SIZE)
+    page^[15] = tag_of(made)
+    memory :: made or_else handle_at[slop_os.Memory](0)
     // Mapped, then over itself, past its end, and writable and executable
-    page^[16] = call(.MemoryMap, memory.rdx, space, MEMORY_AT, 0, MEMORY_SIZE, read_write).rax
-    page^[17] = call(.MemoryMap, memory.rdx, space, MEMORY_AT + frames.FRAME_SIZE, 0, frames.FRAME_SIZE, read).rax
-    page^[18] = call(.MemoryMap, memory.rdx, space, MEMORY_AGAIN, frames.FRAME_SIZE, MEMORY_SIZE, read).rax
-    page^[19] = call(.MemoryMap, memory.rdx, space, MEMORY_AGAIN, 0, frames.FRAME_SIZE, write_execute).rax
+    page^[16] = tag_of(slop_os.memory_map(memory, space, MEMORY_AT, 0, MEMORY_SIZE, read_write))
+    page^[17] = tag_of(slop_os.memory_map(memory, space, MEMORY_AT + frames.FRAME_SIZE, 0, frames.FRAME_SIZE, read))
+    page^[18] = tag_of(slop_os.memory_map(memory, space, MEMORY_AGAIN, frames.FRAME_SIZE, MEMORY_SIZE, read))
+    page^[19] = tag_of(slop_os.memory_map(memory, space, MEMORY_AGAIN, 0, frames.FRAME_SIZE, write_execute))
     // Each page, untouched, reads as zeros, then holds what's written
     zeros := cast[u64](0)
     for i in 0..<MEMORY_PAGES {
@@ -83,46 +86,46 @@ user_memory #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #n
     }
     page^[20] = zeros
     // The second page again, read-only, shows the same frame
-    page^[21] = call(.MemoryMap, memory.rdx, space, MEMORY_AGAIN, frames.FRAME_SIZE, frames.FRAME_SIZE, read).rax
+    page^[21] = tag_of(slop_os.memory_map(memory, space, MEMORY_AGAIN, frames.FRAME_SIZE, frames.FRAME_SIZE, read))
     page^[22] = intrinsics.volatile_load_u64(cast[ptr[u64]](MEMORY_AGAIN))
     // B writes to it, and is stopped
-    writer :: call(.ThreadCreate, budget, space, page^[MEMORY_SLOT_ENTRY], page^[MEMORY_SLOT_STACK], base)
-    page^[23] = writer.rax
+    writer :: slop_os.thread_create(budget, space, page^[MEMORY_SLOT_ENTRY], page^[MEMORY_SLOT_STACK], base)
+    page^[23] = tag_of(writer)
     loop {
         intrinsics.spin_hint()
     }
     while intrinsics.volatile_load_u64(&page^[MEMORY_SLOT_B_STARTED]) == 0
-    started :: call(.ClockMonotonic).rdx
+    started :: clock_now()
     loop {
         intrinsics.spin_hint()
     }
-    while call(.ClockMonotonic).rdx - started < STOP_NANOSECONDS
+    while clock_now() - started < STOP_NANOSECONDS
     page^[24] = intrinsics.volatile_load_u64(&page^[MEMORY_SLOT_B_AFTER])
-    page^[25] = call(.HandleInfo, writer.rdx).rax
-    page^[26] = call(.MemoryUnmap, space, MEMORY_AGAIN).rax
-    page^[27] = call(.MemoryUnmap, space, MEMORY_AGAIN).rax
+    page^[25] = tag_of(slop_os.handle_info(cast[slop_os.Handle](writer or_else handle_at[slop_os.Thread](0))))
+    page^[26] = tag_of(slop_os.memory_unmap(space, MEMORY_AGAIN))
+    page^[27] = tag_of(slop_os.memory_unmap(space, MEMORY_AGAIN))
     // Closing the child: the parent pays for the memory, and gets back the rest of the limit
-    page^[28] = call(.MemoryBudgetInfo, child.rdx).r8
-    page^[29] = call(.MemoryBudgetInfo, budget).r8
-    page^[30] = call(.HandleClose, child.rdx).rax
-    page^[31] = call(.MemoryBudgetInfo, budget).r8
+    page^[28] = used_of(child)
+    page^[29] = used_of(budget)
+    page^[30] = tag_of(slop_os.handle_close(cast[slop_os.Handle](child)))
+    page^[31] = used_of(budget)
     page^[32] = intrinsics.volatile_load_u64(cast[ptr[u64]](MEMORY_AT + 3 * frames.FRAME_SIZE))
-    page^[33] = call(.HandleClose, memory.rdx).rax
+    page^[33] = tag_of(slop_os.handle_close(cast[slop_os.Handle](memory)))
     intrinsics.volatile_store_u64(&page^[MEMORY_SLOT_DONE], 1)
-    _ = call(.ThreadExit)
-    loop {
-        intrinsics.spin_hint()
-    }
+    slop_os.thread_exit()
+}
+
+// What a budget has charged, in user mode.
+used_of :: fn(budget: slop_os.MemoryBudget) -> u64 #no_context {
+    info :: slop_os.memory_budget_info(budget) or_else slop_os.BudgetInfo.{}
+    return info.used
 }
 
 user_memory_writer #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #never_returns {
     intrinsics.volatile_store_u64(&page^[MEMORY_SLOT_B_STARTED], 1)
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](MEMORY_AGAIN), 7)
     intrinsics.volatile_store_u64(&page^[MEMORY_SLOT_B_AFTER], 1)
-    _ = call(.ThreadExit)
-    loop {
-        intrinsics.spin_hint()
-    }
+    slop_os.thread_exit()
 }
 
 test_memory :: fn(kernel: ptr[mut Kernel]) {
@@ -144,10 +147,9 @@ test_memory :: fn(kernel: ptr[mut Kernel]) {
             return void
         }
     }
-    // Both functions, call, and the code between them
-    first :: min_u64(min_u64(cast[u64](user_memory), cast[u64](user_memory_writer)), cast[u64](call)) & ~(frames.FRAME_SIZE - 1)
-    last :: frames.round_up(max_u64(max_u64(cast[u64](user_memory), cast[u64](user_memory_writer)), cast[u64](call)) + 4 * frames.FRAME_SIZE,
-        frames.FRAME_SIZE)
+    // The kernel's code, with the functions and the stubs they call
+    first :: kernel.code_base
+    last :: kernel.code_base + kernel.code_size
     if !mapped_for_test(kernel, space, TEST_CODE, kernel.image_physical + (first - kernel.image_base), last - first, USER_CODE) {
         return void
     }
@@ -206,9 +208,9 @@ memory_test_tick :: fn(kernel: ptr[mut Kernel], tick: u64) {
     pools :: &kernel.pools
     _, root_used :: budget_info(cast[ptr[mut MemoryBudget]](kernel.root_budget))
     // The root budget is the one left
-    if pools.memories.allocated != 0 || pools.mappings.allocated != 0 || pools.budgets.allocated != 1 || root_used != test.root_used {
+    if pool_of(kernel, .Memory).allocated != 0 || pools.mappings.allocated != 0 || pool_of(kernel, .MemoryBudget).allocated != 1 || root_used != test.root_used {
         runtime.log_error("test_memory: left after the process was destroyed: % memory objects, % mappings, % budgets; the root has % charged, not %",
-            pools.memories.allocated, pools.mappings.allocated, pools.budgets.allocated, root_used, test.root_used)
+            pool_of(kernel, .Memory).allocated, pools.mappings.allocated, pool_of(kernel, .MemoryBudget).allocated, root_used, test.root_used)
         return void
     }
     runtime.log_info("test_memory: destroying the process freed its memory, its mappings and its budgets, and gave the root budget back what it paid for")

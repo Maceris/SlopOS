@@ -74,7 +74,7 @@ ring_send #no_context :: fn(memory: u64, side: u64, value: u64) -> bool {
  * The next 8-byte message in the ring side writes, at memory, waiting on port for it if there's none:
  * says it waits, looks once more, then waits. Packets for KEY_ONCE it takes meanwhile are counted at once.
  */
-ring_receive #no_context :: fn(memory: u64, side: u64, port: u64, packets: u64, once: ptr[mut u64]) -> u64 {
+ring_receive #no_context :: fn(memory: u64, side: u64, port: slop_os.Port, packets: u64, once: ptr[mut u64]) -> u64 {
     indices :: memory + side * 128
     ring :: memory + cast[u64](slop_os.CHANNEL_RINGS_OFFSET) + side * cast[u64](slop_os.CHANNEL_DEFAULT_RING)
     mask :: cast[u64](slop_os.CHANNEL_DEFAULT_RING) - 1
@@ -92,7 +92,7 @@ ring_receive #no_context :: fn(memory: u64, side: u64, port: u64, packets: u64, 
         intrinsics.atomic_store_u32(waiting_at, 1)
         intrinsics.fence_sequentially_consistent()
         if intrinsics.atomic_load_u32_acquire(cast[ptr[u32]](indices)) == head {
-            taken :: call(.PortWait, port, packets, 4, slop_os.NO_DEADLINE).rdx
+            taken :: cast[u64](slop_os.port_wait(port, packets_at(packets, 4), slop_os.NO_DEADLINE) or_else 0)
             for i in 0..<4 {
                 if cast[u64](i) < taken && cast[ptr[u64]](packets + cast[u64](i) * 32)^ == KEY_ONCE {
                     once^ += 1
@@ -105,73 +105,75 @@ ring_receive #no_context :: fn(memory: u64, side: u64, port: u64, packets: u64, 
 user_channels_a #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #never_returns {
     base :: cast[u64](page)
     packets :: cast[ptr[u64[16]]](base + CHANNEL_PACKETS_OFFSET)
-    space :: page^[CHANNEL_SLOT_SPACE]
-    c0 :: page^[CHANNEL_SLOT_END]
-    budget :: page^[TEST_SLOT_BUDGET]
-    port :: call(.PortCreate, budget).rdx
-    made :: call(.ChannelCreate, budget, 0)
-    x :: made.rdx
-    y :: made.r8
-    page^[8] = made.rax
-    page^[9] = call(.ChannelCreate, budget, 1000).rax
-    page^[10] = call(.ChannelMap, x, space, TEST_RING).rax
-    page^[11] = call(.ChannelMap, x, space, TEST_RING + 0x10000).rax
+    taken :: packets_at(base + CHANNEL_PACKETS_OFFSET, 4)
+    space :: handle_at[slop_os.AddressSpace](page^[CHANNEL_SLOT_SPACE])
+    c0 :: handle_at[slop_os.Channel](page^[CHANNEL_SLOT_END])
+    budget :: handle_at[slop_os.MemoryBudget](page^[TEST_SLOT_BUDGET])
+    port :: slop_os.port_create(budget) or_else handle_at[slop_os.Port](0)
+    made :: slop_os.channel_create(budget, 0)
+    pair :: made or_else slop_os.ChannelPair.{}
+    x :: pair.a
+    y :: pair.b
+    page^[8] = tag_of(made)
+    page^[9] = tag_of(slop_os.channel_create(budget, 1000))
+    page^[10] = tag_of(slop_os.channel_map(x, space, TEST_RING))
+    page^[11] = tag_of(slop_os.channel_map(x, space, TEST_RING + 0x10000))
     // Sending: x is mapped, c0 is the channel's own end, and y goes
-    handles :: cast[ptr[mut u64]](base + CHANNEL_HANDLES_OFFSET)
-    handles^ = x
-    page^[12] = call(.ChannelSendHandles, c0, base + CHANNEL_HANDLES_OFFSET, 1, 3).rax
-    handles^ = c0
-    page^[13] = call(.ChannelSendHandles, c0, base + CHANNEL_HANDLES_OFFSET, 1, 3).rax
-    handles^ = y
-    page^[14] = call(.ChannelSendHandles, c0, base + CHANNEL_HANDLES_OFFSET, 1, 3).rax
+    handles :: cast[ptr[mut slop_os.Handle[1]]](base + CHANNEL_HANDLES_OFFSET)
+    handles^[0] = cast[slop_os.Handle](x)
+    page^[12] = tag_of(slop_os.channel_send_handles(c0, handles^, 3))
+    handles^[0] = cast[slop_os.Handle](c0)
+    page^[13] = tag_of(slop_os.channel_send_handles(c0, handles^, 3))
+    handles^[0] = cast[slop_os.Handle](y)
+    page^[14] = tag_of(slop_os.channel_send_handles(c0, handles^, 3))
     cast[ptr[mut u64]](base + CHANNEL_DATA_OFFSET)^ = CHANNEL_VALUE
-    page^[15] = call(.ChannelWrite, c0, base + CHANNEL_DATA_OFFSET, 8, 3).rax
+    page^[15] = tag_of(slop_os.channel_write(c0, bytes_at(base + CHANNEL_DATA_OFFSET, 8), 3))
     readable :: cast[u64](cast[u32](slop_os.SIGNAL_READABLE))
     writable :: cast[u64](cast[u32](slop_os.SIGNAL_WRITABLE))
     peer_closed :: cast[u64](cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    once :: cast[u64](cast[u32](slop_os.BindMode.Once))
-    page^[16] = call(.PortBind, port, x, readable | peer_closed, KEY_X, cast[u64](cast[u32](slop_os.BindMode.Persistent))).rax
-    page^[17] = call(.PortBind, port, x, writable, KEY_ONCE, once).rax
+    any_x :: cast[slop_os.Handle](x)
+    page^[16] = tag_of(slop_os.port_bind(port, any_x, cast[slop_os.Signals](cast[u32](readable | peer_closed)), KEY_X, .Persistent))
+    page^[17] = tag_of(slop_os.port_bind(port, any_x, slop_os.SIGNAL_WRITABLE, KEY_ONCE, .Once))
     // Through the rings: x is side 0, so A writes ring 0 and reads ring 1
     page^[18] = ring_receive(TEST_RING, 1, port, base + CHANNEL_PACKETS_OFFSET, &page^[20])
     _ = ring_send(TEST_RING, 0, FIRST_FROM_A)
     // B rings Writable twice once it has the message: the Once binding sees it once
     seen := cast[u64](0)
-    waited := call(.ChannelNotifyAndWait, x, readable, port, base + CHANNEL_PACKETS_OFFSET, 4, slop_os.NO_DEADLINE)
+    waited := cast[u64](slop_os.channel_notify_and_wait(x, slop_os.SIGNAL_READABLE, port, taken, slop_os.NO_DEADLINE) or_else 0)
     loop {
         for i in 0..<4 {
-            if cast[u64](i) < waited.rdx && packets^[i * 4] == KEY_ONCE && packets^[i * 4 + 2] == writable {
+            if cast[u64](i) < waited && packets^[i * 4] == KEY_ONCE && packets^[i * 4 + 2] == writable {
                 seen = 1
             }
         }
         if seen != 0 {
             break
         }
-        waited = call(.PortWait, port, base + CHANNEL_PACKETS_OFFSET, 4, slop_os.NO_DEADLINE)
+        waited = cast[u64](slop_os.port_wait(port, taken, slop_os.NO_DEADLINE) or_else 0)
     }
     page^[19] = seen
     // B raises Writable again once it hears A took the packet, then says so: disarmed, the binding queues nothing
     if ring_send(TEST_RING, 0, TOOK_IT) {
-        _ = call(.ChannelNotify, x, readable)
+        _ = slop_os.channel_notify(x, slop_os.SIGNAL_READABLE)
     }
     page^[28] = ring_receive(TEST_RING, 1, port, base + CHANNEL_PACKETS_OFFSET, &page^[20])
-    started :: call(.ClockMonotonic).rdx
-    again :: call(.PortWait, port, base + CHANNEL_PACKETS_OFFSET, 4, started + SHORT_WAIT_NANOSECONDS)
+    started :: clock_now()
+    again :: cast[u64](slop_os.port_wait(port, taken, started + SHORT_WAIT_NANOSECONDS) or_else 0)
     for i in 0..<4 {
-        if cast[u64](i) < again.rdx && packets^[i * 4] == KEY_ONCE {
+        if cast[u64](i) < again && packets^[i * 4] == KEY_ONCE {
             page^[20] += 1
         }
     }
     // Armed again, it sees the next one; then B closes y
-    page^[21] = call(.PortBind, port, x, writable, KEY_ONCE, once).rax
+    page^[21] = tag_of(slop_os.port_bind(port, any_x, slop_os.SIGNAL_WRITABLE, KEY_ONCE, .Once))
     if ring_send(TEST_RING, 0, SECOND_FROM_A) {
-        _ = call(.ChannelNotify, x, readable)
+        _ = slop_os.channel_notify(x, slop_os.SIGNAL_READABLE)
     }
     both := cast[u64](0)
     loop {
-        last :: call(.PortWait, port, base + CHANNEL_PACKETS_OFFSET, 4, slop_os.NO_DEADLINE)
+        last :: cast[u64](slop_os.port_wait(port, taken, slop_os.NO_DEADLINE) or_else 0)
         for i in 0..<4 {
-            if cast[u64](i) < last.rdx {
+            if cast[u64](i) < last {
                 key :: packets^[i * 4]
                 signals :: packets^[i * 4 + 2]
                 if key == KEY_ONCE && signals == writable {
@@ -185,86 +187,77 @@ user_channels_a #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]
     }
     while both != 3
     page^[22] = both
-    page^[23] = call(.ChannelWrite, x, base + CHANNEL_DATA_OFFSET, 8, slop_os.NO_BATCH).rax
-    page^[24] = call(.ChannelRead, x, base + CHANNEL_DATA_OFFSET, 64).rax
-    page^[25] = call(.HandleClose, x).rax
+    page^[23] = tag_of(slop_os.channel_write(x, bytes_at(base + CHANNEL_DATA_OFFSET, 8), slop_os.NO_BATCH))
+    page^[24] = tag_of(slop_os.channel_read(x, bytes_at(base + CHANNEL_DATA_OFFSET, 64), cast[ptr[mut u32]](0)))
+    page^[25] = tag_of(slop_os.handle_close(any_x))
     // Closing x unmapped its rings, so another channel's go where they were; and again once unmapped
-    other :: call(.ChannelCreate, budget, 0).rdx
-    page^[29] = call(.ChannelMap, other, space, TEST_RING).rax
-    page^[30] = call(.ChannelUnmap, other).rax
-    page^[31] = call(.ChannelMap, other, space, TEST_RING).rax
-    page^[26] = call(.HandleClose, port).rax
+    other_pair :: slop_os.channel_create(budget, 0) or_else slop_os.ChannelPair.{}
+    other :: other_pair.a
+    page^[29] = tag_of(slop_os.channel_map(other, space, TEST_RING))
+    page^[30] = tag_of(slop_os.channel_unmap(other))
+    page^[31] = tag_of(slop_os.channel_map(other, space, TEST_RING))
+    page^[26] = tag_of(slop_os.handle_close(cast[slop_os.Handle](port)))
     intrinsics.volatile_store_u64(&page^[27], 1)
-    _ = call(.ThreadExit)
-    loop {
-        intrinsics.spin_hint()
-    }
+    slop_os.thread_exit()
 }
 
 user_channels_b #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #never_returns {
     base :: cast[u64](page)
-    space :: page^[CHANNEL_SLOT_SPACE]
-    c0 :: page^[CHANNEL_SLOT_END]
-    port :: call(.PortCreate, page^[TEST_SLOT_BUDGET]).rdx
-    readable :: cast[u64](cast[u32](slop_os.SIGNAL_READABLE))
-    writable :: cast[u64](cast[u32](slop_os.SIGNAL_WRITABLE))
-    persistent :: cast[u64](cast[u32](slop_os.BindMode.Persistent))
-    page^[8] = call(.PortBind, port, c0, readable, KEY_C0, persistent).rax
+    space :: handle_at[slop_os.AddressSpace](page^[CHANNEL_SLOT_SPACE])
+    c0 :: handle_at[slop_os.Channel](page^[CHANNEL_SLOT_END])
+    port :: slop_os.port_create(handle_at[slop_os.MemoryBudget](page^[TEST_SLOT_BUDGET])) or_else handle_at[slop_os.Port](0)
+    taken :: packets_at(base + CHANNEL_PACKETS_OFFSET, 4)
+    page^[8] = tag_of(slop_os.port_bind(port, cast[slop_os.Handle](c0), slop_os.SIGNAL_READABLE, KEY_C0, .Persistent))
     // Through the kernel: Empty says it waits, so A's write rings the doorbell
     loop {
-        read :: call(.ChannelRead, c0, base + CHANNEL_DATA_OFFSET, 64)
-        if read.rax == 0 {
-            page^[9] = read.rdx
-            page^[10] = read.r8
-            break
+        read :: slop_os.channel_read(c0, bytes_at(base + CHANNEL_DATA_OFFSET, 64), cast[ptr[mut u32]](0))
+        match read {
+            case Ok(info) => {
+                page^[9] = cast[u64](info.size)
+                page^[10] = cast[u64](info.flags_and_batch)
+                break
+            }
+            case Error(error) => {
+                if error != .Empty {
+                    page^[9] = 0xdead0000 | cast[u64](cast[u32](error))
+                    break
+                }
+            }
         }
-        if read.rax != cast[u64](cast[u32](slop_os.ChannelError.Empty)) {
-            page^[9] = 0xdead0000 | read.rax
-            break
-        }
-        _ = call(.PortWait, port, base + CHANNEL_PACKETS_OFFSET, 4, slop_os.NO_DEADLINE)
+        _ = slop_os.port_wait(port, taken, slop_os.NO_DEADLINE)
     }
     page^[11] = cast[ptr[u64]](base + CHANNEL_DATA_OFFSET)^
-    batch :: page^[10] >> 16
-    taken :: call(.ChannelTakeHandles, c0, batch, base + CHANNEL_TAKEN_OFFSET, 4)
-    page^[12] = taken.rdx
-    page^[13] = call(.ChannelTakeHandles, c0, batch, base + CHANNEL_TAKEN_OFFSET, 4).rax
-    y :: cast[u64](cast[ptr[u32]](base + CHANNEL_TAKEN_OFFSET)^)
-    page^[14] = call(.ChannelMap, y, space, TEST_RING).rax
-    page^[15] = call(.PortBind, port, y, readable, KEY_Y, persistent).rax
+    batch :: cast[u32](page^[10] >> 16)
+    into :: cast[ptr[mut slop_os.Handle[4]]](base + CHANNEL_TAKEN_OFFSET)
+    page^[12] = cast[u64](slop_os.channel_take_handles(c0, batch, into^, cast[ptr[mut u32]](0)) or_else 0)
+    page^[13] = tag_of(slop_os.channel_take_handles(c0, batch, into^, cast[ptr[mut u32]](0)))
+    y :: cast[slop_os.Channel](into^[0])
+    page^[14] = tag_of(slop_os.channel_map(y, space, TEST_RING))
+    page^[15] = tag_of(slop_os.port_bind(port, cast[slop_os.Handle](y), slop_os.SIGNAL_READABLE, KEY_Y, .Persistent))
     // y is side 1: B writes ring 1 and reads ring 0
     if ring_send(TEST_RING, 1, FROM_B) {
-        _ = call(.ChannelNotify, y, readable)
+        _ = slop_os.channel_notify(y, slop_os.SIGNAL_READABLE)
     }
     page^[16] = ring_receive(TEST_RING, 0, port, base + CHANNEL_PACKETS_OFFSET, &page^[30])
-    _ = call(.ChannelNotify, y, writable)
+    _ = slop_os.channel_notify(y, slop_os.SIGNAL_WRITABLE)
     page^[20] = ring_receive(TEST_RING, 0, port, base + CHANNEL_PACKETS_OFFSET, &page^[30])
-    _ = call(.ChannelNotify, y, writable)
+    _ = slop_os.channel_notify(y, slop_os.SIGNAL_WRITABLE)
     if ring_send(TEST_RING, 1, RAISED_AGAIN) {
-        _ = call(.ChannelNotify, y, readable)
+        _ = slop_os.channel_notify(y, slop_os.SIGNAL_READABLE)
     }
     page^[17] = ring_receive(TEST_RING, 0, port, base + CHANNEL_PACKETS_OFFSET, &page^[30])
-    _ = call(.ChannelNotify, y, writable)
-    page^[18] = call(.HandleClose, y).rax
+    _ = slop_os.channel_notify(y, slop_os.SIGNAL_WRITABLE)
+    page^[18] = tag_of(slop_os.handle_close(cast[slop_os.Handle](y)))
     intrinsics.volatile_store_u64(&page^[19], 1)
-    _ = call(.ThreadExit)
-    loop {
-        intrinsics.spin_hint()
-    }
+    slop_os.thread_exit()
 }
 
 test_channels :: fn(kernel: ptr[mut Kernel]) {
     test :: allocate_object[ChannelsTest](&kernel.frames) or_else out_of_memory(&kernel.options, "test_channels: no memory")
     entries :: u64.[cast[u64](user_channels_a), cast[u64](user_channels_b)]
-    functions :: u64.[cast[u64](user_channels_a), cast[u64](user_channels_b), cast[u64](ring_send), cast[u64](ring_receive), cast[u64](call)]
-    first := functions[0]
-    last := functions[0]
-    for function in functions {
-        first = min_u64(first, function)
-        last = max_u64(last, function)
-    }
-    code :: first & ~(frames.FRAME_SIZE - 1)
-    code_end :: frames.round_up(last + 4 * frames.FRAME_SIZE, frames.FRAME_SIZE)
+    // The kernel's code, with the functions and the stubs they call
+    code :: kernel.code_base
+    code_end :: kernel.code_base + kernel.code_size
     for i in 0..<2 {
         process := cast[ptr[mut Process]](0)
         match create_process(kernel, 0, 0) {
@@ -375,10 +368,10 @@ channels_test_tick :: fn(kernel: ptr[mut Kernel], tick: u64) {
         return void
     }
     pools :: &kernel.pools
-    if pools.channels.allocated != 0 || pools.channel_cores.allocated != 0 || pools.ports.allocated != 0
-        || pools.bindings.allocated != 0 || pools.threads.allocated != 0 {
+    if pool_of(kernel, .Channel).allocated != 0 || pools.channel_cores.allocated != 0 || pool_of(kernel, .Port).allocated != 0
+        || pools.bindings.allocated != 0 || pool_of(kernel, .Thread).allocated != 0 {
         runtime.log_error("test_channels: left after the processes were destroyed: % ends, % cores, % ports, % bindings, % threads",
-            pools.channels.allocated, pools.channel_cores.allocated, pools.ports.allocated, pools.bindings.allocated, pools.threads.allocated)
+            pool_of(kernel, .Channel).allocated, pools.channel_cores.allocated, pool_of(kernel, .Port).allocated, pools.bindings.allocated, pool_of(kernel, .Thread).allocated)
         return void
     }
     runtime.log_info("test_channels: destroying the processes freed their channels, ports and bindings")

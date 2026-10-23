@@ -92,6 +92,16 @@ create_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, controller: u
     return .Ok(irq)
 }
 
+// The platform capability holds nothing.
+destroy_platform :: fn(kernel: ptr[mut Kernel], platform: ptr[mut Platform]) {
+}
+
+release_platform :: fn(kernel: ptr[mut Kernel], platform: ptr[mut Platform]) {
+}
+
+release_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
+}
+
 // Destroying an IRQ: its line masked, its route forgotten, its binding dropped.
 destroy_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
     if cast[usize](irq.slot) < MAX_DEVICE_INTERRUPTS {

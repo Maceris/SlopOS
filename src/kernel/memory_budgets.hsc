@@ -150,7 +150,7 @@ create_budget :: fn(kernel: ptr[mut Kernel], owner: u64, parent: u64, limit: u64
  * Closing a budget: its charges move to its parent, which takes back its limit, so the parent gains
  * what the child didn't use. Its own slot stays charged to the parent until it's released.
  */
-destroy_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut MemoryBudget]) {
+destroy_memory_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut MemoryBudget]) {
     concurrency.lock(&kernel.budgets_lock)
     defer concurrency.unlock(&kernel.budgets_lock)
     concurrency.lock(&budget.lock)
@@ -179,7 +179,7 @@ destroy_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut MemoryBudget]) {
     budget.limit = 0
 }
 
-release_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut MemoryBudget]) {
+release_memory_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut MemoryBudget]) {
 }
 
 /*

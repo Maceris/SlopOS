@@ -1,6 +1,6 @@
 # Proposal: Code Values, `#insert` and Hygienic Macros
 
-Status: **agreed** 2026-10-22; phases 1 to 5 done 2026-10-23, and phase 6's atomics; its SlopOS users move into M5's fourth stage, the per-kind matches to 4a and 4b, the syscall stubs and dispatch to 4d (*Phases*; phase 5 as built is in *Macros and hygiene as built*). Quotes of what goes inside something else
+Status: **agreed** 2026-10-22; all six phases done 2026-10-23: phase 6's users are the atomics, SlopOS's syscall stubs and dispatch, and its per-kind code (decisions 0057) (*Phases*; phase 5 as built is in *Macros and hygiene as built*). Quotes of what goes inside something else
 are named for their contents: `#code fields { }`, `variants`, `members`, `patterns` and `cases` (chosen 2026-10-23). In bodies, `#insert` changes the tree in
 place, so generics, whose instances share one tree, wait for a per-instance form. Asked for before M5's fourth stage, whose
 generated ABI package needs it (`../design/system-abi.md` §4). Directions chosen with the Hemera author:

@@ -65,8 +65,8 @@ user_target #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #n
         intrinsics.spin_hint()
     }
     while intrinsics.volatile_load_u64(&page^[TARGET_SLOT_GO]) == 0
-    page^[TARGET_RESULTS] = call(.ClockMonotonic).rdx
-    page^[TARGET_RESULTS + 1] = call(.ClockMonotonic).rdx
+    page^[TARGET_RESULTS] = clock_now()
+    page^[TARGET_RESULTS + 1] = clock_now()
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](FAULT_AT), FAULT_VALUE)
     page^[TARGET_RESULTS + 2] = intrinsics.volatile_load_u64(cast[ptr[u64]](FAULT_AT))
     intrinsics.volatile_store_u64(&page^[TARGET_SLOT_DONE], 1)
@@ -82,81 +82,83 @@ user_counter_thread #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[
 }
 
 // The next stop's StopInfo, at stop, once the intercept's packet says there is one.
-next_stop :: fn(port: u64, intercept: u64, base: u64) #no_context {
+next_stop :: fn(port: slop_os.Port, intercept: slop_os.Intercept, base: u64) #no_context {
     loop {
-        if call(.InterceptNext, intercept, base + CONTROL_STOP_OFFSET).rax == 0 {
+        if tag_of(slop_os.intercept_next(intercept, cast[ptr[mut slop_os.StopInfo]](base + CONTROL_STOP_OFFSET))) == 0 {
             break
         }
-        _ = call(.PortWait, port, base + CONTROL_PACKETS_OFFSET, 1, slop_os.NO_DEADLINE)
+        _ = slop_os.port_wait(port, packets_at(base + CONTROL_PACKETS_OFFSET, 1), slop_os.NO_DEADLINE)
     }
 }
 
 // A u64 of T's page, read through D's process handle.
 read_target :: fn(page: ptr[mut u64[64]], slot: u64) -> u64 #no_context {
     base :: cast[u64](page)
-    _ = call(.ProcessReadMemory, page^[CONTROL_SLOT_TARGET], page^[CONTROL_SLOT_TARGET_SPACE], TEST_COUNTERS + slot * 8,
-        base + CONTROL_READ_OFFSET, 8)
+    _ = slop_os.process_read_memory(handle_at[slop_os.Process](page^[CONTROL_SLOT_TARGET]),
+        handle_at[slop_os.AddressSpace](page^[CONTROL_SLOT_TARGET_SPACE]), TEST_COUNTERS + slot * 8, bytes_at(base + CONTROL_READ_OFFSET, 8))
     return intrinsics.volatile_load_u64(cast[ptr[u64]](base + CONTROL_READ_OFFSET))
 }
 
 wait_nanoseconds :: fn(nanoseconds: u64) #no_context {
-    started :: call(.ClockMonotonic).rdx
+    started :: clock_now()
     loop {
         intrinsics.spin_hint()
     }
-    while call(.ClockMonotonic).rdx - started < nanoseconds
+    while clock_now() - started < nanoseconds
 }
 
 user_debugger #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #never_returns {
     base :: cast[u64](page)
-    target :: page^[CONTROL_SLOT_TARGET]
-    target_space :: page^[CONTROL_SLOT_TARGET_SPACE]
+    target :: handle_at[slop_os.Process](page^[CONTROL_SLOT_TARGET])
+    target_space :: handle_at[slop_os.AddressSpace](page^[CONTROL_SLOT_TARGET_SPACE])
+    budget :: handle_at[slop_os.MemoryBudget](page^[TEST_SLOT_BUDGET])
     t1 :: page^[CONTROL_SLOT_T1]
     t2 :: page^[CONTROL_SLOT_T2]
     stop :: cast[ptr[slop_os.StopInfo]](base + CONTROL_STOP_OFFSET)
     registers :: cast[ptr[mut u64[18]]](base + CONTROL_REGISTERS_OFFSET)
-    port :: call(.PortCreate, page^[TEST_SLOT_BUDGET]).rdx
+    port :: slop_os.port_create(budget) or_else handle_at[slop_os.Port](0)
     // T's threads, an intercept, a second refused, and a watch for its end
-    page^[8] = call(.ProcessThreads, target, base + CONTROL_IDS_OFFSET, 4).rdx
-    points :: cast[u64](slop_os.STOP_SYSCALL_ENTRY | slop_os.STOP_SYSCALL_EXIT | slop_os.STOP_FAULT)
-    calls :: cast[u64](1) << cast[u64](cast[u32](slop_os.Syscall.ClockMonotonic))
-    intercept :: call(.InterceptAttach, target, port, CONTROL_KEY, calls, points)
-    page^[9] = intercept.rax
-    page^[10] = call(.InterceptAttach, target, port, CONTROL_KEY + 100, calls, points).rax
-    page^[11] = call(.PortBind, port, target, cast[u64](cast[u32](slop_os.SIGNAL_TERMINATED)), WATCH_KEY,
-        cast[u64](cast[u32](slop_os.BindMode.Persistent))).rax
+    page^[8] = cast[u64](slop_os.process_threads(target, cast[ptr[mut u64[4]]](base + CONTROL_IDS_OFFSET)^) or_else 0)
+    points :: slop_os.STOP_SYSCALL_ENTRY | slop_os.STOP_SYSCALL_EXIT | slop_os.STOP_FAULT
+    calls :: slop_os.syscall_bit(slop_os.SYSCALL_CLOCK_MONOTONIC)
+    attached :: slop_os.intercept_attach(target, port, CONTROL_KEY, calls, points)
+    page^[9] = tag_of(attached)
+    intercept :: attached or_else handle_at[slop_os.Intercept](0)
+    page^[10] = tag_of(slop_os.intercept_attach(target, port, CONTROL_KEY + 100, calls, points))
+    page^[11] = tag_of(slop_os.port_bind(port, cast[slop_os.Handle](target), slop_os.SIGNAL_TERMINATED, WATCH_KEY, .Persistent))
     // T1 goes, by a write to T's memory
     page^[CONTROL_SLOT_ONE] = 1
-    page^[12] = call(.ProcessWriteMemory, target, target_space, TEST_COUNTERS + TARGET_SLOT_GO * 8, base + CONTROL_SLOT_ONE * 8, 8).rax
+    page^[12] = tag_of(slop_os.process_write_memory(target, target_space, TEST_COUNTERS + TARGET_SLOT_GO * 8,
+        bytes_at(base + CONTROL_SLOT_ONE * 8, 8)))
     // The first call, at its entry: answered, and skipped
-    next_stop(port, intercept.rdx, base)
+    next_stop(port, intercept, base)
     page^[13] = if stop.thread == t1 { cast[u64](cast[u32](stop.point)) } else { cast[u64](0) }
     page^[14] = cast[u64](stop.number)
-    page^[15] = call(.ThreadReadRegisters, target, t1, base + CONTROL_REGISTERS_OFFSET).rax
+    page^[15] = tag_of(slop_os.thread_read_registers(target, t1, registers^))
     page^[16] = registers^[REGISTER_RAX]
     registers^[REGISTER_RAX] = 0
     registers^[REGISTER_RDX] = SKIPPED_VALUE
-    page^[17] = call(.ThreadWriteRegisters, target, t1, base + CONTROL_REGISTERS_OFFSET).rax
-    page^[18] = call(.InterceptResume, intercept.rdx, t1, cast[u64](cast[u32](slop_os.InterceptAction.Skip))).rax
+    page^[17] = tag_of(slop_os.thread_write_registers(target, t1, registers^))
+    page^[18] = tag_of(slop_os.intercept_resume(intercept, t1, .Skip))
     // The second runs, and its result is changed at its exit
-    next_stop(port, intercept.rdx, base)
+    next_stop(port, intercept, base)
     page^[19] = cast[u64](cast[u32](stop.point))
-    _ = call(.InterceptResume, intercept.rdx, t1, cast[u64](cast[u32](slop_os.InterceptAction.Continue)))
-    next_stop(port, intercept.rdx, base)
+    _ = slop_os.intercept_resume(intercept, t1, .Continue)
+    next_stop(port, intercept, base)
     page^[20] = cast[u64](cast[u32](stop.point))
-    _ = call(.ThreadReadRegisters, target, t1, base + CONTROL_REGISTERS_OFFSET)
+    _ = slop_os.thread_read_registers(target, t1, registers^)
     registers^[REGISTER_RDX] = CHANGED_VALUE
-    _ = call(.ThreadWriteRegisters, target, t1, base + CONTROL_REGISTERS_OFFSET)
-    page^[21] = call(.InterceptResume, intercept.rdx, t1, cast[u64](cast[u32](slop_os.InterceptAction.Skip))).rax
-    _ = call(.InterceptResume, intercept.rdx, t1, cast[u64](cast[u32](slop_os.InterceptAction.Continue)))
+    _ = slop_os.thread_write_registers(target, t1, registers^)
+    page^[21] = tag_of(slop_os.intercept_resume(intercept, t1, .Skip))
+    _ = slop_os.intercept_resume(intercept, t1, .Continue)
     // The fault: memory mapped where it wrote, and it tries again
-    next_stop(port, intercept.rdx, base)
+    next_stop(port, intercept, base)
     page^[22] = cast[u64](cast[u32](stop.point))
     page^[23] = if stop.address == FAULT_AT { cast[u64](1) } else { cast[u64](0) }
-    memory :: call(.MemoryCreate, page^[TEST_SLOT_BUDGET], frames.FRAME_SIZE).rdx
-    read_write :: cast[u64](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    page^[24] = call(.MemoryMap, memory, target_space, FAULT_AT, 0, frames.FRAME_SIZE, read_write).rax
-    _ = call(.InterceptResume, intercept.rdx, t1, cast[u64](cast[u32](slop_os.InterceptAction.Continue)))
+    memory :: slop_os.memory_create(budget, frames.FRAME_SIZE) or_else handle_at[slop_os.Memory](0)
+    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
+    page^[24] = tag_of(slop_os.memory_map(memory, target_space, FAULT_AT, 0, frames.FRAME_SIZE, read_write))
+    _ = slop_os.intercept_resume(intercept, t1, .Continue)
     loop {
         intrinsics.spin_hint()
     }
@@ -165,37 +167,35 @@ user_debugger #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) 
     page^[26] = read_target(page, TARGET_RESULTS + 1)
     page^[27] = read_target(page, TARGET_RESULTS + 2)
     // T2, suspended: its count stands still, and its registers can be read; resumed, it counts, and they can't
-    page^[28] = call(.ThreadSuspend, target, t2).rax
+    page^[28] = tag_of(slop_os.thread_suspend(target, t2))
     wait_nanoseconds(COUNTING_NANOSECONDS)
     before :: read_target(page, TARGET_SLOT_COUNTER)
     wait_nanoseconds(COUNTING_NANOSECONDS)
     page^[29] = if read_target(page, TARGET_SLOT_COUNTER) == before { cast[u64](1) } else { cast[u64](0) }
-    page^[30] = call(.ThreadReadRegisters, target, t2, base + CONTROL_REGISTERS_OFFSET).rax
-    page^[31] = call(.ThreadResume, target, t2).rax
+    page^[30] = tag_of(slop_os.thread_read_registers(target, t2, registers^))
+    page^[31] = tag_of(slop_os.thread_resume(target, t2))
     // Three threads busy on two CPUs, preempted at ticks: it runs again within a few
-    resumed :: call(.ClockMonotonic).rdx
+    resumed :: clock_now()
     loop {
         intrinsics.spin_hint()
     }
-    while read_target(page, TARGET_SLOT_COUNTER) == before && call(.ClockMonotonic).rdx - resumed < RESUME_NANOSECONDS
+    while read_target(page, TARGET_SLOT_COUNTER) == before && clock_now() - resumed < RESUME_NANOSECONDS
     page^[32] = if read_target(page, TARGET_SLOT_COUNTER) > before { cast[u64](1) } else { cast[u64](0) }
-    page^[33] = call(.ThreadReadRegisters, target, t2, base + CONTROL_REGISTERS_OFFSET).rax
+    page^[33] = tag_of(slop_os.thread_read_registers(target, t2, registers^))
     // T killed, and its end seen, once the stops' packet is out of the way
+    one :: packets_at(base + CONTROL_PACKETS_OFFSET, 1)
     loop {
-        if call(.PortWait, port, base + CONTROL_PACKETS_OFFSET, 1, 0).rdx == 0 {
+        if (slop_os.port_wait(port, one, 0) or_else 0) == 0 {
             break
         }
     }
-    page^[34] = call(.ProcessKill, target).rax
-    ended :: call(.PortWait, port, base + CONTROL_PACKETS_OFFSET, 1, slop_os.NO_DEADLINE)
+    page^[34] = tag_of(slop_os.process_kill(target))
+    ended :: slop_os.port_wait(port, one, slop_os.NO_DEADLINE) or_else 0
     packet :: cast[ptr[u64[4]]](base + CONTROL_PACKETS_OFFSET)
-    page^[35] = if ended.rdx == 1 && packet^[0] == WATCH_KEY && packet^[2] & cast[u64](cast[u32](slop_os.SIGNAL_TERMINATED)) != 0 { cast[u64](1) }
+    page^[35] = if ended == 1 && packet^[0] == WATCH_KEY && packet^[2] & cast[u64](cast[u32](slop_os.SIGNAL_TERMINATED)) != 0 { cast[u64](1) }
         else { cast[u64](0) }
     intrinsics.volatile_store_u64(&page^[CONTROL_SLOT_DONE], 1)
-    _ = call(.ThreadExit)
-    loop {
-        intrinsics.spin_hint()
-    }
+    slop_os.thread_exit()
 }
 
 // A process with an address space mapping the test's code and a page and stacks of its own: the page's direct-map address.
@@ -242,12 +242,9 @@ control_thread :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], space #
 
 test_control :: fn(kernel: ptr[mut Kernel]) {
     test :: allocate_object[ControlTest](&kernel.frames) or_else out_of_memory(&kernel.options, "test_control: no memory")
-    lowest := min_u64(min_u64(cast[u64](user_target), cast[u64](user_counter_thread)), min_u64(cast[u64](user_debugger), cast[u64](call)))
-    lowest = min_u64(lowest, min_u64(min_u64(cast[u64](next_stop), cast[u64](read_target)), cast[u64](wait_nanoseconds)))
-    highest := max_u64(max_u64(cast[u64](user_target), cast[u64](user_counter_thread)), max_u64(cast[u64](user_debugger), cast[u64](call)))
-    highest = max_u64(highest, max_u64(max_u64(cast[u64](next_stop), cast[u64](read_target)), cast[u64](wait_nanoseconds)))
-    first :: lowest & ~(frames.FRAME_SIZE - 1)
-    last :: frames.round_up(highest + 4 * frames.FRAME_SIZE, frames.FRAME_SIZE)
+    // The kernel's code, with the functions and the stubs they call
+    first :: kernel.code_base
+    last :: kernel.code_base + kernel.code_size
     debugger, debugger_space, page :: control_process(kernel, first, last)
     target, target_space, target_page :: control_process(kernel, first, last)
     if debugger == null || target == null || debugger_space == null || target_space == null {
@@ -307,9 +304,9 @@ control_test_tick :: fn(kernel: ptr[mut Kernel], tick: u64) {
         return void
     }
     pools :: &kernel.pools
-    if pools.intercepts.allocated != 0 || pools.threads.allocated != 0 || pools.processes.allocated != 0 {
+    if pool_of(kernel, .Intercept).allocated != 0 || pool_of(kernel, .Thread).allocated != 0 || pool_of(kernel, .Process).allocated != 0 {
         runtime.log_error("test_control: left after the processes were destroyed: % intercepts, % threads, % processes",
-            pools.intercepts.allocated, pools.threads.allocated, pools.processes.allocated)
+            pool_of(kernel, .Intercept).allocated, pool_of(kernel, .Thread).allocated, pool_of(kernel, .Process).allocated)
         return void
     }
     runtime.log_info("test_control: destroying the debugger freed its intercept, and the target's threads")
@@ -321,7 +318,7 @@ check_control_results :: fn(test: ptr[ControlTest]) {
         runtime.log_error("test_control: the debugger didn't finish")
         return void
     }
-    clock :: cast[u64](cast[u32](slop_os.Syscall.ClockMonotonic))
+    clock :: cast[u64](slop_os.SYSCALL_CLOCK_MONOTONIC)
     entry :: cast[u64](cast[u32](slop_os.StopPoint.SyscallEntry))
     exit :: cast[u64](cast[u32](slop_os.StopPoint.SyscallExit))
     expected :: u64.[

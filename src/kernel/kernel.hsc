@@ -35,6 +35,9 @@ Kernel :: struct {
     counter_frequency : u64,
     // Where the kernel image is, for stack traces relative to it.
     image_base : u64,
+    // The image's code: where its executable segment starts, page-aligned, and its size (address_space.hsc, keep_boot_info).
+    code_base : u64,
+    code_size : u64,
     // Every CPU, the boot CPU first. The first online_cpus of them are running.
     cpus : boot_info.BootCpu[],
     online_cpus : u32,

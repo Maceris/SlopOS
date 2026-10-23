@@ -4,6 +4,7 @@ import intrinsics from "base"
 import runtime from "base"
 import arch_interface from "../arch_interface"
 import frames from "frames"
+import slop_os from "std/os"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -142,6 +143,51 @@ start_threads_test :: fn(kernel: ptr[mut Kernel], count: usize, budgeted: bool) 
         }
     }
     return test
+}
+
+/*
+ * The kernel's code, mapped at TEST_CODE in space for a test's code in user mode, which calls system calls
+ * through the ABI package's stubs, wherever they are in it.
+ */
+map_test_code :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace]) -> bool {
+    return mapped_for_test(kernel, space, TEST_CODE, kernel.image_physical + (kernel.code_base - kernel.image_base), kernel.code_size, USER_CODE)
+}
+
+// Where a function of the kernel's is, in the test's mapping of its code.
+test_address :: fn(kernel: ptr[Kernel], function: u64) -> u64 {
+    return TEST_CODE + (function - kernel.code_base)
+}
+
+// A call's result as a test records it: 0, or its error's tag.
+tag_of :: fn[T, E](result: Result[T, E]) -> u64 #no_context {
+    return match result {
+        case Error(error) => cast[u64](cast[u32](error))
+        case _ => 0
+    }
+}
+
+// A handle of any kind as a test's page holds it, and back.
+slot_of :: fn[H](handle: H) -> u64 #no_context {
+    return cast[u64](cast[u32](cast[slop_os.Handle](handle)))
+}
+
+handle_at :: fn[H](word: u64) -> H #no_context {
+    return cast[H](cast[slop_os.Handle](cast[u32](word)))
+}
+
+// count packets at address, for a port_wait.
+packets_at :: fn(address: u64, count: usize) -> slop_os.Packet[] #no_context {
+    return bit_cast[slop_os.Packet[]](usize.[count, cast[usize](address)])
+}
+
+// count bytes at address, as a slice for a call.
+bytes_at :: fn(address: u64, count: usize) -> u8[] #no_context {
+    return bit_cast[u8[]](usize.[count, cast[usize](address)])
+}
+
+// The monotonic clock, in user mode.
+clock_now :: fn() -> u64 #no_context {
+    return slop_os.clock_monotonic() or_else 0
 }
 
 // Where each test's page holds a handle to the budget its user code pays with.

@@ -43,85 +43,76 @@ PortsTest :: struct {
     page : u64,
 }
 
-// A system call by its number, in user mode.
-call :: fn(number: slop_os.Syscall, a: u64 = 0, b: u64 = 0, c: u64 = 0, d: u64 = 0, e: u64 = 0, f: u64 = 0) -> x86_64.SystemCallResult #no_context {
-    return x86_64.system_call(cast[u64](cast[u32](number)), a, b, c, d, e, f)
-}
 
 user_ports #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #never_returns {
     base :: cast[u64](page)
     packets :: cast[ptr[u64[16]]](base + PORT_PACKETS_OFFSET)
-    budget :: page^[TEST_SLOT_BUDGET]
-    port :: call(.PortCreate, budget).rdx
-    page^[PORT_SLOT_PORT] = port
-    page^[8] = call(.PortBindWake, port, PORT_KEY).rax
-    page^[9] = call(.PortBindWake, port, PORT_KEY).rax
-    page^[10] = call(.PortWake, port, 99, 1).rax
-    _ = call(.PortWake, port, PORT_KEY, 1)
-    _ = call(.PortWake, port, PORT_KEY, 2)
-    woken :: call(.PortWait, port, base + PORT_PACKETS_OFFSET, 4, slop_os.NO_DEADLINE)
-    page^[11] = woken.rax
-    page^[12] = woken.rdx
+    taken :: packets_at(base + PORT_PACKETS_OFFSET, 4)
+    budget :: handle_at[slop_os.MemoryBudget](page^[TEST_SLOT_BUDGET])
+    port :: slop_os.port_create(budget) or_else handle_at[slop_os.Port](0)
+    page^[PORT_SLOT_PORT] = slot_of(port)
+    page^[8] = tag_of(slop_os.port_bind_wake(port, PORT_KEY))
+    page^[9] = tag_of(slop_os.port_bind_wake(port, PORT_KEY))
+    page^[10] = tag_of(slop_os.port_wake(port, 99, 1))
+    _ = slop_os.port_wake(port, PORT_KEY, 1)
+    _ = slop_os.port_wake(port, PORT_KEY, 2)
+    woken :: slop_os.port_wait(port, taken, slop_os.NO_DEADLINE)
+    page^[11] = tag_of(woken)
+    page^[12] = cast[u64](woken or_else 0)
     page^[13] = packets^[0]
     page^[14] = packets^[1] & 0xffffffff
     page^[15] = packets^[2]
     // A timer
-    set :: call(.ClockMonotonic).rdx
-    _ = call(.PortSetTimer, port, TIMER_KEY, set + TIMER_NANOSECONDS)
-    timed :: call(.PortWait, port, base + PORT_PACKETS_OFFSET, 4, slop_os.NO_DEADLINE)
-    after_timer :: call(.ClockMonotonic).rdx
-    page^[16] = timed.rdx
+    set :: clock_now()
+    _ = slop_os.port_set_timer(port, TIMER_KEY, set + TIMER_NANOSECONDS)
+    timed :: slop_os.port_wait(port, taken, slop_os.NO_DEADLINE)
+    after_timer :: clock_now()
+    page^[16] = cast[u64](timed or_else 0)
     page^[17] = packets^[1] & 0xffffffff
     page^[18] = if after_timer - set >= TIMER_NANOSECONDS { cast[u64](1) } else { cast[u64](0) }
     // A deadline, with nothing to take
-    started :: call(.ClockMonotonic).rdx
-    nothing :: call(.PortWait, port, base + PORT_PACKETS_OFFSET, 4, started + DEADLINE_NANOSECONDS)
-    after_deadline :: call(.ClockMonotonic).rdx
-    page^[19] = nothing.rdx
+    started :: clock_now()
+    nothing :: slop_os.port_wait(port, taken, started + DEADLINE_NANOSECONDS)
+    after_deadline :: clock_now()
+    page^[19] = cast[u64](nothing or_else 0)
     page^[20] = if after_deadline - started >= DEADLINE_NANOSECONDS { cast[u64](1) } else { cast[u64](0) }
     // Memory it can't write
-    page^[21] = call(.PortWait, port, 0x10, 4, slop_os.NO_DEADLINE).rax
+    page^[21] = tag_of(slop_os.port_wait(port, packets_at(0x10, 4), slop_os.NO_DEADLINE))
     // B wakes it
-    space :: page^[0]
-    _ = call(.ThreadCreate, budget, space, page^[PORT_SLOT_ENTRY], page^[PORT_SLOT_STACK], base)
-    from_b :: call(.PortWait, port, base + PORT_PACKETS_OFFSET, 4, slop_os.NO_DEADLINE)
-    page^[22] = if from_b.rdx == 1 { packets^[2] } else { cast[u64](0) }
+    space :: handle_at[slop_os.AddressSpace](page^[0])
+    _ = slop_os.thread_create(budget, space, page^[PORT_SLOT_ENTRY], page^[PORT_SLOT_STACK], base)
+    from_b :: slop_os.port_wait(port, taken, slop_os.NO_DEADLINE)
+    page^[22] = if (from_b or_else 0) == 1 { packets^[2] } else { cast[u64](0) }
     intrinsics.volatile_store_u64(&page^[PORT_SLOT_A_WOKEN], 1)
-    page^[25] = call(.PortUnbind, port, PORT_KEY).rax
-    page^[26] = call(.PortWake, port, PORT_KEY, 1).rax
+    page^[25] = tag_of(slop_os.port_unbind(port, PORT_KEY))
+    page^[26] = tag_of(slop_os.port_wake(port, PORT_KEY, 1))
     // Once B waits, and a while more, closing the port wakes it
     loop {
         intrinsics.spin_hint()
     }
     while intrinsics.volatile_load_u64(&page^[PORT_SLOT_B_WAITING]) == 0
-    while_b :: call(.ClockMonotonic).rdx
-    _ = call(.PortWait, port, base + PORT_PACKETS_OFFSET, 4, while_b + DEADLINE_NANOSECONDS)
-    page^[27] = call(.HandleClose, port).rax
+    while_b :: clock_now()
+    _ = slop_os.port_wait(port, taken, while_b + DEADLINE_NANOSECONDS)
+    page^[27] = tag_of(slop_os.handle_close(cast[slop_os.Handle](port)))
     loop {
         intrinsics.spin_hint()
     }
     while intrinsics.volatile_load_u64(&page^[23]) == 0
     intrinsics.volatile_store_u64(&page^[24], 1)
-    _ = call(.ThreadExit)
-    loop {
-        intrinsics.spin_hint()
-    }
+    slop_os.thread_exit()
 }
 
 user_port_helper #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #never_returns {
-    port :: intrinsics.volatile_load_u64(&page^[PORT_SLOT_PORT])
-    _ = call(.PortWake, port, PORT_KEY, 0x100)
+    port :: handle_at[slop_os.Port](intrinsics.volatile_load_u64(&page^[PORT_SLOT_PORT]))
+    _ = slop_os.port_wake(port, PORT_KEY, 0x100)
     loop {
         intrinsics.spin_hint()
     }
     while intrinsics.volatile_load_u64(&page^[PORT_SLOT_A_WOKEN]) == 0
     intrinsics.volatile_store_u64(&page^[PORT_SLOT_B_WAITING], 1)
-    gone :: call(.PortWait, port, cast[u64](page) + PORT_B_PACKETS_OFFSET, 4, slop_os.NO_DEADLINE)
-    intrinsics.volatile_store_u64(&page^[23], gone.rax)
-    _ = call(.ThreadExit)
-    loop {
-        intrinsics.spin_hint()
-    }
+    gone :: slop_os.port_wait(port, packets_at(cast[u64](page) + PORT_B_PACKETS_OFFSET, 4), slop_os.NO_DEADLINE)
+    intrinsics.volatile_store_u64(&page^[23], tag_of(gone))
+    slop_os.thread_exit()
 }
 
 test_ports :: fn(kernel: ptr[mut Kernel]) {
@@ -143,10 +134,9 @@ test_ports :: fn(kernel: ptr[mut Kernel]) {
             return void
         }
     }
-    // Both functions, call, and the code between them
-    first :: min_u64(min_u64(cast[u64](user_ports), cast[u64](user_port_helper)), cast[u64](call)) & ~(frames.FRAME_SIZE - 1)
-    last :: frames.round_up(max_u64(max_u64(cast[u64](user_ports), cast[u64](user_port_helper)), cast[u64](call)) + 4 * frames.FRAME_SIZE,
-        frames.FRAME_SIZE)
+    // The kernel's code, with the functions and the stubs they call
+    first :: kernel.code_base
+    last :: kernel.code_base + kernel.code_size
     if !mapped_for_test(kernel, space, TEST_CODE, kernel.image_physical + (first - kernel.image_base), last - first, USER_CODE) {
         return void
     }
@@ -200,9 +190,9 @@ ports_test_tick :: fn(kernel: ptr[mut Kernel], tick: u64) {
     if tick != PORTS_TEST_TICKS {
         return void
     }
-    if kernel.pools.ports.allocated != 0 || kernel.pools.bindings.allocated != 0 || kernel.pools.threads.allocated != 0 {
+    if pool_of(kernel, .Port).allocated != 0 || kernel.pools.bindings.allocated != 0 || pool_of(kernel, .Thread).allocated != 0 {
         runtime.log_error("test_ports: left after the process was destroyed: % ports, % bindings, % threads",
-            kernel.pools.ports.allocated, kernel.pools.bindings.allocated, kernel.pools.threads.allocated)
+            pool_of(kernel, .Port).allocated, kernel.pools.bindings.allocated, pool_of(kernel, .Thread).allocated)
         return void
     }
     runtime.log_info("test_ports: destroying the process freed its ports and their bindings")

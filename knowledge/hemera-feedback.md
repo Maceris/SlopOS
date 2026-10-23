@@ -43,6 +43,18 @@ them is `compiler-plan.md`, Phase 7:
 | Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 resolved 2026-10-13 (see Resolved). The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
 | Cryptography in `std` (needed with networking and remote login) | Planned 2026-10-19, directions chosen with the Hemera author: SHA-256/512, BLAKE2b, BLAKE3, HMAC, HKDF, ChaCha20-Poly1305, AES-256-GCM (hardware from the start, through `vector[T, n]`, `v128` and per-function `#target_features`), X25519, Ed25519 and Argon2id, in one freestanding `std/crypto`; `#constant_time` checked by the compiler, with secrets marked on types (`#secret`). All six phases done (2026-10-19 to 20), plus Project Wycheproof's vectors and the machine code checked under Valgrind (`--valgrind-secrets`) | `hemera-proposals/cryptography.md`; `decisions/0042`, `0043`, `0019` |
 
+### Found writing the generated ABI (roadmap M5, stage 4d, 2026-10-23)
+
+- `(expr).field` doesn't parse: a member of a parenthesized expression, like `(x or_else y).limit`, needs a
+  temporary.
+- `Result[T, E].Error(e)` doesn't parse; `.Error(e)` works where the type is known.
+- An enum shorthand (`.Port`) isn't inferred as the argument to a generic function's non-generic parameter
+  (`object_of[E](process, handle, .Port, ...)`): it needs `slop_os.ObjectKind.Port`.
+- `#insert` can't name an enum member (`#insert name = value` in an enum body) or a struct member after a dot
+  (`x.#insert name`), so generated code reaches members by offset and enums can't be generated from tables.
+- Reflection loses a view parameter's `mut` (`FunctionInput` of `packets: mut Packet[]` reads `Packet[]`), so
+  `compiler.parameters` prints it without.
+
 ## 2. Design Notes
 
 Context for the open items, and choices SlopOS relies on.
@@ -89,6 +101,14 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-23 — M5 stage 4d (`decisions/0057`): `std/os/slop_os` generates its stubs, call numbers and the
+  kernel's dispatch from `Syscalls`, a struct of typed function types (`syscall_table.hsc`), with typed
+  handles, slices and `Result`s. Two compiler fixes on the way: in a quote, `#insert` of patterns, cases,
+  fields, variants or members spreads their items among the quoted match's, switch's or type's, as
+  statements and lists already did; and printing a quote maps each `#insert` placeholder to its operand in
+  the parser's order, so the printer's own order (string concatenation's, which the MS ABI evaluates right to
+  left) no longer swaps them.
 
 - 2026-10-23 — `std/os/slop_os`, for M5 stage 4c (`decisions/0056`): the `Intercept` kind, the five process
   rights, calls 34 to 44 (threads, memory, suspend and resume, registers, intercepts, kill), `StopPoint`,

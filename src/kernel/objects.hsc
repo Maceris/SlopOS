@@ -1,5 +1,6 @@
 package kernel
 
+import compiler from "base"
 import intrinsics from "base"
 import runtime from "base"
 import concurrency from "std"
@@ -61,40 +62,92 @@ ObjectError :: enum {
     BudgetExceeded,
 }
 
-// The pools, one per kind, type-stable (slab.hsc).
+/*
+ * The kernel's objects, one field per kind (decisions/0034, 0057): its type is the object, named as its
+ * kind is in slop_os.ObjectKind, and its name names the kind's destroy_ and release_ functions. The code
+ * for each kind, its pool and its destruction, is generated from this table.
+ */
+KernelObjects :: struct {
+    process : Process,
+    thread : Thread,
+    address_space : AddressSpace,
+    port : Port,
+    channel : Channel,
+    memory_budget : MemoryBudget,
+    memory : Memory,
+    irq : Irq,
+    platform : Platform,
+    intercept : Intercept,
+}
+
+// Pools for kinds by their slop_os.ObjectKind value, which is below this.
+OBJECT_KIND_SLOTS :: 16
+
+// The pools, type-stable (slab.hsc): one per kind of object, and the other things objects hold.
 ObjectPools :: struct {
-    processes : slab.SlabCache,
-    threads : slab.SlabCache,
-    spaces : slab.SlabCache,
-    ports : slab.SlabCache,
+    objects : slab.SlabCache[OBJECT_KIND_SLOTS],
     // Port bindings, which aren't objects but are reached the same way (ports.hsc).
     bindings : slab.SlabCache,
-    channels : slab.SlabCache,
     // What a channel's ends share (channels.hsc).
     channel_cores : slab.SlabCache,
-    budgets : slab.SlabCache,
-    memories : slab.SlabCache,
-    irqs : slab.SlabCache,
-    platforms : slab.SlabCache,
-    intercepts : slab.SlabCache,
     // Where memory objects are mapped (memory.hsc).
     mappings : slab.SlabCache,
 }
 
 init_pools :: fn(kernel: ptr[mut Kernel]) {
-    kernel.pools.processes = object_cache(cast[u64](size_of(Process)), cast[u64](align_of(Process)))
-    kernel.pools.threads = object_cache(cast[u64](size_of(Thread)), cast[u64](align_of(Thread)))
-    kernel.pools.spaces = object_cache(cast[u64](size_of(AddressSpace)), cast[u64](align_of(AddressSpace)))
-    kernel.pools.ports = object_cache(cast[u64](size_of(Port)), cast[u64](align_of(Port)))
+    #insert object_pools()
     kernel.pools.bindings = object_cache(cast[u64](size_of(Binding)), cast[u64](align_of(Binding)))
-    kernel.pools.channels = object_cache(cast[u64](size_of(Channel)), cast[u64](align_of(Channel)))
     kernel.pools.channel_cores = slab.make_cache(cast[u64](size_of(ChannelCore)), cast[u64](align_of(ChannelCore)))
-    kernel.pools.budgets = object_cache(cast[u64](size_of(MemoryBudget)), cast[u64](align_of(MemoryBudget)))
-    kernel.pools.memories = object_cache(cast[u64](size_of(Memory)), cast[u64](align_of(Memory)))
-    kernel.pools.irqs = object_cache(cast[u64](size_of(Irq)), cast[u64](align_of(Irq)))
-    kernel.pools.platforms = object_cache(cast[u64](size_of(Platform)), cast[u64](align_of(Platform)))
-    kernel.pools.intercepts = object_cache(cast[u64](size_of(Intercept)), cast[u64](align_of(Intercept)))
     kernel.pools.mappings = slab.make_cache(cast[u64](size_of(MemoryMapping)), cast[u64](align_of(MemoryMapping)))
+}
+
+// Each kind's pool, made for its object: statements for init_pools.
+object_pools :: fn() -> compiler.Code {
+    made : compiler.Code[..]
+    for field in object_table().members {
+        type :: compiler.type_code(compiler.described_type(field.member_type))
+        index :: cast[u64](cast[u8](kind_of(field)))
+        array_add(&made, #code {
+            kernel.pools.objects[#insert index] = object_cache(cast[u64](size_of(#insert type)), cast[u64](align_of(#insert type)))
+        })
+    }
+    return compiler.list(made)
+}
+
+/*
+ * For each kind, a call of its function named prefix and the field's name, like destroy_process, with
+ * kernel and object as that kind: statements for where kind, kernel and object are.
+ */
+per_kind :: fn(prefix: string) -> compiler.Code {
+    made : compiler.Code[..]
+    for field in object_table().members {
+        type :: compiler.type_code(compiler.described_type(field.member_type))
+        kind :: kind_of(field)
+        array_add(&made, #code {
+            if kind == #insert kind {
+                run :: #insert compiler.name(prefix, field.name)
+                run(kernel, cast[ptr[mut #insert type]](object))
+            }
+        })
+    }
+    return compiler.list(made)
+}
+
+object_table :: fn() -> ptr[compiler.TypeInfoStruct] {
+    return cast[ptr[compiler.TypeInfoStruct]](type_info_of(KernelObjects))
+}
+
+// The kind a table field is: the ObjectKind member named as its type is.
+kind_of :: fn(field: compiler.StructMember) -> slop_os.ObjectKind {
+    name :: cast[ptr[compiler.TypeInfoStruct]](field.member_type).name
+    kinds :: cast[ptr[compiler.TypeInfoEnum]](type_info_of(slop_os.ObjectKind))
+    for member, i in kinds.members {
+        if member == name && i < kinds.values.count {
+            return cast[slop_os.ObjectKind](cast[u8](kinds.values[i]))
+        }
+    }
+    compiler.report_error(#caller_location, "no ObjectKind is named %", name)
+    return .Process
 }
 
 object_cache :: fn(size: u64, alignment: u64) -> slab.SlabCache {
@@ -103,19 +156,9 @@ object_cache :: fn(size: u64, alignment: u64) -> slab.SlabCache {
     return cache
 }
 
+// The pool for objects of kind.
 pool_of :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind) -> ptr[mut slab.SlabCache] {
-    return match kind {
-        case .Process => &kernel.pools.processes
-        case .Thread => &kernel.pools.threads
-        case .Port => &kernel.pools.ports
-        case .Channel => &kernel.pools.channels
-        case .MemoryBudget => &kernel.pools.budgets
-        case .Memory => &kernel.pools.memories
-        case .Irq => &kernel.pools.irqs
-        case .Platform => &kernel.pools.platforms
-        case .Intercept => &kernel.pools.intercepts
-        case _ => &kernel.pools.spaces
-    }
+    return &kernel.pools.objects[cast[usize](cast[u8](kind)) % OBJECT_KIND_SLOTS]
 }
 
 /*
@@ -229,18 +272,9 @@ destroy_object :: fn(kernel: ptr[mut Kernel], object: u64) -> bool {
     cpu.destroying += 1
     intrinsics.atomic_store_u32(&header.generation, header.generation + 1)
     disown(object)
-    match header.kind {
-        case .Process => destroy_process(kernel, cast[ptr[mut Process]](object))
-        case .Thread => destroy_thread(kernel, cast[ptr[mut Thread]](object))
-        case .AddressSpace => destroy_address_space(kernel, cast[ptr[mut AddressSpace]](object))
-        case .Port => destroy_port(kernel, cast[ptr[mut Port]](object))
-        case .Channel => destroy_channel(kernel, cast[ptr[mut Channel]](object))
-        case .MemoryBudget => destroy_budget(kernel, cast[ptr[mut MemoryBudget]](object))
-        case .Memory => destroy_memory(kernel, cast[ptr[mut Memory]](object))
-        case .Irq => destroy_irq(kernel, cast[ptr[mut Irq]](object))
-        case .Intercept => destroy_intercept(kernel, cast[ptr[mut Intercept]](object))
-        case _ => {}
-    }
+    // Each kind's own (KernelObjects)
+    kind :: header.kind
+    #insert per_kind("destroy_")
     retire(kernel, object)
     cpu.destroying -= 1
     // The outermost destroy finishes what the ones inside it left for later
@@ -339,16 +373,7 @@ oldest_quiescent :: fn(kernel: ptr[Kernel]) -> u64 {
 release_object :: fn(kernel: ptr[mut Kernel], object: u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
     kind :: header.kind
-    match kind {
-        case .Process => release_process(kernel, cast[ptr[mut Process]](object))
-        case .Thread => release_thread(kernel, cast[ptr[mut Thread]](object))
-        case .AddressSpace => release_address_space(kernel, cast[ptr[mut AddressSpace]](object))
-        case .Port => release_port(kernel, cast[ptr[mut Port]](object))
-        case .Channel => release_channel(kernel, cast[ptr[mut Channel]](object))
-        case .MemoryBudget => release_budget(kernel, cast[ptr[mut MemoryBudget]](object))
-        case .Memory => release_memory(kernel, cast[ptr[mut Memory]](object))
-        case _ => {}
-    }
+    #insert per_kind("release_")
     return_charge(object)
     // A slot whose generation would wrap is never used again (decisions/0008)
     if header.generation == 0xffffffff {

@@ -49,15 +49,17 @@ the kernel logger, and an assertion handler that stops the kernel.
 
 ## Objects, Handles and System Calls
 
-- **Objects** (`src/kernel/objects.hsc`, `0008`, `0051`): processes, threads and address spaces so far, each
-  owned by a process and kept in a type-stable pool of its kind. Destroying one revokes every handle to it,
-  destroys what it owns, and frees its memory once every CPU has passed a quiescent point.
+- **Objects** (`src/kernel/objects.hsc`, `0008`, `0051`, `0057`): each owned by a process and kept in a
+  type-stable pool of its kind. Destroying one revokes every handle to it, destroys what it owns, and frees
+  its memory once every CPU has passed a quiescent point. Each kind's pool and the calls of its `destroy_`
+  and `release_` functions are generated from `KernelObjects`, a table of the kinds.
 - **Processes** (`src/kernel/processes.hsc`): nodes of the ownership tree, each with what it owns and its
   handle table. Destroying one destroys its whole subtree.
 - **Handle tables** (`src/kernel/handles.hsc`): per process, entries with rights and an owning flag,
   looked up without a lock.
-- **System calls** (`src/kernel/syscalls.hsc`): the calls in `../specs/system_calls.md`, on the calling
-  thread's process's handles.
+- **System calls** (`src/kernel/syscalls.hsc`, `0057`): the calls in `../specs/system_calls.md`, on the
+  calling thread's process's handles: one typed handler per call, `sys_<name>`, reached by the dispatch the
+  ABI package generates from its table, which decodes the call's registers.
 - **Ports** (`src/kernel/ports.hsc`, `0052`): bindings with keys, wake and timer packets, and threads that
   block on them. A woken thread finishes its wait when it next runs. User memory is written only through
   the address space's table and the direct map (`src/kernel/user_memory.hsc`).

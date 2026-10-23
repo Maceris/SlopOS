@@ -48,39 +48,40 @@ SyscallsTest :: struct {
 }
 
 user_syscalls #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #never_returns {
-    space :: page^[SLOT_SPACE]
-    info :: x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.HandleInfo)), space)
-    page^[8] = info.rax
-    page^[9] = info.rdx
-    page^[10] = info.r8
-    copy :: x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.HandleDuplicate)), space, cast[u64](cast[u32](slop_os.RIGHT_DUPLICATE)))
-    page^[11] = copy.rax
-    page^[12] = x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.HandleInfo)), copy.rdx).r8
-    page^[13] = x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.HandleDuplicate)), copy.rdx,
-        cast[u64](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))).rax
-    page^[14] = x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.HandleClose)), copy.rdx).rax
-    page^[15] = x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.HandleClose)), copy.rdx).rax
-    budget :: page^[TEST_SLOT_BUDGET]
-    thread :: x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.ThreadCreate)), budget, space, page^[SLOT_ENTRY],
-        page^[SLOT_STACK], page^[SLOT_COUNTER])
-    page^[16] = thread.rax
-    watch :: x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.HandleDuplicate)), thread.rdx, cast[u64](cast[u32](slop_os.RIGHT_DUPLICATE)))
-    page^[17] = watch.rax
-    child :: x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.ProcessCreate)), budget)
-    page^[18] = child.rax
-    page^[19] = x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.HandleClose)), child.rdx).rax
+    space :: handle_at[slop_os.AddressSpace](page^[SLOT_SPACE])
+    budget :: handle_at[slop_os.MemoryBudget](page^[TEST_SLOT_BUDGET])
+    any_space :: cast[slop_os.Handle](space)
+    info :: slop_os.handle_info(any_space)
+    page^[8] = tag_of(info)
+    found :: info or_else slop_os.HandleInfo.{}
+    page^[9] = cast[u64](cast[u8](found.kind))
+    page^[10] = cast[u64](cast[u32](found.rights))
+    copy :: slop_os.handle_duplicate(any_space, slop_os.RIGHT_DUPLICATE)
+    page^[11] = tag_of(copy)
+    copied :: copy or_else slop_os.NO_HANDLE
+    copied_info :: slop_os.handle_info(copied) or_else slop_os.HandleInfo.{}
+    page^[12] = cast[u64](cast[u32](copied_info.rights))
+    more :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    page^[13] = tag_of(slop_os.handle_duplicate(copied, more))
+    page^[14] = tag_of(slop_os.handle_close(copied))
+    page^[15] = tag_of(slop_os.handle_close(copied))
+    thread :: slop_os.thread_create(budget, space, page^[SLOT_ENTRY], page^[SLOT_STACK], page^[SLOT_COUNTER])
+    page^[16] = tag_of(thread)
+    made :: cast[slop_os.Handle](thread or_else handle_at[slop_os.Thread](0))
+    watch :: slop_os.handle_duplicate(made, slop_os.RIGHT_DUPLICATE)
+    page^[17] = tag_of(watch)
+    child :: slop_os.process_create(budget)
+    page^[18] = tag_of(child)
+    page^[19] = tag_of(slop_os.handle_close(cast[slop_os.Handle](child or_else handle_at[slop_os.Process](0))))
     counter :: cast[ptr[u64]](page^[SLOT_COUNTER])
     loop {
         intrinsics.spin_hint()
     }
     while intrinsics.volatile_load_u64(counter) < COUNT_BEFORE_CLOSE
-    page^[20] = x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.HandleClose)), thread.rdx).rax
-    page^[21] = x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.HandleInfo)), watch.rdx).rax
+    page^[20] = tag_of(slop_os.handle_close(made))
+    page^[21] = tag_of(slop_os.handle_info(watch or_else slop_os.NO_HANDLE))
     intrinsics.volatile_store_u64(&page^[SLOT_DONE], 1)
-    _ = x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.ThreadExit)))
-    loop {
-        intrinsics.spin_hint()
-    }
+    slop_os.thread_exit()
 }
 
 test_syscalls :: fn(kernel: ptr[mut Kernel]) {
@@ -102,9 +103,9 @@ test_syscalls :: fn(kernel: ptr[mut Kernel]) {
             return void
         }
     }
-    // Both functions, and the code between them
-    first :: min_u64(cast[u64](user_syscalls), cast[u64](user_counter)) & ~(frames.FRAME_SIZE - 1)
-    last :: frames.round_up(max_u64(cast[u64](user_syscalls), cast[u64](user_counter)) + 4 * frames.FRAME_SIZE, frames.FRAME_SIZE)
+    // The kernel's code, with the functions and the stubs they call
+    first :: kernel.code_base
+    last :: kernel.code_base + kernel.code_size
     if !mapped_for_test(kernel, space, TEST_CODE, kernel.image_physical + (first - kernel.image_base), last - first, USER_CODE) {
         return void
     }
@@ -169,9 +170,9 @@ syscalls_test_tick :: fn(kernel: ptr[mut Kernel], tick: u64) {
         return void
     }
     // Everything the process owned, back in its pool
-    if kernel.pools.processes.allocated != 0 || kernel.pools.threads.allocated != 0 || kernel.pools.spaces.allocated != 0 {
+    if pool_of(kernel, .Process).allocated != 0 || pool_of(kernel, .Thread).allocated != 0 || pool_of(kernel, .AddressSpace).allocated != 0 {
         runtime.log_error("test_syscalls: objects left after the process was destroyed: % processes, % threads, % address spaces",
-            kernel.pools.processes.allocated, kernel.pools.threads.allocated, kernel.pools.spaces.allocated)
+            pool_of(kernel, .Process).allocated, pool_of(kernel, .Thread).allocated, pool_of(kernel, .AddressSpace).allocated)
         return void
     }
     runtime.log_info("test_syscalls: destroying the process freed everything it owned, after a grace period")

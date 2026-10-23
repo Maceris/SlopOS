@@ -13,12 +13,13 @@ import frames from "frames"
 }
 
 /*
- * System calls (roadmap M5, knowledge/design/system-abi.md §4): the calling thread's registers are kept
- * in it, the call is found by its number in slop_os.Syscall, and its result goes in the thread's result
- * registers before the scheduler resumes it, or runs something else. Every handle is looked up in the
- * calling thread's process's table.
+ * System calls (roadmap M5, knowledge/design/system-abi.md §4, decisions/0057): the calling thread's
+ * registers are kept in it, and the dispatch generated from the ABI package's table (slop_os.Syscalls)
+ * decodes the call's arguments from them and calls its handler here, sys_<name>, with the calling thread.
+ * Its result goes in the thread's result registers before the scheduler resumes it, or runs something
+ * else; a handler that blocks gives back null, and its result is written when the wait is over. Every
+ * handle is looked up in the calling thread's process's table.
  */
-//TODO(claude): generate the dispatch from the ABI package's table (M5, the ABI package)
 
 /*
  * A system call from the CPU's current thread, whose registers are saved. Never returns: the scheduler
@@ -37,16 +38,16 @@ handle_syscall :: fn(registers: ptr[arch.UserRegisters]) #never_returns {
         leave_cpu(cpu)
         schedule(false)
     }
-    // A call that blocks has its result set when it finishes (ports.hsc, complete_wait), and stops at its exit then
-    match dispatch_syscall(kernel, thread) {
-        case Some(result) => {
-            kept :: result
-            arch.set_syscall_result(&thread.registers, &kept)
-            if cpu.current == cast[u64](thread) && stop_thread(kernel, thread, .SyscallExit, number, 0, true) {
-                leave_cpu(cpu)
-            }
+    /*
+     * A call that blocked the thread took it off this CPU, and its result is set when its wait is over
+     * (ports.hsc, complete_wait), when it stops at its exit too. Only this CPU changes its current thread.
+     */
+    result :: dispatch_syscall(thread)
+    if cpu.current == cast[u64](thread) {
+        arch.set_syscall_result(&thread.registers, &result)
+        if stop_thread(kernel, thread, .SyscallExit, number, 0, true) {
+            leave_cpu(cpu)
         }
-        case None => {}
     }
     schedule(false)
 }
@@ -59,10 +60,9 @@ leave_cpu :: fn(cpu: ptr[mut PerCpu]) {
 
 /*
  * A fault from user mode, by the CPU's current thread, whose registers are saved: a page of memory mapped
- * in its space, filled in if it wasn't yet (memory.hsc), after which it goes on; otherwise the thread is
- * destroyed. Never returns: the scheduler picks up from here.
+ * in its space, filled in if it wasn't yet (memory.hsc), after which it goes on; otherwise a stop for its
+ * debugger (intercepts.hsc), or its end. Never returns: the scheduler picks up from here.
  */
-//TODO(claude): fault packets to a port, for a debugger or a pager (M5, interception and process control)
 handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interface.Fault) #never_returns {
     save_user_registers(registers)
     cpu :: per_cpu()
@@ -80,7 +80,6 @@ handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interfac
         }
         case _ => access = 0xff
     }
-    // A debugger's exception port (intercepts.hsc), or the thread's end
     if !resolved {
         if stop_thread(kernel, thread, .Fault, access, address, true) {
             leave_cpu(cpu)
@@ -93,320 +92,485 @@ handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interfac
     schedule(false)
 }
 
-dispatch_syscall :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> arch_interface.SyscallResult? {
+// The call in thread's registers, by the dispatch generated from the ABI package's table.
+dispatch_syscall :: fn(thread: ptr[mut Thread]) -> arch_interface.SyscallResult {
     registers :: &thread.registers
     number :: arch.syscall_number(registers)
+    #insert slop_os.syscall_dispatch()
+    return answered(cast[u64](cast[u32](slop_os.HandleError.NoSuchCall)), 0, 0)
+}
+
+// What the generated dispatch decodes arguments with, and answers with (slop_os.syscall_dispatch).
+word :: fn(registers: ptr[arch.UserRegisters], index: u64) -> u64 {
+    return arch.syscall_argument(registers, cast[u32](index))
+}
+
+buffer :: fn(registers: ptr[arch.UserRegisters], index: u64) -> slop_os.UserBuffer {
+    return slop_os.UserBuffer.{address = word(registers, index), count = word(registers, index + 1)}
+}
+
+answered :: fn(tag: u64, first: u64, second: u64) -> arch_interface.SyscallResult {
+    return arch_interface.SyscallResult.{tag = tag, values = u64.[first, second]}
+}
+
+// ---- Handles
+
+sys_handle_close :: fn(thread: ptr[mut Thread], handle: slop_os.Handle) -> Result[void, slop_os.HandleError] {
+    removed :: remove(&process_of(thread).table, handle)?
+    if removed.owning && is_live(removed.object, removed.generation) {
+        _ = destroy_object(per_cpu().kernel, removed.object)
+    }
+    return .Ok
+}
+
+// Another handle to the same object, never owning, with rights the handle has.
+sys_handle_duplicate :: fn(thread: ptr[mut Thread], handle: slop_os.Handle, rights: slop_os.Rights) -> Result[slop_os.Handle, slop_os.HandleError] {
     process :: process_of(thread)
-    if number == cast[u64](cast[u32](slop_os.Syscall.HandleClose)) {
-        return handle_close(kernel, process, argument(registers, 0))
+    found :: lookup(&process.table, handle)?
+    held :: cast[u32](found.rights)
+    if held & cast[u32](slop_os.RIGHT_DUPLICATE) == 0 || cast[u32](rights) & ~held != 0 {
+        return .Error(.MissingRight)
     }
-    if number == cast[u64](cast[u32](slop_os.Syscall.HandleDuplicate)) {
-        return handle_duplicate(kernel, process, argument(registers, 0), cast[slop_os.Rights](cast[u32](arch.syscall_argument(registers, 1))))
-    }
-    if number == cast[u64](cast[u32](slop_os.Syscall.HandleInfo)) {
-        return handle_info(process, argument(registers, 0))
-    }
-    if number == cast[u64](cast[u32](slop_os.Syscall.ThreadExit)) {
-        _ = destroy_object(kernel, cast[u64](thread))
-        return succeeded(0, 0)
-    }
-    if number == cast[u64](cast[u32](slop_os.Syscall.ThreadCreate)) {
-        match paying_budget(process, argument(registers, 0)) {
-            case Ok(budget) => return thread_create(kernel, process, budget, argument(registers, 1), arch.syscall_argument(registers, 2),
-                arch.syscall_argument(registers, 3), arch.syscall_argument(registers, 4))
-            case Error(error) => return failed(error)
-        }
-    }
-    if number == cast[u64](cast[u32](slop_os.Syscall.ProcessCreate)) {
-        match paying_budget(process, argument(registers, 0)) {
-            case Ok(budget) => return process_create(kernel, process, budget)
-            case Error(error) => return failed(error)
-        }
-    }
-    if number == cast[u64](cast[u32](slop_os.Syscall.AddressSpaceCreate)) {
-        match paying_budget(process, argument(registers, 0)) {
-            case Ok(budget) => return address_space_create(kernel, process, budget)
-            case Error(error) => return failed(error)
-        }
-    }
-    if number == cast[u64](cast[u32](slop_os.Syscall.ClockMonotonic)) {
-        return succeeded(cast[u64](kernel_monotonic(cast[rawptr](kernel))), 0)
-    }
-    if number == cast[u64](cast[u32](slop_os.Syscall.PortCreate)) {
-        budget := cast[u64](0)
-        match paying_budget(process, argument(registers, 0)) {
-            case Ok(given) => budget = given
-            case Error(error) => return failed(error)
-        }
-        match create_port(kernel, cast[u64](process), budget) {
-            case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
-            case Error(error) => return failed(object_failure(error))
-        }
-    }
-    if number == cast[u64](cast[u32](slop_os.Syscall.PortBindWake)) {
-        match port_of(process, argument(registers, 0), slop_os.RIGHT_PORT_BIND) {
-            case Ok(port) => return port_done(port_bind_wake(kernel, port, arch.syscall_argument(registers, 1)))
-            case Error(error) => return tagged(cast[u64](cast[u32](error)))
-        }
-    }
-    if number == cast[u64](cast[u32](slop_os.Syscall.PortWake)) {
-        match port_of(process, argument(registers, 0), slop_os.RIGHT_PORT_BIND) {
-            case Ok(port) => return port_done(port_wake(kernel, port, arch.syscall_argument(registers, 1), arch.syscall_argument(registers, 2)))
-            case Error(error) => return tagged(cast[u64](cast[u32](error)))
-        }
-    }
-    if number == cast[u64](cast[u32](slop_os.Syscall.PortSetTimer)) {
-        match port_of(process, argument(registers, 0), slop_os.RIGHT_PORT_BIND) {
-            case Ok(port) => return port_done(port_set_timer(kernel, port, arch.syscall_argument(registers, 1), arch.syscall_argument(registers, 2)))
-            case Error(error) => return tagged(cast[u64](cast[u32](error)))
-        }
-    }
-    if number == cast[u64](cast[u32](slop_os.Syscall.PortUnbind)) {
-        match port_of(process, argument(registers, 0), slop_os.RIGHT_PORT_BIND) {
-            case Ok(port) => return port_done(port_unbind(kernel, port, arch.syscall_argument(registers, 1)))
-            case Error(error) => return tagged(cast[u64](cast[u32](error)))
-        }
-    }
-    if number == cast[u64](cast[u32](slop_os.Syscall.PortWait)) {
-        match port_of(process, argument(registers, 0), slop_os.RIGHT_PORT_WAIT) {
-            case Ok(port) => {
-                deadline :: ticks_at(kernel, arch.syscall_argument(registers, 3))
-                return wait_result(port_wait_begin(kernel, thread, port, arch.syscall_argument(registers, 1),
-                    cast[u32](arch.syscall_argument(registers, 2)), deadline))
-            }
-            case Error(error) => return tagged(cast[u64](cast[u32](error)))
-        }
-    }
-    if number >= cast[u64](cast[u32](slop_os.Syscall.ChannelCreate)) && number <= cast[u64](cast[u32](slop_os.Syscall.PortBind)) {
-        return dispatch_channel_call(kernel, thread, process, cast[slop_os.Syscall](cast[u32](number)))
-    }
-    if number >= cast[u64](cast[u32](slop_os.Syscall.MemoryBudgetCreate)) && number <= cast[u64](cast[u32](slop_os.Syscall.MemoryUnmap)) {
-        return dispatch_memory_call(kernel, process, registers, cast[slop_os.Syscall](cast[u32](number)))
-    }
-    if number >= cast[u64](cast[u32](slop_os.Syscall.ControllerRegister)) && number <= cast[u64](cast[u32](slop_os.Syscall.MemoryCreateWindow)) {
-        return dispatch_device_call(kernel, process, registers, cast[slop_os.Syscall](cast[u32](number)))
-    }
-    if number >= cast[u64](cast[u32](slop_os.Syscall.ProcessThreads)) && number <= cast[u64](cast[u32](slop_os.Syscall.ProcessKill)) {
-        return dispatch_control_call(kernel, thread, process, cast[slop_os.Syscall](cast[u32](number)))
-    }
-    return failed(.NoSuchCall)
+    made :: install(per_cpu().kernel, &process.table, found.object, found.generation, found.kind, rights, false)?
+    return .Ok(made)
 }
 
-// Process control (control.hsc, intercepts.hsc): rights on a process handle cover its subtree (decisions/0017).
-dispatch_control_call :: fn(kernel: ptr[mut Kernel], caller: ptr[mut Thread], process: ptr[mut Process], call: slop_os.Syscall)
-    -> arch_interface.SyscallResult {
-    registers :: &caller.registers
-    space :: caller.space
-    if call == .InterceptNext || call == .InterceptResume {
-        intercept := cast[ptr[mut Intercept]](0)
-        match lookup(&process.table, argument(registers, 0)) {
-            case Ok(found) => {
-                if found.kind != .Intercept {
-                    return failed(.WrongKind)
-                }
-                intercept = cast[ptr[mut Intercept]](found.object)
-            }
-            case Error(error) => return failed(error)
-        }
-        if call == .InterceptNext {
-            return control_done(intercept_next(kernel, intercept, space, arch.syscall_argument(registers, 1)))
-        }
-        action :: cast[u32](arch.syscall_argument(registers, 2))
-        if action < cast[u32](slop_os.InterceptAction.Continue) || action > cast[u32](slop_os.InterceptAction.Kill) {
-            return tagged(cast[u64](cast[u32](slop_os.ControlError.NotStopped)))
-        }
-        return control_done(intercept_resume(kernel, intercept, arch.syscall_argument(registers, 1), cast[slop_os.InterceptAction](action)))
-    }
-    needed :: match call {
-        case .ProcessThreads => slop_os.RIGHT_PROCESS_INSPECT
-        case .ThreadReadRegisters => slop_os.RIGHT_PROCESS_INSPECT
-        case .ProcessReadMemory => slop_os.RIGHT_PROCESS_READ_MEMORY
-        case .InterceptAttach => slop_os.RIGHT_PROCESS_INTERCEPT
-        case .ProcessKill => slop_os.RIGHT_PROCESS_KILL
-        case _ => slop_os.RIGHT_PROCESS_WRITE_STATE
-    }
-    target := cast[ptr[mut Process]](0)
-    match lookup(&process.table, argument(registers, 0)) {
+sys_handle_info :: fn(thread: ptr[mut Thread], handle: slop_os.Handle) -> Result[slop_os.HandleInfo, slop_os.HandleError] {
+    found :: lookup(&process_of(thread).table, handle)?
+    return .Ok(slop_os.HandleInfo.{kind = found.kind, rights = found.rights})
+}
+
+/*
+ * The object a handle of kind refers to, if the handle has every right in rights, with its error as
+ * the call's: they share HandleError's tags.
+ */
+object_of :: fn[E](process: ptr[mut Process], handle: slop_os.Handle, kind: slop_os.ObjectKind, rights: slop_os.Rights) -> Result[u64, E] {
+    match lookup(&process.table, handle) {
         case Ok(found) => {
-            if found.kind != .Process {
-                return failed(.WrongKind)
+            if found.kind != kind {
+                return .Error(cast[E](cast[u32](slop_os.HandleError.WrongKind)))
             }
-            if cast[u32](found.rights) & cast[u32](needed) == 0 {
-                return failed(.MissingRight)
+            if cast[u32](found.rights) & cast[u32](rights) != cast[u32](rights) {
+                return .Error(cast[E](cast[u32](slop_os.HandleError.MissingRight)))
             }
-            target = cast[ptr[mut Process]](found.object)
+            return .Ok(found.object)
         }
-        case Error(error) => return failed(error)
-    }
-    if call == .ProcessKill {
-        _ = destroy_object(kernel, cast[u64](target))
-        return succeeded(0, 0)
-    }
-    if call == .ProcessThreads {
-        ids : u64[64]
-        capacity :: cast[u32](arch.syscall_argument(registers, 2))
-        count :: threads_of(kernel, cast[u64](target), &ids, capacity)
-        written :: min_u64(min_u64(cast[u64](count), cast[u64](capacity)), 64)
-        if !copy_to_user(kernel, space, arch.syscall_argument(registers, 1), cast[u64](&ids[0]), written * 8) {
-            return tagged(cast[u64](cast[u32](slop_os.ControlError.BadBuffer)))
-        }
-        return succeeded(cast[u64](count), 0)
-    }
-    if call == .InterceptAttach {
-        port := cast[ptr[mut Port]](0)
-        match port_of(process, argument(registers, 1), slop_os.RIGHT_PORT_BIND) {
-            case Ok(found) => port = found
-            case Error(error) => return tagged(cast[u64](cast[u32](error)))
-        }
-        // Paid for by the process's own budget, as it has no budget argument
-        match create_intercept(kernel, cast[u64](process), process.header.budget, target, port, arch.syscall_argument(registers, 2),
-            arch.syscall_argument(registers, 3), cast[u32](arch.syscall_argument(registers, 4))) {
-            case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
-            case Error(error) => return tagged(cast[u64](cast[u32](error)))
-        }
-    }
-    if call == .ProcessReadMemory || call == .ProcessWriteMemory {
-        other := cast[ptr[mut AddressSpace]](0)
-        match lookup(&process.table, argument(registers, 1)) {
-            case Ok(found) => {
-                if found.kind != .AddressSpace {
-                    return failed(.WrongKind)
-                }
-                other = cast[ptr[mut AddressSpace]](found.object)
-            }
-            case Error(error) => return failed(error)
-        }
-        if !in_subtree(cast[u64](other), cast[u64](target)) {
-            return tagged(cast[u64](cast[u32](slop_os.ControlError.BadAddress)))
-        }
-        address :: arch.syscall_argument(registers, 2)
-        buffer :: arch.syscall_argument(registers, 3)
-        size :: arch.syscall_argument(registers, 4)
-        copied :: if call == .ProcessReadMemory { copy_between(kernel, other, address, space, buffer, size) }
-            else { copy_between(kernel, space, buffer, other, address, size) }
-        return if copied { succeeded(0, 0) } else { tagged(cast[u64](cast[u32](slop_os.ControlError.BadAddress))) }
-    }
-    // The rest act on one of its threads
-    thread :: thread_in(kernel, cast[u64](target), arch.syscall_argument(registers, 1))
-        or_return tagged(cast[u64](cast[u32](slop_os.ControlError.NoSuchThread)))
-    if call == .ThreadSuspend {
-        hold_thread(kernel, thread, HELD_SUSPEND)
-        return succeeded(0, 0)
-    }
-    if call == .ThreadResume {
-        unhold_thread(kernel, thread, HELD_SUSPEND)
-        return succeeded(0, 0)
-    }
-    // Registers, only while they're the thread's alone: parked
-    concurrency.lock(&thread.control)
-    defer concurrency.unlock(&thread.control)
-    if !thread.parked {
-        return tagged(cast[u64](cast[u32](slop_os.ControlError.NotStopped)))
-    }
-    if call == .ThreadReadRegisters {
-        return if read_registers(kernel, thread, space, arch.syscall_argument(registers, 2)) { succeeded(0, 0) }
-            else { tagged(cast[u64](cast[u32](slop_os.ControlError.BadBuffer))) }
-    }
-    return control_done(write_registers(kernel, thread, space, arch.syscall_argument(registers, 2)))
-}
-
-control_done :: fn(error: slop_os.ControlError?) -> arch_interface.SyscallResult {
-    return match error {
-        case Some(failure) => tagged(cast[u64](cast[u32](failure)))
-        case None => succeeded(0, 0)
+        case Error(error) => return .Error(cast[E](cast[u32](error)))
     }
 }
 
-// IRQs, device memory and windows (irqs.hsc, memory.hsc).
-dispatch_device_call :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], registers: ptr[arch.UserRegisters], call: slop_os.Syscall)
-    -> arch_interface.SyscallResult {
-    if call == .IrqAck {
-        match lookup(&process.table, argument(registers, 0)) {
-            case Ok(found) => {
-                if found.kind != .Irq {
-                    return failed(.WrongKind)
-                }
-                if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_IRQ_ACK) == 0 {
-                    return failed(.MissingRight)
-                }
-                irq_ack(kernel, cast[ptr[mut Irq]](found.object))
-                return succeeded(0, 0)
-            }
-            case Error(error) => return failed(error)
-        }
-    }
-    if call == .MemoryCreateWindow {
-        return window_call(kernel, process, registers)
-    }
-    // The rest need the platform capability
-    match lookup(&process.table, argument(registers, 0)) {
-        case Ok(found) => {
-            if found.kind != .Platform {
-                return failed(.WrongKind)
-            }
-        }
-        case Error(error) => return failed(error)
-    }
-    if call == .ControllerRegister {
-        kind :: controller_kind(cast[u32](arch.syscall_argument(registers, 1))) or_return tagged(cast[u64](cast[u32](slop_os.DeviceError.NoController)))
-        physical :: arch.syscall_argument(registers, 2)
-        if physical & (frames.FRAME_SIZE - 1) != 0 || overlaps_kernel_ram(kernel, physical, CONTROLLER_REGISTERS_SIZE) {
-            return tagged(cast[u64](cast[u32](slop_os.DeviceError.BadAddress)))
-        }
-        match register_controller(kernel, kind, cast[boot_info.PhysicalAddress](physical)) {
-            case Ok(index) => return succeeded(cast[u64](index), cast[u64](kernel.controllers[cast[usize](index) % MAX_CONTROLLERS].lines))
-            case Error(error) => return tagged(cast[u64](cast[u32](
-                if error == .TooManyControllers { slop_os.DeviceError.TooManyControllers }
-                else if error == .NoMapping { slop_os.DeviceError.OutOfMemory } else { slop_os.DeviceError.NoController })))
-        }
-    }
-    budget := cast[u64](0)
-    match paying_budget(process, argument(registers, 1)) {
-        case Ok(given) => budget = given
-        case Error(error) => return failed(error)
-    }
-    if call == .IrqCreate {
-        flags :: cast[u32](arch.syscall_argument(registers, 4))
-        trigger :: if flags & slop_os.IRQ_LEVEL != 0 { arch_interface.Trigger.Level } else { arch_interface.Trigger.Edge }
-        polarity :: if flags & slop_os.IRQ_ACTIVE_LOW != 0 { arch_interface.Polarity.ActiveLow } else { arch_interface.Polarity.ActiveHigh }
-        match create_irq(kernel, cast[u64](process), budget, cast[u32](arch.syscall_argument(registers, 2)),
-            cast[u32](arch.syscall_argument(registers, 3)), trigger, polarity) {
-            case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
-            case Error(error) => return tagged(cast[u64](cast[u32](error)))
-        }
-    }
-    cache_number :: cast[u32](arch.syscall_argument(registers, 4))
-    cache := arch_interface.CacheMode.Device
-    if cache_number == cast[u32](slop_os.CacheMode.WriteBack) {
-        cache = .WriteBack
-    }
-    else if cache_number == cast[u32](slop_os.CacheMode.WriteCombining) {
-        cache = .WriteCombining
-    }
-    else if cache_number != cast[u32](slop_os.CacheMode.Device) {
-        return tagged(cast[u64](cast[u32](slop_os.DeviceError.InvalidSize)))
-    }
-    match create_device_memory(kernel, cast[u64](process), budget, arch.syscall_argument(registers, 2), arch.syscall_argument(registers, 3), cache) {
-        case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
-        case Error(error) => return tagged(cast[u64](cast[u32](error)))
+// A handle error, as a call's own: every error type shares HandleError's tags.
+converted :: fn[E](error: slop_os.HandleError) -> E {
+    return cast[E](cast[u32](error))
+}
+
+// What a handle refers to, with its error as the call's.
+found_of :: fn[E](process: ptr[mut Process], handle: slop_os.Handle) -> Result[Resolved, E] {
+    match lookup(&process.table, handle) {
+        case Ok(found) => return .Ok(found)
+        case Error(error) => return .Error(converted[E](error))
     }
 }
 
-// MemoryCreateWindow: a window may be mapped only as the memory's handle may be.
-window_call :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], registers: ptr[arch.UserRegisters]) -> arch_interface.SyscallResult {
-    found := Resolved.{}
-    match lookup(&process.table, argument(registers, 0)) {
-        case Ok(resolved) => found = resolved
-        case Error(error) => return failed(error)
+/*
+ * An owning handle in process to object, which it owns, and if it's a thread, started. Without room for
+ * the handle, the object is destroyed.
+ */
+owning_handle :: fn[E](kernel: ptr[mut Kernel], process: ptr[mut Process], object: u64, start: bool) -> Result[slop_os.Handle, E] {
+    match install_owning(kernel, process, object) {
+        case Ok(handle) => {
+            if start {
+                start_thread(kernel, cast[ptr[mut Thread]](object))
+            }
+            return .Ok(handle)
+        }
+        case Error(error) => {
+            _ = destroy_object(kernel, object)
+            return .Error(converted[E](error))
+        }
     }
+}
+
+/*
+ * The budget a handle names, as the address of what will pay, if the handle has RIGHT_BUDGET_CHARGE
+ * (decisions/0011, 0054).
+ */
+paying_budget :: fn[E](process: ptr[mut Process], budget: slop_os.MemoryBudget) -> Result[u64, E] {
+    return object_of[E](process, cast[slop_os.Handle](budget), slop_os.ObjectKind.MemoryBudget, slop_os.RIGHT_BUDGET_CHARGE)
+}
+
+// What creating an object failing means to the caller.
+object_failure :: fn(error: ObjectError) -> slop_os.HandleError {
+    if error == .OutOfMemory {
+        return .OutOfMemory
+    }
+    return if error == .BudgetExceeded { slop_os.HandleError.BudgetExceeded } else { slop_os.HandleError.ObjectGone }
+}
+
+// ---- Threads, processes, address spaces
+
+sys_thread_exit :: fn(thread: ptr[mut Thread]) {
+    _ = destroy_object(per_cpu().kernel, cast[u64](thread))
+}
+
+/*
+ * A thread in space, owned by the caller's process, started at entry with stack and argument: an owning
+ * handle to it.
+ */
+sys_thread_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, space: slop_os.AddressSpace, entry: u64, stack: u64,
+    argument: u64) -> Result[slop_os.Thread, slop_os.HandleError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    paying :: paying_budget[slop_os.HandleError](process, budget)?
+    target :: object_of[slop_os.HandleError](process, cast[slop_os.Handle](space), slop_os.ObjectKind.AddressSpace, slop_os.RIGHT_SPACE_THREADS)
+       ?
+    start :: arch_interface.UserStart.{
+        instruction_pointer = cast[arch_interface.VirtualAddress](entry),
+        stack_pointer = cast[arch_interface.VirtualAddress](stack),
+        argument = argument,
+    }
+    made := cast[ptr[mut Thread]](0)
+    match create_thread(kernel, cast[u64](process), cast[ptr[mut AddressSpace]](target), &start,
+        arch_interface.VectorConfig.{extended = false}, 0, paying) {
+        case Ok(created) => made = created
+        case Error(error) => return .Error(if error == .OutOfMemory { slop_os.HandleError.OutOfMemory }
+            else if error == .BudgetExceeded { slop_os.HandleError.BudgetExceeded } else { slop_os.HandleError.ObjectGone })
+    }
+    handle :: owning_handle[slop_os.HandleError](kernel, process, cast[u64](made), true)?
+    return .Ok(cast[slop_os.Thread](handle))
+}
+
+// A new process, owned by the caller's, with budget its budget: an owning handle to it.
+sys_process_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget) -> Result[slop_os.Process, slop_os.HandleError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    paying :: paying_budget[slop_os.HandleError](process, budget)?
+    made := cast[ptr[mut Process]](0)
+    match create_process(kernel, cast[u64](process), paying) {
+        case Ok(created) => made = created
+        case Error(error) => return .Error(object_failure(error))
+    }
+    handle :: owning_handle[slop_os.HandleError](kernel, process, cast[u64](made), false)?
+    return .Ok(cast[slop_os.Process](handle))
+}
+
+// A new, empty address space, owned by the caller's process: an owning handle to it.
+sys_address_space_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget) -> Result[slop_os.AddressSpace, slop_os.HandleError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    paying :: paying_budget[slop_os.HandleError](process, budget)?
+    made := cast[ptr[mut AddressSpace]](0)
+    match create_address_space(kernel, cast[u64](process), paying) {
+        case Ok(created) => made = created
+        case Error(error) => return .Error(if error == .OwnerGone { slop_os.HandleError.ObjectGone }
+            else if error == .BudgetExceeded { slop_os.HandleError.BudgetExceeded } else { slop_os.HandleError.OutOfMemory })
+    }
+    handle :: owning_handle[slop_os.HandleError](kernel, process, cast[u64](made), false)?
+    return .Ok(cast[slop_os.AddressSpace](handle))
+}
+
+sys_clock_monotonic :: fn(thread: ptr[mut Thread]) -> Result[u64, slop_os.HandleError] {
+    return .Ok(cast[u64](kernel_monotonic(cast[rawptr](per_cpu().kernel))))
+}
+
+// ---- Ports
+
+sys_port_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget) -> Result[slop_os.Port, slop_os.HandleError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    paying :: paying_budget[slop_os.HandleError](process, budget)?
+    made := cast[ptr[mut Port]](0)
+    match create_port(kernel, cast[u64](process), paying) {
+        case Ok(created) => made = created
+        case Error(error) => return .Error(object_failure(error))
+    }
+    handle :: owning_handle[slop_os.HandleError](kernel, process, cast[u64](made), false)?
+    return .Ok(cast[slop_os.Port](handle))
+}
+
+// The port a handle refers to, if the handle has right.
+port_of :: fn(thread: ptr[mut Thread], port: slop_os.Port, right: slop_os.Rights) -> Result[ptr[mut Port], slop_os.PortError] {
+    object :: object_of[slop_os.PortError](process_of(thread), cast[slop_os.Handle](port), slop_os.ObjectKind.Port, right)?
+    return .Ok(cast[ptr[mut Port]](object))
+}
+
+// A port call's outcome as its result.
+port_done :: fn(error: slop_os.PortError?) -> Result[void, slop_os.PortError] {
+    match error {
+        case Some(failure) => return .Error(failure)
+        case None => return .Ok
+    }
+}
+
+sys_port_bind_wake :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64) -> Result[void, slop_os.PortError] {
+    found :: port_of(thread, port, slop_os.RIGHT_PORT_BIND)?
+    return port_done(port_bind_wake(per_cpu().kernel, found, key))
+}
+
+sys_port_wake :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64, bits: u64) -> Result[void, slop_os.PortError] {
+    found :: port_of(thread, port, slop_os.RIGHT_PORT_BIND)?
+    return port_done(port_wake(per_cpu().kernel, found, key, bits))
+}
+
+sys_port_set_timer :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64, deadline: u64) -> Result[void, slop_os.PortError] {
+    found :: port_of(thread, port, slop_os.RIGHT_PORT_BIND)?
+    return port_done(port_set_timer(per_cpu().kernel, found, key, deadline))
+}
+
+sys_port_unbind :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64) -> Result[void, slop_os.PortError] {
+    found :: port_of(thread, port, slop_os.RIGHT_PORT_BIND)?
+    return port_done(port_unbind(per_cpu().kernel, found, key))
+}
+
+sys_port_wait :: fn(thread: ptr[mut Thread], port: slop_os.Port, packets: slop_os.UserBuffer, deadline: u64) -> Result[u32, slop_os.PortError] {
+    kernel :: per_cpu().kernel
+    found :: port_of(thread, port, slop_os.RIGHT_PORT_WAIT)?
+    return wait_result[slop_os.PortError](port_wait_begin(kernel, thread, found, packets.address, cast[u32](min_u64(packets.count, 0xffffffff)),
+        ticks_at(kernel, deadline)))
+}
+
+// A wait's outcome as its result; if the thread blocked, its result is written when the wait is over.
+wait_result :: fn[E](outcome: WaitOutcome) -> Result[u32, E] {
+    match outcome {
+        case Done(taken) => return .Ok(taken)
+        case Failed(error) => return .Error(cast[E](cast[u32](error)))
+        case Blocked => return .Ok(0)
+    }
+}
+
+// A Signal packet when a channel end, a process or a thread raises signals, or an Irq packet for an IRQ.
+sys_port_bind :: fn(thread: ptr[mut Thread], port: slop_os.Port, object: slop_os.Handle, signals: slop_os.Signals, key: u64,
+    mode: slop_os.BindMode) -> Result[void, slop_os.PortError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    found_port :: port_of(thread, port, slop_os.RIGHT_PORT_BIND)?
+    once :: if mode == .Once { slop_os.BindMode.Once } else { slop_os.BindMode.Persistent }
+    found :: found_of[slop_os.PortError](process, object)?
+    if found.kind == .Process {
+        if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_PROCESS_INSPECT) == 0 {
+            return .Error(.MissingRight)
+        }
+        watched :: cast[ptr[mut Process]](found.object)
+        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.watch_lock, signals, key, once))
+    }
+    if found.kind == .Thread {
+        watched :: cast[ptr[mut Thread]](found.object)
+        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.control, signals, key, once))
+    }
+    if found.kind == .Irq {
+        return port_done(irq_bind(kernel, found_port, cast[ptr[mut Irq]](found.object), key, once))
+    }
+    if found.kind != .Channel {
+        return .Error(.WrongKind)
+    }
+    return port_done(port_bind(kernel, found_port, cast[ptr[mut Channel]](found.object), signals, key, once))
+}
+
+// ---- Channels
+
+// The channel end a handle refers to, if the handle has every right in rights.
+end_of :: fn(thread: ptr[mut Thread], end: slop_os.Channel, rights: slop_os.Rights) -> Result[ptr[mut Channel], slop_os.ChannelError] {
+    object :: object_of[slop_os.ChannelError](process_of(thread), cast[slop_os.Handle](end), slop_os.ObjectKind.Channel, rights)?
+    return .Ok(cast[ptr[mut Channel]](object))
+}
+
+channel_done :: fn(error: slop_os.ChannelError?) -> Result[void, slop_os.ChannelError] {
+    match error {
+        case Some(failure) => return .Error(failure)
+        case None => return .Ok
+    }
+}
+
+// Owning handles in the caller's process to both ends of a new channel; without room for them, it's destroyed.
+sys_channel_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, ring_bytes: u32) -> Result[slop_os.ChannelPair, slop_os.ChannelError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    paying :: paying_budget[slop_os.ChannelError](process, budget)?
+    pair :: create_channel(kernel, cast[u64](process), paying, ring_bytes)?
+    a := slop_os.NO_HANDLE
+    match install_owning(kernel, process, cast[u64](pair.a)) {
+        case Ok(handle) => a = handle
+        case Error(error) => {
+            _ = destroy_object(kernel, cast[u64](pair.a))
+            _ = destroy_object(kernel, cast[u64](pair.b))
+            return .Error(converted[slop_os.ChannelError](error))
+        }
+    }
+    match install_owning(kernel, process, cast[u64](pair.b)) {
+        case Ok(b) => return .Ok(slop_os.ChannelPair.{a = cast[slop_os.Channel](a), b = cast[slop_os.Channel](b)})
+        case Error(error) => {
+            _ = remove(&process.table, a)
+            _ = destroy_object(kernel, cast[u64](pair.a))
+            _ = destroy_object(kernel, cast[u64](pair.b))
+            return .Error(converted[slop_os.ChannelError](error))
+        }
+    }
+}
+
+// Map end's rings in space, which needs RIGHT_SPACE_MAP.
+sys_channel_map :: fn(thread: ptr[mut Thread], end: slop_os.Channel, space: slop_os.AddressSpace, address: u64) -> Result[void, slop_os.ChannelError] {
+    found :: end_of(thread, end, slop_os.RIGHT_CHANNEL_MAP)?
+    target :: object_of[slop_os.ChannelError](process_of(thread), cast[slop_os.Handle](space), slop_os.ObjectKind.AddressSpace, slop_os.RIGHT_SPACE_MAP)?
+    return channel_done(channel_map(per_cpu().kernel, found, cast[ptr[mut AddressSpace]](target), address))
+}
+
+sys_channel_unmap :: fn(thread: ptr[mut Thread], end: slop_os.Channel) -> Result[void, slop_os.ChannelError] {
+    found :: end_of(thread, end, cast[slop_os.Rights](0))?
+    return channel_done(channel_unmap(per_cpu().kernel, found))
+}
+
+sys_channel_notify :: fn(thread: ptr[mut Thread], end: slop_os.Channel, signals: slop_os.Signals) -> Result[void, slop_os.ChannelError] {
+    found :: end_of(thread, end, cast[slop_os.Rights](0))?
+    return channel_done(channel_notify(per_cpu().kernel, found, signals))
+}
+
+sys_channel_write :: fn(thread: ptr[mut Thread], end: slop_os.Channel, payload: slop_os.UserBuffer, batch: u32) -> Result[void, slop_os.ChannelError] {
+    found :: end_of(thread, end, cast[slop_os.Rights](0))?
+    return channel_done(channel_write(per_cpu().kernel, thread, found, payload.address, cast[u32](min_u64(payload.count, 0xffffffff)), batch))
+}
+
+// Into buffer: the message's size, also at size, and its flags and batch.
+sys_channel_read :: fn(thread: ptr[mut Thread], end: slop_os.Channel, buffer: slop_os.UserBuffer, size: u64) -> Result[slop_os.MessageInfo, slop_os.ChannelError] {
+    kernel :: per_cpu().kernel
+    found :: end_of(thread, end, cast[slop_os.Rights](0))?
+    match channel_read(kernel, thread, found, buffer.address, cast[u32](min_u64(buffer.count, 0xffffffff))) {
+        case Read(read, flags_and_batch) => {
+            if !tell(kernel, thread, size, read) {
+                return .Error(.BadBuffer)
+            }
+            return .Ok(slop_os.MessageInfo.{size = read, flags_and_batch = flags_and_batch})
+        }
+        case Failed(error, needed) => {
+            if error == .BufferTooSmall {
+                _ = tell(kernel, thread, size, needed)
+            }
+            return .Error(error)
+        }
+    }
+}
+
+// value, written at address in the caller's memory, if there's an address.
+tell :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], address: u64, value: u32) -> bool {
+    kept :: value
+    return address == 0 || copy_to_user(kernel, thread.space, address, cast[u64](&kept), 4)
+}
+
+sys_channel_send_handles :: fn(thread: ptr[mut Thread], end: slop_os.Channel, handles: slop_os.UserBuffer, batch: u32) -> Result[void, slop_os.ChannelError] {
+    found :: end_of(thread, end, cast[slop_os.Rights](0))?
+    return channel_done(channel_send_handles(per_cpu().kernel, thread, found, handles.address, cast[u32](min_u64(handles.count, 0xffffffff)), batch))
+}
+
+// How many handles it took into handles; how many there are, also at count.
+sys_channel_take_handles :: fn(thread: ptr[mut Thread], end: slop_os.Channel, batch: u32, handles: slop_os.UserBuffer, count: u64) -> Result[u32, slop_os.ChannelError] {
+    kernel :: per_cpu().kernel
+    found :: end_of(thread, end, cast[slop_os.Rights](0))?
+    match channel_take_handles(kernel, thread, found, batch, handles.address, cast[u32](min_u64(handles.count, 0xffffffff))) {
+        case Taken(taken) => {
+            if !tell(kernel, thread, count, taken) {
+                return .Error(.BadBuffer)
+            }
+            return .Ok(taken)
+        }
+        case Failed(error, there) => {
+            if error == .BufferTooSmall {
+                _ = tell(kernel, thread, count, there)
+            }
+            return .Error(error)
+        }
+    }
+}
+
+/*
+ * The notify, during which a thread it wakes is made ready on this CPU, to run here once the caller waits,
+ * then port_wait (knowledge/design/ipc.md §5).
+ */
+sys_channel_notify_and_wait :: fn(thread: ptr[mut Thread], end: slop_os.Channel, signals: slop_os.Signals, port: slop_os.Port,
+    packets: slop_os.UserBuffer, deadline: u64) -> Result[u32, slop_os.ChannelError] {
+    kernel :: per_cpu().kernel
+    found :: end_of(thread, end, cast[slop_os.Rights](0))?
+    waited :: object_of[slop_os.ChannelError](process_of(thread), cast[slop_os.Handle](port), slop_os.ObjectKind.Port, slop_os.RIGHT_PORT_WAIT)?
+    cpu :: per_cpu()
+    cpu.handoff = true
+    notified :: channel_notify(kernel, found, signals)
+    cpu.handoff = false
+    match notified {
+        case Some(error) => return .Error(error)
+        case None => {}
+    }
+    return wait_result[slop_os.ChannelError](port_wait_begin(kernel, thread, cast[ptr[mut Port]](waited), packets.address,
+        cast[u32](min_u64(packets.count, 0xffffffff)), ticks_at(kernel, deadline)))
+}
+
+// ---- Memory budgets and memory objects (memory_budgets.hsc, memory.hsc)
+
+memory_done :: fn(error: slop_os.MemoryError?) -> Result[void, slop_os.MemoryError] {
+    match error {
+        case Some(failure) => return .Error(failure)
+        case None => return .Ok
+    }
+}
+
+sys_memory_budget_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, limit: u64) -> Result[slop_os.MemoryBudget, slop_os.HandleError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    paying :: paying_budget[slop_os.HandleError](process, budget)?
+    made := cast[ptr[mut MemoryBudget]](0)
+    match create_budget(kernel, cast[u64](process), paying, limit) {
+        case Ok(created) => made = created
+        case Error(error) => return .Error(object_failure(error))
+    }
+    handle :: owning_handle[slop_os.HandleError](kernel, process, cast[u64](made), false)?
+    return .Ok(cast[slop_os.MemoryBudget](handle))
+}
+
+sys_memory_budget_info :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget) -> Result[slop_os.BudgetInfo, slop_os.HandleError] {
+    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](budget), slop_os.ObjectKind.MemoryBudget, cast[slop_os.Rights](0))
+       ?
+    limit, used :: budget_info(cast[ptr[mut MemoryBudget]](object))
+    return .Ok(slop_os.BudgetInfo.{limit = limit, used = used})
+}
+
+sys_memory_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, size: u64) -> Result[slop_os.Memory, slop_os.MemoryError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    paying :: paying_budget[slop_os.MemoryError](process, budget)?
+    made :: create_memory(kernel, cast[u64](process), paying, size)?
+    handle :: owning_handle[slop_os.MemoryError](kernel, process, cast[u64](made), false)?
+    return .Ok(cast[slop_os.Memory](handle))
+}
+
+// The memory needs the rights its protection asks for, and the space RIGHT_SPACE_MAP.
+sys_memory_map :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, space: slop_os.AddressSpace, address: u64, offset: u64, size: u64,
+    protection: slop_os.Protection) -> Result[void, slop_os.MemoryError] {
+    process :: process_of(thread)
+    bits :: cast[u32](protection)
+    needed := cast[u32](slop_os.RIGHT_MEMORY_READ)
+    if bits & cast[u32](slop_os.PROTECTION_WRITE) != 0 {
+        needed |= cast[u32](slop_os.RIGHT_MEMORY_WRITE)
+    }
+    if bits & cast[u32](slop_os.PROTECTION_EXECUTE) != 0 {
+        needed |= cast[u32](slop_os.RIGHT_MEMORY_EXECUTE)
+    }
+    found :: object_of[slop_os.MemoryError](process, cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, cast[slop_os.Rights](needed))?
+    target :: object_of[slop_os.MemoryError](process, cast[slop_os.Handle](space), slop_os.ObjectKind.AddressSpace, slop_os.RIGHT_SPACE_MAP)?
+    return memory_done(memory_map(per_cpu().kernel, cast[ptr[mut Memory]](found), cast[ptr[mut AddressSpace]](target), address, offset, size, bits))
+}
+
+sys_memory_unmap :: fn(thread: ptr[mut Thread], space: slop_os.AddressSpace, address: u64) -> Result[void, slop_os.MemoryError] {
+    target :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](space), slop_os.ObjectKind.AddressSpace, slop_os.RIGHT_SPACE_MAP)?
+    return memory_done(memory_unmap(per_cpu().kernel, cast[ptr[mut AddressSpace]](target), address))
+}
+
+// A window may be mapped only as the memory's handle may be.
+sys_memory_create_window :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, budget: slop_os.MemoryBudget, offset: u64, size: u64)
+    -> Result[slop_os.Memory, slop_os.MemoryError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    found :: found_of[slop_os.MemoryError](process, cast[slop_os.Handle](memory))?
     if found.kind != .Memory {
-        return failed(.WrongKind)
+        return .Error(.WrongKind)
     }
-    budget := cast[u64](0)
-    match paying_budget(process, argument(registers, 1)) {
-        case Ok(given) => budget = given
-        case Error(error) => return failed(error)
-    }
+    paying :: paying_budget[slop_os.MemoryError](process, budget)?
     rights :: cast[u32](found.rights)
     allowed := cast[u32](0)
     if rights & cast[u32](slop_os.RIGHT_MEMORY_READ) != 0 {
@@ -418,465 +582,212 @@ window_call :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], registers:
     if rights & cast[u32](slop_os.RIGHT_MEMORY_EXECUTE) != 0 {
         allowed |= cast[u32](slop_os.PROTECTION_EXECUTE)
     }
-    match create_window(kernel, cast[u64](process), budget, cast[ptr[mut Memory]](found.object), arch.syscall_argument(registers, 2),
-        arch.syscall_argument(registers, 3), allowed) {
-        case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
-        case Error(error) => return tagged(cast[u64](cast[u32](error)))
+    made :: create_window(kernel, cast[u64](process), paying, cast[ptr[mut Memory]](found.object), offset, size, allowed)?
+    handle :: owning_handle[slop_os.MemoryError](kernel, process, cast[u64](made), false)?
+    return .Ok(cast[slop_os.Memory](handle))
+}
+
+// ---- Devices (irqs.hsc)
+
+// The platform capability a handle names.
+platform_of :: fn(thread: ptr[mut Thread], platform: slop_os.Platform) -> Result[u64, slop_os.DeviceError] {
+    return object_of[slop_os.DeviceError](process_of(thread), cast[slop_os.Handle](platform), slop_os.ObjectKind.Platform, cast[slop_os.Rights](0))
+}
+
+sys_controller_register :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, kind: slop_os.ControllerKind, registers: u64)
+    -> Result[slop_os.ControllerInfo, slop_os.DeviceError] {
+    kernel :: per_cpu().kernel
+    _ = platform_of(thread, platform)?
+    known :: controller_kind(cast[u32](kind)) or_return .Error(.NoController)
+    if registers & (frames.FRAME_SIZE - 1) != 0 || overlaps_kernel_ram(kernel, registers, CONTROLLER_REGISTERS_SIZE) {
+        return .Error(.BadAddress)
+    }
+    match register_controller(kernel, known, cast[boot_info.PhysicalAddress](registers)) {
+        case Ok(index) => return .Ok(slop_os.ControllerInfo.{number = index, lines = kernel.controllers[cast[usize](index) % MAX_CONTROLLERS].lines})
+        case Error(error) => return .Error(if error == .TooManyControllers { slop_os.DeviceError.TooManyControllers }
+            else if error == .NoMapping { slop_os.DeviceError.OutOfMemory } else { slop_os.DeviceError.NoController })
     }
 }
 
-// The memory budgets and memory objects (memory_budgets.hsc, memory.hsc).
-dispatch_memory_call :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], registers: ptr[arch.UserRegisters], call: slop_os.Syscall)
-    -> arch_interface.SyscallResult {
-    if call == .MemoryBudgetInfo {
-        match lookup(&process.table, argument(registers, 0)) {
-            case Ok(found) => {
-                if found.kind != .MemoryBudget {
-                    return failed(.WrongKind)
-                }
-                limit, used :: budget_info(cast[ptr[mut MemoryBudget]](found.object))
-                return succeeded(limit, used)
-            }
-            case Error(error) => return failed(error)
-        }
+sys_irq_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget, controller: u32, line: u32,
+    flags: u32) -> Result[slop_os.Irq, slop_os.DeviceError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    _ = platform_of(thread, platform)?
+    paying :: paying_budget[slop_os.DeviceError](process, budget)?
+    trigger :: if flags & slop_os.IRQ_LEVEL != 0 { arch_interface.Trigger.Level } else { arch_interface.Trigger.Edge }
+    polarity :: if flags & slop_os.IRQ_ACTIVE_LOW != 0 { arch_interface.Polarity.ActiveLow } else { arch_interface.Polarity.ActiveHigh }
+    made :: create_irq(kernel, cast[u64](process), paying, controller, line, trigger, polarity)?
+    handle :: owning_handle[slop_os.DeviceError](kernel, process, cast[u64](made), false)?
+    return .Ok(cast[slop_os.Irq](handle))
+}
+
+sys_irq_ack :: fn(thread: ptr[mut Thread], irq: slop_os.Irq) -> Result[void, slop_os.HandleError] {
+    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](irq), slop_os.ObjectKind.Irq, slop_os.RIGHT_IRQ_ACK)?
+    irq_ack(per_cpu().kernel, cast[ptr[mut Irq]](object))
+    return .Ok
+}
+
+sys_memory_create_physical :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget, address: u64, size: u64,
+    cache: slop_os.CacheMode) -> Result[slop_os.Memory, slop_os.DeviceError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    _ = platform_of(thread, platform)?
+    paying :: paying_budget[slop_os.DeviceError](process, budget)?
+    mode := arch_interface.CacheMode.Device
+    if cache == .WriteBack {
+        mode = .WriteBack
     }
-    if call == .MemoryUnmap {
-        match space_to_map(process, argument(registers, 0)) {
-            case Ok(space) => return memory_done(memory_unmap(kernel, space, arch.syscall_argument(registers, 1)))
-            case Error(error) => return failed(error)
-        }
+    else if cache == .WriteCombining {
+        mode = .WriteCombining
     }
-    if call == .MemoryMap {
-        return memory_map_call(kernel, process, registers)
+    else if cache != .Device {
+        return .Error(.InvalidSize)
     }
-    budget := cast[u64](0)
-    match paying_budget(process, argument(registers, 0)) {
-        case Ok(given) => budget = given
-        case Error(error) => return failed(error)
-    }
-    if call == .MemoryBudgetCreate {
-        match create_budget(kernel, cast[u64](process), budget, arch.syscall_argument(registers, 1)) {
-            case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
-            case Error(error) => return failed(object_failure(error))
-        }
-    }
-    match create_memory(kernel, cast[u64](process), budget, arch.syscall_argument(registers, 1)) {
-        case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
-        case Error(error) => return tagged(cast[u64](cast[u32](error)))
+    made :: create_device_memory(kernel, cast[u64](process), paying, address, size, mode)?
+    handle :: owning_handle[slop_os.DeviceError](kernel, process, cast[u64](made), false)?
+    return .Ok(cast[slop_os.Memory](handle))
+}
+
+// ---- Process control (control.hsc, intercepts.hsc): rights on a process cover its subtree (decisions/0017)
+
+// The process a handle names, if the handle has right.
+target_of :: fn(thread: ptr[mut Thread], process: slop_os.Process, right: slop_os.Rights) -> Result[ptr[mut Process], slop_os.ControlError] {
+    object :: object_of[slop_os.ControlError](process_of(thread), cast[slop_os.Handle](process), slop_os.ObjectKind.Process, right)?
+    return .Ok(cast[ptr[mut Process]](object))
+}
+
+control_done :: fn(error: slop_os.ControlError?) -> Result[void, slop_os.ControlError] {
+    match error {
+        case Some(failure) => return .Error(failure)
+        case None => return .Ok
     }
 }
 
-// MemoryMap: the memory needs the rights its protection asks for, and the space RIGHT_SPACE_MAP.
-memory_map_call :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], registers: ptr[arch.UserRegisters]) -> arch_interface.SyscallResult {
-    found := Resolved.{}
-    match lookup(&process.table, argument(registers, 0)) {
-        case Ok(resolved) => found = resolved
-        case Error(error) => return failed(error)
+sys_process_threads :: fn(thread: ptr[mut Thread], process: slop_os.Process, ids: slop_os.UserBuffer) -> Result[u32, slop_os.ControlError] {
+    kernel :: per_cpu().kernel
+    target :: target_of(thread, process, slop_os.RIGHT_PROCESS_INSPECT)?
+    found : u64[64]
+    capacity :: cast[u32](min_u64(ids.count, 64))
+    count :: threads_of(kernel, cast[u64](target), &found, capacity)
+    written :: min_u64(cast[u64](count), cast[u64](capacity))
+    if !copy_to_user(kernel, thread.space, ids.address, cast[u64](&found[0]), written * 8) {
+        return .Error(.BadBuffer)
     }
-    if found.kind != .Memory {
-        return failed(.WrongKind)
-    }
-    protection :: cast[u32](arch.syscall_argument(registers, 5))
-    needed := cast[u32](slop_os.RIGHT_MEMORY_READ)
-    if protection & cast[u32](slop_os.PROTECTION_WRITE) != 0 {
-        needed |= cast[u32](slop_os.RIGHT_MEMORY_WRITE)
-    }
-    if protection & cast[u32](slop_os.PROTECTION_EXECUTE) != 0 {
-        needed |= cast[u32](slop_os.RIGHT_MEMORY_EXECUTE)
-    }
-    if cast[u32](found.rights) & needed != needed {
-        return failed(.MissingRight)
-    }
-    match space_to_map(process, argument(registers, 1)) {
-        case Ok(space) => return memory_done(memory_map(kernel, cast[ptr[mut Memory]](found.object), space,
-            arch.syscall_argument(registers, 2), arch.syscall_argument(registers, 3), arch.syscall_argument(registers, 4), protection))
-        case Error(error) => return failed(error)
-    }
+    return .Ok(count)
 }
 
-// The address space a handle names, if it has RIGHT_SPACE_MAP.
-space_to_map :: fn(process: ptr[mut Process], handle: slop_os.Handle) -> Result[ptr[mut AddressSpace], slop_os.HandleError] {
-    found :: lookup(&process.table, handle)?
-    if found.kind != .AddressSpace {
-        return .Error(.WrongKind)
+// The address space a handle names, if it's in the subtree.
+subtree_space :: fn(thread: ptr[mut Thread], target: ptr[mut Process], space: slop_os.AddressSpace) -> Result[ptr[mut AddressSpace], slop_os.ControlError] {
+    object :: object_of[slop_os.ControlError](process_of(thread), cast[slop_os.Handle](space), slop_os.ObjectKind.AddressSpace, cast[slop_os.Rights](0))?
+    if !in_subtree(object, cast[u64](target)) {
+        return .Error(.BadAddress)
     }
-    if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_SPACE_MAP) == 0 {
-        return .Error(.MissingRight)
-    }
-    return .Ok(cast[ptr[mut AddressSpace]](found.object))
+    return .Ok(cast[ptr[mut AddressSpace]](object))
 }
 
-/*
- * The budget a handle names, as the address of what will pay, if the handle has RIGHT_BUDGET_CHARGE
- * (decisions/0011, 0054).
- */
-paying_budget :: fn(process: ptr[mut Process], handle: slop_os.Handle) -> Result[u64, slop_os.HandleError] {
-    found :: lookup(&process.table, handle)?
-    if found.kind != .MemoryBudget {
-        return .Error(.WrongKind)
+sys_process_read_memory :: fn(thread: ptr[mut Thread], process: slop_os.Process, space: slop_os.AddressSpace, address: u64,
+    buffer: slop_os.UserBuffer) -> Result[void, slop_os.ControlError] {
+    target :: target_of(thread, process, slop_os.RIGHT_PROCESS_READ_MEMORY)?
+    other :: subtree_space(thread, target, space)?
+    if !copy_between(per_cpu().kernel, other, address, thread.space, buffer.address, buffer.count) {
+        return .Error(.BadAddress)
     }
-    if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_BUDGET_CHARGE) == 0 {
-        return .Error(.MissingRight)
-    }
-    return .Ok(found.object)
+    return .Ok
 }
 
-memory_done :: fn(error: slop_os.MemoryError?) -> arch_interface.SyscallResult {
-    return match error {
-        case Some(failure) => tagged(cast[u64](cast[u32](failure)))
-        case None => succeeded(0, 0)
+sys_process_write_memory :: fn(thread: ptr[mut Thread], process: slop_os.Process, space: slop_os.AddressSpace, address: u64,
+    buffer: slop_os.UserBuffer) -> Result[void, slop_os.ControlError] {
+    target :: target_of(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE)?
+    other :: subtree_space(thread, target, space)?
+    if !copy_between(per_cpu().kernel, thread.space, buffer.address, other, address, buffer.count) {
+        return .Error(.BadAddress)
     }
+    return .Ok
 }
 
-// What creating an object failing means to the caller.
-object_failure :: fn(error: ObjectError) -> slop_os.HandleError {
-    if error == .OutOfMemory {
-        return .OutOfMemory
-    }
-    return if error == .BudgetExceeded { slop_os.HandleError.BudgetExceeded } else { slop_os.HandleError.ObjectGone }
+// A thread in the subtree, by ID.
+subtree_thread :: fn(thread: ptr[mut Thread], process: slop_os.Process, right: slop_os.Rights, id: u64) -> Result[ptr[mut Thread], slop_os.ControlError] {
+    target :: target_of(thread, process, right)?
+    found :: thread_in(per_cpu().kernel, cast[u64](target), id) or_return .Error(.NoSuchThread)
+    return .Ok(found)
 }
 
-// The channel calls, and binding to ports.
-dispatch_channel_call :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], process: ptr[mut Process], call: slop_os.Syscall)
-    -> arch_interface.SyscallResult? {
-    registers :: &thread.registers
-    if call == .ChannelCreate {
-        budget := cast[u64](0)
-        match paying_budget(process, argument(registers, 0)) {
-            case Ok(given) => budget = given
-            case Error(error) => return tagged(cast[u64](cast[u32](error)))
-        }
-        match create_channel(kernel, cast[u64](process), budget, cast[u32](arch.syscall_argument(registers, 1))) {
-            case Ok(pair) => return owned_pair(kernel, process, pair)
-            case Error(error) => return tagged(cast[u64](cast[u32](error)))
-        }
-    }
-    if call == .PortBind {
-        port := cast[ptr[mut Port]](0)
-        match port_of(process, argument(registers, 0), slop_os.RIGHT_PORT_BIND) {
-            case Ok(found) => port = found
-            case Error(error) => return tagged(cast[u64](cast[u32](error)))
-        }
-        // An IRQ's interrupts (irqs.hsc), a process's or a thread's end (control.hsc)
-        match lookup(&process.table, argument(registers, 1)) {
-            case Ok(found) => {
-                once :: arch.syscall_argument(registers, 4) == cast[u64](cast[u32](slop_os.BindMode.Once))
-                mode :: if once { slop_os.BindMode.Once } else { slop_os.BindMode.Persistent }
-                signals :: cast[slop_os.Signals](cast[u32](arch.syscall_argument(registers, 2)))
-                if found.kind == .Process {
-                    if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_PROCESS_INSPECT) == 0 {
-                        return tagged(cast[u64](cast[u32](slop_os.PortError.MissingRight)))
-                    }
-                    watched :: cast[ptr[mut Process]](found.object)
-                    return port_done(watch_bind(kernel, port, found.object, &watched.watchers, &watched.watch_lock, signals,
-                        arch.syscall_argument(registers, 3), mode))
-                }
-                if found.kind == .Thread {
-                    watched :: cast[ptr[mut Thread]](found.object)
-                    return port_done(watch_bind(kernel, port, found.object, &watched.watchers, &watched.control, signals,
-                        arch.syscall_argument(registers, 3), mode))
-                }
-                if found.kind == .Irq {
-                    once :: arch.syscall_argument(registers, 4) == cast[u64](cast[u32](slop_os.BindMode.Once))
-                    return port_done(irq_bind(kernel, port, cast[ptr[mut Irq]](found.object), arch.syscall_argument(registers, 3),
-                        if once { slop_os.BindMode.Once } else { slop_os.BindMode.Persistent }))
-                }
-            }
-            case Error(error) => {}
-        }
-        match channel_of(process, argument(registers, 1), cast[slop_os.Rights](0)) {
-            case Ok(end) => {
-                once :: arch.syscall_argument(registers, 4) == cast[u64](cast[u32](slop_os.BindMode.Once))
-                mode :: if once { slop_os.BindMode.Once } else { slop_os.BindMode.Persistent }
-                return port_done(port_bind(kernel, port, end, cast[slop_os.Signals](cast[u32](arch.syscall_argument(registers, 2))),
-                    arch.syscall_argument(registers, 3), mode))
-            }
-            case Error(error) => return tagged(cast[u64](cast[u32](error)))
-        }
-    }
-    right :: if call == .ChannelMap { slop_os.RIGHT_CHANNEL_MAP } else { cast[slop_os.Rights](0) }
-    end := cast[ptr[mut Channel]](0)
-    match channel_of(process, argument(registers, 0), right) {
-        case Ok(found) => end = found
-        case Error(error) => return tagged(cast[u64](cast[u32](error)))
-    }
-    if call == .ChannelMap {
-        return channel_map_call(kernel, process, end, argument(registers, 1), arch.syscall_argument(registers, 2))
-    }
-    if call == .ChannelUnmap {
-        return channel_done(channel_unmap(kernel, end))
-    }
-    if call == .ChannelNotify {
-        return channel_done(channel_notify(kernel, end, cast[slop_os.Signals](cast[u32](arch.syscall_argument(registers, 1)))))
-    }
-    if call == .ChannelWrite {
-        return channel_done(channel_write(kernel, thread, end, arch.syscall_argument(registers, 1),
-            cast[u32](arch.syscall_argument(registers, 2)), cast[u32](arch.syscall_argument(registers, 3))))
-    }
-    if call == .ChannelRead {
-        return read_result(channel_read(kernel, thread, end, arch.syscall_argument(registers, 1), cast[u32](arch.syscall_argument(registers, 2))))
-    }
-    if call == .ChannelSendHandles {
-        return channel_done(channel_send_handles(kernel, thread, end, arch.syscall_argument(registers, 1),
-            cast[u32](arch.syscall_argument(registers, 2)), cast[u32](arch.syscall_argument(registers, 3))))
-    }
-    if call == .ChannelTakeHandles {
-        return take_result(channel_take_handles(kernel, thread, end, cast[u32](arch.syscall_argument(registers, 1)),
-            arch.syscall_argument(registers, 2), cast[u32](arch.syscall_argument(registers, 3))))
-    }
-    return notify_and_wait(kernel, thread, process, end)
+sys_thread_suspend :: fn(thread: ptr[mut Thread], process: slop_os.Process, id: u64) -> Result[void, slop_os.ControlError] {
+    found :: subtree_thread(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE, id)?
+    hold_thread(per_cpu().kernel, found, HELD_SUSPEND)
+    return .Ok
 }
 
-/*
- * ChannelNotifyAndWait: the notify, during which a thread it wakes is made ready on this CPU, to run
- * here once the caller waits, then PortWait (knowledge/design/ipc.md §5).
- */
-notify_and_wait :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], process: ptr[mut Process], end: ptr[mut Channel])
-    -> arch_interface.SyscallResult? {
-    registers :: &thread.registers
-    port := cast[ptr[mut Port]](0)
-    match port_of(process, argument(registers, 2), slop_os.RIGHT_PORT_WAIT) {
-        case Ok(found) => port = found
-        case Error(error) => return tagged(cast[u64](cast[u32](error)))
-    }
-    cpu :: per_cpu()
-    cpu.handoff = true
-    notified :: channel_notify(kernel, end, cast[slop_os.Signals](cast[u32](arch.syscall_argument(registers, 1))))
-    cpu.handoff = false
-    match notified {
-        case Some(error) => return tagged(cast[u64](cast[u32](error)))
-        case None => {}
-    }
-    return wait_result(port_wait_begin(kernel, thread, port, arch.syscall_argument(registers, 3),
-        cast[u32](arch.syscall_argument(registers, 4)), ticks_at(kernel, arch.syscall_argument(registers, 5))))
+sys_thread_resume :: fn(thread: ptr[mut Thread], process: slop_os.Process, id: u64) -> Result[void, slop_os.ControlError] {
+    found :: subtree_thread(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE, id)?
+    unhold_thread(per_cpu().kernel, found, HELD_SUSPEND)
+    return .Ok
 }
 
-wait_result :: fn(outcome: WaitOutcome) -> arch_interface.SyscallResult? {
-    return match outcome {
-        case Done(taken) => succeeded(cast[u64](taken), 0)
-        case Failed(error) => tagged(cast[u64](cast[u32](error)))
-        case Blocked => null
+// Registers, only while they're the thread's alone: parked.
+sys_thread_read_registers :: fn(thread: ptr[mut Thread], process: slop_os.Process, id: u64, registers: slop_os.UserBuffer) -> Result[void, slop_os.ControlError] {
+    found :: subtree_thread(thread, process, slop_os.RIGHT_PROCESS_INSPECT, id)?
+    if registers.count < cast[u64](slop_os.THREAD_REGISTERS) {
+        return .Error(.BadBuffer)
     }
+    concurrency.lock(&found.control)
+    defer concurrency.unlock(&found.control)
+    if !found.parked {
+        return .Error(.NotStopped)
+    }
+    if !read_registers(per_cpu().kernel, found, thread.space, registers.address) {
+        return .Error(.BadBuffer)
+    }
+    return .Ok
 }
 
-// Map end's rings in the address space a handle names, which needs RIGHT_SPACE_MAP.
-channel_map_call :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], end: ptr[mut Channel], space: slop_os.Handle, address: u64)
-    -> arch_interface.SyscallResult {
-    match lookup(&process.table, space) {
-        case Ok(found) => {
-            if found.kind != .AddressSpace {
-                return failed(.WrongKind)
-            }
-            if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_SPACE_MAP) == 0 {
-                return failed(.MissingRight)
-            }
-            return channel_done(channel_map(kernel, end, cast[ptr[mut AddressSpace]](found.object), address))
-        }
-        case Error(error) => return failed(error)
+sys_thread_write_registers :: fn(thread: ptr[mut Thread], process: slop_os.Process, id: u64, registers: slop_os.UserBuffer) -> Result[void, slop_os.ControlError] {
+    found :: subtree_thread(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE, id)?
+    if registers.count < cast[u64](slop_os.THREAD_REGISTERS) {
+        return .Error(.BadBuffer)
     }
+    concurrency.lock(&found.control)
+    defer concurrency.unlock(&found.control)
+    if !found.parked {
+        return .Error(.NotStopped)
+    }
+    return control_done(write_registers(per_cpu().kernel, found, thread.space, registers.address))
 }
 
-// The channel end a handle refers to, if the handle has every right in rights.
-channel_of :: fn(process: ptr[mut Process], handle: slop_os.Handle, rights: slop_os.Rights) -> Result[ptr[mut Channel], slop_os.ChannelError] {
-    match lookup(&process.table, handle) {
-        case Ok(found) => {
-            if found.kind != .Channel {
-                return .Error(.WrongKind)
-            }
-            if cast[u32](found.rights) & cast[u32](rights) != cast[u32](rights) {
-                return .Error(.MissingRight)
-            }
-            return .Ok(cast[ptr[mut Channel]](found.object))
-        }
-        case Error(error) => return .Error(if error == .ObjectGone { slop_os.ChannelError.ObjectGone } else { slop_os.ChannelError.InvalidHandle })
-    }
+// Paid for by the caller's process's own budget, as it has no budget argument.
+sys_intercept_attach :: fn(thread: ptr[mut Thread], process: slop_os.Process, port: slop_os.Port, key: u64, calls: u64, points: u32)
+    -> Result[slop_os.Intercept, slop_os.ControlError] {
+    kernel :: per_cpu().kernel
+    caller :: process_of(thread)
+    target :: target_of(thread, process, slop_os.RIGHT_PROCESS_INTERCEPT)?
+    reporting :: object_of[slop_os.ControlError](caller, cast[slop_os.Handle](port), slop_os.ObjectKind.Port, slop_os.RIGHT_PORT_BIND)?
+    made :: create_intercept(kernel, cast[u64](caller), caller.header.budget, target, cast[ptr[mut Port]](reporting), key, calls, points)?
+    handle :: owning_handle[slop_os.ControlError](kernel, caller, cast[u64](made), false)?
+    return .Ok(cast[slop_os.Intercept](handle))
 }
 
-channel_done :: fn(error: slop_os.ChannelError?) -> arch_interface.SyscallResult {
-    return match error {
-        case Some(failure) => tagged(cast[u64](cast[u32](failure)))
-        case None => succeeded(0, 0)
-    }
+intercept_of_handle :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept) -> Result[ptr[mut Intercept], slop_os.ControlError] {
+    object :: object_of[slop_os.ControlError](process_of(thread), cast[slop_os.Handle](intercept), slop_os.ObjectKind.Intercept, cast[slop_os.Rights](0))?
+    return .Ok(cast[ptr[mut Intercept]](object))
 }
 
-read_result :: fn(outcome: ReadOutcome) -> arch_interface.SyscallResult {
-    return match outcome {
-        case Read(size, handles) => succeeded(cast[u64](size), cast[u64](handles))
-        case Failed(error, size) => arch_interface.SyscallResult.{tag = cast[u64](cast[u32](error)), values = u64.[cast[u64](size), 0]}
-    }
+sys_intercept_next :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept, stop: u64) -> Result[void, slop_os.ControlError] {
+    found :: intercept_of_handle(thread, intercept)?
+    return control_done(intercept_next(per_cpu().kernel, found, thread.space, stop))
 }
 
-take_result :: fn(outcome: TakeOutcome) -> arch_interface.SyscallResult {
-    return match outcome {
-        case Taken(count) => succeeded(cast[u64](count), 0)
-        case Failed(error, count) => arch_interface.SyscallResult.{tag = cast[u64](cast[u32](error)), values = u64.[cast[u64](count), 0]}
+sys_intercept_resume :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept, id: u64, action: slop_os.InterceptAction)
+    -> Result[void, slop_os.ControlError] {
+    found :: intercept_of_handle(thread, intercept)?
+    if action != .Continue && action != .Skip && action != .Kill {
+        return .Error(.NotStopped)
     }
+    return control_done(intercept_resume(per_cpu().kernel, found, id, action))
 }
 
-// Owning handles in process to both ends of a new channel; without room for them, the channel is destroyed.
-owned_pair :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], pair: ChannelPair) -> arch_interface.SyscallResult {
-    a := slop_os.NO_HANDLE
-    match install_owning(kernel, process, cast[u64](pair.a)) {
-        case Ok(handle) => a = handle
-        case Error(error) => {
-            _ = destroy_object(kernel, cast[u64](pair.a))
-            _ = destroy_object(kernel, cast[u64](pair.b))
-            return failed(error)
-        }
-    }
-    match install_owning(kernel, process, cast[u64](pair.b)) {
-        case Ok(handle) => return succeeded(cast[u64](cast[u32](a)), cast[u64](cast[u32](handle)))
-        case Error(error) => {
-            _ = remove(&process.table, a)
-            _ = destroy_object(kernel, cast[u64](pair.a))
-            _ = destroy_object(kernel, cast[u64](pair.b))
-            return failed(error)
-        }
-    }
-}
-
-// The port a handle refers to, if the handle has right.
-port_of :: fn(process: ptr[mut Process], handle: slop_os.Handle, right: slop_os.Rights) -> Result[ptr[mut Port], slop_os.PortError] {
-    match lookup(&process.table, handle) {
-        case Ok(found) => {
-            if found.kind != .Port {
-                return .Error(.WrongKind)
-            }
-            if cast[u32](found.rights) & cast[u32](right) == 0 {
-                return .Error(.MissingRight)
-            }
-            return .Ok(cast[ptr[mut Port]](found.object))
-        }
-        // The tags they share mean the same
-        case Error(error) => return .Error(if error == .ObjectGone { slop_os.PortError.ObjectGone } else { slop_os.PortError.InvalidHandle })
-    }
-}
-
-port_done :: fn(error: slop_os.PortError?) -> arch_interface.SyscallResult {
-    return match error {
-        case Some(failure) => tagged(cast[u64](cast[u32](failure)))
-        case None => succeeded(0, 0)
-    }
-}
-
-tagged :: fn(tag: u64) -> arch_interface.SyscallResult {
-    return arch_interface.SyscallResult.{tag = tag, values = u64.[0, 0]}
-}
-
-argument :: fn(registers: ptr[arch.UserRegisters], index: u32) -> slop_os.Handle {
-    return cast[slop_os.Handle](cast[u32](arch.syscall_argument(registers, index)))
-}
-
-succeeded :: fn(first: u64, second: u64) -> arch_interface.SyscallResult {
-    return arch_interface.SyscallResult.{tag = 0, values = u64.[first, second]}
-}
-
-failed :: fn(error: slop_os.HandleError) -> arch_interface.SyscallResult {
-    return arch_interface.SyscallResult.{tag = cast[u64](cast[u32](error)), values = u64.[0, 0]}
-}
-
-// Closing the owning handle destroys the object.
-handle_close :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], handle: slop_os.Handle) -> arch_interface.SyscallResult {
-    match remove(&process.table, handle) {
-        case Ok(removed) => {
-            if removed.owning && is_live(removed.object, removed.generation) {
-                _ = destroy_object(kernel, removed.object)
-            }
-            return succeeded(0, 0)
-        }
-        case Error(error) => return failed(error)
-    }
-}
-
-// Another handle to the same object, never owning, with rights the handle has.
-handle_duplicate :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], handle: slop_os.Handle, rights: slop_os.Rights)
-    -> arch_interface.SyscallResult {
-    match lookup(&process.table, handle) {
-        case Ok(found) => {
-            held :: cast[u32](found.rights)
-            if held & cast[u32](slop_os.RIGHT_DUPLICATE) == 0 || cast[u32](rights) & ~held != 0 {
-                return failed(.MissingRight)
-            }
-            match install(kernel, &process.table, found.object, found.generation, found.kind, rights, false) {
-                case Ok(made) => return succeeded(cast[u64](cast[u32](made)), 0)
-                case Error(error) => return failed(error)
-            }
-        }
-        case Error(error) => return failed(error)
-    }
-}
-
-handle_info :: fn(process: ptr[mut Process], handle: slop_os.Handle) -> arch_interface.SyscallResult {
-    match lookup(&process.table, handle) {
-        case Ok(found) => return succeeded(cast[u64](cast[u8](found.kind)), cast[u64](cast[u32](found.rights)))
-        case Error(error) => return failed(error)
-    }
-}
-
-/*
- * A thread in the address space space names, owned by the caller's process, started at entry with stack
- * and argument: an owning handle to it.
- */
-thread_create :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], budget: u64, space: slop_os.Handle, entry: u64, stack: u64,
-    argument: u64) -> arch_interface.SyscallResult {
-    found := Resolved.{}
-    match lookup(&process.table, space) {
-        case Ok(resolved) => found = resolved
-        case Error(error) => return failed(error)
-    }
-    if found.kind != .AddressSpace {
-        return failed(.WrongKind)
-    }
-    if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_SPACE_THREADS) == 0 {
-        return failed(.MissingRight)
-    }
-    start :: arch_interface.UserStart.{
-        instruction_pointer = cast[arch_interface.VirtualAddress](entry),
-        stack_pointer = cast[arch_interface.VirtualAddress](stack),
-        argument = argument,
-    }
-    made := cast[ptr[mut Thread]](0)
-    match create_thread(kernel, cast[u64](process), cast[ptr[mut AddressSpace]](found.object), &start,
-        arch_interface.VectorConfig.{extended = false}, 0, budget) {
-        case Ok(thread) => made = thread
-        case Error(error) => return failed(if error == .OutOfMemory { slop_os.HandleError.OutOfMemory }
-            else if error == .BudgetExceeded { slop_os.HandleError.BudgetExceeded } else { slop_os.HandleError.ObjectGone })
-    }
-    return owned_by_caller(kernel, process, cast[u64](made), true)
-}
-
-// A new process, owned by the caller's, with budget its budget: an owning handle to it.
-process_create :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], budget: u64) -> arch_interface.SyscallResult {
-    match create_process(kernel, cast[u64](process), budget) {
-        case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
-        case Error(error) => return failed(object_failure(error))
-    }
-}
-
-// A new, empty address space, owned by the caller's process: an owning handle to it.
-address_space_create :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], budget: u64) -> arch_interface.SyscallResult {
-    match create_address_space(kernel, cast[u64](process), budget) {
-        case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
-        case Error(error) => return failed(if error == .OwnerGone { slop_os.HandleError.ObjectGone }
-            else if error == .BudgetExceeded { slop_os.HandleError.BudgetExceeded } else { slop_os.HandleError.OutOfMemory })
-    }
-}
-
-/*
- * An owning handle in process to object, which it owns, and if it's a thread, started. Without room for
- * the handle, the object is destroyed.
- */
-owned_by_caller :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], object: u64, start: bool) -> arch_interface.SyscallResult {
-    match install_owning(kernel, process, object) {
-        case Ok(handle) => {
-            if start {
-                start_thread(kernel, cast[ptr[mut Thread]](object))
-            }
-            return succeeded(cast[u64](cast[u32](handle)), 0)
-        }
-        case Error(error) => {
-            _ = destroy_object(kernel, object)
-            return failed(error)
-        }
-    }
+sys_process_kill :: fn(thread: ptr[mut Thread], process: slop_os.Process) -> Result[void, slop_os.ControlError] {
+    target :: target_of(thread, process, slop_os.RIGHT_PROCESS_KILL)?
+    _ = destroy_object(per_cpu().kernel, cast[u64](target))
+    return .Ok
 }
