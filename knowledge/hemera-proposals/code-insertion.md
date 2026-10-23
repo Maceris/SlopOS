@@ -1,6 +1,7 @@
 # Proposal: Code Values, `#insert` and Hygienic Macros
 
-Status: **agreed** 2026-10-22; phase 1 done 2026-10-23 (*Phases*). Asked for before M5's fourth stage, whose
+Status: **agreed** 2026-10-22; phases 1 and 2 done 2026-10-23 (*Phases*). In bodies, `#insert` changes the tree in
+place, so generics, whose instances share one tree, wait for a per-instance form. Asked for before M5's fourth stage, whose
 generated ABI package needs it (`../design/system-abi.md` §4). Directions chosen with the Hemera author:
 - **`#insert` works on code, not strings.** Compile-time code builds code as syntax trees, from quotes and
   from what reflection gives, leaning on type safety and the editor support real Hemera gets. Parsing

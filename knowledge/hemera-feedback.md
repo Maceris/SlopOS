@@ -90,6 +90,12 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-23 — Code insertion, phase 2 of 6: `#insert` outside a quote puts code made at compile time into a body,
+  statements among the statements around them and expressions in place, checked as if written there; errors in it
+  are reported where it was written, then where it was inserted; `--show-inserted=file:line` prints what was put
+  there. Not yet at the top level (phase 3) or in generics, and names resolve where the code lands until hygiene
+  (phase 5).
+
 - 2026-10-23 — Code insertion, phase 1 of 6 (`hemera-proposals/code-insertion.md`, asked for before M5's fourth
   stage): `#code(...)` and `#code { ... }` quote code as a `compiler.Code`, and `#insert` in a quote splices code, a type
   or a literal, binding like a prefix operator; `compiler.code_text` prints it, through a new tree printer that every
