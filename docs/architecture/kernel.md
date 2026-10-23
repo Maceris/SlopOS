@@ -78,7 +78,12 @@ the kernel logger, and an assertion handler that stops the kernel.
   made and filled with zeroed frames as it's touched, through user page faults. A mapping is on its
   space's list and its memory's, and whoever claims it takes it down; a fault maps a page only while
   its mapping is on its space's list. A fault outside what's mapped, or one a mapping doesn't allow,
-  destroys the thread.
+  destroys the thread. Device memory is physical addresses outside the kernel's RAM; a window shares
+  another memory object's frames and is destroyed with it (`0055`).
+- **IRQs and the platform capability** (`src/kernel/irqs.hsc`, `0039`, `0055`): the platform capability,
+  made at boot for the root task, registers interrupt controllers and makes IRQs and device memory. An
+  IRQ is a controller line routed to a CPU; each interrupt bumps its port binding's packet, and a
+  level-triggered line stays masked until the driver acknowledges it.
 
 ## Interrupts and Time
 
@@ -111,7 +116,8 @@ the kernel logger, and an assertion handler that stops the kernel.
 
 | What | Roadmap |
 |---|---|
-| IRQ objects, interception, the generated ABI package; child windows onto memory objects, device memory | M5 |
+| Interception and process control, the generated ABI package | M5 |
+| I/O-port ranges, IOMMU domains, message-signaled interrupts | M7 |
 | Destroying large subtrees with preemption points | M5 |
 | Loading programs, the root task, user space | M6 |
 | The platform service, PCIe, drivers | M7 |

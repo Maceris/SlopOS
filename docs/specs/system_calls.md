@@ -33,13 +33,13 @@ each object is its owning one (`0008`).
 - **Rights** (`slop_os.Rights`, `0010`): `RIGHT_DUPLICATE` and `RIGHT_TRANSFER` for every kind, then per
   kind: `RIGHT_SPACE_THREADS` and `RIGHT_SPACE_MAP` for an address space; `RIGHT_PORT_WAIT` and
   `RIGHT_PORT_BIND` for a port; `RIGHT_CHANNEL_MAP` for a channel end; `RIGHT_BUDGET_CHARGE` for a memory
-  budget; `RIGHT_MEMORY_READ`, `RIGHT_MEMORY_WRITE` and `RIGHT_MEMORY_EXECUTE` for a memory object. An
-  owning handle has every right.
+  budget; `RIGHT_MEMORY_READ`, `RIGHT_MEMORY_WRITE` and `RIGHT_MEMORY_EXECUTE` for a memory object;
+  `RIGHT_IRQ_ACK` for an IRQ. An owning handle has every right.
   Duplicating keeps or drops rights, never adds them.
 
 Object kinds (`slop_os.ObjectKind`, `0034`): `MemoryBudget`, `CpuBudget`, `Memory`, `AddressSpace`,
-`Thread`, `Process`, `Channel`, `Port`, `Irq`, `IoPortRange`, `IommuDomain`. So far processes, threads,
-address spaces, ports, channels, memory budgets and memory objects exist.
+`Thread`, `Process`, `Channel`, `Port`, `Irq`, `IoPortRange`, `IommuDomain`, and `Platform`, the authority
+over the machine's hardware (`0039`, `0055`). So far all but I/O-port ranges and IOMMU domains exist.
 
 ## Calls
 
@@ -68,15 +68,21 @@ address spaces, ports, channels, memory budgets and memory objects exist.
 | 20 | `ChannelSendHandles` | end, handles, count, batch | nothing: count handles (u32s at handles, up to 64) moved out of the caller's table into batch (0 to 15) on the other end. Each needs `RIGHT_TRANSFER` |
 | 21 | `ChannelTakeHandles` | end, batch, handles, capacity | how many: the batch's handles, in the caller's table, written at handles; `NO_HANDLE` for any whose object is gone |
 | 22 | `ChannelNotifyAndWait` | end, signals, port, packets, capacity, deadline | as `ChannelNotify`, then `PortWait`; a thread the notify wakes is made ready on the caller's CPU |
-| 23 | `PortBind` | port, object, signals, key, mode | nothing: a `Signal` packet for key when the object raises any of signals; needs `RIGHT_PORT_BIND`. Mode `Once` (1) disarms it once its packet is queued, and binding the same key to the same object arms it again; `Persistent` (2) doesn't |
+| 23 | `PortBind` | port, object, signals, key, mode | nothing: a `Signal` packet for key when the object, a channel end, raises any of signals, or for an IRQ an `Irq` packet for its interrupts, signals unused; needs `RIGHT_PORT_BIND`. Mode `Once` (1) disarms it once its packet is queued, and binding the same key to the same object arms it again; `Persistent` (2) doesn't |
 | 24 | `MemoryBudgetCreate` | budget, limit | an owning handle to a child budget of limit bytes, charged to the budget |
 | 25 | `MemoryBudgetInfo` | budget | its limit, and how much of it is charged, in bytes |
 | 26 | `MemoryCreate` | budget, size | an owning handle to a new memory object of size bytes, a whole number of pages up to `MAX_MEMORY_SIZE` (1 GiB), charged for all of it |
 | 27 | `MemoryMap` | memory, address space, address, offset, size, protection | nothing: size bytes of the memory from offset, mapped at address, page-aligned, with protection (`PROTECTION_READ`, `_WRITE`, `_EXECUTE`; never writable and executable). Needs the memory rights the protection asks for, and `RIGHT_SPACE_MAP` |
 | 28 | `MemoryUnmap` | address space, address | nothing: the mapping that starts at address, unmapped; needs `RIGHT_SPACE_MAP` |
+| 29 | `ControllerRegister` | platform, kind, registers | the interrupt controller's number, and how many lines it has: kind is a `ControllerKind`, registers its physical address, from the firmware tables. The same controller registered again gives the same number |
+| 30 | `IrqCreate` | platform, budget, controller, line, flags | an owning handle to the line's IRQ, routed to a CPU the kernel picks and unmasked; flags `IRQ_LEVEL` and `IRQ_ACTIVE_LOW`, from the firmware tables. A line has at most one IRQ |
+| 31 | `IrqAck` | irq | nothing: a level-triggered line, unmasked again; needs `RIGHT_IRQ_ACK` |
+| 32 | `MemoryCreatePhysical` | platform, budget, address, size, cache | an owning handle to device memory: size bytes at the physical address, which mustn't be RAM the kernel owns, mapped with the `CacheMode` |
+| 33 | `MemoryCreateWindow` | memory, budget, offset, size | an owning handle to a window onto size bytes of the memory from offset, which can be mapped only as the memory's handle could |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
-handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created.
+handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the
+platform capability.
 
 ## Memory Budgets
 
@@ -108,6 +114,22 @@ A fault in user mode outside any mapping, or an access a mapping doesn't allow (
 one, running code from one that isn't executable), destroys the faulting thread. Closing a memory object
 unmaps it from every address space; destroying an address space takes down what's mapped in it.
 
+- **Device memory** (`MemoryCreatePhysical`) is a range of physical addresses that isn't RAM the kernel
+  owns: device registers, a framebuffer, firmware tables. Its pages are those addresses, mapped with its
+  cache mode (`Device`, uncached and strongly ordered, for registers), and only its slot is charged.
+- **A window** (`MemoryCreateWindow`, `0010`) shares a range of another memory object's frames, and is
+  charged only its slot. Closing the memory destroys its windows, unmapping them everywhere; closing a
+  window leaves the memory and its other windows. A window made through a handle without
+  `RIGHT_MEMORY_WRITE` can't be mapped writable, whatever its own handle's rights; so for execute.
+
+## IRQs
+
+An IRQ is one interrupt controller line, made with the platform capability once its controller is
+registered (`0039`, `0055`). The kernel routes it to a CPU and unmasks it. Each interrupt adds one to the
+count in its binding's `Irq` packet, queuing the packet if it isn't; a driver binds it to a port with
+`PortBind`, one binding per IRQ. A level-triggered line is masked when its interrupt arrives, until the
+driver calls `IrqAck`. Closing the IRQ masks the line.
+
 ## Ports
 
 A port is the one wait mechanism (`../../knowledge/design/ipc.md` §3, `0052`). Each binding has a key the
@@ -121,9 +143,9 @@ waiting on it, with `ObjectGone`.
 | Field | |
 |---|---|
 | `key: u64` | The binding's key |
-| `kind: PacketKind` (u32) | `Signal` (1), `Timer` (2), `User` (3) |
+| `kind: PacketKind` (u32) | `Signal` (1), `Timer` (2), `User` (3), `Irq` (4) |
 | `reserved: u32` | |
-| `data: u64[2]` | `Signal`: the signals raised since it was last taken; `Timer`: the deadline it was set for; `User`: the bits raised since it was last taken |
+| `data: u64[2]` | `Signal`: the signals raised since it was last taken; `Timer`: the deadline it was set for; `User`: the bits raised since it was last taken; `Irq`: the interrupts since it was last taken |
 
 ## Channels
 
@@ -214,8 +236,22 @@ Calls on a memory budget or a memory object fail with `slop_os.MemoryError`:
 | 26 | `NotMapped` | No mapping starts at that address |
 | 27 | `BadProtection` | Writable and executable at once, or no access at all |
 
+Registering a controller, making an IRQ or device memory fail with `slop_os.DeviceError`:
+
+| Tag | Error | Why |
+|---|---|---|
+| 1 to 6, 25 | as above | |
+| 18 | `BadAddress` | Not page-aligned, or RAM the kernel owns |
+| 24 | `InvalidSize` | Not a whole number of pages, or an unknown cache mode |
+| 28 | `NoController` | No controller of that kind at those registers, or none of that kind on this architecture |
+| 29 | `TooManyControllers` | As many controllers are registered as the kernel takes (8) |
+| 30 | `NoSuchController` | No registered controller has that number |
+| 31 | `NoSuchLine` | The controller has no such line |
+| 32 | `LineInUse` | The line has an IRQ already |
+| 33 | `NoFreeInterrupt` | The CPU picked has every device interrupt taken |
+
 ## Not Yet
 
-IRQ objects, process control and interception come with the rest of M5, as do child windows onto memory
-objects (`0010`) and device memory (`../architecture/kernel.md`, Not Built Yet). Faults are delivered to
-no one yet: a thread that faults outside its memory is destroyed.
+Process control and interception come with the rest of M5; I/O-port ranges, IOMMU domains and
+message-signaled interrupts with the platform service and drivers (M7). Faults are delivered to no one
+yet: a thread that faults outside its memory is destroyed.

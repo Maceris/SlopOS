@@ -3,6 +3,8 @@ package kernel
 import runtime from "base"
 import arch_interface from "../arch_interface"
 import slop_os from "std/os"
+import boot_info from "../boot_info"
+import frames from "frames"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -151,7 +153,118 @@ dispatch_syscall :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> arch
     if number >= cast[u64](cast[u32](slop_os.Syscall.MemoryBudgetCreate)) && number <= cast[u64](cast[u32](slop_os.Syscall.MemoryUnmap)) {
         return dispatch_memory_call(kernel, process, registers, cast[slop_os.Syscall](cast[u32](number)))
     }
+    if number >= cast[u64](cast[u32](slop_os.Syscall.ControllerRegister)) && number <= cast[u64](cast[u32](slop_os.Syscall.MemoryCreateWindow)) {
+        return dispatch_device_call(kernel, process, registers, cast[slop_os.Syscall](cast[u32](number)))
+    }
     return failed(.NoSuchCall)
+}
+
+// IRQs, device memory and windows (irqs.hsc, memory.hsc).
+dispatch_device_call :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], registers: ptr[arch.UserRegisters], call: slop_os.Syscall)
+    -> arch_interface.SyscallResult {
+    if call == .IrqAck {
+        match lookup(&process.table, argument(registers, 0)) {
+            case Ok(found) => {
+                if found.kind != .Irq {
+                    return failed(.WrongKind)
+                }
+                if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_IRQ_ACK) == 0 {
+                    return failed(.MissingRight)
+                }
+                irq_ack(kernel, cast[ptr[mut Irq]](found.object))
+                return succeeded(0, 0)
+            }
+            case Error(error) => return failed(error)
+        }
+    }
+    if call == .MemoryCreateWindow {
+        return window_call(kernel, process, registers)
+    }
+    // The rest need the platform capability
+    match lookup(&process.table, argument(registers, 0)) {
+        case Ok(found) => {
+            if found.kind != .Platform {
+                return failed(.WrongKind)
+            }
+        }
+        case Error(error) => return failed(error)
+    }
+    if call == .ControllerRegister {
+        kind :: controller_kind(cast[u32](arch.syscall_argument(registers, 1))) or_return tagged(cast[u64](cast[u32](slop_os.DeviceError.NoController)))
+        physical :: arch.syscall_argument(registers, 2)
+        if physical & (frames.FRAME_SIZE - 1) != 0 || overlaps_kernel_ram(kernel, physical, CONTROLLER_REGISTERS_SIZE) {
+            return tagged(cast[u64](cast[u32](slop_os.DeviceError.BadAddress)))
+        }
+        match register_controller(kernel, kind, cast[boot_info.PhysicalAddress](physical)) {
+            case Ok(index) => return succeeded(cast[u64](index), cast[u64](kernel.controllers[cast[usize](index) % MAX_CONTROLLERS].lines))
+            case Error(error) => return tagged(cast[u64](cast[u32](
+                if error == .TooManyControllers { slop_os.DeviceError.TooManyControllers }
+                else if error == .NoMapping { slop_os.DeviceError.OutOfMemory } else { slop_os.DeviceError.NoController })))
+        }
+    }
+    budget := cast[u64](0)
+    match paying_budget(process, argument(registers, 1)) {
+        case Ok(given) => budget = given
+        case Error(error) => return failed(error)
+    }
+    if call == .IrqCreate {
+        flags :: cast[u32](arch.syscall_argument(registers, 4))
+        trigger :: if flags & slop_os.IRQ_LEVEL != 0 { arch_interface.Trigger.Level } else { arch_interface.Trigger.Edge }
+        polarity :: if flags & slop_os.IRQ_ACTIVE_LOW != 0 { arch_interface.Polarity.ActiveLow } else { arch_interface.Polarity.ActiveHigh }
+        match create_irq(kernel, cast[u64](process), budget, cast[u32](arch.syscall_argument(registers, 2)),
+            cast[u32](arch.syscall_argument(registers, 3)), trigger, polarity) {
+            case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
+            case Error(error) => return tagged(cast[u64](cast[u32](error)))
+        }
+    }
+    cache_number :: cast[u32](arch.syscall_argument(registers, 4))
+    cache := arch_interface.CacheMode.Device
+    if cache_number == cast[u32](slop_os.CacheMode.WriteBack) {
+        cache = .WriteBack
+    }
+    else if cache_number == cast[u32](slop_os.CacheMode.WriteCombining) {
+        cache = .WriteCombining
+    }
+    else if cache_number != cast[u32](slop_os.CacheMode.Device) {
+        return tagged(cast[u64](cast[u32](slop_os.DeviceError.InvalidSize)))
+    }
+    match create_device_memory(kernel, cast[u64](process), budget, arch.syscall_argument(registers, 2), arch.syscall_argument(registers, 3), cache) {
+        case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
+        case Error(error) => return tagged(cast[u64](cast[u32](error)))
+    }
+}
+
+// MemoryCreateWindow: a window may be mapped only as the memory's handle may be.
+window_call :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], registers: ptr[arch.UserRegisters]) -> arch_interface.SyscallResult {
+    found := Resolved.{}
+    match lookup(&process.table, argument(registers, 0)) {
+        case Ok(resolved) => found = resolved
+        case Error(error) => return failed(error)
+    }
+    if found.kind != .Memory {
+        return failed(.WrongKind)
+    }
+    budget := cast[u64](0)
+    match paying_budget(process, argument(registers, 1)) {
+        case Ok(given) => budget = given
+        case Error(error) => return failed(error)
+    }
+    rights :: cast[u32](found.rights)
+    allowed := cast[u32](0)
+    if rights & cast[u32](slop_os.RIGHT_MEMORY_READ) != 0 {
+        allowed |= cast[u32](slop_os.PROTECTION_READ)
+    }
+    if rights & cast[u32](slop_os.RIGHT_MEMORY_WRITE) != 0 {
+        allowed |= cast[u32](slop_os.PROTECTION_WRITE)
+    }
+    if rights & cast[u32](slop_os.RIGHT_MEMORY_EXECUTE) != 0 {
+        allowed |= cast[u32](slop_os.PROTECTION_EXECUTE)
+    }
+    match create_window(kernel, cast[u64](process), budget, cast[ptr[mut Memory]](found.object), arch.syscall_argument(registers, 2),
+        arch.syscall_argument(registers, 3), allowed) {
+        case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
+        case Error(error) => return tagged(cast[u64](cast[u32](error)))
+    }
 }
 
 // The memory budgets and memory objects (memory_budgets.hsc, memory.hsc).
@@ -285,6 +398,17 @@ dispatch_channel_call :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], pr
         match port_of(process, argument(registers, 0), slop_os.RIGHT_PORT_BIND) {
             case Ok(found) => port = found
             case Error(error) => return tagged(cast[u64](cast[u32](error)))
+        }
+        // An IRQ's interrupts (irqs.hsc)
+        match lookup(&process.table, argument(registers, 1)) {
+            case Ok(found) => {
+                if found.kind == .Irq {
+                    once :: arch.syscall_argument(registers, 4) == cast[u64](cast[u32](slop_os.BindMode.Once))
+                    return port_done(irq_bind(kernel, port, cast[ptr[mut Irq]](found.object), arch.syscall_argument(registers, 3),
+                        if once { slop_os.BindMode.Once } else { slop_os.BindMode.Persistent }))
+                }
+            }
+            case Error(error) => {}
         }
         match channel_of(process, argument(registers, 1), cast[slop_os.Rights](0)) {
             case Ok(end) => {

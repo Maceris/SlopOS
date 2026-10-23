@@ -17,9 +17,9 @@ import concurrency from "std"
  * level-triggered line until it's acknowledged.
  *
  * Each CPU has its own device interrupt IDs (arch.device_interrupt_range), each routed from at most
- * one line, recorded in its PerCpu.
+ * one line, recorded in its PerCpu. A route made for an IRQ (irqs.hsc) delivers its interrupts to the
+ * IRQ's port binding; a line has at most one IRQ.
  */
-//TODO(claude): registration through a syscall behind the platform capability (M5); Irq objects for drivers (M5, M7)
 
 MAX_CONTROLLERS :: 8
 // Device interrupt IDs a CPU keeps routes for: at least as many as any architecture has.
@@ -40,6 +40,8 @@ InterruptError :: enum {
     NoSuchCpu,
     // Every device interrupt ID on that CPU is taken.
     NoFreeInterrupt,
+    // An IRQ has the line already.
+    LineInUse,
 }
 
 WiredController :: struct {
@@ -47,8 +49,9 @@ WiredController :: struct {
     lock : concurrency.SpinLock,
     controller : arch.InterruptController,
     kind : arch_interface.ControllerKind,
-    // In the kernel window.
+    // In the kernel window, and where they are.
     registers : u64,
+    physical : u64,
     lines : u32,
 }
 
@@ -60,6 +63,8 @@ DeviceRoute :: struct {
     trigger : arch_interface.Trigger,
     // Interrupts that arrived.
     count : u64,
+    // The Irq object it's for (irqs.hsc), 0 for one the kernel routed for itself.
+    irq : u64,
 }
 
 /*
@@ -68,6 +73,12 @@ DeviceRoute :: struct {
  */
 register_controller :: fn(kernel: ptr[mut Kernel], kind: arch_interface.ControllerKind, registers: boot_info.PhysicalAddress)
     -> Result[u32, InterruptError] {
+    // Registered already: the same one
+    for index in 0..<cast[usize](intrinsics.atomic_load_u32_acquire(&kernel.controller_count)) {
+        if index < MAX_CONTROLLERS && kernel.controllers[index].physical == cast[u64](registers) && kernel.controllers[index].kind == kind {
+            return .Ok(cast[u32](index))
+        }
+    }
     mapped := cast[u64](0)
     match map_device(kernel, registers, CONTROLLER_REGISTERS_SIZE) {
         case Ok(address) => mapped = address
@@ -89,7 +100,7 @@ register_controller :: fn(kernel: ptr[mut Kernel], kind: arch_interface.Controll
         unmap_device(kernel, mapped, CONTROLLER_REGISTERS_SIZE)
         return .Error(.TooManyControllers)
     }
-    kernel.controllers[index] = WiredController.{controller = controller, kind = kind, registers = mapped, lines = lines}
+    kernel.controllers[index] = WiredController.{controller = controller, kind = kind, registers = mapped, physical = cast[u64](registers), lines = lines}
     intrinsics.atomic_store_u32_release(&kernel.controller_count, index + 1)
     concurrency.unlock(&kernel.interrupts_lock)
     return .Ok(index)
@@ -106,6 +117,7 @@ route_line :: fn(
     cpu_index: u32,
     trigger: arch_interface.Trigger,
     polarity: arch_interface.Polarity,
+    irq: u64 = 0,
 ) -> Result[arch_interface.InterruptId, InterruptError] {
     wired :: controller_at(kernel, controller_index) or_return .Error(.NoSuchController)
     if line >= wired.lines {
@@ -121,6 +133,11 @@ route_line :: fn(
     runtime.assert(cast[usize](count) <= MAX_DEVICE_INTERRUPTS, "MAX_DEVICE_INTERRUPTS covers every architecture's device interrupt IDs")
     slot : usize = MAX_DEVICE_INTERRUPTS
     concurrency.lock(&kernel.interrupts_lock)
+    // A line an IRQ has is routed for nothing else
+    if irq != 0 && line_has_irq(kernel, controller_index, line) {
+        concurrency.unlock(&kernel.interrupts_lock)
+        return .Error(.LineInUse)
+    }
     for i in 0..<cast[usize](count) {
         if !cpu.device_routes[i].used {
             slot = i
@@ -128,7 +145,7 @@ route_line :: fn(
         }
     }
     if slot < MAX_DEVICE_INTERRUPTS {
-        cpu.device_routes[slot] = DeviceRoute.{used = true, controller = controller_index, line = line, trigger = trigger, count = 0}
+        cpu.device_routes[slot] = DeviceRoute.{used = true, controller = controller_index, line = line, trigger = trigger, count = 0, irq = irq}
     }
     concurrency.unlock(&kernel.interrupts_lock)
     if slot == MAX_DEVICE_INTERRUPTS {
@@ -155,6 +172,33 @@ unmask_line :: fn(kernel: ptr[mut Kernel], controller_index: u32, line: u32) {
     concurrency.lock(&wired.lock)
     arch.unmask_wired(&wired.controller, line)
     concurrency.unlock(&wired.lock)
+}
+
+// Whether an IRQ has controller_index's line, on any CPU. Takes interrupts_lock as held.
+line_has_irq :: fn(kernel: ptr[Kernel], controller_index: u32, line: u32) -> bool {
+    for address in kernel.per_cpus {
+        if address != 0 {
+            routes :: &cast[ptr[PerCpu]](address).device_routes
+            for route in routes^ {
+                if route.used && route.irq != 0 && route.controller == controller_index && route.line == line {
+                    return true
+                }
+            }
+        }
+    }
+    return false
+}
+
+// Forget the route at slot on the CPU with index cpu_index, an IRQ's being destroyed.
+unroute :: fn(kernel: ptr[mut Kernel], cpu_index: u32, slot: u32) {
+    per_cpus :: kernel.per_cpus
+    if cast[usize](cpu_index) >= per_cpus.count || per_cpus[cpu_index] == 0 || cast[usize](slot) >= MAX_DEVICE_INTERRUPTS {
+        return void
+    }
+    cpu :: cast[ptr[mut PerCpu]](per_cpus[cpu_index])
+    concurrency.lock(&kernel.interrupts_lock)
+    cpu.device_routes[slot] = DeviceRoute.{}
+    concurrency.unlock(&kernel.interrupts_lock)
 }
 
 controller_at :: fn(kernel: ptr[mut Kernel], index: u32) -> ptr[mut WiredController]? {
@@ -184,6 +228,10 @@ handle_device_interrupt :: fn(id: arch_interface.InterruptId) {
     }
     route.count += 1
     arch.end_of_interrupt(id)
+    // An IRQ's: a packet for its driver
+    if route.irq != 0 {
+        deliver_irq(kernel, cast[ptr[mut Irq]](route.irq))
+    }
     if kernel.options.test_ioapic {
         test_device_interrupt(kernel, route)
     }

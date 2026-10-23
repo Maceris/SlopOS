@@ -244,6 +244,31 @@ keep_boot_info :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
             kept += 1
         }
     }
+
+    // The RAM the kernel owns, which device memory can't be made over (memory.hsc)
+    owned : usize = 0
+    for region in memory_map {
+        if is_kernel_ram(region.kind) {
+            owned += 1
+        }
+    }
+    ram :: view_of(cast[ptr[mut boot_info.PhysicalRange]](allocate_kept(kernel, owned * size_of(boot_info.PhysicalRange))), owned)
+    kernel.ram = ram
+    kept_ram : usize = 0
+    for region in memory_map {
+        if is_kernel_ram(region.kind) && kept_ram < ram.count {
+            ram[kept_ram] = region.range
+            kept_ram += 1
+        }
+    }
+}
+
+/*
+ * RAM the kernel hands out or holds: free memory, boot memory, its image and boot modules. A
+ * framebuffer, firmware tables and the firmware's own memory are left to the platform service.
+ */
+is_kernel_ram :: fn(kind: boot_info.MemoryKind) -> bool {
+    return kind == .Usable || kind == .BootReclaimable || kind == .KernelImage || kind == .BootModule
 }
 
 /*

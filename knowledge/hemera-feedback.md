@@ -90,6 +90,11 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-23 — `std/os/slop_os`, for M5 stage 4b (`decisions/0055`): the `Platform` object kind,
+  `ControllerRegister`, `IrqCreate`, `IrqAck`, `MemoryCreatePhysical` and `MemoryCreateWindow`,
+  `ControllerKind`, `IRQ_LEVEL` and `IRQ_ACTIVE_LOW`, `CacheMode`, `RIGHT_IRQ_ACK`, the `Irq` packet kind and
+  `DeviceError`. No compiler change was needed.
+
 - 2026-10-23 — `std/os/slop_os` (the ABI package), for M5 stage 4a (`decisions/0054`): the memory calls
   (`MemoryBudgetCreate`, `MemoryBudgetInfo`, `MemoryCreate`, `MemoryMap`, `MemoryUnmap`), a budget argument
   first on every creation call, `RIGHT_BUDGET_CHARGE` and the memory rights, `Protection`, `MemoryError`,

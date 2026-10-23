@@ -28,6 +28,13 @@ import slab from "slab"
  * then unlinks it from its memory. A fault maps a page only while the mapping is on its space's list, so
  * nothing stays mapped of memory that's been destroyed, and its frames go once no CPU can use them.
  *
+ * Device memory (decisions/0055) is a range of physical addresses that isn't RAM the kernel owns, made
+ * with the platform capability: its pages are those addresses, mapped with its cache mode, and nothing
+ * is charged but its slot. A window (decisions/0010, 0055) is a range of another memory object, sharing
+ * its frames; destroying the memory destroys its windows, unmapping them everywhere, and destroying a
+ * window leaves the memory and its other windows. A window can be mapped only as its parent's handle
+ * allowed when it was made.
+ *
  * Lock order: a memory's lock, then a space's.
  */
 
@@ -45,6 +52,20 @@ Memory :: struct #align(16) {
      */
     directory : u64,
     first_mapping : u64,
+    // Device memory's: where it starts, 0 for other memory.
+    physical : u64,
+    cache : arch_interface.CacheMode,
+    // How it can be mapped (slop_os.PROTECTION_*): everything, or for a window, what its parent's handle allowed.
+    allowed : u32,
+    // A window's: its parent, and the page of the parent it starts at; its neighbors among the parent's
+    // windows, under the parent's lock, and whether it's linked there.
+    parent : u64,
+    parent_page : u64,
+    window_next : u64,
+    window_previous : u64,
+    in_parent : bool,
+    // Its own windows, under lock.
+    first_window : u64,
 }
 
 // A range of a memory object, mapped in an address space.
@@ -90,6 +111,7 @@ create_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, size: u64)
     }
     memory :: cast[ptr[mut Memory]](object)
     memory.size = size
+    memory.allowed = 7
     directory :: zeroed_frame(kernel) or_else 0
     memory.directory = directory
     if directory == 0 {
@@ -115,14 +137,103 @@ create_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, size: u64)
     return .Ok(memory)
 }
 
+/*
+ * Device memory of size bytes at physical, which isn't RAM the kernel owns, owned by owner and charged
+ * to budget for its slot.
+ */
+create_device_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, physical: u64, size: u64, cache: arch_interface.CacheMode)
+    -> Result[ptr[mut Memory], slop_os.DeviceError] {
+    if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || size > slop_os.MAX_MEMORY_SIZE {
+        return .Error(.InvalidSize)
+    }
+    if physical == 0 || physical & (frames.FRAME_SIZE - 1) != 0 || physical > ~size || overlaps_kernel_ram(kernel, physical, size) {
+        return .Error(.BadAddress)
+    }
+    object := cast[u64](0)
+    match new_object(kernel, .Memory, budget, 0) {
+        case Ok(made) => object = made
+        case Error(error) => return .Error(if error == .BudgetExceeded { slop_os.DeviceError.BudgetExceeded } else { slop_os.DeviceError.OutOfMemory })
+    }
+    memory :: cast[ptr[mut Memory]](object)
+    memory.size = size
+    memory.physical = physical
+    memory.cache = cache
+    memory.allowed = 7
+    match adopt(owner, object) {
+        case Ok => {}
+        case Error(error) => {
+            _ = destroy_object(kernel, object)
+            return .Error(.ObjectGone)
+        }
+    }
+    return .Ok(memory)
+}
+
+/*
+ * A window onto size bytes of parent from offset, owned by owner and charged to budget for its slot,
+ * mappable only as allowed (slop_os.PROTECTION_*).
+ */
+create_window :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, parent: ptr[mut Memory], offset: u64, size: u64, allowed: u32)
+    -> Result[ptr[mut Memory], slop_os.MemoryError] {
+    if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || offset & (frames.FRAME_SIZE - 1) != 0 || offset > parent.size
+        || size > parent.size - offset {
+        return .Error(.InvalidSize)
+    }
+    object := cast[u64](0)
+    match new_object(kernel, .Memory, budget, 0) {
+        case Ok(made) => object = made
+        case Error(error) => return .Error(if error == .BudgetExceeded { slop_os.MemoryError.BudgetExceeded } else { slop_os.MemoryError.OutOfMemory })
+    }
+    window :: cast[ptr[mut Memory]](object)
+    window.size = size
+    window.parent = cast[u64](parent)
+    window.parent_page = offset / frames.FRAME_SIZE
+    window.cache = parent.cache
+    window.allowed = parent.allowed & allowed
+    // On the parent's list before anyone can have it, so destroying the parent reaches it
+    concurrency.lock(&parent.lock)
+    gone :: is_dying(cast[u64](parent))
+    if !gone {
+        window.window_previous = 0
+        window.window_next = parent.first_window
+        if parent.first_window != 0 {
+            cast[ptr[mut Memory]](parent.first_window).window_previous = object
+        }
+        parent.first_window = object
+        window.in_parent = true
+    }
+    concurrency.unlock(&parent.lock)
+    if gone {
+        release_object(kernel, object)
+        return .Error(.ObjectGone)
+    }
+    match adopt(owner, object) {
+        case Ok => {}
+        case Error(error) => {
+            _ = destroy_object(kernel, object)
+            return .Error(.ObjectGone)
+        }
+    }
+    return .Ok(window)
+}
+
 // Where page's frame's address is kept.
 page_slot :: fn(memory: ptr[Memory], page: u64) -> ptr[mut u64] {
     leaf :: cast[ptr[u64]](memory.directory + (page / PAGES_PER_LEAF % PAGES_PER_LEAF) * 8)^
     return cast[ptr[mut u64]](leaf + page % PAGES_PER_LEAF * 8)
 }
 
-// page's frame, a zeroed one if it had none yet: its physical address, 0 if there are no frames.
+/*
+ * page's frame, a zeroed one if it had none yet: its physical address, 0 if there are no frames. Device
+ * memory's is its address; a window's, its parent's.
+ */
 frame_for :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], page: u64) -> u64 {
+    if memory.physical != 0 {
+        return memory.physical + page * frames.FRAME_SIZE
+    }
+    if memory.parent != 0 {
+        return frame_for(kernel, cast[ptr[Memory]](memory.parent), memory.parent_page + page)
+    }
     slot :: page_slot(memory, page)
     held :: intrinsics.atomic_load_u64_acquire(slot)
     if held != 0 {
@@ -139,8 +250,18 @@ frame_for :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], page: u64) -> u64 
     return cast[u64](frame)
 }
 
-// Destroying a memory object takes down every mapping of it.
+/*
+ * Destroying a memory object takes down every mapping of it, and destroys its windows; a window leaves
+ * its parent's list.
+ */
 destroy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
+    destroy_windows(kernel, memory)
+    if memory.parent != 0 {
+        parent :: cast[ptr[mut Memory]](memory.parent)
+        concurrency.lock(&parent.lock)
+        unlink_window(parent, memory)
+        concurrency.unlock(&parent.lock)
+    }
     loop {
         concurrency.lock(&memory.lock)
         claimed := cast[u64](0)
@@ -166,7 +287,43 @@ destroy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
     }
 }
 
-// Once no CPU can use it: its frames, and its page array.
+/*
+ * Destroy memory's windows, each once the destroy running on this CPU is done (destroy_later), off its
+ * list first, so none is reached twice.
+ */
+destroy_windows :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
+    loop {
+        concurrency.lock(&memory.lock)
+        window :: memory.first_window
+        if window != 0 {
+            unlink_window(memory, cast[ptr[mut Memory]](window))
+        }
+        concurrency.unlock(&memory.lock)
+        if window == 0 {
+            break
+        }
+        destroy_later(kernel, window, cast[ptr[ObjectHeader]](window).generation)
+    }
+}
+
+// Take window off parent's list, if it's on it. Takes the parent's lock as held.
+unlink_window :: fn(parent: ptr[mut Memory], window: ptr[mut Memory]) {
+    if !window.in_parent {
+        return void
+    }
+    if window.window_previous != 0 {
+        cast[ptr[mut Memory]](window.window_previous).window_next = window.window_next
+    }
+    else {
+        parent.first_window = window.window_next
+    }
+    if window.window_next != 0 {
+        cast[ptr[mut Memory]](window.window_next).window_previous = window.window_previous
+    }
+    window.in_parent = false
+}
+
+// Once no CPU can use it: its frames, and its page array; device memory and windows have neither.
 release_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
     if memory.directory == 0 {
         return void
@@ -197,6 +354,10 @@ memory_map :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], space: ptr[mu
     executable :: protection & cast[u32](slop_os.PROTECTION_EXECUTE) != 0
     if protection == 0 || protection & ~cast[u32](7) != 0 || (writable && executable) {
         return slop_os.MemoryError.BadProtection
+    }
+    // A window, only as its parent's handle allowed
+    if protection & ~memory.allowed != 0 {
+        return slop_os.MemoryError.MissingRight
     }
     if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || offset & (frames.FRAME_SIZE - 1) != 0 || offset > memory.size
         || size > memory.size - offset {
@@ -368,7 +529,7 @@ resolve_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arc
     if frame == 0 {
         return false
     }
-    mapped, error :: map_pages_locked(kernel, space, address, frame, frames.FRAME_SIZE, mapping_for(protection))
+    mapped, error :: map_pages_locked(kernel, space, address, frame, frames.FRAME_SIZE, mapping_for(protection, memory.cache))
     // Another CPU may have mapped it meanwhile, for a fault of its own
     return match error {
         case Some(failure) => failure == .AlreadyMapped
@@ -376,8 +537,8 @@ resolve_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arc
     }
 }
 
-// How a mapping with protection is mapped.
-mapping_for :: fn(protection: u32) -> arch_interface.Mapping {
+// How a mapping with protection, of memory with cache, is mapped.
+mapping_for :: fn(protection: u32, cache: arch_interface.CacheMode) -> arch_interface.Mapping {
     kind := arch_interface.Protection.Read
     if protection & cast[u32](slop_os.PROTECTION_WRITE) != 0 {
         kind = .ReadWrite
@@ -385,7 +546,7 @@ mapping_for :: fn(protection: u32) -> arch_interface.Mapping {
     else if protection & cast[u32](slop_os.PROTECTION_EXECUTE) != 0 {
         kind = .ReadExecute
     }
-    return arch_interface.Mapping.{protection = kind, cache = .WriteBack, user = true, global = false}
+    return arch_interface.Mapping.{protection = kind, cache = cache, user = true, global = false}
 }
 
 /*

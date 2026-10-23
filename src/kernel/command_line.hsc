@@ -56,6 +56,8 @@ Options :: struct {
     test_channels : bool,
     // test_memory: once booted, run two threads in user mode that use memory budgets and memory objects.
     test_memory : bool,
+    // test_devices: once booted, run a driver in user mode with the platform capability: an IRQ, device memory and windows.
+    test_devices : bool,
 }
 
 parse_command_line :: fn(command_line: string) -> Options {
@@ -132,6 +134,9 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_memory" {
         options.test_memory = true
+    }
+    if word == "test_devices" {
+        options.test_devices = true
     }
     if word == "test_channels" {
         options.test_channels = true

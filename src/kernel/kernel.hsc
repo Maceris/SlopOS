@@ -49,6 +49,8 @@ Kernel :: struct {
     page_table_lock : concurrency.SpinLock,
     // The bootloader's memory, reclaimed once every CPU is done with it.
     boot_memory : boot_info.PhysicalRange[],
+    // The RAM the kernel owns, from the memory map (address_space.hsc, keep_boot_info).
+    ram : boot_info.PhysicalRange[],
     // How many CPUs must leave their boot stacks before boot memory is reclaimed, 0 until it's known.
     cpus_leaving_boot_stacks : u32,
     // How many have.
@@ -79,6 +81,9 @@ Kernel :: struct {
     // The budget every other is split from, and the lock for changing two budgets at once (memory_budgets.hsc).
     root_budget : u64,
     budgets_lock : concurrency.SpinLock,
+    // The platform capability, for the root task (irqs.hsc); and the last CPU an IRQ was routed to.
+    platform : u64,
+    next_irq_cpu : u32,
     // Threads (threads.hsc): the last ID, and the last CPU one was started on.
     next_thread_id : u64,
     next_start_cpu : u32,
@@ -96,6 +101,8 @@ Kernel :: struct {
     channels_test : u64,
     // test_memory's state, as an address, while it runs (memory_test.hsc)
     memory_test : u64,
+    // test_devices' state, as an address, while it runs (devices_test.hsc)
+    devices_test : u64,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : concurrency.SpinLock,
     // test_pool's state, as an address, once the boot CPU has set it up for the other CPUs (pool_test.hsc)
@@ -222,6 +229,7 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         leave_boot_stacks(kernel)
         // Of the memory free once boot memory is back
         kernel.root_budget = make_root_budget(kernel)
+        kernel.platform = new_object(kernel, .Platform, 0, 0) or_else 0
         if kernel.options.test_clock {
             test_clock(kernel)
         }
@@ -248,6 +256,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         }
         if kernel.options.test_memory {
             test_memory(kernel)
+        }
+        if kernel.options.test_devices {
+            test_devices(kernel)
         }
         if kernel.options.test_fault {
             runtime.log_info("test_fault: running an invalid instruction")
