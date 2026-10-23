@@ -12,19 +12,26 @@ import frames from "frames"
 }
 
 /*
- * Address spaces (roadmap M4, knowledge/design/kernel.md §2): page tables for user mode, sharing the
- * kernel's half (decisions/0048), each with its own address-space tag where the CPU has them, so
- * switching between them keeps the TLB.
+ * Address spaces (roadmap M4, M5, knowledge/design/kernel.md §2): objects with page tables for user
+ * mode, sharing the kernel's half (decisions/0048), each with its own address-space tag where the CPU
+ * has them, so switching between them keeps the TLB.
+ *
+ * Destroying one destroys the threads that run in it. Its tables, its root and its tag go once no CPU
+ * can be using them: every CPU switches its page tables away from one it won't run again before its
+ * next quiescent point (scheduler.hsc). The tag's entries are flushed from every CPU before it's reused.
  */
-//TODO(claude): destroying one, and its tag's reuse after flush_tlb_tag on every CPU (M5, with AddressSpace objects)
 
 // Tags: 0 is the kernel's own table's (address_space.hsc).
 MAX_TAGS :: 4096
 
-AddressSpace :: struct {
+AddressSpace :: struct #align(16) {
+    header : ObjectHeader,
     // Held while its table changes (docs/specs/arch_interface.md, Rules for L2).
     lock : concurrency.SpinLock,
     table : arch.PageTable,
+    // The threads that run in it, and the lock for that list.
+    threads_lock : concurrency.SpinLock,
+    first_thread : u64,
 }
 
 SpaceError :: enum {
@@ -34,6 +41,8 @@ SpaceError :: enum {
     // Not user addresses, or not aligned.
     InvalidAddress,
     AlreadyMapped,
+    // Its owner is being destroyed.
+    OwnerGone,
 }
 
 // The tags in use, one bit each.
@@ -42,18 +51,117 @@ TagSet :: struct {
     used : u64[MAX_TAGS / 64],
 }
 
-create_address_space :: fn(kernel: ptr[mut Kernel]) -> (made #unrestricted : Result[ptr[mut AddressSpace], SpaceError]) {
-    tag :: allocate_tag(kernel) or_return .Error(.OutOfTags)
-    root :: frames.take_frame(&per_cpu().frame_cache, &kernel.frames) or_return .Error(.OutOfMemory)
-    intrinsics.mem_zero(cast[rawptr](frames.virtual_of(&kernel.frames, root)), cast[usize](frames.FRAME_SIZE))
-    space, error :: runtime.new_aligned(AddressSpace, align_of(AddressSpace))
-    if error != null {
-        frames.give_frame(&per_cpu().frame_cache, &kernel.frames, root)
-        return .Error(.OutOfMemory)
+// An empty address space, owned by owner (a Process's address, 0 for the kernel).
+create_address_space :: fn(kernel: ptr[mut Kernel], owner: u64) -> (made #unrestricted : Result[ptr[mut AddressSpace], SpaceError]) {
+    object := cast[u64](0)
+    match new_object(kernel, .AddressSpace) {
+        case Ok(address) => object = address
+        case Error(error) => return .Error(.OutOfMemory)
     }
-    space^ = AddressSpace.{}
+    space :: cast[ptr[mut AddressSpace]](object)
+    tag := cast[arch_interface.AddressSpaceTag](0)
+    match allocate_tag(kernel) {
+        case Some(given) => tag = given
+        case None => {
+            release_object(kernel, object)
+            return .Error(.OutOfTags)
+        }
+    }
+    root := cast[boot_info.PhysicalAddress](0)
+    match frames.take_frame(&per_cpu().frame_cache, &kernel.frames) {
+        case Ok(frame) => root = frame
+        case Error(error) => {
+            free_tag(kernel, tag)
+            release_object(kernel, object)
+            return .Error(.OutOfMemory)
+        }
+    }
+    intrinsics.mem_zero(cast[rawptr](frames.virtual_of(&kernel.frames, root)), cast[usize](frames.FRAME_SIZE))
     arch.init_page_table(&space.table, root, tag, &kernel.page_table)
+    match adopt(owner, object) {
+        case Ok => {}
+        case Error(error) => {
+            _ = destroy_object(kernel, object)
+            return .Error(.OwnerGone)
+        }
+    }
     return .Ok(space)
+}
+
+// Destroying an address space destroys the threads that run in it.
+destroy_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace]) {
+    loop {
+        concurrency.lock(&space.threads_lock)
+        first :: space.first_thread
+        concurrency.unlock(&space.threads_lock)
+        if first == 0 {
+            break
+        }
+        // A thread being destroyed elsewhere takes itself off the list
+        if !destroy_object(kernel, first) {
+            leave_space(cast[ptr[mut Thread]](first))
+        }
+    }
+}
+
+// Once no CPU can use it: its tables, its root, and its tag, flushed from every CPU first.
+release_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace]) {
+    if cast[u64](space.table.root) == 0 {
+        return void
+    }
+    freed : arch_interface.FreedTables
+    loop {
+        freed.count = 0
+        done :: arch.release_user_tables(&space.table, &freed)
+        free_tables(kernel, &freed)
+        if done {
+            break
+        }
+    }
+    frames.give_frame(&per_cpu().frame_cache, &kernel.frames, space.table.root)
+    tag :: space.table.tag
+    if cast[u16](tag) != 0 {
+        flush := arch_interface.TlbBatch.{tag = tag, all = true}
+        shootdown(kernel, &flush)
+        free_tag(kernel, tag)
+    }
+    space.table.root = cast[arch_interface.PhysicalAddress](0)
+}
+
+// Add a thread to the ones that run in space, unless space is being destroyed.
+join_space :: fn(space: ptr[mut AddressSpace], thread: ptr[mut Thread]) -> bool {
+    concurrency.lock(&space.threads_lock)
+    defer concurrency.unlock(&space.threads_lock)
+    if intrinsics.atomic_load_u32_acquire(&space.header.dying) != 0 {
+        return false
+    }
+    thread.space_previous = 0
+    thread.space_next = space.first_thread
+    if space.first_thread != 0 {
+        cast[ptr[mut Thread]](space.first_thread).space_previous = cast[u64](thread)
+    }
+    space.first_thread = cast[u64](thread)
+    thread.in_space = true
+    return true
+}
+
+leave_space :: fn(thread: ptr[mut Thread]) {
+    space :: thread.space
+    concurrency.lock(&space.threads_lock)
+    defer concurrency.unlock(&space.threads_lock)
+    if !thread.in_space {
+        return void
+    }
+    if thread.space_previous != 0 {
+        cast[ptr[mut Thread]](thread.space_previous).space_next = thread.space_next
+    }
+    else {
+        space.first_thread = thread.space_next
+    }
+    if thread.space_next != 0 {
+        cast[ptr[mut Thread]](thread.space_next).space_previous = thread.space_previous
+    }
+    thread.in_space = false
 }
 
 /*
@@ -76,6 +184,14 @@ allocate_tag :: fn(kernel: ptr[mut Kernel]) -> arch_interface.AddressSpaceTag? {
         }
     }
     return null
+}
+
+free_tag :: fn(kernel: ptr[mut Kernel], tag: arch_interface.AddressSpaceTag) {
+    index :: cast[usize](cast[u16](tag))
+    tags :: &kernel.tags
+    concurrency.lock(&tags.lock)
+    tags.used[index / 64 % (MAX_TAGS / 64)] &= ~(cast[u64](1) << cast[u64](index % 64))
+    concurrency.unlock(&tags.lock)
 }
 
 /*

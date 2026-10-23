@@ -35,7 +35,8 @@ docs/
 | Document | Status |
 |---|---|
 | `architecture/layers.md` | The layer model (L0–L6) and its interfaces. L0, L1 and much of L2 built |
-| `architecture/kernel.md` | The kernel core as built: boot, memory, interrupts, time, threads and scheduling. Built (roadmap M1–M4) |
+| `architecture/kernel.md` | The kernel core as built: boot, memory, objects and handles, interrupts, time, threads and scheduling. Built (roadmap M1–M5 stage 1) |
 | `specs/boot_info.md` | The boot handoff from L0 to the kernel core, and its Limine implementation. Implemented |
 | `specs/arch_interface.md` | The boundary between the arch layer and the kernel core, in both directions. Implemented on x86-64 |
+| `specs/system_calls.md` | How user space calls the kernel: registers, handles, rights, the calls and their errors. Implemented, growing |
 | `guides/building.md` | Building, booting in QEMU, the kernel's command line, testing and debugging |

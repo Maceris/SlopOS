@@ -113,6 +113,8 @@ when relevant.
   clock is monotonic only (`0049`).
 - Threads are slab objects with eager XSAVE vector state; each CPU has a run queue per priority level and
   steals when idle; budgets are charged at ticks with sporadic-server refills; no FSGSBASE (`0050`).
+- Kernel objects are named by address in type-stable pools; handles are 16-bit index and 16-bit generation;
+  a CPU records a quiescent point only after checking what it resumes isn't dying (`0051`).
 
 ## Writing Hemera: Things That Are Easy to Get Wrong
 

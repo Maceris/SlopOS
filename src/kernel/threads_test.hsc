@@ -78,8 +78,16 @@ test_budgets :: fn(kernel: ptr[mut Kernel]) {
 start_threads_test :: fn(kernel: ptr[mut Kernel], count: usize, budgeted: bool) -> ptr[mut ThreadsTest]? {
     test :: allocate_object[ThreadsTest](&kernel.frames) or_else out_of_memory(&kernel.options, "threads test: no memory")
     test.count = count
+    process := cast[ptr[mut Process]](0)
+    match create_process(kernel, 0) {
+        case Ok(made) => process = made
+        case Error(error) => {
+            runtime.log_error("threads test: no process: %", error)
+            return null
+        }
+    }
     space := cast[ptr[mut AddressSpace]](0)
-    match create_address_space(kernel) {
+    match create_address_space(kernel, cast[u64](process)) {
         case Ok(made) => space = made
         case Error(error) => {
             runtime.log_error("threads test: no address space: %", error)
@@ -118,7 +126,7 @@ start_threads_test :: fn(kernel: ptr[mut Kernel], count: usize, budgeted: bool) 
         }
         budget :: if budgeted && i == 0 { cast[u64](&test.budget) } else { cast[u64](0) }
         thread := cast[ptr[mut Thread]](0)
-        match create_thread(kernel, space, &start, arch_interface.VectorConfig.{extended = false}, budget) {
+        match create_thread(kernel, cast[u64](process), space, &start, arch_interface.VectorConfig.{extended = false}, budget) {
             case Ok(made) => thread = made
             case Error(error) => {
                 runtime.log_error("threads test: no thread: %", error)

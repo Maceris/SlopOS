@@ -188,6 +188,36 @@ test_user_pages :: fn(kernel: ptr[mut arch.PageTable], memory: ptr[mut Memory]) 
     if translates(&user, USER_PAGE) {
         return 36
     }
+
+    // Three pages under two page directories: six tables below the root, all released, a few at a time
+    refill(&tables, memory)
+    _ = mapped(&user, USER_PAGE, 0xa000, .Size4K, USER_DATA, &tables)
+    refill(&tables, memory)
+    _ = mapped(&user, USER_PAGE + 0x200000, 0xb000, .Size4K, USER_DATA, &tables)
+    refill(&tables, memory)
+    _ = mapped(&user, 0x80000000, 0xc000, .Size4K, USER_DATA, &tables)
+    if !translates(&user, 0x80000000) || !translates(&user, USER_PAGE + 0x200000) {
+        return 37
+    }
+    released : u32 = 0
+    calls : u32 = 0
+    loop {
+        freed.count = 0
+        done :: arch.release_user_tables(&user, &freed)
+        released += freed.count
+        calls += 1
+        if done {
+            break
+        }
+    }
+    while calls < 10
+    if released != 6 || calls != 2 || translates(&user, USER_PAGE) || translates(&user, 0x80000000) {
+        return 38
+    }
+    // The kernel half is still there
+    if !translates_to(&user, KERNEL_PAGE, 0x9000, KERNEL_DATA) {
+        return 39
+    }
     return 0
 }
 

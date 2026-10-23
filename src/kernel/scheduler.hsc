@@ -9,9 +9,10 @@ import concurrency from "std"
 }
 
 /*
- * The dispatcher (roadmap M4, knowledge/design/scheduling.md §2, decisions/0037): each CPU runs the
- * highest-priority ready thread whose budget has time left, round robin within a priority, and threads
- * whose budget is spent, or that have none, round robin in the background band below every priority.
+ * The dispatcher (roadmap M4, knowledge/design/scheduling.md §2, decisions/0037, 0050): each CPU runs
+ * the highest-priority ready thread whose budget has time left, round robin within a priority, and
+ * threads whose budget is spent, or that have none, round robin in the background band below every
+ * priority.
  *
  * Each CPU has its own run queue: a list per level, the background band at level 0 and priority p at
  * p + 1, and a bit per level that has threads. A CPU with nothing to run takes a thread from another's
@@ -21,6 +22,11 @@ import concurrency from "std"
  *
  * A thread's level is worked out when it's queued, so one whose budget comes back while it waits in the
  * background band moves up only once it's run again: within a tick, since the band is round robin.
+ *
+ * Returning to user mode and going idle are quiescent points (objects.hsc): the CPU first switches its
+ * page tables to what it runs next, then reads the epoch, then checks that the thread it resumes isn't
+ * being destroyed, and only then says it's quiescent. So a thread destroyed in an earlier epoch is never
+ * resumed, and nothing is freed while a CPU still uses it.
  */
 //SPEC: knowledge/design/scheduling.md §2 (dispatch, Demote, replenishment)
 
@@ -57,8 +63,8 @@ make_ready :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], cpu_index: u3
     target :: cast[ptr[mut PerCpu]](per_cpus[cpu_index])
     level :: level_of(thread, arch.counter())
     thread.state = .Ready
-    thread.cpu = cpu_index
     concurrency.lock(&target.run_queue.lock)
+    intrinsics.atomic_store_u32_release(&thread.cpu, cpu_index)
     enqueue(&target.run_queue, thread, level)
     concurrency.unlock(&target.run_queue.lock)
     running :: intrinsics.atomic_load_u32_acquire(&target.current_level)
@@ -72,44 +78,53 @@ make_ready :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], cpu_index: u3
 /*
  * Run what should run next on the calling CPU, after an entry: at a tick, the next thread of the same
  * level or higher, round robin; at any other entry, a thread of a higher level than the current one,
- * which otherwise goes on. With no thread, a ready one here or on another CPU, or idle.
+ * which otherwise goes on. With no thread, a ready one here or on another CPU, or idle. A thread being
+ * destroyed is dropped wherever it's found.
  */
 schedule :: fn(tick: bool) #never_returns {
     cpu :: per_cpu()
     kernel :: cpu.kernel
-    now :: arch.counter()
-    current :: cpu.current
-    current_level := IDLE_LEVEL
-    if current != 0 {
-        account(cpu, cast[ptr[mut Thread]](current), now)
-        current_level = level_of(cast[ptr[Thread]](current), now)
-    }
-    next := cast[u64](0)
-    concurrency.lock(&cpu.run_queue.lock)
-    best :: highest_level(&cpu.run_queue)
-    if best != IDLE_LEVEL && (current == 0 || best > current_level || (tick && best == current_level)) {
-        next = dequeue(&cpu.run_queue, best)
-    }
-    concurrency.unlock(&cpu.run_queue.lock)
-    if next == 0 && current == 0 {
-        next = steal(kernel, cpu)
-    }
-    if next == 0 {
-        if current != 0 {
-            go_on(cpu, cast[ptr[mut Thread]](current), current_level)
+    loop {
+        now :: arch.counter()
+        current := cpu.current
+        if current != 0 && is_dying(current) {
+            cpu.current = 0
+            current = 0
         }
-        go_idle(cpu)
-    }
-    if current != 0 {
-        // Saved before it's queued, where another CPU may take it
-        thread :: cast[ptr[mut Thread]](current)
-        arch.save_vector_state(cast[ptr[mut arch.VectorState]](thread.vector))
-        thread.state = .Ready
+        current_level := IDLE_LEVEL
+        if current != 0 {
+            account(cpu, cast[ptr[mut Thread]](current), now)
+            current_level = level_of(cast[ptr[Thread]](current), now)
+        }
+        next := cast[u64](0)
         concurrency.lock(&cpu.run_queue.lock)
-        enqueue(&cpu.run_queue, thread, current_level)
+        best :: highest_level(&cpu.run_queue)
+        if best != IDLE_LEVEL && (current == 0 || best > current_level || (tick && best == current_level)) {
+            next = dequeue(&cpu.run_queue, best)
+        }
         concurrency.unlock(&cpu.run_queue.lock)
+        if next == 0 && current == 0 {
+            next = steal(kernel, cpu)
+        }
+        if next == 0 && current == 0 {
+            go_idle(kernel, cpu)
+        }
+        if next == 0 {
+            go_on(kernel, cpu, cast[ptr[mut Thread]](current), current_level)
+            continue
+        }
+        if current != 0 {
+            // Saved before it's queued, where another CPU may take it
+            thread :: cast[ptr[mut Thread]](current)
+            arch.save_vector_state(cast[ptr[mut arch.VectorState]](thread.vector))
+            thread.state = .Ready
+            concurrency.lock(&cpu.run_queue.lock)
+            enqueue(&cpu.run_queue, thread, current_level)
+            concurrency.unlock(&cpu.run_queue.lock)
+            cpu.current = 0
+        }
+        run(kernel, cpu, cast[ptr[mut Thread]](next), now)
     }
-    run(cpu, cast[ptr[mut Thread]](next), now)
 }
 
 // Charge the time since the current thread started running, or since the last charge.
@@ -122,31 +137,53 @@ account :: fn(cpu: ptr[mut PerCpu], thread: ptr[mut Thread], now: u64) {
     cpu.run_start = now
 }
 
-// Switch to thread: its vector state, its address space, its registers.
-run :: fn(cpu: ptr[mut PerCpu], thread: ptr[mut Thread], now: u64) #never_returns {
-    thread.state = .Running
-    thread.cpu = cpu.index
-    cpu.current = cast[u64](thread)
-    intrinsics.atomic_store_u32_release(&cpu.current_level, thread.level)
-    cpu.run_start = now
-    arch.restore_vector_state(cast[ptr[arch.VectorState]](thread.vector))
+/*
+ * Switch to thread: its address space, its vector state, its registers. Returns only if it turns out to
+ * be dying.
+ */
+run :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Thread], now: u64) {
     if cpu.space != cast[u64](thread.space) {
         arch.activate(&thread.space.table)
         cpu.space = cast[u64](thread.space)
     }
+    epoch :: intrinsics.atomic_load_u64(&kernel.epoch)
+    if is_dying(cast[u64](thread)) {
+        return void
+    }
+    pass_quiescent(kernel, cpu, epoch)
+    thread.state = .Running
+    intrinsics.atomic_store_u32_release(&thread.cpu, cpu.index)
+    cpu.current = cast[u64](thread)
+    intrinsics.atomic_store_u32_release(&cpu.current_level, thread.level)
+    cpu.run_start = now
+    arch.restore_vector_state(cast[ptr[arch.VectorState]](thread.vector))
     arch.return_to_user(&thread.registers)
 }
 
-// Back to the current thread, whose registers, vector state and address space are all still its own.
-go_on :: fn(cpu: ptr[mut PerCpu], thread: ptr[mut Thread], level: u32) #never_returns {
+/*
+ * Back to the current thread, whose registers, vector state and address space are all still its own.
+ * Returns only if it turns out to be dying.
+ */
+go_on :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Thread], level: u32) {
+    epoch :: intrinsics.atomic_load_u64(&kernel.epoch)
+    if is_dying(cast[u64](thread)) {
+        return void
+    }
+    pass_quiescent(kernel, cpu, epoch)
     thread.level = level
     intrinsics.atomic_store_u32_release(&cpu.current_level, level)
     arch.return_to_user(&thread.registers)
 }
 
-go_idle :: fn(cpu: ptr[mut PerCpu]) #never_returns {
+// Nothing to run: the kernel's own page tables, so no address space stays active here, then idle.
+go_idle :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu]) #never_returns {
     cpu.current = 0
     intrinsics.atomic_store_u32_release(&cpu.current_level, IDLE_LEVEL)
+    if cpu.space != 0 {
+        arch.activate(&kernel.page_table)
+        cpu.space = 0
+    }
+    pass_quiescent(kernel, cpu, intrinsics.atomic_load_u64(&kernel.epoch))
     arch.idle()
 }
 
@@ -212,6 +249,7 @@ enqueue :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread], level: u32) {
     }
     queue.last[index] = cast[u64](thread)
     queue.nonempty[index / 64 % 5] |= cast[u64](1) << cast[u64](index % 64)
+    thread.queued = true
     intrinsics.atomic_store_u32_release(&queue.count, queue.count + 1)
 }
 
@@ -220,16 +258,30 @@ dequeue :: fn(queue: ptr[mut RunQueue], level: u32) -> u64 {
     index :: cast[usize](level) % LEVELS
     first :: queue.first[index]
     runtime.assert(first != 0, "dequeue takes a level with threads")
-    thread :: cast[ptr[mut Thread]](first)
-    queue.first[index] = thread.next
-    if thread.next != 0 {
-        cast[ptr[mut Thread]](thread.next).previous = 0
+    unlink(queue, cast[ptr[mut Thread]](first))
+    return first
+}
+
+// Take thread off its level's list. Takes the lock as held.
+unlink :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread]) {
+    index :: cast[usize](thread.level) % LEVELS
+    if thread.previous != 0 {
+        cast[ptr[mut Thread]](thread.previous).next = thread.next
     }
     else {
-        queue.last[index] = 0
+        queue.first[index] = thread.next
+    }
+    if thread.next != 0 {
+        cast[ptr[mut Thread]](thread.next).previous = thread.previous
+    }
+    else {
+        queue.last[index] = thread.previous
+    }
+    if queue.first[index] == 0 {
         queue.nonempty[index / 64 % 5] &= ~(cast[u64](1) << cast[u64](index % 64))
     }
     thread.next = 0
+    thread.previous = 0
+    thread.queued = false
     intrinsics.atomic_store_u32_release(&queue.count, queue.count - 1)
-    return first
 }

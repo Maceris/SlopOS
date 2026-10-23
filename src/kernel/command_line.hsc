@@ -48,6 +48,8 @@ Options :: struct {
     test_threads : bool,
     // test_budgets: once booted, run a thread with a CPU budget against one without (on 1 CPU).
     test_budgets : bool,
+    // test_syscalls: once booted, run a thread in user mode that makes system calls on handles.
+    test_syscalls : bool,
 }
 
 parse_command_line :: fn(command_line: string) -> Options {
@@ -115,5 +117,8 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_budgets" {
         options.test_budgets = true
+    }
+    if word == "test_syscalls" {
+        options.test_syscalls = true
     }
 }

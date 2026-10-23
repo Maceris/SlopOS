@@ -11,7 +11,8 @@
  *
  * Slabs with free objects are on the cache's partial list; full ones are on none; a slab that
  * empties is kept for the next allocation, up to MAX_EMPTY_SLABS, and otherwise goes back to the
- * frame allocator.
+ * frame allocator, unless the cache is type-stable. A free object's first 8 bytes are the cache's;
+ * the rest is left as it was.
  *
  * In front of each cache, every CPU has a magazine: a stack of free objects it takes from and gives
  * back to without a lock, refilled from the cache or emptied into it half a magazine at a time.
@@ -75,6 +76,12 @@ SlabCache :: struct {
     // Slabs taken from the frame allocator, and objects handed out, from the cache or into magazines.
     slab_count : u64,
     allocated : u64,
+    /*
+     * Type-stable: empty slabs are kept rather than freed, so memory that held one of its objects only
+     * ever holds its objects. What reaches an object by its address then can't reach anything else
+     * there, which kernel objects' generational handles depend on (decisions/0008).
+     */
+    type_stable : bool,
 }
 
 // One CPU's stack of free objects from one cache. Used only by its CPU, so it needs no lock.
@@ -240,7 +247,7 @@ give_object :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllo
         return void
     }
     unlink(cache, base)
-    if cache.empty.count < MAX_EMPTY_SLABS {
+    if cache.empty.count < MAX_EMPTY_SLABS || cache.type_stable {
         push(cache, base, .Empty)
         return void
     }

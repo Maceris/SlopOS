@@ -88,6 +88,14 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-22 — `&cast[T](x).field` failed to parse: after `&`, the parser read the next token as a name, so it
+  reported "Undeclared name. cast". Kernel code reaching an object's field by its address needs exactly that.
+  It parses as the address of the cast's chain now; tests in the parser's valid scenarios and `using_fields`.
+- 2026-10-22 — `base` gains `x86_64.system_call`, a system call answering in `rax`, `rdx` and `r8`, as SlopOS's
+  do; `x86_64.syscall` gives only `rax`, Linux's way. Checked on Linux with `getpid` (the `system` scenario), and
+  used by M5's tests until the ABI package generates stubs. The ABI package itself (`std/os/slop_os`) gains its
+  first system calls, handles, rights and errors (`syscalls.hsc`).
+
 - 2026-10-22 — Entry functions' generated code now clears `RFLAGS.AC` before the body, with `pushfq`, `andq`
   and `popfq` (`clac` faults on CPUs without SMAP). An interrupt gate leaves AC as user code set it, which with
   SMAP enabled lets the kernel reach user memory; `SYSCALL` already cleared it through `IA32_FMASK`. Found while

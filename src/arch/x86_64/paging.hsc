@@ -300,6 +300,52 @@ translate :: fn(table: ptr[PageTable], virtual_address: arch_interface.VirtualAd
 }
 
 /*
+ * An address space's tables, freed into freed, as many as it has room for: true once none are left
+ * but the root. What they mapped isn't touched. Each call frees tables with none below them, so it can
+ * stop anywhere and go on.
+ */
+release_user_tables :: fn(table: ptr[mut PageTable], freed: ptr[mut arch_interface.FreedTables]) -> bool {
+    runtime.assert(!table.kernel, "the kernel's own tables stay")
+    top :: table_at(table, cast[u64](table.root))
+    loop {
+        slot := cast[u64](0)
+        for i in 0..<KERNEL_HALF_FIRST {
+            entry :: top.entries[i]
+            if entry & ENTRY_PRESENT != 0 {
+                below :: lowest_table_slot(table, table_at(table, entry & ENTRY_ADDRESS), TOP_LEVEL - 1)
+                slot = if below != 0 { below } else { cast[u64](&top.entries[i]) }
+                break
+            }
+        }
+        if slot == 0 {
+            return true
+        }
+        add_freed(freed, load_entry(slot) & ENTRY_ADDRESS)
+        store_entry(cast[ptr[mut u64]](slot), 0)
+    }
+    while cast[usize](freed.count) < 4
+    return false
+}
+
+/*
+ * In current, a table at level, the entry of a table under it with no tables under it in turn, or 0 if
+ * current points at no tables.
+ */
+lowest_table_slot :: fn(table: ptr[PageTable], current: ptr[mut Table], level: u64) -> u64 {
+    if level == 0 {
+        return 0
+    }
+    for i in 0..<ENTRIES {
+        entry :: current.entries[i]
+        if entry & ENTRY_PRESENT != 0 && entry & ENTRY_LARGE == 0 {
+            below :: lowest_table_slot(table, table_at(table, entry & ENTRY_ADDRESS), level - 1)
+            return if below != 0 { below } else { cast[u64](&current.entries[i]) }
+        }
+    }
+    return 0
+}
+
+/*
  * Switch the calling CPU to table. With PCIDs, its tag's entries stay in the TLB unless something
  * since marked them stale; the first switch from the bootloader's tables flushes everything.
  */

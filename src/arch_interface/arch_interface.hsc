@@ -222,6 +222,13 @@ Translation :: struct {
     mapping : Mapping,
 }
 
+/*
+ * Free an address space's tables before its root is freed: as many as freed has room for each call, true
+ * once only the root is left. What they mapped isn't touched. L2 frees them, and the root, once no CPU can
+ * still use them.
+ */
+release_user_tables : fn(table: ptr[mut PageTable], freed: ptr[mut FreedTables]) -> bool : ---
+
 // Where virtual_address is mapped, or null if nothing is mapped there.
 translate : fn(table: ptr[PageTable], virtual_address: VirtualAddress) -> Translation? : ---
 

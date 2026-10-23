@@ -73,8 +73,10 @@ Kernel :: struct {
     test_controller : u32,
     // Where the kernel image's frames start, for mapping its code elsewhere.
     image_physical : u64,
-    // Threads (threads.hsc): their slab cache, the last ID, and the last CPU one was started on.
-    thread_cache : slab.SlabCache,
+    // The kernel objects' pools, and the epoch objects are destroyed in (objects.hsc).
+    pools : ObjectPools,
+    epoch : u64,
+    // Threads (threads.hsc): the last ID, and the last CPU one was started on.
     next_thread_id : u64,
     next_start_cpu : u32,
     // The address-space tags in use (spaces.hsc).
@@ -83,6 +85,8 @@ Kernel :: struct {
     stop_after_ticks : u64,
     // test_threads' or test_budgets' state, as an address, while it runs (threads_test.hsc)
     threads_test : u64,
+    // test_syscalls' state, as an address, while it runs (syscalls_test.hsc)
+    syscalls_test : u64,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : concurrency.SpinLock,
     // test_pool's state, as an address, once the boot CPU has set it up for the other CPUs (pool_test.hsc)
@@ -128,6 +132,9 @@ PerCpu :: struct #align(64) {
     space : u64,
     // When the current thread last started running, or was last charged.
     run_start : u64,
+    // Objects this CPU destroyed, waiting for a grace period; and the epoch it last passed a quiescent point in (objects.hsc).
+    limbo : u64,
+    quiescent_epoch : u64,
 }
 
 // The memory for one CPU's stacks.
@@ -170,7 +177,7 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     kernel.frames = made
     init_heap(&kernel.heap)
     init_clock(kernel)
-    init_threads(kernel)
+    init_pools(kernel)
     kernel.stop_after_ticks = BOOT_TICKS
     kernel.image_physical = cast[u64](info.kernel_image.physical.base)
     log_memory(&kernel.frames)
@@ -208,6 +215,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         }
         if kernel.options.test_budgets {
             test_budgets(kernel)
+        }
+        if kernel.options.test_syscalls {
+            test_syscalls(kernel)
         }
         if kernel.options.test_fault {
             runtime.log_info("test_fault: running an invalid instruction")

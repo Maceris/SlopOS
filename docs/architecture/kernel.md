@@ -1,6 +1,6 @@
 # The Kernel Core as Built
 
-What the kernel core (L2, `layers.md`) does so far, roadmap M1 to M4, and where its code is. What's not
+What the kernel core (L2, `layers.md`) does so far, roadmap M1 to M5's first stage, and where its code is. What's not
 built yet is listed at the end. The interfaces it builds on are specified in `../specs/boot_info.md` and
 `../specs/arch_interface.md`; choices and alternatives are in `../../knowledge/decisions/`, cited by
 number.
@@ -47,6 +47,18 @@ the kernel logger, and an assertion handler that stops the kernel.
 - **User address spaces** (`src/kernel/spaces.hsc`): their own page tables below the shared kernel half,
   each with its own PCID where the CPU has them.
 
+## Objects, Handles and System Calls
+
+- **Objects** (`src/kernel/objects.hsc`, `0008`, `0051`): processes, threads and address spaces so far, each
+  owned by a process and kept in a type-stable pool of its kind. Destroying one revokes every handle to it,
+  destroys what it owns, and frees its memory once every CPU has passed a quiescent point.
+- **Processes** (`src/kernel/processes.hsc`): nodes of the ownership tree, each with what it owns and its
+  handle table. Destroying one destroys its whole subtree.
+- **Handle tables** (`src/kernel/handles.hsc`): per process, entries with rights and an owning flag,
+  looked up without a lock.
+- **System calls** (`src/kernel/syscalls.hsc`): the calls in `../specs/system_calls.md`, on the calling
+  thread's process's handles.
+
 ## Interrupts and Time
 
 - Every interrupt, fault and system call enters through the arch layer's entries on the CPU's kernel
@@ -78,8 +90,9 @@ the kernel logger, and an assertion handler that stops the kernel.
 
 | What | Roadmap |
 |---|---|
-| System calls, capabilities, kernel objects (memory objects, channels, ports, IRQs for drivers), IPC | M5 |
-| Blocking, exiting and destroying threads; destroying address spaces | M5 |
+| Ports, blocking threads, timers; channels and IPC | M5 |
+| Memory objects and budgets as objects, IRQ objects, the generated ABI package, interception | M5 |
+| Destroying large subtrees with preemption points | M5 |
 | Loading programs, the root task, user space | M6 |
 | The platform service, PCIe, drivers | M7 |
 | xAPIC (without x2APIC), tickless idle, CPU affinity for budgets | later |

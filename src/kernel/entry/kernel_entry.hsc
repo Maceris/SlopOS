@@ -29,11 +29,10 @@ InterruptSource :: union {
     Spurious,
 }
 
-// A system call from user mode.
-//TODO(claude): system calls (M5)
+// A system call from user mode, by the CPU's current thread.
 syscall #never_returns :: fn(registers: ptr[mut arch.UserRegisters]) {
-    runtime.log_fatal("a system call arrived, and the kernel doesn't take system calls yet")
-    kernel.stop(.KernelFault)
+    kernel.left_boot_stack()
+    kernel.handle_syscall(registers)
 }
 
 // A fault in user mode.

@@ -38,6 +38,7 @@ handle_timer :: fn() {
         runtime.log_info("timer interrupt %", cpu.timer_ticks)
     }
     threads_test_tick(kernel, cpu.timer_ticks)
+    syscalls_test_tick(kernel, cpu.timer_ticks)
     if cpu.timer_ticks >= kernel.stop_after_ticks {
         stop(.Halted)
     }
