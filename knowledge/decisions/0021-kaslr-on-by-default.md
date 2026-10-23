@@ -1,6 +1,6 @@
 # 0021: KASLR On by Default, Disabled by a Boot Option
 
-Status: accepted
+Status: accepted, amended 2026-10-22 (how it's turned on, see the end)
 Date: 2026-10-04
 
 ## Context
@@ -36,3 +36,14 @@ and left open when to turn randomization on.
   It defends against ordinary memory-corruption exploits that need kernel addresses.
 - The kernel needs its entropy seed (RDSEED, or Limine's) before laying out its regions,
   which ties into the early-boot context (`../hemera-feedback.md`, item 9).
+
+## Amendment (2026-10-22)
+- **Limine randomizes nothing unless asked.** Limine 12 loads the kernel at its link address by
+  default, so the boot configuration says `kaslr: yes`, and `randomise_hhdm_base: yes` to put the
+  direct map at a random offset too (1 GiB aligned). `kaslr: no` and `randomise_hhdm_base: no` turn
+  them off; `tools/boot.py` does that with `--no-kaslr`.
+- **The kernel's own regions are in the direct map** (`0048`): its state, per-CPU state, stacks,
+  page tables and heap. Randomizing the direct map randomizes them all, so there's no kernel
+  command-line flag yet; one comes with the first region the kernel lays out itself.
+- The kernel logs both: its image's base and the direct map's offset. The boot tests check two boots
+  differ in both, and two with `--no-kaslr` don't.

@@ -16,7 +16,7 @@ stopped to the debug exit device (src/kernel/stop.hsc, StopReason). QEMU's CPU i
 default, since SlopOS needs x86-64-v3.
 
 The kernel's ELF goes in a Limine ISO, which QEMU boots (BIOS by default, --uefi for UEFI) with the
-serial port captured. A kernel ends the run by writing a code to QEMU's isa-debug-exit device at
+serial port captured. Limine randomizes the kernel's base and its direct map (KASLR), unless --no-kaslr. A kernel ends the run by writing a code to QEMU's isa-debug-exit device at
 port 0xf4; QEMU then exits with (code << 1) | 1, which this script turns back into the code. It
 exits with that code, so --expect makes it a test: 0 if the kernel's code matched, 1 otherwise.
 
@@ -49,10 +49,14 @@ KERNEL_FLAGS = [
     "--cpu-features=-mmx,-sse,-sse2,-avx,-avx2,+soft-float",
 ]
 
+# KASLR (knowledge/decisions/0021): Limine loads the kernel at a random base and puts its direct map at a random
+# offset, which this Limine doesn't do unless asked. --no-kaslr turns both off, so every boot has the same addresses.
 LIMINE_CONFIG = """timeout: 0
 
 /SlopOS
     protocol: limine
+    kaslr: {kaslr}
+    randomise_hhdm_base: {kaslr}
     path: boot():/boot/kernel
     cmdline: {command_line}
 """
@@ -120,13 +124,13 @@ def build_slopos_kernel(output: Path) -> None:
     run_hemera([f"--setting=targets=kernel,kernel_output={output}", str(BUILD_PACKAGE)], "SlopOS's kernel")
 
 
-def make_image(kernel: Path, limine: Path, xorriso: Path, folder: Path, command_line: str) -> Path:
+def make_image(kernel: Path, limine: Path, xorriso: Path, folder: Path, command_line: str, kaslr: bool) -> Path:
     """An ISO that boots kernel through Limine, from BIOS or UEFI."""
     root = folder / "iso_root"
     (root / "boot" / "limine").mkdir(parents=True)
     (root / "EFI" / "BOOT").mkdir(parents=True)
     shutil.copy(kernel, root / "boot" / "kernel")
-    (root / "boot" / "limine" / "limine.conf").write_text(LIMINE_CONFIG.format(command_line=command_line), newline="\n")
+    (root / "boot" / "limine" / "limine.conf").write_text(LIMINE_CONFIG.format(command_line=command_line, kaslr="yes" if kaslr else "no"), newline="\n")
     for name in ["limine-bios.sys", "limine-bios-cd.bin", "limine-uefi-cd.bin"]:
         shutil.copy(limine / name, root / "boot" / "limine" / name)
     shutil.copy(limine / "BOOTX64.EFI", root / "EFI" / "BOOT" / "BOOTX64.EFI")
@@ -173,6 +177,7 @@ def main() -> int:
                         help="a line the serial output should contain, with --expect; may be repeated")
     parser.add_argument("--timeout", type=float, default=30, help="seconds before giving up")
     parser.add_argument("--uefi", action="store_true", help="boot with UEFI firmware instead of BIOS")
+    parser.add_argument("--no-kaslr", action="store_true", help="the same addresses every boot: no random kernel base or direct map")
     parser.add_argument("--serial", type=Path, help="also keep the serial output in this file")
     parser.add_argument("qemu_arguments", nargs="*", help="more arguments for QEMU, after --")
     arguments = parser.parse_args()
@@ -191,7 +196,7 @@ def main() -> int:
                 parser.error("--package needs --linker-script")
             else:
                 build_kernel(arguments.package.resolve(), arguments.linker_script.resolve(), kernel)
-        image = make_image(kernel.resolve(), limine, xorriso, folder, arguments.command_line)
+        image = make_image(kernel.resolve(), limine, xorriso, folder, arguments.command_line, not arguments.no_kaslr)
         serial = folder / "serial.txt"
         code = run(image, qemu, serial, arguments.timeout, arguments.uefi, arguments.cpu, arguments.qemu_arguments)
         output = serial.read_text(errors="replace") if serial.exists() else ""

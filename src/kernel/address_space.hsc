@@ -61,11 +61,11 @@ start_address_space :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]
     count :: cast[usize](mapper.tables.count)
     runtime.assert(count <= 4, "TableFrames holds 4 frames")
     for i in 0..<count {
-        frames.free(&kernel.frames, mapper.tables.frames[i], 0)
+        frames.give_frame(&per_cpu().frame_cache, &kernel.frames, mapper.tables.frames[i])
     }
     arch.activate(&kernel.page_table)
-    runtime.log_info("kernel page tables active: % MiB of RAM in the direct map, the image in % segments",
-        mapper.direct_bytes >> 20, info.kernel_image.segments.count)
+    runtime.log_info("kernel page tables active: % MiB of RAM in the direct map at %, the image in % segments",
+        mapper.direct_bytes >> 20, cast[rawptr](info.direct_map_offset), info.kernel_image.segments.count)
 }
 
 /*
@@ -202,9 +202,13 @@ map_page :: fn(kernel: ptr[mut Kernel], virtual_address: u64, physical: u64, siz
     }
 }
 
+// Zeroed frames for new tables, from the calling CPU's cache of single frames.
 refill_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[mut arch_interface.TableFrames]) {
+    cache :: &per_cpu().frame_cache
     for i in cast[usize](tables.count)..<4 {
-        tables.frames[i] = frames.allocate_zeroed(&kernel.frames, 0) or_else out_of_memory(&kernel.options, "no memory for the kernel's page tables")
+        frame :: frames.take_frame(cache, &kernel.frames) or_else out_of_memory(&kernel.options, "no memory for the kernel's page tables")
+        intrinsics.mem_zero(cast[rawptr](frames.virtual_of(&kernel.frames, frame)), cast[usize](frames.FRAME_SIZE))
+        tables.frames[i] = frame
     }
     tables.count = 4
 }

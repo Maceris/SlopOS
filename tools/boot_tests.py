@@ -78,10 +78,49 @@ def main() -> int:
         if not build_kernel(morestack_kernel, "morestack"):
             print("FAILED: the kernel doesn't build with morestack")
             return 1
-        failed = run_tests(kernel, TESTS) + run_tests(morestack_kernel, MORESTACK_TESTS)
-        count = len(TESTS) + len(MORESTACK_TESTS)
+        failed = run_tests(kernel, TESTS) + run_tests(morestack_kernel, MORESTACK_TESTS) + run_address_tests(kernel)
+        count = len(TESTS) + len(MORESTACK_TESTS) + len(ADDRESS_TESTS)
         print(f"{count - failed} of {count} passed")
         return 0 if failed == 0 else 1
+
+
+# Where the kernel says it is: its image, and its direct map (decisions/0021)
+ADDRESS_LINES = ["[boot] kernel image at ", "[boot] kernel page tables active: "]
+
+# Name, whether two boots should be at different addresses, and boot.py's arguments for both
+ADDRESS_TESTS = [
+    ("randomizes its addresses (KASLR)", True, []),
+    ("keeps its addresses without KASLR", False, ["--no-kaslr"]),
+]
+
+
+def addresses(kernel: Path, arguments: list) -> list | None:
+    """Boots kernel, and gives the lines that say where it is, or None if it didn't halt as usual."""
+    result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", "--timeout=60", "--expect=0", *arguments],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        sys.stdout.write(result.stdout)
+        sys.stdout.write(result.stderr)
+        return None
+    return [line for line in result.stdout.splitlines() if any(line.startswith(prefix) for prefix in ADDRESS_LINES)]
+
+
+def run_address_tests(kernel: Path) -> int:
+    """Boots kernel twice for each address test, comparing where it was, and gives how many failed."""
+    failed = 0
+    for name, differ, arguments in ADDRESS_TESTS:
+        first = addresses(kernel, arguments)
+        second = addresses(kernel, arguments)
+        passed = first is not None and second is not None and len(first) == len(ADDRESS_LINES) and len(second) == len(first)
+        if passed:
+            # Every line differs with KASLR, from the image's base and the direct map's offset; none without
+            passed = all((a != b) == differ for a, b in zip(first, second))
+        print(f"{'passed' if passed else 'FAILED'}: {name}")
+        if not passed:
+            failed += 1
+            print(f"first boot: {first}")
+            print(f"second boot: {second}")
+    return failed
 
 
 def run_tests(kernel: Path, tests: list) -> int:

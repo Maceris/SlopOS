@@ -1,6 +1,6 @@
 # 0048: The Kernel's Address Space and Heap
 
-Status: accepted, amended 2026-10-22 (heap blocks by size and alignment, see the end)
+Status: accepted, amended 2026-10-22 (heap blocks by size and alignment; the direct map randomized; see the end)
 Date: 2026-10-22
 Related: `0004` (position-independent code), `0021` (KASLR), `0023` (cheap threads), `0026` (stack
 checks, not guard pages), `0032` (arch interface), `../roadmap.md` M2
@@ -65,3 +65,10 @@ Hemera's allocators now pass a block's alignment when freeing and resizing, as t
 (Hemera's `docs/memory.md`, *Allocators*). So a heap block's class depends on its size and alignment
 together, the smallest class or frame block that holds the size and is aligned enough, and asking for
 more alignment than the size is no longer an error.
+
+## Amendment (2026-10-22): The Direct Map Randomized
+The direct map still stays at the bootloader's offset, but that offset is random: Limine puts it at a
+random 1 GiB-aligned address when asked (`randomise_hhdm_base`, `0021`'s amendment). So the kernel never
+has to move what it allocated before its tables existed, and its regions, which all live in the direct
+map, are randomized with it. Single frames also go through a per-CPU cache in front of the frame
+allocator, which page tables and the heap's one-frame blocks use.

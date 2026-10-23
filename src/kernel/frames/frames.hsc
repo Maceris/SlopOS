@@ -11,9 +11,13 @@
  * block says anything; the rest of a block's bytes are left as they are. Free blocks are linked
  * into one list per order through their own first bytes, reached through the direct map, so a
  * buddy is taken off its list in constant time.
+ *
+ * In front of it, each CPU can keep a FrameCache of single frames, which it takes from and gives
+ * to without the lock, refilled or emptied half a cache at a time under it, like the slab
+ * allocator's magazines. Frames in a cache count as allocated.
  */
 //SPEC: Knuth, The Art of Computer Programming Vol. 1, §2.5 (the buddy system)
-//TODO(claude): per-CPU caches of single frames, so most allocations don't take the lock
+//SPEC: Bonwick and Adams, "Magazines and Vmem" (USENIX 2001), §3 (the magazine layer, here for frames)
 package frames
 
 import intrinsics from "base"
@@ -22,6 +26,9 @@ import concurrency from "std"
 import boot_info from "../../boot_info"
 
 FRAME_SIZE : u64 : 4096
+// Single frames a FrameCache holds, and what it takes or gives back at once.
+FRAME_CACHE_SIZE :: 32
+FRAME_CACHE_BATCH :: 16
 FRAME_SHIFT : u64 : 12
 // Blocks go up to 2^18 frames, 1 GiB, the largest page x86-64 maps.
 MAX_ORDER : u64 : 18
@@ -53,6 +60,12 @@ FreeList :: struct {
     // The physical address of the first block, 0 when the list is empty.
     first : u64,
     count : u64,
+}
+
+// One CPU's stack of single free frames, by physical address. Used only by its CPU, so it needs no lock.
+FrameCache :: struct {
+    count : u64,
+    frames : u64[FRAME_CACHE_SIZE],
 }
 
 FrameAllocator :: struct {
@@ -152,9 +165,14 @@ add_range :: fn(allocator: ptr[mut FrameAllocator], start: u64, end: u64) {
  * contents are whatever was there before.
  */
 allocate :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[boot_info.PhysicalAddress, FrameError] {
-    runtime.assert(order <= MAX_ORDER, "allocate takes an order up to MAX_ORDER")
     concurrency.lock(&allocator.lock)
     defer concurrency.unlock(&allocator.lock)
+    return take_block(allocator, order)
+}
+
+// allocate, with the lock held.
+take_block :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[boot_info.PhysicalAddress, FrameError] {
+    runtime.assert(order <= MAX_ORDER, "allocate takes an order up to MAX_ORDER")
     // The smallest free block at least that big, split down to size
     found := order
     loop {
@@ -193,15 +211,70 @@ allocate_zeroed :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[
  * kernel, which stops it.
  */
 free :: fn(allocator: ptr[mut FrameAllocator], address: boot_info.PhysicalAddress, order: u64) {
+    concurrency.lock(&allocator.lock)
+    defer concurrency.unlock(&allocator.lock)
+    give_block(allocator, address, order)
+}
+
+// free, with the lock held.
+give_block :: fn(allocator: ptr[mut FrameAllocator], address: boot_info.PhysicalAddress, order: u64) {
     frame :: cast[u64](address) >> FRAME_SHIFT
     // One state per frame: states.count is frame_count
     states :: allocator.states
     runtime.assert(cast[u64](address) % FRAME_SIZE == 0 && frame < cast[u64](states.count), "free takes a frame the allocator owns")
-    concurrency.lock(&allocator.lock)
-    defer concurrency.unlock(&allocator.lock)
     runtime.assert(order <= MAX_ORDER && states[frame] == STATE_ALLOCATED | cast[u8](order),
         "free takes an allocated block, with the order it was allocated with")
     release(allocator, frame, order)
+}
+
+// A single frame from the calling CPU's cache, refilled from the allocator if it's empty.
+take_frame :: fn(cache: ptr[mut FrameCache], allocator: ptr[mut FrameAllocator]) -> Result[boot_info.PhysicalAddress, FrameError] {
+    if cache.count == 0 {
+        concurrency.lock(&allocator.lock)
+        defer concurrency.unlock(&allocator.lock)
+        for i in 0..<FRAME_CACHE_BATCH {
+            match take_block(allocator, 0) {
+                case Ok(address) => cache.frames[i] = cast[u64](address)
+                case Error(error) => break
+            }
+            cache.count += 1
+        }
+        if cache.count == 0 {
+            return .Error(.OutOfMemory)
+        }
+    }
+    count :: cache.count
+    runtime.assert(count >= 1 && count <= FRAME_CACHE_SIZE, "a frame cache holds up to FRAME_CACHE_SIZE frames")
+    cache.count = count - 1
+    return .Ok(cast[boot_info.PhysicalAddress](cache.frames[count - 1]))
+}
+
+// Give a single frame to the calling CPU's cache, emptying half of it into the allocator if it's full.
+give_frame :: fn(cache: ptr[mut FrameCache], allocator: ptr[mut FrameAllocator], address: boot_info.PhysicalAddress) {
+    if cache.count == FRAME_CACHE_SIZE {
+        concurrency.lock(&allocator.lock)
+        defer concurrency.unlock(&allocator.lock)
+        for i in FRAME_CACHE_SIZE - FRAME_CACHE_BATCH..<FRAME_CACHE_SIZE {
+            give_block(allocator, cast[boot_info.PhysicalAddress](cache.frames[i]), 0)
+        }
+        cache.count = FRAME_CACHE_SIZE - FRAME_CACHE_BATCH
+    }
+    count :: cache.count
+    runtime.assert(count < FRAME_CACHE_SIZE, "a frame cache that isn't full has room")
+    cache.frames[count] = cast[u64](address)
+    cache.count = count + 1
+}
+
+// Give every frame in a cache back to the allocator.
+drain_frames :: fn(cache: ptr[mut FrameCache], allocator: ptr[mut FrameAllocator]) {
+    concurrency.lock(&allocator.lock)
+    defer concurrency.unlock(&allocator.lock)
+    count :: cache.count
+    runtime.assert(count <= FRAME_CACHE_SIZE, "a frame cache holds up to FRAME_CACHE_SIZE frames")
+    for i in 0..<count {
+        give_block(allocator, cast[boot_info.PhysicalAddress](cache.frames[i]), 0)
+    }
+    cache.count = 0
 }
 
 // The order of the smallest block that holds size bytes.

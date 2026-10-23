@@ -11,7 +11,7 @@ import slab from "slab"
  *
  * Blocks up to 2 KiB come from slab caches of power-of-two size classes, through the calling CPU's
  * magazine for the class, so most allocations and frees take no lock. Larger ones are blocks of
- * frames of their own. A block is the smallest of either that holds the size and is aligned to the
+ * frames of their own, single frames through the calling CPU's frame cache. A block is the smallest of either that holds the size and is aligned to the
  * alignment: a class's objects are aligned to its size, and frame blocks to theirs. Memory comes
  * zeroed.
  *
@@ -109,6 +109,10 @@ class_of :: fn(size: u64) -> u64 {
 
 // A block of bytes from block_bytes, in the direct map. Its contents are whatever was there.
 allocate_block :: fn(kernel: ptr[mut Kernel], size: u64) -> Result[u64, frames.FrameError] {
+    if size == frames.FRAME_SIZE {
+        address :: frames.take_frame(&per_cpu().frame_cache, &kernel.frames)?
+        return .Ok(frames.virtual_of(&kernel.frames, address))
+    }
     if size > LARGEST_SMALL {
         address :: frames.allocate(&kernel.frames, frames.order_for(size))?
         return .Ok(frames.virtual_of(&kernel.frames, address))
@@ -123,7 +127,12 @@ free_block :: fn(kernel: ptr[mut Kernel], address: u64, size: u64) {
     if size > LARGEST_SMALL {
         // Blocks are in the direct map, at their physical address plus its offset
         physical :: cast[boot_info.PhysicalAddress](address - kernel.frames.direct_map_offset)
-        frames.free(&kernel.frames, physical, frames.order_for(size))
+        if size == frames.FRAME_SIZE {
+            frames.give_frame(&per_cpu().frame_cache, &kernel.frames, physical)
+        }
+        else {
+            frames.free(&kernel.frames, physical, frames.order_for(size))
+        }
         return void
     }
     class :: class_of(size)

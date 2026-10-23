@@ -188,7 +188,7 @@ with the freestanding flags) and every test program, each checked by the house r
 implement of `arch_interface` yet in `NOT_YET_IMPLEMENTED`: take a name off when you implement
 it, or the check fails. `python tools/boot.py --expect 0` builds the kernel that way, boots it
 in QEMU through Limine with `test_exit` on its command line, and checks the code it stopped with
-(`src/kernel/stop.hsc`); `--uefi`, `--cpu` and `--command-line` vary the run, and
+(`src/kernel/stop.hsc`); `--uefi`, `--cpu`, `--command-line` and `--no-kaslr` vary the run, and
 `python tools/boot_tests.py` runs every boot test. It finds QEMU, Limine and xorriso through
 `QEMU`, `LIMINE` and `XORRISO`, or the PATH; `HEMERA_INSTALL` overrides where `std` is.
 `python tools/unit_tests.py` builds every `test/` package under `src/` as a hosted program (through

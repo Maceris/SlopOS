@@ -82,6 +82,8 @@ PerCpu :: struct #align(64) {
     left_boot_stack : bool,
     // This CPU's magazines in front of the kernel heap's caches.
     heap : CpuHeap,
+    // This CPU's single frames in front of the frame allocator.
+    frame_cache : frames.FrameCache,
 }
 
 // The memory for one CPU's stacks.

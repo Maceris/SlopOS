@@ -101,6 +101,35 @@ main :: fn() -> int {
     }
     frames.free(&allocator, clean, 1)
 
+    // A CPU's cache takes half its size at once, hands them out without the allocator, and gives half back once full
+    cache : frames.FrameCache
+    first :: frames.take_frame(&cache, &allocator) or_else NO_FRAME
+    if first == NO_FRAME || cache.count != frames.FRAME_CACHE_BATCH - 1 || allocator.free_frames != FREE_FRAMES - frames.FRAME_CACHE_BATCH {
+        return 18
+    }
+    taken : boot_info.PhysicalAddress[frames.FRAME_CACHE_SIZE]
+    for i in 0..<frames.FRAME_CACHE_SIZE {
+        taken[i] = frames.allocate(&allocator, 0) or_else NO_FRAME
+    }
+    for i in 0..<frames.FRAME_CACHE_SIZE {
+        frames.give_frame(&cache, &allocator, taken[i])
+    }
+    // 15 left and 32 given: full after 17, so the 18th gives 16 back first, leaving 31 once all are in
+    if cache.count != 31 || allocator.free_frames != FREE_FRAMES - frames.FRAME_CACHE_SIZE {
+        return 19
+    }
+    frames.give_frame(&cache, &allocator, first)
+    frames.drain_frames(&cache, &allocator)
+    if cache.count != 0 || allocator.free_frames != FREE_FRAMES {
+        return 20
+    }
+    // Every list is back as it was, the cache's frames merged into their buddies
+    for order in 0..<6 {
+        if allocator.lists[order].count != 1 {
+            return 21
+        }
+    }
+
     if frames.order_for(1) != 0 || frames.order_for(4096) != 0 || frames.order_for(4097) != 1 || frames.order_for(28672) != 3 {
         return 16
     }
