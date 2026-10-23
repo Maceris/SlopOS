@@ -54,10 +54,7 @@ interrupt #never_returns :: fn(from: Interrupted, source: InterruptSource) {
         case Idle => {}
     }
     match source {
-        case Timer => {
-            kernel.handle_timer()
-            kernel.schedule(true)
-        }
+        case Timer => kernel.schedule(kernel.handle_timer())
         case Ipi(kind) => {
             if kind == .Stop {
                 arch.halt()

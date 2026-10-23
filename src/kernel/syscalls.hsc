@@ -26,12 +26,18 @@ handle_syscall :: fn(registers: ptr[arch.UserRegisters]) #never_returns {
     kernel :: cpu.kernel
     runtime.assert(cpu.current != 0, "a system call comes from a thread")
     thread :: cast[ptr[mut Thread]](cpu.current)
-    result :: dispatch_syscall(kernel, thread)
-    arch.set_syscall_result(&thread.registers, &result)
+    // A call that blocks has its result set when it finishes (ports.hsc, complete_wait)
+    match dispatch_syscall(kernel, thread) {
+        case Some(result) => {
+            kept :: result
+            arch.set_syscall_result(&thread.registers, &kept)
+        }
+        case None => {}
+    }
     schedule(false)
 }
 
-dispatch_syscall :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> arch_interface.SyscallResult {
+dispatch_syscall :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> arch_interface.SyscallResult? {
     registers :: &thread.registers
     number :: arch.syscall_number(registers)
     process :: process_of(thread)
@@ -58,7 +64,83 @@ dispatch_syscall :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> arch
     if number == cast[u64](cast[u32](slop_os.Syscall.AddressSpaceCreate)) {
         return address_space_create(kernel, process)
     }
+    if number == cast[u64](cast[u32](slop_os.Syscall.ClockMonotonic)) {
+        return succeeded(cast[u64](kernel_monotonic(cast[rawptr](kernel))), 0)
+    }
+    if number == cast[u64](cast[u32](slop_os.Syscall.PortCreate)) {
+        match create_port(kernel, cast[u64](process)) {
+            case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
+            case Error(error) => return failed(if error == .OutOfMemory { slop_os.HandleError.OutOfMemory } else { slop_os.HandleError.ObjectGone })
+        }
+    }
+    if number == cast[u64](cast[u32](slop_os.Syscall.PortBindWake)) {
+        match port_of(process, argument(registers, 0), slop_os.RIGHT_PORT_BIND) {
+            case Ok(port) => return port_done(port_bind_wake(kernel, port, arch.syscall_argument(registers, 1)))
+            case Error(error) => return tagged(cast[u64](cast[u32](error)))
+        }
+    }
+    if number == cast[u64](cast[u32](slop_os.Syscall.PortWake)) {
+        match port_of(process, argument(registers, 0), slop_os.RIGHT_PORT_BIND) {
+            case Ok(port) => return port_done(port_wake(kernel, port, arch.syscall_argument(registers, 1), arch.syscall_argument(registers, 2)))
+            case Error(error) => return tagged(cast[u64](cast[u32](error)))
+        }
+    }
+    if number == cast[u64](cast[u32](slop_os.Syscall.PortSetTimer)) {
+        match port_of(process, argument(registers, 0), slop_os.RIGHT_PORT_BIND) {
+            case Ok(port) => return port_done(port_set_timer(kernel, port, arch.syscall_argument(registers, 1), arch.syscall_argument(registers, 2)))
+            case Error(error) => return tagged(cast[u64](cast[u32](error)))
+        }
+    }
+    if number == cast[u64](cast[u32](slop_os.Syscall.PortUnbind)) {
+        match port_of(process, argument(registers, 0), slop_os.RIGHT_PORT_BIND) {
+            case Ok(port) => return port_done(port_unbind(kernel, port, arch.syscall_argument(registers, 1)))
+            case Error(error) => return tagged(cast[u64](cast[u32](error)))
+        }
+    }
+    if number == cast[u64](cast[u32](slop_os.Syscall.PortWait)) {
+        match port_of(process, argument(registers, 0), slop_os.RIGHT_PORT_WAIT) {
+            case Ok(port) => {
+                deadline :: ticks_at(kernel, arch.syscall_argument(registers, 3))
+                outcome :: port_wait_begin(kernel, thread, port, arch.syscall_argument(registers, 1),
+                    cast[u32](arch.syscall_argument(registers, 2)), deadline)
+                return match outcome {
+                    case Done(taken) => succeeded(cast[u64](taken), 0)
+                    case Failed(error) => tagged(cast[u64](cast[u32](error)))
+                    case Blocked => null
+                }
+            }
+            case Error(error) => return tagged(cast[u64](cast[u32](error)))
+        }
+    }
     return failed(.NoSuchCall)
+}
+
+// The port a handle refers to, if the handle has right.
+port_of :: fn(process: ptr[mut Process], handle: slop_os.Handle, right: slop_os.Rights) -> Result[ptr[mut Port], slop_os.PortError] {
+    match lookup(&process.table, handle) {
+        case Ok(found) => {
+            if found.kind != .Port {
+                return .Error(.WrongKind)
+            }
+            if cast[u32](found.rights) & cast[u32](right) == 0 {
+                return .Error(.MissingRight)
+            }
+            return .Ok(cast[ptr[mut Port]](found.object))
+        }
+        // The tags they share mean the same
+        case Error(error) => return .Error(if error == .ObjectGone { slop_os.PortError.ObjectGone } else { slop_os.PortError.InvalidHandle })
+    }
+}
+
+port_done :: fn(error: slop_os.PortError?) -> arch_interface.SyscallResult {
+    return match error {
+        case Some(failure) => tagged(cast[u64](cast[u32](failure)))
+        case None => succeeded(0, 0)
+    }
+}
+
+tagged :: fn(tag: u64) -> arch_interface.SyscallResult {
+    return arch_interface.SyscallResult.{tag = tag, values = u64.[0, 0]}
 }
 
 argument :: fn(registers: ptr[arch.UserRegisters], index: u32) -> slop_os.Handle {

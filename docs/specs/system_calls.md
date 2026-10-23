@@ -31,12 +31,12 @@ each object is its owning one (`0008`).
 - **A closed handle is no longer a handle**: using it fails with `InvalidHandle`, even once its entry is
   reused.
 - **Rights** (`slop_os.Rights`, `0010`): `RIGHT_DUPLICATE` and `RIGHT_TRANSFER` for every kind, then per
-  kind: `RIGHT_SPACE_THREADS` for an address space. An owning handle has every right. Duplicating keeps or
-  drops rights, never adds them.
+  kind: `RIGHT_SPACE_THREADS` for an address space; `RIGHT_PORT_WAIT` and `RIGHT_PORT_BIND` for a port. An
+  owning handle has every right. Duplicating keeps or drops rights, never adds them.
 
 Object kinds (`slop_os.ObjectKind`, `0034`): `MemoryBudget`, `CpuBudget`, `Memory`, `AddressSpace`,
-`Thread`, `Process`, `Channel`, `Port`, `Irq`, `IoPortRange`, `IommuDomain`. So far processes, threads and
-address spaces exist.
+`Thread`, `Process`, `Channel`, `Port`, `Irq`, `IoPortRange`, `IommuDomain`. So far processes, threads,
+address spaces and ports exist.
 
 ## Calls
 
@@ -49,8 +49,32 @@ address spaces exist.
 | 4 | `ThreadCreate` | address space, entry, stack pointer, argument | an owning handle to a new thread, started; needs `RIGHT_SPACE_THREADS`. The thread starts at entry with the argument in the first argument register and every other register zero (`0026`) |
 | 5 | `ProcessCreate` | | an owning handle to a new process, owned by the caller's |
 | 6 | `AddressSpaceCreate` | | an owning handle to a new, empty address space |
+| 7 | `ClockMonotonic` | | the monotonic clock, in nanoseconds since the kernel's timer started (`0009`) |
+| 8 | `PortCreate` | | an owning handle to a new port |
+| 9 | `PortBindWake` | port, key | nothing: a wake binding for key; needs `RIGHT_PORT_BIND` |
+| 10 | `PortWake` | port, key, bits | nothing: key's wake binding's packet, with bits ORed into it; needs `RIGHT_PORT_BIND` |
+| 11 | `PortSetTimer` | port, key, deadline | nothing: a timer packet for key at deadline (monotonic nanoseconds), binding key if it isn't yet; setting it again moves it. Needs `RIGHT_PORT_BIND` |
+| 12 | `PortUnbind` | port, key | nothing: the binding goes, with a packet it had queued; needs `RIGHT_PORT_BIND` |
+| 13 | `PortWait` | port, packets, capacity, deadline | how many packets it wrote at packets, up to capacity and 64: at once if any are queued, otherwise once one is, or 0 at deadline (`NO_DEADLINE` for none). Needs `RIGHT_PORT_WAIT` |
 
-Threads, processes and address spaces a call creates are owned by the calling thread's process.
+Threads, processes, address spaces and ports a call creates are owned by the calling thread's process.
+
+## Ports
+
+A port is the one wait mechanism (`../../knowledge/design/ipc.md` §3, `0052`). Each binding has a key the
+caller chose, unique on its port, and a packet slot of its own, so delivering never allocates: a packet
+already queued takes a new event in (wake bits ORed together). Packets are taken oldest first; threads
+waiting are woken most recent first, one for each packet newly queued. Closing a port wakes every thread
+waiting on it, with `ObjectGone`.
+
+`slop_os.Packet`, 32 bytes:
+
+| Field | |
+|---|---|
+| `key: u64` | The binding's key |
+| `kind: PacketKind` (u32) | `Signal` (1), `Timer` (2), `User` (3) |
+| `reserved: u32` | |
+| `data: u64[2]` | `Timer`: the deadline it was set for; `User`: the bits raised since it was last taken |
 
 ## Errors
 
@@ -66,7 +90,16 @@ Threads, processes and address spaces a call creates are owned by the calling th
 | 6 | `OutOfMemory` | |
 | 7 | `NoSuchCall` | No call has that number |
 
+Calls on a port fail with `slop_os.PortError`, whose tags mean the same where they're shared:
+
+| Tag | Error | Why |
+|---|---|---|
+| 1 to 6 | as above | |
+| 8 | `KeyInUse` | The key is bound already, or bound to another kind of binding |
+| 9 | `NoSuchKey` | No binding has that key, or not one of that kind |
+| 10 | `BadBuffer` | Packets would go where the thread can't write; nothing was taken |
+
 ## Not Yet
 
-Ports, channels and IPC, memory objects and budgets as objects, IRQ objects, process control and
-interception come with the rest of M5 (`../architecture/kernel.md`, Not Built Yet).
+Channels and IPC, memory objects and budgets as objects, IRQ objects, process control and interception
+come with the rest of M5 (`../architecture/kernel.md`, Not Built Yet).

@@ -26,6 +26,8 @@ ThreadState :: enum #backed_by(u8) {
     Ready,
     // On a CPU, as that CPU's current thread.
     Running,
+    // Waiting on a port (ports.hsc).
+    Blocked,
 }
 
 Thread :: struct #align(16) {
@@ -54,6 +56,19 @@ Thread :: struct #align(16) {
     // Counter ticks it's run.
     run_time : u64,
     id : u64,
+    // Its port_wait, while it has one (ports.hsc): the port and its generation, where its packets go and how
+    // many, until when (counter ticks, or slop_os.NO_DEADLINE), and its place among the port's waiters.
+    wait_port : u64,
+    wait_port_generation : u32,
+    wait_capacity : u32,
+    wait_buffer : u64,
+    wait_deadline : u64,
+    waiting : bool,
+    wait_next : u64,
+    wait_previous : u64,
+    // Counts its waits, so a deadline from an earlier one doesn't wake a later one.
+    wait_sequence : u64,
+    wait_timer : TimerEntry,
 }
 
 #assert size_of(Thread) <= 1024
@@ -87,6 +102,7 @@ create_thread :: fn(kernel: ptr[mut Kernel], owner: u64, space #escaping : ptr[m
     arch.init_user_registers(&thread.registers, start)
     thread.space = space
     thread.budget = budget
+    thread.wait_timer = make_timer()
     thread.id = intrinsics.interlocked_increment_u64(&kernel.next_thread_id) + 1
     match adopt(owner, object) {
         case Ok => {}
@@ -114,6 +130,7 @@ start_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
  * is told, and doesn't resume it.
  */
 destroy_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
+    cancel_wait(kernel, thread)
     leave_space(thread)
     per_cpus :: kernel.per_cpus
     // Its CPU may change until its run queue's lock is held and it's still that CPU

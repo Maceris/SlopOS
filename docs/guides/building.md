@@ -90,6 +90,7 @@ Words separated by spaces; unknown words are ignored.
 | `test_threads` | Run 4 threads in user mode, preempted by the timer, each keeping its own vector state |
 | `test_budgets` | Run a thread with a CPU budget against one without, on 1 CPU |
 | `test_syscalls` | Run a thread that makes system calls on handles, then destroy its process and check everything is reclaimed |
+| `test_ports` | Run two threads that wait on a port, wake it and set its timers, then close it under one of them |
 | `test_fibers` | Run two fibers taking turns |
 | `test_segments` | Grow a fiber's stack onto more segments (a kernel built with `stack_check=morestack`) |
 | `test_pool` | Share two fiber pools between CPUs 1 to 5 (6 CPUs) |

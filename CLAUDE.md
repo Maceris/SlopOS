@@ -115,6 +115,8 @@ when relevant.
   steals when idle; budgets are charged at ticks with sporadic-server refills; no FSGSBASE (`0050`).
 - Kernel objects are named by address in type-stable pools; handles are 16-bit index and 16-bit generation;
   a CPU records a quiescent point only after checking what it resumes isn't dying (`0051`).
+- Port bindings are made before anything is delivered (`PortBindWake`, `PortSetTimer`); a woken thread finishes
+  its `PortWait` when it next runs; timers are per-CPU heaps with precise deadlines (`0052`).
 
 ## Writing Hemera: Things That Are Easy to Get Wrong
 

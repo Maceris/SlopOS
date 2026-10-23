@@ -50,6 +50,8 @@ Options :: struct {
     test_budgets : bool,
     // test_syscalls: once booted, run a thread in user mode that makes system calls on handles.
     test_syscalls : bool,
+    // test_ports: once booted, run two threads in user mode that wait on a port, wake it and set its timers.
+    test_ports : bool,
 }
 
 parse_command_line :: fn(command_line: string) -> Options {
@@ -120,5 +122,8 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_syscalls" {
         options.test_syscalls = true
+    }
+    if word == "test_ports" {
+        options.test_ports = true
     }
 }

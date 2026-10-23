@@ -1,6 +1,6 @@
 # The Kernel Core as Built
 
-What the kernel core (L2, `layers.md`) does so far, roadmap M1 to M5's first stage, and where its code is. What's not
+What the kernel core (L2, `layers.md`) does so far, roadmap M1 to M5's second stage, and where its code is. What's not
 built yet is listed at the end. The interfaces it builds on are specified in `../specs/boot_info.md` and
 `../specs/arch_interface.md`; choices and alternatives are in `../../knowledge/decisions/`, cited by
 number.
@@ -58,6 +58,11 @@ the kernel logger, and an assertion handler that stops the kernel.
   looked up without a lock.
 - **System calls** (`src/kernel/syscalls.hsc`): the calls in `../specs/system_calls.md`, on the calling
   thread's process's handles.
+- **Ports** (`src/kernel/ports.hsc`, `0052`): bindings with keys, wake and timer packets, and threads that
+  block on them. A woken thread finishes its wait when it next runs. User memory is written only through
+  the address space's table and the direct map (`src/kernel/user_memory.hsc`).
+- **Timers** (`src/kernel/timers.hsc`): a heap of deadlines per CPU; each CPU's timer is set for its next
+  tick or its earliest deadline.
 
 ## Interrupts and Time
 
@@ -90,7 +95,7 @@ the kernel logger, and an assertion handler that stops the kernel.
 
 | What | Roadmap |
 |---|---|
-| Ports, blocking threads, timers; channels and IPC | M5 |
+| Channels and IPC | M5 |
 | Memory objects and budgets as objects, IRQ objects, the generated ABI package, interception | M5 |
 | Destroying large subtrees with preemption points | M5 |
 | Loading programs, the root task, user space | M6 |

@@ -150,6 +150,10 @@ run :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Thread]
     if is_dying(cast[u64](thread)) {
         return void
     }
+    // A woken thread finishes its wait first, or blocks again
+    if thread.wait_port != 0 && !complete_wait(kernel, thread) {
+        return void
+    }
     pass_quiescent(kernel, cpu, epoch)
     thread.state = .Running
     intrinsics.atomic_store_u32_release(&thread.cpu, cpu.index)

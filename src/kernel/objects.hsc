@@ -56,12 +56,17 @@ ObjectPools :: struct {
     processes : slab.SlabCache,
     threads : slab.SlabCache,
     spaces : slab.SlabCache,
+    ports : slab.SlabCache,
+    // Port bindings, which aren't objects but are reached the same way (ports.hsc).
+    bindings : slab.SlabCache,
 }
 
 init_pools :: fn(kernel: ptr[mut Kernel]) {
     kernel.pools.processes = object_cache(cast[u64](size_of(Process)), cast[u64](align_of(Process)))
     kernel.pools.threads = object_cache(cast[u64](size_of(Thread)), cast[u64](align_of(Thread)))
     kernel.pools.spaces = object_cache(cast[u64](size_of(AddressSpace)), cast[u64](align_of(AddressSpace)))
+    kernel.pools.ports = object_cache(cast[u64](size_of(Port)), cast[u64](align_of(Port)))
+    kernel.pools.bindings = object_cache(cast[u64](size_of(Binding)), cast[u64](align_of(Binding)))
 }
 
 object_cache :: fn(size: u64, alignment: u64) -> slab.SlabCache {
@@ -74,6 +79,7 @@ pool_of :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind) -> ptr[mut slab
     return match kind {
         case .Process => &kernel.pools.processes
         case .Thread => &kernel.pools.threads
+        case .Port => &kernel.pools.ports
         case _ => &kernel.pools.spaces
     }
 }
@@ -186,6 +192,7 @@ destroy_object :: fn(kernel: ptr[mut Kernel], object: u64) -> bool {
         case .Process => destroy_process(kernel, cast[ptr[mut Process]](object))
         case .Thread => destroy_thread(kernel, cast[ptr[mut Thread]](object))
         case .AddressSpace => destroy_address_space(kernel, cast[ptr[mut AddressSpace]](object))
+        case .Port => destroy_port(kernel, cast[ptr[mut Port]](object))
         case _ => {}
     }
     retire(kernel, object)
@@ -257,6 +264,7 @@ release_object :: fn(kernel: ptr[mut Kernel], object: u64) {
         case .Process => release_process(kernel, cast[ptr[mut Process]](object))
         case .Thread => release_thread(kernel, cast[ptr[mut Thread]](object))
         case .AddressSpace => release_address_space(kernel, cast[ptr[mut AddressSpace]](object))
+        case .Port => release_port(kernel, cast[ptr[mut Port]](object))
         case _ => {}
     }
     // A slot whose generation would wrap is never used again (decisions/0008)

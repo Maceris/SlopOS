@@ -32,6 +32,7 @@ them is `compiler-plan.md`, Phase 7:
 | Issue | Severity | Where |
 |---|---|---|
 | Once (2026-10-16), building the kernel through the build package in `boot_tests.py` failed, and the output was lost. Likely found 2026-10-20: the compiler crashed (an access violation, no output) when indexing through a pointer to an alias another thread hadn't resolved yet, about one build in four of std/crypto's tests; fixed, the checker now waits for it. Another race found 2026-10-22, about one kernel build in thirty (see Resolved). Watching whether the kernel build fails again; `build/failed_kernel_build.log` keeps its output if so | unknown | `tools/boot_tests.py` |
+| An enum shorthand where an optional is expected (2026-10-22): `return .ObjectGone` from a function returning `PortError?` fails ("Optional[PortError] has no member ObjectGone"), and so does `.Failed(...)` for a `WaitOutcome?`; spelling the type out works. The shorthand could look through an optional to what it holds | friction | `src/kernel/ports.hsc` |
 
 ### Language and library design
 
@@ -87,6 +88,11 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-22 — `std/maps` gains `map_try_put` and `map_try_resize`, which give the allocator's error and leave the
+  map as it was when growing fails; `map_put` asserts, which would let user space stop the kernel by running it out
+  of memory. Ports keep their bindings in one (M5, stage 2). Tested in the `maps` scenario with an allocator that
+  always fails.
 
 - 2026-10-22 — `&cast[T](x).field` failed to parse: after `&`, the parser read the next token as a name, so it
   reported "Undeclared name. cast". Kernel code reaching an object's field by its address needs exactly that.

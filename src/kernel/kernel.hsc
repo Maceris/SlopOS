@@ -87,6 +87,8 @@ Kernel :: struct {
     threads_test : u64,
     // test_syscalls' state, as an address, while it runs (syscalls_test.hsc)
     syscalls_test : u64,
+    // test_ports' state, as an address, while it runs (ports_test.hsc)
+    ports_test : u64,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : concurrency.SpinLock,
     // test_pool's state, as an address, once the boot CPU has set it up for the other CPUs (pool_test.hsc)
@@ -135,6 +137,9 @@ PerCpu :: struct #align(64) {
     // Objects this CPU destroyed, waiting for a grace period; and the epoch it last passed a quiescent point in (objects.hsc).
     limbo : u64,
     quiescent_epoch : u64,
+    // Its armed timers, and when its next tick is (timers.hsc, timer.hsc).
+    timers : TimerHeap,
+    next_tick : u64,
 }
 
 // The memory for one CPU's stacks.
@@ -218,6 +223,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         }
         if kernel.options.test_syscalls {
             test_syscalls(kernel)
+        }
+        if kernel.options.test_ports {
+            test_ports(kernel)
         }
         if kernel.options.test_fault {
             runtime.log_info("test_fault: running an invalid instruction")
