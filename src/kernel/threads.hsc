@@ -4,6 +4,7 @@ import intrinsics from "base"
 import runtime from "base"
 import arch_interface from "../arch_interface"
 import concurrency from "std"
+import slop_os from "std/os"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -28,6 +29,8 @@ ThreadState :: enum #backed_by(u8) {
     Running,
     // Waiting on a port (ports.hsc).
     Blocked,
+    // Held, and parked on no queue until nothing holds it (control.hsc).
+    Stopped,
 }
 
 Thread :: struct #align(16) {
@@ -69,6 +72,30 @@ Thread :: struct #align(16) {
     // Counts its waits, so a deadline from an earlier one doesn't wake a later one.
     wait_sequence : u64,
     wait_timer : TimerEntry,
+    // Process control (control.hsc): what holds it (HELD_*), and whether it's parked, under control.
+    control : concurrency.SpinLock,
+    held : u32,
+    parked : bool,
+    // A stop (intercepts.hsc): the intercept, where and why, whether it's been reported, and its neighbors
+    // on the intercept's list.
+    stop_reported : bool,
+    stop_linked : bool,
+    // Its next system call's entry stop is passed over: it's the call made again after one.
+    restarted : bool,
+    stop_point : u32,
+    stop_number : u32,
+    stop_intercept : u64,
+    stop_address : u64,
+    stop_next : u64,
+    stop_previous : u64,
+    // The system call it's in, for its exit stop.
+    syscall_number : u64,
+    // On the kernel's list of threads, under threads_lock.
+    on_list : bool,
+    all_next : u64,
+    all_previous : u64,
+    // Bindings watching for it to end (SIGNAL_TERMINATED), under control.
+    watchers : EndBinding[2],
 }
 
 #assert size_of(Thread) <= 1024
@@ -118,6 +145,7 @@ create_thread :: fn(kernel: ptr[mut Kernel], owner: u64, space #escaping : ptr[m
         _ = destroy_object(kernel, object)
         return .Error(.OwnerGone)
     }
+    link_thread(kernel, thread)
     return .Ok(thread)
 }
 
@@ -135,6 +163,9 @@ start_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
 destroy_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     cancel_wait(kernel, thread)
     leave_space(thread)
+    forget_stop(thread)
+    unlink_thread(kernel, thread)
+    raise_watchers(kernel, &thread.watchers, &thread.control, cast[u32](slop_os.SIGNAL_TERMINATED))
     per_cpus :: kernel.per_cpus
     // Its CPU may change until its run queue's lock is held and it's still that CPU
     loop {

@@ -76,6 +76,7 @@ ObjectPools :: struct {
     memories : slab.SlabCache,
     irqs : slab.SlabCache,
     platforms : slab.SlabCache,
+    intercepts : slab.SlabCache,
     // Where memory objects are mapped (memory.hsc).
     mappings : slab.SlabCache,
 }
@@ -92,6 +93,7 @@ init_pools :: fn(kernel: ptr[mut Kernel]) {
     kernel.pools.memories = object_cache(cast[u64](size_of(Memory)), cast[u64](align_of(Memory)))
     kernel.pools.irqs = object_cache(cast[u64](size_of(Irq)), cast[u64](align_of(Irq)))
     kernel.pools.platforms = object_cache(cast[u64](size_of(Platform)), cast[u64](align_of(Platform)))
+    kernel.pools.intercepts = object_cache(cast[u64](size_of(Intercept)), cast[u64](align_of(Intercept)))
     kernel.pools.mappings = slab.make_cache(cast[u64](size_of(MemoryMapping)), cast[u64](align_of(MemoryMapping)))
 }
 
@@ -111,6 +113,7 @@ pool_of :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind) -> ptr[mut slab
         case .Memory => &kernel.pools.memories
         case .Irq => &kernel.pools.irqs
         case .Platform => &kernel.pools.platforms
+        case .Intercept => &kernel.pools.intercepts
         case _ => &kernel.pools.spaces
     }
 }
@@ -235,6 +238,7 @@ destroy_object :: fn(kernel: ptr[mut Kernel], object: u64) -> bool {
         case .MemoryBudget => destroy_budget(kernel, cast[ptr[mut MemoryBudget]](object))
         case .Memory => destroy_memory(kernel, cast[ptr[mut Memory]](object))
         case .Irq => destroy_irq(kernel, cast[ptr[mut Irq]](object))
+        case .Intercept => destroy_intercept(kernel, cast[ptr[mut Intercept]](object))
         case _ => {}
     }
     retire(kernel, object)

@@ -1,6 +1,7 @@
 package kernel
 
 import intrinsics from "base"
+import concurrency from "std"
 import runtime from "base"
 import slop_os from "std/os"
 
@@ -15,6 +16,11 @@ Process :: struct #align(16) {
     header : ObjectHeader,
     table : HandleTable,
     owned : OwnedList,
+    // The intercept of its subtree, if it has one (intercepts.hsc).
+    intercept : u64,
+    // Bindings watching for it to end (SIGNAL_TERMINATED), under watch_lock.
+    watch_lock : concurrency.SpinLock,
+    watchers : EndBinding[2],
 }
 
 /*
@@ -22,7 +28,7 @@ Process :: struct #align(16) {
  * to budget, which is its budget: its table's pages are charged there, and what it takes with owning
  * handles moves there (memory_budgets.hsc).
  */
-create_process :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> Result[ptr[mut Process], ObjectError] {
+create_process :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> (made #unrestricted : Result[ptr[mut Process], ObjectError]) {
     object :: new_object(kernel, .Process, budget, 0)?
     cast[ptr[mut Process]](object).table.account = object
     match adopt(owner, object) {
@@ -40,6 +46,8 @@ create_process :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> Result
  * reaches the whole subtree.
  */
 destroy_process :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
+    raise_watchers(kernel, &process.watchers, &process.watch_lock, cast[u32](slop_os.SIGNAL_TERMINATED))
+    forget_intercept(kernel, process)
     close_table(&process.table)
     loop {
         owned :: take_owned(&process.owned)

@@ -84,6 +84,10 @@ Kernel :: struct {
     // The platform capability, for the root task (irqs.hsc); and the last CPU an IRQ was routed to.
     platform : u64,
     next_irq_cpu : u32,
+    // Every thread, for finding one by ID, and how many intercepts there are (control.hsc, intercepts.hsc).
+    threads_lock : concurrency.SpinLock,
+    first_thread : u64,
+    intercepts : u32,
     // Threads (threads.hsc): the last ID, and the last CPU one was started on.
     next_thread_id : u64,
     next_start_cpu : u32,
@@ -103,6 +107,8 @@ Kernel :: struct {
     memory_test : u64,
     // test_devices' state, as an address, while it runs (devices_test.hsc)
     devices_test : u64,
+    // test_control's state, as an address, while it runs (control_test.hsc)
+    control_test : u64,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : concurrency.SpinLock,
     // test_pool's state, as an address, once the boot CPU has set it up for the other CPUs (pool_test.hsc)
@@ -259,6 +265,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         }
         if kernel.options.test_devices {
             test_devices(kernel)
+        }
+        if kernel.options.test_control {
+            test_control(kernel)
         }
         if kernel.options.test_fault {
             runtime.log_info("test_fault: running an invalid instruction")

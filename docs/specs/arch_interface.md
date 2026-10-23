@@ -458,6 +458,22 @@ syscall_argument : fn(registers: ptr[UserRegisters], index: u32) -> u64 : ---
 set_syscall_result : fn(registers: ptr[mut UserRegisters], result: ptr[SyscallResult]) : ---
 instruction_pointer : fn(registers: ptr[UserRegisters]) -> VirtualAddress : ---
 
+/*
+ * Back to the system call instruction, so returning to user mode makes the call again: how a call a
+ * debugger stopped at its entry runs once it's let go (knowledge/design/kernel.md §4).
+ */
+restart_syscall : fn(registers: ptr[mut UserRegisters]) : ---
+
+/*
+ * A thread's registers as a debugger sees them, by index, in the order the system ABI gives for this
+ * architecture (slop_os.THREAD_REGISTERS): how many, one, and one set. Setting refuses a value user mode
+ * can't have (an instruction or stack pointer outside user addresses), and keeps the flags user mode
+ * can't change.
+ */
+user_register_count : fn() -> u32 : ---
+get_user_register : fn(registers: ptr[UserRegisters], index: u32) -> u64 : ---
+set_user_register : fn(registers: ptr[mut UserRegisters], index: u32, value: u64) -> bool : ---
+
 // Return to user mode with registers, on the calling CPU's active page table.
 return_to_user #never_returns : fn(registers: ptr[UserRegisters]) : ---
 

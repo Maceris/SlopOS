@@ -34,12 +34,14 @@ each object is its owning one (`0008`).
   kind: `RIGHT_SPACE_THREADS` and `RIGHT_SPACE_MAP` for an address space; `RIGHT_PORT_WAIT` and
   `RIGHT_PORT_BIND` for a port; `RIGHT_CHANNEL_MAP` for a channel end; `RIGHT_BUDGET_CHARGE` for a memory
   budget; `RIGHT_MEMORY_READ`, `RIGHT_MEMORY_WRITE` and `RIGHT_MEMORY_EXECUTE` for a memory object;
-  `RIGHT_IRQ_ACK` for an IRQ. An owning handle has every right.
+  `RIGHT_IRQ_ACK` for an IRQ; `RIGHT_PROCESS_INSPECT`, `_READ_MEMORY`, `_WRITE_STATE`, `_INTERCEPT` and
+  `_KILL` for a process, over its whole subtree (`0017`). An owning handle has every right.
   Duplicating keeps or drops rights, never adds them.
 
 Object kinds (`slop_os.ObjectKind`, `0034`): `MemoryBudget`, `CpuBudget`, `Memory`, `AddressSpace`,
-`Thread`, `Process`, `Channel`, `Port`, `Irq`, `IoPortRange`, `IommuDomain`, and `Platform`, the authority
-over the machine's hardware (`0039`, `0055`). So far all but I/O-port ranges and IOMMU domains exist.
+`Thread`, `Process`, `Channel`, `Port`, `Irq`, `IoPortRange`, `IommuDomain`, `Platform`, the authority over
+the machine's hardware (`0039`, `0055`), and `Intercept`, a debugger's hold on a subtree (`0056`). So far
+all but I/O-port ranges and IOMMU domains exist.
 
 ## Calls
 
@@ -68,7 +70,7 @@ over the machine's hardware (`0039`, `0055`). So far all but I/O-port ranges and
 | 20 | `ChannelSendHandles` | end, handles, count, batch | nothing: count handles (u32s at handles, up to 64) moved out of the caller's table into batch (0 to 15) on the other end. Each needs `RIGHT_TRANSFER` |
 | 21 | `ChannelTakeHandles` | end, batch, handles, capacity | how many: the batch's handles, in the caller's table, written at handles; `NO_HANDLE` for any whose object is gone |
 | 22 | `ChannelNotifyAndWait` | end, signals, port, packets, capacity, deadline | as `ChannelNotify`, then `PortWait`; a thread the notify wakes is made ready on the caller's CPU |
-| 23 | `PortBind` | port, object, signals, key, mode | nothing: a `Signal` packet for key when the object, a channel end, raises any of signals, or for an IRQ an `Irq` packet for its interrupts, signals unused; needs `RIGHT_PORT_BIND`. Mode `Once` (1) disarms it once its packet is queued, and binding the same key to the same object arms it again; `Persistent` (2) doesn't |
+| 23 | `PortBind` | port, object, signals, key, mode | nothing: a `Signal` packet for key when the object, a channel end, a process (with `RIGHT_PROCESS_INSPECT`) or a thread, raises any of signals, or for an IRQ an `Irq` packet for its interrupts, signals unused; needs `RIGHT_PORT_BIND`. A process or a thread can be watched by 2 bindings, an end by 4. Mode `Once` (1) disarms it once its packet is queued, and binding the same key to the same object arms it again; `Persistent` (2) doesn't |
 | 24 | `MemoryBudgetCreate` | budget, limit | an owning handle to a child budget of limit bytes, charged to the budget |
 | 25 | `MemoryBudgetInfo` | budget | its limit, and how much of it is charged, in bytes |
 | 26 | `MemoryCreate` | budget, size | an owning handle to a new memory object of size bytes, a whole number of pages up to `MAX_MEMORY_SIZE` (1 GiB), charged for all of it |
@@ -79,6 +81,17 @@ over the machine's hardware (`0039`, `0055`). So far all but I/O-port ranges and
 | 31 | `IrqAck` | irq | nothing: a level-triggered line, unmasked again; needs `RIGHT_IRQ_ACK` |
 | 32 | `MemoryCreatePhysical` | platform, budget, address, size, cache | an owning handle to device memory: size bytes at the physical address, which mustn't be RAM the kernel owns, mapped with the `CacheMode` |
 | 33 | `MemoryCreateWindow` | memory, budget, offset, size | an owning handle to a window onto size bytes of the memory from offset, which can be mapped only as the memory's handle could |
+| 34 | `ProcessThreads` | process, IDs, capacity | how many threads the process's subtree has; up to capacity (and 64) of their IDs written at IDs. Needs `RIGHT_PROCESS_INSPECT` |
+| 35 | `ProcessReadMemory` | process, address space, address, buffer, size | nothing: size bytes of the space, which must be in the process's subtree, copied to buffer. Needs `RIGHT_PROCESS_READ_MEMORY` |
+| 36 | `ProcessWriteMemory` | process, address space, address, buffer, size | nothing: size bytes from buffer copied into the space. Needs `RIGHT_PROCESS_WRITE_STATE` |
+| 37 | `ThreadSuspend` | process, thread ID | nothing: the thread stops where it is until `ThreadResume`; a wait it's in goes on. Needs `RIGHT_PROCESS_WRITE_STATE` |
+| 38 | `ThreadResume` | process, thread ID | nothing: a suspended thread goes on. Needs `RIGHT_PROCESS_WRITE_STATE` |
+| 39 | `ThreadReadRegisters` | process, thread ID, registers | nothing: a stopped or suspended thread's `THREAD_REGISTERS` registers, as u64s, written at registers. Needs `RIGHT_PROCESS_INSPECT` |
+| 40 | `ThreadWriteRegisters` | process, thread ID, registers | nothing: a stopped or suspended thread's registers, set from registers. Needs `RIGHT_PROCESS_WRITE_STATE` |
+| 41 | `InterceptAttach` | process, port, key, calls, points | an owning handle to an intercept of the process's subtree, paid for by the caller's process's budget: its threads stop at the entry or exit (`STOP_SYSCALL_ENTRY`, `STOP_SYSCALL_EXIT`) of the calls whose bit is set in calls, and at faults (`STOP_FAULT`). Needs `RIGHT_PROCESS_INTERCEPT` and `RIGHT_PORT_BIND` |
+| 42 | `InterceptNext` | intercept, stop | nothing: the next stop not yet reported, a `StopInfo`, written at stop |
+| 43 | `InterceptResume` | intercept, thread ID, action | nothing: a thread the intercept stopped goes on: `Continue`, `Skip` (at an entry only) or `Kill` |
+| 44 | `ProcessKill` | process | nothing: the process is destroyed, with its subtree. Needs `RIGHT_PROCESS_KILL` |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the
@@ -130,6 +143,42 @@ count in its binding's `Irq` packet, queuing the packet if it isn't; a driver bi
 `PortBind`, one binding per IRQ. A level-triggered line is masked when its interrupt arrives, until the
 driver calls `IrqAck`. Closing the IRQ masks the line.
 
+## Process Control
+
+Rights on a process cover its whole subtree, including processes made later (`0017`): through one handle a
+debugger lists its threads by ID, reads and writes its address spaces' memory, suspends and resumes its
+threads, reads and writes the registers of threads stopped or suspended, intercepts it, and kills it. A
+thread is held, by a suspend or a stop, only where its whole state is its saved registers: on its next
+entry to the kernel if it's running, at once if it's waiting to run, and once its wait is over if it's
+blocked, so a wait isn't cancelled and its results are written first (`../../knowledge/design/kernel.md`
+§4, `0056`).
+
+**Intercepts.** One per process; the nearest intercepted process above a thread is the one it stops for.
+A thread stops at a call's entry, before the call does anything, at its exit, once its results are
+written (after any wait), or at a fault its memory doesn't resolve: the intercept is its subtree's
+exception port. Each stop adds one to the count in the intercept's `Stop` packet, queuing it if it isn't;
+`InterceptNext` reports the stops one by one:
+
+| `StopInfo` field | |
+|---|---|
+| `thread: u64` | The thread's ID |
+| `point: StopPoint` (u32) | `SyscallEntry` (1), `SyscallExit` (2), `Fault` (3) |
+| `number: u32` | The call's number; for a fault, the access: 0 read, 1 write, 2 execute |
+| `address: u64` | For a fault, the address it touched |
+
+`InterceptResume` lets a stopped thread go on. `Continue` at an entry makes the call, with any registers the
+debugger changed (it doesn't stop at that entry again); at an exit, returns to user mode; at a fault,
+retries the access, after the debugger has mapped memory or changed registers. `Skip`, at an entry only,
+returns to user mode with the registers as the debugger wrote them, the call never made: how a replayer
+answers calls. `Kill` destroys the thread. Closing the intercept lets every thread it stopped go on, as
+with `Continue`. Without an intercept asking for faults, a faulting thread is destroyed.
+
+**Registers** (`THREAD_REGISTERS`, 18 on x86-64): rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8 to r15, rip,
+rflags. Writing them refuses an instruction or stack pointer outside user addresses, and changes only
+rflags' status flags and DF.
+
+**Ends**: a process or a thread raises `SIGNAL_TERMINATED` when it's destroyed, which stays raised.
+
 ## Ports
 
 A port is the one wait mechanism (`../../knowledge/design/ipc.md` §3, `0052`). Each binding has a key the
@@ -143,9 +192,9 @@ waiting on it, with `ObjectGone`.
 | Field | |
 |---|---|
 | `key: u64` | The binding's key |
-| `kind: PacketKind` (u32) | `Signal` (1), `Timer` (2), `User` (3), `Irq` (4) |
+| `kind: PacketKind` (u32) | `Signal` (1), `Timer` (2), `User` (3), `Irq` (4), `Stop` (5) |
 | `reserved: u32` | |
-| `data: u64[2]` | `Signal`: the signals raised since it was last taken; `Timer`: the deadline it was set for; `User`: the bits raised since it was last taken; `Irq`: the interrupts since it was last taken |
+| `data: u64[2]` | `Signal`: the signals raised since it was last taken; `Timer`: the deadline it was set for; `User`: the bits raised since it was last taken; `Irq`: the interrupts since it was last taken; `Stop`: the stops since it was last taken |
 
 ## Channels
 
@@ -250,8 +299,20 @@ Registering a controller, making an IRQ or device memory fail with `slop_os.Devi
 | 32 | `LineInUse` | The line has an IRQ already |
 | 33 | `NoFreeInterrupt` | The CPU picked has every device interrupt taken |
 
+Process control fails with `slop_os.ControlError`:
+
+| Tag | Error | Why |
+|---|---|---|
+| 1 to 6, 10, 25 | as above | |
+| 14 | `Empty` | `InterceptNext`: no stop left to report |
+| 18 | `BadAddress` | The address space isn't in the process's subtree, or the range isn't mapped there |
+| 34 | `NoSuchThread` | No thread with that ID in the subtree, or none the intercept stopped |
+| 35 | `NotStopped` | The thread isn't stopped or suspended; or `Skip` at a stop that isn't an entry |
+| 36 | `AlreadyIntercepted` | The process has an intercept already |
+| 37 | `BadRegisters` | A register value user mode can't have |
+
 ## Not Yet
 
-Process control and interception come with the rest of M5; I/O-port ranges, IOMMU domains and
-message-signaled interrupts with the platform service and drivers (M7). Faults are delivered to no one
-yet: a thread that faults outside its memory is destroyed.
+I/O-port ranges, IOMMU domains and message-signaled interrupts come with the platform service and drivers
+(M7); pagers for memory objects with memory-mapped files. Process memory is read and written through the
+page tables, so a memory object's pages no thread has touched yet can't be.

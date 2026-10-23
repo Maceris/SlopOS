@@ -90,6 +90,11 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-23 — `std/os/slop_os`, for M5 stage 4c (`decisions/0056`): the `Intercept` kind, the five process
+  rights, calls 34 to 44 (threads, memory, suspend and resume, registers, intercepts, kill), `StopPoint`,
+  `StopInfo`, `InterceptAction`, `THREAD_REGISTERS`, `SIGNAL_TERMINATED`, the `Stop` packet kind and
+  `ControlError`. No compiler change was needed.
+
 - 2026-10-23 — `std/os/slop_os`, for M5 stage 4b (`decisions/0055`): the `Platform` object kind,
   `ControllerRegister`, `IrqCreate`, `IrqAck`, `MemoryCreatePhysical` and `MemoryCreateWindow`,
   `ControllerKind`, `IRQ_LEVEL` and `IRQ_ACTIVE_LOW`, `CacheMode`, `RIGHT_IRQ_ACK`, the `Irq` packet kind and

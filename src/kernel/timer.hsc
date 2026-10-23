@@ -55,6 +55,7 @@ handle_timer :: fn() -> bool {
     channels_test_tick(kernel, cpu.timer_ticks)
     memory_test_tick(kernel, cpu.timer_ticks)
     devices_test_tick(kernel, cpu.timer_ticks)
+    control_test_tick(kernel, cpu.timer_ticks)
     if cpu.timer_ticks >= kernel.stop_after_ticks {
         stop(.Halted)
     }

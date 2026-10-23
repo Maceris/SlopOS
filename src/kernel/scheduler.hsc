@@ -91,6 +91,11 @@ schedule :: fn(tick: bool) #never_returns {
             cpu.current = 0
             current = 0
         }
+        // Held while it ran (control.hsc): parked, its registers and vector state saved
+        if current != 0 && park_if_held(cast[ptr[mut Thread]](current), true) {
+            cpu.current = 0
+            current = 0
+        }
         current_level := IDLE_LEVEL
         if current != 0 {
             account(cpu, cast[ptr[mut Thread]](current), now)
@@ -150,8 +155,17 @@ run :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Thread]
     if is_dying(cast[u64](thread)) {
         return void
     }
-    // A woken thread finishes its wait first, or blocks again
-    if thread.wait_port != 0 && !complete_wait(kernel, thread) {
+    // A woken thread finishes its wait first, or blocks again; then stops at its call's exit, if it's intercepted
+    if thread.wait_port != 0 {
+        if !complete_wait(kernel, thread) {
+            return void
+        }
+        if stop_thread(kernel, thread, .SyscallExit, thread.syscall_number, 0, false) {
+            return void
+        }
+    }
+    // Held while it waited or was queued (control.hsc)
+    if park_if_held(thread, false) {
         return void
     }
     pass_quiescent(kernel, cpu, epoch)

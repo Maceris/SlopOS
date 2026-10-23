@@ -35,6 +35,8 @@ BindingKind :: enum #backed_by(u8) {
     Signal,
     // An IRQ's (irqs.hsc): data counts the interrupts.
     Irq,
+    // An intercept's (intercepts.hsc): data counts the stops.
+    Stop,
 }
 
 // A key's packet slot, from a type-stable pool, so a timer that fires late finds a binding, if not its own.
@@ -299,6 +301,7 @@ take_packets :: fn(port: ptr[mut Port], packets: ptr[mut slop_os.Packet[slop_os.
                 case .Timer => slop_os.PacketKind.Timer
                 case .Signal => slop_os.PacketKind.Signal
                 case .Irq => slop_os.PacketKind.Irq
+                case .Stop => slop_os.PacketKind.Stop
                 case _ => slop_os.PacketKind.User
             },
             reserved = 0,

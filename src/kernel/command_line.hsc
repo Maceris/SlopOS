@@ -58,6 +58,8 @@ Options :: struct {
     test_memory : bool,
     // test_devices: once booted, run a driver in user mode with the platform capability: an IRQ, device memory and windows.
     test_devices : bool,
+    // test_control: once booted, run a debugger in user mode that intercepts, inspects and controls another process.
+    test_control : bool,
 }
 
 parse_command_line :: fn(command_line: string) -> Options {
@@ -137,6 +139,9 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_devices" {
         options.test_devices = true
+    }
+    if word == "test_control" {
+        options.test_control = true
     }
     if word == "test_channels" {
         options.test_channels = true

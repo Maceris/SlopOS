@@ -243,7 +243,8 @@ sees. Processes using direct access aren't strictly replayable.
 ## 5. Open Questions
 - Fault delivery: does a page fault on uncommitted memory go to a per-memory-object pager
   port (Zircon-style user pagers, for memory-mapped files later), or only to the process's
-  exception port for now?
+  exception port for now? *Answered by `../decisions/0056`: the subtree's intercept, asking for
+  faults, is its exception port; pagers come with memory-mapped files.*
 - Does the kernel parse the ACPI MADT itself to start CPUs, or is Limine's SMP information
   enough? (Already open under *Layering*.)
 - The carrier register in the kernel (§3): embedding `CarrierBlock` in `PerCpu`, the

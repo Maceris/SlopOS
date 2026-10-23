@@ -1,6 +1,8 @@
 package kernel
 
+import intrinsics from "base"
 import runtime from "base"
+import concurrency from "std"
 import arch_interface from "../arch_interface"
 import slop_os from "std/os"
 import boot_info from "../boot_info"
@@ -28,15 +30,31 @@ handle_syscall :: fn(registers: ptr[arch.UserRegisters]) #never_returns {
     kernel :: cpu.kernel
     runtime.assert(cpu.current != 0, "a system call comes from a thread")
     thread :: cast[ptr[mut Thread]](cpu.current)
-    // A call that blocks has its result set when it finishes (ports.hsc, complete_wait)
+    number :: arch.syscall_number(&thread.registers)
+    thread.syscall_number = number
+    // A debugger's stops (intercepts.hsc), at its entry, and at its exit once its result is written
+    if stop_thread(kernel, thread, .SyscallEntry, number, 0, true) {
+        leave_cpu(cpu)
+        schedule(false)
+    }
+    // A call that blocks has its result set when it finishes (ports.hsc, complete_wait), and stops at its exit then
     match dispatch_syscall(kernel, thread) {
         case Some(result) => {
             kept :: result
             arch.set_syscall_result(&thread.registers, &kept)
+            if cpu.current == cast[u64](thread) && stop_thread(kernel, thread, .SyscallExit, number, 0, true) {
+                leave_cpu(cpu)
+            }
         }
         case None => {}
     }
     schedule(false)
+}
+
+// The CPU's current thread stopped: nothing runs here until the scheduler picks something.
+leave_cpu :: fn(cpu: ptr[mut PerCpu]) {
+    cpu.current = 0
+    intrinsics.atomic_store_u32_release(&cpu.current_level, IDLE_LEVEL)
 }
 
 /*
@@ -52,13 +70,25 @@ handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interfac
     runtime.assert(cpu.current != 0, "a fault from user mode comes from a thread")
     thread :: cast[ptr[mut Thread]](cpu.current)
     resolved := false
+    access := cast[u64](0)
+    address := cast[u64](0)
     match fault {
-        case Page(page) => resolved = resolve_fault(kernel, thread, page)
-        case _ => {}
+        case Page(page) => {
+            resolved = resolve_fault(kernel, thread, page)
+            access = cast[u64](cast[u8](page.access))
+            address = cast[u64](page.address)
+        }
+        case _ => access = 0xff
     }
+    // A debugger's exception port (intercepts.hsc), or the thread's end
     if !resolved {
-        runtime.log_info("thread % stopped by a fault: %", thread.id, fault)
-        _ = destroy_object(kernel, cast[u64](thread))
+        if stop_thread(kernel, thread, .Fault, access, address, true) {
+            leave_cpu(cpu)
+        }
+        else {
+            runtime.log_info("thread % stopped by a fault: %", thread.id, fault)
+            _ = destroy_object(kernel, cast[u64](thread))
+        }
     }
     schedule(false)
 }
@@ -156,7 +186,135 @@ dispatch_syscall :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> arch
     if number >= cast[u64](cast[u32](slop_os.Syscall.ControllerRegister)) && number <= cast[u64](cast[u32](slop_os.Syscall.MemoryCreateWindow)) {
         return dispatch_device_call(kernel, process, registers, cast[slop_os.Syscall](cast[u32](number)))
     }
+    if number >= cast[u64](cast[u32](slop_os.Syscall.ProcessThreads)) && number <= cast[u64](cast[u32](slop_os.Syscall.ProcessKill)) {
+        return dispatch_control_call(kernel, thread, process, cast[slop_os.Syscall](cast[u32](number)))
+    }
     return failed(.NoSuchCall)
+}
+
+// Process control (control.hsc, intercepts.hsc): rights on a process handle cover its subtree (decisions/0017).
+dispatch_control_call :: fn(kernel: ptr[mut Kernel], caller: ptr[mut Thread], process: ptr[mut Process], call: slop_os.Syscall)
+    -> arch_interface.SyscallResult {
+    registers :: &caller.registers
+    space :: caller.space
+    if call == .InterceptNext || call == .InterceptResume {
+        intercept := cast[ptr[mut Intercept]](0)
+        match lookup(&process.table, argument(registers, 0)) {
+            case Ok(found) => {
+                if found.kind != .Intercept {
+                    return failed(.WrongKind)
+                }
+                intercept = cast[ptr[mut Intercept]](found.object)
+            }
+            case Error(error) => return failed(error)
+        }
+        if call == .InterceptNext {
+            return control_done(intercept_next(kernel, intercept, space, arch.syscall_argument(registers, 1)))
+        }
+        action :: cast[u32](arch.syscall_argument(registers, 2))
+        if action < cast[u32](slop_os.InterceptAction.Continue) || action > cast[u32](slop_os.InterceptAction.Kill) {
+            return tagged(cast[u64](cast[u32](slop_os.ControlError.NotStopped)))
+        }
+        return control_done(intercept_resume(kernel, intercept, arch.syscall_argument(registers, 1), cast[slop_os.InterceptAction](action)))
+    }
+    needed :: match call {
+        case .ProcessThreads => slop_os.RIGHT_PROCESS_INSPECT
+        case .ThreadReadRegisters => slop_os.RIGHT_PROCESS_INSPECT
+        case .ProcessReadMemory => slop_os.RIGHT_PROCESS_READ_MEMORY
+        case .InterceptAttach => slop_os.RIGHT_PROCESS_INTERCEPT
+        case .ProcessKill => slop_os.RIGHT_PROCESS_KILL
+        case _ => slop_os.RIGHT_PROCESS_WRITE_STATE
+    }
+    target := cast[ptr[mut Process]](0)
+    match lookup(&process.table, argument(registers, 0)) {
+        case Ok(found) => {
+            if found.kind != .Process {
+                return failed(.WrongKind)
+            }
+            if cast[u32](found.rights) & cast[u32](needed) == 0 {
+                return failed(.MissingRight)
+            }
+            target = cast[ptr[mut Process]](found.object)
+        }
+        case Error(error) => return failed(error)
+    }
+    if call == .ProcessKill {
+        _ = destroy_object(kernel, cast[u64](target))
+        return succeeded(0, 0)
+    }
+    if call == .ProcessThreads {
+        ids : u64[64]
+        capacity :: cast[u32](arch.syscall_argument(registers, 2))
+        count :: threads_of(kernel, cast[u64](target), &ids, capacity)
+        written :: min_u64(min_u64(cast[u64](count), cast[u64](capacity)), 64)
+        if !copy_to_user(kernel, space, arch.syscall_argument(registers, 1), cast[u64](&ids[0]), written * 8) {
+            return tagged(cast[u64](cast[u32](slop_os.ControlError.BadBuffer)))
+        }
+        return succeeded(cast[u64](count), 0)
+    }
+    if call == .InterceptAttach {
+        port := cast[ptr[mut Port]](0)
+        match port_of(process, argument(registers, 1), slop_os.RIGHT_PORT_BIND) {
+            case Ok(found) => port = found
+            case Error(error) => return tagged(cast[u64](cast[u32](error)))
+        }
+        // Paid for by the process's own budget, as it has no budget argument
+        match create_intercept(kernel, cast[u64](process), process.header.budget, target, port, arch.syscall_argument(registers, 2),
+            arch.syscall_argument(registers, 3), cast[u32](arch.syscall_argument(registers, 4))) {
+            case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
+            case Error(error) => return tagged(cast[u64](cast[u32](error)))
+        }
+    }
+    if call == .ProcessReadMemory || call == .ProcessWriteMemory {
+        other := cast[ptr[mut AddressSpace]](0)
+        match lookup(&process.table, argument(registers, 1)) {
+            case Ok(found) => {
+                if found.kind != .AddressSpace {
+                    return failed(.WrongKind)
+                }
+                other = cast[ptr[mut AddressSpace]](found.object)
+            }
+            case Error(error) => return failed(error)
+        }
+        if !in_subtree(cast[u64](other), cast[u64](target)) {
+            return tagged(cast[u64](cast[u32](slop_os.ControlError.BadAddress)))
+        }
+        address :: arch.syscall_argument(registers, 2)
+        buffer :: arch.syscall_argument(registers, 3)
+        size :: arch.syscall_argument(registers, 4)
+        copied :: if call == .ProcessReadMemory { copy_between(kernel, other, address, space, buffer, size) }
+            else { copy_between(kernel, space, buffer, other, address, size) }
+        return if copied { succeeded(0, 0) } else { tagged(cast[u64](cast[u32](slop_os.ControlError.BadAddress))) }
+    }
+    // The rest act on one of its threads
+    thread :: thread_in(kernel, cast[u64](target), arch.syscall_argument(registers, 1))
+        or_return tagged(cast[u64](cast[u32](slop_os.ControlError.NoSuchThread)))
+    if call == .ThreadSuspend {
+        hold_thread(kernel, thread, HELD_SUSPEND)
+        return succeeded(0, 0)
+    }
+    if call == .ThreadResume {
+        unhold_thread(kernel, thread, HELD_SUSPEND)
+        return succeeded(0, 0)
+    }
+    // Registers, only while they're the thread's alone: parked
+    concurrency.lock(&thread.control)
+    defer concurrency.unlock(&thread.control)
+    if !thread.parked {
+        return tagged(cast[u64](cast[u32](slop_os.ControlError.NotStopped)))
+    }
+    if call == .ThreadReadRegisters {
+        return if read_registers(kernel, thread, space, arch.syscall_argument(registers, 2)) { succeeded(0, 0) }
+            else { tagged(cast[u64](cast[u32](slop_os.ControlError.BadBuffer))) }
+    }
+    return control_done(write_registers(kernel, thread, space, arch.syscall_argument(registers, 2)))
+}
+
+control_done :: fn(error: slop_os.ControlError?) -> arch_interface.SyscallResult {
+    return match error {
+        case Some(failure) => tagged(cast[u64](cast[u32](failure)))
+        case None => succeeded(0, 0)
+    }
 }
 
 // IRQs, device memory and windows (irqs.hsc, memory.hsc).
@@ -399,9 +557,25 @@ dispatch_channel_call :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], pr
             case Ok(found) => port = found
             case Error(error) => return tagged(cast[u64](cast[u32](error)))
         }
-        // An IRQ's interrupts (irqs.hsc)
+        // An IRQ's interrupts (irqs.hsc), a process's or a thread's end (control.hsc)
         match lookup(&process.table, argument(registers, 1)) {
             case Ok(found) => {
+                once :: arch.syscall_argument(registers, 4) == cast[u64](cast[u32](slop_os.BindMode.Once))
+                mode :: if once { slop_os.BindMode.Once } else { slop_os.BindMode.Persistent }
+                signals :: cast[slop_os.Signals](cast[u32](arch.syscall_argument(registers, 2)))
+                if found.kind == .Process {
+                    if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_PROCESS_INSPECT) == 0 {
+                        return tagged(cast[u64](cast[u32](slop_os.PortError.MissingRight)))
+                    }
+                    watched :: cast[ptr[mut Process]](found.object)
+                    return port_done(watch_bind(kernel, port, found.object, &watched.watchers, &watched.watch_lock, signals,
+                        arch.syscall_argument(registers, 3), mode))
+                }
+                if found.kind == .Thread {
+                    watched :: cast[ptr[mut Thread]](found.object)
+                    return port_done(watch_bind(kernel, port, found.object, &watched.watchers, &watched.control, signals,
+                        arch.syscall_argument(registers, 3), mode))
+                }
                 if found.kind == .Irq {
                     once :: arch.syscall_argument(registers, 4) == cast[u64](cast[u32](slop_os.BindMode.Once))
                     return port_done(irq_bind(kernel, port, cast[ptr[mut Irq]](found.object), arch.syscall_argument(registers, 3),

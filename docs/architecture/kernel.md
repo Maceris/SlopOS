@@ -84,6 +84,11 @@ the kernel logger, and an assertion handler that stops the kernel.
   made at boot for the root task, registers interrupt controllers and makes IRQs and device memory. An
   IRQ is a controller line routed to a CPU; each interrupt bumps its port binding's packet, and a
   level-triggered line stays masked until the driver acknowledges it.
+- **Process control** (`src/kernel/control.hsc`, `src/kernel/intercepts.hsc`, `0017`, `0056`): rights on a
+  process cover its subtree. A thread is held by a suspend or a stop, and parked once its whole state is
+  its saved registers: at its next entry, off its run queue, or after its wait. Intercepts stop threads at
+  system calls' entries and exits and at unresolved faults, report them through a port, and let them go
+  on by making the call again from user mode (`arch.restart_syscall`), skipping it, or killing the thread.
 
 ## Interrupts and Time
 
@@ -116,7 +121,7 @@ the kernel logger, and an assertion handler that stops the kernel.
 
 | What | Roadmap |
 |---|---|
-| Interception and process control, the generated ABI package | M5 |
+| The generated ABI package | M5 |
 | I/O-port ranges, IOMMU domains, message-signaled interrupts | M7 |
 | Destroying large subtrees with preemption points | M5 |
 | Loading programs, the root task, user space | M6 |
