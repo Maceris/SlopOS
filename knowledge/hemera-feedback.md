@@ -90,6 +90,12 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-23 — Code insertion, phase 1 of 6 (`hemera-proposals/code-insertion.md`, asked for before M5's fourth
+  stage): `#code(...)` and `#code { ... }` quote code as a `compiler.Code`, and `#insert` in a quote splices code, a type
+  or a literal, binding like a prefix operator; `compiler.code_text` prints it, through a new tree printer that every
+  file in Hemera's base, std and scenarios round-trips through. Found on the way: a line longer than 65535 characters
+  hung the lexer, whose 16-bit column wrapped; it's an error now (E2007). Next: `#insert` outside quotes (phase 2).
+
 - 2026-10-22 — `std/maps` gains `map_try_put` and `map_try_resize`, which give the allocator's error and leave the
   map as it was when growing fails; `map_put` asserts, which would let user space stop the kernel by running it out
   of memory. Ports keep their bindings in one (M5, stage 2). Tested in the `maps` scenario with an allocator that
