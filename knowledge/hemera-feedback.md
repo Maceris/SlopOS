@@ -90,6 +90,13 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-23 — Code insertion, phase 3 of 6: `#insert` at the top level, where its code's declarations are the
+  package's, and among a struct's fields, a union's variants, an enum's members, a match's patterns and a switch's
+  cases. What goes inside something else is quoted with a word naming it, chosen with the Hemera author:
+  `#code fields { }`, `variants`, `members`, `patterns` (match) and `cases` (switch), so `#code struct { }` stays a
+  struct. A top-level `#insert` waits like an undecided `#if`; imports and builtins are used without waiting and
+  checked once everything is decided. The syscall table's stubs can now be generated into the ABI package.
+
 - 2026-10-23 — Code insertion, phase 2 of 6: `#insert` outside a quote puts code made at compile time into a body,
   statements among the statements around them and expressions in place, checked as if written there; errors in it
   are reported where it was written, then where it was inserted; `--show-inserted=file:line` prints what was put
