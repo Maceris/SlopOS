@@ -6,6 +6,7 @@ import runtime from "base"
  * test_heap: blocks of many sizes from the context's allocator, the kernel heap, small and large,
  * each filled with its own bytes. Every block has to come zeroed and aligned, keep its contents while
  * the others are allocated, and keep them when it grows or shrinks, with what it grows by zeroed.
+ * Small blocks aligned beyond their size have to come aligned too.
  */
 HEAP_TEST_BLOCKS :: 200
 
@@ -62,9 +63,30 @@ test_heap :: fn() {
             runtime.log_error("test_heap: block % lost its contents after resizing", i)
             return void
         }
-        _, freed :: context.allocator.function(context.allocator.data, 0, 0, cast[rawptr](addresses[i]), cast[usize](sizes[i]))
+        _, freed :: context.allocator.function(context.allocator.data, 0, 1, cast[rawptr](addresses[i]), cast[usize](sizes[i]))
+    }
+    if !over_aligned_blocks() {
+        return void
     }
     runtime.log_info("test_heap: % blocks kept their contents, grown, shrunk and freed", HEAP_TEST_BLOCKS)
+}
+
+// 24 bytes aligned to 32 bytes up to 64 KiB, each from the class or frame block that's aligned enough.
+over_aligned_blocks :: fn() -> bool {
+    with {
+        alignment : usize = 32
+    }
+    loop {
+        bytes, error :: runtime.new_array_aligned(u8, 24, alignment)
+        if error != null || cast[usize](bytes.data) % alignment != 0 {
+            runtime.log_error("test_heap: no block of 24 bytes aligned to %", alignment)
+            return false
+        }
+        runtime.free_array_aligned(bytes, alignment)
+        alignment *= 2
+    }
+    while alignment <= 65536
+    return true
 }
 
 // Sizes from 1 byte to a few KiB, and every 25th block bigger, in frames of its own.

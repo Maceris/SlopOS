@@ -39,7 +39,6 @@ them is `compiler-plan.md`, Phase 7:
 |---|---|---|
 | Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`; `os.run_process` runs processes since 2026-10-19 (Windows and Linux). Still open: sharing parsed files between targets and building them in parallel, documented as planned in Hemera's `docs/compilation.md` (2026-10-19); `find_packages` is unimplemented and may be removed | `hemera-proposals/build-programs.md`; `decisions/0028` |
 | Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 resolved 2026-10-13 (see Resolved). The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
-| Freeing passes no alignment (2026-10-22, friction) | Open. `base`'s `free` and `free_array` pass the size but alignment 0, so an allocator can't serve an over-aligned block from somewhere it would only find again by alignment. The kernel heap picks a block's class by size alone and refuses alignments beyond a block's natural one. Passing the alignment on free (`align_of(T)`, or what `new_aligned` was given) would lift that | `HEMERA(friction)` in `src/kernel/heap.hsc` |
 | Cryptography in `std` (needed with networking and remote login) | Planned 2026-10-19, directions chosen with the Hemera author: SHA-256/512, BLAKE2b, BLAKE3, HMAC, HKDF, ChaCha20-Poly1305, AES-256-GCM (hardware from the start, through `vector[T, n]`, `v128` and per-function `#target_features`), X25519, Ed25519 and Argon2id, in one freestanding `std/crypto`; `#constant_time` checked by the compiler, with secrets marked on types (`#secret`). All six phases done (2026-10-19 to 20), plus Project Wycheproof's vectors and the machine code checked under Valgrind (`--valgrind-secrets`) | `hemera-proposals/cryptography.md`; `decisions/0042`, `0043`, `0019` |
 
 ## 2. Design Notes
@@ -89,6 +88,14 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-22 — Freeing passes the alignment, decided with the Hemera author and documented in Hemera's
+  `docs/memory.md` (*Allocators*). `free` and `free_array` passed alignment 0, so an allocator couldn't tell an
+  over-aligned block from another of the same size, and the kernel heap refused alignment beyond a block's natural
+  one. Now freeing and resizing pass the block's alignment as it was allocated, as `old_size` is its size: `free`
+  and `free_array` pass the type's, and new `free_aligned` and `free_array_aligned` pair with `new_aligned` and
+  `new_array_aligned`. `Array`, `SharedPtr` (which keeps the alignment in its header), directory listings and fibers
+  pass theirs. The kernel heap now picks a block by size and alignment, serving 24 bytes aligned to 64 KiB, and a
+  request past the frame allocator's largest block fails with `OutOfMemory` instead of tripping its assertion.
 - 2026-10-22 — Defaults in function types, decided with the Hemera author and now in Hemera's `docs/functions.md`
   (*Defaults in Function Types*). `AllocatorFn` gives `location` a default, and checking accepted a call through an
   `Allocator`'s `function` that left it out, but generating it failed (E5002): a function type recorded only that

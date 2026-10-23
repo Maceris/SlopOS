@@ -9,21 +9,22 @@ import slab from "slab"
 /*
  * The kernel heap (roadmap M2): Hemera's Allocator for the kernel, which every CPU's context has.
  *
- * Sizes up to 2 KiB come from slab caches of power-of-two size classes, through the calling CPU's
+ * Blocks up to 2 KiB come from slab caches of power-of-two size classes, through the calling CPU's
  * magazine for the class, so most allocations and frees take no lock. Larger ones are blocks of
- * frames of their own. Either way a block is aligned to its class's size or its own, and memory
- * comes zeroed.
+ * frames of their own. A block is the smallest of either that holds the size and is aligned to the
+ * alignment: a class's objects are aligned to its size, and frame blocks to theirs. Memory comes
+ * zeroed.
  *
- * Freeing passes only the size (base's free and free_array pass no alignment), so which class a
- * block is in depends on its size alone. A block is aligned to its class, so asking for more than
- * that is an error rather than something free couldn't undo.
+ * Freeing and resizing pass the size and alignment a block was allocated with (Hemera's
+ * docs/memory.md, Allocators), which say which block it is.
  */
-//HEMERA(friction): Allocator's free passes no alignment, so an allocator that would serve an over-aligned block differently can't tell on free; the heap refuses alignment beyond a block's natural one instead
 
 // Classes of 16, 32, ... 2048 bytes.
 SMALLEST_CLASS : u64 : 16
 SIZE_CLASSES :: 8
 LARGEST_SMALL : u64 : SMALLEST_CLASS << (SIZE_CLASSES - 1)
+// The frame allocator's largest block.
+LARGEST_BLOCK : u64 : frames.FRAME_SIZE << frames.MAX_ORDER
 
 // The slab caches every CPU shares.
 Heap :: struct {
@@ -56,11 +57,15 @@ heap_function : runtime.AllocatorFn : fn(
 ) -> (u8[], runtime.AllocatorError?) {
     kernel :: cast[ptr[mut Kernel]](allocator_data)
     empty : u8[]
-    if size > 0 && cast[u64](alignment) > block_bytes(cast[u64](size)) {
+    if cast[u64](alignment) & (cast[u64](alignment) - 1) != 0 {
         return empty, runtime.AllocatorError.InvalidArgument
     }
+    if size > 0 && block_bytes(cast[u64](size), cast[u64](alignment)) > LARGEST_BLOCK {
+        return empty, runtime.AllocatorError.OutOfMemory
+    }
     // Growing or shrinking within the same block stays where it is
-    if old_memory != null && size > 0 && block_bytes(cast[u64](size)) == block_bytes(cast[u64](old_size)) {
+    if old_memory != null && size > 0
+        && block_bytes(cast[u64](size), cast[u64](alignment)) == block_bytes(cast[u64](old_size), cast[u64](alignment)) {
         if size > old_size {
             intrinsics.mem_zero(cast[rawptr](cast[u64](old_memory) + cast[u64](old_size)), size - old_size)
         }
@@ -68,7 +73,7 @@ heap_function : runtime.AllocatorFn : fn(
     }
     result := empty
     if size > 0 {
-        match allocate_block(kernel, cast[u64](size)) {
+        match allocate_block(kernel, block_bytes(cast[u64](size), cast[u64](alignment))) {
             case Ok(address) => result = view_of(cast[ptr[mut u8]](address), size)
             case Error(error) => return empty, runtime.AllocatorError.OutOfMemory
         }
@@ -78,17 +83,18 @@ heap_function : runtime.AllocatorFn : fn(
         if size > 0 {
             intrinsics.mem_copy(cast[rawptr](result.data), old_memory, if old_size < size { old_size } else { size })
         }
-        free_block(kernel, cast[u64](old_memory), cast[u64](old_size))
+        free_block(kernel, cast[u64](old_memory), block_bytes(cast[u64](old_size), cast[u64](alignment)))
     }
     return result, null
 }
 
-// The size of the block size bytes get: a size class, or a block of frames.
-block_bytes :: fn(size: u64) -> u64 {
-    if size > LARGEST_SMALL {
-        return frames.FRAME_SIZE << frames.order_for(size)
+// The size of the block size bytes aligned to alignment get: a size class, or a block of frames.
+block_bytes :: fn(size: u64, alignment: u64) -> u64 {
+    wanted :: if alignment > size { alignment } else { size }
+    if wanted > LARGEST_SMALL {
+        return frames.FRAME_SIZE << frames.order_for(wanted)
     }
-    return SMALLEST_CLASS << class_of(size)
+    return SMALLEST_CLASS << class_of(wanted)
 }
 
 // The smallest class that holds size bytes, up to LARGEST_SMALL.
@@ -101,7 +107,7 @@ class_of :: fn(size: u64) -> u64 {
     return class
 }
 
-// A block for size bytes, in the direct map. Its contents are whatever was there.
+// A block of bytes from block_bytes, in the direct map. Its contents are whatever was there.
 allocate_block :: fn(kernel: ptr[mut Kernel], size: u64) -> Result[u64, frames.FrameError] {
     if size > LARGEST_SMALL {
         address :: frames.allocate(&kernel.frames, frames.order_for(size))?

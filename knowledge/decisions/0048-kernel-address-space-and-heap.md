@@ -1,6 +1,6 @@
 # 0048: The Kernel's Address Space and Heap
 
-Status: accepted
+Status: accepted, amended 2026-10-22 (heap blocks by size and alignment, see the end)
 Date: 2026-10-22
 Related: `0004` (position-independent code), `0021` (KASLR), `0023` (cheap threads), `0026` (stack
 checks, not guard pages), `0032` (arch interface), `../roadmap.md` M2
@@ -59,3 +59,9 @@ everything that maps or allocates later.
   for such mappings (M3, the I/O APIC).
 - Freeing a heap block with a different size than it was allocated with is caught, where whole-frame
   allocation used to hide it (it found `fiber_destroy` freeing a fiber's block by its struct's size).
+
+## Amendment (2026-10-22)
+Hemera's allocators now pass a block's alignment when freeing and resizing, as they pass its size
+(Hemera's `docs/memory.md`, *Allocators*). So a heap block's class depends on its size and alignment
+together, the smallest class or frame block that holds the size and is aligned enough, and asking for
+more alignment than the size is no longer an error.
