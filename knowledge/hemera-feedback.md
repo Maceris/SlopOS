@@ -90,6 +90,13 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-23 — Code insertion, phase 5 of 6: `#macro` functions called as `name!(...)`, their `compiler.Code`
+  arguments quoted as written, expanded hygienically: locals a macro's code declares are invisible to the caller
+  (and the caller's to it), its other names resolve from the macro's own file and imports, and argument code stays
+  the caller's. Expansion stops 64 insertions deep. Also fixed on the way: a statement may start with an
+  assignment to an insertion (`#insert target += 1`), and an insertion chain's notes now include how the site
+  itself was inserted.
+
 - 2026-10-23 — Code insertion, phase 4 of 6: code made from values, `compiler.name` (only ever an identifier),
   `literal`, `type_code`, `list`, `parameters` and `arguments` of a function type, and `described_type` for a
   reflected member's type; looking at code with `code_kind`, `identifier_of`, `items_of` and `location_of`; and in

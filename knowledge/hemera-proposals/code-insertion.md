@@ -1,6 +1,6 @@
 # Proposal: Code Values, `#insert` and Hygienic Macros
 
-Status: **agreed** 2026-10-22; phases 1 to 4 done 2026-10-23 (*Phases*). Quotes of what goes inside something else
+Status: **agreed** 2026-10-22; phases 1 to 5 done 2026-10-23 (*Phases*; phase 5 as built is in *Macros and hygiene as built*). Quotes of what goes inside something else
 are named for their contents: `#code fields { }`, `variants`, `members`, `patterns` and `cases` (chosen 2026-10-23). In bodies, `#insert` changes the tree in
 place, so generics, whose instances share one tree, wait for a per-instance form. Asked for before M5's fourth stage, whose
 generated ABI package needs it (`../design/system-abi.md` §4). Directions chosen with the Hemera author:
@@ -250,6 +250,20 @@ show a need, it's added then, explicitly.
 made by `compiler.name` resolve where the `#insert` is, since that's what a generated declaration's name
 is for. Top-level declarations an `#insert` makes are declared in the package it's in, like code written
 there.
+
+### Macros and hygiene as built (2026-10-23)
+
+Phase 5 differs from §4 and §5 in two places, both confirmed by the Hemera author on 2026-10-23:
+- **A `#macro` function can be called without `!`**, as the function it is, by compile-time code that wants its
+  code. Only `!` on a function that isn't a macro is an error. Called that way it only gives `Code`, with no
+  expansion, which may help chain macros together.
+- **Plain `#insert` stays unhygienic**: its code's names are looked up where it's put, as phases 2 to 4 shipped.
+  Only a macro's expansion is marked. `#insert` is the general, less strict form; macros are the safe one.
+  Extra restrictions or helpers, like making generated names collision-proof, wait for a real case.
+
+Otherwise as written: an expansion's locals are its own, its other names are looked up from the macro's file with
+that file's imports, the arguments keep the caller's marks, and expansion stops 64 insertions deep with the chain
+in the note. A macro call goes in a body, as statements or an expression, and nothing may follow it.
 
 ### 6. Restrictions
 
