@@ -20,13 +20,13 @@ lives in `../knowledge/` instead.
 - A spec here is the source of truth for the code. If they disagree, one of them is a bug.
 - Mark anything not yet implemented as such.
 
-## Planned Layout
+## Layout
 
 ```
 docs/
-  architecture/   layer model, component and data-flow diagrams
+  architecture/   layer model, the kernel core, component and data-flow diagrams
   specs/          syscall ABI, IPC, device-class protocols, BootInfo, formats
-  api/            kernel, services, std (SlopOS-specific parts)
+  api/            kernel, services, std (SlopOS-specific parts): none yet
   guides/         building, running, writing drivers and services
 ```
 
@@ -34,6 +34,8 @@ docs/
 
 | Document | Status |
 |---|---|
-| `architecture/layers.md` | The layer model (L0–L6) and its interfaces. Specified, not implemented |
-| `specs/boot_info.md` | The boot handoff from L0 to the kernel core, and its Limine implementation. Draft |
-| `specs/arch_interface.md` | The boundary between the arch layer and the kernel core, in both directions. Specified, not implemented |
+| `architecture/layers.md` | The layer model (L0–L6) and its interfaces. L0, L1 and much of L2 built |
+| `architecture/kernel.md` | The kernel core as built: boot, memory, interrupts, time, threads and scheduling. Built (roadmap M1–M4) |
+| `specs/boot_info.md` | The boot handoff from L0 to the kernel core, and its Limine implementation. Implemented |
+| `specs/arch_interface.md` | The boundary between the arch layer and the kernel core, in both directions. Implemented on x86-64 |
+| `guides/building.md` | Building, booting in QEMU, the kernel's command line, testing and debugging |

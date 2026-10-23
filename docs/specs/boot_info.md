@@ -5,9 +5,9 @@ image's location, the CPUs and how to start them, the boot modules, framebuffers
 tables, and a few optional values the bootloader may know. It is the only boot data the kernel
 core reads; no bootloader structure reaches L2 (`../architecture/layers.md`, L0).
 
-Status: **draft**, implemented in `src/boot_info` and `src/boot/limine` (roadmap M1), apart from
-`start_cpu`. Choices and alternatives are in
-`../../knowledge/decisions/0031-boot-info.md` (proposed). Four-digit numbers like `0020` refer to
+Status: **implemented** in `src/boot_info` and `src/boot/limine` (roadmap M1), with starting CPUs (M3)
+and reclaiming boot memory (M2). Choices and alternatives are in
+`../../knowledge/decisions/0031-boot-info.md`. Four-digit numbers like `0020` refer to
 decision records in `../../knowledge/decisions/`.
 
 `BootInfo` is internal to the kernel image: L0 and L2 are compiled together, so this

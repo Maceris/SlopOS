@@ -5,7 +5,10 @@ applications (L6). Two of the boundaries between them abstract hardware: the **a
 inside the kernel, for the CPU and core platform, and **device-class protocols** above user-space
 drivers, for peripheral devices.
 
-Implementation status: **specified, not implemented.** No layer has code yet.
+Implementation status: **partly implemented.** L0 (the Limine adapter, `src/boot/limine`) and L1 (x86-64,
+`src/arch/x86_64`, all of the arch interface) are built, and so is much of L2: memory, address spaces,
+interrupt routing, threads and dispatch, and the clock (roadmap M1 to M4, `kernel.md`). L3 to L6 have no
+code yet.
 
 Decided in `../../knowledge/decisions/0002-layered-architecture.md`. The design history is in
 `../../knowledge/design/layers.md`. Four-digit numbers like `0023` refer to decision records in
@@ -173,7 +176,8 @@ On x86-64, the stubs are Hemera entry functions (`#calling_convention(.entry)` a
 ## L2 — Microkernel Core
 
 Portable Hemera, using only L1, `BootInfo`, and `std`'s `Freestanding` and `Allocating` tiers.
-It provides mechanism only; policy lives in user space.
+It provides mechanism only; policy lives in user space. What's built so far, and what isn't, is in
+`kernel.md`.
 
 - **Physical memory and memory objects**, including device memory and memory budgets (`0011`).
 - **Address spaces**: mapping, unmapping and protecting memory objects.

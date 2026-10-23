@@ -182,6 +182,9 @@ docs don't settle it, ask, or guess and mark it `//HEMERA(guess)` when it's deli
 
 ## Building
 
+The full guide is `docs/guides/building.md`: tools, settings, `boot.py`'s options, the kernel's command
+line, the tests, and debugging.
+
 The kernel in `src/` builds and boots (`knowledge/compiler-plan.md`, Phase 6), and new code is
 expected to build too, with the compiler extended where it can't yet (`knowledge/decisions/0047`). `base` is built into the compiler, and it
 finds `std` in the Hemera repo it was built in. `hemera src/build` builds everything through the
