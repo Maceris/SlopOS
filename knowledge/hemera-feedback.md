@@ -90,6 +90,15 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-23 — Code insertion, phase 6 (first users), the Hemera part: `base/intrinsics/atomics.hsc`'s 714
+  declarations are made at compile time from a list of 14 types, the orderings each kind of operation takes,
+  and the operations' signatures, identical to what was written by hand (checked declaration by declaration).
+  It costs about 17 ms a build. Needed on the way: `compiler.name` joins its parts (`name("atomic_load_", type,
+  ordering)`, chosen 2026-10-23); `#insert` result types, named or not; a name looked up in an imported package
+  whose top-level `#insert` may declare it is used provisionally, like the file's own, rather than waiting
+  (runtime imports intrinsics, whose `#insert` needs runtime to run); `--generate-all` skips functions that only
+  run at compile time; and `--show-inserted` prints a list of declarations a line each.
+
 - 2026-10-23 — Code insertion, phase 5 of 6: `#macro` functions called as `name!(...)`, their `compiler.Code`
   arguments quoted as written, expanded hygienically: locals a macro's code declares are invisible to the caller
   (and the caller's to it), its other names resolve from the macro's own file and imports, and argument code stays
