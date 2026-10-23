@@ -79,7 +79,7 @@ start_threads_test :: fn(kernel: ptr[mut Kernel], count: usize, budgeted: bool) 
     test :: allocate_object[ThreadsTest](&kernel.frames) or_else out_of_memory(&kernel.options, "threads test: no memory")
     test.count = count
     process := cast[ptr[mut Process]](0)
-    match create_process(kernel, 0) {
+    match create_process(kernel, 0, 0) {
         case Ok(made) => process = made
         case Error(error) => {
             runtime.log_error("threads test: no process: %", error)
@@ -87,7 +87,7 @@ start_threads_test :: fn(kernel: ptr[mut Kernel], count: usize, budgeted: bool) 
         }
     }
     space := cast[ptr[mut AddressSpace]](0)
-    match create_address_space(kernel, cast[u64](process)) {
+    match create_address_space(kernel, cast[u64](process), 0) {
         case Ok(made) => space = made
         case Error(error) => {
             runtime.log_error("threads test: no address space: %", error)
@@ -126,7 +126,7 @@ start_threads_test :: fn(kernel: ptr[mut Kernel], count: usize, budgeted: bool) 
         }
         budget :: if budgeted && i == 0 { cast[u64](&test.budget) } else { cast[u64](0) }
         thread := cast[ptr[mut Thread]](0)
-        match create_thread(kernel, cast[u64](process), space, &start, arch_interface.VectorConfig.{extended = false}, budget) {
+        match create_thread(kernel, cast[u64](process), space, &start, arch_interface.VectorConfig.{extended = false}, budget, 0) {
             case Ok(made) => thread = made
             case Error(error) => {
                 runtime.log_error("threads test: no thread: %", error)
@@ -142,6 +142,31 @@ start_threads_test :: fn(kernel: ptr[mut Kernel], count: usize, budgeted: bool) 
         }
     }
     return test
+}
+
+// Where each test's page holds a handle to the budget its user code pays with.
+TEST_SLOT_BUDGET :: 7
+TEST_BUDGET_LIMIT : u64 : 16 << 20
+
+/*
+ * A budget for a test's process to pay with: a child of the root budget that the process owns, so it's
+ * closed, and what it was charged goes back to the root, when the process is destroyed. Its handle goes
+ * in page's TEST_SLOT_BUDGET.
+ */
+give_test_budget :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], page: u64) -> bool {
+    match create_budget(kernel, cast[u64](process), kernel.root_budget, TEST_BUDGET_LIMIT) {
+        case Ok(budget) => {
+            match install_owning(kernel, process, cast[u64](budget)) {
+                case Ok(handle) => {
+                    cast[ptr[mut u64[64]]](page)^[TEST_SLOT_BUDGET] = cast[u64](cast[u32](handle))
+                    return true
+                }
+                case Error(error) => runtime.log_error("no handle for a test's budget: %", error)
+            }
+        }
+        case Error(error) => runtime.log_error("no budget for a test: %", error)
+    }
+    return false
 }
 
 mapped_for_test :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, physical: u64, size: u64,

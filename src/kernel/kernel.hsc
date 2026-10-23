@@ -76,6 +76,9 @@ Kernel :: struct {
     // The kernel objects' pools, and the epoch objects are destroyed in (objects.hsc).
     pools : ObjectPools,
     epoch : u64,
+    // The budget every other is split from, and the lock for changing two budgets at once (memory_budgets.hsc).
+    root_budget : u64,
+    budgets_lock : concurrency.SpinLock,
     // Threads (threads.hsc): the last ID, and the last CPU one was started on.
     next_thread_id : u64,
     next_start_cpu : u32,
@@ -91,6 +94,8 @@ Kernel :: struct {
     ports_test : u64,
     // test_channels' state, as an address, while it runs (channels_test.hsc)
     channels_test : u64,
+    // test_memory's state, as an address, while it runs (memory_test.hsc)
+    memory_test : u64,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : concurrency.SpinLock,
     // test_pool's state, as an address, once the boot CPU has set it up for the other CPUs (pool_test.hsc)
@@ -215,6 +220,8 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         start_timer(kernel, info.counter_frequency_hint)
         start_cpus(kernel, info)
         leave_boot_stacks(kernel)
+        // Of the memory free once boot memory is back
+        kernel.root_budget = make_root_budget(kernel)
         if kernel.options.test_clock {
             test_clock(kernel)
         }
@@ -238,6 +245,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         }
         if kernel.options.test_channels {
             test_channels(kernel)
+        }
+        if kernel.options.test_memory {
+            test_memory(kernel)
         }
         if kernel.options.test_fault {
             runtime.log_info("test_fault: running an invalid instruction")

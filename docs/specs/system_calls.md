@@ -32,12 +32,14 @@ each object is its owning one (`0008`).
   reused.
 - **Rights** (`slop_os.Rights`, `0010`): `RIGHT_DUPLICATE` and `RIGHT_TRANSFER` for every kind, then per
   kind: `RIGHT_SPACE_THREADS` and `RIGHT_SPACE_MAP` for an address space; `RIGHT_PORT_WAIT` and
-  `RIGHT_PORT_BIND` for a port; `RIGHT_CHANNEL_MAP` for a channel end. An owning handle has every right.
+  `RIGHT_PORT_BIND` for a port; `RIGHT_CHANNEL_MAP` for a channel end; `RIGHT_BUDGET_CHARGE` for a memory
+  budget; `RIGHT_MEMORY_READ`, `RIGHT_MEMORY_WRITE` and `RIGHT_MEMORY_EXECUTE` for a memory object. An
+  owning handle has every right.
   Duplicating keeps or drops rights, never adds them.
 
 Object kinds (`slop_os.ObjectKind`, `0034`): `MemoryBudget`, `CpuBudget`, `Memory`, `AddressSpace`,
 `Thread`, `Process`, `Channel`, `Port`, `Irq`, `IoPortRange`, `IommuDomain`. So far processes, threads,
-address spaces, ports and channels exist.
+address spaces, ports, channels, memory budgets and memory objects exist.
 
 ## Calls
 
@@ -47,17 +49,17 @@ address spaces, ports and channels exist.
 | 1 | `HandleDuplicate` | handle, rights | a non-owning handle with those rights; needs `RIGHT_DUPLICATE`, and every right asked for |
 | 2 | `HandleInfo` | handle | the object's kind, and the handle's rights |
 | 3 | `ThreadExit` | | never returns: the calling thread is destroyed |
-| 4 | `ThreadCreate` | address space, entry, stack pointer, argument | an owning handle to a new thread, started; needs `RIGHT_SPACE_THREADS`. The thread starts at entry with the argument in the first argument register and every other register zero (`0026`) |
-| 5 | `ProcessCreate` | | an owning handle to a new process, owned by the caller's |
-| 6 | `AddressSpaceCreate` | | an owning handle to a new, empty address space |
+| 4 | `ThreadCreate` | budget, address space, entry, stack pointer, argument | an owning handle to a new thread, started; needs `RIGHT_SPACE_THREADS`. The thread starts at entry with the argument in the first argument register and every other register zero (`0026`) |
+| 5 | `ProcessCreate` | budget | an owning handle to a new process, owned by the caller's, whose budget the budget is |
+| 6 | `AddressSpaceCreate` | budget | an owning handle to a new, empty address space |
 | 7 | `ClockMonotonic` | | the monotonic clock, in nanoseconds since the kernel's timer started (`0009`) |
-| 8 | `PortCreate` | | an owning handle to a new port |
+| 8 | `PortCreate` | budget | an owning handle to a new port |
 | 9 | `PortBindWake` | port, key | nothing: a wake binding for key; needs `RIGHT_PORT_BIND` |
 | 10 | `PortWake` | port, key, bits | nothing: key's wake binding's packet, with bits ORed into it; needs `RIGHT_PORT_BIND` |
 | 11 | `PortSetTimer` | port, key, deadline | nothing: a timer packet for key at deadline (monotonic nanoseconds), binding key if it isn't yet; setting it again moves it. Needs `RIGHT_PORT_BIND` |
 | 12 | `PortUnbind` | port, key | nothing: the binding goes, with a packet it had queued; needs `RIGHT_PORT_BIND` |
 | 13 | `PortWait` | port, packets, capacity, deadline | how many packets it wrote at packets, up to capacity and 64: at once if any are queued, otherwise once one is, or 0 at deadline (`NO_DEADLINE` for none). Needs `RIGHT_PORT_WAIT` |
-| 14 | `ChannelCreate` | ring bytes | owning handles to a new channel's two ends; rings of ring bytes each way, a power of two from 1 KiB to 128 KiB, 0 for the default 1 KiB |
+| 14 | `ChannelCreate` | budget, ring bytes | owning handles to a new channel's two ends; rings of ring bytes each way, a power of two from 1 KiB to 128 KiB, 0 for the default 1 KiB |
 | 15 | `ChannelMap` | end, address space, address | nothing: the channel's memory, `channel_memory_size` bytes, mapped read/write at address, page-aligned. Needs `RIGHT_CHANNEL_MAP` and `RIGHT_SPACE_MAP`; one mapping per end |
 | 16 | `ChannelUnmap` | end | nothing: the end's mapping, unmapped |
 | 17 | `ChannelNotify` | end, signals | nothing: `SIGNAL_READABLE` or `SIGNAL_WRITABLE`, raised on the other end |
@@ -67,8 +69,44 @@ address spaces, ports and channels exist.
 | 21 | `ChannelTakeHandles` | end, batch, handles, capacity | how many: the batch's handles, in the caller's table, written at handles; `NO_HANDLE` for any whose object is gone |
 | 22 | `ChannelNotifyAndWait` | end, signals, port, packets, capacity, deadline | as `ChannelNotify`, then `PortWait`; a thread the notify wakes is made ready on the caller's CPU |
 | 23 | `PortBind` | port, object, signals, key, mode | nothing: a `Signal` packet for key when the object raises any of signals; needs `RIGHT_PORT_BIND`. Mode `Once` (1) disarms it once its packet is queued, and binding the same key to the same object arms it again; `Persistent` (2) doesn't |
+| 24 | `MemoryBudgetCreate` | budget, limit | an owning handle to a child budget of limit bytes, charged to the budget |
+| 25 | `MemoryBudgetInfo` | budget | its limit, and how much of it is charged, in bytes |
+| 26 | `MemoryCreate` | budget, size | an owning handle to a new memory object of size bytes, a whole number of pages up to `MAX_MEMORY_SIZE` (1 GiB), charged for all of it |
+| 27 | `MemoryMap` | memory, address space, address, offset, size, protection | nothing: size bytes of the memory from offset, mapped at address, page-aligned, with protection (`PROTECTION_READ`, `_WRITE`, `_EXECUTE`; never writable and executable). Needs the memory rights the protection asks for, and `RIGHT_SPACE_MAP` |
+| 28 | `MemoryUnmap` | address space, address | nothing: the mapping that starts at address, unmapped; needs `RIGHT_SPACE_MAP` |
 
-Threads, processes, address spaces, ports and channels a call creates are owned by the calling thread's process.
+Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
+handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created.
+
+## Memory Budgets
+
+Every object is charged to a memory budget (`0011`, `0054`): its slot, and what it holds, a thread's vector
+state, a channel's core and rings, a memory object's whole size and its page array, an address space's
+root table. What an object takes on later is charged as it does, to the same budget, and can fail with
+`BudgetExceeded`: a process's handle-table pages to the process, page tables and mappings to their address
+space, port bindings to their port, handle batches in flight to the end that sent them. A budget never
+charges more than its limit. An object's whole charge comes back once it's freed, after its grace period.
+
+- **Splitting**: `MemoryBudgetCreate` charges a child's limit to its parent, with its slot. Closing a child
+  moves what's charged to it to its parent, which gets back the part of the limit the child hadn't used;
+  nothing it paid for is destroyed.
+- **Processes**: a process's budget is the one `ProcessCreate` was given. Taking an owning handle out of a
+  batch (`ChannelTakeHandles`) moves the object's charge to the taker's process's budget, for all the
+  batch's objects or none: if the budget can't take them, the take fails with `BudgetExceeded` and the
+  batch stays. While a batch is in flight, its objects stay charged where they were.
+- **The root budget** is of the memory free once the kernel is up, and the kernel's own; the budgets
+  processes get are split from it.
+
+## Memory Objects
+
+A memory object is anonymous memory, zeroed. It's charged for its whole size when it's made, and filled
+only as it's touched: a page fault in a mapping of it maps the page, with the frame it has or a new zeroed
+one. Mappings of the same memory share its frames. `MemoryMap` maps nothing at once, and refuses a range
+that overlaps another mapping or a channel's rings; `ChannelMap` refuses a range a mapping holds.
+
+A fault in user mode outside any mapping, or an access a mapping doesn't allow (a write to a read-only
+one, running code from one that isn't executable), destroys the faulting thread. Closing a memory object
+unmaps it from every address space; destroying an address space takes down what's mapped in it.
 
 ## Ports
 
@@ -135,12 +173,13 @@ The memory, `channel_memory_size(ring)` bytes:
 | 5 | `TableFull` | The process has 65535 handles |
 | 6 | `OutOfMemory` | |
 | 7 | `NoSuchCall` | No call has that number |
+| 25 | `BudgetExceeded` | The budget can't pay for it, or (`ChannelTakeHandles`) the taker's can't take what the batch owns |
 
 Calls on a port fail with `slop_os.PortError`, whose tags mean the same where they're shared:
 
 | Tag | Error | Why |
 |---|---|---|
-| 1 to 6 | as above | |
+| 1 to 6, 25 | as above | |
 | 8 | `KeyInUse` | The key is bound already, or bound to another kind of binding |
 | 9 | `NoSuchKey` | No binding has that key, or not one of that kind |
 | 10 | `BadBuffer` | Packets would go where the thread can't write; nothing was taken |
@@ -150,7 +189,7 @@ Calls on a channel fail with `slop_os.ChannelError`, the same where tags are sha
 
 | Tag | Error | Why |
 |---|---|---|
-| 1 to 6, 10 | as above | |
+| 1 to 6, 10, 25 | as above | |
 | 12 | `PeerClosed` | The other end is closed (for `ChannelRead`: and nothing is left to read) |
 | 13 | `Full` | No room in the ring for the message |
 | 14 | `Empty` | No message in the ring |
@@ -165,7 +204,18 @@ Calls on a channel fail with `slop_os.ChannelError`, the same where tags are sha
 | 23 | `InFlight` | The end is in a batch not yet taken |
 | 24 | `InvalidSize` | The ring isn't a power of two from 1 KiB to 128 KiB |
 
+Calls on a memory budget or a memory object fail with `slop_os.MemoryError`:
+
+| Tag | Error | Why |
+|---|---|---|
+| 1 to 6, 25 | as above | |
+| 18 | `BadAddress` | Not a page-aligned user address range, or it overlaps a mapping or a channel's rings |
+| 24 | `InvalidSize` | Not a whole number of pages, none, more than `MAX_MEMORY_SIZE`, or past the memory's end |
+| 26 | `NotMapped` | No mapping starts at that address |
+| 27 | `BadProtection` | Writable and executable at once, or no access at all |
+
 ## Not Yet
 
-Memory objects and budgets as objects, IRQ objects, process control and interception come with the rest
-of M5 (`../architecture/kernel.md`, Not Built Yet).
+IRQ objects, process control and interception come with the rest of M5, as do child windows onto memory
+objects (`0010`) and device memory (`../architecture/kernel.md`, Not Built Yet). Faults are delivered to
+no one yet: a thread that faults outside its memory is destroyed.

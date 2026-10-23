@@ -60,12 +60,13 @@ user_syscalls #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) 
         cast[u64](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))).rax
     page^[14] = x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.HandleClose)), copy.rdx).rax
     page^[15] = x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.HandleClose)), copy.rdx).rax
-    thread :: x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.ThreadCreate)), space, page^[SLOT_ENTRY], page^[SLOT_STACK],
-        page^[SLOT_COUNTER])
+    budget :: page^[TEST_SLOT_BUDGET]
+    thread :: x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.ThreadCreate)), budget, space, page^[SLOT_ENTRY],
+        page^[SLOT_STACK], page^[SLOT_COUNTER])
     page^[16] = thread.rax
     watch :: x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.HandleDuplicate)), thread.rdx, cast[u64](cast[u32](slop_os.RIGHT_DUPLICATE)))
     page^[17] = watch.rax
-    child :: x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.ProcessCreate)))
+    child :: x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.ProcessCreate)), budget)
     page^[18] = child.rax
     page^[19] = x86_64.system_call(cast[u64](cast[u32](slop_os.Syscall.HandleClose)), child.rdx).rax
     counter :: cast[ptr[u64]](page^[SLOT_COUNTER])
@@ -85,7 +86,7 @@ user_syscalls #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) 
 test_syscalls :: fn(kernel: ptr[mut Kernel]) {
     test :: allocate_object[SyscallsTest](&kernel.frames) or_else out_of_memory(&kernel.options, "test_syscalls: no memory")
     process := cast[ptr[mut Process]](0)
-    match create_process(kernel, 0) {
+    match create_process(kernel, 0, 0) {
         case Ok(made) => process = made
         case Error(error) => {
             runtime.log_error("test_syscalls: no process: %", error)
@@ -94,7 +95,7 @@ test_syscalls :: fn(kernel: ptr[mut Kernel]) {
     }
     test.process = cast[u64](process)
     space := cast[ptr[mut AddressSpace]](0)
-    match create_address_space(kernel, cast[u64](process)) {
+    match create_address_space(kernel, cast[u64](process), 0) {
         case Ok(made) => space = made
         case Error(error) => {
             runtime.log_error("test_syscalls: no address space: %", error)
@@ -126,6 +127,9 @@ test_syscalls :: fn(kernel: ptr[mut Kernel]) {
             return void
         }
     }
+    if !give_test_budget(kernel, process, test.page) {
+        return void
+    }
     slots^[SLOT_ENTRY] = TEST_CODE + (cast[u64](user_counter) - first)
     slots^[SLOT_STACK] = TEST_STACKS + 2 * frames.FRAME_SIZE - 8
     slots^[SLOT_COUNTER] = TEST_COUNTERS + frames.FRAME_SIZE
@@ -134,7 +138,7 @@ test_syscalls :: fn(kernel: ptr[mut Kernel]) {
         stack_pointer = cast[arch_interface.VirtualAddress](TEST_STACKS + frames.FRAME_SIZE - 8),
         argument = TEST_COUNTERS,
     }
-    match create_thread(kernel, cast[u64](process), space, &start, arch_interface.VectorConfig.{extended = false}, 0) {
+    match create_thread(kernel, cast[u64](process), space, &start, arch_interface.VectorConfig.{extended = false}, 0, 0) {
         case Ok(thread) => start_thread(kernel, thread)
         case Error(error) => {
             runtime.log_error("test_syscalls: no thread: %", error)

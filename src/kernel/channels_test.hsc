@@ -107,12 +107,13 @@ user_channels_a #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]
     packets :: cast[ptr[u64[16]]](base + CHANNEL_PACKETS_OFFSET)
     space :: page^[CHANNEL_SLOT_SPACE]
     c0 :: page^[CHANNEL_SLOT_END]
-    port :: call(.PortCreate).rdx
-    made :: call(.ChannelCreate, 0)
+    budget :: page^[TEST_SLOT_BUDGET]
+    port :: call(.PortCreate, budget).rdx
+    made :: call(.ChannelCreate, budget, 0)
     x :: made.rdx
     y :: made.r8
     page^[8] = made.rax
-    page^[9] = call(.ChannelCreate, 1000).rax
+    page^[9] = call(.ChannelCreate, budget, 1000).rax
     page^[10] = call(.ChannelMap, x, space, TEST_RING).rax
     page^[11] = call(.ChannelMap, x, space, TEST_RING + 0x10000).rax
     // Sending: x is mapped, c0 is the channel's own end, and y goes
@@ -188,7 +189,7 @@ user_channels_a #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]
     page^[24] = call(.ChannelRead, x, base + CHANNEL_DATA_OFFSET, 64).rax
     page^[25] = call(.HandleClose, x).rax
     // Closing x unmapped its rings, so another channel's go where they were; and again once unmapped
-    other :: call(.ChannelCreate, 0).rdx
+    other :: call(.ChannelCreate, budget, 0).rdx
     page^[29] = call(.ChannelMap, other, space, TEST_RING).rax
     page^[30] = call(.ChannelUnmap, other).rax
     page^[31] = call(.ChannelMap, other, space, TEST_RING).rax
@@ -204,7 +205,7 @@ user_channels_b #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]
     base :: cast[u64](page)
     space :: page^[CHANNEL_SLOT_SPACE]
     c0 :: page^[CHANNEL_SLOT_END]
-    port :: call(.PortCreate).rdx
+    port :: call(.PortCreate, page^[TEST_SLOT_BUDGET]).rdx
     readable :: cast[u64](cast[u32](slop_os.SIGNAL_READABLE))
     writable :: cast[u64](cast[u32](slop_os.SIGNAL_WRITABLE))
     persistent :: cast[u64](cast[u32](slop_os.BindMode.Persistent))
@@ -266,7 +267,7 @@ test_channels :: fn(kernel: ptr[mut Kernel]) {
     code_end :: frames.round_up(last + 4 * frames.FRAME_SIZE, frames.FRAME_SIZE)
     for i in 0..<2 {
         process := cast[ptr[mut Process]](0)
-        match create_process(kernel, 0) {
+        match create_process(kernel, 0, 0) {
             case Ok(made) => process = made
             case Error(error) => {
                 runtime.log_error("test_channels: no process: %", error)
@@ -275,7 +276,7 @@ test_channels :: fn(kernel: ptr[mut Kernel]) {
         }
         test.processes[i] = cast[u64](process)
         space := cast[ptr[mut AddressSpace]](0)
-        match create_address_space(kernel, cast[u64](process)) {
+        match create_address_space(kernel, cast[u64](process), 0) {
             case Ok(made) => space = made
             case Error(error) => {
                 runtime.log_error("test_channels: no address space: %", error)
@@ -297,10 +298,13 @@ test_channels :: fn(kernel: ptr[mut Kernel]) {
                 return void
             }
         }
+        if !give_test_budget(kernel, process, test.pages[i]) {
+            return void
+        }
     }
     // The channel between them: each end owned by its process
     pair := ChannelPair.{}
-    match create_channel(kernel, test.processes[0], 0) {
+    match create_channel(kernel, test.processes[0], 0, 0) {
         case Ok(made) => pair = made
         case Error(error) => {
             runtime.log_error("test_channels: no channel: %", error)
@@ -327,7 +331,7 @@ test_channels :: fn(kernel: ptr[mut Kernel]) {
             stack_pointer = cast[arch_interface.VirtualAddress](TEST_STACKS + frames.FRAME_SIZE - 8),
             argument = TEST_COUNTERS,
         }
-        match create_thread(kernel, cast[u64](process), space, &start, arch_interface.VectorConfig.{extended = false}, 0) {
+        match create_thread(kernel, cast[u64](process), space, &start, arch_interface.VectorConfig.{extended = false}, 0, 0) {
             case Ok(thread) => start_thread(kernel, thread)
             case Error(error) => {
                 runtime.log_error("test_channels: no thread: %", error)

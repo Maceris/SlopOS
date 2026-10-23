@@ -32,7 +32,7 @@ import slab from "slab"
  * Lock order: a core's lock, then a port's, then a run queue's. A space's lock is never taken with a
  * core's.
  */
-//TODO(claude): the rings as a memory object, and the core charged to a memory budget (M5, budgets)
+//TODO(claude): the rings as a memory object (knowledge/design/ipc.md §2)
 
 // The ports an end can be bound to at once.
 MAX_END_BINDINGS :: 4
@@ -104,10 +104,21 @@ Channel :: struct #align(16) {
     sending : u32,
 }
 
-// Handles in flight, from the kernel heap.
+// Handles in flight, from the kernel heap, charged to the end that sent them while it lives.
 HandleBatch :: struct {
     count : u32,
+    sender_generation : u32,
+    sender : u64,
     entries : Resolved[64],
+}
+
+// A batch, freed, its charge back to its sender if that's still the same end.
+free_batch :: fn(kernel: ptr[mut Kernel], address: u64) {
+    batch :: cast[ptr[mut HandleBatch]](address)
+    if batch.sender != 0 {
+        uncharge(batch.sender, batch.sender_generation, cast[u64](size_of(HandleBatch)))
+    }
+    free_block(kernel, address, cast[u64](size_of(HandleBatch)))
 }
 
 ChannelPair :: struct {
@@ -117,28 +128,29 @@ ChannelPair :: struct {
 
 /*
  * A channel with rings of ring_bytes each way (0 for the default), its ends owned by owner (a Process's
- * address, 0 for the kernel).
+ * address, 0 for the kernel), charged to budget: end A with the core and the rings, end B its slot.
  */
-create_channel :: fn(kernel: ptr[mut Kernel], owner: u64, ring_bytes: u32) -> Result[ChannelPair, slop_os.ChannelError] {
+create_channel :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, ring_bytes: u32) -> Result[ChannelPair, slop_os.ChannelError] {
     ring :: if ring_bytes == 0 { slop_os.CHANNEL_DEFAULT_RING } else { ring_bytes }
     if ring < slop_os.CHANNEL_MIN_RING || ring > slop_os.CHANNEL_MAX_RING || ring & (ring - 1) != 0 {
         return .Error(.InvalidSize)
     }
     a := cast[u64](0)
     b := cast[u64](0)
-    match new_object(kernel, .Channel) {
+    order :: frames.order_for(slop_os.channel_memory_size(ring))
+    held :: kernel.pools.channel_cores.object_size + (frames.FRAME_SIZE << order)
+    match new_object(kernel, .Channel, budget, held) {
         case Ok(made) => a = made
-        case Error(error) => return .Error(.OutOfMemory)
+        case Error(error) => return .Error(if error == .BudgetExceeded { slop_os.ChannelError.BudgetExceeded } else { slop_os.ChannelError.OutOfMemory })
     }
-    match new_object(kernel, .Channel) {
+    match new_object(kernel, .Channel, budget, 0) {
         case Ok(made) => b = made
         case Error(error) => {
             _ = destroy_object(kernel, a)
-            return .Error(.OutOfMemory)
+            return .Error(if error == .BudgetExceeded { slop_os.ChannelError.BudgetExceeded } else { slop_os.ChannelError.OutOfMemory })
         }
     }
     core_address :: slab.allocate(&kernel.pools.channel_cores, &kernel.frames) or_else 0
-    order :: frames.order_for(slop_os.channel_memory_size(ring))
     memory := cast[u64](0)
     if core_address != 0 {
         match frames.allocate_zeroed(&kernel.frames, order) {
@@ -310,6 +322,12 @@ channel_map :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel], space: ptr[mut
         set_mapping_state(core, mapping, .None)
         return slop_os.ChannelError.ObjectGone
     }
+    // A memory mapping there may have nothing in its page tables yet
+    if !range_free(kernel, space, address, size) {
+        concurrency.unlock(&space.lock)
+        set_mapping_state(core, mapping, .None)
+        return slop_os.ChannelError.BadAddress
+    }
     link_ring(space, mapping)
     _ = intrinsics.interlocked_increment_u32(&core.references)
     concurrency.unlock(&space.lock)
@@ -321,7 +339,8 @@ channel_map :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel], space: ptr[mut
             concurrency.unlock(&space.lock)
             drop_core(kernel, cast[u64](core))
             set_mapping_state(core, mapping, .None)
-            return if error == .OutOfMemory { slop_os.ChannelError.OutOfMemory } else { slop_os.ChannelError.BadAddress }
+            return if error == .OutOfMemory { slop_os.ChannelError.OutOfMemory }
+                else if error == .BudgetExceeded { slop_os.ChannelError.BudgetExceeded } else { slop_os.ChannelError.BadAddress }
         }
     }
     concurrency.lock(&core.lock)
@@ -541,7 +560,7 @@ port_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], end: ptr[mut Chann
             if cast[u64](free_slot) == 0 {
                 return slop_os.PortError.TooManyBindings
             }
-            binding = new_binding(kernel, port, key, .Signal) or_return slop_os.PortError.OutOfMemory
+            binding = new_binding(kernel, port, key, .Signal) or_return binding_failure(port)
             binding.object = cast[u64](end)
             binding.object_generation = end.header.generation
             free_slot.binding = cast[u64](binding)
@@ -720,9 +739,18 @@ channel_send_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end
             case Error(error) => return if error == .ObjectGone { slop_os.ChannelError.ObjectGone } else { slop_os.ChannelError.InvalidHandle }
         }
     }
-    block :: allocate_block(kernel, cast[u64](size_of(HandleBatch))) or_return slop_os.ChannelError.OutOfMemory
+    if !charge_more(cast[u64](end), cast[u64](size_of(HandleBatch))) {
+        return slop_os.ChannelError.BudgetExceeded
+    }
+    block :: allocate_block(kernel, cast[u64](size_of(HandleBatch))) or_else 0
+    if block == 0 {
+        uncharge(cast[u64](end), end.header.generation, cast[u64](size_of(HandleBatch)))
+        return slop_os.ChannelError.OutOfMemory
+    }
     filled :: cast[ptr[mut HandleBatch]](block)
     filled.count = 0
+    filled.sender = cast[u64](end)
+    filled.sender_generation = end.header.generation
     peer :: 1 - end.side
     slot :: &side_of(core, peer).batches[cast[usize](batch) % 16]
     concurrency.lock(&core.lock)
@@ -738,7 +766,7 @@ channel_send_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end
     }
     concurrency.unlock(&core.lock)
     if failure != 0 {
-        free_block(kernel, block, cast[u64](size_of(HandleBatch)))
+        free_batch(kernel, block)
         return cast[slop_os.ChannelError](failure)
     }
     // Ends being sent are held unmapped until the batch is taken or dropped
@@ -748,7 +776,7 @@ channel_send_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end
                 if found.kind == .Channel && !hold_for_sending(cast[ptr[mut Channel]](found.object)) {
                     let_go_of_ends(filled, cast[u32](i), &process.table, &given)
                     set_batch(core, slot, 0)
-                    free_block(kernel, block, cast[u64](size_of(HandleBatch)))
+                    free_batch(kernel, block)
                     return slop_os.ChannelError.Mapped
                 }
             }
@@ -837,7 +865,7 @@ drop_batch :: fn(kernel: ptr[mut Kernel], batch: ptr[mut HandleBatch]) {
             }
         }
     }
-    free_block(kernel, cast[u64](batch), cast[u64](size_of(HandleBatch)))
+    free_batch(kernel, cast[u64](batch))
 }
 
 // How many handles were taken; or the error, and for BufferTooSmall, how many there are.
@@ -874,9 +902,25 @@ channel_take_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end
         concurrency.unlock(&core.lock)
         return .Failed(.BadBuffer, 0)
     }
+    process :: process_of(thread)
+    // What the owning handles own is charged to the taker's budget from now on, or the batch stays (decisions/0011)
+    owned : u64[64]
+    owned_count := cast[u32](0)
+    for entry, i in taken.entries {
+        if i >= cast[usize](count) {
+            break
+        }
+        if entry.object != 0 && entry.owning && is_live(entry.object, entry.generation) {
+            owned[cast[usize](owned_count) % 64] = entry.object
+            owned_count += 1
+        }
+    }
+    if !move_charges(kernel, &owned, owned_count, process.header.budget) {
+        concurrency.unlock(&core.lock)
+        return .Failed(.BudgetExceeded, 0)
+    }
     slot^ = 0
     concurrency.unlock(&core.lock)
-    process :: process_of(thread)
     installed : slop_os.Handle[64]
     for entry, i in taken.entries {
         if i >= cast[usize](count) {
@@ -891,7 +935,7 @@ channel_take_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end
             }
         }
     }
-    free_block(kernel, address, cast[u64](size_of(HandleBatch)))
+    free_batch(kernel, address)
     if !copy_to_user(kernel, thread.space, handles, cast[u64](&installed[0]), cast[u64](count) * 4) {
         return .Failed(.BadBuffer, 0)
     }

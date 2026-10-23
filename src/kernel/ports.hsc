@@ -70,6 +70,13 @@ Port :: struct #align(16) {
     ready_last : u64,
     // Threads waiting, the most recent first.
     waiters : u64,
+    // Whether the last binding couldn't be made because its budget was short, under lock.
+    short_of_budget : bool,
+}
+
+// Why new_binding gave none. Takes the lock as held.
+binding_failure :: fn(port: ptr[Port]) -> slop_os.PortError {
+    return if port.short_of_budget { slop_os.PortError.BudgetExceeded } else { slop_os.PortError.OutOfMemory }
 }
 
 // What starting a wait comes to.
@@ -80,8 +87,9 @@ WaitOutcome :: union {
     Blocked,
 }
 
-create_port :: fn(kernel: ptr[mut Kernel], owner: u64) -> Result[ptr[mut Port], ObjectError] {
-    object :: new_object(kernel, .Port)?
+// A port owned by owner (a Process's address, 0 for the kernel), charged to budget, with its bindings as they're made.
+create_port :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> Result[ptr[mut Port], ObjectError] {
+    object :: new_object(kernel, .Port, budget, 0)?
     port :: cast[ptr[mut Port]](object)
     match adopt(owner, object) {
         case Ok => {}
@@ -105,7 +113,7 @@ port_bind_wake :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64) -> 
         return slop_os.PortError.KeyInUse
     }
     if new_binding(kernel, port, key, .Wake) == null {
-        return slop_os.PortError.OutOfMemory
+        return binding_failure(port)
     }
     return null
 }
@@ -138,7 +146,7 @@ port_set_timer :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, dea
         if maps.map_has(&port.bindings, key) {
             return slop_os.PortError.KeyInUse
         }
-        binding = new_binding(kernel, port, key, .Timer) or_return slop_os.PortError.OutOfMemory
+        binding = new_binding(kernel, port, key, .Timer) or_return binding_failure(port)
     }
     _ = cancel_timer(kernel, &binding.timer)
     binding.data = deadline
@@ -456,7 +464,16 @@ binding_of :: fn(port: ptr[mut Port], key: u64, kind: BindingKind) -> ptr[mut Bi
 
 // A binding for key, in the port's map, with no packet yet. Takes the lock as held.
 new_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, kind: BindingKind) -> ptr[mut Binding]? {
-    address :: slab.allocate(&kernel.pools.bindings, &kernel.frames) or_return null
+    port.short_of_budget = false
+    if !charge_more(cast[u64](port), kernel.pools.bindings.object_size) {
+        port.short_of_budget = true
+        return null
+    }
+    address :: slab.allocate(&kernel.pools.bindings, &kernel.frames) or_else 0
+    if address == 0 {
+        uncharge(cast[u64](port), port.header.generation, kernel.pools.bindings.object_size)
+        return null
+    }
     binding :: cast[ptr[mut Binding]](address)
     generation :: binding.generation
     binding^ = Binding.{}
@@ -467,6 +484,7 @@ new_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, kind: 
     binding.timer = make_timer()
     if maps.map_try_put(&port.bindings, key, address) != null {
         slab.free(&kernel.pools.bindings, &kernel.frames, address)
+        uncharge(cast[u64](port), port.header.generation, kernel.pools.bindings.object_size)
         return null
     }
     return binding
@@ -478,6 +496,7 @@ free_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], binding: ptr[mu
     _ = cancel_timer(kernel, &binding.timer)
     binding.generation += 1
     slab.free(&kernel.pools.bindings, &kernel.frames, cast[u64](binding))
+    uncharge(cast[u64](port), port.header.generation, kernel.pools.bindings.object_size)
 }
 
 // Monotonic nanoseconds as a counter value.

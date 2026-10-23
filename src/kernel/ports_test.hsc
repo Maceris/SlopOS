@@ -51,7 +51,8 @@ call :: fn(number: slop_os.Syscall, a: u64 = 0, b: u64 = 0, c: u64 = 0, d: u64 =
 user_ports #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #never_returns {
     base :: cast[u64](page)
     packets :: cast[ptr[u64[16]]](base + PORT_PACKETS_OFFSET)
-    port :: call(.PortCreate).rdx
+    budget :: page^[TEST_SLOT_BUDGET]
+    port :: call(.PortCreate, budget).rdx
     page^[PORT_SLOT_PORT] = port
     page^[8] = call(.PortBindWake, port, PORT_KEY).rax
     page^[9] = call(.PortBindWake, port, PORT_KEY).rax
@@ -82,7 +83,7 @@ user_ports #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #ne
     page^[21] = call(.PortWait, port, 0x10, 4, slop_os.NO_DEADLINE).rax
     // B wakes it
     space :: page^[0]
-    _ = call(.ThreadCreate, space, page^[PORT_SLOT_ENTRY], page^[PORT_SLOT_STACK], base)
+    _ = call(.ThreadCreate, budget, space, page^[PORT_SLOT_ENTRY], page^[PORT_SLOT_STACK], base)
     from_b :: call(.PortWait, port, base + PORT_PACKETS_OFFSET, 4, slop_os.NO_DEADLINE)
     page^[22] = if from_b.rdx == 1 { packets^[2] } else { cast[u64](0) }
     intrinsics.volatile_store_u64(&page^[PORT_SLOT_A_WOKEN], 1)
@@ -126,7 +127,7 @@ user_port_helper #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]
 test_ports :: fn(kernel: ptr[mut Kernel]) {
     test :: allocate_object[PortsTest](&kernel.frames) or_else out_of_memory(&kernel.options, "test_ports: no memory")
     process := cast[ptr[mut Process]](0)
-    match create_process(kernel, 0) {
+    match create_process(kernel, 0, 0) {
         case Ok(made) => process = made
         case Error(error) => {
             runtime.log_error("test_ports: no process: %", error)
@@ -135,7 +136,7 @@ test_ports :: fn(kernel: ptr[mut Kernel]) {
     }
     test.process = cast[u64](process)
     space := cast[ptr[mut AddressSpace]](0)
-    match create_address_space(kernel, cast[u64](process)) {
+    match create_address_space(kernel, cast[u64](process), 0) {
         case Ok(made) => space = made
         case Error(error) => {
             runtime.log_error("test_ports: no address space: %", error)
@@ -164,6 +165,9 @@ test_ports :: fn(kernel: ptr[mut Kernel]) {
             return void
         }
     }
+    if !give_test_budget(kernel, process, test.page) {
+        return void
+    }
     slots^[PORT_SLOT_ENTRY] = TEST_CODE + (cast[u64](user_port_helper) - first)
     slots^[PORT_SLOT_STACK] = TEST_STACKS + 2 * frames.FRAME_SIZE - 8
     start :: arch_interface.UserStart.{
@@ -171,7 +175,7 @@ test_ports :: fn(kernel: ptr[mut Kernel]) {
         stack_pointer = cast[arch_interface.VirtualAddress](TEST_STACKS + frames.FRAME_SIZE - 8),
         argument = TEST_COUNTERS,
     }
-    match create_thread(kernel, cast[u64](process), space, &start, arch_interface.VectorConfig.{extended = false}, 0) {
+    match create_thread(kernel, cast[u64](process), space, &start, arch_interface.VectorConfig.{extended = false}, 0, 0) {
         case Ok(thread) => start_thread(kernel, thread)
         case Error(error) => {
             runtime.log_error("test_ports: no thread: %", error)

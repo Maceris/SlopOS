@@ -48,6 +48,9 @@ HandleTable :: struct {
     count : u32,
     // Set when its process is destroyed: no more handles go in.
     closed : bool,
+    // The object its pages are charged to, its process, and whether the last page couldn't be paid for.
+    account : u64,
+    short_of_budget : bool,
 }
 
 // What a handle refers to, as a lookup found it.
@@ -84,7 +87,7 @@ install :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], object: u64,
         if cast[usize](index) >= MAX_HANDLES {
             return .Error(.TableFull)
         }
-        entry = make_entry(kernel, table, index) or_return .Error(.OutOfMemory)
+        entry = make_entry(kernel, table, index) or_return .Error(if table.short_of_budget { slop_os.HandleError.BudgetExceeded } else { slop_os.HandleError.OutOfMemory })
         table.next_unused = index + 1
     }
     entry_generation :: intrinsics.atomic_load_u64(&entry.tag) >> TAG_GENERATION_SHIFT
@@ -182,19 +185,36 @@ entry_at :: fn(table: ptr[HandleTable], index: u32) -> ptr[mut HandleEntry]? {
     return cast[ptr[mut HandleEntry]](page + cast[u64](cast[usize](index) % ENTRIES_PER_PAGE) * cast[u64](size_of(HandleEntry)))
 }
 
-// The entry at index, a new one at the end, making its page, and the directory, if they aren't there yet.
+/*
+ * The entry at index, a new one at the end, making its page, and the directory, if they aren't there
+ * yet, each charged to the table's process: null if there's no memory, or the budget is short.
+ */
 make_entry :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], index: u32) -> ptr[mut HandleEntry]? {
+    table.short_of_budget = false
     if table.directory == 0 {
-        directory :: zeroed_frame(kernel) or_return null
+        directory :: charged_frame(kernel, table) or_return null
         intrinsics.atomic_store_u64_release(&table.directory, directory)
     }
     page_index :: cast[usize](index) / ENTRIES_PER_PAGE % TABLE_PAGES
     slot :: cast[ptr[mut u64]](table.directory + cast[u64](page_index) * 8)
     if slot^ == 0 {
-        page :: zeroed_frame(kernel) or_return null
+        page :: charged_frame(kernel, table) or_return null
         intrinsics.atomic_store_u64_release(slot, page)
     }
     return entry_at(table, index)
+}
+
+// A zeroed frame for table, charged to its process; its whole charge comes back once the process is released.
+charged_frame :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) -> u64? {
+    if table.account != 0 && !charge_more(table.account, frames.FRAME_SIZE) {
+        table.short_of_budget = true
+        return null
+    }
+    frame :: zeroed_frame(kernel) or_else 0
+    if frame == 0 && table.account != 0 {
+        uncharge(table.account, cast[ptr[ObjectHeader]](table.account).generation, frames.FRAME_SIZE)
+    }
+    return if frame != 0 { frame } else { null }
 }
 
 // A zeroed frame from this CPU's cache, as an address in the direct map.

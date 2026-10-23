@@ -77,18 +77,21 @@ ThreadError :: enum {
     OutOfMemory,
     // Its owner or its address space is being destroyed.
     OwnerGone,
+    // Its memory budget can't pay for it.
+    BudgetExceeded,
 }
 
 /*
  * A thread owned by owner (a Process's address, 0 for the kernel), in space, starting at start, with
- * vector state for config, bound to budget (0 for none). It doesn't run until start_thread.
+ * vector state for config, bound to CPU budget (0 for none), charged to memory_budget with its vector state.
+ * It doesn't run until start_thread.
  */
 create_thread :: fn(kernel: ptr[mut Kernel], owner: u64, space #escaping : ptr[mut AddressSpace], start: ptr[arch_interface.UserStart],
-    config: arch_interface.VectorConfig, budget: u64) -> Result[ptr[mut Thread], ThreadError] {
+    config: arch_interface.VectorConfig, budget: u64, memory_budget: u64) -> Result[ptr[mut Thread], ThreadError] {
     object := cast[u64](0)
-    match new_object(kernel, .Thread) {
+    match new_object(kernel, .Thread, memory_budget, cast[u64](arch.vector_state_size(config))) {
         case Ok(address) => object = address
-        case Error(error) => return .Error(.OutOfMemory)
+        case Error(error) => return .Error(if error == .BudgetExceeded { ThreadError.BudgetExceeded } else { ThreadError.OutOfMemory })
     }
     thread :: cast[ptr[mut Thread]](object)
     vector, error :: runtime.new_array_aligned(u8, arch.vector_state_size(config), arch.vector_state_alignment())

@@ -17,9 +17,14 @@ Process :: struct #align(16) {
     owned : OwnedList,
 }
 
-// A process owned by owner (a Process's address, 0 for the kernel), with an empty handle table.
-create_process :: fn(kernel: ptr[mut Kernel], owner: u64) -> Result[ptr[mut Process], ObjectError] {
-    object :: new_object(kernel, .Process)?
+/*
+ * A process owned by owner (a Process's address, 0 for the kernel), with an empty handle table, charged
+ * to budget, which is its budget: its table's pages are charged there, and what it takes with owning
+ * handles moves there (memory_budgets.hsc).
+ */
+create_process :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> Result[ptr[mut Process], ObjectError] {
+    object :: new_object(kernel, .Process, budget, 0)?
+    cast[ptr[mut Process]](object).table.account = object
     match adopt(owner, object) {
         case Ok => {}
         case Error(error) => {

@@ -90,6 +90,11 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-23 — `std/os/slop_os` (the ABI package), for M5 stage 4a (`decisions/0054`): the memory calls
+  (`MemoryBudgetCreate`, `MemoryBudgetInfo`, `MemoryCreate`, `MemoryMap`, `MemoryUnmap`), a budget argument
+  first on every creation call, `RIGHT_BUDGET_CHARGE` and the memory rights, `Protection`, `MemoryError`,
+  `MAX_MEMORY_SIZE`, and `BudgetExceeded` (tag 25) in every error enum. No compiler change was needed.
+
 - 2026-10-23 — Code insertion, phase 6 (first users), the Hemera part: `base/intrinsics/atomics.hsc`'s 714
   declarations are made at compile time from a list of 14 types, the orderings each kind of operation takes,
   and the operations' signatures, identical to what was written by hand (checked declaration by declaration).

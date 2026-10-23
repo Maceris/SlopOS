@@ -2,8 +2,8 @@
  * What the arch layer's entry stubs call (docs/specs/arch_interface.md, kernel_entry): the kernel's
  * side of every entry. Each one runs with the CPU's carrier block loaded and its context pushed.
  *
- * There's no user mode yet (M4 to M6), so syscall and user_fault, which only come from it, stop the
- * kernel.
+ * syscall and user_fault come from user mode: a system call (syscalls.hsc), and a fault, which fills in
+ * memory a thread maps or stops the thread (memory.hsc).
  */
 package kernel_entry
 
@@ -38,8 +38,8 @@ syscall #never_returns :: fn(registers: ptr[mut arch.UserRegisters]) {
 // A fault in user mode.
 //TODO(claude): faults in user threads (M4 to M6)
 user_fault #never_returns :: fn(registers: ptr[mut arch.UserRegisters], fault: arch_interface.Fault) {
-    runtime.log_fatal("a fault arrived from user mode, which the kernel doesn't run yet")
-    kernel.stop(.KernelFault)
+    kernel.left_boot_stack()
+    kernel.handle_user_fault(registers, fault)
 }
 
 /*

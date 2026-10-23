@@ -68,6 +68,17 @@ the kernel logger, and an assertion handler that stops the kernel.
   writes on the same rings. A mapping is on its address space's list of rings and holds the core until
   it's unmapped or the space is released. Objects that hold each other, like an end in a batch on
   another channel, are destroyed one after another (`destroy_later`, `src/kernel/objects.hsc`).
+- **Memory budgets** (`src/kernel/memory_budgets.hsc`, `0011`, `0054`): every object is charged to the budget
+  that paid for it, its slot and what it holds, and what it grows later (handle-table pages, page tables,
+  bindings, handle batches) as it grows; its whole charge comes back once it's released. Budgets split
+  into children, whose limit the parent is charged; closing a child moves its charges to the parent. The
+  root budget, of the memory free at boot, is the kernel's. Taking an owning handle moves the object's
+  charge to the taker's process's budget.
+- **Memory objects** (`src/kernel/memory.hsc`, `0054`): anonymous memory, charged for its whole size when
+  made and filled with zeroed frames as it's touched, through user page faults. A mapping is on its
+  space's list and its memory's, and whoever claims it takes it down; a fault maps a page only while
+  its mapping is on its space's list. A fault outside what's mapped, or one a mapping doesn't allow,
+  destroys the thread.
 
 ## Interrupts and Time
 
@@ -100,8 +111,7 @@ the kernel logger, and an assertion handler that stops the kernel.
 
 | What | Roadmap |
 |---|---|
-| Memory objects, memory budgets, IRQ objects, interception, the generated ABI package | M5 |
-| Memory objects and budgets as objects, IRQ objects, the generated ABI package, interception | M5 |
+| IRQ objects, interception, the generated ABI package; child windows onto memory objects, device memory | M5 |
 | Destroying large subtrees with preemption points | M5 |
 | Loading programs, the root task, user space | M6 |
 | The platform service, PCIe, drivers | M7 |

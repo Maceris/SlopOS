@@ -37,6 +37,30 @@ handle_syscall :: fn(registers: ptr[arch.UserRegisters]) #never_returns {
     schedule(false)
 }
 
+/*
+ * A fault from user mode, by the CPU's current thread, whose registers are saved: a page of memory mapped
+ * in its space, filled in if it wasn't yet (memory.hsc), after which it goes on; otherwise the thread is
+ * destroyed. Never returns: the scheduler picks up from here.
+ */
+//TODO(claude): fault packets to a port, for a debugger or a pager (M5, interception and process control)
+handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interface.Fault) #never_returns {
+    save_user_registers(registers)
+    cpu :: per_cpu()
+    kernel :: cpu.kernel
+    runtime.assert(cpu.current != 0, "a fault from user mode comes from a thread")
+    thread :: cast[ptr[mut Thread]](cpu.current)
+    resolved := false
+    match fault {
+        case Page(page) => resolved = resolve_fault(kernel, thread, page)
+        case _ => {}
+    }
+    if !resolved {
+        runtime.log_info("thread % stopped by a fault: %", thread.id, fault)
+        _ = destroy_object(kernel, cast[u64](thread))
+    }
+    schedule(false)
+}
+
 dispatch_syscall :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> arch_interface.SyscallResult? {
     registers :: &thread.registers
     number :: arch.syscall_number(registers)
@@ -55,22 +79,36 @@ dispatch_syscall :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> arch
         return succeeded(0, 0)
     }
     if number == cast[u64](cast[u32](slop_os.Syscall.ThreadCreate)) {
-        return thread_create(kernel, process, argument(registers, 0), arch.syscall_argument(registers, 1),
-            arch.syscall_argument(registers, 2), arch.syscall_argument(registers, 3))
+        match paying_budget(process, argument(registers, 0)) {
+            case Ok(budget) => return thread_create(kernel, process, budget, argument(registers, 1), arch.syscall_argument(registers, 2),
+                arch.syscall_argument(registers, 3), arch.syscall_argument(registers, 4))
+            case Error(error) => return failed(error)
+        }
     }
     if number == cast[u64](cast[u32](slop_os.Syscall.ProcessCreate)) {
-        return process_create(kernel, process)
+        match paying_budget(process, argument(registers, 0)) {
+            case Ok(budget) => return process_create(kernel, process, budget)
+            case Error(error) => return failed(error)
+        }
     }
     if number == cast[u64](cast[u32](slop_os.Syscall.AddressSpaceCreate)) {
-        return address_space_create(kernel, process)
+        match paying_budget(process, argument(registers, 0)) {
+            case Ok(budget) => return address_space_create(kernel, process, budget)
+            case Error(error) => return failed(error)
+        }
     }
     if number == cast[u64](cast[u32](slop_os.Syscall.ClockMonotonic)) {
         return succeeded(cast[u64](kernel_monotonic(cast[rawptr](kernel))), 0)
     }
     if number == cast[u64](cast[u32](slop_os.Syscall.PortCreate)) {
-        match create_port(kernel, cast[u64](process)) {
+        budget := cast[u64](0)
+        match paying_budget(process, argument(registers, 0)) {
+            case Ok(given) => budget = given
+            case Error(error) => return failed(error)
+        }
+        match create_port(kernel, cast[u64](process), budget) {
             case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
-            case Error(error) => return failed(if error == .OutOfMemory { slop_os.HandleError.OutOfMemory } else { slop_os.HandleError.ObjectGone })
+            case Error(error) => return failed(object_failure(error))
         }
     }
     if number == cast[u64](cast[u32](slop_os.Syscall.PortBindWake)) {
@@ -110,7 +148,121 @@ dispatch_syscall :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> arch
     if number >= cast[u64](cast[u32](slop_os.Syscall.ChannelCreate)) && number <= cast[u64](cast[u32](slop_os.Syscall.PortBind)) {
         return dispatch_channel_call(kernel, thread, process, cast[slop_os.Syscall](cast[u32](number)))
     }
+    if number >= cast[u64](cast[u32](slop_os.Syscall.MemoryBudgetCreate)) && number <= cast[u64](cast[u32](slop_os.Syscall.MemoryUnmap)) {
+        return dispatch_memory_call(kernel, process, registers, cast[slop_os.Syscall](cast[u32](number)))
+    }
     return failed(.NoSuchCall)
+}
+
+// The memory budgets and memory objects (memory_budgets.hsc, memory.hsc).
+dispatch_memory_call :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], registers: ptr[arch.UserRegisters], call: slop_os.Syscall)
+    -> arch_interface.SyscallResult {
+    if call == .MemoryBudgetInfo {
+        match lookup(&process.table, argument(registers, 0)) {
+            case Ok(found) => {
+                if found.kind != .MemoryBudget {
+                    return failed(.WrongKind)
+                }
+                limit, used :: budget_info(cast[ptr[mut MemoryBudget]](found.object))
+                return succeeded(limit, used)
+            }
+            case Error(error) => return failed(error)
+        }
+    }
+    if call == .MemoryUnmap {
+        match space_to_map(process, argument(registers, 0)) {
+            case Ok(space) => return memory_done(memory_unmap(kernel, space, arch.syscall_argument(registers, 1)))
+            case Error(error) => return failed(error)
+        }
+    }
+    if call == .MemoryMap {
+        return memory_map_call(kernel, process, registers)
+    }
+    budget := cast[u64](0)
+    match paying_budget(process, argument(registers, 0)) {
+        case Ok(given) => budget = given
+        case Error(error) => return failed(error)
+    }
+    if call == .MemoryBudgetCreate {
+        match create_budget(kernel, cast[u64](process), budget, arch.syscall_argument(registers, 1)) {
+            case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
+            case Error(error) => return failed(object_failure(error))
+        }
+    }
+    match create_memory(kernel, cast[u64](process), budget, arch.syscall_argument(registers, 1)) {
+        case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
+        case Error(error) => return tagged(cast[u64](cast[u32](error)))
+    }
+}
+
+// MemoryMap: the memory needs the rights its protection asks for, and the space RIGHT_SPACE_MAP.
+memory_map_call :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], registers: ptr[arch.UserRegisters]) -> arch_interface.SyscallResult {
+    found := Resolved.{}
+    match lookup(&process.table, argument(registers, 0)) {
+        case Ok(resolved) => found = resolved
+        case Error(error) => return failed(error)
+    }
+    if found.kind != .Memory {
+        return failed(.WrongKind)
+    }
+    protection :: cast[u32](arch.syscall_argument(registers, 5))
+    needed := cast[u32](slop_os.RIGHT_MEMORY_READ)
+    if protection & cast[u32](slop_os.PROTECTION_WRITE) != 0 {
+        needed |= cast[u32](slop_os.RIGHT_MEMORY_WRITE)
+    }
+    if protection & cast[u32](slop_os.PROTECTION_EXECUTE) != 0 {
+        needed |= cast[u32](slop_os.RIGHT_MEMORY_EXECUTE)
+    }
+    if cast[u32](found.rights) & needed != needed {
+        return failed(.MissingRight)
+    }
+    match space_to_map(process, argument(registers, 1)) {
+        case Ok(space) => return memory_done(memory_map(kernel, cast[ptr[mut Memory]](found.object), space,
+            arch.syscall_argument(registers, 2), arch.syscall_argument(registers, 3), arch.syscall_argument(registers, 4), protection))
+        case Error(error) => return failed(error)
+    }
+}
+
+// The address space a handle names, if it has RIGHT_SPACE_MAP.
+space_to_map :: fn(process: ptr[mut Process], handle: slop_os.Handle) -> Result[ptr[mut AddressSpace], slop_os.HandleError] {
+    found :: lookup(&process.table, handle)?
+    if found.kind != .AddressSpace {
+        return .Error(.WrongKind)
+    }
+    if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_SPACE_MAP) == 0 {
+        return .Error(.MissingRight)
+    }
+    return .Ok(cast[ptr[mut AddressSpace]](found.object))
+}
+
+/*
+ * The budget a handle names, as the address of what will pay, if the handle has RIGHT_BUDGET_CHARGE
+ * (decisions/0011, 0054).
+ */
+paying_budget :: fn(process: ptr[mut Process], handle: slop_os.Handle) -> Result[u64, slop_os.HandleError] {
+    found :: lookup(&process.table, handle)?
+    if found.kind != .MemoryBudget {
+        return .Error(.WrongKind)
+    }
+    if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_BUDGET_CHARGE) == 0 {
+        return .Error(.MissingRight)
+    }
+    return .Ok(found.object)
+}
+
+memory_done :: fn(error: slop_os.MemoryError?) -> arch_interface.SyscallResult {
+    return match error {
+        case Some(failure) => tagged(cast[u64](cast[u32](failure)))
+        case None => succeeded(0, 0)
+    }
+}
+
+// What creating an object failing means to the caller.
+object_failure :: fn(error: ObjectError) -> slop_os.HandleError {
+    if error == .OutOfMemory {
+        return .OutOfMemory
+    }
+    return if error == .BudgetExceeded { slop_os.HandleError.BudgetExceeded } else { slop_os.HandleError.ObjectGone }
 }
 
 // The channel calls, and binding to ports.
@@ -118,7 +270,12 @@ dispatch_channel_call :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], pr
     -> arch_interface.SyscallResult? {
     registers :: &thread.registers
     if call == .ChannelCreate {
-        match create_channel(kernel, cast[u64](process), cast[u32](arch.syscall_argument(registers, 0))) {
+        budget := cast[u64](0)
+        match paying_budget(process, argument(registers, 0)) {
+            case Ok(given) => budget = given
+            case Error(error) => return tagged(cast[u64](cast[u32](error)))
+        }
+        match create_channel(kernel, cast[u64](process), budget, cast[u32](arch.syscall_argument(registers, 1))) {
             case Ok(pair) => return owned_pair(kernel, process, pair)
             case Error(error) => return tagged(cast[u64](cast[u32](error)))
         }
@@ -362,7 +519,7 @@ handle_info :: fn(process: ptr[mut Process], handle: slop_os.Handle) -> arch_int
  * A thread in the address space space names, owned by the caller's process, started at entry with stack
  * and argument: an owning handle to it.
  */
-thread_create :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], space: slop_os.Handle, entry: u64, stack: u64,
+thread_create :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], budget: u64, space: slop_os.Handle, entry: u64, stack: u64,
     argument: u64) -> arch_interface.SyscallResult {
     found := Resolved.{}
     match lookup(&process.table, space) {
@@ -382,26 +539,28 @@ thread_create :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], space: s
     }
     made := cast[ptr[mut Thread]](0)
     match create_thread(kernel, cast[u64](process), cast[ptr[mut AddressSpace]](found.object), &start,
-        arch_interface.VectorConfig.{extended = false}, 0) {
+        arch_interface.VectorConfig.{extended = false}, 0, budget) {
         case Ok(thread) => made = thread
-        case Error(error) => return failed(if error == .OutOfMemory { slop_os.HandleError.OutOfMemory } else { slop_os.HandleError.ObjectGone })
+        case Error(error) => return failed(if error == .OutOfMemory { slop_os.HandleError.OutOfMemory }
+            else if error == .BudgetExceeded { slop_os.HandleError.BudgetExceeded } else { slop_os.HandleError.ObjectGone })
     }
     return owned_by_caller(kernel, process, cast[u64](made), true)
 }
 
-// A new process, owned by the caller's: an owning handle to it.
-process_create :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> arch_interface.SyscallResult {
-    match create_process(kernel, cast[u64](process)) {
+// A new process, owned by the caller's, with budget its budget: an owning handle to it.
+process_create :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], budget: u64) -> arch_interface.SyscallResult {
+    match create_process(kernel, cast[u64](process), budget) {
         case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
-        case Error(error) => return failed(if error == .OutOfMemory { slop_os.HandleError.OutOfMemory } else { slop_os.HandleError.ObjectGone })
+        case Error(error) => return failed(object_failure(error))
     }
 }
 
 // A new, empty address space, owned by the caller's process: an owning handle to it.
-address_space_create :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> arch_interface.SyscallResult {
-    match create_address_space(kernel, cast[u64](process)) {
+address_space_create :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], budget: u64) -> arch_interface.SyscallResult {
+    match create_address_space(kernel, cast[u64](process), budget) {
         case Ok(made) => return owned_by_caller(kernel, process, cast[u64](made), false)
-        case Error(error) => return failed(if error == .OwnerGone { slop_os.HandleError.ObjectGone } else { slop_os.HandleError.OutOfMemory })
+        case Error(error) => return failed(if error == .OwnerGone { slop_os.HandleError.ObjectGone }
+            else if error == .BudgetExceeded { slop_os.HandleError.BudgetExceeded } else { slop_os.HandleError.OutOfMemory })
     }
 }
 

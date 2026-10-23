@@ -38,6 +38,8 @@ AddressSpace :: struct #align(16) {
     first_thread : u64,
     // The channel rings mapped in it (RingMapping), under lock.
     first_ring : u64,
+    // The memory objects mapped in it (MemoryMapping), by address, under lock (memory.hsc).
+    first_mapping : u64,
 }
 
 SpaceError :: enum {
@@ -49,6 +51,8 @@ SpaceError :: enum {
     AlreadyMapped,
     // Its owner is being destroyed.
     OwnerGone,
+    // Its budget can't pay for it, or for the page tables a mapping needs.
+    BudgetExceeded,
 }
 
 // The tags in use, one bit each.
@@ -57,12 +61,15 @@ TagSet :: struct {
     used : u64[MAX_TAGS / 64],
 }
 
-// An empty address space, owned by owner (a Process's address, 0 for the kernel).
-create_address_space :: fn(kernel: ptr[mut Kernel], owner: u64) -> (made #unrestricted : Result[ptr[mut AddressSpace], SpaceError]) {
+/*
+ * An empty address space, owned by owner (a Process's address, 0 for the kernel), charged to budget with
+ * its root table, and with the tables its mappings need as they're made.
+ */
+create_address_space :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> (made #unrestricted : Result[ptr[mut AddressSpace], SpaceError]) {
     object := cast[u64](0)
-    match new_object(kernel, .AddressSpace) {
+    match new_object(kernel, .AddressSpace, budget, frames.FRAME_SIZE) {
         case Ok(address) => object = address
-        case Error(error) => return .Error(.OutOfMemory)
+        case Error(error) => return .Error(if error == .BudgetExceeded { SpaceError.BudgetExceeded } else { SpaceError.OutOfMemory })
     }
     space :: cast[ptr[mut AddressSpace]](object)
     tag := cast[arch_interface.AddressSpaceTag](0)
@@ -94,8 +101,9 @@ create_address_space :: fn(kernel: ptr[mut Kernel], owner: u64) -> (made #unrest
     return .Ok(space)
 }
 
-// Destroying an address space destroys the threads that run in it.
+// Destroying an address space destroys the threads that run in it, and takes down the memory mapped in it.
 destroy_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace]) {
+    take_down_space_mappings(kernel, space)
     loop {
         concurrency.lock(&space.threads_lock)
         first :: space.first_thread
@@ -228,12 +236,16 @@ map_user :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u
 // How many pages it mapped, and why it stopped if it didn't map them all.
 map_pages :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, physical: u64, size: u64,
     mapping: arch_interface.Mapping) -> (mapped: u64, error: SpaceError?) {
-    tables : arch_interface.TableFrames
     concurrency.lock(&space.lock)
-    defer {
-        concurrency.unlock(&space.lock)
-        give_back_tables(kernel, &tables)
-    }
+    defer concurrency.unlock(&space.lock)
+    return map_pages_locked(kernel, space, address, physical, size, mapping)
+}
+
+// As map_pages, taking the space's lock as held.
+map_pages_locked :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, physical: u64, size: u64,
+    mapping: arch_interface.Mapping) -> (mapped: u64, error: SpaceError?) {
+    tables : arch_interface.TableFrames
+    defer give_back_user_tables(kernel, space, &tables)
     for page in 0..<size / frames.FRAME_SIZE {
         offset :: page * frames.FRAME_SIZE
         loop {
@@ -248,8 +260,9 @@ map_pages :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: 
                     if error != .NeedTableFrames {
                         return page, SpaceError.InvalidAddress
                     }
-                    if !refill_user_tables(kernel, &tables) {
-                        return page, SpaceError.OutOfMemory
+                    match refill_user_tables(kernel, space, &tables) {
+                        case Some(error) => return page, error
+                        case None => {}
                     }
                 }
             }
@@ -264,6 +277,7 @@ map_pages :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: 
  */
 unmap_user :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, size: u64) {
     pages :: size / frames.FRAME_SIZE
+    generation :: intrinsics.atomic_load_u32_acquire(&space.header.generation)
     flush : arch_interface.TlbBatch
     freed : arch_interface.FreedTables
     page : u64 = 0
@@ -277,6 +291,7 @@ unmap_user :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address:
         // Every CPU forgets the old entries before an emptied table can be reused
         shootdown(kernel, &flush)
         flush = arch_interface.TlbBatch.{}
+        uncharge(cast[u64](space), generation, cast[u64](freed.count) * frames.FRAME_SIZE)
         free_tables(kernel, &freed)
     }
 }
@@ -306,18 +321,33 @@ unmap_some :: fn(table: ptr[mut arch.PageTable], address: u64, first: u64, pages
     return page
 }
 
-// Zeroed frames for new tables from this CPU's frame cache, false if there are none.
-refill_user_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[mut arch_interface.TableFrames]) -> bool {
+/*
+ * Zeroed frames for new tables from this CPU's frame cache, each charged to space: why not, if it
+ * couldn't. The ones no mapping takes are given back with give_back_user_tables.
+ */
+refill_user_tables :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], tables: ptr[mut arch_interface.TableFrames]) -> SpaceError? {
     cache :: &per_cpu().frame_cache
     for i in cast[usize](tables.count)..<4 {
+        if !charge_more(cast[u64](space), frames.FRAME_SIZE) {
+            return SpaceError.BudgetExceeded
+        }
         match frames.take_frame(cache, &kernel.frames) {
             case Ok(frame) => {
                 intrinsics.mem_zero(cast[rawptr](frames.virtual_of(&kernel.frames, frame)), cast[usize](frames.FRAME_SIZE))
                 tables.frames[i] = frame
                 tables.count += 1
             }
-            case Error(error) => return false
+            case Error(error) => {
+                uncharge(cast[u64](space), space.header.generation, frames.FRAME_SIZE)
+                return SpaceError.OutOfMemory
+            }
         }
     }
-    return true
+    return null
+}
+
+// The table frames no mapping took, back to this CPU's frame cache, and their charge back to space.
+give_back_user_tables :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], tables: ptr[mut arch_interface.TableFrames]) {
+    uncharge(cast[u64](space), space.header.generation, cast[u64](tables.count) * frames.FRAME_SIZE)
+    give_back_tables(kernel, tables)
 }

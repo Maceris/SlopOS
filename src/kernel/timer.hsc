@@ -53,6 +53,7 @@ handle_timer :: fn() -> bool {
     syscalls_test_tick(kernel, cpu.timer_ticks)
     ports_test_tick(kernel, cpu.timer_ticks)
     channels_test_tick(kernel, cpu.timer_ticks)
+    memory_test_tick(kernel, cpu.timer_ticks)
     if cpu.timer_ticks >= kernel.stop_after_ticks {
         stop(.Halted)
     }

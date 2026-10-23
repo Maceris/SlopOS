@@ -39,6 +39,12 @@ ObjectHeader :: struct {
     limbo_epoch : u64,
     // On its CPU's list of objects to destroy once what it's destroying now is done (destroy_later).
     doomed_next : u64,
+    // The MemoryBudget it's charged to, 0 for the kernel's own, and how much, with what it holds
+    // (memory_budgets.hsc); its neighbors on that budget's list, under the budget's lock.
+    budget : u64,
+    charge : u64,
+    charged_next : u64,
+    charged_previous : u64,
 }
 
 // What an owner keeps of what it owns.
@@ -51,6 +57,8 @@ ObjectError :: enum {
     OutOfMemory,
     // The owner it would belong to is being destroyed.
     OwnerGone,
+    // The budget paying for it can't (memory_budgets.hsc).
+    BudgetExceeded,
 }
 
 // The pools, one per kind, type-stable (slab.hsc).
@@ -64,6 +72,10 @@ ObjectPools :: struct {
     channels : slab.SlabCache,
     // What a channel's ends share (channels.hsc).
     channel_cores : slab.SlabCache,
+    budgets : slab.SlabCache,
+    memories : slab.SlabCache,
+    // Where memory objects are mapped (memory.hsc).
+    mappings : slab.SlabCache,
 }
 
 init_pools :: fn(kernel: ptr[mut Kernel]) {
@@ -74,6 +86,9 @@ init_pools :: fn(kernel: ptr[mut Kernel]) {
     kernel.pools.bindings = object_cache(cast[u64](size_of(Binding)), cast[u64](align_of(Binding)))
     kernel.pools.channels = object_cache(cast[u64](size_of(Channel)), cast[u64](align_of(Channel)))
     kernel.pools.channel_cores = slab.make_cache(cast[u64](size_of(ChannelCore)), cast[u64](align_of(ChannelCore)))
+    kernel.pools.budgets = object_cache(cast[u64](size_of(MemoryBudget)), cast[u64](align_of(MemoryBudget)))
+    kernel.pools.memories = object_cache(cast[u64](size_of(Memory)), cast[u64](align_of(Memory)))
+    kernel.pools.mappings = slab.make_cache(cast[u64](size_of(MemoryMapping)), cast[u64](align_of(MemoryMapping)))
 }
 
 object_cache :: fn(size: u64, alignment: u64) -> slab.SlabCache {
@@ -88,15 +103,18 @@ pool_of :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind) -> ptr[mut slab
         case .Thread => &kernel.pools.threads
         case .Port => &kernel.pools.ports
         case .Channel => &kernel.pools.channels
+        case .MemoryBudget => &kernel.pools.budgets
+        case .Memory => &kernel.pools.memories
         case _ => &kernel.pools.spaces
     }
 }
 
 /*
  * A zeroed object of kind from its pool: its address. It keeps the generation its slot had, so handles
- * to whatever was there before stay stale.
+ * to whatever was there before stay stale. It's charged to budget (a MemoryBudget's address, 0 for the
+ * kernel's own): its slot, and extra bytes for what it holds.
  */
-new_object :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind) -> Result[u64, ObjectError] {
+new_object :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind, budget: u64, extra: u64) -> Result[u64, ObjectError] {
     pool :: pool_of(kernel, kind)
     address :: slab.allocate(pool, &kernel.frames) or_return .Error(.OutOfMemory)
     header :: cast[ptr[mut ObjectHeader]](address)
@@ -104,6 +122,10 @@ new_object :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind) -> Result[u6
     intrinsics.mem_zero(cast[rawptr](address), cast[usize](pool.object_size))
     header.generation = generation
     header.kind = kind
+    if !charge_new(budget, address, pool.object_size + extra) {
+        slab.free(pool, &kernel.frames, address)
+        return .Error(.BudgetExceeded)
+    }
     return .Ok(address)
 }
 
@@ -204,6 +226,8 @@ destroy_object :: fn(kernel: ptr[mut Kernel], object: u64) -> bool {
         case .AddressSpace => destroy_address_space(kernel, cast[ptr[mut AddressSpace]](object))
         case .Port => destroy_port(kernel, cast[ptr[mut Port]](object))
         case .Channel => destroy_channel(kernel, cast[ptr[mut Channel]](object))
+        case .MemoryBudget => destroy_budget(kernel, cast[ptr[mut MemoryBudget]](object))
+        case .Memory => destroy_memory(kernel, cast[ptr[mut Memory]](object))
         case _ => {}
     }
     retire(kernel, object)
@@ -310,8 +334,11 @@ release_object :: fn(kernel: ptr[mut Kernel], object: u64) {
         case .AddressSpace => release_address_space(kernel, cast[ptr[mut AddressSpace]](object))
         case .Port => release_port(kernel, cast[ptr[mut Port]](object))
         case .Channel => release_channel(kernel, cast[ptr[mut Channel]](object))
+        case .MemoryBudget => release_budget(kernel, cast[ptr[mut MemoryBudget]](object))
+        case .Memory => release_memory(kernel, cast[ptr[mut Memory]](object))
         case _ => {}
     }
+    return_charge(object)
     // A slot whose generation would wrap is never used again (decisions/0008)
     if header.generation == 0xffffffff {
         return void
