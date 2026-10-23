@@ -88,6 +88,12 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-22 — The generator keeps scalar locals and parameters that nothing assigns to or takes the address of as
+  values, rather than storing each in a stack slot and loading it back. The kernel's unoptimized IR went from 25,023
+  instructions to 21,060 (loads 6,884 to 4,768, stores 3,992 to 3,071, allocas 2,729 to 1,808). As measured first,
+  O2 takes the same time either way, since LLVM takes values out of memory cheaply (SROA and early CSE, about 55 ms on
+  the kernel); unoptimized code generation got about 10% faster and the object about 1% smaller. The kernel build's
+  time is in InstCombine, inlining and GVN, which only less code would cut.
 - 2026-10-22 — A function type's defaults can be any expression, as a function's can: checked with the names the
   package and file where the type is written see, once, and generated in each caller from what that check found.
   A named function type's (an alias's, `Handler :: fn(...)`) are checked where it's declared, whether or not a call
