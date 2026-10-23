@@ -90,6 +90,12 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-23 — Code insertion, phase 4 of 6: code made from values, `compiler.name` (only ever an identifier),
+  `literal`, `type_code`, `list`, `parameters` and `arguments` of a function type, and `described_type` for a
+  reflected member's type; looking at code with `code_kind`, `identifier_of`, `items_of` and `location_of`; and in
+  quotes, `#insert` as a declaration's name, in parameter lists and in types (`ptr[mut #insert T]`). A scenario
+  generates a function per member of a struct of function types, which is the syscall table's stubs' shape.
+
 - 2026-10-23 — Code insertion, phase 3 of 6: `#insert` at the top level, where its code's declarations are the
   package's, and among a struct's fields, a union's variants, an enum's members, a match's patterns and a switch's
   cases. What goes inside something else is quoted with a word naming it, chosen with the Hemera author:

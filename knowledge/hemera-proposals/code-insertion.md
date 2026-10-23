@@ -1,6 +1,6 @@
 # Proposal: Code Values, `#insert` and Hygienic Macros
 
-Status: **agreed** 2026-10-22; phases 1 to 3 done 2026-10-23 (*Phases*). Quotes of what goes inside something else
+Status: **agreed** 2026-10-22; phases 1 to 4 done 2026-10-23 (*Phases*). Quotes of what goes inside something else
 are named for their contents: `#code fields { }`, `variants`, `members`, `patterns` and `cases` (chosen 2026-10-23). In bodies, `#insert` changes the tree in
 place, so generics, whose instances share one tree, wait for a per-instance form. Asked for before M5's fourth stage, whose
 generated ABI package needs it (`../design/system-abi.md` §4). Directions chosen with the Hemera author:
