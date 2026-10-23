@@ -53,14 +53,23 @@ interrupt #never_returns :: fn(from: Interrupted, source: InterruptSource) {
             if kind == .Stop {
                 arch.halt()
             }
+            if kind == .TlbFlush {
+                kernel.flush_for_shootdown(kernel.per_cpu())
+                arch.idle()
+            }
             //TODO(claude): the scheduler (M4). Until then nothing is ever scheduled, so the CPU goes back to idle
             if kind == .Reschedule {
+                kernel.read_for_shootdown_test()
                 arch.idle()
             }
         }
+        case Device(id) => {
+            kernel.handle_device_interrupt(id)
+            arch.idle()
+        }
         case _ => {}
     }
-    //TODO(claude): the other IPIs (M3, M4), device interrupts (M3, M7) and interrupts from user mode (M6)
+    //TODO(claude): interrupts from user mode (M6)
     runtime.log_error("an interrupt arrived that the kernel doesn't handle yet")
     arch.idle()
 }

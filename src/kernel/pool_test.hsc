@@ -131,7 +131,7 @@ spawn_into :: fn(pool #escaping : ptr[mut fiber.FiberPool], function: runtime.Th
 
 pool_counts_ok :: fn(name: string, counts: ptr[PoolCounts], fibers: u64, cpus: u64) -> bool {
     if counts.turns != fibers * POOL_TURNS || counts.strays != 0 || counts.cpus != cpus || counts.moves == 0 {
-        runtime.log_error("test_pool: the % pool's fibers took % turns (not %), % on other pools' CPUs, on CPUs %x (not %x), with % moves",
+        runtime.log_error("test_pool: the % pool's fibers took % turns (not %), % on other pools' CPUs, on CPUs %{x} (not %{x}), with % moves",
             name, counts.turns, fibers * POOL_TURNS, counts.strays, counts.cpus, cpus, counts.moves)
         return false
     }

@@ -13,6 +13,7 @@ BOOT_TICKS :: 3
 
 start_timer :: fn(kernel: ptr[mut Kernel], hint: u64?) {
     kernel.counter_frequency = arch.init_timer(hint)
+    start_clock(kernel)
     runtime.log_info("timer: counter at % kHz", kernel.counter_frequency / 1000)
     set_next_tick(kernel)
 }

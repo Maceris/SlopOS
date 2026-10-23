@@ -29,6 +29,12 @@ TESTS = [
                                               "--expect-line=[info] test_write_code: writing to the kernel's code"]),
     ("allocates from the kernel heap", 0, ["--command-line=test_exit test_heap",
         "--expect-line=[info] test_heap: 200 blocks kept their contents, grown, shrunk and freed"]),
+    ("keeps time with the counter", 0, ["--command-line=test_exit test_clock",
+        "--expect-line=[info] test_clock: 10 ms by the counter is 10 ms by the clock"]),
+    ("shoots down TLB entries on every CPU", 0, ["--command-line=test_exit test_shootdown",
+        "--expect-line=[info] test_shootdown: every CPU read the new page after the shootdown", "--", "-smp", "4"]),
+    ("routes a device's interrupts through the I/O APIC", 0, ["--command-line=test_exit test_ioapic",
+        "--expect-line=[info] test_ioapic: 10 interrupts arrived from the test device"]),
     ("resumes after an NMI", 0, ["--command-line=test_exit test_nmi", "--expect-line=[info] test_nmi: back from the NMI"]),
     ("switches between fibers", 0, ["--command-line=test_exit test_fibers",
                                     "--expect-line=[info] test_fibers: stack traces follow suspended and resumed fibers"]),
@@ -84,8 +90,8 @@ def main() -> int:
         return 0 if failed == 0 else 1
 
 
-# Where the kernel says it is: its image, and its direct map (decisions/0021)
-ADDRESS_LINES = ["[boot] kernel image at ", "[boot] kernel page tables active: "]
+# Where the kernel says it is: its image, its direct map and its window (decisions/0021)
+ADDRESS_LINES = ["[boot] kernel image at ", "[boot] kernel page tables active: ", "[boot] kernel window at "]
 
 # Name, whether two boots should be at different addresses, and boot.py's arguments for both
 ADDRESS_TESTS = [
@@ -113,7 +119,7 @@ def run_address_tests(kernel: Path) -> int:
         second = addresses(kernel, arguments)
         passed = first is not None and second is not None and len(first) == len(ADDRESS_LINES) and len(second) == len(first)
         if passed:
-            # Every line differs with KASLR, from the image's base and the direct map's offset; none without
+            # Every line differs with KASLR, by the image's base, the direct map's offset and the window's; none without
             passed = all((a != b) == differ for a, b in zip(first, second))
         print(f"{'passed' if passed else 'FAILED'}: {name}")
         if not passed:

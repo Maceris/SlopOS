@@ -2,8 +2,8 @@
  * The x86-64 arch layer (L1): implements arch_interface (docs/specs/arch_interface.md, x86-64)
  * for the kernel core, which imports this package as arch.
  *
- * Not here yet, with the milestones that need them: wired interrupt controllers and device
- * interrupts (M3), user state, vector state and entry from user mode (M4 to M6).
+ * Not here yet, with the milestones that need them: user state, vector state and entry from user
+ * mode (M4 to M6).
  */
 package arch_x86_64
 

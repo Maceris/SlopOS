@@ -52,6 +52,24 @@ Kernel :: struct {
     cpus_leaving_boot_stacks : u32,
     // How many have.
     cpus_off_boot_stacks : u32,
+    // Each CPU's PerCpu, by index, as an address: 0 until it's allocated.
+    per_cpus : u64[],
+    // The TLB shootdown in progress, if any (shootdown.hsc).
+    shootdown : Shootdown,
+    // Kernel addresses for device registers and other mappings of the kernel's own (window.hsc).
+    window : Window,
+    // Every CPU's context.clock (clock.hsc), and when and how fast it counts.
+    clock : runtime.Clock,
+    clock_start : u64,
+    clock_frequency : u64,
+    // Registered interrupt controllers (interrupts.hsc), and the lock for registering them and routing lines.
+    controllers : WiredController[MAX_CONTROLLERS],
+    controller_count : u32,
+    interrupts_lock : concurrency.SpinLock,
+    // test_shootdown's state, as an address, while CPUs are asked to read its page (shootdown_test.hsc)
+    shootdown_test : u64,
+    // test_ioapic's controller (device_test.hsc)
+    test_controller : u32,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : concurrency.SpinLock,
     // test_pool's state, as an address, once the boot CPU has set it up for the other CPUs (pool_test.hsc)
@@ -84,6 +102,10 @@ PerCpu :: struct #align(64) {
     heap : CpuHeap,
     // This CPU's single frames in front of the frame allocator.
     frame_cache : frames.FrameCache,
+    // 1 while a TLB shootdown waits for this CPU to flush.
+    flush_requested : u32,
+    // Where each of this CPU's device interrupt IDs comes from (interrupts.hsc).
+    device_routes : DeviceRoute[MAX_DEVICE_INTERRUPTS],
 }
 
 // The memory for one CPU's stacks.
@@ -125,6 +147,7 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     kernel :: cast[ptr[mut Kernel]](frames.virtual_of(&made, kernel_frames))
     kernel.frames = made
     init_heap(&kernel.heap)
+    init_clock(kernel)
     log_memory(&kernel.frames)
     kernel.features = features
     kernel.options = options
@@ -146,6 +169,15 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         start_timer(kernel, info.counter_frequency_hint)
         start_cpus(kernel, info)
         leave_boot_stacks(kernel)
+        if kernel.options.test_clock {
+            test_clock(kernel)
+        }
+        if kernel.options.test_shootdown {
+            test_shootdown(kernel)
+        }
+        if kernel.options.test_ioapic {
+            test_io_apic(kernel)
+        }
         if kernel.options.test_fault {
             runtime.log_info("test_fault: running an invalid instruction")
             intrinsics.trap()

@@ -31,7 +31,7 @@ them is `compiler-plan.md`, Phase 7:
 
 | Issue | Severity | Where |
 |---|---|---|
-| Once (2026-10-16), building the kernel through the build package in `boot_tests.py` failed, and the output was lost. Likely found 2026-10-20: the compiler crashed (an access violation, no output) when indexing through a pointer to an alias another thread hadn't resolved yet, about one build in four of std/crypto's tests; fixed, the checker now waits for it. Watching whether the kernel build fails again; `build/failed_kernel_build.log` keeps its output if so | unknown | `tools/boot_tests.py` |
+| Once (2026-10-16), building the kernel through the build package in `boot_tests.py` failed, and the output was lost. Likely found 2026-10-20: the compiler crashed (an access violation, no output) when indexing through a pointer to an alias another thread hadn't resolved yet, about one build in four of std/crypto's tests; fixed, the checker now waits for it. Another race found 2026-10-22, about one kernel build in thirty (see Resolved). Watching whether the kernel build fails again; `build/failed_kernel_build.log` keeps its output if so | unknown | `tools/boot_tests.py` |
 
 ### Language and library design
 
@@ -87,6 +87,15 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 
 ## 3. Resolved
+
+- 2026-10-22 — A race in checking: about one kernel build in thirty failed with "BootModule has no field name" at
+  `modules[i] = .{name = ...}` in `src/boot/limine/convert.hsc`. A `.{...}` literal took the type expected
+  there as it was, here a view parameter's elements, and a signature only needs its types declared, so another
+  thread could still be laying `BootModule` out, with no fields yet. `Type.{...}` already waited for its type to be
+  complete; `.{...}` now waits for the type expected too. 0 failures in 60 builds after, against 1 in 30 before.
+  `build/failed_kernel_build.log` kept the output, as intended.
+- 2026-10-22 — `std/time` was tiered `Os`, though it only reads `context.clock`, which every context has, and does
+  calendar arithmetic. The kernel's clock test needed it, and the tier check refused; it's `Freestanding` now.
 
 - 2026-10-22 — Freeing passes the alignment, decided with the Hemera author and documented in Hemera's
   `docs/memory.md` (*Allocators*). `free` and `free_array` passed alignment 0, so an allocator couldn't tell an

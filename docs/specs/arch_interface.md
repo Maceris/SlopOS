@@ -8,7 +8,8 @@ The arch interface is the boundary between the arch layer (L1) and the kernel co
   interrupts).
 
 Status: **specified**, partly implemented: `src/arch_interface`, and in `src/arch/x86_64` CPU
-setup, interrupts, the timer and the miscellaneous functions (roadmap M1), and paging (M2). Choices and alternatives are in
+setup, interrupts, the timer and the miscellaneous functions (roadmap M1), paging (M2), and wired
+interrupts (M3). Choices and alternatives are in
 `../../knowledge/decisions/0032-arch-interface.md`. Four-digit numbers like `0023` refer
 to decision records in `../../knowledge/decisions/`.
 
@@ -526,6 +527,24 @@ test_exit : fn(code: u32) : ---
  * interrupted. Only called when the command line asks for it (test_nmi).
  */
 test_nmi : fn() : ---
+
+// A device the emulator always has that raises a wired interrupt: its controller, and its line there.
+TestDevice :: struct {
+    kind : ControllerKind,
+    registers : PhysicalAddress,
+    line : u32,
+    trigger : Trigger,
+    polarity : Polarity,
+}
+
+/*
+ * Where the emulator's test device is, for tests that route a wired interrupt (test_ioapic). On real
+ * hardware the platform service finds controllers in the firmware tables instead.
+ */
+test_device : fn() -> TestDevice : ---
+
+// Start or stop the test device's interrupts, about a thousand a second. Only for test_ioapic.
+test_device_interrupts : fn(on: bool) : ---
 ```
 
 ## `kernel_entry`
@@ -605,7 +624,7 @@ How `arch/x86_64` meets the interface (`../../knowledge/design/arch-x86-64.md`):
 | Paging | 4-level page tables, reached through the direct map. The kernel's table gets all 256 tables of the kernel half up front, and other address spaces copy its top-level entries. Each non-leaf entry counts the present entries of the table below it in bits 61:52, which the CPU ignores, so `unmap` frees a table that empties without reading it. `init_cpu` sets the PAT (entries 0–3 as at reset, 5 write-combining): `WriteBack` is entry 0, `WriteCombining` 5, `Device` 3 (uncached) |
 | TLB | `CR4.PGE` for global pages. With PCIDs, `activate` keeps a tag's entries, unless `flush_tlb` or `flush_tlb_tag` marked the tag stale while it wasn't the current one; `invlpg` flushes the current tag's addresses and global entries, and `all` flushes everything by toggling `CR4.PGE`. The first `activate` on a CPU does that too, leaving nothing of the bootloader's tables |
 | Interrupts | x2APIC (xAPIC if absent). Device IDs are vectors 48–239 |
-| Wired interrupts | I/O APICs (`ControllerKind.IoApic`); the legacy 8259 PIC is masked and ignored |
+| Wired interrupts | I/O APICs (`ControllerKind.IoApic`), version 0x10 to 0x2f, up to 240 lines, every line masked at first; routed in physical destination mode, so to APIC IDs up to 255 until interrupt remapping. L2 serializes calls on one controller, whose registers are behind a select register. `init_system` masks the legacy 8259 PICs |
 | Timer | TSC with TSC-deadline, frequency from the hint, `CPUID` leaf `0x15`, or calibration against the PIT |
 | Entry | One `.entry` function for every vector, through `x86_64.entry_points`, which returns only for NMIs, and a `.syscall_entry` function (`STAR`, `LSTAR` and `FMASK` set by `init_cpu`). Every vector runs on an IST stack: the critical events on their own, the rest on the kernel stack's own slot, so an entry from idle starts again at its top |
 | `return_to_user` | `x86_64.return_to_user` |
@@ -614,6 +633,7 @@ How `arch/x86_64` meets the interface (`../../knowledge/design/arch-x86-64.md`):
 | `early_console_write` | 16550 UART at I/O port `0x3F8`, 115200 baud, 8N1 |
 | `test_exit` | QEMU's `isa-debug-exit` device at I/O port `0xf4` |
 | `test_nmi` | An NMI IPI to the CPU's own x2APIC ID |
+| `test_device` | QEMU's I/O APIC at `0xfec00000` (the MP specification's default) and its PIT, ISA IRQ 0, on line 2, edge triggered and active high, as QEMU's MADT says; `test_device_interrupts` runs PIT channel 0 at about 1 kHz, or stops it |
 
 ## Not Covered
 

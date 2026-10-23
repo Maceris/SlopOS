@@ -85,6 +85,7 @@ init_system :: fn(system: ptr[mut ArchSystem]) {
         entry^ = IdtEntry.{}
     }
     fill_idt(system)
+    mask_legacy_pics()
 }
 
 /*

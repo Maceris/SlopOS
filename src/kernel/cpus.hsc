@@ -90,6 +90,9 @@ allocate_cpu :: fn(kernel #escaping : ptr[mut Kernel], index: u32) -> Result[ptr
     stack_memory :: allocate_object[CpuStackMemory](&kernel.frames)?
     cpu.kernel = kernel
     cpu.index = index
+    per_cpus :: kernel.per_cpus
+    runtime.assert(cast[usize](index) < per_cpus.count, "keep_boot_info makes room for every CPU's PerCpu")
+    per_cpus[index] = cast[u64](cpu)
     cpu.start_state = CPU_WAITING
     cpu.carrier.index = cast[usize](index)
     cpu.carrier.program_data = cast[rawptr](cpu)
@@ -99,6 +102,7 @@ allocate_cpu :: fn(kernel #escaping : ptr[mut Kernel], index: u32) -> Result[ptr
     cpu.context.log_level = .INFO
     cpu.context.assertion_handler = kernel_assertion_handler
     cpu.context.allocator = heap_allocator(kernel)
+    cpu.context.clock = &kernel.clock
 
     cpu.stacks.kernel = range_of(&stack_memory.kernel[0], KERNEL_STACK_SIZE)
     cpu.stacks.critical[cast[u8](arch_interface.CriticalEvent.Nmi)] = range_of(&stack_memory.nmi[0], CRITICAL_STACK_SIZE)

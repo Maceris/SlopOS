@@ -196,7 +196,9 @@ def main() -> int:
                 parser.error("--package needs --linker-script")
             else:
                 build_kernel(arguments.package.resolve(), arguments.linker_script.resolve(), kernel)
-        image = make_image(kernel.resolve(), limine, xorriso, folder, arguments.command_line, not arguments.no_kaslr)
+        # The kernel's own regions follow its command line; the image and the direct map, Limine's configuration
+        command_line = arguments.command_line + (" no_kaslr" if arguments.no_kaslr else "")
+        image = make_image(kernel.resolve(), limine, xorriso, folder, command_line, not arguments.no_kaslr)
         serial = folder / "serial.txt"
         code = run(image, qemu, serial, arguments.timeout, arguments.uefi, arguments.cpu, arguments.qemu_arguments)
         output = serial.read_text(errors="replace") if serial.exists() else ""

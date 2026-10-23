@@ -66,6 +66,7 @@ start_address_space :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]
     arch.activate(&kernel.page_table)
     runtime.log_info("kernel page tables active: % MiB of RAM in the direct map at %, the image in % segments",
         mapper.direct_bytes >> 20, cast[rawptr](info.direct_map_offset), info.kernel_image.segments.count)
+    start_window(kernel, info, mapper.direct_bytes)
 }
 
 /*
@@ -222,6 +223,7 @@ keep_boot_info :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
     cpus_address :: allocate_kept(kernel, cpus.count * size_of(boot_info.BootCpu))
     kept_cpus :: view_of(cast[ptr[mut boot_info.BootCpu]](cpus_address), cpus.count)
     kernel.cpus = kept_cpus
+    kernel.per_cpus = view_of(cast[ptr[mut u64]](allocate_kept(kernel, cpus.count * size_of(u64))), cpus.count)
     for cpu, i in cpus {
         kept_cpus[i] = cpu
     }

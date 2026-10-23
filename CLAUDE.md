@@ -108,6 +108,9 @@ when relevant.
 - The kernel's address space is a direct map of RAM and the image mapped per segment, W^X, shared by
   every address space as its kernel half; boot memory is reclaimed once every CPU is off it. The heap
   is slab caches behind per-CPU magazines, every CPU's `Allocator` (`0048`).
+- Device registers are mapped in the kernel window, at a random address; TLB shootdowns run one at a
+  time, with no other lock held; device interrupt IDs are per CPU; the kernel parses no ACPI, and its
+  clock is monotonic only (`0049`).
 
 ## Writing Hemera: Things That Are Easy to Get Wrong
 

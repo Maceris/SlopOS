@@ -435,3 +435,21 @@ test_exit : fn(code: u32) : ---
  * interrupted. Only called when the command line asks for it (test_nmi).
  */
 test_nmi : fn() : ---
+
+// A device the emulator always has that raises a wired interrupt: its controller, and its line there.
+TestDevice :: struct {
+    kind : ControllerKind,
+    registers : PhysicalAddress,
+    line : u32,
+    trigger : Trigger,
+    polarity : Polarity,
+}
+
+/*
+ * Where the emulator's test device is, for tests that route a wired interrupt (test_ioapic). On real
+ * hardware the platform service finds controllers in the firmware tables instead.
+ */
+test_device : fn() -> TestDevice : ---
+
+// Start or stop the test device's interrupts, about a thousand a second. Only for test_ioapic.
+test_device_interrupts : fn(on: bool) : ---

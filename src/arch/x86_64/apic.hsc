@@ -58,7 +58,7 @@ CALIBRATION_DIVISOR : u64 : 100
  * Turn on x2APIC mode and software-enable the local APIC, with spurious interrupts on
  * SPURIOUS_VECTOR. Limine already enables x2APIC mode where the CPU has it.
  */
-//TODO(claude): xAPIC through its memory-mapped registers when there's no x2APIC, once the kernel has a place to map device memory (M3, with the I/O APIC)
+//TODO(claude): xAPIC through its memory-mapped registers when there's no x2APIC: the kernel window can map them, but init_cpu would need them mapped first (testable with QEMU's -cpu max,-x2apic)
 enable_local_apic :: fn() {
     base :: x86_64.rdmsr(IA32_APIC_BASE)
     x86_64.wrmsr(IA32_APIC_BASE, base | APIC_BASE_ENABLE | APIC_BASE_X2APIC_ENABLE)

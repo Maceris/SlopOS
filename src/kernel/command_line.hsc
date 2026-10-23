@@ -32,6 +32,18 @@ Options :: struct {
     test_write_code : bool,
     // test_heap: once booted, allocate, resize and free blocks of many sizes from the kernel heap.
     test_heap : bool,
+    /*
+     * no_kaslr: lay out the kernel's own regions, like the kernel window, at the same addresses on
+     * every boot (decisions/0021). The bootloader's configuration does the same for the image and the
+     * direct map.
+     */
+    no_kaslr : bool,
+    // test_clock: once booted, check the monotonic clock keeps time with the counter.
+    test_clock : bool,
+    // test_shootdown: once booted, change a mapping every CPU has used, and check they all see the change.
+    test_shootdown : bool,
+    // test_ioapic: once booted, route the emulator's test device through its interrupt controller.
+    test_ioapic : bool,
 }
 
 parse_command_line :: fn(command_line: string) -> Options {
@@ -81,5 +93,17 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_heap" {
         options.test_heap = true
+    }
+    if word == "no_kaslr" {
+        options.no_kaslr = true
+    }
+    if word == "test_clock" {
+        options.test_clock = true
+    }
+    if word == "test_shootdown" {
+        options.test_shootdown = true
+    }
+    if word == "test_ioapic" {
+        options.test_ioapic = true
     }
 }

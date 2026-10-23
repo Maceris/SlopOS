@@ -7,8 +7,6 @@ package arch_x86_64
  * true: take a name off when its milestone adds it.
  */
 NOT_YET_IMPLEMENTED :: string.[
-    // M3: wired interrupts
-    "InterruptController", "init_interrupt_controller", "route_wired", "mask_wired", "unmask_wired",
     // M4 to M6: threads' vector state, and user mode
     "VectorState", "vector_state_size", "vector_state_alignment", "init_vector_state", "save_vector_state",
     "restore_vector_state", "init_user_registers", "syscall_number", "syscall_argument", "set_syscall_result",

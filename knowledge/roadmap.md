@@ -64,13 +64,15 @@ Stresses: the `Allocator` interface for real, bit-packed page table entries, ato
 
 ## M3 — Interrupts, Time, SMP (L1, L2)
 
-- Static ACPI tables the kernel needs: RSDP/XSDT, MADT, HPET.
-- Local APIC / x2APIC, I/O APIC, IRQ routing to (later) driver messages.
-- TSC calibration, monotonic clock, the clock page (a seqlock, on Hemera's `base/intrinsics/atomics.hsc`).
+- Interrupt controllers registered with the kernel (the platform service reads the MADT, `decisions/0039`;
+  the kernel parses no ACPI, `0031`), the I/O APIC, IRQ routing to (later) driver messages.
+- Local APIC / x2APIC, TSC calibration, the kernel's monotonic clock. A mapped clock page only as
+  `0024`'s opt-in; time goes through a syscall (`0009`).
+- The kernel window for device registers (`0049`).
 - Bringing up the other CPUs, per-CPU data via `GS`, spinlocks, TLB shootdown.
 
-Specs: ACPI 6.5 (static tables), Intel SDM Vol. 3A ch. 10–11, Intel x2APIC spec.
-Stresses: atomics and fences, the per-CPU `context.user_data` approach, endian-specific table parsing.
+Specs: Intel SDM Vol. 3A ch. 10–11, Intel x2APIC spec, Intel 82093AA I/O APIC datasheet.
+Stresses: atomics and fences, the per-CPU `context.user_data` approach, volatile MMIO.
 
 ## M4 — Threads and Scheduling (L2)
 
@@ -144,5 +146,5 @@ Stresses: volatile MMIO, fences (Hemera's `base/intrinsics/atomics.hsc`), protoc
 | M0 | done 2026-10-17: `BootInfo`, `arch_interface`, `CpuFeatures`; the build package (`src/build`) with the house-rule checks for `std` tiers and the arch interface (`src/checks`); freestanding `std` for views, fixed-buffer text and formatting, and `std/containers` (`FixedArray`, `RingBuffer`, `Bitmap`, intrusive `List`); `SharedPtr` on atomics |
 | M1 | done 2026-10-15 (`compiler-plan.md` Phase 6); `tools/boot_tests.py` boots it seven ways. Entry from user mode is generated (entry functions, 2026-10-16) and waits for user mode itself (M4–M6) |
 | M2 | done 2026-10-22 (`decisions/0048`): the buddy frame allocator (`src/kernel/frames`); x86-64 paging behind the arch interface (map, unmap, protect, translate, W^X, NX, global pages, PCIDs; `src/arch/x86_64/paging.hsc`); the kernel's own address space, a direct map and the image with each segment's protection, on every CPU, after which boot memory is reclaimed (`src/kernel/address_space.hsc`); the slab allocator with per-CPU magazines (`src/kernel/slab`) and the kernel heap on it, every CPU's `Allocator` (`src/kernel/heap.hsc`). Per-CPU caches of single frames; KASLR for the image and the direct map, which holds every region of the kernel's own (`0021`, amended). Frames, slabs and paging are unit-tested over a buffer standing in for memory |
-| M3 | started 2026-10-16: the other CPUs start, go idle and stop with the kernel (the `starts every CPU` boot test, 4 CPUs). ACPI, the I/O APIC, the clock page and TLB shootdown are to come |
+| M3 | done 2026-10-22 (`decisions/0049`): the other CPUs start, go idle and stop with the kernel; TLB shootdown across CPUs (`src/kernel/shootdown.hsc`); the kernel window for device registers, at a random address (`src/kernel/window.hsc`); I/O APICs behind the arch interface, registered controllers, per-CPU device interrupt IDs and routing (`src/arch/x86_64/io_apic.hsc`, `src/kernel/interrupts.hsc`); the kernel's monotonic clock in every CPU's context (`src/kernel/clock.hsc`). Boot tests: a shootdown on 4 CPUs, the PIT's interrupts through QEMU's I/O APIC, the clock against the counter. Registration through a syscall waits for M5, the platform service for M7 |
 | M4–M9 | not started |

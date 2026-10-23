@@ -1,6 +1,7 @@
 package arch_x86_64
 
 import x86_64 from "base/intrinsics"
+import arch_interface from "../../arch_interface"
 
 // The early console: the first 16550 UART, at COM1's I/O ports
 //SPEC: TI PC16550D datasheet (registers, line control, line status); COM1 at I/O port 0x3f8
@@ -28,6 +29,20 @@ BAUD_DIVISOR : u16 : 1
 
 // QEMU's isa-debug-exit device, which the test harness adds (tools/boot.py)
 DEBUG_EXIT_PORT : u16 : 0xf4
+
+/*
+ * The test device: QEMU's PIT, ISA IRQ 0, which QEMU's MADT routes to line 2 of its I/O APIC, at the
+ * address the MP specification gives the first I/O APIC.
+ */
+//SPEC: Intel MultiProcessor Specification 1.4, §3.6.1 (the default I/O APIC address); Intel 8254 datasheet
+TEST_IO_APIC : u64 : 0xfec00000
+TEST_PIT_LINE : u32 : 2
+PIT_CHANNEL_0 : u16 : 0x40
+// Channel 0, low then high byte, binary: mode 2 (a rate generator), or mode 0 (once, at the end of its count)
+PIT_CHANNEL_0_RATE : u8 : 0x34
+PIT_CHANNEL_0_ONCE : u8 : 0x30
+// 1193182 Hz / 1193: about a thousand interrupts a second
+PIT_TEST_DIVISOR : u16 : 1193
 
 // Set the early console up: 115200 baud, 8N1, FIFOs on, no interrupts.
 early_console_init :: fn() {
@@ -60,6 +75,27 @@ write_byte :: fn(byte: u8) {
 
 test_exit :: fn(code: u32) {
     x86_64.out_u32(DEBUG_EXIT_PORT, code)
+}
+
+test_device :: fn() -> arch_interface.TestDevice {
+    return arch_interface.TestDevice.{
+        kind = .IoApic,
+        registers = cast[arch_interface.PhysicalAddress](TEST_IO_APIC),
+        line = TEST_PIT_LINE,
+        trigger = .Edge,
+        polarity = .ActiveHigh,
+    }
+}
+
+/*
+ * The PIT's channel 0 as a rate generator, or stopped: counting once from its largest count, so at
+ * most one more edge comes, which a masked line ignores.
+ */
+test_device_interrupts :: fn(on: bool) {
+    divisor :: if on { PIT_TEST_DIVISOR } else { cast[u16](0) }
+    x86_64.out_u8(PIT_COMMAND, if on { PIT_CHANNEL_0_RATE } else { PIT_CHANNEL_0_ONCE })
+    x86_64.out_u8(PIT_CHANNEL_0, cast[u8](divisor & 0xff))
+    x86_64.out_u8(PIT_CHANNEL_0, cast[u8](divisor >> 8))
 }
 
 // Stop the calling CPU for good, with interrupts disabled. NMIs still wake it, so it halts again.
