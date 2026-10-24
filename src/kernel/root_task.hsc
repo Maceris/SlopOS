@@ -23,9 +23,10 @@ import frames from "frames"
  * startup block (docs/specs/programs.md). Its grants:
  * - "platform", the platform capability;
  * - "debug_log", a debug log;
+ * - "command_line", the kernel's command line, its bytes then zeros;
  * - "module:<name>", each other boot module, a read-only memory object over the frames it was loaded into.
  * Its own handles are to itself, its address space and the root memory budget, and its startup block
- * has the boot's random seed. Its end is the machine's: the kernel stops (processes.hsc).
+ * has the boot's random seed. Its end is the machine's: the kernel stops (processes.hsc), and only then.
  */
 
 ROOT_STACK_SIZE : u64 : 256 * 1024
@@ -77,7 +78,7 @@ load_root_task :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule) -> s
         case Ok(made) => space = made
         case Error(error) => return "no address space"
     }
-    grant_count :: kernel.modules.count + 1
+    grant_count :: kernel.modules.count + 2
     block_size :: page_up(cast[u64](size_of(slop_os.StartupBlock)) + cast[u64](grant_count + 1) * cast[u64](size_of(slop_os.Grant)))
     layout :: choose_layout(kernel, executable.size, block_size)
     not_loaded :: load_image(kernel, process, space, &executable, file, layout.image)
@@ -105,6 +106,8 @@ load_root_task :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule) -> s
         case Error(error) => return "no thread"
     }
     intrinsics.atomic_store_u64_release(&kernel.root_task, cast[u64](process))
+    // From here, the root task's end is the kernel's, not a number of ticks
+    kernel.stop_after_ticks = 0xffffffffffffffff
     start_thread(kernel, thread)
     runtime.log_info("root task % started at %", module.name, cast[rawptr](layout.image))
     return null
@@ -276,6 +279,8 @@ write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], sp
     count = add_grant(grants, count, "platform", .Platform, platform)
     log :: create_debug_log(kernel, process) or_return "no debug log"
     count = add_grant(grants, count, "debug_log", .DebugLog, log)
+    command_line :: copy_of_command_line(kernel, process) or_return "no memory for its command line"
+    count = add_grant(grants, count, "command_line", .Memory, command_line)
     for module, i in kernel.modules {
         if i == 0 {
             continue
@@ -301,6 +306,16 @@ write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], sp
         return "its startup block doesn't map"
     }
     return null
+}
+
+// The kernel's command line, in memory process owns, its bytes then zeros: an owning handle to it.
+copy_of_command_line :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> slop_os.Handle? {
+    text :: kernel.command_line
+    memory :: create_memory(kernel, cast[u64](process), kernel.root_budget, page_up(cast[u64](text.count) + 1)) or_return null
+    if !copy_into(kernel, memory, view_of(cast[ptr[u8]](text.data), text.count)) {
+        return null
+    }
+    return handle_for(kernel, process, cast[u64](memory), .Memory, true)
 }
 
 // A handle in process's table to object, owning if it owns it: every right.

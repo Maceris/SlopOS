@@ -87,3 +87,93 @@ install_owning :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], object:
     header :: cast[ptr[ObjectHeader]](object)
     return install(kernel, &process.table, object, header.generation, header.kind, slop_os.RIGHTS_ALL, true)
 }
+
+/*
+ * The caller's handles, moved out of its table into target's, the value each gets there written at given
+ * (decisions/0067): what an owning handle owns is target's from then on, charged to its budget, for all of
+ * them or none (decisions/0011). Each needs RIGHT_TRANSFER. An owning handle to target or a process above
+ * it can't go, since target would own itself, nor a channel end whose rings are mapped. One closed
+ * meanwhile, or that doesn't fit in target's table, comes out as NO_HANDLE.
+ */
+give_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], target: ptr[mut Process], handles: slop_os.UserBuffer,
+    given: slop_os.UserBuffer) -> slop_os.ControlError? {
+    count :: handles.count
+    if count > cast[u64](slop_os.MAX_HANDLES_PER_BATCH) {
+        return slop_os.ControlError.TooBig
+    }
+    if given.count < count || !is_user_writable(thread.space, given.address, count * 4) {
+        return slop_os.ControlError.BadBuffer
+    }
+    moving : slop_os.Handle[64]
+    if !copy_from_user(kernel, thread.space, handles.address, cast[u64](&moving[0]), count * 4) {
+        return slop_os.ControlError.BadBuffer
+    }
+    process :: process_of(thread)
+    owned : u64[64]
+    owned_count := cast[u32](0)
+    for i in 0..<cast[usize](count) {
+        match lookup(&process.table, moving[i]) {
+            case Ok(found) => {
+                if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_TRANSFER) == 0 {
+                    return slop_os.ControlError.MissingRight
+                }
+                if found.owning && (found.object == cast[u64](target) || in_subtree(cast[u64](target), found.object)) {
+                    return slop_os.ControlError.NotTransferable
+                }
+                if found.owning {
+                    owned[cast[usize](owned_count) % 64] = found.object
+                    owned_count += 1
+                }
+            }
+            case Error(error) => return converted[slop_os.ControlError](error)
+        }
+    }
+    // Ends are held unmapped while they move, as sending them is (channels.hsc)
+    held : u64[64]
+    held_generations : u32[64]
+    held_count : usize = 0
+    for i in 0..<cast[usize](count) {
+        match lookup(&process.table, moving[i]) {
+            case Ok(found) => {
+                if found.kind == .Channel {
+                    if !hold_for_sending(cast[ptr[mut Channel]](found.object)) {
+                        let_go_of_held(&held, &held_generations, held_count)
+                        return slop_os.ControlError.NotTransferable
+                    }
+                    held[held_count % 64] = found.object
+                    held_generations[held_count % 64] = found.generation
+                    held_count += 1
+                }
+            }
+            case Error(error) => {}
+        }
+    }
+    if !move_charges(kernel, &owned, owned_count, target.header.budget) {
+        let_go_of_held(&held, &held_generations, held_count)
+        return slop_os.ControlError.BudgetExceeded
+    }
+    installed : slop_os.Handle[64]
+    for i in 0..<cast[usize](count) {
+        installed[i] = slop_os.NO_HANDLE
+        match remove(&process.table, moving[i]) {
+            case Ok(removed) => {
+                if is_live(removed.object, removed.generation) {
+                    installed[i] = take_one(kernel, target, removed)
+                }
+            }
+            case Error(error) => {}
+        }
+    }
+    let_go_of_held(&held, &held_generations, held_count)
+    if !copy_to_user(kernel, thread.space, given.address, cast[u64](&installed[0]), count * 4) {
+        return slop_os.ControlError.BadBuffer
+    }
+    return null
+}
+
+// The first count of the ends give_handles held, let go of.
+let_go_of_held :: fn(held: ptr[u64[64]], generations: ptr[u32[64]], count: usize) {
+    for i in 0..<count {
+        let_go_of_end(cast[ptr[mut Channel]](held[i % 64]), generations[i % 64])
+    }
+}

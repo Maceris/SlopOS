@@ -542,6 +542,11 @@ sys_memory_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, s
     return .Ok(cast[slop_os.Memory](handle))
 }
 
+sys_memory_size :: fn(thread: ptr[mut Thread], memory: slop_os.Memory) -> Result[u64, slop_os.HandleError] {
+    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, cast[slop_os.Rights](0))?
+    return .Ok(cast[ptr[Memory]](object).size)
+}
+
 // The memory needs the rights its protection asks for, and the space RIGHT_SPACE_MAP.
 sys_memory_map :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, space: slop_os.AddressSpace, address: u64, offset: u64, size: u64,
     protection: slop_os.Protection) -> Result[void, slop_os.MemoryError] {
@@ -801,4 +806,41 @@ sys_process_kill :: fn(thread: ptr[mut Thread], process: slop_os.Process) -> Res
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_KILL)?
     _ = destroy_object(per_cpu().kernel, cast[u64](target))
     return .Ok
+}
+
+/*
+ * A thread owned by the process, in space, which must be in its subtree, started at entry with stack and
+ * argument, as thread_create would in the caller's: its ID (decisions/0067).
+ */
+sys_thread_create_in :: fn(thread: ptr[mut Thread], process: slop_os.Process, budget: slop_os.MemoryBudget, space: slop_os.AddressSpace,
+    entry: u64, stack: u64, argument: u64) -> Result[u64, slop_os.ControlError] {
+    kernel :: per_cpu().kernel
+    target :: target_of(thread, process, slop_os.RIGHT_PROCESS_THREADS)?
+    caller :: process_of(thread)
+    paying :: paying_budget[slop_os.ControlError](caller, budget)?
+    found :: object_of[slop_os.ControlError](caller, cast[slop_os.Handle](space), slop_os.ObjectKind.AddressSpace, slop_os.RIGHT_SPACE_THREADS)?
+    if !in_subtree(found, cast[u64](target)) {
+        return .Error(.BadAddress)
+    }
+    start :: arch_interface.UserStart.{
+        instruction_pointer = cast[arch_interface.VirtualAddress](entry),
+        stack_pointer = cast[arch_interface.VirtualAddress](stack),
+        argument = argument,
+    }
+    match create_thread(kernel, cast[u64](target), cast[ptr[mut AddressSpace]](found), &start,
+        arch_interface.VectorConfig.{extended = false}, 0, paying) {
+        case Ok(made) => {
+            id :: made.id
+            start_thread(kernel, made)
+            return .Ok(id)
+        }
+        case Error(error) => return .Error(if error == .OutOfMemory { slop_os.ControlError.OutOfMemory }
+            else if error == .BudgetExceeded { slop_os.ControlError.BudgetExceeded } else { slop_os.ControlError.ObjectGone })
+    }
+}
+
+sys_process_give_handles :: fn(thread: ptr[mut Thread], process: slop_os.Process, handles: slop_os.UserBuffer, given: slop_os.UserBuffer)
+    -> Result[void, slop_os.ControlError] {
+    target :: target_of(thread, process, slop_os.RIGHT_PROCESS_THREADS)?
+    return control_done(give_handles(per_cpu().kernel, thread, target, handles, given))
 }

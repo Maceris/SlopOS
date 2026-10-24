@@ -92,6 +92,8 @@ Kernel :: struct {
     // The boot modules, the root task's first, their names kept past boot; the boot's random seed (keep_boot_info).
     modules : boot_info.BootModule[],
     boot_seed : u8[32],
+    // The kernel's command line, kept past boot, for the root task.
+    command_line : string,
     // The root task's process, as an address, once it's started, whose end stops the kernel (root_task.hsc).
     root_task : u64,
     next_irq_cpu : u32,

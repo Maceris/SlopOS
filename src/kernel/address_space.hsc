@@ -259,6 +259,10 @@ keep_boot_info :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
         }
     }
     kernel.modules = modules
+    // The command line, for the root task too
+    command_line :: cast[ptr[mut u8]](allocate_kept(kernel, info.command_line.count))
+    intrinsics.mem_copy_non_overlapping(cast[mut rawptr](command_line), cast[rawptr](info.command_line.data), info.command_line.count)
+    kernel.command_line = string_of(command_line, info.command_line.count)
     // The boot's random seed, for the root task: the bootloader's, mixed with the CPU's
     match info.bootloader_entropy {
         case Some(bytes) => kernel.boot_seed = bytes

@@ -47,8 +47,9 @@ each object is its owning one (`0008`).
   kind: `RIGHT_SPACE_THREADS` and `RIGHT_SPACE_MAP` for an address space; `RIGHT_PORT_WAIT` and
   `RIGHT_PORT_BIND` for a port; `RIGHT_CHANNEL_MAP` for a channel end; `RIGHT_BUDGET_CHARGE` for a memory
   budget; `RIGHT_MEMORY_READ`, `RIGHT_MEMORY_WRITE` and `RIGHT_MEMORY_EXECUTE` for a memory object;
-  `RIGHT_IRQ_ACK` for an IRQ; `RIGHT_PROCESS_INSPECT`, `_READ_MEMORY`, `_WRITE_STATE`, `_INTERCEPT` and
-  `_KILL` for a process, over its whole subtree (`0017`); `RIGHT_DEBUG_LOG_WRITE` for a debug log. An owning
+  `RIGHT_IRQ_ACK` for an IRQ; `RIGHT_PROCESS_INSPECT`, `_READ_MEMORY`, `_WRITE_STATE`, `_INTERCEPT`,
+  `_KILL` and `_THREADS` (starting threads in it and giving it handles, `0067`) for a process, over its whole
+  subtree (`0017`); `RIGHT_DEBUG_LOG_WRITE` for a debug log. An owning
   handle has every right.
   Duplicating keeps or drops rights, never adds them.
 
@@ -109,6 +110,9 @@ domains exist.
 | 44 | `process_kill` | process | nothing: the process is destroyed, with its subtree. Needs `RIGHT_PROCESS_KILL` |
 | 45 | `process_exit` | code (u32) | never returns: the calling process is destroyed, with its subtree, and its end gives code (`0059`) |
 | 46 | `debug_log` | log, text (a slice) | nothing: a line in the kernel's log, `[user] ` then text's first `DEBUG_LOG_LINE` (200) bytes, each not printable ASCII as `?`. Needs `RIGHT_DEBUG_LOG_WRITE` (`0060`) |
+| 47 | `thread_create_in` | process, budget, address space, entry, stack pointer, argument | the new thread's ID: a thread owned by the process, started as `thread_create` starts one, in an address space in the process's subtree. Needs `RIGHT_PROCESS_THREADS` and `RIGHT_SPACE_THREADS` (`0067`) |
+| 48 | `process_give_handles` | process, handles (a slice), given (a slice) | nothing: the handles (up to 64), moved out of the caller's table into the process's, the value each has there written at given. An owning handle's object becomes the process's, charged to its budget, for all of them or none. Each needs `RIGHT_TRANSFER`; an owning handle to the process or one above it can't go, nor a channel end whose rings are mapped. One closed meanwhile comes out as `NO_HANDLE`. Needs `RIGHT_PROCESS_THREADS` (`0067`) |
+| 49 | `memory_size` | memory | its size in bytes (`0067`) |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the
@@ -324,7 +328,9 @@ Process control fails with `slop_os.ControlError`:
 |---|---|---|
 | 1 to 6, 10, 25 | as above | |
 | 14 | `Empty` | `intercept_next`: no stop left to report |
+| 15 | `TooBig` | `process_give_handles`: more than 64 handles |
 | 18 | `BadAddress` | The address space isn't in the process's subtree, or the range isn't mapped there |
+| 22 | `NotTransferable` | `process_give_handles`: an owning handle to the process or one above it, or a channel end whose rings are mapped |
 | 34 | `NoSuchThread` | No thread with that ID in the subtree, or none the intercept stopped |
 | 35 | `NotStopped` | The thread isn't stopped or suspended; or `Skip` at a stop that isn't an entry |
 | 36 | `AlreadyIntercepted` | The process has an intercept already |

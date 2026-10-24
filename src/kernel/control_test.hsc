@@ -18,6 +18,9 @@ import frames from "frames"
  * - T1 writes where nothing is mapped: D maps memory there in T's space and lets it retry, which works;
  * - D reads what T1 got from T's memory; suspends T2, whose count then stands still and whose registers
  *   it can read, and resumes it, when it counts again and they can't be read;
+ * - D starts a thread in T (thread_create_in), but not in a space outside T's subtree; gives T the memory
+ *   T1 faulted on (process_give_handles), after which it's no longer D's, but can't give a process its own
+ *   owning handle, nor a handle without RIGHT_TRANSFER; and memory_size says how big memory is;
  * - D kills T, and its port tells it T ended, killed;
  * - a third process, E, ends itself with process_exit once D writes to its memory, at the start, and a port
  *   of D's gets its code.
@@ -37,6 +40,8 @@ CONTROL_SLOT_ONE :: 5
 CONTROL_SLOT_EXITING :: 6
 CONTROL_SLOT_EXITING_SPACE :: 51
 CONTROL_SLOT_DONE :: 50
+// Where the counting function is in the test's code, for D to start a thread of T's at
+CONTROL_SLOT_ENTRY :: 52
 // T's page's slots.
 TARGET_SLOT_GO :: 0
 TARGET_SLOT_COUNTER :: 1
@@ -49,6 +54,7 @@ CONTROL_PACKETS_OFFSET : u64 : 1152
 CONTROL_REGISTERS_OFFSET : u64 : 1280
 // After the registers, which are up to 34 u64s
 CONTROL_READ_OFFSET : u64 : 1600
+CONTROL_GIVEN_OFFSET : u64 : 1664
 CONTROL_KEY : u64 : 21
 WATCH_KEY : u64 : 22
 EXIT_WATCH_KEY : u64 : 23
@@ -218,6 +224,25 @@ user_debugger #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) 
     while read_target(page, TARGET_SLOT_COUNTER) == before && clock_now() - resumed < RESUME_NANOSECONDS
     page^[32] = if read_target(page, TARGET_SLOT_COUNTER) > before { cast[u64](1) } else { cast[u64](0) }
     page^[33] = tag_of(slop_os.thread_read_registers(target, t2, registers^))
+    // Building into T: a thread in its own space starts, one in a space outside its subtree doesn't
+    other_space :: slop_os.address_space_create(budget) or_else handle_at[slop_os.AddressSpace](0)
+    entry :: page^[CONTROL_SLOT_ENTRY]
+    // In the middle of T1's stack page, below where T1 spins
+    stack :: TEST_STACKS + frames.FRAME_SIZE / 2 - 8
+    page^[39] = tag_of(slop_os.thread_create_in(target, budget, other_space, entry, stack, TEST_COUNTERS))
+    created :: slop_os.thread_create_in(target, budget, target_space, entry, stack, TEST_COUNTERS)
+    page^[40] = if tag_of(created) == 0 && (created or_else 0) != 0 { cast[u64](1) } else { cast[u64](0) }
+    // The memory T1 faulted on goes to T, and isn't D's any more
+    given :: cast[ptr[mut slop_os.Handle[4]]](base + CONTROL_GIVEN_OFFSET)
+    page^[41] = tag_of(slop_os.process_give_handles(target, slop_os.Handle.[cast[slop_os.Handle](memory)], given^))
+    page^[42] = tag_of(slop_os.memory_size(memory))
+    // A process can't be given its own owning handle, nor a handle without RIGHT_TRANSFER
+    child :: slop_os.process_create(budget) or_else handle_at[slop_os.Process](0)
+    page^[43] = tag_of(slop_os.process_give_handles(child, slop_os.Handle.[cast[slop_os.Handle](child)], given^))
+    sized :: slop_os.memory_create(budget, 2 * frames.FRAME_SIZE) or_else handle_at[slop_os.Memory](0)
+    page^[44] = if (slop_os.memory_size(sized) or_else 0) == 2 * frames.FRAME_SIZE { cast[u64](1) } else { cast[u64](0) }
+    readable :: slop_os.handle_duplicate(cast[slop_os.Handle](sized), slop_os.RIGHT_MEMORY_READ) or_else slop_os.NO_HANDLE
+    page^[45] = tag_of(slop_os.process_give_handles(target, slop_os.Handle.[readable], given^))
     // T killed, and its end seen, once the stops' packet is out of the way
     one :: packets_at(base + CONTROL_PACKETS_OFFSET, 1)
     loop {
@@ -326,6 +351,7 @@ test_control :: fn(kernel: ptr[mut Kernel]) {
         runtime.log_error("test_control: no handles for the debugger")
         return void
     }
+    slots^[CONTROL_SLOT_ENTRY] = TEST_CODE + (cast[u64](user_counter_thread) - first)
     // T's threads first, so D knows them when it starts
     slots^[CONTROL_SLOT_T1] = control_thread(kernel, t, t_space, first, cast[u64](user_target), TEST_STACKS + frames.FRAME_SIZE - 8)
     slots^[CONTROL_SLOT_T2] = control_thread(kernel, t, t_space, first, cast[u64](user_counter_thread), TEST_STACKS + 2 * frames.FRAME_SIZE - 8)
@@ -381,6 +407,8 @@ check_control_results :: fn(test: ptr[ControlTest]) {
         0, 1, 0, 0, 1, control_tag(.NotStopped),
         0, 1,
         0, 0, 1,
+        control_tag(.BadAddress), 1, 0, cast[u64](cast[u32](slop_os.HandleError.InvalidHandle)), control_tag(.NotTransferable), 1,
+        control_tag(.MissingRight),
     ]
     for value, i in expected {
         if slots^[8 + i] != value {
@@ -388,7 +416,7 @@ check_control_results :: fn(test: ptr[ControlTest]) {
             return void
         }
     }
-    runtime.log_info("test_control: a debugger skipped and answered a call, changed a result, fixed a fault, read and wrote memory, suspended and resumed a thread, and killed the process it watched; a process ended itself, and its code came with its end")
+    runtime.log_info("test_control: a debugger skipped and answered a call, changed a result, fixed a fault, read and wrote memory, suspended, resumed and started threads, gave a handle, and killed its target; a process ended itself, and its code came with its end")
 }
 
 // A control error's tag, as a call gives it.
