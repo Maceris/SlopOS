@@ -15,7 +15,7 @@ import runtime from "base"
 
 // What context.clock points at, in Kernel: its data is the Kernel.
 init_clock :: fn(kernel #escaping : ptr[mut Kernel]) {
-    kernel.clock = runtime.Clock.{data = cast[rawptr](kernel), monotonic = kernel_monotonic, wall = kernel_wall}
+    kernel.clock = runtime.Clock.{data = cast[mut rawptr](kernel), monotonic = kernel_monotonic, wall = kernel_wall}
 }
 
 /*

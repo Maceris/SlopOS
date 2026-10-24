@@ -208,7 +208,7 @@ refill_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[mut arch_interface.Tabl
     cache :: &per_cpu().frame_cache
     for i in cast[usize](tables.count)..<4 {
         frame :: frames.take_frame(cache, &kernel.frames) or_else out_of_memory(&kernel.options, "no memory for the kernel's page tables")
-        intrinsics.mem_zero(cast[rawptr](frames.virtual_of(&kernel.frames, frame)), cast[usize](frames.FRAME_SIZE))
+        intrinsics.mem_zero(cast[mut rawptr](frames.virtual_of(&kernel.frames, frame)), cast[usize](frames.FRAME_SIZE))
         tables.frames[i] = frame
     }
     tables.count = 4

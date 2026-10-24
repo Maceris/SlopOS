@@ -240,7 +240,7 @@ frame_for :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], page: u64) -> u64 
         return held
     }
     frame :: frames.take_frame(&per_cpu().frame_cache, &kernel.frames) or_return 0
-    intrinsics.mem_zero(cast[rawptr](frames.virtual_of(&kernel.frames, frame)), cast[usize](frames.FRAME_SIZE))
+    intrinsics.mem_zero(cast[mut rawptr](frames.virtual_of(&kernel.frames, frame)), cast[usize](frames.FRAME_SIZE))
     // Another fault on the same page may have given it one first
     other, given :: intrinsics.interlocked_compare_exchange_u64(slot, cast[u64](frame), 0)
     if !given {

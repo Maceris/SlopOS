@@ -133,7 +133,7 @@ free :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator],
  * Objects for out, as many as fit, under one lock: how many. Fewer only when memory ran out, so
  * 0 means none was free.
  */
-allocate_batch :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator], out: u64[]) -> usize {
+allocate_batch :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator], out: mut u64[]) -> usize {
     concurrency.lock(&cache.lock)
     defer concurrency.unlock(&cache.lock)
     for i in 0..<out.count {

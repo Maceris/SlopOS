@@ -75,7 +75,7 @@ vector_state_alignment :: fn() -> usize {
  */
 init_vector_state :: fn(state: ptr[mut VectorState], config: arch_interface.VectorConfig) {
     components :: components_for(config)
-    intrinsics.mem_zero(cast[rawptr](state), cast[usize](VECTOR_HEADER_SIZE + area_end(components)))
+    intrinsics.mem_zero(cast[mut rawptr](state), cast[usize](VECTOR_HEADER_SIZE + area_end(components)))
     state.components = components
     area :: area_of(state)
     cast[ptr[mut u16]](area + FCW_OFFSET)^ = FCW_INITIAL

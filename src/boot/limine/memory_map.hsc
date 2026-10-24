@@ -62,7 +62,7 @@ build_memory_map :: fn(
     response: ptr[MemoryMapResponse],
     executable_physical: u64,
     carved: boot_info.PhysicalRange,
-    regions: boot_info.MemoryRegion[],
+    regions: mut boot_info.MemoryRegion[],
 ) -> usize {
     count : usize = 0
     for entry in pointers(response.entries, response.entry_count) {
@@ -89,7 +89,7 @@ build_memory_map :: fn(
  * growing made them overlap. Where they do, a non-Usable region keeps the overlap from a Usable
  * one, the same kinds merge, and of two other kinds, the earlier keeps it.
  */
-add_region :: fn(regions: boot_info.MemoryRegion[], count: usize, start, end: u64, kind: boot_info.MemoryKind) -> usize {
+add_region :: fn(regions: mut boot_info.MemoryRegion[], count: usize, start, end: u64, kind: boot_info.MemoryKind) -> usize {
     // memory_map_capacity leaves room for one more each time
     runtime.assert(count < regions.count, "add_region needs room for another region")
     first := start
@@ -137,7 +137,7 @@ region :: fn(start, end: u64, kind: boot_info.MemoryKind) -> boot_info.MemoryReg
  * Mark carved as BootReclaimable, splitting the Usable region it was taken from.
  * Returns the new count.
  */
-carve_out :: fn(regions: boot_info.MemoryRegion[], count: usize, carved: boot_info.PhysicalRange) -> usize {
+carve_out :: fn(regions: mut boot_info.MemoryRegion[], count: usize, carved: boot_info.PhysicalRange) -> usize {
     // memory_map_capacity leaves room for the two more a split makes
     runtime.assert(count < regions.count && count + 2 <= regions.count, "carve_out needs room for two more regions")
     carved_start :: cast[u64](carved.base)
@@ -181,7 +181,7 @@ carve_out :: fn(regions: boot_info.MemoryRegion[], count: usize, carved: boot_in
 }
 
 // Merge regions of the same kind that touch. Returns the new count.
-merge_adjacent :: fn(regions: boot_info.MemoryRegion[], count: usize) -> usize {
+merge_adjacent :: fn(regions: mut boot_info.MemoryRegion[], count: usize) -> usize {
     runtime.assert(count <= regions.count, "merge_adjacent's count is more than there are regions")
     if count == 0 {
         return 0

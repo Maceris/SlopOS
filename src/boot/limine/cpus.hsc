@@ -53,7 +53,7 @@ cpu_entry #calling_convention(.c) #no_context :: fn(info: ptr[MpInfo]) #never_re
 }
 
 // Every CPU, the boot CPU first. Each one's boot_handle is its StartingCpu, for start_cpu.
-cpus :: fn(mp: ptr[MpResponse], cpus: boot_info.BootCpu[], starting #escaping : StartingCpu[]) -> boot_info.BootCpu[] {
+cpus :: fn(mp: ptr[MpResponse], cpus: mut boot_info.BootCpu[], starting #escaping : mut StartingCpu[]) -> boot_info.BootCpu[] {
     count : usize = 1
     for cpu in pointers(mp.cpus, mp.cpu_count) {
         index := count

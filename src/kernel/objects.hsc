@@ -171,7 +171,7 @@ new_object :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind, budget: u64,
     address :: slab.allocate(pool, &kernel.frames) or_return .Error(.OutOfMemory)
     header :: cast[ptr[mut ObjectHeader]](address)
     generation :: header.generation
-    intrinsics.mem_zero(cast[rawptr](address), cast[usize](pool.object_size))
+    intrinsics.mem_zero(cast[mut rawptr](address), cast[usize](pool.object_size))
     header.generation = generation
     header.kind = kind
     if !charge_new(budget, address, pool.object_size + extra) {

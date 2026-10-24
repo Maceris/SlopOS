@@ -49,10 +49,10 @@ copy_user :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address: u64,
         piece :: if size - copied < in_page { size - copied } else { in_page }
         user :: kernel.frames.direct_map_offset + cast[u64](found.physical_address)
         if to_user {
-            intrinsics.mem_copy(cast[rawptr](user), cast[rawptr](other + copied), cast[usize](piece))
+            intrinsics.mem_copy(cast[mut rawptr](user), cast[rawptr](other + copied), cast[usize](piece))
         }
         else {
-            intrinsics.mem_copy(cast[rawptr](other + copied), cast[rawptr](user), cast[usize](piece))
+            intrinsics.mem_copy(cast[mut rawptr](other + copied), cast[rawptr](user), cast[usize](piece))
         }
         copied += piece
     }

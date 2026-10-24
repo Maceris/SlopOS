@@ -46,7 +46,7 @@ TimerEntry :: struct {
 TimerHeap :: struct {
     lock : concurrency.SpinLock,
     // Entries' addresses, from the heap allocator.
-    entries : u64[],
+    entries : mut u64[],
     count : usize,
 }
 
@@ -224,7 +224,7 @@ deadline_at :: fn(entries: u64[], index: usize) -> u64 {
     return cast[ptr[TimerEntry]](entries[index]).deadline
 }
 
-swap :: fn(entries: u64[], a: usize, b: usize) {
+swap :: fn(entries: mut u64[], a: usize, b: usize) {
     runtime.assert(a < entries.count && b < entries.count, "swap takes two entries")
     held :: entries[a]
     entries[a] = entries[b]

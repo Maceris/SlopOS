@@ -89,7 +89,7 @@ create_address_space :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> 
             return .Error(.OutOfMemory)
         }
     }
-    intrinsics.mem_zero(cast[rawptr](frames.virtual_of(&kernel.frames, root)), cast[usize](frames.FRAME_SIZE))
+    intrinsics.mem_zero(cast[mut rawptr](frames.virtual_of(&kernel.frames, root)), cast[usize](frames.FRAME_SIZE))
     arch.init_page_table(&space.table, root, tag, &kernel.page_table)
     match adopt(owner, object) {
         case Ok => {}
@@ -333,7 +333,7 @@ refill_user_tables :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], 
         }
         match frames.take_frame(cache, &kernel.frames) {
             case Ok(frame) => {
-                intrinsics.mem_zero(cast[rawptr](frames.virtual_of(&kernel.frames, frame)), cast[usize](frames.FRAME_SIZE))
+                intrinsics.mem_zero(cast[mut rawptr](frames.virtual_of(&kernel.frames, frame)), cast[usize](frames.FRAME_SIZE))
                 tables.frames[i] = frame
                 tables.count += 1
             }

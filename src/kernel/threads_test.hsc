@@ -176,13 +176,13 @@ handle_at :: fn[H](word: u64) -> H #no_context {
 }
 
 // count packets at address, for a port_wait.
-packets_at :: fn(address: u64, count: usize) -> slop_os.Packet[] #no_context {
-    return bit_cast[slop_os.Packet[]](usize.[count, cast[usize](address)])
+packets_at :: fn(address: u64, count: usize) -> mut slop_os.Packet[] #no_context {
+    return bit_cast[mut slop_os.Packet[]](usize.[count, cast[usize](address)])
 }
 
 // count bytes at address, as a slice for a call.
-bytes_at :: fn(address: u64, count: usize) -> u8[] #no_context {
-    return bit_cast[u8[]](usize.[count, cast[usize](address)])
+bytes_at :: fn(address: u64, count: usize) -> mut u8[] #no_context {
+    return bit_cast[mut u8[]](usize.[count, cast[usize](address)])
 }
 
 // The monotonic clock, in user mode.

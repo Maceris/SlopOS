@@ -59,7 +59,7 @@ Kernel :: struct {
     // How many have.
     cpus_off_boot_stacks : u32,
     // Each CPU's PerCpu, by index, as an address: 0 until it's allocated.
-    per_cpus : u64[],
+    per_cpus : mut u64[],
     // The TLB shootdown in progress, if any (shootdown.hsc).
     shootdown : Shootdown,
     // Kernel addresses for device registers and other mappings of the kernel's own (window.hsc).

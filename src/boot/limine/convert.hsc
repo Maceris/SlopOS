@@ -32,7 +32,7 @@ start_carve :: fn(physical: boot_info.PhysicalRange, virtual_base: u64) -> ptr[m
 }
 
 // Room for count Ts in carve, aligned for any of BootInfo's arrays.
-take :: fn[T](carve: ptr[mut Carve], count: usize) -> T[] {
+take :: fn[T](carve: ptr[mut Carve], count: usize) -> mut T[] {
     start :: carve.used
     carve.used = (start + cast[u64](count * size_of(T)) + ARRAY_ALIGNMENT - 1) & ~(ARRAY_ALIGNMENT - 1)
     return view_of(cast[ptr[mut T]](carve.virtual_base + start), count)
@@ -130,7 +130,7 @@ bootloader_names :: fn() -> (string, string) {
 }
 
 // "name version", in bytes.
-join_names :: fn(name, version: string, bytes: u8[]) -> string {
+join_names :: fn(name, version: string, bytes: mut u8[]) -> string {
     if name.count == 0 || bytes.count == 0 {
         return ""
     }
@@ -163,7 +163,7 @@ kernel_image :: fn(
     address: ptr[ExecutableAddressResponse],
     memory_map: boot_info.MemoryRegion[],
     elf: ptr[ElfHeader],
-    segments: boot_info.ImageSegment[],
+    segments: mut boot_info.ImageSegment[],
 ) -> boot_info.KernelImage {
     image : boot_info.KernelImage
     image.virtual_base = cast[boot_info.VirtualAddress](address.virtual_base)
@@ -201,7 +201,7 @@ module_files :: fn() -> ptr[File][] {
     return pointers(response.modules, response.module_count)
 }
 
-boot_modules :: fn(files: ptr[File][], hhdm_offset: u64, modules: boot_info.BootModule[]) -> boot_info.BootModule[] {
+boot_modules :: fn(files: ptr[File][], hhdm_offset: u64, modules: mut boot_info.BootModule[]) -> boot_info.BootModule[] {
     runtime.assert(files.count <= modules.count, "boot_modules needs room for every module")
     for file, i in files {
         modules[i] = .{
@@ -242,7 +242,7 @@ rgb_framebuffer_count :: fn() -> usize {
     return count
 }
 
-framebuffers :: fn(hhdm_offset: u64, framebuffers: boot_info.Framebuffer[]) -> boot_info.Framebuffer[] {
+framebuffers :: fn(hhdm_offset: u64, framebuffers: mut boot_info.Framebuffer[]) -> boot_info.Framebuffer[] {
     count : usize = 0
     for framebuffer in limine_framebuffers() {
         if framebuffer.memory_model != FRAMEBUFFER_RGB {

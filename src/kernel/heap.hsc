@@ -54,9 +54,9 @@ heap_function : runtime.AllocatorFn : fn(
     old_memory: rawptr,
     old_size: usize,
     location := #caller_location,
-) -> (u8[], runtime.AllocatorError?) {
+) -> (mut u8[], runtime.AllocatorError?) {
     kernel :: cast[ptr[mut Kernel]](allocator_data)
-    empty : u8[]
+    empty : mut u8[]
     if cast[u64](alignment) & (cast[u64](alignment) - 1) != 0 {
         return empty, runtime.AllocatorError.InvalidArgument
     }
@@ -67,7 +67,7 @@ heap_function : runtime.AllocatorFn : fn(
     if old_memory != null && size > 0
         && block_bytes(cast[u64](size), cast[u64](alignment)) == block_bytes(cast[u64](old_size), cast[u64](alignment)) {
         if size > old_size {
-            intrinsics.mem_zero(cast[rawptr](cast[u64](old_memory) + cast[u64](old_size)), size - old_size)
+            intrinsics.mem_zero(cast[mut rawptr](cast[u64](old_memory) + cast[u64](old_size)), size - old_size)
         }
         return view_of(cast[ptr[mut u8]](old_memory), size), null
     }
@@ -77,11 +77,11 @@ heap_function : runtime.AllocatorFn : fn(
             case Ok(address) => result = view_of(cast[ptr[mut u8]](address), size)
             case Error(error) => return empty, runtime.AllocatorError.OutOfMemory
         }
-        intrinsics.mem_zero(cast[rawptr](result.data), size)
+        intrinsics.mem_zero(cast[mut rawptr](result.data), size)
     }
     if old_memory != null {
         if size > 0 {
-            intrinsics.mem_copy(cast[rawptr](result.data), old_memory, if old_size < size { old_size } else { size })
+            intrinsics.mem_copy(cast[mut rawptr](result.data), old_memory, if old_size < size { old_size } else { size })
         }
         free_block(kernel, cast[u64](old_memory), block_bytes(cast[u64](old_size), cast[u64](alignment)))
     }

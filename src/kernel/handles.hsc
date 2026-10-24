@@ -221,7 +221,7 @@ charged_frame :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) -> u64
 zeroed_frame :: fn(kernel: ptr[mut Kernel]) -> u64? {
     frame :: frames.take_frame(&per_cpu().frame_cache, &kernel.frames) or_return null
     address :: frames.virtual_of(&kernel.frames, frame)
-    intrinsics.mem_zero(cast[rawptr](address), cast[usize](frames.FRAME_SIZE))
+    intrinsics.mem_zero(cast[mut rawptr](address), cast[usize](frames.FRAME_SIZE))
     return address
 }
 

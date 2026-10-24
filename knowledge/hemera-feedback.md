@@ -32,8 +32,6 @@ them is `compiler-plan.md`, Phase 7:
 | Issue | Severity | Where |
 |---|---|---|
 | Once (2026-10-16), building the kernel through the build package in `boot_tests.py` failed, and the output was lost. Likely found 2026-10-20: the compiler crashed (an access violation, no output) when indexing through a pointer to an alias another thread hadn't resolved yet, about one build in four of std/crypto's tests; fixed, the checker now waits for it. Another race found 2026-10-22, about one kernel build in thirty (see Resolved). Watching whether the kernel build fails again; `build/failed_kernel_build.log` keeps its output if so | unknown | `tools/boot_tests.py` |
-| An enum shorthand where an optional is expected (2026-10-22): `return .ObjectGone` from a function returning `PortError?` fails ("Optional[PortError] has no member ObjectGone"), and so does `.Failed(...)` for a `WaitOutcome?`; spelling the type out works. The shorthand could look through an optional to what it holds | friction | `src/kernel/ports.hsc` |
-| A function declared inside a function (2026-10-22): it checks, then fails to generate ("functions defined inside functions can't be generated yet", E5002), along with every use of it. Hoisting it to the package works. Found writing a test helper in `src/kernel/channels_test.hsc` | friction | `src/kernel/channels_test.hsc` (`channel_tag`) |
 
 ### Language and library design
 
@@ -42,18 +40,6 @@ them is `compiler-plan.md`, Phase 7:
 | Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`; `os.run_process` runs processes since 2026-10-19 (Windows and Linux). Still open: sharing parsed files between targets and building them in parallel, documented as planned in Hemera's `docs/compilation.md` (2026-10-19); `find_packages` is unimplemented and may be removed | `hemera-proposals/build-programs.md`; `decisions/0028` |
 | Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 resolved 2026-10-13 (see Resolved). The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
 | Cryptography in `std` (needed with networking and remote login) | Planned 2026-10-19, directions chosen with the Hemera author: SHA-256/512, BLAKE2b, BLAKE3, HMAC, HKDF, ChaCha20-Poly1305, AES-256-GCM (hardware from the start, through `vector[T, n]`, `v128` and per-function `#target_features`), X25519, Ed25519 and Argon2id, in one freestanding `std/crypto`; `#constant_time` checked by the compiler, with secrets marked on types (`#secret`). All six phases done (2026-10-19 to 20), plus Project Wycheproof's vectors and the machine code checked under Valgrind (`--valgrind-secrets`) | `hemera-proposals/cryptography.md`; `decisions/0042`, `0043`, `0019` |
-
-### Found writing the generated ABI (roadmap M5, stage 4d, 2026-10-23)
-
-- `(expr).field` doesn't parse: a member of a parenthesized expression, like `(x or_else y).limit`, needs a
-  temporary.
-- `Result[T, E].Error(e)` doesn't parse; `.Error(e)` works where the type is known.
-- An enum shorthand (`.Port`) isn't inferred as the argument to a generic function's non-generic parameter
-  (`object_of[E](process, handle, .Port, ...)`): it needs `slop_os.ObjectKind.Port`.
-- `#insert` can't name an enum member (`#insert name = value` in an enum body) or a struct member after a dot
-  (`x.#insert name`), so generated code reaches members by offset and enums can't be generated from tables.
-- Reflection loses a view parameter's `mut` (`FunctionInput` of `packets: mut Packet[]` reads `Packet[]`), so
-  `compiler.parameters` prints it without.
 
 ## 2. Design Notes
 
@@ -102,6 +88,32 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-23 — Read-only unless given `mut`, decided with the Hemera author and documented in Hemera's
+  `docs/types.md` (*Mutability*, *Array Views*). `mut` on `packets: mut Packet[]` meant nothing: a view's elements
+  could always be changed, as could a dynamic array parameter's, and through a view inside a read-only struct. Now
+  `T[]` only reads and `mut T[]` writes (reflected as `ArrayDimensions.is_mutable`); static and dynamic arrays
+  follow what holds them; an array becomes a `mut T[]` only where it can be changed, implicitly at a call;
+  `rawptr` only reads and `mut rawptr` writes; and `mut` that changes nothing (`n: mut int`) is an error.
+  Allocators return `mut u8[]`, `view_of` from a `ptr[mut T]` gives a `mut T[]`, and the memory intrinsics take
+  a `mut rawptr` destination. SlopOS needed `mut` on the views it writes: boot-info conversion, the memory map,
+  the frame allocator's states, the timer heap, the slab's batches, `Kernel.per_cpus`, and the tests' packet and
+  byte buffers.
+- 2026-10-23 — The Hemera gaps found writing the generated ABI, and two older frictions, fixed in the compiler
+  (`0047`) and documented in Hemera's docs, with tests (`expression_forms`, `inserted_member_names`):
+  - `(expr).field`, `(expr)[i]` and `(expr)^` parse: a parenthesized expression takes a chain like a name.
+  - `Result[T, E].Error(e)`: a variant named with the type's arguments.
+  - An enum shorthand (or `.{...}`) as a generic function's argument waits until the other arguments or the
+    result decide its type.
+  - Enum and union shorthand looks through an optional (`return .ObjectGone` for a `PortError?`), decided with
+    the Hemera author.
+  - A function declared inside a function is a declaration of its own, generated like any; one with several
+    names or generic parameters is refused with an error.
+  - `#insert` names members in a quote, as chosen with the Hemera author: `#insert name = value` and
+    `#insert name,` among an enum's members, `#insert name : T` among fields, and `value.#insert name` and
+    `.#insert name` to reach one. A list of `#code members { ... }` quotes (and fields, variants, patterns,
+    cases) puts each one's items in place, so an enum can be generated a member at a time from a table.
+  - Printing made `fields`, `variants`, `members`, `patterns` or `cases` code (`compiler.code_text`) printed
+    only the word; it prints the items now.
 - 2026-10-23 — M5 stage 4d (`decisions/0057`): `std/os/slop_os` generates its stubs, call numbers and the
   kernel's dispatch from `Syscalls`, a struct of typed function types (`syscall_table.hsc`), with typed
   handles, slices and `Result`s. Two compiler fixes on the way: in a quote, `#insert` of patterns, cases,

@@ -40,7 +40,7 @@ main :: fn() -> int {
     if error != null {
         return 1
     }
-    intrinsics.mem_zero(cast[rawptr](bytes.data), bytes.count)
+    intrinsics.mem_zero(cast[mut rawptr](bytes.data), bytes.count)
     memory := Memory.{direct_map_offset = cast[u64](bytes.data) - MEMORY_BASE, next_frame = 0}
 
     kernel : arch.PageTable

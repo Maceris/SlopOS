@@ -106,15 +106,14 @@ create_port :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> Result[pt
 }
 
 // A wake binding for key.
-// HEMERA(enum shorthand through an optional): `.ObjectGone` would do for these returns
 port_bind_wake :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64) -> slop_os.PortError? {
     concurrency.lock(&port.lock)
     defer concurrency.unlock(&port.lock)
     if is_dying(cast[u64](port)) {
-        return slop_os.PortError.ObjectGone
+        return .ObjectGone
     }
     if maps.map_has(&port.bindings, key) {
-        return slop_os.PortError.KeyInUse
+        return .KeyInUse
     }
     if new_binding(kernel, port, key, .Wake) == null {
         return binding_failure(port)
@@ -127,9 +126,9 @@ port_wake :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, bits: u6
     concurrency.lock(&port.lock)
     defer concurrency.unlock(&port.lock)
     if is_dying(cast[u64](port)) {
-        return slop_os.PortError.ObjectGone
+        return .ObjectGone
     }
-    binding :: binding_of(port, key, .Wake) or_return slop_os.PortError.NoSuchKey
+    binding :: binding_of(port, key, .Wake) or_return .NoSuchKey
     binding.data |= bits
     queue_binding(kernel, port, binding)
     return null
@@ -143,12 +142,12 @@ port_set_timer :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, dea
     concurrency.lock(&port.lock)
     defer concurrency.unlock(&port.lock)
     if is_dying(cast[u64](port)) {
-        return slop_os.PortError.ObjectGone
+        return .ObjectGone
     }
     binding := binding_of(port, key, .Timer) or_else cast[ptr[mut Binding]](0)
     if cast[u64](binding) == 0 {
         if maps.map_has(&port.bindings, key) {
-            return slop_os.PortError.KeyInUse
+            return .KeyInUse
         }
         binding = new_binding(kernel, port, key, .Timer) or_return binding_failure(port)
     }
@@ -164,7 +163,7 @@ port_set_timer :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, dea
     binding.timer.owner_generation = cast[u64](binding.generation)
     binding.timer.port = cast[u64](port)
     if !arm_timer(&binding.timer, ticks) {
-        return slop_os.PortError.OutOfMemory
+        return .OutOfMemory
     }
     return null
 }
@@ -174,9 +173,9 @@ port_unbind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64) -> slo
     concurrency.lock(&port.lock)
     defer concurrency.unlock(&port.lock)
     if is_dying(cast[u64](port)) {
-        return slop_os.PortError.ObjectGone
+        return .ObjectGone
     }
-    address :: maps.map_get(&port.bindings, key) or_return slop_os.PortError.NoSuchKey
+    address :: maps.map_get(&port.bindings, key) or_return .NoSuchKey
     _ = maps.map_remove(&port.bindings, key)
     free_binding(kernel, port, cast[ptr[mut Binding]](address))
     return null

@@ -72,7 +72,7 @@ FrameAllocator :: struct {
     lock : concurrency.SpinLock,
     lists : FreeList[ORDER_COUNT],
     // One byte per frame, for frames 0 to frame_count, in the direct map.
-    states : u8[],
+    states : mut u8[],
     frame_count : u64,
     // Where physical address 0 is in the direct map.
     direct_map_offset : u64,
@@ -112,7 +112,7 @@ make :: fn(memory_map: boot_info.MemoryRegion[], direct_map_offset: u64) -> Resu
     allocator.direct_map_offset = direct_map_offset
     allocator.frame_count = frame_count
     allocator.states = view_of(cast[ptr[mut u8]](direct_map_offset + state_base), cast[usize](frame_count))
-    intrinsics.mem_zero(cast[rawptr](direct_map_offset + state_base), cast[usize](frame_count))
+    intrinsics.mem_zero(cast[mut rawptr](direct_map_offset + state_base), cast[usize](frame_count))
     for region in memory_map {
         if region.kind != .Usable {
             continue
@@ -202,7 +202,7 @@ take_block :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[boot_
 // Like allocate, with the block's bytes zeroed.
 allocate_zeroed :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[boot_info.PhysicalAddress, FrameError] {
     address :: allocate(allocator, order)?
-    intrinsics.mem_zero(cast[rawptr](virtual_of(allocator, address)), cast[usize](FRAME_SIZE << order))
+    intrinsics.mem_zero(cast[mut rawptr](virtual_of(allocator, address)), cast[usize](FRAME_SIZE << order))
     return .Ok(address)
 }
 

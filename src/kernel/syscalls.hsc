@@ -270,7 +270,7 @@ sys_address_space_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBu
 }
 
 sys_clock_monotonic :: fn(thread: ptr[mut Thread]) -> Result[u64, slop_os.HandleError] {
-    return .Ok(cast[u64](kernel_monotonic(cast[rawptr](per_cpu().kernel))))
+    return .Ok(cast[u64](kernel_monotonic(cast[mut rawptr](per_cpu().kernel))))
 }
 
 // ---- Ports

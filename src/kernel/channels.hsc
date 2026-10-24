@@ -626,7 +626,7 @@ channel_write :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end: ptr[m
         handle_batch = if batch == slop_os.NO_BATCH { cast[u16](0) } else { cast[u16](batch) },
     }
     // Headers are 8-byte aligned in a ring a power of two in size, so one never wraps
-    intrinsics.mem_copy(cast[rawptr](ring + cast[u64](tail & mask)), cast[rawptr](&header), size_of(slop_os.MessageHeader))
+    intrinsics.mem_copy(cast[mut rawptr](ring + cast[u64](tail & mask)), cast[rawptr](&header), size_of(slop_os.MessageHeader))
     start :: (tail + 8) & mask
     first :: if size < ring_bytes - start { size } else { ring_bytes - start }
     if !copy_from_user(kernel, thread.space, payload, ring + cast[u64](start), cast[u64](first))
@@ -680,7 +680,7 @@ channel_read :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end: ptr[mu
         return .Failed(.Corrupt, 0)
     }
     ring :: ring_of(kernel, core, peer)
-    intrinsics.mem_copy(cast[rawptr](&header), cast[rawptr](ring + cast[u64](head & mask)), size_of(slop_os.MessageHeader))
+    intrinsics.mem_copy(cast[mut rawptr](&header), cast[rawptr](ring + cast[u64](head & mask)), size_of(slop_os.MessageHeader))
     size :: header.size
     if size > slop_os.channel_max_payload(ring_bytes) {
         return .Failed(.Corrupt, 0)
