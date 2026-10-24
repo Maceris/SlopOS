@@ -21,6 +21,9 @@ Process :: struct #align(16) {
     // Bindings watching for it to end (SIGNAL_TERMINATED), under watch_lock.
     watch_lock : concurrency.SpinLock,
     watchers : EndBinding[2],
+    // Set by process_exit, with its code; a process destroyed without it was killed.
+    exited : bool,
+    exit_code : u32,
 }
 
 /*
@@ -46,7 +49,8 @@ create_process :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> (made 
  * reaches the whole subtree.
  */
 destroy_process :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
-    raise_watchers(kernel, &process.watchers, &process.watch_lock, cast[u32](slop_os.SIGNAL_TERMINATED))
+    ended :: if process.exited { cast[u64](process.exit_code) } else { slop_os.EXIT_KILLED }
+    raise_watchers(kernel, &process.watchers, &process.watch_lock, cast[u32](slop_os.SIGNAL_TERMINATED), ended)
     forget_intercept(kernel, process)
     close_table(&process.table)
     loop {

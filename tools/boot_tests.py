@@ -15,10 +15,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BOOT = ROOT / "tools" / "boot.py"
+# SlopOS's programs, built once and carried as every boot's modules
+PROGRAMS = Path()
 
 # Name, the code expected, and boot.py's arguments
 TESTS = [
-    ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
+    ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed", "--expect-line=[boot] module hello.elf"]),
     ("boots and halts (UEFI)", 0, ["--uefi", "--expect-line=[info] boot memory reclaimed"]),
     ("reports a kernel fault", 1, ["--command-line=test_exit test_fault"]),
     ("reports a failed assertion", 3, ["--command-line=test_exit test_assert"]),
@@ -61,7 +63,7 @@ TESTS = [
         "--expect-line=[info] test_devices: destroying the process freed its IRQs, its device memory and its windows",
         "--", "-smp", "2"]),
     ("controls a process from a debugger in user mode", 0, ["--command-line=test_exit test_control",
-        "--expect-line=[info] test_control: a debugger skipped and answered a call, changed a result, fixed a fault, read and wrote memory, suspended and resumed a thread, and killed the process it watched",
+        "--expect-line=[info] test_control: a debugger skipped and answered a call, changed a result, fixed a fault, read and wrote memory, suspended and resumed a thread, and killed the process it watched; a process ended itself, and its code came with its end",
         "--expect-line=[info] test_control: destroying the debugger freed its intercept, and the target's threads",
         "--", "-smp", "2"]),
     ("resumes after an NMI", 0, ["--command-line=test_exit test_nmi", "--expect-line=[info] test_nmi: back from the NMI"]),
@@ -103,11 +105,25 @@ def build_kernel(output: Path, stack_check: str = "trap") -> bool:
     return False
 
 
+def build_programs(output: Path) -> bool:
+    """Builds SlopOS's programs through the build package, into the folder output."""
+    output.mkdir(parents=True, exist_ok=True)
+    command = ["hemera", f"--setting=targets=programs,programs_output={output.as_posix()}", str(ROOT / "src" / "build")]
+    if os.environ.get("HEMERA_INSTALL"):
+        command.insert(1, f"--install-path={os.environ['HEMERA_INSTALL']}")
+    return subprocess.run(command).returncode == 0
+
+
 def main() -> int:
+    global PROGRAMS
     with tempfile.TemporaryDirectory(prefix="slopos-boot-tests-") as temporary:
         kernel = Path(temporary) / "kernel.elf"
         if not build_kernel(kernel):
             print("FAILED: the kernel doesn't build")
+            return 1
+        PROGRAMS = Path(temporary) / "programs"
+        if not build_programs(PROGRAMS):
+            print("FAILED: the programs don't build")
             return 1
         morestack_kernel = Path(temporary) / "kernel_morestack.elf"
         if not build_kernel(morestack_kernel, "morestack"):
@@ -131,7 +147,7 @@ ADDRESS_TESTS = [
 
 def addresses(kernel: Path, arguments: list) -> list | None:
     """Boots kernel, and gives the lines that say where it is, or None if it didn't halt as usual."""
-    result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", "--timeout=60", "--expect=0", *arguments],
+    result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", f"--programs={PROGRAMS}", "--timeout=60", "--expect=0", *arguments],
                             capture_output=True, text=True)
     if result.returncode != 0:
         sys.stdout.write(result.stdout)
@@ -162,8 +178,8 @@ def run_tests(kernel: Path, tests: list) -> int:
     """Boots kernel for each test, and gives how many failed."""
     failed = 0
     for name, expected, arguments in tests:
-        result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", "--timeout=60", f"--expect={expected}",
-                                 *arguments], capture_output=True, text=True)
+        result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", f"--programs={PROGRAMS}", "--timeout=60",
+                                 f"--expect={expected}", *arguments], capture_output=True, text=True)
         passed = result.returncode == 0
         print(f"{'passed' if passed else 'FAILED'}: {name}")
         if not passed:

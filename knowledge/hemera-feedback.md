@@ -41,6 +41,12 @@ them is `compiler-plan.md`, Phase 7:
 | Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 resolved 2026-10-13 (see Resolved). The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
 | Cryptography in `std` (needed with networking and remote login) | Planned 2026-10-19, directions chosen with the Hemera author: SHA-256/512, BLAKE2b, BLAKE3, HMAC, HKDF, ChaCha20-Poly1305, AES-256-GCM (hardware from the start, through `vector[T, n]`, `v128` and per-function `#target_features`), X25519, Ed25519 and Argon2id, in one freestanding `std/crypto`; `#constant_time` checked by the compiler, with secrets marked on types (`#secret`). All six phases done (2026-10-19 to 20), plus Project Wycheproof's vectors and the machine code checked under Valgrind (`--valgrind-secrets`) | `hemera-proposals/cryptography.md`; `decisions/0042`, `0043`, `0019` |
 
+### Found building programs (roadmap M6, stage 6a, 2026-10-23)
+
+- Comparing two optionals (`a != b` with both `u64?`) checks, then fails to generate ("comparing
+  Optional[u64] values can't be generated yet", E5002); unwrapping them first works. Found in
+  `src/elf_loader/test`. Severity: nice.
+
 ## 2. Design Notes
 
 Context for the open items, and choices SlopOS relies on.
@@ -88,6 +94,14 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-23 — M6 stage 6a (`decisions/0059`): Hemera targets SlopOS. The compiler has `OSType::SlopOS`
+  (`--os=slopos`, `os = .SlopOS` in a build package), whose startup code is the entry, given the startup
+  block's address, ending the process with `main`'s result through `runtime.os_exit_process`, and linked as a
+  static PIE. `base/runtime/slop_os.hsc` is the runtime's SlopOS layer (memory, clock, exit), with the page
+  heap now shared with Linux (`page_heap.hsc`); `std/os/slop_os/startup.hsc` checks base's copy of the call
+  numbers and the startup block at compile time. Two compiler fixes on the way (`0047`): `#assert` evaluates
+  `cast` between integer types, the bitwise operators and shifts (documented in Hemera's
+  `docs/directives.md`); and the ABI generator's stubs for calls that never return take their parameters.
 - 2026-10-23 — Read-only unless given `mut`, decided with the Hemera author and documented in Hemera's
   `docs/types.md` (*Mutability*, *Array Views*). `mut` on `packets: mut Packet[]` meant nothing: a view's elements
   could always be changed, as could a dynamic array parameter's, and through a view inside a read-only struct. Now

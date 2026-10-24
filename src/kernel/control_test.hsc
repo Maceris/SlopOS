@@ -18,7 +18,9 @@ import frames from "frames"
  * - T1 writes where nothing is mapped: D maps memory there in T's space and lets it retry, which works;
  * - D reads what T1 got from T's memory; suspends T2, whose count then stands still and whose registers
  *   it can read, and resumes it, when it counts again and they can't be read;
- * - D kills T, and its port tells it T ended.
+ * - D kills T, and its port tells it T ended, killed;
+ * - a third process, E, ends itself with process_exit once D writes to its memory, at the start, and a port
+ *   of D's gets its code.
  * Then the kernel destroys D, and every intercept and thread is gone.
  */
 
@@ -31,6 +33,9 @@ CONTROL_SLOT_T1 :: 2
 CONTROL_SLOT_T2 :: 3
 CONTROL_SLOT_SPACE :: 4
 CONTROL_SLOT_ONE :: 5
+// Slot 7 is TEST_SLOT_BUDGET
+CONTROL_SLOT_EXITING :: 6
+CONTROL_SLOT_EXITING_SPACE :: 51
 CONTROL_SLOT_DONE :: 50
 // T's page's slots.
 TARGET_SLOT_GO :: 0
@@ -45,6 +50,8 @@ CONTROL_REGISTERS_OFFSET : u64 : 1280
 CONTROL_READ_OFFSET : u64 : 1536
 CONTROL_KEY : u64 : 21
 WATCH_KEY : u64 : 22
+EXIT_WATCH_KEY : u64 : 23
+EXIT_VALUE : u64 : 42
 SKIPPED_VALUE : u64 : 12345
 CHANGED_VALUE : u64 : 777
 FAULT_AT : u64 : 0x6000000
@@ -58,6 +65,15 @@ ControlTest :: struct {
     debugger : u64,
     target : u64,
     page : u64,
+}
+
+// E's only thread: once D says so, the process ends, with EXIT_VALUE.
+user_exiting #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #never_returns {
+    loop {
+        intrinsics.spin_hint()
+    }
+    while intrinsics.volatile_load_u64(&page^[TARGET_SLOT_GO]) == 0
+    slop_os.process_exit(cast[u32](EXIT_VALUE))
 }
 
 user_target #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #never_returns {
@@ -126,8 +142,15 @@ user_debugger #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) 
     intercept :: attached or_else handle_at[slop_os.Intercept](0)
     page^[10] = tag_of(slop_os.intercept_attach(target, port, CONTROL_KEY + 100, calls, points))
     page^[11] = tag_of(slop_os.port_bind(port, cast[slop_os.Handle](target), slop_os.SIGNAL_TERMINATED, WATCH_KEY, .Persistent))
-    // T1 goes, by a write to T's memory
+    // E ends itself once told to, watched on a port of its own, which is looked at last
     page^[CONTROL_SLOT_ONE] = 1
+    exit_port :: slop_os.port_create(budget) or_else handle_at[slop_os.Port](0)
+    exiting :: handle_at[slop_os.Process](page^[CONTROL_SLOT_EXITING])
+    exiting_space :: handle_at[slop_os.AddressSpace](page^[CONTROL_SLOT_EXITING_SPACE])
+    page^[36] = tag_of(slop_os.port_bind(exit_port, cast[slop_os.Handle](exiting), slop_os.SIGNAL_TERMINATED, EXIT_WATCH_KEY, .Once))
+    page^[37] = tag_of(slop_os.process_write_memory(exiting, exiting_space, TEST_COUNTERS + TARGET_SLOT_GO * 8,
+        bytes_at(base + CONTROL_SLOT_ONE * 8, 8)))
+    // T1 goes, by a write to T's memory
     page^[12] = tag_of(slop_os.process_write_memory(target, target_space, TEST_COUNTERS + TARGET_SLOT_GO * 8,
         bytes_at(base + CONTROL_SLOT_ONE * 8, 8)))
     // The first call, at its entry: answered, and skipped
@@ -192,8 +215,11 @@ user_debugger #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) 
     page^[34] = tag_of(slop_os.process_kill(target))
     ended :: slop_os.port_wait(port, one, slop_os.NO_DEADLINE) or_else 0
     packet :: cast[ptr[u64[4]]](base + CONTROL_PACKETS_OFFSET)
-    page^[35] = if ended == 1 && packet^[0] == WATCH_KEY && packet^[2] & cast[u64](cast[u32](slop_os.SIGNAL_TERMINATED)) != 0 { cast[u64](1) }
-        else { cast[u64](0) }
+    page^[35] = if ended == 1 && packet^[0] == WATCH_KEY && packet^[2] & cast[u64](cast[u32](slop_os.SIGNAL_TERMINATED)) != 0
+        && packet^[3] == slop_os.EXIT_KILLED { cast[u64](1) } else { cast[u64](0) }
+    // E's end, which says with what
+    exited :: slop_os.port_wait(exit_port, one, slop_os.NO_DEADLINE) or_else 0
+    page^[38] = if exited == 1 && packet^[0] == EXIT_WATCH_KEY && packet^[3] == EXIT_VALUE { cast[u64](1) } else { cast[u64](0) }
     intrinsics.volatile_store_u64(&page^[CONTROL_SLOT_DONE], 1)
     slop_os.thread_exit()
 }
@@ -247,7 +273,8 @@ test_control :: fn(kernel: ptr[mut Kernel]) {
     last :: kernel.code_base + kernel.code_size
     debugger, debugger_space, page :: control_process(kernel, first, last)
     target, target_space, target_page :: control_process(kernel, first, last)
-    if debugger == null || target == null || debugger_space == null || target_space == null {
+    exiting, exiting_space, exiting_page :: control_process(kernel, first, last)
+    if debugger == null || target == null || debugger_space == null || target_space == null || exiting == null || exiting_space == null {
         runtime.log_error("test_control: no processes")
         return void
     }
@@ -255,6 +282,8 @@ test_control :: fn(kernel: ptr[mut Kernel]) {
     t :: target or_else cast[ptr[mut Process]](0)
     d_space :: debugger_space or_else cast[ptr[mut AddressSpace]](0)
     t_space :: target_space or_else cast[ptr[mut AddressSpace]](0)
+    e :: exiting or_else cast[ptr[mut Process]](0)
+    e_space :: exiting_space or_else cast[ptr[mut AddressSpace]](0)
     test.debugger = cast[u64](d)
     test.target = cast[u64](t)
     test.page = page
@@ -272,6 +301,14 @@ test_control :: fn(kernel: ptr[mut Kernel]) {
         case Ok(handle) => slots^[CONTROL_SLOT_TARGET_SPACE] = cast[u64](cast[u32](handle))
         case Error(error) => handed = false
     }
+    match install(kernel, &d.table, cast[u64](e), e.header.generation, .Process, slop_os.RIGHTS_ALL, false) {
+        case Ok(handle) => slots^[CONTROL_SLOT_EXITING] = cast[u64](cast[u32](handle))
+        case Error(error) => handed = false
+    }
+    match install(kernel, &d.table, cast[u64](e_space), e_space.header.generation, .AddressSpace, slop_os.RIGHTS_ALL, false) {
+        case Ok(handle) => slots^[CONTROL_SLOT_EXITING_SPACE] = cast[u64](cast[u32](handle))
+        case Error(error) => handed = false
+    }
     if !handed {
         runtime.log_error("test_control: no handles for the debugger")
         return void
@@ -280,6 +317,7 @@ test_control :: fn(kernel: ptr[mut Kernel]) {
     slots^[CONTROL_SLOT_T1] = control_thread(kernel, t, t_space, first, cast[u64](user_target), TEST_STACKS + frames.FRAME_SIZE - 8)
     slots^[CONTROL_SLOT_T2] = control_thread(kernel, t, t_space, first, cast[u64](user_counter_thread), TEST_STACKS + 2 * frames.FRAME_SIZE - 8)
     if slots^[CONTROL_SLOT_T1] == 0 || slots^[CONTROL_SLOT_T2] == 0
+        || control_thread(kernel, e, e_space, first, cast[u64](user_exiting), TEST_STACKS + frames.FRAME_SIZE - 8) == 0
         || control_thread(kernel, d, d_space, first, cast[u64](user_debugger), TEST_STACKS + frames.FRAME_SIZE - 8) == 0 {
         runtime.log_error("test_control: no threads")
         return void
@@ -329,6 +367,7 @@ check_control_results :: fn(test: ptr[ControlTest]) {
         SKIPPED_VALUE, CHANGED_VALUE, FAULT_VALUE,
         0, 1, 0, 0, 1, control_tag(.NotStopped),
         0, 1,
+        0, 0, 1,
     ]
     for value, i in expected {
         if slots^[8 + i] != value {
@@ -336,7 +375,7 @@ check_control_results :: fn(test: ptr[ControlTest]) {
             return void
         }
     }
-    runtime.log_info("test_control: a debugger skipped and answered a call, changed a result, fixed a fault, read and wrote memory, suspended and resumed a thread, and killed the process it watched")
+    runtime.log_info("test_control: a debugger skipped and answered a call, changed a result, fixed a fault, read and wrote memory, suspended and resumed a thread, and killed the process it watched; a process ended itself, and its code came with its end")
 }
 
 // A control error's tag, as a call gives it.

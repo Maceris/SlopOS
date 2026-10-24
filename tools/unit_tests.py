@@ -4,6 +4,9 @@ package whose main returns 0 if everything worked, or the number of the first ch
 They're hosted programs, built for this machine by SlopOS's build package (src/build, targets=tests)
 with Hemera's compiler (hemera on the PATH, or HEMERA), so they test code that doesn't need ring 0,
 like the frame allocator over a buffer.
+
+SlopOS's programs are built first (targets=programs), and each test is given the folder they're in,
+for tests that read one, like the ELF loader's.
 """
 
 import os
@@ -23,13 +26,23 @@ def find_hemera() -> str:
     return found
 
 
+def build(hemera: str, settings: str) -> bool:
+    """Runs SlopOS's build package with settings, and whether it worked."""
+    command = [hemera, f"--setting={settings}", str(ROOT / "src" / "build")]
+    if os.environ.get("HEMERA_INSTALL"):
+        command.insert(1, f"--install-path={os.environ['HEMERA_INSTALL']}")
+    return subprocess.run(command).returncode == 0
+
+
 def main() -> int:
     hemera = find_hemera()
     with tempfile.TemporaryDirectory(prefix="slopos-tests-") as temporary:
-        command = [hemera, f"--setting=targets=tests,tests_output={Path(temporary).as_posix()}", str(ROOT / "src" / "build")]
-        if os.environ.get("HEMERA_INSTALL"):
-            command.insert(1, f"--install-path={os.environ['HEMERA_INSTALL']}")
-        if subprocess.run(command).returncode != 0:
+        programs = Path(temporary) / "programs"
+        programs.mkdir()
+        if not build(hemera, f"targets=programs,programs_output={programs.as_posix()}"):
+            print("FAILED: the programs don't build")
+            return 1
+        if not build(hemera, f"targets=tests,tests_output={Path(temporary).as_posix()}"):
             print("FAILED: the tests don't build")
             return 1
         # The build package names each test program after the package it tests, <package>_test
@@ -38,7 +51,7 @@ def main() -> int:
         failed = 0
         for test in tests:
             name = test.name.removesuffix(suffix)
-            code = subprocess.run([str(test)]).returncode
+            code = subprocess.run([str(test), str(programs)]).returncode
             if code == 0:
                 print(f"passed: {name}")
             else:

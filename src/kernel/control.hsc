@@ -156,7 +156,8 @@ watch_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], object: u64, watc
 }
 
 // Raise signals on the bindings watching an object. Takes its lock (lock) itself.
-raise_watchers :: fn(kernel: ptr[mut Kernel], watchers: ptr[mut EndBinding[2]], lock: ptr[mut concurrency.SpinLock], signals: u32) {
+raise_watchers :: fn(kernel: ptr[mut Kernel], watchers: ptr[mut EndBinding[2]], lock: ptr[mut concurrency.SpinLock], signals: u32,
+    detail: u64) {
     concurrency.lock(lock)
     defer concurrency.unlock(lock)
     for i in 0..<2 {
@@ -167,6 +168,7 @@ raise_watchers :: fn(kernel: ptr[mut Kernel], watchers: ptr[mut EndBinding[2]], 
             concurrency.lock(&port.lock)
             // A binding the port dropped is no longer this one, whatever its slot holds now
             if binding.generation == slot.generation && binding.port == cast[u64](port) && !is_dying(cast[u64](port)) {
+                binding.detail = detail
                 signal_binding(kernel, port, binding, signals)
             }
             concurrency.unlock(&port.lock)

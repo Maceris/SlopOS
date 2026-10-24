@@ -51,6 +51,8 @@ Binding :: struct #align(16) {
     port : u64,
     // Wake bits or signals raised since its packet was taken; a timer's deadline, in nanoseconds.
     data : u64,
+    // Its packet's second word: for a process's end, how it ended (slop_os.EXIT_KILLED or its code).
+    detail : u64,
     // A signal binding's: the object and its generation, the signals it sees, and whether it's armed,
     // and disarmed once its packet is queued (BindMode.Once).
     object : u64,
@@ -304,7 +306,7 @@ take_packets :: fn(port: ptr[mut Port], packets: ptr[mut slop_os.Packet[slop_os.
                 case _ => slop_os.PacketKind.User
             },
             reserved = 0,
-            data = u64.[binding.data, 0],
+            data = u64.[binding.data, binding.detail],
         }
         if binding.kind != .Timer {
             binding.data = 0

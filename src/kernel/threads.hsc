@@ -165,7 +165,7 @@ destroy_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     leave_space(thread)
     forget_stop(thread)
     unlink_thread(kernel, thread)
-    raise_watchers(kernel, &thread.watchers, &thread.control, cast[u32](slop_os.SIGNAL_TERMINATED))
+    raise_watchers(kernel, &thread.watchers, &thread.control, cast[u32](slop_os.SIGNAL_TERMINATED), 0)
     per_cpus :: kernel.per_cpus
     // Its CPU may change until its run queue's lock is held and it's still that CPU
     loop {

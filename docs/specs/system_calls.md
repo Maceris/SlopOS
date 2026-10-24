@@ -105,6 +105,7 @@ all but I/O-port ranges and IOMMU domains exist.
 | 42 | `intercept_next` | intercept, stop (a pointer) | nothing: the next stop not yet reported, a `StopInfo`, written at stop |
 | 43 | `intercept_resume` | intercept, thread ID, action | nothing: a thread the intercept stopped goes on: `Continue`, `Skip` (at an entry only) or `Kill` |
 | 44 | `process_kill` | process | nothing: the process is destroyed, with its subtree. Needs `RIGHT_PROCESS_KILL` |
+| 45 | `process_exit` | code (u32) | never returns: the calling process is destroyed, with its subtree, and its end gives code (`0059`) |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the
@@ -190,7 +191,9 @@ with `Continue`. Without an intercept asking for faults, a faulting thread is de
 rflags. Writing them refuses an instruction or stack pointer outside user addresses, and changes only
 rflags' status flags and DF.
 
-**Ends**: a process or a thread raises `SIGNAL_TERMINATED` when it's destroyed, which stays raised.
+**Ends**: a process or a thread raises `SIGNAL_TERMINATED` when it's destroyed, which stays raised. A
+process's `Signal` packet for it says how it ended in `data[1]`: the code it gave `process_exit`, or
+`EXIT_KILLED` (`1 << 32`, which no code can be) when anything else destroyed it.
 
 ## Ports
 
@@ -207,7 +210,7 @@ waiting on it, with `ObjectGone`.
 | `key: u64` | The binding's key |
 | `kind: PacketKind` (u32) | `Signal` (1), `Timer` (2), `User` (3), `Irq` (4), `Stop` (5) |
 | `reserved: u32` | |
-| `data: u64[2]` | `Signal`: the signals raised since it was last taken; `Timer`: the deadline it was set for; `User`: the bits raised since it was last taken; `Irq`: the interrupts since it was last taken; `Stop`: the stops since it was last taken |
+| `data: u64[2]` | `Signal`: the signals raised since it was last taken, and for a process's `SIGNAL_TERMINATED`, how it ended; `Timer`: the deadline it was set for; `User`: the bits raised since it was last taken; `Irq`: the interrupts since it was last taken; `Stop`: the stops since it was last taken |
 
 ## Channels
 

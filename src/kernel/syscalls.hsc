@@ -786,6 +786,14 @@ sys_intercept_resume :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept
     return control_done(intercept_resume(per_cpu().kernel, found, id, action))
 }
 
+// The caller's process ends, with its subtree, the calling thread with it: code goes to whoever watches it end.
+sys_process_exit :: fn(thread: ptr[mut Thread], code: u32) {
+    process :: process_of(thread)
+    process.exited = true
+    process.exit_code = code
+    _ = destroy_object(per_cpu().kernel, cast[u64](process))
+}
+
 sys_process_kill :: fn(thread: ptr[mut Thread], process: slop_os.Process) -> Result[void, slop_os.ControlError] {
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_KILL)?
     _ = destroy_object(per_cpu().kernel, cast[u64](target))

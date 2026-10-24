@@ -39,4 +39,5 @@ docs/
 | `specs/boot_info.md` | The boot handoff from L0 to the kernel core, and its Limine implementation. Implemented |
 | `specs/arch_interface.md` | The boundary between the arch layer and the kernel core, in both directions. Implemented on x86-64 |
 | `specs/system_calls.md` | How user space calls the kernel: registers, handles, rights, the calls and their errors. Implemented, growing |
+| `specs/programs.md` | What a program is and how it starts: executables, loading them, the startup block, the runtime. Implemented in part (M6) |
 | `guides/building.md` | Building, booting in QEMU, the kernel's command line, testing and debugging |

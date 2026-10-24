@@ -15,6 +15,9 @@ The kernel's command line is --command-line, test_exit by default, which makes S
 stopped to the debug exit device (src/kernel/stop.hsc, StopReason). QEMU's CPU is --cpu, max by
 default, since SlopOS needs x86-64-v3.
 
+SlopOS's programs, each an ELF in --programs (built with the kernel when there's no --kernel), go in the
+ISO as Limine's modules, in the order of their names.
+
 The kernel's ELF goes in a Limine ISO, which QEMU boots (BIOS by default, --uefi for UEFI) with the
 serial port captured. Limine randomizes the kernel's base and its direct map (KASLR), unless --no-kaslr. A kernel ends the run by writing a code to QEMU's isa-debug-exit device at
 port 0xf4; QEMU then exits with (code << 1) | 1, which this script turns back into the code. It
@@ -59,7 +62,7 @@ LIMINE_CONFIG = """timeout: 0
     randomise_hhdm_base: {kaslr}
     path: boot():/boot/kernel
     cmdline: {command_line}
-"""
+{modules}"""
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD_PACKAGE = ROOT / "src" / "build"
@@ -124,13 +127,25 @@ def build_slopos_kernel(output: Path) -> None:
     run_hemera([f"--setting=targets=kernel,kernel_output={output}", str(BUILD_PACKAGE)], "SlopOS's kernel")
 
 
-def make_image(kernel: Path, limine: Path, xorriso: Path, folder: Path, command_line: str, kaslr: bool) -> Path:
-    """An ISO that boots kernel through Limine, from BIOS or UEFI."""
+def build_slopos_programs(output: Path) -> None:
+    """Builds SlopOS's programs through its build package, into the folder output."""
+    output.mkdir(parents=True, exist_ok=True)
+    run_hemera([f"--setting=targets=programs,programs_output={output.as_posix()}", str(BUILD_PACKAGE)], "SlopOS's programs")
+
+
+def make_image(kernel: Path, programs: list[Path], limine: Path, xorriso: Path, folder: Path, command_line: str, kaslr: bool) -> Path:
+    """An ISO that boots kernel through Limine, from BIOS or UEFI, with programs as its modules."""
     root = folder / "iso_root"
     (root / "boot" / "limine").mkdir(parents=True)
+    (root / "boot" / "modules").mkdir(parents=True)
     (root / "EFI" / "BOOT").mkdir(parents=True)
     shutil.copy(kernel, root / "boot" / "kernel")
-    (root / "boot" / "limine" / "limine.conf").write_text(LIMINE_CONFIG.format(command_line=command_line, kaslr="yes" if kaslr else "no"), newline="\n")
+    modules = ""
+    for program in programs:
+        shutil.copy(program, root / "boot" / "modules" / program.name)
+        modules += f"    module_path: boot():/boot/modules/{program.name}\n"
+    config = LIMINE_CONFIG.format(command_line=command_line, kaslr="yes" if kaslr else "no", modules=modules)
+    (root / "boot" / "limine" / "limine.conf").write_text(config, newline="\n")
     for name in ["limine-bios.sys", "limine-bios-cd.bin", "limine-uefi-cd.bin"]:
         shutil.copy(limine / name, root / "boot" / "limine" / name)
     shutil.copy(limine / "BOOTX64.EFI", root / "EFI" / "BOOT" / "BOOTX64.EFI")
@@ -169,6 +184,7 @@ def main() -> int:
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--kernel", type=Path, help="the kernel's ELF")
     source.add_argument("--package", type=Path, help="a kernel package to build first (default: SlopOS's, through src/build)")
+    parser.add_argument("--programs", type=Path, help="a folder of programs to carry as modules (default: SlopOS's, built, without --kernel)")
     parser.add_argument("--linker-script", type=Path, help="the linker script, with --package")
     parser.add_argument("--command-line", default="test_exit", help="the kernel's command line")
     parser.add_argument("--cpu", default=DEFAULT_CPU, help="QEMU's CPU model")
@@ -196,9 +212,15 @@ def main() -> int:
                 parser.error("--package needs --linker-script")
             else:
                 build_kernel(arguments.package.resolve(), arguments.linker_script.resolve(), kernel)
+        programs_folder = arguments.programs
+        if programs_folder is None and arguments.kernel is None and arguments.package is None:
+            programs_folder = folder / "programs"
+            build_slopos_programs(programs_folder)
+        programs = sorted(programs_folder.glob("*.elf")) if programs_folder is not None else []
         # The kernel's own regions follow its command line; the image and the direct map, Limine's configuration
         command_line = arguments.command_line + (" no_kaslr" if arguments.no_kaslr else "")
-        image = make_image(kernel.resolve(), limine, xorriso, folder, command_line, not arguments.no_kaslr)
+        image = make_image(kernel.resolve(), [program.resolve() for program in programs], limine, xorriso, folder, command_line,
+                           not arguments.no_kaslr)
         serial = folder / "serial.txt"
         code = run(image, qemu, serial, arguments.timeout, arguments.uefi, arguments.cpu, arguments.qemu_arguments)
         output = serial.read_text(errors="replace") if serial.exists() else ""
