@@ -97,6 +97,18 @@ sets up the carrier register (`decisions/0026`).
 Stresses: `distinct` handle types, compile-time code generation from `TypeInfo`/`FunctionInfo`,
 relative pointers in shared memory, `Result` across the kernel boundary.
 
+## A — AArch64 (L0, L1, Hemera)
+
+The second architecture (`decisions/0022`, `0061`), started 2026-10-23 with M6 paused after 6b. Baseline
+ARMv8.2-A with LSE atomics; QEMU `virt`, edk2 and Limine. In five stages: A1 Hemera on AArch64, hosted (code
+generation, the carrier register, the prologue stack check, fibers, Linux in `base`, tested through user-mode
+QEMU); A2 Hemera for an AArch64 kernel (entry functions, system-register intrinsics); A3 SlopOS boots (MMU,
+exception vectors, PL011); A4 interrupts, time and SMP (GICv3, the generic timer); A5 threads and user mode, with
+every boot test on both architectures. M6 then resumes for both.
+
+Stresses: the arch interface's x86 assumptions, Hemera's backend beyond x86, compile-time arguments for system
+registers, `TARGET_ARCH` branching.
+
 ## M6 — User Space (L2, L4, L5)
 
 - ELF loader with relocations (PIE) and ASLR, shared by the kernel, the root task and the process
@@ -141,8 +153,7 @@ Stresses: volatile MMIO, fences (Hemera's `base/intrinsics/atomics.hsc`), protoc
 - Networking: virtio-net + a TCP/IP stack.
 - Display: virtio-gpu (2D), compositor, trusted input path.
 - A Hemera UEFI bootloader (replacing Limine).
-- A second architecture (AArch64), proving the layering. Proposed to start right after M3
-  instead (`decisions/0022`).
+- RISC-V, the third architecture (`decisions/0022`), after LLVM is rebuilt with its backend.
 
 ---
 
@@ -157,4 +168,5 @@ Stresses: volatile MMIO, fences (Hemera's `base/intrinsics/atomics.hsc`), protoc
 | M4 | done 2026-10-22 (`decisions/0050`): threads in user mode (`src/kernel/threads.hsc`), with eager XSAVE vector state (`src/arch/x86_64/vector.hsc`) and user address spaces with PCIDs (`src/kernel/spaces.hsc`); per-CPU run queues with stealing, CPU budgets with sporadic-server refills and Demote, ticks on every CPU, idle and preemption (`src/kernel/scheduler.hsc`, `src/kernel/budgets.hsc`). The arch interface is complete on x86-64. Boot tests: 4 threads on 2 CPUs, each preempted and resumed with its own vector state; a budgeted thread against a background one. Blocking, exiting and creating threads by system call come with M5 |
 | M5 | done 2026-10-23, in four stages. Stage 1 done (`decisions/0051`): the system call path, kernel objects in type-stable pools, per-process handle tables with generations and rights, quiescent-state reclamation, Process nodes and the ownership tree, threads that exit and are destroyed, address spaces destroyed with their threads; seven calls in the ABI package (`docs/specs/system_calls.md`). Stage 2 done (`decisions/0052`): ports with wake and timer bindings, per-CPU timer heaps with precise deadlines, threads that block on ports and finish their waits when they next run, the monotonic clock as a call. Stage 3 done (`decisions/0053`): channels with shared rings mapped by both ends, doorbells as signals on port bindings (Once and Persistent), handles moved in batches, kernel-copied reads and writes for recorded processes, notify-and-wait with a handoff to the caller's CPU. Stage 4 in four parts: 4a done (`decisions/0054`): memory budgets that every object is charged to, split and closed into their parents, with charges moving when owning handles are taken; anonymous memory objects charged in full and filled lazily through page faults, mapped and shared between spaces, a bad fault destroying the thread. 4b done (`decisions/0055`): the platform capability, which registers interrupt controllers and makes IRQs and device memory; IRQs delivered as port packets and acknowledged; windows onto memory objects, destroyed with them. 4c done (`decisions/0056`): process control over a subtree with the five rights, threads held by suspends and stops and parked where their state is their registers, intercepts that stop threads at calls' entries and exits and at faults (the exception port), with Continue, Skip and Kill, register and memory access, kill, and termination signals. 4d done (`decisions/0057`): the syscall table as a struct of typed function types in the ABI package, from which `#insert` generates the stubs, the call numbers and the kernel's dispatch into typed handlers; the kernel's per-kind code generated from a table of object kinds; the boot tests call through the stubs |
 | M6 | planned 2026-10-23 (`decisions/0058`), in four stages. 6a done (`decisions/0059`): programs build as position-independent executables for `os = .SlopOS` (`src/apps`, `src/services`, `src/drivers`), with Hemera's `base` runtime for SlopOS (a page heap on memory objects, the clock, `process_exit`), the startup block in the ABI package, the shared ELF loader (`src/elf_loader`, unit-tested on the built programs), and the programs carried as boot modules (`docs/specs/programs.md`). 6b done (`decisions/0060`): the kernel loads the root task from the first boot module with the shared loader, at random places, with a labeled grant table (the platform, a debug log, each other module as a read-only memory object over its frames), the boot's random seed and its stack in the startup block; the root task's end stops the kernel; programs write lines through the debug log (`debug_log`) |
+| A (AArch64) | planned 2026-10-23 (`decisions/0061`), in five stages; M6 paused after 6b meanwhile |
 | M7–M9 | not started |
