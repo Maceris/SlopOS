@@ -14,7 +14,8 @@ import reflection from "std"
 check_program :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
     tiers_hold := check_tiers(target, program)
     arch_holds := check_arch_interface(program)
-    return tiers_hold && arch_holds
+    protocols_hold := check_protocols(program)
+    return tiers_hold && arch_holds && protocols_hold
 }
 
 // std tiers
@@ -121,6 +122,29 @@ check_arch_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     for &candidate in program.packages {
         if imported_as_arch(program, candidate.path) {
             holds = implements(candidate, interface) && holds
+        }
+    }
+    return holds
+}
+
+/*
+ * A package that generates protocol code (os.protocol_code, which declares validate_request) says what protocol it
+ * is, a PROTOCOL constant, and which of its requests can be sent again after a reconnect, an is_idempotent function
+ * (decisions/0040, 0071). What its messages hold, and its Response's Unsupported, the generator checks itself.
+ */
+check_protocols :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
+    holds := true
+    for &candidate in program.packages {
+        if compiler.find_function(candidate, "validate_request") is_none {
+            continue
+        }
+        if compiler.find_constant(candidate, "PROTOCOL") is_none {
+            compiler.report_error(candidate.location, "% is a protocol, so it declares PROTOCOL, a slop_os.Protocol (decisions/0040)", candidate.name)
+            holds = false
+        }
+        if compiler.find_function(candidate, "is_idempotent") is_none {
+            compiler.report_error(candidate.location, "% is a protocol, so it declares is_idempotent(request) (decisions/0040)", candidate.name)
+            holds = false
         }
     }
     return holds

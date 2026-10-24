@@ -21,8 +21,10 @@ import text_buffer from "std"
 import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
 import process_builder from "../../process_builder"
-import protocols from "../../protocols"
+import entropy from "../../protocols/entropy"
+import supervision from "../../protocols/supervision"
 import random_stream from "../../random_stream"
+import service_kit from "../../service_kit"
 import system_config from "../../system_config"
 import supervisor from "../supervisor"
 import test_kit from "../../test_kit"
@@ -36,7 +38,7 @@ SUPERVISOR_KEY : u64 : 1000
 SupervisorGrants :: struct {
     log : slop_os.DebugLog?,
     manager : os.Channel[process_manager.ProcessManager],
-    root : os.Channel[protocols.Supervision],
+    root : os.Channel[supervision.Supervision],
     hello_module : slop_os.Memory,
 }
 
@@ -87,28 +89,26 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     root.stream = random_stream.make(block.seed)
 
     // The listeners the root task connects services through, its own connection to the manager among them
-    entropy_pair :: slop_os.channel_create(block.budget, 0) or_return 5
+    entropy_pair :: os.channel_for[entropy.Entropy](block.budget, 0) or_return 5
     root.entropy = entropy_pair.b
     root.entropy_port = os.port_for(block.budget, root.entropy) or_return 5
-    manager_pair :: slop_os.channel_create(block.budget, process_manager.RING_BYTES) or_return 5
+    manager_pair :: os.channel_for[process_manager.ProcessManager](block.budget, process_manager.RING_BYTES) or_return 5
     root.manager = manager_pair.b
     root.manager_port = os.port_for(block.budget, root.manager) or_return 5
-    supervision_pair :: slop_os.channel_create(block.budget, 0) or_return 5
+    supervision_pair :: os.channel_for[supervision.Supervision](block.budget, 0) or_return 5
     root.supervision = supervision_pair.a
 
-    entropy_tag :: os.protocol_tag[protocols.Entropy]()
-    manager_tag :: os.protocol_tag[process_manager.ProcessManager]()
     // The entropy service, and the process manager, with a connection of its own to it
     entropy_grants :: process_builder.Grant.[
         process_builder.grant("log", cast[slop_os.Handle](duplicate_log(&root) or_return 6)),
-        process_builder.grant("clients", cast[slop_os.Handle](entropy_pair.a), entropy_tag),
+        process_builder.grant("clients", cast[slop_os.Handle](entropy_pair.a)),
     ]
     start_itself(&root, "entropy", entropy_grants) or_return 7
-    manager_entropy :: protocols.connect(root.entropy, root.entropy_port, block.budget, 0) or_return 6
+    manager_entropy :: entropy.connect(root.entropy, root.entropy_port, block.budget) or_return 6
     manager_grants :: process_builder.Grant.[
         process_builder.grant("log", cast[slop_os.Handle](duplicate_log(&root) or_return 6)),
-        process_builder.grant("entropy", cast[slop_os.Handle](manager_entropy), entropy_tag),
-        process_builder.grant("clients", cast[slop_os.Handle](manager_pair.a), manager_tag),
+        process_builder.grant("entropy", cast[slop_os.Handle](manager_entropy.end)),
+        process_builder.grant("clients", cast[slop_os.Handle](manager_pair.a)),
     ]
     start_itself(&root, "process_manager", manager_grants) or_return 7
 
@@ -125,9 +125,8 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     module_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     grants := SupervisorGrants.{
         log = duplicate_log(&root),
-        manager = os.Channel[process_manager.ProcessManager].{
-            end = protocols.connect(root.manager, root.manager_port, block.budget, process_manager.RING_BYTES) or_return 9},
-        root = os.Channel[protocols.Supervision].{end = supervision_pair.b},
+        manager = process_manager.connect(root.manager, root.manager_port, block.budget) or_return 9,
+        root = os.Channel[supervision.Supervision].{end = supervision_pair.b},
         hello_module = cast[slop_os.Memory](slop_os.handle_duplicate(hello_module, module_rights) or_return 9),
     }
     manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
@@ -159,46 +158,52 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     supervisor_signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     _ = slop_os.port_bind(port, cast[slop_os.Handle](root.supervision), supervisor_signals, SUPERVISOR_KEY, .Persistent)
     reported : usize = 0
+    into := os.Incoming.{}
     loop {
         loop {
             if cast[slop_os.Handle](root.supervision) == slop_os.NO_HANDLE {
                 break
             }
-            report := protocols.SupervisorReport.{}
-            handles : slop_os.Handle[1]
-            match os.try_receive(root.supervision, os.mut_bytes_of(&report), handles) {
-                case Ok(received) => {}
-                case Error(error) => {
+            match supervision.receive_request(root.supervision, port, &into, false) {
+                case Received => {}
+                case Empty => break
+                case Failed(error) => {
                     // Gone, which it stays: its end is closed, so its signal doesn't wake the port again
-                    if error != .Empty {
-                        log_line.write(root.log, "root task: the supervisor's channel is gone (%)", error)
-                        _ = slop_os.handle_close(cast[slop_os.Handle](root.supervision))
-                        root.supervision = cast[slop_os.Channel](slop_os.NO_HANDLE)
-                    }
+                    log_line.write(root.log, "root task: the supervisor's channel is gone (%)", error)
+                    _ = slop_os.handle_close(cast[slop_os.Handle](root.supervision))
+                    root.supervision = cast[slop_os.Channel](slop_os.NO_HANDLE)
                     break
                 }
+                case _ => continue
             }
-            name :: protocols.text_of_label(&report.name)
-            if report.tag == protocols.SUPERVISOR_STARTED {
-                log_line.write(root.log, "root task: the supervisor started %", name)
-                reported += 1
-                if test_services && reported == supervised {
-                    return 0
+            match os.message_of[supervision.Request](&into)^ {
+                case Started(report) => {
+                    named := report
+                    name :: service_kit.text_of_label(&named.name)
+                    log_line.write(root.log, "root task: the supervisor started %", name)
+                    reported += 1
+                    if test_services && reported == supervised {
+                        return 0
+                    }
+                    if test_outlive_manager && name == "hello" {
+                        kill(&root, "process_manager")
+                    }
                 }
-                if test_outlive_manager && name == "hello" {
-                    kill(&root, "process_manager")
+                case Ended(report) => {
+                    named := report
+                    name :: service_kit.text_of_label(&named.name)
+                    log_line.write(root.log, "root task: the supervisor's % ended with %", name, report.code)
+                    if test_outlive_manager && name == "hello" {
+                        return if report.code == 0 { 0 } else { 12 }
+                    }
                 }
-            }
-            else if report.tag == protocols.SUPERVISOR_ENDED {
-                log_line.write(root.log, "root task: the supervisor's % ended with %", name, report.code)
-                if test_outlive_manager && name == "hello" {
-                    return if report.code == 0 { 0 } else { 12 }
-                }
-            }
-            else {
-                log_line.write(root.log, "root task: the supervisor's % didn't start (%)", name, report.code)
-                if test_services || test_outlive_manager {
-                    return 13
+                case Failed(report) => {
+                    named := report
+                    name :: service_kit.text_of_label(&named.name)
+                    log_line.write(root.log, "root task: the supervisor's % didn't start (%)", name, report.code)
+                    if test_services || test_outlive_manager {
+                        return 13
+                    }
                 }
             }
         }
@@ -283,8 +288,8 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform) ->
         case Ok(copy) => grants.program = cast[slop_os.Memory](copy)
         case Error(error) => {}
     }
-    match protocols.connect(root.manager, root.manager_port, block.budget, process_manager.RING_BYTES) {
-        case Some(end) => grants.manager = os.Channel[process_manager.ProcessManager].{end = end}
+    match process_manager.connect(root.manager, root.manager_port, block.budget) {
+        case Some(connection) => grants.manager = connection
         case None => {}
     }
     // Only the devices test is given the hardware

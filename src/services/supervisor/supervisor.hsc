@@ -10,7 +10,7 @@ import os from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
-import protocols from "../../protocols"
+import supervision from "../../protocols/supervision"
 import system_config from "../../system_config"
 import hello from "../../apps/hello"
 
@@ -29,7 +29,7 @@ Supervisor :: struct {
     root_port : slop_os.Port,
 }
 
-main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager], root: os.Channel[protocols.Supervision],
+main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager], root: os.Channel[supervision.Supervision],
     hello_module: slop_os.Memory) -> int {
     block :: slop_os.startup_block()
     supervisor := Supervisor.{block = block, manager = manager, root = root.end}
@@ -44,8 +44,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         case Some(copy) => grants.log = copy
         case None => {}
     }
-    match protocols.connect(manager.end, supervisor.manager_port, block.budget, process_manager.RING_BYTES) {
-        case Some(end) => grants.manager = os.Channel[process_manager.ProcessManager].{end = end}
+    match process_manager.connect(manager.end, supervisor.manager_port, block.budget) {
+        case Some(connection) => grants.manager = connection
         case None => {}
     }
     started := false
@@ -53,11 +53,11 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         case Ok(launched) => {
             _ = slop_os.port_bind(port, cast[slop_os.Handle](launched.process), slop_os.SIGNAL_TERMINATED, 0, .Once)
             started = true
-            tell_root(&supervisor, protocols.SUPERVISOR_STARTED, 0, service.name)
+            tell_root(&supervisor, .Started(report_of(service.name, 0)))
         }
         case Error(error) => {
             log_line.write(supervisor.log, "supervisor: % didn't start: %", service.name, error)
-            tell_root(&supervisor, protocols.SUPERVISOR_FAILED, cast[u64](error) + 1, service.name)
+            tell_root(&supervisor, .Failed(report_of(service.name, cast[u64](error) + 1)))
         }
     }
     log_line.write(supervisor.log, "supervisor: started % services", if started { 1 } else { 0 })
@@ -70,7 +70,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             }
             if packet.kind == .Signal && packet.key == 0 {
                 log_line.write(supervisor.log, "supervisor: % ended", service.name)
-                tell_root(&supervisor, protocols.SUPERVISOR_ENDED, packet.data[1], service.name)
+                tell_root(&supervisor, .Ended(report_of(service.name, packet.data[1])))
             }
         }
     }
@@ -85,9 +85,14 @@ duplicate_log :: fn(supervisor: ptr[mut Supervisor]) -> slop_os.DebugLog? {
     }
 }
 
-// A SupervisorReport to the root task.
-tell_root :: fn(supervisor: ptr[mut Supervisor], tag: u32, code: u64, name: string) {
-    report := protocols.SupervisorReport.{tag = tag, code = code, name = os.label_from(name)}
-    none : slop_os.Handle[1]
-    _ = os.send(supervisor.root, supervisor.root_port, os.bytes_of(&report), view_of(&none[0], 0))
+// A report to the root task.
+tell_root :: fn(supervisor: ptr[mut Supervisor], report: supervision.Request) {
+    out := os.Outgoing.{}
+    request :: os.begin[supervision.Request](&out)
+    request^ = report
+    _ = supervision.send_request(supervisor.root, supervisor.root_port, &out)
+}
+
+report_of :: fn(name: string, code: u64) -> supervision.Report {
+    return supervision.Report.{name = os.label_from(name), code = code}
 }

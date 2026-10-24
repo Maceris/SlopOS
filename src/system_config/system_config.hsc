@@ -15,12 +15,13 @@ import entropy from "../services/entropy"
 import process_manager from "../services/process_manager"
 import supervisor from "../services/supervisor"
 import hello from "../apps/hello"
-import protocols from "../protocols"
+import supervision from "../protocols/supervision"
 import test_channels from "../tests/test_channels"
 import test_control from "../tests/test_control"
 import test_devices from "../tests/test_devices"
 import test_memory from "../tests/test_memory"
 import test_ports from "../tests/test_ports"
+import test_protocols from "../tests/test_protocols"
 import test_syscalls from "../tests/test_syscalls"
 import test_threads from "../tests/test_threads"
 
@@ -66,7 +67,7 @@ SERVICES :: Service.[
  * each as test_syscalls': so every one's entry has to be the same.
  */
 TEST_ENTRIES :: type.[type_of(test_channels.main), type_of(test_control.main), type_of(test_devices.main), type_of(test_memory.main),
-    type_of(test_ports.main), type_of(test_syscalls.main), type_of(test_threads.main)]
+    type_of(test_ports.main), type_of(test_protocols.main), type_of(test_syscalls.main), type_of(test_threads.main)]
 
 #assert same_test_entries()
 
@@ -80,7 +81,7 @@ same_test_entries :: fn() -> bool {
 }
 
 // What the root task serves itself: the supervisor's reports.
-ROOT_TASK_SERVES :: type.[os.Listener[protocols.Supervision]]
+ROOT_TASK_SERVES :: type.[os.Listener[supervision.Supervision]]
 
 // The service named name.
 service :: fn(name: string) -> Service? {

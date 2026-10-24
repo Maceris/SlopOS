@@ -52,7 +52,7 @@ process's life:
 
 | Field | |
 |---|---|
-| `abi_version: u32` | `slop_os.ABI_VERSION` of the kernel that started it: 1 |
+| `abi_version: u32` | `slop_os.ABI_VERSION` of the kernel that started it: 2 |
 | `size: u32` | `size_of(StartupBlock)` as its writer knew it |
 | `process: Process` | The process itself |
 | `space: AddressSpace` | Its address space, with `RIGHT_SPACE_MAP` |
@@ -64,9 +64,9 @@ process's life:
 | `seed: u8[32]` | A random seed, which `context.random` is seeded from (`0068`): the boot's for the root task, and one its loader drew for any other |
 | `cpu_features: CpuFeatures` | The CPU's features (`0019`) |
 
-Each **grant** (`slop_os.Grant`, 48 bytes) is a handle the process starts with besides its own three: a
-label of up to 32 bytes, in UTF-8 and padded with zeros, then its kind, the handle, and for a channel end, the
-tag of the protocol it speaks (`os.protocol_tag`), or 0. `slop_os.find_grant` looks one up by label and kind.
+Each **grant** (`slop_os.Grant`, 40 bytes) is a handle the process starts with besides its own three: a
+label of up to 32 bytes, in UTF-8 and padded with zeros, then its kind and the handle. `slop_os.find_grant` looks
+one up by label and kind.
 
 **The entry's parameters** are grants (`0044`, `0068`): each is the grant labeled with its name, of its type's
 kind, so a program's `main` is its manifest:
@@ -76,8 +76,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
 ```
 
 A parameter is a handle type (`slop_os.DebugLog`, `slop_os.Memory`, `os.Channel[P]`, `os.Listener[P]`, ...) or
-an optional of one, which is `None` without its grant. Without a grant a required parameter needs, or with one of
-another kind, the process ends before `main` with `slop_os.EXIT_MISSING_GRANT` (126). Other grants, like boot
+an optional of one, which is `None` without its grant. A `Channel[P]` or `Listener[P]` needs a channel made with
+`P`'s tag (`0071`). Without a grant a required parameter needs, or with one of another kind or protocol, the process
+ends before `main` with `slop_os.EXIT_MISSING_GRANT` (126). Other grants, like boot
 modules, are still found by label.
 
 ## The Root Task
@@ -114,7 +115,7 @@ of its own with a memory budget split off its starter's, which owns it:
 **Wiring**: `system_config` names each service's entry, and checks when it's compiled that every
 `Channel[P]` one takes has a server: a service taking a `Listener[P]`, or the root task, which serves the
 supervisor's reports. The root task holds the other end of each listener, and connects a service by sending a
-new channel's end through it (`protocols.connect`, a `CONNECT` message with the end as its one handle); its own
+new channel's end through it in the protocol's `Connect` request (each protocol package's `connect`); its own
 connection to the manager is the listener itself.
 
 **Loading a program** (`src/process_builder`, which the root task and the manager share) does through calls
@@ -129,15 +130,25 @@ compiler checks are the entry's parameters: it splits the budget off the caller'
 address space, and sends the manager a `LOAD`, each field's handle labeled with its name and tagged with its
 protocol, an optional's `None` left out.
 
-**The process manager's requests** (`std/os/slop_os/process_manager`), each a fixed-layout struct starting with
-its tag, on channels with 2 KiB rings (`RING_BYTES`):
-- `LOAD`, a `LoadRequest`: the program's name, then a label and a protocol tag for each grant (up to 12). Its
-  batch has the process (with `RIGHT_PROCESS_THREADS`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`), its address space
-  (owning), its budget (with `RIGHT_BUDGET_CHARGE`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`), the executable (with
-  `RIGHT_MEMORY_READ`), then the grants. The requester makes the process, its space and its budget, so the
-  result is never the manager's. The answer, a `LoadReply`, has a `LoadStatus` and the first thread's ID;
-  either way the manager keeps none of the handles.
-- `CONNECT`: its one handle, a channel end, becomes another client.
+**The process manager's protocol** (`std/os/slop_os/process_manager`), generated (`0071`), on channels with 2 KiB
+rings (`RING_BYTES`):
+- `Load`: the program's name; the process (with `RIGHT_PROCESS_THREADS`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`),
+  its address space (owning), its budget (with `RIGHT_BUDGET_CHARGE`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`) and the
+  executable (with `RIGHT_MEMORY_READ`); and up to 12 grants, each with its label. The requester makes the process,
+  its space and its budget, so the result is never the manager's. The answer is `Loaded` with the first thread's
+  ID, or `NotLoaded` with a `LoadStatus`; either way the manager keeps none of the handles.
+- `Connect`: a `Channel[ProcessManager]`, which becomes another client.
+
+## Protocols
+
+A protocol is a package (`0040`, `0071`): a `Request` and a `Response` union, a type named after the protocol for
+`os.Channel[P]`, a `PROTOCOL` and an `is_idempotent`, and `#insert os.protocol_code(Request, Response)`, which
+generates its validators and its send and receive functions. A message is its union's own layout, then its
+variable-size data (`slop_os.Relative[T]`, an offset from the message's start and a count); each handle in it
+travels as its index in the message's batch. Receiving checks every bool, enum, handle index and Relative, and
+that each `Channel[P]` in it has `P`'s tag, before anything reads it; a variant the receiver doesn't know gets
+`answer_unsupported`. SlopOS's own are in `src/protocols/<name>`; those `std` speaks, in
+`std/os/slop_os/<name>`.
 
 **Boot tests** tell the root task what to test with a word on the kernel's command line: `test_services` ends
 it with 0 once the supervisor has started its services, and `test_outlive_manager` kills the manager once

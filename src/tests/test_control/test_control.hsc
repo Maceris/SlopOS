@@ -157,7 +157,7 @@ Copy :: struct {
 launch_copy :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessManager], manager_port: slop_os.Port,
     program: slop_os.Memory, name: string, role: u64) -> Copy? {
     block :: slop_os.startup_block()
-    pair :: slop_os.channel_create(block.budget, 0) or_return null
+    pair :: slop_os.channel_create(block.budget, 0, 0) or_return null
     log_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     log_copy :: cast[slop_os.DebugLog](slop_os.handle_duplicate(cast[slop_os.Handle](log), log_rights) or_return null)
     copy := Copy.{end = pair.a}

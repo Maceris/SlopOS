@@ -42,13 +42,11 @@ Target :: struct {
 Grant :: struct {
     label : u8[slop_os.GRANT_LABEL_SIZE],
     handle : slop_os.Handle,
-    // For a channel end, the protocol it speaks (os.protocol_tag), or 0
-    tag : u64,
 }
 
-// A grant labeled label, for a channel end speaking tag's protocol.
-grant :: fn(label: string, handle: slop_os.Handle, tag: u64 = 0) -> Grant {
-    made := Grant.{handle = handle, tag = tag}
+// A grant labeled label.
+grant :: fn(label: string, handle: slop_os.Handle) -> Grant {
+    made := Grant.{handle = handle}
     for byte, i in label {
         if i < made.label.count {
             made.label[i] = cast[u8](byte)
@@ -164,7 +162,6 @@ build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: p
     for &grant, i in written {
         if i < grants.count && i < kinds.count && OWN_HANDLES + i < given.count {
             grant.label = grants[i].label
-            grant.tag = grants[i].tag
             grant.kind = kinds[i]
             grant.handle = given[OWN_HANDLES + i]
         }

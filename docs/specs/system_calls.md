@@ -77,7 +77,7 @@ domains exist.
 | 11 | `port_set_timer` | port, key, deadline | nothing: a timer packet for key at deadline (monotonic nanoseconds), binding key if it isn't yet; setting it again moves it. Needs `RIGHT_PORT_BIND` |
 | 12 | `port_unbind` | port, key | nothing: the binding goes, with a packet it had queued; needs `RIGHT_PORT_BIND` |
 | 13 | `port_wait` | port, packets (a slice), deadline | how many packets it wrote into packets, up to its count and 64: at once if any are queued, otherwise once one is, or 0 at deadline (`NO_DEADLINE` for none). Needs `RIGHT_PORT_WAIT` |
-| 14 | `channel_create` | budget, ring bytes | owning handles to a new channel's two ends; rings of ring bytes each way, a power of two from 1 KiB to 128 KiB, 0 for the default 1 KiB |
+| 14 | `channel_create` | budget, ring bytes, tag | owning handles to a new channel's two ends; rings of ring bytes each way, a power of two from 1 KiB to 128 KiB, 0 for the default 1 KiB; tag, the protocol both ends speak, kept and never interpreted (`0040`, `0071`) |
 | 15 | `channel_map` | end, address space, address | nothing: the channel's memory, `channel_memory_size` bytes, mapped read/write at address, page-aligned. Needs `RIGHT_CHANNEL_MAP` and `RIGHT_SPACE_MAP`; one mapping per end |
 | 16 | `channel_unmap` | end | nothing: the end's mapping, unmapped |
 | 17 | `channel_notify` | end, signals | nothing: `SIGNAL_READABLE` or `SIGNAL_WRITABLE`, raised on the other end |
@@ -113,6 +113,7 @@ domains exist.
 | 47 | `thread_create_in` | process, budget, address space, entry, stack pointer, argument | the new thread's ID: a thread owned by the process, started as `thread_create` starts one, in an address space in the process's subtree. Needs `RIGHT_PROCESS_THREADS` and `RIGHT_SPACE_THREADS` (`0067`) |
 | 48 | `process_give_handles` | process, handles (a slice), given (a slice) | nothing: the handles (up to 64), moved out of the caller's table into the process's, the value each has there written at given. An owning handle's object becomes the process's, charged to its budget, for all of them or none. Each needs `RIGHT_TRANSFER`; an owning handle to the process or one above it can't go, nor a channel end whose rings are mapped. One closed meanwhile comes out as `NO_HANDLE`. Needs `RIGHT_PROCESS_THREADS` (`0067`) |
 | 49 | `memory_size` | memory | its size in bytes (`0067`) |
+| 50 | `channel_tag` | end | the tag its channel was made with (`0071`) |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the

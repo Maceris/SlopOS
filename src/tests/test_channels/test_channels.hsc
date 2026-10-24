@@ -114,7 +114,7 @@ run_a :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessMa
     ring_at :: runtime.reserve_addresses(cast[usize](slop_os.channel_memory_size(slop_os.CHANNEL_DEFAULT_RING))) or_return 101
     port :: slop_os.port_create(budget) or_return 102
     // c0, and B, a copy of this program given its other end
-    first :: slop_os.channel_create(budget, 0) or_return 103
+    first :: slop_os.channel_create(budget, 0, 0) or_return 103
     c0 :: first.a
     manager_port :: os.port_for(block.budget, manager.end) or_return 104
     log_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
@@ -122,12 +122,12 @@ run_a :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessMa
     b :: os.launch(manager, manager_port, "test_channels B", program, 4 << 20, main, BGrants.{log = log_copy, peer = first.b})
         or_return 105
     results : u64[24]
-    made :: slop_os.channel_create(budget, 0)
+    made :: slop_os.channel_create(budget, 0, 0)
     pair :: made or_else slop_os.ChannelPair.{}
     x :: pair.a
     y :: pair.b
     results[0] = test_kit.tag_of(made)
-    results[1] = test_kit.tag_of(slop_os.channel_create(budget, 1000))
+    results[1] = test_kit.tag_of(slop_os.channel_create(budget, 1000, 0))
     results[2] = test_kit.tag_of(slop_os.channel_map(x, space, ring_at))
     results[3] = test_kit.tag_of(slop_os.channel_map(x, space, ring_at + 0x10000))
     // Sending: x is mapped, c0 is the channel's own end, and y goes
@@ -205,7 +205,7 @@ run_a :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessMa
     results[16] = test_kit.tag_of(slop_os.channel_read(x, buffer, cast[ptr[mut u32]](0)))
     results[17] = test_kit.tag_of(slop_os.handle_close(any_x))
     // Closing x unmapped its rings, so another channel's go where they were; and again once unmapped
-    other_pair :: slop_os.channel_create(budget, 0) or_else slop_os.ChannelPair.{}
+    other_pair :: slop_os.channel_create(budget, 0, 0) or_else slop_os.ChannelPair.{}
     other :: other_pair.a
     results[21] = test_kit.tag_of(slop_os.channel_map(other, space, ring_at))
     results[22] = test_kit.tag_of(slop_os.channel_unmap(other))

@@ -1,6 +1,8 @@
 # Protocols: Wire Format, Evolution, Tags and Metadata
 
-Status: **accepted** 2026-10-13 (`../decisions/0040`). Answers the *IPC and data* open questions on
+Status: **accepted** 2026-10-13 (`../decisions/0040`), **built** 2026-10-24 (`../decisions/0071`): variable-size
+data is `slop_os.Relative[T]`, an offset from the message's start rather than from the field, and tags are a hash of
+the protocol type's name. Answers the *IPC and data* open questions on
 the wire format, schema evolution, protocol versioning, protocol identifiers, idempotence and
 displaying values without a compiled type.
 

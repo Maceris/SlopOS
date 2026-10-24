@@ -37,7 +37,7 @@ def program_test(name: str, program: str, line: str, words: str = "") -> tuple:
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 14 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 15 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] process manager: started supervisor", "--expect-line=[user] process manager: started hello",
         "--expect-line=[user] hello: heap working, random numbers working", "--expect-line=[user] root task: the supervisor started hello",
@@ -82,6 +82,8 @@ TESTS = [
     program_test("drives a device from user mode with the platform capability", "test_devices",
         "a driver registered a controller, took an IRQ's interrupts through its port, read device memory, and lost a window "
         "with its memory", "test_device"),
+    program_test("sends and checks messages with generated protocol code", "test_protocols",
+        "messages went through with their handles and data, and broken, unknown and mistyped ones were refused"),
     program_test("controls a process from a debugger in user mode", "test_control",
         "a debugger skipped and changed calls, fixed a fault, read and wrote memory, suspended, resumed and started threads, "
         "gave a handle and killed its target; an exit's code came with its end"),

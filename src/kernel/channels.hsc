@@ -93,6 +93,8 @@ ChannelCore :: struct #align(16) {
     memory : u64,
     order : u64,
     ring_bytes : u32,
+    // The protocol both ends speak, as whoever made it says: never interpreted here (decisions/0040, 0071)
+    tag : u64,
     sides : CoreSide[2],
 }
 
@@ -133,7 +135,7 @@ ChannelPair :: struct {
  * A channel with rings of ring_bytes each way (0 for the default), its ends owned by owner (a Process's
  * address, 0 for the kernel), charged to budget: end A with the core and the rings, end B its slot.
  */
-create_channel :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, ring_bytes: u32) -> Result[ChannelPair, slop_os.ChannelError] {
+create_channel :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, ring_bytes: u32, tag: u64) -> Result[ChannelPair, slop_os.ChannelError] {
     ring :: if ring_bytes == 0 { slop_os.CHANNEL_DEFAULT_RING } else { ring_bytes }
     if ring < slop_os.CHANNEL_MIN_RING || ring > slop_os.CHANNEL_MAX_RING || ring & (ring - 1) != 0 {
         return .Error(.InvalidSize)
@@ -174,6 +176,7 @@ create_channel :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, ring_byte
     core.memory = memory
     core.order = order
     core.ring_bytes = ring
+    core.tag = tag
     for side in 0..<2 {
         core.sides[side].mapping.core = core_address
     }

@@ -385,11 +385,12 @@ channel_done :: fn(error: slop_os.ChannelError?) -> Result[void, slop_os.Channel
 }
 
 // Owning handles in the caller's process to both ends of a new channel; without room for them, it's destroyed.
-sys_channel_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, ring_bytes: u32) -> Result[slop_os.ChannelPair, slop_os.ChannelError] {
+sys_channel_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, ring_bytes: u32, tag: u64)
+    -> Result[slop_os.ChannelPair, slop_os.ChannelError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     paying :: paying_budget[slop_os.ChannelError](process, budget)?
-    pair :: create_channel(kernel, cast[u64](process), paying, ring_bytes)?
+    pair :: create_channel(kernel, cast[u64](process), paying, ring_bytes, tag)?
     a := slop_os.NO_HANDLE
     match install_owning(kernel, process, cast[u64](pair.a)) {
         case Ok(handle) => a = handle
@@ -540,6 +541,12 @@ sys_memory_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, s
     made :: create_memory(kernel, cast[u64](process), paying, size)?
     handle :: owning_handle[slop_os.MemoryError](kernel, process, cast[u64](made), false)?
     return .Ok(cast[slop_os.Memory](handle))
+}
+
+// The tag the channel was made with.
+sys_channel_tag :: fn(thread: ptr[mut Thread], end: slop_os.Channel) -> Result[u64, slop_os.ChannelError] {
+    object :: object_of[slop_os.ChannelError](process_of(thread), cast[slop_os.Handle](end), slop_os.ObjectKind.Channel, cast[slop_os.Rights](0))?
+    return .Ok(core_of(cast[ptr[Channel]](object)).tag)
 }
 
 sys_memory_size :: fn(thread: ptr[mut Thread], memory: slop_os.Memory) -> Result[u64, slop_os.HandleError] {
