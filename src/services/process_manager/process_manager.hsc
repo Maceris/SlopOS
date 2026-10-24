@@ -1,14 +1,16 @@
 /*
- * The process manager (decisions/0012, 0058, 0067): loads programs into processes their requesters made,
- * which stay theirs and are paid for by them, and keeps nothing of what it builds, so a program outlives
- * it. It serves each channel it was granted as "client:<name>", and each end a client sends it in a
- * PM_CONNECT; each PM_LOAD gets a LoadReply. ASLR's randomness comes from the entropy service, a fresh
- * seed for each program.
+ * The process manager (decisions/0012, 0058, 0067, 0068): loads programs into processes their requesters
+ * made, which stay theirs and are paid for by them, and keeps nothing of what it builds, so a program
+ * outlives it. Its protocol is std's (std/os/slop_os/process_manager). It serves clients, the listener the
+ * root task connects through, and each end a client sends it in a CONNECT; each LOAD gets a LoadReply. The
+ * entropy service gives each program its seed, and the randomness that places its parts.
  */
 package process_manager
 
 import runtime from "base"
+import os from "std"
 import slop_os from "std/os"
+import process_manager as manager_protocol from "std/os/slop_os"
 import log_line from "../../log_line"
 import process_builder from "../../process_builder"
 import protocols from "../../protocols"
@@ -23,15 +25,18 @@ Manager :: struct {
     entropy_port : slop_os.Port,
 }
 
-main :: fn() -> int {
+main :: fn(log: slop_os.DebugLog?, entropy: os.Channel[protocols.Entropy],
+    clients: os.Listener[manager_protocol.ProcessManager]) -> int {
     block :: slop_os.startup_block()
-    manager := Manager.{block = block}
-    manager.log = cast[slop_os.DebugLog](slop_os.find_grant(block, "debug_log", .DebugLog) or_else slop_os.NO_HANDLE)
-    manager.entropy = cast[slop_os.Channel](slop_os.find_grant(block, "entropy", .Channel) or_return 1)
-    manager.entropy_port = protocols.port_for(block.budget, manager.entropy) or_return 2
-    manager.port = slop_os.port_create(block.budget) or_return 3
-    protocols.add_granted_clients(&manager.clients, manager.port, block)
-    log_line.write(manager.log, "process manager: serving % clients", manager.clients.count)
+    manager := Manager.{block = block, entropy = entropy.end}
+    manager.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
+    manager.entropy_port = os.port_for(block.budget, manager.entropy) or_return 1
+    manager.port = slop_os.port_create(block.budget) or_return 2
+    // The listener is a client like any, whose requests are connections or loads
+    if !protocols.add_client(&manager.clients, manager.port, clients.end) {
+        return 3
+    }
+    log_line.write(manager.log, "process manager: serving")
     loop {
         // A client added while serving is served in the same pass
         with {
@@ -57,20 +62,20 @@ serve :: fn(manager: ptr[mut Manager], index: usize) {
         return void
     }
     loop {
-        request := protocols.LoadRequest.{}
+        request := manager_protocol.LoadRequest.{}
         handles : slop_os.Handle[slop_os.MAX_HANDLES_PER_BATCH]
-        match protocols.try_receive(end, protocols.mut_bytes_of(&request), handles) {
+        match os.try_receive(end, os.mut_bytes_of(&request), handles) {
             case Ok(received) => {
                 taken :: view_of(&handles[0], cast[usize](received.handle_count))
-                if request.tag == protocols.PM_CONNECT && taken.count == 1 {
+                if request.tag == manager_protocol.CONNECT && taken.count == 1 {
                     if !protocols.add_client(&manager.clients, manager.port, cast[slop_os.Channel](taken[0])) {
                         close_all(taken)
                     }
                 }
-                else if request.tag == protocols.PM_LOAD {
+                else if request.tag == manager_protocol.LOAD {
                     reply := load(manager, &request, received, taken)
                     none : slop_os.Handle[1]
-                    _ = protocols.send(end, manager.port, protocols.bytes_of(&reply), view_of(&none[0], 0))
+                    _ = os.send(end, manager.port, os.bytes_of(&reply), view_of(&none[0], 0))
                 }
                 else {
                     close_all(taken)
@@ -87,24 +92,35 @@ serve :: fn(manager: ptr[mut Manager], index: usize) {
 }
 
 /*
- * One PM_LOAD's reply: the program built into the requester's process, and its first thread's ID. Whatever
+ * One LOAD's reply: the program built into the requester's process, and its first thread's ID. Whatever
  * happens, the request's handles leave this process: to the program, or closed.
  */
-load :: fn(manager: ptr[mut Manager], request: ptr[protocols.LoadRequest], received: protocols.Received, handles: slop_os.Handle[])
-    -> protocols.LoadReply {
+load :: fn(manager: ptr[mut Manager], request: ptr[manager_protocol.LoadRequest], received: os.Received, handles: slop_os.Handle[])
+    -> manager_protocol.LoadReply {
     defer close_all(handles)
     grant_count :: cast[usize](request.grant_count)
-    if received.size != cast[u32](size_of(protocols.LoadRequest)) || grant_count > protocols.MAX_LOAD_GRANTS
-        || handles.count != protocols.LOAD_HANDLES + grant_count {
+    if received.size != cast[u32](size_of(manager_protocol.LoadRequest)) || grant_count > manager_protocol.MAX_GRANTS
+        || handles.count != manager_protocol.LOAD_HANDLES + grant_count {
         return failed(.BadRequest)
     }
     name :: protocols.text_of_label(&request.name)
-    seed : u8[32]
-    if !draw(manager, seed) {
+    // The program's own seed, and one for where its parts go
+    seeds : u8[64]
+    if !draw(manager, seeds) {
         log_line.write(manager.log, "process manager: no randomness for %", name)
         return failed(.NoRandom)
     }
-    stream := random_stream.make(seed)
+    seed : u8[32]
+    layout_seed : u8[32]
+    for byte, i in seeds {
+        if i < 32 {
+            seed[i] = byte
+        }
+        else if i - 32 < layout_seed.count {
+            layout_seed[i - 32] = byte
+        }
+    }
+    stream := random_stream.make(layout_seed)
     // The executable, mapped where the manager can read it
     executable :: cast[slop_os.Memory](handles[3])
     size :: slop_os.memory_size(executable) or_return failed(.BadRequest)
@@ -115,10 +131,11 @@ load :: fn(manager: ptr[mut Manager], request: ptr[protocols.LoadRequest], recei
     }
     defer _ = slop_os.memory_unmap(manager.block.space, address)
     file :: view_of(cast[ptr[u8]](address), cast[usize](size))
-    grants : process_builder.Grant[protocols.MAX_LOAD_GRANTS]
+    grants : process_builder.Grant[manager_protocol.MAX_GRANTS]
     for i in 0..<grant_count {
-        if i < grants.count && i < request.labels.count && protocols.LOAD_HANDLES + i < handles.count {
-            grants[i] = process_builder.Grant.{label = request.labels[i], handle = handles[protocols.LOAD_HANDLES + i]}
+        if i < grants.count && i < request.labels.count && i < request.tags.count && manager_protocol.LOAD_HANDLES + i < handles.count {
+            grants[i] = process_builder.Grant.{label = request.labels[i], handle = handles[manager_protocol.LOAD_HANDLES + i],
+                tag = request.tags[i]}
         }
     }
     target :: process_builder.Target.{
@@ -126,22 +143,21 @@ load :: fn(manager: ptr[mut Manager], request: ptr[protocols.LoadRequest], recei
         space = cast[slop_os.AddressSpace](handles[1]),
         budget = cast[slop_os.MemoryBudget](handles[2]),
     }
-    zeros : u8[32]
-    match process_builder.build(target, file, view_of(&grants[0], grant_count), zeros, &stream) {
+    match process_builder.build(target, file, view_of(&grants[0], grant_count), seed, &stream) {
         case Ok(thread) => {
             log_line.write(manager.log, "process manager: started %", name)
-            return protocols.LoadReply.{tag = protocols.PM_LOAD, status = .Loaded, thread = thread}
+            return manager_protocol.LoadReply.{tag = manager_protocol.LOAD, status = .Loaded, thread = thread}
         }
         case Error(error) => {
             log_line.write(manager.log, "process manager: % didn't start: %", name, error)
-            return failed(if error == .NotAProgram { protocols.LoadStatus.NotAProgram } else if error == .NoMemory { protocols.LoadStatus.NoMemory }
-                else { protocols.LoadStatus.Failed })
+            return failed(if error == .NotAProgram { manager_protocol.LoadStatus.NotAProgram } else if error == .NoMemory {
+                manager_protocol.LoadStatus.NoMemory } else { manager_protocol.LoadStatus.Failed })
         }
     }
 }
 
-failed :: fn(status: protocols.LoadStatus) -> protocols.LoadReply {
-    return protocols.LoadReply.{tag = protocols.PM_LOAD, status = status}
+failed :: fn(status: manager_protocol.LoadStatus) -> manager_protocol.LoadReply {
+    return manager_protocol.LoadReply.{tag = manager_protocol.LOAD, status = status}
 }
 
 // bytes, filled from the entropy service: false if it didn't answer.
@@ -149,7 +165,7 @@ draw :: fn(manager: ptr[mut Manager], bytes: mut u8[]) -> bool {
     request := protocols.EntropyRequest.{tag = protocols.ENTROPY_FILL, count = cast[u32](bytes.count)}
     reply := protocols.EntropyReply.{}
     none : slop_os.Handle[1]
-    match protocols.call(manager.entropy, manager.entropy_port, protocols.bytes_of(&request), view_of(&none[0], 0), protocols.mut_bytes_of(&reply)) {
+    match os.call(manager.entropy, manager.entropy_port, os.bytes_of(&request), view_of(&none[0], 0), os.mut_bytes_of(&reply)) {
         case Ok(received) => {
             if reply.tag != protocols.ENTROPY_FILL || cast[usize](reply.count) < bytes.count {
                 return false

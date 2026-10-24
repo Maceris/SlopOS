@@ -138,8 +138,8 @@ function:
   - `CpuFeatures` (`0019`);
   - the startup grants (`0009`), with their handle kinds and labels;
   - the typed arguments of the exported entry point (`0018`).
-- `std`'s startup code turns the startup block into the program's typed parameters. How
-  entry-point types become grants is still open under *Executables*.
+- `std`'s startup code turns the startup block into the program's typed parameters: each the grant
+  labeled with the parameter's name, of its type's kind (`0068`).
 
 ## 7. Library ABI Between Separately Compiled Hemera Code
 

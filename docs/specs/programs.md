@@ -3,11 +3,11 @@
 What a SlopOS program is, and how it starts: the executable its build makes, what its loader does with it,
 and what it's given when it starts.
 
-Status: **implemented in part** (roadmap M6, stages 6a to 6c): programs build, the kernel loads and starts
-the root task, and the root task starts the first services, the process manager loading programs for the
-rest; typed entry points come with 6d. Choices and alternatives are in
+Status: **implemented in part** (roadmap M6, stages 6a to 6d): programs build, the kernel loads and starts
+the root task, the root task starts the first services, the process manager loading programs for the rest,
+and a program's entry takes its grants as typed parameters. Choices and alternatives are in
 `../../knowledge/decisions/0058-user-space-plan.md`, `0059-user-programs-as-built.md`,
-`0060-root-task-as-built.md` and `0067-process-manager-as-built.md`. Four-digit numbers like `0004` refer to decision records in
+`0060-root-task-as-built.md`, `0067-process-manager-as-built.md` and `0068-typed-entry-points-as-built.md`. Four-digit numbers like `0004` refer to decision records in
 `../../knowledge/decisions/`.
 
 ## Executables
@@ -41,16 +41,17 @@ own protection, and the RELRO pages without write.
 
 The process's first thread starts at the entry, with the stack pointer 8 below a multiple of 16 (as a call
 leaves it) and the **startup block**'s address in its first argument register; every other register is
-zero (`0026`). The startup code keeps the address, sets up the thread's carrier block and its `Context`,
-calls `main`, and ends the process with `process_exit` and `main`'s result as its code, or 0 for a `main`
-without one.
+zero (`0026`). The startup code keeps the address, checks the block's version, sets up the thread's carrier
+block and its `Context`, finds `main`'s parameters among the grants (below), calls `main`, and ends the
+process with `process_exit` and `main`'s result as its code, or 0 for a `main` without one. A block of another
+version ends the process with `slop_os.EXIT_WRONG_ABI` (125) before anything reads it.
 
 `slop_os.StartupBlock`, written by the loader in memory it maps into the process, read-only, for the
 process's life:
 
 | Field | |
 |---|---|
-| `abi_version: u32` | `slop_os.ABI_VERSION` of the kernel that started it |
+| `abi_version: u32` | `slop_os.ABI_VERSION` of the kernel that started it: 1 |
 | `size: u32` | `size_of(StartupBlock)` as its writer knew it |
 | `process: Process` | The process itself |
 | `space: AddressSpace` | Its address space, with `RIGHT_SPACE_MAP` |
@@ -59,13 +60,24 @@ process's life:
 | `free_base: u64`, `free_size: u64` | A free range of the address space, page-aligned, at a random place, where the program's runtime maps its own memory: its heap, and later its threads' stacks. Nothing else in the space uses it |
 | `stack_base: u64`, `stack_size: u64` | The first thread's stack, which the runtime takes its stack limit from |
 | `grants: u64` | Where the grants are, as bytes from the block's start |
-| `seed: u8[32]` | A random seed: the boot's for the root task, one drawn from it for the entropy service; zeros for other processes |
+| `seed: u8[32]` | A random seed, which `context.random` is seeded from (`0068`): the boot's for the root task, and one its loader drew for any other |
 | `cpu_features: CpuFeatures` | The CPU's features (`0019`) |
 
-Each **grant** (`slop_os.Grant`, 40 bytes) is a handle the process starts with besides its own three: a
-label of up to 32 bytes, in UTF-8 and padded with zeros, then its kind and the handle. `slop_os.find_grant`
-looks one up by label and kind. The entry point's typed arguments (`0044`) come with 6d, as grants named
-after their parameters.
+Each **grant** (`slop_os.Grant`, 48 bytes) is a handle the process starts with besides its own three: a
+label of up to 32 bytes, in UTF-8 and padded with zeros, then its kind, the handle, and for a channel end, the
+tag of the protocol it speaks (`os.protocol_tag`), or 0. `slop_os.find_grant` looks one up by label and kind.
+
+**The entry's parameters** are grants (`0044`, `0068`): each is the grant labeled with its name, of its type's
+kind, so a program's `main` is its manifest:
+
+```
+main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager]?) -> int
+```
+
+A parameter is a handle type (`slop_os.DebugLog`, `slop_os.Memory`, `os.Channel[P]`, `os.Listener[P]`, ...) or
+an optional of one, which is `None` without its grant. Without a grant a required parameter needs, or with one of
+another kind, the process ends before `main` with `slop_os.EXIT_MISSING_GRANT` (126). Other grants, like boot
+modules, are still found by label.
 
 ## The Root Task
 
@@ -85,19 +97,21 @@ stops a kernel with a root task: a working system's root task never ends. CPU bu
 
 ## The First Services
 
-The root task starts the services `src/system_config` lists, in its order (`0067`), each in a process of its
-own with a memory budget split off its starter's, which owns it:
+The root task starts the services `src/system_config` lists, in its order (`0067`, `0068`), each in a process
+of its own with a memory budget split off its starter's, which owns it:
 
-| Service | Started by | |
-|---|---|---|
-| `entropy` | the root task, with its own loader | Random bytes from a ChaCha20 stream seeded from the boot's seed, for each channel it was granted as `client:<name>` |
-| `process_manager` | the root task, with its own loader | Loads programs for requesters (below), drawing a fresh seed from `entropy` for each |
-| `supervisor` | the root task, through the manager | Starts the services `system_config` gives it through the manager, owns them, and tells the root task as each starts and ends; it restarts nothing yet |
-| `hello` | the supervisor, through the manager | Reports that its heap works, and given a connection to the manager, that it's still running once the manager is gone |
+| Service | Started by | Entry | |
+|---|---|---|---|
+| `entropy` | the root task, with its own loader | `log`, `clients: Listener[Entropy]` | Random bytes from a ChaCha20 stream seeded from its startup block, for each connection |
+| `process_manager` | the root task, with its own loader | `log`, `entropy: Channel[Entropy]`, `clients: Listener[ProcessManager]` | Loads programs for requesters (below), drawing each one's seed, and the randomness that places its parts, from `entropy` |
+| `supervisor` | the root task, through the manager | `log`, `manager`, `root: Channel[Supervision]`, `hello_module` | Starts the services `system_config` gives it with `os.launch`, owns them, and tells the root task as each starts and ends; it restarts nothing yet |
+| `hello` | the supervisor, through the manager | `log?`, `manager?` | Reports that its heap and random numbers work, and given a connection to the manager, that it's still running once the manager is gone |
 
-A grant `system_config` names is made by the service's starter: `debug_log` a duplicate of its own,
-`entropy` a channel to the entropy service, `process_manager` a new connection to the manager (one end sent
-to it in a `PM_CONNECT`), `root_task` a channel to the root task, and `module:<name>` a boot module, read-only.
+**Wiring**: `system_config` names each service's entry, and checks when it's compiled that every
+`Channel[P]` one takes has a server: a service taking a `Listener[P]`, or the root task, which serves the
+supervisor's reports. The root task holds the other end of each listener, and connects a service by sending a
+new channel's end through it (`protocols.connect`, a `CONNECT` message with the end as its one handle); its own
+connection to the manager is the listener itself.
 
 **Loading a program** (`src/process_builder`, which the root task and the manager share) does through calls
 what the kernel does for the root task: the image is loaded and relocated into a memory object, its segments
@@ -106,14 +120,20 @@ process is given its address space, handles to itself and its budget, its image'
 block's memory objects, and its grants (`process_give_handles`), and its first thread starts
 (`thread_create_in`). Everything is charged to the program's budget.
 
-**The process manager's requests** (`src/protocols`), each a fixed-layout struct starting with its tag:
-- `PM_LOAD`, a `LoadRequest`: the program's name, then a label for each grant (up to 12). Its batch has the
-  process (with `RIGHT_PROCESS_THREADS`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`), its address space (owning),
-  its budget (with `RIGHT_BUDGET_CHARGE`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`), the executable (with
+**Launching** (`os.launch` in `std/os`) takes the program's entry and a struct of its grants, whose fields the
+compiler checks are the entry's parameters: it splits the budget off the caller's, makes the process and its
+address space, and sends the manager a `LOAD`, each field's handle labeled with its name and tagged with its
+protocol, an optional's `None` left out.
+
+**The process manager's requests** (`std/os/slop_os/process_manager`), each a fixed-layout struct starting with
+its tag, on channels with 2 KiB rings (`RING_BYTES`):
+- `LOAD`, a `LoadRequest`: the program's name, then a label and a protocol tag for each grant (up to 12). Its
+  batch has the process (with `RIGHT_PROCESS_THREADS`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`), its address space
+  (owning), its budget (with `RIGHT_BUDGET_CHARGE`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`), the executable (with
   `RIGHT_MEMORY_READ`), then the grants. The requester makes the process, its space and its budget, so the
   result is never the manager's. The answer, a `LoadReply`, has a `LoadStatus` and the first thread's ID;
   either way the manager keeps none of the handles.
-- `PM_CONNECT`: its one handle, a channel end, becomes another client.
+- `CONNECT`: its one handle, a channel end, becomes another client.
 
 **Boot tests** tell the root task what to test with a word on the kernel's command line: `test_services` ends
 it with 0 once the supervisor has started its services, and `test_outlive_manager` kills the manager once
@@ -130,8 +150,8 @@ its own when it's compiled:
 - **ending:** `process_exit`, also for a failed assertion.
 
 A program writes output through a debug log, if it's given one (`slop_os.debug_log`); `context.logger` has
-nowhere to go yet. There are no threads, and `context.random` has no source yet: the entropy service
-answers requests on a channel, which 6d's `std/os` turns into one.
+nowhere to go yet. There are no threads. `context.random` is ChaCha20 from the startup block's seed, rekeyed
+after every block, so `std/random` works in any program.
 
 `runtime.reserve_addresses(size)` gives a program a page-aligned part of the free range of its own, for
 mapping something itself, like a module the root task reads.

@@ -1,27 +1,32 @@
 package hello
 
 import runtime from "base"
+import os from "std"
+import random from "std"
 import slop_os from "std/os"
+import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
 
 /*
- * The first SlopOS program (roadmap M6): it fills memory from its heap and says whether that worked
- * through its debug log, if it's given one. Given a connection to the process manager, it then waits
- * for the manager to be gone and says it's still running, which shows a program outlives the manager
- * that loaded it (decisions/0067). It ends with 0 if the heap worked.
+ * The first SlopOS program (roadmap M6): it fills memory from its heap, draws random numbers, and says
+ * whether both worked through its debug log, if it's given one. Given a connection to the process manager,
+ * it then waits for the manager to be gone and says it's still running, which shows a program outlives the
+ * manager that loaded it (decisions/0067). It ends with 0 if its heap worked.
  */
-main :: fn() -> int {
-    block :: slop_os.startup_block()
-    log :: cast[slop_os.DebugLog](slop_os.find_grant(block, "debug_log", .DebugLog) or_else slop_os.NO_HANDLE)
+main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager]?) -> int {
+    to :: log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     code :: fill_heap()
-    log_line.write(log, "hello: heap %", if code == 0 { "working" } else { "broken" })
-    match slop_os.find_grant(block, "process_manager", .Channel) {
-        case Some(manager) => {
-            port :: slop_os.port_create(block.budget) or_return 3
-            slop_os.port_bind(port, manager, slop_os.SIGNAL_PEER_CLOSED, 0, .Once) or_return 4
+    // Two draws of 64 bits alike would be one chance in 2^64
+    random_works :: random.next_u64() != random.next_u64()
+    log_line.write(to, "hello: heap %, random numbers %", if code == 0 { "working" } else { "broken" },
+        if random_works { "working" } else { "broken" })
+    match manager {
+        case Some(connection) => {
+            port :: slop_os.port_create(slop_os.startup_block().budget) or_return 3
+            slop_os.port_bind(port, cast[slop_os.Handle](connection.end), slop_os.SIGNAL_PEER_CLOSED, 0, .Once) or_return 4
             packets : slop_os.Packet[1]
             _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_return 5
-            log_line.write(log, "hello: still running after the process manager ended")
+            log_line.write(to, "hello: still running after the process manager ended")
         }
         case None => {}
     }
