@@ -28,8 +28,12 @@ Severity: **blocker** / **friction** / **nice**.
 ### Smaller gaps
 
 - The compiler crashed once (exit 0xC0000005, an access violation) building SlopOS's x86-64 kernel through the
-  build package in `boot_tests.py`, and built it fine eight times after (A3, 2026-10-24). Being hunted with the
-  Debug build, a hundred builds one at a time. Severity: friction.
+  build package in `boot_tests.py`, and built it fine 200 times after, in the Debug build (2026-10-24). The
+  likely cause, found with an AddressSanitizer build of the compiler and fixed: the house rules' description of
+  each function read every key of its checked results as an AST node, but a named result's key is its entry in
+  the function's type, so it read past the end of that, which faults only when the next page isn't mapped. The
+  compiler now writes a crash dump if it does crash, and `hemera-asan` builds every SlopOS target without a
+  report. Kept open until enough builds have passed. Severity: friction.
 
 - Comparing two optionals (`a != b` with both `u64?`) checks, then fails to generate ("comparing
   Optional[u64] values can't be generated yet", E5002); unwrapping them first works. Found in
