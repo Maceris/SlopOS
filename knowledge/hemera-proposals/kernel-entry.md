@@ -1,6 +1,8 @@
 # Kernel Entry on AArch64 and RISC-V
 
-Status: **open**, needed after M3 (`../decisions/0022`). x86-64 was adopted 2026-10-13 as
+Status: **open** for RISC-V. AArch64 was built 2026-10-24 (`../decisions/0063`): one `.entry` function for the
+whole vector table (`aarch64.vector_table`), `aarch64.RegisterFrame`, `return_to_user(frame, kernel_stack)`, and system
+registers by name as compile-time arguments. x86-64 was adopted 2026-10-13 as
 `#calling_convention(.entry)` and `.syscall_entry`, with `x86_64.RegisterFrame`, `entry_points`
 and `return_to_user`; Hemera's `docs/calling_convention.md` (*Entry Functions*) and
 `base/intrinsics/x86_64` are the reference. This keeps how the SlopOS kernel uses it, and the

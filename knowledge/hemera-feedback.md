@@ -23,7 +23,7 @@ Severity: **blocker** / **friction** / **nice**.
 | Topic | State | Details |
 |---|---|---|
 | Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`; `os.run_process` runs processes since 2026-10-19 (Windows and Linux); targets built several at once since 2026-10-23 (`--jobs`), SlopOS's build from 7.7 s to 4.0 s. Still open: sharing parsed files between targets, measured to save little so far; `find_packages` is unimplemented and may be removed | `hemera-proposals/build-programs.md`; `decisions/0028` |
-| Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 done 2026-10-13; hosted AArch64 (code generation, the stack check, fibers, Linux) done 2026-10-23 (`decisions/0062`), kernel entry is A2. The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
+| Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 done 2026-10-13; hosted AArch64 (code generation, the stack check, fibers, Linux) done 2026-10-23 (`decisions/0062`), AArch64 kernel entry and system registers 2026-10-24 (`decisions/0063`); RISC-V waits for the third architecture. The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
 
 ### Smaller gaps
 
