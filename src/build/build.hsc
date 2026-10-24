@@ -11,8 +11,7 @@
  * - tests_output: the folder test programs go in, the current folder by default.
  * - stack_check: what the kernel's prologue checks do without room, trap (the default) or morestack,
  *   which a boot test of stack segments builds.
- * - arch: the kernel's architecture, x86_64 (the default) or aarch64 (roadmap A). Programs are only built
- *   for x86-64 so far, so aarch64 leaves them out.
+ * - arch: the kernel's and the programs' architecture, x86_64 (the default) or aarch64 (roadmap A).
  */
 package build
 
@@ -26,8 +25,7 @@ build :: fn() {
     if targets == "all" || targets == "kernel" {
         add_kernel()
     }
-    aarch64 :: compiler.target_setting("arch", default = "x86_64") == "aarch64"
-    if (targets == "all" || targets == "programs") && !aarch64 {
+    if targets == "all" || targets == "programs" {
         add_programs("../apps")
         add_programs("../services")
         add_programs("../drivers")
@@ -68,7 +66,8 @@ add_kernel :: fn() {
 
 /*
  * Every folder in folder, as a SlopOS program named after it: a position-independent executable for
- * x86-64-v3 (decisions/0003, 0004), which its loader relocates and starts with its startup block.
+ * x86-64-v3 (decisions/0003, 0004), or AArch64's ARMv8.2-A with LSE (0061), which its loader relocates and
+ * starts with its startup block.
  */
 add_programs :: fn(folder: string) {
     for subfolder in compiler.subfolders(folder) {
@@ -86,6 +85,11 @@ add_programs :: fn(folder: string) {
         program.target_options.os = .SlopOS
         program.target_options.architecture = .x86_64
         program.target_options.cpu = "x86-64-v3"
+        if compiler.target_setting("arch", default = "x86_64") == "aarch64" {
+            program.target_options.architecture = .arm64
+            // The baseline, which Hemera gives AArch64 without a CPU
+            program.target_options.cpu = ""
+        }
         program.target_options.relocation_model = .Default
         program.target_options.startup_code = true
         target :: compiler.add_target(program)

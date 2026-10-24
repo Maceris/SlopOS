@@ -63,8 +63,11 @@ FIRST_SPECIAL : u32 : 1020
 SGI_RESCHEDULE : u32 : 1
 SGI_TLB_FLUSH : u32 : 2
 SGI_STOP : u32 : 3
-// The virtual timer's PPI where the device tree doesn't say
+// The virtual and the physical timer's PPIs where the device tree doesn't say
 DEFAULT_TIMER_INTERRUPT : u32 : 27
+DEFAULT_TEST_TIMER_INTERRUPT : u32 : 30
+// The test device's rate: about a thousand interrupts a second
+TEST_DEVICE_HZ : u64 : 1000
 
 // The kernel's device interrupt IDs, on each CPU
 FIRST_DEVICE_ID : u32 : 32
@@ -124,7 +127,7 @@ init_cpu_interface :: fn(system: ptr[ArchSystem], cpu: ptr[mut ArchCpu]) {
         for i in 0..<32 {
             write_u8(sgi, GICR_IPRIORITYR + cast[u64](i), INTERRUPT_PRIORITY)
         }
-        write_u32(sgi, GICR_ISENABLER0, 0xffff | (cast[u32](1) << system.timer_interrupt))
+        write_u32(sgi, GICR_ISENABLER0, 0xffff | (cast[u32](1) << system.timer_interrupt) | (cast[u32](1) << system.test_timer_interrupt))
     }
     aarch64.write_system_register(.ICC_SRE_EL1, SRE_ENABLE)
     aarch64.isb()
@@ -186,10 +189,18 @@ interrupt_source :: fn() -> kernel_entry.InterruptSource {
     if interrupt == system.timer_interrupt {
         // Until the next deadline, so the level the timer holds doesn't raise it again
         aarch64.write_system_register(.CNTV_CTL_EL0, 0)
+        return .Timer
+    }
+    if interrupt == system.test_timer_interrupt {
+        // The test device's clock: its line pended, and the next in a thousandth of a second, while it's on
         if system.test_interrupts {
             pend_test_line(system)
+            aarch64.write_system_register(.CNTP_TVAL_EL0, aarch64.read_system_register(.CNTFRQ_EL0) / TEST_DEVICE_HZ)
         }
-        return .Timer
+        else {
+            aarch64.write_system_register(.CNTP_CTL_EL0, 0)
+        }
+        return .Spurious
     }
     return match interrupt {
         case SGI_RESCHEDULE => .Ipi(.Reschedule)
@@ -222,14 +233,9 @@ device_interrupt_range :: fn() -> (first: arch_interface.InterruptId, count: u32
 // The line routed to id on this CPU, acknowledged.
 end_of_interrupt :: fn(id: arch_interface.InterruptId) {
     cpu :: current_cpu()
-    system :: current_system()
-    for route in system.routes {
+    for route in current_system().routes {
         if route.used && route.cpu == cpu.mpidr && route.id == cast[u32](id) {
             acknowledge(route.interrupt)
-            // The test device raises its line again as soon as it's acknowledged, until it's stopped
-            if system.test_interrupts && route.interrupt == FIRST_SPI + TEST_LINE {
-                pend_test_line(system)
-            }
             return void
         }
     }
@@ -355,15 +361,21 @@ test_device :: fn() -> arch_interface.TestDevice {
 }
 
 /*
- * Start or stop the test device: its line is pended through the distributor now, and again each time its
- * interrupt is acknowledged, and at every timer interrupt on any CPU, while it's on.
+ * Start or stop the test device: while it's on, its line is pended through the distributor about a thousand
+ * times a second, by the generic timer's physical timer on the CPU that started it, which the kernel doesn't
+ * use otherwise (its own is the virtual timer).
  */
 test_device_interrupts :: fn(on: bool) {
     system :: current_system()
     system.test_interrupts = on
     if on {
-        pend_test_line(system)
+        aarch64.write_system_register(.CNTP_TVAL_EL0, aarch64.read_system_register(.CNTFRQ_EL0) / TEST_DEVICE_HZ)
+        aarch64.write_system_register(.CNTP_CTL_EL0, 1)
     }
+    else {
+        aarch64.write_system_register(.CNTP_CTL_EL0, 0)
+    }
+    aarch64.isb()
 }
 
 pend_test_line :: fn(system: ptr[ArchSystem]) {

@@ -132,10 +132,11 @@ def build_slopos_kernel(output: Path, architecture: str = "x86_64") -> None:
     run_hemera([f"--setting=targets=kernel,kernel_output={output},arch={architecture}", str(BUILD_PACKAGE)], "SlopOS's kernel")
 
 
-def build_slopos_programs(output: Path) -> None:
+def build_slopos_programs(output: Path, architecture: str = "x86_64") -> None:
     """Builds SlopOS's programs through its build package, into the folder output."""
     output.mkdir(parents=True, exist_ok=True)
-    run_hemera([f"--setting=targets=programs,programs_output={output.as_posix()}", str(BUILD_PACKAGE)], "SlopOS's programs")
+    run_hemera([f"--setting=targets=programs,programs_output={output.as_posix()},arch={architecture}", str(BUILD_PACKAGE)],
+               "SlopOS's programs")
 
 
 def make_image(kernel: Path, programs: list[Path], limine: Path, xorriso: Path, folder: Path, command_line: str, kaslr: bool) -> Path:
@@ -243,10 +244,9 @@ def main() -> int:
             else:
                 build_kernel(arguments.package.resolve(), arguments.linker_script.resolve(), kernel)
         programs_folder = arguments.programs
-        # Programs are built for x86-64 only so far
-        if programs_folder is None and arguments.kernel is None and arguments.package is None and not aarch64:
+        if programs_folder is None and arguments.kernel is None and arguments.package is None:
             programs_folder = folder / "programs"
-            build_slopos_programs(programs_folder)
+            build_slopos_programs(programs_folder, arguments.arch)
         programs = sorted(programs_folder.glob("*.elf"), key=lambda path: (path.name != "root_task.elf", path.name))             if programs_folder is not None else []
         # The kernel's own regions follow its command line; the image and the direct map, Limine's configuration
         command_line = arguments.command_line + (" no_kaslr" if arguments.no_kaslr else "")

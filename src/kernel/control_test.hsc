@@ -47,7 +47,8 @@ CONTROL_IDS_OFFSET : u64 : 1024
 CONTROL_STOP_OFFSET : u64 : 1088
 CONTROL_PACKETS_OFFSET : u64 : 1152
 CONTROL_REGISTERS_OFFSET : u64 : 1280
-CONTROL_READ_OFFSET : u64 : 1536
+// After the registers, which are up to 34 u64s
+CONTROL_READ_OFFSET : u64 : 1600
 CONTROL_KEY : u64 : 21
 WATCH_KEY : u64 : 22
 EXIT_WATCH_KEY : u64 : 23
@@ -56,8 +57,20 @@ SKIPPED_VALUE : u64 : 12345
 CHANGED_VALUE : u64 : 777
 FAULT_AT : u64 : 0x6000000
 FAULT_VALUE : u64 : 4242
-REGISTER_RAX :: 0
-REGISTER_RDX :: 3
+/*
+ * In a thread's registers as a debugger sees them (slop_os.THREAD_REGISTERS): the system call number's, and
+ * the result's tag's and first value's
+ */
+#if TARGET_ARCH == .x86_64 {
+    REGISTER_NUMBER :: 0
+    REGISTER_TAG :: 0
+    REGISTER_FIRST :: 3
+}
+#else_if TARGET_ARCH == .arm64 {
+    REGISTER_NUMBER :: 8
+    REGISTER_TAG :: 0
+    REGISTER_FIRST :: 1
+}
 COUNTING_NANOSECONDS : u64 : 10_000_000
 RESUME_NANOSECONDS : u64 : 200_000_000
 
@@ -131,7 +144,7 @@ user_debugger #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) 
     t1 :: page^[CONTROL_SLOT_T1]
     t2 :: page^[CONTROL_SLOT_T2]
     stop :: cast[ptr[slop_os.StopInfo]](base + CONTROL_STOP_OFFSET)
-    registers :: cast[ptr[mut u64[18]]](base + CONTROL_REGISTERS_OFFSET)
+    registers :: cast[ptr[mut u64[slop_os.THREAD_REGISTERS]]](base + CONTROL_REGISTERS_OFFSET)
     port :: slop_os.port_create(budget) or_else handle_at[slop_os.Port](0)
     // T's threads, an intercept, a second refused, and a watch for its end
     page^[8] = cast[u64](slop_os.process_threads(target, cast[ptr[mut u64[4]]](base + CONTROL_IDS_OFFSET)^) or_else 0)
@@ -158,9 +171,9 @@ user_debugger #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) 
     page^[13] = if stop.thread == t1 { cast[u64](cast[u32](stop.point)) } else { cast[u64](0) }
     page^[14] = cast[u64](stop.number)
     page^[15] = tag_of(slop_os.thread_read_registers(target, t1, registers^))
-    page^[16] = registers^[REGISTER_RAX]
-    registers^[REGISTER_RAX] = 0
-    registers^[REGISTER_RDX] = SKIPPED_VALUE
+    page^[16] = registers^[REGISTER_NUMBER]
+    registers^[REGISTER_TAG] = 0
+    registers^[REGISTER_FIRST] = SKIPPED_VALUE
     page^[17] = tag_of(slop_os.thread_write_registers(target, t1, registers^))
     page^[18] = tag_of(slop_os.intercept_resume(intercept, t1, .Skip))
     // The second runs, and its result is changed at its exit
@@ -170,7 +183,7 @@ user_debugger #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) 
     next_stop(port, intercept, base)
     page^[20] = cast[u64](cast[u32](stop.point))
     _ = slop_os.thread_read_registers(target, t1, registers^)
-    registers^[REGISTER_RDX] = CHANGED_VALUE
+    registers^[REGISTER_FIRST] = CHANGED_VALUE
     _ = slop_os.thread_write_registers(target, t1, registers^)
     page^[21] = tag_of(slop_os.intercept_resume(intercept, t1, .Skip))
     _ = slop_os.intercept_resume(intercept, t1, .Continue)

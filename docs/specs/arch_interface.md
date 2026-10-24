@@ -10,8 +10,8 @@ The arch interface is the boundary between the arch layer (L1) and the kernel co
 Status: **specified**, and implemented on x86-64 (`src/arch/x86_64`): CPU setup, interrupts, the timer
 and the miscellaneous functions (roadmap M1), paging (M2), wired interrupts (M3), and user and vector
 state (M4). On AArch64 (`src/arch/aarch64`): CPU setup, entry, paging and the miscellaneous functions
-(roadmap A3), interrupts, wired interrupts and the timer (A4); user and vector state come with A5, and MSIs
-and an NMI later. Choices and alternatives are in
+(roadmap A3), interrupts, wired interrupts and the timer (A4), and user and vector state (A5); MSIs and an
+NMI come later. Choices and alternatives are in
 `../../knowledge/decisions/0032-arch-interface.md`. Four-digit numbers like `0023` refer
 to decision records in `../../knowledge/decisions/`.
 
@@ -676,8 +676,8 @@ How `arch/x86_64` meets the interface (`../../knowledge/design/arch-x86-64.md`):
 
 ## AArch64
 
-How `arch/aarch64` meets the interface so far (roadmap A3 and A4, `../../knowledge/decisions/0064-aarch64-boot-as-built.md`,
-`0065-aarch64-interrupts-as-built.md`). It finds its devices in the device tree (`src/devicetree`): the GICv3, the
+How `arch/aarch64` meets the interface (roadmap A3 to A5, `../../knowledge/decisions/0064-aarch64-boot-as-built.md`,
+`0065-aarch64-interrupts-as-built.md`, `0066-aarch64-user-mode-as-built.md`). It finds its devices in the device tree (`src/devicetree`): the GICv3, the
 virtual timer's interrupt and the PL011.
 
 | Interface | AArch64 |
@@ -686,7 +686,7 @@ virtual timer's interrupt and the PL011.
 | `UserRegisters` | `aarch64.RegisterFrame` |
 | `ArchCpu` | The carrier block and context for entries, the kernel stack's limit and top, the early console's address, the `ArchSystem`, its MPIDR affinity and its redistributor; `TPIDR_EL1` points at it |
 | `init_system` | The vector table; from the device tree, the GICv3's distributor (turned on, with affinity routing and group 1) and redistributor region, mapped through the direct map, and the virtual timer's PPI |
-| `init_cpu` | `TPIDR_EL1`; `VBAR_EL1`; `SP_EL1` at the kernel stack's top (`aarch64.write_sp_el1`), since Limine starts the kernel on `SP_EL0`, which stays its boot stack; PAN on, and kept on at every exception (`SCTLR_EL1.SPAN` clear); `CPACR_EL1` 0, so floating point and SIMD trap; `MAIR_EL1`; `TCR_EL1` with 16-bit ASIDs where the CPU has them, ASIDs from `TTBR0`, and `TTBR0` walks off until an address space is activated; its redistributor (found by MPIDR affinity) awake, with its SGIs and the timer's PPI enabled in group 1, and its CPU interface (`ICC_SRE_EL1`, `ICC_PMR_EL1`, `ICC_IGRPEN1_EL1`) |
+| `init_cpu` | `TPIDR_EL1`; `VBAR_EL1`; `SP_EL1` at the kernel stack's top (`aarch64.write_sp_el1`), since Limine starts the kernel on `SP_EL0`, which stays its boot stack; PAN on, and kept on at every exception (`SCTLR_EL1.SPAN` clear); `CPACR_EL1.FPEN` set, so floating point and SIMD don't trap at EL0 or EL1; `MAIR_EL1`; `TCR_EL1` with 16-bit ASIDs where the CPU has them, ASIDs from `TTBR0`, and `TTBR0` walks off until an address space is activated; its redistributor (found by MPIDR affinity) awake, with its SGIs and the timer's PPI enabled in group 1, and its CPU interface (`ICC_SRE_EL1`, `ICC_PMR_EL1`, `ICC_IGRPEN1_EL1`) |
 | `AddressSpaceTag` | ASID: 65536 tags with 16-bit ASIDs, otherwise 256 |
 | Paging | 4 KiB pages, 48-bit addresses, four levels. The kernel's table is `TTBR1`'s and every address space's `TTBR0`'s, so nothing is copied to share the kernel half. Table entries count the valid entries below them in bits 11:2. Kernel mappings are global, user ones `nG` with their ASID, PXN, and only reachable from EL0. `MAIR_EL1`: `WriteBack` index 0 (as Limine's), `WriteCombining` index 1 (normal non-cacheable), `Device` index 2 (Device-nGnRnE). A changed memory type is break-before-make |
 | TLB | `tlbi vae1` by ASID for user pages, `vaae1` for the kernel's global ones, `aside1` for a tag, `vmalle1` for everything. The first `activate` on a CPU flushes everything, leaving nothing of the bootloader's tables |
@@ -695,11 +695,16 @@ virtual timer's interrupt and the PL011.
 | Wired interrupts | The distributor's SPIs (`ControllerKind.GicDistributor`), every one masked at first, routed by `GICD_IROUTER` to one CPU's affinity, with `GICD_ICFGR` for the trigger. The GIC has no polarity: an active-low line is inverted before it |
 | Timer | The generic timer's virtual counter and timer (`CNTVCT_EL0`, `CNTV_CVAL_EL0`, `CNTV_CTL_EL0`), at `CNTFRQ_EL0` |
 | `idle` | An `eret` to a wait loop at EL1, with `SP_EL1` at the kernel stack's top and interrupts unmasked, so the interrupt starts at the stack's top |
+| System calls | `svc #0`: the number in `x8`, arguments in `x0` to `x5`, results in `x0`, `x1` and `x2` (`../../knowledge/design/system-abi.md`). `restart_syscall` steps `ELR_EL1` back over the `svc` |
+| `init_user_registers` | Every register zero but `ELR_EL1` (the entry), `SP_EL0` and `x0` (the argument), with `SPSR_EL1` 0: EL0, no interrupt masked |
+| `return_to_user` | `aarch64.return_to_user`, with `SP_EL1` at the CPU's kernel stack's top |
+| User registers | `x0` to `x30`, `sp`, `pc` and `pstate` (34), of which user mode may only change `pstate`'s condition flags |
+| Vector state | `v0` to `v31`, `FPCR` and `FPSR`, 528 bytes, switched eagerly with `aarch64.save_fp_simd` and `restore_fp_simd`, as x86-64's XSAVE state is. SVE isn't kept yet |
 | `hardware_entropy` | `rndrrs`, where the CPU has `FEAT_RNG` |
 | `early_console_write` | The device tree's first PL011, through the direct map: `early_console_init` maps its registers there as a Device block in the bootloader's tables, and `init_kernel_page_table` again in the kernel's, as it does the GIC's, with `kernel_half_frames` (2 for each 2 MiB block) for its tables. Its address is in `TPIDR_EL1` until `init_cpu`, then in the `ArchCpu` |
 | `test_exit` | QEMU's semihosting, `SYS_EXIT` with `(code << 1) \| 1`, so codes read as the debug exit device's do |
 | `test_device` | SPI line 100 of the distributor, which nothing on QEMU `virt` uses, edge-triggered; `test_device_interrupts` pends it through `GICD_ISPENDR`, and again each time it's acknowledged and at every timer interrupt, until it's stopped |
-| Not yet | `msi_message`, which needs the GICv3 ITS, and `test_nmi`, which needs pseudo-NMIs or FEAT_NMI; user and vector state (A5) |
+| Not yet | `msi_message`, which needs the GICv3 ITS, and `test_nmi`, which needs pseudo-NMIs or FEAT_NMI |
 
 ## Not Covered
 

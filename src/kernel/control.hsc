@@ -291,27 +291,32 @@ copy_between :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], addres
     return true
 }
 
+// The most registers a debugger sees on any architecture: x86-64's 18, AArch64's 34.
+MAX_USER_REGISTERS :: 64
+
 // A thread's registers, as a debugger sees them (slop_os.THREAD_REGISTERS), written at buffer in space.
 read_registers :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], space: ptr[mut AddressSpace], buffer: u64) -> bool {
-    values : u64[32]
+    values : u64[MAX_USER_REGISTERS]
     count :: arch.user_register_count()
+    runtime.assert(count <= MAX_USER_REGISTERS, "MAX_USER_REGISTERS covers every architecture's")
     for i in 0..<cast[usize](count) {
-        values[i % 32] = arch.get_user_register(&thread.registers, cast[u32](i))
+        values[i % MAX_USER_REGISTERS] = arch.get_user_register(&thread.registers, cast[u32](i))
     }
     return copy_to_user(kernel, space, buffer, cast[u64](&values[0]), cast[u64](count) * 8)
 }
 
 // A parked thread's registers, set from buffer in space: why not, if they couldn't be.
 write_registers :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], space: ptr[mut AddressSpace], buffer: u64) -> slop_os.ControlError? {
-    values : u64[32]
+    values : u64[MAX_USER_REGISTERS]
     count :: arch.user_register_count()
+    runtime.assert(count <= MAX_USER_REGISTERS, "MAX_USER_REGISTERS covers every architecture's")
     if !copy_from_user(kernel, space, buffer, cast[u64](&values[0]), cast[u64](count) * 8) {
         return slop_os.ControlError.BadBuffer
     }
     // Checked on a copy, so a bad value leaves them as they were
     changed := thread.registers
     for i in 0..<cast[usize](count) {
-        if !arch.set_user_register(&changed, cast[u32](i), values[i % 32]) {
+        if !arch.set_user_register(&changed, cast[u32](i), values[i % MAX_USER_REGISTERS]) {
             return slop_os.ControlError.BadRegisters
         }
     }

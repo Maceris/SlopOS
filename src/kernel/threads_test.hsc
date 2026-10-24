@@ -20,7 +20,7 @@ import slop_os from "std/os"
  *
  * test_threads: THREADS_TEST_THREADS threads on 2 CPUs. Halfway through, the counts are noted; at the
  * end every thread has to have counted more since, so each was preempted and run again, and its XSAVE
- * area still has the xmm0 it started with, a pattern of its own, which a mix-up of vector states would
+ * state still has the first vector register (xmm0 or v0) it started with, a pattern of its own, which a mix-up of vector states would
  * have moved to another thread.
  *
  * test_budgets: on 1 CPU, a thread with a budget of 30 ms every 100 ms at priority 10, and one in the
@@ -36,9 +36,24 @@ BUDGETS_TEST_TICKS : u64 : 50
 TEST_CODE : u64 : 0x400000
 TEST_COUNTERS : u64 : 0x600000
 TEST_STACKS : u64 : 0x800000
-// Where xmm0 is in the XSAVE area's legacy region, and the SSE bit of the header's XSTATE_BV
-XMM0_OFFSET : u64 : 160
-XSTATE_BV_OFFSET : u64 : 512
+/*
+ * Where each architecture's first vector register is in a thread's vector state: xmm0 in the XSAVE area's
+ * legacy region, after the arch layer's 64-byte header, whose XSTATE_BV needs the SSE bit for it to count;
+ * or v0, first.
+ */
+#if TARGET_ARCH == .x86_64 {
+    VECTOR_0_OFFSET : u64 : 64 + 160
+    XSTATE_BV_OFFSET : u64 : 64 + 512
+
+    mark_vector_present :: fn(thread: ptr[Thread]) {
+        cast[ptr[mut u64]](thread.vector + XSTATE_BV_OFFSET)^ = 2
+    }
+}
+#else_if TARGET_ARCH == .arm64 {
+    VECTOR_0_OFFSET : u64 : 0
+
+    mark_vector_present :: fn(thread: ptr[Thread]) {}
+}
 
 USER_CODE :: arch_interface.Mapping.{protection = .ReadExecute, cache = .WriteBack, user = true, global = false}
 USER_DATA :: arch_interface.Mapping.{protection = .ReadWrite, cache = .WriteBack, user = true, global = false}
@@ -77,7 +92,7 @@ test_budgets :: fn(kernel: ptr[mut Kernel]) {
 
 /*
  * count threads in one address space, started: the first bound to a budget if budgeted. Each starts with
- * xmm0 holding its index plus one in every byte.
+ * its first vector register holding its index plus one in every byte.
  */
 start_threads_test :: fn(kernel: ptr[mut Kernel], count: usize, budgeted: bool) -> ptr[mut ThreadsTest]? {
     test :: allocate_object[ThreadsTest](&kernel.frames) or_else out_of_memory(&kernel.options, "threads test: no memory")
@@ -229,20 +244,18 @@ mapped_for_test :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], add
     }
 }
 
-// xmm0 is byte in all 16 of its bytes, and the header says the SSE state is there.
+// The first vector register is byte in all 16 of its bytes, and the state says it's there.
 mark_vector_state :: fn(thread: ptr[Thread], byte: u8) {
-    area :: thread.vector + 64
     for i in 0..<16 {
-        cast[ptr[mut u8]](area + XMM0_OFFSET + cast[u64](i))^ = byte
+        cast[ptr[mut u8]](thread.vector + VECTOR_0_OFFSET + cast[u64](i))^ = byte
     }
-    cast[ptr[mut u64]](area + XSTATE_BV_OFFSET)^ = 2
+    mark_vector_present(thread)
 }
 
-// Whether xmm0 in thread's saved state is still byte in every byte.
+// Whether the first vector register in thread's saved state is still byte in every byte.
 has_vector_mark :: fn(thread: ptr[Thread], byte: u8) -> bool {
-    area :: thread.vector + 64
     for i in 0..<16 {
-        if cast[ptr[u8]](area + XMM0_OFFSET + cast[u64](i))^ != byte {
+        if cast[ptr[u8]](thread.vector + VECTOR_0_OFFSET + cast[u64](i))^ != byte {
             return false
         }
     }
@@ -279,7 +292,7 @@ threads_test_tick :: fn(kernel: ptr[mut Kernel], tick: u64) {
             return void
         }
         if !has_vector_mark(thread, cast[u8](i + 1)) {
-            runtime.log_error("test_threads: thread %'s xmm0 isn't its own", i)
+            runtime.log_error("test_threads: thread %'s first vector register isn't its own", i)
             return void
         }
     }

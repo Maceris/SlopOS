@@ -1,6 +1,7 @@
 /*
- * Loading SlopOS programs (decisions/0004, 0058): position-independent ELF executables for x86-64, whose
- * only relocations are R_X86_64_RELATIVE. The kernel uses it for the root task, and the root task and the
+ * Loading SlopOS programs (decisions/0004, 0058): position-independent ELF executables for the architecture
+ * this is built for, x86-64's or AArch64's, whose only relocations are relative ones (R_X86_64_RELATIVE,
+ * R_AARCH64_RELATIVE). The kernel uses it for the root task, and the root task and the
  * process manager for every other program. It allocates nothing:
  *
  *     executable :: elf_loader.read(file)?        // checked: segments, entry, relocations
@@ -41,7 +42,7 @@ Executable :: struct {
     size : u64,
     segments : Segment[MAX_SEGMENTS],
     segment_count : usize,
-    // Its relocations, as file offset and count: RELA entries, each R_X86_64_RELATIVE into a writable segment
+    // Its relocations, as file offset and count: RELA entries, each RELATIVE_RELOCATION into a writable segment
     relocations : u64,
     relocation_count : u64,
     // What's read-only once it's relocated (PT_GNU_RELRO), from the image's base: pages to map without write
@@ -52,7 +53,7 @@ Executable :: struct {
 LoadError :: enum {
     // Not an ELF file, or one cut short
     NotElf,
-    // ELF, but not 64-bit little-endian x86-64, or not a version this reads
+    // ELF, but not 64-bit little-endian for this architecture, or not a version this reads
     Unsupported,
     // Not position-independent (ET_DYN), so it can't go at a random base
     NotPositionIndependent,
@@ -76,7 +77,15 @@ LoadError :: enum {
 
 // ELF's constants that this reads.
 ET_DYN : u64 : 3
-EM_X86_64 : u64 : 62
+// The machine programs are for, and their relative relocation: this architecture's
+#if TARGET_ARCH == .arm64 {
+    MACHINE : u64 : 183
+    RELATIVE_RELOCATION : u64 : 1027
+}
+#else {
+    MACHINE : u64 : 62
+    RELATIVE_RELOCATION : u64 : 8
+}
 PT_LOAD : u64 : 1
 PT_DYNAMIC : u64 : 2
 PT_INTERP : u64 : 3
@@ -94,7 +103,6 @@ DT_RELAENT : u64 : 9
 DT_TEXTREL : u64 : 22
 DT_REL : u64 : 17
 DT_JMPREL : u64 : 23
-R_X86_64_RELATIVE : u64 : 8
 HEADER_SIZE : u64 : 64
 PROGRAM_HEADER_SIZE : u64 : 56
 DYNAMIC_ENTRY_SIZE : u64 : 16
@@ -178,7 +186,7 @@ read :: fn(file: u8[]) -> Result[Executable, LoadError] {
     }
     kind :: read_le(file, 16, 2) or_return .Error(.NotElf)
     machine :: read_le(file, 18, 2) or_return .Error(.NotElf)
-    if machine != EM_X86_64 {
+    if machine != MACHINE {
         return .Error(.Unsupported)
     }
     if kind != ET_DYN {
@@ -268,7 +276,7 @@ read :: fn(file: u8[]) -> Result[Executable, LoadError] {
     return .Ok(executable)
 }
 
-// The dynamic section's relocations, checked: each R_X86_64_RELATIVE, into a writable segment.
+// The dynamic section's relocations, checked: each RELATIVE_RELOCATION, into a writable segment.
 read_dynamic :: fn(executable: ptr[mut Executable], file: u8[], address: u64, size: u64) -> Result[void, LoadError] {
     dynamic :: file_offset_of(executable, address, size) or_return .Error(.BadHeaders)
     relocations : u64 = 0
@@ -309,7 +317,7 @@ read_dynamic :: fn(executable: ptr[mut Executable], file: u8[], address: u64, si
         at :: table + i * RELA_SIZE
         offset :: read_le(file, at, 8) or_return .Error(.BadHeaders)
         info :: read_le(file, at + 8, 8) or_return .Error(.BadHeaders)
-        if info != R_X86_64_RELATIVE {
+        if info != RELATIVE_RELOCATION {
             return .Error(.UnsupportedRelocation)
         }
         target :: segment_at(executable, offset, 8) or_return .Error(.RelocationOutsideImage)

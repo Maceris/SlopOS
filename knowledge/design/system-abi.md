@@ -105,8 +105,10 @@ On x86-64:
   success value or error variants don't fit.
 - The kernel preserves every register except the result registers, including the context
   register, so a syscall stub is an ordinary Hemera function.
-- AArch64 and RISC-V get the same rules with their own registers, generated from the same
-  table, with the same numbers.
+- On AArch64 (`decisions/0066`): `svc #0`, the number in `x8`, up to six arguments in `x0` to `x5`,
+  and results in `x0` (0 or the error's tag), `x1` and `x2`, every other register kept.
+- RISC-V gets the same rules with its own registers, generated from the same table, with the same
+  numbers.
 
 **Numbering:** free until ABI v1, then append-only (`0025`).
 

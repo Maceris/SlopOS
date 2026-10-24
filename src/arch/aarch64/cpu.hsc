@@ -2,9 +2,9 @@
  * The AArch64 arch layer (L1): implements arch_interface (docs/specs/arch_interface.md, AArch64) for the
  * kernel core, which imports this package as arch.
  *
- * So far (roadmap A4, decisions/0065): CPU setup, exception entry, paging, the GICv3, the generic timer, the
- * early console and the miscellaneous functions, with the devices found in the device tree. User mode and
- * vector state come with A5; until then they're stubs (not_yet_implemented.hsc).
+ * Everything but MSIs and an NMI (not_yet_implemented.hsc): CPU setup, exception entry, paging, the GICv3,
+ * the generic timer, user mode and its vector state, the early console and the miscellaneous functions, with
+ * the devices found in the device tree (roadmap A3 to A5, decisions/0064 to 0066).
  */
 package arch_aarch64
 
@@ -55,8 +55,9 @@ ArchSystem :: struct {
     distributor_physical : u64,
     redistributors : u64,
     redistributors_size : u64,
-    // The virtual timer's interrupt ID.
+    // The virtual timer's interrupt ID, and the physical timer's, which drives the test device (gic.hsc).
     timer_interrupt : u32,
+    test_timer_interrupt : u32,
     // The 2 MiB blocks of device registers mapped in the direct map, by physical address (paging.hsc).
     device_blocks : u64[MAX_DEVICE_BLOCKS],
     device_block_count : u32,
@@ -73,14 +74,17 @@ UserRegisters :: struct {
 }
 
 /*
- * One thread's floating-point and SIMD state (arch_interface.VectorState): v0 to v31, then FPCR and FPSR.
- * Saving and restoring it comes with user mode (A5).
+ * One thread's floating-point and SIMD state (arch_interface.VectorState): v0 to v31, then FPCR and FPSR, as
+ * aarch64.save_fp_simd writes them (vector.hsc).
  */
 VectorState :: struct #align(16) {
     registers : u64[64],
     fpcr : u64,
     fpsr : u64,
 }
+
+// CPACR_EL1.FPEN (bits 20 and 21): floating point and SIMD don't trap at EL0 or EL1, so threads' state is switched eagerly (vector.hsc).
+CPACR_FP_ON : u64 : 3 << 20
 
 // SCTLR_EL1's SPAN (bit 23): clear, so taking an exception to EL1 sets PSTATE.PAN.
 SCTLR_SPAN : u64 : 1 << 23
@@ -116,6 +120,7 @@ init_system :: fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareT
     features :: detect_features()
     system.asid16 = has(&features, .Aarch64Asid16)
     system.timer_interrupt = DEFAULT_TIMER_INTERRUPT
+    system.test_timer_interrupt = DEFAULT_TEST_TIMER_INTERRUPT
     tree := devicetree.open(devicetree_address(firmware, direct_map_offset)) or_return void
     gic :: devicetree.find_compatible(&tree, "arm,gic-v3")
     if gic is_some {
@@ -133,9 +138,14 @@ init_system :: fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareT
         // Four interrupts of three cells each: secure and non-secure physical, virtual, hypervisor
         interrupts :: devicetree.property(&tree, &node, "interrupts")
         if interrupts is_some {
-            number :: devicetree.cell(interrupts or_else devicetree.Property.{}, 2 * 3 + 1)
+            value :: interrupts or_else devicetree.Property.{}
+            number :: devicetree.cell(value, 2 * 3 + 1)
             if number is_some {
                 system.timer_interrupt = FIRST_PPI + (number or_else 0)
+            }
+            physical :: devicetree.cell(value, 1 * 3 + 1)
+            if physical is_some {
+                system.test_timer_interrupt = FIRST_PPI + (physical or_else 0)
             }
         }
     }
@@ -163,8 +173,8 @@ devicetree_address :: fn(firmware: ptr[boot_info.FirmwareTables], direct_map_off
 
 /*
  * Set the calling CPU up: TPIDR_EL1 at its ArchCpu, the vector table, SP_EL1 at the kernel stack's top,
- * Privileged Access Never on and kept on at every exception, floating point trapping (the kernel uses
- * none), the memory attributes, 16-bit ASIDs where the CPU has them, with walks through TTBR0 off until an
+ * Privileged Access Never on and kept on at every exception, floating point on for user threads (the kernel
+ * uses none), the memory attributes, 16-bit ASIDs where the CPU has them, with walks through TTBR0 off until an
  * address space is activated, and its GIC redistributor and CPU interface.
  *
  * Limine starts the kernel on SP_EL0 (PSTATE.SP clear), its boot stack, and every exception taken to EL1
@@ -193,7 +203,7 @@ init_cpu :: fn(
     }
     aarch64.write_system_register(.SCTLR_EL1, aarch64.read_system_register(.SCTLR_EL1) & ~SCTLR_SPAN)
     aarch64.write_system_register_encoded(3, 0, 4, 2, 3, PAN_ON)
-    aarch64.write_system_register(.CPACR_EL1, 0)
+    aarch64.write_system_register(.CPACR_EL1, CPACR_FP_ON)
     init_paging(system)
     init_cpu_interface(system, cpu)
     aarch64.isb()

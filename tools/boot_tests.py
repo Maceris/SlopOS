@@ -16,8 +16,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BOOT = ROOT / "tools" / "boot.py"
-# SlopOS's programs, built once, carried as modules by the tests whose arguments have WITH_PROGRAMS
+# SlopOS's programs, built once for each architecture, carried as modules by the tests whose arguments have WITH_PROGRAMS
 PROGRAMS = Path()
+PROGRAMS_AARCH64 = Path()
 WITH_PROGRAMS = "<programs>"
 
 # Name, the code expected, and boot.py's arguments
@@ -88,34 +89,25 @@ MORESTACK_TESTS = [
 ]
 
 
-# The AArch64 kernel's (tools/boot.py --arch aarch64): what doesn't need user mode yet (knowledge/roadmap.md, A)
-AARCH64_TESTS = [
-    ("AArch64: boots and halts", 0, ["--expect-line=[info] boot memory reclaimed"]),
-    ("AArch64: reports a kernel fault", 1, ["--command-line=test_exit test_fault"]),
-    ("AArch64: reports a failed assertion", 3, ["--command-line=test_exit test_assert"]),
-    ("AArch64: refuses a CPU below ARMv8.2-A with LSE", 2, ["--cpu=cortex-a57"]),
-    ("AArch64: starts every CPU", 0, ["--expect-line=[info] 4 of 4 CPUs online", "--expect-line=[info] boot memory reclaimed",
-                                      "--", "-smp", "4"]),
-    ("AArch64: keeps the kernel's code read-only", 1, ["--command-line=test_exit test_write_code",
-        "--expect-line=[info] test_write_code: writing to the kernel's code"]),
-    ("AArch64: allocates from the kernel heap", 0, ["--command-line=test_exit test_heap",
-        "--expect-line=[info] test_heap: 200 blocks kept their contents, grown, shrunk and freed"]),
-    ("AArch64: keeps time with the counter", 0, ["--command-line=test_exit test_clock",
-        "--expect-line=[info] test_clock: 10 ms by the counter is 10 ms by the clock"]),
-    ("AArch64: shoots down TLB entries on every CPU", 0, ["--command-line=test_exit test_shootdown",
-        "--expect-line=[info] test_shootdown: every CPU read the new page after the shootdown", "--", "-smp", "4"]),
-    ("AArch64: routes a device's interrupts through the GIC", 0, ["--command-line=test_exit test_ioapic",
-        "--expect-line=[info] test_ioapic: 10 interrupts arrived from the test device"]),
-    ("AArch64: switches between fibers", 0, ["--command-line=test_exit test_fibers",
-        "--expect-line=[info] test_fibers: stack traces follow suspended and resumed fibers"]),
-    ("AArch64: shares fiber pools between CPUs", 0, ["--command-line=test_exit test_pool",
-        "--expect-line=[info] test_pool: two pools shared five CPUs, each fiber staying on its own pool's", "--", "-smp", "6"]),
-]
+# Every test again on AArch64 (tools/boot.py --arch aarch64, always through UEFI), but those that can't apply there:
+# BIOS, x86-64's baseline, and the NMI, which AArch64 has no counterpart for yet (knowledge/decisions/0065)
+AARCH64_LEFT_OUT = {"boots and halts (BIOS)", "refuses a CPU below x86-64-v3", "resumes after an NMI"}
+AARCH64_NAMES = {
+    "boots and halts (UEFI)": "boots and halts",
+    "routes a device's interrupts through the I/O APIC": "routes a device's interrupts through the GIC",
+}
 
-AARCH64_MORESTACK_TESTS = [
-    ("AArch64: grows a fiber's stack onto segments", 0, ["--command-line=test_exit test_segments",
-        "--expect-line=[info] test_segments: stack traces leave out morestack, across segments"]),
-]
+
+def aarch64_tests(tests: list) -> list:
+    """The tests for AArch64, named so, with AArch64's own baseline check among them."""
+    adapted = [(f"AArch64: {AARCH64_NAMES.get(name, name)}", expected, arguments)
+               for name, expected, arguments in tests if name not in AARCH64_LEFT_OUT]
+    return adapted + [("AArch64: refuses a CPU below ARMv8.2-A with LSE", 2, ["--cpu=cortex-a57"])]
+
+
+AARCH64_TESTS = aarch64_tests(TESTS)
+
+AARCH64_MORESTACK_TESTS = aarch64_tests(MORESTACK_TESTS)[:-1]
 
 
 # Where a failed build's output is kept, since a run's own output may be cut short or filtered
@@ -144,17 +136,18 @@ def build_kernel(output: Path, stack_check: str = "trap", architecture: str = "x
     return False
 
 
-def build_programs(output: Path) -> bool:
-    """Builds SlopOS's programs through the build package, into the folder output."""
+def build_programs(output: Path, architecture: str = "x86_64") -> bool:
+    """Builds SlopOS's programs through the build package, for an architecture, into the folder output."""
     output.mkdir(parents=True, exist_ok=True)
-    command = ["hemera", f"--setting=targets=programs,programs_output={output.as_posix()}", str(ROOT / "src" / "build")]
+    command = ["hemera", f"--setting=targets=programs,programs_output={output.as_posix()},arch={architecture}",
+               str(ROOT / "src" / "build")]
     if os.environ.get("HEMERA_INSTALL"):
         command.insert(1, f"--install-path={os.environ['HEMERA_INSTALL']}")
     return subprocess.run(command).returncode == 0
 
 
 def main() -> int:
-    global PROGRAMS
+    global PROGRAMS, PROGRAMS_AARCH64
     with tempfile.TemporaryDirectory(prefix="slopos-boot-tests-") as temporary:
         kernel = Path(temporary) / "kernel.elf"
         if not build_kernel(kernel):
@@ -163,6 +156,10 @@ def main() -> int:
         PROGRAMS = Path(temporary) / "programs"
         if not build_programs(PROGRAMS):
             print("FAILED: the programs don't build")
+            return 1
+        PROGRAMS_AARCH64 = Path(temporary) / "programs_aarch64"
+        if not build_programs(PROGRAMS_AARCH64, "aarch64"):
+            print("FAILED: the programs don't build for AArch64")
             return 1
         morestack_kernel = Path(temporary) / "kernel_morestack.elf"
         if not build_kernel(morestack_kernel, "morestack"):
@@ -228,7 +225,8 @@ def run_tests(kernel: Path, tests: list, more: list = []) -> int:
     """Boots kernel for each test, with more of boot.py's arguments, and gives how many failed."""
     failed = 0
     for name, expected, arguments in tests:
-        arguments = more + [f"--programs={PROGRAMS}" if argument == WITH_PROGRAMS else argument for argument in arguments]
+        programs = PROGRAMS_AARCH64 if "--arch=aarch64" in more else PROGRAMS
+        arguments = more + [f"--programs={programs}" if argument == WITH_PROGRAMS else argument for argument in arguments]
         result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", "--timeout=60", f"--expect={expected}",
                                  *arguments], capture_output=True, text=True)
         passed = result.returncode == 0

@@ -21,8 +21,8 @@ import frames from "frames"
  * - it makes an IRQ for the device's line (a second for the same line is refused, and so is making one
  *   without the platform capability), binds it to a port, and once the kernel starts the device, takes
  *   DEVICES_TEST_INTERRUPTS interrupts through Irq packets, acknowledging each;
- * - device memory over RAM the kernel owns is refused; over the emulator's HPET it maps, and reads the
- *   HPET's vendor;
+ * - device memory over RAM the kernel owns is refused; over a device the emulator always has, it maps, and
+ *   reads an ID the device gives: the HPET's vendor on x86-64, the PL011's first peripheral ID on AArch64;
  * - a window onto memory through a read-only handle can't be mapped writable, maps read-only and shows
  *   what was written through the memory; closing the memory destroys the window and its mapping.
  * Then the kernel destroys the process, and every IRQ, memory object and mapping has to be gone.
@@ -44,9 +44,20 @@ DEVICE_SLOT_STOP :: 41
 DEVICE_SLOT_DONE :: 42
 DEVICE_PACKETS_OFFSET : u64 : 256
 IRQ_KEY : u64 : 11
-// QEMU's HPET, where its firmware tables put it; its first register's high half is its vendor.
-QEMU_HPET : u64 : 0xfed00000
-HPET_VENDOR : u64 : 0x8086
+#if TARGET_ARCH == .x86_64 {
+    // QEMU's HPET, where its firmware tables put it; its first register's high half is its vendor.
+    TEST_DEVICE_MEMORY : u64 : 0xfed00000
+    TEST_DEVICE_ID_OFFSET : u64 : 0
+    TEST_DEVICE_ID_SHIFT : u32 : 16
+    TEST_DEVICE_ID : u64 : 0x8086
+}
+#else_if TARGET_ARCH == .arm64 {
+    // QEMU virt's PL011, where its device tree puts it; UARTPeriphID0 is 0x11.
+    TEST_DEVICE_MEMORY : u64 : 0x09000000
+    TEST_DEVICE_ID_OFFSET : u64 : 0xfe0
+    TEST_DEVICE_ID_SHIFT : u32 : 0
+    TEST_DEVICE_ID : u64 : 0x11
+}
 DEVICE_AT : u64 : 0x3000000
 WINDOWED_AT : u64 : 0x4000000
 WINDOW_AT : u64 : 0x5000000
@@ -105,10 +116,10 @@ user_driver #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[64]]) #n
     read :: slop_os.PROTECTION_READ
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     page^[18] = tag_of(slop_os.memory_create_physical(platform, budget, page^[DEVICE_SLOT_RAM], frames.FRAME_SIZE, .Device))
-    hpet :: slop_os.memory_create_physical(platform, budget, QEMU_HPET, frames.FRAME_SIZE, .Device)
-    page^[19] = tag_of(hpet)
-    page^[20] = tag_of(slop_os.memory_map(hpet or_else handle_at[slop_os.Memory](0), space, DEVICE_AT, 0, frames.FRAME_SIZE, read))
-    page^[21] = cast[u64](intrinsics.volatile_load_u32(cast[ptr[u32]](DEVICE_AT)) >> 16)
+    device :: slop_os.memory_create_physical(platform, budget, TEST_DEVICE_MEMORY, frames.FRAME_SIZE, .Device)
+    page^[19] = tag_of(device)
+    page^[20] = tag_of(slop_os.memory_map(device or_else handle_at[slop_os.Memory](0), space, DEVICE_AT, 0, frames.FRAME_SIZE, read))
+    page^[21] = cast[u64](intrinsics.volatile_load_u32(cast[ptr[u32]](DEVICE_AT + TEST_DEVICE_ID_OFFSET)) >> TEST_DEVICE_ID_SHIFT)
     // A window, through a read-only handle
     memory :: slop_os.memory_create(budget, 4 * frames.FRAME_SIZE) or_else handle_at[slop_os.Memory](0)
     _ = slop_os.memory_map(memory, space, WINDOWED_AT, 0, 4 * frames.FRAME_SIZE, read_write)
@@ -184,7 +195,12 @@ test_devices :: fn(kernel: ptr[mut Kernel]) {
     }
     // What the firmware tables would say of the test device
     device :: arch.test_device()
-    slots^[DEVICE_SLOT_KIND] = cast[u64](cast[u32](slop_os.ControllerKind.IoApic))
+    kind : slop_os.ControllerKind = match device.kind {
+        case .IoApic => .IoApic
+        case .GicDistributor => .GicDistributor
+        case _ => .Plic
+    }
+    slots^[DEVICE_SLOT_KIND] = cast[u64](cast[u32](kind))
     slots^[DEVICE_SLOT_REGISTERS] = cast[u64](device.registers)
     slots^[DEVICE_SLOT_LINE] = cast[u64](device.line)
     slots^[DEVICE_SLOT_FLAGS] = (if device.trigger == .Level { cast[u64](slop_os.IRQ_LEVEL) } else { cast[u64](0) })
@@ -249,7 +265,7 @@ check_device_results :: fn(test: ptr[DevicesTest]) {
         0, 1, device_tag(.BadAddress),
         0, device_tag(.LineInUse), device_tag(.WrongKind), 0,
         1, 1, 0,
-        device_tag(.BadAddress), 0, 0, HPET_VENDOR,
+        device_tag(.BadAddress), 0, 0, TEST_DEVICE_ID,
         0, tag(.MissingRight), 0, 1002,
         0, cast[u64](cast[u32](slop_os.HandleError.ObjectGone)), tag(.NotMapped),
     ]
