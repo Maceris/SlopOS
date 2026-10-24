@@ -48,6 +48,17 @@ Irq :: struct #align(16) {
     // Its port binding, and that binding's generation, which changes once the port drops it.
     binding : u64,
     binding_generation : u32,
+    /*
+     * A message-signaled IRQ's (devices.hsc), whose line is its event: its Device, and its neighbors among the
+     * device's IRQs, under the device's lock, and whether it's there; its device's MSI source, and its message.
+     */
+    msi : bool,
+    device : u64,
+    device_next : u64,
+    device_previous : u64,
+    in_device : bool,
+    msi_source : u32,
+    message : arch_interface.MsiMessage,
 }
 
 /*
@@ -109,9 +120,12 @@ release_platform :: fn(kernel: ptr[mut Kernel], platform: ptr[mut Platform]) {
 release_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
 }
 
-// Destroying an IRQ: its line masked, its route forgotten, its binding dropped.
+// Destroying an IRQ: its line masked, or its event no longer delivered; its route forgotten, its binding dropped.
 destroy_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
-    if cast[usize](irq.slot) < MAX_DEVICE_INTERRUPTS {
+    if irq.msi {
+        destroy_msi_irq(kernel, irq)
+    }
+    else if cast[usize](irq.slot) < MAX_DEVICE_INTERRUPTS {
         if kernel.options.test_device && irq.line == arch.test_device().line {
             arch.test_device_interrupts(false)
         }

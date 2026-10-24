@@ -664,6 +664,76 @@ sys_memory_create_physical :: fn(thread: ptr[mut Thread], platform: slop_os.Plat
     return .Ok(cast[slop_os.Memory](handle))
 }
 
+// ---- Devices and DMA (devices.hsc)
+
+sys_device_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget, address: u32, msi_source: u32)
+    -> Result[slop_os.Device, slop_os.DeviceError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    _ = platform_of(thread, platform)?
+    paying :: paying_budget[slop_os.DeviceError](process, budget)?
+    made :: create_device(kernel, cast[u64](process), paying, address, msi_source)?
+    handle :: owning_handle[slop_os.DeviceError](kernel, process, cast[u64](made), false)?
+    return .Ok(cast[slop_os.Device](handle))
+}
+
+sys_device_attach :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, device: slop_os.Device, domain: slop_os.DmaDomain)
+    -> Result[void, slop_os.DeviceError] {
+    process :: process_of(thread)
+    _ = platform_of(thread, platform)?
+    found :: object_of[slop_os.DeviceError](process, cast[slop_os.Handle](device), slop_os.ObjectKind.Device, cast[slop_os.Rights](0))?
+    target :: object_of[slop_os.DeviceError](process, cast[slop_os.Handle](domain), slop_os.ObjectKind.DmaDomain, cast[slop_os.Rights](0))?
+    attach_device(cast[ptr[mut Device]](found), cast[ptr[DmaDomain]](target))
+    return .Ok
+}
+
+sys_irq_create_msi :: fn(thread: ptr[mut Thread], device: slop_os.Device, budget: slop_os.MemoryBudget) -> Result[slop_os.Irq, slop_os.DeviceError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    found :: object_of[slop_os.DeviceError](process, cast[slop_os.Handle](device), slop_os.ObjectKind.Device, cast[slop_os.Rights](0))?
+    paying :: paying_budget[slop_os.DeviceError](process, budget)?
+    made :: create_msi_irq(kernel, cast[u64](process), paying, cast[ptr[mut Device]](found))?
+    handle :: owning_handle[slop_os.DeviceError](kernel, process, cast[u64](made), false)?
+    return .Ok(cast[slop_os.Irq](handle))
+}
+
+// A wired line's IRQ has no message.
+sys_irq_message :: fn(thread: ptr[mut Thread], irq: slop_os.Irq) -> Result[slop_os.MsiMessage, slop_os.DeviceError] {
+    object :: object_of[slop_os.DeviceError](process_of(thread), cast[slop_os.Handle](irq), slop_os.ObjectKind.Irq, cast[slop_os.Rights](0))?
+    found :: cast[ptr[Irq]](object)
+    if !found.msi {
+        return .Error(.NoMsi)
+    }
+    return .Ok(slop_os.MsiMessage.{address = found.message.address, data = found.message.data})
+}
+
+sys_dma_domain_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget)
+    -> Result[slop_os.DmaDomain, slop_os.DeviceError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    _ = platform_of(thread, platform)?
+    paying :: paying_budget[slop_os.DeviceError](process, budget)?
+    made :: create_dma_domain(kernel, cast[u64](process), paying)?
+    handle :: owning_handle[slop_os.DeviceError](kernel, process, cast[u64](made), false)?
+    return .Ok(cast[slop_os.DmaDomain](handle))
+}
+
+sys_dma_memory_create :: fn(thread: ptr[mut Thread], domain: slop_os.DmaDomain, budget: slop_os.MemoryBudget, size: u64, limit: u64)
+    -> Result[slop_os.Memory, slop_os.DeviceError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    found :: object_of[slop_os.DeviceError](process, cast[slop_os.Handle](domain), slop_os.ObjectKind.DmaDomain, cast[slop_os.Rights](0))?
+    paying :: paying_budget[slop_os.DeviceError](process, budget)?
+    made :: create_dma_memory(kernel, cast[u64](process), paying, cast[ptr[DmaDomain]](found), size, limit)?
+    handle :: owning_handle[slop_os.DeviceError](kernel, process, cast[u64](made), false)?
+    return .Ok(cast[slop_os.Memory](handle))
+}
+
+sys_memory_device_address :: fn(thread: ptr[mut Thread], memory: slop_os.Memory) -> Result[u64, slop_os.DeviceError] {
+    object :: object_of[slop_os.DeviceError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, cast[slop_os.Rights](0))?
+    return device_address_of(cast[ptr[Memory]](object))
+}
+
 // ---- Process control (control.hsc, intercepts.hsc): rights on a process cover its subtree (decisions/0017)
 
 // The process a handle names, if the handle has right.

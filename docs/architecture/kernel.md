@@ -101,6 +101,11 @@ the kernel logger, and an assertion handler that stops the kernel.
   their registers mapped in the window, their lines routed to device interrupt IDs, which each CPU has
   its own of. A level-triggered line is masked when its interrupt arrives. The kernel parses no firmware
   tables; until the platform service exists, tests register the emulator's I/O APIC.
+- **Devices and DMA** (`src/kernel/devices.hsc`, `0073`): a Device is a PCIe function, whose message-signaled
+  IRQs are routed to the same device interrupt IDs, through the local APICs or the GICv3's ITS; DMA memory is
+  pinned in one block of frames (`frames.allocate_below`), in a DMA domain, untranslated until there's an IOMMU.
+- **The firmware tables** (`src/kernel/firmware.hsc`, `0073`) are found and copied, ACPI's or the device tree,
+  into read-only memory for the root task before boot memory is reclaimed; the kernel reads nothing in them.
 - **The clock** (`src/kernel/clock.hsc`): monotonic nanoseconds since the timer started, the same on every
   CPU, as every context's `clock`. No wall clock (`0009`).
 - **Ticks**: every CPU's timer interrupts 100 times a second, for the scheduler.
@@ -124,7 +129,8 @@ the kernel logger, and an assertion handler that stops the kernel.
 | What | Roadmap |
 |---|---|
 | The generated ABI package | M5 |
-| I/O-port ranges, IOMMU domains, message-signaled interrupts | M7 |
+| I/O-port ranges | M7 |
+| IOMMUs, translating DMA domains | D, right after M7 |
 | Destroying large subtrees with preemption points | M5 |
 | Loading programs, the root task, user space | M6 |
 | The platform service, PCIe, drivers | M7 |

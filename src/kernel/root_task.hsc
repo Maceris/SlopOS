@@ -25,6 +25,7 @@ import test_device from "../test_device"
  * - "platform", the platform capability;
  * - "debug_log", a debug log;
  * - "command_line", the kernel's command line, its bytes then zeros;
+ * - "firmware", the firmware tables' copy (firmware.hsc, slop_os.FirmwareTables), read-only, if the boot has them;
  * - "test_device", with test_device on the command line: what the firmware tables say of the test device;
  * - "module:<name>", each other boot module, a read-only memory object over the frames it was loaded into.
  * Its own handles are to itself, its address space and the root memory budget, and its startup block
@@ -287,6 +288,16 @@ write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], sp
     count = add_grant(grants, count, "debug_log", .DebugLog, log)
     command_line :: copy_of_command_line(kernel, process) or_return "no memory for its command line"
     count = add_grant(grants, count, "command_line", .Memory, command_line)
+    if kernel.firmware != 0 {
+        firmware :: kernel.firmware
+        kernel.firmware = 0
+        match adopt(cast[u64](process), firmware) {
+            case Ok => {}
+            case Error(error) => return "no firmware tables: it's being destroyed"
+        }
+        handle :: handle_for(kernel, process, firmware, .Memory, true) or_return "no handle to the firmware tables"
+        count = add_grant(grants, count, "firmware", .Memory, handle)
+    }
     if kernel.options.test_device {
         device :: test_device_page(kernel, process) or_return "no memory for its test device"
         count = add_grant(grants, count, "test_device", .Memory, device)

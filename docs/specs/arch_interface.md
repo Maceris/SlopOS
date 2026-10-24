@@ -10,8 +10,8 @@ The arch interface is the boundary between the arch layer (L1) and the kernel co
 Status: **specified**, and implemented on x86-64 (`src/arch/x86_64`): CPU setup, interrupts, the timer
 and the miscellaneous functions (roadmap M1), paging (M2), wired interrupts (M3), and user and vector
 state (M4). On AArch64 (`src/arch/aarch64`): CPU setup, entry, paging and the miscellaneous functions
-(roadmap A3), interrupts, wired interrupts and the timer (A4), and user and vector state (A5); MSIs and an
-NMI come later. Choices and alternatives are in
+(roadmap A3), interrupts, wired interrupts and the timer (A4), user and vector state (A5), and MSIs through the
+GICv3's ITS (M7); an NMI comes later. Choices and alternatives are in
 `../../knowledge/decisions/0032-arch-interface.md`. Four-digit numbers like `0023` refer
 to decision records in `../../knowledge/decisions/`.
 
@@ -342,8 +342,30 @@ MsiMessage :: struct {
 // The IDs L2 may give to devices.
 device_interrupt_range : fn() -> (first: InterruptId, count: u32) : ---
 
-// The message a device sends to raise id on the CPU with this hardware ID.
-msi_message : fn(cpu_hardware_id: u64, id: InterruptId) -> MsiMessage : ---
+/*
+ * Message-signaled interrupts (0073). A device's are known to the interrupt controller by its source (on
+ * AArch64, the ITS's device ID; unused on x86-64), and each of them by an event, from 0. The bytes of memory the
+ * controller keeps for each device's (an ITS's translation table), 0 for none; null if it takes no MSIs at all.
+ */
+msi_device_memory : fn() -> u64? : ---
+
+// Bytes of memory the interrupt controller needs for MSIs at all, asked once every CPU has started; 0 for none.
+msi_controller_memory : fn() -> u64 : ---
+
+// MSIs set up, with msi_controller_memory's bytes, zeroed and contiguous, aligned to their size rounded up to a power of two.
+init_msi : fn(memory: PhysicalAddress) : ---
+
+// A device's MSIs, known as source, up to events of them, with memory, msi_device_memory's bytes, zeroed and contiguous.
+add_msi_device : fn(source: u32, memory: PhysicalAddress, events: u32) : ---
+
+// The device's MSIs forgotten, every event of them.
+remove_msi_device : fn(source: u32) : ---
+
+// Source's event, delivered as id to the CPU with this hardware ID: the message the device sends to raise it.
+route_msi : fn(source: u32, event: u32, cpu_hardware_id: u64, id: InterruptId) -> MsiMessage : ---
+
+// Source's event no longer delivered.
+unroute_msi : fn(source: u32, event: u32) : ---
 
 // Acknowledge id to the interrupt controller.
 end_of_interrupt : fn(id: InterruptId) : ---
@@ -661,6 +683,7 @@ How `arch/x86_64` meets the interface (`../../knowledge/design/arch-x86-64.md`):
 | TLB | `CR4.PGE` for global pages. With PCIDs, `activate` keeps a tag's entries, unless `flush_tlb` or `flush_tlb_tag` marked the tag stale while it wasn't the current one; `invlpg` flushes the current tag's addresses and global entries, and `all` flushes everything by toggling `CR4.PGE`. The first `activate` on a CPU does that too, leaving nothing of the bootloader's tables |
 | Interrupts | x2APIC (xAPIC if absent). Device IDs are vectors 48–239 |
 | Wired interrupts | I/O APICs (`ControllerKind.IoApic`), version 0x10 to 0x2f, up to 240 lines, every line masked at first; routed in physical destination mode, so to APIC IDs up to 255 until interrupt remapping. L2 serializes calls on one controller, whose registers are behind a select register. `init_system` masks the legacy 8259 PICs |
+| MSIs | Straight to the local APICs, which keep nothing per device: `route_msi`'s message is `0xfee00000` with the APIC ID in bits 12 to 19, and the vector as its data, fixed delivery, edge-triggered; APIC IDs up to 255 until interrupt remapping |
 | Timer | TSC with TSC-deadline, frequency from the hint, `CPUID` leaf `0x15`, or calibration against the PIT |
 | Entry | One `.entry` function for every vector, through `x86_64.entry_points`, which returns only for NMIs, and a `.syscall_entry` function (`STAR`, `LSTAR` and `FMASK` set by `init_cpu`). Every vector runs on an IST stack: the critical events on their own, the rest on the kernel stack's own slot, so an entry from idle starts again at its top |
 | `return_to_user` | `x86_64.return_to_user` |
@@ -704,7 +727,8 @@ virtual timer's interrupt and the PL011.
 | `early_console_write` | The device tree's first PL011, through the direct map: `early_console_init` maps its registers there as a Device block in the bootloader's tables, and `init_kernel_page_table` again in the kernel's, as it does the GIC's, with `kernel_half_frames` (2 for each 2 MiB block) for its tables. Its address is in `TPIDR_EL1` until `init_cpu`, then in the `ArchCpu` |
 | `test_exit` | QEMU's semihosting, `SYS_EXIT` with `(code << 1) \| 1`, so codes read as the debug exit device's do |
 | `test_device` | SPI line 100 of the distributor, which nothing on QEMU `virt` uses, edge-triggered; `test_device_interrupts` pends it through `GICD_ISPENDR`, and again each time it's acknowledged and at every timer interrupt, until it's stopped |
-| Not yet | `msi_message`, which needs the GICv3 ITS, and `test_nmi`, which needs pseudo-NMIs or FEAT_NMI |
+| MSIs | Through the GICv3's ITS, found in the device tree (`arm,gic-v3-its`): `init_msi` gives it flat device and collection tables and a command queue, and every redistributor the one LPI property table and a pending table of its own, with LPIs on; each redistributor is a collection. `add_msi_device` maps a device's translation table (`MAPD`); `route_msi` gives the event an LPI of its own (8192 of them, from 8192), enabled, mapped to the CPU's collection (`MAPTI`, `INV`), and routes it to the kernel's ID as an SPI is. The message is the event's number, to `GITS_TRANSLATER` |
+| Not yet | `test_nmi`, which needs pseudo-NMIs or FEAT_NMI |
 
 ## Not Covered
 

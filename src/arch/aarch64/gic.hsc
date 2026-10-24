@@ -5,6 +5,7 @@ import runtime from "base"
 import aarch64 from "base/intrinsics"
 import arch_interface from "../../arch_interface"
 import kernel_entry from "../../kernel/entry"
+import concurrency from "std"
 
 /*
  * The GICv3 (docs/specs/arch_interface.md, AArch64): the distributor for shared peripheral interrupts (SPIs),
@@ -13,7 +14,8 @@ import kernel_entry from "../../kernel/entry"
  * both drops the priority and deactivates it.
  *
  * An SPI's interrupt ID is its line's (32 + line), which software can't choose, so the kernel's device
- * interrupt IDs are translated: routes records which ID each line was routed to on which CPU.
+ * interrupt IDs are translated: routes records which ID each line was routed to on which CPU. So for the LPIs
+ * message-signaled interrupts raise (its.hsc).
  */
 //SPEC: Arm GICv3 and GICv4 Architecture Specification (IHI 0069): §12.9 (GICD_*), §12.10/12.11 (GICR_* and the SGI frame), §12.2 (ICC_*_EL1)
 
@@ -174,7 +176,7 @@ interrupt_source :: fn() -> kernel_entry.InterruptSource {
     cpu :: current_cpu()
     system :: current_system()
     interrupt :: cast[u32](aarch64.read_system_register(.ICC_IAR1_EL1) & 0xffffff)
-    if interrupt >= FIRST_SPECIAL {
+    if interrupt >= FIRST_SPECIAL && interrupt < FIRST_LPI {
         return .Spurious
     }
     if interrupt >= FIRST_SPI {
@@ -325,8 +327,10 @@ route_wired :: fn(
     record_route(current_system(), cpu_hardware_id, cast[u32](id), interrupt)
 }
 
-// Keep a route, replacing any for the same line or for the same ID on the same CPU.
+// Keep a route, replacing any for the same interrupt or for the same ID on the same CPU.
 record_route :: fn(system: ptr[mut ArchSystem], cpu: u64, id: u32, interrupt: u32) {
+    concurrency.lock(&system.routes_lock)
+    defer concurrency.unlock(&system.routes_lock)
     free : usize = MAX_ROUTES
     for &route, index in system.routes {
         if route.used && (route.interrupt == interrupt || (route.cpu == cpu && route.id == id)) {
@@ -338,6 +342,17 @@ record_route :: fn(system: ptr[mut ArchSystem], cpu: u64, id: u32, interrupt: u3
     }
     runtime.assert(free < MAX_ROUTES, "a route for every device interrupt ID")
     system.routes[free] = Route.{used = true, cpu = cpu, id = id, interrupt = interrupt}
+}
+
+// Forget the route from an interrupt, an LPI no longer raised (its.hsc).
+forget_route :: fn(system: ptr[mut ArchSystem], interrupt: u32) {
+    concurrency.lock(&system.routes_lock)
+    defer concurrency.unlock(&system.routes_lock)
+    for &route in system.routes {
+        if route.used && route.interrupt == interrupt {
+            route.used = false
+        }
+    }
 }
 
 mask_wired :: fn(controller: ptr[mut InterruptController], line: u32) {

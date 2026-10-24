@@ -97,6 +97,11 @@ Kernel :: struct {
     root_ended : u32,
     root_stop_tick : u64,
     next_irq_cpu : u32,
+    // Every Device, for refusing a second at the same address (devices.hsc).
+    devices_lock : concurrency.SpinLock,
+    first_device : u64,
+    // The firmware tables' copy, a Memory's address, for the root task's "firmware" grant, 0 without (firmware.hsc).
+    firmware : u64,
     // Every thread, for finding one by ID, and how many intercepts there are (control.hsc, intercepts.hsc).
     threads_lock : concurrency.SpinLock,
     first_thread : u64,
@@ -232,7 +237,10 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     start_framebuffer_console(kernel, info)
     push_context cpu_context from cpu.context {
         start_timer(kernel, info.counter_frequency_hint)
+        // While the bootloader's memory, which may hold them, is still there
+        copy_firmware_tables(kernel, &info.firmware_tables, info.direct_map_offset)
         start_cpus(kernel, info)
+        start_msis(kernel)
         leave_boot_stacks(kernel)
         // Of the memory free once boot memory is back
         kernel.root_budget = make_root_budget(kernel)

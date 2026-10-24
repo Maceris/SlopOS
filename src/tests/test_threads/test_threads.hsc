@@ -38,7 +38,7 @@ counter #calling_convention(.c) #no_context :: fn(slot: ptr[mut u64[4]]) #never_
     }
 }
 
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?,
+main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?) -> int {
     block :: slop_os.startup_block()
     slots, error :: runtime.new_array(u64[4], THREADS)

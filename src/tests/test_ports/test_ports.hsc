@@ -48,7 +48,7 @@ helper #calling_convention(.c) #no_context :: fn(shared: ptr[mut u64[8]]) #never
     slop_os.thread_exit()
 }
 
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?,
+main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?) -> int {
     block :: slop_os.startup_block()
     pages, error :: runtime.new_array(u64[8], 1)

@@ -71,6 +71,11 @@ Memory :: struct #align(16) {
     first_window : u64,
     // A boot module's: its frames, at physical, go to the frame allocator once it's released.
     boot_module : bool,
+    // Contiguous memory's (create_contiguous_memory): the order of the block at physical, plus one; 0 for other memory.
+    block_order : u64,
+    // DMA memory's: its DmaDomain, and that domain's generation then (devices.hsc).
+    domain : u64,
+    domain_generation : u32,
 }
 
 // A range of a memory object, mapped in an address space.
@@ -350,8 +355,54 @@ create_module_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, phy
     return .Ok(memory)
 }
 
+/*
+ * Memory in one block of frames, pinned, zeroed, ending at or below limit (0 for none), owned by owner and charged to
+ * budget for the whole block: for DMA (devices.hsc) and the firmware tables' copy. allowed is how it can be mapped
+ * (slop_os.PROTECTION_*).
+ */
+create_contiguous_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, size: u64, limit: u64, allowed: u32)
+    -> Result[ptr[mut Memory], slop_os.DeviceError] {
+    if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || size > slop_os.MAX_MEMORY_SIZE || (limit != 0 && limit < size) {
+        return .Error(.InvalidSize)
+    }
+    order :: frames.order_for(size)
+    object := cast[u64](0)
+    match new_object(kernel, .Memory, budget, frames.FRAME_SIZE << order) {
+        case Ok(made) => object = made
+        case Error(error) => return .Error(if error == .BudgetExceeded { slop_os.DeviceError.BudgetExceeded } else { slop_os.DeviceError.OutOfMemory })
+    }
+    memory :: cast[ptr[mut Memory]](object)
+    block := cast[u64](0)
+    match frames.allocate_below(&kernel.frames, order, limit) {
+        case Ok(address) => block = cast[u64](address)
+        case Error(error) => {
+            release_object(kernel, object)
+            return .Error(.OutOfMemory)
+        }
+    }
+    intrinsics.mem_zero(cast[mut rawptr](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](block))), cast[usize](frames.FRAME_SIZE << order))
+    memory.size = size
+    memory.physical = block
+    memory.cache = .WriteBack
+    memory.allowed = allowed
+    memory.block_order = order + 1
+    match adopt(owner, object) {
+        case Ok => {}
+        case Error(error) => {
+            _ = destroy_object(kernel, object)
+            return .Error(.ObjectGone)
+        }
+    }
+    return .Ok(memory)
+}
+
 // Once no CPU can use it: its frames, and its page array; device memory and windows have neither.
 release_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
+    if memory.block_order != 0 {
+        frames.free(&kernel.frames, cast[boot_info.PhysicalAddress](memory.physical), memory.block_order - 1)
+        memory.block_order = 0
+        return void
+    }
     if memory.boot_module {
         memory.boot_module = false
         frames.add_range(&kernel.frames, memory.physical, memory.physical + memory.size)

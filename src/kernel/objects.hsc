@@ -79,6 +79,8 @@ KernelObjects :: struct {
     platform : Platform,
     intercept : Intercept,
     debug_log : DebugLog,
+    device : Device,
+    dma_domain : DmaDomain,
 }
 
 // Pools for kinds by their slop_os.ObjectKind value, which is below this.

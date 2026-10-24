@@ -10,8 +10,8 @@ import arch_interface from "../../arch_interface"
  * when its stage adds it.
  */
 NOT_YET_IMPLEMENTED :: string.[
-    // MSI needs the GICv3 ITS, once PCIe devices do; an NMI needs pseudo-NMIs or FEAT_NMI (decisions/0065)
-    "msi_message", "test_nmi",
+    // An NMI needs pseudo-NMIs or FEAT_NMI (decisions/0065)
+    "test_nmi",
 ]
 
 // A stub reached, which the kernel never does on purpose: say which, and stop.
@@ -20,10 +20,6 @@ not_yet #never_returns :: fn(name: string) {
     early_console_write(name)
     early_console_write("\n")
     halt()
-}
-
-msi_message :: fn(cpu_hardware_id: u64, id: arch_interface.InterruptId) -> arch_interface.MsiMessage {
-    not_yet("msi_message")
 }
 
 test_nmi :: fn() {

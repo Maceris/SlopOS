@@ -182,7 +182,43 @@ take_block :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[boot_
     if found > MAX_ORDER {
         return .Error(.OutOfMemory)
     }
-    block :: take_first(allocator, found)
+    return .Ok(split_down(allocator, take_first(allocator, found), found, order))
+}
+
+/*
+ * Like allocate, a block that ends at or below limit, a physical address, for a device that reaches only
+ * that far (0 for no limit). A split keeps the lower half, so any free block that starts low enough will do.
+ */
+allocate_below :: fn(allocator: ptr[mut FrameAllocator], order: u64, limit: u64) -> Result[boot_info.PhysicalAddress, FrameError] {
+    runtime.assert(order <= MAX_ORDER, "allocate_below takes an order up to MAX_ORDER")
+    if limit == 0 {
+        return allocate(allocator, order)
+    }
+    concurrency.lock(&allocator.lock)
+    defer concurrency.unlock(&allocator.lock)
+    size :: FRAME_SIZE << order
+    for found in order..=MAX_ORDER {
+        with {
+            address := allocator.lists[found].first
+        }
+        loop {
+            if address <= limit && size <= limit - address {
+                frame :: address >> FRAME_SHIFT
+                unlink(allocator, frame, found)
+                return .Ok(split_down(allocator, frame, found, order))
+            }
+            address = block_of(allocator, address >> FRAME_SHIFT).next
+        }
+        while address != 0
+    }
+    return .Error(.OutOfMemory)
+}
+
+/*
+ * A free block of order found, taken off its list, split down to order, its upper halves back on their
+ * lists: the physical address of what's left, allocated. Takes the lock as held.
+ */
+split_down :: fn(allocator: ptr[mut FrameAllocator], block: u64, found: u64, order: u64) -> boot_info.PhysicalAddress {
     with {
         size := found
     }
@@ -196,7 +232,7 @@ take_block :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[boot_
     runtime.assert(block < cast[u64](states.count), "a free list held a frame the allocator has no state for")
     states[block] = STATE_ALLOCATED | cast[u8](order)
     allocator.free_frames -= cast[u64](1) << order
-    return .Ok(cast[boot_info.PhysicalAddress](block << FRAME_SHIFT))
+    return cast[boot_info.PhysicalAddress](block << FRAME_SHIFT)
 }
 
 // Like allocate, with the block's bytes zeroed.

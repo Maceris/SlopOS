@@ -52,7 +52,7 @@ process's life:
 
 | Field | |
 |---|---|
-| `abi_version: u32` | `slop_os.ABI_VERSION` of the kernel that started it: 2 |
+| `abi_version: u32` | `slop_os.ABI_VERSION` of the kernel that started it: 3 |
 | `size: u32` | `size_of(StartupBlock)` as its writer knew it |
 | `process: Process` | The process itself |
 | `space: AddressSpace` | Its address space, with `RIGHT_SPACE_MAP` |
@@ -92,6 +92,7 @@ loader above, at random places for its image, its 256 KiB stack with its startup
 | `platform` | `Platform` | The authority over the machine's hardware (`0039`) |
 | `debug_log` | `DebugLog` | Lines in the kernel's log (`debug_log`, `system_calls.md`) |
 | `command_line` | `Memory` | The kernel's command line, its bytes then zeros (`0067`) |
+| `firmware` | `Memory` | The firmware tables, which the kernel copied before boot memory was reclaimed, read-only, if the boot has them (`0073`): a `slop_os.FirmwareTables` (its magic, `FIRMWARE_MAGIC`; its kind, `Acpi` or `DeviceTree`; how many tables), then a `FirmwareTable` for each (its signature, size, offset in the copy, and the physical address it was at, which ACPI's tables point at one another by), then the tables. ACPI's are the RSDP, every table the XSDT (or RSDT) lists, and the FADT's DSDT and FACS; the device tree's is its blob, `DTB ` |
 | `test_device` | `Memory` | With `test_device` on the command line: what the firmware tables say of the emulator's test device (`src/test_device`), for `test_devices` (`0069`) |
 | `module:<name>` | `Memory` | Each other boot module: a read-only memory object over the frames it was loaded into, which go back to the kernel when it's destroyed |
 

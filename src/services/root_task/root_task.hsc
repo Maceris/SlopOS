@@ -47,6 +47,7 @@ TestGrants :: struct {
     log : slop_os.DebugLog,
     platform : slop_os.Platform?,
     test_device : slop_os.Memory?,
+    firmware : slop_os.Memory?,
     // A connection to the manager, and the program's own module, for a test that launches copies of itself
     manager : os.Channel[process_manager.ProcessManager]?,
     program : slop_os.Memory?,
@@ -292,8 +293,8 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform) ->
         case Some(connection) => grants.manager = connection
         case None => {}
     }
-    // Only the devices test is given the hardware
-    if name == "test_devices" {
+    // Only the devices tests are given the hardware, and the firmware tables that describe it
+    if name == "test_devices" || name == "test_msi_dma" {
         platform_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
         match slop_os.handle_duplicate(cast[slop_os.Handle](platform), platform_rights) {
             case Ok(copy) => grants.platform = cast[slop_os.Platform](copy)
@@ -301,6 +302,15 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform) ->
         }
         match slop_os.find_grant(block, "test_device", .Memory) {
             case Some(device) => grants.test_device = cast[slop_os.Memory](device)
+            case None => {}
+        }
+        match slop_os.find_grant(block, "firmware", .Memory) {
+            case Some(firmware) => {
+                match slop_os.handle_duplicate(firmware, module_rights) {
+                    case Ok(copy) => grants.firmware = cast[slop_os.Memory](copy)
+                    case Error(error) => {}
+                }
+            }
             case None => {}
         }
     }

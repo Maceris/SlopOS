@@ -2,9 +2,9 @@
  * The AArch64 arch layer (L1): implements arch_interface (docs/specs/arch_interface.md, AArch64) for the
  * kernel core, which imports this package as arch.
  *
- * Everything but MSIs and an NMI (not_yet_implemented.hsc): CPU setup, exception entry, paging, the GICv3,
- * the generic timer, user mode and its vector state, the early console and the miscellaneous functions, with
- * the devices found in the device tree (roadmap A3 to A5, decisions/0064 to 0066).
+ * Everything but an NMI (not_yet_implemented.hsc): CPU setup, exception entry, paging, the GICv3 and its ITS
+ * for MSIs, the generic timer, user mode and its vector state, the early console and the miscellaneous
+ * functions, with the devices found in the device tree (roadmap A3 to A5, M7; decisions/0064 to 0066, 0073).
  */
 package arch_aarch64
 
@@ -13,6 +13,7 @@ import aarch64 from "base/intrinsics"
 import arch_interface from "../../arch_interface"
 import boot_info from "../../boot_info"
 import devicetree from "../../devicetree"
+import concurrency from "std"
 
 /*
  * One CPU's architecture state (arch_interface.ArchCpu). TPIDR_EL1 points at it, so entries find their
@@ -62,8 +63,11 @@ ArchSystem :: struct {
     device_blocks : u64[MAX_DEVICE_BLOCKS],
     device_block_count : u32,
     direct_map_offset : u64,
-    // Lines routed to the kernel's device interrupt IDs (gic.hsc).
+    // Lines and LPIs routed to the kernel's device interrupt IDs (gic.hsc), under routes_lock.
     routes : Route[MAX_ROUTES],
+    routes_lock : concurrency.SpinLock,
+    // The GIC's ITS, for message-signaled interrupts (its.hsc).
+    its : ItsState,
     // test_device_interrupts is on: the timer pends the test line.
     test_interrupts : bool,
 }
@@ -130,6 +134,14 @@ init_system :: fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareT
         if (distributor is_some) && (redistributors is_some) {
             found :: redistributors or_else devicetree.Region.{}
             map_gic(system, (distributor or_else devicetree.Region.{}).address, found.address, found.size)
+        }
+    }
+    its :: devicetree.find_compatible(&tree, "arm,gic-v3-its")
+    if its is_some {
+        node := its or_else devicetree.Node.{}
+        registers :: devicetree.reg(&tree, &node, 0)
+        if registers is_some {
+            map_its(system, (registers or_else devicetree.Region.{}).address)
         }
     }
     timer :: devicetree.find_compatible(&tree, "arm,armv8-timer")

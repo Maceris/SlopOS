@@ -22,22 +22,23 @@ PROGRAMS_AARCH64 = Path()
 WITH_PROGRAMS = "<programs>"
 
 
-def program_test(name: str, program: str, line: str, words: str = "") -> tuple:
+def program_test(name: str, program: str, line: str, words: str = "", qemu: list = []) -> tuple:
     """
-    A test program the root task runs (src/tests, knowledge/decisions/0069) on 2 CPUs: it says line and ends with 0, its
-    budget is back to nothing, and once the root task has ended, only the kernel's own objects are left.
+    A test program the root task runs (src/tests, knowledge/decisions/0069) on 2 CPUs, with more QEMU arguments if it
+    needs a device: it says line and ends with 0, its budget is back to nothing, and once the root task has ended, only
+    the kernel's own objects are left.
     """
     command_line = f"test_exit {words} test_program={program}" if words else f"test_exit test_program={program}"
     return (name, 7, [WITH_PROGRAMS, f"--command-line={command_line}", f"--expect-line=[user] {program}: {line}",
                       f"--expect-line=[user] root task: {program} ended with 0, and its budget is back to nothing",
-                      "--expect-line=[info] objects left: only the kernel's own", "--", "-smp", "2"])
+                      "--expect-line=[info] objects left: only the kernel's own", "--", "-smp", "2", *qemu])
 
 
 # Name, the code expected, and boot.py's arguments
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 15 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 17 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] process manager: started supervisor", "--expect-line=[user] process manager: started hello",
         "--expect-line=[user] hello: heap working, random numbers working", "--expect-line=[user] root task: the supervisor started hello",
@@ -82,6 +83,10 @@ TESTS = [
     program_test("drives a device from user mode with the platform capability", "test_devices",
         "a driver registered a controller, took an IRQ's interrupts through its port, read device memory, and lost a window "
         "with its memory", "test_device"),
+    # QEMU's edu device, its DMA reaching all of memory, which starts at 1 GiB on virt
+    program_test("drives a PCIe device's MSI and DMA from user mode", "test_msi_dma",
+        "edu took its MSI and copied a page through DMA memory, and its device took its IRQs with it",
+        qemu=["-device", "edu,dma_mask=0xffffffffff"]),
     program_test("sends and checks messages with generated protocol code", "test_protocols",
         "messages went through with their handles and data, and broken, unknown and mistyped ones were refused"),
     program_test("controls a process from a debugger in user mode", "test_control",

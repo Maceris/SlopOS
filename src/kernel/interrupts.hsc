@@ -161,6 +161,39 @@ route_line :: fn(
     return .Ok(id)
 }
 
+// A route's controller for a message-signaled interrupt, which comes from no controller's line (devices.hsc).
+MSI_CONTROLLER : u32 : 0xffffffff
+
+/*
+ * A free device interrupt ID on the CPU with index cpu_index for irq, a message-signaled IRQ, whose line is its
+ * event: the ID.
+ */
+route_message :: fn(kernel: ptr[mut Kernel], cpu_index: u32, event: u32, irq: u64) -> Result[arch_interface.InterruptId, InterruptError] {
+    per_cpus :: kernel.per_cpus
+    if cast[usize](cpu_index) >= kernel.cpus.count || cast[usize](cpu_index) >= per_cpus.count || per_cpus[cpu_index] == 0 {
+        return .Error(.NoSuchCpu)
+    }
+    cpu :: cast[ptr[mut PerCpu]](per_cpus[cpu_index])
+    first, count :: arch.device_interrupt_range()
+    runtime.assert(cast[usize](count) <= MAX_DEVICE_INTERRUPTS, "MAX_DEVICE_INTERRUPTS covers every architecture's device interrupt IDs")
+    slot : usize = MAX_DEVICE_INTERRUPTS
+    concurrency.lock(&kernel.interrupts_lock)
+    for i in 0..<cast[usize](count) {
+        if !cpu.device_routes[i].used {
+            slot = i
+            break
+        }
+    }
+    if slot < MAX_DEVICE_INTERRUPTS {
+        cpu.device_routes[slot] = DeviceRoute.{used = true, controller = MSI_CONTROLLER, line = event, trigger = .Edge, count = 0, irq = irq}
+    }
+    concurrency.unlock(&kernel.interrupts_lock)
+    if slot == MAX_DEVICE_INTERRUPTS {
+        return .Error(.NoFreeInterrupt)
+    }
+    return .Ok(cast[arch_interface.InterruptId](cast[u32](first) + cast[u32](slot)))
+}
+
 mask_line :: fn(kernel: ptr[mut Kernel], controller_index: u32, line: u32) {
     wired :: controller_at(kernel, controller_index) or_return void
     runtime.assert(line < wired.lines, "mask_line takes one of the controller's lines")

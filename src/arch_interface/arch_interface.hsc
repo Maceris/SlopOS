@@ -266,8 +266,30 @@ MsiMessage :: struct {
 // The IDs L2 may give to devices.
 device_interrupt_range : fn() -> (first: InterruptId, count: u32) : ---
 
-// The message a device sends to raise id on the CPU with this hardware ID.
-msi_message : fn(cpu_hardware_id: u64, id: InterruptId) -> MsiMessage : ---
+/*
+ * Message-signaled interrupts (decisions/0073). A device's are known to the interrupt controller by its source (on
+ * AArch64, the ITS's device ID; unused on x86-64), and each of them by an event, from 0. The bytes of memory the
+ * controller keeps for each device's (an ITS's translation table), 0 for none; null if it takes no MSIs at all.
+ */
+msi_device_memory : fn() -> u64? : ---
+
+// Bytes of memory the interrupt controller needs for MSIs at all, asked once every CPU has started; 0 for none.
+msi_controller_memory : fn() -> u64 : ---
+
+// MSIs set up, with msi_controller_memory's bytes, zeroed and contiguous, aligned to their size rounded up to a power of two.
+init_msi : fn(memory: PhysicalAddress) : ---
+
+// A device's MSIs, known as source, up to events of them, with memory, msi_device_memory's bytes, zeroed and contiguous.
+add_msi_device : fn(source: u32, memory: PhysicalAddress, events: u32) : ---
+
+// The device's MSIs forgotten, every event of them.
+remove_msi_device : fn(source: u32) : ---
+
+// Source's event, delivered as id to the CPU with this hardware ID: the message the device sends to raise it.
+route_msi : fn(source: u32, event: u32, cpu_hardware_id: u64, id: InterruptId) -> MsiMessage : ---
+
+// Source's event no longer delivered.
+unroute_msi : fn(source: u32, event: u32) : ---
 
 // Acknowledge id to the interrupt controller.
 end_of_interrupt : fn(id: InterruptId) : ---

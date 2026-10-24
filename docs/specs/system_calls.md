@@ -54,10 +54,10 @@ each object is its owning one (`0008`).
   Duplicating keeps or drops rights, never adds them.
 
 Object kinds (`slop_os.ObjectKind`, `0034`): `MemoryBudget`, `CpuBudget`, `Memory`, `AddressSpace`,
-`Thread`, `Process`, `Channel`, `Port`, `Irq`, `IoPortRange`, `IommuDomain`, `Platform`, the authority over
-the machine's hardware (`0039`, `0055`), `Intercept`, a debugger's hold on a subtree (`0056`), and
-`DebugLog`, lines in the kernel's log (`0060`). So far all but CPU budgets, I/O-port ranges and IOMMU
-domains exist.
+`Thread`, `Process`, `Channel`, `Port`, `Irq`, `IoPortRange`, `DmaDomain`, where devices' DMA reaches
+(`0073`), `Platform`, the authority over the machine's hardware (`0039`, `0055`), `Intercept`, a debugger's
+hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and `Device`, a PCIe function
+(`0073`). So far all but CPU budgets and I/O-port ranges exist.
 
 ## Calls
 
@@ -114,6 +114,13 @@ domains exist.
 | 48 | `process_give_handles` | process, handles (a slice), given (a slice) | nothing: the handles (up to 64), moved out of the caller's table into the process's, the value each has there written at given. An owning handle's object becomes the process's, charged to its budget, for all of them or none. Each needs `RIGHT_TRANSFER`; an owning handle to the process or one above it can't go, nor a channel end whose rings are mapped. One closed meanwhile comes out as `NO_HANDLE`. Needs `RIGHT_PROCESS_THREADS` (`0067`) |
 | 49 | `memory_size` | memory | its size in bytes (`0067`) |
 | 50 | `channel_tag` | end | the tag its channel was made with (`0071`) |
+| 51 | `device_create` | platform, budget, address, MSI source | an owning handle to a Device: the PCIe function at address (`slop_os.device_address`: segment, bus, device, function), whose MSIs the interrupt controller knows as the MSI source (on AArch64, the ITS's device ID, from the device tree's `msi-map`; unused on x86-64). No other device may have the address, nor on AArch64 the source (`0073`) |
+| 52 | `device_attach` | platform, device, domain | nothing: the device's DMA, in the domain, which an IOMMU will confine it to |
+| 53 | `irq_create_msi` | device, budget | an owning handle to an IRQ for one of the device's message-signaled interrupts, up to `MAX_DEVICE_MSIS` (32), routed to a CPU the kernel picks |
+| 54 | `irq_message` | irq | its `MsiMessage`, the address and data the device writes to raise it, for its MSI or MSI-X entry |
+| 55 | `dma_domain_create` | platform, budget | an owning handle to a new DMA domain |
+| 56 | `dma_memory_create` | domain, budget, size, limit | an owning handle to DMA memory in the domain: pinned, in one block of frames, zeroed, ending at or below limit (0 for none), charged for its whole block |
+| 57 | `memory_device_address` | memory | where DMA memory is to the devices in its domain |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the
@@ -160,10 +167,26 @@ unmaps it from every address space; destroying an address space takes down what'
 ## IRQs
 
 An IRQ is one interrupt controller line, made with the platform capability once its controller is
-registered (`0039`, `0055`). The kernel routes it to a CPU and unmasks it. Each interrupt adds one to the
-count in its binding's `Irq` packet, queuing the packet if it isn't; a driver binds it to a port with
-`port_bind`, one binding per IRQ. A level-triggered line is masked when its interrupt arrives, until the
-driver calls `irq_ack`. Closing the IRQ masks the line.
+registered (`0039`, `0055`), or one of a device's message-signaled interrupts. The kernel routes it to a CPU and
+unmasks it. Each interrupt adds one to the count in its binding's `Irq` packet, queuing the packet if it isn't;
+a driver binds it to a port with `port_bind`, one binding per IRQ. A level-triggered line is masked when its
+interrupt arrives, until the driver calls `irq_ack`. Closing the IRQ masks the line.
+
+## Devices and DMA
+
+A **device** is one PCIe function, made with the platform capability by whoever read the firmware tables and
+found it, and given to its driver (`0070`, `0073`). Its **message-signaled IRQs** (`irq_create_msi`) are each one
+of its events, numbered from 0; the driver programs `irq_message`'s address and data into the device's MSI or
+MSI-X entry, and its interrupts arrive as any IRQ's do. They're edge-triggered, so `irq_ack` does nothing. On
+x86-64 the message goes straight to a CPU's local APIC; on AArch64, to the GICv3's ITS, which turns the event
+into an LPI on the CPU's redistributor. Closing the device destroys its IRQs.
+
+A **DMA domain** is where its devices' DMA reaches. There's no IOMMU yet, so that's all of memory, a device
+address is a physical address, and a driver can DMA anywhere: drivers are trusted until there is (`0070`).
+**DMA memory** (`dma_memory_create`) is made in a domain: pinned for as long as it lives, in one block of frames,
+below a limit for a device that reaches only so far, and its device address is its block's. Closing the domain
+leaves its memory without one (`NotDmaMemory`). `device_attach` records which domain a device's DMA is in, for
+when an IOMMU confines it there.
 
 ## Process Control
 
@@ -337,8 +360,20 @@ Process control fails with `slop_os.ControlError`:
 | 36 | `AlreadyIntercepted` | The process has an intercept already |
 | 37 | `BadRegisters` | A register value user mode can't have |
 
+Devices, MSIs and DMA memory fail with `slop_os.DeviceError` too:
+
+| Tag | Error | Why |
+|---|---|---|
+| 1 to 6, 24, 25 | as above | `dma_memory_create`'s size isn't a whole number of pages, or its limit is below it |
+| 6 | `OutOfMemory` | No block of frames that size below the limit is free |
+| 33 | `NoFreeInterrupt` | The CPU picked has every device interrupt taken |
+| 38 | `NotDmaMemory` | `memory_device_address`: not DMA memory, or its domain is gone |
+| 39 | `NoMsi` | No interrupt controller here takes MSIs; or `irq_message` on a wired line's IRQ |
+| 40 | `TooManyVectors` | The device has `MAX_DEVICE_MSIS` IRQs already |
+| 41 | `DeviceExists` | Another device has that address, or on AArch64 that MSI source |
+
 ## Not Yet
 
-I/O-port ranges, IOMMU domains and message-signaled interrupts come with the platform service and drivers
-(M7); pagers for memory objects with memory-mapped files. Process memory is read and written through the
+I/O-port ranges come with the drivers that need them, and IOMMUs (VT-d, SMMUv3) right after M7, translating DMA
+domains (`0072`); pagers for memory objects with memory-mapped files. Process memory is read and written through the
 page tables, so a memory object's pages no thread has touched yet can't be.

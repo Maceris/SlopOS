@@ -100,17 +100,39 @@ interrupt_pending :: fn() -> bool {
     return false
 }
 
+// MSIs go straight to the local APICs, which keep nothing per device.
+msi_device_memory :: fn() -> u64? {
+    return 0
+}
+
+msi_controller_memory :: fn() -> u64 {
+    return 0
+}
+
+init_msi :: fn(memory: arch_interface.PhysicalAddress) {
+}
+
+add_msi_device :: fn(source: u32, memory: arch_interface.PhysicalAddress, events: u32) {
+}
+
+remove_msi_device :: fn(source: u32) {
+}
+
 /*
  * The message a device sends to raise id on a CPU: the local APIC's address with the destination
  * in bits 12-19, and the vector, fixed delivery, edge triggered.
  */
 //SPEC: Intel SDM Vol. 3A §11.11 (message signalled interrupts)
-//TODO(claude): destinations above 255 need interrupt remapping through the IOMMU (M7)
-msi_message :: fn(cpu_hardware_id: u64, id: arch_interface.InterruptId) -> arch_interface.MsiMessage {
+//TODO(claude): destinations above 255 need interrupt remapping through the IOMMU (after M7)
+route_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interface.InterruptId) -> arch_interface.MsiMessage {
     return arch_interface.MsiMessage.{
         address = 0xfee00000 | ((cpu_hardware_id & 0xff) << 12),
         data = cast[u32](id) & 0xff,
     }
+}
+
+// Nothing to undo: the device stops sending it once its driver stops asking for it.
+unroute_msi :: fn(source: u32, event: u32) {
 }
 
 // Timer

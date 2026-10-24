@@ -24,6 +24,7 @@ Severity: **blocker** / **friction** / **nice**.
 |---|---|---|
 | Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`; `os.run_process` runs processes since 2026-10-19 (Windows and Linux); targets built several at once since 2026-10-23 (`--jobs`), SlopOS's build from 7.7 s to 4.0 s. Still open: sharing parsed files between targets, measured to save little so far; `find_packages` is unimplemented and may be removed | `hemera-proposals/build-programs.md`; `decisions/0028` |
 | Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 done 2026-10-13; hosted AArch64 (code generation, the stack check, fibers, Linux) done 2026-10-23 (`decisions/0062`), AArch64 kernel entry and system registers 2026-10-24 (`decisions/0063`); RISC-V waits for the third architecture. The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
+| Relative pointers and endian-specific integers | Open (2026-10-24): the docs only name them, and the compiler stores endian types in the CPU's order and can't set or follow a `relptr`. Decide the meaning first, then docs and compiler | `hemera-proposals/relative-pointers-and-endian-types.md` |
 
 ### Smaller gaps
 
@@ -45,6 +46,87 @@ Severity: **blocker** / **friction** / **nice**.
   it to the package works. Left out when nested functions became declarations (2026-10-23). Severity: nice.
 - A pointer to a `mut` view can't be written: in `ptr[mut u8[]]`, the `mut` is the pointer's, so the view it
   points to only reads. Nothing has needed one yet (2026-10-23, read-only unless `mut`). Severity: nice.
+
+### Hemera's docs against its compiler (survey, 2026-10-24)
+
+Small programs written from the examples in each of Hemera's `docs/`, built with the Release compiler and run on
+Windows x64. Each item is something the docs describe that doesn't work. Only what the docs promise is listed:
+things they leave out, like `==` on structs, aren't. The ones a "strong fit" in section 4 depends on are marked
+**(SlopOS)**.
+
+Wrong code, with no error:
+
+- **`#fall_through` does nothing (SlopOS).** The parser accepts it, but `emit_switch`/`emit_cases` in
+  `middle_end/generate.cpp` make a plain if/else chain, so the case after it never runs. `docs/control_flow.md`'s
+  own `switch` example gives the wrong result. Severity: friction (it's silent).
+- **Endian-specific integers are stored in the CPU's order (SlopOS).** `x : u32be = 0x01020304`, then
+  `bit_cast[u8[4]](x)` gives `04 03 02 01`. Arithmetic and casts come out as numbers, so `u32be` acts like a
+  plain `u32`. Any disk, network or device layout written with them is wrong. Severity: blocker, for their
+  intended use.
+- **`!` on `b16`/`b32`/`b64` gives the wrong answer when the value is true.** `a : b16 = true; if !a` is taken.
+  `!false` and `if a` work. Severity: friction.
+- **Multiline strings (`\\` lines) lose everything after the first line.** `\\ab` `\\cd` gives `"\ab\n"`, a
+  4-byte string that keeps one backslash. The only tests are parser tests. Severity: friction.
+- **A `#scoped` struct can be held in a field of an ordinary struct,** which `docs/memory.md` says is an error,
+  even when the outer struct is then built from a stack buffer and allocated with `new`. Severity: friction (a
+  memory-safety rule that isn't checked).
+
+Builds fail where the docs say it works:
+
+- **Relative pointers can't be used (SlopOS).** `relptr8`..`relptr64` have the right sizes, but there's no way to
+  set one from a `ptr` (E4015). `cast[relptr16[int]](&x)` is accepted, but then `^` produces invalid MLIR (E5003).
+  The docs don't say how a relative pointer is assigned or followed either, see
+  `hemera-proposals/relative-pointers-and-endian-types.md`. Severity: blocker, for their intended use.
+- **Complex (`c16`..`c128`) and quaternion (`q32`..`q256`) arithmetic** produces invalid MLIR (`llvm.add` on
+  `!llvm.array<2 x i32>`), E5003 at lowering, not a checking error. Severity: nice.
+- **A `#union` struct's literal** (`U.{a = 42}`) can't be generated (E5002). Assigning fields after `U.{}` works.
+  Severity: friction (register and descriptor overlays).
+- **Matching or switching on strings** can't be generated (E5002), though `control_flow.md` lists strings as a
+  case type for both. Severity: friction.
+- **`#file_path`** gives "DIRECTIVE isn't supported in an expression yet" (E4024). `#file_data` works.
+  Severity: nice.
+- **`types_are_aliases`** can't be worked out at compile time ("isn't something the compiler can compute here"),
+  in `#assert`, or generated at run time (E5002), so nothing can use it. `==` between type values in `#assert`
+  fails too ("not supported in a compile-time constant yet"). It does work at run time. Severity: nice.
+- **A variadic parameter followed by another** (`fn(fiz: bool, some: int..., fuzz: f32)`, from
+  `functions.md`) only works when the variadic is passed on as a view: `bar(true, 20, 20, 2)` says `fuzz` has no
+  value. The docs don't say how the call is split up. Severity: nice.
+- **A struct field's default can't be a function** (E4014), though `types.md` lets a default be any constant.
+  Severity: nice.
+- **Types declared inside a function** (E4024), **generic macros** (E4024), and **`#insert` or a macro call in a
+  generic's body** (E4024). The last is in `compilation.md` as not done yet; the first two aren't mentioned.
+  Severity: nice.
+- **Several names in one declaration**, `x, y, z := 0, 0, 0`, is a parse error (E3017). `operators.md` only
+  shows assigning several at once, so this may be by design. Severity: nice.
+- **`#run` as an array's size in a type** (`int[#run fib(5)]`) is a parse error. A named constant works.
+  Severity: nice.
+- **A multi-dimensional array type in an expression** (`size_of(i8[10][5])`) is read as indexing: "the type
+  i8[10] can't be indexed". Severity: nice.
+
+Targets and runtime:
+
+- **macOS / Mach-O** is in `compilation.md`'s linking table, but only ELF and PE/COFF can be linked (E7000), and a
+  build package's target for Mac is refused. RISC-V, which `multitasking.md` gives a carrier register (`s11`),
+  can't be built.
+- **Signals**: `multitasking.md` describes per-carrier alternate signal stacks, but the runtime installs no signal
+  handlers on Linux. This doesn't affect SlopOS (section 2, *Fibers*).
+- **Stale docs**: `multitasking.md`'s Open Questions still lists the carrier register, the prologue check and
+  `morestack` in LLVM as open, and those are done. `compilation.md` says build packages can't set `TargetOptions`
+  "until … `#run`", and they can. `types.md`'s `using` example builds `MyVec3.{1, 2, 3}`, but a `using` field is
+  one field, so that's an error (and it names a `Vec3` that doesn't exist).
+- **Stale compiler TODOs** that no longer match what the compiler does: `checking.cpp`'s "`#if` inside a
+  function" (it works), and `front_end/type_checking.cpp` and `front_end/mlir_generation.cpp`, which are still
+  built but look like an earlier front end, full of `//TODO(ches) handle this`.
+
+What worked, from the same survey: the pipe operator with `_` and `$n`, chained and multi-target assignments,
+`%%` and `>>>`, the optional and result operators (with `Result[void, E]`), `break n`/`break all`, `with` loops,
+`#at_least_once`, `#reverse`, `match` on unions with nested patterns, ranges and booleans, variadics (including
+`any...`), named and default parameters, optional functions, `f16`, `i128`/`u128`, `any` and type info, vectors,
+`#backed_by`, generics (value parameters, constraints, derived parameters, generic aliases, `mut` type arguments),
+`using` through pointers, layout directives, stack-pointer escape checks, `#escaping`, `#owned`/`#release`,
+secrets, the read-only context, `push_context`, `#run`/`#assert`, `#is_compile_time`, `#insert` (statements,
+expressions, fields), hygienic macros, `#file_data`, constants made by calls (structs and strings too), import
+aliases, `base.` names, format-string options and their checking.
 
 ## 2. Design Notes
 
