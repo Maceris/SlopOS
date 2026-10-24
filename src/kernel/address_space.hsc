@@ -282,13 +282,6 @@ keep_boot_info :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
         }
     }
 
-    // The image's code, which tests map for their code in user mode (threads_test.hsc)
-    for segment in info.kernel_image.segments {
-        if segment.executable && kernel.code_size == 0 {
-            kernel.code_base = cast[u64](segment.virtual_base) & ~(frames.FRAME_SIZE - 1)
-            kernel.code_size = frames.round_up(cast[u64](segment.virtual_base) + segment.size, frames.FRAME_SIZE) - kernel.code_base
-        }
-    }
 
     // The RAM the kernel owns, which device memory can't be made over (memory.hsc)
     owned : usize = 0

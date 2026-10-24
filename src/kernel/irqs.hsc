@@ -92,6 +92,10 @@ create_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, controller: u
         }
     }
     unmask_line(kernel, controller, line)
+    // The test device runs while its line has an IRQ
+    if kernel.options.test_device && line == arch.test_device().line {
+        arch.test_device_interrupts(true)
+    }
     return .Ok(irq)
 }
 
@@ -108,6 +112,9 @@ release_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
 // Destroying an IRQ: its line masked, its route forgotten, its binding dropped.
 destroy_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
     if cast[usize](irq.slot) < MAX_DEVICE_INTERRUPTS {
+        if kernel.options.test_device && irq.line == arch.test_device().line {
+            arch.test_device_interrupts(false)
+        }
         mask_line(kernel, irq.controller, irq.line)
         unroute(kernel, irq.cpu, irq.slot)
     }

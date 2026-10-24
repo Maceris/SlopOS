@@ -1,7 +1,7 @@
 /*
  * SlopOS's build (decisions/0028): `hemera src/build` builds every target, each checked by the house
  * rules (decisions/0029). The kernel is named here; programs and tests are found: every folder in
- * src/apps, src/services and src/drivers is a SlopOS program (decisions/0033, 0058), and every test
+ * src/apps, src/services, src/drivers and src/tests is a SlopOS program (decisions/0033, 0058, 0069), and every test
  * folder under src a hosted test program (decisions/0033, Tests).
  *
  * Settings (--setting=name=value):
@@ -29,6 +29,7 @@ build :: fn() {
         add_programs("../apps")
         add_programs("../services")
         add_programs("../drivers")
+        add_programs("../tests")
     }
     if targets == "all" || targets == "tests" {
         add_tests("..")

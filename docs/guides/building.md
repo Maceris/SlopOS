@@ -87,14 +87,19 @@ Words separated by spaces; unknown words are ignored.
 | `test_clock` | Check the monotonic clock against the counter |
 | `test_shootdown` | Change a mapping every CPU has used, and check they all see the change (2 CPUs or more) |
 | `test_ioapic` | Route the emulator's PIT through its I/O APIC, and count its interrupts |
-| `test_threads` | Run 4 threads in user mode, preempted by the timer, each keeping its own vector state |
 | `test_budgets` | Run a thread with a CPU budget against one without, on 1 CPU |
-| `test_syscalls` | Run a thread that makes system calls on handles, then destroy its process and check everything is reclaimed |
-| `test_ports` | Run two threads that wait on a port, wake it and set its timers, then close it under one of them |
-| `test_channels` | Run two processes that pass a channel end and messages over channels, through the kernel and through mapped rings, then close one end |
+| `test_device` | Grant the root task what the firmware tables say of the emulator's test device, and run the device while an IRQ for its line exists, for `test_devices` |
 | `test_fibers` | Run two fibers taking turns |
 | `test_segments` | Grow a fiber's stack onto more segments (a kernel built with `stack_check=morestack`) |
 | `test_pool` | Share two fiber pools between CPUs 1 to 5 (6 CPUs) |
+
+The root task reads the command line too (`docs/specs/programs.md`):
+
+| Word | What it does |
+|---|---|
+| `test_services` | End once the supervisor has started its services |
+| `test_outlive_manager` | Kill the process manager once `hello` has started, and end once `hello` has |
+| `test_program=<name>` | Run the test program `src/tests/<name>` in place of the supervisor, and end once it has: `test_syscalls`, `test_ports`, `test_channels`, `test_memory`, `test_control`, `test_threads`, or `test_devices` (with `test_device`) |
 
 ## Testing
 

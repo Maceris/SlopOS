@@ -71,6 +71,19 @@ load_segment_count :: fn(elf: ptr[ElfHeader]) -> usize {
     return count
 }
 
+// How many bytes the kernel takes once loaded: from its link base to the end of its highest segment, in whole pages.
+image_size :: fn(elf: ptr[ElfHeader]) -> u64 {
+    highest : u64 = 0
+    for i in 0..<cast[u64](elf.program_header_count) {
+        header :: program_header(elf, i)
+        end :: cast[u64](header.virtual_address) + cast[u64](header.memory_size)
+        if cast[u32](header.kind) == PT_LOAD && end > highest {
+            highest = end
+        }
+    }
+    return align_up(highest) - link_base(elf)
+}
+
 // The address the kernel was linked at: its lowest loaded segment's, rounded down to a page.
 link_base :: fn(elf: ptr[ElfHeader]) -> u64 {
     lowest : u64 = 0xffffffffffffffff

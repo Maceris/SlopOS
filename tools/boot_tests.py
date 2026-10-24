@@ -21,11 +21,23 @@ PROGRAMS = Path()
 PROGRAMS_AARCH64 = Path()
 WITH_PROGRAMS = "<programs>"
 
+
+def program_test(name: str, program: str, line: str, words: str = "") -> tuple:
+    """
+    A test program the root task runs (src/tests, knowledge/decisions/0069) on 2 CPUs: it says line and ends with 0, its
+    budget is back to nothing, and once the root task has ended, only the kernel's own objects are left.
+    """
+    command_line = f"test_exit {words} test_program={program}" if words else f"test_exit test_program={program}"
+    return (name, 7, [WITH_PROGRAMS, f"--command-line={command_line}", f"--expect-line=[user] {program}: {line}",
+                      f"--expect-line=[user] root task: {program} ended with 0, and its budget is back to nothing",
+                      "--expect-line=[info] objects left: only the kernel's own", "--", "-smp", "2"])
+
+
 # Name, the code expected, and boot.py's arguments
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 7 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 14 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] process manager: started supervisor", "--expect-line=[user] process manager: started hello",
         "--expect-line=[user] hello: heap working, random numbers working", "--expect-line=[user] root task: the supervisor started hello",
@@ -53,35 +65,26 @@ TESTS = [
         "--expect-line=[info] test_shootdown: every CPU read the new page after the shootdown", "--", "-smp", "4"]),
     ("routes a device's interrupts through the I/O APIC", 0, ["--command-line=test_exit test_ioapic",
         "--expect-line=[info] test_ioapic: 10 interrupts arrived from the test device"]),
-    ("runs user threads on every CPU", 0, ["--command-line=test_exit test_threads",
-        "--expect-line=[info] test_threads: 4 user threads on 2 CPUs, each preempted and run again, each with its own vector state",
-        "--", "-smp", "2"]),
     ("gives a thread its CPU budget", 0, ["--command-line=test_exit test_budgets",
         "--expect-line=[info] test_budgets: the budgeted thread got its budget at its priority, then shared the background"]),
-    ("takes system calls on handles", 0, ["--command-line=test_exit test_syscalls",
-        "--expect-line=[info] test_syscalls: handles were looked up, copied, refused, closed and went stale; threads and processes made and destroyed",
-        "--expect-line=[info] test_syscalls: destroying the process freed everything it owned, after a grace period",
-        "--", "-smp", "2"]),
-    ("waits on ports, wakes them and sets their timers", 0, ["--command-line=test_exit test_ports",
-        "--expect-line=[info] test_ports: wakes, timers, deadlines and other threads woke waiters; closing the port woke the last",
-        "--expect-line=[info] test_ports: destroying the process freed its ports and their bindings",
-        "--", "-smp", "2"]),
-    ("passes handles and messages over channels", 0, ["--command-line=test_exit test_channels",
-        "--expect-line=[info] test_channels: handles moved, messages went through the kernel and the rings, doorbells and Once bindings woke the right waiters, and closing an end reached the other",
-        "--expect-line=[info] test_channels: destroying the processes freed their channels, ports and bindings",
-        "--", "-smp", "2"]),
-    ("maps memory objects, paid for by budgets", 0, ["--command-line=test_exit test_memory",
-        "--expect-line=[info] test_memory: budgets split and closed, memory filled as it was touched and shared between mappings, and a write it didn't allow stopped the thread",
-        "--expect-line=[info] test_memory: destroying the process freed its memory, its mappings and its budgets, and gave the root budget back what it paid for",
-        "--", "-smp", "2"]),
-    ("drives a device from user mode with the platform capability", 0, ["--command-line=test_exit test_devices",
-        "--expect-line=[info] test_devices: a driver registered a controller, took an IRQ's interrupts through its port, read device memory, and lost a window with its memory",
-        "--expect-line=[info] test_devices: destroying the process freed its IRQs, its device memory and its windows",
-        "--", "-smp", "2"]),
-    ("controls a process from a debugger in user mode", 0, ["--command-line=test_exit test_control",
-        "--expect-line=[info] test_control: a debugger skipped and answered a call, changed a result, fixed a fault, read and wrote memory, suspended, resumed and started threads, gave a handle, and killed its target; a process ended itself, and its code came with its end",
-        "--expect-line=[info] test_control: destroying the debugger freed its intercept, and the target's threads",
-        "--", "-smp", "2"]),
+    program_test("runs threads of its own, each preempted and with its own vector state", "test_threads",
+        "4 threads of its own, each preempted and run again, each with its own vector state"),
+    program_test("takes system calls on handles", "test_syscalls",
+        "handles were looked up, copied, refused, closed and went stale; threads and processes made and destroyed"),
+    program_test("waits on ports, wakes them and sets their timers", "test_ports",
+        "wakes, timers, deadlines and other threads woke waiters; closing the port woke the last"),
+    program_test("passes handles and messages over channels", "test_channels",
+        "handles moved, messages went through the kernel and the rings, doorbells and Once bindings woke the right waiters, "
+        "and closing an end reached the other"),
+    program_test("maps memory objects, paid for by budgets", "test_memory",
+        "budgets split and closed, memory filled as it was touched and shared between mappings, and a write it didn't allow "
+        "stopped the thread"),
+    program_test("drives a device from user mode with the platform capability", "test_devices",
+        "a driver registered a controller, took an IRQ's interrupts through its port, read device memory, and lost a window "
+        "with its memory", "test_device"),
+    program_test("controls a process from a debugger in user mode", "test_control",
+        "a debugger skipped and changed calls, fixed a fault, read and wrote memory, suspended, resumed and started threads, "
+        "gave a handle and killed its target; an exit's code came with its end"),
     ("resumes after an NMI", 0, ["--command-line=test_exit test_nmi", "--expect-line=[info] test_nmi: back from the NMI"]),
     ("switches between fibers", 0, ["--command-line=test_exit test_fibers",
                                     "--expect-line=[info] test_fibers: stack traces follow suspended and resumed fibers"]),
@@ -207,7 +210,8 @@ def addresses(kernel: Path, arguments: list) -> list | None:
         sys.stdout.write(result.stdout)
         sys.stdout.write(result.stderr)
         return None
-    return [line for line in result.stdout.splitlines() if any(line.startswith(prefix) for prefix in ADDRESS_LINES)]
+    # Only the kernel's own addresses: where the firmware put the image physically is its choice, and can differ between boots
+    return [line.split(", physical ")[0] for line in result.stdout.splitlines() if any(line.startswith(prefix) for prefix in ADDRESS_LINES)]
 
 
 def run_address_tests(kernel: Path, more: list = [], prefix: str = "") -> int:

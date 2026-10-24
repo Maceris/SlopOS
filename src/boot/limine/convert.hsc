@@ -97,7 +97,7 @@ build_boot_info :: fn(info: ptr[mut boot_info.BootInfo]) {
 
     info.direct_map_offset = hhdm.offset
     regions :: take[boot_info.MemoryRegion](carve, memory_map_count)
-    region_count :: build_memory_map(memory_map, address.physical_base, carved, regions)
+    region_count :: build_memory_map(memory_map, address.physical_base, image_size(elf), carved, regions)
     runtime.assert(region_count <= regions.count, "build_memory_map gave more regions than it has room for")
     info.memory_map = regions[0..<region_count]
     info.kernel_image = kernel_image(address, info.memory_map, elf, take[boot_info.ImageSegment](carve, segment_count))

@@ -3,11 +3,12 @@
 What a SlopOS program is, and how it starts: the executable its build makes, what its loader does with it,
 and what it's given when it starts.
 
-Status: **implemented in part** (roadmap M6, stages 6a to 6d): programs build, the kernel loads and starts
-the root task, the root task starts the first services, the process manager loading programs for the rest,
-and a program's entry takes its grants as typed parameters. Choices and alternatives are in
-`../../knowledge/decisions/0058-user-space-plan.md`, `0059-user-programs-as-built.md`,
-`0060-root-task-as-built.md`, `0067-process-manager-as-built.md` and `0068-typed-entry-points-as-built.md`. Four-digit numbers like `0004` refer to decision records in
+Status: **implemented** (roadmap M6, stages 6a to 6e): programs build, the kernel loads and starts the root
+task, the root task starts the first services, the process manager loading programs for the rest, a program's
+entry takes its grants as typed parameters, and the kernel's user-mode tests are programs. Choices and
+alternatives are in `../../knowledge/decisions/0058-user-space-plan.md`, `0059-user-programs-as-built.md`,
+`0060-root-task-as-built.md`, `0067-process-manager-as-built.md`, `0068-typed-entry-points-as-built.md` and
+`0069-tests-as-programs-as-built.md`. Four-digit numbers like `0004` refer to decision records in
 `../../knowledge/decisions/`.
 
 ## Executables
@@ -90,10 +91,13 @@ loader above, at random places for its image, its 256 KiB stack with its startup
 | `platform` | `Platform` | The authority over the machine's hardware (`0039`) |
 | `debug_log` | `DebugLog` | Lines in the kernel's log (`debug_log`, `system_calls.md`) |
 | `command_line` | `Memory` | The kernel's command line, its bytes then zeros (`0067`) |
+| `test_device` | `Memory` | With `test_device` on the command line: what the firmware tables say of the emulator's test device (`src/test_device`), for `test_devices` (`0069`) |
 | `module:<name>` | `Memory` | Each other boot module: a read-only memory object over the frames it was loaded into, which go back to the kernel when it's destroyed |
 
-When the root task ends, the kernel logs how and stops (`StopReason.RootTaskEnded`, 7), and nothing else
-stops a kernel with a root task: a working system's root task never ends. CPU budgets aren't objects yet, so its threads run with the kernel's default.
+When the root task ends, the kernel logs how, destroys everything it owned, waits a grace period of 20 ticks,
+logs what's left in its pools, which should be only its own (the root budget and the platform capability), and
+stops (`StopReason.RootTaskEnded`, 7). Nothing else stops a kernel with a root task: a working system's root task
+never ends. CPU budgets aren't objects yet, so its threads run with the kernel's default.
 
 ## The First Services
 
@@ -138,6 +142,23 @@ its tag, on channels with 2 KiB rings (`RING_BYTES`):
 **Boot tests** tell the root task what to test with a word on the kernel's command line: `test_services` ends
 it with 0 once the supervisor has started its services, and `test_outlive_manager` kills the manager once
 `hello` has started, then ends once `hello` has, after it said it's still running.
+
+## Test Programs
+
+Each user-mode test is a program in `src/tests` (`0069`), which the root task runs with `test_program=<name>`:
+it starts the entropy service and the manager, launches the test in place of the supervisor, and ends with 0 if
+the test ended with 0 and the test's budget is back to nothing after its grace period. Every test's entry is the
+same, which `system_config` checks:
+
+```
+main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?,
+    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?) -> int
+```
+
+The root task gives every test its log, a connection to the manager and its own module, and `test_devices` the
+platform capability and the `test_device` grant. A test that needs other processes launches copies of itself,
+giving each a `peer` channel to tell it its part. Each test says what worked in its debug log and ends with 0, or
+the number of the first check that failed (`src/test_kit`).
 
 ## The Runtime
 

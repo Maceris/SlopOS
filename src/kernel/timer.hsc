@@ -1,5 +1,6 @@
 package kernel
 
+import intrinsics from "base"
 import runtime from "base"
 
 #if TARGET_ARCH == .x86_64 {
@@ -52,15 +53,31 @@ handle_timer :: fn() -> bool {
     if cpu.timer_ticks <= BOOT_TICKS {
         runtime.log_info("timer interrupt %", cpu.timer_ticks)
     }
-    threads_test_tick(kernel, cpu.timer_ticks)
-    syscalls_test_tick(kernel, cpu.timer_ticks)
-    ports_test_tick(kernel, cpu.timer_ticks)
-    channels_test_tick(kernel, cpu.timer_ticks)
-    memory_test_tick(kernel, cpu.timer_ticks)
-    devices_test_tick(kernel, cpu.timer_ticks)
-    control_test_tick(kernel, cpu.timer_ticks)
+    budgets_test_tick(kernel, cpu.timer_ticks)
+    root_task_ended(kernel, cpu.timer_ticks)
     if cpu.timer_ticks >= kernel.stop_after_ticks {
         stop(.Halted)
     }
     return true
+}
+
+// Ticks between the root task's end and the kernel's: the grace period for what it owned to be freed.
+ROOT_END_TICKS : u64 : 20
+
+/*
+ * At each of the boot CPU's ticks: once the root task has ended, and ROOT_END_TICKS have passed, the objects
+ * left, which should be only the kernel's own, then the stop (decisions/0069).
+ */
+root_task_ended :: fn(kernel: ptr[mut Kernel], tick: u64) {
+    state :: intrinsics.atomic_load_u32_acquire(&kernel.root_ended)
+    if state == 1 {
+        kernel.root_stop_tick = tick + ROOT_END_TICKS
+        intrinsics.atomic_store_u32_release(&kernel.root_ended, 2)
+        return void
+    }
+    if state != 2 || tick < kernel.root_stop_tick {
+        return void
+    }
+    log_objects_left(kernel)
+    stop(.RootTaskEnded)
 }

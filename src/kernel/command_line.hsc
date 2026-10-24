@@ -44,22 +44,13 @@ Options :: struct {
     test_shootdown : bool,
     // test_ioapic: once booted, route the emulator's test device through its interrupt controller.
     test_ioapic : bool,
-    // test_threads: once booted, run threads in user mode on every CPU, preempted by the timer (needs 2 CPUs).
-    test_threads : bool,
     // test_budgets: once booted, run a thread with a CPU budget against one without (on 1 CPU).
     test_budgets : bool,
-    // test_syscalls: once booted, run a thread in user mode that makes system calls on handles.
-    test_syscalls : bool,
-    // test_ports: once booted, run two threads in user mode that wait on a port, wake it and set its timers.
-    test_ports : bool,
-    // test_channels: once booted, run two processes that pass handles and messages over channels.
-    test_channels : bool,
-    // test_memory: once booted, run two threads in user mode that use memory budgets and memory objects.
-    test_memory : bool,
-    // test_devices: once booted, run a driver in user mode with the platform capability: an IRQ, device memory and windows.
-    test_devices : bool,
-    // test_control: once booted, run a debugger in user mode that intercepts, inspects and controls another process.
-    test_control : bool,
+    /*
+     * test_device: grant the root task what the firmware tables say of the emulator's test device, and run the
+     * device while an IRQ for its line exists, for the test_devices program (decisions/0069).
+     */
+    test_device : bool,
     // no_root_task: don't start the root task from the first boot module (root_task.hsc).
     no_root_task : bool,
 }
@@ -127,28 +118,10 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     if word == "test_ioapic" {
         options.test_ioapic = true
     }
-    if word == "test_threads" {
-        options.test_threads = true
-    }
     if word == "test_budgets" {
         options.test_budgets = true
     }
-    if word == "test_syscalls" {
-        options.test_syscalls = true
-    }
-    if word == "test_ports" {
-        options.test_ports = true
-    }
-    if word == "test_memory" {
-        options.test_memory = true
-    }
-    if word == "test_devices" {
-        options.test_devices = true
-    }
-    if word == "test_control" {
-        options.test_control = true
-    }
-    if word == "test_channels" {
-        options.test_channels = true
+    if word == "test_device" {
+        options.test_device = true
     }
 }

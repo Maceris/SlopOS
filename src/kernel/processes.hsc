@@ -51,7 +51,10 @@ create_process :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> (made 
 destroy_process :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
     ended :: if process.exited { cast[u64](process.exit_code) } else { slop_os.EXIT_KILLED }
     raise_watchers(kernel, &process.watchers, &process.watch_lock, cast[u32](slop_os.SIGNAL_TERMINATED), ended)
-    // The root task's end is the machine's
+    /*
+     * The root task's end is the machine's: once its subtree is destroyed and a grace period has passed, the
+     * boot CPU's timer says what's left and stops (timer.hsc, root_task_ended)
+     */
     if intrinsics.atomic_load_u64_acquire(&kernel.root_task) == cast[u64](process) {
         if process.exited {
             runtime.log_info("root task ended with code %", process.exit_code)
@@ -59,7 +62,7 @@ destroy_process :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
         else {
             runtime.log_error("root task was destroyed")
         }
-        stop(.RootTaskEnded)
+        intrinsics.atomic_store_u32_release(&kernel.root_ended, 1)
     }
     forget_intercept(kernel, process)
     close_table(&process.table)

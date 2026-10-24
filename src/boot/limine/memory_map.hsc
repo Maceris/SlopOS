@@ -20,9 +20,12 @@ align_up :: fn(value: u64) -> u64 {
     return align_down(value + PAGE_SIZE - 1)
 }
 
-// How many regions the map can need for count Limine entries: page 0 and the carved range each add up to two.
+/*
+ * How many regions the map can need for count Limine entries: page 0 and the carved range each add up to two,
+ * and the kernel's own range, split out of modules Limine put beside it, two more.
+ */
 memory_map_capacity :: fn(count: usize) -> usize {
-    return count + 3
+    return count + 5
 }
 
 memory_kind :: fn(entry: ptr[MemoryMapEntry], executable_physical: u64) -> boot_info.MemoryKind {
@@ -61,6 +64,7 @@ memory_kind :: fn(entry: ptr[MemoryMapEntry], executable_physical: u64) -> boot_
 build_memory_map :: fn(
     response: ptr[MemoryMapResponse],
     executable_physical: u64,
+    executable_size: u64,
     carved: boot_info.PhysicalRange,
     regions: mut boot_info.MemoryRegion[],
 ) -> usize {
@@ -69,6 +73,22 @@ build_memory_map :: fn(
         kind :: memory_kind(entry, executable_physical)
         start := align_down(entry.base)
         end := align_up(entry.base + entry.length)
+        /*
+         * Limine puts the kernel and the modules beside it in one entry: the kernel's own pages are its image,
+         * read-only in the direct map, and the rest are modules, whose frames go back to the allocator
+         */
+        if kind == .KernelImage {
+            image_start :: align_down(executable_physical)
+            image_end :: align_up(executable_physical + executable_size)
+            if image_start > start {
+                count = add_region(regions, count, start, image_start, .BootModule)
+            }
+            count = add_region(regions, count, image_start, if image_end < end { image_end } else { end }, .KernelImage)
+            if image_end < end {
+                count = add_region(regions, count, image_end, end, .BootModule)
+            }
+            continue
+        }
         // Usable regions shrink to page boundaries, others grow to them
         if kind == .Usable {
             start = align_up(entry.base)

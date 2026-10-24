@@ -38,9 +38,6 @@ Kernel :: struct {
     counter_frequency : u64,
     // Where the kernel image is, for stack traces relative to it.
     image_base : u64,
-    // The image's code: where its executable segment starts, page-aligned, and its size (address_space.hsc, keep_boot_info).
-    code_base : u64,
-    code_size : u64,
     // Every CPU, the boot CPU first. The first online_cpus of them are running.
     cpus : boot_info.BootCpu[],
     online_cpus : u32,
@@ -96,6 +93,9 @@ Kernel :: struct {
     command_line : string,
     // The root task's process, as an address, once it's started, whose end stops the kernel (root_task.hsc).
     root_task : u64,
+    // 1 once the root task has ended, 2 once the boot CPU has noted when to stop for it, at root_stop_tick.
+    root_ended : u32,
+    root_stop_tick : u64,
     next_irq_cpu : u32,
     // Every thread, for finding one by ID, and how many intercepts there are (control.hsc, intercepts.hsc).
     threads_lock : concurrency.SpinLock,
@@ -108,20 +108,8 @@ Kernel :: struct {
     tags : TagSet,
     // The boot CPU's tick the kernel stops at (timer.hsc).
     stop_after_ticks : u64,
-    // test_threads' or test_budgets' state, as an address, while it runs (threads_test.hsc)
-    threads_test : u64,
-    // test_syscalls' state, as an address, while it runs (syscalls_test.hsc)
-    syscalls_test : u64,
-    // test_ports' state, as an address, while it runs (ports_test.hsc)
-    ports_test : u64,
-    // test_channels' state, as an address, while it runs (channels_test.hsc)
-    channels_test : u64,
-    // test_memory's state, as an address, while it runs (memory_test.hsc)
-    memory_test : u64,
-    // test_devices' state, as an address, while it runs (devices_test.hsc)
-    devices_test : u64,
-    // test_control's state, as an address, while it runs (control_test.hsc)
-    control_test : u64,
+    // test_budgets' state, as an address, while it runs (budgets_test.hsc)
+    budgets_test : u64,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : concurrency.SpinLock,
     // test_pool's state, as an address, once the boot CPU has set it up for the other CPUs (pool_test.hsc)
@@ -258,29 +246,8 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         if kernel.options.test_ioapic {
             test_io_apic(kernel)
         }
-        if kernel.options.test_threads {
-            test_threads(kernel)
-        }
         if kernel.options.test_budgets {
             test_budgets(kernel)
-        }
-        if kernel.options.test_syscalls {
-            test_syscalls(kernel)
-        }
-        if kernel.options.test_ports {
-            test_ports(kernel)
-        }
-        if kernel.options.test_channels {
-            test_channels(kernel)
-        }
-        if kernel.options.test_memory {
-            test_memory(kernel)
-        }
-        if kernel.options.test_devices {
-            test_devices(kernel)
-        }
-        if kernel.options.test_control {
-            test_control(kernel)
         }
         memory_tests(kernel)
         if kernel.options.test_nmi {

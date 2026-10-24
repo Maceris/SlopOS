@@ -5,10 +5,12 @@
  * through the manager, with std/os's launch. It owns each, serves the supervisor's reports, and watches
  * them. A working system's root task never ends; restarting the supervisor comes later.
  *
- * Two words on the kernel's command line are for boot tests, and end it with 0:
+ * Words on the kernel's command line are for boot tests, and end it with 0 if what they test works:
  * - test_services, once the supervisor has started all of its services;
  * - test_outlive_manager, which kills the process manager once the supervisor reports hello started, and
- *   ends once hello has, after it said it's still running.
+ *   ends once hello has, after it said it's still running;
+ * - test_program=<name>, which launches the test program src/tests/<name> in place of the supervisor, and
+ *   ends once it has, with 0 if it ended with 0 and its budget is back to nothing (decisions/0069).
  */
 package root_task
 
@@ -23,6 +25,8 @@ import protocols from "../../protocols"
 import random_stream from "../../random_stream"
 import system_config from "../../system_config"
 import supervisor from "../supervisor"
+import test_kit from "../../test_kit"
+import test_syscalls from "../../tests/test_syscalls"
 
 MAX_STARTED :: 8
 // The port's key for the supervisor's reports; a started service's is its index.
@@ -35,6 +39,21 @@ SupervisorGrants :: struct {
     root : os.Channel[protocols.Supervision],
     hello_module : slop_os.Memory,
 }
+
+// What a test program is given: every test's entry takes these (src/tests, test_kit).
+TestGrants :: struct {
+    log : slop_os.DebugLog,
+    platform : slop_os.Platform?,
+    test_device : slop_os.Memory?,
+    // A connection to the manager, and the program's own module, for a test that launches copies of itself
+    manager : os.Channel[process_manager.ProcessManager]?,
+    program : slop_os.Memory?,
+    // What a copy is given by the test that launched it; never by the root task
+    peer : slop_os.Channel?,
+}
+
+// A test program's memory budget.
+TEST_BUDGET : u64 : 32 * 1024 * 1024
 
 // A service the root task started, and owns.
 Started :: struct {
@@ -92,6 +111,11 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         process_builder.grant("clients", cast[slop_os.Handle](manager_pair.a), manager_tag),
     ]
     start_itself(&root, "process_manager", manager_grants) or_return 7
+
+    match word_after(words, "test_program=") {
+        case Some(name) => return run_test(&root, name, platform)
+        case None => {}
+    }
 
     // The supervisor, through the manager, with a connection of its own
     service :: system_config.service("supervisor") or_return 8
@@ -242,6 +266,65 @@ start_with_loader :: fn(root: ptr[mut Root], name: string, grants: process_build
     }
 }
 
+/*
+ * The test program name, launched through the manager with TestGrants, and watched until it ends: 0 if it
+ * ended with 0, and its budget, once its grace period has passed, is back to nothing.
+ */
+run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform) -> int {
+    block :: root.block
+    module_storage : u8[slop_os.GRANT_LABEL_SIZE]
+    module_name := text_buffer.make(module_storage)
+    text_buffer.append(&module_name, name)
+    text_buffer.append(&module_name, ".elf")
+    module :: find_module(block, text_buffer.as_string(&module_name)) or_return 20
+    grants := TestGrants.{log = duplicate_log(root) or_return 21}
+    module_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    match slop_os.handle_duplicate(module, module_rights) {
+        case Ok(copy) => grants.program = cast[slop_os.Memory](copy)
+        case Error(error) => {}
+    }
+    match protocols.connect(root.manager, root.manager_port, block.budget, process_manager.RING_BYTES) {
+        case Some(end) => grants.manager = os.Channel[process_manager.ProcessManager].{end = end}
+        case None => {}
+    }
+    // Only the devices test is given the hardware
+    if name == "test_devices" {
+        platform_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+        match slop_os.handle_duplicate(cast[slop_os.Handle](platform), platform_rights) {
+            case Ok(copy) => grants.platform = cast[slop_os.Platform](copy)
+            case Error(error) => {}
+        }
+        match slop_os.find_grant(block, "test_device", .Memory) {
+            case Some(device) => grants.test_device = cast[slop_os.Memory](device)
+            case None => {}
+        }
+    }
+    manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
+    // Every test's entry has the same type, test_syscalls.main's (system_config checks it)
+    launched := os.Launched.{}
+    match os.launch(manager, root.manager_port, name, cast[slop_os.Memory](module), TEST_BUDGET, test_syscalls.main, grants) {
+        case Ok(made) => launched = made
+        case Error(error) => {
+            log_line.write(root.log, "root task: % didn't start: %", name, error)
+            return 22
+        }
+    }
+    port :: slop_os.port_create(block.budget) or_return 23
+    slop_os.port_bind(port, cast[slop_os.Handle](launched.process), slop_os.SIGNAL_TERMINATED, 0, .Once) or_return 23
+    packets : slop_os.Packet[1]
+    _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_return 23
+    code :: packets[0].data[1]
+    emptied :: test_kit.wait_for_budget(launched.budget, 0, 2_000_000_000)
+    left :: test_kit.used(launched.budget)
+    if emptied {
+        log_line.write(root.log, "root task: % ended with %, and its budget is back to nothing", name, code)
+    }
+    else {
+        log_line.write(root.log, "root task: % ended with %, and its budget still has % bytes charged", name, code, left)
+    }
+    return if code == 0 && emptied { 0 } else if code != 0 { 24 } else { 25 }
+}
+
 // A service started, by its name, which is a constant's.
 remember :: fn(root: ptr[mut Root], name #escaping : string, process: slop_os.Process) {
     index :: root.started_count
@@ -295,6 +378,33 @@ text_of :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> strin
         count += 1
     }
     return string_of(cast[ptr[u8]](address), count)
+}
+
+// What follows prefix in the word of text that starts with it, or null.
+word_after :: fn(text: string, prefix: string) -> string? {
+    start : usize = 0
+    for character, i in text {
+        if character == ' ' {
+            match word_from(text, start, i, prefix) {
+                case Some(found) => return found
+                case None => {}
+            }
+            start = i + 1
+        }
+    }
+    return word_from(text, start, text.count, prefix)
+}
+
+// What follows prefix in text's bytes from start to end, if they start with it.
+word_from :: fn(text: string, start: usize, end: usize, prefix: string) -> string? {
+    if end < start || end - start < prefix.count {
+        return null
+    }
+    word :: string_of(cast[ptr[u8]](cast[u64](text.data) + cast[u64](start)), end - start)
+    if string_of(cast[ptr[u8]](word.data), prefix.count) != prefix {
+        return null
+    }
+    return string_of(cast[ptr[u8]](cast[u64](word.data) + cast[u64](prefix.count)), word.count - prefix.count)
 }
 
 // Whether word is one of the words of text, which spaces separate.

@@ -8,6 +8,7 @@ import arch_interface from "../arch_interface"
 import boot_info from "../boot_info"
 import elf_loader from "../elf_loader"
 import frames from "frames"
+import test_device from "../test_device"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -24,6 +25,7 @@ import frames from "frames"
  * - "platform", the platform capability;
  * - "debug_log", a debug log;
  * - "command_line", the kernel's command line, its bytes then zeros;
+ * - "test_device", with test_device on the command line: what the firmware tables say of the test device;
  * - "module:<name>", each other boot module, a read-only memory object over the frames it was loaded into.
  * Its own handles are to itself, its address space and the root memory budget, and its startup block
  * has the boot's random seed. Its end is the machine's: the kernel stops (processes.hsc), and only then.
@@ -78,7 +80,7 @@ load_root_task :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule) -> s
         case Ok(made) => space = made
         case Error(error) => return "no address space"
     }
-    grant_count :: kernel.modules.count + 2
+    grant_count :: kernel.modules.count + 3
     block_size :: page_up(cast[u64](size_of(slop_os.StartupBlock)) + cast[u64](grant_count + 1) * cast[u64](size_of(slop_os.Grant)))
     layout :: choose_layout(kernel, executable.size, block_size)
     not_loaded :: load_image(kernel, process, space, &executable, file, layout.image)
@@ -160,6 +162,10 @@ random_bits :: fn(kernel: ptr[Kernel]) -> u64 {
 // value rounded up to whole pages.
 page_up :: fn(value: u64) -> u64 {
     return (value + PAGE - 1) & ~(PAGE - 1)
+}
+
+max_u64 :: fn(a, b: u64) -> u64 {
+    return if a > b { a } else { b }
 }
 
 /*
@@ -281,6 +287,10 @@ write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], sp
     count = add_grant(grants, count, "debug_log", .DebugLog, log)
     command_line :: copy_of_command_line(kernel, process) or_return "no memory for its command line"
     count = add_grant(grants, count, "command_line", .Memory, command_line)
+    if kernel.options.test_device {
+        device :: test_device_page(kernel, process) or_return "no memory for its test device"
+        count = add_grant(grants, count, "test_device", .Memory, device)
+    }
     for module, i in kernel.modules {
         if i == 0 {
             continue
@@ -315,6 +325,32 @@ copy_of_command_line :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -
     if !copy_into(kernel, memory, view_of(cast[ptr[u8]](text.data), text.count)) {
         return null
     }
+    return handle_for(kernel, process, cast[u64](memory), .Memory, true)
+}
+
+/*
+ * What the firmware tables would say of the test device, in memory process owns (test_device.TestDeviceInfo):
+ * an owning handle to it. The RAM it gives as the kernel's is the page's own frame.
+ */
+test_device_page :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> slop_os.Handle? {
+    memory :: create_memory(kernel, cast[u64](process), kernel.root_budget, PAGE) or_return null
+    frame :: frame_for(kernel, memory, 0)
+    if frame == 0 {
+        return null
+    }
+    device :: arch.test_device()
+    info :: cast[ptr[mut test_device.TestDeviceInfo]](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](frame)))
+    kind : slop_os.ControllerKind = match device.kind {
+        case .IoApic => .IoApic
+        case .GicDistributor => .GicDistributor
+        case _ => .Plic
+    }
+    info.kind = cast[u32](kind)
+    info.line = device.line
+    info.flags = (if device.trigger == .Level { cast[u32](slop_os.IRQ_LEVEL) } else { cast[u32](0) })
+        | (if device.polarity == .ActiveLow { cast[u32](slop_os.IRQ_ACTIVE_LOW) } else { cast[u32](0) })
+    info.registers = cast[u64](device.registers)
+    info.kernel_ram = frame
     return handle_for(kernel, process, cast[u64](memory), .Memory, true)
 }
 
