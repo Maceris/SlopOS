@@ -18,23 +18,11 @@ Severity: **blocker** / **friction** / **nice**.
 
 ## 1. Open Items
 
-### Needed to boot a kernel (roadmap M1)
-
-The smallest kernel that proves the toolchain: Limine loads a Hemera ELF, it sets up a
-GDT/IDT, prints to the serial port and framebuffer, handles a timer interrupt, and halts.
-
-That kernel builds and boots now (2026-10-15, `compiler-plan.md` Phase 6). Its items 1–10, referred to by
-number in older records, are in this file's history (see Resolved). Still watched:
-
-| Issue | Severity | Where |
-|---|---|---|
-| Once (2026-10-16), building the kernel through the build package in `boot_tests.py` failed, and the output was lost. Two races in the checker that could explain it were found and fixed since (2026-10-20, 2026-10-22), and no build has failed that way in the many since. Watching a while longer; `build/failed_kernel_build.log` keeps the output if one does | unknown | `tools/boot_tests.py` |
-
 ### Language and library design
 
 | Topic | State | Details |
 |---|---|---|
-| Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`; `os.run_process` runs processes since 2026-10-19 (Windows and Linux). Still open: sharing parsed files between targets and building them in parallel, documented as planned in Hemera's `docs/compilation.md` (2026-10-19); `find_packages` is unimplemented and may be removed | `hemera-proposals/build-programs.md`; `decisions/0028` |
+| Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`; `os.run_process` runs processes since 2026-10-19 (Windows and Linux); targets built several at once since 2026-10-23 (`--jobs`), SlopOS's build from 7.7 s to 4.0 s. Still open: sharing parsed files between targets, measured to save little so far; `find_packages` is unimplemented and may be removed | `hemera-proposals/build-programs.md`; `decisions/0028` |
 | Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 done 2026-10-13. The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
 
 ### Smaller gaps
@@ -102,7 +90,8 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
-Resolved items are removed once they're done, as everything up to 2026-10-23 was; they're in this file's
+Resolved items are removed once they're done, as everything up to 2026-10-23 was, and the kernel build that
+failed once on 2026-10-16 (two checker races that explain it were fixed since, and it hasn't recurred); they're in this file's
 history up to commit `052f203`, where references like "item 9" or "Resolved 2026-10-15" from older records
 lead.
 

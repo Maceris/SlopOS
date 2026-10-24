@@ -6,19 +6,20 @@ Permissions*) and `base/compiler/build.hsc` and `package.hsc` are the reference,
 `../decisions/0028-build-package.md` is how SlopOS uses it. `os.run_process` runs other programs
 since 2026-10-19 (Windows and Linux), gated by `--allow-run`. This keeps only what's still open.
 
-## Parse Once, Build in Parallel
+## Parse Once
 
-Documented 2026-10-19 in Hemera's `docs/compilation.md` (*Build Packages*) as it is today: targets
-are built one at a time, each a program of its own whose files are read, parsed and checked for it,
-with the work inside a target spread across threads. Planned, and stated there:
+**Building targets at the same time is done** (2026-10-23, Hemera's `docs/compilation.md`, *Build
+Packages*): several at once (`--jobs`), each reporting in one piece and in order, the build's checks
+taking turns, steps after every target, and the outputs the same as one at a time. SlopOS's whole
+build went from about 7.7 s to about 4.0 s, now bound by the kernel alone: most of its 3.7 s is LLVM
+simplifying the whole kernel module, on one thread.
 
-- **Sharing parsed files between targets.** Each target is still checked on its own, since its
-  `#if` choices, settings and package paths can change what a file means.
-- **Building independent targets at the same time**, with steps still waiting on the targets they
-  depend on.
-
-Neither may change what a build produces (Hemera's `docs/compilation.md`, *Deterministic Output*).
-SlopOS feels this as build time once there are many programs and drivers; nothing is blocked on it.
+Still open: **sharing parsed files between targets.** Measured 2026-10-23 on SlopOS's whole build:
+599 files read, about 190 of them for the kernel and the build package alone, and lexing and parsing
+all of them is about 250 ms of CPU time (181 ms lexing, 68 ms parsing), spread across each target's
+checking threads and mostly off the kernel's path, so sharing would save tens of milliseconds there.
+Checking changes a file's tree (insertions, types on nodes), so sharing would mean copying trees or
+making them immutable. Not worth it yet; lexing, the larger half, may be worth making faster first.
 
 ## `find_packages`
 
