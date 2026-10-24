@@ -127,9 +127,9 @@ make :: fn(memory_map: boot_info.MemoryRegion[], direct_map_offset: u64) -> Resu
     return .Ok(allocator)
 }
 
-// Whether memory of this kind is RAM the frame allocator may own, now or once it's reclaimed.
+// Whether memory of this kind is RAM the frame allocator may own, now or once it's reclaimed or given back, like a boot module's.
 is_reclaimable_ram :: fn(kind: boot_info.MemoryKind) -> bool {
-    return kind == .Usable || kind == .BootReclaimable || kind == .FirmwareTables
+    return kind == .Usable || kind == .BootReclaimable || kind == .FirmwareTables || kind == .BootModule
 }
 
 /*

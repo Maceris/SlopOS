@@ -94,6 +94,12 @@ Context for the open items, and choices SlopOS relies on.
 
 ## 3. Resolved
 
+- 2026-10-23 — M6 stage 6b (`decisions/0060`): a `#no_context` function calling a generic function that needs a
+  context (`view_of`, from the ABI package's `grants_of`) passed the checker, then crashed the compiler while
+  generating the call, with no message. The checker refuses it now, as it does any other call (E4027), with a
+  test (`no_context_generic`). Also new in Hemera: SlopOS programs' startup code gives the first thread its
+  stack limit (`runtime.os_prepare_carrier`), and `runtime.reserve_addresses` gives a program part of its
+  free range to map things in.
 - 2026-10-23 — M6 stage 6a (`decisions/0059`): Hemera targets SlopOS. The compiler has `OSType::SlopOS`
   (`--os=slopos`, `os = .SlopOS` in a build package), whose startup code is the entry, given the startup
   block's address, ending the process with `main`'s result through `runtime.os_exit_process`, and linked as a

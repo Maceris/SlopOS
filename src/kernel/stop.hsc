@@ -22,6 +22,8 @@ StopReason :: enum #backed_by(u8) {
     BootFailed = 5,
     // Too little memory to boot.
     OutOfMemory = 6,
+    // The root task ended, which a working system's never does (decisions/0012): it says with what.
+    RootTaskEnded = 7,
 }
 
 // Stop the kernel for good: every other CPU, then the calling one.

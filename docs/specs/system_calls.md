@@ -19,7 +19,7 @@ generated from it at compile time, with `#insert`:
 - **the kernel's dispatch**, which decodes a call's registers into its handler's typed arguments.
 
 Arguments are typed: a handle of the kind the call takes (`Port`, `Channel`, `MemoryBudget`, `Memory`,
-`AddressSpace`, `Process`, `Thread`, `Irq`, `Platform`, `Intercept`, all distinct aliases of `Handle`, and
+`AddressSpace`, `Process`, `Thread`, `Irq`, `Platform`, `Intercept`, `DebugLog`, all distinct aliases of `Handle`, and
 `Handle` where any kind goes, `0015`), integers, enums, pointers into the caller's memory, and slices.
 Each result is a `Result[T, E]`, with `E` the call's error enum and `T` nothing, one value, or a struct of
 two.
@@ -48,13 +48,15 @@ each object is its owning one (`0008`).
   `RIGHT_PORT_BIND` for a port; `RIGHT_CHANNEL_MAP` for a channel end; `RIGHT_BUDGET_CHARGE` for a memory
   budget; `RIGHT_MEMORY_READ`, `RIGHT_MEMORY_WRITE` and `RIGHT_MEMORY_EXECUTE` for a memory object;
   `RIGHT_IRQ_ACK` for an IRQ; `RIGHT_PROCESS_INSPECT`, `_READ_MEMORY`, `_WRITE_STATE`, `_INTERCEPT` and
-  `_KILL` for a process, over its whole subtree (`0017`). An owning handle has every right.
+  `_KILL` for a process, over its whole subtree (`0017`); `RIGHT_DEBUG_LOG_WRITE` for a debug log. An owning
+  handle has every right.
   Duplicating keeps or drops rights, never adds them.
 
 Object kinds (`slop_os.ObjectKind`, `0034`): `MemoryBudget`, `CpuBudget`, `Memory`, `AddressSpace`,
 `Thread`, `Process`, `Channel`, `Port`, `Irq`, `IoPortRange`, `IommuDomain`, `Platform`, the authority over
-the machine's hardware (`0039`, `0055`), and `Intercept`, a debugger's hold on a subtree (`0056`). So far
-all but I/O-port ranges and IOMMU domains exist.
+the machine's hardware (`0039`, `0055`), `Intercept`, a debugger's hold on a subtree (`0056`), and
+`DebugLog`, lines in the kernel's log (`0060`). So far all but CPU budgets, I/O-port ranges and IOMMU
+domains exist.
 
 ## Calls
 
@@ -106,6 +108,7 @@ all but I/O-port ranges and IOMMU domains exist.
 | 43 | `intercept_resume` | intercept, thread ID, action | nothing: a thread the intercept stopped goes on: `Continue`, `Skip` (at an entry only) or `Kill` |
 | 44 | `process_kill` | process | nothing: the process is destroyed, with its subtree. Needs `RIGHT_PROCESS_KILL` |
 | 45 | `process_exit` | code (u32) | never returns: the calling process is destroyed, with its subtree, and its end gives code (`0059`) |
+| 46 | `debug_log` | log, text (a slice) | nothing: a line in the kernel's log, `[user] ` then text's first `DEBUG_LOG_LINE` (200) bytes, each not printable ASCII as `?`. Needs `RIGHT_DEBUG_LOG_WRITE` (`0060`) |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the

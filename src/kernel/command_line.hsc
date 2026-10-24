@@ -60,6 +60,8 @@ Options :: struct {
     test_devices : bool,
     // test_control: once booted, run a debugger in user mode that intercepts, inspects and controls another process.
     test_control : bool,
+    // no_root_task: don't start the root task from the first boot module (root_task.hsc).
+    no_root_task : bool,
 }
 
 parse_command_line :: fn(command_line: string) -> Options {
@@ -109,6 +111,9 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_heap" {
         options.test_heap = true
+    }
+    if word == "no_root_task" {
+        options.no_root_task = true
     }
     if word == "no_kaslr" {
         options.no_kaslr = true

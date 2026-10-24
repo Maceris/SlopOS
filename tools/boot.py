@@ -16,7 +16,8 @@ stopped to the debug exit device (src/kernel/stop.hsc, StopReason). QEMU's CPU i
 default, since SlopOS needs x86-64-v3.
 
 SlopOS's programs, each an ELF in --programs (built with the kernel when there's no --kernel), go in the
-ISO as Limine's modules, in the order of their names.
+ISO as Limine's modules: root_task.elf first, which the kernel starts as the root task, then the others in
+the order of their names.
 
 The kernel's ELF goes in a Limine ISO, which QEMU boots (BIOS by default, --uefi for UEFI) with the
 serial port captured. Limine randomizes the kernel's base and its direct map (KASLR), unless --no-kaslr. A kernel ends the run by writing a code to QEMU's isa-debug-exit device at
@@ -216,7 +217,7 @@ def main() -> int:
         if programs_folder is None and arguments.kernel is None and arguments.package is None:
             programs_folder = folder / "programs"
             build_slopos_programs(programs_folder)
-        programs = sorted(programs_folder.glob("*.elf")) if programs_folder is not None else []
+        programs = sorted(programs_folder.glob("*.elf"), key=lambda path: (path.name != "root_task.elf", path.name))             if programs_folder is not None else []
         # The kernel's own regions follow its command line; the image and the direct map, Limine's configuration
         command_line = arguments.command_line + (" no_kaslr" if arguments.no_kaslr else "")
         image = make_image(kernel.resolve(), [program.resolve() for program in programs], limine, xorriso, folder, command_line,

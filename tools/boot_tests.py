@@ -15,12 +15,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BOOT = ROOT / "tools" / "boot.py"
-# SlopOS's programs, built once and carried as every boot's modules
+# SlopOS's programs, built once, carried as modules by the tests whose arguments have WITH_PROGRAMS
 PROGRAMS = Path()
+WITH_PROGRAMS = "<programs>"
 
 # Name, the code expected, and boot.py's arguments
 TESTS = [
-    ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed", "--expect-line=[boot] module hello.elf"]),
+    ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
+    ("starts the root task, which reports and ends", 7, [WITH_PROGRAMS, "--expect-line=[boot] module root_task.elf",
+        "--expect-line=[boot] module hello.elf", "--expect-line=[user] root task: started, with 3 grants",
+        "--expect-line=[user] root task: hello.elf mapped, heap working, seeded: true",
+        "--expect-line=[info] root task ended with code 0"]),
+    ("doesn't start the root task with no_root_task", 0, [WITH_PROGRAMS, "--command-line=test_exit no_root_task",
+        "--expect-line=[info] boot memory reclaimed"]),
     ("boots and halts (UEFI)", 0, ["--uefi", "--expect-line=[info] boot memory reclaimed"]),
     ("reports a kernel fault", 1, ["--command-line=test_exit test_fault"]),
     ("reports a failed assertion", 3, ["--command-line=test_exit test_assert"]),
@@ -147,7 +154,7 @@ ADDRESS_TESTS = [
 
 def addresses(kernel: Path, arguments: list) -> list | None:
     """Boots kernel, and gives the lines that say where it is, or None if it didn't halt as usual."""
-    result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", f"--programs={PROGRAMS}", "--timeout=60", "--expect=0", *arguments],
+    result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", "--timeout=60", "--expect=0", *arguments],
                             capture_output=True, text=True)
     if result.returncode != 0:
         sys.stdout.write(result.stdout)
@@ -178,8 +185,9 @@ def run_tests(kernel: Path, tests: list) -> int:
     """Boots kernel for each test, and gives how many failed."""
     failed = 0
     for name, expected, arguments in tests:
-        result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", f"--programs={PROGRAMS}", "--timeout=60",
-                                 f"--expect={expected}", *arguments], capture_output=True, text=True)
+        arguments = [f"--programs={PROGRAMS}" if argument == WITH_PROGRAMS else argument for argument in arguments]
+        result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", "--timeout=60", f"--expect={expected}",
+                                 *arguments], capture_output=True, text=True)
         passed = result.returncode == 0
         print(f"{'passed' if passed else 'FAILED'}: {name}")
         if not passed:

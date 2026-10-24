@@ -66,6 +66,8 @@ Memory :: struct #align(16) {
     in_parent : bool,
     // Its own windows, under lock.
     first_window : u64,
+    // A boot module's: its frames, at physical, go to the frame allocator once it's released.
+    boot_module : bool,
 }
 
 // A range of a memory object, mapped in an address space.
@@ -323,8 +325,35 @@ unlink_window :: fn(parent: ptr[mut Memory], window: ptr[mut Memory]) {
     window.in_parent = false
 }
 
+/*
+ * A boot module's memory (root_task.hsc), read-only: the size bytes of frames at physical Limine loaded it into,
+ * owned by owner and charged to budget for its slot. Its frames go to the frame allocator once it's released.
+ */
+create_module_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, physical: u64, size: u64) -> Result[ptr[mut Memory], ObjectError] {
+    object :: new_object(kernel, .Memory, budget, 0)?
+    memory :: cast[ptr[mut Memory]](object)
+    memory.size = size
+    memory.physical = physical
+    memory.cache = .WriteBack
+    memory.allowed = cast[u32](slop_os.PROTECTION_READ)
+    memory.boot_module = true
+    match adopt(owner, object) {
+        case Ok => {}
+        case Error(error) => {
+            _ = destroy_object(kernel, object)
+            return .Error(error)
+        }
+    }
+    return .Ok(memory)
+}
+
 // Once no CPU can use it: its frames, and its page array; device memory and windows have neither.
 release_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
+    if memory.boot_module {
+        memory.boot_module = false
+        frames.add_range(&kernel.frames, memory.physical, memory.physical + memory.size)
+        return void
+    }
     if memory.directory == 0 {
         return void
     }

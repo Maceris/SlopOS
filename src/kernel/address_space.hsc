@@ -245,6 +245,36 @@ keep_boot_info :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
         }
     }
 
+    // The boot modules, their names copied out of boot memory
+    modules :: view_of(cast[ptr[mut boot_info.BootModule]](allocate_kept(kernel, info.modules.count * size_of(boot_info.BootModule))),
+        info.modules.count)
+    for module, i in info.modules {
+        if i < modules.count {
+            name :: cast[ptr[mut u8]](allocate_kept(kernel, module.name.count))
+            intrinsics.mem_copy_non_overlapping(cast[mut rawptr](name), cast[rawptr](module.name.data), module.name.count)
+            modules[i] = boot_info.BootModule.{name = string_of(name, module.name.count), command_line = "", contents = module.contents}
+        }
+    }
+    kernel.modules = modules
+    // The boot's random seed, for the root task: the bootloader's, mixed with the CPU's
+    match info.bootloader_entropy {
+        case Some(bytes) => kernel.boot_seed = bytes
+        case None => {}
+    }
+    for word in 0..<4 {
+        match arch.hardware_entropy() {
+            case Some(value) => {
+                for b in 0..<8 {
+                    at :: cast[usize](word * 8 + b)
+                    if at < kernel.boot_seed.count {
+                        kernel.boot_seed[at] = kernel.boot_seed[at] ~ cast[u8]((value >> (cast[u64](b) * 8)) & 0xff)
+                    }
+                }
+            }
+            case None => {}
+        }
+    }
+
     // The image's code, which tests map for their code in user mode (threads_test.hsc)
     for segment in info.kernel_image.segments {
         if segment.executable && kernel.code_size == 0 {

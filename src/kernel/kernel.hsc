@@ -86,6 +86,11 @@ Kernel :: struct {
     budgets_lock : concurrency.SpinLock,
     // The platform capability, for the root task (irqs.hsc); and the last CPU an IRQ was routed to.
     platform : u64,
+    // The boot modules, the root task's first, their names kept past boot; the boot's random seed (keep_boot_info).
+    modules : boot_info.BootModule[],
+    boot_seed : u8[32],
+    // The root task's process, as an address, once it's started, whose end stops the kernel (root_task.hsc).
+    root_task : u64,
     next_irq_cpu : u32,
     // Every thread, for finding one by ID, and how many intercepts there are (control.hsc, intercepts.hsc).
     threads_lock : concurrency.SpinLock,
@@ -299,6 +304,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         if kernel.options.test_assert {
             runtime.log_info("test_assert: failing an assertion")
             runtime.assert(false, "test_assert")
+        }
+        if !kernel.options.no_root_task {
+            start_root_task(kernel)
         }
         runtime.log_info("idle")
         arch.idle()

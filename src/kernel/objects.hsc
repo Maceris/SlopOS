@@ -78,6 +78,7 @@ KernelObjects :: struct {
     irq : Irq,
     platform : Platform,
     intercept : Intercept,
+    debug_log : DebugLog,
 }
 
 // Pools for kinds by their slop_os.ObjectKind value, which is below this.
