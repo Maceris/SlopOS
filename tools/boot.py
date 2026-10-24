@@ -20,15 +20,19 @@ ISO as Limine's modules: root_task.elf first, which the kernel starts as the roo
 the order of their names.
 
 The kernel's ELF goes in a Limine ISO, which QEMU boots (BIOS by default, --uefi for UEFI) with the
-serial port captured. Limine randomizes the kernel's base and its direct map (KASLR), unless --no-kaslr. A kernel ends the run by writing a code to QEMU's isa-debug-exit device at
+serial port captured. --arch aarch64 builds SlopOS's kernel for AArch64 (the build package's arch setting)
+and boots it on QEMU's virt machine, always through UEFI, ending through semihosting instead of the debug
+exit device, with the same code. Limine randomizes the kernel's base and its direct map (KASLR), unless --no-kaslr. A kernel ends the run by writing a code to QEMU's isa-debug-exit device at
 port 0xf4; QEMU then exits with (code << 1) | 1, which this script turns back into the code. It
 exits with that code, so --expect makes it a test: 0 if the kernel's code matched, 1 otherwise.
 
 Tools are found from the environment, then the PATH:
     QEMU      qemu-system-x86_64, or its folder
+    QEMU_AARCH64  qemu-system-aarch64, or its folder, for --arch aarch64 (default: next to qemu-system-x86_64)
     LIMINE    the folder of Limine's binary release (limine-bios.sys, BOOTX64.EFI, ...)
     XORRISO   xorriso
     OVMF      UEFI firmware for --uefi, if QEMU's own edk2-x86_64-code.fd isn't next to it
+    AAVMF     UEFI firmware for --arch aarch64, if QEMU's own edk2-aarch64-code.fd isn't next to it
 """
 
 import argparse
@@ -123,9 +127,9 @@ def build_kernel(package: Path, linker_script: Path, output: Path) -> None:
     run_hemera([*KERNEL_FLAGS, f"--linker-script={linker_script}", f"--output={output}", str(package)], str(package))
 
 
-def build_slopos_kernel(output: Path) -> None:
+def build_slopos_kernel(output: Path, architecture: str = "x86_64") -> None:
     """Builds SlopOS's kernel through its build package, checks and all."""
-    run_hemera([f"--setting=targets=kernel,kernel_output={output}", str(BUILD_PACKAGE)], "SlopOS's kernel")
+    run_hemera([f"--setting=targets=kernel,kernel_output={output},arch={architecture}", str(BUILD_PACKAGE)], "SlopOS's kernel")
 
 
 def build_slopos_programs(output: Path) -> None:
@@ -149,7 +153,8 @@ def make_image(kernel: Path, programs: list[Path], limine: Path, xorriso: Path, 
     (root / "boot" / "limine" / "limine.conf").write_text(config, newline="\n")
     for name in ["limine-bios.sys", "limine-bios-cd.bin", "limine-uefi-cd.bin"]:
         shutil.copy(limine / name, root / "boot" / "limine" / name)
-    shutil.copy(limine / "BOOTX64.EFI", root / "EFI" / "BOOT" / "BOOTX64.EFI")
+    for name in ["BOOTX64.EFI", "BOOTAA64.EFI"]:
+        shutil.copy(limine / name, root / "EFI" / "BOOT" / name)
     image = folder / "image.iso"
     subprocess.run([
         str(xorriso), "-as", "mkisofs", "-R", "-r", "-J",
@@ -180,6 +185,25 @@ def run(image: Path, qemu: Path, serial: Path, timeout: float, uefi: bool, cpu: 
     return result.returncode >> 1 if result.returncode % 2 == 1 else NO_EXIT_CODE
 
 
+def run_aarch64(image: Path, qemu: Path, serial: Path, timeout: float, cpu: str, extra: list[str]) -> int:
+    """Boots the image on QEMU's virt machine through UEFI, and gives the code the kernel ended with."""
+    firmware = find_tool("AAVMF", ["edk2-aarch64-code.fd", "AAVMF_CODE.fd", "QEMU_EFI.fd"], [qemu.parent / "share"])
+    command = [
+        str(qemu), "-M", "virt", "-m", "256M", "-cpu", cpu,
+        "-drive", f"if=pflash,format=raw,readonly=on,file={firmware}",
+        "-device", "virtio-scsi-pci", "-device", "scsi-cd,drive=cd",
+        "-drive", f"if=none,id=cd,media=cdrom,format=raw,file={image}",
+        "-serial", f"file:{serial}", "-display", "none", "-no-reboot",
+        "-semihosting-config", "enable=on,target=native",
+    ]
+    try:
+        result = subprocess.run(command + extra, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return TIMED_OUT
+    # As with the debug exit device, the kernel's test_exit ends QEMU with (code << 1) | 1
+    return result.returncode >> 1 if result.returncode % 2 == 1 else NO_EXIT_CODE
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Boots a kernel in QEMU through Limine.")
     source = parser.add_mutually_exclusive_group()
@@ -194,12 +218,16 @@ def main() -> int:
                         help="a line the serial output should contain, with --expect; may be repeated")
     parser.add_argument("--timeout", type=float, default=30, help="seconds before giving up")
     parser.add_argument("--uefi", action="store_true", help="boot with UEFI firmware instead of BIOS")
+    parser.add_argument("--arch", choices=["x86_64", "aarch64"], default="x86_64", help="the architecture to build and boot for")
     parser.add_argument("--no-kaslr", action="store_true", help="the same addresses every boot: no random kernel base or direct map")
     parser.add_argument("--serial", type=Path, help="also keep the serial output in this file")
     parser.add_argument("qemu_arguments", nargs="*", help="more arguments for QEMU, after --")
     arguments = parser.parse_args()
 
     qemu = find_tool("QEMU", ["qemu-system-x86_64.exe", "qemu-system-x86_64"], [Path(r"C:\Program Files\qemu")])
+    aarch64 = arguments.arch == "aarch64"
+    if aarch64:
+        qemu = find_tool("QEMU_AARCH64", ["qemu-system-aarch64.exe", "qemu-system-aarch64"], [qemu.parent, Path(r"C:\Program Files\qemu")])
     limine = find_limine()
     xorriso = find_tool("XORRISO", ["xorriso.exe", "xorriso"], [])
     with tempfile.TemporaryDirectory(prefix="slopos-boot-") as temporary:
@@ -208,13 +236,14 @@ def main() -> int:
         if kernel is None:
             kernel = folder / "kernel.elf"
             if arguments.package is None:
-                build_slopos_kernel(kernel)
+                build_slopos_kernel(kernel, arguments.arch)
             elif arguments.linker_script is None:
                 parser.error("--package needs --linker-script")
             else:
                 build_kernel(arguments.package.resolve(), arguments.linker_script.resolve(), kernel)
         programs_folder = arguments.programs
-        if programs_folder is None and arguments.kernel is None and arguments.package is None:
+        # Programs are built for x86-64 only so far
+        if programs_folder is None and arguments.kernel is None and arguments.package is None and not aarch64:
             programs_folder = folder / "programs"
             build_slopos_programs(programs_folder)
         programs = sorted(programs_folder.glob("*.elf"), key=lambda path: (path.name != "root_task.elf", path.name))             if programs_folder is not None else []
@@ -223,7 +252,10 @@ def main() -> int:
         image = make_image(kernel.resolve(), [program.resolve() for program in programs], limine, xorriso, folder, command_line,
                            not arguments.no_kaslr)
         serial = folder / "serial.txt"
-        code = run(image, qemu, serial, arguments.timeout, arguments.uefi, arguments.cpu, arguments.qemu_arguments)
+        if aarch64:
+            code = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, arguments.qemu_arguments)
+        else:
+            code = run(image, qemu, serial, arguments.timeout, arguments.uefi, arguments.cpu, arguments.qemu_arguments)
         output = serial.read_text(errors="replace") if serial.exists() else ""
         if arguments.serial is not None:
             arguments.serial.write_text(output)

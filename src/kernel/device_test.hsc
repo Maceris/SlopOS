@@ -5,6 +5,9 @@ import runtime from "base"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * test_ioapic: the emulator's test device (arch.test_device: QEMU's PIT on line 2 of its I/O APIC)

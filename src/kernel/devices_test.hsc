@@ -9,6 +9,9 @@ import frames from "frames"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * test_devices: a driver in user mode, given the platform capability as the root task would give the

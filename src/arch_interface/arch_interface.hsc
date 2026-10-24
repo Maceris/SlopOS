@@ -440,8 +440,12 @@ unmask_interrupts : fn() : ---
 // it failed.
 hardware_entropy : fn() -> u64? : ---
 
-// Set up the architecture's early console. Called once, by L0, before anything is written to it.
-early_console_init : fn() : ---
+/*
+ * Set up the architecture's early console. Called once, by L0, before anything is written to it, with the
+ * bootloader's direct map at direct_map_offset, through which a console in memory-mapped registers (AArch64's
+ * PL011) is reached, in the bootloader's tables and then in the kernel's own (init_kernel_page_table).
+ */
+early_console_init : fn(direct_map_offset: u64) : ---
 
 // Write to the architecture's early console, before any driver exists.
 early_console_write : fn(text: string) : ---

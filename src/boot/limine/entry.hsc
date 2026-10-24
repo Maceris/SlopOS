@@ -14,6 +14,9 @@ import kernel from "../../kernel"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../../arch/aarch64"
+}
 
 /*
  * A logger for the boot context, writing straight to the architecture's early console. Only the
@@ -62,7 +65,12 @@ kernel_entry #calling_convention(.c) #no_context :: fn() #never_returns {
     intrinsics.set_carrier(&carrier)
     push_context boot from runtime.MINIMAL_CONTEXT {
         push_context early (logger = &EARLY_LOGGER, log_level = .INFO) {
-            arch.early_console_init()
+            // Through the direct map, where the console's registers need one; without it, nothing to map them in yet
+            direct_map_offset :: match HHDM_REQUEST.response {
+                case Some(hhdm) => hhdm.offset
+                case None => cast[u64](0)
+            }
+            arch.early_console_init(direct_map_offset)
             info : boot_info.BootInfo
             build_boot_info(&info)
             kernel.boot(&info)

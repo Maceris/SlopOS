@@ -12,6 +12,9 @@ import slab from "slab"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * Memory objects (roadmap M5, knowledge/design/kernel.md §2, decisions/0011, 0054): anonymous memory,

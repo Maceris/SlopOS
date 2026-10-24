@@ -21,6 +21,9 @@ import concurrency from "std"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 // Each CPU's kernel stack, where every entry runs (decisions/0023)
 KERNEL_STACK_SIZE :: 16 * 1024
@@ -234,10 +237,13 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     intrinsics.set_carrier(&cpu.carrier)
     arch.init_system(&kernel.arch)
     arch.init_cpu(&kernel.arch, &cpu.arch, &cpu.carrier, &cpu.context, &cpu.stacks)
-    runtime.log_info("boot CPU set up: descriptor tables, entries and local APIC")
+    runtime.log_info("boot CPU set up: its entries and its own state")
     start_address_space(kernel, info)
     start_framebuffer_console(kernel, info)
     push_context cpu_context from cpu.context {
+        if !arch.TAKES_INTERRUPTS {
+            stop_before_interrupts(kernel)
+        }
         start_timer(kernel, info.counter_frequency_hint)
         start_cpus(kernel, info)
         leave_boot_stacks(kernel)
@@ -277,10 +283,7 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         if kernel.options.test_control {
             test_control(kernel)
         }
-        if kernel.options.test_fault {
-            runtime.log_info("test_fault: running an invalid instruction")
-            intrinsics.trap()
-        }
+        memory_tests(kernel)
         if kernel.options.test_nmi {
             test_nmi(kernel, cpu)
         }
@@ -293,23 +296,42 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         if kernel.options.test_pool {
             test_pool(kernel)
         }
-        if kernel.options.test_heap {
-            test_heap()
-        }
-        if kernel.options.test_write_code {
-            runtime.log_info("test_write_code: writing to the kernel's code")
-            intrinsics.volatile_store_u8(cast[ptr[mut u8]](cast[u64](boot)), 0xcc)
-            runtime.log_error("test_write_code: the kernel's code is writable")
-        }
-        if kernel.options.test_assert {
-            runtime.log_info("test_assert: failing an assertion")
-            runtime.assert(false, "test_assert")
-        }
         if !kernel.options.no_root_task {
             start_root_task(kernel)
         }
         runtime.log_info("idle")
         arch.idle()
+    }
+}
+
+/*
+ * Where the kernel stops on an architecture that can't take interrupts yet (arch.TAKES_INTERRUPTS, AArch64
+ * until roadmap A4): with its own address space, its heap and its console, it runs the tests that need only
+ * those, then halts.
+ */
+stop_before_interrupts :: fn(kernel: ptr[mut Kernel]) #never_returns {
+    runtime.log_info("no interrupts on this architecture yet, so stopping after memory")
+    memory_tests(kernel)
+    stop(.Halted)
+}
+
+// The tests that need only memory: a fault, the heap, the kernel's read-only code and a failed assertion.
+memory_tests :: fn(kernel: ptr[mut Kernel]) {
+    if kernel.options.test_fault {
+        runtime.log_info("test_fault: running an invalid instruction")
+        intrinsics.trap()
+    }
+    if kernel.options.test_heap {
+        test_heap()
+    }
+    if kernel.options.test_write_code {
+        runtime.log_info("test_write_code: writing to the kernel's code")
+        intrinsics.volatile_store_u8(cast[ptr[mut u8]](cast[u64](boot)), 0xcc)
+        runtime.log_error("test_write_code: the kernel's code is writable")
+    }
+    if kernel.options.test_assert {
+        runtime.log_info("test_assert: failing an assertion")
+        runtime.assert(false, "test_assert")
     }
 }
 

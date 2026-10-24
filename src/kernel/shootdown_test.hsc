@@ -9,6 +9,9 @@ import frames from "frames"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * test_shootdown: a page in the kernel window every CPU reads, so each has it in its TLB, then pointed

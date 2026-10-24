@@ -10,6 +10,9 @@ import slop_os from "std/os"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * Intercepts (roadmap M5, knowledge/design/kernel.md §4, decisions/0009, 0017, 0056): a debugger's hold on

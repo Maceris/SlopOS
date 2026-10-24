@@ -10,6 +10,9 @@ import runtime from "base"
 import x86_64 from "base/intrinsics"
 import arch_interface from "../../arch_interface"
 
+// Whether the kernel can go on past its own address space: take interrupts, start the timer and the other CPUs.
+TAKES_INTERRUPTS :: true
+
 // Segment selectors, in GDT order. SYSRET needs user data right below user code (Intel SDM Vol. 3A §5.8.8).
 KERNEL_CODE_SELECTOR : u16 : 0x08
 KERNEL_DATA_SELECTOR : u16 : 0x10

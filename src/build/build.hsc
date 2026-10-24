@@ -11,6 +11,8 @@
  * - tests_output: the folder test programs go in, the current folder by default.
  * - stack_check: what the kernel's prologue checks do without room, trap (the default) or morestack,
  *   which a boot test of stack segments builds.
+ * - arch: the kernel's architecture, x86_64 (the default) or aarch64 (roadmap A). Programs are only built
+ *   for x86-64 so far, so aarch64 leaves them out.
  */
 package build
 
@@ -24,7 +26,8 @@ build :: fn() {
     if targets == "all" || targets == "kernel" {
         add_kernel()
     }
-    if targets == "all" || targets == "programs" {
+    aarch64 :: compiler.target_setting("arch", default = "x86_64") == "aarch64"
+    if (targets == "all" || targets == "programs") && !aarch64 {
         add_programs("../apps")
         add_programs("../services")
         add_programs("../drivers")
@@ -37,7 +40,8 @@ build :: fn() {
 
 /*
  * The kernel, booted by Limine: freestanding, entered at kernel_entry with its own carrier block, no red
- * zone and no SIMD (design/arch-x86-64.md), and stack checks that trap.
+ * zone and no SIMD (design/arch-x86-64.md), and stack checks that trap. On AArch64 that's no floating
+ * point or Advanced SIMD, which trap at EL1 too until CPACR_EL1 allows them.
  */
 add_kernel :: fn() {
     kernel := compiler.command_line_options()
@@ -54,6 +58,11 @@ add_kernel :: fn() {
     }
     kernel.target_options.cpu_features = "-mmx,-sse,-sse2,-avx,-avx2,+soft-float"
     kernel.target_options.linker_script = "../boot/limine/x86_64.ld"
+    if compiler.target_setting("arch", default = "x86_64") == "aarch64" {
+        kernel.target_options.architecture = .arm64
+        kernel.target_options.cpu_features = "-fp-armv8,-neon"
+        kernel.target_options.linker_script = "../boot/limine/aarch64.ld"
+    }
     target :: compiler.add_target(kernel)
 }
 

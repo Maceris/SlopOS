@@ -9,6 +9,9 @@ import slop_os from "std/os"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * Process control (roadmap M5, decisions/0017, 0056, knowledge/design/kernel.md §4): rights on a process

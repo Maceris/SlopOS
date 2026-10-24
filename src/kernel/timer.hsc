@@ -5,6 +5,9 @@ import runtime from "base"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 // How often every CPU's timer interrupts: the scheduler's tick.
 TICKS_PER_SECOND :: 100

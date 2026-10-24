@@ -9,6 +9,9 @@ import slop_os from "std/os"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * Threads in user mode, before there are programs to load (M6) or system calls (M5): each runs

@@ -57,7 +57,7 @@ cpus :: fn(mp: ptr[MpResponse], cpus: mut boot_info.BootCpu[], starting #escapin
     count : usize = 1
     for cpu in pointers(mp.cpus, mp.cpu_count) {
         index := count
-        if cpu.lapic_id == mp.bsp_lapic_id {
+        if hardware_id(cpu) == boot_cpu_hardware_id(mp) {
             index = 0
         }
         else {
@@ -65,7 +65,7 @@ cpus :: fn(mp: ptr[MpResponse], cpus: mut boot_info.BootCpu[], starting #escapin
         }
         runtime.assert(index < cpus.count && index < starting.count, "cpus needs room for every CPU")
         starting[index].info = cast[ptr[mut MpInfo]](cpu)
-        cpus[index] = boot_info.BootCpu.{cast[u64](cpu.lapic_id), cast[rawptr](&starting[index])}
+        cpus[index] = boot_info.BootCpu.{hardware_id(cpu), cast[rawptr](&starting[index])}
     }
     return cpus
 }

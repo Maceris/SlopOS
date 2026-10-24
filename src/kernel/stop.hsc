@@ -6,6 +6,9 @@ import runtime from "base"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * Why the kernel stopped. With test_exit on the command line, this is the code the emulator exits

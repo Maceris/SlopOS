@@ -166,24 +166,74 @@ PagingModeRequest :: struct {
 MP_REQUEST_X86_64_X2APIC :: 1
 MP_RESPONSE_X86_64_X2APIC :: 1
 
-// One CPU, as x86-64 describes it.
-MpInfo :: struct {
-    processor_id : u32,
-    lapic_id : u32,
-    reserved : u64,
-    // An atomic write here starts the parked CPU there, with this MpInfo's address in rdi.
-    goto_address : u64,
-    extra_argument : u64,
+#if TARGET_ARCH == .x86_64 {
+    // x2APIC mode where the CPUs support it
+    MP_REQUEST_FLAGS :: MP_REQUEST_X86_64_X2APIC
+    PAGING_MODE_4_LEVEL :: PAGING_MODE_X86_64_4_LEVEL
+
+    // One CPU, as x86-64 describes it.
+    MpInfo :: struct {
+        processor_id : u32,
+        lapic_id : u32,
+        reserved : u64,
+        // An atomic write here starts the parked CPU there, with this MpInfo's address in rdi.
+        goto_address : u64,
+        extra_argument : u64,
+    }
+
+    #assert size_of(MpInfo) == 32
+
+    MpResponse :: struct {
+        revision : u64,
+        flags : u32,
+        bsp_lapic_id : u32,
+        cpu_count : u64,
+        cpus : ptr[ptr[MpInfo]]?,
+    }
+
+    // A CPU's hardware ID, which identifies it to interrupt controllers: its local APIC ID.
+    hardware_id :: fn(cpu: ptr[MpInfo]) -> u64 {
+        return cast[u64](cpu.lapic_id)
+    }
+
+    boot_cpu_hardware_id :: fn(mp: ptr[MpResponse]) -> u64 {
+        return cast[u64](mp.bsp_lapic_id)
+    }
 }
+#else_if TARGET_ARCH == .arm64 {
+    MP_REQUEST_FLAGS :: 0
+    PAGING_MODE_4_LEVEL :: PAGING_MODE_AARCH64_4_LEVEL
 
-#assert size_of(MpInfo) == 32
+    // One CPU, as AArch64 describes it.
+    MpInfo :: struct {
+        processor_id : u32,
+        reserved_1 : u32,
+        // The affinity fields of its MPIDR_EL1
+        mpidr : u64,
+        reserved : u64,
+        // An atomic write here starts the parked CPU there, with this MpInfo's address in x0.
+        goto_address : u64,
+        extra_argument : u64,
+    }
 
-MpResponse :: struct {
-    revision : u64,
-    flags : u32,
-    bsp_lapic_id : u32,
-    cpu_count : u64,
-    cpus : ptr[ptr[MpInfo]]?,
+    #assert size_of(MpInfo) == 40
+
+    MpResponse :: struct {
+        revision : u64,
+        flags : u64,
+        bsp_mpidr : u64,
+        cpu_count : u64,
+        cpus : ptr[ptr[MpInfo]]?,
+    }
+
+    // A CPU's hardware ID, which identifies it to the interrupt controller: its MPIDR's affinity fields.
+    hardware_id :: fn(cpu: ptr[MpInfo]) -> u64 {
+        return cpu.mpidr
+    }
+
+    boot_cpu_hardware_id :: fn(mp: ptr[MpResponse]) -> u64 {
+        return mp.bsp_mpidr
+    }
 }
 
 MpRequest :: struct {

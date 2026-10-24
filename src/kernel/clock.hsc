@@ -5,6 +5,9 @@ import runtime from "base"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * The kernel's clock (roadmap M3, docs/architecture/layers.md: L1 has a counter, L2 has time): every

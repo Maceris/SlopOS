@@ -7,6 +7,9 @@ import arch_interface from "../arch_interface"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * TLB shootdown (roadmap M3, docs/specs/arch_interface.md, Rules for L2): after a mapping changes,

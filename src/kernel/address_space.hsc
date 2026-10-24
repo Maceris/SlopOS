@@ -10,6 +10,9 @@ import frames from "frames"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * The kernel's own address space (roadmap M2, decisions/0048), which every address space shares as

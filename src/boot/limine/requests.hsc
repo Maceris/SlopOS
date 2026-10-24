@@ -29,12 +29,12 @@ EXECUTABLE_ADDRESS_REQUEST #externally_initialized #section(".limine_requests") 
 
 EXECUTABLE_FILE_REQUEST #externally_initialized #section(".limine_requests") : Request[ExecutableFileResponse] : request[ExecutableFileResponse](0xad97e90e83f1ed67, 0x31eb5d1c5ff23b69)
 
-// x2APIC mode where the CPUs support it
+// With x2APIC mode where the CPUs support it, on x86-64
 MP_REQUEST #externally_initialized #section(".limine_requests") : MpRequest : MpRequest.{
     id = request_id(0x95a67b819a1b857e, 0xa0b61b723b6a73e0),
     revision = 0,
     response = null,
-    flags = MP_REQUEST_X86_64_X2APIC,
+    flags = MP_REQUEST_FLAGS,
 }
 
 MODULE_REQUEST #externally_initialized #section(".limine_requests") : Request[ModuleResponse] : request[ModuleResponse](0x3e7e279702be32af, 0xca1c4f3bd1280cee)
@@ -44,9 +44,9 @@ PAGING_MODE_REQUEST #externally_initialized #section(".limine_requests") : Pagin
     id = request_id(0x95c1a0edab0944cb, 0xa4e5cb3842f7488a),
     revision = 0,
     response = null,
-    mode = PAGING_MODE_X86_64_4_LEVEL,
-    max_mode = PAGING_MODE_X86_64_4_LEVEL,
-    min_mode = PAGING_MODE_X86_64_4_LEVEL,
+    mode = PAGING_MODE_4_LEVEL,
+    max_mode = PAGING_MODE_4_LEVEL,
+    min_mode = PAGING_MODE_4_LEVEL,
 }
 
 // Every CPU's boot stack

@@ -27,6 +27,10 @@ Severity: **blocker** / **friction** / **nice**.
 
 ### Smaller gaps
 
+- The compiler crashed once (exit 0xC0000005, an access violation) building SlopOS's x86-64 kernel through the
+  build package in `boot_tests.py`, and built it fine eight times after (A3, 2026-10-24). Being hunted with the
+  Debug build, a hundred builds one at a time. Severity: friction.
+
 - Comparing two optionals (`a != b` with both `u64?`) checks, then fails to generate ("comparing
   Optional[u64] values can't be generated yet", E5002); unwrapping them first works. Found in
   `src/elf_loader/test` (M6, 2026-10-23). Severity: nice.

@@ -111,7 +111,9 @@ is_std :: fn(program: ptr[compiler.ProgramInfo], path: string) -> bool {
  * type of the same name, and a signature using one matches a signature using the other.
  *
  * What an architecture doesn't implement yet, it lists in NOT_YET_IMPLEMENTED (decisions/0005). Those
- * may be missing; one that's there, or isn't in arch_interface at all, is an error, so the list stays true.
+ * may be missing, or stubs in its not_yet_implemented.hsc, which the kernel's other code needs to compile
+ * on an architecture that doesn't run it yet. One defined anywhere else, a stub that isn't listed, or a
+ * name arch_interface doesn't declare is an error, so the list stays true.
  */
 check_arch_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     interface :: package_named(program, "arch_interface") or_return true
@@ -140,7 +142,8 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
     holds := true
     gaps :: compiler.find_constant(implementation, "NOT_YET_IMPLEMENTED") or_else compiler.ConstantInfo.{}
     for name in listed_names(gaps.value) {
-        implemented :: declares_type(implementation, name) || (compiler.find_function(implementation, name) is_some)
+        function :: compiler.find_function(implementation, name) or_else compiler.FunctionInfo.{}
+        implemented :: declares_type(implementation, name) || (function.name != "" && !is_stub(function.location.file_path))
         if implemented {
             compiler.report_error(gaps.location, "%.% is there now, so take it off NOT_YET_IMPLEMENTED", implementation.name, name)
             holds = false
@@ -168,6 +171,12 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
             continue
         }
         found := compiler.find_function(implementation, required.name) or_else compiler.FunctionInfo.{}
+        if found.name != "" && is_stub(found.location.file_path) {
+            compiler.report_error(found.location, "%.% is a stub, so list it in NOT_YET_IMPLEMENTED", implementation.name,
+                required.name)
+            holds = false
+            continue
+        }
         if found.name == "" {
             compiler.report_error(required.location, "% doesn't implement %", implementation.name, required.name)
             holds = false
@@ -186,6 +195,11 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
         }
     }
     return holds
+}
+
+// Whether a function's file is a not_yet_implemented.hsc, as the stubs of what isn't implemented yet are.
+is_stub :: fn(path: string) -> bool {
+    return ends_with(path, "not_yet_implemented.hsc")
 }
 
 // The implementation by value: it came from find_function, so a pointer to it couldn't be passed on
@@ -310,6 +324,20 @@ package_named :: fn(program: ptr[compiler.ProgramInfo], name: string) -> ptr[com
         }
     }
     return null
+}
+
+ends_with :: fn(text: string, suffix: string) -> bool {
+    if text.count < suffix.count {
+        return false
+    }
+    start :: text.count - suffix.count
+    for character, index in suffix {
+        at :: start + index
+        if at >= text.count || text[at] != character {
+            return false
+        }
+    }
+    return true
 }
 
 starts_with :: fn(text: string, prefix: string) -> bool {

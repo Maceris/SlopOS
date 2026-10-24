@@ -7,6 +7,9 @@ import concurrency from "std"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * Reaching user memory (docs/specs/arch_interface.md, Rules for L2): never through a user address, but

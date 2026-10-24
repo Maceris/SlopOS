@@ -11,6 +11,9 @@ import frames from "frames"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * System calls (roadmap M5, knowledge/design/system-abi.md §4, decisions/0057): the calling thread's

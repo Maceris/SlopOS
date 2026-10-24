@@ -66,7 +66,7 @@ build_boot_info :: fn(info: ptr[mut boot_info.BootInfo]) {
     if STACK_SIZE_REQUEST.response is_none {
         kernel.boot_failed(info.command_line, "the bootloader didn't set up 64 KiB boot stacks")
     }
-    if paging.mode != PAGING_MODE_X86_64_4_LEVEL {
+    if paging.mode != PAGING_MODE_4_LEVEL {
         kernel.boot_failed(info.command_line, "the bootloader didn't set up 4-level paging")
     }
     elf :: cast[ptr[ElfHeader]](file_response.executable_file.address)

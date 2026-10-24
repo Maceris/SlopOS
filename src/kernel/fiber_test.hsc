@@ -8,6 +8,9 @@ import frames from "frames"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * test_fibers: two fibers on the boot CPU, taking turns, to check that a fiber suspends and resumes

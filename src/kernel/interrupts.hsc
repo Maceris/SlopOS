@@ -9,6 +9,9 @@ import concurrency from "std"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * Wired interrupts (roadmap M3, decisions/0039): interrupt controllers the platform service registers,

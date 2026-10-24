@@ -1,0 +1,3 @@
+--- hemera --setting=targets=kernel,stack_check=trap,kernel_output=C:\Users\chesb\AppData\Local\Temp\slopos-boot-tests-bb26wsyb\kernel.elf,arch=x86_64 D:\Documents\Programming\SlopOS\src\build
+exit code 3221225477
+

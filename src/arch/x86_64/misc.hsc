@@ -44,8 +44,8 @@ PIT_CHANNEL_0_ONCE : u8 : 0x30
 // 1193182 Hz / 1193: about a thousand interrupts a second
 PIT_TEST_DIVISOR : u16 : 1193
 
-// Set the early console up: 115200 baud, 8N1, FIFOs on, no interrupts.
-early_console_init :: fn() {
+// Set the early console up: 115200 baud, 8N1, FIFOs on, no interrupts. It's in I/O ports, so nothing is mapped.
+early_console_init :: fn(direct_map_offset: u64) {
     x86_64.out_u8(COM1 + UART_INTERRUPT_ENABLE, 0)
     x86_64.out_u8(COM1 + UART_LINE_CONTROL, LINE_CONTROL_DLAB)
     x86_64.out_u8(COM1 + UART_DIVISOR_LOW, cast[u8](BAUD_DIVISOR & 0xff))

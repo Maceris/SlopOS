@@ -11,6 +11,9 @@ import slab from "slab"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * Ports (roadmap M5, knowledge/design/ipc.md §3, decisions/0035): the one wait mechanism. A port has

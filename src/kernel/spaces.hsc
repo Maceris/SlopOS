@@ -10,6 +10,9 @@ import frames from "frames"
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
 }
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * Address spaces (roadmap M4, M5, knowledge/design/kernel.md §2): objects with page tables for user
