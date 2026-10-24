@@ -235,15 +235,12 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     cpu.carrier.stack_limit = intrinsics.carrier().stack_limit
     cpu.carrier.native_stack_limit = cpu.carrier.stack_limit
     intrinsics.set_carrier(&cpu.carrier)
-    arch.init_system(&kernel.arch)
+    arch.init_system(&kernel.arch, &info.firmware_tables, info.direct_map_offset)
     arch.init_cpu(&kernel.arch, &cpu.arch, &cpu.carrier, &cpu.context, &cpu.stacks)
     runtime.log_info("boot CPU set up: its entries and its own state")
     start_address_space(kernel, info)
     start_framebuffer_console(kernel, info)
     push_context cpu_context from cpu.context {
-        if !arch.TAKES_INTERRUPTS {
-            stop_before_interrupts(kernel)
-        }
         start_timer(kernel, info.counter_frequency_hint)
         start_cpus(kernel, info)
         leave_boot_stacks(kernel)
@@ -302,17 +299,6 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         runtime.log_info("idle")
         arch.idle()
     }
-}
-
-/*
- * Where the kernel stops on an architecture that can't take interrupts yet (arch.TAKES_INTERRUPTS, AArch64
- * until roadmap A4): with its own address space, its heap and its console, it runs the tests that need only
- * those, then halts.
- */
-stop_before_interrupts :: fn(kernel: ptr[mut Kernel]) #never_returns {
-    runtime.log_info("no interrupts on this architecture yet, so stopping after memory")
-    memory_tests(kernel)
-    stop(.Halted)
 }
 
 // The tests that need only memory: a fault, the heap, the kernel's read-only code and a failed assertion.

@@ -62,8 +62,12 @@ detect_features : fn() -> slop_os.CpuFeatures : ---
 // The first baseline feature the CPU lacks (x86-64-v3 on x86-64, 0003), or null.
 missing_baseline_feature : fn(features: ptr[slop_os.CpuFeatures]) -> string? : ---
 
-// Set up the state shared by every CPU. Called once, on the boot CPU, before init_cpu.
-init_system : fn(system: ptr[mut ArchSystem]) : ---
+/*
+ * Set up the state shared by every CPU. Called once, on the boot CPU, before init_cpu, with the firmware's
+ * tables, reached through the bootloader's direct map, for what the architecture finds in them, like
+ * AArch64's interrupt controller in the device tree.
+ */
+init_system : fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) : ---
 
 /*
  * Set up the calling CPU: descriptor tables, entry points, the stacks entries use,
@@ -443,9 +447,10 @@ hardware_entropy : fn() -> u64? : ---
 /*
  * Set up the architecture's early console. Called once, by L0, before anything is written to it, with the
  * bootloader's direct map at direct_map_offset, through which a console in memory-mapped registers (AArch64's
- * PL011) is reached, in the bootloader's tables and then in the kernel's own (init_kernel_page_table).
+ * PL011) is reached, in the bootloader's tables and then in the kernel's own (init_kernel_page_table), and the
+ * firmware's tables, which say where it is.
  */
-early_console_init : fn(direct_map_offset: u64) : ---
+early_console_init : fn(direct_map_offset: u64, firmware: ptr[boot_info.FirmwareTables]) : ---
 
 // Write to the architecture's early console, before any driver exists.
 early_console_write : fn(text: string) : ---

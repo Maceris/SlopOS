@@ -3,6 +3,7 @@ package arch_x86_64
 import runtime from "base"
 import x86_64 from "base/intrinsics"
 import arch_interface from "../../arch_interface"
+import boot_info from "../../boot_info"
 
 // Model-specific registers and control register bits
 //SPEC: Intel SDM Vol. 4 (MSRs), Vol. 3A §2.5 (control registers), §2.2.1 (EFER)
@@ -79,7 +80,7 @@ gate :: fn(handler: u64, ist: u8) -> IdtEntry {
 }
 
 // Set up the IDT. Called once, on the boot CPU, before init_cpu.
-init_system :: fn(system: ptr[mut ArchSystem]) {
+init_system :: fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) {
     for &entry in system.idt {
         entry^ = IdtEntry.{}
     }

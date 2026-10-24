@@ -189,7 +189,8 @@ def run_aarch64(image: Path, qemu: Path, serial: Path, timeout: float, cpu: str,
     """Boots the image on QEMU's virt machine through UEFI, and gives the code the kernel ended with."""
     firmware = find_tool("AAVMF", ["edk2-aarch64-code.fd", "AAVMF_CODE.fd", "QEMU_EFI.fd"], [qemu.parent / "share"])
     command = [
-        str(qemu), "-M", "virt", "-m", "256M", "-cpu", cpu,
+        # GICv3, and the device tree rather than ACPI, which edk2 gives only with ACPI off
+        str(qemu), "-M", "virt,gic-version=3,acpi=off", "-m", "256M", "-cpu", cpu,
         "-drive", f"if=pflash,format=raw,readonly=on,file={firmware}",
         "-device", "virtio-scsi-pci", "-device", "scsi-cd,drive=cd",
         "-drive", f"if=none,id=cd,media=cdrom,format=raw,file={image}",

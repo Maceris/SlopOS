@@ -70,7 +70,8 @@ kernel_entry #calling_convention(.c) #no_context :: fn() #never_returns {
                 case Some(hhdm) => hhdm.offset
                 case None => cast[u64](0)
             }
-            arch.early_console_init(direct_map_offset)
+            tables :: firmware_tables(direct_map_offset)
+            arch.early_console_init(direct_map_offset, &tables)
             info : boot_info.BootInfo
             build_boot_info(&info)
             kernel.boot(&info)

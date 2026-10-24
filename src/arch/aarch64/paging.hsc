@@ -64,8 +64,8 @@ KERNEL_HALF_START : u64 : 0xffff000000000000
 USER_LOW : u64 : 0x10000
 USER_HIGH : u64 : 0x00007ffffffff000
 
-// The kernel table's table frames for the early console's mapping: one at level 2 and one at level 1.
-CONSOLE_TABLES :: 2
+// The kernel table's table frames for each device block L1 maps: at most one at level 2 and one at level 1.
+TABLES_PER_DEVICE_BLOCK : u32 : 2
 BLOCK_2M : u64 : 1 << 21
 BLOCK_1G : u64 : 1 << 30
 
@@ -100,14 +100,15 @@ supports_page_size :: fn(size: arch_interface.PageSize) -> bool {
     return true
 }
 
-// The kernel half has TTBR1's root to itself; these are for the early console's mapping.
+// The kernel half has TTBR1's root to itself; these are for the device blocks L1 maps for itself.
 kernel_half_frames :: fn() -> u32 {
-    return CONSOLE_TABLES
+    return TABLES_PER_DEVICE_BLOCK * current_system().device_block_count
 }
 
 /*
- * The kernel's own table: root, a zeroed frame, mapping the early console's registers where the bootloader's
- * tables had them, through the two zeroed frames at half.
+ * The kernel's own table: root, a zeroed frame, mapping the device registers L1 uses (the console's and the
+ * GIC's) where the bootloader's tables had them, at the direct map's address for them, with tables from the
+ * kernel_half_frames() zeroed frames at half.
  */
 init_kernel_page_table :: fn(
     table: ptr[mut PageTable],
@@ -120,19 +121,56 @@ init_kernel_page_table :: fn(
     table.tag = tag
     table.kernel = true
     table.direct_map_offset = direct_map_offset
-    // A direct map at a 2 MiB boundary, so the block's address there is the registers' block's
-    if direct_map_offset == 0 || direct_map_offset % BLOCK_2M != 0 {
-        return void
+    system :: current_system()
+    next := cast[u64](half)
+    for block, i in system.device_blocks {
+        if i >= cast[usize](system.device_block_count) {
+            break
+        }
+        tables := arch_interface.TableFrames.{count = TABLES_PER_DEVICE_BLOCK}
+        tables.frames[0] = cast[arch_interface.PhysicalAddress](next)
+        tables.frames[1] = cast[arch_interface.PhysicalAddress](next + 4096)
+        next += cast[u64](TABLES_PER_DEVICE_BLOCK) * 4096
+        // A block another one's tables already cover leaves its own frames unused, zeroed
+        _ = map(table, cast[arch_interface.VirtualAddress](direct_map_offset + block), cast[arch_interface.PhysicalAddress](block),
+            .Size2M, DEVICE_MAPPING, &tables)
     }
-    // A 2 MiB Device block around the registers, under tables of its own, each counting its one entry
-    block :: (direct_map_offset + PL011_PHYSICAL) & ~(BLOCK_2M - 1)
-    level_2 :: cast[u64](half)
-    level_1 :: cast[u64](half) + 4096
-    top :: table_at(table, cast[u64](root))
-    store_entry(slot_at(top, block, 3), level_2 | ENTRY_VALID | ENTRY_TABLE | (1 << COUNT_SHIFT))
-    store_entry(slot_at(table_at(table, level_2), block, 2), level_1 | ENTRY_VALID | ENTRY_TABLE | (1 << COUNT_SHIFT))
-    store_entry(slot_at(table_at(table, level_1), block, 1), device_block(PL011_PHYSICAL & ~(BLOCK_2M - 1)))
-    aarch64.dsb(.ISHST)
+}
+
+// Kernel device registers: readable and writable, uncached, global.
+DEVICE_MAPPING :: arch_interface.Mapping.{protection = .ReadWrite, cache = .Device, user = false, global = true}
+
+// Keep a 2 MiB block of device registers, by physical address, for the kernel's own table.
+add_device_block :: fn(system: ptr[mut ArchSystem], physical: u64) {
+    block :: physical & ~(BLOCK_2M - 1)
+    count :: cast[usize](system.device_block_count)
+    for kept, i in system.device_blocks {
+        if i < count && kept == block {
+            return void
+        }
+    }
+    runtime.assert(count < MAX_DEVICE_BLOCKS, "room for L1's device blocks")
+    if count < MAX_DEVICE_BLOCKS {
+        system.device_blocks[count] = block
+        system.device_block_count += 1
+    }
+}
+
+/*
+ * Map device registers from physical, size bytes of them, through the direct map: in the bootloader's tables
+ * now, and in the kernel's own once it's made. False if some block of them couldn't be.
+ */
+map_device_range :: fn(system: ptr[mut ArchSystem], physical: u64, size: u64) -> bool {
+    block := physical & ~(BLOCK_2M - 1)
+    loop {
+        if !map_early_device(system.direct_map_offset, block) {
+            return false
+        }
+        add_device_block(system, block)
+        block += BLOCK_2M
+    }
+    while block < physical + size
+    return true
 }
 
 // An address space whose root is a zeroed frame. The kernel half is TTBR1's, so there's nothing to share.
@@ -455,9 +493,9 @@ init_paging :: fn(system: ptr[ArchSystem]) {
 }
 
 /*
- * Map the early console's registers in the bootloader's tables, at direct_map_offset plus physical, as a
- * Device block in the first gap the walk down to it finds: 1 GiB, 2 MiB or a page. False if it can't, with
- * no table where one is needed, or something mapped there already.
+ * Map device registers in the bootloader's tables, at direct_map_offset plus physical, as a Device block in
+ * the first gap the walk down to it finds: 1 GiB, 2 MiB or a page. True if they're mapped so already; false if
+ * it can't, with no table where one is needed, or something else mapped there.
  */
 map_early_device :: fn(direct_map_offset: u64, physical: u64) -> bool {
     // Index 2 of MAIR_EL1, which the bootloader leaves unused, as Device-nGnRnE until init_cpu sets all of it
@@ -483,7 +521,9 @@ map_early_device :: fn(direct_map_offset: u64, physical: u64) -> bool {
             return true
         }
         if level == 0 || is_block(entry, level) {
-            return false
+            // Mapped already, which is fine if it's as a device block over the same registers
+            device :: (entry & ENTRY_ATTRIBUTE) >> ATTRIBUTE_SHIFT == ATTRIBUTE_DEVICE
+            return device && page_address(entry, level) == physical & ~((cast[u64](1) << (12 + 9 * level)) - 1)
         }
         current = cast[ptr[mut Table]](direct_map_offset + (entry & ENTRY_ADDRESS))
     }

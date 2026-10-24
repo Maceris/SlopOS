@@ -3,18 +3,19 @@ package arch_aarch64
 import intrinsics from "base"
 import aarch64 from "base/intrinsics"
 import arch_interface from "../../arch_interface"
+import boot_info from "../../boot_info"
+import devicetree from "../../devicetree"
 
 /*
- * The early console: QEMU virt's PL011 UART, through the direct map. Its registers aren't in the
- * bootloader's direct map, which only covers memory, so early_console_init maps them there in the
+ * The early console: the device tree's first PL011 UART, through the direct map. Its registers aren't in
+ * the bootloader's direct map, which only covers memory, so early_console_init maps them there in the
  * bootloader's tables, as a Device block in the first gap the walk finds, and init_kernel_page_table maps
  * them again in the kernel's own table, at the same address (paging.hsc).
  *
  * L1 keeps no global state, so where the registers are is in TPIDR_EL1: until init_cpu, the address itself
  * with bit 0 set; after, in the ArchCpu it points at, which is 64-byte aligned.
  */
-//SPEC: Arm PrimeCell UART (PL011) TRM (DDI 0183): UARTDR, UARTFR, UARTIBRD/FBRD, UARTLCR_H, UARTCR; QEMU's hw/arm/virt.c (the UART at 0x09000000)
-PL011_PHYSICAL : u64 : 0x0900_0000
+//SPEC: Arm PrimeCell UART (PL011) TRM (DDI 0183): UARTDR, UARTFR, UARTIBRD/FBRD, UARTLCR_H, UARTCR
 UART_DATA : u64 : 0x00
 UART_FLAGS : u64 : 0x18
 UART_INTEGER_BAUD : u64 : 0x24
@@ -37,14 +38,21 @@ SEMIHOSTING_EXIT : u64 : 0x18
 APPLICATION_EXIT : u64 : 0x20026
 
 /*
- * Map the UART and set it up: 115200 baud, 8N1, FIFOs on, no interrupts. Without a direct map, or room for
- * the mapping in the bootloader's tables, there's no early console, and writes go nowhere.
+ * Find the UART in the device tree, map it and set it up: 115200 baud, 8N1, FIFOs on, no interrupts. Without
+ * a direct map, a device tree with one, or room for the mapping in the bootloader's tables, there's no early
+ * console, and writes go nowhere.
  */
-early_console_init :: fn(direct_map_offset: u64) {
-    if direct_map_offset == 0 || !map_early_device(direct_map_offset, PL011_PHYSICAL) {
+early_console_init :: fn(direct_map_offset: u64, firmware: ptr[boot_info.FirmwareTables]) {
+    if direct_map_offset == 0 {
         return void
     }
-    base :: direct_map_offset + PL011_PHYSICAL
+    tree := devicetree.open(devicetree_address(firmware, direct_map_offset)) or_return void
+    node := devicetree.find_compatible(&tree, "arm,pl011") or_return void
+    registers :: (devicetree.reg(&tree, &node, 0) or_return void).address
+    if !map_early_device(direct_map_offset, registers) {
+        return void
+    }
+    base :: direct_map_offset + registers
     aarch64.write_system_register(.TPIDR_EL1, base | 1)
     write_register(base, UART_CONTROL, 0)
     write_register(base, UART_INTERRUPT_MASK, 0)
@@ -134,8 +142,25 @@ hardware_entropy :: fn() -> u64? {
     return aarch64.rndrrs()
 }
 
-// The virtual counter, which the generic timer counts with.
-counter :: fn() -> u64 {
-    aarch64.isb()
-    return aarch64.read_system_register(.CNTVCT_EL0)
+/*
+ * Wait for an interrupt with interrupts unmasked, on the kernel stack's top: an eret to idle_wait at EL1 with
+ * SP_EL1 there, so the interrupt enters on a kernel stack holding nothing, and this never returns.
+ */
+idle :: fn() #never_returns {
+    cpu :: current_cpu()
+    frame : aarch64.RegisterFrame
+    frame.elr = cast[u64](idle_wait)
+    frame.spsr = SPSR_EL1H | SPSR_PAN
+    aarch64.return_to_user(&frame, cast[rawptr](cpu.kernel_stack_top))
+}
+
+// SPSR_EL1: EL1 on SP_EL1 (EL1h) with DAIF clear, and PAN on.
+SPSR_EL1H : u64 : 0b0101
+SPSR_PAN : u64 : 1 << 22
+
+// Where idle waits: no stack, no carrier block, no context, just wfi with interrupts unmasked.
+idle_wait #calling_convention(.c) #no_context :: fn() #never_returns {
+    loop {
+        aarch64.wfi()
+    }
 }

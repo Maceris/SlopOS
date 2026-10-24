@@ -11,9 +11,9 @@ import kernel_entry from "../../kernel/entry"
  * RegisterFrame on SP_EL1. This finds the CPU through TPIDR_EL1, loads its carrier block, pushes its
  * context, and decodes the cause into kernel_entry's portable arguments.
  *
- * Exceptions run on SP_EL1, the kernel stack: from user mode, from its top, where return_to_user left it,
- * and from the kernel's boot code on SP_EL0, wherever it is. Those get the kernel stack's limit. One taken
- * on SP_EL1, in an entry already, stays on that stack, with its limit.
+ * Exceptions run on SP_EL1, the kernel stack: from user mode and idle, from its top, where return_to_user
+ * left it; from the kernel's boot code on SP_EL0, wherever it is; and from an entry, below it. So every
+ * entry gets the kernel stack's limit.
  */
 
 // ESR_EL1's exception classes this decodes, besides those aarch64 names (bits 26 to 31).
@@ -35,13 +35,11 @@ DATA_ABORT_WRITE : u64 : 1 << 6
 
 /*
  * Every exception. None returns: faults in the kernel stop it, and the rest come from user mode or idle,
- * which L2 never goes back to directly.
+ * which L2 never goes back to directly. Interrupts are acknowledged as interrupt_source says (gic.hsc).
  */
 exception_entry #calling_convention(.entry) :: fn(frame: ptr[mut aarch64.RegisterFrame]) #never_returns {
     cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](aarch64.read_system_register(.TPIDR_EL1))
-    if frame.vector & ~cast[u64](3) != aarch64.VECTOR_CURRENT_SPX {
-        cpu.carrier.stack_limit = cpu.kernel_stack_limit
-    }
+    cpu.carrier.stack_limit = cpu.kernel_stack_limit
     intrinsics.set_carrier(cpu.carrier)
     push_context entry from cpu.context^ {
         dispatch(frame)
@@ -67,11 +65,12 @@ dispatch :: fn(frame: ptr[mut aarch64.RegisterFrame]) #never_returns {
         kernel_entry.fatal_critical(.MachineCheck)
     }
     if kind != cast[u64](aarch64.ExceptionKind.Synchronous) {
-        // IRQs and FIQs, before the interrupt controller is driven (A4)
+        // IRQs and FIQs, through the GIC. The kernel only unmasks them in user mode and idle
+        source :: interrupt_source()
         if from_user_mode(frame) {
-            kernel_entry.interrupt(.User(cast[ptr[mut UserRegisters]](frame)), .Spurious)
+            kernel_entry.interrupt(.User(cast[ptr[mut UserRegisters]](frame)), source)
         }
-        kernel_entry.interrupt(.Idle, .Spurious)
+        kernel_entry.interrupt(.Idle, source)
     }
     class :: (frame.esr >> 26) & 0x3f
     if class == aarch64.ESR_CLASS_SVC && from_user_mode(frame) {

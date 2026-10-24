@@ -10,7 +10,8 @@ The arch interface is the boundary between the arch layer (L1) and the kernel co
 Status: **specified**, and implemented on x86-64 (`src/arch/x86_64`): CPU setup, interrupts, the timer
 and the miscellaneous functions (roadmap M1), paging (M2), wired interrupts (M3), and user and vector
 state (M4). On AArch64 (`src/arch/aarch64`): CPU setup, entry, paging and the miscellaneous functions
-(roadmap A3); interrupts, the timer and other CPUs come with A4, and user and vector state with A5. Choices and alternatives are in
+(roadmap A3), interrupts, wired interrupts and the timer (A4); user and vector state come with A5, and MSIs
+and an NMI later. Choices and alternatives are in
 `../../knowledge/decisions/0032-arch-interface.md`. Four-digit numbers like `0023` refer
 to decision records in `../../knowledge/decisions/`.
 
@@ -19,9 +20,6 @@ package, in one change, and carries no version number.
 
 ## Conformance
 
-Each architecture package also says how far it goes, with `TAKES_INTERRUPTS : bool`: whether the kernel can
-go on past its own address space, taking interrupts, starting the timer and the other CPUs. Where it's false,
-the kernel stops there (`kernel.boot`), after the tests that need only memory.
 
 The kernel imports one architecture package as `arch` (`../architecture/layers.md`, L1). A
 house-rule check registered by the build (`0029`) verifies that the package:
@@ -133,8 +131,12 @@ detect_features : fn() -> abi.CpuFeatures : ---
 // The first baseline feature the CPU lacks (x86-64-v3 on x86-64, 0003), or null.
 missing_baseline_feature : fn(features: ptr[abi.CpuFeatures]) -> string? : ---
 
-// Set up the state shared by every CPU. Called once, on the boot CPU, before init_cpu.
-init_system : fn(system: ptr[mut ArchSystem]) : ---
+/*
+ * Set up the state shared by every CPU. Called once, on the boot CPU, before init_cpu, with the firmware's
+ * tables, reached through the bootloader's direct map, for what the architecture finds in them, like
+ * AArch64's interrupt controller in the device tree.
+ */
+init_system : fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) : ---
 
 /*
  * Set up the calling CPU: descriptor tables, entry points, the stacks entries use,
@@ -540,9 +542,10 @@ hardware_entropy : fn() -> u64? : ---
 /*
  * Set up the architecture's early console. Called once, by L0, before anything is written to it, with the
  * bootloader's direct map at direct_map_offset, through which a console in memory-mapped registers (AArch64's
- * PL011) is reached, in the bootloader's tables and then in the kernel's own (init_kernel_page_table).
+ * PL011) is reached, in the bootloader's tables and then in the kernel's own (init_kernel_page_table), and the
+ * firmware's tables, which say where it is.
  */
-early_console_init : fn(direct_map_offset: u64) : ---
+early_console_init : fn(direct_map_offset: u64, firmware: ptr[boot_info.FirmwareTables]) : ---
 
 // Write to the architecture's early console, before any driver exists.
 early_console_write : fn(text: string) : ---
@@ -673,22 +676,30 @@ How `arch/x86_64` meets the interface (`../../knowledge/design/arch-x86-64.md`):
 
 ## AArch64
 
-How `arch/aarch64` meets the interface so far (roadmap A3, `../../knowledge/decisions/0064-aarch64-boot-as-built.md`):
+How `arch/aarch64` meets the interface so far (roadmap A3 and A4, `../../knowledge/decisions/0064-aarch64-boot-as-built.md`,
+`0065-aarch64-interrupts-as-built.md`). It finds its devices in the device tree (`src/devicetree`): the GICv3, the
+virtual timer's interrupt and the PL011.
 
 | Interface | AArch64 |
 |---|---|
-| `ArchSystem` | The vector table's address, the early console's, and whether the CPU has 16-bit ASIDs |
+| `ArchSystem` | The vector table's address, the early console's, whether the CPU has 16-bit ASIDs, the GIC's distributor and redistributor region, the timer's interrupt ID, the device blocks L1 maps, and the routes from lines to the kernel's device interrupt IDs |
 | `UserRegisters` | `aarch64.RegisterFrame` |
-| `ArchCpu` | The carrier block and context for entries, the kernel stack's limit and top, and the early console's address; `TPIDR_EL1` points at it |
-| `init_cpu` | `TPIDR_EL1`; `VBAR_EL1`; `SP_EL1` at the kernel stack's top (`aarch64.write_sp_el1`), since Limine starts the kernel on `SP_EL0`, which stays its boot stack; PAN on, and kept on at every exception (`SCTLR_EL1.SPAN` clear); `CPACR_EL1` 0, so floating point and SIMD trap; `MAIR_EL1`; `TCR_EL1` with 16-bit ASIDs where the CPU has them, ASIDs from `TTBR0`, and `TTBR0` walks off until an address space is activated |
+| `ArchCpu` | The carrier block and context for entries, the kernel stack's limit and top, the early console's address, the `ArchSystem`, its MPIDR affinity and its redistributor; `TPIDR_EL1` points at it |
+| `init_system` | The vector table; from the device tree, the GICv3's distributor (turned on, with affinity routing and group 1) and redistributor region, mapped through the direct map, and the virtual timer's PPI |
+| `init_cpu` | `TPIDR_EL1`; `VBAR_EL1`; `SP_EL1` at the kernel stack's top (`aarch64.write_sp_el1`), since Limine starts the kernel on `SP_EL0`, which stays its boot stack; PAN on, and kept on at every exception (`SCTLR_EL1.SPAN` clear); `CPACR_EL1` 0, so floating point and SIMD trap; `MAIR_EL1`; `TCR_EL1` with 16-bit ASIDs where the CPU has them, ASIDs from `TTBR0`, and `TTBR0` walks off until an address space is activated; its redistributor (found by MPIDR affinity) awake, with its SGIs and the timer's PPI enabled in group 1, and its CPU interface (`ICC_SRE_EL1`, `ICC_PMR_EL1`, `ICC_IGRPEN1_EL1`) |
 | `AddressSpaceTag` | ASID: 65536 tags with 16-bit ASIDs, otherwise 256 |
 | Paging | 4 KiB pages, 48-bit addresses, four levels. The kernel's table is `TTBR1`'s and every address space's `TTBR0`'s, so nothing is copied to share the kernel half. Table entries count the valid entries below them in bits 11:2. Kernel mappings are global, user ones `nG` with their ASID, PXN, and only reachable from EL0. `MAIR_EL1`: `WriteBack` index 0 (as Limine's), `WriteCombining` index 1 (normal non-cacheable), `Device` index 2 (Device-nGnRnE). A changed memory type is break-before-make |
 | TLB | `tlbi vae1` by ASID for user pages, `vaae1` for the kernel's global ones, `aside1` for a tag, `vmalle1` for everything. The first `activate` on a CPU flushes everything, leaving nothing of the bootloader's tables |
-| Entry | One `.entry` function for all 16 vectors, through `aarch64.vector_table`, which never returns: faults in the kernel stop it, `svc` from EL0 is a system call, and IRQs and FIQs are spurious until A4 drives the GIC. SError is fatal, like a machine check |
+| Entry | One `.entry` function for all 16 vectors, through `aarch64.vector_table`, which never returns: faults in the kernel stop it, `svc` from EL0 is a system call, and an IRQ or FIQ is acknowledged through `ICC_IAR1_EL1`. SError is fatal, like a machine check |
+| Interrupts | GICv3, every interrupt in group 1 at one priority, with EOImode 0. The timer and IPIs are acknowledged at entry; the timer is stopped first, since its interrupt is a level. IPIs are SGIs 1 (reschedule), 2 (TLB flush) and 3 (stop), through `ICC_SGI1R_EL1`. Device interrupt IDs are the kernel's own, 32 to 255: an SPI's interrupt ID is its line's, so routes translate between them |
+| Wired interrupts | The distributor's SPIs (`ControllerKind.GicDistributor`), every one masked at first, routed by `GICD_IROUTER` to one CPU's affinity, with `GICD_ICFGR` for the trigger. The GIC has no polarity: an active-low line is inverted before it |
+| Timer | The generic timer's virtual counter and timer (`CNTVCT_EL0`, `CNTV_CVAL_EL0`, `CNTV_CTL_EL0`), at `CNTFRQ_EL0` |
+| `idle` | An `eret` to a wait loop at EL1, with `SP_EL1` at the kernel stack's top and interrupts unmasked, so the interrupt starts at the stack's top |
 | `hardware_entropy` | `rndrrs`, where the CPU has `FEAT_RNG` |
-| `early_console_write` | QEMU `virt`'s PL011 at `0x09000000`, through the direct map: `early_console_init` maps its registers there as a Device block in the bootloader's tables, and `init_kernel_page_table` again in the kernel's, with `kernel_half_frames` (2) for its tables. Its address is in `TPIDR_EL1` until `init_cpu`, then in the `ArchCpu` |
-| `counter` | The generic timer's virtual count, `CNTVCT_EL0` |
+| `early_console_write` | The device tree's first PL011, through the direct map: `early_console_init` maps its registers there as a Device block in the bootloader's tables, and `init_kernel_page_table` again in the kernel's, as it does the GIC's, with `kernel_half_frames` (2 for each 2 MiB block) for its tables. Its address is in `TPIDR_EL1` until `init_cpu`, then in the `ArchCpu` |
 | `test_exit` | QEMU's semihosting, `SYS_EXIT` with `(code << 1) \| 1`, so codes read as the debug exit device's do |
+| `test_device` | SPI line 100 of the distributor, which nothing on QEMU `virt` uses, edge-triggered; `test_device_interrupts` pends it through `GICD_ISPENDR`, and again each time it's acknowledged and at every timer interrupt, until it's stopped |
+| Not yet | `msi_message`, which needs the GICv3 ITS, and `test_nmi`, which needs pseudo-NMIs or FEAT_NMI; user and vector state (A5) |
 
 ## Not Covered
 

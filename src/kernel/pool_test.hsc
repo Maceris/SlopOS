@@ -162,10 +162,14 @@ join_pool_test :: fn(kernel: ptr[Kernel], index: u32) {
         return void
     }
     pool :: if bit & FIRST_POOL_CPUS != 0 { test.first } else { test.second }
-    // While a fiber resumes, its stack holds frames above the stack pointer, which an interrupt would overwrite
+    /*
+     * While a fiber resumes, its stack holds frames above the stack pointer, which an interrupt would
+     * overwrite. They stay masked after: an interrupt never returns into kernel code, so unmasking here would
+     * let a timer tick that came meanwhile take the CPU to idle before it counted itself; the CPU's idle,
+     * next, unmasks them.
+     */
     arch.mask_interrupts()
     fiber.run_carrier(pool)
-    arch.unmask_interrupts()
     intrinsics.interlocked_increment_u64(&test.carriers_done)
 }
 

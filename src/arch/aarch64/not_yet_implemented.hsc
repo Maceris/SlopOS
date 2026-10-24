@@ -5,16 +5,14 @@ import arch_interface from "../../arch_interface"
 /*
  * What arch_interface declares that AArch64 doesn't implement yet, by the stage that brings it
  * (decisions/0005, 0061; knowledge/roadmap.md, A). The kernel's other code calls them, so they're here as
- * stubs to compile, but the kernel stops before it would (TAKES_INTERRUPTS). Each one stops the CPU. The
+ * stubs to compile, but nothing the kernel runs on AArch64 reaches them yet. Each one stops the CPU. The
  * arch-interface house rule (src/checks) accepts stubs in this file only if they're listed, and fails once
  * one of them is implemented anywhere else, so the list stays true: take a name off, and its stub out,
  * when its stage adds it.
  */
 NOT_YET_IMPLEMENTED :: string.[
-    // A4: the GICv3, the generic timer's interrupts, and the other CPUs
-    "device_interrupt_range", "msi_message", "end_of_interrupt", "send_ipi", "interrupt_pending", "idle",
-    "init_interrupt_controller", "route_wired", "mask_wired", "unmask_wired",
-    "init_timer", "set_deadline", "cancel_deadline", "test_device", "test_device_interrupts", "test_nmi",
+    // MSI needs the GICv3 ITS, once PCIe devices do; an NMI needs pseudo-NMIs or FEAT_NMI (decisions/0065)
+    "msi_message", "test_nmi",
     // A5: user mode and its floating-point and SIMD state
     "init_user_registers", "syscall_number", "syscall_argument", "set_syscall_result", "instruction_pointer",
     "restart_syscall", "user_register_count", "get_user_register", "set_user_register", "return_to_user",
@@ -29,75 +27,8 @@ not_yet #never_returns :: fn(name: string) {
     halt()
 }
 
-device_interrupt_range :: fn() -> (first: arch_interface.InterruptId, count: u32) {
-    not_yet("device_interrupt_range")
-}
-
 msi_message :: fn(cpu_hardware_id: u64, id: arch_interface.InterruptId) -> arch_interface.MsiMessage {
     not_yet("msi_message")
-}
-
-end_of_interrupt :: fn(id: arch_interface.InterruptId) {
-    not_yet("end_of_interrupt")
-}
-
-send_ipi :: fn(cpu_hardware_id: u64, kind: arch_interface.IpiKind) {
-    not_yet("send_ipi")
-}
-
-interrupt_pending :: fn() -> bool {
-    not_yet("interrupt_pending")
-}
-
-idle :: fn() #never_returns {
-    not_yet("idle")
-}
-
-init_interrupt_controller :: fn(
-    controller: ptr[mut InterruptController],
-    kind: arch_interface.ControllerKind,
-    registers: arch_interface.VirtualAddress,
-) -> Result[u32, arch_interface.ControllerError] {
-    not_yet("init_interrupt_controller")
-}
-
-route_wired :: fn(
-    controller: ptr[mut InterruptController],
-    line: u32,
-    cpu_hardware_id: u64,
-    id: arch_interface.InterruptId,
-    trigger: arch_interface.Trigger,
-    polarity: arch_interface.Polarity,
-) {
-    not_yet("route_wired")
-}
-
-mask_wired :: fn(controller: ptr[mut InterruptController], line: u32) {
-    not_yet("mask_wired")
-}
-
-unmask_wired :: fn(controller: ptr[mut InterruptController], line: u32) {
-    not_yet("unmask_wired")
-}
-
-init_timer :: fn(hint: u64?) -> u64 {
-    not_yet("init_timer")
-}
-
-set_deadline :: fn(value: u64) {
-    not_yet("set_deadline")
-}
-
-cancel_deadline :: fn() {
-    not_yet("cancel_deadline")
-}
-
-test_device :: fn() -> arch_interface.TestDevice {
-    not_yet("test_device")
-}
-
-test_device_interrupts :: fn(on: bool) {
-    not_yet("test_device_interrupts")
 }
 
 test_nmi :: fn() {

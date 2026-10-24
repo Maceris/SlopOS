@@ -2,8 +2,7 @@
 Builds SlopOS's kernel once, through its build package (src/build), then boots it for each test
 below with tools/boot.py and checks the code it stops with (src/kernel/stop.hsc, StopReason). Tests
 of growing stacks get a second kernel, built with morestack (the build package's stack_check), and the
-AArch64 tests a third, built for AArch64 (its arch setting), which stops after memory until it takes
-interrupts (knowledge/roadmap.md, A).
+AArch64 tests kernels built for AArch64 (its arch setting), the same two ways.
 Exits 0 if every test passed.
 
     python tools/boot_tests.py
@@ -89,17 +88,33 @@ MORESTACK_TESTS = [
 ]
 
 
-# The same for the AArch64 kernel (tools/boot.py --arch aarch64), which so far stops once its memory is set up
-AARCH64_STOP = "--expect-line=[info] no interrupts on this architecture yet, so stopping after memory"
+# The AArch64 kernel's (tools/boot.py --arch aarch64): what doesn't need user mode yet (knowledge/roadmap.md, A)
 AARCH64_TESTS = [
-    ("AArch64: boots, sets up memory and halts", 0, [AARCH64_STOP]),
+    ("AArch64: boots and halts", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("AArch64: reports a kernel fault", 1, ["--command-line=test_exit test_fault"]),
     ("AArch64: reports a failed assertion", 3, ["--command-line=test_exit test_assert"]),
     ("AArch64: refuses a CPU below ARMv8.2-A with LSE", 2, ["--cpu=cortex-a57"]),
+    ("AArch64: starts every CPU", 0, ["--expect-line=[info] 4 of 4 CPUs online", "--expect-line=[info] boot memory reclaimed",
+                                      "--", "-smp", "4"]),
     ("AArch64: keeps the kernel's code read-only", 1, ["--command-line=test_exit test_write_code",
         "--expect-line=[info] test_write_code: writing to the kernel's code"]),
     ("AArch64: allocates from the kernel heap", 0, ["--command-line=test_exit test_heap",
         "--expect-line=[info] test_heap: 200 blocks kept their contents, grown, shrunk and freed"]),
+    ("AArch64: keeps time with the counter", 0, ["--command-line=test_exit test_clock",
+        "--expect-line=[info] test_clock: 10 ms by the counter is 10 ms by the clock"]),
+    ("AArch64: shoots down TLB entries on every CPU", 0, ["--command-line=test_exit test_shootdown",
+        "--expect-line=[info] test_shootdown: every CPU read the new page after the shootdown", "--", "-smp", "4"]),
+    ("AArch64: routes a device's interrupts through the GIC", 0, ["--command-line=test_exit test_ioapic",
+        "--expect-line=[info] test_ioapic: 10 interrupts arrived from the test device"]),
+    ("AArch64: switches between fibers", 0, ["--command-line=test_exit test_fibers",
+        "--expect-line=[info] test_fibers: stack traces follow suspended and resumed fibers"]),
+    ("AArch64: shares fiber pools between CPUs", 0, ["--command-line=test_exit test_pool",
+        "--expect-line=[info] test_pool: two pools shared five CPUs, each fiber staying on its own pool's", "--", "-smp", "6"]),
+]
+
+AARCH64_MORESTACK_TESTS = [
+    ("AArch64: grows a fiber's stack onto segments", 0, ["--command-line=test_exit test_segments",
+        "--expect-line=[info] test_segments: stack traces leave out morestack, across segments"]),
 ]
 
 
@@ -158,9 +173,14 @@ def main() -> int:
             print("FAILED: the kernel doesn't build for AArch64")
             return 1
         failed = run_tests(kernel, TESTS) + run_tests(morestack_kernel, MORESTACK_TESTS) + run_address_tests(kernel)
+        aarch64_morestack_kernel = Path(temporary) / "kernel_aarch64_morestack.elf"
+        if not build_kernel(aarch64_morestack_kernel, "morestack", "aarch64"):
+            print("FAILED: the kernel doesn't build for AArch64 with morestack")
+            return 1
         failed += run_tests(aarch64_kernel, AARCH64_TESTS, ["--arch=aarch64"])
+        failed += run_tests(aarch64_morestack_kernel, AARCH64_MORESTACK_TESTS, ["--arch=aarch64"])
         failed += run_address_tests(aarch64_kernel, ["--arch=aarch64"], "AArch64: ")
-        count = len(TESTS) + len(MORESTACK_TESTS) + len(AARCH64_TESTS) + 2 * len(ADDRESS_TESTS)
+        count = len(TESTS) + len(MORESTACK_TESTS) + len(AARCH64_TESTS) + len(AARCH64_MORESTACK_TESTS) + 2 * len(ADDRESS_TESTS)
         print(f"{count - failed} of {count} passed")
         return 0 if failed == 0 else 1
 

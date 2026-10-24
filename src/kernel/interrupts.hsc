@@ -27,8 +27,8 @@ import concurrency from "std"
 MAX_CONTROLLERS :: 8
 // Device interrupt IDs a CPU keeps routes for: at least as many as any architecture has.
 MAX_DEVICE_INTERRUPTS :: 256
-// Bytes of registers mapped for each controller.
-CONTROLLER_REGISTERS_SIZE : u64 : 4096
+// Bytes of registers mapped for each controller: a GICv3 distributor's, which an I/O APIC's 4 KiB fit in.
+CONTROLLER_REGISTERS_SIZE : u64 : 64 * 1024
 
 InterruptError :: enum {
     // This architecture doesn't have that kind of controller.

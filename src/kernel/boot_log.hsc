@@ -22,6 +22,9 @@ log_boot_info :: fn(info: ptr[boot_info.BootInfo]) {
     for module in info.modules {
         runtime.log_info("module %", module.name)
     }
+    tables :: &info.firmware_tables
+    runtime.log_info("firmware tables: ACPI %, device tree %, SMBIOS %, EFI system table %", tables.acpi_rsdp is_some,
+        tables.devicetree is_some, tables.smbios is_some, tables.efi_system_table is_some)
 }
 
 firmware_name :: fn(firmware: boot_info.Firmware) -> string {
