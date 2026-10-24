@@ -59,7 +59,7 @@ path-based access checks (TOCTOU races, symlink attacks).
   per-call cost (`decisions/0008`, `decisions/0010`).
 - **[decided]** Command-line arguments are grants, globs become a `FileSet`, and programs
   can ask the powerbox for more at runtime, on the console or in a GUI (`decisions/0018`).
-  Still **[unsure]**: how does a shell work in detail? Typing `grep foo ~/notes/*.md` implicitly grants
+  Proposed in `design/shell.md` (2026-10-24). Before that it was **[unsure]**: how does a shell work in detail? Typing `grep foo ~/notes/*.md` implicitly grants
   grep read access to those files — that's actually a nice model (the shell is the
   powerbox), but scripts and globbing need thought.
 
@@ -185,6 +185,8 @@ Explicit goals: no Windows-style installers, no registry.
   anywhere else.
 - **[leaning]** *System configuration is declarative and versioned* (NixOS, Fuchsia,
   ChromeOS A/B). The system is a function of a config; changes are atomic and roll back.
+- **[proposed, `design/software.md`]** Bundles, installations owning their data, typed configuration and
+  generations, for roadmap M9.
 - **[unsure]** Sharing data between apps (a photo library used by two editors) — done by
   capabilities to a shared store, granted explicitly. Plugins (code that runs inside another
   app) are the hard case.
@@ -310,6 +312,7 @@ clean way back.
   boot into the previous generation if the new one fails.
 - **[explore]** Because services are user-space and restartable, most updates are "restart
   that one service", not "reboot".
+- **[proposed, `design/software.md` §5]** Generations on the ESP, boot assessment and fallback (with roadmap B).
 
 ---
 
@@ -319,7 +322,8 @@ clean way back.
 bolted on. Reproducing a bug often means guessing at the state.
 
 **Directions.**
-- **[leaning]** Structured events as a first-class system service (typed, per §3).
+- **[leaning]** Structured events as a first-class system service (typed, per §3). Proposed in
+  `design/observability.md`, with crash reports, the debugger and replay.
 - **[explore]** Every IPC message is traceable, so "what did this app talk to?" is a query.
 - **[explore]** *Record/replay.* If all nondeterminism (time, randomness, I/O) enters a
   process through capabilities and messages, a process's execution can be recorded and
@@ -342,6 +346,7 @@ Password prompts can be spoofed by any app drawing a lookalike window.
   for credential prompts and permission grants.
 - **[leaning]** Input, clipboard and screen capture are capabilities like anything else.
 - **[unsure]** GUI is far off; note it now so the capability model doesn't paint us into a corner.
+  Proposed in `design/display.md` (roadmap M15) and, for the console, `design/console-and-sessions.md`.
 
 ---
 

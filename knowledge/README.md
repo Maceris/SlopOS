@@ -22,6 +22,13 @@ system as built lives in `../docs/` instead.
 | `design/system-abi.md` | The Hemera-native system ABI: syscalls, process start, libraries, C interop |
 | `design/security.md` | The security design: threat model, capabilities, users, grants (overview of decisions 0008–0018) |
 | `design/services.md` | The user-space system services: what each does, what it holds, whether it's trusted |
+| `design/storage.md` | Proposed (M8): volume servers, the native copy-on-write filesystem, encryption, FAT32, the file protocols |
+| `design/software.md` | Proposed (M9): the bundle and config stores, generations and updates, installations, shared libraries |
+| `design/console-and-sessions.md` | Proposed (M10): the typed terminal protocol, the trusted path, accounts, login, sessions, the powerbox |
+| `design/shell.md` | Proposed (M11): the shell language, calls through manifests, typed pipelines, scripts as programs |
+| `design/observability.md` | Proposed (M9, M12): typed logs, crash reports, the debugger, record and replay, tracing |
+| `design/networking.md` | Proposed (M13, M14): the user-space stack, network authority as capabilities, DNS, TLS, SSH |
+| `design/display.md` | Proposed (M15, M16): the compositor, GUI capabilities and trusted path, text, audio |
 | `hemera-proposals/` | Designs for Hemera changes still open: what SlopOS needs, and what the compiler (`apps/`, built out as SlopOS needs it, `decisions/0047`) must implement. Once one is in Hemera, its docs are the reference and the proposal is removed |
 | `hemera-feedback.md` | Log of where Hemera helped, hurt or was missing something. The experiment's real output |
 | `prior-art.md` | Other systems and papers worth studying |
