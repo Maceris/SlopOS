@@ -48,10 +48,9 @@ RESTARTS : u32 : 3
 RESTART_WINDOW : u64 : 60_000_000_000
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 NOWHERE : usize : 0xffffffffffffffff
-// How long test_restart waits once the console has dialed its serial line, before it kills the line's driver, and once
-// it's dialed it again, for what's typed after its banner to be echoed, before it says everything has started
+// How long test_restart waits once the console has dialed its serial line, for its banner to be shown, before it kills
+// the line's driver, and once it's dialed it again, before it says everything has started
 TEST_RESTART_PAUSE : u64 : 500_000_000
-TEST_RESTART_ECHO : u64 : 2_000_000_000
 
 // Which protocol a listener speaks, so a connector dials it with that protocol's Connect.
 Speaks :: enum {
@@ -238,7 +237,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         }
         while !is_running(&supervisor, serial_line) || dials_of(&supervisor, serial_line) < 2
         // And has had time to show its banner again, and echo what's typed after it, before the root task's last second
-        pause(&supervisor, TEST_RESTART_ECHO)
+        pause(&supervisor, TEST_RESTART_PAUSE)
     }
     log_line.write(supervisor.log, "supervisor: started % services", supervisor.started_count)
     tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))

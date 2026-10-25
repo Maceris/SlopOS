@@ -172,6 +172,7 @@ send :: fn(driver: ptr[mut Driver], bytes: u8[]) -> u32 {
         }
         _ = virtio.offer(&driver.transmit, driver.buffers_device + cast[u64](RECEIVE_BUFFERS) * BUFFER_BYTES, cast[u32](count), false)
         if !wait_sent(driver) {
+            log_line.write(driver.log, "virtio_console: the device didn't take % bytes to send", count)
             break
         }
         sent += count

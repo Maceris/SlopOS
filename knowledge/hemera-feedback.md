@@ -105,6 +105,12 @@ decided with the project's owner:
   takes. Hosted test `field_defaults`, front-end test `field_default_mismatch`.
 - **Two optionals compared** are equal when both are `None` or both hold equal values. Hosted test
   `optional_comparisons`.
+- **Variadic parameters with others after them**, decided with the project's owner: allowed only where a call can
+  always tell where each group ends, each variadic type unable to be taken for the parameters a value after it could go
+  to (no implicit conversion either way, no literal fitting both), and a parameter between two groups for the variadic
+  one after it; a value goes to a variadic parameter while it fits. A parameter with a default right after a variadic
+  one is given by name only, so `log_info`'s `location` keeps working. `functions.md`'s example, `int...` then `f32`,
+  is now an error, as it was ambiguous. Hosted test `variadic_groups`, front-end tests `variadic_*`.
 - **`#run` as an array's count**, or a generic's value; **multi-dimensional array types** as values
   (`size_of(i8[10][5])`); and **a string literal's members** (`"abc".count`, `"abc"[1]`), as a constant's had
   since 7f. Hosted test `constant_sizes`.
@@ -113,12 +119,6 @@ Still open, from the same survey:
 
 Builds fail where the docs say it works:
 
-- **A variadic parameter followed by another** (`fn(fiz: bool, some: int..., fuzz: f32)`, from
-  `functions.md`) only works when the variadic is passed on as a view: `bar(true, 20, 20, 2)` says `fuzz` has no
-  value. Decided with the project's owner (2026-10-25), still to build: several variadics, or parameters after one,
-  are allowed only when a call can always be split, each group's type unable to convert implicitly to the next's (and
-  for `a: A..., b: B..., c: C...`, `A` and `C` too, since `b` can be empty). The docs' example is then an error, since
-  an untyped `3` could be an `int` or the `f32`; `fuzz: bool` after `int...` would be fine. Severity: nice.
 - **Types declared inside a function** (E4024), **generic macros** (E4024), and **`#insert` or a macro call in a
   generic's body** (E4024). The last is in `compilation.md` as not done yet; the first two aren't mentioned.
   Severity: nice.

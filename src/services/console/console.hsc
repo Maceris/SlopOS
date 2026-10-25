@@ -224,7 +224,11 @@ take_typed :: fn(console: ptr[mut Console], into: ptr[mut os.Incoming]) {
                 console.line_end = NONE
                 log_line.write(console.log, "console: its serial line went; dialing again")
                 dial_serial(console)
-                return void
+                // Read the new one until it's empty, since only a read that finds nothing has its next answer wake the port
+                if cast[slop_os.Handle](console.line_end) == slop_os.NO_HANDLE {
+                    return void
+                }
+                continue
             }
             case _ => continue
         }
@@ -254,7 +258,11 @@ take_keys :: fn(console: ptr[mut Console], into: ptr[mut os.Incoming]) {
                 console.keyboard_end = NONE
                 log_line.write(console.log, "console: its keyboard went; dialing again")
                 dial_keyboard(console)
-                return void
+                // As a serial line dialed again
+                if cast[slop_os.Handle](console.keyboard_end) == slop_os.NO_HANDLE {
+                    return void
+                }
+                continue
             }
             case _ => continue
         }
