@@ -54,22 +54,35 @@ Windows x64. Each item is something the docs describe that doesn't work. Only wh
 things they leave out, like `==` on structs, aren't. The ones a "strong fit" in section 4 depends on are marked
 **(SlopOS)**.
 
+Fixed the same day (Hemera's compiler, with tests): the four that gave wrong code or missed an error without saying
+so.
+
+- `#fall_through` now runs the next case: code generation sets a flag the next case's condition reads, the bounds and
+  ownership analyses carry the case's end into the next case, and one with no case after it is an error (E4002).
+  Hosted test `fall_through`, and an owner moved again through a fall-through in `owned_errors`.
+- `!` on `b16`/`b32`/`b64` compares with 0, rather than flipping every bit, which left a true value true. Hosted test
+  `wide_booleans`.
+- A multiline string is its lines after their `\\`, as written, joined by newlines, with none after the last; it was
+  only the first line, with its `\\` read as an escape. Code generation, the bounds prover's count of a constant
+  string, and format-string checking all read literals through one `ast::string_value` now. `docs/types.md` says
+  what the string is, which it didn't before. Hosted test `multiline_strings`.
+- A struct that isn't `#scoped` holding a `#scoped` one in place, in an array or in an optional is an error (E4014).
+  Front-end tests `stack_scoped_field` and `stack_scoped_in_array_field`. `base` and `std` still build under
+  `--generate-all`.
+- Found while testing those: ownership treated every `switch` as possibly running no case, even one with `case _`, so
+  releasing an owner in every case was reported as releasing it on only some paths. It now counts `case _`. An enum
+  `switch` that names every member still counts as possibly running none.
+
+Still open, from the same survey:
+
 Wrong code, with no error:
 
-- **`#fall_through` does nothing (SlopOS).** The parser accepts it, but `emit_switch`/`emit_cases` in
-  `middle_end/generate.cpp` make a plain if/else chain, so the case after it never runs. `docs/control_flow.md`'s
-  own `switch` example gives the wrong result. Severity: friction (it's silent).
 - **Endian-specific integers are stored in the CPU's order (SlopOS).** `x : u32be = 0x01020304`, then
   `bit_cast[u8[4]](x)` gives `04 03 02 01`. Arithmetic and casts come out as numbers, so `u32be` acts like a
   plain `u32`. Any disk, network or device layout written with them is wrong. Severity: blocker, for their
   intended use.
-- **`!` on `b16`/`b32`/`b64` gives the wrong answer when the value is true.** `a : b16 = true; if !a` is taken.
-  `!false` and `if a` work. Severity: friction.
-- **Multiline strings (`\\` lines) lose everything after the first line.** `\\ab` `\\cd` gives `"\ab\n"`, a
-  4-byte string that keeps one backslash. The only tests are parser tests. Severity: friction.
-- **A `#scoped` struct can be held in a field of an ordinary struct,** which `docs/memory.md` says is an error,
-  even when the outer struct is then built from a stack buffer and allocated with `new`. Severity: friction (a
-  memory-safety rule that isn't checked).
+- **A local dynamic array of a `#scoped` struct** (`parsers : Parser[..]`) is still accepted, though its elements are
+  on the heap; only fields are checked so far. Severity: friction.
 
 Builds fail where the docs say it works:
 
