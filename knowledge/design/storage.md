@@ -1,6 +1,6 @@
 # Storage: Volume Servers, the Native Filesystem, FAT32
 
-Status: **proposed** 2026-10-24, for roadmap M8. Builds on `../decisions/0015` (`Dir`, `ReadOnlyDir`), `0016`
+Status: **proposed** 2026-10-24, for roadmap M8; its open questions decided 2026-10-25 (`../decisions/0085`). Builds on `../decisions/0015` (`Dir`, `ReadOnlyDir`), `0016`
 (per-user volumes), `0018` (`FileSet`, informational names), `0042` (unlocking, key generations), `0046` (typed bytes,
 handle-relative trees, transactions in the filesystem) and `security.md` §8 (stored links). The choices still to
 make are listed at the end and in `../open-questions.md`, *Storage*.
@@ -183,6 +183,9 @@ io_uring's fixed buffers do.
   (Limine, the kernel, the boot set) and a container with the system volume, so SlopOS boots from a disk image.
 
 ## 10. Open Questions
+
+Decided 2026-10-25 (`../decisions/0085`): the split below, ChaCha20-Poly1305, no intent log to begin with, and 4 KiB
+blocks with 16 KiB nodes. What was asked:
 
 - Volume servers as separate processes (§2), or one storage service holding every volume, as `services.md` had it:
   the split costs a process per unlocked volume and a hop for allocation, and buys isolation between users' plaintext.

@@ -71,18 +71,10 @@ milestone's stages and design choices are decided when it's planned; those are l
 ## Storage
 
 Answered 2026-10-13: files are bytes with an optional schema hash, trees exist only beneath directory handles, and
-transactions and snapshots are in the filesystem (`decisions/0046`). Open, from `design/storage.md` (2026-10-24):
-
-- **A process per unlocked volume**, under a container service that never sees plaintext (`storage.md` §2), or one
-  storage service holding every volume, as `design/services.md` first had it. Proposed: the split, so a bug exploited
-  through one user's files reaches only that user's volume, and the administrator's volume management goes to a
-  process that can't read anything.
-- **The default cipher**: ChaCha20-Poly1305 everywhere, or AES-256-GCM where the CPU has AES (`0019`). Proposed:
-  ChaCha20-Poly1305 by default, chosen per volume at creation.
-- **Ordered crash semantics** (a crash leaves a prefix of the acknowledged operations) as a promise of the native
-  filesystem, and durability only through `Sync` (`storage.md` §4). Proposed: yes.
-- **No writable file mappings**, ever, or later (`storage.md` §7). Proposed: never; read-only mappings of immutable
-  content through pager-backed memory objects in M9.
+transactions and snapshots are in the filesystem (`decisions/0046`). Answered 2026-10-25 (`decisions/0085`): a
+process per unlocked volume under a container service that never sees plaintext, ChaCha20-Poly1305 by default,
+ordered crash semantics with durability through `Sync`, no writable file mappings ever, no intent log to begin with,
+and 4 KiB blocks with 16 KiB B+tree nodes.
 
 ## Software
 
