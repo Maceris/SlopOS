@@ -70,6 +70,16 @@ open :: fn(address: u64) -> Tree? {
  * (status "disabled"), or null.
  */
 find_compatible :: fn(tree: ptr[Tree], compatible: string) -> Node? {
+    return find_node(tree, compatible, 0)
+}
+
+// The node whose phandle is phandle, as another node's property refers to it (like iommu-map's), if it isn't disabled.
+find_phandle :: fn(tree: ptr[Tree], phandle: u32) -> Node? {
+    return if phandle == 0 { null } else { find_node(tree, "", phandle) }
+}
+
+// The first node that isn't disabled and lists compatible, unless it's "", or has phandle, unless it's 0.
+find_node :: fn(tree: ptr[Tree], compatible: string, phandle: u32) -> Node? {
     // The cells each depth gives its children: 2 and 1 by default
     address_cells : u32[MAX_DEPTH]
     size_cells : u32[MAX_DEPTH]
@@ -128,7 +138,10 @@ find_compatible :: fn(tree: ptr[Tree], compatible: string) -> Node? {
             else if name == "#size-cells" && length == 4 && depth < MAX_DEPTH {
                 size_cells[depth] = big_endian_u32(value.address)
             }
-            else if name == "compatible" && lists(value, compatible) {
+            else if name == "compatible" && compatible != "" && lists(value, compatible) {
+                matched = true
+            }
+            else if name == "phandle" && phandle != 0 && length == 4 && big_endian_u32(value.address) == phandle {
                 matched = true
             }
             else if name == "status" && lists(value, "disabled") {

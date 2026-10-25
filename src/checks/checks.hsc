@@ -14,8 +14,9 @@ import reflection from "std"
 check_program :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
     tiers_hold := check_tiers(target, program)
     arch_holds := check_arch_interface(program)
+    iommus_hold := check_iommu_interface(program)
     protocols_hold := check_protocols(program)
-    return tiers_hold && arch_holds && protocols_hold
+    return tiers_hold && arch_holds && iommus_hold && protocols_hold
 }
 
 // std tiers
@@ -120,7 +121,23 @@ check_arch_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     interface :: package_named(program, "arch_interface") or_return true
     holds := true
     for &candidate in program.packages {
-        if imported_as_arch(program, candidate.path) {
+        if imported_as(program, candidate.path, "arch", false) {
+            holds = implements(candidate, interface) && holds
+        }
+    }
+    return holds
+}
+
+/*
+ * Each package imported under an alias starting iommu_, like iommu_vtd, implements the program's iommu_interface
+ * package (decisions/0039, 0079), by the arch interface's rules: an IOMMU package is to iommu_interface what an
+ * architecture package is to arch_interface.
+ */
+check_iommu_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
+    interface :: package_named(program, "iommu_interface") or_return true
+    holds := true
+    for &candidate in program.packages {
+        if candidate.path != interface.path && imported_as(program, candidate.path, "iommu_", true) {
             holds = implements(candidate, interface) && holds
         }
     }
@@ -150,11 +167,11 @@ check_protocols :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     return holds
 }
 
-// Whether anything in the program imports the package at path as arch.
-imported_as_arch :: fn(program: ptr[compiler.ProgramInfo], path: string) -> bool {
+// Whether anything in the program imports the package at path as alias, or, with prefix, under an alias starting so.
+imported_as :: fn(program: ptr[compiler.ProgramInfo], path: string, alias: string, prefix: bool) -> bool {
     for &package in program.packages {
         for &edge in package.imports {
-            if edge.alias == "arch" && edge.path == path {
+            if (edge.alias == alias || (prefix && starts_with(edge.alias, alias))) && edge.path == path {
                 return true
             }
         }
@@ -173,7 +190,7 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
             holds = false
         }
         else if !declares_type(interface, name) && (compiler.find_function(interface, name) is_none) {
-            compiler.report_error(gaps.location, "% lists %, which arch_interface doesn't declare", implementation.name, name)
+            compiler.report_error(gaps.location, "% lists %, which % doesn't declare", implementation.name, name, interface.name)
             holds = false
         }
     }
@@ -182,8 +199,8 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
             continue
         }
         if is_architecture_type(declared.type) && !declares_type(implementation, declared.name) {
-            compiler.report_error(declared.location, "% doesn't declare %, which arch_interface leaves to each architecture",
-                implementation.name, declared.name)
+            compiler.report_error(declared.location, "% doesn't declare %, which % leaves to each implementation",
+                implementation.name, declared.name, interface.name)
             holds = false
         }
     }
@@ -213,8 +230,8 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
             continue
         }
         if !signatures_match(found, required) {
-            compiler.report_error(found.location, "%.% doesn't match the signature arch_interface declares",
-                implementation.name, required.name)
+            compiler.report_error(found.location, "%.% doesn't match the signature % declares",
+                implementation.name, required.name, interface.name)
             holds = false
         }
     }

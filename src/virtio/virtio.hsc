@@ -1,6 +1,6 @@
 /*
  * The virtio-pci transport (decisions/0070, 0074): a modern (virtio 1.x) device behind PCIe, its registers found
- * through its vendor capabilities in BARs its driver has mapped, its features negotiated (VERSION_1 always), its
+ * through its vendor capabilities in BARs its driver has mapped, its features negotiated (VERSION_1 always, ACCESS_PLATFORM where offered), its
  * interrupts through MSI-X, one vector per queue, and split virtqueues in DMA memory, each descriptor reused only once
  * the device has given back the chain it was in.
  *
@@ -45,6 +45,8 @@ STATUS_DRIVER_OK : u8 : 4
 STATUS_FEATURES_OK : u8 : 8
 STATUS_FAILED : u8 : 128
 FEATURE_VERSION_1 : u64 : 1 << 32
+// The device's DMA goes through the platform's IOMMU, as its device addresses are I/O virtual addresses (decisions/0079)
+FEATURE_ACCESS_PLATFORM : u64 : 1 << 33
 NO_VECTOR : u16 : 0xffff
 
 // A descriptor's flags: another follows, and the device writes the buffer
@@ -152,7 +154,8 @@ open :: fn(config: u64, bars: u64[6]) -> Transport? {
 }
 
 /*
- * The device reset and told a driver has it, its features read and wanted's taken (always with VERSION_1), and those
+ * The device reset and told a driver has it, its features read and wanted's taken (always with VERSION_1, and with
+ * ACCESS_PLATFORM where it's offered, since memory_device_address gives what the device's DMA reaches it at), and those
  * accepted: the features, or null if the device refused them or isn't modern.
  */
 start :: fn(transport: ptr[Transport], wanted: u64) -> u64? {
@@ -172,7 +175,7 @@ start :: fn(transport: ptr[Transport], wanted: u64) -> u64? {
         write_u8(common, DEVICE_STATUS, STATUS_FAILED)
         return null
     }
-    taken :: offered & (wanted | FEATURE_VERSION_1)
+    taken :: offered & (wanted | FEATURE_VERSION_1 | FEATURE_ACCESS_PLATFORM)
     write_u32(common, DRIVER_FEATURE_SELECT, 0)
     write_u32(common, DRIVER_FEATURE, cast[u32](taken))
     write_u32(common, DRIVER_FEATURE_SELECT, 1)

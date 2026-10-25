@@ -10,6 +10,8 @@
  *   reads an ID the device gives: the HPET's vendor on x86-64, the PL011's first peripheral ID on AArch64;
  * - a window onto memory through a read-only handle can't be mapped writable, maps read-only and shows
  *   what was written through the memory; closing the memory destroys the window and its mapping;
+ * - registering an IOMMU is refused for a kind there's none of, memory that isn't device memory, no requester IDs,
+ *   and device memory that's another device, the HPET or the PL011;
  * - what it all charged its budget comes back.
  */
 package test_devices
@@ -33,6 +35,7 @@ IRQ_KEY : u64 : 11
     DEVICE_ID_OFFSET : u64 : 0
     DEVICE_ID_SHIFT : u32 : 16
     DEVICE_ID : u64 : 0x8086
+    IOMMU : slop_os.IommuKind : .VtD
 }
 #else_if TARGET_ARCH == .arm64 {
     // QEMU virt's PL011, where its device tree puts it; UARTPeriphID0 is 0x11.
@@ -40,6 +43,7 @@ IRQ_KEY : u64 : 11
     DEVICE_ID_OFFSET : u64 : 0xfe0
     DEVICE_ID_SHIFT : u32 : 0
     DEVICE_ID : u64 : 0x11
+    IOMMU : slop_os.IommuKind : .Smmuv3
 }
 
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
@@ -54,7 +58,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     info :: cast[ptr[device_info.TestDeviceInfo]](info_at)
     kind :: cast[slop_os.ControllerKind](info.kind)
     budget :: slop_os.memory_budget_create(block.budget, 1 << 20) or_return 102
-    results : u64[21]
+    results : u64[25]
     // The controller, and one in RAM
     registered :: slop_os.controller_register(hardware, kind, info.registers)
     results[0] = test_kit.tag_of(registered)
@@ -114,6 +118,12 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     results[15] = test_kit.tag_of(slop_os.memory_map(window, space, window_at, 0, PAGE, read_write))
     results[16] = test_kit.tag_of(slop_os.memory_map(window, space, window_at, 0, PAGE, read))
     results[17] = intrinsics.volatile_load_u64(cast[ptr[u64]](window_at))
+    // IOMMUs: a kind there's none of, memory that isn't device memory, no requester IDs, and another device's registers
+    registers :: device or_else test_kit.handle_at[slop_os.Memory](0)
+    results[21] = test_kit.tag_of(slop_os.iommu_register(hardware, cast[slop_os.IommuKind](99), registers, 0, 1, 0))
+    results[22] = test_kit.tag_of(slop_os.iommu_register(hardware, IOMMU, memory, 0, 1, 0))
+    results[23] = test_kit.tag_of(slop_os.iommu_register(hardware, IOMMU, registers, 0, 0, 0))
+    results[24] = test_kit.tag_of(slop_os.iommu_register(hardware, IOMMU, registers, 0, 1, 0))
     // Closing the memory destroys the window, and takes down its mapping
     results[18] = test_kit.tag_of(slop_os.handle_close(cast[slop_os.Handle](memory)))
     results[19] = test_kit.tag_of(slop_os.handle_info(cast[slop_os.Handle](window)))
@@ -125,6 +135,8 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
         test_kit.tag(slop_os.DeviceError.BadAddress), 0, 0, DEVICE_ID,
         0, test_kit.tag(slop_os.MemoryError.MissingRight), 0, 1002,
         0, test_kit.tag(slop_os.HandleError.ObjectGone), test_kit.tag(slop_os.MemoryError.NotMapped),
+        test_kit.tag(slop_os.DeviceError.NoIommu), test_kit.tag(slop_os.DeviceError.BadAddress),
+        test_kit.tag(slop_os.DeviceError.InvalidSize), test_kit.tag(slop_os.DeviceError.NoIommu),
     ]
     failed := test_kit.check(log, NAME, results, expected)
     if failed != 0 {
@@ -137,6 +149,6 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
         log_line.write(log, "%: its budget still has % bytes charged", NAME, test_kit.used(budget))
         return 30
     }
-    log_line.write(log, "%: a driver registered a controller, took an IRQ's interrupts through its port, read device memory, and lost a window with its memory", NAME)
+    log_line.write(log, "%: a driver registered a controller, took an IRQ's interrupts through its port, read device memory, and lost a window with its memory; IOMMUs that aren't were refused", NAME)
     return 0
 }

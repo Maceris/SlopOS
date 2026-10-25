@@ -34,6 +34,10 @@ def program_test(name: str, program: str, line: str, words: str = "", qemu: list
                       "--expect-line=[info] objects left: only the kernel's own", "--", "-smp", "2", *qemu])
 
 
+# What the kernel says of the IOMMU QEMU gives each machine (src/kernel/iommus.hsc)
+X86_IOMMU_LINE = "[info] IOMMU 0: VT-d, 4 KiB of registers at 0x00000000fed90000, version 1.0, 48-bit I/O addresses"
+AARCH64_IOMMU_LINE = "[info] IOMMU 0: SMMUv3, 128 KiB of registers at 0x0000000009050000, version 3.1, 44-bit I/O addresses"
+
 # Name, the code expected, and boot.py's arguments
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
@@ -44,12 +48,20 @@ TESTS = [
         "--expect-line=[user] hello: heap working, random numbers working", "--expect-line=[user] root task: the supervisor started hello",
         "--expect-line=[user] platform: serving", "--expect-line=[user] root task: the supervisor started all 2 of its services",
         "--expect-line=[info] root task ended with code 0"]),
+    # The IOMMU the platform service found in the firmware tables, which the kernel identified
+    ("registers the IOMMU from the firmware tables", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
+        f"--expect-line={X86_IOMMU_LINE}", "--expect-line=[user] platform: serving", "--expect-line=[info] root task ended with code 0"]),
     # virtio-rng, modern only, found by the platform service, claimed by the supervisor for its driver
     ("drives virtio-rng from the platform service, and reseeds entropy from it", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services", "--expect-line=[user] platform: 0:3.0 (6900 4164) claimed",
         "--expect-line=[user] root task: the supervisor started virtio_rng",
         "--expect-line=[user] virtio_rng: serving, a source of the entropy service's",
         "--expect-line=[user] entropy: reseeded from a hardware source, 32 bytes",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2", "-device", "virtio-rng-pci,disable-legacy=on,iommu_platform=on"]),
+    # The same without an IOMMU, where only trusted drivers will get DMA (decisions/0079)
+    ("drives virtio-rng without an IOMMU", 7, [WITH_PROGRAMS, "--no-iommu", "--command-line=test_exit test_services",
+        "--expect-line=[user] platform: the firmware tables describe no IOMMU, so devices' DMA reaches all of memory",
+        "--expect-line=[user] virtio_rng: serving, a source of the entropy service's",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2", "-device", "virtio-rng-pci,disable-legacy=on"]),
     # A virtio console whose other end boot.py types into: hello's line through the console service, and an echo
     ("shows lines on a virtio console, and echoes what's typed into it", 7, [WITH_PROGRAMS,
@@ -80,7 +92,7 @@ TESTS = [
         "--command-line=test_exit test_services test_reassign", "--expect-line=[user] platform: 1:0.0 (6900 4164) claimed",
         "--expect-line=[user] virtio_rng: serving, a source of the entropy service's",
         "--expect-line=[user] entropy: reseeded from a hardware source, 32 bytes", "--expect-line=[info] root task ended with code 0",
-        "--", "-smp", "2", "-device", "pcie-root-port,id=bridge,chassis=1,slot=1", "-device", "virtio-rng-pci,bus=bridge,disable-legacy=on"]),
+        "--", "-smp", "2", "-device", "pcie-root-port,id=bridge,chassis=1,slot=1", "-device", "virtio-rng-pci,bus=bridge,disable-legacy=on,iommu_platform=on"]),
     ("keeps a program running after the process manager ends", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_outlive_manager", "--expect-line=[user] root task: killing process_manager",
         "--expect-line=[user] root task: process_manager was killed",
@@ -120,7 +132,7 @@ TESTS = [
         "stopped the thread"),
     program_test("drives a device from user mode with the platform capability", "test_devices",
         "a driver registered a controller, took an IRQ's interrupts through its port, read device memory, and lost a window "
-        "with its memory", "test_device"),
+        "with its memory; IOMMUs that aren't were refused", "test_device"),
     # QEMU's edu device, its DMA reaching all of memory, which starts at 1 GiB on virt
     program_test("drives a PCIe device's MSI and DMA from user mode", "test_msi_dma",
         "edu took its MSI and copied a page through DMA memory, and its device took its IRQs with it",
@@ -154,8 +166,9 @@ AARCH64_NAMES = {
 
 
 def aarch64_tests(tests: list) -> list:
-    """The tests for AArch64, named so, with AArch64's own baseline check among them."""
-    adapted = [(f"AArch64: {AARCH64_NAMES.get(name, name)}", expected, arguments)
+    """The tests for AArch64, named so, with AArch64's own baseline check and IOMMU among them."""
+    lines = {f"--expect-line={X86_IOMMU_LINE}": f"--expect-line={AARCH64_IOMMU_LINE}"}
+    adapted = [(f"AArch64: {AARCH64_NAMES.get(name, name)}", expected, [lines.get(argument, argument) for argument in arguments])
                for name, expected, arguments in tests if name not in AARCH64_LEFT_OUT]
     return adapted + [("AArch64: refuses a CPU below ARMv8.2-A with LSE", 2, ["--cpu=cortex-a57"])]
 

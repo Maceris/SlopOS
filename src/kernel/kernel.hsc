@@ -72,6 +72,13 @@ Kernel :: struct {
     controllers : WiredController[MAX_CONTROLLERS],
     controller_count : u32,
     interrupts_lock : concurrency.SpinLock,
+    // Registered IOMMUs and the requester IDs each covers (iommus.hsc), and the lock for registering them and for
+    // binding a domain to one.
+    iommus : RegisteredIommu[MAX_IOMMUS],
+    iommu_count : u32,
+    iommu_scopes : IommuScope[MAX_IOMMU_SCOPES],
+    iommu_scope_count : u32,
+    iommus_lock : concurrency.SpinLock,
     // test_shootdown's state, as an address, while CPUs are asked to read its page (shootdown_test.hsc)
     shootdown_test : u64,
     // test_ioapic's controller (device_test.hsc)

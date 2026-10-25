@@ -115,12 +115,13 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 49 | `memory_size` | memory | its size in bytes (`0067`) |
 | 50 | `channel_tag` | end | the tag its channel was made with (`0071`) |
 | 51 | `device_create` | platform, budget, address, MSI source, configuration space | an owning handle to a Device: the PCIe function at address (`slop_os.device_address`: segment, bus, device, function), whose MSIs the interrupt controller knows as the MSI source (on AArch64, the ITS's device ID, from the device tree's `msi-map`; unused on x86-64), and whose 4 KiB of configuration space is at the physical address given, page-aligned and not RAM (`BadAddress` otherwise). Destroying it clears the function's Bus Master Enable first, so a driver that ends leaves no DMA running into memory that went with it. No other device may have the address, nor on AArch64 the source (`0073`) |
-| 52 | `device_attach` | platform, device, domain | nothing: the device's DMA, in the domain, which an IOMMU will confine it to |
+| 52 | `device_attach` | platform, device, domain | nothing: the device's DMA, in the domain, which an IOMMU will confine it to. The first device attached binds the domain to the IOMMU it's behind, or to none; a device behind another is refused (`WrongIommu`) |
 | 53 | `irq_create_msi` | device, budget | an owning handle to an IRQ for one of the device's message-signaled interrupts, up to `MAX_DEVICE_MSIS` (32), routed to a CPU the kernel picks |
 | 54 | `irq_message` | irq | its `MsiMessage`, the address and data the device writes to raise it, for its MSI or MSI-X entry |
 | 55 | `dma_domain_create` | platform, budget | an owning handle to a new DMA domain |
 | 56 | `dma_memory_create` | domain, budget, size, limit | an owning handle to DMA memory in the domain: pinned, in one block of frames, zeroed, ending at or below limit (0 for none), charged for its whole block |
 | 57 | `memory_device_address` | memory | where DMA memory is to the devices in its domain |
+| 58 | `iommu_register` | platform, kind, registers, first, count, stream | the IOMMU's number: kind is an `IommuKind`, registers its registers as device memory (not a window), from the firmware tables, and it covers count requester IDs from first (`slop_os.device_address`, in one segment), which it knows as stream IDs from stream (on VT-d, the requester IDs themselves). The same IOMMU registered again, of the same kind at the same place, gives the same number and covers those requester IDs too (`0079`) |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the
@@ -181,12 +182,18 @@ MSI-X entry, and its interrupts arrive as any IRQ's do. They're edge-triggered, 
 x86-64 the message goes straight to a CPU's local APIC; on AArch64, to the GICv3's ITS, which turns the event
 into an LPI on the CPU's redistributor. Closing the device destroys its IRQs.
 
-A **DMA domain** is where its devices' DMA reaches. There's no IOMMU yet, so that's all of memory, a device
-address is a physical address, and a driver can DMA anywhere: drivers are trusted until there is (`0070`).
+A **DMA domain** is where its devices' DMA reaches. No IOMMU translates yet, so that's all of memory, a device
+address is a physical address, and a driver can DMA anywhere: drivers are trusted until one does (`0070`, `0079`).
 **DMA memory** (`dma_memory_create`) is made in a domain: pinned for as long as it lives, in one block of frames,
 below a limit for a device that reaches only so far, and its device address is its block's. Closing the domain
 leaves its memory without one (`NotDmaMemory`). `device_attach` records which domain a device's DMA is in, for
 when an IOMMU confines it there.
+
+**IOMMUs** are registered by the platform service from the firmware tables (`iommu_register`): on x86-64, ACPI's
+DMAR's VT-d units; on AArch64, the SMMUv3s the device tree's `iommu-map` refers to. The kernel identifies each
+through its implementation (`iommu_interface.md`). A device is behind the IOMMU whose registered requester IDs
+cover it most narrowly, as a DMAR unit for all of a segment's devices leaves out those another unit covers, and a
+domain's devices are all behind one IOMMU, or all behind none.
 
 ## Process Control
 
@@ -366,14 +373,19 @@ Devices, MSIs and DMA memory fail with `slop_os.DeviceError` too:
 |---|---|---|
 | 1 to 6, 24, 25 | as above | `dma_memory_create`'s size isn't a whole number of pages, or its limit is below it |
 | 6 | `OutOfMemory` | No block of frames that size below the limit is free |
+| 18 | `BadAddress` | `iommu_register`: the registers aren't device memory, uncached, or are a window onto it |
+| 24 | `InvalidSize` | `iommu_register`: no requester IDs, more than the rest of the segment from first, or registers over 1 MiB |
 | 33 | `NoFreeInterrupt` | The CPU picked has every device interrupt taken |
 | 38 | `NotDmaMemory` | `memory_device_address`: not DMA memory, or its domain is gone |
 | 39 | `NoMsi` | No interrupt controller here takes MSIs; or `irq_message` on a wired line's IRQ |
 | 40 | `TooManyVectors` | The device has `MAX_DEVICE_MSIS` IRQs already |
 | 41 | `DeviceExists` | Another device has that address, or on AArch64 that MSI source |
+| 42 | `NoIommu` | `iommu_register`: no IOMMU of that kind at those registers, or none the kernel drives on this architecture, or one without the translation domains use |
+| 43 | `TooManyIommus` | `iommu_register`: the kernel has every IOMMU (8) or range of requester IDs (32) it takes |
+| 44 | `WrongIommu` | `device_attach`: the device isn't behind the IOMMU the domain's devices are |
 
 ## Not Yet
 
-I/O-port ranges come with the drivers that need them, and IOMMUs (VT-d, SMMUv3) right after M7, translating DMA
-domains (`0072`); pagers for memory objects with memory-mapped files. Process memory is read and written through the
+I/O-port ranges come with the drivers that need them, and the IOMMUs' translation of DMA domains, VT-d's and
+SMMUv3's, with roadmap D's later stages (`0072`, `0079`); pagers for memory objects with memory-mapped files. Process memory is read and written through the
 page tables, so a memory object's pages no thread has touched yet can't be.

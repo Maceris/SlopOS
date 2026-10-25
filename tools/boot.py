@@ -190,12 +190,15 @@ def run(image: Path, qemu: Path, serial: Path, timeout: float, uefi: bool, cpu: 
     return result.returncode >> 1 if result.returncode % 2 == 1 else NO_EXIT_CODE
 
 
-def run_aarch64(image: Path, qemu: Path, serial: Path, timeout: float, cpu: str, extra: list[str]) -> int:
+def run_aarch64(image: Path, qemu: Path, serial: Path, timeout: float, cpu: str, extra: list[str], iommu: bool) -> int:
     """Boots the image on QEMU's virt machine through UEFI, and gives the code the kernel ended with."""
     firmware = find_tool("AAVMF", ["edk2-aarch64-code.fd", "AAVMF_CODE.fd", "QEMU_EFI.fd"], [qemu.parent / "share"])
+    # An SMMUv3 for the PCIe host bridge, with stage 2, the translation SlopOS's domains use (decisions/0079)
+    machine = "virt,gic-version=3,acpi=off" + (",iommu=smmuv3" if iommu else "")
     command = [
         # GICv3, and the device tree rather than ACPI, which edk2 gives only with ACPI off
-        str(qemu), "-M", "virt,gic-version=3,acpi=off", "-m", "256M", "-cpu", cpu,
+        str(qemu), "-M", machine, "-m", "256M", "-cpu", cpu,
+        *(["-global", "arm-smmuv3.stage=2"] if iommu else []),
         "-drive", f"if=pflash,format=raw,readonly=on,file={firmware}",
         "-device", "virtio-scsi-pci", "-device", "scsi-cd,drive=cd",
         "-drive", f"if=none,id=cd,media=cdrom,format=raw,file={image}",
@@ -209,6 +212,9 @@ def run_aarch64(image: Path, qemu: Path, serial: Path, timeout: float, cpu: str,
     # As with the debug exit device, the kernel's test_exit ends QEMU with (code << 1) | 1
     return result.returncode >> 1 if result.returncode % 2 == 1 else NO_EXIT_CODE
 
+
+# On q35, VT-d with interrupt remapping (decisions/0079): before every other PCI device, as QEMU wants it
+X86_IOMMU = ["-device", "intel-iommu,intremap=on"]
 
 # The virtio console's banner, which says it's ready for what's typed into it (src/services/console)
 CONSOLE_BANNER = "SlopOS console"
@@ -249,7 +255,7 @@ class Keyboard:
         self.replies = b""
 
     def qemu_arguments(self) -> list[str]:
-        return ["-device", "virtio-keyboard-pci,disable-legacy=on,id=keyboard",
+        return ["-device", "virtio-keyboard-pci,disable-legacy=on,iommu_platform=on,id=keyboard",
                 "-qmp", f"tcp:127.0.0.1:{self.port},server=on,wait=off"]
 
     def command(self, name: str, arguments: dict | None = None) -> None:
@@ -316,7 +322,7 @@ class ConsoleLink:
         self.thread = threading.Thread(target=self.talk, daemon=True)
 
     def qemu_arguments(self) -> list[str]:
-        return ["-device", "virtio-serial-pci,disable-legacy=on",
+        return ["-device", "virtio-serial-pci,disable-legacy=on,iommu_platform=on",
                 "-chardev", f"socket,id=console,host=127.0.0.1,port={self.port},server=on,wait=on",
                 "-device", "virtconsole,chardev=console"]
 
@@ -396,6 +402,8 @@ def main() -> int:
     parser.add_argument("--uefi", action="store_true", help="boot with UEFI firmware instead of BIOS")
     parser.add_argument("--arch", choices=["x86_64", "aarch64"], default="x86_64", help="the architecture to build and boot for")
     parser.add_argument("--no-kaslr", action="store_true", help="the same addresses every boot: no random kernel base or direct map")
+    parser.add_argument("--no-iommu", action="store_true",
+                        help="no IOMMU: by default q35 has VT-d and virt an SMMUv3, and virtio devices this adds go through it")
     parser.add_argument("--serial", type=Path, help="also keep the serial output in this file")
     parser.add_argument("--console-input", action="append", default=[],
                         help="a line to type into a virtio console, which this adds, once it shows its banner; may be repeated")
@@ -438,12 +446,12 @@ def main() -> int:
         image = make_image(kernel.resolve(), [program.resolve() for program in programs], limine, xorriso, folder, command_line,
                            not arguments.no_kaslr)
         serial = folder / "serial.txt"
-        extra = list(arguments.qemu_arguments)
+        extra = (X86_IOMMU if not aarch64 and not arguments.no_iommu else []) + list(arguments.qemu_arguments)
         console = None
         disk = folder / "disk.img"
         if arguments.disk is not None:
             make_disk(disk, arguments.disk)
-            extra += ["-drive", f"file={disk},if=none,id=disk,format=raw", "-device", "virtio-blk-pci,drive=disk,disable-legacy=on"]
+            extra += ["-drive", f"file={disk},if=none,id=disk,format=raw", "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on"]
         keyboard = None
         if arguments.keyboard_input:
             keyboard = Keyboard()
@@ -453,7 +461,7 @@ def main() -> int:
             extra += console.qemu_arguments()
             console.thread.start()
         if aarch64:
-            code = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra)
+            code = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra, not arguments.no_iommu)
         else:
             code = run(image, qemu, serial, arguments.timeout, arguments.uefi, arguments.cpu, extra)
         if console is not None:

@@ -26,9 +26,11 @@ import frames from "frames"
  *
  * A DmaDomain is where its devices' DMA reaches. Without an IOMMU that's all of memory, and a device address is a
  * physical address: DMA memory, pinned and in one block of frames, is made in a domain, and its device address is
- * its block's. Attaching a device to a domain records it, for when an IOMMU confines it there.
+ * its block's. Attaching a device to a domain records it, and the IOMMU it's behind (iommus.hsc), which the domain is
+ * bound to by its first device: a domain's devices are all behind that IOMMU, or, where the first is behind none, all
+ * behind none. Until the IOMMU translates (roadmap Db, Dd), that's all.
  *
- * Lock order: a device's lock, then the kernel's devices_lock, then interrupts_lock.
+ * Lock order: a device's lock, then the kernel's devices_lock, then interrupts_lock; a device's lock, then iommus_lock.
  */
 
 Device :: struct #align(16) {
@@ -46,6 +48,8 @@ Device :: struct #align(16) {
     // The domain it's attached to, and that domain's generation then; 0 for none.
     domain : u64,
     domain_generation : u32,
+    // The IOMMU it's behind, as attaching it found, and its stream there.
+    iommu : IommuPath,
     // What the interrupt controller keeps for its MSIs, a block of frames of this order plus one, 0 for none.
     msi_memory : u64,
     msi_memory_order : u64,
@@ -57,6 +61,10 @@ Device :: struct #align(16) {
 
 DmaDomain :: struct #align(16) {
     header : ObjectHeader,
+    // Under the kernel's iommus_lock: whether a device was attached, binding it to that device's IOMMU, the IOMMU's
+    // number plus one, or 0 for none.
+    bound : bool,
+    iommu : u32,
 }
 
 /*
@@ -145,12 +153,24 @@ CONFIG_BYTES : u64 : 4096
 PCI_COMMAND : u64 : 0x04
 PCI_COMMAND_BUS_MASTER : u16 : 1 << 2
 
-// The device's DMA in domain, from now on.
-attach_device :: fn(device: ptr[mut Device], domain: ptr[DmaDomain]) {
+// The device's DMA in domain, from now on, if it's behind the IOMMU domain's other devices are.
+attach_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device], domain: ptr[mut DmaDomain]) -> Result[void, slop_os.DeviceError] {
+    path :: iommu_path(kernel, device.address)
     concurrency.lock(&device.lock)
-    device.domain = cast[u64](domain)
-    device.domain_generation = domain.header.generation
+    concurrency.lock(&kernel.iommus_lock)
+    fits :: !domain.bound || domain.iommu == path.iommu
+    if fits {
+        domain.bound = true
+        domain.iommu = path.iommu
+    }
+    concurrency.unlock(&kernel.iommus_lock)
+    if fits {
+        device.domain = cast[u64](domain)
+        device.domain_generation = domain.header.generation
+        device.iommu = path
+    }
     concurrency.unlock(&device.lock)
+    return if fits { .Ok } else { .Error(.WrongIommu) }
 }
 
 /*

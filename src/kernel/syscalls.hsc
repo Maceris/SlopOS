@@ -687,8 +687,7 @@ sys_device_attach :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, dev
     _ = platform_of(thread, platform)?
     found :: object_of[slop_os.DeviceError](process, cast[slop_os.Handle](device), slop_os.ObjectKind.Device, cast[slop_os.Rights](0))?
     target :: object_of[slop_os.DeviceError](process, cast[slop_os.Handle](domain), slop_os.ObjectKind.DmaDomain, cast[slop_os.Rights](0))?
-    attach_device(cast[ptr[mut Device]](found), cast[ptr[DmaDomain]](target))
-    return .Ok
+    return attach_device(per_cpu().kernel, cast[ptr[mut Device]](found), cast[ptr[mut DmaDomain]](target))
 }
 
 sys_irq_create_msi :: fn(thread: ptr[mut Thread], device: slop_os.Device, budget: slop_os.MemoryBudget) -> Result[slop_os.Irq, slop_os.DeviceError] {
@@ -736,6 +735,24 @@ sys_dma_memory_create :: fn(thread: ptr[mut Thread], domain: slop_os.DmaDomain, 
 sys_memory_device_address :: fn(thread: ptr[mut Thread], memory: slop_os.Memory) -> Result[u64, slop_os.DeviceError] {
     object :: object_of[slop_os.DeviceError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, cast[slop_os.Rights](0))?
     return device_address_of(cast[ptr[Memory]](object))
+}
+
+// registers is device memory itself, uncached, not a window onto it (iommus.hsc).
+sys_iommu_register :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, kind: slop_os.IommuKind, registers: slop_os.Memory, first: u32,
+    count: u32, stream: u32) -> Result[u32, slop_os.DeviceError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    _ = platform_of(thread, platform)?
+    known :: iommu_kind(cast[u32](kind)) or_return .Error(.NoIommu)
+    object :: object_of[slop_os.DeviceError](process, cast[slop_os.Handle](registers), slop_os.ObjectKind.Memory, cast[slop_os.Rights](0))?
+    memory :: cast[ptr[Memory]](object)
+    if memory.physical == 0 || memory.parent != 0 || memory.cache != .Device {
+        return .Error(.BadAddress)
+    }
+    if memory.size > MAX_IOMMU_REGISTERS {
+        return .Error(.InvalidSize)
+    }
+    return register_iommu(kernel, known, memory.physical, memory.size, first, count, stream)
 }
 
 // ---- Process control (control.hsc, intercepts.hsc): rights on a process cover its subtree (decisions/0017)

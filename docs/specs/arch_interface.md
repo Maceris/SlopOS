@@ -732,9 +732,9 @@ virtual timer's interrupt and the PL011.
 
 ## Not Covered
 
-- **IOMMUs** are driven by the kernel behind a separate interface, `iommu_interface`, since they
-  differ per platform rather than per architecture (Intel VT-d, AMD-Vi, Arm SMMU, the RISC-V IOMMU)
-  and an architecture may need several (`0039`). Specified before roadmap M7.
+- **IOMMUs** are driven by the kernel behind a separate interface, `iommu_interface` (`iommu_interface.md`),
+  since they differ per platform rather than per architecture (Intel VT-d, AMD-Vi, Arm SMMU, the RISC-V IOMMU)
+  and an architecture may need several (`0039`, `0079`).
 - **Cache maintenance for DMA** on architectures where devices aren't cache-coherent.
 - **Debug registers** for hardware breakpoints and watchpoints.
 - **Reading and writing a stopped thread's full register set** for debuggers (`0017`), which

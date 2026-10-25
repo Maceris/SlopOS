@@ -1,7 +1,8 @@
 /*
  * The platform service (decisions/0039, 0070, 0074): given the platform capability and the firmware tables' copy by
  * the root task, it finds the PCIe host bridge (src/pci), enumerates every function on every bus behind it, and gives
- * each, once, to the supervisor, which starts its driver with what it holds of it (platform.PciDevice).
+ * each, once, to the supervisor, which starts its driver with what it holds of it (platform.PciDevice). Before it gives
+ * any out, it registers the IOMMUs the firmware tables describe with the kernel (iommus.hsc).
  *
  * Firmware's work is kept where it holds (decisions/0074): bus numbers bridges were given, and BARs inside a window,
  * or their bridge's, that overlap nothing. A bridge without bus numbers is given the next free ones, and a memory BAR
@@ -105,6 +106,13 @@ main :: fn(log: slop_os.DebugLog?, platform: slop_os.Platform, firmware: slop_os
     }
     for i in 0..<state.count {
         place_bars(to, state, i)
+    }
+    ranges :: register_iommus(to, platform, state, tables, tables_size)
+    if ranges == 0 {
+        log_line.write(to, "platform: the firmware tables describe no IOMMU, so devices' DMA reaches all of memory")
+    }
+    else {
+        log_line.write(to, "platform: % ranges of requester IDs registered with their IOMMUs", ranges)
     }
     log_line.write(to, "platform: % functions on buses % to %, % BARs placed, % left unplaced", state.count, host.first_bus,
         state.highest_bus, state.placed, state.unplaced)

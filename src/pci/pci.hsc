@@ -116,6 +116,24 @@ find_host :: fn(tables: u64, size: u64) -> Host? {
     return null
 }
 
+/*
+ * Where the first table with signature is in the firmware tables' copy at tables, size bytes of it, as an address in
+ * it, and how many bytes it has; null if there's none.
+ */
+firmware_table :: fn(tables: u64, size: u64, signature: string) -> devicetree.Region? {
+    header :: cast[ptr[slop_os.FirmwareTables]](tables)
+    if size < cast[u64](size_of(slop_os.FirmwareTables)) || header.magic != slop_os.FIRMWARE_MAGIC {
+        return null
+    }
+    entries :: view_of(cast[ptr[slop_os.FirmwareTable]](tables + cast[u64](size_of(slop_os.FirmwareTables))), cast[usize](header.count))
+    for &entry in entries {
+        if entry.offset + cast[u64](entry.size) <= size && signature_of(entry) == signature {
+            return devicetree.Region.{address = tables + entry.offset, size = cast[u64](entry.size)}
+        }
+    }
+    return null
+}
+
 signature_of :: fn(entry: ptr[slop_os.FirmwareTable]) -> string {
     return string_of(&entry.signature[0], 4)
 }
