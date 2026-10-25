@@ -33,10 +33,6 @@ Left over from what was built: known limits, each an error rather than wrong cod
 - A generic type declared inside a function (E4024); a type declared there without its own parameters works.
 - `match` and `switch` cases on a `cstring`; a `string`'s work.
 - A constant's `#union` literal naming a member that overlaps another; a variable's works.
-- An optional view as a function's result, `-> (mut u8[])?`: after `->`, `(` starts a list of results, so it's an
-  error (E3007), as are `((mut u8[])?)` and a named `(view : (mut u8[])?)`, though `(mut u8[])?` is a variable's
-  type. Checking first, then returning a plain view, works;
-  making it a type there is a syntax question, for the owner (found in 8b, `decisions/0087`).
 
 ### Targets and runtime
 
