@@ -135,6 +135,11 @@ route_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interfac
 unroute_msi :: fn(source: u32, event: u32) {
 }
 
+// MSIs are writes to the interrupt range, which VT-d takes as interrupts, not DMA it translates.
+msi_doorbell :: fn() -> arch_interface.PhysicalAddress? {
+    return null
+}
+
 // Timer
 
 /*

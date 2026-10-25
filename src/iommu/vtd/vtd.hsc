@@ -191,7 +191,7 @@ identify :: fn(iommu: ptr[mut Iommu], kind: iommu_interface.IommuKind, registers
     ids :: (cast[u64](1) << (4 + 2 * (capability & 7))) - 1
     return .Ok(iommu_interface.IommuInfo.{address_bits = iommu.address_bits, major = major, minor = version & 0xf,
         memory = 4 * PAGE, domain_ids = if ids > 0xffff { 0xffff } else { cast[u32](ids) },
-        interrupts = if iommu.remaps { INTERRUPT_ENTRIES } else { 0 }})
+        interrupts = if iommu.remaps { INTERRUPT_ENTRIES } else { 0 }, fault_messages = true})
 }
 
 /*
@@ -320,7 +320,8 @@ detach :: fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32) {
     }
 }
 
-map :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64, physical: iommu_interface.PhysicalAddress, writable: bool,
+// Second-level entries have no memory type of their own here, so device memory is mapped as RAM is.
+map :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64, physical: iommu_interface.PhysicalAddress, writable: bool, device: bool,
     frames: ptr[mut iommu_interface.TableFrames]) -> Result[void, iommu_interface.MapError] {
     if address & (PAGE - 1) != 0 || address >> cast[u64](iommu.address_bits) != 0 || cast[u64](physical) & (PAGE - 1) != 0 {
         return .Error(.InvalidAddress)

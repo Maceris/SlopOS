@@ -291,6 +291,13 @@ route_msi : fn(source: u32, event: u32, cpu_hardware_id: u64, id: InterruptId) -
 // Source's event no longer delivered.
 unroute_msi : fn(source: u32, event: u32) : ---
 
+/*
+ * The page devices write their MSIs to as memory, which an IOMMU translating their DMA must map into each of their
+ * domains, at its own address, for the MSIs to arrive (AArch64: the ITS's GITS_TRANSLATER); null where MSIs aren't
+ * DMA an IOMMU translates (x86-64, whose interrupt range VT-d takes as interrupts).
+ */
+msi_doorbell : fn() -> PhysicalAddress? : ---
+
 // Acknowledge id to the interrupt controller.
 end_of_interrupt : fn(id: InterruptId) : ---
 

@@ -266,6 +266,15 @@ init_msi :: fn(memory: arch_interface.PhysicalAddress) {
 }
 
 // Bytes of a device's interrupt translation table, for MAX_DEVICE_MSIS events; null without an ITS.
+// The page of GITS_TRANSLATER, which a device's MSI is a write to.
+msi_doorbell :: fn() -> arch_interface.PhysicalAddress? {
+    its :: &current_system().its
+    if !its.ready {
+        return null
+    }
+    return cast[arch_interface.PhysicalAddress]((its.physical + GITS_TRANSLATER) & ~cast[u64](0xfff))
+}
+
 msi_device_memory :: fn() -> u64? {
     its :: &current_system().its
     if !its.ready {

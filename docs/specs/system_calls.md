@@ -189,7 +189,7 @@ into an LPI on the CPU's redistributor. Closing the device destroys its IRQs.
 A **DMA domain** is where its devices' DMA reaches. **DMA memory** (`dma_memory_create`) is made in a domain:
 pinned for as long as it lives, in one block of frames, its device addresses below a limit for a device that reaches
 only so far. Closing the domain leaves its memory without one (`NotDmaMemory`). `device_attach` puts a device's DMA
-in a domain. Behind an IOMMU that translates (VT-d so far, `0081`), a domain's devices reach only its DMA memory,
+in a domain. Behind an IOMMU that translates (VT-d, `0081`; SMMUv3, `0083`), a domain's devices reach only its DMA memory,
 which is mapped at device addresses of the domain's own, from 1 MiB up, and nothing else: the IOMMU blocks the rest
 and the kernel logs it. Without one, a domain is all of memory, a device address is a physical address, and a driver
 can DMA anywhere: drivers are trusted until there is one (`0070`, `0079`). A domain no device is attached to yet when
@@ -392,7 +392,6 @@ Devices, MSIs and DMA memory fail with `slop_os.DeviceError` too:
 
 ## Not Yet
 
-I/O-port ranges come with the drivers that need them, SMMUv3's translation of DMA domains with roadmap Dd
-(`0072`, `0079`), and I/O APIC lines through interrupt remapping when a driver needs one; pagers for memory objects
-with memory-mapped files. Process memory is read and written through the
+I/O-port ranges come with the drivers that need them, and I/O APIC lines through interrupt remapping when a driver
+needs one (`0082`); pagers for memory objects with memory-mapped files. Process memory is read and written through the
 page tables, so a memory object's pages no thread has touched yet can't be.

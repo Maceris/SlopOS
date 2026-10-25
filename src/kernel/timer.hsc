@@ -53,6 +53,7 @@ handle_timer :: fn() -> bool {
     if cpu.timer_ticks <= BOOT_TICKS {
         runtime.log_info("timer interrupt %", cpu.timer_ticks)
     }
+    poll_dma_faults(kernel)
     budgets_test_tick(kernel, cpu.timer_ticks)
     root_task_ended(kernel, cpu.timer_ticks)
     if cpu.timer_ticks >= kernel.stop_after_ticks {

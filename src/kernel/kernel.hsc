@@ -81,6 +81,8 @@ Kernel :: struct {
     iommus_lock : concurrency.SpinLock,
     // Set once an IOMMU remaps interrupts, which blocks every wired line's, not remapped yet (translation.hsc).
     wired_lines_blocked : u32,
+    // Set once an IOMMU that doesn't signal its faults translates, so CPU 0 reads them at its ticks.
+    iommus_polled : u32,
     // test_shootdown's state, as an address, while CPUs are asked to read its page (shootdown_test.hsc)
     shootdown_test : u64,
     // test_ioapic's controller (device_test.hsc)

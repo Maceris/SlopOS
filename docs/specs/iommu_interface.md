@@ -5,10 +5,9 @@ IOMMU (`../../knowledge/decisions/0039-platform-discovery.md`, `0079`). IOMMUs d
 architecture (Intel VT-d, AMD-Vi, Arm SMMUv3, the RISC-V IOMMU), and an architecture may need several, so they're
 behind an interface of their own, beside the arch interface (`arch_interface.md`), with the same rules.
 
-Status: **specified for DMA and interrupt remapping**, and implemented for VT-d (`src/iommu/vtd`, on x86-64, roadmap
-Da to Dc): identifying an IOMMU, translating DMA domains with invalidation, recording faults, and remapping interrupts.
-SMMUv3 (`src/iommu/smmuv3`, on AArch64) is identified, and the rest comes with roadmap Dd; it remaps no interrupts,
-which the GICv3's ITS isolates by device already. Four-digit numbers like
+Status: **specified and implemented** for VT-d (`src/iommu/vtd`, on x86-64, roadmap Da to Dc) and SMMUv3
+(`src/iommu/smmuv3`, on AArch64, roadmap Da and Dd): identifying an IOMMU, translating DMA domains with invalidation,
+and recording faults; VT-d also remaps interrupts, which on AArch64 the GICv3's ITS isolates by device already. Four-digit numbers like
 `0079` refer to decision records in `../../knowledge/decisions/`.
 
 The interface is internal to the kernel image. It changes together with every IOMMU package, in one change, and
@@ -30,6 +29,11 @@ implementation doesn't do yet, it lists in `NOT_YET_IMPLEMENTED`, with stubs in 
   and reached through the direct map. A call short of frames says so (`NeedFrames`) having changed nothing.
 - **L2 picks domain IDs and device addresses.** Each domain on an IOMMU has an ID from 1 below `info.domain_ids`, and
   L2 allocates its I/O virtual addresses, below `1 << info.address_bits`.
+- **L2 maps the MSI doorbell.** Where MSIs are writes the IOMMU translates (`arch_interface.msi_doorbell`, AArch64's
+  ITS), L2 maps its page into each domain at its own address, as device memory, and keeps the domain's other
+  addresses clear of it.
+- **L2 reads faults it isn't signalled.** An IOMMU whose `info.fault_messages` is false has its faults read at CPU 0's
+  ticks, 100 a second.
 - **L2 invalidates.** `map` and `unmap` change tables only; L2 calls `invalidate` once a batch of them is done, and
   frees a frame of a domain's tables only once nothing is attached to it and it's been invalidated.
 - **L2 picks the IOMMU.** A device is behind the IOMMU whose registered requester IDs cover it most narrowly, and
@@ -97,6 +101,8 @@ IommuInfo :: struct {
     domain_ids : u32,
     // The interrupts it remaps, by index from 0, once it's enabled; 0 if it doesn't.
     interrupts : u32,
+    // Whether it signals its faults by a message (route_faults); otherwise L2 asks for them (next_fault) now and then.
+    fault_messages : bool,
 }
 
 /*
@@ -147,10 +153,10 @@ attach : fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32, frames: ptr
 detach : fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32) : ---
 
 /*
- * The 4 KiB page at address in domain mapped to physical, readable, and writable if writable. Until invalidate, the
- * IOMMU may not see it.
+ * The 4 KiB page at address in domain mapped to physical, readable, and writable if writable: RAM, or device memory
+ * (device), like the MSI doorbell (arch_interface.msi_doorbell). Until invalidate, the IOMMU may not see it.
  */
-map : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64, physical: PhysicalAddress, writable: bool,
+map : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64, physical: PhysicalAddress, writable: bool, device: bool,
     frames: ptr[mut TableFrames]) -> Result[void, MapError] : ---
 
 // The 4 KiB page at address in domain unmapped, if it's mapped; until invalidate, the IOMMU may still reach it.
@@ -238,10 +244,18 @@ its own there, and the message `remap_interrupt` gives is the one `irq_message` 
 
 | Interface | SMMUv3 |
 |---|---|
-| `Iommu` | Its registers' address and its domains' width |
-| `identify` | `SMMU_AIDR` says SMMUv3; both 64 KiB register pages fit in its size. Stage 2 (`SMMU_IDR0.S2P`), AArch64's tables (`TTF`) and 4 KiB pages (`SMMU_IDR5.GRAN4K`), or `Unsupported`; its domains' width is its output address size (`SMMU_IDR5.OAS`), at most 48 bits, and at least 39 |
-| Not yet | Everything else, in `NOT_YET_IMPLEMENTED` until roadmap Dd: `enable` is `Unsupported`, so the kernel leaves the SMMU as it is and reaches none of the rest |
+| `Iommu` | Its registers' address, its domains' width and levels, its output address size, its stream ID bits (at most 16), and from `enable` its tables and queues |
+| `identify` | `SMMU_AIDR` says SMMUv3; both 64 KiB register pages fit in its size. Stage 2 (`SMMU_IDR0.S2P`), AArch64's tables (`TTF`), 4 KiB pages (`SMMU_IDR5.GRAN4K`), two-level stream tables (`ST_LEVEL`), coherent access (`COHACC`) and queues of 256 entries, or `Unsupported`; its domains' width is its output address size (`SMMU_IDR5.OAS`), at most 48 bits, and at least 39. VMIDs of 16 bits where `VMID16` says so, otherwise 8; no interrupts remapped; faults not signalled by a message |
+| `enable` | The SMMU off, then: tables and queues inner shareable write-back (`SMMU_CR1`); a two-level stream table, split at 6 bits, so each second-level table is a page of 64 entries; a command queue of 256 commands and an event queue of 256 records; the command queue on, `CMD_CFGI_ALL` and `CMD_TLBI_NSNH_ALL` synced; the event queue on; the SMMU on. Each step waits for `SMMU_CR0ACK` |
+| `Domain` | Its stage-2 tables' root and its VMID |
+| `attach` | The stream's second-level table where it has none (from `frames`, its first-level descriptor written and `CMD_CFGI_ALL` synced); an entry in use made to abort and invalidated; then the entry: stage 2 only (`Config` 0b110), `S2T0SZ` for the width, `S2SL0` level 0 for 4 levels and 1 for 3, walks inner shareable write-back, `S2PS` the output size, AArch64, faults recorded (`S2R`), the root; its first word last, then `CMD_CFGI_STE` and `CMD_TLBI_S12_VMALL`, synced |
+| `detach` | The entry made to abort (valid, `Config` 0), invalidated as `attach`'s is |
+| `map` | Stage-2 descriptors: tables, and the 4 KiB page normal write-back inner shareable, or Device-nGnRE for device memory, readable, writable if asked, with its access flag set |
+| `invalidate` | After unmapping, `CMD_TLBI_S12_VMALL` for its VMID, synced; after mapping, a `dsb` only, as nothing absent is cached |
+| Commands | At the queue's producer, waiting while it's full; `CMD_SYNC` is done when the consumer reaches the producer, or failed if `SMMU_CMDQ_CONS` reports an error. A `dsb` comes before the producer moves |
+| Faults | `next_fault` takes the next event queue record: its stream ID, and for `F_TRANSLATION` to `F_PERMISSION` the input address and whether it was a read |
 | Streams | The stream ID `iommu-map` gives a requester ID |
+
 
 ## Not Covered
 

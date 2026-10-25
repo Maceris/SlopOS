@@ -37,9 +37,9 @@ def program_test(name: str, program: str, line: str, words: str = "", qemu: list
 # What the kernel says of the IOMMU QEMU gives each machine (src/kernel/iommus.hsc)
 X86_IOMMU_LINE = "[info] IOMMU 0: VT-d, 4 KiB of registers at 0x00000000fed90000, version 1.0, 48-bit I/O addresses"
 AARCH64_IOMMU_LINE = "[info] IOMMU 0: SMMUv3, 128 KiB of registers at 0x0000000009050000, version 3.1, 44-bit I/O addresses"
-# Whether it translates (src/kernel/translation.hsc): VT-d does, SMMUv3 not until roadmap Dd
+# How it translates (src/kernel/translation.hsc): VT-d remapping interrupts too, and signalling its faults; SMMUv3 not
 X86_TRANSLATING_LINE = "[info] IOMMU 0: translating, 256 interrupts remapped, its faults to CPU 0's interrupt 48"
-AARCH64_TRANSLATING_LINE = "[info] IOMMU 0: not translating, which its implementation can't yet"
+AARCH64_TRANSLATING_LINE = "[info] IOMMU 0: translating, 0 interrupts remapped, its faults read at CPU 0's ticks"
 
 # Name, the code expected, and boot.py's arguments
 TESTS = [

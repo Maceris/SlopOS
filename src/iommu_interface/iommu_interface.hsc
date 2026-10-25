@@ -94,6 +94,8 @@ IommuInfo :: struct {
     domain_ids : u32,
     // The interrupts it remaps, by index from 0, once it's enabled; 0 if it doesn't.
     interrupts : u32,
+    // Whether it signals its faults by a message (route_faults); otherwise L2 asks for them (next_fault) now and then.
+    fault_messages : bool,
 }
 
 /*
@@ -122,10 +124,10 @@ attach : fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32, frames: ptr
 detach : fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32) : ---
 
 /*
- * The 4 KiB page at address in domain mapped to physical, readable, and writable if writable. Until invalidate, the
- * IOMMU may not see it.
+ * The 4 KiB page at address in domain mapped to physical, readable, and writable if writable: RAM, or device memory
+ * (device), like the MSI doorbell (arch_interface.msi_doorbell). Until invalidate, the IOMMU may not see it.
  */
-map : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64, physical: PhysicalAddress, writable: bool,
+map : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64, physical: PhysicalAddress, writable: bool, device: bool,
     frames: ptr[mut TableFrames]) -> Result[void, MapError] : ---
 
 // The 4 KiB page at address in domain unmapped, if it's mapped; until invalidate, the IOMMU may still reach it.

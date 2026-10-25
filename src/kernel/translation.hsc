@@ -19,9 +19,11 @@ import frames from "frames"
 }
 
 /*
- * DMA through the IOMMUs (roadmap Db, decisions/0079, 0081). An IOMMU whose implementation can turn translation on
- * (VT-d; SMMUv3 with roadmap Dd) does so once it's registered, every device blocked until it's attached, with its
- * faults signalled to CPU 0, which logs them. A domain's first device behind it gives the domain an ID there and a
+ * DMA through the IOMMUs (roadmap Db and Dd, decisions/0079, 0081, 0083). An IOMMU (VT-d, SMMUv3) turns translation
+ * on once it's registered, every device blocked until it's attached, with its faults signalled to CPU 0 where it can
+ * signal them by a message (VT-d), or read at CPU 0's ticks where it can't (SMMUv3, whose interrupts are wired), and
+ * logged. Where MSIs are writes an IOMMU translates (AArch64's to the ITS), the doorbell is mapped into each domain at
+ * its own address, which the domain's other addresses keep clear of. A domain's first device behind it gives the domain an ID there and a
  * root table, charged to the domain's budget, as the tables mapping its memory are. DMA memory made in a domain that
  * translates is in frames anywhere, mapped at the lowest free I/O virtual addresses of the domain's own below its
  * limit; destroying it unmaps it, and the IOMMU reaches none of it once that returns. Destroying a domain detaches its
@@ -94,6 +96,11 @@ start_translation :: fn(kernel: ptr[mut Kernel], index: u32) {
     if registered.remapping {
         intrinsics.atomic_store_u32_release(&kernel.wired_lines_blocked, 1)
     }
+    if !registered.info.fault_messages {
+        intrinsics.atomic_store_u32_release(&kernel.iommus_polled, 1)
+        runtime.log_info("IOMMU %: translating, % interrupts remapped, its faults read at CPU 0's ticks", index, registered.interrupt_limit)
+        return void
+    }
     match route_message(kernel, 0, index, 0, IOMMU_CONTROLLER) {
         case Ok(id) => {
             cpus :: kernel.cpus
@@ -109,8 +116,20 @@ start_translation :: fn(kernel: ptr[mut Kernel], index: u32) {
     }
 }
 
+// At CPU 0's ticks: the faults of each IOMMU that doesn't signal them.
+poll_dma_faults :: fn(kernel: ptr[mut Kernel]) {
+    if intrinsics.atomic_load_u32_acquire(&kernel.iommus_polled) == 0 {
+        return void
+    }
+    for index in 0..<intrinsics.atomic_load_u32_acquire(&kernel.iommu_count) {
+        if cast[usize](index) < MAX_IOMMUS && kernel.iommus[cast[usize](index)].translating && !kernel.iommus[cast[usize](index)].info.fault_messages {
+            handle_dma_faults(kernel, index)
+        }
+    }
+}
+
 /*
- * An IOMMU's faults, at its interrupt: each logged, with the device's address and what it was refused. The device's
+ * An IOMMU's faults, at its interrupt or its tick: each logged, with the device's address and what it was refused. The device's
  * driver isn't told yet (roadmap De).
  */
 handle_dma_faults :: fn(kernel: ptr[mut Kernel], index: u32) {
@@ -177,6 +196,12 @@ translate_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device], domain:
         domain.root = root
         domain.next_address = FIRST_DEVICE_ADDRESS
         domain.address_limit = cast[u64](1) << cast[u64](registered.info.address_bits)
+        match map_doorbell(kernel, registered, domain) {
+            case Some(error) => {
+                runtime.log_warn("a domain on IOMMU % has no MSI doorbell, so its devices' MSIs won't arrive", path.iommu - 1)
+            }
+            case None => {}
+        }
     }
     // Context tables and the like are the IOMMU's own, kept for as long as it is, so they're charged to nothing
     tables : iommu_interface.TableFrames
@@ -193,6 +218,33 @@ translate_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device], domain:
     }
     device.translated = true
     return .Ok
+}
+
+/*
+ * The MSI doorbell mapped into a new domain at its own address, writable device memory, its tables charged to the
+ * domain, where MSIs are writes the IOMMU translates; its page is kept out of the domain's other addresses. Takes the
+ * IOMMU's lock as held.
+ */
+map_doorbell :: fn(kernel: ptr[mut Kernel], registered: ptr[mut RegisteredIommu], domain: ptr[mut DmaDomain]) -> iommu_interface.MapError? {
+    doorbell :: cast[u64](arch.msi_doorbell() or_return null)
+    if doorbell >= domain.address_limit {
+        return iommu_interface.MapError.InvalidAddress
+    }
+    domain.reserved = doorbell
+    tables : iommu_interface.TableFrames
+    defer give_back_iommu_tables(kernel, &tables, cast[u64](domain))
+    loop {
+        match iommu_unit.map(&registered.unit, &domain.unit, doorbell, cast[iommu_interface.PhysicalAddress](doorbell), true, true, &tables) {
+            case Ok => break
+            case Error(error) => {
+                if error != .NeedFrames || !refill_iommu_tables(kernel, &tables, cast[u64](domain)) {
+                    return error
+                }
+            }
+        }
+    }
+    iommu_unit.invalidate(&registered.unit, &domain.unit, true)
+    return null
 }
 
 // A device's DMA blocked again, if it was translated through its domain. Takes the device's lock as held.
@@ -230,7 +282,7 @@ map_dma_memory :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain], memory
         mapped := false
         loop {
             match iommu_unit.map(&registered.unit, &domain.unit, address + offset,
-                cast[iommu_interface.PhysicalAddress](memory.physical + offset), true, &tables) {
+                cast[iommu_interface.PhysicalAddress](memory.physical + offset), true, false, &tables) {
                 case Ok => mapped = true
                 case Error(error) => {
                     if error == .NeedFrames && refill_iommu_tables(kernel, &tables, cast[u64](domain)) {
@@ -406,6 +458,10 @@ take_device_addresses :: fn(domain: ptr[mut DmaDomain], size: u64, top: u64) -> 
             }
             return range.start
         }
+    }
+    // Past the doorbell's page, if it's in the way
+    if domain.reserved != 0 && domain.next_address < domain.reserved + frames.FRAME_SIZE && domain.next_address + size > domain.reserved {
+        domain.next_address = domain.reserved + frames.FRAME_SIZE
     }
     if domain.next_address > top || size > top - domain.next_address {
         return null

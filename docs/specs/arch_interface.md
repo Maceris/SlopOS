@@ -367,6 +367,13 @@ route_msi : fn(source: u32, event: u32, cpu_hardware_id: u64, id: InterruptId) -
 // Source's event no longer delivered.
 unroute_msi : fn(source: u32, event: u32) : ---
 
+/*
+ * The page devices write their MSIs to as memory, which an IOMMU translating their DMA must map into each of their
+ * domains, at its own address, for the MSIs to arrive (AArch64: the ITS's GITS_TRANSLATER); null where MSIs aren't
+ * DMA an IOMMU translates (x86-64, whose interrupt range VT-d takes as interrupts).
+ */
+msi_doorbell : fn() -> PhysicalAddress? : ---
+
 // Acknowledge id to the interrupt controller.
 end_of_interrupt : fn(id: InterruptId) : ---
 
@@ -727,6 +734,7 @@ virtual timer's interrupt and the PL011.
 | `early_console_write` | The device tree's first PL011, through the direct map: `early_console_init` maps its registers there as a Device block in the bootloader's tables, and `init_kernel_page_table` again in the kernel's, as it does the GIC's, with `kernel_half_frames` (2 for each 2 MiB block) for its tables. Its address is in `TPIDR_EL1` until `init_cpu`, then in the `ArchCpu` |
 | `test_exit` | QEMU's semihosting, `SYS_EXIT` with `(code << 1) \| 1`, so codes read as the debug exit device's do |
 | `test_device` | SPI line 100 of the distributor, which nothing on QEMU `virt` uses, edge-triggered; `test_device_interrupts` pends it through `GICD_ISPENDR`, and again each time it's acknowledged and at every timer interrupt, until it's stopped |
+| `msi_doorbell` | The page of the ITS's `GITS_TRANSLATER`, which an SMMU maps into each domain |
 | MSIs | Through the GICv3's ITS, found in the device tree (`arm,gic-v3-its`): `init_msi` gives it flat device and collection tables and a command queue, and every redistributor the one LPI property table and a pending table of its own, with LPIs on; each redistributor is a collection. `add_msi_device` maps a device's translation table (`MAPD`); `route_msi` gives the event an LPI of its own (8192 of them, from 8192), enabled, mapped to the CPU's collection (`MAPTI`, `INV`), and routes it to the kernel's ID as an SPI is. The message is the event's number, to `GITS_TRANSLATER` |
 | Not yet | `test_nmi`, which needs pseudo-NMIs or FEAT_NMI |
 
