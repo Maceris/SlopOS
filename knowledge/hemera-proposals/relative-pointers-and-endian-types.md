@@ -1,6 +1,8 @@
 # Proposal: Relative Pointers and Endian-Specific Types
 
-Status: **open** (2026-10-24). Raised by the survey of Hemera's docs against its compiler (`hemera-feedback.md`,
+Status: **decided and built** (2026-10-24): every proposal below was taken, with one addition, that a relative
+pointer set to point at itself fails the store's check like one too far away, since its offset would be 0. As built,
+in Hemera's `docs/types.md` (*Relative Pointers*, *Endian-Specific Types*), and `hemera-feedback.md`. Raised by the survey of Hemera's docs against its compiler (`hemera-feedback.md`,
 *Hemera's docs against its compiler*). Section 4 of the feedback file lists both features as a strong fit for SlopOS,
 but `types.md` only names them, and the compiler only has their sizes. Both need decisions about what the language
 means before the compiler can do them properly, so they come here first (`CLAUDE.md`, hard rule 1).

@@ -24,7 +24,7 @@ Severity: **blocker** / **friction** / **nice**.
 |---|---|---|
 | Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`; `os.run_process` runs processes since 2026-10-19 (Windows and Linux); targets built several at once since 2026-10-23 (`--jobs`), SlopOS's build from 7.7 s to 4.0 s. Still open: sharing parsed files between targets, measured to save little so far; `find_packages` is unimplemented and may be removed | `hemera-proposals/build-programs.md`; `decisions/0028` |
 | Kernel entry on AArch64 and RISC-V (needed after M3, `0022`) | x86-64 done 2026-10-13; hosted AArch64 (code generation, the stack check, fibers, Linux) done 2026-10-23 (`decisions/0062`), AArch64 kernel entry and system registers 2026-10-24 (`decisions/0063`); RISC-V waits for the third architecture. The same pattern is outlined for the others: a frame type, `.entry`, an entry-table intrinsic (AArch64's `VBAR_EL1` table), `return_to_user` (`eret`, `sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
-| Relative pointers and endian-specific integers | Open (2026-10-24): the docs only name them, and the compiler stores endian types in the CPU's order and can't set or follow a `relptr`. Decide the meaning first, then docs and compiler | `hemera-proposals/relative-pointers-and-endian-types.md` |
+| Relative pointers and endian-specific integers | Done (2026-10-24): decided with the project's owner as the proposal suggested, then `docs/types.md` (*Relative Pointers*, *Endian-Specific Types*, *Implicit Casting*) and the compiler, with hosted tests `endian_types`, `relative_pointers` and `relative_to_itself` and front-end tests for the errors | `hemera-proposals/relative-pointers-and-endian-types.md` |
 
 ### Smaller gaps
 
@@ -73,25 +73,31 @@ so.
   releasing an owner in every case was reported as releasing it on only some paths. It now counts `case _`. An enum
   `switch` that names every member still counts as possibly running none.
 
+Fixed later the same day, with the proposal decided (`hemera-proposals/relative-pointers-and-endian-types.md`):
+
+- Endian-specific integers and floats are stored in their own byte order. They convert implicitly to their native
+  type and wider native ones, swapping their bytes, compute as those (so `+=` on one is an error), and become one
+  only by a `cast` or from a literal. `u32le` is its own type on every target.
+- Relative pointers are set by assigning a `ptr[T]`, the offset from their own address, checked at run time to fit
+  and not to be 0 (a pointer to itself, which an optional one would read as None), and read where they're stored as
+  the `ptr[T]` they hold. They're never null, `relptrN[T]?` is None at offset 0, they can't point into the stack, and
+  nothing with one in it is a value of its own (variables, parameters, results, literals, casts, whole-value
+  assignments: E4040). Their pointer arithmetic is gone.
+- The stale docs above are fixed, `checking.cpp`'s two stale TODOs say what happens instead, and
+  `type_checking.cpp` and `mlir_generation.cpp` are gone, with the work type and test only they used.
+
 Still open, from the same survey:
 
 Wrong code, with no error:
 
-- **Endian-specific integers are stored in the CPU's order (SlopOS).** `x : u32be = 0x01020304`, then
-  `bit_cast[u8[4]](x)` gives `04 03 02 01`. Arithmetic and casts come out as numbers, so `u32be` acts like a
-  plain `u32`. Any disk, network or device layout written with them is wrong. Severity: blocker, for their
-  intended use.
 - **A local dynamic array of a `#scoped` struct** (`parsers : Parser[..]`) is still accepted, though its elements are
   on the heap; only fields are checked so far. Severity: friction.
 
 Builds fail where the docs say it works:
 
-- **Relative pointers can't be used (SlopOS).** `relptr8`..`relptr64` have the right sizes, but there's no way to
-  set one from a `ptr` (E4015). `cast[relptr16[int]](&x)` is accepted, but then `^` produces invalid MLIR (E5003).
-  The docs don't say how a relative pointer is assigned or followed either, see
-  `hemera-proposals/relative-pointers-and-endian-types.md`. Severity: blocker, for their intended use.
 - **Complex (`c16`..`c128`) and quaternion (`q32`..`q256`) arithmetic** produces invalid MLIR (`llvm.add` on
-  `!llvm.array<2 x i32>`), E5003 at lowering, not a checking error. Severity: nice.
+  `!llvm.array<2 x i32>`), E5003 at lowering, not a checking error.
+  Note: mlir has a complex dialect we might want to use. Quaternions probably need to be vectors or tensors. Severity: nice.
 - **A `#union` struct's literal** (`U.{a = 42}`) can't be generated (E5002). Assigning fields after `U.{}` works.
   Severity: friction (register and descriptor overlays).
 - **Matching or switching on strings** can't be generated (E5002), though `control_flow.md` lists strings as a
@@ -123,13 +129,6 @@ Targets and runtime:
   can't be built.
 - **Signals**: `multitasking.md` describes per-carrier alternate signal stacks, but the runtime installs no signal
   handlers on Linux. This doesn't affect SlopOS (section 2, *Fibers*).
-- **Stale docs**: `multitasking.md`'s Open Questions still lists the carrier register, the prologue check and
-  `morestack` in LLVM as open, and those are done. `compilation.md` says build packages can't set `TargetOptions`
-  "until … `#run`", and they can. `types.md`'s `using` example builds `MyVec3.{1, 2, 3}`, but a `using` field is
-  one field, so that's an error (and it names a `Vec3` that doesn't exist).
-- **Stale compiler TODOs** that no longer match what the compiler does: `checking.cpp`'s "`#if` inside a
-  function" (it works), and `front_end/type_checking.cpp` and `front_end/mlir_generation.cpp`, which are still
-  built but look like an earlier front end, full of `//TODO(ches) handle this`.
 
 What worked, from the same survey: the pipe operator with `_` and `$n`, chained and multi-target assignments,
 `%%` and `>>>`, the optional and result operators (with `Result[void, E]`), `break n`/`break all`, `with` loops,
