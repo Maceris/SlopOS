@@ -17,6 +17,9 @@ VirtualAddress :: boot_info.VirtualAddress
 // One IOMMU the platform service registered: what the implementation keeps of it, like its registers' address.
 Iommu :: struct {}
 
+// One DMA domain's translation on an IOMMU: its tables' root, its ID there, and how deep its tables are.
+Domain :: struct {}
+
 // Kinds of IOMMU. An implementation drives one, and an architecture builds only some.
 IommuKind :: enum #backed_by(u8) {
     // x86-64
@@ -36,6 +39,45 @@ IommuError :: enum #backed_by(u8) {
     // It lacks what the kernel needs of one: the translation its domains use (VT-d's second-level tables, SMMUv3's
     // stage 2), with 4 KiB pages and at least 39-bit I/O virtual addresses.
     Unsupported,
+    // It didn't do what it was told in time, like turning translation on.
+    Timeout,
+}
+
+MapError :: enum #backed_by(u8) {
+    // frames ran out. Refill them and call again; nothing was changed.
+    NeedFrames,
+    // Something is mapped there already.
+    AlreadyMapped,
+    // Not page-aligned, or outside the domain's addresses.
+    InvalidAddress,
+}
+
+// Zeroed frames L2 gives for new tables. Calls take them from the end.
+TableFrames :: struct {
+    count : u32,
+    frames : PhysicalAddress[4],
+}
+
+// Table frames a call let go of. L2 frees them once the IOMMU can no longer reach them.
+FreedFrames :: struct {
+    count : u32,
+    frames : PhysicalAddress[4],
+}
+
+// What an IOMMU writes, and where, to raise a message-signaled interrupt for its faults: arch_interface's MsiMessage.
+FaultMessage :: struct {
+    address : u64,
+    data : u32,
+}
+
+// A DMA access an IOMMU blocked.
+DmaFault :: struct {
+    stream : u32,
+    // The page it was to, as the device addressed it.
+    address : u64,
+    write : bool,
+    // Why, as the IOMMU numbers its reasons.
+    reason : u32,
 }
 
 // What identify finds out about an IOMMU.
@@ -45,6 +87,10 @@ IommuInfo :: struct {
     // Its version, as its registers give it: major, then minor.
     major : u32,
     minor : u32,
+    // The bytes of zeroed, contiguous memory enable takes, for its tables and queues.
+    memory : u64,
+    // Domain IDs from 1 up to this, one per domain on it.
+    domain_ids : u32,
 }
 
 /*
@@ -52,3 +98,47 @@ IommuInfo :: struct {
  * needed of it in iommu, changing nothing: DMA through it goes on as before, translated or not.
  */
 identify : fn(iommu: ptr[mut Iommu], kind: IommuKind, registers: VirtualAddress, size: u64) -> Result[IommuInfo, IommuError] : ---
+
+/*
+ * Turn translation on, with memory, info.memory bytes of zeroed, contiguous memory, for its tables and queues, which
+ * it keeps, and the rest of what it reaches, like domains' tables, through the direct map at direct_map_offset. Every
+ * stream is blocked until it's attached to a domain; its faults are recorded, not yet signalled (route_faults).
+ */
+enable : fn(iommu: ptr[mut Iommu], memory: PhysicalAddress, direct_map_offset: u64) -> Result[void, IommuError] : ---
+
+// Signal its faults by writing message.
+route_faults : fn(iommu: ptr[mut Iommu], message: FaultMessage) : ---
+
+// Make domain an empty one on the IOMMU, with ID id and root, a zeroed frame, for its top-level table.
+init_domain : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], id: u32, root: PhysicalAddress) : ---
+
+// stream's DMA translated through domain from now on, instead of what it was before; it takes frames for its own tables.
+attach : fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32, frames: ptr[mut TableFrames]) -> Result[void, MapError] : ---
+
+// stream's DMA blocked again, and nothing the IOMMU cached of domain's for it left, when this returns.
+detach : fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32) : ---
+
+/*
+ * The 4 KiB page at address in domain mapped to physical, readable, and writable if writable. Until invalidate, the
+ * IOMMU may not see it.
+ */
+map : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64, physical: PhysicalAddress, writable: bool,
+    frames: ptr[mut TableFrames]) -> Result[void, MapError] : ---
+
+// The 4 KiB page at address in domain unmapped, if it's mapped; until invalidate, the IOMMU may still reach it.
+unmap : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64) : ---
+
+/*
+ * Nothing the IOMMU cached of domain's tables left, when this returns: after unmapping, so it no longer reaches what
+ * was mapped; after mapping (mapped), where it may cache what isn't mapped, like VT-d's caching mode.
+ */
+invalidate : fn(iommu: ptr[mut Iommu], domain: ptr[Domain], mapped: bool) : ---
+
+/*
+ * Let go of domain's tables, all but its root, as many as freed has room for each call: true once only the root is
+ * left. Nothing is attached to it any more.
+ */
+release_domain : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], freed: ptr[mut FreedFrames]) -> bool : ---
+
+// The oldest fault it recorded and hasn't given yet, taken from its records, or null.
+next_fault : fn(iommu: ptr[mut Iommu]) -> DmaFault? : ---

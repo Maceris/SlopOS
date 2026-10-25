@@ -28,6 +28,12 @@ Iommu :: struct {
     address_bits : u32,
 }
 
+// One domain on an SMMU (iommu_interface.Domain): its stage-2 tables, with roadmap Dd.
+Domain :: struct {
+    root : u64,
+    id : u32,
+}
+
 // OAS, the output address sizes, by its value
 OUTPUT_BITS :: u32.[32, 36, 40, 42, 44, 48, 52]
 
@@ -58,5 +64,5 @@ identify :: fn(iommu: ptr[mut Iommu], kind: iommu_interface.IommuKind, registers
     }
     iommu.registers = base
     iommu.address_bits = if OUTPUT_BITS[output] < 48 { OUTPUT_BITS[output] } else { 48 }
-    return .Ok(iommu_interface.IommuInfo.{address_bits = iommu.address_bits, major = 3, minor = version & 0xf})
+    return .Ok(iommu_interface.IommuInfo.{address_bits = iommu.address_bits, major = 3, minor = version & 0xf, memory = 0, domain_ids = 0})
 }

@@ -182,12 +182,14 @@ MSI-X entry, and its interrupts arrive as any IRQ's do. They're edge-triggered, 
 x86-64 the message goes straight to a CPU's local APIC; on AArch64, to the GICv3's ITS, which turns the event
 into an LPI on the CPU's redistributor. Closing the device destroys its IRQs.
 
-A **DMA domain** is where its devices' DMA reaches. No IOMMU translates yet, so that's all of memory, a device
-address is a physical address, and a driver can DMA anywhere: drivers are trusted until one does (`0070`, `0079`).
-**DMA memory** (`dma_memory_create`) is made in a domain: pinned for as long as it lives, in one block of frames,
-below a limit for a device that reaches only so far, and its device address is its block's. Closing the domain
-leaves its memory without one (`NotDmaMemory`). `device_attach` records which domain a device's DMA is in, for
-when an IOMMU confines it there.
+A **DMA domain** is where its devices' DMA reaches. **DMA memory** (`dma_memory_create`) is made in a domain:
+pinned for as long as it lives, in one block of frames, its device addresses below a limit for a device that reaches
+only so far. Closing the domain leaves its memory without one (`NotDmaMemory`). `device_attach` puts a device's DMA
+in a domain. Behind an IOMMU that translates (VT-d so far, `0081`), a domain's devices reach only its DMA memory,
+which is mapped at device addresses of the domain's own, from 1 MiB up, and nothing else: the IOMMU blocks the rest
+and the kernel logs it. Without one, a domain is all of memory, a device address is a physical address, and a driver
+can DMA anywhere: drivers are trusted until there is one (`0070`, `0079`). A domain no device is attached to yet when
+its first DMA memory is made is bound to no IOMMU.
 
 **IOMMUs** are registered by the platform service from the firmware tables (`iommu_register`): on x86-64, ACPI's
 DMAR's VT-d units; on AArch64, the SMMUv3s the device tree's `iommu-map` refers to. The kernel identifies each
@@ -386,6 +388,6 @@ Devices, MSIs and DMA memory fail with `slop_os.DeviceError` too:
 
 ## Not Yet
 
-I/O-port ranges come with the drivers that need them, and the IOMMUs' translation of DMA domains, VT-d's and
-SMMUv3's, with roadmap D's later stages (`0072`, `0079`); pagers for memory objects with memory-mapped files. Process memory is read and written through the
+I/O-port ranges come with the drivers that need them, and SMMUv3's translation of DMA domains with roadmap Dd, and
+interrupt remapping with Dc (`0072`, `0079`); pagers for memory objects with memory-mapped files. Process memory is read and written through the
 page tables, so a memory object's pages no thread has touched yet can't be.

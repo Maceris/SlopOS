@@ -37,6 +37,9 @@ def program_test(name: str, program: str, line: str, words: str = "", qemu: list
 # What the kernel says of the IOMMU QEMU gives each machine (src/kernel/iommus.hsc)
 X86_IOMMU_LINE = "[info] IOMMU 0: VT-d, 4 KiB of registers at 0x00000000fed90000, version 1.0, 48-bit I/O addresses"
 AARCH64_IOMMU_LINE = "[info] IOMMU 0: SMMUv3, 128 KiB of registers at 0x0000000009050000, version 3.1, 44-bit I/O addresses"
+# Whether it translates (src/kernel/translation.hsc): VT-d does, SMMUv3 not until roadmap Dd
+X86_TRANSLATING_LINE = "[info] IOMMU 0: translating, its faults to CPU 0's interrupt 48"
+AARCH64_TRANSLATING_LINE = "[info] IOMMU 0: not translating, which its implementation can't yet"
 
 # Name, the code expected, and boot.py's arguments
 TESTS = [
@@ -50,7 +53,8 @@ TESTS = [
         "--expect-line=[info] root task ended with code 0"]),
     # The IOMMU the platform service found in the firmware tables, which the kernel identified
     ("registers the IOMMU from the firmware tables", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        f"--expect-line={X86_IOMMU_LINE}", "--expect-line=[user] platform: serving", "--expect-line=[info] root task ended with code 0"]),
+        f"--expect-line={X86_IOMMU_LINE}", f"--expect-line={X86_TRANSLATING_LINE}", "--expect-line=[user] platform: serving",
+        "--expect-line=[info] root task ended with code 0"]),
     # virtio-rng, modern only, found by the platform service, claimed by the supervisor for its driver
     ("drives virtio-rng from the platform service, and reseeds entropy from it", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services", "--expect-line=[user] platform: 0:3.0 (6900 4164) claimed",
@@ -167,7 +171,8 @@ AARCH64_NAMES = {
 
 def aarch64_tests(tests: list) -> list:
     """The tests for AArch64, named so, with AArch64's own baseline check and IOMMU among them."""
-    lines = {f"--expect-line={X86_IOMMU_LINE}": f"--expect-line={AARCH64_IOMMU_LINE}"}
+    lines = {f"--expect-line={X86_IOMMU_LINE}": f"--expect-line={AARCH64_IOMMU_LINE}",
+             f"--expect-line={X86_TRANSLATING_LINE}": f"--expect-line={AARCH64_TRANSLATING_LINE}"}
     adapted = [(f"AArch64: {AARCH64_NAMES.get(name, name)}", expected, [lines.get(argument, argument) for argument in arguments])
                for name, expected, arguments in tests if name not in AARCH64_LEFT_OUT]
     return adapted + [("AArch64: refuses a CPU below ARMv8.2-A with LSE", 2, ["--cpu=cortex-a57"])]

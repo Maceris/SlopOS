@@ -10,9 +10,11 @@ import frames from "frames"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
+    import iommu_vtd as iommu_unit from "../iommu/vtd"
 }
 #else_if TARGET_ARCH == .arm64 {
     import arch from "../arch/aarch64"
+    import iommu_smmuv3 as iommu_unit from "../iommu/smmuv3"
 }
 
 /*
@@ -24,11 +26,11 @@ import frames from "frames"
  * message-signaled IRQs, each one of its events, routed to a CPU's device interrupt ID as a wired line's is
  * (interrupts.hsc). Destroying the device destroys its IRQs, as destroying memory destroys its windows.
  *
- * A DmaDomain is where its devices' DMA reaches. Without an IOMMU that's all of memory, and a device address is a
- * physical address: DMA memory, pinned and in one block of frames, is made in a domain, and its device address is
- * its block's. Attaching a device to a domain records it, and the IOMMU it's behind (iommus.hsc), which the domain is
- * bound to by its first device: a domain's devices are all behind that IOMMU, or, where the first is behind none, all
- * behind none. Until the IOMMU translates (roadmap Db, Dd), that's all.
+ * A DmaDomain is where its devices' DMA reaches. DMA memory, pinned and in one block of frames, is made in a domain.
+ * Attaching a device to a domain records it, and the IOMMU it's behind (iommus.hsc), which the domain is bound to by
+ * its first device, or by its first DMA memory to none: a domain's devices are all behind that IOMMU, or all behind
+ * none. Where the IOMMU translates, the domain's memory is mapped at device addresses of its own, and its devices
+ * reach nothing else (translation.hsc); without one, that's all of memory, and a device address is a physical address.
  *
  * Lock order: a device's lock, then the kernel's devices_lock, then interrupts_lock; a device's lock, then iommus_lock.
  */
@@ -48,8 +50,9 @@ Device :: struct #align(16) {
     // The domain it's attached to, and that domain's generation then; 0 for none.
     domain : u64,
     domain_generation : u32,
-    // The IOMMU it's behind, as attaching it found, and its stream there.
+    // The IOMMU it's behind, as attaching it found, and its stream there; whether its DMA goes through its domain's tables.
     iommu : IommuPath,
+    translated : bool,
     // What the interrupt controller keeps for its MSIs, a block of frames of this order plus one, 0 for none.
     msi_memory : u64,
     msi_memory_order : u64,
@@ -61,10 +64,21 @@ Device :: struct #align(16) {
 
 DmaDomain :: struct #align(16) {
     header : ObjectHeader,
-    // Under the kernel's iommus_lock: whether a device was attached, binding it to that device's IOMMU, the IOMMU's
-    // number plus one, or 0 for none.
+    // Under the kernel's iommus_lock: whether a device was attached or memory made, binding it to that device's IOMMU,
+    // the IOMMU's number plus one, or 0 for none.
     bound : bool,
     iommu : u32,
+    // Under its IOMMU's lock: whether it translates there, and was, once it's destroyed, with its tables to go; its
+    // tables, ID and root; the I/O virtual addresses it gives out, below address_limit, past next_address or freed.
+    translating : bool,
+    stopped : bool,
+    unit : iommu_unit.Domain,
+    id : u32,
+    root : u64,
+    next_address : u64,
+    address_limit : u64,
+    free_ranges : AddressRange[MAX_FREE_RANGES],
+    free_count : u32,
 }
 
 /*
@@ -164,13 +178,25 @@ attach_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device], domain: pt
         domain.iommu = path.iommu
     }
     concurrency.unlock(&kernel.iommus_lock)
-    if fits {
-        device.domain = cast[u64](domain)
-        device.domain_generation = domain.header.generation
-        device.iommu = path
+    if !fits {
+        concurrency.unlock(&device.lock)
+        return .Error(.WrongIommu)
+    }
+    // Away from the domain it was in, if it was
+    untranslate_device(kernel, device)
+    device.domain = cast[u64](domain)
+    device.domain_generation = domain.header.generation
+    device.iommu = path
+    match translate_device(kernel, device, domain, path) {
+        case Ok => {}
+        case Error(error) => {
+            device.domain = 0
+            concurrency.unlock(&device.lock)
+            return .Error(error)
+        }
     }
     concurrency.unlock(&device.lock)
-    return if fits { .Ok } else { .Error(.WrongIommu) }
+    return .Ok
 }
 
 /*
@@ -186,6 +212,11 @@ destroy_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
         command :: cast[ptr[mut u16]](device.config + PCI_COMMAND)
         intrinsics.volatile_store_u16(command, intrinsics.volatile_load_u16(command) & ~PCI_COMMAND_BUS_MASTER)
     }
+    // And blocked by its IOMMU, which won't reach its domain's tables once they go
+    concurrency.lock(&device.lock)
+    untranslate_device(kernel, device)
+    device.domain = 0
+    concurrency.unlock(&device.lock)
     loop {
         concurrency.lock(&device.lock)
         first :: device.first_irq
@@ -356,31 +387,51 @@ create_dma_domain :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> Res
     return .Ok(cast[ptr[mut DmaDomain]](object))
 }
 
-// A domain holds nothing yet: what an IOMMU's will hold is its page tables.
+// Its devices detached, and its translation stopped; its tables go once no CPU can be using them.
 destroy_dma_domain :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain]) {
+    stop_domain(kernel, domain)
 }
 
 release_dma_domain :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain]) {
+    release_domain_tables(kernel, domain)
 }
 
 /*
- * DMA memory in domain, size bytes, ending at or below limit (0 for none), owned by owner and charged to budget: in
- * one block of frames, pinned for as long as it lives.
+ * DMA memory in domain, size bytes, its device addresses ending at or below limit (0 for none), owned by owner and
+ * charged to budget: in one block of frames, pinned for as long as it lives. A domain that translates maps it, and
+ * its frames may be anywhere; otherwise they're below limit. A domain no device is attached to yet is bound to none.
  */
-create_dma_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, domain: ptr[DmaDomain], size: u64, limit: u64)
+create_dma_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, domain: ptr[mut DmaDomain], size: u64, limit: u64)
     -> Result[ptr[mut Memory], slop_os.DeviceError] {
-    memory :: create_contiguous_memory(kernel, owner, budget, size, limit, 3)?
+    concurrency.lock(&kernel.iommus_lock)
+    if !domain.bound {
+        domain.bound = true
+        domain.iommu = 0
+    }
+    concurrency.unlock(&kernel.iommus_lock)
+    translates :: translating_iommu(kernel, domain.iommu) is_some
+    if translates && limit != 0 && limit < size {
+        return .Error(.InvalidSize)
+    }
+    memory :: create_contiguous_memory(kernel, owner, budget, size, if translates { cast[u64](0) } else { limit }, 3)?
     memory.domain = cast[u64](domain)
     memory.domain_generation = domain.header.generation
+    match map_dma_memory(kernel, domain, memory, limit) {
+        case Ok => {}
+        case Error(error) => {
+            _ = destroy_object(kernel, cast[u64](memory))
+            return .Error(error)
+        }
+    }
     return .Ok(memory)
 }
 
-// Where DMA memory is to its domain's devices: without an IOMMU, its physical address.
+// Where DMA memory is to its domain's devices: the address its domain mapped it at, or without an IOMMU, its physical address.
 device_address_of :: fn(memory: ptr[Memory]) -> Result[u64, slop_os.DeviceError] {
     if memory.domain == 0 || !is_live(memory.domain, memory.domain_generation) {
         return .Error(.NotDmaMemory)
     }
-    return .Ok(memory.physical)
+    return .Ok(if memory.device_address != 0 { memory.device_address } else { memory.physical })
 }
 
 // The interrupt controller's MSIs, set up once every CPU has started, with the memory it asks for, which it keeps.

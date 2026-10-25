@@ -727,7 +727,7 @@ sys_dma_memory_create :: fn(thread: ptr[mut Thread], domain: slop_os.DmaDomain, 
     process :: process_of(thread)
     found :: object_of[slop_os.DeviceError](process, cast[slop_os.Handle](domain), slop_os.ObjectKind.DmaDomain, cast[slop_os.Rights](0))?
     paying :: paying_budget[slop_os.DeviceError](process, budget)?
-    made :: create_dma_memory(kernel, cast[u64](process), paying, cast[ptr[DmaDomain]](found), size, limit)?
+    made :: create_dma_memory(kernel, cast[u64](process), paying, cast[ptr[mut DmaDomain]](found), size, limit)?
     handle :: owning_handle[slop_os.DeviceError](kernel, process, cast[u64](made), false)?
     return .Ok(cast[slop_os.Memory](handle))
 }

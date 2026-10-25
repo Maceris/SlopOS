@@ -7,11 +7,12 @@ import boot_info from "../boot_info"
 import concurrency from "std"
 import slop_os from "std/os"
 
+// Each architecture's IOMMU package, by one name
 #if TARGET_ARCH == .x86_64 {
-    import iommu_vtd from "../iommu/vtd"
+    import iommu_vtd as iommu_unit from "../iommu/vtd"
 }
 #else_if TARGET_ARCH == .arm64 {
-    import iommu_smmuv3 from "../iommu/smmuv3"
+    import iommu_smmuv3 as iommu_unit from "../iommu/smmuv3"
 }
 
 /*
@@ -21,9 +22,9 @@ import slop_os from "std/os"
  * requester ID most narrowly, as VT-d's DMAR has a unit for all of a segment's devices besides those another covers,
  * and a domain's devices are all behind one IOMMU, or all behind none.
  *
- * Registering an IOMMU changes nothing it does yet: translation comes with each implementation's stage (Db, Dd).
+ * Once it's identified, translation goes on, where its implementation can (translation.hsc).
  *
- * Lock order: a device's lock, then iommus_lock.
+ * Lock order: a device's lock, then iommus_lock; a device's lock, then an IOMMU's lock.
  */
 
 MAX_IOMMUS :: 8
@@ -32,21 +33,21 @@ MAX_IOMMU_SCOPES :: 32
 // The most bytes of registers an IOMMU may have: SMMUv3's are 128 KiB
 MAX_IOMMU_REGISTERS : u64 : 1 << 20
 
-#if TARGET_ARCH == .x86_64 {
-    IommuUnit :: iommu_vtd.Iommu
-}
-#else_if TARGET_ARCH == .arm64 {
-    IommuUnit :: iommu_smmuv3.Iommu
-}
-
 RegisteredIommu :: struct {
-    unit : IommuUnit,
+    // Held for everything done through it once it's registered.
+    lock : concurrency.SpinLock,
+    unit : iommu_unit.Iommu,
     kind : iommu_interface.IommuKind,
     info : iommu_interface.IommuInfo,
     // In the kernel window, and where they are.
     registers : u64,
     physical : u64,
     size : u64,
+    // Whether translation is on; the domain IDs in use, a bit each, below id_limit; faults taken (translation.hsc).
+    translating : bool,
+    ids : u64[MAX_DOMAIN_IDS / 64],
+    id_limit : u32,
+    faults : u64,
 }
 
 // count requester IDs from first (slop_os.device_address), behind the IOMMU with number iommu, as streams from stream.
@@ -115,9 +116,9 @@ add_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, physic
         case Ok(address) => mapped = address
         case Error(error) => return .Error(.OutOfMemory)
     }
-    unit : IommuUnit
+    unit : iommu_unit.Iommu
     info : iommu_interface.IommuInfo
-    match identify_iommu(&unit, kind, cast[iommu_interface.VirtualAddress](mapped), size) {
+    match iommu_unit.identify(&unit, kind, cast[iommu_interface.VirtualAddress](mapped), size) {
         case Ok(found) => info = found
         case Error(error) => {
             unmap_device(kernel, mapped, size)
@@ -140,17 +141,8 @@ add_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, physic
     }
     runtime.log_info("IOMMU %: %, % KiB of registers at %, version %.%, %-bit I/O addresses", index, kind_name(kind), size / 1024,
         cast[rawptr](physical), info.major, info.minor, info.address_bits)
+    start_translation(kernel, index)
     return .Ok(index)
-}
-
-identify_iommu :: fn(unit: ptr[mut IommuUnit], kind: iommu_interface.IommuKind, registers: iommu_interface.VirtualAddress, size: u64)
-    -> Result[iommu_interface.IommuInfo, iommu_interface.IommuError] {
-    #if TARGET_ARCH == .x86_64 {
-        return iommu_vtd.identify(unit, kind, registers, size)
-    }
-    #else {
-        return iommu_smmuv3.identify(unit, kind, registers, size)
-    }
 }
 
 kind_name :: fn(kind: iommu_interface.IommuKind) -> string {

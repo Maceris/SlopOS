@@ -73,9 +73,11 @@ Memory :: struct #align(16) {
     boot_module : bool,
     // Contiguous memory's (create_contiguous_memory): the order of the block at physical, plus one; 0 for other memory.
     block_order : u64,
-    // DMA memory's: its DmaDomain, and that domain's generation then (devices.hsc).
+    // DMA memory's: its DmaDomain, and that domain's generation then (devices.hsc); where its domain mapped it, 0 for
+    // nowhere (translation.hsc).
     domain : u64,
     domain_generation : u32,
+    device_address : u64,
 }
 
 // A range of a memory object, mapped in an address space.
@@ -265,6 +267,8 @@ frame_for :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], page: u64) -> u64 
  * its parent's list.
  */
 destroy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
+    // DMA memory's devices reach it no more, before its frames can go
+    unmap_dma_memory(kernel, memory)
     destroy_windows(kernel, memory)
     if memory.parent != 0 {
         parent :: cast[ptr[mut Memory]](memory.parent)

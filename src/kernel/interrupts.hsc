@@ -166,9 +166,10 @@ MSI_CONTROLLER : u32 : 0xffffffff
 
 /*
  * A free device interrupt ID on the CPU with index cpu_index for irq, a message-signaled IRQ, whose line is its
- * event: the ID.
+ * event: the ID. The kernel routes one for itself as controller's line, irq 0, as an IOMMU's faults are.
  */
-route_message :: fn(kernel: ptr[mut Kernel], cpu_index: u32, event: u32, irq: u64) -> Result[arch_interface.InterruptId, InterruptError] {
+route_message :: fn(kernel: ptr[mut Kernel], cpu_index: u32, event: u32, irq: u64, controller: u32 = MSI_CONTROLLER)
+    -> Result[arch_interface.InterruptId, InterruptError] {
     per_cpus :: kernel.per_cpus
     if cast[usize](cpu_index) >= kernel.cpus.count || cast[usize](cpu_index) >= per_cpus.count || per_cpus[cpu_index] == 0 {
         return .Error(.NoSuchCpu)
@@ -185,7 +186,7 @@ route_message :: fn(kernel: ptr[mut Kernel], cpu_index: u32, event: u32, irq: u6
         }
     }
     if slot < MAX_DEVICE_INTERRUPTS {
-        cpu.device_routes[slot] = DeviceRoute.{used = true, controller = MSI_CONTROLLER, line = event, trigger = .Edge, count = 0, irq = irq}
+        cpu.device_routes[slot] = DeviceRoute.{used = true, controller = controller, line = event, trigger = .Edge, count = 0, irq = irq}
     }
     concurrency.unlock(&kernel.interrupts_lock)
     if slot == MAX_DEVICE_INTERRUPTS {
@@ -267,6 +268,9 @@ handle_device_interrupt :: fn(id: arch_interface.InterruptId) {
     // An IRQ's: a packet for its driver
     if route.irq != 0 {
         deliver_irq(kernel, cast[ptr[mut Irq]](route.irq))
+    }
+    else if route.controller == IOMMU_CONTROLLER {
+        handle_dma_faults(kernel, route.line)
     }
     if kernel.options.test_ioapic {
         test_device_interrupt(kernel, route)
