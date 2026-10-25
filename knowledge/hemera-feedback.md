@@ -33,6 +33,10 @@ Left over from what was built: known limits, each an error rather than wrong cod
 - A generic type declared inside a function (E4024); a type declared there without its own parameters works.
 - `match` and `switch` cases on a `cstring`; a `string`'s work.
 - A constant's `#union` literal naming a member that overlaps another; a variable's works.
+- `f()?.member`: a result unwrapped and then a member of it doesn't parse; binding the result first works. Whether
+  `?.` should mean that, or optional chaining as in other languages, is a syntax question for the owner (found in 8c).
+- Indexing through a pointer to a fixed array, `p[i]` with `p: ptr[u8[8]]`, isn't proven in bounds after
+  `i < p.count` (E4031); a view, or the array as a struct's field (`p.bytes[i]`), is (found in 8c).
 
 ### Targets and runtime
 
