@@ -28,13 +28,29 @@ Severity: **blocker** / **friction** / **nice**.
 
 ### Smaller gaps
 
-- `x & ~MASK` with `x` unsigned and `MASK` an untyped constant is refused: `~0xff` is the untyped -256, out of
-  `u64`'s range, so `MASK` needs a cast (`~cast[u64](MASK)`). Found writing `std/crypto` (2026-10-19), still so.
-  Severity: friction.
-- A function declared inside a function can't be generic yet, nor have several names (E4024, E4018); hoisting
-  it to the package works. Left out when nested functions became declarations (2026-10-23). Severity: nice.
+Decided with the project's owner (2026-10-25), still to build:
+
+- `x & ~MASK` with `x` unsigned and `MASK` an untyped constant was refused: `~0xff` is the untyped -256. Done
+  2026-10-25 as decided: an untyped constant's `~` is worked out in the type it's used as, so `~0xff` with a `u64` is
+  `0xffff_ffff_ffff_ff00`, and fits a type when what it flips does; alone (`N :: ~0xff`) it's the untyped -256. Hosted
+  test `complement_constants`, front-end test `complement_out_of_range`.
 - A pointer to a `mut` view can't be written: in `ptr[mut u8[]]`, the `mut` is the pointer's, so the view it
-  points to only reads. Nothing has needed one yet (2026-10-23, read-only unless `mut`). Severity: nice.
+  points to only reads. Decided: parentheses, `ptr[mut (mut u8[])]` a pointer that can change a view whose elements
+  can be changed, `ptr[(mut u8[])]` one that only reads the view. Severity: nice.
+- Several names in one declaration, `x, y, z := 0, 0, 0`, is a parse error. Decided: allowed, each name with its
+  value, typed (`x, y : int = 1, 2`) or not, consistent with a call's several results. Severity: nice.
+- Types declared inside a function, and `#insert` or a macro call in a generic's body (both E4024). Decided: build
+  both, a type seen only in its function (and the functions nested in it), and insertions expanded per instance.
+- `base/compiler`'s `find_packages`, never implemented: decided to remove it, `subfolders` and `load_package` doing
+  its work.
+- Not planned, by the same decision: generic functions or several names for a function declared inside a function
+  (E4024, E4018; hoisting it to the package works), and generic macros.
+
+Not design questions, also planned: `std`'s floats formatted as the shortest text that reads back as the same value,
+and `std/reflection` printing numbers. Parser recovery was dropped: a syntax error ends only its own file's parse, and
+every other file, in the package and in others, still parses and reports its own (checked 2026-10-25), which is about
+Jai's level; within a file, nearly anything parses inside a function, so carrying on past an error would mostly
+report cascades.
 
 ### Hemera's docs against its compiler (survey, 2026-10-24)
 
@@ -119,11 +135,7 @@ Still open, from the same survey:
 
 Builds fail where the docs say it works:
 
-- **Types declared inside a function** (E4024), **generic macros** (E4024), and **`#insert` or a macro call in a
-  generic's body** (E4024). The last is in `compilation.md` as not done yet; the first two aren't mentioned.
-  Severity: nice.
-- **Several names in one declaration**, `x, y, z := 0, 0, 0`, is a parse error (E3017). `operators.md` only
-  shows assigning several at once, so this may be by design. Severity: nice.
+- The rest of this survey's open items are decided, under *Smaller gaps* above.
 
 Targets and runtime:
 
