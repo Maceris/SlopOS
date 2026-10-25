@@ -24,7 +24,7 @@ FREE_SIZE : u64 : 1 << 40
 USER_LOW : u64 : 0x10000
 USER_HIGH : u64 : 0x00007ffffffff000
 // The most grants a process starts with, from this.
-MAX_GRANTS :: 16
+MAX_GRANTS :: 24
 // Handles that go to the process besides its grants: its space, itself, its budget, its image, stack and block.
 OWN_HANDLES :: 6
 

@@ -367,14 +367,21 @@ class ConsoleLink:
 
 
 # A disk image's size, and its blocks', as virtio-blk counts them
-DISK_BYTES = 4 << 20
+DISK_BYTES = 38 << 20
 BLOCK_BYTES = 512
 DISK_BLOCKS = DISK_BYTES // BLOCK_BYTES
-# Its GPT's partitions: the one the disk check checks, and a spare, each 1 MiB (src/services/disk_check)
-CHECKED_FIRST = 2048
-PARTITIONS = [("SlopOS check", CHECKED_FIRST, 2048), ("SlopOS spare", 4096, 2048)]
-# A type GUID for test partitions, and each partition's own, in their bytes
+# A type GUID for test partitions, and the EFI system partition's (C12A7328-F81F-11D2-BA4B-00A0C93EC93B), in their bytes
 TEST_TYPE = bytes.fromhex("534c4f50 4f532054 45535420 50415254".replace(" ", ""))
+ESP_TYPE = bytes.fromhex("28732ac1 1ff8d211 ba4b00a0 c93ec93b".replace(" ", ""))
+# Its GPT's partitions: the one the disk check checks and a spare, 1 MiB each, and an EFI system partition of 34 MiB,
+# just enough clusters of a sector for FAT32 (src/services/disk_check)
+CHECKED_FIRST = 2048
+ESP_FIRST = 6144
+ESP_SECTORS = 69632
+PARTITIONS = [("SlopOS check", CHECKED_FIRST, 2048, TEST_TYPE), ("SlopOS spare", 4096, 2048, TEST_TYPE),
+              ("EFI system partition", ESP_FIRST, ESP_SECTORS, ESP_TYPE)]
+# What the EFI system partition holds, in EFI/SlopOS: one file with an 8.3 name, one with a long one
+ESP_FILES = [("hello.txt", b"Hello from the host's FAT32"), ("A long name, from the host.txt", b"A long name, from the host")]
 GPT_ENTRIES = 128
 GPT_ENTRY_BYTES = 128
 GPT_ENTRY_BLOCKS = GPT_ENTRIES * GPT_ENTRY_BYTES // BLOCK_BYTES
@@ -397,8 +404,8 @@ def make_disk(path: Path, mark: str) -> None:
     """
     image = bytearray(DISK_BYTES)
     entries = bytearray(GPT_ENTRIES * GPT_ENTRY_BYTES)
-    for index, (name, first, count) in enumerate(PARTITIONS):
-        entry = struct.pack("<16s16sQQQ", TEST_TYPE, bytes([index + 1]) * 16, first, first + count - 1, 0) + name.encode("utf-16-le")
+    for index, (name, first, count, kind) in enumerate(PARTITIONS):
+        entry = struct.pack("<16s16sQQQ", kind, bytes([index + 1]) * 16, first, first + count - 1, 0) + name.encode("utf-16-le")
         entries[index * GPT_ENTRY_BYTES:index * GPT_ENTRY_BYTES + len(entry)] = entry
     entries_crc = zlib.crc32(entries)
     # The protective MBR: one partition of type 0xee from block 1 over the whole disk
@@ -416,7 +423,89 @@ def make_disk(path: Path, mark: str) -> None:
         label = f"block {number}".encode()
         at = (CHECKED_FIRST + number) * BLOCK_BYTES
         image[at:at + len(label)] = label
+    esp_start = ESP_FIRST * BLOCK_BYTES
+    image[esp_start:esp_start + ESP_SECTORS * BLOCK_BYTES] = fat32_volume(ESP_SECTORS, ESP_FILES)
     path.write_bytes(bytes(image))
+
+
+def short_checksum(short: bytes) -> int:
+    """The checksum of an 8.3 name that its long-name entries carry (FAT32 1.03, 7.2)."""
+    total = 0
+    for byte in short:
+        total = (((total & 1) << 7) + (total >> 1) + byte) & 0xff
+    return total
+
+
+def directory_entries(name: str, short: bytes, attributes: int, cluster: int, size: int, lower_case: int = 0) -> bytes:
+    """A name's directory entries: its long-name ones, last first, unless it has none, then its short one."""
+    entries = b""
+    if name:
+        units = list(name.encode("utf-16-le"))
+        units = [units[i] | units[i + 1] << 8 for i in range(0, len(units), 2)]
+        count = (len(units) + 12) // 13
+        padded = units + [0] + [0xffff] * (count * 13 - len(units) - 1)
+        checksum = short_checksum(short)
+        for order in range(count, 0, -1):
+            part = padded[(order - 1) * 13:order * 13]
+            entries += struct.pack("<B5HBBB6HH2H", order | (0x40 if order == count else 0), *part[0:5], 0x0f, 0, checksum, *part[5:11], 0, *part[11:13])
+    # 1980-01-01, day 1 of month 1
+    date = 1 << 5 | 1
+    entries += struct.pack("<11sBBBHHHHHHHI", short, attributes, lower_case, 0, 0, date, date, cluster >> 16, 0, date, cluster & 0xffff, size)
+    return entries
+
+
+def fat32_volume(sectors: int, files: list) -> bytes:
+    """
+    A FAT32 volume of sectors, a sector a cluster, as Microsoft's specification 1.03 lays it out, written here apart
+    from src/fat, so each checks the other: EFI/SlopOS, a long name of its own, holding files, each in a cluster.
+    """
+    volume = bytearray(sectors * BLOCK_BYTES)
+    reserved = 32
+    fat_sectors = ((sectors - reserved + 2) * 4 + BLOCK_BYTES - 1) // BLOCK_BYTES
+    first_data = reserved + 2 * fat_sectors
+    clusters = sectors - first_data
+    boot = bytearray(BLOCK_BYTES)
+    boot[0:3] = b"\xebX\x90"
+    boot[3:11] = b"MSWIN4.1"
+    struct.pack_into("<HBHBHHBHHHII", boot, 11, BLOCK_BYTES, 1, reserved, 2, 0, 0, 0xf8, 0, 63, 255, 0, sectors)
+    struct.pack_into("<IHHIHH", boot, 36, fat_sectors, 0, 0, 2, 1, 6)
+    struct.pack_into("<BBBI11s8s", boot, 64, 0x80, 0, 0x29, 0x12345678, b"HOST ESP   ", b"FAT32   ")
+    boot[510:512] = bytes([0x55, 0xaa])
+    info = bytearray(BLOCK_BYTES)
+    struct.pack_into("<I", info, 0, 0x41615252)
+    struct.pack_into("<IIII", info, 484, 0x61417272, 0xffffffff, 0xffffffff, 0)
+    struct.pack_into("<I", info, 508, 0xaa550000)
+    for at in (0, 6):
+        volume[at * BLOCK_BYTES:(at + 1) * BLOCK_BYTES] = boot
+        volume[(at + 1) * BLOCK_BYTES:(at + 2) * BLOCK_BYTES] = info
+    # Clusters: 2 the root, 3 EFI, 4 SlopOS, then each file's
+    fat = [0x0ffffff8, 0x0fffffff, 0x0fffffff, 0x0fffffff, 0x0fffffff] + [0x0fffffff] * len(files)
+
+    def cluster_bytes(cluster: int) -> int:
+        return (first_data + cluster - 2) * BLOCK_BYTES
+
+    def put_cluster(cluster: int, data: bytes) -> None:
+        start = cluster_bytes(cluster)
+        volume[start:start + len(data)] = data
+
+    put_cluster(2, directory_entries("", b"EFI        ", 0x10, 3, 0))
+    put_cluster(3, directory_entries("", b".          ", 0x10, 3, 0) + directory_entries("", b"..         ", 0x10, 0, 0)
+                + directory_entries("SlopOS", b"SLOPOS     ", 0x10, 4, 0))
+    listing = directory_entries("", b".          ", 0x10, 4, 0) + directory_entries("", b"..         ", 0x10, 3, 0)
+    for index, (name, data) in enumerate(files):
+        cluster = 5 + index
+        if name == "hello.txt":
+            # An 8.3 name, its base and extension lower case by its case flags
+            listing += directory_entries("", b"HELLO   TXT", 0x20, cluster, len(data), 0x18)
+        else:
+            listing += directory_entries(name, b"ALONGN~1TXT", 0x20, cluster, len(data))
+        put_cluster(cluster, data)
+    put_cluster(4, listing)
+    table = struct.pack(f"<{len(fat)}I", *fat)
+    for copy in range(2):
+        start = (reserved + copy * fat_sectors) * BLOCK_BYTES
+        volume[start:start + len(table)] = table
+    return bytes(volume)
 
 
 def disk_block_starts(path: Path, expected: str) -> bool:
@@ -454,6 +543,8 @@ def main() -> int:
                         help="a line to type on a virtio keyboard, which this adds with a virtio console, once the console "
                              "shows its banner; may be repeated")
     parser.add_argument("--disk", help="add a virtio block device, a GPT disk image with this mark in its SlopOS check partition's block 0 (make_disk)")
+    parser.add_argument("--expect-disk-text", action="append", default=[],
+                        help="TEXT: the --disk image holds TEXT somewhere once the kernel has stopped, with --expect; may be repeated")
     parser.add_argument("--expect-disk-block", action="append", default=[],
                         help="N=TEXT: block N of the --disk image starts with TEXT once the kernel has stopped, with --expect; "
                              "may be repeated")
@@ -509,6 +600,8 @@ def main() -> int:
             console.thread.join(timeout=5)
         output = serial.read_text(errors="replace") if serial.exists() else ""
         unwritten = [expected for expected in arguments.expect_disk_block if not disk.exists() or not disk_block_starts(disk, expected)]
+        image_bytes = disk.read_bytes() if disk.exists() and arguments.expect_disk_text else b""
+        unwritten += [f"text {text}" for text in arguments.expect_disk_text if text.encode() not in image_bytes]
         if arguments.serial is not None:
             arguments.serial.write_text(output)
     sys.stdout.write(output)

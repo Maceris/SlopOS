@@ -3,15 +3,24 @@
  * partition named CHECKED among every disk's, opens a block connection narrowed to it, describes it, takes its buffer,
  * reads the mark tools/boot.py wrote in the partition's block 0, writes its own into block 1, flushes, reads it back,
  * and reads blocks 2 to 9 with eight requests in flight at once, each holding its number as boot.py wrote it; then a
- * read of the block past the partition's end is refused. It says what it found in its debug log, and ends with 0 if
- * all of it held, or the number of the first check that didn't.
+ * read of the block past the partition's end is refused. Then, given the first EFI system partition's root as its
+ * working directory, it uses std's files there (decisions/0087): it reads the files tools/boot.py put in EFI/SlopOS,
+ * one with a long name, writes one of its own, makes a directory and moves its file into it, lists them, reads its file
+ * back through the directory opened, and is refused a path above its working directory; and through the protocols
+ * themselves, narrows EFI/SlopOS to read only, selects its files by a pattern, and is refused a file made in the set
+ * the read-only directory gave. It says what it found in its
+ * debug log, and ends with 0 if all of it held, or the number of the first check that didn't.
  */
 package disk_check
 
 import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
+import strings from "std"
 import text_buffer from "std"
+import dir from "std/os/slop_os"
+import file_set from "std/os/slop_os"
+import read_only_dir from "std/os/slop_os"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
 import connector from "../../protocols/connector"
@@ -19,6 +28,13 @@ import partitions from "../../protocols/partitions"
 import storage from "../../protocols/storage"
 
 CHECKED :: "SlopOS check"
+// What tools/boot.py put on the EFI system partition, and what the check writes there
+HOST_FILE :: "EFI/SlopOS/hello.txt"
+HOST_TEXT :: "Hello from the host's FAT32"
+LONG_FILE :: "EFI/SlopOS/A long name, from the host.txt"
+LONG_TEXT :: "A long name, from the host"
+GUEST_FILE :: "EFI/SlopOS/Written by the guest.txt"
+GUEST_TEXT :: "Written by the guest, through std's files"
 HOST_MARK :: "SlopOS disk check: from the host"
 GUEST_MARK :: "SlopOS disk check: from the guest"
 // Where in the buffer each part goes, in bytes
@@ -35,7 +51,7 @@ Disk :: struct {
     buffer : u64,
 }
 
-main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?) -> int {
+main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, working_directory: os.Channel[dir.Dir]?) -> int {
     block_of_startup :: slop_os.startup_block()
     to :: log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     dialing :: storage or_else os.Channel[connector.Connector].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
@@ -149,6 +165,60 @@ main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?) ->
     }
     log_line.write(to, "disk_check: in %, % blocks from % of disk %, read the host's mark, wrote, flushed and read back block 1, read 8 blocks at once, and was refused the block past its end",
         CHECKED, info.block_count, partition.info.first, partition.disk)
+    if working_directory is_none {
+        log_line.write(to, "disk_check: no EFI system partition")
+        return 0
+    }
+    failed :: check_files(to)
+    if failed != 0 {
+        return failed
+    }
+    return check_protocols(to, working_directory or_return 31)
+}
+
+// The EFI system partition, its working directory, through std's files.
+check_files :: fn(to: slop_os.DebugLog) -> int {
+    host :: os.read_entire_file(HOST_FILE) or_return 20
+    long :: os.read_entire_file(LONG_FILE) or_return 21
+    if !strings.equal(host, HOST_TEXT) || !strings.equal(long, LONG_TEXT) {
+        log_line.write(to, "disk_check: the host's files hold % and %", host, long)
+        return 22
+    }
+    if os.write_entire_file(GUEST_FILE, GUEST_TEXT) != null || os.make_directory("EFI/SlopOS/made") != null {
+        return 23
+    }
+    if os.rename(GUEST_FILE, "EFI/SlopOS/made/Written by the guest.txt") != null || os.exists(GUEST_FILE) {
+        return 24
+    }
+    entries :: os.list_directory("EFI/SlopOS") or_return 25
+    names := 0
+    for entry in entries {
+        if (strings.equal(entry.name, "hello.txt") && !entry.is_directory) || (strings.equal(entry.name, "made") && entry.is_directory)
+            || strings.equal(entry.name, "A long name, from the host.txt") {
+            names += 1
+        }
+    }
+    count :: entries.count
+    os.free_directory_listing(entries)
+    if names != 3 || count != 3 {
+        return 26
+    }
+    made :: os.open_directory("EFI/SlopOS/made") or_return 27
+    back :: os.read_entire_file_in(made, "Written by the guest.txt") or_return 28
+    os.close_directory(made)
+    if !strings.equal(back, GUEST_TEXT) {
+        return 29
+    }
+    match os.read_entire_file("../EFI/SlopOS/hello.txt") {
+        case Ok(text) => return 30
+        case Error(error) => {
+            if error != .InvalidPath {
+                return 30
+            }
+        }
+    }
+    log_line.write(to, "disk_check: on the EFI system partition, read the host's files, wrote, moved and read back its own, listed %, and was refused a path above it",
+        count)
     return 0
 }
 
@@ -213,4 +283,123 @@ starts_with :: fn(disk: ptr[Disk], offset: u32, text: string) -> bool {
         }
     }
     return true
+}
+
+/*
+ * Beneath std's files, through the protocols: EFI/SlopOS opened, narrowed to read only, a set of its files selected
+ * by a pattern, which FAT matches ignoring case, and a file made through that set refused.
+ */
+check_protocols :: fn(to: slop_os.DebugLog, working_directory: os.Channel[dir.Dir]) -> int {
+    budget :: slop_os.startup_block().budget
+    into := os.Incoming.{}
+    port :: os.port_for(budget, working_directory.end) or_return 31
+    out := os.Outgoing.{}
+    opening :: os.begin[dir.Request](&out)
+    opening^ = .OpenDirectory(dir.OpenDirectory.{path = bytes_of(&out, "EFI/SlopOS")})
+    directory := cast[slop_os.Channel](slop_os.NO_HANDLE)
+    match ask_dir(working_directory.end, port, &out, &into) {
+        case OpenedDirectory(made) => directory = made.end
+        case _ => return 31
+    }
+    directory_port :: os.port_for(budget, directory) or_return 32
+    out = os.Outgoing.{}
+    narrowing :: os.begin[dir.Request](&out)
+    narrowing^ = .Narrow
+    read_only := cast[slop_os.Channel](slop_os.NO_HANDLE)
+    match ask_dir(directory, directory_port, &out, &into) {
+        case Narrowed(made) => read_only = made.end
+        case _ => return 32
+    }
+    read_only_port :: os.port_for(budget, read_only) or_return 33
+    out = os.Outgoing.{}
+    selecting :: os.begin[read_only_dir.Request](&out)
+    selecting^ = .Select(bytes_of(&out, "*.TXT"))
+    set := cast[slop_os.Channel](slop_os.NO_HANDLE)
+    match ask_read_only_dir(read_only, read_only_port, &out, &into) {
+        case Selected(made) => set = made.end
+        case _ => return 33
+    }
+    set_port :: os.port_for(budget, set) or_return 34
+    matched := 0
+    cursor : u64 = 0
+    ended := false
+    loop {
+        out = os.Outgoing.{}
+        listing :: os.begin[file_set.Request](&out)
+        listing^ = .List(cursor)
+        match ask_file_set(set, set_port, &out, &into) {
+            case Listed(entry) => {
+                matched += 1
+                cursor = entry.next
+            }
+            case End => ended = true
+            case _ => return 34
+        }
+    }
+    while !ended && matched < 8
+    // The host's two files; the directory the check made doesn't match
+    if matched != 2 {
+        return 35
+    }
+    out = os.Outgoing.{}
+    creating :: os.begin[file_set.Request](&out)
+    creating^ = .OpenFile(file_set.OpenFile.{name = bytes_of(&out, "Made through the set.txt"), creation = .New})
+    match ask_file_set(set, set_port, &out, &into) {
+        case Failed(error) => {
+            if error != .ReadOnly {
+                return 36
+            }
+        }
+        case _ => return 36
+    }
+    log_line.write(to, "disk_check: narrowed EFI/SlopOS to read only, selected % of its files by *.TXT, and was refused a file made in the set",
+        matched)
+    return 0
+}
+
+// A path's bytes appended to out, as a Relative.
+bytes_of :: fn(out: ptr[mut os.Outgoing], text: string) -> slop_os.Relative[u8] {
+    return os.append(out, view_of(cast[ptr[u8]](text.data), text.count))
+}
+
+// One request on a dir connection, and its answer, waited for.
+ask_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> dir.Response {
+    if dir.send_request(end, port, out) is_some {
+        return .Unsupported
+    }
+    loop {
+        match dir.receive_response(end, port, into, true) {
+            case Received => return os.message_of[dir.Response](into)^
+            case Failed(error) => return .Unsupported
+            case _ => continue
+        }
+    }
+}
+
+// One request on a read_only_dir connection, and its answer, waited for.
+ask_read_only_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> read_only_dir.Response {
+    if read_only_dir.send_request(end, port, out) is_some {
+        return .Unsupported
+    }
+    loop {
+        match read_only_dir.receive_response(end, port, into, true) {
+            case Received => return os.message_of[read_only_dir.Response](into)^
+            case Failed(error) => return .Unsupported
+            case _ => continue
+        }
+    }
+}
+
+// One request on a file_set connection, and its answer, waited for.
+ask_file_set :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> file_set.Response {
+    if file_set.send_request(end, port, out) is_some {
+        return .Unsupported
+    }
+    loop {
+        match file_set.receive_response(end, port, into, true) {
+            case Received => return os.message_of[file_set.Response](into)^
+            case Failed(error) => return .Unsupported
+            case _ => continue
+        }
+    }
 }

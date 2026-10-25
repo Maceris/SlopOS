@@ -45,7 +45,7 @@ AARCH64_TRANSLATING_LINE = "[info] IOMMU 0: translating, 0 interrupts remapped, 
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 27 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 28 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] process manager: started supervisor", "--expect-line=[user] process manager: started hello",
         "--expect-line=[user] hello: heap working, random numbers working", "--expect-line=[user] root task: the supervisor started hello",
@@ -102,16 +102,26 @@ TESTS = [
         "--expect-line=[user] console: read after the restart", "--expect-console-line=echo: after the restart",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # A GPT disk image boot.py marks, whose partitions the storage manager's partition server finds; the disk check reads,
-    # writes, flushes and reads back its partition, is refused a block past it, and the image holds what it wrote after
+    # writes, flushes and reads back its partition, is refused a block past it, and the image holds what it wrote after;
+    # then, through std's files, it reads, writes, moves and lists files on the EFI system partition boot.py wrote with
+    # FAT32, through a FAT server the storage manager starts
     ("reads and writes a virtio disk through the block protocol", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services", "--disk=SlopOS disk check: from the host",
-        "--expect-line=[user] virtio_blk: serving 8192 blocks",
-        "--expect-line=[user] partition_server: 2 partitions on a disk of 8192 blocks",
+        "--expect-line=[user] virtio_blk: serving 77824 blocks",
+        "--expect-line=[user] partition_server: 3 partitions on a disk of 77824 blocks",
         "--expect-line=[user] storage: disk 0 partition 0: SlopOS check, 2048 blocks from 2048",
         "--expect-line=[user] storage: disk 0 partition 1: SlopOS spare, 2048 blocks from 4096",
+        "--expect-line=[user] storage: disk 0 partition 2: EFI system partition, 69632 blocks from 6144",
+        "--expect-line=[user] storage: started a FAT server for disk 0 partition 2",
+        "--expect-line=[user] fat_server: serving a FAT32 volume of 68512 clusters of 512 bytes",
         "--expect-line=[user] disk_check: in SlopOS check, 2048 blocks from 2048 of disk 0, read the host's mark, wrote, flushed and "
         "read back block 1, read 8 blocks at once, and was refused the block past its end",
-        "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+        "--expect-line=[user] disk_check: on the EFI system partition, read the host's files, wrote, moved and read back its own, "
+        "listed 3, and was refused a path above it",
+        "--expect-line=[user] disk_check: narrowed EFI/SlopOS to read only, selected 2 of its files by *.TXT, and was refused a "
+        "file made in the set",
+        "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # Behind a root port, with firmware's bus numbers and BARs taken as unset
     ("numbers buses and places BARs behind a bridge", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services test_reassign", "--expect-line=[user] platform: 1:0.0 (6900 4164) claimed",

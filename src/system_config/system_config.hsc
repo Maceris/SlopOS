@@ -14,6 +14,7 @@ import os from "std"
 import console from "../services/console"
 import disk_check from "../services/disk_check"
 import entropy from "../services/entropy"
+import fat_server from "../services/fat_server"
 import platform from "../services/platform"
 import partition_server from "../services/partition_server"
 import process_manager from "../services/process_manager"
@@ -96,6 +97,9 @@ SERVICES :: Service.[
         entry = type_of(storage_manager.main)},
     Service.{name = "partition_server", module = "partition_server.elf", starter = .StorageManager, by_manager = true, budget = 2 * MIB,
         entry = type_of(partition_server.main)},
+    // For each FAT partition whose files are asked for, which holds only its partition (decisions/0087)
+    Service.{name = "fat_server", module = "fat_server.elf", starter = .StorageManager, by_manager = true, budget = 2 * MIB,
+        entry = type_of(fat_server.main)},
     // Started only when there's a disk
     Service.{name = "disk_check", module = "disk_check.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(disk_check.main)},

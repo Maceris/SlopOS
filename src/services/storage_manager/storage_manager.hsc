@@ -2,24 +2,41 @@
  * The storage manager (roadmap 8a, decisions/0085, 0086): it holds every disk, through connectors the supervisor gives
  * it, and starts a partition server for each through the process manager, giving it that disk's block connection and
  * nothing else. It lists each disk's partitions, and serves the storage protocol: every partition, by one index, and
- * block connections narrowed to one, which the partition server makes. Volumes come with 8b and 8d.
+ * block connections narrowed to one, which the partition server makes. A FAT partition's files (an EFI system
+ * partition's, or a basic data partition's) are served by a FAT server, started the first time they're asked for with
+ * a connection narrowed to that partition and nothing else (decisions/0087); each client gets a connection of its own
+ * to its root. SlopOS's own volumes come with 8d.
  */
 package storage_manager
 
 import os from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
+import dir from "std/os/slop_os"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
 import connector from "../../protocols/connector"
 import partitions from "../../protocols/partitions"
 import storage from "../../protocols/storage"
 import service_kit from "../../service_kit"
+import fat_server from "../fat_server"
 import partition_server from "../partition_server"
 
 MAX_DISKS :: 4
 MAX_PARTITIONS :: 32
 PARTITION_SERVER_BUDGET : u64 : 2 * 1024 * 1024
+FAT_SERVER_BUDGET : u64 : 2 * 1024 * 1024
+// The GPT types whose partitions hold FAT volumes, as their bytes are on the disk: the EFI system partition
+// (C12A7328-F81F-11D2-BA4B-00A0C93EC93B) and a basic data partition (EBD0A0A2-B9E5-4433-87C0-68B6B72699C7)
+ESP_TYPE :: u8.[0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11, 0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b]
+BASIC_DATA_TYPE :: u8.[0xa2, 0xa0, 0xd0, 0xeb, 0xe5, 0xb9, 0x33, 0x44, 0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99, 0xc7]
+
+// What a FAT server is given (fat_server.main).
+FatServerGrants :: struct {
+    log : slop_os.DebugLog?,
+    partition : os.Channel[block.Block],
+    clients : os.Listener[dir.Dir],
+}
 
 // A connector to a disk, which may not be given
 DiskConnector :: os.Channel[connector.Connector]?
@@ -44,16 +61,22 @@ Manager :: struct {
     disk_count : usize,
     partitions : storage.Partition[MAX_PARTITIONS],
     partition_count : usize,
+    // Each partition's FAT server, its listener's end and a port for it, NO_HANDLE until it's started
+    files : Disk[MAX_PARTITIONS],
+    manager : os.Channel[process_manager.ProcessManager],
+    manager_port : slop_os.Port,
+    fat_server_module : slop_os.Memory,
     clients : service_kit.Clients,
 }
 
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager], partition_server_module: slop_os.Memory,
-    disk0: os.Channel[connector.Connector]?, disk1: os.Channel[connector.Connector]?, disk2: os.Channel[connector.Connector]?,
-    disk3: os.Channel[connector.Connector]?, clients: os.Listener[storage.Storage]) -> int {
+    fat_server_module: slop_os.Memory, disk0: os.Channel[connector.Connector]?, disk1: os.Channel[connector.Connector]?,
+    disk2: os.Channel[connector.Connector]?, disk3: os.Channel[connector.Connector]?, clients: os.Listener[storage.Storage]) -> int {
     startup :: slop_os.startup_block()
-    state := Manager.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)}
+    state := Manager.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE), manager = manager, fat_server_module = fat_server_module}
     state.port = slop_os.port_create(startup.budget) or_return 1
     manager_port :: os.port_for(startup.budget, manager.end) or_return 1
+    state.manager_port = manager_port
 
     // A partition server for each disk, and its partitions
     for maybe in DiskConnector.[disk0, disk1, disk2, disk3] {
@@ -162,6 +185,14 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
                     }
                 }
             }
+            case OpenFiles(which) => {
+                if cast[usize](which) < state.partition_count && cast[usize](which) < state.partitions.count {
+                    match files_of(state, cast[usize](which)) {
+                        case Some(root) => response = .OpenedFiles(root)
+                        case None => response = .NoFiles
+                    }
+                }
+            }
             case Connect(connection) => {
                 if !service_kit.add_client(&state.clients, state.port, connection.end) {
                     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
@@ -174,6 +205,43 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
         made^ = response
         _ = storage.send_response(end, state.port, &out)
     }
+}
+
+/*
+ * A connection to the root of the FAT volume on a partition, from its FAT server, started the first time with a
+ * connection narrowed to the partition: null for a partition of another kind, or if the server can't be started.
+ */
+files_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
+    if index >= state.partitions.count || index >= state.files.count {
+        return null
+    }
+    startup :: slop_os.startup_block()
+    if cast[slop_os.Handle](state.files[index].end) == slop_os.NO_HANDLE {
+        partition :: state.partitions[index]
+        if partition.info.type_guid != ESP_TYPE && partition.info.type_guid != BASIC_DATA_TYPE {
+            return null
+        }
+        narrowed := os.Channel[block.Block].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
+        match ask(state, cast[usize](partition.disk), .Open(partition.index)) {
+            case Opened(connection) => narrowed = connection
+            case _ => return null
+        }
+        pair :: os.channel_for[dir.Dir](startup.budget, 0) or_return null
+        grants := FatServerGrants.{log = duplicate_log(state.log), partition = narrowed, clients = os.Listener[dir.Dir].{end = pair.a}}
+        match os.launch(state.manager, state.manager_port, "fat_server", state.fat_server_module, FAT_SERVER_BUDGET, fat_server.main, grants) {
+            case Ok(launched) => {}
+            case Error(error) => {
+                log_line.write(state.log, "storage: no FAT server for disk % partition %: %", partition.disk, partition.index, error)
+                _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+                return null
+            }
+        }
+        port :: os.port_for(startup.budget, pair.b) or_return null
+        state.files[index] = Disk.{end = pair.b, port = port}
+        log_line.write(state.log, "storage: started a FAT server for disk % partition %", partition.disk, partition.index)
+    }
+    server :: state.files[index]
+    return dir.connect(server.end, server.port, startup.budget)
 }
 
 // One request to a disk's partition server, and its answer, waited for.

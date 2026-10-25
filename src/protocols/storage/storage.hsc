@@ -2,13 +2,15 @@ package storage
 
 import os from "std"
 import slop_os from "std/os"
+import dir from "std/os/slop_os"
 import block from "../block"
 import partitions from "../partitions"
 
 /*
  * The storage manager's protocol (roadmap 8a, decisions/0086): every partition of every disk it holds, by one index
- * from 0, and block connections narrowed to one, from that disk's partition server. Connections arrive on its
- * listener as Connects. Volumes come with 8b and 8d.
+ * from 0, and block connections narrowed to one, from that disk's partition server, or the files of a FAT partition
+ * (an EFI system partition or a basic data one), as a dir connection to its root, from a FAT server for it.
+ * Connections arrive on its listener as Connects. SlopOS's own volumes come with 8d.
  */
 
 Storage :: struct {}
@@ -27,6 +29,8 @@ Request :: union {
     Describe(u32),
     // A new block connection narrowed to the partition at an index
     Open(u32),
+    // The root of the FAT volume on the partition at an index
+    OpenFiles(u32),
     // Serve another client, on its end
     Connect(os.Channel[Storage]),
 }
@@ -34,7 +38,10 @@ Request :: union {
 Response :: union {
     Described(Partition),
     Opened(os.Channel[block.Block]),
+    OpenedFiles(os.Channel[dir.Dir]),
     NoPartition,
+    // The partition isn't one of a kind that holds files, or its FAT server couldn't be started
+    NoFiles,
     Unsupported,
 }
 
@@ -42,6 +49,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Describe(_) => true
         case Open(_) => true
+        case OpenFiles(_) => true
         case Connect(_) => true
     }
 }

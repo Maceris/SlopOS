@@ -119,9 +119,10 @@ of its own with a memory budget split off its starter's, which owns it:
 | `virtio_blk` | the supervisor, through the manager, for each modern virtio block device | its device's bundle, `clients: Listener[Block]` | The disk as the `block` protocol (below) |
 | `virtio_input` | the supervisor, through the manager, for each modern virtio input device | its device's bundle, `clients: Listener[Input]` | Its keyboard, mouse or tablet as the `input` protocol (below) |
 | `edu_dma` | the supervisor, through the manager, for each QEMU edu device | its device's bundle | A driver that isn't trusted with DMA: writes outside its domain, for the test that it's stopped (`0084`) |
-| `storage_manager` | the supervisor, through the manager, once the drivers have started, if there's a disk | `log`, `manager`, `partition_server_module`, `disk0` to `disk3: Channel[Connector]?`, `clients: Listener[Storage]` | Starts a partition server for each disk, and serves every disk's partitions, and block connections narrowed to one, as the `storage` protocol (`0086`) |
+| `storage_manager` | the supervisor, through the manager, once the drivers have started, if there's a disk | `log`, `manager`, `partition_server_module`, `fat_server_module`, `disk0` to `disk3: Channel[Connector]?`, `clients: Listener[Storage]` | Starts a partition server for each disk, and serves every disk's partitions, block connections narrowed to one, and a FAT partition's files, as the `storage` protocol (`0086`, `0087`) |
 | `partition_server` | the storage manager, through the manager, for each disk | `log`, `disk: Channel[Block]`, `clients: Listener[Partitions]` | Reads its disk's GPT, and serves its partitions and block connections narrowed to one as the `partitions` protocol, holding nothing but its disk (`0086`) |
-| `disk_check` | the supervisor, through the manager, if there's a disk | `log`, `storage: Channel[Connector]?` | Opens the partition named `SlopOS check` through the storage manager, reads, writes, flushes and reads back its blocks, is refused the block past its end, and says what it found; the supervisor says everything has started once it has ended |
+| `fat_server` | the storage manager, through the manager, for each FAT partition whose files are asked for | `log`, `partition: Channel[Block]`, `clients: Listener[Dir]` | Serves the FAT32 volume on its partition as the file protocols (below), holding nothing but a connection narrowed to that partition (`0087`) |
+| `disk_check` | the supervisor, through the manager, if there's a disk | `log`, `storage: Channel[Connector]?`, `working_directory: Channel[Dir]?` | Opens the partition named `SlopOS check` through the storage manager, reads, writes, flushes and reads back its blocks, and is refused the block past its end; then uses `std`'s files and the file protocols on the first EFI system partition, its working directory (`0087`); and says what it found. The supervisor says everything has started once it has ended |
 
 **Wiring**: `system_config` names each service's entry, and checks when it's compiled that every
 `Channel[P]` one takes has a server: a service taking a `Listener[P]`, the root task, which serves the
@@ -135,7 +136,10 @@ driver, which may be restarted, but a connector to it: a channel the supervisor 
 protocol's `Connect`, or `Unavailable` while nothing does. `connector.dial[P]` dials, tries again every 100 ms while
 it's unavailable, up to 50 times, and checks the connection speaks `P`; a client whose connection's other end goes
 dials again. The console is given connectors to the first serial line and keyboard, `hello` one to the console, the
-storage manager one to each of the first four disks, and the disk check one to the storage manager.
+storage manager one to each of the first four disks, and the disk check one to the storage manager. The disk check's
+working directory is the first EFI system partition's root, which the supervisor asks the storage manager for
+(`OpenFiles`) on a connection of its own, while its port goes on serving connectors, which the storage manager dials
+its disks through before it answers.
 
 **Restarts**: a driver that ends other than by exiting with 0, killed or crashed, is started again: the platform
 service reissues its device (`Reissue` with its address, answered with `Claimed` and its bundle made anew, to the one
@@ -159,7 +163,7 @@ protocol, an optional's `None` left out.
 rings (`RING_BYTES`):
 - `Load`: the program's name; the process (with `RIGHT_PROCESS_THREADS`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`),
   its address space (owning), its budget (with `RIGHT_BUDGET_CHARGE`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`) and the
-  executable (with `RIGHT_MEMORY_READ`); and up to 16 grants, each with its label. The requester makes the process,
+  executable (with `RIGHT_MEMORY_READ`); and up to 24 grants (16 before version 2), each with its label. The requester makes the process,
   its space and its budget, so the result is never the manager's. The answer is `Loaded` with the first thread's
   ID, or `NotLoaded` with a `LoadStatus`; either way the manager keeps none of the handles.
 - `Connect`: a `Channel[ProcessManager]`, which becomes another client.
@@ -225,6 +229,32 @@ client's tag; `Flush` makes what's written durable; each is answered with `Finis
 order. `Describe` gives the block count, the buffer's size, and whether the disk is read-only and flushes.
 `virtio_blk` keeps up to 16 requests in flight across its clients, each a chain of a header, the data and a status
 byte. A device without a flush writes durably, and its `Flush` is `Done` at once.
+
+**Files** (`std/os/slop_os`'s `files`, `dir`, `read_only_dir`, `file`, `read_only_file` and `file_set`, `0087`): a
+`dir` connection is a directory and everything beneath it, and nothing above it: paths are UTF-8 with `/` between
+components, resolved beneath the directory they're sent on, where `.` and `..` aren't components. `OpenFile` (with
+`Existing`, `New`, `Either` or `Truncate`), `OpenReadOnlyFile` and `OpenDirectory` (`create` making it and any missing
+directory before it) give connections of their own; `List` gives the entry at or after a cursor, and the cursor after
+it; `Remove` takes a file or an empty directory, `Rename` moves what's at one path to another, replacing a file;
+`Narrow` gives the directory as `read_only_dir`, and `Select` a `file_set`: the files whose names match a pattern
+(`*`, `?`), compared as the directory compares names, found when it's used, so files made later match too, and a set
+from a read-only directory refuses `OpenFile`. `Sync` makes everything changed beneath it durable; `Features` says
+what the file system does beyond the least, for FAT only ignoring case. A file's bytes move through a buffer the
+client gives its connection once (`UseBuffer`, a memory object the server maps, at most 16 MiB): `Read` and `Write`
+name the file's offset, a count and an offset in the buffer; `SetSize` cuts or extends with zeros; `Narrow` gives the
+file as `read_only_file`. `Info` gives the kind, the size and an informational name, the path it was opened as, for
+display only (`0018`). Errors are a `FileError`: `NotFound`, `NotADirectory`, `IsADirectory`, `AlreadyExists`,
+`DirectoryNotEmpty`, `InvalidPath`, `NoSpace`, `ReadOnly`, `DeviceError`, `Corrupt` or `NoBuffer`.
+
+`std`'s files (`std/os/slop_os_files.hsc`) are these: `os.Directory` a `dir` connection, `os.File` a `file` or
+`read_only_file` one with a 64 KiB buffer of its own, and the path functions (`open`, `read_entire_file` and the rest)
+resolve beneath the program's `working_directory` grant, failing with `NotFound` without one and `InvalidPath` for a
+path above it.
+
+The **FAT server** (`src/services/fat_server`, over `src/fat`) serves FAT32 with long names, read and write: a new
+name gets an 8.3 alias (`~N`), names compare ignoring ASCII case, times are 1980-01-01, and FAT12 and FAT16 are
+refused. Each request re-reads its directory entry, so a file renamed or removed through another connection is seen
+at once. Up to 64 connections.
 
 **Hardware randomness** (`src/protocols/rng`): an RNG's driver makes a channel of the `rng` protocol (`Read` with a
 count, answered with `Bytes`) and offers it to the entropy service with `entropy.AddSource`. The entropy service
