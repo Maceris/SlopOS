@@ -57,7 +57,8 @@ python tools/boot.py --expect 0
 | `--no-kaslr` | The same addresses on every boot: no random image base, direct map or kernel window (`0021`) |
 | `--timeout SECONDS` | Give up after this long; 30 by default |
 | `--serial PATH` | Also keep the serial output in a file |
-| `--console-input LINE` | Add a virtio console linked to a TCP socket on the loopback, and type this line into it once the console service's banner shows; may be repeated |
+| `--console-input LINE` | Add a virtio console linked to a TCP socket on the loopback, and type this line into it when the console service's banner shows; may be repeated, the i-th line typed at the i-th banner, as when the console has dialed its serial line again |
+| `--keyboard-input LINE` | Add a virtio keyboard and the virtio console, and type this line on the keyboard, a key at a time with Enter at the end, through QEMU's machine protocol (QMP) on a loopback socket, once the console's banner shows; may be repeated |
 | `--expect-console-line LINE` | With `--expect`: the virtio console must show this exact line; may be repeated |
 | `--disk MARK` | Add a virtio block device: a 1 MiB image with `MARK` at the start of block 0, and `block N` at the start of blocks 2 to 9 |
 | `--expect-disk-block N=TEXT` | With `--expect`: block `N` of the image must start with `TEXT` once the kernel has stopped; may be repeated |

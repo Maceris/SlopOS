@@ -20,7 +20,9 @@ import supervisor from "../services/supervisor"
 import hello from "../apps/hello"
 import virtio_blk from "../drivers/virtio_blk"
 import virtio_console from "../drivers/virtio_console"
+import virtio_input from "../drivers/virtio_input"
 import virtio_rng from "../drivers/virtio_rng"
+import connector from "../protocols/connector"
 import platform_protocol from "../protocols/platform"
 import supervision from "../protocols/supervision"
 import test_channels from "../tests/test_channels"
@@ -97,6 +99,10 @@ SERVICES :: Service.[
     Service.{name = "virtio_console", module = "virtio_console.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(virtio_console.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1043,
         class = platform_protocol.ANY_CLASS}},
+    // A modern virtio input device (virtio's device ID 18), a keyboard, mouse or tablet
+    Service.{name = "virtio_input", module = "virtio_input.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
+        entry = type_of(virtio_input.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1052,
+        class = platform_protocol.ANY_CLASS}},
 ]
 
 /*
@@ -120,6 +126,9 @@ same_test_entries :: fn() -> bool {
 // What the root task serves itself: the supervisor's reports.
 ROOT_TASK_SERVES :: type.[os.Listener[supervision.Supervision]]
 
+// What the supervisor serves itself: connectors, which dial what it started (decisions/0077).
+SUPERVISOR_SERVES :: type.[os.Listener[connector.Connector]]
+
 // The service named name.
 service :: fn(name: string) -> Service? {
     for each in SERVICES {
@@ -131,8 +140,9 @@ service :: fn(name: string) -> Service? {
 }
 
 /*
- * Every os.Channel[P] a service takes, or an optional one, has a server: a service taking an os.Listener[P], or
- * the root task, which serves ROOT_TASK_SERVES. One without fails the build, saying which.
+ * Every os.Channel[P] a service takes, or an optional one, has a server: a service taking an os.Listener[P], the
+ * root task, which serves ROOT_TASK_SERVES, or the supervisor, which serves SUPERVISOR_SERVES. One without fails the
+ * build, saying which.
  */
 check_wiring :: fn() {
     for each in SERVICES {
@@ -149,6 +159,9 @@ check_wiring :: fn() {
                 }
             }
             for offered in ROOT_TASK_SERVES {
+                served = served || os.end_tag(type_info_of(offered)) == tag
+            }
+            for offered in SUPERVISOR_SERVES {
                 served = served || os.end_tag(type_info_of(offered)) == tag
             }
             if !served {

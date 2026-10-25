@@ -88,7 +88,11 @@ handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interfac
             leave_cpu(cpu)
         }
         else {
-            runtime.log_info("thread % stopped by a fault: %", thread.id, fault)
+            // A process being destroyed loses its memory while its threads may still run, which then fault: as expected
+            owner :: thread.header.owner
+            if !is_dying(cast[u64](thread)) && (owner == 0 || !is_dying(owner)) {
+                runtime.log_info("thread % stopped by a fault: %", thread.id, fault)
+            }
             _ = destroy_object(kernel, cast[u64](thread))
         }
     }

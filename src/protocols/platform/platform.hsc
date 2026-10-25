@@ -4,8 +4,8 @@ import os from "std"
 import slop_os from "std/os"
 
 /*
- * The platform service's protocol (decisions/0074): the devices it found, each claimed once, by the supervisor, for a
- * driver system_config names, with everything the driver holds of it. Connections arrive on its listener as Connects.
+ * The platform service's protocol (decisions/0074, 0077): the devices it found, each claimed once, by the supervisor, for
+ * a driver system_config names, with everything the driver holds of it, and given again for a driver that's restarted. Connections arrive on its listener as Connects.
  */
 
 Platform :: struct {}
@@ -51,6 +51,8 @@ Request :: union {
     Claim(DeviceMatch),
     // Serve another client, on its end
     Connect(os.Channel[Platform]),
+    // A device this client claimed, at its address, given again, made anew: the last bundle died with its driver
+    Reissue(u32),
 }
 
 Response :: union {
@@ -65,6 +67,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Claim(_) => false
         case Connect(_) => true
+        case Reissue(_) => false
     }
 }
 

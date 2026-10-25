@@ -52,6 +52,8 @@ Function :: struct {
     config : u64,
     bars : Bar[6],
     claimed : bool,
+    // The client that claimed it, by its index
+    claimer : usize,
 }
 
 Platform :: struct {
@@ -450,7 +452,7 @@ serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
             case Claim(wanted) => {
                 out := os.Outgoing.{}
                 response :: os.begin[protocol.Response](&out)
-                response^ = claim(to, platform, state, wanted)
+                response^ = claim(to, platform, state, index, wanted)
                 _ = protocol.send_response(end, port, &out)
             }
             case Connect(connection) => {
@@ -458,12 +460,43 @@ serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
                     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
                 }
             }
+            case Reissue(address) => {
+                out := os.Outgoing.{}
+                response :: os.begin[protocol.Response](&out)
+                response^ = reissue(to, platform, state, index, address)
+                _ = protocol.send_response(end, port, &out)
+            }
         }
     }
 }
 
+/*
+ * A claimed device, by its address, given again to the client that claimed it, made anew; NoDevice for one it didn't
+ * claim. Its last Device and the rest died with the driver that held them.
+ */
+reissue :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], client: usize, address: u32) -> protocol.Response {
+    for &function, i in state.functions {
+        if i >= state.count {
+            break
+        }
+        if !function.claimed || function.claimer != client
+            || slop_os.device_address(state.host.segment, function.bus, function.device, function.function) != address {
+            continue
+        }
+        match bundle_of(platform, state, function) {
+            case Some(device) => {
+                log_line.write(to, "platform: %:%.% reissued", function.bus, function.device, function.function)
+                return .Claimed(device)
+            }
+            case None => return .NoDevice
+        }
+    }
+    return .NoDevice
+}
+
 // The next unclaimed function wanted matches, with what its driver holds of it; or NoDevice.
-claim :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], wanted: protocol.DeviceMatch) -> protocol.Response {
+claim :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], client: usize, wanted: protocol.DeviceMatch)
+    -> protocol.Response {
     for &function, i in state.functions {
         if i >= state.count {
             break
@@ -474,6 +507,7 @@ claim :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Pla
         match bundle_of(platform, state, function) {
             case Some(device) => {
                 function.claimed = true
+                function.claimer = client
                 log_line.write(to, "platform: %:%.% (% %) claimed", function.bus, function.device, function.function,
                     function.vendor, function.device_id)
                 return .Claimed(device)

@@ -111,19 +111,34 @@ of its own with a memory budget split off its starter's, which owns it:
 | `entropy` | the root task, with its own loader | `log`, `clients: Listener[Entropy]` | Random bytes from a ChaCha20 stream seeded from its startup block, for each connection |
 | `process_manager` | the root task, with its own loader | `log`, `entropy: Channel[Entropy]`, `clients: Listener[ProcessManager]` | Loads programs for requesters (below), drawing each one's seed, and the randomness that places its parts, from `entropy` |
 | `platform` | the root task, through the manager | `log`, `platform`, `firmware`, `clients: Listener[Platform]`, `command_line?` | Finds the PCIe host bridge in the firmware tables, numbers its buses and places its BARs where firmware didn't, and gives each device to the supervisor once (below) |
-| `supervisor` | the root task, through the manager | `log`, `manager`, `root: Channel[Supervision]`, `hello_module`, `platform_service: Channel[Platform]?`, `entropy_service: Channel[Entropy]?`, each driver's module | Starts the services `system_config` gives it with `os.launch`, and a driver for each device it claims from the platform service, owns them, and tells the root task as each starts and ends, and once all have; it restarts nothing yet |
-| `console` | the supervisor, through the manager, once the drivers have started | `log`, `serial_line: Channel[Serial]?`, `clients: Listener[ConsoleLog]` | Shows its clients' lines on the first serial line, and echoes back what's typed into it (below); M10's terminal service replaces it |
-| `hello` | the supervisor, through the manager | `log?`, `manager?`, `console: Channel[ConsoleLog]?` | Reports that its heap and random numbers work, in its debug log and on the console, and given a connection to the manager, that it's still running once the manager is gone |
+| `supervisor` | the root task, through the manager | `log`, `manager`, `root: Channel[Supervision]`, `hello_module`, `platform_service: Channel[Platform]?`, `entropy_service: Channel[Entropy]?`, each driver's module, `command_line?` | Starts the services `system_config` gives it with `os.launch`, and a driver for each device it claims from the platform service, owns them, serves the connectors they're reached through, restarts a driver that crashes or is killed (below), and tells the root task as each starts and ends, and once all have |
+| `console` | the supervisor, through the manager, once the drivers have started | `log`, `serial_line: Channel[Connector]?`, `keyboard: Channel[Connector]?`, `clients: Listener[ConsoleLog]` | Shows its clients' lines on the first serial line, and echoes back what's typed into it or on the first keyboard (below); M10's terminal service replaces it |
+| `hello` | the supervisor, through the manager | `log?`, `manager?`, `console: Channel[Connector]?` | Reports that its heap and random numbers work, in its debug log and on the console, and given a connection to the manager, that it's still running once the manager is gone |
 | `virtio_rng` | the supervisor, through the manager, for each modern virtio entropy device | its device's bundle (below), `entropy_service: Channel[Entropy]?` | Offers the device's bytes to the entropy service as a source, on a channel of the `rng` protocol |
 | `virtio_console` | the supervisor, through the manager, for each modern virtio console | its device's bundle, `clients: Listener[Serial]` | Its device's first port as the `serial` protocol |
 | `virtio_blk` | the supervisor, through the manager, for each modern virtio block device | its device's bundle, `clients: Listener[Block]` | The disk as the `block` protocol (below) |
-| `disk_check` | the supervisor, through the manager, if there's a disk | `log`, `disk: Channel[Block]?` | Reads, writes, flushes and reads back blocks of the first disk, and says what it found; M8's storage manager replaces it |
+| `virtio_input` | the supervisor, through the manager, for each modern virtio input device | its device's bundle, `clients: Listener[Input]` | Its keyboard, mouse or tablet as the `input` protocol (below) |
+| `disk_check` | the supervisor, through the manager, if there's a disk | `log`, `disk: Channel[Connector]?` | Reads, writes, flushes and reads back blocks of the first disk, and says what it found; M8's storage manager replaces it |
 
 **Wiring**: `system_config` names each service's entry, and checks when it's compiled that every
-`Channel[P]` one takes has a server: a service taking a `Listener[P]`, or the root task, which serves the
-supervisor's reports. The root task holds the other end of each listener, and connects a service by sending a
-new channel's end through it in the protocol's `Connect` request (each protocol package's `connect`); its own
-connection to the manager is the listener itself.
+`Channel[P]` one takes has a server: a service taking a `Listener[P]`, the root task, which serves the
+supervisor's reports, or the supervisor, which serves connectors. The root task holds the other end of each
+listener, and connects a service by sending a new channel's end through it in the protocol's `Connect` request
+(each protocol package's `connect`); its own connection to the manager is the listener itself.
+
+**Connectors** (`src/protocols/connector`, `0077`): a service the supervisor starts doesn't get connections to a
+driver, which may be restarted, but a connector to it: a channel the supervisor serves, whose `Dial` is answered with
+`Dialed` and a new connection to whichever process serves it now, made through that driver's listener with its
+protocol's `Connect`, or `Unavailable` while nothing does. `connector.dial[P]` dials, tries again every 100 ms while
+it's unavailable, up to 50 times, and checks the connection speaks `P`; a client whose connection's other end goes
+dials again. The console is given connectors to the first serial line and keyboard, `hello` one to the console, and
+the disk check one to the first disk.
+
+**Restarts**: a driver that ends other than by exiting with 0, killed or crashed, is started again: the platform
+service reissues its device (`Reissue` with its address, answered with `Claimed` and its bundle made anew, to the one
+that claimed it), and the supervisor launches the driver with it and a new listener, in the same place among what it
+started, which it reports started again. A driver that ends a fourth time within a minute isn't. Its device's objects
+were the driver's, given to it, so they went with it.
 
 **Loading a program** (`src/process_builder`, which the root task and the manager share) does through calls
 what the kernel does for the root task: the image is loaded and relocated into a memory object, its segments
@@ -141,7 +156,7 @@ protocol, an optional's `None` left out.
 rings (`RING_BYTES`):
 - `Load`: the program's name; the process (with `RIGHT_PROCESS_THREADS`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`),
   its address space (owning), its budget (with `RIGHT_BUDGET_CHARGE`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`) and the
-  executable (with `RIGHT_MEMORY_READ`); and up to 12 grants, each with its label. The requester makes the process,
+  executable (with `RIGHT_MEMORY_READ`); and up to 16 grants, each with its label. The requester makes the process,
   its space and its budget, so the result is never the manager's. The answer is `Loaded` with the first thread's
   ID, or `NotLoaded` with a `LoadStatus`; either way the manager keeps none of the handles.
 - `Connect`: a `Channel[ProcessManager]`, which becomes another client.
@@ -177,7 +192,7 @@ driver holds its own device and nothing else, and needs the platform service no 
 
 **Drivers** are in `src/drivers`. A virtio device is reached through `src/virtio`: the modern virtio-pci transport,
 its registers through its vendor capabilities, its features (`VERSION_1` always), MSI-X with one vector per queue,
-and split virtqueues of up to 16 descriptors in a page of DMA memory, laid out in little-endian types.
+and split virtqueues of up to 64 descriptors in a page of DMA memory, laid out in little-endian types.
 
 **Drivers that serve clients** take a listener (`clients: Listener[P]`), whose other end the supervisor keeps and
 connects the services that use them through, so `system_config`'s wiring check sees the driver as `P`'s server (`0075`).
@@ -189,8 +204,15 @@ multiport): four receive buffers always offered to the device, and one buffer to
 
 **The console** (`src/services/console`, `src/protocols/console_log`): its clients send `Line`s, answered with
 nothing, which it shows on the first serial line the supervisor gives it, after a line break and its banner,
-`SlopOS console`; each line typed into it is written to its debug log (`console: read ...`) and echoed back
-(`echo: ...`).
+`SlopOS console`; each line typed into it, or on the first keyboard, which it reads as a US layout (shift, Enter,
+Backspace), is written to its debug log (`console: read ...`) and echoed back (`echo: ...`). A serial line or
+keyboard that goes is dialed again, and the banner shown again.
+
+**Input devices** (`src/protocols/input`, `0077`): events in SlopOS's own terms, each a kind (`Key`, `Motion`,
+`Position`, `Button`, `Wheel`), whether it's pressed, a code and x and y: a key by its USB HID usage (page 7), a button
+from 0 for the left, a pointer's motion or position, how far a wheel turned. `Read` with the most to take, held until
+there's at least one, is answered with `Events`; every client sees every event from when it connected. `virtio_input`
+turns its device's evdev events into these: keys 0 to 127 by a table, buttons, relative and absolute axes, the wheel.
 
 **Disks** (`src/protocols/block`, `0076`): a disk is 512-byte blocks. Each connection has a buffer, DMA memory the
 driver makes at its first `GetBuffer` and gives a read-write window onto, 64 KiB for `virtio_blk`, which the device
@@ -210,10 +232,13 @@ its stream with its own next 32 bytes XORed with the source's.
 it with 0 a second after the supervisor says it has started everything (`AllStarted`), for drivers to come up;
 `test_outlive_manager` kills the manager once `hello` has started, then ends once `hello` has, after it said it's
 still running; and `test_reassign` has the platform service take every virtio device's BARs and every bridge's bus
-numbers as unset, so assigning them is tested where firmware assigns everything. `tools/boot.py` can link a virtio
-console to a TCP socket on the loopback (`--console-input`, `--expect-console-line`), which it types into once the
-console's banner shows, and whose lines it checks; and add a virtio disk, an image it marks (`--disk`) and checks
-afterwards (`--expect-disk-block`).
+numbers as unset, so assigning them is tested where firmware assigns everything. The supervisor's `test_restart`
+kills the first serial line's driver once the console has dialed it, and says it has started everything only once
+the driver's been restarted and dialed again. `tools/boot.py` can link a virtio console to a TCP socket on the
+loopback (`--console-input`, `--expect-console-line`), which it types its i-th line into at the console's i-th
+banner, and whose lines it checks; add a virtio keyboard it types on through QEMU's machine protocol
+(`--keyboard-input`); and add a virtio disk, an image it marks (`--disk`) and checks afterwards
+(`--expect-disk-block`).
 
 ## Test Programs
 

@@ -36,6 +36,7 @@ Tools are found from the environment, then the PATH:
 """
 
 import argparse
+import json
 import os
 import shutil
 import socket
@@ -213,19 +214,104 @@ def run_aarch64(image: Path, qemu: Path, serial: Path, timeout: float, cpu: str,
 CONSOLE_BANNER = "SlopOS console"
 
 
+def free_port() -> int:
+    """A TCP port on the loopback nothing is listening on, for QEMU to serve."""
+    finding = socket.socket()
+    finding.bind(("127.0.0.1", 0))
+    port = finding.getsockname()[1]
+    finding.close()
+    return port
+
+
+# QEMU's key codes (qcodes) for what a US keyboard types, each with whether shift is held for it
+QCODES = {" ": ("spc", False), "-": ("minus", False), "_": ("minus", True), "=": ("equal", False), "+": ("equal", True),
+          ".": ("dot", False), ",": ("comma", False), "/": ("slash", False), "?": ("slash", True), ";": ("semicolon", False),
+          ":": ("semicolon", True), "'": ("apostrophe", False), "!": ("1", True), "@": ("2", True), "#": ("3", True),
+          "$": ("4", True), "%": ("5", True), "^": ("6", True), "&": ("7", True), "*": ("8", True), "(": ("9", True),
+          ")": ("0", True), "\n": ("ret", False)}
+
+
+def qcode_of(character: str) -> tuple[str, bool]:
+    if character.isascii() and character.isalnum():
+        return character.lower(), character.isupper()
+    return QCODES[character]
+
+
+class Keyboard:
+    """
+    A virtio keyboard, typed into through QEMU's machine protocol (QMP), which QEMU serves on a loopback socket: each
+    line, a key down and up at a time, with shift held where it's needed, and Enter at the end.
+    """
+
+    def __init__(self):
+        self.port = free_port()
+        self.connection = None
+        self.replies = b""
+
+    def qemu_arguments(self) -> list[str]:
+        return ["-device", "virtio-keyboard-pci,disable-legacy=on,id=keyboard",
+                "-qmp", f"tcp:127.0.0.1:{self.port},server=on,wait=off"]
+
+    def command(self, name: str, arguments: dict | None = None) -> None:
+        message = {"execute": name} | ({"arguments": arguments} if arguments is not None else {})
+        self.connection.sendall(json.dumps(message).encode() + b"\n")
+        # Its reply, skipping the events QEMU sends between
+        while True:
+            while b"\n" not in self.replies:
+                data = self.connection.recv(4096)
+                if not data:
+                    raise OSError("QMP closed")
+                self.replies += data
+            line, _, self.replies = self.replies.partition(b"\n")
+            reply = json.loads(line)
+            if "return" in reply or "error" in reply:
+                return
+
+    def connect(self) -> bool:
+        deadline = time.monotonic() + 30
+        while self.connection is None and time.monotonic() < deadline:
+            try:
+                self.connection = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            except OSError:
+                time.sleep(0.2)
+        if self.connection is None:
+            return False
+        # Its greeting, then out of negotiation
+        while b"\n" not in self.replies:
+            self.replies += self.connection.recv(4096)
+        _, _, self.replies = self.replies.partition(b"\n")
+        self.command("qmp_capabilities")
+        return True
+
+    def key(self, qcode: str, down: bool) -> None:
+        self.command("input-send-event", {"events": [
+            {"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": qcode}}}]})
+
+    def type_line(self, line: str) -> None:
+        for character in line + "\n":
+            qcode, shifted = qcode_of(character)
+            if shifted:
+                self.key("shift", True)
+            self.key(qcode, True)
+            self.key(qcode, False)
+            if shifted:
+                self.key("shift", False)
+
+
 class ConsoleLink:
     """
     A virtio console whose other end is a TCP socket QEMU serves on the loopback (a file can't be typed into on
     Windows): this connects to it, waits for the console's banner, types input into it, and keeps what it shows. QEMU
-    waits for the connection before it starts the machine, since what's written with nothing connected is lost.
+    waits for the connection before it starts the machine, since what's written with nothing connected is lost. The
+    i-th line typed is typed at the i-th banner, so a console that's connected again gets the next; lines for a
+    keyboard are typed at the first banner, once the serial lines have been.
     """
 
-    def __init__(self, typed: list[str]):
-        finding = socket.socket()
-        finding.bind(("127.0.0.1", 0))
-        self.port = finding.getsockname()[1]
-        finding.close()
+    def __init__(self, typed: list[str], keyed: list[str], keyboard: "Keyboard | None"):
+        self.port = free_port()
         self.typed = typed
+        self.keyed = keyed
+        self.keyboard = keyboard
         self.shown = ""
         self.thread = threading.Thread(target=self.talk, daemon=True)
 
@@ -245,7 +331,7 @@ class ConsoleLink:
         if connection is None:
             return
         connection.settimeout(None)
-        sent = False
+        banners = 0
         with connection:
             while True:
                 try:
@@ -255,10 +341,17 @@ class ConsoleLink:
                 if not data:
                     return
                 self.shown += data.decode(errors="replace")
-                if not sent and CONSOLE_BANNER in self.shown:
-                    sent = True
-                    for line in self.typed:
-                        connection.sendall((line + "\n").encode())
+                while self.shown.count(CONSOLE_BANNER) > banners:
+                    if banners < len(self.typed):
+                        connection.sendall((self.typed[banners] + "\n").encode())
+                    if banners == 0 and self.keyboard is not None and self.keyed:
+                        try:
+                            if self.keyboard.connect():
+                                for line in self.keyed:
+                                    self.keyboard.type_line(line)
+                        except OSError:
+                            pass
+                    banners += 1
 
     def lines(self) -> list[str]:
         return [line.rstrip("\r") for line in self.shown.split("\n")]
@@ -308,6 +401,9 @@ def main() -> int:
                         help="a line to type into a virtio console, which this adds, once it shows its banner; may be repeated")
     parser.add_argument("--expect-console-line", action="append", default=[],
                         help="a line the virtio console should show, with --expect; may be repeated")
+    parser.add_argument("--keyboard-input", action="append", default=[],
+                        help="a line to type on a virtio keyboard, which this adds with a virtio console, once the console "
+                             "shows its banner; may be repeated")
     parser.add_argument("--disk", help="add a virtio block device, a disk image with this mark in block 0 (make_disk)")
     parser.add_argument("--expect-disk-block", action="append", default=[],
                         help="N=TEXT: block N of the --disk image starts with TEXT once the kernel has stopped, with --expect; "
@@ -348,8 +444,12 @@ def main() -> int:
         if arguments.disk is not None:
             make_disk(disk, arguments.disk)
             extra += ["-drive", f"file={disk},if=none,id=disk,format=raw", "-device", "virtio-blk-pci,drive=disk,disable-legacy=on"]
-        if arguments.console_input or arguments.expect_console_line:
-            console = ConsoleLink(arguments.console_input)
+        keyboard = None
+        if arguments.keyboard_input:
+            keyboard = Keyboard()
+            extra += keyboard.qemu_arguments()
+        if arguments.console_input or arguments.expect_console_line or arguments.keyboard_input:
+            console = ConsoleLink(arguments.console_input, arguments.keyboard_input, keyboard)
             extra += console.qemu_arguments()
             console.thread.start()
         if aarch64:

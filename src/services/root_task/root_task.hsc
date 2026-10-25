@@ -48,7 +48,9 @@ SupervisorGrants :: struct {
     disk_check_module : slop_os.Memory?,
     virtio_blk_module : slop_os.Memory?,
     virtio_console_module : slop_os.Memory?,
+    virtio_input_module : slop_os.Memory?,
     virtio_rng_module : slop_os.Memory?,
+    command_line : slop_os.Memory?,
 }
 
 // What the platform service is given (platform.main).
@@ -159,7 +161,12 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         disk_check_module = module_copy(block, "disk_check", module_rights),
         virtio_blk_module = module_copy(block, "virtio_blk", module_rights),
         virtio_console_module = module_copy(block, "virtio_console", module_rights),
+        virtio_input_module = module_copy(block, "virtio_input", module_rights),
         virtio_rng_module = module_copy(block, "virtio_rng", module_rights),
+    }
+    match slop_os.handle_duplicate(cast[slop_os.Handle](command_line), module_rights) {
+        case Ok(copy) => grants.command_line = cast[slop_os.Memory](copy)
+        case Error(error) => {}
     }
     match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, supervisor.main, grants) {
         case Ok(launched) => {

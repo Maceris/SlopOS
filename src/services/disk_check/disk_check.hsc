@@ -1,8 +1,9 @@
 /*
- * The disk check (decisions/0076), until M8's storage manager: given a connection to the first disk, it describes it,
- * takes its buffer, reads the mark tools/boot.py wrote in block 0, writes its own into block 1, flushes, reads it back,
- * and reads blocks 2 to 9 with eight requests in flight at once, each holding its number as boot.py wrote it. It says
- * what it found in its debug log, and ends with 0 if all of it held, or the number of the first check that didn't.
+ * The disk check (decisions/0076, 0077), until M8's storage manager: given a connector to the first disk, it dials it,
+ * describes it, takes its buffer, reads the mark tools/boot.py wrote in block 0, writes its own into block 1, flushes,
+ * reads it back, and reads blocks 2 to 9 with eight requests in flight at once, each holding its number as boot.py wrote
+ * it. It says what it found in its debug log, and ends with 0 if all of it held, or the number of the first check that
+ * didn't.
  */
 package disk_check
 
@@ -12,6 +13,7 @@ import slop_os from "std/os"
 import text_buffer from "std"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
+import connector from "../../protocols/connector"
 
 HOST_MARK :: "SlopOS disk check: from the host"
 GUEST_MARK :: "SlopOS disk check: from the guest"
@@ -29,14 +31,16 @@ Disk :: struct {
     buffer : u64,
 }
 
-main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block]?) -> int {
+main :: fn(log: slop_os.DebugLog?, disk: os.Channel[connector.Connector]?) -> int {
     block_of_startup :: slop_os.startup_block()
     to :: log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
-    connection :: disk or_else os.Channel[block.Block].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
-    if cast[slop_os.Handle](connection.end) == slop_os.NO_HANDLE {
+    dialing :: disk or_else os.Channel[connector.Connector].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
+    if cast[slop_os.Handle](dialing.end) == slop_os.NO_HANDLE {
         log_line.write(to, "disk_check: no disk")
         return 0
     }
+    dial_port :: os.port_for(block_of_startup.budget, dialing.end) or_return 1
+    connection :: connector.dial[block.Block](dialing.end, dial_port) or_return 1
     checked := Disk.{log = to, end = connection.end}
     checked.port = os.port_for(block_of_startup.budget, connection.end) or_return 1
     // What it is, and its buffer
