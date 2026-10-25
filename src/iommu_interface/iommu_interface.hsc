@@ -64,18 +64,19 @@ FreedFrames :: struct {
     frames : PhysicalAddress[4],
 }
 
-// What an IOMMU writes, and where, to raise a message-signaled interrupt for its faults: arch_interface's MsiMessage.
-FaultMessage :: struct {
+// What's written, and where, to raise a message-signaled interrupt: arch_interface's MsiMessage.
+MsiMessage :: struct {
     address : u64,
     data : u32,
 }
 
-// A DMA access an IOMMU blocked.
+// A DMA access an IOMMU blocked, or an interrupt it didn't remap.
 DmaFault :: struct {
     stream : u32,
-    // The page it was to, as the device addressed it.
+    // The page it was to, as the device addressed it; for an interrupt, the remapped interrupt's index.
     address : u64,
     write : bool,
+    interrupt : bool,
     // Why, as the IOMMU numbers its reasons.
     reason : u32,
 }
@@ -91,6 +92,8 @@ IommuInfo :: struct {
     memory : u64,
     // Domain IDs from 1 up to this, one per domain on it.
     domain_ids : u32,
+    // The interrupts it remaps, by index from 0, once it's enabled; 0 if it doesn't.
+    interrupts : u32,
 }
 
 /*
@@ -107,7 +110,7 @@ identify : fn(iommu: ptr[mut Iommu], kind: IommuKind, registers: VirtualAddress,
 enable : fn(iommu: ptr[mut Iommu], memory: PhysicalAddress, direct_map_offset: u64) -> Result[void, IommuError] : ---
 
 // Signal its faults by writing message.
-route_faults : fn(iommu: ptr[mut Iommu], message: FaultMessage) : ---
+route_faults : fn(iommu: ptr[mut Iommu], message: MsiMessage) : ---
 
 // Make domain an empty one on the IOMMU, with ID id and root, a zeroed frame, for its top-level table.
 init_domain : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], id: u32, root: PhysicalAddress) : ---
@@ -142,3 +145,12 @@ release_domain : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], freed: ptr[mut F
 
 // The oldest fault it recorded and hasn't given yet, taken from its records, or null.
 next_fault : fn(iommu: ptr[mut Iommu]) -> DmaFault? : ---
+
+/*
+ * Remapped interrupt index made to deliver vector, an InterruptId, to the CPU with this hardware ID, from stream only:
+ * the message stream's device writes to raise it. The IOMMU uses it once this returns.
+ */
+remap_interrupt : fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32) -> MsiMessage : ---
+
+// Remapped interrupt index raising nothing, and nothing the IOMMU cached of it left, when this returns.
+unmap_interrupt : fn(iommu: ptr[mut Iommu], index: u32) : ---

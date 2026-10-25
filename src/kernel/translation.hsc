@@ -2,6 +2,7 @@ package kernel
 
 import intrinsics from "base"
 import runtime from "base"
+import arch_interface from "../arch_interface"
 import iommu_interface from "../iommu_interface"
 import boot_info from "../boot_info"
 import concurrency from "std"
@@ -26,6 +27,11 @@ import frames from "frames"
  * limit; destroying it unmaps it, and the IOMMU reaches none of it once that returns. Destroying a domain detaches its
  * devices first, and its tables go once nothing can reach them.
  *
+ * Interrupt remapping (roadmap Dc): an IOMMU that remaps interrupts (VT-d's) turns it on with translation, and every
+ * message-signaled IRQ of a device behind it then has an entry of its own there, its message the entry's handle, which
+ * the IOMMU takes only from that device; the compatibility-format messages devices could forge are blocked. Wired
+ * lines' are too, as the I/O APIC's entries aren't remapped yet, so no IRQ is made for one once an IOMMU remaps.
+ *
  * Everything an IOMMU does is under its lock. Lock order: a device's lock, then an IOMMU's lock.
  */
 
@@ -39,6 +45,8 @@ MAX_FREE_RANGES :: 16
 MAX_FAULTS_TAKEN :: 16
 // A route's controller for an IOMMU's faults, whose line is the IOMMU's number (interrupts.hsc)
 IOMMU_CONTROLLER : u32 : 0xfffffffe
+// Remapped interrupts the kernel gives out on each IOMMU, at most
+MAX_REMAPPED_INTERRUPTS :: 256
 
 // A free range of a domain's I/O virtual addresses.
 AddressRange :: struct {
@@ -71,6 +79,9 @@ start_translation :: fn(kernel: ptr[mut Kernel], index: u32) {
         case Ok => {
             registered.translating = true
             registered.id_limit = if registered.info.domain_ids < MAX_DOMAIN_IDS { registered.info.domain_ids } else { MAX_DOMAIN_IDS - 1 }
+            registered.remapping = registered.info.interrupts != 0
+            registered.interrupt_limit = if registered.info.interrupts < MAX_REMAPPED_INTERRUPTS { registered.info.interrupts }
+                else { MAX_REMAPPED_INTERRUPTS }
         }
         case Error(error) => failed = true
     }
@@ -80,15 +91,19 @@ start_translation :: fn(kernel: ptr[mut Kernel], index: u32) {
         runtime.log_error("IOMMU %: translation didn't go on", index)
         return void
     }
+    if registered.remapping {
+        intrinsics.atomic_store_u32_release(&kernel.wired_lines_blocked, 1)
+    }
     match route_message(kernel, 0, index, 0, IOMMU_CONTROLLER) {
         case Ok(id) => {
             cpus :: kernel.cpus
             hardware_id :: if cpus.count > 0 { cpus[0].hardware_id } else { cast[u64](0) }
             message :: arch.route_msi(0, index, hardware_id, id)
             concurrency.lock(&registered.lock)
-            iommu_unit.route_faults(&registered.unit, iommu_interface.FaultMessage.{address = message.address, data = message.data})
+            iommu_unit.route_faults(&registered.unit, iommu_interface.MsiMessage.{address = message.address, data = message.data})
             concurrency.unlock(&registered.lock)
-            runtime.log_info("IOMMU %: translating, its faults to CPU 0's interrupt %", index, cast[u32](id))
+            runtime.log_info("IOMMU %: translating, % interrupts remapped, its faults to CPU 0's interrupt %", index,
+                registered.interrupt_limit, cast[u32](id))
         }
         case Error(error) => runtime.log_warn("IOMMU %: translating, but its faults aren't signalled", index)
     }
@@ -111,8 +126,15 @@ handle_dma_faults :: fn(kernel: ptr[mut Kernel], index: u32) {
         }
         concurrency.unlock(&registered.lock)
         fault :: found or_return void
-        runtime.log_warn("IOMMU %: blocked a DMA % at % from %:%.%, reason %", index, if fault.write { "write" } else { "read" },
-            cast[rawptr](fault.address), (fault.stream >> 8) & 0xff, (fault.stream >> 3) & 0x1f, fault.stream & 7, fault.reason)
+        bus, slot, function :: (fault.stream >> 8) & 0xff, (fault.stream >> 3) & 0x1f, fault.stream & 7
+        if fault.interrupt {
+            runtime.log_warn("IOMMU %: blocked an interrupt through remapped interrupt % from %:%.%, reason %", index, fault.address,
+                bus, slot, function, fault.reason)
+        }
+        else {
+            runtime.log_warn("IOMMU %: blocked a DMA % at % from %:%.%, reason %", index, if fault.write { "write" } else { "read" },
+                cast[rawptr](fault.address), bus, slot, function, fault.reason)
+        }
     }
 }
 
@@ -317,6 +339,53 @@ release_domain_tables :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain])
     }
     frames.free(&kernel.frames, cast[boot_info.PhysicalAddress](domain.root), 0)
     give_domain_id(registered, domain.id)
+    concurrency.unlock(&registered.lock)
+}
+
+/*
+ * A message-signaled IRQ of device's, routed to id on the CPU with this hardware ID, remapped by the IOMMU it's
+ * behind, if that remaps interrupts: its message, which only device can raise it with. Null if every remapped
+ * interrupt there is taken; the arch's own message where its IOMMU doesn't remap.
+ */
+remap_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], device: ptr[Device], hardware_id: u64, id: arch_interface.InterruptId)
+    -> arch_interface.MsiMessage? {
+    message :: arch.route_msi(device.msi_source, irq.line, hardware_id, id)
+    path :: iommu_path(kernel, device.address)
+    registered :: translating_iommu(kernel, path.iommu) or_return message
+    if !registered.remapping {
+        return message
+    }
+    concurrency.lock(&registered.lock)
+    defer concurrency.unlock(&registered.lock)
+    index := registered.interrupt_limit
+    for i in 0..<registered.interrupt_limit {
+        word :: cast[usize](i / 64) % registered.interrupts.count
+        bit :: cast[u64](1) << cast[u64](i % 64)
+        if registered.interrupts[word] & bit == 0 {
+            registered.interrupts[word] |= bit
+            index = i
+            break
+        }
+    }
+    if index == registered.interrupt_limit {
+        return null
+    }
+    remapped :: iommu_unit.remap_interrupt(&registered.unit, index, path.stream, hardware_id, cast[u32](id))
+    irq.remap_iommu = path.iommu
+    irq.remap_index = index
+    return arch_interface.MsiMessage.{address = remapped.address, data = remapped.data}
+}
+
+// A remapped IRQ's entry raising nothing again, and free.
+unremap_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
+    if irq.remap_iommu == 0 {
+        return void
+    }
+    registered :: translating_iommu(kernel, irq.remap_iommu) or_return void
+    irq.remap_iommu = 0
+    concurrency.lock(&registered.lock)
+    iommu_unit.unmap_interrupt(&registered.unit, irq.remap_index)
+    registered.interrupts[cast[usize](irq.remap_index / 64) % registered.interrupts.count] &= ~(cast[u64](1) << cast[u64](irq.remap_index % 64))
     concurrency.unlock(&registered.lock)
 }
 

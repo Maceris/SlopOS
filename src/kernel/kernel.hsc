@@ -79,6 +79,8 @@ Kernel :: struct {
     iommu_scopes : IommuScope[MAX_IOMMU_SCOPES],
     iommu_scope_count : u32,
     iommus_lock : concurrency.SpinLock,
+    // Set once an IOMMU remaps interrupts, which blocks every wired line's, not remapped yet (translation.hsc).
+    wired_lines_blocked : u32,
     // test_shootdown's state, as an address, while CPUs are asked to read its page (shootdown_test.hsc)
     shootdown_test : u64,
     // test_ioapic's controller (device_test.hsc)

@@ -6,7 +6,8 @@ import iommu_interface from "../../iommu_interface"
 /*
  * Arm SMMUv3 (iommu_interface, roadmap D): one SMMU, which the platform service finds through the device tree's
  * iommu-map and registers (decisions/0039, 0079). Its domains use stage 2 only, with 4 KiB pages; their width is its
- * output address size, at most 48 bits.
+ * output address size, at most 48 bits. It remaps no interrupts: the GICv3's ITS already takes a device's MSIs only
+ * as the events its device ID was given.
  */
 //SPEC: Arm System Memory Management Unit Architecture Specification, SMMU architecture version 3 (IHI 0070), §6.3.1 (SMMU_IDR0), §6.3.6 (SMMU_IDR5), §6.3.7 (SMMU_AIDR)
 
@@ -64,5 +65,14 @@ identify :: fn(iommu: ptr[mut Iommu], kind: iommu_interface.IommuKind, registers
     }
     iommu.registers = base
     iommu.address_bits = if OUTPUT_BITS[output] < 48 { OUTPUT_BITS[output] } else { 48 }
-    return .Ok(iommu_interface.IommuInfo.{address_bits = iommu.address_bits, major = 3, minor = version & 0xf, memory = 0, domain_ids = 0})
+    return .Ok(iommu_interface.IommuInfo.{address_bits = iommu.address_bits, major = 3, minor = version & 0xf, memory = 0, domain_ids = 0,
+        interrupts = 0})
+}
+
+// It remaps none (info.interrupts is 0), so the kernel never asks.
+remap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32) -> iommu_interface.MsiMessage {
+    return iommu_interface.MsiMessage.{}
+}
+
+unmap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32) {
 }

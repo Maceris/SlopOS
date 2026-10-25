@@ -5,9 +5,10 @@ IOMMU (`../../knowledge/decisions/0039-platform-discovery.md`, `0079`). IOMMUs d
 architecture (Intel VT-d, AMD-Vi, Arm SMMUv3, the RISC-V IOMMU), and an architecture may need several, so they're
 behind an interface of their own, beside the arch interface (`arch_interface.md`), with the same rules.
 
-Status: **specified for DMA remapping**, and implemented for VT-d (`src/iommu/vtd`, on x86-64, roadmap Da and Db):
-identifying an IOMMU, translating DMA domains with invalidation, and recording faults. SMMUv3 (`src/iommu/smmuv3`, on
-AArch64) is identified, and the rest comes with roadmap Dd; interrupt remapping with Dc. Four-digit numbers like
+Status: **specified for DMA and interrupt remapping**, and implemented for VT-d (`src/iommu/vtd`, on x86-64, roadmap
+Da to Dc): identifying an IOMMU, translating DMA domains with invalidation, recording faults, and remapping interrupts.
+SMMUv3 (`src/iommu/smmuv3`, on AArch64) is identified, and the rest comes with roadmap Dd; it remaps no interrupts,
+which the GICv3's ITS isolates by device already. Four-digit numbers like
 `0079` refer to decision records in `../../knowledge/decisions/`.
 
 The interface is internal to the kernel image. It changes together with every IOMMU package, in one change, and
@@ -94,6 +95,8 @@ IommuInfo :: struct {
     memory : u64,
     // Domain IDs from 1 up to this, one per domain on it.
     domain_ids : u32,
+    // The interrupts it remaps, by index from 0, once it's enabled; 0 if it doesn't.
+    interrupts : u32,
 }
 
 /*
@@ -169,28 +172,45 @@ release_domain : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], freed: ptr[mut F
 ### Faults
 
 ```
-// What an IOMMU writes, and where, to raise a message-signaled interrupt for its faults: arch_interface's MsiMessage.
-FaultMessage :: struct {
+// What's written, and where, to raise a message-signaled interrupt: arch_interface's MsiMessage.
+MsiMessage :: struct {
     address : u64,
     data : u32,
 }
 
-// A DMA access an IOMMU blocked.
+// A DMA access an IOMMU blocked, or an interrupt it didn't remap.
 DmaFault :: struct {
     stream : u32,
-    // The page it was to, as the device addressed it.
+    // The page it was to, as the device addressed it; for an interrupt, the remapped interrupt's index.
     address : u64,
     write : bool,
+    interrupt : bool,
     // Why, as the IOMMU numbers its reasons.
     reason : u32,
 }
 
 // Signal its faults by writing message.
-route_faults : fn(iommu: ptr[mut Iommu], message: FaultMessage) : ---
+route_faults : fn(iommu: ptr[mut Iommu], message: MsiMessage) : ---
 
 // The oldest fault it recorded and hasn't given yet, taken from its records, or null.
 next_fault : fn(iommu: ptr[mut Iommu]) -> DmaFault? : ---
 ```
+
+### Interrupt Remapping
+
+```
+/*
+ * Remapped interrupt index made to deliver vector, an InterruptId, to the CPU with this hardware ID, from stream only:
+ * the message stream's device writes to raise it. The IOMMU uses it once this returns.
+ */
+remap_interrupt : fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32) -> MsiMessage : ---
+
+// Remapped interrupt index raising nothing, and nothing the IOMMU cached of it left, when this returns.
+unmap_interrupt : fn(iommu: ptr[mut Iommu], index: u32) : ---
+```
+
+L2 gives each message-signaled IRQ of a device behind an IOMMU that remaps (`info.interrupts` non-zero) an index of
+its own there, and the message `remap_interrupt` gives is the one `irq_message` gives the driver.
 
 ## VT-d
 
@@ -207,7 +227,8 @@ next_fault : fn(iommu: ptr[mut Iommu]) -> DmaFault? : ---
 | `map` | Second-level entries readable and writable for tables, readable and writable as asked for the 4 KiB page; tables from `frames`, counted before anything changes |
 | `invalidate` | A domain-selective IOTLB invalidation, waited for; after mapping, only in caching mode (`CAP_REG.CM`), or a write buffer flush where `CAP_REG.RWBF` asks for one |
 | `release_domain` | The deepest tables first, each cleared from its parent |
-| Faults | `route_faults` programs `FEDATA`, `FEADDR` and `FEUADDR` and unmasks `FECTL`; `next_fault` takes the next fault recording register with its F bit set, from where the last was found, and clears it |
+| Faults | `route_faults` programs `FEDATA`, `FEADDR` and `FEUADDR` and unmasks `FECTL`; `next_fault` takes the next fault recording register with its F bit set, from where the last was found, and clears it; reasons 0x20 to 0x2f are interrupts', with the index in place of the address |
+| Interrupt remapping | Where `ECAP_REG.IR` is set: 256 entries in `enable`'s fourth page, with x2APIC destinations where `ECAP_REG.EIM` is (`IRTA_REG.EIME`), the table pointer set, the interrupt entry cache invalidated, and remapping on, compatibility format left off (`GCMD_REG.CFI` clear). `remap_interrupt` writes a remapped entry: fixed, edge, physical destination, the vector, the CPU's APIC ID, and source validation of the requester ID (SVT 1, SQ 0), then invalidates its cached copy; its message is the remappable format with the index as handle and no subhandle |
 | Caches | Where `ECAP_REG.C` is clear, as QEMU's is, every table entry and descriptor written is flushed with `clflush`, then `mfence` |
 | Streams | A device's requester ID |
 

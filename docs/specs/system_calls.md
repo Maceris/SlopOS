@@ -117,7 +117,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 51 | `device_create` | platform, budget, address, MSI source, configuration space | an owning handle to a Device: the PCIe function at address (`slop_os.device_address`: segment, bus, device, function), whose MSIs the interrupt controller knows as the MSI source (on AArch64, the ITS's device ID, from the device tree's `msi-map`; unused on x86-64), and whose 4 KiB of configuration space is at the physical address given, page-aligned and not RAM (`BadAddress` otherwise). Destroying it clears the function's Bus Master Enable first, so a driver that ends leaves no DMA running into memory that went with it. No other device may have the address, nor on AArch64 the source (`0073`) |
 | 52 | `device_attach` | platform, device, domain | nothing: the device's DMA, in the domain, which an IOMMU will confine it to. The first device attached binds the domain to the IOMMU it's behind, or to none; a device behind another is refused (`WrongIommu`) |
 | 53 | `irq_create_msi` | device, budget | an owning handle to an IRQ for one of the device's message-signaled interrupts, up to `MAX_DEVICE_MSIS` (32), routed to a CPU the kernel picks |
-| 54 | `irq_message` | irq | its `MsiMessage`, the address and data the device writes to raise it, for its MSI or MSI-X entry |
+| 54 | `irq_message` | irq | its `MsiMessage`, the address and data the device writes to raise it, for its MSI or MSI-X entry: behind an IOMMU that remaps interrupts, a remappable message the IOMMU takes only from the device |
 | 55 | `dma_domain_create` | platform, budget | an owning handle to a new DMA domain |
 | 56 | `dma_memory_create` | domain, budget, size, limit | an owning handle to DMA memory in the domain: pinned, in one block of frames, zeroed, ending at or below limit (0 for none), charged for its whole block |
 | 57 | `memory_device_address` | memory | where DMA memory is to the devices in its domain |
@@ -179,7 +179,11 @@ A **device** is one PCIe function, made with the platform capability by whoever 
 found it, and given to its driver (`0070`, `0073`). Its **message-signaled IRQs** (`irq_create_msi`) are each one
 of its events, numbered from 0; the driver programs `irq_message`'s address and data into the device's MSI or
 MSI-X entry, and its interrupts arrive as any IRQ's do. They're edge-triggered, so `irq_ack` does nothing. On
-x86-64 the message goes straight to a CPU's local APIC; on AArch64, to the GICv3's ITS, which turns the event
+x86-64 the message goes to a CPU's local APIC, through VT-d's interrupt remapping where the device is behind a unit
+that has it (`0082`): the message is then a handle to an entry of the device's own, which the unit takes only from the
+device's requester ID, and messages in the old format are blocked, so a device raises only its own IRQs. A wired
+line's IRQ can't be made once remapping is on (`NoController`), as its I/O APIC entries aren't remapped yet. On
+AArch64, the message goes to the GICv3's ITS, which takes it only as an event its device ID was given, and turns it
 into an LPI on the CPU's redistributor. Closing the device destroys its IRQs.
 
 A **DMA domain** is where its devices' DMA reaches. **DMA memory** (`dma_memory_create`) is made in a domain:
@@ -388,6 +392,7 @@ Devices, MSIs and DMA memory fail with `slop_os.DeviceError` too:
 
 ## Not Yet
 
-I/O-port ranges come with the drivers that need them, and SMMUv3's translation of DMA domains with roadmap Dd, and
-interrupt remapping with Dc (`0072`, `0079`); pagers for memory objects with memory-mapped files. Process memory is read and written through the
+I/O-port ranges come with the drivers that need them, SMMUv3's translation of DMA domains with roadmap Dd
+(`0072`, `0079`), and I/O APIC lines through interrupt remapping when a driver needs one; pagers for memory objects
+with memory-mapped files. Process memory is read and written through the
 page tables, so a memory object's pages no thread has touched yet can't be.

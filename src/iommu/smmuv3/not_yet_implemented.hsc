@@ -25,7 +25,7 @@ enable :: fn(iommu: ptr[mut Iommu], memory: iommu_interface.PhysicalAddress, dir
     return .Error(.Unsupported)
 }
 
-route_faults :: fn(iommu: ptr[mut Iommu], message: iommu_interface.FaultMessage) {
+route_faults :: fn(iommu: ptr[mut Iommu], message: iommu_interface.MsiMessage) {
 }
 
 init_domain :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], id: u32, root: iommu_interface.PhysicalAddress) {

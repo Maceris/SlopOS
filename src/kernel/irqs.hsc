@@ -59,6 +59,9 @@ Irq :: struct #align(16) {
     in_device : bool,
     msi_source : u32,
     message : arch_interface.MsiMessage,
+    // Where its IOMMU remaps it: that IOMMU's number plus one, 0 for none, and its entry's index (translation.hsc).
+    remap_iommu : u32,
+    remap_index : u32,
 }
 
 /*
@@ -77,6 +80,11 @@ create_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, controller: u
     irq.line = line
     irq.trigger = trigger
     irq.slot = cast[u32](MAX_DEVICE_INTERRUPTS)
+    // Its interrupts would be blocked as a forged message would (translation.hsc)
+    if intrinsics.atomic_load_u32_acquire(&kernel.wired_lines_blocked) != 0 {
+        release_object(kernel, object)
+        return .Error(.NoController)
+    }
     online :: intrinsics.atomic_load_u32_acquire(&kernel.online_cpus)
     cpu :: intrinsics.interlocked_increment_u32(&kernel.next_irq_cpu) % online
     first, count :: arch.device_interrupt_range()

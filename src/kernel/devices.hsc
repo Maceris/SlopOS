@@ -333,7 +333,17 @@ create_msi_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, device: p
             irq.slot = cast[u32](id) - cast[u32](first)
             cpus :: kernel.cpus
             hardware_id :: if cast[usize](cpu) < cpus.count { cpus[cast[usize](cpu)].hardware_id } else { cast[u64](0) }
-            irq.message = arch.route_msi(device.msi_source, event, hardware_id, id)
+            match remap_msi(kernel, irq, device, hardware_id, id) {
+                case Some(message) => irq.message = message
+                case None => {
+                    unroute(kernel, irq.cpu, irq.slot)
+                    concurrency.lock(&device.lock)
+                    unlink_irq(device, irq)
+                    concurrency.unlock(&device.lock)
+                    release_object(kernel, object)
+                    return .Error(.NoFreeInterrupt)
+                }
+            }
         }
         case Error(error) => {
             // Its event, free again: nothing else has it yet
@@ -366,6 +376,7 @@ destroy_msi_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
         unlink_irq(device, irq)
     }
     concurrency.unlock(&device.lock)
+    unremap_msi(kernel, irq)
     if cast[usize](irq.slot) < MAX_DEVICE_INTERRUPTS {
         unroute(kernel, irq.cpu, irq.slot)
     }

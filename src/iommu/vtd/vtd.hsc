@@ -12,11 +12,17 @@ import iommu_interface from "../../iommu_interface"
  * batch of it waited for with an invalidation wait descriptor writing a status word. A unit whose table walks don't
  * snoop caches (ECAP_REG.C clear, as QEMU's says) has every table write flushed from the cache.
  *
+ * Interrupt remapping (roadmap Dc), where the unit has it: a table of 256 interrupt remapping entries, each a remapped
+ * MSI's vector and CPU, and the requester ID it may come from, which the unit checks; compatibility-format interrupts
+ * are blocked, so a device raises only the interrupts its entries give it. Entries' destinations are x2APIC IDs where
+ * the unit has extended interrupt mode, otherwise xAPIC IDs.
+ *
  * L2 serializes calls on one unit.
  */
 //SPEC: Intel Virtualization Technology for Directed I/O, Architecture Specification 4.1, §3.4.2-3 (root and context
 //SPEC: entries), §3.6 (second-level translation), §6.5.2 (queued invalidation), §7.2.1 (primary fault logging),
-//SPEC: §9.1-9.3 (root, context and second-level entries), §11.4 (registers)
+//SPEC: §9.1-9.3 (root, context and second-level entries), §11.4 (registers); §5.1 (interrupt remapping), §5.1.2.2
+//SPEC: (remappable interrupt requests), §6.5.2.7 (interrupt entry cache invalidation), §9.9 (remapping table entries)
 
 VERSION : u64 : 0x000
 CAPABILITY : u64 : 0x008
@@ -32,6 +38,7 @@ FAULT_UPPER_ADDRESS : u64 : 0x044
 QUEUE_HEAD : u64 : 0x080
 QUEUE_TAIL : u64 : 0x088
 QUEUE_ADDRESS : u64 : 0x090
+REMAPPING_TABLE : u64 : 0x0b8
 // The bytes of registers every unit has, from its version register to its last fixed one
 FIXED_REGISTERS : u64 : 0x100
 
@@ -42,12 +49,16 @@ CAPABILITY_RWBF : u64 : 1 << 4
 CAPABILITY_CACHING_MODE : u64 : 1 << 7
 EXTENDED_COHERENT : u64 : 1 << 0
 EXTENDED_QUEUED_INVALIDATION : u64 : 1 << 1
+EXTENDED_INTERRUPT_REMAPPING : u64 : 1 << 3
+EXTENDED_INTERRUPT_MODE : u64 : 1 << 4
 
 // Global command bits, and their status bits at the same places
 COMMAND_TRANSLATION : u32 : 1 << 31
 COMMAND_ROOT_TABLE : u32 : 1 << 30
 COMMAND_WRITE_BUFFER_FLUSH : u32 : 1 << 27
 COMMAND_QUEUED_INVALIDATION : u32 : 1 << 26
+COMMAND_INTERRUPT_REMAPPING : u32 : 1 << 25
+COMMAND_REMAPPING_TABLE : u32 : 1 << 24
 // The status bits that are on or off, as the command register's are written back: the one-shot ones left out
 STATUS_PERSISTENT : u32 : 0x96ffffff
 
@@ -70,6 +81,9 @@ CACHE_LINE : u64 : 64
 // Invalidation descriptors' types, and their granularities
 DESCRIPTOR_CONTEXT : u64 : 1
 DESCRIPTOR_IOTLB : u64 : 2
+DESCRIPTOR_INTERRUPT_ENTRY : u64 : 4
+// An interrupt entry cache invalidation of one entry, rather than all of them
+INTERRUPT_ENTRY_ONE : u64 : 1 << 4
 DESCRIPTOR_WAIT : u64 : 5
 GLOBAL : u64 : 1 << 4
 DOMAIN : u64 : 2 << 4
@@ -77,8 +91,20 @@ WAIT_STATUS_WRITE : u64 : 1 << 5
 WAIT_FENCE : u64 : 1 << 6
 // 256 descriptors of 16 bytes, one page of queue
 QUEUE_ENTRIES : u32 : 256
+// The remapping table: 256 entries of 16 bytes, one page; its size field is entries' log 2, less 1
+INTERRUPT_ENTRIES : u32 : 256
+TABLE_SIZE_FIELD : u64 : 7
+TABLE_EXTENDED_MODE : u64 : 1 << 11
+// An entry's present bit, its vector's place and its destination's; its upper half's source validation, by requester ID
+ENTRY_PRESENT : u64 : 1 << 0
+ENTRY_VECTOR_SHIFT : u64 : 16
+ENTRY_DESTINATION_SHIFT : u64 : 32
+ENTRY_VERIFY_SOURCE : u64 : 1 << 18
+// A remappable message's address: the interrupt range, the remappable format bit, and the handle's bits 14:0 and 15
+MESSAGE_BASE : u64 : 0xfee00000
+MESSAGE_REMAPPABLE : u64 : 1 << 4
 // How long a command or a wait may take, in spins
-SPINS : u64 : 100_000_000
+SPINS : u64 : 1_000_000
 
 // One VT-d unit (iommu_interface.Iommu).
 Iommu :: struct {
@@ -97,7 +123,12 @@ Iommu :: struct {
     flushes : bool,
     caching_mode : bool,
     write_buffer : bool,
-    // From enable: the direct map, its root table, its invalidation queue and its tail, and the status word waits write.
+    // Interrupt remapping, with x2APIC destinations where extended interrupt mode is there.
+    remaps : bool,
+    extended_mode : bool,
+    // From enable: the direct map, its root table, its invalidation queue and its tail, the status word waits write,
+    // and its interrupt remapping table.
+    remapping : u64,
     direct_map_offset : u64,
     root : u64,
     queue : u64,
@@ -154,22 +185,28 @@ identify :: fn(iommu: ptr[mut Iommu], kind: iommu_interface.IommuKind, registers
     iommu.flushes = extended & EXTENDED_COHERENT == 0
     iommu.caching_mode = capability & CAPABILITY_CACHING_MODE != 0
     iommu.write_buffer = capability & CAPABILITY_RWBF != 0
+    iommu.remaps = extended & EXTENDED_INTERRUPT_REMAPPING != 0
+    iommu.extended_mode = extended & EXTENDED_INTERRUPT_MODE != 0
     // ND: 2^(4 + 2 ND) domain IDs, of which 0 is left alone, as caching mode keeps it for itself
     ids :: (cast[u64](1) << (4 + 2 * (capability & 7))) - 1
     return .Ok(iommu_interface.IommuInfo.{address_bits = iommu.address_bits, major = major, minor = version & 0xf,
-        memory = 3 * PAGE, domain_ids = if ids > 0xffff { 0xffff } else { cast[u32](ids) }})
+        memory = 4 * PAGE, domain_ids = if ids > 0xffff { 0xffff } else { cast[u32](ids) },
+        interrupts = if iommu.remaps { INTERRUPT_ENTRIES } else { 0 }})
 }
 
 /*
- * memory's three pages: the root table, the invalidation queue, and the status word invalidation waits write. The
- * queue goes on first, then the root table, both caches are invalidated, and translation goes on.
+ * memory's four pages: the root table, the invalidation queue, the status word invalidation waits write, and the
+ * interrupt remapping table. The queue goes on first, then the root table, both caches are invalidated, and
+ * translation goes on; then, where the unit remaps interrupts, the remapping table, its cache invalidated, and
+ * remapping, compatibility-format interrupts blocked.
  */
 enable :: fn(iommu: ptr[mut Iommu], memory: iommu_interface.PhysicalAddress, direct_map_offset: u64) -> Result[void, iommu_interface.IommuError] {
     iommu.direct_map_offset = direct_map_offset
     iommu.root = cast[u64](memory)
     iommu.queue = cast[u64](memory) + PAGE
     iommu.status = cast[u64](memory) + 2 * PAGE
-    flush_range(iommu, iommu.root, 3 * PAGE)
+    iommu.remapping = cast[u64](memory) + 3 * PAGE
+    flush_range(iommu, iommu.root, 4 * PAGE)
     write_u64(iommu, QUEUE_TAIL, 0)
     iommu.tail = 0
     write_u64(iommu, QUEUE_ADDRESS, iommu.queue)
@@ -189,11 +226,51 @@ enable :: fn(iommu: ptr[mut Iommu], memory: iommu_interface.PhysicalAddress, dir
     if !command(iommu, COMMAND_TRANSLATION, true) {
         return .Error(.Timeout)
     }
+    if !iommu.remaps {
+        return .Ok
+    }
+    write_u64(iommu, REMAPPING_TABLE, iommu.remapping | TABLE_SIZE_FIELD | (if iommu.extended_mode { TABLE_EXTENDED_MODE } else { cast[u64](0) }))
+    if !one_shot(iommu, COMMAND_REMAPPING_TABLE) {
+        return .Error(.Timeout)
+    }
+    submit(iommu, DESCRIPTOR_INTERRUPT_ENTRY, 0)
+    if !wait(iommu) || !command(iommu, COMMAND_INTERRUPT_REMAPPING, true) {
+        return .Error(.Timeout)
+    }
     return .Ok
 }
 
+/*
+ * Entry index: fixed delivery, edge-triggered, physical destination mode, to the CPU's APIC ID, from stream only. Its
+ * upper half first and its present bit last, then its cached copy invalidated.
+ */
+remap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32) -> iommu_interface.MsiMessage {
+    entry :: iommu.remapping + cast[u64](index % INTERRUPT_ENTRIES) * 16
+    // SVT 1, SQ 0: the requester ID must be stream's
+    store(iommu, entry + 8, cast[u64](stream & 0xffff) | ENTRY_VERIFY_SOURCE)
+    destination :: if iommu.extended_mode { cpu_hardware_id & 0xffffffff } else { (cpu_hardware_id & 0xff) << 8 }
+    store(iommu, entry, destination << ENTRY_DESTINATION_SHIFT | cast[u64](vector & 0xff) << ENTRY_VECTOR_SHIFT | ENTRY_PRESENT)
+    invalidate_interrupt(iommu, index)
+    handle :: cast[u64](index)
+    return iommu_interface.MsiMessage.{address = MESSAGE_BASE | (handle & 0x7fff) << 5 | MESSAGE_REMAPPABLE | ((handle >> 15) & 1) << 2,
+        data = 0}
+}
+
+unmap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32) {
+    entry :: iommu.remapping + cast[u64](index % INTERRUPT_ENTRIES) * 16
+    store(iommu, entry, 0)
+    store(iommu, entry + 8, 0)
+    invalidate_interrupt(iommu, index)
+}
+
+// One entry's cached copy, by its index, waited for.
+invalidate_interrupt :: fn(iommu: ptr[mut Iommu], index: u32) {
+    submit(iommu, DESCRIPTOR_INTERRUPT_ENTRY | INTERRUPT_ENTRY_ONE | cast[u64](index) << 32, 0)
+    _ = wait(iommu)
+}
+
 // Faults signalled by message: the fault event registers, then unmasked.
-route_faults :: fn(iommu: ptr[mut Iommu], message: iommu_interface.FaultMessage) {
+route_faults :: fn(iommu: ptr[mut Iommu], message: iommu_interface.MsiMessage) {
     write_u32(iommu, FAULT_DATA, message.data)
     write_u32(iommu, FAULT_ADDRESS, cast[u32](message.address))
     write_u32(iommu, FAULT_UPPER_ADDRESS, cast[u32](message.address >> 32))
@@ -356,8 +433,11 @@ next_fault :: fn(iommu: ptr[mut Iommu]) -> iommu_interface.DmaFault? {
         // Writing the fault bit clears it
         intrinsics.volatile_store_u32(cast[ptr[mut u32]](record + 12), 1 << 31)
         iommu.next_fault = (index + 1) % iommu.fault_count
-        return iommu_interface.DmaFault.{stream = cast[u32](upper & 0xffff), address = lower & ~(PAGE - 1),
-            write = upper & FAULT_READ == 0, reason = cast[u32]((upper >> 32) & 0xff)}
+        reason :: cast[u32]((upper >> 32) & 0xff)
+        // Reasons 0x20 to 0x2f are interrupt remapping's, whose fault information is the interrupt's index
+        interrupt :: reason >= 0x20 && reason < 0x30
+        return iommu_interface.DmaFault.{stream = cast[u32](upper & 0xffff), address = if interrupt { lower >> 48 } else { lower & ~(PAGE - 1) },
+            write = upper & FAULT_READ == 0, interrupt = interrupt, reason = reason}
     }
     write_u32(iommu, FAULT_STATUS, FAULT_STATUS_OVERFLOW)
     return null
@@ -449,11 +529,11 @@ command :: fn(iommu: ptr[mut Iommu], bit: u32, on: bool) -> bool {
     return false
 }
 
-// A one-shot command, until its status says it's done: set for the root table, clear for a write buffer flush.
+// A one-shot command, until its status says it's done: set for a table's pointer, clear for a write buffer flush.
 one_shot :: fn(iommu: ptr[mut Iommu], bit: u32) -> bool {
     status :: read_u32(iommu, GLOBAL_STATUS) & STATUS_PERSISTENT
     write_u32(iommu, GLOBAL_COMMAND, status | bit)
-    done_when_set :: bit == COMMAND_ROOT_TABLE
+    done_when_set :: bit != COMMAND_WRITE_BUFFER_FLUSH
     for spin in 0..<SPINS {
         if (read_u32(iommu, GLOBAL_STATUS) & bit != 0) == done_when_set {
             return true

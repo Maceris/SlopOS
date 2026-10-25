@@ -48,6 +48,10 @@ RegisteredIommu :: struct {
     ids : u64[MAX_DOMAIN_IDS / 64],
     id_limit : u32,
     faults : u64,
+    // Whether it remaps interrupts, and its remapped interrupts in use, a bit each, below interrupt_limit.
+    remapping : bool,
+    interrupts : u64[MAX_REMAPPED_INTERRUPTS / 64],
+    interrupt_limit : u32,
 }
 
 // count requester IDs from first (slop_os.device_address), behind the IOMMU with number iommu, as streams from stream.

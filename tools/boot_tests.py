@@ -38,7 +38,7 @@ def program_test(name: str, program: str, line: str, words: str = "", qemu: list
 X86_IOMMU_LINE = "[info] IOMMU 0: VT-d, 4 KiB of registers at 0x00000000fed90000, version 1.0, 48-bit I/O addresses"
 AARCH64_IOMMU_LINE = "[info] IOMMU 0: SMMUv3, 128 KiB of registers at 0x0000000009050000, version 3.1, 44-bit I/O addresses"
 # Whether it translates (src/kernel/translation.hsc): VT-d does, SMMUv3 not until roadmap Dd
-X86_TRANSLATING_LINE = "[info] IOMMU 0: translating, its faults to CPU 0's interrupt 48"
+X86_TRANSLATING_LINE = "[info] IOMMU 0: translating, 256 interrupts remapped, its faults to CPU 0's interrupt 48"
 AARCH64_TRANSLATING_LINE = "[info] IOMMU 0: not translating, which its implementation can't yet"
 
 # Name, the code expected, and boot.py's arguments
