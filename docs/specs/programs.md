@@ -92,7 +92,7 @@ loader above, at random places for its image, its 256 KiB stack with its startup
 | `platform` | `Platform` | The authority over the machine's hardware (`0039`) |
 | `debug_log` | `DebugLog` | Lines in the kernel's log (`debug_log`, `system_calls.md`) |
 | `command_line` | `Memory` | The kernel's command line, its bytes then zeros (`0067`) |
-| `firmware` | `Memory` | The firmware tables, which the kernel copied before boot memory was reclaimed, read-only, if the boot has them (`0073`): a `slop_os.FirmwareTables` (its magic, `FIRMWARE_MAGIC`; its kind, `Acpi` or `DeviceTree`; how many tables), then a `FirmwareTable` for each (its signature, size, offset in the copy, and the physical address it was at, which ACPI's tables point at one another by), then the tables. ACPI's are the RSDP, every table the XSDT (or RSDT) lists, and the FADT's DSDT and FACS; the device tree's is its blob, `DTB ` |
+| `firmware` | `Memory` | The firmware tables, which the kernel copied before boot memory was reclaimed, read-only, if the boot has them (`0073`): a `slop_os.FirmwareTables` (its magic, `FIRMWARE_MAGIC`; its kind, `Acpi` or `DeviceTree`; how many tables), then a `FirmwareTable` for each (its signature, size, offset in the copy, and the physical address it was at, which ACPI's tables point at one another by), then the tables. ACPI's are the RSDP, every table the XSDT (or RSDT) lists, and the FADT's DSDT and FACS; the device tree's is its blob, `DTB `. Last is the kernel's own `RAM `, a `slop_os.PhysicalRange` for each range of RAM it owns, at physical address 0 (`0074`) |
 | `test_device` | `Memory` | With `test_device` on the command line: what the firmware tables say of the emulator's test device (`src/test_device`), for `test_devices` (`0069`) |
 | `module:<name>` | `Memory` | Each other boot module: a read-only memory object over the frames it was loaded into, which go back to the kernel when it's destroyed |
 
@@ -110,8 +110,10 @@ of its own with a memory budget split off its starter's, which owns it:
 |---|---|---|---|
 | `entropy` | the root task, with its own loader | `log`, `clients: Listener[Entropy]` | Random bytes from a ChaCha20 stream seeded from its startup block, for each connection |
 | `process_manager` | the root task, with its own loader | `log`, `entropy: Channel[Entropy]`, `clients: Listener[ProcessManager]` | Loads programs for requesters (below), drawing each one's seed, and the randomness that places its parts, from `entropy` |
-| `supervisor` | the root task, through the manager | `log`, `manager`, `root: Channel[Supervision]`, `hello_module` | Starts the services `system_config` gives it with `os.launch`, owns them, and tells the root task as each starts and ends; it restarts nothing yet |
+| `platform` | the root task, through the manager | `log`, `platform`, `firmware`, `clients: Listener[Platform]`, `command_line?` | Finds the PCIe host bridge in the firmware tables, numbers its buses and places its BARs where firmware didn't, and gives each device to the supervisor once (below) |
+| `supervisor` | the root task, through the manager | `log`, `manager`, `root: Channel[Supervision]`, `hello_module`, `platform_service: Channel[Platform]?`, `entropy_service: Channel[Entropy]?`, each driver's module | Starts the services `system_config` gives it with `os.launch`, and a driver for each device it claims from the platform service, owns them, and tells the root task as each starts and ends, and once all have; it restarts nothing yet |
 | `hello` | the supervisor, through the manager | `log?`, `manager?` | Reports that its heap and random numbers work, and given a connection to the manager, that it's still running once the manager is gone |
+| `virtio_rng` | the supervisor, through the manager, for each modern virtio entropy device | its device's bundle (below), `entropy_service: Channel[Entropy]?` | Offers the device's bytes to the entropy service as a source, on a channel of the `rng` protocol |
 
 **Wiring**: `system_config` names each service's entry, and checks when it's compiled that every
 `Channel[P]` one takes has a server: a service taking a `Listener[P]`, or the root task, which serves the
@@ -151,9 +153,38 @@ that each `Channel[P]` in it has `P`'s tag, before anything reads it; a variant 
 `answer_unsupported`. SlopOS's own are in `src/protocols/<name>`; those `std` speaks, in
 `std/os/slop_os/<name>`.
 
+## Devices and Drivers
+
+The platform service (`src/services/platform`, `0074`) finds the host bridge through `src/pci`: on x86-64 the MCFG's
+ECAM, and as windows for BARs, the gaps in the `RAM ` table below the I/O APICs at 0xFEC00000 and 64 GiB above
+everything else, since ACPI's real windows are AML; on AArch64 the device tree's `pci-host-ecam-generic`, its
+`bus-range`, `ranges` and `msi-map`. It walks every bus depth first, keeping what firmware assigned where it holds:
+a bridge without bus numbers gets the next free ones, and a memory BAR that's unplaced, outside a window it may be
+in, or overlapping a BAR, RAM, the ECAM or a window of a bridge it isn't behind is placed first-fit, aligned to its
+size, in its bridge's window or the host's. I/O BARs aren't placed.
+
+**The `platform` protocol** (`src/protocols/platform`): `Claim` with a `DeviceMatch` (a vendor and device ID, or a
+class, each `ANY` for any) gives `Claimed` with the next unclaimed device that matches, which is never given again,
+or `NoDevice`. A claimed device is a `PciDevice`: its address, IDs and class; its `Device`; a window onto its 4 KiB of
+configuration space; each BAR it has as device memory at its CPU address (`NO_HANDLE` for one it hasn't); and a DMA
+domain it's attached to. The supervisor claims devices for each driver `system_config` lists with `devices`, and
+starts the driver with those as its entry's parameters (`device`, `config`, `bar0` to `bar5`, `domain`), so a
+driver holds its own device and nothing else, and needs the platform service no further.
+
+**Drivers** are in `src/drivers`. A virtio device is reached through `src/virtio`: the modern virtio-pci transport,
+its registers through its vendor capabilities, its features (`VERSION_1` always), MSI-X with one vector per queue,
+and split virtqueues of up to 16 descriptors in a page of DMA memory, laid out in little-endian types.
+
+**Hardware randomness** (`src/protocols/rng`): an RNG's driver makes a channel of the `rng` protocol (`Read` with a
+count, answered with `Bytes`) and offers it to the entropy service with `entropy.AddSource`. The entropy service
+reads 32 bytes from each source when it's added, and again each time 64 KiB more have been handed out, and reseeds
+its stream with its own next 32 bytes XORed with the source's.
+
 **Boot tests** tell the root task what to test with a word on the kernel's command line: `test_services` ends
-it with 0 once the supervisor has started its services, and `test_outlive_manager` kills the manager once
-`hello` has started, then ends once `hello` has, after it said it's still running.
+it with 0 a second after the supervisor says it has started everything (`AllStarted`), for drivers to come up;
+`test_outlive_manager` kills the manager once `hello` has started, then ends once `hello` has, after it said it's
+still running; and `test_reassign` has the platform service take every virtio device's BARs and every bridge's bus
+numbers as unset, so assigning them is tested where firmware assigns everything.
 
 ## Test Programs
 
@@ -163,12 +194,12 @@ the test ended with 0 and the test's budget is back to nothing after its grace p
 same, which `system_config` checks:
 
 ```
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?,
+main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?) -> int
 ```
 
-The root task gives every test its log, a connection to the manager and its own module, and `test_devices` the
-platform capability and the `test_device` grant. A test that needs other processes launches copies of itself,
+The root task gives every test its log, a connection to the manager and its own module, and `test_devices` and
+`test_msi_dma` the platform capability, the `test_device` grant and the firmware tables. A test that needs other processes launches copies of itself,
 giving each a `peer` channel to tell it its part. Each test says what worked in its debug log and ends with 0, or
 the number of the first check that failed (`src/test_kit`).
 

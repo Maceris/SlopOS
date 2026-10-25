@@ -14,7 +14,9 @@ import frames from "frames"
  *
  * On x86-64 they're ACPI's: the RSDP, every table its XSDT (or, before ACPI 2, its RSDT) lists, and the FADT's DSDT
  * and FACS, read through the kernel window, since firmware may keep them in reserved memory the direct map leaves out.
- * On AArch64, the device tree's blob, which the bootloader's memory holds, through the direct map.
+ * On AArch64, the device tree's blob, which the bootloader's memory holds, through the direct map. Last, on both, the
+ * kernel's own "RAM " table: the RAM it owns, a slop_os.PhysicalRange each, so the platform service knows what isn't
+ * free for devices (decisions/0074).
  */
 //SPEC: ACPI Specification 6.5, §5.2.5 (RSDP), §5.2.6 (system description table header), §5.2.7-8 (RSDT, XSDT), §5.2.9 (FADT), §5.2.10 (FACS)
 //SPEC: Devicetree Specification 0.4, §5.2 (the header)
@@ -57,13 +59,15 @@ copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.Firmwa
         runtime.log_warn("no firmware tables to copy for the root task")
         return void
     }
-    header_bytes :: cast[u64](size_of(slop_os.FirmwareTables)) + cast[u64](found.count) * cast[u64](size_of(slop_os.FirmwareTable))
+    ram_bytes :: cast[u64](kernel.ram.count) * cast[u64](size_of(slop_os.PhysicalRange))
+    header_bytes :: cast[u64](size_of(slop_os.FirmwareTables)) + cast[u64](found.count + 1) * cast[u64](size_of(slop_os.FirmwareTable))
     total := header_bytes
     for table, i in found.tables {
         if i < found.count {
             total = frames.round_up(total, 8) + table.size
         }
     }
+    total = frames.round_up(total, 8) + ram_bytes
     if total > MAX_FIRMWARE_BYTES {
         runtime.log_error("the firmware tables are too big to copy: % bytes", total)
         return void
@@ -80,8 +84,8 @@ copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.Firmwa
     header :: cast[ptr[mut slop_os.FirmwareTables]](base)
     header.magic = slop_os.FIRMWARE_MAGIC
     header.kind = found.kind
-    header.count = cast[u32](found.count)
-    entries :: view_of(cast[ptr[mut slop_os.FirmwareTable]](base + cast[u64](size_of(slop_os.FirmwareTables))), found.count)
+    header.count = cast[u32](found.count + 1)
+    entries :: view_of(cast[ptr[mut slop_os.FirmwareTable]](base + cast[u64](size_of(slop_os.FirmwareTables))), found.count + 1)
     offset := header_bytes
     for &table, i in found.tables {
         if i >= found.count || i >= entries.count {
@@ -97,8 +101,20 @@ copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.Firmwa
         }
         offset += table.size
     }
+    // The RAM the kernel owns, which wasn't anywhere before, so at physical address 0
+    offset = frames.round_up(offset, 8)
+    last :: found.count
+    if last < entries.count {
+        entries[last] = slop_os.FirmwareTable.{signature = signature_of("RAM "), size = cast[u32](ram_bytes), offset = offset, physical = 0}
+    }
+    ranges :: view_of(cast[ptr[mut slop_os.PhysicalRange]](base + offset), kernel.ram.count)
+    for range, i in kernel.ram {
+        if i < ranges.count {
+            ranges[i] = slop_os.PhysicalRange.{base = cast[u64](range.base), size = range.size}
+        }
+    }
     kernel.firmware = cast[u64](memory)
-    runtime.log_info("firmware tables: % copied for the root task, % bytes", found.count, total)
+    runtime.log_info("firmware tables: % copied for the root task, and % RAM ranges, % bytes", found.count, kernel.ram.count, total)
 }
 
 // The tables an RSDP leads to, and the RSDP.

@@ -22,10 +22,12 @@ import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
 import process_builder from "../../process_builder"
 import entropy from "../../protocols/entropy"
+import platform_protocol from "../../protocols/platform"
 import supervision from "../../protocols/supervision"
 import random_stream from "../../random_stream"
 import service_kit from "../../service_kit"
 import system_config from "../../system_config"
+import platform from "../platform"
 import supervisor from "../supervisor"
 import test_kit from "../../test_kit"
 import test_syscalls from "../../tests/test_syscalls"
@@ -40,7 +42,22 @@ SupervisorGrants :: struct {
     manager : os.Channel[process_manager.ProcessManager],
     root : os.Channel[supervision.Supervision],
     hello_module : slop_os.Memory,
+    platform_service : os.Channel[platform_protocol.Platform]?,
+    entropy_service : os.Channel[entropy.Entropy]?,
+    virtio_rng_module : slop_os.Memory?,
 }
+
+// What the platform service is given (platform.main).
+PlatformGrants :: struct {
+    log : slop_os.DebugLog?,
+    platform : slop_os.Platform,
+    firmware : slop_os.Memory,
+    clients : os.Listener[platform_protocol.Platform],
+    command_line : slop_os.Memory?,
+}
+
+// How long test_services waits once everything has started, for drivers to come up, in nanoseconds
+SETTLE_NANOSECONDS : u64 : 1_000_000_000
 
 // What a test program is given: every test's entry takes these (src/tests, test_kit).
 TestGrants :: struct {
@@ -84,9 +101,9 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     block :: slop_os.startup_block()
     root := Root.{block = block, log = debug_log}
     log_line.write(root.log, "root task: started, with % grants", block.grant_count)
-    words :: text_of(block, command_line) or_return 4
-    test_services :: has_word(words, "test_services")
-    test_outlive_manager :: has_word(words, "test_outlive_manager")
+    words :: service_kit.text_of(block, command_line) or_return 4
+    test_services :: service_kit.has_word(words, "test_services")
+    test_outlive_manager :: service_kit.has_word(words, "test_outlive_manager")
     root.stream = random_stream.make(block.seed)
 
     // The listeners the root task connects services through, its own connection to the manager among them
@@ -113,24 +130,29 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     ]
     start_itself(&root, "process_manager", manager_grants) or_return 7
 
-    match word_after(words, "test_program=") {
+    match service_kit.word_after(words, "test_program=") {
         case Some(name) => return run_test(&root, name, platform)
         case None => {}
     }
+
+    module_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
+    platform_connection :: start_platform(&root, platform, command_line, module_rights)
 
     // The supervisor, through the manager, with a connection of its own
     service :: system_config.service("supervisor") or_return 8
     module :: find_module(block, service.module) or_return 8
     hello_service :: system_config.service("hello") or_return 8
     hello_module :: find_module(block, hello_service.module) or_return 8
-    module_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     grants := SupervisorGrants.{
         log = duplicate_log(&root),
         manager = process_manager.connect(root.manager, root.manager_port, block.budget) or_return 9,
         root = os.Channel[supervision.Supervision].{end = supervision_pair.b},
         hello_module = cast[slop_os.Memory](slop_os.handle_duplicate(hello_module, module_rights) or_return 9),
+        platform_service = platform_connection,
+        entropy_service = entropy.connect(root.entropy, root.entropy_port, block.budget),
+        virtio_rng_module = module_copy(block, "virtio_rng", module_rights),
     }
-    manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
     match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, supervisor.main, grants) {
         case Ok(launched) => {
             remember(&root, service.name, launched.process)
@@ -143,12 +165,6 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     }
 
     // Then it watches
-    supervised : usize = 0
-    for each in system_config.SERVICES {
-        if each.starter == .Supervisor {
-            supervised += 1
-        }
-    }
     port :: slop_os.port_create(block.budget) or_return 11
     for &started, i in root.started {
         if i >= root.started_count {
@@ -158,7 +174,6 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     }
     supervisor_signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     _ = slop_os.port_bind(port, cast[slop_os.Handle](root.supervision), supervisor_signals, SUPERVISOR_KEY, .Persistent)
-    reported : usize = 0
     into := os.Incoming.{}
     loop {
         loop {
@@ -182,10 +197,6 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
                     named := report
                     name :: service_kit.text_of_label(&named.name)
                     log_line.write(root.log, "root task: the supervisor started %", name)
-                    reported += 1
-                    if test_services && reported == supervised {
-                        return 0
-                    }
                     if test_outlive_manager && name == "hello" {
                         kill(&root, "process_manager")
                     }
@@ -204,6 +215,20 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
                     log_line.write(root.log, "root task: the supervisor's % didn't start (%)", name, report.code)
                     if test_services || test_outlive_manager {
                         return 13
+                    }
+                }
+                case AllStarted(count) => {
+                    log_line.write(root.log, "root task: the supervisor started all % of its services", count)
+                    if test_services {
+                        // Drivers come up by themselves once they've started
+                        settle :: (slop_os.clock_monotonic() or_else 0) + SETTLE_NANOSECONDS
+                        loop {
+                            waited : slop_os.Packet[1]
+                            if (slop_os.port_wait(port, waited, settle) or_else 0) == 0 {
+                                break
+                            }
+                        }
+                        return 0
                     }
                 }
             }
@@ -340,6 +365,53 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform) ->
     return if code == 0 && emptied { 0 } else if code != 0 { 24 } else { 25 }
 }
 
+/*
+ * The platform service, through the manager, with the hardware and the firmware tables that describe it: a connection
+ * to it, for the supervisor, or null without the tables or if it didn't start.
+ */
+start_platform :: fn(root: ptr[mut Root], platform_capability: slop_os.Platform, command_line: slop_os.Memory, rights: slop_os.Rights)
+    -> os.Channel[platform_protocol.Platform]? {
+    block :: root.block
+    firmware :: slop_os.find_grant(block, "firmware", .Memory) or_return null
+    service :: system_config.service("platform") or_return null
+    module :: find_module(block, service.module) or_return null
+    pair :: os.channel_for[platform_protocol.Platform](block.budget, 0) or_return null
+    port :: os.port_for(block.budget, pair.b) or_return null
+    capability_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    grants := PlatformGrants.{
+        log = duplicate_log(root),
+        platform = cast[slop_os.Platform](slop_os.handle_duplicate(cast[slop_os.Handle](platform_capability), capability_rights) or_return null),
+        firmware = cast[slop_os.Memory](slop_os.handle_duplicate(firmware, rights) or_return null),
+        clients = os.Listener[platform_protocol.Platform].{end = pair.a},
+    }
+    match slop_os.handle_duplicate(cast[slop_os.Handle](command_line), rights) {
+        case Ok(copy) => grants.command_line = cast[slop_os.Memory](copy)
+        case Error(error) => {}
+    }
+    manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
+    match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, platform.main, grants) {
+        case Ok(launched) => {
+            remember(root, service.name, launched.process)
+            log_line.write(root.log, "root task: started %", service.name)
+            return platform_protocol.connect(pair.b, port, block.budget)
+        }
+        case Error(error) => {
+            log_line.write(root.log, "root task: % didn't start: %", service.name, error)
+            return null
+        }
+    }
+}
+
+// A copy of the module a service is started from, for whoever starts it, or null.
+module_copy :: fn(block: ptr[slop_os.StartupBlock], name: string, rights: slop_os.Rights) -> slop_os.Memory? {
+    service :: system_config.service(name) or_return null
+    module :: find_module(block, service.module) or_return null
+    match slop_os.handle_duplicate(module, rights) {
+        case Ok(copy) => return cast[slop_os.Memory](copy)
+        case Error(error) => return null
+    }
+}
+
 // A service started, by its name, which is a constant's.
 remember :: fn(root: ptr[mut Root], name #escaping : string, process: slop_os.Process) {
     index :: root.started_count
@@ -377,66 +449,3 @@ find_module :: fn(block: ptr[slop_os.StartupBlock], module: string) -> slop_os.H
     return slop_os.find_grant(block, text_buffer.as_string(&label), .Memory)
 }
 
-// The kernel's command line, the memory's bytes up to its first zero, mapped read-only.
-text_of :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> string? {
-    size :: slop_os.memory_size(memory) or_return null
-    address :: runtime.reserve_addresses(cast[usize](size)) or_return null
-    match slop_os.memory_map(memory, block.space, address, 0, size, slop_os.PROTECTION_READ) {
-        case Ok => {}
-        case Error(error) => return null
-    }
-    count : usize = 0
-    for byte in view_of(cast[ptr[u8]](address), cast[usize](size)) {
-        if byte == 0 {
-            break
-        }
-        count += 1
-    }
-    return string_of(cast[ptr[u8]](address), count)
-}
-
-// What follows prefix in the word of text that starts with it, or null.
-word_after :: fn(text: string, prefix: string) -> string? {
-    start : usize = 0
-    for character, i in text {
-        if character == ' ' {
-            match word_from(text, start, i, prefix) {
-                case Some(found) => return found
-                case None => {}
-            }
-            start = i + 1
-        }
-    }
-    return word_from(text, start, text.count, prefix)
-}
-
-// What follows prefix in text's bytes from start to end, if they start with it.
-word_from :: fn(text: string, start: usize, end: usize, prefix: string) -> string? {
-    if end < start || end - start < prefix.count {
-        return null
-    }
-    word :: string_of(cast[ptr[u8]](cast[u64](text.data) + cast[u64](start)), end - start)
-    if string_of(cast[ptr[u8]](word.data), prefix.count) != prefix {
-        return null
-    }
-    return string_of(cast[ptr[u8]](cast[u64](word.data) + cast[u64](prefix.count)), word.count - prefix.count)
-}
-
-// Whether word is one of the words of text, which spaces separate.
-has_word :: fn(text: string, word: string) -> bool {
-    start : usize = 0
-    for character, i in text {
-        if character == ' ' {
-            if is_word_at(text, start, i, word) {
-                return true
-            }
-            start = i + 1
-        }
-    }
-    return is_word_at(text, start, text.count, word)
-}
-
-// Whether text's bytes from start to end are word.
-is_word_at :: fn(text: string, start: usize, end: usize, word: string) -> bool {
-    return end >= start && end - start == word.count && string_of(cast[ptr[u8]](cast[u64](text.data) + cast[u64](start)), word.count) == word
-}

@@ -2,10 +2,12 @@ package entropy
 
 import os from "std"
 import slop_os from "std/os"
+import rng from "../rng"
 
 /*
- * The entropy service's protocol (decisions/0058, 0067, 0071): random bytes for the services that need more than
- * their own seed. Connections arrive on its listener as Connects.
+ * The entropy service's protocol (decisions/0058, 0067, 0071, 0074): random bytes for the services that need more than
+ * their own seed. Connections arrive on its listener as Connects, and hardware RNGs' drivers offer themselves with
+ * AddSource.
  */
 
 Entropy :: struct {}
@@ -20,6 +22,8 @@ Request :: union {
     Fill(u32),
     // Serve another client, on its end
     Connect(os.Channel[Entropy]),
+    // Reseed from a hardware RNG, through its driver; answered with nothing
+    AddSource(os.Channel[rng.Rng]),
 }
 
 Response :: union {
@@ -32,6 +36,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Fill(_) => true
         case Connect(_) => true
+        case AddSource(_) => true
     }
 }
 

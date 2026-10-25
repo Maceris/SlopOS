@@ -12,9 +12,12 @@ import runtime from "base"
 import text_buffer from "std"
 import os from "std"
 import entropy from "../services/entropy"
+import platform from "../services/platform"
 import process_manager from "../services/process_manager"
 import supervisor from "../services/supervisor"
 import hello from "../apps/hello"
+import virtio_rng from "../drivers/virtio_rng"
+import platform_protocol from "../protocols/platform"
 import supervision from "../protocols/supervision"
 import test_channels from "../tests/test_channels"
 import test_control from "../tests/test_control"
@@ -44,23 +47,38 @@ Service :: struct {
     budget : u64,
     // Its entry's type, whose parameters are what it's given
     entry : type,
+    // A driver's: the devices it takes, one process each, which the supervisor claims from the platform service; all
+    // zeros for a service that isn't a driver (is_driver)
+    devices : platform_protocol.DeviceMatch,
+}
+
+// Whether a service is a driver, with devices it takes.
+is_driver :: fn(service: Service) -> bool {
+    return service.devices.vendor != 0 || service.devices.device != 0 || service.devices.class != 0
 }
 
 MIB : u64 : 1024 * 1024
 
 /*
  * In the order they start. The entropy service comes first, since the process manager draws from it, and the
- * supervisor's budget pays for what it starts too.
+ * supervisor's budget pays for what it starts too. The platform service starts before the supervisor, which claims
+ * devices from it for the drivers.
  */
 SERVICES :: Service.[
     Service.{name = "entropy", module = "entropy.elf", starter = .RootTask, by_manager = false, budget = 2 * MIB,
         entry = type_of(entropy.main)},
     Service.{name = "process_manager", module = "process_manager.elf", starter = .RootTask, by_manager = false, budget = 8 * MIB,
         entry = type_of(process_manager.main)},
+    Service.{name = "platform", module = "platform.elf", starter = .RootTask, by_manager = true, budget = 8 * MIB,
+        entry = type_of(platform.main)},
     Service.{name = "supervisor", module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 16 * MIB,
         entry = type_of(supervisor.main)},
     Service.{name = "hello", module = "hello.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(hello.main)},
+    // A modern virtio entropy device (virtio's device ID 4, as PCI device 0x1040 + 4)
+    Service.{name = "virtio_rng", module = "virtio_rng.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
+        entry = type_of(virtio_rng.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1044,
+        class = platform_protocol.ANY_CLASS}},
 ]
 
 /*

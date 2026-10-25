@@ -1,9 +1,10 @@
 /*
- * What the first services share (decisions/0067, 0071): a set of clients, each an end bound to the service's port
- * under its index, and grants' labels as text.
+ * What the first services share (decisions/0067, 0071, 0074): a set of clients, each an end bound to the service's
+ * port under its index, grants' labels as text, and the words of the kernel's command line.
  */
 package service_kit
 
+import runtime from "base"
 import slop_os from "std/os"
 
 // The most clients one service serves.
@@ -49,4 +50,68 @@ text_of_label :: fn(label: ptr[u8[slop_os.GRANT_LABEL_SIZE]]) -> string {
         count += 1
     }
     return string_of(&label^[0], count)
+}
+
+// Text in memory, like the kernel's command line: its bytes up to its first zero, mapped read-only.
+text_of :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> string? {
+    size :: slop_os.memory_size(memory) or_return null
+    address :: runtime.reserve_addresses(cast[usize](size)) or_return null
+    match slop_os.memory_map(memory, block.space, address, 0, size, slop_os.PROTECTION_READ) {
+        case Ok => {}
+        case Error(error) => return null
+    }
+    count : usize = 0
+    for byte in view_of(cast[ptr[u8]](address), cast[usize](size)) {
+        if byte == 0 {
+            break
+        }
+        count += 1
+    }
+    return string_of(cast[ptr[u8]](address), count)
+}
+
+// What follows prefix in the word of text that starts with it, or null.
+word_after :: fn(text: string, prefix: string) -> string? {
+    start : usize = 0
+    for character, i in text {
+        if character == ' ' {
+            match word_from(text, start, i, prefix) {
+                case Some(found) => return found
+                case None => {}
+            }
+            start = i + 1
+        }
+    }
+    return word_from(text, start, text.count, prefix)
+}
+
+// What follows prefix in text's bytes from start to end, if they start with it.
+word_from :: fn(text: string, start: usize, end: usize, prefix: string) -> string? {
+    if end < start || end - start < prefix.count {
+        return null
+    }
+    word :: string_of(cast[ptr[u8]](cast[u64](text.data) + cast[u64](start)), end - start)
+    if string_of(cast[ptr[u8]](word.data), prefix.count) != prefix {
+        return null
+    }
+    return string_of(cast[ptr[u8]](cast[u64](word.data) + cast[u64](prefix.count)), word.count - prefix.count)
+}
+
+// Whether word is one of the words of text, which spaces separate.
+has_word :: fn(text: string, word: string) -> bool {
+    start : usize = 0
+    for character, i in text {
+        if character == ' ' {
+            if is_word_at(text, start, i, word) {
+                return true
+            }
+            start = i + 1
+        }
+    }
+    return is_word_at(text, start, text.count, word)
+}
+
+// Whether text's bytes from start to end are word.
+is_word_at :: fn(text: string, start: usize, end: usize, word: string) -> bool {
+    return end >= start && end - start == word.count && string_of(cast[ptr[u8]](cast[u64](text.data) + cast[u64](start)), word.count) == word
 }

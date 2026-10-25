@@ -86,22 +86,25 @@ Fixed later the same day, with the proposal decided (`hemera-proposals/relative-
 - The stale docs above are fixed, `checking.cpp`'s two stale TODOs say what happens instead, and
   `type_checking.cpp` and `mlir_generation.cpp` are gone, with the work type and test only they used.
 
+Fixed with SlopOS's M7 7c (`decisions/0074`), the gaps its drivers would meet first:
+
+- `match` and `switch` on strings generate a byte comparison of each case (`cstring` cases still don't). Hosted test
+  `string_cases`.
+- A `#union` struct's literal is built in memory: zeroed, then each member it names stored at its offset, in order, so
+  a later one overwrites what it overlaps; the others' defaults are left out once one is named. A constant's literal
+  still can't name an overlapping member. Hosted test `union_literals`.
+- A dynamic array of a `#scoped` struct is an error wherever it's written, a local's type included, since its elements
+  are on the heap. Front-end test `scoped_dynamic_local`.
+- Found on the way: base's runtime had no grant kinds for 7b's `Device` and `DmaDomain`, so an entry parameter of either
+  ended its process with `EXIT_MISSING_GRANT`; `std`'s asserts now check them like the others.
+
 Still open, from the same survey:
-
-Wrong code, with no error:
-
-- **A local dynamic array of a `#scoped` struct** (`parsers : Parser[..]`) is still accepted, though its elements are
-  on the heap; only fields are checked so far. Severity: friction.
 
 Builds fail where the docs say it works:
 
 - **Complex (`c16`..`c128`) and quaternion (`q32`..`q256`) arithmetic** produces invalid MLIR (`llvm.add` on
   `!llvm.array<2 x i32>`), E5003 at lowering, not a checking error.
   Note: mlir has a complex dialect we might want to use. Quaternions probably need to be vectors or tensors. Severity: nice.
-- **A `#union` struct's literal** (`U.{a = 42}`) can't be generated (E5002). Assigning fields after `U.{}` works.
-  Severity: friction (register and descriptor overlays).
-- **Matching or switching on strings** can't be generated (E5002), though `control_flow.md` lists strings as a
-  case type for both. Severity: friction.
 - **`#file_path`** gives "DIRECTIVE isn't supported in an expression yet" (E4024). `#file_data` works.
   Severity: nice.
 - **`types_are_aliases`** can't be worked out at compile time ("isn't something the compiler can compute here"),

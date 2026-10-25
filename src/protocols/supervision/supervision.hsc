@@ -4,8 +4,8 @@ import os from "std"
 import slop_os from "std/os"
 
 /*
- * The supervisor's reports to the root task (decisions/0067, 0071), one way: as each service starts, ends, or
- * doesn't start. The root task answers none of them.
+ * The supervisor's reports to the root task (decisions/0067, 0071, 0074), one way: as each service or driver starts,
+ * ends, or doesn't start, and once it has started all it will. The root task answers none of them.
  */
 
 Supervision :: struct {}
@@ -23,6 +23,8 @@ Request :: union {
     Started(Report),
     Ended(Report),
     Failed(Report),
+    // Everything it starts at boot has started or failed: how many started
+    AllStarted(u32),
 }
 
 Response :: union {
@@ -35,6 +37,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Started(_) => true
         case Ended(_) => true
         case Failed(_) => true
+        case AllStarted(_) => true
     }
 }
 

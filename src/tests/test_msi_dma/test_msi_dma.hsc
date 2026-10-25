@@ -3,7 +3,7 @@
  * the platform capability and the firmware tables' copy as the root task would give the platform service:
  * - the copy is read-only, starts with its header, and has the tables this machine's firmware gives: ACPI's RSDP,
  *   FADT, DSDT and MCFG on x86-64, the device tree on AArch64;
- * - the PCIe configuration space, through ECAM where the MCFG or the device tree says, has edu on bus 0;
+ * - the PCIe configuration space, through ECAM where the MCFG or the device tree says (src/pci), has edu on bus 0;
  * - a Device for it, a second for its address refused, and one without the platform capability; an MSI for it,
  *   whose message is programmed into edu's MSI capability, then edu raises it, and the IRQ's packet arrives; 31
  *   more fit, and no more;
@@ -19,8 +19,8 @@ import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
-import devicetree from "../../devicetree"
 import log_line from "../../log_line"
+import pci from "../../pci"
 import test_kit from "../../test_kit"
 
 NAME :: "test_msi_dma"
@@ -78,12 +78,12 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     slop_os.memory_map(tables_memory, space, tables_at, 0, tables_size, read) or_return 103
     header :: cast[ptr[slop_os.FirmwareTables]](tables_at)
     results[1] = if header.magic == slop_os.FIRMWARE_MAGIC { cast[u64](1) } else { cast[u64](0) }
-    found :: find_ecam(tables_at, tables_size)
-    results[2] = if found.tables_right { cast[u64](1) } else { cast[u64](0) }
-    log_line.write(log, "%: % firmware tables, ECAM at %", NAME, header.count, cast[rawptr](found.ecam))
+    results[2] = if tables_right(tables_at) { cast[u64](1) } else { cast[u64](0) }
+    host := pci.find_host(tables_at, tables_size) or_return 104
+    log_line.write(log, "%: % firmware tables, ECAM at %", NAME, header.count, cast[rawptr](host.ecam))
 
     // edu, on bus 0
-    config_memory :: slop_os.memory_create_physical(hardware, budget, found.ecam, BUS_BYTES, .Device) or_return 104
+    config_memory :: slop_os.memory_create_physical(hardware, budget, host.ecam, BUS_BYTES, .Device) or_return 104
     config_at :: runtime.reserve_addresses(cast[usize](BUS_BYTES)) or_return 104
     slop_os.memory_map(config_memory, space, config_at, 0, BUS_BYTES, read_write) or_return 104
     slot := cast[u64](32)
@@ -114,10 +114,10 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
 
     // Its Device, a second at its address, and one without the platform capability
     address :: slop_os.device_address(0, 0, cast[u8](slot), 0)
-    made :: slop_os.device_create(hardware, budget, address, msi_source_of(found, address))
+    made :: slop_os.device_create(hardware, budget, address, pci.msi_source(&host, address))
     results[5] = test_kit.tag_of(made)
     device :: made or_else test_kit.handle_at[slop_os.Device](0)
-    results[6] = test_kit.tag_of(slop_os.device_create(hardware, budget, address, msi_source_of(found, address)))
+    results[6] = test_kit.tag_of(slop_os.device_create(hardware, budget, address, pci.msi_source(&host, address)))
     not_platform :: test_kit.handle_at[slop_os.Platform](cast[u64](cast[u32](budget)))
     results[7] = test_kit.tag_of(slop_os.device_create(not_platform, budget, slop_os.device_address(0, 0, 31, 7), 0xffff))
 
@@ -224,57 +224,22 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     return 0
 }
 
-// What the firmware tables say of PCIe: where bus 0's ECAM is, and, on AArch64, how requester IDs become MSI sources.
-Ecam :: struct {
-    ecam : u64,
-    tables_right : bool,
-    rid_base : u32,
-    msi_base : u32,
-}
-
-// The ECAM, from the MCFG (x86-64) or the device tree's host bridge (AArch64), in the copy at tables, size bytes.
-find_ecam :: fn(tables: u64, size: u64) -> Ecam {
-    found : Ecam
+// Whether the firmware tables' copy has what this machine's firmware gives: ACPI's RSDP, FADT, DSDT and MCFG, or a device tree.
+tables_right :: fn(tables: u64) -> bool {
     header :: cast[ptr[slop_os.FirmwareTables]](tables)
     entries :: view_of(cast[ptr[slop_os.FirmwareTable]](tables + cast[u64](size_of(slop_os.FirmwareTables))), cast[usize](header.count))
+    seen := cast[u32](0)
+    for &entry in entries {
+        name :: pci.signature_of(entry)
+        seen |= if name == "RSDP" { cast[u32](1) } else if name == "FACP" { cast[u32](2) } else if name == "DSDT" { cast[u32](4) }
+            else if name == "MCFG" { cast[u32](8) } else if name == "DTB " { cast[u32](16) } else { cast[u32](0) }
+    }
     #if TARGET_ARCH == .x86_64 {
-        seen := cast[u32](0)
-        for &entry in entries {
-            name :: signature(entry)
-            seen |= if name == "RSDP" { cast[u32](1) } else if name == "FACP" { cast[u32](2) } else if name == "DSDT" { cast[u32](4) }
-                else if name == "MCFG" { cast[u32](8) } else { cast[u32](0) }
-            // The MCFG's first allocation, after its header and 8 reserved bytes: bus 0's base
-            if name == "MCFG" && entry.size >= 52 && entry.offset + 52 <= size {
-                found.ecam = intrinsics.volatile_load_u64(cast[ptr[u64]](tables + entry.offset + 44))
-            }
-        }
-        found.tables_right = header.kind == .Acpi && seen == 15
+        return header.kind == .Acpi && seen == 15
     }
     #else {
-        for &entry in entries {
-            if signature(entry) == "DTB " && entry.offset + cast[u64](entry.size) <= size {
-                found.tables_right = header.kind == .DeviceTree
-                tree := devicetree.open(tables + entry.offset) or_return found
-                bridge := devicetree.find_compatible(&tree, "pci-host-ecam-generic") or_return found
-                region :: devicetree.reg(&tree, &bridge, 0) or_return found
-                found.ecam = region.address
-                // msi-map: a requester ID base, the MSI controller, its base, and how many
-                map :: devicetree.property(&tree, &bridge, "msi-map") or_return found
-                found.rid_base = devicetree.cell(map, 0) or_else 0
-                found.msi_base = devicetree.cell(map, 2) or_else 0
-            }
-        }
+        return header.kind == .DeviceTree && seen == 16
     }
-    return found
-}
-
-signature :: fn(entry: ptr[slop_os.FirmwareTable]) -> string {
-    return string_of(&entry.signature[0], 4)
-}
-
-// A function's MSI source: its requester ID through the msi-map on AArch64; unused on x86-64.
-msi_source_of :: fn(found: Ecam, address: u32) -> u32 {
-    return (address & 0xffff) - found.rid_base + found.msi_base
 }
 
 // The message into the function's MSI capability, one vector, enabled: whether it has one.

@@ -1,8 +1,9 @@
 /*
- * The supervisor (decisions/0017, 0058, 0067, 0068), a stub for now: it starts the services system_config
- * gives it through the process manager, with std/os's launch, each in a process of its own that it owns
- * and pays for from its budget, and tells the root task as each starts and ends. Restarting them comes
- * with M7's drivers.
+ * The supervisor (decisions/0017, 0058, 0067, 0068, 0074): it starts the services system_config gives it through the
+ * process manager, with std/os's launch, each in a process of its own that it owns and pays for from its budget, and
+ * tells the root task as each starts and ends, and once all have. A driver's service names the devices it takes: the
+ * supervisor claims each from the platform service and starts a driver for it, with what it holds of it
+ * (platform.PciDevice). Restarting them comes with 7f.
  */
 package supervisor
 
@@ -10,14 +11,39 @@ import os from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
+import entropy from "../../protocols/entropy"
+import platform from "../../protocols/platform"
 import supervision from "../../protocols/supervision"
 import system_config from "../../system_config"
 import hello from "../../apps/hello"
+import virtio_rng from "../../drivers/virtio_rng"
+
+MAX_STARTED :: 16
 
 // What hello is given (hello.main).
 HelloGrants :: struct {
     log : slop_os.DebugLog?,
     manager : os.Channel[process_manager.ProcessManager]?,
+}
+
+// What a virtio-rng driver is given (virtio_rng.main): its device, and a connection to the entropy service.
+VirtioRngGrants :: struct {
+    log : slop_os.DebugLog?,
+    device : slop_os.Device,
+    config : slop_os.Memory,
+    bar0 : slop_os.Memory?,
+    bar1 : slop_os.Memory?,
+    bar2 : slop_os.Memory?,
+    bar3 : slop_os.Memory?,
+    bar4 : slop_os.Memory?,
+    bar5 : slop_os.Memory?,
+    domain : slop_os.DmaDomain,
+    entropy_service : os.Channel[entropy.Entropy]?,
+}
+
+Started :: struct {
+    name : string,
+    process : slop_os.Process,
 }
 
 Supervisor :: struct {
@@ -27,53 +53,146 @@ Supervisor :: struct {
     manager_port : slop_os.Port,
     root : slop_os.Channel,
     root_port : slop_os.Port,
+    // What it started, which its port watches under their indexes
+    started : Started[MAX_STARTED],
+    started_count : usize,
+    port : slop_os.Port,
 }
 
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager], root: os.Channel[supervision.Supervision],
-    hello_module: slop_os.Memory) -> int {
+    hello_module: slop_os.Memory, platform_service: os.Channel[platform.Platform]?, entropy_service: os.Channel[entropy.Entropy]?,
+    virtio_rng_module: slop_os.Memory?) -> int {
     block :: slop_os.startup_block()
     supervisor := Supervisor.{block = block, manager = manager, root = root.end}
     supervisor.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     supervisor.manager_port = os.port_for(block.budget, manager.end) or_return 1
     supervisor.root_port = os.port_for(block.budget, root.end) or_return 2
-    port :: slop_os.port_create(block.budget) or_return 3
-    // hello, the one service it starts so far
-    service :: system_config.service("hello") or_return 4
-    grants := HelloGrants.{}
-    match duplicate_log(&supervisor) {
-        case Some(copy) => grants.log = copy
+    supervisor.port = slop_os.port_create(block.budget) or_return 3
+    start_hello(&supervisor, hello_module)
+    // Each driver, for every device it takes
+    match platform_service {
+        case Some(platform_end) => {
+            platform_port :: os.port_for(block.budget, platform_end.end) or_return 4
+            for each in system_config.SERVICES {
+                if !system_config.is_driver(each) || each.starter != system_config.Starter.Supervisor {
+                    continue
+                }
+                wanted :: each.devices
+                loop {
+                    device :: claim(&supervisor, platform_end.end, platform_port, wanted) or_break
+                    if each.name == "virtio_rng" {
+                        start_virtio_rng(&supervisor, each, device, virtio_rng_module, entropy_service)
+                    }
+                    else {
+                        close_device(&device)
+                    }
+                }
+            }
+        }
         case None => {}
     }
-    match process_manager.connect(manager.end, supervisor.manager_port, block.budget) {
-        case Some(connection) => grants.manager = connection
-        case None => {}
-    }
-    started := false
-    match os.launch(manager, supervisor.manager_port, service.name, hello_module, service.budget, hello.main, grants) {
-        case Ok(launched) => {
-            _ = slop_os.port_bind(port, cast[slop_os.Handle](launched.process), slop_os.SIGNAL_TERMINATED, 0, .Once)
-            started = true
-            tell_root(&supervisor, .Started(report_of(service.name, 0)))
-        }
-        case Error(error) => {
-            log_line.write(supervisor.log, "supervisor: % didn't start: %", service.name, error)
-            tell_root(&supervisor, .Failed(report_of(service.name, cast[u64](error) + 1)))
-        }
-    }
-    log_line.write(supervisor.log, "supervisor: started % services", if started { 1 } else { 0 })
+    log_line.write(supervisor.log, "supervisor: started % services", supervisor.started_count)
+    tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))
     loop {
         packets : slop_os.Packet[8]
-        taken :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_else 0
+        taken :: slop_os.port_wait(supervisor.port, packets, slop_os.NO_DEADLINE) or_else 0
         for packet, i in packets {
             if i >= cast[usize](taken) {
                 break
             }
-            if packet.kind == .Signal && packet.key == 0 {
-                log_line.write(supervisor.log, "supervisor: % ended", service.name)
-                tell_root(&supervisor, .Ended(report_of(service.name, packet.data[1])))
+            index :: cast[usize](packet.key)
+            if packet.kind == .Signal && index < supervisor.started_count && index < supervisor.started.count {
+                name :: supervisor.started[index].name
+                log_line.write(supervisor.log, "supervisor: % ended", name)
+                tell_root(&supervisor, .Ended(report_of(name, packet.data[1])))
             }
         }
     }
+}
+
+start_hello :: fn(supervisor: ptr[mut Supervisor], module: slop_os.Memory) {
+    service :: system_config.service("hello") or_return void
+    grants := HelloGrants.{log = duplicate_log(supervisor)}
+    grants.manager = process_manager.connect(supervisor.manager.end, supervisor.manager_port, supervisor.block.budget)
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module, service.budget, hello.main, grants) {
+        case Ok(launched) => started(supervisor, service.name, launched.process)
+        case Error(error) => failed(supervisor, service.name, error)
+    }
+}
+
+// A driver for a virtio entropy device, with what it holds of it; the device's handles go to it, or are closed.
+start_virtio_rng :: fn(supervisor: ptr[mut Supervisor], service: system_config.Service, device: platform.PciDevice, module: slop_os.Memory?,
+    entropy_service: os.Channel[entropy.Entropy]?) {
+    grants := VirtioRngGrants.{log = duplicate_log(supervisor), device = device.device, config = device.config, domain = device.domain,
+        bar0 = optional(device.bar0), bar1 = optional(device.bar1), bar2 = optional(device.bar2), bar3 = optional(device.bar3),
+        bar4 = optional(device.bar4), bar5 = optional(device.bar5)}
+    match entropy_service {
+        case Some(service_end) => {
+            entropy_port :: os.port_for(supervisor.block.budget, service_end.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+            grants.entropy_service = entropy.connect(service_end.end, entropy_port, supervisor.block.budget)
+        }
+        case None => {}
+    }
+    executable :: module or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
+    // By its constant name, which outlives the service's copy
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, executable, service.budget, virtio_rng.main, grants) {
+        case Ok(launched) => started(supervisor, "virtio_rng", launched.process)
+        case Error(error) => failed(supervisor, service.name, error)
+    }
+}
+
+// The next device wanted matches, claimed from the platform service, or null once there are none.
+claim :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, port: slop_os.Port, wanted: platform.DeviceMatch) -> platform.PciDevice? {
+    out := os.Outgoing.{}
+    request :: os.begin[platform.Request](&out)
+    request^ = .Claim(wanted)
+    if platform.send_request(end, port, &out) != null {
+        return null
+    }
+    into := os.Incoming.{}
+    loop {
+        match platform.receive_response(end, port, &into, true) {
+            case Received => break
+            case Failed(error) => return null
+            case _ => continue
+        }
+    }
+    return match os.message_of[platform.Response](&into)^ {
+        case Claimed(device) => device
+        case _ => null
+    }
+}
+
+optional :: fn(memory: slop_os.Memory) -> slop_os.Memory? {
+    return if cast[slop_os.Handle](memory) == slop_os.NO_HANDLE { null } else { memory }
+}
+
+// A device no driver takes, given back by closing what it held.
+close_device :: fn(device: ptr[platform.PciDevice]) {
+    for handle in slop_os.Handle.[cast[slop_os.Handle](device.device), cast[slop_os.Handle](device.config),
+        cast[slop_os.Handle](device.domain), cast[slop_os.Handle](device.bar0), cast[slop_os.Handle](device.bar1),
+        cast[slop_os.Handle](device.bar2), cast[slop_os.Handle](device.bar3), cast[slop_os.Handle](device.bar4),
+        cast[slop_os.Handle](device.bar5)] {
+        if handle != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(handle)
+        }
+    }
+}
+
+// A service started: watched until it ends, and reported.
+started :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process: slop_os.Process) {
+    index :: supervisor.started_count
+    if index < supervisor.started.count {
+        supervisor.started[index] = Started.{name = name, process = process}
+        supervisor.started_count = index + 1
+        _ = slop_os.port_bind(supervisor.port, cast[slop_os.Handle](process), slop_os.SIGNAL_TERMINATED, cast[u64](index), .Once)
+    }
+    tell_root(supervisor, .Started(report_of(name, 0)))
+}
+
+failed :: fn(supervisor: ptr[mut Supervisor], name: string, error: os.LaunchError) {
+    log_line.write(supervisor.log, "supervisor: % didn't start: %", name, error)
+    tell_root(supervisor, .Failed(report_of(name, cast[u64](error) + 1)))
 }
 
 // A copy of the supervisor's debug log, to give a service.
