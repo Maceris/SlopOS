@@ -9,6 +9,7 @@ package virtio_rng
 import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
+import driver_kit from "../../driver_kit"
 import log_line from "../../log_line"
 import pci from "../../pci"
 import entropy from "../../protocols/entropy"
@@ -36,8 +37,8 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     entropy_service: os.Channel[entropy.Entropy]?) -> int {
     block :: slop_os.startup_block()
     driver := Driver.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)}
-    config_at :: map_device(config) or_return 2
-    bars := u64.[map_bar(bar0), map_bar(bar1), map_bar(bar2), map_bar(bar3), map_bar(bar4), map_bar(bar5)]
+    config_at :: driver_kit.map_device(config) or_return 2
+    bars := driver_kit.map_bars(bar0, bar1, bar2, bar3, bar4, bar5)
     driver.transport = virtio.open(config_at, bars) or_return 3
     _ = virtio.start(&driver.transport, 0) or_return 4
 
@@ -130,23 +131,5 @@ fill :: fn(driver: ptr[mut Driver], count: u32) -> u32 {
         if waited == 0 {
             return 0
         }
-    }
-}
-
-// A BAR, if the device has it, mapped: where, or 0.
-map_bar :: fn(bar: slop_os.Memory?) -> u64 {
-    memory :: bar or_return 0
-    return map_device(memory) or_else 0
-}
-
-// Memory mapped read/write, page-aligned, as it is: where.
-map_device :: fn(memory: slop_os.Memory) -> u64? {
-    block :: slop_os.startup_block()
-    size :: slop_os.memory_size(memory) or_return null
-    at :: runtime.reserve_addresses(cast[usize](size)) or_return null
-    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    match slop_os.memory_map(memory, block.space, at, 0, size, read_write) {
-        case Ok => return at
-        case Error(error) => return null
     }
 }

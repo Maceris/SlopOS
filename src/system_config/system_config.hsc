@@ -11,11 +11,13 @@ import compiler from "base"
 import runtime from "base"
 import text_buffer from "std"
 import os from "std"
+import console from "../services/console"
 import entropy from "../services/entropy"
 import platform from "../services/platform"
 import process_manager from "../services/process_manager"
 import supervisor from "../services/supervisor"
 import hello from "../apps/hello"
+import virtio_console from "../drivers/virtio_console"
 import virtio_rng from "../drivers/virtio_rng"
 import platform_protocol from "../protocols/platform"
 import supervision from "../protocols/supervision"
@@ -62,7 +64,8 @@ MIB : u64 : 1024 * 1024
 /*
  * In the order they start. The entropy service comes first, since the process manager draws from it, and the
  * supervisor's budget pays for what it starts too. The platform service starts before the supervisor, which claims
- * devices from it for the drivers.
+ * devices from it for the drivers, and starts them first: the console service needs a serial line, and hello the
+ * console.
  */
 SERVICES :: Service.[
     Service.{name = "entropy", module = "entropy.elf", starter = .RootTask, by_manager = false, budget = 2 * MIB,
@@ -73,11 +76,17 @@ SERVICES :: Service.[
         entry = type_of(platform.main)},
     Service.{name = "supervisor", module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 16 * MIB,
         entry = type_of(supervisor.main)},
+    Service.{name = "console", module = "console.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
+        entry = type_of(console.main)},
     Service.{name = "hello", module = "hello.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(hello.main)},
     // A modern virtio entropy device (virtio's device ID 4, as PCI device 0x1040 + 4)
     Service.{name = "virtio_rng", module = "virtio_rng.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(virtio_rng.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1044,
+        class = platform_protocol.ANY_CLASS}},
+    // A modern virtio console (virtio's device ID 3)
+    Service.{name = "virtio_console", module = "virtio_console.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
+        entry = type_of(virtio_console.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1043,
         class = platform_protocol.ANY_CLASS}},
 ]
 

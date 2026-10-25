@@ -3,7 +3,9 @@
  * process manager, with std/os's launch, each in a process of its own that it owns and pays for from its budget, and
  * tells the root task as each starts and ends, and once all have. A driver's service names the devices it takes: the
  * supervisor claims each from the platform service and starts a driver for it, with what it holds of it
- * (platform.PciDevice). Restarting them comes with 7f.
+ * (platform.PciDevice). Drivers start first, since services need them: a driver that serves clients is given a
+ * listener whose other end the supervisor keeps, and connects them through (decisions/0075). The console service is
+ * given the first serial line, and hello the console. Restarting them comes with 7f.
  */
 package supervisor
 
@@ -11,11 +13,15 @@ import os from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
+import console_log from "../../protocols/console_log"
 import entropy from "../../protocols/entropy"
 import platform from "../../protocols/platform"
+import serial from "../../protocols/serial"
 import supervision from "../../protocols/supervision"
 import system_config from "../../system_config"
 import hello from "../../apps/hello"
+import console from "../console"
+import virtio_console from "../../drivers/virtio_console"
 import virtio_rng from "../../drivers/virtio_rng"
 
 MAX_STARTED :: 16
@@ -24,6 +30,36 @@ MAX_STARTED :: 16
 HelloGrants :: struct {
     log : slop_os.DebugLog?,
     manager : os.Channel[process_manager.ProcessManager]?,
+    console : os.Channel[console_log.ConsoleLog]?,
+}
+
+// What the console service is given (console.main).
+ConsoleGrants :: struct {
+    log : slop_os.DebugLog?,
+    serial_line : os.Channel[serial.Serial]?,
+    clients : os.Listener[console_log.ConsoleLog],
+}
+
+// What a virtio console's driver is given (virtio_console.main): its device, and a listener for its clients.
+VirtioConsoleGrants :: struct {
+    log : slop_os.DebugLog?,
+    device : slop_os.Device,
+    config : slop_os.Memory,
+    bar0 : slop_os.Memory?,
+    bar1 : slop_os.Memory?,
+    bar2 : slop_os.Memory?,
+    bar3 : slop_os.Memory?,
+    bar4 : slop_os.Memory?,
+    bar5 : slop_os.Memory?,
+    domain : slop_os.DmaDomain,
+    clients : os.Listener[serial.Serial],
+}
+
+// The modules of what the supervisor starts, besides hello.
+Modules :: struct {
+    console : slop_os.Memory?,
+    virtio_console : slop_os.Memory?,
+    virtio_rng : slop_os.Memory?,
 }
 
 // What a virtio-rng driver is given (virtio_rng.main): its device, and a connection to the entropy service.
@@ -57,18 +93,23 @@ Supervisor :: struct {
     started : Started[MAX_STARTED],
     started_count : usize,
     port : slop_os.Port,
+    // The first serial line's driver's listener, and the console service's, which the supervisor connects clients
+    // through; NO_HANDLE without
+    serial_listener : slop_os.Channel,
+    console_listener : slop_os.Channel,
 }
 
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager], root: os.Channel[supervision.Supervision],
     hello_module: slop_os.Memory, platform_service: os.Channel[platform.Platform]?, entropy_service: os.Channel[entropy.Entropy]?,
-    virtio_rng_module: slop_os.Memory?) -> int {
+    console_module: slop_os.Memory?, virtio_console_module: slop_os.Memory?, virtio_rng_module: slop_os.Memory?) -> int {
     block :: slop_os.startup_block()
-    supervisor := Supervisor.{block = block, manager = manager, root = root.end}
+    supervisor := Supervisor.{block = block, manager = manager, root = root.end,
+        serial_listener = cast[slop_os.Channel](slop_os.NO_HANDLE), console_listener = cast[slop_os.Channel](slop_os.NO_HANDLE)}
+    modules :: Modules.{console = console_module, virtio_console = virtio_console_module, virtio_rng = virtio_rng_module}
     supervisor.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     supervisor.manager_port = os.port_for(block.budget, manager.end) or_return 1
     supervisor.root_port = os.port_for(block.budget, root.end) or_return 2
     supervisor.port = slop_os.port_create(block.budget) or_return 3
-    start_hello(&supervisor, hello_module)
     // Each driver, for every device it takes
     match platform_service {
         case Some(platform_end) => {
@@ -81,7 +122,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
                 loop {
                     device :: claim(&supervisor, platform_end.end, platform_port, wanted) or_break
                     if each.name == "virtio_rng" {
-                        start_virtio_rng(&supervisor, each, device, virtio_rng_module, entropy_service)
+                        start_virtio_rng(&supervisor, each, device, modules.virtio_rng, entropy_service)
+                    }
+                    else if each.name == "virtio_console" {
+                        start_virtio_console(&supervisor, each, device, modules.virtio_console)
                     }
                     else {
                         close_device(&device)
@@ -91,6 +135,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         }
         case None => {}
     }
+    // Then the services that use them
+    start_console(&supervisor, modules.console)
+    start_hello(&supervisor, hello_module)
     log_line.write(supervisor.log, "supervisor: started % services", supervisor.started_count)
     tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))
     loop {
@@ -114,6 +161,10 @@ start_hello :: fn(supervisor: ptr[mut Supervisor], module: slop_os.Memory) {
     service :: system_config.service("hello") or_return void
     grants := HelloGrants.{log = duplicate_log(supervisor)}
     grants.manager = process_manager.connect(supervisor.manager.end, supervisor.manager_port, supervisor.block.budget)
+    if cast[slop_os.Handle](supervisor.console_listener) != slop_os.NO_HANDLE {
+        port :: os.port_for(supervisor.block.budget, supervisor.console_listener) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+        grants.console = console_log.connect(supervisor.console_listener, port, supervisor.block.budget)
+    }
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module, service.budget, hello.main, grants) {
         case Ok(launched) => started(supervisor, service.name, launched.process)
         case Error(error) => failed(supervisor, service.name, error)
@@ -137,6 +188,53 @@ start_virtio_rng :: fn(supervisor: ptr[mut Supervisor], service: system_config.S
     // By its constant name, which outlives the service's copy
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, executable, service.budget, virtio_rng.main, grants) {
         case Ok(launched) => started(supervisor, "virtio_rng", launched.process)
+        case Error(error) => failed(supervisor, service.name, error)
+    }
+}
+
+/*
+ * A driver for a virtio console, with what it holds of it and a listener for its clients, whose other end the
+ * supervisor keeps if it's the first serial line.
+ */
+start_virtio_console :: fn(supervisor: ptr[mut Supervisor], service: system_config.Service, device: platform.PciDevice, module: slop_os.Memory?) {
+    pair := slop_os.ChannelPair.{}
+    match os.channel_for[serial.Serial](supervisor.block.budget, 0) {
+        case Ok(made) => pair = made
+        case Error(error) => {
+            close_device(&device)
+            return void
+        }
+    }
+    grants := VirtioConsoleGrants.{log = duplicate_log(supervisor), device = device.device, config = device.config, domain = device.domain,
+        bar0 = optional(device.bar0), bar1 = optional(device.bar1), bar2 = optional(device.bar2), bar3 = optional(device.bar3),
+        bar4 = optional(device.bar4), bar5 = optional(device.bar5), clients = os.Listener[serial.Serial].{end = pair.a}}
+    executable :: module or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, executable, service.budget, virtio_console.main, grants) {
+        case Ok(launched) => {
+            started(supervisor, "virtio_console", launched.process)
+            if cast[slop_os.Handle](supervisor.serial_listener) == slop_os.NO_HANDLE {
+                supervisor.serial_listener = pair.b
+            }
+        }
+        case Error(error) => failed(supervisor, service.name, error)
+    }
+}
+
+// The console service, given the first serial line if there's one, and a listener for its clients.
+start_console :: fn(supervisor: ptr[mut Supervisor], module: slop_os.Memory?) {
+    service :: system_config.service("console") or_return void
+    executable :: module or_return void
+    pair :: os.channel_for[console_log.ConsoleLog](supervisor.block.budget, 0) or_return void
+    grants := ConsoleGrants.{log = duplicate_log(supervisor), clients = os.Listener[console_log.ConsoleLog].{end = pair.a}}
+    if cast[slop_os.Handle](supervisor.serial_listener) != slop_os.NO_HANDLE {
+        port :: os.port_for(supervisor.block.budget, supervisor.serial_listener) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+        grants.serial_line = serial.connect(supervisor.serial_listener, port, supervisor.block.budget)
+    }
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, executable, service.budget, console.main, grants) {
+        case Ok(launched) => {
+            started(supervisor, "console", launched.process)
+            supervisor.console_listener = pair.b
+        }
         case Error(error) => failed(supervisor, service.name, error)
     }
 }

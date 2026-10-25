@@ -44,6 +44,8 @@ SupervisorGrants :: struct {
     hello_module : slop_os.Memory,
     platform_service : os.Channel[platform_protocol.Platform]?,
     entropy_service : os.Channel[entropy.Entropy]?,
+    console_module : slop_os.Memory?,
+    virtio_console_module : slop_os.Memory?,
     virtio_rng_module : slop_os.Memory?,
 }
 
@@ -151,6 +153,8 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         hello_module = cast[slop_os.Memory](slop_os.handle_duplicate(hello_module, module_rights) or_return 9),
         platform_service = platform_connection,
         entropy_service = entropy.connect(root.entropy, root.entropy_port, block.budget),
+        console_module = module_copy(block, "console", module_rights),
+        virtio_console_module = module_copy(block, "virtio_console", module_rights),
         virtio_rng_module = module_copy(block, "virtio_rng", module_rights),
     }
     match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, supervisor.main, grants) {

@@ -38,9 +38,12 @@ Tools are found from the environment, then the PATH:
 import argparse
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 # What the kernel writes to port 0xf4 can't be told apart from a reset or a crash when QEMU exits
@@ -206,6 +209,60 @@ def run_aarch64(image: Path, qemu: Path, serial: Path, timeout: float, cpu: str,
     return result.returncode >> 1 if result.returncode % 2 == 1 else NO_EXIT_CODE
 
 
+# The virtio console's banner, which says it's ready for what's typed into it (src/services/console)
+CONSOLE_BANNER = "SlopOS console"
+
+
+class ConsoleLink:
+    """
+    A virtio console whose other end is a TCP socket QEMU serves on the loopback (a file can't be typed into on
+    Windows): this connects to it, waits for the console's banner, types input into it, and keeps what it shows.
+    """
+
+    def __init__(self, typed: list[str]):
+        finding = socket.socket()
+        finding.bind(("127.0.0.1", 0))
+        self.port = finding.getsockname()[1]
+        finding.close()
+        self.typed = typed
+        self.shown = ""
+        self.thread = threading.Thread(target=self.talk, daemon=True)
+
+    def qemu_arguments(self) -> list[str]:
+        return ["-device", "virtio-serial-pci,disable-legacy=on",
+                "-chardev", f"socket,id=console,host=127.0.0.1,port={self.port},server=on,wait=off",
+                "-device", "virtconsole,chardev=console"]
+
+    def talk(self) -> None:
+        connection = None
+        deadline = time.monotonic() + 30
+        while connection is None and time.monotonic() < deadline:
+            try:
+                connection = socket.create_connection(("127.0.0.1", self.port), timeout=1)
+            except OSError:
+                time.sleep(0.2)
+        if connection is None:
+            return
+        connection.settimeout(None)
+        sent = False
+        with connection:
+            while True:
+                try:
+                    data = connection.recv(4096)
+                except OSError:
+                    return
+                if not data:
+                    return
+                self.shown += data.decode(errors="replace")
+                if not sent and CONSOLE_BANNER in self.shown:
+                    sent = True
+                    for line in self.typed:
+                        connection.sendall((line + "\n").encode())
+
+    def lines(self) -> list[str]:
+        return [line.rstrip("\r") for line in self.shown.split("\n")]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Boots a kernel in QEMU through Limine.")
     source = parser.add_mutually_exclusive_group()
@@ -223,6 +280,10 @@ def main() -> int:
     parser.add_argument("--arch", choices=["x86_64", "aarch64"], default="x86_64", help="the architecture to build and boot for")
     parser.add_argument("--no-kaslr", action="store_true", help="the same addresses every boot: no random kernel base or direct map")
     parser.add_argument("--serial", type=Path, help="also keep the serial output in this file")
+    parser.add_argument("--console-input", action="append", default=[],
+                        help="a line to type into a virtio console, which this adds, once it shows its banner; may be repeated")
+    parser.add_argument("--expect-console-line", action="append", default=[],
+                        help="a line the virtio console should show, with --expect; may be repeated")
     parser.add_argument("qemu_arguments", nargs="*", help="more arguments for QEMU, after --")
     arguments = parser.parse_args()
 
@@ -253,14 +314,26 @@ def main() -> int:
         image = make_image(kernel.resolve(), [program.resolve() for program in programs], limine, xorriso, folder, command_line,
                            not arguments.no_kaslr)
         serial = folder / "serial.txt"
+        extra = list(arguments.qemu_arguments)
+        console = None
+        if arguments.console_input or arguments.expect_console_line:
+            console = ConsoleLink(arguments.console_input)
+            extra += console.qemu_arguments()
+            console.thread.start()
         if aarch64:
-            code = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, arguments.qemu_arguments)
+            code = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra)
         else:
-            code = run(image, qemu, serial, arguments.timeout, arguments.uefi, arguments.cpu, arguments.qemu_arguments)
+            code = run(image, qemu, serial, arguments.timeout, arguments.uefi, arguments.cpu, extra)
+        if console is not None:
+            console.thread.join(timeout=5)
         output = serial.read_text(errors="replace") if serial.exists() else ""
         if arguments.serial is not None:
             arguments.serial.write_text(output)
     sys.stdout.write(output)
+    if console is not None:
+        for line in console.lines():
+            if line:
+                print(f"[console] {line}")
     description = {TIMED_OUT: "timed out", NO_EXIT_CODE: "ended without an exit code"}.get(code, f"exited with {code}")
     print(f"boot.py: the kernel {description}", file=sys.stderr)
     if arguments.expect is not None:
@@ -268,7 +341,11 @@ def main() -> int:
         missing = [line for line in arguments.expect_line if line not in lines]
         for line in missing:
             print(f"boot.py: the serial output has no line {line!r}", file=sys.stderr)
-        return 0 if code == arguments.expect and not missing else 1
+        shown = console.lines() if console is not None else []
+        missing_shown = [line for line in arguments.expect_console_line if line not in shown]
+        for line in missing_shown:
+            print(f"boot.py: the virtio console showed no line {line!r}", file=sys.stderr)
+        return 0 if code == arguments.expect and not missing and not missing_shown else 1
     return code
 
 

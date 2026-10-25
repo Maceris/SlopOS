@@ -112,8 +112,10 @@ of its own with a memory budget split off its starter's, which owns it:
 | `process_manager` | the root task, with its own loader | `log`, `entropy: Channel[Entropy]`, `clients: Listener[ProcessManager]` | Loads programs for requesters (below), drawing each one's seed, and the randomness that places its parts, from `entropy` |
 | `platform` | the root task, through the manager | `log`, `platform`, `firmware`, `clients: Listener[Platform]`, `command_line?` | Finds the PCIe host bridge in the firmware tables, numbers its buses and places its BARs where firmware didn't, and gives each device to the supervisor once (below) |
 | `supervisor` | the root task, through the manager | `log`, `manager`, `root: Channel[Supervision]`, `hello_module`, `platform_service: Channel[Platform]?`, `entropy_service: Channel[Entropy]?`, each driver's module | Starts the services `system_config` gives it with `os.launch`, and a driver for each device it claims from the platform service, owns them, and tells the root task as each starts and ends, and once all have; it restarts nothing yet |
-| `hello` | the supervisor, through the manager | `log?`, `manager?` | Reports that its heap and random numbers work, and given a connection to the manager, that it's still running once the manager is gone |
+| `console` | the supervisor, through the manager, once the drivers have started | `log`, `serial_line: Channel[Serial]?`, `clients: Listener[ConsoleLog]` | Shows its clients' lines on the first serial line, and echoes back what's typed into it (below); M10's terminal service replaces it |
+| `hello` | the supervisor, through the manager | `log?`, `manager?`, `console: Channel[ConsoleLog]?` | Reports that its heap and random numbers work, in its debug log and on the console, and given a connection to the manager, that it's still running once the manager is gone |
 | `virtio_rng` | the supervisor, through the manager, for each modern virtio entropy device | its device's bundle (below), `entropy_service: Channel[Entropy]?` | Offers the device's bytes to the entropy service as a source, on a channel of the `rng` protocol |
+| `virtio_console` | the supervisor, through the manager, for each modern virtio console | its device's bundle, `clients: Listener[Serial]` | Its device's first port as the `serial` protocol |
 
 **Wiring**: `system_config` names each service's entry, and checks when it's compiled that every
 `Channel[P]` one takes has a server: a service taking a `Listener[P]`, or the root task, which serves the
@@ -175,6 +177,19 @@ driver holds its own device and nothing else, and needs the platform service no 
 its registers through its vendor capabilities, its features (`VERSION_1` always), MSI-X with one vector per queue,
 and split virtqueues of up to 16 descriptors in a page of DMA memory, laid out in little-endian types.
 
+**Drivers that serve clients** take a listener (`clients: Listener[P]`), whose other end the supervisor keeps and
+connects the services that use them through, so `system_config`'s wiring check sees the driver as `P`'s server (`0075`).
+
+**Serial lines** (`src/protocols/serial`): `Write` with bytes, answered with how many were taken; `Read` with the most
+to take, held by the driver until at least one byte has arrived, then answered with `Data`; `Features`, answered with
+the line's speed (0 for a virtual console); and `Connect`. `virtio_console` serves its device's first port (no
+multiport): four receive buffers always offered to the device, and one buffer to send at a time, waited for.
+
+**The console** (`src/services/console`, `src/protocols/console_log`): its clients send `Line`s, answered with
+nothing, which it shows on the first serial line the supervisor gives it, after a line break and its banner,
+`SlopOS console`; each line typed into it is written to its debug log (`console: read ...`) and echoed back
+(`echo: ...`).
+
 **Hardware randomness** (`src/protocols/rng`): an RNG's driver makes a channel of the `rng` protocol (`Read` with a
 count, answered with `Bytes`) and offers it to the entropy service with `entropy.AddSource`. The entropy service
 reads 32 bytes from each source when it's added, and again each time 64 KiB more have been handed out, and reseeds
@@ -184,7 +199,9 @@ its stream with its own next 32 bytes XORed with the source's.
 it with 0 a second after the supervisor says it has started everything (`AllStarted`), for drivers to come up;
 `test_outlive_manager` kills the manager once `hello` has started, then ends once `hello` has, after it said it's
 still running; and `test_reassign` has the platform service take every virtio device's BARs and every bridge's bus
-numbers as unset, so assigning them is tested where firmware assigns everything.
+numbers as unset, so assigning them is tested where firmware assigns everything. `tools/boot.py` can link a virtio
+console to a TCP socket on the loopback (`--console-input`, `--expect-console-line`), which it types into once the
+console's banner shows, and whose lines it checks.
 
 ## Test Programs
 
