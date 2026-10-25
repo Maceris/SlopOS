@@ -86,7 +86,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 20 | `channel_send_handles` | end, handles (a slice), batch | nothing: the handles (up to 64) moved out of the caller's table into batch (0 to 15) on the other end. Each needs `RIGHT_TRANSFER` |
 | 21 | `channel_take_handles` | end, batch, handles (a slice), count (a pointer, or null) | how many: the batch's handles, in the caller's table, written into handles, and how many there are at count too, also when handles is too small; `NO_HANDLE` for any whose object is gone |
 | 22 | `channel_notify_and_wait` | end, signals, port, packets (a slice), deadline | as `channel_notify`, then `port_wait`; a thread the notify wakes is made ready on the caller's CPU |
-| 23 | `port_bind` | port, object, signals, key, mode | nothing: a `Signal` packet for key when the object, a channel end, a process (with `RIGHT_PROCESS_INSPECT`) or a thread, raises any of signals, or for an IRQ an `Irq` packet for its interrupts, signals unused; needs `RIGHT_PORT_BIND`. A process or a thread can be watched by 2 bindings, an end by 4. Mode `Once` (1) disarms it once its packet is queued, and binding the same key to the same object arms it again; `Persistent` (2) doesn't |
+| 23 | `port_bind` | port, object, signals, key, mode | nothing: a `Signal` packet for key when the object, a channel end, a process (with `RIGHT_PROCESS_INSPECT`), a thread or a Device, raises any of signals, or for an IRQ an `Irq` packet for its interrupts, signals unused; needs `RIGHT_PORT_BIND`. A process, a thread or a Device can be watched by 2 bindings, an end by 4. Mode `Once` (1) disarms it once its packet is queued, and binding the same key to the same object arms it again; `Persistent` (2) doesn't |
 | 24 | `memory_budget_create` | budget, limit | an owning handle to a child budget of limit bytes, charged to the budget |
 | 25 | `memory_budget_info` | budget | its limit, and how much of it is charged, in bytes |
 | 26 | `memory_create` | budget, size | an owning handle to a new memory object of size bytes, a whole number of pages up to `MAX_MEMORY_SIZE` (1 GiB), charged for all of it |
@@ -118,7 +118,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 52 | `device_attach` | platform, device, domain | nothing: the device's DMA, in the domain, which an IOMMU will confine it to. The first device attached binds the domain to the IOMMU it's behind, or to none; a device behind another is refused (`WrongIommu`) |
 | 53 | `irq_create_msi` | device, budget | an owning handle to an IRQ for one of the device's message-signaled interrupts, up to `MAX_DEVICE_MSIS` (32), routed to a CPU the kernel picks |
 | 54 | `irq_message` | irq | its `MsiMessage`, the address and data the device writes to raise it, for its MSI or MSI-X entry: behind an IOMMU that remaps interrupts, a remappable message the IOMMU takes only from the device |
-| 55 | `dma_domain_create` | platform, budget | an owning handle to a new DMA domain |
+| 55 | `dma_domain_create` | platform, budget, flags | an owning handle to a new DMA domain; with `DMA_DOMAIN_TRUSTED` in flags, one that may have DMA memory where no IOMMU translates it, for a trusted driver (`0084`) |
 | 56 | `dma_memory_create` | domain, budget, size, limit | an owning handle to DMA memory in the domain: pinned, in one block of frames, zeroed, ending at or below limit (0 for none), charged for its whole block |
 | 57 | `memory_device_address` | memory | where DMA memory is to the devices in its domain |
 | 58 | `iommu_register` | platform, kind, registers, first, count, stream | the IOMMU's number: kind is an `IommuKind`, registers its registers as device memory (not a window), from the firmware tables, and it covers count requester IDs from first (`slop_os.device_address`, in one segment), which it knows as stream IDs from stream (on VT-d, the requester IDs themselves). The same IOMMU registered again, of the same kind at the same place, gives the same number and covers those requester IDs too (`0079`) |
@@ -193,7 +193,13 @@ in a domain. Behind an IOMMU that translates (VT-d, `0081`; SMMUv3, `0083`), a d
 which is mapped at device addresses of the domain's own, from 1 MiB up, and nothing else: the IOMMU blocks the rest
 and the kernel logs it. Without one, a domain is all of memory, a device address is a physical address, and a driver
 can DMA anywhere: drivers are trusted until there is one (`0070`, `0079`). A domain no device is attached to yet when
-its first DMA memory is made is bound to no IOMMU.
+its first DMA memory is made is bound to no IOMMU. Where no IOMMU translates a domain, only one made trusted
+(`DMA_DOMAIN_TRUSTED`) has DMA memory (`Untrusted` otherwise): the platform service makes a trusted domain only for a
+driver `system_config` trusts with DMA (`0039`, `0084`).
+
+When an IOMMU blocks a device's DMA, the kernel logs it and raises `SIGNAL_DMA_FAULT` on its Device, with the device
+address it used in the packet's `data[1]`, for whoever watches the driver: the supervisor kills it, and starts it again
+as one that crashed.
 
 **IOMMUs** are registered by the platform service from the firmware tables (`iommu_register`): on x86-64, ACPI's
 DMAR's VT-d units; on AArch64, the SMMUv3s the device tree's `iommu-map` refers to. The kernel identifies each
@@ -235,6 +241,8 @@ with `Continue`. Without an intercept asking for faults, a faulting thread is de
 rflags. Writing them refuses an instruction or stack pointer outside user addresses, and changes only
 rflags' status flags and DF.
 
+**DMA faults**: a Device raises `SIGNAL_DMA_FAULT` each time an IOMMU blocks its DMA (`0084`).
+
 **Ends**: a process or a thread raises `SIGNAL_TERMINATED` when it's destroyed, which stays raised. A
 process's `Signal` packet for it says how it ended in `data[1]`: the code it gave `process_exit`, or
 `EXIT_KILLED` (`1 << 32`, which no code can be) when anything else destroyed it.
@@ -254,7 +262,7 @@ waiting on it, with `ObjectGone`.
 | `key: u64` | The binding's key |
 | `kind: PacketKind` (u32) | `Signal` (1), `Timer` (2), `User` (3), `Irq` (4), `Stop` (5) |
 | `reserved: u32` | |
-| `data: u64[2]` | `Signal`: the signals raised since it was last taken, and for a process's `SIGNAL_TERMINATED`, how it ended; `Timer`: the deadline it was set for; `User`: the bits raised since it was last taken; `Irq`: the interrupts since it was last taken; `Stop`: the stops since it was last taken |
+| `data: u64[2]` | `Signal`: the signals raised since it was last taken, and for a process's `SIGNAL_TERMINATED`, how it ended, or for a Device's `SIGNAL_DMA_FAULT`, the device address; `Timer`: the deadline it was set for; `User`: the bits raised since it was last taken; `Irq`: the interrupts since it was last taken; `Stop`: the stops since it was last taken |
 
 ## Channels
 
@@ -389,6 +397,7 @@ Devices, MSIs and DMA memory fail with `slop_os.DeviceError` too:
 | 42 | `NoIommu` | `iommu_register`: no IOMMU of that kind at those registers, or none the kernel drives on this architecture, or one without the translation domains use |
 | 43 | `TooManyIommus` | `iommu_register`: the kernel has every IOMMU (8) or range of requester IDs (32) it takes |
 | 44 | `WrongIommu` | `device_attach`: the device isn't behind the IOMMU the domain's devices are |
+| 45 | `Untrusted` | `dma_memory_create`: no IOMMU translates the domain, and it wasn't made trusted |
 
 ## Not Yet
 

@@ -10,7 +10,7 @@ import slop_os from "std/os"
 
 Platform :: struct {}
 
-PROTOCOL :: slop_os.Protocol.{name = "platform", major_version = 1, lending = .Server}
+PROTOCOL :: slop_os.Protocol.{name = "platform", major_version = 2, lending = .Server}
 
 // A DeviceMatch's vendor, device or class that matches any.
 ANY_ID : u16 : 0xffff
@@ -24,10 +24,16 @@ DeviceMatch :: struct {
     class : u32,
 }
 
+// What a Claim wants: devices that match, for a driver trusted with DMA no IOMMU confines, or not (decisions/0084).
+Wanted :: struct {
+    devices : DeviceMatch,
+    trusted : bool,
+}
+
 /*
  * A device, and what its driver holds of it: its Device (slop_os.device_create), a window onto its 4 KiB of
  * configuration space, each BAR it has as device memory (NO_HANDLE for one it hasn't, or the upper half of a 64-bit
- * one), and a DMA domain it's attached to.
+ * one), and a DMA domain it's attached to: trusted with DMA memory where no IOMMU confines it only if the claim was.
  */
 PciDevice :: struct {
     // Its segment and requester ID (slop_os.device_address)
@@ -48,7 +54,7 @@ PciDevice :: struct {
 
 Request :: union {
     // The next device that matches and nothing has claimed, which nothing else will
-    Claim(DeviceMatch),
+    Claim(Wanted),
     // Serve another client, on its end
     Connect(os.Channel[Platform]),
     // A device this client claimed, at its address, given again, made anew: the last bundle died with its driver

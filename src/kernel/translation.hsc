@@ -129,8 +129,8 @@ poll_dma_faults :: fn(kernel: ptr[mut Kernel]) {
 }
 
 /*
- * An IOMMU's faults, at its interrupt or its tick: each logged, with the device's address and what it was refused. The device's
- * driver isn't told yet (roadmap De).
+ * An IOMMU's faults, at its interrupt or its tick: each logged, with the device's address and what it was refused,
+ * and raised on the Device the stream is (SIGNAL_DMA_FAULT), for whoever watches its driver (decisions/0084).
  */
 handle_dma_faults :: fn(kernel: ptr[mut Kernel], index: u32) {
     if index >= intrinsics.atomic_load_u32_acquire(&kernel.iommu_count) || cast[usize](index) >= MAX_IOMMUS {
@@ -145,6 +145,7 @@ handle_dma_faults :: fn(kernel: ptr[mut Kernel], index: u32) {
         }
         concurrency.unlock(&registered.lock)
         fault :: found or_return void
+        signal_dma_fault(kernel, index, fault)
         bus, slot, function :: (fault.stream >> 8) & 0xff, (fault.stream >> 3) & 0x1f, fault.stream & 7
         if fault.interrupt {
             runtime.log_warn("IOMMU %: blocked an interrupt through remapped interrupt % from %:%.%, reason %", index, fault.address,
@@ -154,6 +155,26 @@ handle_dma_faults :: fn(kernel: ptr[mut Kernel], index: u32) {
             runtime.log_warn("IOMMU %: blocked a DMA % at % from %:%.%, reason %", index, if fault.write { "write" } else { "read" },
                 cast[rawptr](fault.address), bus, slot, function, fault.reason)
         }
+    }
+}
+
+// SIGNAL_DMA_FAULT on the Device translated through the IOMMU as the fault's stream, if there's one.
+signal_dma_fault :: fn(kernel: ptr[mut Kernel], index: u32, fault: iommu_interface.DmaFault) {
+    concurrency.lock(&kernel.devices_lock)
+    defer concurrency.unlock(&kernel.devices_lock)
+    with {
+        other := kernel.first_device
+    }
+    loop {
+        if other == 0 {
+            break
+        }
+        device :: cast[ptr[mut Device]](other)
+        if device.translated && device.iommu.iommu == index + 1 && device.iommu.stream == fault.stream {
+            raise_watchers(kernel, &device.watchers, &device.watch_lock, cast[u32](slop_os.SIGNAL_DMA_FAULT), fault.address)
+            return void
+        }
+        other = device.next
     }
 }
 

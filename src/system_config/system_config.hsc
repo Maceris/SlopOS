@@ -18,6 +18,7 @@ import platform from "../services/platform"
 import process_manager from "../services/process_manager"
 import supervisor from "../services/supervisor"
 import hello from "../apps/hello"
+import edu_dma from "../drivers/edu_dma"
 import virtio_blk from "../drivers/virtio_blk"
 import virtio_console from "../drivers/virtio_console"
 import virtio_input from "../drivers/virtio_input"
@@ -56,6 +57,9 @@ Service :: struct {
     // A driver's: the devices it takes, one process each, which the supervisor claims from the platform service; all
     // zeros for a service that isn't a driver (is_driver)
     devices : platform_protocol.DeviceMatch,
+    // A driver's: whether it's trusted with DMA where no IOMMU confines its device, as SlopOS's own drivers are; one
+    // that isn't gets no DMA memory there (decisions/0039, 0084)
+    trusted_with_dma : bool,
 }
 
 // Whether a service is a driver, with devices it takes.
@@ -90,19 +94,23 @@ SERVICES :: Service.[
     // A modern virtio entropy device (virtio's device ID 4, as PCI device 0x1040 + 4)
     Service.{name = "virtio_rng", module = "virtio_rng.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(virtio_rng.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1044,
-        class = platform_protocol.ANY_CLASS}},
+        class = platform_protocol.ANY_CLASS}, trusted_with_dma = true},
     // A modern virtio block device (virtio's device ID 2); its buffers are its clients' DMA memory, in its budget
     Service.{name = "virtio_blk", module = "virtio_blk.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,
         entry = type_of(virtio_blk.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1042,
-        class = platform_protocol.ANY_CLASS}},
+        class = platform_protocol.ANY_CLASS}, trusted_with_dma = true},
     // A modern virtio console (virtio's device ID 3)
     Service.{name = "virtio_console", module = "virtio_console.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(virtio_console.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1043,
-        class = platform_protocol.ANY_CLASS}},
+        class = platform_protocol.ANY_CLASS}, trusted_with_dma = true},
     // A modern virtio input device (virtio's device ID 18), a keyboard, mouse or tablet
     Service.{name = "virtio_input", module = "virtio_input.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(virtio_input.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1052,
-        class = platform_protocol.ANY_CLASS}},
+        class = platform_protocol.ANY_CLASS}, trusted_with_dma = true},
+    // QEMU's edu device, for the test that a driver that DMAs outside its domain is stopped: not trusted
+    Service.{name = "edu_dma", module = "edu_dma.elf", starter = .Supervisor, by_manager = true, budget = 1 * MIB,
+        entry = type_of(edu_dma.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1234, device = 0x11e8,
+        class = platform_protocol.ANY_CLASS}, trusted_with_dma = false},
 ]
 
 /*

@@ -53,6 +53,9 @@ Device :: struct #align(16) {
     // The IOMMU it's behind, as attaching it found, and its stream there; whether its DMA goes through its domain's tables.
     iommu : IommuPath,
     translated : bool,
+    // Bindings watching for its DMA to be blocked (SIGNAL_DMA_FAULT), under watch_lock.
+    watch_lock : concurrency.SpinLock,
+    watchers : EndBinding[2],
     // What the interrupt controller keeps for its MSIs, a block of frames of this order plus one, 0 for none.
     msi_memory : u64,
     msi_memory_order : u64,
@@ -64,6 +67,8 @@ Device :: struct #align(16) {
 
 DmaDomain :: struct #align(16) {
     header : ObjectHeader,
+    // Whether it may have DMA memory where no IOMMU translates it, for a trusted driver (decisions/0084).
+    trusted : bool,
     // Under the kernel's iommus_lock: whether a device was attached or memory made, binding it to that device's IOMMU,
     // the IOMMU's number plus one, or 0 for none.
     bound : bool,
@@ -384,12 +389,14 @@ destroy_msi_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
     }
 }
 
-create_dma_domain :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> Result[ptr[mut DmaDomain], slop_os.DeviceError] {
+// A domain, trusted with DMA memory no IOMMU confines if trusted.
+create_dma_domain :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, trusted: bool) -> Result[ptr[mut DmaDomain], slop_os.DeviceError] {
     object := cast[u64](0)
     match new_object(kernel, .DmaDomain, budget, 0) {
         case Ok(made) => object = made
         case Error(error) => return .Error(if error == .BudgetExceeded { slop_os.DeviceError.BudgetExceeded } else { slop_os.DeviceError.OutOfMemory })
     }
+    cast[ptr[mut DmaDomain]](object).trusted = trusted
     match adopt(owner, object) {
         case Ok => {}
         case Error(error) => {
@@ -412,7 +419,8 @@ release_dma_domain :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain]) {
 /*
  * DMA memory in domain, size bytes, its device addresses ending at or below limit (0 for none), owned by owner and
  * charged to budget: in one block of frames, pinned for as long as it lives. A domain that translates maps it, and
- * its frames may be anywhere; otherwise they're below limit. A domain no device is attached to yet is bound to none.
+ * its frames may be anywhere; otherwise they're below limit, and only a trusted domain has any (decisions/0084). A
+ * domain no device is attached to yet is bound to none.
  */
 create_dma_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, domain: ptr[mut DmaDomain], size: u64, limit: u64)
     -> Result[ptr[mut Memory], slop_os.DeviceError] {
@@ -423,6 +431,9 @@ create_dma_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, domain
     }
     concurrency.unlock(&kernel.iommus_lock)
     translates :: translating_iommu(kernel, domain.iommu) is_some
+    if !translates && !domain.trusted {
+        return .Error(.Untrusted)
+    }
     if translates && limit != 0 && limit < size {
         return .Error(.InvalidSize)
     }

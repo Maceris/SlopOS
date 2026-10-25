@@ -45,7 +45,7 @@ AARCH64_TRANSLATING_LINE = "[info] IOMMU 0: translating, 0 interrupts remapped, 
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 24 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 25 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] process manager: started supervisor", "--expect-line=[user] process manager: started hello",
         "--expect-line=[user] hello: heap working, random numbers working", "--expect-line=[user] root task: the supervisor started hello",
@@ -67,6 +67,22 @@ TESTS = [
         "--expect-line=[user] platform: the firmware tables describe no IOMMU, so devices' DMA reaches all of memory",
         "--expect-line=[user] virtio_rng: serving, a source of the entropy service's",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2", "-device", "virtio-rng-pci,disable-legacy=on"]),
+    # QEMU's edu device, its driver not trusted: DMA outside its domain blocked, and the driver killed and started again
+    # until it's ended too often (knowledge/decisions/0084)
+    ("stops a driver that DMAs outside its domain, until it's ended too often", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_dma_fault",
+        "--expect-line=[user] edu_dma: writing outside its domain, at 0x0000000004100000",
+        "--expect-line=[user] supervisor: edu_dma's DMA was blocked, at 0x0000000004100000; killing it",
+        "--expect-line=[user] supervisor: restarted edu_dma",
+        "--expect-line=[user] supervisor: edu_dma ended 4 times in a minute, and isn't started again",
+        "--expect-line=[info] root task ended with code 0", "--expect-line=[info] objects left: only the kernel's own",
+        "--", "-smp", "2", "-device", "edu"]),
+    # Without an IOMMU, a driver that isn't trusted gets no DMA memory
+    ("gives no DMA memory to a driver that isn't trusted, without an IOMMU", 7, [WITH_PROGRAMS, "--no-iommu",
+        "--command-line=test_exit test_services test_dma_fault",
+        "--expect-line=[user] edu_dma: no DMA memory, as no IOMMU confines its device and it isn't trusted",
+        "--expect-line=[user] root task: the supervisor's edu_dma ended with 0", "--expect-line=[info] root task ended with code 0",
+        "--", "-smp", "2", "-device", "edu"]),
     # A virtio console whose other end boot.py types into: hello's line through the console service, and an echo
     ("shows lines on a virtio console, and echoes what's typed into it", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services", "--console-input=ping from the host",

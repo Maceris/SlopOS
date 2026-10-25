@@ -157,7 +157,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     }
 
     // DMA: a domain the device is attached to, memory in it below the limit, and none whose limit is below its size
-    domain :: slop_os.dma_domain_create(hardware, budget) or_return 108
+    domain :: slop_os.dma_domain_create(hardware, budget, slop_os.DMA_DOMAIN_TRUSTED) or_return 108
     results[15] = test_kit.tag_of(slop_os.device_attach(hardware, device, domain))
     results[16] = test_kit.tag_of(slop_os.dma_memory_create(domain, budget, 2 * PAGE, PAGE))
     dma_made :: slop_os.dma_memory_create(domain, budget, 2 * PAGE, DMA_LIMIT)

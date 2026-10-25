@@ -12,7 +12,9 @@
  *
  * A driver that ends other than by exiting with 0, killed or crashed, is started again with its device reissued by the
  * platform service, made anew, and a new listener, up to RESTARTS times in RESTART_WINDOW; its clients' connections went
- * with it, and they dial again. With test_restart on the kernel's command line, the supervisor kills the first serial
+ * with it, and they dial again. A driver whose device's DMA an IOMMU blocks (SIGNAL_DMA_FAULT, on a handle to its
+ * Device the supervisor keeps) is killed, and so started again in the same way (decisions/0084). With test_dma_fault
+ * on the kernel's command line, the supervisor says it has started all only once edu_dma has ended for good. With test_restart on the kernel's command line, the supervisor kills the first serial
  * line's driver once everything has started and the console has dialed it and shown its banner, and says it has
  * started all only once that driver is back, and dialed again.
  */
@@ -35,6 +37,7 @@ import system_config from "../../system_config"
 import hello from "../../apps/hello"
 import console from "../console"
 import disk_check from "../disk_check"
+import edu_dma from "../../drivers/edu_dma"
 import virtio_blk from "../../drivers/virtio_blk"
 import virtio_console from "../../drivers/virtio_console"
 import virtio_input from "../../drivers/virtio_input"
@@ -44,6 +47,8 @@ MAX_STARTED :: 16
 MAX_CONNECTORS :: 16
 // Connectors are bound to the port from here on, what it started below
 CONNECTOR_KEY : u64 : 1000
+// Drivers' devices are bound from here on, for their DMA faults, each by its index in what it started
+FAULT_KEY : u64 : 2000
 RESTARTS : u32 : 3
 RESTART_WINDOW : u64 : 60_000_000_000
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
@@ -97,6 +102,20 @@ VirtioRngGrants :: struct {
     entropy_service : os.Channel[entropy.Entropy]?,
 }
 
+// What a driver that's given only its device is given (edu_dma.main).
+DeviceGrants :: struct {
+    log : slop_os.DebugLog?,
+    device : slop_os.Device,
+    config : slop_os.Memory,
+    bar0 : slop_os.Memory?,
+    bar1 : slop_os.Memory?,
+    bar2 : slop_os.Memory?,
+    bar3 : slop_os.Memory?,
+    bar4 : slop_os.Memory?,
+    bar5 : slop_os.Memory?,
+    domain : slop_os.DmaDomain,
+}
+
 // What a driver that serves clients is given (virtio_console.main, virtio_blk.main, virtio_input.main): its device, and a
 // listener for them.
 ServingGrants :: struct[P] {
@@ -122,6 +141,7 @@ Modules :: struct {
     virtio_console : slop_os.Memory?,
     virtio_input : slop_os.Memory?,
     virtio_rng : slop_os.Memory?,
+    edu_dma : slop_os.Memory?,
 }
 
 // Something it started.
@@ -138,6 +158,10 @@ Started :: struct {
     address : u32,
     restarts : u32,
     restarts_since : u64,
+    // A driver's: a handle to its Device, which the port watches for its DMA faults; NO_HANDLE without
+    watch : slop_os.Handle,
+    // Ended, and not to be started again
+    done : bool,
 }
 
 // A connector the supervisor serves: its end, what it dials, by index in started, and how many times it has.
@@ -175,21 +199,23 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     hello_module: slop_os.Memory, platform_service: os.Channel[platform.Platform]?, entropy_service: os.Channel[entropy.Entropy]?,
     console_module: slop_os.Memory?, disk_check_module: slop_os.Memory?, virtio_blk_module: slop_os.Memory?,
     virtio_console_module: slop_os.Memory?, virtio_input_module: slop_os.Memory?, virtio_rng_module: slop_os.Memory?,
-    command_line: slop_os.Memory?) -> int {
+    edu_dma_module: slop_os.Memory?, command_line: slop_os.Memory?) -> int {
     startup :: slop_os.startup_block()
     supervisor := Supervisor.{block = startup, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, console = NOWHERE}
     supervisor.modules = Modules.{hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
-        virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module}
+        virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module}
     supervisor.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     supervisor.manager_port = os.port_for(startup.budget, manager.end) or_return 1
     supervisor.root_port = os.port_for(startup.budget, root.end) or_return 2
     supervisor.port = slop_os.port_create(startup.budget) or_return 3
     test_restart := false
+    test_dma_fault := false
     match command_line {
         case Some(memory) => {
             text :: service_kit.text_of(startup, memory) or_else ""
             test_restart = service_kit.has_word(text, "test_restart")
+            test_dma_fault = service_kit.has_word(text, "test_dma_fault")
         }
         case None => {}
     }
@@ -204,7 +230,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
                     continue
                 }
                 loop {
-                    device :: request_device(&supervisor, .Claim(each.devices)) or_break
+                    device :: request_device(&supervisor, .Claim(platform.Wanted.{devices = each.devices, trusted = each.trusted_with_dma})) or_break
                     start_driver(&supervisor, index, device, NOWHERE)
                 }
             }
@@ -239,6 +265,13 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         // And has had time to show its banner again, and echo what's typed after it, before the root task's last second
         pause(&supervisor, TEST_RESTART_PAUSE)
     }
+    if test_dma_fault {
+        // Until edu_dma has ended for good: refused DMA memory and ended with 0, or killed too often
+        loop {
+            wait_and_handle(&supervisor)
+        }
+        while !ended_for_good(&supervisor, "edu_dma")
+    }
     log_line.write(supervisor.log, "supervisor: started % services", supervisor.started_count)
     tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))
     loop {
@@ -261,6 +294,10 @@ wait_and_handle :: fn(supervisor: ptr[mut Supervisor]) {
         if packet.kind == .Signal && index < supervisor.started_count && index < supervisor.started.count {
             ended(supervisor, index, packet.data[1])
         }
+        faulted :: cast[usize](packet.key - FAULT_KEY)
+        if packet.kind == .Signal && packet.key >= FAULT_KEY && faulted < supervisor.started_count && faulted < supervisor.started.count {
+            dma_fault(supervisor, faulted, packet.data[1])
+        }
     }
     for i in 0..<supervisor.connector_count {
         serve_connector(supervisor, i)
@@ -280,7 +317,13 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
         _ = slop_os.handle_close(cast[slop_os.Handle](entry.listener))
         entry.listener = NONE
     }
+    if cast[slop_os.Handle](entry.watch) != slop_os.NO_HANDLE {
+        _ = slop_os.port_unbind(supervisor.port, FAULT_KEY + cast[u64](index))
+        _ = slop_os.handle_close(entry.watch)
+        entry.watch = slop_os.NO_HANDLE
+    }
     if !entry.driver || code == 0 {
+        entry.done = true
         return void
     }
     now :: slop_os.clock_monotonic() or_else 0
@@ -290,6 +333,7 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
     }
     if entry.restarts >= RESTARTS {
         log_line.write(supervisor.log, "supervisor: % ended % times in a minute, and isn't started again", entry.name, RESTARTS + 1)
+        entry.done = true
         return void
     }
     entry.restarts += 1
@@ -298,6 +342,28 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
     if entry.running {
         log_line.write(supervisor.log, "supervisor: restarted %", entry.name)
     }
+}
+
+// A driver whose device's DMA an IOMMU blocked, at address: killed, if it's running, and so started again as one that crashed.
+dma_fault :: fn(supervisor: ptr[mut Supervisor], index: usize, address: u64) {
+    entry :: &supervisor.started[index % supervisor.started.count]
+    if !entry.running {
+        return void
+    }
+    log_line.write(supervisor.log, "supervisor: %'s DMA was blocked, at %; killing it", entry.name, cast[rawptr](address))
+    _ = slop_os.process_kill(entry.process)
+    // Not running from here, though its end arrives on the port later
+    entry.running = false
+}
+
+// Whether the driver named name was started, and has ended for good.
+ended_for_good :: fn(supervisor: ptr[Supervisor], name: string) -> bool {
+    for entry, i in supervisor.started {
+        if i < supervisor.started_count && entry.name == name {
+            return entry.done
+        }
+    }
+    return true
 }
 
 /*
@@ -310,6 +376,8 @@ start_driver :: fn(supervisor: ptr[mut Supervisor], index: usize, device: platfo
         return void
     }
     service :: system_config.SERVICES[index]
+    // A handle of its own to the device, for its DMA faults, which goes stale once the device does
+    watch :: slop_os.handle_duplicate(cast[slop_os.Handle](device.device), cast[slop_os.Rights](0)) or_else slop_os.NO_HANDLE
     launched := cast[slop_os.Process](slop_os.NO_HANDLE)
     listener := NONE
     speaks := Speaks.Nothing
@@ -340,13 +408,23 @@ start_driver :: fn(supervisor: ptr[mut Supervisor], index: usize, device: platfo
         listener = pair.b
         launched = launch_serving[input.Input](supervisor, service, device, pair.a, virtio_input.main)
     }
+    else if service.name == "edu_dma" {
+        name = "edu_dma"
+        launched = launch_device_only(supervisor, service, device, edu_dma.main)
+    }
     else {
         close_device(&device)
+        if watch != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(watch)
+        }
         return void
     }
     if cast[slop_os.Handle](launched) == slop_os.NO_HANDLE {
         if cast[slop_os.Handle](listener) != slop_os.NO_HANDLE {
             _ = slop_os.handle_close(cast[slop_os.Handle](listener))
+        }
+        if watch != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(watch)
         }
         return void
     }
@@ -362,7 +440,14 @@ start_driver :: fn(supervisor: ptr[mut Supervisor], index: usize, device: platfo
     entry.driver = true
     entry.service = index
     entry.address = device.address
+    entry.done = false
+    entry.watch = watch
+    if watch != slop_os.NO_HANDLE {
+        _ = slop_os.port_bind(supervisor.port, watch, slop_os.SIGNAL_DMA_FAULT, FAULT_KEY + cast[u64](slot), .Persistent)
+    }
     if again != NOWHERE {
+        // The last process's binding still has the key, though it fired
+        _ = slop_os.port_unbind(supervisor.port, cast[u64](slot))
         _ = slop_os.port_bind(supervisor.port, cast[slop_os.Handle](launched), slop_os.SIGNAL_TERMINATED, cast[u64](slot), .Once)
         tell_root(supervisor, .Started(report_of(name, 0)))
     }
@@ -407,6 +492,24 @@ launch_serving :: fn[P](supervisor: ptr[mut Supervisor], service: system_config.
     }
 }
 
+// A driver given only its device: its process, or NO_HANDLE.
+launch_device_only :: fn(supervisor: ptr[mut Supervisor], service: system_config.Service, device: platform.PciDevice,
+    entry: (fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memory, bar0: slop_os.Memory?, bar1: slop_os.Memory?,
+    bar2: slop_os.Memory?, bar3: slop_os.Memory?, bar4: slop_os.Memory?, bar5: slop_os.Memory?, domain: slop_os.DmaDomain) -> int))
+    -> slop_os.Process {
+    grants := DeviceGrants.{log = duplicate_log(supervisor), device = device.device, config = device.config, domain = device.domain,
+        bar0 = optional(device.bar0), bar1 = optional(device.bar1), bar2 = optional(device.bar2), bar3 = optional(device.bar3),
+        bar4 = optional(device.bar4), bar5 = optional(device.bar5)}
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
+        entry, grants) {
+        case Ok(launched) => return launched.process
+        case Error(error) => {
+            failed(supervisor, service.name, error)
+            return cast[slop_os.Process](slop_os.NO_HANDLE)
+        }
+    }
+}
+
 // A driver for a virtio entropy device, with a connection of its own to the entropy service: its process, or NO_HANDLE.
 launch_virtio_rng :: fn(supervisor: ptr[mut Supervisor], service: system_config.Service, device: platform.PciDevice) -> slop_os.Process {
     grants := VirtioRngGrants.{log = duplicate_log(supervisor), device = device.device, config = device.config, domain = device.domain,
@@ -434,6 +537,7 @@ module_of :: fn(supervisor: ptr[Supervisor], name: string) -> slop_os.Memory {
     none :: cast[slop_os.Memory](slop_os.NO_HANDLE)
     found := if name == "virtio_rng" { modules.virtio_rng } else if name == "virtio_console" { modules.virtio_console }
         else if name == "virtio_blk" { modules.virtio_blk } else if name == "virtio_input" { modules.virtio_input }
+        else if name == "edu_dma" { modules.edu_dma }
         else if name == "console" { modules.console } else if name == "disk_check" { modules.disk_check } else { cast[slop_os.Memory?](null) }
     return found or_else none
 }

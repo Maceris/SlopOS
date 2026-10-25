@@ -53,8 +53,9 @@ Function :: struct {
     config : u64,
     bars : Bar[6],
     claimed : bool,
-    // The client that claimed it, by its index
+    // The client that claimed it, by its index, and whether its driver is trusted with DMA no IOMMU confines
     claimer : usize,
+    trusted : bool,
 }
 
 Platform :: struct {
@@ -503,15 +504,16 @@ reissue :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut P
 }
 
 // The next unclaimed function wanted matches, with what its driver holds of it; or NoDevice.
-claim :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], client: usize, wanted: protocol.DeviceMatch)
+claim :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], client: usize, wanted: protocol.Wanted)
     -> protocol.Response {
     for &function, i in state.functions {
         if i >= state.count {
             break
         }
-        if function.claimed || function.bridge || function.class == CLASS_HOST_BRIDGE || !matches(function, wanted) {
+        if function.claimed || function.bridge || function.class == CLASS_HOST_BRIDGE || !matches(function, wanted.devices) {
             continue
         }
+        function.trusted = wanted.trusted
         match bundle_of(platform, state, function) {
             case Some(device) => {
                 function.claimed = true
@@ -546,7 +548,8 @@ bundle_of :: fn(platform: slop_os.Platform, state: ptr[mut Platform], function: 
     result.device = slop_os.device_create(platform, block.budget, address, pci.msi_source(host, address), config_physical) or_return null
     result.config = slop_os.memory_create_physical(platform, block.budget, config_physical, pci.FUNCTION_BYTES, .Device)
         or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
-    result.domain = slop_os.dma_domain_create(platform, block.budget) or_else cast[slop_os.DmaDomain](slop_os.NO_HANDLE)
+    trust :: if function.trusted { slop_os.DMA_DOMAIN_TRUSTED } else { cast[u32](0) }
+    result.domain = slop_os.dma_domain_create(platform, block.budget, trust) or_else cast[slop_os.DmaDomain](slop_os.NO_HANDLE)
     attached := cast[slop_os.Handle](result.config) != slop_os.NO_HANDLE && cast[slop_os.Handle](result.domain) != slop_os.NO_HANDLE
     if attached {
         match slop_os.device_attach(platform, result.device, result.domain) {

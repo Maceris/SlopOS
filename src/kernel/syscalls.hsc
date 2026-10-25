@@ -367,6 +367,10 @@ sys_port_bind :: fn(thread: ptr[mut Thread], port: slop_os.Port, object: slop_os
     if found.kind == .Irq {
         return port_done(irq_bind(kernel, found_port, cast[ptr[mut Irq]](found.object), key, once))
     }
+    if found.kind == .Device {
+        watched :: cast[ptr[mut Device]](found.object)
+        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.watch_lock, signals, key, once))
+    }
     if found.kind != .Channel {
         return .Error(.WrongKind)
     }
@@ -710,13 +714,13 @@ sys_irq_message :: fn(thread: ptr[mut Thread], irq: slop_os.Irq) -> Result[slop_
     return .Ok(slop_os.MsiMessage.{address = found.message.address, data = found.message.data})
 }
 
-sys_dma_domain_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget)
+sys_dma_domain_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget, flags: u32)
     -> Result[slop_os.DmaDomain, slop_os.DeviceError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     _ = platform_of(thread, platform)?
     paying :: paying_budget[slop_os.DeviceError](process, budget)?
-    made :: create_dma_domain(kernel, cast[u64](process), paying)?
+    made :: create_dma_domain(kernel, cast[u64](process), paying, flags & slop_os.DMA_DOMAIN_TRUSTED != 0)?
     handle :: owning_handle[slop_os.DeviceError](kernel, process, cast[u64](made), false)?
     return .Ok(cast[slop_os.DmaDomain](handle))
 }
