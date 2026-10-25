@@ -23,7 +23,7 @@ making them immutable. Not worth it yet; lexing, the larger half, may be worth m
 
 ## `find_packages`
 
-`compiler.find_packages(folder, declares)` is declared but not implemented. SlopOS finds packages by
-folder instead, with `compiler.subfolders` and `compiler.load_package`, its own build code deciding
-what to build (`../decisions/0028-build-package.md`, revised 2026-10-16). It may be removed from
-`base/compiler`.
+`compiler.find_packages(folder, declares)` was declared but never implemented, and was removed from
+`base/compiler` on 2026-10-25. SlopOS finds packages by folder instead, with `compiler.subfolders` and
+`compiler.load_package`, its own build code deciding what to build (`../decisions/0028-build-package.md`,
+revised 2026-10-16).
