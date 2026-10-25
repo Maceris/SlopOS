@@ -180,6 +180,10 @@ The kernel's work after M7, by milestone, so it isn't a surprise inside a user-s
 
 ## D — Device Isolation (L2, L3)
 
+Planned 2026-10-25 (`decisions/0079`), in five stages: Da the interface and registration, Db VT-d DMA remapping, Dc
+VT-d interrupt remapping, Dd SMMUv3, De drivers out of the TCB. IOVAs are allocated per domain, only DMA memory is
+mapped, and a DMA fault is reported on the Device for the supervisor to restart its driver.
+
 - Intel VT-d and Arm SMMUv3 behind `iommu_interface` (`0039`), registered by the platform service: a DMA domain per
   driver, DMA memory mapped into its device's domain only, interrupt remapping so a device can't forge MSIs.
 - Drivers leave the TCB: a driver without a domain gets no DMA memory (`0039`, "only drivers the boot configuration
