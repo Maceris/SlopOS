@@ -51,6 +51,8 @@ SupervisorGrants :: struct {
     virtio_input_module : slop_os.Memory?,
     virtio_rng_module : slop_os.Memory?,
     edu_dma_module : slop_os.Memory?,
+    storage_manager_module : slop_os.Memory?,
+    partition_server_module : slop_os.Memory?,
     command_line : slop_os.Memory?,
 }
 
@@ -165,6 +167,8 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         virtio_input_module = module_copy(block, "virtio_input", module_rights),
         virtio_rng_module = module_copy(block, "virtio_rng", module_rights),
         edu_dma_module = module_copy(block, "edu_dma", module_rights),
+        storage_manager_module = module_copy(block, "storage_manager", module_rights),
+        partition_server_module = module_copy(block, "partition_server", module_rights),
     }
     match slop_os.handle_duplicate(cast[slop_os.Handle](command_line), module_rights) {
         case Ok(copy) => grants.command_line = cast[slop_os.Memory](copy)

@@ -1,9 +1,10 @@
 /*
- * The disk check (decisions/0076, 0077), until M8's storage manager: given a connector to the first disk, it dials it,
- * describes it, takes its buffer, reads the mark tools/boot.py wrote in block 0, writes its own into block 1, flushes,
- * reads it back, and reads blocks 2 to 9 with eight requests in flight at once, each holding its number as boot.py wrote
- * it. It says what it found in its debug log, and ends with 0 if all of it held, or the number of the first check that
- * didn't.
+ * The disk check (decisions/0076, 0077, 0086): given a connector to the storage manager, it dials it, finds the
+ * partition named CHECKED among every disk's, opens a block connection narrowed to it, describes it, takes its buffer,
+ * reads the mark tools/boot.py wrote in the partition's block 0, writes its own into block 1, flushes, reads it back,
+ * and reads blocks 2 to 9 with eight requests in flight at once, each holding its number as boot.py wrote it; then a
+ * read of the block past the partition's end is refused. It says what it found in its debug log, and ends with 0 if
+ * all of it held, or the number of the first check that didn't.
  */
 package disk_check
 
@@ -14,7 +15,10 @@ import text_buffer from "std"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
 import connector from "../../protocols/connector"
+import partitions from "../../protocols/partitions"
+import storage from "../../protocols/storage"
 
+CHECKED :: "SlopOS check"
 HOST_MARK :: "SlopOS disk check: from the host"
 GUEST_MARK :: "SlopOS disk check: from the guest"
 // Where in the buffer each part goes, in bytes
@@ -31,16 +35,42 @@ Disk :: struct {
     buffer : u64,
 }
 
-main :: fn(log: slop_os.DebugLog?, disk: os.Channel[connector.Connector]?) -> int {
+main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?) -> int {
     block_of_startup :: slop_os.startup_block()
     to :: log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
-    dialing :: disk or_else os.Channel[connector.Connector].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
+    dialing :: storage or_else os.Channel[connector.Connector].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     if cast[slop_os.Handle](dialing.end) == slop_os.NO_HANDLE {
-        log_line.write(to, "disk_check: no disk")
+        log_line.write(to, "disk_check: no storage manager")
         return 0
     }
     dial_port :: os.port_for(block_of_startup.budget, dialing.end) or_return 1
-    connection :: connector.dial[block.Block](dialing.end, dial_port) or_return 1
+    manager :: connector.dial[storage.Storage](dialing.end, dial_port) or_return 1
+    manager_port :: os.port_for(block_of_startup.budget, manager.end) or_return 1
+    // The partition, among every disk's
+    found := cast[u32](0xffffffff)
+    partition := storage.Partition.{}
+    for index in 0..<cast[u32](64) {
+        match ask(manager.end, manager_port, .Describe(index)) {
+            case Described(described) => {
+                info := described.info
+                if partitions.name_of(&info) == CHECKED {
+                    found = index
+                    partition = described
+                    break
+                }
+            }
+            case _ => break
+        }
+    }
+    if found == 0xffffffff {
+        log_line.write(to, "disk_check: no partition named %", CHECKED)
+        return 13
+    }
+    connection := os.Channel[block.Block].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
+    match ask(manager.end, manager_port, .Open(found)) {
+        case Opened(opened) => connection = opened
+        case _ => return 13
+    }
     checked := Disk.{log = to, end = connection.end}
     checked.port = os.port_for(block_of_startup.budget, connection.end) or_return 1
     // What it is, and its buffer
@@ -103,6 +133,11 @@ main :: fn(log: slop_os.DebugLog?, disk: os.Channel[connector.Connector]?) -> in
     if answered != (cast[u32](1) << MANY) - 1 {
         return 11
     }
+    // The block past the partition's end, refused before it reaches the disk
+    if info.block_count != partition.info.count
+        || run(&checked, .Read(block.Transfer.{tag = 5, first = info.block_count, count = 1, offset = READ_AT})) != .OutOfRange {
+        return 14
+    }
     for i in 0..<MANY {
         storage : u8[16]
         label := text_buffer.make(storage)
@@ -112,9 +147,27 @@ main :: fn(log: slop_os.DebugLog?, disk: os.Channel[connector.Connector]?) -> in
             return 12
         }
     }
-    log_line.write(to, "disk_check: read the host's mark, wrote, flushed and read back block 1, and read 8 blocks at once, of %",
-        info.block_count)
+    log_line.write(to, "disk_check: in %, % blocks from % of disk %, read the host's mark, wrote, flushed and read back block 1, read 8 blocks at once, and was refused the block past its end",
+        CHECKED, info.block_count, partition.info.first, partition.disk)
     return 0
+}
+
+// One request to the storage manager, and its answer, waited for.
+ask :: fn(end: slop_os.Channel, port: slop_os.Port, request: storage.Request) -> storage.Response {
+    out := os.Outgoing.{}
+    made :: os.begin[storage.Request](&out)
+    made^ = request
+    if storage.send_request(end, port, &out) is_some {
+        return .Unsupported
+    }
+    into := os.Incoming.{}
+    loop {
+        match storage.receive_response(end, port, &into, true) {
+            case Received => return os.message_of[storage.Response](&into)^
+            case Failed(error) => return .Unsupported
+            case _ => continue
+        }
+    }
 }
 
 send :: fn(disk: ptr[Disk], request: block.Request) {

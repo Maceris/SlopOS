@@ -17,6 +17,9 @@
  * on the kernel's command line, the supervisor says it has started all only once edu_dma has ended for good. With test_restart on the kernel's command line, the supervisor kills the first serial
  * line's driver once everything has started and the console has dialed it and shown its banner, and says it has
  * started all only once that driver is back, and dialed again.
+ *
+ * The storage manager (decisions/0086), started when there's a disk, is given connectors to every disk's driver, the
+ * process manager and the partition server's module, and the disk check a connector to it.
  */
 package supervisor
 
@@ -31,12 +34,14 @@ import entropy from "../../protocols/entropy"
 import input from "../../protocols/input"
 import platform from "../../protocols/platform"
 import serial from "../../protocols/serial"
+import storage from "../../protocols/storage"
 import supervision from "../../protocols/supervision"
 import service_kit from "../../service_kit"
 import system_config from "../../system_config"
 import hello from "../../apps/hello"
 import console from "../console"
 import disk_check from "../disk_check"
+import storage_manager from "../storage_manager"
 import edu_dma from "../../drivers/edu_dma"
 import virtio_blk from "../../drivers/virtio_blk"
 import virtio_console from "../../drivers/virtio_console"
@@ -64,6 +69,7 @@ Speaks :: enum {
     Block,
     Input,
     ConsoleLog,
+    Storage,
 }
 
 // What hello is given (hello.main).
@@ -84,7 +90,21 @@ ConsoleGrants :: struct {
 // What the disk check is given (disk_check.main).
 DiskCheckGrants :: struct {
     log : slop_os.DebugLog?,
-    disk : os.Channel[connector.Connector]?,
+    storage : os.Channel[connector.Connector]?,
+}
+
+MaybeConnector :: os.Channel[connector.Connector]?
+
+// What the storage manager is given (storage_manager.main): connectors to up to four disks.
+StorageGrants :: struct {
+    log : slop_os.DebugLog?,
+    manager : os.Channel[process_manager.ProcessManager],
+    partition_server_module : slop_os.Memory,
+    disk0 : os.Channel[connector.Connector]?,
+    disk1 : os.Channel[connector.Connector]?,
+    disk2 : os.Channel[connector.Connector]?,
+    disk3 : os.Channel[connector.Connector]?,
+    clients : os.Listener[storage.Storage],
 }
 
 // What a virtio-rng driver is given (virtio_rng.main): its device, and a connection to the entropy service.
@@ -142,6 +162,8 @@ Modules :: struct {
     virtio_input : slop_os.Memory?,
     virtio_rng : slop_os.Memory?,
     edu_dma : slop_os.Memory?,
+    storage_manager : slop_os.Memory?,
+    partition_server : slop_os.Memory?,
 }
 
 // Something it started.
@@ -199,12 +221,14 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     hello_module: slop_os.Memory, platform_service: os.Channel[platform.Platform]?, entropy_service: os.Channel[entropy.Entropy]?,
     console_module: slop_os.Memory?, disk_check_module: slop_os.Memory?, virtio_blk_module: slop_os.Memory?,
     virtio_console_module: slop_os.Memory?, virtio_input_module: slop_os.Memory?, virtio_rng_module: slop_os.Memory?,
-    edu_dma_module: slop_os.Memory?, command_line: slop_os.Memory?) -> int {
+    edu_dma_module: slop_os.Memory?, storage_manager_module: slop_os.Memory?, partition_server_module: slop_os.Memory?,
+    command_line: slop_os.Memory?) -> int {
     startup :: slop_os.startup_block()
     supervisor := Supervisor.{block = startup, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, console = NOWHERE}
     supervisor.modules = Modules.{hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
-        virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module}
+        virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
+        storage_manager = storage_manager_module, partition_server = partition_server_module}
     supervisor.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     supervisor.manager_port = os.port_for(startup.budget, manager.end) or_return 1
     supervisor.root_port = os.port_for(startup.budget, root.end) or_return 2
@@ -240,7 +264,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     // Then the services that use them, each with connectors to what it uses
     start_console(&supervisor)
     start_hello(&supervisor)
-    start_disk_check(&supervisor)
+    storage_slot :: start_storage(&supervisor)
+    start_disk_check(&supervisor, storage_slot)
     serial_line :: supervisor.first_serial
     if test_restart && serial_line < supervisor.started.count {
         // Once the console has its connection, which the driver's end takes with it
@@ -265,6 +290,11 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         // And has had time to show its banner again, and echo what's typed after it, before the root task's last second
         pause(&supervisor, TEST_RESTART_PAUSE)
     }
+    // The disk check is done once it's checked, which it reports before everything has started
+    loop {
+        wait_and_handle(&supervisor)
+    }
+    while !ended_for_good(&supervisor, "disk_check")
     if test_dma_fault {
         // Until edu_dma has ended for good: refused DMA memory and ended with 0, or killed too often
         loop {
@@ -356,7 +386,7 @@ dma_fault :: fn(supervisor: ptr[mut Supervisor], index: usize, address: u64) {
     entry.running = false
 }
 
-// Whether the driver named name was started, and has ended for good.
+// Whether what's named name was started and has ended for good, or wasn't started.
 ended_for_good :: fn(supervisor: ptr[Supervisor], name: string) -> bool {
     for entry, i in supervisor.started {
         if i < supervisor.started_count && entry.name == name {
@@ -537,7 +567,7 @@ module_of :: fn(supervisor: ptr[Supervisor], name: string) -> slop_os.Memory {
     none :: cast[slop_os.Memory](slop_os.NO_HANDLE)
     found := if name == "virtio_rng" { modules.virtio_rng } else if name == "virtio_console" { modules.virtio_console }
         else if name == "virtio_blk" { modules.virtio_blk } else if name == "virtio_input" { modules.virtio_input }
-        else if name == "edu_dma" { modules.edu_dma }
+        else if name == "edu_dma" { modules.edu_dma } else if name == "storage_manager" { modules.storage_manager }
         else if name == "console" { modules.console } else if name == "disk_check" { modules.disk_check } else { cast[slop_os.Memory?](null) }
     return found or_else none
 }
@@ -573,12 +603,54 @@ start_hello :: fn(supervisor: ptr[mut Supervisor]) {
 }
 
 // The disk check, with a connector to the first disk, if there is one.
-start_disk_check :: fn(supervisor: ptr[mut Supervisor]) {
+/*
+ * The storage manager, when there's a disk, with a connector to each of the first four disks' drivers, a connection
+ * to the process manager and the partition server's module: its index in what's started, or NOWHERE.
+ */
+start_storage :: fn(supervisor: ptr[mut Supervisor]) -> usize {
     if supervisor.first_disk == NOWHERE {
+        return NOWHERE
+    }
+    service :: system_config.service("storage_manager") or_return NOWHERE
+    module :: supervisor.modules.partition_server or_return NOWHERE
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    partition_server := cast[slop_os.Memory](slop_os.handle_duplicate(cast[slop_os.Handle](module), rights) or_return NOWHERE)
+    manager :: process_manager.connect(supervisor.manager.end, supervisor.manager_port, supervisor.block.budget) or_return NOWHERE
+    pair :: os.channel_for[storage.Storage](supervisor.block.budget, 0) or_return NOWHERE
+    disks : MaybeConnector[4]
+    found : usize = 0
+    for entry, i in supervisor.started {
+        if i < supervisor.started_count && entry.speaks == .Block && found < disks.count {
+            disks[found] = connector_to(supervisor, i)
+            found += 1
+        }
+    }
+    grants := StorageGrants.{log = duplicate_log(supervisor), manager = manager, partition_server_module = partition_server, disk0 = disks[0],
+        disk1 = disks[1], disk2 = disks[2], disk3 = disks[3], clients = os.Listener[storage.Storage].{end = pair.a}}
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "storage_manager"), service.budget,
+        storage_manager.main, grants) {
+        case Ok(launched) => {
+            slot :: started(supervisor, "storage_manager", launched.process)
+            if slot < supervisor.started.count {
+                supervisor.started[slot].listener = pair.b
+                supervisor.started[slot].speaks = .Storage
+            }
+            return slot
+        }
+        case Error(error) => {
+            failed(supervisor, service.name, error)
+            return NOWHERE
+        }
+    }
+}
+
+// The disk check, given a connector to the storage manager at storage, when there's a disk.
+start_disk_check :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
+    if supervisor.first_disk == NOWHERE || storage_slot == NOWHERE {
         return void
     }
     service :: system_config.service("disk_check") or_return void
-    grants := DiskCheckGrants.{log = duplicate_log(supervisor), disk = connector_to(supervisor, supervisor.first_disk)}
+    grants := DiskCheckGrants.{log = duplicate_log(supervisor), storage = connector_to(supervisor, storage_slot)}
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "disk_check"), service.budget,
         disk_check.main, grants) {
         case Ok(launched) => _ = started(supervisor, "disk_check", launched.process)
@@ -682,6 +754,7 @@ dial :: fn(supervisor: ptr[mut Supervisor], target: usize) -> slop_os.Channel? {
         case .Block => (block.connect(entry.listener, port, budget) or_return null).end
         case .Input => (input.connect(entry.listener, port, budget) or_return null).end
         case .ConsoleLog => (console_log.connect(entry.listener, port, budget) or_return null).end
+        case .Storage => (storage.connect(entry.listener, port, budget) or_return null).end
         case .Nothing => null
     }
 }

@@ -118,7 +118,10 @@ of its own with a memory budget split off its starter's, which owns it:
 | `virtio_console` | the supervisor, through the manager, for each modern virtio console | its device's bundle, `clients: Listener[Serial]` | Its device's first port as the `serial` protocol |
 | `virtio_blk` | the supervisor, through the manager, for each modern virtio block device | its device's bundle, `clients: Listener[Block]` | The disk as the `block` protocol (below) |
 | `virtio_input` | the supervisor, through the manager, for each modern virtio input device | its device's bundle, `clients: Listener[Input]` | Its keyboard, mouse or tablet as the `input` protocol (below) |
-| `disk_check` | the supervisor, through the manager, if there's a disk | `log`, `disk: Channel[Connector]?` | Reads, writes, flushes and reads back blocks of the first disk, and says what it found; M8's storage manager replaces it |
+| `edu_dma` | the supervisor, through the manager, for each QEMU edu device | its device's bundle | A driver that isn't trusted with DMA: writes outside its domain, for the test that it's stopped (`0084`) |
+| `storage_manager` | the supervisor, through the manager, once the drivers have started, if there's a disk | `log`, `manager`, `partition_server_module`, `disk0` to `disk3: Channel[Connector]?`, `clients: Listener[Storage]` | Starts a partition server for each disk, and serves every disk's partitions, and block connections narrowed to one, as the `storage` protocol (`0086`) |
+| `partition_server` | the storage manager, through the manager, for each disk | `log`, `disk: Channel[Block]`, `clients: Listener[Partitions]` | Reads its disk's GPT, and serves its partitions and block connections narrowed to one as the `partitions` protocol, holding nothing but its disk (`0086`) |
+| `disk_check` | the supervisor, through the manager, if there's a disk | `log`, `storage: Channel[Connector]?` | Opens the partition named `SlopOS check` through the storage manager, reads, writes, flushes and reads back its blocks, is refused the block past its end, and says what it found; the supervisor says everything has started once it has ended |
 
 **Wiring**: `system_config` names each service's entry, and checks when it's compiled that every
 `Channel[P]` one takes has a server: a service taking a `Listener[P]`, the root task, which serves the
@@ -131,8 +134,8 @@ driver, which may be restarted, but a connector to it: a channel the supervisor 
 `Dialed` and a new connection to whichever process serves it now, made through that driver's listener with its
 protocol's `Connect`, or `Unavailable` while nothing does. `connector.dial[P]` dials, tries again every 100 ms while
 it's unavailable, up to 50 times, and checks the connection speaks `P`; a client whose connection's other end goes
-dials again. The console is given connectors to the first serial line and keyboard, `hello` one to the console, and
-the disk check one to the first disk.
+dials again. The console is given connectors to the first serial line and keyboard, `hello` one to the console, the
+storage manager one to each of the first four disks, and the disk check one to the storage manager.
 
 **Restarts**: a driver that ends other than by exiting with 0, killed or crashed, is started again: the platform
 service reissues its device (`Reissue` with its address, answered with `Claimed` and its bundle made anew, to the one

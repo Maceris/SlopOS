@@ -1,0 +1,207 @@
+/*
+ * The storage manager (roadmap 8a, decisions/0085, 0086): it holds every disk, through connectors the supervisor gives
+ * it, and starts a partition server for each through the process manager, giving it that disk's block connection and
+ * nothing else. It lists each disk's partitions, and serves the storage protocol: every partition, by one index, and
+ * block connections narrowed to one, which the partition server makes. Volumes come with 8b and 8d.
+ */
+package storage_manager
+
+import os from "std"
+import slop_os from "std/os"
+import process_manager from "std/os/slop_os"
+import log_line from "../../log_line"
+import block from "../../protocols/block"
+import connector from "../../protocols/connector"
+import partitions from "../../protocols/partitions"
+import storage from "../../protocols/storage"
+import service_kit from "../../service_kit"
+import partition_server from "../partition_server"
+
+MAX_DISKS :: 4
+MAX_PARTITIONS :: 32
+PARTITION_SERVER_BUDGET : u64 : 2 * 1024 * 1024
+
+// A connector to a disk, which may not be given
+DiskConnector :: os.Channel[connector.Connector]?
+
+// What a partition server is given (partition_server.main).
+PartitionServerGrants :: struct {
+    log : slop_os.DebugLog?,
+    disk : os.Channel[block.Block],
+    clients : os.Listener[partitions.Partitions],
+}
+
+// A disk's partition server: the end it's spoken to on, and a port for that end.
+Disk :: struct {
+    end : slop_os.Channel,
+    port : slop_os.Port,
+}
+
+Manager :: struct {
+    log : slop_os.DebugLog,
+    port : slop_os.Port,
+    disks : Disk[MAX_DISKS],
+    disk_count : usize,
+    partitions : storage.Partition[MAX_PARTITIONS],
+    partition_count : usize,
+    clients : service_kit.Clients,
+}
+
+main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager], partition_server_module: slop_os.Memory,
+    disk0: os.Channel[connector.Connector]?, disk1: os.Channel[connector.Connector]?, disk2: os.Channel[connector.Connector]?,
+    disk3: os.Channel[connector.Connector]?, clients: os.Listener[storage.Storage]) -> int {
+    startup :: slop_os.startup_block()
+    state := Manager.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)}
+    state.port = slop_os.port_create(startup.budget) or_return 1
+    manager_port :: os.port_for(startup.budget, manager.end) or_return 1
+
+    // A partition server for each disk, and its partitions
+    for maybe in DiskConnector.[disk0, disk1, disk2, disk3] {
+        dialing :: maybe or_continue
+        dial_port :: os.port_for(startup.budget, dialing.end) or_continue
+        disk :: connector.dial[block.Block](dialing.end, dial_port) or_continue
+        pair :: os.channel_for[partitions.Partitions](startup.budget, 0) or_continue
+        grants := PartitionServerGrants.{log = duplicate_log(state.log), disk = disk, clients = os.Listener[partitions.Partitions].{end = pair.a}}
+        match os.launch(manager, manager_port, "partition_server", partition_server_module, PARTITION_SERVER_BUDGET, partition_server.main, grants) {
+            case Ok(launched) => {}
+            case Error(error) => {
+                log_line.write(state.log, "storage: no partition server for disk %: %", state.disk_count, error)
+                continue
+            }
+        }
+        if state.disk_count >= state.disks.count {
+            break
+        }
+        server_port :: os.port_for(startup.budget, pair.b) or_continue
+        index :: state.disk_count
+        if index >= state.disks.count {
+            break
+        }
+        state.disks[index] = Disk.{end = pair.b, port = server_port}
+        state.disk_count = index + 1
+        list_partitions(&state, index)
+    }
+    log_line.write(state.log, "storage: serving % partitions on % disks", state.partition_count, state.disk_count)
+
+    if !service_kit.add_client(&state.clients, state.port, clients.end) {
+        return 2
+    }
+    into := os.Incoming.{}
+    loop {
+        // Clients that connect meanwhile are read in the same pass, as a channel wakes its reader only once it's found empty
+        with {
+            i : usize = 0
+        }
+        loop {
+            serve_client(&state, i, &into)
+            i += 1
+        }
+        while i < state.clients.count
+        packets : slop_os.Packet[8]
+        _ = slop_os.port_wait(state.port, packets, slop_os.NO_DEADLINE)
+    }
+}
+
+// A disk's partitions, from 0 until its partition server has no more, each logged.
+list_partitions :: fn(state: ptr[mut Manager], disk: usize) {
+    for index in 0..<cast[u32](MAX_PARTITIONS) {
+        match ask(state, disk, .Describe(index)) {
+            case Described(info) => {
+                slot :: state.partition_count
+                if slot >= state.partitions.count {
+                    return void
+                }
+                state.partitions[slot] = storage.Partition.{disk = cast[u32](disk), index = index, info = info}
+                state.partition_count = slot + 1
+                described := info
+                log_line.write(state.log, "storage: disk % partition %: %, % blocks from %", disk, index, partitions.name_of(&described),
+                    info.count, info.first)
+            }
+            case _ => return void
+        }
+    }
+}
+
+// A client's requests, until it has none.
+serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incoming]) {
+    if index >= state.clients.ends.count {
+        return void
+    }
+    end :: state.clients.ends[index]
+    if cast[slop_os.Handle](end) == slop_os.NO_HANDLE {
+        return void
+    }
+    loop {
+        match storage.receive_request(end, state.port, into, false) {
+            case Received => {}
+            case Empty => return void
+            case Unsupported => {
+                _ = storage.answer_unsupported(end, state.port)
+                continue
+            }
+            case Invalid => continue
+            case WrongProtocol => continue
+            case Failed(error) => {
+                service_kit.drop_client(&state.clients, index)
+                return void
+            }
+        }
+        response : storage.Response = .NoPartition
+        match os.message_of[storage.Request](into)^ {
+            case Describe(which) => {
+                if cast[usize](which) < state.partition_count && cast[usize](which) < state.partitions.count {
+                    response = .Described(state.partitions[cast[usize](which)])
+                }
+            }
+            case Open(which) => {
+                if cast[usize](which) < state.partition_count && cast[usize](which) < state.partitions.count {
+                    partition :: state.partitions[cast[usize](which)]
+                    match ask(state, cast[usize](partition.disk), .Open(partition.index)) {
+                        case Opened(connection) => response = .Opened(connection)
+                        case _ => {}
+                    }
+                }
+            }
+            case Connect(connection) => {
+                if !service_kit.add_client(&state.clients, state.port, connection.end) {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
+                }
+                continue
+            }
+        }
+        out := os.Outgoing.{}
+        made :: os.begin[storage.Response](&out)
+        made^ = response
+        _ = storage.send_response(end, state.port, &out)
+    }
+}
+
+// One request to a disk's partition server, and its answer, waited for.
+ask :: fn(state: ptr[mut Manager], disk: usize, request: partitions.Request) -> partitions.Response {
+    if disk >= state.disk_count || disk >= state.disks.count {
+        return .Unsupported
+    }
+    server :: state.disks[disk]
+    out := os.Outgoing.{}
+    made :: os.begin[partitions.Request](&out)
+    made^ = request
+    if partitions.send_request(server.end, server.port, &out) is_some {
+        return .Unsupported
+    }
+    into := os.Incoming.{}
+    loop {
+        match partitions.receive_response(server.end, server.port, &into, true) {
+            case Received => return os.message_of[partitions.Response](&into)^
+            case Failed(error) => return .Unsupported
+            case _ => continue
+        }
+    }
+}
+
+duplicate_log :: fn(log: slop_os.DebugLog) -> slop_os.DebugLog? {
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    match slop_os.handle_duplicate(cast[slop_os.Handle](log), rights) {
+        case Ok(copy) => return cast[slop_os.DebugLog](copy)
+        case Error(error) => return null
+    }
+}

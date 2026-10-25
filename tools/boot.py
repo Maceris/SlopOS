@@ -40,11 +40,13 @@ import json
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import zlib
 from pathlib import Path
 
 # What the kernel writes to port 0xf4 can't be told apart from a reset or a crash when QEMU exits
@@ -175,7 +177,8 @@ def make_image(kernel: Path, programs: list[Path], limine: Path, xorriso: Path, 
 def run(image: Path, qemu: Path, serial: Path, timeout: float, uefi: bool, cpu: str, extra: list[str]) -> int:
     """Boots the image, and gives the code the kernel wrote to the debug exit device."""
     command = [
-        str(qemu), "-M", "q35", "-m", "256M", "-cpu", cpu, "-cdrom", str(image),
+        # The CD first: a test disk's protective MBR looks bootable to the BIOS
+        str(qemu), "-M", "q35", "-m", "256M", "-cpu", cpu, "-cdrom", str(image), "-boot", "order=d",
         "-serial", f"file:{serial}", "-display", "none", "-no-reboot",
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
     ]
@@ -364,22 +367,60 @@ class ConsoleLink:
 
 
 # A disk image's size, and its blocks', as virtio-blk counts them
-DISK_BYTES = 1 << 20
+DISK_BYTES = 4 << 20
 BLOCK_BYTES = 512
+DISK_BLOCKS = DISK_BYTES // BLOCK_BYTES
+# Its GPT's partitions: the one the disk check checks, and a spare, each 1 MiB (src/services/disk_check)
+CHECKED_FIRST = 2048
+PARTITIONS = [("SlopOS check", CHECKED_FIRST, 2048), ("SlopOS spare", 4096, 2048)]
+# A type GUID for test partitions, and each partition's own, in their bytes
+TEST_TYPE = bytes.fromhex("534c4f50 4f532054 45535420 50415254".replace(" ", ""))
+GPT_ENTRIES = 128
+GPT_ENTRY_BYTES = 128
+GPT_ENTRY_BLOCKS = GPT_ENTRIES * GPT_ENTRY_BYTES // BLOCK_BYTES
+
+
+def gpt_header(at: int, alternate: int, entries_block: int, entries_crc: int) -> bytes:
+    """A GPT header for block at (UEFI 2.10, 5.3.2), its CRC32 filled in."""
+    first_usable = GPT_ENTRY_BLOCKS + 2
+    last_usable = DISK_BLOCKS - GPT_ENTRY_BLOCKS - 2
+    def pack(crc: int) -> bytes:
+        return struct.pack("<8sIIIIQQQQ16sQIII", b"EFI PART", 0x00010000, 92, crc, 0, at, alternate, first_usable, last_usable,
+                           bytes(range(16)), entries_block, GPT_ENTRIES, GPT_ENTRY_BYTES, entries_crc)
+    return pack(zlib.crc32(pack(0)))
 
 
 def make_disk(path: Path, mark: str) -> None:
-    """A raw disk image: mark at the start of block 0, and "block N" at the start of blocks 2 to 9, zeros elsewhere."""
+    """
+    A raw disk image with a GPT (a protective MBR, the primary header and entries, and the backup's at the end) of
+    PARTITIONS: the checked one has mark at the start of its block 0 and "block N" at the start of its blocks 2 to 9.
+    """
     image = bytearray(DISK_BYTES)
-    image[0:len(mark)] = mark.encode()
+    entries = bytearray(GPT_ENTRIES * GPT_ENTRY_BYTES)
+    for index, (name, first, count) in enumerate(PARTITIONS):
+        entry = struct.pack("<16s16sQQQ", TEST_TYPE, bytes([index + 1]) * 16, first, first + count - 1, 0) + name.encode("utf-16-le")
+        entries[index * GPT_ENTRY_BYTES:index * GPT_ENTRY_BYTES + len(entry)] = entry
+    entries_crc = zlib.crc32(entries)
+    # The protective MBR: one partition of type 0xee from block 1 over the whole disk
+    image[446:462] = struct.pack("<BBBBBBBBII", 0, 0, 2, 0, 0xee, 0xff, 0xff, 0xff, 1, DISK_BLOCKS - 1)
+    image[510:512] = bytes([0x55, 0xaa])
+    image[BLOCK_BYTES:BLOCK_BYTES + 92] = gpt_header(1, DISK_BLOCKS - 1, 2, entries_crc)
+    image[2 * BLOCK_BYTES:2 * BLOCK_BYTES + len(entries)] = entries
+    backup_entries = DISK_BLOCKS - GPT_ENTRY_BLOCKS - 1
+    image[backup_entries * BLOCK_BYTES:backup_entries * BLOCK_BYTES + len(entries)] = entries
+    last = (DISK_BLOCKS - 1) * BLOCK_BYTES
+    image[last:last + 92] = gpt_header(DISK_BLOCKS - 1, 1, backup_entries, entries_crc)
+    start = CHECKED_FIRST * BLOCK_BYTES
+    image[start:start + len(mark)] = mark.encode()
     for number in range(2, 10):
         label = f"block {number}".encode()
-        image[number * BLOCK_BYTES:number * BLOCK_BYTES + len(label)] = label
+        at = (CHECKED_FIRST + number) * BLOCK_BYTES
+        image[at:at + len(label)] = label
     path.write_bytes(bytes(image))
 
 
 def disk_block_starts(path: Path, expected: str) -> bool:
-    """Whether the image has a block starting with text, for an expectation written as N=text."""
+    """Whether the image has a block starting with text, for an expectation written as N=text, N counting the disk's blocks."""
     number, _, text = expected.partition("=")
     image = path.read_bytes()
     start = int(number) * BLOCK_BYTES
@@ -412,7 +453,7 @@ def main() -> int:
     parser.add_argument("--keyboard-input", action="append", default=[],
                         help="a line to type on a virtio keyboard, which this adds with a virtio console, once the console "
                              "shows its banner; may be repeated")
-    parser.add_argument("--disk", help="add a virtio block device, a disk image with this mark in block 0 (make_disk)")
+    parser.add_argument("--disk", help="add a virtio block device, a GPT disk image with this mark in its SlopOS check partition's block 0 (make_disk)")
     parser.add_argument("--expect-disk-block", action="append", default=[],
                         help="N=TEXT: block N of the --disk image starts with TEXT once the kernel has stopped, with --expect; "
                              "may be repeated")
