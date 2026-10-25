@@ -670,13 +670,13 @@ sys_memory_create_physical :: fn(thread: ptr[mut Thread], platform: slop_os.Plat
 
 // ---- Devices and DMA (devices.hsc)
 
-sys_device_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget, address: u32, msi_source: u32)
-    -> Result[slop_os.Device, slop_os.DeviceError] {
+sys_device_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget, address: u32, msi_source: u32,
+    config: u64) -> Result[slop_os.Device, slop_os.DeviceError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     _ = platform_of(thread, platform)?
     paying :: paying_budget[slop_os.DeviceError](process, budget)?
-    made :: create_device(kernel, cast[u64](process), paying, address, msi_source)?
+    made :: create_device(kernel, cast[u64](process), paying, address, msi_source, config)?
     handle :: owning_handle[slop_os.DeviceError](kernel, process, cast[u64](made), false)?
     return .Ok(cast[slop_os.Device](handle))
 }

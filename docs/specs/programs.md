@@ -52,7 +52,7 @@ process's life:
 
 | Field | |
 |---|---|
-| `abi_version: u32` | `slop_os.ABI_VERSION` of the kernel that started it: 3 |
+| `abi_version: u32` | `slop_os.ABI_VERSION` of the kernel that started it: 4 |
 | `size: u32` | `size_of(StartupBlock)` as its writer knew it |
 | `process: Process` | The process itself |
 | `space: AddressSpace` | Its address space, with `RIGHT_SPACE_MAP` |

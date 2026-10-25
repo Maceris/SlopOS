@@ -534,8 +534,8 @@ bundle_of :: fn(platform: slop_os.Platform, state: ptr[mut Platform], function: 
     host :: &state.host
     address :: slop_os.device_address(host.segment, function.bus, function.device, function.function)
     result := protocol.PciDevice.{address = address, vendor = function.vendor, device_id = function.device_id, class = function.class}
-    result.device = slop_os.device_create(platform, block.budget, address, pci.msi_source(host, address)) or_return null
     config_physical :: host.ecam + pci.function_offset(host, function.bus, function.device, function.function)
+    result.device = slop_os.device_create(platform, block.budget, address, pci.msi_source(host, address), config_physical) or_return null
     result.config = slop_os.memory_create_physical(platform, block.budget, config_physical, pci.FUNCTION_BYTES, .Device)
         or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
     result.domain = slop_os.dma_domain_create(platform, block.budget) or_else cast[slop_os.DmaDomain](slop_os.NO_HANDLE)

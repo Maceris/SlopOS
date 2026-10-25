@@ -114,12 +114,17 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
 
     // Its Device, a second at its address, and one without the platform capability
     address :: slop_os.device_address(0, 0, cast[u8](slot), 0)
-    made :: slop_os.device_create(hardware, budget, address, pci.msi_source(&host, address))
+    config_physical :: host.ecam + slot << 15
+    made :: slop_os.device_create(hardware, budget, address, pci.msi_source(&host, address), config_physical)
     results[5] = test_kit.tag_of(made)
     device :: made or_else test_kit.handle_at[slop_os.Device](0)
-    results[6] = test_kit.tag_of(slop_os.device_create(hardware, budget, address, pci.msi_source(&host, address)))
+    results[6] = test_kit.tag_of(slop_os.device_create(hardware, budget, address, pci.msi_source(&host, address), config_physical))
     not_platform :: test_kit.handle_at[slop_os.Platform](cast[u64](cast[u32](budget)))
-    results[7] = test_kit.tag_of(slop_os.device_create(not_platform, budget, slop_os.device_address(0, 0, 31, 7), 0xffff))
+    results[7] = test_kit.tag_of(slop_os.device_create(not_platform, budget, slop_os.device_address(0, 0, 31, 7), 0xffff,
+        config_physical))
+    // Configuration space not on a page
+    results[28] = test_kit.tag_of(slop_os.device_create(hardware, budget, slop_os.device_address(0, 0, 31, 7), 0xffff,
+        config_physical + 4))
 
     // Its MSI: the message into edu's MSI capability, then edu raises it
     irq_made :: slop_os.irq_create_msi(device, budget)
@@ -187,10 +192,13 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     }
     results[23] = same
 
-    // edu quiet again; closing the device destroys its IRQ, and closing the domain its memory's device address
+    /*
+     * edu quiet again; closing the device destroys its IRQ and turns its DMA off, and closing the domain takes its
+     * memory's device address
+     */
     stop_msi(config)
-    intrinsics.volatile_store_u16(command, intrinsics.volatile_load_u16(command) & ~COMMAND_BUS_MASTER)
     results[24] = test_kit.tag_of(slop_os.handle_close(cast[slop_os.Handle](device)))
+    results[29] = if intrinsics.volatile_load_u16(command) & COMMAND_BUS_MASTER == 0 { cast[u64](1) } else { cast[u64](2) }
     results[25] = test_kit.tag_of(slop_os.handle_info(cast[slop_os.Handle](irq)))
     results[26] = test_kit.tag_of(slop_os.handle_close(cast[slop_os.Handle](domain)))
     results[27] = test_kit.tag_of(slop_os.memory_device_address(dma))
@@ -202,7 +210,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
         0, test_kit.tag(slop_os.DeviceError.InvalidSize), 0, 1, test_kit.tag(slop_os.DeviceError.NotDmaMemory),
         1, 1, 1, 1,
         0, test_kit.tag(slop_os.HandleError.ObjectGone), 0, test_kit.tag(slop_os.DeviceError.NotDmaMemory),
-        0, 0, 0, 0,
+        test_kit.tag(slop_os.DeviceError.BadAddress), 1, 0, 0,
     ]
     failed := test_kit.check(log, NAME, results, expected)
     if failed != 0 {

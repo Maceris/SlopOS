@@ -37,6 +37,8 @@ Device :: struct #align(16) {
     lock : concurrency.SpinLock,
     address : u32,
     msi_source : u32,
+    // Its configuration space, mapped in the kernel's window, for turning its DMA off when it's destroyed
+    config : u64,
     // Its events in use, a bit each.
     events : u32,
     // Its IRQs, under lock.
@@ -62,7 +64,11 @@ DmaDomain :: struct #align(16) {
  * interrupt controller keeps for it. No other device may have its address, nor, where the controller uses sources,
  * its source.
  */
-create_device :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, address: u32, msi_source: u32) -> Result[ptr[mut Device], slop_os.DeviceError] {
+create_device :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, address: u32, msi_source: u32, config: u64)
+    -> Result[ptr[mut Device], slop_os.DeviceError] {
+    if config == 0 || config & (frames.FRAME_SIZE - 1) != 0 || config > ~CONFIG_BYTES || overlaps_kernel_ram(kernel, config, CONFIG_BYTES) {
+        return .Error(.BadAddress)
+    }
     table_size :: arch.msi_device_memory() or_else 0
     order :: if table_size == 0 { cast[u64](0) } else { frames.order_for(table_size) + 1 }
     extra :: if order == 0 { cast[u64](0) } else { frames.FRAME_SIZE << (order - 1) }
@@ -74,6 +80,13 @@ create_device :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, address: u
     device :: cast[ptr[mut Device]](object)
     device.address = address
     device.msi_source = msi_source
+    match map_device(kernel, cast[boot_info.PhysicalAddress](config), CONFIG_BYTES) {
+        case Ok(mapped) => device.config = mapped
+        case Error(error) => {
+            release_object(kernel, object)
+            return .Error(.OutOfMemory)
+        }
+    }
     if order != 0 {
         match frames.allocate_zeroed(&kernel.frames, order - 1) {
             case Ok(block) => {
@@ -126,6 +139,12 @@ create_device :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, address: u
     return .Ok(device)
 }
 
+// A PCIe function's configuration space, and its command register's Bus Master Enable, which lets it start DMA.
+//SPEC: PCI Express Base Specification 5.0, §7.5.1.1.3 (Command Register)
+CONFIG_BYTES : u64 : 4096
+PCI_COMMAND : u64 : 0x04
+PCI_COMMAND_BUS_MASTER : u16 : 1 << 2
+
 // The device's DMA in domain, from now on.
 attach_device :: fn(device: ptr[mut Device], domain: ptr[DmaDomain]) {
     concurrency.lock(&device.lock)
@@ -139,6 +158,14 @@ attach_device :: fn(device: ptr[mut Device], domain: ptr[DmaDomain]) {
  * then the interrupt controller forgets it, and it leaves the kernel's devices.
  */
 destroy_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
+    /*
+     * Its DMA off first, Bus Master Enable cleared: what its driver gave it to read and write, like its queues, goes with
+     * the driver, and no grace period ends while this destroy runs, so before any of that memory is used again
+     */
+    if device.config != 0 {
+        command :: cast[ptr[mut u16]](device.config + PCI_COMMAND)
+        intrinsics.volatile_store_u16(command, intrinsics.volatile_load_u16(command) & ~PCI_COMMAND_BUS_MASTER)
+    }
     loop {
         concurrency.lock(&device.lock)
         first :: device.first_irq
@@ -172,6 +199,10 @@ destroy_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
 
 // Once no CPU can use it: what the interrupt controller kept for it.
 release_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
+    if device.config != 0 {
+        unmap_device(kernel, device.config, CONFIG_BYTES)
+        device.config = 0
+    }
     if device.msi_memory_order != 0 {
         frames.free(&kernel.frames, cast[boot_info.PhysicalAddress](device.msi_memory), device.msi_memory_order - 1)
         device.msi_memory = 0

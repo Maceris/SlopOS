@@ -48,8 +48,10 @@ RESTARTS : u32 : 3
 RESTART_WINDOW : u64 : 60_000_000_000
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 NOWHERE : usize : 0xffffffffffffffff
-// How long test_restart waits once the console has dialed its serial line, before it kills the line's driver
+// How long test_restart waits once the console has dialed its serial line, before it kills the line's driver, and once
+// it's dialed it again, for what's typed after its banner to be echoed, before it says everything has started
 TEST_RESTART_PAUSE : u64 : 500_000_000
+TEST_RESTART_ECHO : u64 : 2_000_000_000
 
 // Which protocol a listener speaks, so a connector dials it with that protocol's Connect.
 Speaks :: enum {
@@ -222,7 +224,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         }
         while dials_of(&supervisor, serial_line) == 0
         // And has had time to show its banner through it
-        pause(&supervisor)
+        pause(&supervisor, TEST_RESTART_PAUSE)
         if serial_line < supervisor.started.count {
             killed :: supervisor.started[serial_line]
             log_line.write(supervisor.log, "supervisor: test_restart: killing %", killed.name)
@@ -236,7 +238,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         }
         while !is_running(&supervisor, serial_line) || dials_of(&supervisor, serial_line) < 2
         // And has had time to show its banner again, and echo what's typed after it, before the root task's last second
-        pause(&supervisor)
+        pause(&supervisor, TEST_RESTART_ECHO)
     }
     log_line.write(supervisor.log, "supervisor: started % services", supervisor.started_count)
     tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))
@@ -537,11 +539,11 @@ serve_connector :: fn(supervisor: ptr[mut Supervisor], index: usize) {
     }
 }
 
-// test_restart's wait, TEST_RESTART_PAUSE, for the console to show what it's sent.
-pause :: fn(supervisor: ptr[mut Supervisor]) {
+// test_restart's waits, for the console to show what it's sent, in nanoseconds.
+pause :: fn(supervisor: ptr[mut Supervisor], nanoseconds: u64) {
     waiter :: slop_os.port_create(supervisor.block.budget) or_return void
     packets : slop_os.Packet[1]
-    _ = slop_os.port_wait(waiter, packets, (slop_os.clock_monotonic() or_else 0) + TEST_RESTART_PAUSE)
+    _ = slop_os.port_wait(waiter, packets, (slop_os.clock_monotonic() or_else 0) + nanoseconds)
     _ = slop_os.handle_close(cast[slop_os.Handle](waiter))
 }
 

@@ -92,10 +92,11 @@ decided with the project's owner:
 
 - **Complex numbers and quaternions** are floats, as Odin's are: `c32`, `c64` and `c128` are two `f16`s, `f32`s or
   `f64`s, real then imag, and `q64`, `q128` and `q256` four, imag, jmag, kmag, then real; `c16` and `q32` are gone. They're
-  written with imaginary literals (`2i`, `1.5j`, `3k`), which default to `c128` and `q256`; their parts are `.real`,
-  `.imag`, `.jmag` and `.kmag`; they have `+ - * /` (the complex and Hamilton products), unary `-`, `==` and `!=` but no
-  order, arithmetic with a real number of their parts' type, and casts between sizes. `std/math` has `conjugate`,
-  `magnitude` and `part_of`, over a new `intrinsics.square_root`. Hosted test `composites`, on Linux too.
+  written with imaginary literals (`2i`, `1.5j`, `3k`), which default to `c128` and `q256`; Odin's builtins read them
+  (`real`, `imag`, `jmag`, `kmag`, `conj`, `abs`, the last for any number), and a quaternion's fields are `x`, `y`, `z`,
+  `w` and `xyz`; they have `+ - * /` (the complex and Hamilton products), unary `-`, `==` and `!=` but no order,
+  arithmetic with a real number of their parts' type, and casts between sizes. `intrinsics.square_root` is new.
+  Hosted test `composites`, on Linux too.
 - **`#file_path`** is the path of the file it's in, as a string.
 - **`==` between type values** follows plain aliases, as running code always did and as "a plain alias is the type it
   names" says: the docs' "exact" `==` was the error. It works at compile time (`#assert`, `#if`), and
