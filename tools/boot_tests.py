@@ -38,7 +38,7 @@ def program_test(name: str, program: str, line: str, words: str = "", qemu: list
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 21 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 23 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] process manager: started supervisor", "--expect-line=[user] process manager: started hello",
         "--expect-line=[user] hello: heap working, random numbers working", "--expect-line=[user] root task: the supervisor started hello",
@@ -57,6 +57,12 @@ TESTS = [
         "--expect-line=[user] virtio_console: serving", "--expect-line=[user] console: read ping from the host",
         "--expect-console-line=SlopOS console", "--expect-console-line=hello: heap and random numbers working",
         "--expect-console-line=echo: ping from the host", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # A disk image boot.py marks, which the disk check reads, writes, flushes and reads back, and the image holds after
+    ("reads and writes a virtio disk through the block protocol", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services", "--disk=SlopOS disk check: from the host",
+        "--expect-line=[user] virtio_blk: serving 2048 blocks",
+        "--expect-line=[user] disk_check: read the host's mark, wrote, flushed and read back block 1, and read 8 blocks at once, of 2048",
+        "--expect-disk-block=1=SlopOS disk check: from the guest", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # Behind a root port, with firmware's bus numbers and BARs taken as unset
     ("numbers buses and places BARs behind a bridge", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services test_reassign", "--expect-line=[user] platform: 1:0.0 (6900 4164) claimed",

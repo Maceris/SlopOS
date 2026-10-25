@@ -45,6 +45,8 @@ SupervisorGrants :: struct {
     platform_service : os.Channel[platform_protocol.Platform]?,
     entropy_service : os.Channel[entropy.Entropy]?,
     console_module : slop_os.Memory?,
+    disk_check_module : slop_os.Memory?,
+    virtio_blk_module : slop_os.Memory?,
     virtio_console_module : slop_os.Memory?,
     virtio_rng_module : slop_os.Memory?,
 }
@@ -154,6 +156,8 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         platform_service = platform_connection,
         entropy_service = entropy.connect(root.entropy, root.entropy_port, block.budget),
         console_module = module_copy(block, "console", module_rights),
+        disk_check_module = module_copy(block, "disk_check", module_rights),
+        virtio_blk_module = module_copy(block, "virtio_blk", module_rights),
         virtio_console_module = module_copy(block, "virtio_console", module_rights),
         virtio_rng_module = module_copy(block, "virtio_rng", module_rights),
     }

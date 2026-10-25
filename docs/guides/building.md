@@ -59,6 +59,8 @@ python tools/boot.py --expect 0
 | `--serial PATH` | Also keep the serial output in a file |
 | `--console-input LINE` | Add a virtio console linked to a TCP socket on the loopback, and type this line into it once the console service's banner shows; may be repeated |
 | `--expect-console-line LINE` | With `--expect`: the virtio console must show this exact line; may be repeated |
+| `--disk MARK` | Add a virtio block device: a 1 MiB image with `MARK` at the start of block 0, and `block N` at the start of blocks 2 to 9 |
+| `--expect-disk-block N=TEXT` | With `--expect`: block `N` of the image must start with `TEXT` once the kernel has stopped; may be repeated |
 | `-- ARGUMENTS` | Anything after `--` goes to QEMU, like `-smp 4` |
 
 The kernel stops with a code QEMU's debug-exit device reports when `test_exit` is on its command line:

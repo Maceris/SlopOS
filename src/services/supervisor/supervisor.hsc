@@ -5,7 +5,8 @@
  * supervisor claims each from the platform service and starts a driver for it, with what it holds of it
  * (platform.PciDevice). Drivers start first, since services need them: a driver that serves clients is given a
  * listener whose other end the supervisor keeps, and connects them through (decisions/0075). The console service is
- * given the first serial line, and hello the console. Restarting them comes with 7f.
+ * given the first serial line, hello the console, and the disk check, if there's a disk, the first disk
+ * (decisions/0076). Restarting them comes with 7f.
  */
 package supervisor
 
@@ -13,6 +14,7 @@ import os from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
+import block from "../../protocols/block"
 import console_log from "../../protocols/console_log"
 import entropy from "../../protocols/entropy"
 import platform from "../../protocols/platform"
@@ -21,6 +23,8 @@ import supervision from "../../protocols/supervision"
 import system_config from "../../system_config"
 import hello from "../../apps/hello"
 import console from "../console"
+import disk_check from "../disk_check"
+import virtio_blk from "../../drivers/virtio_blk"
 import virtio_console from "../../drivers/virtio_console"
 import virtio_rng from "../../drivers/virtio_rng"
 
@@ -55,9 +59,32 @@ VirtioConsoleGrants :: struct {
     clients : os.Listener[serial.Serial],
 }
 
+// What the disk check is given (disk_check.main).
+DiskCheckGrants :: struct {
+    log : slop_os.DebugLog?,
+    disk : os.Channel[block.Block]?,
+}
+
+// What a virtio block device's driver is given (virtio_blk.main): its device, and a listener for its clients.
+VirtioBlkGrants :: struct {
+    log : slop_os.DebugLog?,
+    device : slop_os.Device,
+    config : slop_os.Memory,
+    bar0 : slop_os.Memory?,
+    bar1 : slop_os.Memory?,
+    bar2 : slop_os.Memory?,
+    bar3 : slop_os.Memory?,
+    bar4 : slop_os.Memory?,
+    bar5 : slop_os.Memory?,
+    domain : slop_os.DmaDomain,
+    clients : os.Listener[block.Block],
+}
+
 // The modules of what the supervisor starts, besides hello.
 Modules :: struct {
     console : slop_os.Memory?,
+    disk_check : slop_os.Memory?,
+    virtio_blk : slop_os.Memory?,
     virtio_console : slop_os.Memory?,
     virtio_rng : slop_os.Memory?,
 }
@@ -97,23 +124,28 @@ Supervisor :: struct {
     // through; NO_HANDLE without
     serial_listener : slop_os.Channel,
     console_listener : slop_os.Channel,
+    // The first disk's driver's listener, likewise
+    block_listener : slop_os.Channel,
 }
 
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager], root: os.Channel[supervision.Supervision],
     hello_module: slop_os.Memory, platform_service: os.Channel[platform.Platform]?, entropy_service: os.Channel[entropy.Entropy]?,
-    console_module: slop_os.Memory?, virtio_console_module: slop_os.Memory?, virtio_rng_module: slop_os.Memory?) -> int {
-    block :: slop_os.startup_block()
-    supervisor := Supervisor.{block = block, manager = manager, root = root.end,
-        serial_listener = cast[slop_os.Channel](slop_os.NO_HANDLE), console_listener = cast[slop_os.Channel](slop_os.NO_HANDLE)}
-    modules :: Modules.{console = console_module, virtio_console = virtio_console_module, virtio_rng = virtio_rng_module}
+    console_module: slop_os.Memory?, disk_check_module: slop_os.Memory?, virtio_blk_module: slop_os.Memory?,
+    virtio_console_module: slop_os.Memory?, virtio_rng_module: slop_os.Memory?) -> int {
+    startup :: slop_os.startup_block()
+    none :: cast[slop_os.Channel](slop_os.NO_HANDLE)
+    supervisor := Supervisor.{block = startup, manager = manager, root = root.end, serial_listener = none, console_listener = none,
+        block_listener = none}
+    modules :: Modules.{console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
+        virtio_console = virtio_console_module, virtio_rng = virtio_rng_module}
     supervisor.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
-    supervisor.manager_port = os.port_for(block.budget, manager.end) or_return 1
-    supervisor.root_port = os.port_for(block.budget, root.end) or_return 2
-    supervisor.port = slop_os.port_create(block.budget) or_return 3
+    supervisor.manager_port = os.port_for(startup.budget, manager.end) or_return 1
+    supervisor.root_port = os.port_for(startup.budget, root.end) or_return 2
+    supervisor.port = slop_os.port_create(startup.budget) or_return 3
     // Each driver, for every device it takes
     match platform_service {
         case Some(platform_end) => {
-            platform_port :: os.port_for(block.budget, platform_end.end) or_return 4
+            platform_port :: os.port_for(startup.budget, platform_end.end) or_return 4
             for each in system_config.SERVICES {
                 if !system_config.is_driver(each) || each.starter != system_config.Starter.Supervisor {
                     continue
@@ -127,6 +159,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
                     else if each.name == "virtio_console" {
                         start_virtio_console(&supervisor, each, device, modules.virtio_console)
                     }
+                    else if each.name == "virtio_blk" {
+                        start_virtio_blk(&supervisor, each, device, modules.virtio_blk)
+                    }
                     else {
                         close_device(&device)
                     }
@@ -138,6 +173,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     // Then the services that use them
     start_console(&supervisor, modules.console)
     start_hello(&supervisor, hello_module)
+    start_disk_check(&supervisor, modules.disk_check)
     log_line.write(supervisor.log, "supervisor: started % services", supervisor.started_count)
     tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))
     loop {
@@ -216,6 +252,49 @@ start_virtio_console :: fn(supervisor: ptr[mut Supervisor], service: system_conf
                 supervisor.serial_listener = pair.b
             }
         }
+        case Error(error) => failed(supervisor, service.name, error)
+    }
+}
+
+/*
+ * A driver for a virtio block device, with what it holds of it and a listener for its clients, whose other end the
+ * supervisor keeps if it's the first disk.
+ */
+start_virtio_blk :: fn(supervisor: ptr[mut Supervisor], service: system_config.Service, device: platform.PciDevice, module: slop_os.Memory?) {
+    pair := slop_os.ChannelPair.{}
+    match os.channel_for[block.Block](supervisor.block.budget, 0) {
+        case Ok(made) => pair = made
+        case Error(error) => {
+            close_device(&device)
+            return void
+        }
+    }
+    grants := VirtioBlkGrants.{log = duplicate_log(supervisor), device = device.device, config = device.config, domain = device.domain,
+        bar0 = optional(device.bar0), bar1 = optional(device.bar1), bar2 = optional(device.bar2), bar3 = optional(device.bar3),
+        bar4 = optional(device.bar4), bar5 = optional(device.bar5), clients = os.Listener[block.Block].{end = pair.a}}
+    executable :: module or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, executable, service.budget, virtio_blk.main, grants) {
+        case Ok(launched) => {
+            started(supervisor, "virtio_blk", launched.process)
+            if cast[slop_os.Handle](supervisor.block_listener) == slop_os.NO_HANDLE {
+                supervisor.block_listener = pair.b
+            }
+        }
+        case Error(error) => failed(supervisor, service.name, error)
+    }
+}
+
+// The disk check, given the first disk, if there is one.
+start_disk_check :: fn(supervisor: ptr[mut Supervisor], module: slop_os.Memory?) {
+    if cast[slop_os.Handle](supervisor.block_listener) == slop_os.NO_HANDLE {
+        return void
+    }
+    service :: system_config.service("disk_check") or_return void
+    executable :: module or_return void
+    port :: os.port_for(supervisor.block.budget, supervisor.block_listener) or_return void
+    grants := DiskCheckGrants.{log = duplicate_log(supervisor), disk = block.connect(supervisor.block_listener, port, supervisor.block.budget)}
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, executable, service.budget, disk_check.main, grants) {
+        case Ok(launched) => started(supervisor, "disk_check", launched.process)
         case Error(error) => failed(supervisor, service.name, error)
     }
 }

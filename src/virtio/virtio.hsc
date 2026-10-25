@@ -1,7 +1,8 @@
 /*
  * The virtio-pci transport (decisions/0070, 0074): a modern (virtio 1.x) device behind PCIe, its registers found
  * through its vendor capabilities in BARs its driver has mapped, its features negotiated (VERSION_1 always), its
- * interrupts through MSI-X, one vector per queue, and split virtqueues in DMA memory.
+ * interrupts through MSI-X, one vector per queue, and split virtqueues in DMA memory, each descriptor reused only once
+ * the device has given back the chain it was in.
  *
  * Every field the device shares is little-endian, so the rings are laid out with u16le, u32le and u64le, and the
  * registers are reached with volatile loads and stores, swapped through those types, so it's right on any target.
@@ -51,11 +52,14 @@ DESCRIPTOR_NEXT : u16 : 1
 DESCRIPTOR_WRITE : u16 : 2
 
 // A queue of at most this many descriptors, so all of it fits one page: descriptors, the driver's ring, the device's
-MAX_QUEUE_SIZE :: 16
+MAX_QUEUE_SIZE :: 64
 QUEUE_PAGE : u64 : 4096
 DESCRIPTORS_AT : u64 : 0
-DRIVER_RING_AT : u64 : 256
-DEVICE_RING_AT : u64 : 512
+DRIVER_RING_AT : u64 : 1024
+DEVICE_RING_AT : u64 : 2048
+// What offer gives when there aren't enough free descriptors
+NO_DESCRIPTOR : u16 : 0xffff
+MAX_CHAIN :: 4
 
 Descriptor :: struct #packed {
     address : u64le,
@@ -89,7 +93,15 @@ Queue :: struct {
     notify : u64,
     next_available : u16,
     last_used : u16,
-    next_descriptor : u16,
+    // The descriptors not in a chain the device has, a bit each
+    free : u64,
+}
+
+// One buffer of a chain: where it is to the device, how long, and whether the device writes it (or reads it).
+Part :: struct {
+    address : u64,
+    length : u32,
+    device_writes : bool,
 }
 
 /*
@@ -217,7 +229,9 @@ setup_queue :: fn(transport: ptr[Transport], index: u16, page: u64, device_page:
     }
     notify_off :: cast[u64](read_u16(common, QUEUE_NOTIFY_OFF))
     write_u16(common, QUEUE_ENABLE, 1)
-    return Queue.{index = index, size = size, page = page, notify = transport.notify + notify_off * cast[u64](transport.notify_multiplier)}
+    free :: if size >= 64 { cast[u64](0xffffffffffffffff) } else { (cast[u64](1) << cast[u64](size)) - 1 }
+    return Queue.{index = index, size = size, page = page, notify = transport.notify + notify_off * cast[u64](transport.notify_multiplier),
+        free = free}
 }
 
 // The device told the driver is ready.
@@ -225,18 +239,53 @@ ready :: fn(transport: ptr[Transport]) {
     write_u8(transport.common, DEVICE_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK)
 }
 
-/*
- * One buffer of length bytes at device_address offered to the device, writable by it if device_writes, as a chain of one
- * descriptor; then the device told. Its descriptor's index, which the device's used ring gives back.
- */
+// One buffer offered to the device, a chain of one descriptor (offer_chain).
 offer :: fn(queue: ptr[mut Queue], device_address: u64, length: u32, device_writes: bool) -> u16 {
-    id :: queue.next_descriptor
-    queue.next_descriptor = (id + 1) % queue.size
-    descriptor :: cast[ptr[mut Descriptor]](queue.page + DESCRIPTORS_AT + cast[u64](id) * 16)
-    descriptor.address = cast[u64le](device_address)
-    descriptor.length = cast[u32le](length)
-    descriptor.flags = cast[u16le](if device_writes { DESCRIPTOR_WRITE } else { cast[u16](0) })
-    descriptor.next = 0
+    return offer_chain(queue, Part.[Part.{address = device_address, length = length, device_writes = device_writes}])
+}
+
+/*
+ * Buffers offered to the device as one chain, in order, each on a free descriptor; then the device told. The first
+ * descriptor's index, which the device's used ring gives back; or NO_DESCRIPTOR if not enough are free.
+ */
+offer_chain :: fn(queue: ptr[mut Queue], parts: Part[]) -> u16 {
+    ids : u16[MAX_CHAIN]
+    taken : usize = 0
+    for &id in ids {
+        if taken >= parts.count {
+            break
+        }
+        found :: first_free(queue) or_return NO_DESCRIPTOR
+        id^ = found
+        queue.free &= ~(cast[u64](1) << cast[u64](found))
+        taken += 1
+    }
+    if taken < parts.count {
+        for id, i in ids {
+            if i < taken {
+                queue.free |= cast[u64](1) << cast[u64](id)
+            }
+        }
+        return NO_DESCRIPTOR
+    }
+    for part, i in parts {
+        if i >= ids.count {
+            break
+        }
+        descriptor :: cast[ptr[mut Descriptor]](queue.page + DESCRIPTORS_AT + cast[u64](ids[i]) * 16)
+        descriptor.address = cast[u64le](part.address)
+        descriptor.length = cast[u32le](part.length)
+        next :: i + 1
+        flags := if part.device_writes { DESCRIPTOR_WRITE } else { cast[u16](0) }
+        following := cast[u16](0)
+        if next < parts.count && next < ids.count {
+            flags |= DESCRIPTOR_NEXT
+            following = ids[next]
+        }
+        descriptor.flags = cast[u16le](flags)
+        descriptor.next = cast[u16le](following)
+    }
+    id :: ids[0]
     // The driver's ring: flags, its index, then its entries
     entry :: cast[ptr[mut u16le]](queue.page + DRIVER_RING_AT + 4 + cast[u64](queue.next_available % queue.size) * 2)
     entry^ = cast[u16le](id)
@@ -255,7 +304,17 @@ Used :: struct {
     length : u32,
 }
 
-// The next buffer the device has finished with, if there's one.
+// The lowest free descriptor, or null.
+first_free :: fn(queue: ptr[Queue]) -> u16? {
+    for bit in 0..<cast[u64](queue.size) {
+        if queue.free & (cast[u64](1) << bit) != 0 {
+            return cast[u16](bit)
+        }
+    }
+    return null
+}
+
+// The next chain the device has finished with, if there's one, its descriptors free again.
 take_used :: fn(queue: ptr[mut Queue]) -> Used? {
     used_index : u16 = bit_cast[u16le](intrinsics.volatile_load_u16(cast[ptr[u16]](queue.page + DEVICE_RING_AT + 2)))
     if used_index == queue.last_used {
@@ -267,6 +326,21 @@ take_used :: fn(queue: ptr[mut Queue]) -> Used? {
     queue.last_used += 1
     id : u32 = element.id
     length : u32 = element.length
+    // Each descriptor of the chain, followed through its next, free again
+    at := cast[u16](id)
+    for step in 0..<MAX_CHAIN {
+        if cast[u64](at) >= cast[u64](queue.size) {
+            break
+        }
+        queue.free |= cast[u64](1) << cast[u64](at)
+        descriptor :: cast[ptr[Descriptor]](queue.page + DESCRIPTORS_AT + cast[u64](at) * 16)
+        flags : u16 = descriptor.flags
+        if flags & DESCRIPTOR_NEXT == 0 {
+            break
+        }
+        next : u16 = descriptor.next
+        at = next
+    }
     return Used.{id = cast[u16](id), length = length}
 }
 

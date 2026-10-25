@@ -12,11 +12,13 @@ import runtime from "base"
 import text_buffer from "std"
 import os from "std"
 import console from "../services/console"
+import disk_check from "../services/disk_check"
 import entropy from "../services/entropy"
 import platform from "../services/platform"
 import process_manager from "../services/process_manager"
 import supervisor from "../services/supervisor"
 import hello from "../apps/hello"
+import virtio_blk from "../drivers/virtio_blk"
 import virtio_console from "../drivers/virtio_console"
 import virtio_rng from "../drivers/virtio_rng"
 import platform_protocol from "../protocols/platform"
@@ -80,9 +82,16 @@ SERVICES :: Service.[
         entry = type_of(console.main)},
     Service.{name = "hello", module = "hello.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(hello.main)},
+    // Started only when there's a disk
+    Service.{name = "disk_check", module = "disk_check.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
+        entry = type_of(disk_check.main)},
     // A modern virtio entropy device (virtio's device ID 4, as PCI device 0x1040 + 4)
     Service.{name = "virtio_rng", module = "virtio_rng.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(virtio_rng.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1044,
+        class = platform_protocol.ANY_CLASS}},
+    // A modern virtio block device (virtio's device ID 2); its buffers are its clients' DMA memory, in its budget
+    Service.{name = "virtio_blk", module = "virtio_blk.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,
+        entry = type_of(virtio_blk.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1042,
         class = platform_protocol.ANY_CLASS}},
     // A modern virtio console (virtio's device ID 3)
     Service.{name = "virtio_console", module = "virtio_console.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,

@@ -116,6 +116,8 @@ of its own with a memory budget split off its starter's, which owns it:
 | `hello` | the supervisor, through the manager | `log?`, `manager?`, `console: Channel[ConsoleLog]?` | Reports that its heap and random numbers work, in its debug log and on the console, and given a connection to the manager, that it's still running once the manager is gone |
 | `virtio_rng` | the supervisor, through the manager, for each modern virtio entropy device | its device's bundle (below), `entropy_service: Channel[Entropy]?` | Offers the device's bytes to the entropy service as a source, on a channel of the `rng` protocol |
 | `virtio_console` | the supervisor, through the manager, for each modern virtio console | its device's bundle, `clients: Listener[Serial]` | Its device's first port as the `serial` protocol |
+| `virtio_blk` | the supervisor, through the manager, for each modern virtio block device | its device's bundle, `clients: Listener[Block]` | The disk as the `block` protocol (below) |
+| `disk_check` | the supervisor, through the manager, if there's a disk | `log`, `disk: Channel[Block]?` | Reads, writes, flushes and reads back blocks of the first disk, and says what it found; M8's storage manager replaces it |
 
 **Wiring**: `system_config` names each service's entry, and checks when it's compiled that every
 `Channel[P]` one takes has a server: a service taking a `Listener[P]`, or the root task, which serves the
@@ -190,6 +192,15 @@ nothing, which it shows on the first serial line the supervisor gives it, after 
 `SlopOS console`; each line typed into it is written to its debug log (`console: read ...`) and echoed back
 (`echo: ...`).
 
+**Disks** (`src/protocols/block`, `0076`): a disk is 512-byte blocks. Each connection has a buffer, DMA memory the
+driver makes at its first `GetBuffer` and gives a read-write window onto, 64 KiB for `virtio_blk`, which the device
+reads and writes with no copies. `Read` and `Write` name a first block, a count and an offset in the buffer, with the
+client's tag; `Flush` makes what's written durable; each is answered with `Finished`, its tag and a status (`Done`,
+`OutOfRange`, `ReadOnly`, `DeviceError`, or `Busy` when every slot is in flight), as the device finishes it, in any
+order. `Describe` gives the block count, the buffer's size, and whether the disk is read-only and flushes.
+`virtio_blk` keeps up to 16 requests in flight across its clients, each a chain of a header, the data and a status
+byte. A device without a flush writes durably, and its `Flush` is `Done` at once.
+
 **Hardware randomness** (`src/protocols/rng`): an RNG's driver makes a channel of the `rng` protocol (`Read` with a
 count, answered with `Bytes`) and offers it to the entropy service with `entropy.AddSource`. The entropy service
 reads 32 bytes from each source when it's added, and again each time 64 KiB more have been handed out, and reseeds
@@ -201,7 +212,8 @@ it with 0 a second after the supervisor says it has started everything (`AllStar
 still running; and `test_reassign` has the platform service take every virtio device's BARs and every bridge's bus
 numbers as unset, so assigning them is tested where firmware assigns everything. `tools/boot.py` can link a virtio
 console to a TCP socket on the loopback (`--console-input`, `--expect-console-line`), which it types into once the
-console's banner shows, and whose lines it checks.
+console's banner shows, and whose lines it checks; and add a virtio disk, an image it marks (`--disk`) and checks
+afterwards (`--expect-disk-block`).
 
 ## Test Programs
 

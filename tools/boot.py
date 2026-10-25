@@ -216,7 +216,8 @@ CONSOLE_BANNER = "SlopOS console"
 class ConsoleLink:
     """
     A virtio console whose other end is a TCP socket QEMU serves on the loopback (a file can't be typed into on
-    Windows): this connects to it, waits for the console's banner, types input into it, and keeps what it shows.
+    Windows): this connects to it, waits for the console's banner, types input into it, and keeps what it shows. QEMU
+    waits for the connection before it starts the machine, since what's written with nothing connected is lost.
     """
 
     def __init__(self, typed: list[str]):
@@ -230,7 +231,7 @@ class ConsoleLink:
 
     def qemu_arguments(self) -> list[str]:
         return ["-device", "virtio-serial-pci,disable-legacy=on",
-                "-chardev", f"socket,id=console,host=127.0.0.1,port={self.port},server=on,wait=off",
+                "-chardev", f"socket,id=console,host=127.0.0.1,port={self.port},server=on,wait=on",
                 "-device", "virtconsole,chardev=console"]
 
     def talk(self) -> None:
@@ -263,6 +264,29 @@ class ConsoleLink:
         return [line.rstrip("\r") for line in self.shown.split("\n")]
 
 
+# A disk image's size, and its blocks', as virtio-blk counts them
+DISK_BYTES = 1 << 20
+BLOCK_BYTES = 512
+
+
+def make_disk(path: Path, mark: str) -> None:
+    """A raw disk image: mark at the start of block 0, and "block N" at the start of blocks 2 to 9, zeros elsewhere."""
+    image = bytearray(DISK_BYTES)
+    image[0:len(mark)] = mark.encode()
+    for number in range(2, 10):
+        label = f"block {number}".encode()
+        image[number * BLOCK_BYTES:number * BLOCK_BYTES + len(label)] = label
+    path.write_bytes(bytes(image))
+
+
+def disk_block_starts(path: Path, expected: str) -> bool:
+    """Whether the image has a block starting with text, for an expectation written as N=text."""
+    number, _, text = expected.partition("=")
+    image = path.read_bytes()
+    start = int(number) * BLOCK_BYTES
+    return image[start:start + len(text)] == text.encode()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Boots a kernel in QEMU through Limine.")
     source = parser.add_mutually_exclusive_group()
@@ -284,6 +308,10 @@ def main() -> int:
                         help="a line to type into a virtio console, which this adds, once it shows its banner; may be repeated")
     parser.add_argument("--expect-console-line", action="append", default=[],
                         help="a line the virtio console should show, with --expect; may be repeated")
+    parser.add_argument("--disk", help="add a virtio block device, a disk image with this mark in block 0 (make_disk)")
+    parser.add_argument("--expect-disk-block", action="append", default=[],
+                        help="N=TEXT: block N of the --disk image starts with TEXT once the kernel has stopped, with --expect; "
+                             "may be repeated")
     parser.add_argument("qemu_arguments", nargs="*", help="more arguments for QEMU, after --")
     arguments = parser.parse_args()
 
@@ -316,6 +344,10 @@ def main() -> int:
         serial = folder / "serial.txt"
         extra = list(arguments.qemu_arguments)
         console = None
+        disk = folder / "disk.img"
+        if arguments.disk is not None:
+            make_disk(disk, arguments.disk)
+            extra += ["-drive", f"file={disk},if=none,id=disk,format=raw", "-device", "virtio-blk-pci,drive=disk,disable-legacy=on"]
         if arguments.console_input or arguments.expect_console_line:
             console = ConsoleLink(arguments.console_input)
             extra += console.qemu_arguments()
@@ -327,6 +359,7 @@ def main() -> int:
         if console is not None:
             console.thread.join(timeout=5)
         output = serial.read_text(errors="replace") if serial.exists() else ""
+        unwritten = [expected for expected in arguments.expect_disk_block if not disk.exists() or not disk_block_starts(disk, expected)]
         if arguments.serial is not None:
             arguments.serial.write_text(output)
     sys.stdout.write(output)
@@ -345,7 +378,9 @@ def main() -> int:
         missing_shown = [line for line in arguments.expect_console_line if line not in shown]
         for line in missing_shown:
             print(f"boot.py: the virtio console showed no line {line!r}", file=sys.stderr)
-        return 0 if code == arguments.expect and not missing and not missing_shown else 1
+        for expected in unwritten:
+            print(f"boot.py: the disk has no block {expected!r}", file=sys.stderr)
+        return 0 if code == arguments.expect and not missing and not missing_shown and not unwritten else 1
     return code
 
 
