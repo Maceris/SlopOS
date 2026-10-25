@@ -28,17 +28,6 @@ Severity: **blocker** / **friction** / **nice**.
 
 ### Smaller gaps
 
-- The compiler crashed once (exit 0xC0000005, an access violation) building SlopOS's x86-64 kernel through the
-  build package in `boot_tests.py`, and built it fine 200 times after, in the Debug build (2026-10-24). The
-  likely cause, found with an AddressSanitizer build of the compiler and fixed: the house rules' description of
-  each function read every key of its checked results as an AST node, but a named result's key is its entry in
-  the function's type, so it read past the end of that, which faults only when the next page isn't mapped. The
-  compiler now writes a crash dump if it does crash, and `hemera-asan` builds every SlopOS target without a
-  report. Kept open until enough builds have passed. Severity: friction.
-
-- Comparing two optionals (`a != b` with both `u64?`) checks, then fails to generate ("comparing
-  Optional[u64] values can't be generated yet", E5002); unwrapping them first works. Found in
-  `src/elf_loader/test` (M6, 2026-10-23). Severity: nice.
 - `x & ~MASK` with `x` unsigned and `MASK` an untyped constant is refused: `~0xff` is the untyped -256, out of
   `u64`'s range, so `MASK` needs a cast (`~cast[u64](MASK)`). Found writing `std/crypto` (2026-10-19), still so.
   Severity: friction.
@@ -98,32 +87,42 @@ Fixed with SlopOS's M7 7c (`decisions/0074`), the gaps its drivers would meet fi
 - Found on the way: base's runtime had no grant kinds for 7b's `Device` and `DmaDomain`, so an entry parameter of either
   ended its process with `EXIT_MISSING_GRANT`; `std`'s asserts now check them like the others.
 
+Fixed 2026-10-25 (Hemera's compiler, with hosted tests), the survey's plain bugs, with the design questions among them
+decided with the project's owner:
+
+- **Complex numbers and quaternions** are floats, as Odin's are: `c32`, `c64` and `c128` are two `f16`s, `f32`s or
+  `f64`s, real then imag, and `q64`, `q128` and `q256` four, imag, jmag, kmag, then real; `c16` and `q32` are gone. They're
+  written with imaginary literals (`2i`, `1.5j`, `3k`), which default to `c128` and `q256`; their parts are `.real`,
+  `.imag`, `.jmag` and `.kmag`; they have `+ - * /` (the complex and Hamilton products), unary `-`, `==` and `!=` but no
+  order, arithmetic with a real number of their parts' type, and casts between sizes. `std/math` has `conjugate`,
+  `magnitude` and `part_of`, over a new `intrinsics.square_root`. Hosted test `composites`, on Linux too.
+- **`#file_path`** is the path of the file it's in, as a string.
+- **`==` between type values** follows plain aliases, as running code always did and as "a plain alias is the type it
+  names" says: the docs' "exact" `==` was the error. It works at compile time (`#assert`, `#if`), and
+  `types_are_aliases` with it, now taking type values worked out at run time too. Hosted test `type_values`.
+- **A struct field's default** can be a float or string literal, or any constant or function named, of a type the field
+  takes. Hosted test `field_defaults`, front-end test `field_default_mismatch`.
+- **Two optionals compared** are equal when both are `None` or both hold equal values. Hosted test
+  `optional_comparisons`.
+- **`#run` as an array's count**, or a generic's value; **multi-dimensional array types** as values
+  (`size_of(i8[10][5])`); and **a string literal's members** (`"abc".count`, `"abc"[1]`), as a constant's had
+  since 7f. Hosted test `constant_sizes`.
+
 Still open, from the same survey:
 
 Builds fail where the docs say it works:
 
-- **Complex (`c16`..`c128`) and quaternion (`q32`..`q256`) arithmetic** produces invalid MLIR (`llvm.add` on
-  `!llvm.array<2 x i32>`), E5003 at lowering, not a checking error.
-  Note: mlir has a complex dialect we might want to use. Quaternions probably need to be vectors or tensors. Severity: nice.
-- **`#file_path`** gives "DIRECTIVE isn't supported in an expression yet" (E4024). `#file_data` works.
-  Severity: nice.
-- **`types_are_aliases`** can't be worked out at compile time ("isn't something the compiler can compute here"),
-  in `#assert`, or generated at run time (E5002), so nothing can use it. `==` between type values in `#assert`
-  fails too ("not supported in a compile-time constant yet"). It does work at run time. Severity: nice.
 - **A variadic parameter followed by another** (`fn(fiz: bool, some: int..., fuzz: f32)`, from
   `functions.md`) only works when the variadic is passed on as a view: `bar(true, 20, 20, 2)` says `fuzz` has no
-  value. The docs don't say how the call is split up. Severity: nice.
-- **A struct field's default can't be a function** (E4014), though `types.md` lets a default be any constant.
-  Severity: nice.
+  value. Decided with the project's owner (2026-10-25), still to build: several variadics, or parameters after one,
+  are allowed only when a call can always be split, each group's type unable to convert implicitly to the next's (and
+  for `a: A..., b: B..., c: C...`, `A` and `C` too, since `b` can be empty). The docs' example is then an error, since
+  an untyped `3` could be an `int` or the `f32`; `fuzz: bool` after `int...` would be fine. Severity: nice.
 - **Types declared inside a function** (E4024), **generic macros** (E4024), and **`#insert` or a macro call in a
   generic's body** (E4024). The last is in `compilation.md` as not done yet; the first two aren't mentioned.
   Severity: nice.
 - **Several names in one declaration**, `x, y, z := 0, 0, 0`, is a parse error (E3017). `operators.md` only
   shows assigning several at once, so this may be by design. Severity: nice.
-- **`#run` as an array's size in a type** (`int[#run fib(5)]`) is a parse error. A named constant works.
-  Severity: nice.
-- **A multi-dimensional array type in an expression** (`size_of(i8[10][5])`) is read as indexing: "the type
-  i8[10] can't be indexed". Severity: nice.
 
 Targets and runtime:
 
@@ -199,6 +198,11 @@ Resolved items are removed once they're done, as everything up to 2026-10-23 was
 failed once on 2026-10-16 (two checker races that explain it were fixed since, and it hasn't recurred); they're in this file's
 history up to commit `052f203`, where references like "item 9" or "Resolved 2026-10-15" from older records
 lead.
+
+- **The compiler's one crash** (an access violation building the x86-64 kernel, 2026-10-24), resolved 2026-10-25: its
+  likely cause, a read past the end of a function's type in the house rules' descriptions that AddressSanitizer found,
+  was fixed that day, and the many SlopOS builds of M7's stages since, `hemera-asan` builds of every target among them,
+  haven't crashed. The compiler still writes a crash dump if it ever does.
 
 ## 4. Features That Look Like a Strong Fit
 

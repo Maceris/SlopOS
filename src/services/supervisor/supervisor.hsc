@@ -222,10 +222,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         }
         while dials_of(&supervisor, serial_line) == 0
         // And has had time to show its banner through it
-        pause :: slop_os.port_create(supervisor.block.budget) or_return 3
-        packets : slop_os.Packet[1]
-        _ = slop_os.port_wait(pause, packets, (slop_os.clock_monotonic() or_else 0) + TEST_RESTART_PAUSE)
-        _ = slop_os.handle_close(cast[slop_os.Handle](pause))
+        pause(&supervisor)
         if serial_line < supervisor.started.count {
             killed :: supervisor.started[serial_line]
             log_line.write(supervisor.log, "supervisor: test_restart: killing %", killed.name)
@@ -238,6 +235,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             wait_and_handle(&supervisor)
         }
         while !is_running(&supervisor, serial_line) || dials_of(&supervisor, serial_line) < 2
+        // And has had time to show its banner again, and echo what's typed after it, before the root task's last second
+        pause(&supervisor)
     }
     log_line.write(supervisor.log, "supervisor: started % services", supervisor.started_count)
     tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))
@@ -536,6 +535,14 @@ serve_connector :: fn(supervisor: ptr[mut Supervisor], index: usize) {
         }
         _ = connector.send_response(record.end, supervisor.port, &out)
     }
+}
+
+// test_restart's wait, TEST_RESTART_PAUSE, for the console to show what it's sent.
+pause :: fn(supervisor: ptr[mut Supervisor]) {
+    waiter :: slop_os.port_create(supervisor.block.budget) or_return void
+    packets : slop_os.Packet[1]
+    _ = slop_os.port_wait(waiter, packets, (slop_os.clock_monotonic() or_else 0) + TEST_RESTART_PAUSE)
+    _ = slop_os.handle_close(cast[slop_os.Handle](waiter))
 }
 
 // How many times connectors to what's started at target have dialed it.
