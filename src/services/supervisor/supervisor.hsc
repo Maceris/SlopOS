@@ -237,13 +237,9 @@ Supervisor :: struct {
     loaded : Loaded[MAX_LOADED],
 }
 
-/*
- * A program read from the system volume, if it's been read: a flag, not an optional, since an optional starts zeroed,
- * which is Some (hemera-feedback.md).
- */
+// A program read from the system volume, if it's been read.
 Loaded :: struct {
-    read : bool,
-    module : slop_os.Memory,
+    module : slop_os.Memory?,
 }
 
 MAX_LOADED :: 32
@@ -636,12 +632,13 @@ loaded_module :: fn(supervisor: ptr[mut Supervisor], service: system_config.Serv
     if place >= loaded.count {
         return null
     }
-    if loaded[place].read {
-        return loaded[place].module
+    match loaded[place].module {
+        case Some(module) => return module
+        case None => {}
     }
     module :: read_module(supervisor, service.module) or_return null
     if place < loaded.count {
-        loaded[place] = Loaded.{read = true, module = module}
+        loaded[place] = Loaded.{module = module}
     }
     log_line.write(supervisor.log, "supervisor: % from the system volume", service.name)
     return module
