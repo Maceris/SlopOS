@@ -49,6 +49,30 @@ each part.
   syncs, reads back and moves a file of its own. Budgets: the supervisor 48 MiB, the storage manager 20 MiB, a
   container service 4 MiB and a volume server 6 MiB; the root task now gives 30 grants.
 
+### 8d2: Replace, transactions and change cursors
+- **The protocols** (Hemera's `std/os/slop_os`): `dir` gains `Begin` (with a memory object), `Commit`, `Abort`,
+  `Replace` and `Changes`, answered `Began`, `Changed`, `UpToDate` and `Resync`; `read_only_dir` gains `Changes`;
+  `file` gains `Install`; `FileError` gains `Conflict`. Added as new variants, so the protocols keep their versions,
+  and the FAT server answers them `Unsupported`.
+- **slopfs** (`history.hsc`): a volume's change history in its own tree, a record per change, trimmed to a budget in
+  bytes (1 MiB in a volume server), writes to one file in one transaction kept as one; orphans, objects no name leads
+  to, kept while they're open and swept when a volume server starts, which `Replace` installs from (`install`) and a
+  removal of an open file leaves (`unlink`); and forgetting a volume's changes since its last commit (`forget`), the
+  container undoing its allocations and frees (`abandon_volume`, the container protocol's `Abandon`).
+- **Transactions** (`src/services/volume_server/transactions.hsc`): logged in the memory the client gives `Begin`, so
+  they're charged to it and capped by it, and read back at commit as the client's own bytes, checked as they're read.
+  Each records the versions (the transaction an object last changed in) of what it touches and of the directory each
+  name is in; an object with changes not yet committed is committed first, so a later change shows as a newer version.
+  Commit commits what's waiting, checks the versions, applies the log and commits; a failure partway forgets
+  everything since and abandons it, so nothing is left. Making directories isn't part of a transaction yet: its
+  `OpenDirectory` opens them as they are.
+- **Replace**: a new orphan, written through a file connection of its own, installed by `Install`, which orphans the
+  file it replaces until nothing has that open.
+- **Tests**: hosted, the history read beneath a directory and trimmed, a replacement installed with the old contents
+  still readable, and everything since a commit forgotten without a leak. Booted, the disk check on the system volume
+  replaces a file while it has it open, commits a transaction of two files nothing saw before, is refused one whose
+  file was changed outside it, has one that fails partway leave nothing, and follows every change with a cursor.
+
 ## Alternatives considered
 - **The container service copying volumes' data**: simpler checks, but every block copied twice; narrowing the
   driver's connection, as the partition server does, costs nothing more.

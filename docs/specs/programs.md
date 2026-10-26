@@ -246,7 +246,18 @@ client gives its connection once (`UseBuffer`, a memory object the server maps, 
 name the file's offset, a count and an offset in the buffer; `SetSize` cuts or extends with zeros; `Narrow` gives the
 file as `read_only_file`. `Info` gives the kind, the size and an informational name, the path it was opened as, for
 display only (`0018`). Errors are a `FileError`: `NotFound`, `NotADirectory`, `IsADirectory`, `AlreadyExists`,
-`DirectoryNotEmpty`, `InvalidPath`, `NoSpace`, `ReadOnly`, `DeviceError`, `Corrupt` or `NoBuffer`.
+`DirectoryNotEmpty`, `InvalidPath`, `NoSpace`, `ReadOnly`, `DeviceError`, `Corrupt`, `NoBuffer` or `Conflict`.
+
+What the native filesystem adds (`0089`), which FAT answers `Unsupported`, as `Features` says: `Replace` with a path
+gives a file connection to a new file, which its `Install` swaps in for the one at the path, whole, and makes durable,
+while a reader of the old one goes on reading it until it closes; `Begin`, with a memory object for its log, gives a
+transaction's connection, speaking `dir` beneath the same directory, whose opens, writes, sizes, removals and renames
+are logged until `Commit` applies them all at once and makes them durable, or answers `Conflict` if anything they read
+or changed was changed meanwhile, or the error that stopped it with none of it done; `Abort`, or closing it, drops
+them, and reads on it see the directory as it is. `Changes` with a cursor gives the first change beneath the directory
+at or after it (`Created`, `Written`, `Removed`, `MovedOut`, `MovedIn` or `Replaced`, with the path from the
+directory and the cursor after it), or `UpToDate`, or `Resync` with where to ask from once the directory's been
+listed again, for a cursor older than the volume's history keeps (1 MiB of changes).
 
 `std`'s files (`std/os/slop_os_files.hsc`) are these: `os.Directory` a `dir` connection, `os.File` a `file` or
 `read_only_file` one with a 64 KiB buffer of its own, and the path functions (`open`, `read_entire_file` and the rest)

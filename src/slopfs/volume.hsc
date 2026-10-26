@@ -33,6 +33,8 @@ Volume :: struct {
     now : u64,
     // A data write failed, so its commits are refused
     failed : bool,
+    // The bytes of change history it keeps (history.hsc), or 0 for none
+    history_bytes : u64,
 }
 
 // What an object is.
@@ -462,6 +464,7 @@ create :: fn(volume: ptr[mut Volume], directory: u64, name: string, kind: Object
         modified = cast[u64le](volume.now), changed = cast[u64le](volume.nodes.transaction)}
     put_object(volume, object, &record)?
     touch(volume, directory, &parent)?
+    note_change(volume, .Created, object, directory, name)?
     return .Ok(object)
 }
 
@@ -483,6 +486,7 @@ remove :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[vo
     remove_entry(volume, directory, name)?
     destroy(volume, object)?
     touch(volume, directory, &parent)?
+    note_change(volume, .Removed, object, directory, name)?
     return .Ok
 }
 
@@ -573,6 +577,7 @@ rename :: fn(volume: ptr[mut Volume], from: u64, from_name: string, to: u64, to_
             }
             remove_entry(volume, to, to_name)?
             destroy(volume, there)?
+            note_change(volume, .Removed, there, to, to_name)?
         }
         case None => {}
     }
@@ -586,6 +591,8 @@ rename :: fn(volume: ptr[mut Volume], from: u64, from_name: string, to: u64, to_
         to_record := get_object(volume, to)?
         touch(volume, to, &to_record)?
     }
+    note_change(volume, .MovedOut, object, from, from_name)?
+    note_change(volume, .MovedIn, object, to, to_name)?
     return .Ok
 }
 
@@ -798,6 +805,7 @@ write :: fn(volume: ptr[mut Volume], file: u64, offset: u64, from: u8[]) -> Resu
     }
     record.size = cast[u64le](size)
     touch(volume, file, &record)?
+    note_change(volume, .Written, file, cast[u64](record.parent), "")?
     return .Ok
 }
 
@@ -846,6 +854,7 @@ set_size :: fn(volume: ptr[mut Volume], file: u64, size: u64) -> Result[void, Er
     }
     record.size = cast[u64le](size)
     touch(volume, file, &record)?
+    note_change(volume, .Written, file, cast[u64](record.parent), "")?
     return .Ok
 }
 

@@ -66,6 +66,8 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
     "file made in the set",
     "--expect-line=[user] disk_check: on the system volume, read modules/hello.elf as the EFI system partition has it, wrote, "
     "synced and read back its own file, and moved it",
+    "--expect-line=[user] disk_check: on the system volume, replaced a file whole while it was open, committed a transaction of two "
+    "files, was refused one that conflicted, had one that failed partway leave nothing, and followed every change with a cursor",
     "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
     "--expect-disk-text=Written to the system volume by the guest, and synced",
     "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]

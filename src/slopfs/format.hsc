@@ -90,6 +90,10 @@ RecordKind :: enum #backed_by(u8) {
     Entry = 6,
     // A volume: a file's chunk, keyed (file, Extent, byte offset)
     Extent = 7,
+    // A volume: one change, keyed (0, Change, its sequence number from 1), and the history's own state at 0
+    Change = 8,
+    // A volume: an object no name leads to, kept while it's open, keyed (0, Orphan, object), destroyed when nothing has it
+    Orphan = 9,
 }
 
 // A key as it's stored: ordered by object, then kind, then offset.
@@ -254,6 +258,46 @@ ExtentRecord :: struct #packed {
 
 // An inline chunk's record before its bytes.
 INLINE_HEAD : u64 : 8
+
+/*
+ * A volume's change history (decisions/0089), what change cursors read: each change a record from sequence number 1,
+ * the oldest dropped once the history passes its budget in bytes. Its state, at sequence 0: the oldest kept, the next
+ * to be made, and the bytes kept.
+ */
+ChangeState :: struct #packed {
+    first : u64le,
+    next : u64le,
+    bytes : u64le,
+}
+
+#assert size_of(ChangeState) == 24
+
+ChangeKind :: enum #backed_by(u32) {
+    Created = 1,
+    // A file's bytes or size
+    Written = 2,
+    Removed = 3,
+    // Moved away from its name, and to its new one
+    MovedOut = 4,
+    MovedIn = 5,
+    // A file's contents swapped for new ones, whole (Replace)
+    Replaced = 6,
+}
+
+// A change: the transaction it was made in, the object, the directory its name is in, and the name after it.
+ChangeRecord :: struct #packed {
+    transaction : u64le,
+    object : u64le,
+    parent : u64le,
+    kind : u32le,
+    name_bytes : u16le,
+    reserved : u16le,
+}
+
+#assert size_of(ChangeRecord) == 32
+
+// The history's budget a volume server keeps, in bytes.
+HISTORY_BYTES : u64 : 1 << 20
 
 // A record's value's most bytes, so every leaf holds at least two.
 MAX_VALUE_BYTES : u64 : 4096

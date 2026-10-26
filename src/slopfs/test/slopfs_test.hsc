@@ -132,6 +132,10 @@ main :: fn() -> int {
     if failed != 0 {
         return failed
     }
+    failed = check_history()
+    if failed != 0 {
+        return failed
+    }
     failed = check_crashes()
     if failed != 0 {
         return failed

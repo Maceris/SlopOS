@@ -571,6 +571,8 @@ serve_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usi
                 _ = add(server, .Dir, connection.end, directory, fat.Place.{}, false, name_of(&server.connections[index]))
                 continue
             }
+            // Transactions, Replace and change cursors are the native filesystem's (decisions/0089)
+            case _ => {}
         }
         _ = dir.send_response(end, server.port, &out)
     }
@@ -681,6 +683,7 @@ serve_read_only_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], 
                 _ = add(server, .ReadOnlyDir, connection.end, directory, fat.Place.{}, true, name_of(&server.connections[index]))
                 continue
             }
+            case _ => {}
         }
         _ = read_only_dir.send_response(end, server.port, &out)
     }
@@ -902,6 +905,7 @@ serve_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: us
                 _ = add(server, .File, other.end, 0, connection.place, false, name_of(connection))
                 continue
             }
+            case _ => {}
         }
         _ = file.send_response(end, server.port, &out)
     }

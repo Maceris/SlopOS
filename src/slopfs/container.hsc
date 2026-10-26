@@ -425,6 +425,35 @@ commit_changes :: fn(container: ptr[mut Container], only: u64) -> Result[void, E
     return .Ok
 }
 
+/*
+ * A volume's waiting changes undone, as if it had made none since its last commit (forget, on its side): its
+ * allocations free again, and the extents it gave back still its own. What was undone, for whoever keeps who owns what.
+ */
+abandon_volume :: fn(container: ptr[mut Container], id: u64, undone: ptr[mut Change[..]]) {
+    kept : Change[..]
+    space :: &container.space
+    for change in space.changes {
+        if change.owner != id {
+            runtime.array_add(&kept, change)
+            continue
+        }
+        if change.change == .Allocated {
+            add_free(space, change.start, change.blocks)
+        }
+        else if change.change == .FreedLater {
+            for later, i in space.later {
+                if later.start == change.start && later.blocks == change.blocks && later.owner == id {
+                    runtime.array_remove(&space.later, i)
+                    break
+                }
+            }
+        }
+        runtime.array_add(undone, change)
+    }
+    runtime.array_free(&space.changes)
+    space.changes = kept
+}
+
 // Whether changes this commit takes are still waiting.
 changes_taken :: fn(container: ptr[Container], only: u64) -> bool {
     for change in container.space.changes {

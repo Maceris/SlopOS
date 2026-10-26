@@ -8,7 +8,7 @@
  * Its blocks come from the container service, which it reads and writes them through, and its changes are committed
  * there: a Sync on any connection commits at once and answers once that's durable, and a second after the last
  * change, whatever changed is committed anyway. After a crash, the volume is as it was after some prefix of what was
- * done to it (decisions/0085).
+ * done to it (decisions/0085). Transactions, Replace and change cursors are in transactions.hsc.
  */
 package volume_server
 
@@ -40,6 +40,12 @@ Kind :: enum {
     File,
     ReadOnlyFile,
     FileSet,
+    // A dir connection in a transaction, its changes logged until Commit
+    Transaction,
+    // A file opened in a transaction, its writes logged too
+    TransactionFile,
+    // A new file from Replace, until it's installed
+    Replacement,
 }
 
 // A connection: the object it's to, its informational name (a set's pattern), and a file's buffer, mapped here.
@@ -53,6 +59,10 @@ Connection :: struct {
     buffer : u64,
     buffer_bytes : u64,
     buffer_memory : slop_os.Memory,
+    // A transaction's index, for one in a transaction
+    transaction : usize,
+    // A replacement's directory, where it's installed under its name
+    target : u64,
 }
 
 Server :: struct {
@@ -73,6 +83,7 @@ Server :: struct {
     connections : Connection[MAX_CONNECTIONS],
     count : usize,
     added : bool,
+    transactions : Transaction[MAX_TRANSACTIONS],
 }
 
 main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clients: os.Listener[dir.Dir]) -> int {
@@ -109,6 +120,12 @@ main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clie
     server.nodes = slopfs.Nodes.{device = device, transaction = described.transaction, space = cast[rawptr](server), allocate = allocate,
         release = release}
     server.volume = slopfs.attach_volume(&server.nodes, device, described.id, described.record)
+    server.volume.history_bytes = slopfs.HISTORY_BYTES
+    // Nothing has anything open yet, so every orphan a crash left is given back
+    swept :: slopfs.sweep_orphans(server.volume) or_else 0
+    if swept > 0 {
+        _ = commit(server)
+    }
     name :: string_of(&described.record.name[0], cast[usize](cast[u16](described.record.name_bytes)))
     log_line.write(server.log, "volume_server: serving volume % (%), from transaction %", described.id, name, described.transaction)
     // The listener is a connection to the root, as any client's Connect on it gives another
@@ -344,7 +361,19 @@ drop :: fn(server: ptr[mut Server], index: usize) {
     _ = slop_os.port_unbind(server.port, cast[u64](index))
     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
     release_buffer(connection)
+    kind :: connection.kind
+    object :: connection.object
     connection.kind = .Free
+    // A transaction closed is aborted; a replacement never installed, and an orphan nothing has open, given back
+    if kind == .Transaction {
+        end_transaction(server, connection.transaction)
+    }
+    else if kind == .Replacement {
+        _ = slopfs.release_orphan(server.volume, object)
+    }
+    else if kind == .File || kind == .ReadOnlyFile {
+        release_if_unused(server, object, index)
+    }
 }
 
 release_buffer :: fn(connection: ptr[mut Connection]) {
@@ -366,13 +395,13 @@ serve :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
         return void
     }
     kind :: server.connections[index].kind
-    if kind == .Dir {
+    if kind == .Dir || kind == .Transaction {
         serve_dir(server, index, into)
     }
     else if kind == .ReadOnlyDir {
         serve_read_only_dir(server, index, into)
     }
-    else if kind == .File {
+    else if kind == .File || kind == .TransactionFile || kind == .Replacement {
         serve_file(server, index, into)
     }
     else if kind == .ReadOnlyFile {
@@ -495,7 +524,7 @@ info_of :: fn(out: ptr[mut os.Outgoing], kind: files.Kind, size: u64, name: stri
 }
 
 features :: fn() -> files.Features {
-    return files.Features.{}
+    return files.Features.{atomic_replace = true, transactions = true, change_cursors = true}
 }
 
 // A Sync's answer: committed, and durable.
@@ -527,20 +556,27 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
             }
         }
         directory :: server.connections[index].object
+        in_transaction :: server.connections[index].kind == .Transaction
+        transaction :: server.connections[index].transaction
         out := os.Outgoing.{}
         response :: os.begin[dir.Response](&out)
         response^ = .Unsupported
         match os.message_of[dir.Request](into)^ {
             case OpenFile(open) => {
                 path :: path_of(into, open.path) or_else ""
-                match open_file_object(volume, directory, path, open.creation) {
-                    case Ok(object) => {
-                        match open_connection[file.File](server, .File, object, false, path) {
-                            case Some(made) => response^ = .OpenedFile(made)
-                            case None => response^ = .Failed(.NoSpace)
+                if in_transaction {
+                    response^ = open_in_transaction(server, transaction, path, open.creation)
+                }
+                else {
+                    match open_file_object(volume, directory, path, open.creation) {
+                        case Ok(object) => {
+                            match open_connection[file.File](server, .File, object, false, path) {
+                                case Some(made) => response^ = .OpenedFile(made)
+                                case None => response^ = .Failed(.NoSpace)
+                            }
                         }
+                        case Error(error) => response^ = .Failed(file_error(error))
                     }
-                    case Error(error) => response^ = .Failed(file_error(error))
                 }
             }
             case OpenReadOnlyFile(at) => response^ = read_only_open(server, directory, path_of(into, at) or_else "")
@@ -571,16 +607,33 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
             case Remove(at) => {
                 path :: path_of(into, at) or_else ""
                 response^ = .Done
-                match removed(volume, directory, path) {
-                    case Some(error) => response^ = .Failed(file_error(error))
-                    case None => {}
+                if in_transaction {
+                    if !note_versions(server, transaction, path) || !log_op(server, transaction, .Remove, 0, 0, path, "", nothing()) {
+                        response^ = .Failed(.NoSpace)
+                    }
+                }
+                else {
+                    match removed(server, directory, path) {
+                        case Some(error) => response^ = .Failed(error)
+                        case None => {}
+                    }
                 }
             }
             case Rename(rename) => {
+                from :: path_of(into, rename.from) or_else ""
+                to :: path_of(into, rename.to) or_else ""
                 response^ = .Done
-                match moved(volume, directory, path_of(into, rename.from) or_else "", path_of(into, rename.to) or_else "") {
-                    case Some(error) => response^ = .Failed(file_error(error))
-                    case None => {}
+                if in_transaction {
+                    if !note_versions(server, transaction, from) || !note_versions(server, transaction, to)
+                        || !log_op(server, transaction, .Rename, 0, 0, from, to, nothing()) {
+                        response^ = .Failed(.NoSpace)
+                    }
+                }
+                else {
+                    match moved(volume, directory, from, to) {
+                        case Some(error) => response^ = .Failed(file_error(error))
+                        case None => {}
+                    }
                 }
             }
             case Narrow => {
@@ -602,20 +655,33 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
                 _ = add(server, .Dir, connection.end, directory, false, name_of(&server.connections[index]))
                 continue
             }
+            case Begin(memory) => {
+                if in_transaction {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](memory))
+                }
+                else {
+                    response^ = transaction_connection(server, directory, memory, name_of(&server.connections[index]))
+                }
+            }
+            case Commit => {
+                if in_transaction {
+                    response^ = commit_transaction(server, transaction)
+                }
+            }
+            case Abort => {
+                if in_transaction {
+                    reset(server, transaction)
+                    response^ = .Done
+                }
+            }
+            case Replace(at) => {
+                if !in_transaction {
+                    response^ = replacement_of(server, directory, path_of(into, at) or_else "")
+                }
+            }
+            case Changes(cursor) => response^ = changes_of(server, directory, cursor, &out)
         }
         _ = dir.send_response(end, server.port, &out)
-    }
-}
-
-removed :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: string) -> slopfs.Error? {
-    match slopfs.leaf_of(volume, directory, path) {
-        case Ok(leaf) => {
-            match slopfs.remove(volume, leaf.directory, leaf.name) {
-                case Ok => return null
-                case Error(error) => return error
-            }
-        }
-        case Error(error) => return error
     }
 }
 
@@ -729,6 +795,15 @@ serve_read_only_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut o
             case Connect(connection) => {
                 _ = add(server, .ReadOnlyDir, connection.end, directory, true, name_of(&server.connections[index]))
                 continue
+            }
+            case Changes(cursor) => {
+                match changes_of(server, directory, cursor, &out) {
+                    case Changed(change) => response^ = .Changed(change)
+                    case UpToDate(next) => response^ = .UpToDate(next)
+                    case Resync(next) => response^ = .Resync(next)
+                    case Failed(error) => response^ = .Failed(error)
+                    case _ => {}
+                }
             }
         }
         _ = read_only_dir.send_response(end, server.port, &out)
@@ -895,20 +970,30 @@ serve_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomin
             }
         }
         connection :: &server.connections[index]
+        logged :: connection.kind == .TransactionFile
         out := os.Outgoing.{}
         response :: os.begin[file.Response](&out)
         response^ = .Unsupported
         match os.message_of[file.Request](into)^ {
             case UseBuffer(memory) => response^ = if use_buffer(connection, memory) is_none { file.Response.Done } else { file.Response.Failed(.NoBuffer) }
             case Read(transfer) => {
-                match read_file(server, connection, transfer) {
-                    case Ok(count) => response^ = .Transferred(count)
-                    case Error(error) => response^ = .Failed(error)
+                if logged && connection.object == 0 {
+                    response^ = .Transferred(0)
+                }
+                else {
+                    match read_file(server, connection, transfer) {
+                        case Ok(count) => response^ = .Transferred(count)
+                        case Error(error) => response^ = .Failed(error)
+                    }
                 }
             }
             case Write(transfer) => {
                 if !fits(connection, transfer) {
                     response^ = .Failed(.NoBuffer)
+                }
+                else if logged {
+                    response^ = if log_op(server, connection.transaction, .Write, 0, transfer.offset, name_of(connection), "",
+                        buffer_of(connection, transfer)) { file.Response.Transferred(transfer.count) } else { file.Response.Failed(.NoSpace) }
                 }
                 else {
                     match slopfs.write(server.volume, connection.object, transfer.offset, buffer_of(connection, transfer)) {
@@ -918,27 +1003,54 @@ serve_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomin
                 }
             }
             case SetSize(size) => {
-                match slopfs.set_size(server.volume, connection.object, size) {
-                    case Ok => response^ = .Done
-                    case Error(error) => response^ = .Failed(file_error(error))
+                if logged {
+                    response^ = if log_op(server, connection.transaction, .SetSize, 0, size, name_of(connection), "", nothing()) { file.Response.Done }
+                        else { file.Response.Failed(.NoSpace) }
+                }
+                else {
+                    match slopfs.set_size(server.volume, connection.object, size) {
+                        case Ok => response^ = .Done
+                        case Error(error) => response^ = .Failed(file_error(error))
+                    }
                 }
             }
             case Info => {
-                match file_info(server, connection, &out) {
-                    case Ok(info) => response^ = .Described(info)
-                    case Error(error) => response^ = .Failed(error)
+                if logged && connection.object == 0 {
+                    response^ = .Described(info_of(&out, .File, 0, name_of(connection)))
+                }
+                else {
+                    match file_info(server, connection, &out) {
+                        case Ok(info) => response^ = .Described(info)
+                        case Error(error) => response^ = .Failed(error)
+                    }
                 }
             }
-            case Sync => response^ = if synced(server) { file.Response.Done } else { file.Response.Failed(.DeviceError) }
+            case Sync => response^ = if logged || synced(server) { file.Response.Done } else { file.Response.Failed(.DeviceError) }
             case Narrow => {
-                match open_connection[read_only_file.ReadOnlyFile](server, .ReadOnlyFile, connection.object, true, name_of(connection)) {
-                    case Some(made) => response^ = .Narrowed(made)
-                    case None => response^ = .Failed(.NoSpace)
+                if connection.kind == .File {
+                    match open_connection[read_only_file.ReadOnlyFile](server, .ReadOnlyFile, connection.object, true, name_of(connection)) {
+                        case Some(made) => response^ = .Narrowed(made)
+                        case None => response^ = .Failed(.NoSpace)
+                    }
                 }
             }
             case Connect(other) => {
-                _ = add(server, .File, other.end, connection.object, false, name_of(connection))
+                if connection.kind == .File {
+                    _ = add(server, .File, other.end, connection.object, false, name_of(connection))
+                }
+                else {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](other.end))
+                }
                 continue
+            }
+            case Install => {
+                if connection.kind == .Replacement {
+                    response^ = .Done
+                    match installed(server, index) {
+                        case Some(error) => response^ = .Failed(error)
+                        case None => {}
+                    }
+                }
             }
         }
         _ = file.send_response(end, server.port, &out)

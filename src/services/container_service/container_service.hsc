@@ -444,6 +444,21 @@ for_volume :: fn(server: ptr[mut Server], volume: u64, request: container.Reques
             return .Done
         }
         case OpenBlocks => return open_blocks(server, volume)
+        case Abandon => {
+            undone : slopfs.Change[..]
+            defer runtime.array_free(&undone)
+            slopfs.abandon_volume(server.container, volume, &undone)
+            // Its allocations aren't its own any more, and what it gave back is again
+            for change in undone {
+                if change.change == .Allocated {
+                    _ = disown(server, volume, change.start, change.blocks)
+                }
+                else if change.change == .FreedLater {
+                    own(server, change.start, change.blocks, volume)
+                }
+            }
+            return .Done
+        }
         case Commit(record) => {
             // Its root in its own extents, and nothing but its root and next object taken from it
             root :: cast[u64](record.root.address)

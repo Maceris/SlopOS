@@ -43,6 +43,8 @@ Request :: union {
     OpenBlocks,
     // The volume's record, its tree written through block connections whose writes have all finished, made durable
     Commit(slopfs.VolumeRecord),
+    // Everything the volume changed since its last commit undone: its allocations free again, what it gave back its own
+    Abandon,
     // Serve another client, on its end
     Connect(os.Channel[Container]),
 }
@@ -75,6 +77,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Release(_) => false
         case OpenBlocks => true
         case Commit(_) => false
+        case Abandon => true
         case Connect(_) => true
     }
 }

@@ -122,7 +122,7 @@ check_system :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], esp: os.Ch
     }
     log_line.write(to, "disk_check: on the system volume, read % as the EFI system partition has it, wrote, synced and read back its own file, and moved it",
         MODULE_ON_VOLUME)
-    return 0
+    return check_transactions(to, system, &buffer)
 }
 
 // The file at path beneath a directory, read whole into bytes through a read_only_file connection.
