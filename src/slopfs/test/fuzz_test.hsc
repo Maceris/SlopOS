@@ -26,7 +26,7 @@ Survived :: struct {
     committed : u64,
 }
 
-check_fuzz :: fn() -> int {
+check_fuzz :: fn(sealed: bool) -> int {
     device :: new_device_of(FUZZ_BLOCKS) or_return 600
     defer free_device(device)
     disk :: cast[ptr[mut Disk]](device.context)
@@ -36,7 +36,7 @@ check_fuzz :: fn() -> int {
     }
     slopfs.format(device, id) or_return 601
     container := slopfs.mount(device) or_return 602
-    volume := slopfs.create_volume(container, "fuzz", key_of_volume(), 1) or_return 603
+    volume := create_test_volume(container, "fuzz", sealed) or_return 603
     for step in 0..<STEPS - 1 {
         if workload(volume, step) != 0 || commit_failed(container) {
             return 604
@@ -84,10 +84,10 @@ check_fuzz :: fn() -> int {
         else {
             mutate_sealed(disk, &random)
         }
-        exercise(&device, &survived)
+        exercise(&device, &survived, sealed)
         survived.rounds += 1
     }
-    runtime.log_info("fuzz: % rounds: % refused at mount, % mounted, % of those checked out whole, % committed after",
+    runtime.log_info("fuzz%: % rounds: % refused at mount, % mounted, % of those checked out whole, % committed after", if sealed { " (sealed)" } else { "" },
         survived.rounds, survived.refused, survived.mounted, survived.verified, survived.committed)
     // The sealed rounds, at least, mostly mount: their damage is behind the seals
     if survived.mounted == 0 {
@@ -111,7 +111,7 @@ number_of :: fn(text: string) -> u64? {
 }
 
 // A damaged image, mounted and used as far as it goes, every error taken.
-exercise :: fn(device: ptr[slopfs.Device], survived: ptr[mut Survived]) {
+exercise :: fn(device: ptr[slopfs.Device], survived: ptr[mut Survived], sealed: bool) {
     container := slopfs.Container.{}
     mounted := false
     match slopfs.mount(device^) {
@@ -122,7 +122,8 @@ exercise :: fn(device: ptr[slopfs.Device], survived: ptr[mut Survived]) {
                 case Error(problem) => {}
             }
             for id in 1..=cast[u64](2) {
-                match slopfs.open_volume(made, id) {
+                opened :: if sealed { slopfs.open_sealed_volume(made, id, passphrase()) } else { slopfs.open_volume(made, id) }
+                match opened {
                     case Ok(volume) => use_volume(volume)
                     case Error(failure) => {}
                 }

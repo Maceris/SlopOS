@@ -7,7 +7,9 @@
  * a connection narrowed to that partition and nothing else (decisions/0087); each client gets a connection of its own
  * to its root. A SlopOS container's partition gets a container service, holding only that partition, and its system
  * volume a volume server, holding only a connection to the container service for that volume (decisions/0089); its
- * files are the system volume's.
+ * files are the system volume's. Any of a container's volumes is served by name, the same way; an encrypted one's
+ * volume server is given room for Argon2id and the passphrase it's opened with, which it unwraps the volume's keys with
+ * and checks each time it's opened again (roadmap 8e). The keys never leave it.
  */
 package storage_manager
 
@@ -22,6 +24,7 @@ import partitions from "../../protocols/partitions"
 import storage from "../../protocols/storage"
 import service_kit from "../../service_kit"
 import container from "../../protocols/container"
+import volume_protocol from "../../protocols/volume"
 import container_service from "../container_service"
 import fat_server from "../fat_server"
 import partition_server from "../partition_server"
@@ -33,6 +36,10 @@ PARTITION_SERVER_BUDGET : u64 : 2 * 1024 * 1024
 FAT_SERVER_BUDGET : u64 : 2 * 1024 * 1024
 CONTAINER_SERVICE_BUDGET : u64 : 4 * 1024 * 1024
 VOLUME_SERVER_BUDGET : u64 : 6 * 1024 * 1024
+// An encrypted volume's: Argon2id's memory, for a passphrase whose parameters ask for up to 8 MiB, on top
+SEALED_VOLUME_SERVER_BUDGET : u64 : VOLUME_SERVER_BUDGET + 8 * 1024 * 1024
+MAX_VOLUMES :: 8
+VOLUME_NAME_BYTES :: 64
 // A SlopOS container's partition type, "SLOPOS CONTAINER" in ASCII, and the volume its files are (decisions/0088, 0089)
 CONTAINER_TYPE :: u8.[0x53, 0x4c, 0x4f, 0x50, 0x4f, 0x53, 0x20, 0x43, 0x4f, 0x4e, 0x54, 0x41, 0x49, 0x4e, 0x45, 0x52]
 SYSTEM_VOLUME :: "system"
@@ -60,6 +67,21 @@ VolumeServerGrants :: struct {
     log : slop_os.DebugLog?,
     volume : os.Channel[container.Container],
     clients : os.Listener[dir.Dir],
+    control : os.Listener[volume_protocol.Volume],
+}
+
+/*
+ * A volume being served: the partition it's on, its name, its volume server's listener and the end the storage manager
+ * speaks the volume protocol on, with a port for each, and whether it's encrypted and unlocked yet.
+ */
+Served :: struct {
+    partition : usize,
+    name : u8[VOLUME_NAME_BYTES],
+    name_bytes : usize,
+    root : Disk,
+    control : Disk,
+    encrypted : bool,
+    unlocked : bool,
 }
 
 // A connector to a disk, which may not be given
@@ -87,6 +109,10 @@ Manager :: struct {
     partition_count : usize,
     // Each partition's FAT server, its listener's end and a port for it, NO_HANDLE until it's started
     files : Disk[MAX_PARTITIONS],
+    // Each container's service, the same way, and the volumes being served
+    containers : Disk[MAX_PARTITIONS],
+    served : Served[MAX_VOLUMES],
+    served_count : usize,
     manager : os.Channel[process_manager.ProcessManager],
     manager_port : slop_os.Port,
     fat_server_module : slop_os.Memory,
@@ -213,6 +239,18 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
                     }
                 }
             }
+            case OpenVolume(at) => {
+                if cast[usize](at.partition) < state.partition_count && cast[usize](at.partition) < state.partitions.count
+                    && state.partitions[cast[usize](at.partition)].info.type_guid == CONTAINER_TYPE {
+                    passphrase :: os.items(into, at.passphrase)
+                    response = volume_of(state, cast[usize](at.partition), os.items(into, at.name), passphrase, passphrase.count > 0)
+                }
+            }
+            case Rotate(named) => {
+                if cast[usize](named.partition) < state.partition_count {
+                    response = rotate(state, cast[usize](named.partition), os.items(into, named.name))
+                }
+            }
             case OpenFiles(which) => {
                 if cast[usize](which) < state.partition_count && cast[usize](which) < state.partitions.count {
                     match files_of(state, cast[usize](which)) {
@@ -247,7 +285,10 @@ files_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
     if cast[slop_os.Handle](state.files[index].end) == slop_os.NO_HANDLE {
         partition :: state.partitions[index]
         if partition.info.type_guid == CONTAINER_TYPE {
-            return system_volume_of(state, index)
+            return match volume_of(state, index, view_of(cast[ptr[u8]](SYSTEM_VOLUME.data), SYSTEM_VOLUME.count), u8.[], false) {
+                case OpenedFiles(root) => root
+                case _ => null
+            }
         }
         if partition.info.type_guid != ESP_TYPE && partition.info.type_guid != BASIC_DATA_TYPE {
             return null
@@ -276,12 +317,15 @@ files_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
 }
 
 /*
- * The system volume's root, on a container's partition, started the first time: a container service with a connection
- * narrowed to the partition, and a volume server with a connection to it for the system volume.
+ * A container's service, started the first time with a connection narrowed to its partition and nothing else: its
+ * listener's end and a port for it, or null.
  */
-system_volume_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
-    if index >= state.partitions.count || index >= state.files.count {
+container_of :: fn(state: ptr[mut Manager], index: usize) -> Disk? {
+    if index >= state.partitions.count || index >= state.containers.count {
         return null
+    }
+    if cast[slop_os.Handle](state.containers[index].end) != slop_os.NO_HANDLE {
+        return state.containers[index]
     }
     startup :: slop_os.startup_block()
     partition :: state.partitions[index]
@@ -303,34 +347,172 @@ system_volume_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.
         }
     }
     log_line.write(state.log, "storage: started a container service for disk % partition %", partition.disk, partition.index)
-    listener_port :: os.port_for(startup.budget, listener.b) or_return null
+    port :: os.port_for(startup.budget, listener.b) or_return null
+    state.containers[index] = Disk.{end = listener.b, port = port}
+    return state.containers[index]
+}
+
+// The volume being served on the partition at index with a name, if it is.
+served_volume :: fn(state: ptr[mut Manager], index: usize, name: u8[]) -> ptr[mut Served]? {
+    for i in 0..<state.served_count {
+        if i < state.served.count {
+            each :: &state.served[i]
+            if each.partition == index && each.name_bytes == name.count && each.name_bytes <= each.name.count
+                && same_bytes(each.name[0..<each.name_bytes], name) {
+                return each
+            }
+        }
+    }
+    return null
+}
+
+same_bytes :: fn(a: u8[], b: u8[]) -> bool {
+    if a.count != b.count {
+        return false
+    }
+    for byte, i in a {
+        if i < b.count && byte != b[i] {
+            return false
+        }
+    }
+    return true
+}
+
+/*
+ * The root of the container's volume on the partition at index named name: its volume server started the first time,
+ * with a connection to the container service for that volume and nothing else, and for an encrypted volume, unlocked
+ * with passphrase, which given says there is. An encrypted volume being served is opened again only with its
+ * passphrase, which its volume server checks.
+ */
+volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u8[], given: bool) -> storage.Response {
+    startup :: slop_os.startup_block()
+    match served_volume(state, index, name) {
+        case Some(served) => {
+            if served.encrypted {
+                if !given {
+                    return .Locked
+                }
+                answer :: unlock(served, passphrase)
+                if answer != .Unlocked {
+                    return if answer == .WrongKey { .WrongKey } else { .Failed }
+                }
+                served.unlocked = true
+            }
+            root :: dir.connect(served.root.end, served.root.port, startup.budget) or_return .Failed
+            return .OpenedFiles(root)
+        }
+        case None => {}
+    }
+    if state.served_count >= state.served.count || name.count == 0 || name.count > VOLUME_NAME_BYTES {
+        return .Failed
+    }
+    service :: container_of(state, index) or_return .Failed
     volume := os.Channel[container.Container].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     out := os.Outgoing.{}
     request :: os.begin[container.Request](&out)
-    request^ = .OpenVolume(os.append(&out, view_of(cast[ptr[u8]](SYSTEM_VOLUME.data), SYSTEM_VOLUME.count)))
-    match ask_container(listener.b, listener_port, &out) {
+    request^ = .OpenVolume(os.append(&out, name))
+    match ask_container(service.end, service.port, &out) {
         case OpenedVolume(made) => volume = made
-        case _ => {
-            log_line.write(state.log, "storage: no % volume in the container on disk % partition %", SYSTEM_VOLUME, partition.disk,
-                partition.index)
-            return null
-        }
+        case _ => return .NoVolume
     }
-    pair :: os.channel_for[dir.Dir](startup.budget, 0) or_return null
-    volume_grants := VolumeServerGrants.{log = duplicate_log(state.log), volume = volume, clients = os.Listener[dir.Dir].{end = pair.a}}
-    match os.launch(state.manager, state.manager_port, "volume_server", state.volume_server_module, VOLUME_SERVER_BUDGET,
-        volume_server.main, volume_grants) {
+    // Whether it's encrypted, which needs its passphrase, and room for Argon2id's memory
+    encrypted := false
+    volume_port :: os.port_for(startup.budget, volume.end) or_return .Failed
+    asking := os.Outgoing.{}
+    describe :: os.begin[container.Request](&asking)
+    describe^ = .Describe
+    match ask_container(volume.end, volume_port, &asking) {
+        case Described(described) => encrypted = described.record.cipher != 0
+        case _ => {}
+    }
+    _ = slop_os.handle_close(cast[slop_os.Handle](volume_port))
+    if encrypted && !given {
+        _ = slop_os.handle_close(cast[slop_os.Handle](volume.end))
+        return .Locked
+    }
+    pair :: os.channel_for[dir.Dir](startup.budget, 0) or_return .Failed
+    control :: os.channel_for[volume_protocol.Volume](startup.budget, 0) or_return .Failed
+    volume_grants := VolumeServerGrants.{log = duplicate_log(state.log), volume = volume, clients = os.Listener[dir.Dir].{end = pair.a},
+        control = os.Listener[volume_protocol.Volume].{end = control.a}}
+    budget :: if encrypted { SEALED_VOLUME_SERVER_BUDGET } else { VOLUME_SERVER_BUDGET }
+    match os.launch(state.manager, state.manager_port, "volume_server", state.volume_server_module, budget, volume_server.main, volume_grants) {
         case Ok(launched) => {}
         case Error(error) => {
-            log_line.write(state.log, "storage: no volume server for the % volume: %", SYSTEM_VOLUME, error)
+            log_line.write(state.log, "storage: no volume server for the % volume: %", string_of(&name[0], name.count), error)
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
-            return null
+            _ = slop_os.handle_close(cast[slop_os.Handle](control.b))
+            return .Failed
         }
     }
-    port :: os.port_for(startup.budget, pair.b) or_return null
-    state.files[index] = Disk.{end = pair.b, port = port}
-    log_line.write(state.log, "storage: started a volume server for the % volume", SYSTEM_VOLUME)
-    return dir.connect(pair.b, port, startup.budget)
+    root_port :: os.port_for(startup.budget, pair.b) or_return .Failed
+    control_port :: os.port_for(startup.budget, control.b) or_return .Failed
+    slot :: state.served_count
+    if slot >= state.served.count {
+        return .Failed
+    }
+    served := Served.{partition = index, name_bytes = name.count, root = Disk.{end = pair.b, port = root_port},
+        control = Disk.{end = control.b, port = control_port}, encrypted = encrypted}
+    for byte, i in name {
+        if i < served.name.count {
+            served.name[i] = byte
+        }
+    }
+    state.served[slot] = served
+    state.served_count = slot + 1
+    log_line.write(state.log, "storage: started a volume server for the % volume%", string_of(&name[0], name.count),
+        if encrypted { ", encrypted" } else { "" })
+    if encrypted {
+        // A wrong passphrase leaves it waiting, locked, for the next
+        answer :: unlock(&state.served[slot], passphrase)
+        if answer != .Unlocked {
+            return if answer == .WrongKey { .WrongKey } else { .Failed }
+        }
+        state.served[slot].unlocked = true
+    }
+    root :: dir.connect(pair.b, root_port, startup.budget) or_return .Failed
+    return .OpenedFiles(root)
+}
+
+// A served volume's server asked to unlock it, or check, with passphrase.
+unlock :: fn(served: ptr[Served], passphrase: u8[]) -> volume_protocol.Response {
+    out := os.Outgoing.{}
+    request :: os.begin[volume_protocol.Request](&out)
+    request^ = .Unlock(os.append(&out, passphrase))
+    return ask_volume(served, &out)
+}
+
+// One request to a volume server, on the volume protocol, and its answer, waited for.
+ask_volume :: fn(served: ptr[Served], out: ptr[mut os.Outgoing]) -> volume_protocol.Response {
+    if volume_protocol.send_request(served.control.end, served.control.port, out) is_some {
+        return .Failed
+    }
+    into := os.Incoming.{}
+    loop {
+        match volume_protocol.receive_response(served.control.end, served.control.port, &into, true) {
+            case Received => return os.message_of[volume_protocol.Response](&into)^
+            case Failed(error) => return .Failed
+            case _ => continue
+        }
+    }
+}
+
+// A new key generation for a served, unlocked volume.
+rotate :: fn(state: ptr[mut Manager], index: usize, name: u8[]) -> storage.Response {
+    served :: served_volume(state, index, name) or_return .NoVolume
+    if !served.encrypted {
+        return .NotEncrypted
+    }
+    if !served.unlocked {
+        return .Locked
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[volume_protocol.Request](&out)
+    request^ = .Rotate
+    return match ask_volume(served, &out) {
+        case Rotated(generation) => .Rotated(generation)
+        case NotEncrypted => .NotEncrypted
+        case _ => .Failed
+    }
 }
 
 // One request to a container service, sent from out, and its answer, waited for.

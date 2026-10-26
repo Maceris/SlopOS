@@ -3,7 +3,7 @@
  * SlopOS boots from, with the same packages SlopOS reads it with: a GPT (src/gpt), FAT32 partitions (src/fat) and
  * SlopOS containers (src/slopfs), each filled from a folder on the host. tools/boot.py runs it.
  *
- *     image_builder <output> <sectors> <partition>...
+ *     image_builder <output> <sectors> [--sealed=<name>:<passphrase>] <partition>...
  *
  * The image is sectors 512-byte sectors. Each partition is kind,name,sectors[,folder], placed in order from sector
  * 2048, each starting at a MiB, the folder last, so it may hold commas:
@@ -12,7 +12,8 @@
  * - data: a basic data partition, FAT32, holding the folder's tree
  * - test: SlopOS's test partition type, zeros, which whoever made the image marks
  * - slopfs: a SlopOS container, with a volume named "system" holding the folder's tree, checked whole once it's made
- * Each partition is printed as "partition <index> <first> <count> <name>". The GUIDs, the container's ID and its
+ * With --sealed, each container also has an encrypted volume of that name, unlocked by that passphrase, holding
+ * sealed.txt (SEALED_TEXT), for the boot tests (roadmap 8e). Each partition is printed as "partition <index> <first> <count> <name>". The GUIDs, the container's ID and its
  * volume's name-hash key are random.
  */
 package image_builder
@@ -21,6 +22,8 @@ import runtime from "base"
 import io from "std"
 import os from "std"
 import random from "std"
+import crypto from "std"
+import strings from "std"
 import text_buffer from "std"
 import fat from "../../fat"
 import gpt from "../../gpt"
@@ -47,14 +50,23 @@ Kind :: enum {
     Slopfs,
 }
 
-// A partition asked for.
+// A partition asked for, and for a container, the encrypted volume asked for in it, if one was.
 Wanted :: struct {
     kind : Kind,
     name : string,
     first : u64,
     count : u64,
     folder : string,
+    sealed_name : string,
+    sealed_passphrase : string,
 }
+
+// What an encrypted volume the image builder makes holds, in sealed.txt: in capitals, which the disk check, on the
+// disk in the clear, holds only in small letters (sealed_check.hsc)
+SEALED_TEXT :: "ONLY ITS PASSPHRASE OPENS THIS"
+// Argon2id for its passphrase, kept within what a volume server is given room for (storage_manager.hsc)
+SEALED_ARGON2 :: crypto.Argon2Parameters.{memory_kib = 1024, passes = 2, lanes = 1}
+SEALED_OPTION :: "--sealed="
 
 // What can go wrong filling a partition.
 Failure :: enum {
@@ -100,8 +112,27 @@ main :: fn() -> int {
     wanted : Wanted[..]
     defer runtime.array_free(&wanted)
     next := ALIGN_SECTORS
+    sealed_name : string = ""
+    sealed_passphrase : string = ""
     for argument, index in arguments {
         if index < 3 {
+            continue
+        }
+        prefix :: SEALED_OPTION.count
+        if strings.starts_with(argument, SEALED_OPTION) && prefix <= argument.count {
+            option :: argument[prefix..<argument.count]
+            colon := option.count
+            for character, i in option {
+                if character == ':' && colon == option.count {
+                    colon = i
+                }
+            }
+            if colon == 0 || colon + 1 >= option.count {
+                io.eprintln("image_builder: --sealed needs a name and a passphrase, as --sealed=<name>:<passphrase>")
+                return 2
+            }
+            sealed_name = option[0..<colon]
+            sealed_passphrase = option[colon + 1..<option.count]
             continue
         }
         partition := Wanted.{}
@@ -115,6 +146,12 @@ main :: fn() -> int {
         partition.first = next
         next = align(next + partition.count)
         runtime.array_add(&wanted, partition)
+    }
+    for &partition in wanted {
+        if partition.kind == .Slopfs {
+            partition.sealed_name = sealed_name
+            partition.sealed_passphrase = sealed_passphrase
+        }
     }
     if wanted.count > MAX_PARTITIONS || next > sectors - gpt.ENTRY_BLOCKS - 2 {
         io.eprintln("image_builder: the partitions don't fit")
@@ -378,6 +415,18 @@ fill_slopfs :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure
     failed :: copy_to_slopfs(volume, slopfs.ROOT_OBJECT, partition.folder, 0)
     if failed is_some {
         return failed
+    }
+    if partition.sealed_name.count > 0 {
+        sealed_key : u8[32]
+        random.fill(sealed_key)
+        passphrase :: view_of(cast[ptr[u8]](partition.sealed_passphrase.data), partition.sealed_passphrase.count)
+        sealed :: slopfs.create_sealed_volume(container, partition.sealed_name, sealed_key, 0, .ChaCha20Poly1305, passphrase,
+            SEALED_ARGON2) or_return .NotMade
+        made :: slopfs.create(sealed, slopfs.ROOT_OBJECT, "sealed.txt", .File) or_return .NotMade
+        match slopfs.write(sealed, made, 0, view_of(cast[ptr[u8]](SEALED_TEXT.data), SEALED_TEXT.count)) {
+            case Ok => {}
+            case Error(error) => return .NotWritten
+        }
     }
     match slopfs.commit(container) {
         case Ok => {}

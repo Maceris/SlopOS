@@ -9,8 +9,10 @@ import partitions from "../partitions"
 /*
  * The storage manager's protocol (roadmap 8a, decisions/0086): every partition of every disk it holds, by one index
  * from 0, and block connections narrowed to one, from that disk's partition server, or the files of a FAT partition
- * (an EFI system partition or a basic data one), as a dir connection to its root, from a FAT server for it.
- * Connections arrive on its listener as Connects. SlopOS's own volumes come with 8d.
+ * (an EFI system partition or a basic data one), as a dir connection to its root, from a FAT server for it; a SlopOS
+ * container's files are its system volume's (decisions/0089). Any of a container's volumes is opened by name, an
+ * encrypted one with its passphrase, which its volume server, and nothing else, unwraps its keys with (roadmap 8e).
+ * Connections arrive on its listener as Connects.
  */
 
 Storage :: struct {}
@@ -24,13 +26,30 @@ Partition :: struct {
     info : partitions.PartitionInfo,
 }
 
+// A volume of the container on a partition, by name, and the passphrase that unlocks it, empty for one that isn't encrypted.
+VolumeAt :: struct {
+    partition : u32,
+    name : slop_os.Relative[u8],
+    passphrase : slop_os.Relative[u8],
+}
+
+// A volume of the container on a partition, by name.
+VolumeNamed :: struct {
+    partition : u32,
+    name : slop_os.Relative[u8],
+}
+
 Request :: union {
     // The partition at an index, across every disk, from 0
     Describe(u32),
     // A new block connection narrowed to the partition at an index
     Open(u32),
-    // The root of the FAT volume on the partition at an index
+    // The root of the FAT volume on the partition at an index, or of the system volume of the container there
     OpenFiles(u32),
+    // The root of a container's volume, started the first time, unlocked if it's encrypted; after that, checked
+    OpenVolume(VolumeAt),
+    // A new key generation for an encrypted volume being served, sealing what's written from now on (decisions/0042)
+    Rotate(VolumeNamed),
     // Serve another client, on its end
     Connect(os.Channel[Storage]),
 }
@@ -42,6 +61,18 @@ Response :: union {
     NoPartition,
     // The partition isn't one of a kind that holds files, or its FAT server couldn't be started
     NoFiles,
+    // No volume of that name, or it isn't being served
+    NoVolume,
+    // An encrypted volume, asked for without a passphrase
+    Locked,
+    // The passphrase doesn't unlock the volume
+    WrongKey,
+    // The generation now sealing what the volume writes
+    Rotated(u32),
+    // The volume isn't encrypted
+    NotEncrypted,
+    // Its servers couldn't be started, or did something that failed
+    Failed,
     Unsupported,
 }
 
@@ -50,6 +81,8 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Describe(_) => true
         case Open(_) => true
         case OpenFiles(_) => true
+        case OpenVolume(_) => true
+        case Rotate(_) => false
         case Connect(_) => true
     }
 }

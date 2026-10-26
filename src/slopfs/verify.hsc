@@ -5,8 +5,9 @@ import runtime from "base"
 /*
  * A container checked whole, as fsck checks a filesystem: every node of every tree read and checked, every extent a
  * node or a file's chunk takes collected, and those, with the free ones, found to cover the data blocks exactly once
- * each, and to be what the owners tree says, owner and all. The crash-state tester and the fuzzer check each image
- * they mount with it.
+ * each, and to be what the owners tree says, owner and all. An encrypted volume that isn't open can't be read
+ * without its keys, so its extents are taken from the owners tree as they are. The crash-state tester and the fuzzer
+ * check each image they mount with it.
  */
 
 Problem :: enum {
@@ -29,6 +30,8 @@ Report :: struct {
     used_blocks : u64,
     free_blocks : u64,
     volumes : u64,
+    // Encrypted volumes that weren't open, whose trees weren't read
+    locked : u64,
 }
 
 // An extent in use, and its owner.
@@ -69,12 +72,20 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
         }
         record :: cast[ptr[VolumeRecord]](&value[0])
         tree := Tree.{root = record.root, kind = .Volume, owner = found.key.object}
+        open := false
         for volume in container.open {
             if volume.id == found.key.object {
                 tree = volume.tree
+                open = true
             }
         }
-        if !walk_tree(container, &walk, &tree) {
+        if !open && record.cipher != cast[u8](Cipher.None) {
+            if !add_owned(container, &walk, found.key.object) {
+                return .Error(.Unreadable)
+            }
+            walk.report.locked += 1
+        }
+        else if !walk_tree(container, &walk, &tree) {
             return .Error(.Unreadable)
         }
         walk.report.volumes += 1
@@ -143,6 +154,24 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
         return .Error(.Owners)
     }
     return .Ok(walk.report)
+}
+
+// The extents the owners tree says are owner's, as in use.
+add_owned :: fn(container: ptr[mut Container], walk: ptr[mut Walk], owner: u64) -> bool {
+    value := OwnerValue.{}
+    at := Key.{}
+    loop {
+        found := Found.{}
+        match tree_next(&container.nodes, &container.owners, at, view_of(cast[ptr[mut u8]](&value), size_of(OwnerValue))) {
+            case Ok(next) => found = next or_break
+            case Error(error) => return false
+        }
+        if cast[u64](value.volume) == owner {
+            runtime.array_add(&walk.used, Used.{start = found.key.object, blocks = cast[u64](value.blocks), owner = owner})
+        }
+        at = key_after(found.key) or_break
+    }
+    return true
 }
 
 // Every node of a tree, and every chunk a volume's leaves name.

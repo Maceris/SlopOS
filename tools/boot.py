@@ -527,13 +527,19 @@ BOOT_ESP_SECTORS = 131072
 BOOT_SYSTEM_SECTORS = 65536
 
 
+# The encrypted volume the image builder makes beside the system volume, and its passphrase, which the disk check
+# unlocks it with (src/services/disk_check/sealed_check.hsc)
+SEALED_VOLUME = "sealed"
+SEALED_PASSPHRASE = "slopos test passphrase"
+
+
 def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path, image_builder: Path, folder: Path,
                    command_line: str, kaslr: bool, mark: str) -> None:
     """
     A disk that boots kernel through Limine, from BIOS or UEFI, made by the image builder: Limine, the kernel and the
     programs on its EFI system partition, as make_image puts them on the ISO, but only the boot set loaded by Limine,
-    and every program in the system volume of its SlopOS container, where the rest come from; the SlopOS check
-    partition marked as make_disk marks it.
+    and every program in the system volume of its SlopOS container, where the rest come from, with an encrypted volume
+    beside it; the SlopOS check partition marked as make_disk marks it.
     """
     esp = folder / "boot_esp"
     for part in [esp / "EFI" / "BOOT", esp / "EFI" / "SlopOS", esp / "boot" / "limine", esp / "boot" / "modules"]:
@@ -555,7 +561,8 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
     (system / "modules").mkdir(parents=True)
     for program in programs:
         shutil.copy(program, system / "modules" / program.name)
-    built = subprocess.run([str(image_builder), str(path), str(BOOT_DISK_SECTORS), f"test,{PARTITIONS[0][0]},{PARTITIONS[0][2]}",
+    built = subprocess.run([str(image_builder), str(path), str(BOOT_DISK_SECTORS), f"--sealed={SEALED_VOLUME}:{SEALED_PASSPHRASE}",
+                            f"test,{PARTITIONS[0][0]},{PARTITIONS[0][2]}",
                             f"test,{PARTITIONS[1][0]},{PARTITIONS[1][2]}", "bios,BIOS boot,2048",
                             f"esp,EFI system partition,{BOOT_ESP_SECTORS},{esp}", f"slopfs,SlopOS system,{BOOT_SYSTEM_SECTORS},{system}"],
                            capture_output=True, text=True)
@@ -614,6 +621,9 @@ def main() -> int:
     parser.add_argument("--image-builder", type=Path, help="the image builder, with --boot-disk (default: SlopOS's, built)")
     parser.add_argument("--expect-disk-text", action="append", default=[],
                         help="TEXT: the --disk image holds TEXT somewhere once the kernel has stopped, with --expect; may be repeated")
+    parser.add_argument("--refuse-disk-text", action="append", default=[],
+                        help="TEXT: the --disk image holds TEXT nowhere once the kernel has stopped, with --expect, as an "
+                             "encrypted volume's names and bytes aren't; may be repeated")
     parser.add_argument("--expect-disk-block", action="append", default=[],
                         help="N=TEXT: block N of the --disk image starts with TEXT once the kernel has stopped, with --expect; "
                              "may be repeated")
@@ -680,8 +690,9 @@ def main() -> int:
             console.thread.join(timeout=5)
         output = serial.read_text(errors="replace") if serial.exists() else ""
         unwritten = [expected for expected in arguments.expect_disk_block if not disk.exists() or not disk_block_starts(disk, expected)]
-        image_bytes = disk.read_bytes() if disk.exists() and arguments.expect_disk_text else b""
+        image_bytes = disk.read_bytes() if disk.exists() and (arguments.expect_disk_text or arguments.refuse_disk_text) else b""
         unwritten += [f"text {text}" for text in arguments.expect_disk_text if text.encode() not in image_bytes]
+        leaked = [text for text in arguments.refuse_disk_text if text.encode() in image_bytes]
         if arguments.serial is not None:
             arguments.serial.write_text(output)
     sys.stdout.write(output)
@@ -702,7 +713,9 @@ def main() -> int:
             print(f"boot.py: the virtio console showed no line {line!r}", file=sys.stderr)
         for expected in unwritten:
             print(f"boot.py: the disk has no block {expected!r}", file=sys.stderr)
-        return 0 if code == arguments.expect and not missing and not missing_shown and not unwritten else 1
+        for text in leaked:
+            print(f"boot.py: the disk holds {text!r}, which it mustn't", file=sys.stderr)
+        return 0 if code == arguments.expect and not missing and not missing_shown and not unwritten and not leaked else 1
     return code
 
 

@@ -34,7 +34,8 @@ Seal :: u8[32]
 /*
  * Where a block or an extent is, and how to check it: its first block, a second copy's (container trees are written
  * twice, as ZFS's ditto blocks are, or 0), its length in blocks, the transaction it was written in, the key
- * generation it's sealed with (0 unencrypted, 8e), and its seal: BLAKE3-256 of its bytes.
+ * generation it's sealed with (0 on a volume that isn't encrypted), and its seal: BLAKE3-256 of its bytes, or on an
+ * encrypted volume, its AEAD's tag and what its key and nonce came from (keys.hsc).
  */
 BlockPointer :: struct #packed {
     address : u64le,
@@ -94,6 +95,10 @@ RecordKind :: enum #backed_by(u8) {
     Change = 8,
     // A volume: an object no name leads to, kept while it's open, keyed (0, Orphan, object), destroyed when nothing has it
     Orphan = 9,
+    // The volumes: an encrypted volume's key wrapped, keyed (volume, KeyWrap, index) (keys.hsc)
+    KeyWrap = 10,
+    // The volumes: one of its key generations, wrapped by its volume key, keyed (volume, KeyGeneration, number)
+    KeyGeneration = 11,
 }
 
 // A key as it's stored: ordered by object, then kind, then offset.
@@ -181,14 +186,19 @@ OwnerValue :: struct #packed {
 // The most bytes in a volume's name.
 VOLUME_NAME_BYTES :: 64
 
-// A volume's record in the container: its tree, its next object's ID, the key its names hash with, and its name.
+/*
+ * A volume's record in the container: its tree, its next object's ID, the key its names hash with, its cipher (a
+ * Cipher, None for a volume sealed with BLAKE3 alone) and newest key generation, and its name.
+ */
 VolumeRecord :: struct #packed {
     root : BlockPointer,
     next_object : u64le,
     hash_key : u8[32],
     created : u64le,
     name_bytes : u16le,
-    reserved : u8[6],
+    cipher : u8,
+    reserved : u8,
+    generation : u32le,
     name : u8[VOLUME_NAME_BYTES],
 }
 

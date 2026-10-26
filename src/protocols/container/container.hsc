@@ -25,11 +25,18 @@ Released :: struct {
     birth : u64,
 }
 
-// A volume as it was last committed, and the transaction its changes go into now.
+// A new key generation's record, and its number, the one after the volume's newest.
+AddedGeneration :: struct {
+    number : u32,
+    record : slopfs.GenerationRecord,
+}
+
+// A volume as it was last committed, the transaction its changes go into now, and the container it's in.
 Described :: struct {
     id : u64,
     record : slopfs.VolumeRecord,
     transaction : u64,
+    container : u8[16],
 }
 
 Request :: union {
@@ -45,6 +52,12 @@ Request :: union {
     Commit(slopfs.VolumeRecord),
     // Everything the volume changed since its last commit undone: its allocations free again, what it gave back its own
     Abandon,
+    // An encrypted volume's key wrapped, the index'th way from 0, and its key generations by number from 1 (8e): sealed,
+    // so the container service never holds what opens them
+    WrapAt(u64),
+    GenerationAt(u32),
+    // A new key generation's record, kept with the volume, which its record then names; durable with the next commit
+    AddGeneration(AddedGeneration),
     // Serve another client, on its end
     Connect(os.Channel[Container]),
 }
@@ -57,6 +70,10 @@ Response :: union {
     // The transaction committed, and the one changes go into next
     Committed(u64),
     Blocks(os.Channel[block.Block]),
+    Wrap(slopfs.WrapRecord),
+    Generation(slopfs.GenerationRecord),
+    // Past the last wrap record or the newest generation
+    NoMore,
     NoVolume,
     NoSpace,
     // The container couldn't commit: a write failed, or it doesn't hold together, and every later commit fails too
@@ -78,6 +95,9 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case OpenBlocks => true
         case Commit(_) => false
         case Abandon => true
+        case WrapAt(_) => true
+        case GenerationAt(_) => true
+        case AddGeneration(_) => false
         case Connect(_) => true
     }
 }

@@ -136,15 +136,38 @@ main :: fn() -> int {
     if failed != 0 {
         return failed
     }
-    failed = check_crashes()
+    failed = check_sealed()
     if failed != 0 {
         return failed
     }
-    failed = check_fuzz()
-    if failed != 0 {
-        return failed
+    // The crash-state tester and the fuzzer, on a volume that isn't encrypted and on one that is
+    for sealed in bool.[false, true] {
+        failed = check_crashes(sealed)
+        if failed != 0 {
+            return failed
+        }
+        failed = check_fuzz(sealed)
+        if failed != 0 {
+            return failed
+        }
     }
     return 0
+}
+
+// The test volume, 1: as it is, or unlocked with the tests' passphrase.
+open_test_volume :: fn(container #escaping : ptr[mut slopfs.Container], sealed: bool) -> Result[ptr[mut slopfs.Volume], slopfs.Error] {
+    if sealed {
+        return slopfs.open_sealed_volume(container, 1, passphrase())
+    }
+    return slopfs.open_volume(container, 1)
+}
+
+// A new test volume: as it is, or encrypted with the tests' passphrase.
+create_test_volume :: fn(container #escaping : ptr[mut slopfs.Container], name: string, sealed: bool) -> Result[ptr[mut slopfs.Volume], slopfs.Error] {
+    if sealed {
+        return slopfs.create_sealed_volume(container, name, key_of_volume(), 1, .ChaCha20Poly1305, passphrase(), TEST_ARGON2)
+    }
+    return slopfs.create_volume(container, name, key_of_volume(), 1)
 }
 
 // A disk of BLOCKS zeroed blocks in memory, as a device; nothing of it is on the stack, so what holds it can be pointed to.

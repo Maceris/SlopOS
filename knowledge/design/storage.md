@@ -122,8 +122,10 @@ is committed every few seconds, when it grows past a size, or when a client asks
   key; a member's removal starts a new generation for everything written afterwards (`0042`). A block's pointer names
   the generation it was sealed with.
 - **Sealing:** every block of the volume's tree, metadata included, is sealed with an AEAD. Each transaction group
-  derives a subkey from the generation's key and a random salt written in its checkpoint, and numbers its blocks for
-  nonces. A crash that reuses a transaction number reuses no nonce, because the salt is new.
+  derives a subkey from the generation's key and a random salt, and numbers its blocks for nonces; the salt and the
+  number are in each block's pointer with its tag (`../decisions/0090`), since a checkpoint is overwritten while what
+  it sealed lives on. A crash that reuses a transaction number reuses no nonce, because the salt is new. A block's
+  address, transaction and owner are its associated data.
 - **The cipher** is chosen per volume when it's made: ChaCha20-Poly1305 by default (fast in software, constant-time,
   in `std/crypto`), AES-256-GCM on request where the CPU has AES instructions (`0019`); either can be read anywhere,
   more slowly without hardware AES.

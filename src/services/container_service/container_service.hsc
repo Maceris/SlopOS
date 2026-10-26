@@ -426,7 +426,8 @@ for_volume :: fn(server: ptr[mut Server], volume: u64, request: container.Reques
     match request {
         case Describe => {
             record :: slopfs.volume_record(server.container, volume) or_return .NoVolume
-            return .Described(container.Described.{id = volume, record = record, transaction = server.container.nodes.transaction})
+            return .Described(container.Described.{id = volume, record = record, transaction = server.container.nodes.transaction,
+                container = server.container.id})
         }
         case Allocate(blocks) => {
             if blocks == 0 || blocks > MAX_ALLOCATE {
@@ -458,6 +459,34 @@ for_volume :: fn(server: ptr[mut Server], volume: u64, request: container.Reques
                 }
             }
             return .Done
+        }
+        case WrapAt(index) => {
+            match slopfs.volume_wrap(server.container, volume, index) {
+                case Ok(found) => {
+                    wrap :: found or_return .NoMore
+                    return .Wrap(wrap)
+                }
+                case Error(error) => return .Failed
+            }
+        }
+        case GenerationAt(number) => {
+            match slopfs.volume_generation(server.container, volume, number) {
+                case Ok(found) => {
+                    generation :: found or_return .NoMore
+                    return .Generation(generation)
+                }
+                case Error(error) => return .Failed
+            }
+        }
+        case AddGeneration(added) => {
+            record := added.record
+            match slopfs.add_generation(server.container, volume, added.number, &record) {
+                case Ok => return .Done
+                case Error(error) => {
+                    log_line.write(server.log, "container_service: volume %'s generation % refused: %", volume, added.number, error)
+                    return if error == .NotFound { .NotYours } else { .Failed }
+                }
+            }
         }
         case Commit(record) => {
             // Its root in its own extents, and nothing but its root and next object taken from it

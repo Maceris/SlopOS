@@ -23,7 +23,7 @@ Acknowledged :: struct {
     log_end : usize,
 }
 
-check_crashes :: fn() -> int {
+check_crashes :: fn(sealed: bool) -> int {
     device :: new_device_of(CRASH_BLOCKS) or_return 500
     defer free_device(device)
     disk :: cast[ptr[mut Disk]](device.context)
@@ -33,7 +33,7 @@ check_crashes :: fn() -> int {
     }
     slopfs.format(device, id) or_return 501
     container := slopfs.mount(device) or_return 502
-    volume := slopfs.create_volume(container, "crash", key_of_volume(), 1) or_return 503
+    volume := create_test_volume(container, "crash", sealed) or_return 503
     if commit_failed(container) {
         return 504
     }
@@ -60,7 +60,7 @@ check_crashes :: fn() -> int {
     }
     disk.recording = false
     slopfs.unmount(container)
-    return replay(base, disk, acknowledged)
+    return replay(base, disk, acknowledged, sealed)
 }
 
 copy_into :: fn(into: mut u8[], from: u8[]) {
@@ -230,7 +230,7 @@ Replayed :: struct {
  * Every image a crash could leave, from base and the log: prefixes as the log goes, and at each flush, the interval
  * before it in random subsets and with each write torn.
  */
-replay :: fn(base: u8[], recorded: ptr[mut Disk], acknowledged: Acknowledged[]) -> int {
+replay :: fn(base: u8[], recorded: ptr[mut Disk], acknowledged: Acknowledged[], sealed: bool) -> int {
     image :: new_device_of(CRASH_BLOCKS) or_return 520
     defer free_device(image)
     scratch :: cast[ptr[mut Disk]](image.context)
@@ -249,7 +249,7 @@ replay :: fn(base: u8[], recorded: ptr[mut Disk], acknowledged: Acknowledged[]) 
     for at in 0..<recorded.log.count + 1 {
         // The log up to here, applied
         copy_into(scratch.bytes, running)
-        failed := check_image(&image, acknowledged, at, at % 8 == 0, &replayed)
+        failed := check_image(&image, acknowledged, at, at % 8 == 0, &replayed, sealed)
         if failed != 0 {
             runtime.log_error("crash: prefix of % entries: check %", at, failed)
             return failed
@@ -271,7 +271,7 @@ replay :: fn(base: u8[], recorded: ptr[mut Disk], acknowledged: Acknowledged[]) 
                     apply(scratch.bytes, recorded, recorded.log[i], false)
                 }
             }
-            failed = check_image(&image, acknowledged, interval_start, true, &replayed)
+            failed = check_image(&image, acknowledged, interval_start, true, &replayed, sealed)
             if failed != 0 {
                 runtime.log_error("crash: subset % of the writes from % to %: check %", subset, interval_start, at, failed)
                 return failed
@@ -284,7 +284,7 @@ replay :: fn(base: u8[], recorded: ptr[mut Disk], acknowledged: Acknowledged[]) 
                     apply(scratch.bytes, recorded, recorded.log[i], i == torn)
                 }
             }
-            failed = check_image(&image, acknowledged, interval_start, false, &replayed)
+            failed = check_image(&image, acknowledged, interval_start, false, &replayed, sealed)
             if failed != 0 {
                 runtime.log_error("crash: the write at % torn: check %", torn, failed)
                 return failed
@@ -293,7 +293,7 @@ replay :: fn(base: u8[], recorded: ptr[mut Disk], acknowledged: Acknowledged[]) 
         copy_into(snapshot, running)
         interval_start = at + 1
     }
-    runtime.log_info("crash: % images checked, % of them holding the commit being made", replayed.images, replayed.newer)
+    runtime.log_info("crash%: % images checked, % of them holding the commit being made", if sealed { " (sealed)" } else { "" }, replayed.images, replayed.newer)
     return 0
 }
 
@@ -317,7 +317,9 @@ apply :: fn(image: mut u8[], recorded: ptr[mut Disk], entry: Recorded, torn: boo
  * The image mounts and checks out whole, and holds the state after the last commit the log through `durable` made
  * durable, or the one after it; and, with usable, takes another commit and still checks out.
  */
-check_image :: fn(device: ptr[slopfs.Device], acknowledged: Acknowledged[], durable: usize, usable: bool, replayed: ptr[mut Replayed]) -> int {
+check_image :: fn(device: ptr[slopfs.Device], acknowledged: Acknowledged[], durable: usize, usable: bool, replayed: ptr[mut Replayed],
+    sealed: bool) -> int {
+
     replayed.images += 1
     last : usize = 0
     for each, i in acknowledged {
@@ -330,7 +332,7 @@ check_image :: fn(device: ptr[slopfs.Device], acknowledged: Acknowledged[], dura
     if !verified(container) {
         return 531
     }
-    volume :: slopfs.open_volume(container, 1) or_return 532
+    volume :: open_test_volume(container, sealed) or_return 532
     digest :: state_digest(volume) or_return 533
     if last >= acknowledged.count {
         return 534

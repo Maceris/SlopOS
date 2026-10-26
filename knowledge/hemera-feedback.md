@@ -37,6 +37,17 @@ Left over from what was built: known limits, each an error rather than wrong cod
   `?.` should mean that, or optional chaining as in other languages, is a syntax question for the owner (found in 8c).
 - Indexing through a pointer to a fixed array, `p[i]` with `p: ptr[u8[8]]`, isn't proven in bounds after
   `i < p.count` (E4031); a view, or the array as a struct's field (`p.bytes[i]`), is (found in 8c).
+- Found writing slopfs's encryption (8e1):
+  - A function can't give back an optional of a secret, like `Key256?` (E4037: `Optional` isn't a `#secret` type), so
+    keys come back through a pointer and a `bool`.
+  - `x := f() or_return k`, with `k` a secret, makes `x` secret even when `f`'s result isn't, which then can't be
+    pointed to (`&x`, E4037); a `match` on `f()` doesn't.
+  - `runtime.free_array` can't give back an array of a `#secret` type (its cast to `rawptr` is refused); allocating
+    bytes and viewing them as the secret type, then freeing the bytes, works.
+  - A function given a view of the caller's local and returning a pointer is taken to return one into the caller's
+    stack (E4030), even when it comes from `runtime.new`; the caller allocates and passes it in instead.
+  - `if at + i < into.count { into[at + i] = ... }` isn't proven in bounds; `j :: at + i` first is. And a slice after
+    `if a || length > buffer.count { return }` sometimes isn't, where the same check on its own is.
 
 ### Targets and runtime
 

@@ -34,6 +34,10 @@ Error :: enum {
     NotSlopfs,
     // A write failed: commits are refused until the container is mounted again (design/storage.md §4)
     Failed,
+    // An encrypted volume, opened without its keys (keys.hsc)
+    Locked,
+    // A passphrase that doesn't unwrap the volume's key
+    WrongKey,
 }
 
 /*
@@ -110,12 +114,16 @@ Node :: struct {
     dirty : bool,
 }
 
-// A tree: its root (address 0 while it's empty), which it is, whose, and whether its nodes are written twice.
+/*
+ * A tree: its root (address 0 while it's empty), which it is, whose, whether its nodes are written twice, and an
+ * encrypted volume's keys, which seal its nodes (keys.hsc), or null for a BLAKE3 seal.
+ */
 Tree :: struct {
     root : BlockPointer,
     kind : TreeKind,
     owner : u64,
     ditto : bool,
+    keys : ptr[mut Keys]?,
 }
 
 /*
@@ -276,7 +284,7 @@ load :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointer]) -
         if place == 0 {
             continue
         }
-        if !nodes.device.read(nodes.device.context, place, NODE_BLOCKS, node.bytes) {
+        if !read_node(nodes, tree, pointer, place, node) {
             continue
         }
         if node_checks_out(node, tree, pointer) {
@@ -287,11 +295,29 @@ load :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointer]) -
     return .Error(.Corrupt)
 }
 
+// The node at place, into node: as it is, or opened with its tree's keys, which checks its seal.
+read_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointer], place: u64, node: ptr[mut Node]) -> bool {
+    match tree.keys {
+        case None => return nodes.device.read(nodes.device.context, place, NODE_BLOCKS, node.bytes)
+        case Some(keys) => {
+            sealed := runtime.new(Node)
+            defer runtime.free(sealed)
+            if !nodes.device.read(nodes.device.context, place, NODE_BLOCKS, sealed.bytes) {
+                return false
+            }
+            return open_block(keys, tree.owner, pointer, sealed.bytes, node.bytes)
+        }
+    }
+}
+
 node_checks_out :: fn(node: ptr[mut Node], tree: ptr[Tree], pointer: ptr[BlockPointer]) -> bool {
-    seal : Seal
-    crypto.blake3(node.bytes, seal)
-    if seal != pointer.seal {
-        return false
+    // An encrypted node's seal held when it was opened
+    if tree.keys is_none {
+        seal : Seal
+        crypto.blake3(node.bytes, seal)
+        if seal != pointer.seal {
+            return false
+        }
     }
     header :: header_of(node)
     if cast[u32](header.magic) != NODE_MAGIC || cast[u16](header.tree) != cast[u16](tree.kind)
@@ -858,30 +884,47 @@ tree_write :: fn(nodes: ptr[mut Nodes], tree: ptr[mut Tree]) -> Result[void, Err
     if cast[u64](tree.root.address) == 0 || cast[u64](tree.root.birth) != nodes.transaction {
         return .Ok
     }
-    return write_node(nodes, &tree.root)
+    return write_node(nodes, tree, &tree.root)
 }
 
-write_node :: fn(nodes: ptr[mut Nodes], pointer: ptr[mut BlockPointer]) -> Result[void, Error] {
+write_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockPointer]) -> Result[void, Error] {
     address :: cast[u64](pointer.address)
     node :: maps.map_get(&nodes.dirty, address) or_return .Ok
     if level_of(node) > 0 {
         for i in 0..<count_of(node) {
             entry :: entry_at(node, i)
             if cast[u64](entry.child.birth) == nodes.transaction {
-                write_node(nodes, &entry.child)?
+                write_node(nodes, tree, &entry.child)?
             }
         }
     }
-    seal : Seal
-    crypto.blake3(node.bytes, seal)
-    if !nodes.device.write(nodes.device.context, address, NODE_BLOCKS, node.bytes) {
-        return .Error(.DeviceError)
+    // Encrypted, the sealed bytes are written, and the pointer takes their seal and generation
+    match tree.keys {
+        case Some(keys) => {
+            sealed :: runtime.new(Node)
+            defer runtime.free(sealed)
+            if !seal_block(keys, tree.owner, pointer, node.bytes, sealed.bytes) {
+                return .Error(.Corrupt)
+            }
+            write_node_bytes(nodes, address, node.copy, sealed.bytes)?
+        }
+        case None => {
+            crypto.blake3(node.bytes, pointer.seal)
+            write_node_bytes(nodes, address, node.copy, node.bytes)?
+        }
     }
-    if node.copy != 0 && !nodes.device.write(nodes.device.context, node.copy, NODE_BLOCKS, node.bytes) {
-        return .Error(.DeviceError)
-    }
-    pointer.seal = seal
     _ = maps.map_remove(&nodes.dirty, address)
     runtime.free(node)
+    return .Ok
+}
+
+// A node's bytes written at address, and at copy, its second place, unless that's 0.
+write_node_bytes :: fn(nodes: ptr[mut Nodes], address: u64, copy: u64, bytes: u8[]) -> Result[void, Error] {
+    if !nodes.device.write(nodes.device.context, address, NODE_BLOCKS, bytes) {
+        return .Error(.DeviceError)
+    }
+    if copy != 0 && !nodes.device.write(nodes.device.context, copy, NODE_BLOCKS, bytes) {
+        return .Error(.DeviceError)
+    }
     return .Ok
 }

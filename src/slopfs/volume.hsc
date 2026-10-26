@@ -65,13 +65,57 @@ VolumeId :: struct {
  * disk once it's committed.
  */
 create_volume :: fn(container #escaping : ptr[mut Container], name: string, hash_key: u8[32], now: u64) -> Result[ptr[mut Volume], Error] {
+    return create_keyed_volume(container, name, hash_key, now, null)
+}
+
+/*
+ * A new encrypted volume, as create_volume makes one: sealed with cipher, its volume key new and wrapped by passphrase
+ * through Argon2id with parameters, and its first key generation's with it, kept in the container's volumes tree.
+ */
+create_sealed_volume :: fn(container #escaping : ptr[mut Container], name: string, hash_key: u8[32], now: u64, cipher: Cipher,
+    passphrase: u8[], parameters: crypto.Argon2Parameters) -> Result[ptr[mut Volume], Error] {
+
+    if cipher == .None {
+        return create_volume(container, name, hash_key, now)
+    }
+    id :: container.next_volume
+    keys :: new_keys(cipher)
+    keys.volume_key = random_key()
+    match make_first_keys(container, id, keys, passphrase, parameters) {
+        case Ok => {}
+        case Error(error) => {
+            free_keys(keys)
+            return .Error(error)
+        }
+    }
+    return create_keyed_volume(container, name, hash_key, now, keys)
+}
+
+// An encrypted volume's first wrap and generation records, in the container's volumes tree.
+make_first_keys :: fn(container: ptr[mut Container], id: u64, keys: ptr[mut Keys], passphrase: u8[],
+    parameters: crypto.Argon2Parameters) -> Result[void, Error] {
+
+    wrap := wrap_with_passphrase(&keys.volume_key, passphrase, parameters, container.id, id) or_return .Error(.WrongKey)
+    put_wrap(container, id, 0, &wrap)?
+    generation := start_generation(keys, container.nodes.transaction, container.id, id) or_return .Error(.Corrupt)
+    put_generation(container, id, keys.current, &generation)?
+    return .Ok
+}
+
+create_keyed_volume :: fn(container #escaping : ptr[mut Container], name: string, hash_key: u8[32], now: u64,
+    keys #escaping : ptr[mut Keys]?) -> Result[ptr[mut Volume], Error] {
+
     if name.count == 0 || name.count > VOLUME_NAME_BYTES {
+        match keys {
+            case Some(given) => free_keys(given)
+            case None => {}
+        }
         return .Error(.InvalidName)
     }
     volume := runtime.new(Volume)
     volume^ = Volume.{nodes = &container.nodes, device = container.device, id = container.next_volume, next_object = ROOT_OBJECT + 1,
         hash_key = hash_key, created = now, name_bytes = cast[u16](name.count), dirty = true, now = now}
-    volume.tree = Tree.{kind = .Volume, owner = volume.id}
+    volume.tree = Tree.{kind = .Volume, owner = volume.id, keys = keys}
     for character, i in name {
         if i < volume.name.count {
             volume.name[i] = cast[u8](character)
@@ -104,10 +148,38 @@ open_volume :: fn(container #escaping : ptr[mut Container], id: u64) -> Result[p
         return .Error(.Corrupt)
     }
     record :: cast[ptr[VolumeRecord]](&value[0])
-    volume := runtime.new(Volume)
-    volume^ = Volume.{nodes = &container.nodes, device = container.device, id = id, next_object = cast[u64](record.next_object),
-        hash_key = record.hash_key, created = cast[u64](record.created), name = record.name, name_bytes = cast[u16](record.name_bytes)}
-    volume.tree = Tree.{root = record.root, kind = .Volume, owner = id}
+    if record.cipher != cast[u8](Cipher.None) {
+        return .Error(.Locked)
+    }
+    volume :: attach_volume(&container.nodes, container.device, id, record^, null)
+    runtime.array_add(&container.open, volume)
+    return .Ok(volume)
+}
+
+// The encrypted volume id, open: already, or from its record, unlocked with passphrase.
+open_sealed_volume :: fn(container #escaping : ptr[mut Container], id: u64, passphrase: u8[]) -> Result[ptr[mut Volume], Error] {
+    for volume in container.open {
+        if volume.id == id {
+            return .Ok(volume)
+        }
+    }
+    record :: volume_record(container, id)?
+    if record.cipher == cast[u8](Cipher.None) {
+        return open_volume(container, id)
+    }
+    wraps := volume_wraps(container, id)?
+    defer runtime.array_free(&wraps)
+    generations := volume_generations(container, id)?
+    defer runtime.array_free(&generations)
+    keys :: new_keys(.None)
+    match unlock(container.id, id, record, wraps, generations, passphrase, keys) {
+        case Ok => {}
+        case Error(error) => {
+            free_keys(keys)
+            return .Error(error)
+        }
+    }
+    volume :: attach_volume(&container.nodes, container.device, id, record, keys)
     runtime.array_add(&container.open, volume)
     return .Ok(volume)
 }
@@ -116,18 +188,28 @@ open_volume :: fn(container #escaping : ptr[mut Container], id: u64) -> Result[p
  * A volume from its record, its tree changing in nodes and read and written on device: as open_volume opens one in
  * the container's own process, and as a volume server opens its own (decisions/0089).
  */
-attach_volume :: fn(nodes #escaping : ptr[mut Nodes], device #escaping : Device, id: u64, record: VolumeRecord) -> ptr[mut Volume] {
+attach_volume :: fn(nodes #escaping : ptr[mut Nodes], device #escaping : Device, id: u64, record: VolumeRecord,
+    keys #escaping : ptr[mut Keys]?) -> ptr[mut Volume] {
+
     volume := runtime.new(Volume)
     volume^ = Volume.{nodes = nodes, device = device, id = id, next_object = cast[u64](record.next_object), hash_key = record.hash_key,
         created = cast[u64](record.created), name = record.name, name_bytes = cast[u16](record.name_bytes)}
-    volume.tree = Tree.{root = record.root, kind = .Volume, owner = id}
+    volume.tree = Tree.{root = record.root, kind = .Volume, owner = id, keys = keys}
     return volume
 }
 
-// What a volume's record says now: its root as it was last written, and the rest.
+// What a volume's record says now: its root as it was last written, its cipher and newest key generation, and the rest.
 record_of :: fn(volume: ptr[Volume]) -> VolumeRecord {
-    return VolumeRecord.{root = volume.tree.root, next_object = cast[u64le](volume.next_object), hash_key = volume.hash_key,
+    record := VolumeRecord.{root = volume.tree.root, next_object = cast[u64le](volume.next_object), hash_key = volume.hash_key,
         created = cast[u64le](volume.created), name_bytes = cast[u16le](volume.name_bytes), name = volume.name}
+    match volume.tree.keys {
+        case Some(keys) => {
+            record.cipher = cast[u8](keys.cipher)
+            record.generation = cast[u32le](keys.current)
+        }
+        case None => {}
+    }
+    return record
 }
 
 /*
@@ -161,7 +243,12 @@ close_volume :: fn(container: ptr[mut Container], id: u64) {
     }
 }
 
+// A volume's memory given back, its keys with it.
 free_volume :: fn(volume: ptr[mut Volume]) {
+    match volume.tree.keys {
+        case Some(keys) => free_keys(keys)
+        case None => {}
+    }
     runtime.free(volume)
 }
 
@@ -650,6 +737,13 @@ part :: fn(bytes: u8[], start: usize, end: usize) -> u8[] {
     return bytes[0..<0]
 }
 
+mut_part :: fn(bytes: mut u8[], start: usize, end: usize) -> mut u8[] {
+    if start <= end && end <= bytes.count {
+        return bytes[start..<end]
+    }
+    return bytes[0..<0]
+}
+
 // A record's value, and a chunk, in memory of their own.
 ValueBuffer :: struct {
     bytes : u8[4096],
@@ -691,13 +785,30 @@ read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[
         return .Error(.Corrupt)
     }
     device :: volume.device
-    if !device.read(device.context, cast[u64](extent.pointer.address), blocks, buffer) {
-        return .Error(.DeviceError)
-    }
-    seal : Seal
-    crypto.blake3(buffer[0..<length], seal)
-    if seal != extent.pointer.seal {
-        return .Error(.Corrupt)
+    match volume.tree.keys {
+        case Some(keys) => {
+            sealed := runtime.new(ChunkBuffer)
+            defer runtime.free(sealed)
+            if !device.read(device.context, cast[u64](extent.pointer.address), blocks, sealed.bytes) {
+                return .Error(.DeviceError)
+            }
+            if length > buffer.count {
+                return .Error(.Corrupt)
+            }
+            if !open_block(keys, volume.id, &extent.pointer, part(sealed.bytes, 0, length), mut_part(buffer, 0, length)) {
+                return .Error(.Corrupt)
+            }
+        }
+        case None => {
+            if !device.read(device.context, cast[u64](extent.pointer.address), blocks, buffer) {
+                return .Error(.DeviceError)
+            }
+            seal : Seal
+            crypto.blake3(buffer[0..<length], seal)
+            if seal != extent.pointer.seal {
+                return .Error(.Corrupt)
+            }
+        }
     }
     return .Ok(used)
 }
@@ -726,14 +837,36 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
         address :: nodes.allocate(nodes.space, blocks, volume.id) or_return .Error(.NoSpace)
         length :: cast[usize](blocks * BLOCK_BYTES)
         device :: volume.device
-        if length > buffer.count || !device.write(device.context, address, blocks, part(buffer, 0, length)) {
-            volume.failed = true
-            return .Error(.DeviceError)
-        }
         extent := ExtentRecord.{kind = cast[u32le](cast[u32](ExtentKind.Blocks)), bytes = cast[u32le](cast[u32](used))}
         extent.pointer = BlockPointer.{address = cast[u64le](address), birth = cast[u64le](nodes.transaction),
             blocks = cast[u32le](cast[u32](blocks))}
-        crypto.blake3(part(buffer, 0, length), extent.pointer.seal)
+        if length > buffer.count {
+            return .Error(.Corrupt)
+        }
+        // Encrypted, what's written is sealed, and the pointer takes its seal and generation
+        written := part(buffer, 0, length)
+        sealed : ptr[mut ChunkBuffer]? = null
+        match volume.tree.keys {
+            case Some(keys) => {
+                made :: runtime.new(ChunkBuffer)
+                sealed = made
+                if !seal_block(keys, volume.id, &extent.pointer, part(buffer, 0, length), mut_part(made.bytes, 0, length)) {
+                    runtime.free(made)
+                    return .Error(.Corrupt)
+                }
+                written = part(made.bytes, 0, length)
+            }
+            case None => crypto.blake3(part(buffer, 0, length), extent.pointer.seal)
+        }
+        wrote :: device.write(device.context, address, blocks, written)
+        match sealed {
+            case Some(made) => runtime.free(made)
+            case None => {}
+        }
+        if !wrote {
+            volume.failed = true
+            return .Error(.DeviceError)
+        }
         tree_put(nodes, &volume.tree, key, view_of(cast[ptr[mut u8]](&extent), size_of(ExtentRecord)))?
     }
     if had is_some {
@@ -862,4 +995,168 @@ is_inline :: fn(volume: ptr[mut Volume], file: u64) -> Result[bool, Error] {
     head := ExtentRecord.{}
     had :: tree_get(volume.nodes, &volume.tree, key_of(file, .Extent, 0), view_of(cast[ptr[mut u8]](&head), size_of(ExtentRecord)))?
     return .Ok((had is_some) && cast[u32](head.kind) == cast[u32](ExtentKind.Inline))
+}
+
+// An encrypted volume's keys, in the container's volumes tree beside its record (keys.hsc).
+
+put_wrap :: fn(container: ptr[mut Container], id: u64, index: u64, record: ptr[WrapRecord]) -> Result[void, Error] {
+    tree_put(&container.nodes, &container.volumes, key_of(id, .KeyWrap, index), view_of(cast[ptr[u8]](record), size_of(WrapRecord)))?
+    return .Ok
+}
+
+put_generation :: fn(container: ptr[mut Container], id: u64, number: u32, record: ptr[GenerationRecord]) -> Result[void, Error] {
+    tree_put(&container.nodes, &container.volumes, key_of(id, .KeyGeneration, cast[u64](number)),
+        view_of(cast[ptr[u8]](record), size_of(GenerationRecord)))?
+    return .Ok
+}
+
+// A generation's record and its number.
+NumberedGeneration :: struct {
+    number : u32,
+    record : GenerationRecord,
+}
+
+// The volume's key wrapped, each way it is.
+volume_wraps :: fn(container: ptr[mut Container], id: u64) -> Result[WrapRecord[..], Error] {
+    found : WrapRecord[..]
+    record := WrapRecord.{}
+    at := key_of(id, .KeyWrap, 0)
+    loop {
+        next :: match tree_next(&container.nodes, &container.volumes, at, view_of(cast[ptr[mut u8]](&record), size_of(WrapRecord))) {
+            case Ok(next) => next
+            case Error(error) => {
+                runtime.array_free(&found)
+                return .Error(error)
+            }
+        }
+        item :: next or_break
+        if item.key.object != id || item.key.kind != cast[u8](RecordKind.KeyWrap) {
+            break
+        }
+        if item.bytes != size_of(WrapRecord) {
+            runtime.array_free(&found)
+            return .Error(.Corrupt)
+        }
+        runtime.array_add(&found, record)
+        at = key_after(item.key) or_break
+    }
+    return .Ok(found)
+}
+
+// The volume's key generations, oldest first.
+volume_generations :: fn(container: ptr[mut Container], id: u64) -> Result[NumberedGeneration[..], Error] {
+    found : NumberedGeneration[..]
+    record := GenerationRecord.{}
+    at := key_of(id, .KeyGeneration, 0)
+    loop {
+        next :: match tree_next(&container.nodes, &container.volumes, at, view_of(cast[ptr[mut u8]](&record), size_of(GenerationRecord))) {
+            case Ok(next) => next
+            case Error(error) => {
+                runtime.array_free(&found)
+                return .Error(error)
+            }
+        }
+        item :: next or_break
+        if item.key.object != id || item.key.kind != cast[u8](RecordKind.KeyGeneration) {
+            break
+        }
+        if item.bytes != size_of(GenerationRecord) || item.key.offset == 0 || item.key.offset > 0xffffffff {
+            runtime.array_free(&found)
+            return .Error(.Corrupt)
+        }
+        runtime.array_add(&found, NumberedGeneration.{number = cast[u32](item.key.offset), record = record})
+        at = key_after(item.key) or_break
+    }
+    return .Ok(found)
+}
+
+/*
+ * An encrypted volume's keys, into keys, new: its volume key unwrapped with passphrase from its wrap records, and each
+ * generation's with that. WrongKey if none of them takes it, Corrupt if a generation doesn't open with what it does;
+ * either way, keys are for free_keys.
+ */
+unlock :: fn(container: u8[16], id: u64, record: VolumeRecord, wraps: WrapRecord[], generations: NumberedGeneration[],
+    passphrase: u8[], keys: ptr[mut Keys]) -> Result[void, Error] {
+
+    cipher :: record.cipher
+    if cipher != cast[u8](Cipher.ChaCha20Poly1305) && cipher != cast[u8](Cipher.Aes256Gcm) {
+        return .Error(.Corrupt)
+    }
+    keys.cipher = if cipher == cast[u8](Cipher.Aes256Gcm) { .Aes256Gcm } else { .ChaCha20Poly1305 }
+    unwrapped := false
+    for wrap in wraps {
+        if unwrapped {
+            break
+        }
+        candidate := wrap
+        unwrapped = unwrap_with_passphrase(&candidate, passphrase, container, id, &keys.volume_key)
+    }
+    if !unwrapped {
+        return .Error(.WrongKey)
+    }
+    for each in generations {
+        wrapped := each.record
+        generation := GenerationKey.{}
+        if !unwrap_generation(&keys.volume_key, each.number, &wrapped, container, id, &generation) {
+            zero_key(&generation.key)
+            return .Error(.Corrupt)
+        }
+        runtime.array_add(&keys.generations, generation)
+        zero_key(&generation.key)
+    }
+    keys.current = cast[u32](record.generation)
+    if generation_key(keys, keys.current) is_none {
+        return .Error(.Corrupt)
+    }
+    return .Ok
+}
+
+/*
+ * A new key generation for an encrypted volume open in the container's own process, sealing what's written from now
+ * on; what was written before keeps its own (decisions/0042). Its number.
+ */
+rotate :: fn(container: ptr[mut Container], volume: ptr[mut Volume]) -> Result[u32, Error] {
+    keys :: volume.tree.keys or_return .Error(.Locked)
+    record := start_generation(keys, container.nodes.transaction, container.id, volume.id) or_return .Error(.Corrupt)
+    put_generation(container, volume.id, keys.current, &record)?
+    volume.dirty = true
+    return .Ok(keys.current)
+}
+
+// One of the volume's key wrap records, by index from 0, or null past the last.
+volume_wrap :: fn(container: ptr[mut Container], id: u64, index: u64) -> Result[WrapRecord?, Error] {
+    record := WrapRecord.{}
+    bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .KeyWrap, index),
+        view_of(cast[ptr[mut u8]](&record), size_of(WrapRecord)))? or_return .Ok(null)
+    if bytes != size_of(WrapRecord) {
+        return .Error(.Corrupt)
+    }
+    return .Ok(record)
+}
+
+// One of the volume's key generations' records, by number from 1, or null past the newest.
+volume_generation :: fn(container: ptr[mut Container], id: u64, number: u32) -> Result[GenerationRecord?, Error] {
+    record := GenerationRecord.{}
+    bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .KeyGeneration, cast[u64](number)),
+        view_of(cast[ptr[mut u8]](&record), size_of(GenerationRecord)))? or_return .Ok(null)
+    if bytes != size_of(GenerationRecord) {
+        return .Error(.Corrupt)
+    }
+    return .Ok(record)
+}
+
+/*
+ * A new key generation's record, made by the volume's server, kept for an encrypted volume: numbered after its newest,
+ * which its record then names. Both are durable with the next commit. NotFound for a volume that isn't encrypted or
+ * a number that isn't the next.
+ */
+add_generation :: fn(container: ptr[mut Container], id: u64, number: u32, generation: ptr[GenerationRecord]) -> Result[void, Error] {
+    record := volume_record(container, id)?
+    if record.cipher == cast[u8](Cipher.None) || cast[u64](number) != cast[u64](cast[u32](record.generation)) + 1 {
+        return .Error(.NotFound)
+    }
+    put_generation(container, id, number, generation)?
+    record.generation = cast[u32le](number)
+    put_volume_record(container, id, &record)?
+    return .Ok
 }

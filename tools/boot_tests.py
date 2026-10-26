@@ -70,8 +70,17 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
     "synced and read back its own file, and moved it",
     "--expect-line=[user] disk_check: on the system volume, replaced an open file, committed a transaction, was refused a conflicting "
     "one, had a failing one leave nothing, and followed every change",
+    "--expect-line=[user] storage: started a volume server for the sealed volume, encrypted",
+    "--expect-line=[user] volume_server: volume 2 unlocked",
+    "--expect-line=[user] volume_server: volume 2 sealing with key generation 2",
+    "--expect-line=[user] disk_check: on the sealed volume, was refused locked and with a wrong passphrase, unlocked it, read its "
+    "file, wrote one, started key generation 2, wrote another and read all three",
     "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
     "--expect-disk-text=Written to the system volume by the guest, and synced",
+    # What the encrypted volume's files hold, as the image builder and the disk check wrote them, is nowhere on the disk
+    "--refuse-disk-text=ONLY ITS PASSPHRASE OPENS THIS",
+    "--refuse-disk-text=WRITTEN TO THE SEALED VOLUME WITH ITS FIRST KEY GENERATION",
+    "--refuse-disk-text=WRITTEN TO THE SEALED VOLUME WITH ITS SECOND KEY GENERATION",
     "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]
 
 TESTS = [

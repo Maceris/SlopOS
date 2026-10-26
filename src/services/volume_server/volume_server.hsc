@@ -9,6 +9,10 @@
  * there: a Sync on any connection commits at once and answers once that's durable, and a second after the last
  * change, whatever changed is committed anyway. After a crash, the volume is as it was after some prefix of what was
  * done to it (decisions/0085). Transactions, Replace and change cursors are in transactions.hsc.
+ *
+ * An encrypted volume's keys are here and nowhere else (roadmap 8e): it waits for the storage manager's Unlock, on its
+ * own protocol, before it serves anything, unwraps the volume's key with the passphrase from the records the container
+ * service keeps sealed, and holds them until it ends. Rotate starts a new key generation.
  */
 package volume_server
 
@@ -25,6 +29,7 @@ import slopfs from "../../slopfs"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
 import container from "../../protocols/container"
+import volume_protocol from "../../protocols/volume"
 
 MAX_CONNECTIONS :: 64
 // The most bytes of a client's buffer mapped here
@@ -46,6 +51,8 @@ Kind :: enum {
     TransactionFile,
     // A new file from Replace, until it's installed
     Replacement,
+    // The storage manager's, on the volume protocol
+    Control,
 }
 
 // A connection: the object it's to, its informational name (a set's pattern), and a file's buffer, mapped here.
@@ -78,6 +85,8 @@ Server :: struct {
     buffer_bytes : u64,
     nodes : slopfs.Nodes,
     volume : ptr[mut slopfs.Volume],
+    // What the volume server was told of its volume and container
+    described : container.Described,
     // When what's changed is committed, without a Sync, or 0 when nothing has
     commit_at : u64,
     connections : Connection[MAX_CONNECTIONS],
@@ -86,7 +95,8 @@ Server :: struct {
     transactions : Transaction[MAX_TRANSACTIONS],
 }
 
-main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clients: os.Listener[dir.Dir]) -> int {
+main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clients: os.Listener[dir.Dir],
+    control: os.Listener[volume_protocol.Volume]) -> int {
     startup :: slop_os.startup_block()
     server := runtime.new(Server)
     server^ = Server.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE), container = volume.end}
@@ -119,7 +129,13 @@ main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clie
         write = write_blocks, flush = no_flush}
     server.nodes = slopfs.Nodes.{device = device, transaction = described.transaction, space = cast[rawptr](server), allocate = allocate,
         release = release}
-    server.volume = slopfs.attach_volume(&server.nodes, device, described.id, described.record)
+    server.described = described
+    // An encrypted volume is served once it's unlocked
+    keys : ptr[mut slopfs.Keys]? = null
+    if described.record.cipher != cast[u8](slopfs.Cipher.None) {
+        keys = wait_for_unlock(server, control.end) or_return 6
+    }
+    server.volume = slopfs.attach_volume(&server.nodes, device, described.id, described.record, keys)
     server.volume.history_bytes = slopfs.HISTORY_BYTES
     // Nothing has anything open yet, so every orphan a crash left is given back
     swept :: slopfs.sweep_orphans(server.volume) or_else 0
@@ -130,6 +146,9 @@ main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clie
     log_line.write(server.log, "volume_server: serving volume % (%), from transaction %", described.id, name, described.transaction)
     // The listener is a connection to the root, as any client's Connect on it gives another
     if add(server, .Dir, clients.end, slopfs.ROOT_OBJECT, false, "") is_none {
+        return 5
+    }
+    if add(server, .Control, control.end, 0, false, "") is_none {
         return 5
     }
     into := os.Incoming.{}
@@ -410,6 +429,9 @@ serve :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     else if kind == .FileSet {
         serve_file_set(server, index, into)
     }
+    else if kind == .Control {
+        serve_control(server, index, into)
+    }
 }
 
 // Paths and answers
@@ -436,6 +458,9 @@ file_error :: fn(error: slopfs.Error) -> files.FileError {
         case .TooLarge => files.FileError.NoSpace
         case .NotSlopfs => files.FileError.Corrupt
         case .Failed => files.FileError.DeviceError
+        // An open volume has its keys, so neither comes from a file's request
+        case .Locked => files.FileError.DeviceError
+        case .WrongKey => files.FileError.DeviceError
     }
 }
 
@@ -1102,5 +1127,147 @@ serve_read_only_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut 
             }
         }
         _ = read_only_file.send_response(end, server.port, &out)
+    }
+}
+
+// Encryption (roadmap 8e)
+
+/*
+ * An encrypted volume's keys, once the storage manager's Unlock gives a passphrase that unwraps them; each that doesn't
+ * is answered WrongKey, and the next waited for. Null if the storage manager goes, or the keys can't be read.
+ */
+wait_for_unlock :: fn(server: ptr[mut Server], end: slop_os.Channel) -> ptr[mut slopfs.Keys]? {
+    startup :: slop_os.startup_block()
+    port :: os.port_for(startup.budget, end) or_return null
+    defer _ = slop_os.handle_close(cast[slop_os.Handle](port))
+    into := os.Incoming.{}
+    loop {
+        match volume_protocol.receive_request(end, port, &into, true) {
+            case Received => {}
+            case Unsupported => {
+                _ = volume_protocol.answer_unsupported(end, port)
+                continue
+            }
+            case Failed(error) => return null
+            case _ => continue
+        }
+        response : volume_protocol.Response = .Failed
+        keys :: slopfs.new_keys(.None)
+        unlocked := false
+        match os.message_of[volume_protocol.Request](&into)^ {
+            case Unlock(given) => {
+                unlocked = unlock_keys(server, os.items(&into, given), keys)
+                response = if unlocked { .Unlocked } else { .WrongKey }
+            }
+            case Rotate => response = .Failed
+        }
+        out := os.Outgoing.{}
+        made :: os.begin[volume_protocol.Response](&out)
+        made^ = response
+        _ = volume_protocol.send_response(end, port, &out)
+        if unlocked {
+            log_line.write(server.log, "volume_server: volume % unlocked", server.described.id)
+            return keys
+        }
+        slopfs.free_keys(keys)
+    }
+}
+
+/*
+ * The volume's keys, into keys, new: unwrapped with passphrase from the wrap and generation records the container
+ * service keeps. False if it isn't the passphrase or they can't be read; keys are for free_keys either way.
+ */
+unlock_keys :: fn(server: ptr[mut Server], passphrase: u8[], keys: ptr[mut slopfs.Keys]) -> bool {
+    wraps : slopfs.WrapRecord[..]
+    defer runtime.array_free(&wraps)
+    for index in 0..<cast[u64](16) {
+        match ask(server, .WrapAt(index)) {
+            case Wrap(record) => runtime.array_add(&wraps, record)
+            case NoMore => break
+            case _ => return false
+        }
+    }
+    generations : slopfs.NumberedGeneration[..]
+    defer runtime.array_free(&generations)
+    number : u32 = 1
+    loop {
+        match ask(server, .GenerationAt(number)) {
+            case Generation(record) => runtime.array_add(&generations, slopfs.NumberedGeneration.{number = number, record = record})
+            case NoMore => break
+            case _ => return false
+        }
+        number += 1
+    }
+    match slopfs.unlock(server.described.container, server.described.id, server.described.record, wraps, generations, passphrase, keys) {
+        case Ok => return true
+        case Error(error) => {
+            if error != .WrongKey {
+                log_line.write(server.log, "volume_server: volume %'s keys don't open: %", server.described.id, error)
+            }
+            return false
+        }
+    }
+}
+
+// The storage manager's requests on the volume protocol, once the volume is served.
+serve_control :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+    if index >= server.connections.count {
+        return void
+    }
+    end :: server.connections[index].end
+    loop {
+        match volume_protocol.receive_request(end, server.port, into, false) {
+            case Received => {}
+            case Empty => return void
+            case Unsupported => {
+                _ = volume_protocol.answer_unsupported(end, server.port)
+                continue
+            }
+            case Invalid => continue
+            case WrongProtocol => continue
+            case Failed(error) => {
+                drop(server, index)
+                return void
+            }
+        }
+        response : volume_protocol.Response = .NotEncrypted
+        match os.message_of[volume_protocol.Request](into)^ {
+            case Unlock(given) => {
+                if server.volume.tree.keys is_some {
+                    // Unlocked already: the passphrase checked, for whoever asks the storage manager for the volume again
+                    checked :: slopfs.new_keys(.None)
+                    response = if unlock_keys(server, os.items(into, given), checked) { .Unlocked } else { .WrongKey }
+                    slopfs.free_keys(checked)
+                }
+            }
+            case Rotate => response = rotate(server)
+        }
+        out := os.Outgoing.{}
+        made :: os.begin[volume_protocol.Response](&out)
+        made^ = response
+        _ = volume_protocol.send_response(end, server.port, &out)
+    }
+}
+
+/*
+ * A new key generation: made and wrapped here, its record kept by the container service, and what's written from now
+ * on sealed with it. What's changed is committed first, so the generation begins with a transaction of its own.
+ */
+rotate :: fn(server: ptr[mut Server]) -> volume_protocol.Response {
+    keys :: server.volume.tree.keys or_return .NotEncrypted
+    if server.volume.dirty && !commit(server) {
+        return .Failed
+    }
+    previous :: keys.current
+    record :: slopfs.start_generation(keys, server.nodes.transaction, server.described.container, server.described.id) or_return .Failed
+    match ask(server, .AddGeneration(container.AddedGeneration.{number = keys.current, record = record})) {
+        case Done => {
+            log_line.write(server.log, "volume_server: volume % sealing with key generation %", server.described.id, keys.current)
+            return .Rotated(keys.current)
+        }
+        case _ => {
+            slopfs.drop_generation(keys, previous)
+            return .Failed
+        }
     }
 }
