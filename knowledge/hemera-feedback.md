@@ -110,7 +110,9 @@ references like "item 9" or "Resolved 2026-10-15" lead to commit `052f203`.
 Since then: optional views as results (`-> ((mut u8[])?)`), `match f()? { ... }`, and an optional that starts zeroed
 being `Some(0)`, now `None`, `None` being `Optional`'s first variant (decided with the owner, found in 8d3); the
 intermittent E4012, a name called ambiguous between imports before the package's own `#insert`, which wins, was done;
-and `#code` starting a statement in a block, found fixing it.
+and `#code` starting a statement in a block, found fixing it; and a `#run` seeing a type it
+describes before it was laid out, once, as `syscall_table`'s `Result[ChannelPair, ChannelError]` with no variants (it
+waits for what a description holds by value now).
 
 ## 4. Features That Look Like a Strong Fit
 
