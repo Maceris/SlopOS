@@ -66,6 +66,11 @@ Service :: struct {
     // A driver's: whether it's trusted with DMA where no IOMMU confines its device, as SlopOS's own drivers are; one
     // that isn't gets no DMA memory there (decisions/0039, 0084)
     trusted_with_dma : bool,
+    /*
+     * Whether it's in the boot set (decisions/0089): what reaches the system volume, loaded from Limine's modules;
+     * everything else is loaded from the volume's modules folder, Limine's modules standing in where there's none.
+     */
+    boot_set : bool,
 }
 
 // Whether a service is a driver, with devices it takes.
@@ -82,30 +87,30 @@ MIB : u64 : 1024 * 1024
  * console.
  */
 SERVICES :: Service.[
-    Service.{name = "entropy", module = "entropy.elf", starter = .RootTask, by_manager = false, budget = 2 * MIB,
+    Service.{name = "entropy", boot_set = true, module = "entropy.elf", starter = .RootTask, by_manager = false, budget = 2 * MIB,
         entry = type_of(entropy.main)},
-    Service.{name = "process_manager", module = "process_manager.elf", starter = .RootTask, by_manager = false, budget = 8 * MIB,
+    Service.{name = "process_manager", boot_set = true, module = "process_manager.elf", starter = .RootTask, by_manager = false, budget = 8 * MIB,
         entry = type_of(process_manager.main)},
-    Service.{name = "platform", module = "platform.elf", starter = .RootTask, by_manager = true, budget = 8 * MIB,
+    Service.{name = "platform", boot_set = true, module = "platform.elf", starter = .RootTask, by_manager = true, budget = 8 * MIB,
         entry = type_of(platform.main)},
-    Service.{name = "supervisor", module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 48 * MIB,
+    Service.{name = "supervisor", boot_set = true, module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 48 * MIB,
         entry = type_of(supervisor.main)},
     Service.{name = "console", module = "console.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(console.main)},
     Service.{name = "hello", module = "hello.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(hello.main)},
     // Every disk's, and a partition server for each, which holds only its disk (decisions/0086)
-    Service.{name = "storage_manager", module = "storage_manager.elf", starter = .Supervisor, by_manager = true, budget = 20 * MIB,
+    Service.{name = "storage_manager", boot_set = true, module = "storage_manager.elf", starter = .Supervisor, by_manager = true, budget = 20 * MIB,
         entry = type_of(storage_manager.main)},
-    Service.{name = "partition_server", module = "partition_server.elf", starter = .StorageManager, by_manager = true, budget = 2 * MIB,
+    Service.{name = "partition_server", boot_set = true, module = "partition_server.elf", starter = .StorageManager, by_manager = true, budget = 2 * MIB,
         entry = type_of(partition_server.main)},
     // For each FAT partition whose files are asked for, which holds only its partition (decisions/0087)
-    Service.{name = "fat_server", module = "fat_server.elf", starter = .StorageManager, by_manager = true, budget = 2 * MIB,
+    Service.{name = "fat_server", boot_set = true, module = "fat_server.elf", starter = .StorageManager, by_manager = true, budget = 2 * MIB,
         entry = type_of(fat_server.main)},
     // For each SlopOS container, holding only its partition, and for its system volume (decisions/0089)
-    Service.{name = "container_service", module = "container_service.elf", starter = .StorageManager, by_manager = true,
+    Service.{name = "container_service", boot_set = true, module = "container_service.elf", starter = .StorageManager, by_manager = true,
         budget = 4 * MIB, entry = type_of(container_service.main)},
-    Service.{name = "volume_server", module = "volume_server.elf", starter = .StorageManager, by_manager = true, budget = 6 * MIB,
+    Service.{name = "volume_server", boot_set = true, module = "volume_server.elf", starter = .StorageManager, by_manager = true, budget = 6 * MIB,
         entry = type_of(volume_server.main)},
     // Started only when there's a disk
     Service.{name = "disk_check", module = "disk_check.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
@@ -115,7 +120,7 @@ SERVICES :: Service.[
         entry = type_of(virtio_rng.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1044,
         class = platform_protocol.ANY_CLASS}, trusted_with_dma = true},
     // A modern virtio block device (virtio's device ID 2); its buffers are its clients' DMA memory, in its budget
-    Service.{name = "virtio_blk", module = "virtio_blk.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,
+    Service.{name = "virtio_blk", boot_set = true, module = "virtio_blk.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,
         entry = type_of(virtio_blk.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1042,
         class = platform_protocol.ANY_CLASS}, trusted_with_dma = true},
     // A modern virtio console (virtio's device ID 3)

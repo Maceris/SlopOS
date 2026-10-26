@@ -41,7 +41,7 @@ SupervisorGrants :: struct {
     log : slop_os.DebugLog?,
     manager : os.Channel[process_manager.ProcessManager],
     root : os.Channel[supervision.Supervision],
-    hello_module : slop_os.Memory,
+    hello_module : slop_os.Memory?,
     platform_service : os.Channel[platform_protocol.Platform]?,
     entropy_service : os.Channel[entropy.Entropy]?,
     console_module : slop_os.Memory?,
@@ -154,13 +154,11 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     // The supervisor, through the manager, with a connection of its own
     service :: system_config.service("supervisor") or_return 8
     module :: find_module(block, service.module) or_return 8
-    hello_service :: system_config.service("hello") or_return 8
-    hello_module :: find_module(block, hello_service.module) or_return 8
     grants := SupervisorGrants.{
         log = duplicate_log(&root),
         manager = process_manager.connect(root.manager, root.manager_port, block.budget) or_return 9,
         root = os.Channel[supervision.Supervision].{end = supervision_pair.b},
-        hello_module = cast[slop_os.Memory](slop_os.handle_duplicate(hello_module, module_rights) or_return 9),
+        hello_module = module_copy(block, "hello", module_rights),
         platform_service = platform_connection,
         entropy_service = entropy.connect(root.entropy, root.entropy_port, block.budget),
         console_module = module_copy(block, "console", module_rights),

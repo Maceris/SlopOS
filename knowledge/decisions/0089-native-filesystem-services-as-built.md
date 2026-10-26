@@ -73,6 +73,22 @@ each part.
   replaces a file while it has it open, commits a transaction of two files nothing saw before, is refused one whose
   file was changed outside it, has one that fails partway leave nothing, and follows every change with a cursor.
 
+### 8d3: programs from the system volume
+- **The boot set**: `system_config`'s services gain `boot_set`, true for what reaches the system volume: the root task's
+  entropy service, process manager, platform service and supervisor, `virtio_blk`, the storage manager, the partition
+  server, the container service, the volume server, and the FAT server, since the ESP the boot set comes from is FAT.
+- **The supervisor** starts the boot set's drivers and the storage manager first, asks it for the first container's
+  system volume, and then every other driver and service, each program outside the boot set read from the volume's
+  `modules` folder once, straight into a memory object of its own given to the volume server as the read's buffer, and
+  kept for restarts. Where there's no system volume, or the program isn't there, Limine's module stands in, so the ISO
+  boots as before. `hello`'s module is optional now, as the others' are.
+- **The boot disk** (`tools/boot.py --boot-disk`) has Limine load only the boot set; every program is in the system
+  volume. Booted, the console, `hello` and the disk check come from it, on x86-64 through BIOS and UEFI and on AArch64.
+- **Found on the way**: an optional starts zeroed, and its zero is `Some` with a zero value, since `Some` is
+  `Optional`'s first variant, so a struct's optional field left out of its literal, or a variable declared without a
+  value, holds `Some(0)` rather than `None`. The supervisor's table of programs read keeps a flag instead. Recorded in
+  `../hemera-feedback.md` for the project's owner, since changing it changes what Hemera code means.
+
 ## Alternatives considered
 - **The container service copying volumes' data**: simpler checks, but every block copied twice; narrowing the
   driver's connection, as the partition server does, costs nothing more.
@@ -81,8 +97,14 @@ each part.
 - **Committing every volume together**: one commit would make another volume's half-finished changes durable, or leak
   its allocations after a crash.
 
+- **The supervisor loading programs at boot from the ESP's FAT**: it's already read by Limine, but the system volume
+  is what updates write (M9), and checks every block it's read from.
+
 ## Consequences
 - A volume server's allocations are a round trip each to the container service; batching them waits for a measurement
   that says it's needed.
 - The container service keeps every volume's extents in memory, a few dozen bytes each: fine for SlopOS's disks now,
   and a tree of its own when a volume has millions of chunks.
+- M9's update service installs programs by writing the system volume, with `Replace` and transactions, and the next
+  boot runs them; only the boot set needs the ESP.
+- Encryption, snapshots, quotas and the reserve are 8e's.

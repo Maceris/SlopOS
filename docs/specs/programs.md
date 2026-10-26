@@ -126,6 +126,14 @@ of its own with a memory budget split off its starter's, which owns it:
 | `volume_server` | the storage manager, through the manager, for each volume in use | `log`, `volume: Channel[Container]`, `clients: Listener[Dir]` | Holds a volume's tree and serves it as the file protocols, reaching nothing but its own extents, through the container service (`0089`) |
 | `disk_check` | the supervisor, through the manager, if there's a disk | `log`, `storage: Channel[Connector]?`, `working_directory: Channel[Dir]?`, `system: Channel[Dir]?` | Opens the partition named `SlopOS check` through the storage manager, reads, writes, flushes and reads back its blocks, and is refused the block past its end; then uses `std`'s files and the file protocols on the first EFI system partition, its working directory (`0087`), and the file protocols on the first SlopOS container's system volume (`0089`); and says what it found. The supervisor says everything has started once it has ended |
 
+**Where programs come from** (`0089`): the **boot set**, the services `system_config` marks `boot_set` (the root
+task's four, `virtio_blk`, the storage manager, the partition server, the FAT server, the container service and the
+volume server), are Limine's modules: enough to reach the system volume. The supervisor starts the boot set's drivers
+and the storage manager first, asks it for the first SlopOS container's system volume, and reads every other program
+from its `modules` folder, each once, straight into a memory object of its own given to the volume server as the
+read's buffer, before starting the other drivers and services. Where there's no system volume, as on the ISO, or a
+program isn't there, Limine's module stands in.
+
 **Wiring**: `system_config` names each service's entry, and checks when it's compiled that every
 `Channel[P]` one takes has a server: a service taking a `Listener[P]`, the root task, which serves the
 supervisor's reports, or the supervisor, which serves connectors. The root task holds the other end of each

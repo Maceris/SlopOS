@@ -60,14 +60,16 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
     "--expect-line=[user] storage: started a container service for disk 0 partition 4",
     "--expect-line=[user] storage: started a volume server for the system volume",
     "--expect-line=[user] volume_server: serving volume 1 (system), from transaction 3",
+    "--expect-line=[user] supervisor: console from the system volume", "--expect-line=[user] supervisor: hello from the system volume",
+    "--expect-line=[user] supervisor: disk_check from the system volume", "--expect-line=[user] hello: heap working, random numbers working",
     "--expect-line=[user] disk_check: on the EFI system partition, read the host's files, wrote, moved and read back its own, "
     "listed 3, and was refused a path above it",
     "--expect-line=[user] disk_check: narrowed EFI/SlopOS to read only, selected 2 of its files by *.TXT, and was refused a "
     "file made in the set",
     "--expect-line=[user] disk_check: on the system volume, read modules/hello.elf as the EFI system partition has it, wrote, "
     "synced and read back its own file, and moved it",
-    "--expect-line=[user] disk_check: on the system volume, replaced a file whole while it was open, committed a transaction of two "
-    "files, was refused one that conflicted, had one that failed partway leave nothing, and followed every change with a cursor",
+    "--expect-line=[user] disk_check: on the system volume, replaced an open file, committed a transaction, was refused a conflicting "
+    "one, had a failing one leave nothing, and followed every change",
     "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
     "--expect-disk-text=Written to the system volume by the guest, and synced",
     "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]
@@ -153,8 +155,8 @@ TESTS = [
         "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # Booted from a disk the image builder made rather than the ISO: Limine read from its EFI system partition, its
-    # BIOS boot partition for BIOS, the storage stack finding its partitions and its SlopOS container, and the disk check
-    # passing on it as on the test disk
+    # BIOS boot partition for BIOS, loading only the boot set; the storage stack finding its partitions and its SlopOS
+    # container, every other program read from the system volume, and the disk check passing on it as on the test disk
     ("boots from a disk the image builder made", 7, BOOT_DISK_ARGUMENTS),
     ("boots from a disk the image builder made, through UEFI", 7, ["--uefi"] + BOOT_DISK_ARGUMENTS),
     # Behind a root port, with firmware's bus numbers and BARs taken as unset

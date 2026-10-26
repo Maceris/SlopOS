@@ -65,7 +65,7 @@ python tools/boot.py --expect 0
 | `--expect-console-line LINE` | With `--expect`: the virtio console must show this exact line; may be repeated |
 | `--arch ARCH` | `x86_64` (the default), or `aarch64` on QEMU's virt machine through UEFI |
 | `--disk MARK` | Add a virtio block device: a 38 MiB GPT disk whose `SlopOS check` partition has `MARK` at the start of its block 0 and `block N` at the start of its blocks 2 to 9, and an EFI system partition holding the disk check's files, its FAT32 written by `boot.py` itself |
-| `--boot-disk` | Boot from a disk the image builder makes instead of the ISO: the disk check's partitions, marked with `--disk`'s `MARK`, a BIOS boot partition with Limine's second stage, an EFI system partition with Limine, the kernel and the programs, and a SlopOS container whose `system` volume holds the programs |
+| `--boot-disk` | Boot from a disk the image builder makes instead of the ISO: the disk check's partitions, marked with `--disk`'s `MARK`, a BIOS boot partition with Limine's second stage, an EFI system partition with Limine, the kernel and the programs, of which Limine loads only the boot set, and a SlopOS container whose `system` volume holds the programs, the rest read from there |
 | `--image-builder PATH` | With `--boot-disk`: the image builder to run, instead of building one |
 | `--expect-disk-block N=TEXT` | With `--expect`: block `N` of the image must start with `TEXT` once the kernel has stopped; may be repeated |
 | `--expect-disk-text TEXT` | With `--expect`: the image must hold `TEXT` somewhere once the kernel has stopped; may be repeated |

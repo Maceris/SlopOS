@@ -23,6 +23,7 @@ Severity: **blocker** / **friction** / **nice**.
 | Topic | State | Details |
 |---|---|---|
 | Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`; `os.run_process` runs processes since 2026-10-19 (Windows and Linux); targets built several at once since 2026-10-23 (`--jobs`), SlopOS's build from 7.7 s to 4.0 s. Still open: sharing parsed files between targets, measured to save little so far | `hemera-proposals/build-programs.md`; `decisions/0028` |
+| An optional starts as `Some` | Open, for the owner (found 2026-10-25 in 8d3, `decisions/0089`); SlopOS works around it where it matters | Values start zeroed (`docs/types.md`, Structs), and `Optional` is `union { Some(T), None }`, so its zero is `Some` holding zero: a field left out of a struct's literal, or `x : u32?` declared without a value, is `Some(0)`. Either `None` could come first, so zero is `None` (an optional's layout changes), or zeroing an optional could write `None` (zero is no longer what everything starts as) |
 | Kernel entry on RISC-V | x86-64 and AArch64 done (`decisions/0062`, `0063`); RISC-V waits for the third architecture, on the same pattern: a frame type, `.entry`, an entry-table intrinsic, `return_to_user` (`sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
 
 ### Smaller gaps

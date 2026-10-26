@@ -25,9 +25,12 @@
 package supervisor
 
 import os from "std"
+import text_buffer from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
+import files from "std/os/slop_os"
 import process_manager from "std/os/slop_os"
+import read_only_file from "std/os/slop_os"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
 import connector from "../../protocols/connector"
@@ -163,7 +166,7 @@ ServingGrants :: struct[P] {
 
 // The modules of what the supervisor starts.
 Modules :: struct {
-    hello : slop_os.Memory,
+    hello : slop_os.Memory?,
     console : slop_os.Memory?,
     disk_check : slop_os.Memory?,
     virtio_blk : slop_os.Memory?,
@@ -227,10 +230,26 @@ Supervisor :: struct {
     first_disk : usize,
     first_keyboard : usize,
     console : usize,
+    // The system volume's root, once the storage manager has given it, where programs outside the boot set come from
+    system : slop_os.Channel,
+    system_port : slop_os.Port,
+    // Programs read from the system volume, by their services' places in system_config.SERVICES
+    loaded : Loaded[MAX_LOADED],
 }
 
+/*
+ * A program read from the system volume, if it's been read: a flag, not an optional, since an optional starts zeroed,
+ * which is Some (hemera-feedback.md).
+ */
+Loaded :: struct {
+    read : bool,
+    module : slop_os.Memory,
+}
+
+MAX_LOADED :: 32
+
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager], root: os.Channel[supervision.Supervision],
-    hello_module: slop_os.Memory, platform_service: os.Channel[platform.Platform]?, entropy_service: os.Channel[entropy.Entropy]?,
+    hello_module: slop_os.Memory?, platform_service: os.Channel[platform.Platform]?, entropy_service: os.Channel[entropy.Entropy]?,
     console_module: slop_os.Memory?, disk_check_module: slop_os.Memory?, virtio_blk_module: slop_os.Memory?,
     virtio_console_module: slop_os.Memory?, virtio_input_module: slop_os.Memory?, virtio_rng_module: slop_os.Memory?,
     edu_dma_module: slop_os.Memory?, storage_manager_module: slop_os.Memory?, partition_server_module: slop_os.Memory?,
@@ -238,7 +257,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     command_line: slop_os.Memory?) -> int {
     startup :: slop_os.startup_block()
     supervisor := Supervisor.{block = startup, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
-        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, console = NOWHERE}
+        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, console = NOWHERE, system = NONE}
     supervisor.modules = Modules.{hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
@@ -258,27 +277,29 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         case None => {}
     }
 
-    // Each driver, for every device it takes
+    // The boot set's drivers, for every device each takes, and the storage manager, which reaches the system volume
     match platform_service {
         case Some(platform_end) => {
             supervisor.platform_end = platform_end.end
             supervisor.platform_port = os.port_for(startup.budget, platform_end.end) or_return 4
-            for each, index in system_config.SERVICES {
-                if !system_config.is_driver(each) || each.starter != system_config.Starter.Supervisor {
-                    continue
-                }
-                loop {
-                    device :: request_device(&supervisor, .Claim(platform.Wanted.{devices = each.devices, trusted = each.trusted_with_dma})) or_break
-                    start_driver(&supervisor, index, device, NOWHERE)
-                }
-            }
         }
         case None => {}
     }
-    // Then the services that use them, each with connectors to what it uses
+    start_drivers(&supervisor, true)
+    storage_slot :: start_storage(&supervisor)
+    if storage_slot != NOWHERE {
+        match files_of_type(&supervisor, storage_slot, storage_manager.CONTAINER_TYPE) {
+            case Some(root) => {
+                supervisor.system = root.end
+                supervisor.system_port = os.port_for(startup.budget, root.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+            }
+            case None => {}
+        }
+    }
+    // Then every other driver, and the services that use them, each with connectors to what it uses
+    start_drivers(&supervisor, false)
     start_console(&supervisor)
     start_hello(&supervisor)
-    storage_slot :: start_storage(&supervisor)
     start_disk_check(&supervisor, storage_slot)
     serial_line :: supervisor.first_serial
     if test_restart && serial_line < supervisor.started.count {
@@ -576,14 +597,161 @@ launch_virtio_rng :: fn(supervisor: ptr[mut Supervisor], service: system_config.
     }
 }
 
-module_of :: fn(supervisor: ptr[Supervisor], name: string) -> slop_os.Memory {
+/*
+ * A service's program: one outside the boot set from the system volume, read once and kept, once the storage manager
+ * has given it; otherwise, or where it isn't there, Limine's module.
+ */
+module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory {
+    service :: system_config.service(name)
+    match service {
+        case Some(found) => {
+            if !found.boot_set && cast[slop_os.Handle](supervisor.system) != slop_os.NO_HANDLE {
+                match loaded_module(supervisor, found) {
+                    case Some(module) => return module
+                    case None => {}
+                }
+            }
+        }
+        case None => {}
+    }
     modules :: &supervisor.modules
     none :: cast[slop_os.Memory](slop_os.NO_HANDLE)
     found := if name == "virtio_rng" { modules.virtio_rng } else if name == "virtio_console" { modules.virtio_console }
         else if name == "virtio_blk" { modules.virtio_blk } else if name == "virtio_input" { modules.virtio_input }
         else if name == "edu_dma" { modules.edu_dma } else if name == "storage_manager" { modules.storage_manager }
-        else if name == "console" { modules.console } else if name == "disk_check" { modules.disk_check } else { cast[slop_os.Memory?](null) }
+        else if name == "console" { modules.console } else if name == "disk_check" { modules.disk_check }
+        else if name == "hello" { modules.hello } else { cast[slop_os.Memory?](null) }
     return found or_else none
+}
+
+// The program a service's module names, from the system volume's modules folder: read already, or now.
+loaded_module :: fn(supervisor: ptr[mut Supervisor], service: system_config.Service) -> slop_os.Memory? {
+    place := system_config.SERVICES.count
+    for each, i in system_config.SERVICES {
+        if each.name == service.name {
+            place = i
+        }
+    }
+    loaded :: &supervisor.loaded
+    if place >= loaded.count {
+        return null
+    }
+    if loaded[place].read {
+        return loaded[place].module
+    }
+    module :: read_module(supervisor, service.module) or_return null
+    if place < loaded.count {
+        loaded[place] = Loaded.{read = true, module = module}
+    }
+    log_line.write(supervisor.log, "supervisor: % from the system volume", service.name)
+    return module
+}
+
+/*
+ * modules/<module> on the system volume, read whole into a memory object of its own: given to the volume server as the
+ * read's buffer, so the file comes straight into it.
+ */
+read_module :: fn(supervisor: ptr[mut Supervisor], module: string) -> slop_os.Memory? {
+    path_storage : u8[256]
+    path := text_buffer.make(path_storage)
+    text_buffer.append(&path, "modules/")
+    text_buffer.append(&path, module)
+    into := os.Incoming.{}
+    out := os.Outgoing.{}
+    opening :: os.begin[dir.Request](&out)
+    text :: text_buffer.as_string(&path)
+    opening^ = .OpenReadOnlyFile(os.append(&out, view_of(cast[ptr[u8]](text.data), text.count)))
+    opened := cast[slop_os.Channel](slop_os.NO_HANDLE)
+    match ask_system_dir(supervisor.system, supervisor.system_port, &out, &into) {
+        case OpenedReadOnlyFile(made) => opened = made.end
+        case _ => return null
+    }
+    defer slop_os.handle_close(cast[slop_os.Handle](opened))
+    budget :: supervisor.block.budget
+    port :: os.port_for(budget, opened) or_return null
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    out = os.Outgoing.{}
+    describing :: os.begin[read_only_file.Request](&out)
+    describing^ = .Info
+    size := cast[u64](0)
+    match ask_system_file(opened, port, &out, &into) {
+        case Described(info) => size = info.size
+        case _ => return null
+    }
+    if size == 0 || size > MAX_MODULE_BYTES {
+        return null
+    }
+    pages :: (size + 4095) / 4096 * 4096
+    memory :: slop_os.memory_create(budget, pages) or_return null
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    given :: slop_os.handle_duplicate(cast[slop_os.Handle](memory), rights) or_return null
+    for request in read_only_file.Request.[.UseBuffer(cast[slop_os.Memory](given)),
+        .Read(files.Transfer.{offset = 0, count = cast[u32](size), buffer_offset = 0})] {
+        out = os.Outgoing.{}
+        made :: os.begin[read_only_file.Request](&out)
+        made^ = request
+        match ask_system_file(opened, port, &out, &into) {
+            case Done => {}
+            case Transferred(count) => {
+                if cast[u64](count) != size {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](memory))
+                    return null
+                }
+            }
+            case _ => {
+                _ = slop_os.handle_close(cast[slop_os.Handle](memory))
+                return null
+            }
+        }
+    }
+    return memory
+}
+
+// The most bytes a program read from the system volume may be.
+MAX_MODULE_BYTES : u64 : 8 << 20
+
+// One request to the system volume's server on its dir connection, and its answer, waited for.
+ask_system_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> dir.Response {
+    if dir.send_request(end, port, out) is_some {
+        return .Unsupported
+    }
+    loop {
+        match dir.receive_response(end, port, into, true) {
+            case Received => return os.message_of[dir.Response](into)^
+            case Failed(error) => return .Unsupported
+            case _ => continue
+        }
+    }
+}
+
+// One request on a program's file connection, and its answer, waited for.
+ask_system_file :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> read_only_file.Response {
+    if read_only_file.send_request(end, port, out) is_some {
+        return .Unsupported
+    }
+    loop {
+        match read_only_file.receive_response(end, port, into, true) {
+            case Received => return os.message_of[read_only_file.Response](into)^
+            case Failed(error) => return .Unsupported
+            case _ => continue
+        }
+    }
+}
+
+// Every driver the supervisor starts, in the boot set or out of it, for every device it takes.
+start_drivers :: fn(supervisor: ptr[mut Supervisor], boot_set: bool) {
+    if cast[slop_os.Handle](supervisor.platform_end) == slop_os.NO_HANDLE {
+        return void
+    }
+    for each, index in system_config.SERVICES {
+        if !system_config.is_driver(each) || each.starter != system_config.Starter.Supervisor || each.boot_set != boot_set {
+            continue
+        }
+        loop {
+            device :: request_device(supervisor, .Claim(platform.Wanted.{devices = each.devices, trusted = each.trusted_with_dma})) or_break
+            start_driver(supervisor, index, device, NOWHERE)
+        }
+    }
 }
 
 // The console service, with connectors to the first serial line and keyboard, and a listener for its clients.
@@ -610,7 +778,7 @@ start_hello :: fn(supervisor: ptr[mut Supervisor]) {
     service :: system_config.service("hello") or_return void
     grants := HelloGrants.{log = duplicate_log(supervisor), console = connector_to(supervisor, supervisor.console)}
     grants.manager = process_manager.connect(supervisor.manager.end, supervisor.manager_port, supervisor.block.budget)
-    match os.launch(supervisor.manager, supervisor.manager_port, service.name, supervisor.modules.hello, service.budget, hello.main, grants) {
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "hello"), service.budget, hello.main, grants) {
         case Ok(launched) => _ = started(supervisor, "hello", launched.process)
         case Error(error) => failed(supervisor, service.name, error)
     }

@@ -171,7 +171,7 @@ check_transactions :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], buff
     if !saw_replaced || saw_created < 2 {
         return 80
     }
-    log_line.write(to, "disk_check: on the system volume, replaced a file whole while it was open, committed a transaction of two files, was refused one that conflicted, had one that failed partway leave nothing, and followed every change with a cursor")
+    log_line.write(to, "disk_check: on the system volume, replaced an open file, committed a transaction, was refused a conflicting one, had a failing one leave nothing, and followed every change")
     return 0
 }
 

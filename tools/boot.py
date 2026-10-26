@@ -519,6 +519,10 @@ def fat32_volume(sectors: int, files: list) -> bytes:
 # where make_disk has them, a BIOS boot partition for Limine's second stage, the EFI system partition with Limine,
 # the kernel, the modules and the disk check's files, and a SlopOS container whose system volume holds the modules
 BOOT_DISK_SECTORS = 206848
+# The programs Limine loads from the boot disk, enough to reach the system volume, which holds every program; the rest
+# come from it (src/system_config's boot_set, decisions/0089)
+BOOT_SET = ["root_task", "entropy", "process_manager", "platform", "supervisor", "virtio_blk", "storage_manager", "partition_server",
+            "fat_server", "container_service", "volume_server"]
 BOOT_ESP_SECTORS = 131072
 BOOT_SYSTEM_SECTORS = 65536
 
@@ -527,8 +531,9 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
                    command_line: str, kaslr: bool, mark: str) -> None:
     """
     A disk that boots kernel through Limine, from BIOS or UEFI, made by the image builder: Limine, the kernel and the
-    programs on its EFI system partition, as make_image puts them on the ISO, and the programs again in the system
-    volume of its SlopOS container; the SlopOS check partition marked as make_disk marks it.
+    programs on its EFI system partition, as make_image puts them on the ISO, but only the boot set loaded by Limine,
+    and every program in the system volume of its SlopOS container, where the rest come from; the SlopOS check
+    partition marked as make_disk marks it.
     """
     esp = folder / "boot_esp"
     for part in [esp / "EFI" / "BOOT", esp / "EFI" / "SlopOS", esp / "boot" / "limine", esp / "boot" / "modules"]:
@@ -537,7 +542,8 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
     modules = ""
     for program in programs:
         shutil.copy(program, esp / "boot" / "modules" / program.name)
-        modules += f"    module_path: boot():/boot/modules/{program.name}\n"
+        if program.stem in BOOT_SET:
+            modules += f"    module_path: boot():/boot/modules/{program.name}\n"
     config = LIMINE_CONFIG.format(command_line=command_line, kaslr="yes" if kaslr else "no", modules=modules)
     (esp / "boot" / "limine" / "limine.conf").write_text(config, newline="\n")
     shutil.copy(limine / "limine-bios.sys", esp / "boot" / "limine" / "limine-bios.sys")
