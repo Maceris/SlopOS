@@ -140,6 +140,10 @@ main :: fn() -> int {
     if failed != 0 {
         return failed
     }
+    failed = check_snapshots()
+    if failed != 0 {
+        return failed
+    }
     // The crash-state tester and the fuzzer, on a volume that isn't encrypted and on one that is
     for sealed in bool.[false, true] {
         failed = check_crashes(sealed)

@@ -12,7 +12,8 @@
  *
  * An encrypted volume's keys are here and nowhere else (roadmap 8e): it waits for the storage manager's Unlock, on its
  * own protocol, before it serves anything, unwraps the volume's key with the passphrase from the records the container
- * service keeps sealed, and holds them until it ends. Rotate starts a new key generation.
+ * service keeps sealed, and holds them until it ends. Rotate starts a new key generation. A snapshot is served read
+ * only, its root a read_only_dir, and a clone's tree knows whose its older blocks are.
  */
 package volume_server
 
@@ -136,16 +137,19 @@ main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clie
         keys = wait_for_unlock(server, control.end) or_return 6
     }
     server.volume = slopfs.attach_volume(&server.nodes, device, described.id, described.record, keys)
-    server.volume.history_bytes = slopfs.HISTORY_BYTES
-    // Nothing has anything open yet, so every orphan a crash left is given back
-    swept :: slopfs.sweep_orphans(server.volume) or_else 0
-    if swept > 0 {
-        _ = commit(server)
+    server.volume.tree.lineage = described.lineage
+    if !described.read_only {
+        server.volume.history_bytes = slopfs.HISTORY_BYTES
+        // Nothing has anything open yet, so every orphan a crash left is given back
+        swept :: slopfs.sweep_orphans(server.volume) or_else 0
+        if swept > 0 {
+            _ = commit(server)
+        }
     }
     name :: string_of(&described.record.name[0], cast[usize](cast[u16](described.record.name_bytes)))
     log_line.write(server.log, "volume_server: serving volume % (%), from transaction %", described.id, name, described.transaction)
     // The listener is a connection to the root, as any client's Connect on it gives another
-    if add(server, .Dir, clients.end, slopfs.ROOT_OBJECT, false, "") is_none {
+    if add(server, if described.read_only { Kind.ReadOnlyDir } else { Kind.Dir }, clients.end, slopfs.ROOT_OBJECT, described.read_only, "") is_none {
         return 5
     }
     if add(server, .Control, control.end, 0, false, "") is_none {
@@ -461,6 +465,7 @@ file_error :: fn(error: slopfs.Error) -> files.FileError {
         // An open volume has its keys, so neither comes from a file's request
         case .Locked => files.FileError.DeviceError
         case .WrongKey => files.FileError.DeviceError
+        case .InUse => files.FileError.DeviceError
     }
 }
 
@@ -1160,6 +1165,7 @@ wait_for_unlock :: fn(server: ptr[mut Server], end: slop_os.Channel) -> ptr[mut 
                 response = if unlocked { .Unlocked } else { .WrongKey }
             }
             case Rotate => response = .Failed
+            case Commit => response = .Failed
         }
         out := os.Outgoing.{}
         made :: os.begin[volume_protocol.Response](&out)
@@ -1198,7 +1204,7 @@ unlock_keys :: fn(server: ptr[mut Server], passphrase: u8[], keys: ptr[mut slopf
         }
         number += 1
     }
-    match slopfs.unlock(server.described.container, server.described.id, server.described.record, wraps, generations, passphrase, keys) {
+    match slopfs.unlock(server.described.container, key_owner(server), server.described.record, wraps, generations, passphrase, keys) {
         case Ok => return true
         case Error(error) => {
             if error != .WrongKey {
@@ -1241,6 +1247,9 @@ serve_control :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inco
                 }
             }
             case Rotate => response = rotate(server)
+            case Commit => {
+                response = if server.described.read_only || !server.volume.dirty || commit(server) { .Committed } else { .Failed }
+            }
         }
         out := os.Outgoing.{}
         made :: os.begin[volume_protocol.Response](&out)
@@ -1255,11 +1264,30 @@ serve_control :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inco
  */
 rotate :: fn(server: ptr[mut Server]) -> volume_protocol.Response {
     keys :: server.volume.tree.keys or_return .NotEncrypted
+    if server.described.read_only {
+        return .Failed
+    }
     if server.volume.dirty && !commit(server) {
         return .Failed
     }
     previous :: keys.current
-    record :: slopfs.start_generation(keys, server.nodes.transaction, server.described.container, server.described.id) or_return .Failed
+    // Numbered after the newest of the key records', which a clone shares with its origin
+    newest : u32 = 0
+    loop {
+        match ask(server, .GenerationAt(newest + 1)) {
+            case Generation(record) => newest += 1
+            case _ => break
+        }
+    }
+    keys.current = newest
+    record := slopfs.GenerationRecord.{}
+    match slopfs.start_generation(keys, server.nodes.transaction, server.described.container, key_owner(server)) {
+        case Some(made) => record = made
+        case None => {
+            keys.current = previous
+            return .Failed
+        }
+    }
     match ask(server, .AddGeneration(container.AddedGeneration.{number = keys.current, record = record})) {
         case Done => {
             log_line.write(server.log, "volume_server: volume % sealing with key generation %", server.described.id, keys.current)
@@ -1270,4 +1298,10 @@ rotate :: fn(server: ptr[mut Server]) -> volume_protocol.Response {
             return .Failed
         }
     }
+}
+
+// Whose key records the volume uses: its own, or a clone's origin's.
+key_owner :: fn(server: ptr[Server]) -> u64 {
+    record := server.described.record
+    return slopfs.key_owner_of(server.described.id, &record)
 }

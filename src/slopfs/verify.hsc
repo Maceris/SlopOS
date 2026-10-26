@@ -1,12 +1,14 @@
 package slopfs
 
 import runtime from "base"
+import maps from "std"
 
 /*
  * A container checked whole, as fsck checks a filesystem: every node of every tree read and checked, every extent a
  * node or a file's chunk takes collected, and those, with the free ones, found to cover the data blocks exactly once
  * each, and to be what the owners tree says, owner and all. An encrypted volume that isn't open can't be read
- * without its keys, so its extents are taken from the owners tree as they are. The crash-state tester and the fuzzer
+ * without its keys, so its extents are taken from the owners tree as they are. Snapshots' trees are walked too, and
+ * what a snapshot or a clone shares with its volume or origin is counted once. The crash-state tester and the fuzzer
  * check each image they mount with it.
  */
 
@@ -44,11 +46,14 @@ Used :: struct {
 Walk :: struct {
     used : Used[..],
     report : Report,
+    // Every node and chunk found so far, by its first block, since snapshots and clones share them
+    seen : maps.HashMap[u64, bool, maps.hash_integer[u64]],
 }
 
 verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
     walk := Walk.{}
     defer runtime.array_free(&walk.used)
+    defer maps.map_free(&walk.seen)
     if !walk_tree(container, &walk, &container.space_map) {
         return .Error(.Unreadable)
     }
@@ -59,7 +64,7 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
         return .Error(.Unreadable)
     }
     // Each volume's tree, from its record, or as it is in memory where it's open
-    value : u8[184]
+    value : u8[216]
     at : u64 = 0
     loop {
         found := Found.{}
@@ -70,23 +75,48 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
         if found.key.kind != cast[u8](RecordKind.VolumeEntry) || found.bytes != size_of(VolumeRecord) {
             return .Error(.Unreadable)
         }
-        record :: cast[ptr[VolumeRecord]](&value[0])
-        tree := Tree.{root = record.root, kind = .Volume, owner = found.key.object}
+        record := cast[ptr[VolumeRecord]](&value[0])^
+        id :: found.key.object
+        tree := Tree.{root = record.root, kind = .Volume, owner = id}
+        match lineage_of(container, &record) {
+            case Ok(lineage) => tree.lineage = lineage
+            case Error(error) => return .Error(.Unreadable)
+        }
         open := false
         for volume in container.open {
-            if volume.id == found.key.object {
+            if volume.id == id {
                 tree = volume.tree
                 open = true
             }
         }
         if !open && record.cipher != cast[u8](Cipher.None) {
-            if !add_owned(container, &walk, found.key.object) {
+            if !add_owned(container, &walk, id) {
                 return .Error(.Unreadable)
             }
             walk.report.locked += 1
         }
-        else if !walk_tree(container, &walk, &tree) {
-            return .Error(.Unreadable)
+        else {
+            if !walk_tree(container, &walk, &tree) {
+                return .Error(.Unreadable)
+            }
+            // Its snapshots, whose trees share what hasn't changed since
+            snapshots : NumberedSnapshot[..]
+            listed :: snapshot_records(container, id, &snapshots)
+            walked := match listed {
+                case Ok => true
+                case Error(error) => false
+            }
+            for each in snapshots {
+                pinned := tree
+                pinned.root = each.record.root
+                if walked && !walk_tree(container, &walk, &pinned) {
+                    walked = false
+                }
+            }
+            runtime.array_free(&snapshots)
+            if !walked {
+                return .Error(.Unreadable)
+            }
         }
         walk.report.volumes += 1
         if found.key.object == 0xffffffffffffffff {
@@ -166,7 +196,7 @@ add_owned :: fn(container: ptr[mut Container], walk: ptr[mut Walk], owner: u64) 
             case Ok(next) => found = next or_break
             case Error(error) => return false
         }
-        if cast[u64](value.volume) == owner {
+        if cast[u64](value.volume) == owner && first_time(walk, found.key.object) {
             runtime.array_add(&walk.used, Used.{start = found.key.object, blocks = cast[u64](value.blocks), owner = owner})
         }
         at = key_after(found.key) or_break
@@ -182,16 +212,30 @@ walk_tree :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tr
     return walk_node(container, walk, tree, &tree.root, NO_PARENT)
 }
 
+// Whether the extent starting at start is found for the first time, which it then has been.
+first_time :: fn(walk: ptr[mut Walk], start: u64) -> bool {
+    if maps.map_get(&walk.seen, start) is_some {
+        return false
+    }
+    maps.map_put(&walk.seen, start, true)
+    return true
+}
+
 walk_node :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tree], pointer: ptr[BlockPointer], above: u16) -> bool {
+    // A node another tree has is the same below, copy-on-write: walked once
+    if !first_time(walk, cast[u64](pointer.address)) {
+        return true
+    }
     node :: load(&container.nodes, tree, pointer) or_return false
     defer done(node)
     if !level_fits(node, above) {
         return false
     }
     walk.report.nodes += 1
-    runtime.array_add(&walk.used, Used.{start = cast[u64](pointer.address), blocks = NODE_BLOCKS, owner = tree.owner})
+    owner :: owner_at(tree, cast[u64](pointer.birth))
+    runtime.array_add(&walk.used, Used.{start = cast[u64](pointer.address), blocks = NODE_BLOCKS, owner = owner})
     if cast[u64](pointer.copy) != 0 {
-        runtime.array_add(&walk.used, Used.{start = cast[u64](pointer.copy), blocks = NODE_BLOCKS, owner = tree.owner})
+        runtime.array_add(&walk.used, Used.{start = cast[u64](pointer.copy), blocks = NODE_BLOCKS, owner = owner})
     }
     if level_of(node) > 0 {
         for i in 0..<count_of(node) {
@@ -212,10 +256,10 @@ walk_node :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tr
             continue
         }
         extent :: cast[ptr[ExtentRecord]](&value[0])
-        if cast[u32](extent.kind) == cast[u32](ExtentKind.Blocks) {
+        if cast[u32](extent.kind) == cast[u32](ExtentKind.Blocks) && first_time(walk, cast[u64](extent.pointer.address)) {
             walk.report.chunks += 1
             runtime.array_add(&walk.used, Used.{start = cast[u64](extent.pointer.address),
-                blocks = cast[u64](cast[u32](extent.pointer.blocks)), owner = tree.owner})
+                blocks = cast[u64](cast[u32](extent.pointer.blocks)), owner = owner_at(tree, cast[u64](extent.pointer.birth))})
         }
     }
     return true

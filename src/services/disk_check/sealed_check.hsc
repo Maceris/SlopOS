@@ -28,7 +28,7 @@ AFTER_TEXT :: "Written to the sealed volume with its second key generation"
 // A SlopOS container's partition type, "SLOPOS CONTAINER" in ASCII
 CONTAINER_TYPE :: u8.[0x53, 0x4c, 0x4f, 0x50, 0x4f, 0x53, 0x20, 0x43, 0x4f, 0x4e, 0x54, 0x41, 0x49, 0x4e, 0x45, 0x52]
 
-check_sealed :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.Port) -> int {
+check_sealed :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.Port, system: os.Channel[dir.Dir]) -> int {
     container := cast[u32](0xffffffff)
     for index in 0..<cast[u32](64) {
         match ask(manager, port, .Describe(index)) {
@@ -103,7 +103,7 @@ check_sealed :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os
     }
     log_line.write(to, "disk_check: on the sealed volume, was refused locked and with a wrong passphrase, unlocked it, read its file, wrote one, started key generation %, wrote another and read all three",
         generation)
-    return 0
+    return check_snapshots(to, manager, port, system, container)
 }
 
 // text in capitals, in into.

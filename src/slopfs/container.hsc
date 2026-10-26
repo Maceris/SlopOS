@@ -176,6 +176,13 @@ mount :: fn(device #escaping : Device) -> Result[ptr[mut Container], Error] {
             return .Error(error)
         }
     }
+    match load_floors(container) {
+        case Ok => {}
+        case Error(error) => {
+            unmount(container)
+            return .Error(error)
+        }
+    }
     return .Ok(container)
 }
 
@@ -302,7 +309,7 @@ apply_change :: fn(container: ptr[mut Container], change: Change) -> Result[void
     match change.change {
         case .Allocated => {
             space_map_take(container, change.start, change.blocks)?
-            owner := OwnerValue.{blocks = cast[u64le](change.blocks), volume = cast[u64le](change.owner)}
+            owner := OwnerValue.{blocks = cast[u64le](change.blocks), volume = cast[u64le](change.owner), birth = cast[u64le](change.birth)}
             tree_put(&container.nodes, &container.owners, key_of(change.start, .Owner, 0),
                 view_of(cast[ptr[mut u8]](&owner), size_of(OwnerValue)))?
         }
@@ -315,6 +322,12 @@ apply_change :: fn(container: ptr[mut Container], change: Change) -> Result[void
             tree_put(&container.nodes, &container.space_map, key_of(0, .Pending, change.start),
                 view_of(cast[ptr[mut u8]](&value), size_of(SpaceValue)))?
             tree_delete(&container.nodes, &container.owners, key_of(change.start, .Owner, 0))?
+        }
+        case .Dead => {
+            dead := DeadValue.{blocks = cast[u64le](change.blocks), birth = cast[u64le](change.birth),
+                freed = cast[u64le](container.nodes.transaction)}
+            tree_put(&container.nodes, &container.volumes, key_of(change.owner, .Dead, change.start),
+                view_of(cast[ptr[mut u8]](&dead), size_of(DeadValue)))?
         }
     }
     return .Ok
@@ -336,6 +349,17 @@ commit :: fn(container: ptr[mut Container]) -> Result[void, Error] {
         }
     }
     return failing(container, commit_all(container))
+}
+
+/*
+ * The container's own changes made durable, every volume's left waiting for its own commit: a snapshot taken or
+ * deleted, or a clone made, at once (snapshot.hsc).
+ */
+commit_own :: fn(container: ptr[mut Container]) -> Result[void, Error] {
+    if container.failed {
+        return .Error(.Failed)
+    }
+    return failing(container, commit_changes(container, 0))
 }
 
 // A commit's result, a device error stopping every later one.
@@ -440,6 +464,7 @@ abandon_volume :: fn(container: ptr[mut Container], id: u64, undone: ptr[mut Cha
         if change.change == .Allocated {
             add_free(space, change.start, change.blocks)
         }
+        else if change.change == .Dead {}
         else if change.change == .FreedLater {
             for later, i in space.later {
                 if later.start == change.start && later.blocks == change.blocks && later.owner == id {

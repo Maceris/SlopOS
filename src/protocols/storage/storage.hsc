@@ -3,8 +3,10 @@ package storage
 import os from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
+import read_only_dir from "std/os/slop_os"
 import block from "../block"
 import partitions from "../partitions"
+import container from "../container"
 
 /*
  * The storage manager's protocol (roadmap 8a, decisions/0086): every partition of every disk it holds, by one index
@@ -12,7 +14,8 @@ import partitions from "../partitions"
  * (an EFI system partition or a basic data one), as a dir connection to its root, from a FAT server for it; a SlopOS
  * container's files are its system volume's (decisions/0089). Any of a container's volumes is opened by name, an
  * encrypted one with its passphrase, which its volume server, and nothing else, unwraps its keys with (roadmap 8e).
- * Connections arrive on its listener as Connects.
+ * Its snapshots are taken, listed and deleted here, each a clone made from, and opened read only as
+ * "volume@snapshot". Connections arrive on its listener as Connects.
  */
 
 Storage :: struct {}
@@ -39,6 +42,30 @@ VolumeNamed :: struct {
     name : slop_os.Relative[u8],
 }
 
+// A volume's snapshot, both by name, and when it's taken, as the asker says.
+SnapshotOf :: struct {
+    partition : u32,
+    volume : slop_os.Relative[u8],
+    snapshot : slop_os.Relative[u8],
+    now : u64,
+}
+
+// A volume's snapshot by its place among them, oldest first, from 0.
+SnapshotIndexOf :: struct {
+    partition : u32,
+    volume : slop_os.Relative[u8],
+    index : u64,
+}
+
+// A new volume named name, cloned from a volume's snapshot.
+CloneOf :: struct {
+    partition : u32,
+    volume : slop_os.Relative[u8],
+    snapshot : slop_os.Relative[u8],
+    name : slop_os.Relative[u8],
+    now : u64,
+}
+
 Request :: union {
     // The partition at an index, across every disk, from 0
     Describe(u32),
@@ -50,6 +77,12 @@ Request :: union {
     OpenVolume(VolumeAt),
     // A new key generation for an encrypted volume being served, sealing what's written from now on (decisions/0042)
     Rotate(VolumeNamed),
+    // A snapshot of what a volume has committed, which a volume being served commits first; deleted; found by its
+    // place; and a clone made from one (8e)
+    TakeSnapshot(SnapshotOf),
+    DeleteSnapshot(SnapshotOf),
+    SnapshotAt(SnapshotIndexOf),
+    Clone(CloneOf),
     // Serve another client, on its end
     Connect(os.Channel[Storage]),
 }
@@ -58,6 +91,8 @@ Response :: union {
     Described(Partition),
     Opened(os.Channel[block.Block]),
     OpenedFiles(os.Channel[dir.Dir]),
+    // A snapshot's root, read only (8e)
+    OpenedReadOnlyFiles(os.Channel[read_only_dir.ReadOnlyDir]),
     NoPartition,
     // The partition isn't one of a kind that holds files, or its FAT server couldn't be started
     NoFiles,
@@ -73,6 +108,16 @@ Response :: union {
     NotEncrypted,
     // Its servers couldn't be started, or did something that failed
     Failed,
+    Done,
+    // A snapshot, its name, transaction and when it was taken
+    Snapshot(container.SnapshotInfo),
+    // Past the last snapshot
+    NoMore,
+    NoSnapshot,
+    // A snapshot or volume with that name is there already
+    AlreadyExists,
+    // A snapshot a clone was made from, which stays while it's there
+    InUse,
     Unsupported,
 }
 
@@ -83,6 +128,10 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case OpenFiles(_) => true
         case OpenVolume(_) => true
         case Rotate(_) => false
+        case TakeSnapshot(_) => false
+        case DeleteSnapshot(_) => false
+        case SnapshotAt(_) => true
+        case Clone(_) => false
         case Connect(_) => true
     }
 }

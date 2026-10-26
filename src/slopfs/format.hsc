@@ -16,7 +16,8 @@ package slopfs
 BLOCK_BYTES : u64 : 4096
 NODE_BYTES : u64 : 16384
 NODE_BLOCKS : u64 : 4
-FORMAT_VERSION : u32 : 1
+// 2 from 8e: owners with their extents' births, clones, snapshots and dead lists
+FORMAT_VERSION : u32 : 2
 // The checkpoint ring: blocks 1 to RING_BLOCKS, the one for transaction t at 1 + t % RING_BLOCKS
 RING_BLOCKS : u64 : 16
 // The first block extents are allocated from, after the superblock and the ring
@@ -99,6 +100,10 @@ RecordKind :: enum #backed_by(u8) {
     KeyWrap = 10,
     // The volumes: one of its key generations, wrapped by its volume key, keyed (volume, KeyGeneration, number)
     KeyGeneration = 11,
+    // The volumes: one of its snapshots, keyed (volume, Snapshot, number from 1) (snapshot.hsc)
+    Snapshot = 12,
+    // The volumes: an extent it gave back that a snapshot still holds, keyed (volume, Dead, first block)
+    Dead = 13,
 }
 
 // A key as it's stored: ordered by object, then kind, then offset.
@@ -175,20 +180,23 @@ SpaceValue :: struct #packed {
 
 #assert size_of(SpaceValue) == 16
 
-// An owner record's value.
+// An owner record's value: the extent's length, its owner, and the transaction it was allocated in.
 OwnerValue :: struct #packed {
     blocks : u64le,
     volume : u64le,
+    birth : u64le,
 }
 
-#assert size_of(OwnerValue) == 16
+#assert size_of(OwnerValue) == 24
 
 // The most bytes in a volume's name.
 VOLUME_NAME_BYTES :: 64
 
 /*
  * A volume's record in the container: its tree, its next object's ID, the key its names hash with, its cipher (a
- * Cipher, None for a volume sealed with BLAKE3 alone) and newest key generation, and its name.
+ * Cipher, None for a volume sealed with BLAKE3 alone) and newest key generation, and its name. A clone's names the
+ * volume it was cloned from, the snapshot and the transaction that snapshot holds, whose blocks are the origin's; and
+ * every volume names whose key records it uses, its own, or for a clone, its origin's (snapshot.hsc).
  */
 VolumeRecord :: struct #packed {
     root : BlockPointer,
@@ -200,9 +208,13 @@ VolumeRecord :: struct #packed {
     reserved : u8,
     generation : u32le,
     name : u8[VOLUME_NAME_BYTES],
+    origin : u64le,
+    origin_snapshot : u64le,
+    origin_transaction : u64le,
+    key_owner : u64le,
 }
 
-#assert size_of(VolumeRecord) == 184
+#assert size_of(VolumeRecord) == 216
 
 ObjectKind :: enum #backed_by(u32) {
     File = 1,
@@ -311,3 +323,28 @@ HISTORY_BYTES : u64 : 1 << 20
 
 // A record's value's most bytes, so every leaf holds at least two.
 MAX_VALUE_BYTES : u64 : 4096
+
+/*
+ * A snapshot's record: the volume's root and next object as its last commit had them, the transaction that commit made
+ * durable, which holds every block the tree has, when it was taken (as its taker says), and its name.
+ */
+SnapshotRecord :: struct #packed {
+    root : BlockPointer,
+    transaction : u64le,
+    next_object : u64le,
+    created : u64le,
+    name_bytes : u16le,
+    reserved : u8[6],
+    name : u8[VOLUME_NAME_BYTES],
+}
+
+#assert size_of(SnapshotRecord) == 160
+
+// A dead list's record: an extent a volume gave back in freed, which a snapshot still holds, and when it was born.
+DeadValue :: struct #packed {
+    blocks : u64le,
+    birth : u64le,
+    freed : u64le,
+}
+
+#assert size_of(DeadValue) == 24

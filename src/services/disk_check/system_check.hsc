@@ -6,6 +6,7 @@ import slop_os from "std/os"
 import dir from "std/os/slop_os"
 import file from "std/os/slop_os"
 import files from "std/os/slop_os"
+import read_only_dir from "std/os/slop_os"
 import read_only_file from "std/os/slop_os"
 import log_line from "../../log_line"
 
@@ -131,11 +132,28 @@ read_whole :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, buffer:
     out := os.Outgoing.{}
     opening :: os.begin[dir.Request](&out)
     opening^ = .OpenReadOnlyFile(bytes_of(&out, path))
-    opened := os.Channel[read_only_file.ReadOnlyFile].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     match ask_dir(end, port, &out, &into) {
-        case OpenedReadOnlyFile(made) => opened = made
+        case OpenedReadOnlyFile(made) => return read_file_whole(made, buffer, bytes)
         case _ => return false
     }
+}
+
+// The file at path beneath a read-only directory, read whole into bytes.
+read_whole_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, buffer: ptr[Buffer], bytes: ptr[mut u8[..]]) -> bool {
+    into := os.Incoming.{}
+    out := os.Outgoing.{}
+    opening :: os.begin[read_only_dir.Request](&out)
+    opening^ = .OpenReadOnlyFile(bytes_of(&out, path))
+    match ask_read_only_dir(end, port, &out, &into) {
+        case OpenedReadOnlyFile(made) => return read_file_whole(made, buffer, bytes)
+        case _ => return false
+    }
+}
+
+// A read_only_file connection's file read whole into bytes, and the connection closed.
+read_file_whole :: fn(opened: os.Channel[read_only_file.ReadOnlyFile], buffer: ptr[Buffer], bytes: ptr[mut u8[..]]) -> bool {
+    into := os.Incoming.{}
+    out := os.Outgoing.{}
     defer slop_os.handle_close(cast[slop_os.Handle](opened.end))
     budget :: slop_os.startup_block().budget
     file_port :: os.port_for(budget, opened.end) or_return false

@@ -19,6 +19,8 @@ Request :: union {
     Unlock(slop_os.Relative[u8]),
     // A new key generation, which seals what's written from now on (decisions/0042)
     Rotate,
+    // What's changed committed now, as before a snapshot of it is taken
+    Commit,
 }
 
 Response :: union {
@@ -27,6 +29,7 @@ Response :: union {
     WrongKey,
     // The generation now sealing what's written
     Rotated(u32),
+    Committed,
     // The volume isn't encrypted
     NotEncrypted,
     // What it needed couldn't be read, written or committed
@@ -39,6 +42,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Unlock(_) => true
         case Rotate => false
+        case Commit => true
     }
 }
 

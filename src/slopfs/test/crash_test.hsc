@@ -9,7 +9,8 @@ import slopfs from ".."
  * on a disk that records every write and flush; then the disk as a crash could leave it, at every prefix of the
  * writes, at random subsets of the writes between two flushes (which a disk may make durable in any order), and with
  * each write torn halfway. Every one must mount, check out whole, take another commit, and hold the state after the
- * last acknowledged commit, or the one being made: a prefix of what was acknowledged (decisions/0085). Checks from 500.
+ * last acknowledged commit, or the one being made: a prefix of what was acknowledged (decisions/0085). A snapshot is
+ * taken partway and deleted later, so its record and the dead list are in the commits checked too. Checks from 500.
  */
 
 CRASH_BLOCKS : u64 : 1024
@@ -48,6 +49,19 @@ check_crashes :: fn(sealed: bool) -> int {
     runtime.array_add(&acknowledged, Acknowledged.{digest = state_digest(volume) or_return 506, log_end = 0})
     disk.recording = true
     for step in 0..<STEPS {
+        // Taken with the commit that shrinks a file, so what it gives back goes on the dead list; deleted later
+        if step == 5 {
+            match slopfs.take_snapshot(container, volume.id, name_bytes("crash"), 1) {
+                case Ok(number) => {}
+                case Error(error) => return 509
+            }
+        }
+        else if step == 10 {
+            match slopfs.delete_snapshot(container, volume.id, name_bytes("crash"), null) {
+                case Ok => {}
+                case Error(error) => return 509
+            }
+        }
         failed :: workload(volume, step)
         if failed != 0 {
             return 510 + failed

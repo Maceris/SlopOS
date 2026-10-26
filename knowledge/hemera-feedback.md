@@ -48,6 +48,9 @@ Left over from what was built: known limits, each an error rather than wrong cod
     stack (E4030), even when it comes from `runtime.new`; the caller allocates and passes it in instead.
   - `if at + i < into.count { into[at + i] = ... }` isn't proven in bounds; `j :: at + i` first is. And a slice after
     `if a || length > buffer.count { return }` sometimes isn't, where the same check on its own is.
+- Found writing snapshots (8e2): a `Result` has no `is_ok` or `is_error` to go with an optional's `is_some` and
+  `is_none`, so checking one takes a `match`; and `x :: f() or_else { ...; return y }` isn't supported ("BLOCK isn't
+  supported in an expression yet"), so a fallback that does more than give a value takes a `match` too.
 
 ### Targets and runtime
 

@@ -57,6 +57,45 @@ and key generations, 8e2 snapshots and clones, 8e3 quotas and the reserve. This 
   the disk (`boot.py --refuse-disk-text`), so the disk check writes it in capitals made at run time, its own bytes
   being on the disk in the clear.
 
+### 8e2: snapshots and clones
+- **The format, version 2**: an owner record keeps the transaction its extent was allocated in; a volume's record
+  names a clone's origin, the snapshot and the transaction it's cloned from, and whose key records it uses; snapshots
+  and dead lists are records in the volumes tree beside the volume's (`src/slopfs/snapshot.hsc`).
+- **Snapshots, by birth times and dead lists** (ZFS's, `design/storage.md` §3): a snapshot is the volume's root and
+  next object as its last commit left them, and the transaction that commit made durable. A block given back that was
+  born at or before the volume's newest snapshot's transaction stays the volume's, on its dead list with when it was
+  born and given back; a snapshot taken at t holds a dead block born at b and given back at f when b <= t < f, and
+  deleting a snapshot frees, once the deletion is durable, what no other snapshot holds, including what was waiting to
+  go on the list in the transaction open. No reference counts, no back-references; the floors (each volume's newest
+  snapshot's transaction, and a clone's origin's) are worked out from the records when a container is mounted.
+- **Clones**: a new volume whose tree starts as a snapshot's, its names hashing as its origin's do. Its blocks up to
+  that snapshot's transaction are its origin's: it never frees them, the snapshot can't be deleted while it's there
+  (`InUse`), and its tree knows its lineage, since a node's header and an encrypted block's associated data name the
+  volume that wrote it; a node it copies to change becomes its own. A clone of an encrypted volume uses its origin's
+  volume key and key records, and a generation either starts is numbered after the newest of them.
+- **`verify`** walks every snapshot's tree too, each node and chunk once however many trees share it.
+- **The container service** keeps each extent with when it was allocated, whether since its volume's last commit,
+  and whether a snapshot holds it on the dead list. A volume's block connections write only what it allocated since
+  its last commit, so nothing a commit made durable or a snapshot holds is ever written again, whatever the volume
+  server does; and read only its own live extents, and for a clone, its origins' up to what their snapshots hold. On
+  its listener's connections, snapshots are taken (`TakeSnapshot`), deleted, found by their place (`SnapshotAt`), and
+  cloned (`Clone`), each durable at once in a commit of the container's own changes (`commit_own`); `OpenVolume` with
+  `volume@snapshot` gives a snapshot's connection, read only, whose block connections read what the snapshot holds.
+- **The storage manager** takes a snapshot after the volume's server has committed what's waiting (the volume
+  protocol's `Commit`), so it holds everything written so far; passes the rest on; and serves `volume@snapshot`
+  through a volume server of its own, read only: `OpenVolume` answers `OpenedReadOnlyFiles`, a `read_only_dir`, for
+  which Hemera's `std` gained `read_only_dir.connect`. An encrypted volume's snapshot is opened with its passphrase.
+  The storage manager's budget is 64 MiB and the supervisor's 96, for a few more volume servers.
+- **Tests**: hosted (`src/slopfs/test/snapshot_test.hsc`), a snapshot read as the volume was while the volume changes,
+  what it holds on the dead list rather than freed, a second snapshot and a clone of it changed apart from its origin,
+  the clone giving back its origin's files with nothing freed, the snapshot refused deletion while cloned, the first
+  deleted and what only it held freed, everything across a mount, checked whole at every step; the same for an
+  encrypted volume, its clone unlocked with its origin's passphrase and starting a generation of their shared key
+  records. The crash-state tester takes a snapshot partway and deletes it later, so every crash state of those commits
+  is checked too. Booted, the disk check takes a snapshot of the system volume, writes to the volume, reads the
+  snapshot as it was, read only, finds it among the volume's snapshots, clones it and writes to the clone apart from
+  the volume, is refused its deletion while cloned, and reads a snapshot of the encrypted volume.
+
 ## Alternatives considered
 - **The storage manager unwrapping keys**: one process holding every unlocked volume's key, which is what a volume
   server per volume is for (`0085`).
@@ -64,6 +103,10 @@ and key generations, 8e2 snapshots and clones, 8e3 quotas and the reserve. This 
   sealed lives on, so blocks would outlive what opens them.
 - **Encrypting the container's own trees**: their metadata is out of scope (`0013`), and the container service would
   need a key, which it's kept from holding.
+- **Reference counts per block** (as Btrfs keeps them): a write to every shared block's count on every change, where
+  birth times and dead lists need nothing until a block is given back.
+- **A clone's own copy of its origin's key records**: wrapping the volume key for the clone needs the passphrase or the
+  key, which the container service never holds; sharing them is what ZFS does with a clone's encryption root too.
 
 ## Consequences
 - M10's account service unlocks a user's volume with the same `OpenVolume`, its password the passphrase, and wraps the

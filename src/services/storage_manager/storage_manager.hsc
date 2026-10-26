@@ -17,6 +17,7 @@ import os from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
 import dir from "std/os/slop_os"
+import read_only_dir from "std/os/slop_os"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
 import connector from "../../protocols/connector"
@@ -82,6 +83,8 @@ Served :: struct {
     control : Disk,
     encrypted : bool,
     unlocked : bool,
+    // A snapshot's, "volume@snapshot", whose root is read only
+    read_only : bool,
 }
 
 // A connector to a disk, which may not be given
@@ -224,6 +227,9 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
             }
         }
         response : storage.Response = .NoPartition
+        // Begun first, so a snapshot's name can go in it
+        reply := os.Outgoing.{}
+        made :: os.begin[storage.Response](&reply)
         match os.message_of[storage.Request](into)^ {
             case Describe(which) => {
                 if cast[usize](which) < state.partition_count && cast[usize](which) < state.partitions.count {
@@ -251,6 +257,37 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
                     response = rotate(state, cast[usize](named.partition), os.items(into, named.name))
                 }
             }
+            case TakeSnapshot(of) => {
+                if is_container(state, of.partition) {
+                    response = take_snapshot(state, cast[usize](of.partition), os.items(into, of.volume), os.items(into, of.snapshot), of.now)
+                }
+            }
+            case DeleteSnapshot(of) => {
+                if is_container(state, of.partition) {
+                    out := os.Outgoing.{}
+                    request :: os.begin[container.Request](&out)
+                    request^ = .DeleteSnapshot(container.SnapshotNamed.{volume = os.append(&out, os.items(into, of.volume)),
+                        snapshot = os.append(&out, os.items(into, of.snapshot))})
+                    response = to_container(state, cast[usize](of.partition), &out, null)
+                }
+            }
+            case SnapshotAt(at) => {
+                if is_container(state, at.partition) {
+                    out := os.Outgoing.{}
+                    request :: os.begin[container.Request](&out)
+                    request^ = .SnapshotAt(container.SnapshotIndex.{volume = os.append(&out, os.items(into, at.volume)), index = at.index})
+                    response = to_container(state, cast[usize](at.partition), &out, &reply)
+                }
+            }
+            case Clone(of) => {
+                if is_container(state, of.partition) {
+                    out := os.Outgoing.{}
+                    request :: os.begin[container.Request](&out)
+                    request^ = .Clone(container.Cloning.{volume = os.append(&out, os.items(into, of.volume)),
+                        snapshot = os.append(&out, os.items(into, of.snapshot)), name = os.append(&out, os.items(into, of.name)), now = of.now})
+                    response = to_container(state, cast[usize](of.partition), &out, null)
+                }
+            }
             case OpenFiles(which) => {
                 if cast[usize](which) < state.partition_count && cast[usize](which) < state.partitions.count {
                     match files_of(state, cast[usize](which)) {
@@ -266,10 +303,8 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
                 continue
             }
         }
-        out := os.Outgoing.{}
-        made :: os.begin[storage.Response](&out)
         made^ = response
-        _ = storage.send_response(end, state.port, &out)
+        _ = storage.send_response(end, state.port, &reply)
     }
 }
 
@@ -398,8 +433,7 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
                 }
                 served.unlocked = true
             }
-            root :: dir.connect(served.root.end, served.root.port, startup.budget) or_return .Failed
-            return .OpenedFiles(root)
+            return root_of(served)
         }
         case None => {}
     }
@@ -451,7 +485,7 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
         return .Failed
     }
     served := Served.{partition = index, name_bytes = name.count, root = Disk.{end = pair.b, port = root_port},
-        control = Disk.{end = control.b, port = control_port}, encrypted = encrypted}
+        control = Disk.{end = control.b, port = control_port}, encrypted = encrypted, read_only = is_snapshot(name)}
     for byte, i in name {
         if i < served.name.count {
             served.name[i] = byte
@@ -469,7 +503,27 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
         }
         state.served[slot].unlocked = true
     }
-    root :: dir.connect(pair.b, root_port, startup.budget) or_return .Failed
+    return root_of(&state.served[slot])
+}
+
+// Whether a name is a snapshot's, "volume@snapshot".
+is_snapshot :: fn(name: u8[]) -> bool {
+    for byte in name {
+        if byte == cast[u8]('@') {
+            return true
+        }
+    }
+    return false
+}
+
+// A new connection to a served volume's root: a dir, or a snapshot's read_only_dir.
+root_of :: fn(served: ptr[Served]) -> storage.Response {
+    startup :: slop_os.startup_block()
+    if served.read_only {
+        root :: read_only_dir.connect(served.root.end, served.root.port, startup.budget) or_return .Failed
+        return .OpenedReadOnlyFiles(root)
+    }
+    root :: dir.connect(served.root.end, served.root.port, startup.budget) or_return .Failed
     return .OpenedFiles(root)
 }
 
@@ -557,5 +611,71 @@ duplicate_log :: fn(log: slop_os.DebugLog) -> slop_os.DebugLog? {
     match slop_os.handle_duplicate(cast[slop_os.Handle](log), rights) {
         case Ok(copy) => return cast[slop_os.DebugLog](copy)
         case Error(error) => return null
+    }
+}
+
+// Snapshots and clones (roadmap 8e)
+
+// Whether the partition at an index holds a SlopOS container.
+is_container :: fn(state: ptr[Manager], partition: u32) -> bool {
+    index :: cast[usize](partition)
+    return index < state.partition_count && index < state.partitions.count && state.partitions[index].info.type_guid == CONTAINER_TYPE
+}
+
+/*
+ * A snapshot of a container's volume: what its server has waiting committed first, if it's being served, so the
+ * snapshot holds everything written to it so far.
+ */
+take_snapshot :: fn(state: ptr[mut Manager], index: usize, volume: u8[], snapshot: u8[], now: u64) -> storage.Response {
+    match served_volume(state, index, volume) {
+        case Some(served) => {
+            if !served.encrypted || served.unlocked {
+                out := os.Outgoing.{}
+                request :: os.begin[volume_protocol.Request](&out)
+                request^ = .Commit
+                match ask_volume(served, &out) {
+                    case Committed => {}
+                    case _ => return .Failed
+                }
+            }
+        }
+        case None => {}
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[container.Request](&out)
+    request^ = .TakeSnapshot(container.SnapshotNamed.{volume = os.append(&out, volume), snapshot = os.append(&out, snapshot), now = now})
+    return to_container(state, index, &out, null)
+}
+
+/*
+ * A request to a container's service, from out, and its answer as the storage protocol has it; a snapshot's name,
+ * if it's one, is copied into answer, the reply being built.
+ */
+to_container :: fn(state: ptr[mut Manager], index: usize, out: ptr[mut os.Outgoing], answer: ptr[mut os.Outgoing]?) -> storage.Response {
+    service :: container_of(state, index) or_return .Failed
+    if container.send_request(service.end, service.port, out) is_some {
+        return .Failed
+    }
+    into := os.Incoming.{}
+    loop {
+        match container.receive_response(service.end, service.port, &into, true) {
+            case Received => break
+            case Failed(error) => return .Failed
+            case _ => continue
+        }
+    }
+    return match os.message_of[container.Response](&into)^ {
+        case Done => .Done
+        case NoVolume => .NoVolume
+        case NoSnapshot => .NoSnapshot
+        case AlreadyExists => .AlreadyExists
+        case InUse => .InUse
+        case NoMore => .NoMore
+        case Snapshot(info) => match answer {
+            case Some(reply) => .Snapshot(container.SnapshotInfo.{name = os.append(reply, os.items(&into, info.name)),
+                transaction = info.transaction, created = info.created})
+            case None => .Failed
+        }
+        case _ => .Failed
     }
 }

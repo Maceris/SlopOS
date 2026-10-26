@@ -38,6 +38,8 @@ Error :: enum {
     Locked,
     // A passphrase that doesn't unwrap the volume's key
     WrongKey,
+    // A snapshot a clone was made from, which can't be deleted while it's there (snapshot.hsc)
+    InUse,
 }
 
 /*
@@ -115,8 +117,9 @@ Node :: struct {
 }
 
 /*
- * A tree: its root (address 0 while it's empty), which it is, whose, whether its nodes are written twice, and an
- * encrypted volume's keys, which seal its nodes (keys.hsc), or null for a BLAKE3 seal.
+ * A tree: its root (address 0 while it's empty), which it is, whose, whether its nodes are written twice, an encrypted
+ * volume's keys, which seal its nodes (keys.hsc), or null for a BLAKE3 seal, and for a clone's, who wrote its older
+ * blocks.
  */
 Tree :: struct {
     root : BlockPointer,
@@ -124,6 +127,30 @@ Tree :: struct {
     owner : u64,
     ditto : bool,
     keys : ptr[mut Keys]?,
+    lineage : Lineage,
+}
+
+MAX_LINEAGE :: 4
+
+/*
+ * Who wrote a clone's older blocks (snapshot.hsc): its origin, up to the transaction the snapshot it was cloned from
+ * holds, and the origin's own origin up to the one before, and so on, nearest first.
+ */
+Lineage :: struct {
+    count : usize,
+    owners : u64[MAX_LINEAGE],
+    up_to : u64[MAX_LINEAGE],
+}
+
+// Whose a tree's block born in birth is: the oldest ancestor whose part holds it, or the tree's own owner's.
+owner_at :: fn(tree: ptr[Tree], birth: u64) -> u64 {
+    owner := tree.owner
+    for i in 0..<tree.lineage.count {
+        if i < MAX_LINEAGE && birth <= tree.lineage.up_to[i] {
+            owner = tree.lineage.owners[i]
+        }
+    }
+    return owner
 }
 
 /*
@@ -305,7 +332,7 @@ read_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointe
             if !nodes.device.read(nodes.device.context, place, NODE_BLOCKS, sealed.bytes) {
                 return false
             }
-            return open_block(keys, tree.owner, pointer, sealed.bytes, node.bytes)
+            return open_block(keys, owner_at(tree, cast[u64](pointer.birth)), pointer, sealed.bytes, node.bytes)
         }
     }
 }
@@ -321,7 +348,7 @@ node_checks_out :: fn(node: ptr[mut Node], tree: ptr[Tree], pointer: ptr[BlockPo
     }
     header :: header_of(node)
     if cast[u32](header.magic) != NODE_MAGIC || cast[u16](header.tree) != cast[u16](tree.kind)
-        || cast[u64](header.owner) != tree.owner || cast[u64](header.address) != cast[u64](pointer.address)
+        || cast[u64](header.owner) != owner_at(tree, cast[u64](pointer.birth)) || cast[u64](header.address) != cast[u64](pointer.address)
         || cast[u64](header.transaction) != cast[u64](pointer.birth) {
         return false
     }
@@ -395,6 +422,8 @@ writable :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockPoi
     header :: header_of(copy)
     header.transaction = cast[u64le](nodes.transaction)
     header.address = placed.address
+    // A clone's copy of its origin's node is its own
+    header.owner = cast[u64le](tree.owner)
     copy.copy = cast[u64](placed.copy)
     copy.dirty = true
     maps.map_put(&nodes.dirty, cast[u64](placed.address), copy)

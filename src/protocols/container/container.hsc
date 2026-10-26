@@ -12,6 +12,10 @@ import block from "../block"
  * and commits its tree: written through those connections, every write finished, then its record sent here, which
  * the container makes durable with a checkpoint. A volume server never reaches another volume's blocks or the
  * container's own, and the container service never reads a volume's tree.
+ *
+ * Snapshots and clones (roadmap 8e): on the listener's connections, a volume's snapshots are taken, listed and
+ * deleted, and a clone made from one, each durable at once. OpenVolume with "volume@snapshot" gives a snapshot's
+ * connection, read only: its block connections read only what the snapshot holds.
  */
 
 Container :: struct {}
@@ -31,12 +35,45 @@ AddedGeneration :: struct {
     record : slopfs.GenerationRecord,
 }
 
-// A volume as it was last committed, the transaction its changes go into now, and the container it's in.
+/*
+ * A volume as it was last committed, the transaction its changes go into now, the container it's in, who wrote a
+ * clone's older blocks, and whether it's a snapshot, served read only.
+ */
 Described :: struct {
     id : u64,
     record : slopfs.VolumeRecord,
     transaction : u64,
     container : u8[16],
+    lineage : slopfs.Lineage,
+    read_only : bool,
+}
+
+// A volume's snapshot, both by name, and when it's taken, as its taker says.
+SnapshotNamed :: struct {
+    volume : slop_os.Relative[u8],
+    snapshot : slop_os.Relative[u8],
+    now : u64,
+}
+
+// A volume's snapshot by its place among them, oldest first, from 0.
+SnapshotIndex :: struct {
+    volume : slop_os.Relative[u8],
+    index : u64,
+}
+
+// A snapshot: its name, the transaction it holds, and when it was taken.
+SnapshotInfo :: struct {
+    name : slop_os.Relative[u8],
+    transaction : u64,
+    created : u64,
+}
+
+// A new volume named name, cloned from a volume's snapshot.
+Cloning :: struct {
+    volume : slop_os.Relative[u8],
+    snapshot : slop_os.Relative[u8],
+    name : slop_os.Relative[u8],
+    now : u64,
 }
 
 Request :: union {
@@ -58,6 +95,11 @@ Request :: union {
     GenerationAt(u32),
     // A new key generation's record, kept with the volume, which its record then names; durable with the next commit
     AddGeneration(AddedGeneration),
+    // On the listener's connections (8e): a snapshot taken, deleted or found, and a clone made, each durable at once
+    TakeSnapshot(SnapshotNamed),
+    DeleteSnapshot(SnapshotNamed),
+    SnapshotAt(SnapshotIndex),
+    Clone(Cloning),
     // Serve another client, on its end
     Connect(os.Channel[Container]),
 }
@@ -72,8 +114,14 @@ Response :: union {
     Blocks(os.Channel[block.Block]),
     Wrap(slopfs.WrapRecord),
     Generation(slopfs.GenerationRecord),
-    // Past the last wrap record or the newest generation
+    Snapshot(SnapshotInfo),
+    // Past the last wrap record, the newest generation or the last snapshot
     NoMore,
+    // A snapshot or volume with that name is there already
+    AlreadyExists,
+    // A snapshot a clone was made from, which stays while it's there
+    InUse,
+    NoSnapshot,
     NoVolume,
     NoSpace,
     // The container couldn't commit: a write failed, or it doesn't hold together, and every later commit fails too
@@ -98,6 +146,10 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case WrapAt(_) => true
         case GenerationAt(_) => true
         case AddGeneration(_) => false
+        case TakeSnapshot(_) => false
+        case DeleteSnapshot(_) => false
+        case SnapshotAt(_) => true
+        case Clone(_) => false
         case Connect(_) => true
     }
 }

@@ -9,7 +9,8 @@
  * back through the directory opened, and is refused a path above its working directory; and through the protocols
  * themselves, narrows EFI/SlopOS to read only, selects its files by a pattern, and is refused a file made in the set
  * the read-only directory gave. Given the system volume, it reads, writes and moves files there (system_check.hsc), and
- * unlocks an encrypted volume beside it through the storage manager (sealed_check.hsc). It says what it found in its
+ * unlocks an encrypted volume beside it through the storage manager (sealed_check.hsc), and takes, reads and clones
+ * snapshots of them (snapshot_check.hsc). It says what it found in its
  * debug log, and ends with 0 if all of it held, or the number of the first check that didn't.
  */
 package disk_check
@@ -186,7 +187,7 @@ main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, wo
                 return failed_system
             }
             // The system volume's container holds an encrypted one, too (sealed_check.hsc)
-            return check_sealed(to, manager.end, manager_port)
+            return check_sealed(to, manager.end, manager_port, volume)
         }
         case None => {
             log_line.write(to, "disk_check: no system volume")
