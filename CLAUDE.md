@@ -197,7 +197,7 @@ expected to build too, with the compiler extended where it can't yet (`knowledge
 finds `std` in the Hemera repo it was built in. `hemera src/build` builds everything through the
 build package (`decisions/0028`): the kernel (`src/boot/limine`, linked with its `x86_64.ld`,
 with the freestanding flags) and every test program, each checked by the house rules in
-`src/checks` (`decisions/0029`). `--setting=targets=kernel` (or `tests`) builds one kind, and
+`src/checks` (`decisions/0029`). `--setting=targets=kernel` (or `programs`, `tests`, `tools`) builds one kind, and
 `kernel_output` and `tests_output` say where they go, as in
 `--setting=targets=kernel,kernel_output=build/kernel.elf`. An architecture lists what it doesn't
 implement of `arch_interface` yet in `NOT_YET_IMPLEMENTED`: take a name off when you implement

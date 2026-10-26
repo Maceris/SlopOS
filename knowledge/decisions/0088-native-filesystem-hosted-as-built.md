@@ -87,6 +87,26 @@ servers (8d).
     steps as its next object's ID (now at most 4096); a chunk a search found but deleting didn't would loop; a key at
     the largest offset stepped back to the start; a name hash past 56 bits broke `List`'s cursor.
 
+### 8c3: the image builder, and booting from its disk
+- **The image builder** (`src/tools/image_builder`), a hosted Hemera program, the first of `src/build`'s new `tools`
+  target: it writes a GPT disk with `src/gpt`, FAT32 partitions with `src/fat` and SlopOS containers with `src/slopfs`,
+  each filled from a host folder, a container's `system` volume checked whole once it's made. Partitions are `bios`,
+  `esp`, `data`, `test` and `slopfs`, each starting at a MiB; GUIDs, the container's ID and the volume's name-hash key
+  are random. A SlopOS container's partition type is "SLOPOS CONTAINER" in ASCII, as the test type is
+  "SLOPOS TEST PART".
+- **Booting from it** (`tools/boot.py --boot-disk`): the disk check's two partitions where the test disk has them, a
+  BIOS boot partition, which `limine bios-install` needs on a GPT disk for its second stage, a 64 MiB EFI system
+  partition with Limine, the kernel, the modules and the disk check's files, and a 32 MiB container whose system
+  volume holds the modules. QEMU boots it as a virtio disk, first in its boot order, and SlopOS's storage stack then
+  serves the same disk. The ISO stays for every other test.
+- **Tests**: booting from the disk on x86-64 through BIOS and through UEFI, and on AArch64 through UEFI, each finding
+  the five partitions and the FAT server on the ESP Limine was read from, and passing the disk check there. The
+  firmware's and Limine's FAT readers are the independent check of `src/fat`'s writing, as `boot.py`'s own FAT writer
+  is of its reading on the test disk.
+
+Left for 8d: mounting the system volume at boot, which needs the container service; until then the modules still come
+from Limine.
+
 ## Alternatives considered
 - **A log for the space map (ZFS's space maps)**: cheaper to append to, but `storage.md` has a tree, and the tree
   answers "what's free near here" without replaying.
@@ -94,6 +114,9 @@ servers (8d).
   write, each split rewriting what's left since a seal covers the whole extent. 64 KiB chunks sit between.
 - **A header on data blocks**: what `storage.md` first said of every block, but it would misalign file data, and
   the seal already tells a misdirected write.
+- **The image builder in Python**, as `boot.py` writes the test disk: quicker to write, but the point is building the
+  disk with the packages SlopOS reads it with, and `boot.py`'s writer stays as the independent one.
+- **Booting only from the disk**: every test would build one; the ISO stays for those that need no disk.
 
 ## Consequences
 - 8d's volume servers hold a volume's tree and ask the container service for extents, as `Nodes` already asks

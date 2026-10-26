@@ -1,14 +1,16 @@
 /*
  * SlopOS's build (decisions/0028): `hemera src/build` builds every target, each checked by the house
  * rules (decisions/0029). The kernel is named here; programs and tests are found: every folder in
- * src/apps, src/services, src/drivers and src/tests is a SlopOS program (decisions/0033, 0058, 0069), and every test
- * folder under src a hosted test program (decisions/0033, Tests).
+ * src/apps, src/services, src/drivers and src/tests is a SlopOS program (decisions/0033, 0058, 0069), every test
+ * folder under src a hosted test program (decisions/0033, Tests), and every folder in src/tools a hosted tool, like
+ * the image builder (decisions/0088).
  *
  * Settings (--setting=name=value):
- * - targets: all (the default), kernel, programs, or tests.
+ * - targets: all (the default), kernel, programs, tests, or tools.
  * - kernel_output: the kernel's ELF, kernel.elf by default.
  * - programs_output: the folder programs go in, each <name>.elf, the current folder by default.
  * - tests_output: the folder test programs go in, the current folder by default.
+ * - tools_output: the folder tools go in, the current folder by default.
  * - stack_check: what the kernel's prologue checks do without room, trap (the default) or morestack,
  *   which a boot test of stack segments builds.
  * - arch: the kernel's and the programs' architecture, x86_64 (the default) or aarch64 (roadmap A).
@@ -33,6 +35,9 @@ build :: fn() {
     }
     if targets == "all" || targets == "tests" {
         add_tests("..")
+    }
+    if targets == "all" || targets == "tools" {
+        add_tools("../tools")
     }
     compiler.add_check(checks.check_program)
 }
@@ -94,6 +99,23 @@ add_programs :: fn(folder: string) {
         program.target_options.relocation_model = .Default
         program.target_options.startup_code = true
         target :: compiler.add_target(program)
+    }
+}
+
+// Every folder in folder, as a hosted program named after it, for this machine.
+add_tools :: fn(folder: string) {
+    for subfolder in compiler.subfolders(folder) {
+        name :: last_part(subfolder)
+        output_storage : u8[512]
+        output := text_buffer.make(output_storage)
+        text_buffer.append(&output, compiler.target_setting("tools_output", default = "."))
+        text_buffer.append(&output, "/")
+        text_buffer.append(&output, name)
+        tool := compiler.command_line_options()
+        tool.name = name
+        tool.root = subfolder
+        tool.output_path = text_buffer.as_string(&output)
+        target :: compiler.add_target(tool)
     }
 }
 

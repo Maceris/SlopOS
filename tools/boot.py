@@ -138,6 +138,12 @@ def build_slopos_kernel(output: Path, architecture: str = "x86_64") -> None:
     run_hemera([f"--setting=targets=kernel,kernel_output={output},arch={architecture}", str(BUILD_PACKAGE)], "SlopOS's kernel")
 
 
+def build_slopos_tools(output: Path) -> None:
+    """SlopOS's hosted tools, the image builder among them, for this machine, through its build package."""
+    output.mkdir(parents=True, exist_ok=True)
+    run_hemera([f"--setting=targets=tools,tools_output={output.as_posix()}", str(BUILD_PACKAGE)], "the tools")
+
+
 def build_slopos_programs(output: Path, architecture: str = "x86_64") -> None:
     """Builds SlopOS's programs through its build package, into the folder output."""
     output.mkdir(parents=True, exist_ok=True)
@@ -174,11 +180,12 @@ def make_image(kernel: Path, programs: list[Path], limine: Path, xorriso: Path, 
     return image
 
 
-def run(image: Path, qemu: Path, serial: Path, timeout: float, uefi: bool, cpu: str, extra: list[str]) -> int:
-    """Boots the image, and gives the code the kernel wrote to the debug exit device."""
+def run(image: Path | None, qemu: Path, serial: Path, timeout: float, uefi: bool, cpu: str, extra: list[str]) -> int:
+    """Boots the image, or with none the disk in extra, and gives the code the kernel wrote to the debug exit device."""
+    # The CD first: a test disk's protective MBR looks bootable to the BIOS
+    boot = ["-cdrom", str(image), "-boot", "order=d"] if image is not None else []
     command = [
-        # The CD first: a test disk's protective MBR looks bootable to the BIOS
-        str(qemu), "-M", "q35", "-m", "256M", "-cpu", cpu, "-cdrom", str(image), "-boot", "order=d",
+        str(qemu), "-M", "q35", "-m", "256M", "-cpu", cpu, *boot,
         "-serial", f"file:{serial}", "-display", "none", "-no-reboot",
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
     ]
@@ -193,8 +200,10 @@ def run(image: Path, qemu: Path, serial: Path, timeout: float, uefi: bool, cpu: 
     return result.returncode >> 1 if result.returncode % 2 == 1 else NO_EXIT_CODE
 
 
-def run_aarch64(image: Path, qemu: Path, serial: Path, timeout: float, cpu: str, extra: list[str], iommu: bool) -> int:
-    """Boots the image on QEMU's virt machine through UEFI, and gives the code the kernel ended with."""
+def run_aarch64(image: Path | None, qemu: Path, serial: Path, timeout: float, cpu: str, extra: list[str], iommu: bool) -> int:
+    """Boots the image, or with none the disk in extra, on QEMU's virt machine through UEFI, and gives the code the kernel ended with."""
+    cd = ["-device", "virtio-scsi-pci", "-device", "scsi-cd,drive=cd", "-drive", f"if=none,id=cd,media=cdrom,format=raw,file={image}"] \
+        if image is not None else []
     firmware = find_tool("AAVMF", ["edk2-aarch64-code.fd", "AAVMF_CODE.fd", "QEMU_EFI.fd"], [qemu.parent / "share"])
     # An SMMUv3 for the PCIe host bridge, with stage 2, the translation SlopOS's domains use (decisions/0079)
     machine = "virt,gic-version=3,acpi=off" + (",iommu=smmuv3" if iommu else "")
@@ -202,9 +211,7 @@ def run_aarch64(image: Path, qemu: Path, serial: Path, timeout: float, cpu: str,
         # GICv3, and the device tree rather than ACPI, which edk2 gives only with ACPI off
         str(qemu), "-M", machine, "-m", "256M", "-cpu", cpu,
         *(["-global", "arm-smmuv3.stage=2"] if iommu else []),
-        "-drive", f"if=pflash,format=raw,readonly=on,file={firmware}",
-        "-device", "virtio-scsi-pci", "-device", "scsi-cd,drive=cd",
-        "-drive", f"if=none,id=cd,media=cdrom,format=raw,file={image}",
+        "-drive", f"if=pflash,format=raw,readonly=on,file={firmware}", *cd,
         "-serial", f"file:{serial}", "-display", "none", "-no-reboot",
         "-semihosting-config", "enable=on,target=native",
     ]
@@ -508,6 +515,58 @@ def fat32_volume(sectors: int, files: list) -> bytes:
     return bytes(volume)
 
 
+# The disk the image builder makes to boot from, in 512-byte sectors (decisions/0088): the disk check's two partitions
+# where make_disk has them, a BIOS boot partition for Limine's second stage, the EFI system partition with Limine,
+# the kernel, the modules and the disk check's files, and a SlopOS container whose system volume holds the modules
+BOOT_DISK_SECTORS = 206848
+BOOT_ESP_SECTORS = 131072
+BOOT_SYSTEM_SECTORS = 65536
+
+
+def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path, image_builder: Path, folder: Path,
+                   command_line: str, kaslr: bool, mark: str) -> None:
+    """
+    A disk that boots kernel through Limine, from BIOS or UEFI, made by the image builder: Limine, the kernel and the
+    programs on its EFI system partition, as make_image puts them on the ISO, and the programs again in the system
+    volume of its SlopOS container; the SlopOS check partition marked as make_disk marks it.
+    """
+    esp = folder / "boot_esp"
+    for part in [esp / "EFI" / "BOOT", esp / "EFI" / "SlopOS", esp / "boot" / "limine", esp / "boot" / "modules"]:
+        part.mkdir(parents=True)
+    shutil.copy(kernel, esp / "boot" / "kernel")
+    modules = ""
+    for program in programs:
+        shutil.copy(program, esp / "boot" / "modules" / program.name)
+        modules += f"    module_path: boot():/boot/modules/{program.name}\n"
+    config = LIMINE_CONFIG.format(command_line=command_line, kaslr="yes" if kaslr else "no", modules=modules)
+    (esp / "boot" / "limine" / "limine.conf").write_text(config, newline="\n")
+    shutil.copy(limine / "limine-bios.sys", esp / "boot" / "limine" / "limine-bios.sys")
+    for name in ["BOOTX64.EFI", "BOOTAA64.EFI"]:
+        shutil.copy(limine / name, esp / "EFI" / "BOOT" / name)
+    for name, data in ESP_FILES:
+        (esp / "EFI" / "SlopOS" / name).write_bytes(data)
+    system = folder / "boot_system"
+    (system / "modules").mkdir(parents=True)
+    for program in programs:
+        shutil.copy(program, system / "modules" / program.name)
+    built = subprocess.run([str(image_builder), str(path), str(BOOT_DISK_SECTORS), f"test,{PARTITIONS[0][0]},{PARTITIONS[0][2]}",
+                            f"test,{PARTITIONS[1][0]},{PARTITIONS[1][2]}", "bios,BIOS boot,2048",
+                            f"esp,EFI system partition,{BOOT_ESP_SECTORS},{esp}", f"slopfs,SlopOS system,{BOOT_SYSTEM_SECTORS},{system}"],
+                           capture_output=True, text=True)
+    if built.returncode != 0:
+        sys.exit(f"boot.py: the image builder failed:\n{built.stdout}{built.stderr}")
+    checked = [line.split() for line in built.stdout.splitlines() if line.startswith("partition 0 ")]
+    if not checked or int(checked[0][2]) != CHECKED_FIRST:
+        sys.exit(f"boot.py: the image builder put {PARTITIONS[0][0]} somewhere else:\n{built.stdout}")
+    with path.open("r+b") as image:
+        image.seek(CHECKED_FIRST * BLOCK_BYTES)
+        image.write(mark.encode())
+        for number in range(2, 10):
+            image.seek((CHECKED_FIRST + number) * BLOCK_BYTES)
+            image.write(f"block {number}".encode())
+    subprocess.run([str(limine_tool(limine)), "bios-install", str(path)], check=True, capture_output=True)
+
+
 def disk_block_starts(path: Path, expected: str) -> bool:
     """Whether the image has a block starting with text, for an expectation written as N=text, N counting the disk's blocks."""
     number, _, text = expected.partition("=")
@@ -543,6 +602,10 @@ def main() -> int:
                         help="a line to type on a virtio keyboard, which this adds with a virtio console, once the console "
                              "shows its banner; may be repeated")
     parser.add_argument("--disk", help="add a virtio block device, a GPT disk image with this mark in its SlopOS check partition's block 0 (make_disk)")
+    parser.add_argument("--boot-disk", action="store_true",
+                        help="boot from a disk the image builder makes rather than from the ISO (make_boot_disk), the --disk mark in "
+                             "its SlopOS check partition")
+    parser.add_argument("--image-builder", type=Path, help="the image builder, with --boot-disk (default: SlopOS's, built)")
     parser.add_argument("--expect-disk-text", action="append", default=[],
                         help="TEXT: the --disk image holds TEXT somewhere once the kernel has stopped, with --expect; may be repeated")
     parser.add_argument("--expect-disk-block", action="append", default=[],
@@ -575,13 +638,24 @@ def main() -> int:
         programs = sorted(programs_folder.glob("*.elf"), key=lambda path: (path.name != "root_task.elf", path.name))             if programs_folder is not None else []
         # The kernel's own regions follow its command line; the image and the direct map, Limine's configuration
         command_line = arguments.command_line + (" no_kaslr" if arguments.no_kaslr else "")
-        image = make_image(kernel.resolve(), [program.resolve() for program in programs], limine, xorriso, folder, command_line,
-                           not arguments.no_kaslr)
+        image = None
+        if not arguments.boot_disk:
+            image = make_image(kernel.resolve(), [program.resolve() for program in programs], limine, xorriso, folder, command_line,
+                               not arguments.no_kaslr)
         serial = folder / "serial.txt"
         extra = (X86_IOMMU if not aarch64 and not arguments.no_iommu else []) + list(arguments.qemu_arguments)
         console = None
         disk = folder / "disk.img"
-        if arguments.disk is not None:
+        if arguments.boot_disk:
+            image_builder = arguments.image_builder
+            if image_builder is None:
+                build_slopos_tools(folder / "tools")
+                image_builder = next((folder / "tools").glob("image_builder*"))
+            make_boot_disk(disk, kernel.resolve(), [program.resolve() for program in programs], limine, image_builder.resolve(), folder,
+                           command_line, not arguments.no_kaslr, arguments.disk or "")
+            extra += ["-drive", f"file={disk},if=none,id=disk,format=raw",
+                      "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on,bootindex=0"]
+        elif arguments.disk is not None:
             make_disk(disk, arguments.disk)
             extra += ["-drive", f"file={disk},if=none,id=disk,format=raw", "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on"]
         keyboard = None

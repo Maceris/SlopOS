@@ -21,14 +21,17 @@ the house-rule checks on every target (`0029`):
 hemera src/build
 ```
 
-That builds the kernel and every test program. Settings choose what and where, as
-`--setting=name=value,name=value`:
+That builds the kernel, SlopOS's programs, every test program and the hosted tools. Settings choose what and where,
+as `--setting=name=value,name=value`:
 
 | Setting | Values |
 |---|---|
-| `targets` | `all` (the default), `kernel`, or `tests` |
+| `targets` | `all` (the default), `kernel`, `programs`, `tests`, or `tools` |
 | `kernel_output` | The kernel's ELF; `kernel.elf` by default. A relative path is relative to `src/build` |
+| `programs_output` | The folder for SlopOS's programs, each `<name>.elf`; the current folder by default |
 | `tests_output` | The folder for test programs; the current folder by default |
+| `tools_output` | The folder for the hosted tools in `src/tools`, like the image builder; the current folder by default |
+| `arch` | `x86_64` (the default) or `aarch64`, for the kernel and the programs |
 | `stack_check` | What the kernel's prologue checks do without room: `trap` (the default), or `morestack` |
 
 ```
@@ -60,9 +63,26 @@ python tools/boot.py --expect 0
 | `--console-input LINE` | Add a virtio console linked to a TCP socket on the loopback, and type this line into it when the console service's banner shows; may be repeated, the i-th line typed at the i-th banner, as when the console has dialed its serial line again |
 | `--keyboard-input LINE` | Add a virtio keyboard and the virtio console, and type this line on the keyboard, a key at a time with Enter at the end, through QEMU's machine protocol (QMP) on a loopback socket, once the console's banner shows; may be repeated |
 | `--expect-console-line LINE` | With `--expect`: the virtio console must show this exact line; may be repeated |
-| `--disk MARK` | Add a virtio block device: a 1 MiB image with `MARK` at the start of block 0, and `block N` at the start of blocks 2 to 9 |
+| `--arch ARCH` | `x86_64` (the default), or `aarch64` on QEMU's virt machine through UEFI |
+| `--disk MARK` | Add a virtio block device: a 38 MiB GPT disk whose `SlopOS check` partition has `MARK` at the start of its block 0 and `block N` at the start of its blocks 2 to 9, and an EFI system partition holding the disk check's files, its FAT32 written by `boot.py` itself |
+| `--boot-disk` | Boot from a disk the image builder makes instead of the ISO: the disk check's partitions, marked with `--disk`'s `MARK`, a BIOS boot partition with Limine's second stage, an EFI system partition with Limine, the kernel and the programs, and a SlopOS container whose `system` volume holds the programs |
+| `--image-builder PATH` | With `--boot-disk`: the image builder to run, instead of building one |
 | `--expect-disk-block N=TEXT` | With `--expect`: block `N` of the image must start with `TEXT` once the kernel has stopped; may be repeated |
+| `--expect-disk-text TEXT` | With `--expect`: the image must hold `TEXT` somewhere once the kernel has stopped; may be repeated |
 | `-- ARGUMENTS` | Anything after `--` goes to QEMU, like `-smp 4` |
+
+## The Image Builder
+
+`src/tools/image_builder` (`decisions/0088`) makes a GPT disk image with the packages SlopOS reads it with:
+
+```
+image_builder <output> <sectors> <kind,name,sectors[,folder]>...
+```
+
+Each partition starts at a MiB, in order from sector 2048: `bios` (a BIOS boot partition, for `limine bios-install`),
+`esp` and `data` (FAT32, holding the folder's tree), `test` (zeros, SlopOS's test partition type) or `slopfs` (a
+SlopOS container with a `system` volume holding the folder's tree, checked whole once it's made). It prints each
+partition as `partition <index> <first> <count> <name>`.
 
 The kernel stops with a code QEMU's debug-exit device reports when `test_exit` is on its command line:
 

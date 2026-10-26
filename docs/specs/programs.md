@@ -267,7 +267,8 @@ it with 0 a second after the supervisor says it has started everything (`AllStar
 still running; and `test_reassign` has the platform service take every virtio device's BARs and every bridge's bus
 numbers as unset, so assigning them is tested where firmware assigns everything. The supervisor's `test_restart`
 kills the first serial line's driver once the console has dialed it, and says it has started everything only once
-the driver's been restarted and dialed again. `tools/boot.py` can link a virtio console to a TCP socket on the
+the driver's been restarted and dialed again. With `--boot-disk`, `tools/boot.py` boots from a disk the image builder
+made (`0088`) rather than the ISO, Limine read from its EFI system partition. `tools/boot.py` can link a virtio console to a TCP socket on the
 loopback (`--console-input`, `--expect-console-line`), which it types its i-th line into at the console's i-th
 banner, and whose lines it checks; add a virtio keyboard it types on through QEMU's machine protocol
 (`--keyboard-input`); and add a virtio disk, an image it marks (`--disk`) and checks afterwards

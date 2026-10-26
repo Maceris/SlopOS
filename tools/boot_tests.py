@@ -20,6 +20,9 @@ BOOT = ROOT / "tools" / "boot.py"
 PROGRAMS = Path()
 PROGRAMS_AARCH64 = Path()
 WITH_PROGRAMS = "<programs>"
+# The image builder, built once, for the tests whose arguments have WITH_IMAGE_BUILDER (decisions/0088)
+IMAGE_BUILDER = Path()
+WITH_IMAGE_BUILDER = "<image builder>"
 
 
 def program_test(name: str, program: str, line: str, words: str = "", qemu: list = []) -> tuple:
@@ -42,6 +45,25 @@ X86_TRANSLATING_LINE = "[info] IOMMU 0: translating, 256 interrupts remapped, it
 AARCH64_TRANSLATING_LINE = "[info] IOMMU 0: translating, 0 interrupts remapped, its faults read at CPU 0's ticks"
 
 # Name, the code expected, and boot.py's arguments
+# What booting from the image builder's disk checks: the disk's five partitions, the FAT server on its EFI system
+# partition, which Limine was read from, and the disk check's lines and writes, as on the test disk
+BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--timeout=120",
+    "--command-line=test_exit test_services", "--disk=SlopOS disk check: from the host",
+    "--expect-line=[user] virtio_blk: serving 206848 blocks",
+    "--expect-line=[user] partition_server: 5 partitions on a disk of 206848 blocks",
+    "--expect-line=[user] storage: disk 0 partition 0: SlopOS check, 2048 blocks from 2048",
+    "--expect-line=[user] storage: disk 0 partition 2: BIOS boot, 2048 blocks from 6144",
+    "--expect-line=[user] storage: disk 0 partition 3: EFI system partition, 131072 blocks from 8192",
+    "--expect-line=[user] storage: disk 0 partition 4: SlopOS system, 65536 blocks from 139264",
+    "--expect-line=[user] storage: started a FAT server for disk 0 partition 3",
+    "--expect-line=[user] fat_server: serving a FAT32 volume of 128992 clusters of 512 bytes",
+    "--expect-line=[user] disk_check: on the EFI system partition, read the host's files, wrote, moved and read back its own, "
+    "listed 3, and was refused a path above it",
+    "--expect-line=[user] disk_check: narrowed EFI/SlopOS to read only, selected 2 of its files by *.TXT, and was refused a "
+    "file made in the set",
+    "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
+    "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]
+
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
@@ -122,6 +144,11 @@ TESTS = [
         "file made in the set",
         "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # Booted from a disk the image builder made rather than the ISO: Limine read from its EFI system partition, its
+    # BIOS boot partition for BIOS, the storage stack finding its partitions and its SlopOS container, and the disk check
+    # passing on it as on the test disk
+    ("boots from a disk the image builder made", 7, BOOT_DISK_ARGUMENTS),
+    ("boots from a disk the image builder made, through UEFI", 7, ["--uefi"] + BOOT_DISK_ARGUMENTS),
     # Behind a root port, with firmware's bus numbers and BARs taken as unset
     ("numbers buses and places BARs behind a bridge", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services test_reassign", "--expect-line=[user] platform: 1:0.0 (6900 4164) claimed",
@@ -193,7 +220,8 @@ MORESTACK_TESTS = [
 
 # Every test again on AArch64 (tools/boot.py --arch aarch64, always through UEFI), but those that can't apply there:
 # BIOS, x86-64's baseline, and the NMI, which AArch64 has no counterpart for yet (knowledge/decisions/0065)
-AARCH64_LEFT_OUT = {"boots and halts (BIOS)", "refuses a CPU below x86-64-v3", "resumes after an NMI"}
+AARCH64_LEFT_OUT = {"boots and halts (BIOS)", "refuses a CPU below x86-64-v3", "resumes after an NMI",
+                    "boots from a disk the image builder made, through UEFI"}
 AARCH64_NAMES = {
     "boots and halts (UEFI)": "boots and halts",
     "routes a device's interrupts through the I/O APIC": "routes a device's interrupts through the GIC",
@@ -240,6 +268,15 @@ def build_kernel(output: Path, stack_check: str = "trap", architecture: str = "x
     return False
 
 
+def build_tools(output: Path) -> bool:
+    """Builds SlopOS's hosted tools through the build package, into the folder output."""
+    output.mkdir(parents=True, exist_ok=True)
+    command = ["hemera", f"--setting=targets=tools,tools_output={output.as_posix()}", str(ROOT / "src" / "build")]
+    if os.environ.get("HEMERA_INSTALL"):
+        command.insert(1, f"--install-path={os.environ['HEMERA_INSTALL']}")
+    return subprocess.run(command).returncode == 0
+
+
 def build_programs(output: Path, architecture: str = "x86_64") -> bool:
     """Builds SlopOS's programs through the build package, for an architecture, into the folder output."""
     output.mkdir(parents=True, exist_ok=True)
@@ -251,7 +288,7 @@ def build_programs(output: Path, architecture: str = "x86_64") -> bool:
 
 
 def main() -> int:
-    global PROGRAMS, PROGRAMS_AARCH64
+    global PROGRAMS, PROGRAMS_AARCH64, IMAGE_BUILDER
     with tempfile.TemporaryDirectory(prefix="slopos-boot-tests-") as temporary:
         kernel = Path(temporary) / "kernel.elf"
         if not build_kernel(kernel):
@@ -265,6 +302,11 @@ def main() -> int:
         if not build_programs(PROGRAMS_AARCH64, "aarch64"):
             print("FAILED: the programs don't build for AArch64")
             return 1
+        tools = Path(temporary) / "tools"
+        if not build_tools(tools):
+            print("FAILED: the tools don't build")
+            return 1
+        IMAGE_BUILDER = next(tools.glob("image_builder*"))
         morestack_kernel = Path(temporary) / "kernel_morestack.elf"
         if not build_kernel(morestack_kernel, "morestack"):
             print("FAILED: the kernel doesn't build with morestack")
@@ -331,7 +373,8 @@ def run_tests(kernel: Path, tests: list, more: list = []) -> int:
     failed = 0
     for name, expected, arguments in tests:
         programs = PROGRAMS_AARCH64 if "--arch=aarch64" in more else PROGRAMS
-        arguments = more + [f"--programs={programs}" if argument == WITH_PROGRAMS else argument for argument in arguments]
+        arguments = more + [f"--programs={programs}" if argument == WITH_PROGRAMS else
+                            f"--image-builder={IMAGE_BUILDER}" if argument == WITH_IMAGE_BUILDER else argument for argument in arguments]
         result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", "--timeout=60", f"--expect={expected}",
                                  *arguments], capture_output=True, text=True)
         passed = result.returncode == 0
