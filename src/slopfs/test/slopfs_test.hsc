@@ -12,10 +12,26 @@ import slopfs from ".."
 // 32 MiB of 4 KiB blocks
 BLOCKS : u64 : 8192
 
+/*
+ * A disk in memory. Recording, it keeps every write's blocks and bytes, and every flush, in order, for the crash-state
+ * tester; read-only, it refuses writes.
+ */
 Disk :: struct {
     bytes : mut u8[],
     writes : u64,
     flushes : u64,
+    recording : bool,
+    read_only : bool,
+    log : Recorded[..],
+    logged : u8[..],
+}
+
+// A write the disk recorded, its bytes at `at` in its log, or a flush.
+Recorded :: struct {
+    flush : bool,
+    block : u64,
+    count : u64,
+    at : usize,
 }
 
 read_blocks :: fn(context: rawptr, block: u64, count: u64, into: mut u8[]) -> bool {
@@ -38,7 +54,7 @@ write_blocks :: fn(context: rawptr, block: u64, count: u64, from: u8[]) -> bool 
     disk :: cast[ptr[mut Disk]](context)
     start :: cast[usize](block * slopfs.BLOCK_BYTES)
     length :: cast[usize](count * slopfs.BLOCK_BYTES)
-    if start + length > disk.bytes.count || length > from.count {
+    if disk.read_only || start + length > disk.bytes.count || length > from.count {
         return false
     }
     for i in 0..<length {
@@ -48,12 +64,23 @@ write_blocks :: fn(context: rawptr, block: u64, count: u64, from: u8[]) -> bool 
         }
     }
     disk.writes += 1
+    if disk.recording {
+        runtime.array_add(&disk.log, Recorded.{block = block, count = count, at = disk.logged.count})
+        for i in 0..<length {
+            if i < from.count {
+                runtime.array_add(&disk.logged, from[i])
+            }
+        }
+    }
     return true
 }
 
 flush_blocks :: fn(context: rawptr) -> bool {
     disk :: cast[ptr[mut Disk]](context)
     disk.flushes += 1
+    if disk.recording {
+        runtime.array_add(&disk.log, Recorded.{flush = true})
+    }
     return true
 }
 
@@ -101,12 +128,24 @@ main :: fn() -> int {
     if failed != 0 {
         return failed
     }
+    failed = check_crashes()
+    if failed != 0 {
+        return failed
+    }
+    failed = check_fuzz()
+    if failed != 0 {
+        return failed
+    }
     return 0
 }
 
 // A disk of BLOCKS zeroed blocks in memory, as a device; nothing of it is on the stack, so what holds it can be pointed to.
 new_device :: fn() -> slopfs.Device? {
-    bytes, error :: runtime.new_array(u8, cast[usize](BLOCKS * slopfs.BLOCK_BYTES))
+    return new_device_of(BLOCKS)
+}
+
+new_device_of :: fn(blocks: u64) -> slopfs.Device? {
+    bytes, error :: runtime.new_array(u8, cast[usize](blocks * slopfs.BLOCK_BYTES))
     if error != null {
         return null
     }
@@ -115,13 +154,15 @@ new_device :: fn() -> slopfs.Device? {
     }
     disk := runtime.new(Disk)
     disk^ = Disk.{bytes = bytes}
-    return slopfs.Device.{context = cast[rawptr](disk), block_count = BLOCKS, read = read_blocks, write = write_blocks,
+    return slopfs.Device.{context = cast[rawptr](disk), block_count = blocks, read = read_blocks, write = write_blocks,
         flush = flush_blocks}
 }
 
 free_device :: fn(device: slopfs.Device) {
     disk :: cast[ptr[mut Disk]](device.context)
     runtime.free_array(disk.bytes)
+    runtime.array_free(&disk.log)
+    runtime.array_free(&disk.logged)
     runtime.free(disk)
 }
 

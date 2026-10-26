@@ -179,6 +179,8 @@ name_holds :: fn(name: string) -> bool {
     return true
 }
 
+HASH_MASK : u64 : 0x00ffffffffffffff
+
 // A name's hash, keyed by the volume's key: 56 bits, so a List cursor holds it and a place among those alike.
 hash_name :: fn(volume: ptr[Volume], name: string) -> u64 {
     hasher := crypto.blake3_start_keyed(crypto.as_secret(volume.hash_key)) or_return 0
@@ -382,9 +384,14 @@ destroy :: fn(volume: ptr[mut Volume], object: u64) -> Result[void, Error] {
     return .Ok
 }
 
-// A chunk's record taken out, and its blocks given back if it had any.
+/*
+ * A chunk's record taken out, and its blocks given back if it had any. One a search found but deleting doesn't is a
+ * damaged tree's, and Corrupt, so the loops that drop chunks one by one always end.
+ */
 drop_chunk :: fn(volume: ptr[mut Volume], key: Key, extent: ptr[ExtentRecord]) -> Result[void, Error] {
-    tree_delete(&volume.container.nodes, &volume.tree, key)?
+    if !(tree_delete(&volume.container.nodes, &volume.tree, key)?) {
+        return .Error(.Corrupt)
+    }
     release_extent(volume, extent)
     volume.dirty = true
     return .Ok
@@ -398,10 +405,13 @@ release_extent :: fn(volume: ptr[mut Volume], extent: ptr[ExtentRecord]) {
     }
 }
 
+// The most directories deep a volume goes, so walking up from one ends even where a damaged volume loops.
+MAX_DEPTH : u64 : 4096
+
 // Whether directory is ancestor, or beneath it.
 is_beneath :: fn(volume: ptr[mut Volume], directory: u64, ancestor: u64) -> Result[bool, Error] {
     at := directory
-    for step in 0..<volume.next_object {
+    for step in 0..<MAX_DEPTH {
         if at == ancestor {
             return .Ok(true)
         }
@@ -476,6 +486,10 @@ list :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: mut u8[])
         if found.key.object != directory || found.key.kind != cast[u8](RecordKind.Entry) {
             return .Ok(null)
         }
+        // A hash past 56 bits isn't one a name makes, and its cursor wouldn't hold it
+        if found.key.offset > HASH_MASK {
+            return .Error(.Corrupt)
+        }
         if found.key.offset != hash {
             skip = 0
         }
@@ -493,7 +507,7 @@ list :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: mut u8[])
             }
             at = next_entry_at(entries, at) or_break
         }
-        if hash >= 0x00ffffffffffffff {
+        if hash >= HASH_MASK {
             return .Ok(null)
         }
         hash += 1

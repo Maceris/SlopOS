@@ -58,6 +58,35 @@ Built as `src/slopfs`, a portable package over a device of 4 KiB blocks (read, w
 Left for later stages: quotas and the reserve, snapshots and encryption (8e); the container service and volume
 servers (8d).
 
+### 8c2: the crash-state tester and the fuzzer
+- **A whole-container check** (`src/slopfs/verify.hsc`), as fsck checks a filesystem: every node of every tree read
+  and checked, every extent nodes and chunks take collected, and those with the free ones found to cover the data
+  blocks exactly once, each in the owners tree with its owner. The tests run it after every commit; it finds a leak
+  made on purpose.
+- **The crash-state tester** (`src/slopfs/test/crash_test.hsc`, after CrashMonkey): a workload of 14 commits on a disk
+  that records each write and flush; then every image a crash could leave: each prefix of the writes, six random
+  subsets of the writes between each two flushes, and each write torn halfway after those before it. Each of the 529
+  must mount, check out whole, hold the state of the last acknowledged commit or of the one being made (64 held the
+  latter), and take another commit. With the flush before the checkpoint taken out, it finds the checkpoint reaching
+  the disk before what it names.
+- **The fuzzer**, through both mount paths, hosted, deterministic, and longer with `SLOPOS_FUZZ_ROUNDS`:
+  - slopfs (`src/slopfs/test/fuzz_test.hsc`): an image with a volume of files damaged by flipped bytes, blocks copied
+    over others or zeroed, and nodes changed somewhere down a tree with every seal above them and the checkpoint's
+    made again, as someone who can compute BLAKE3 could, so what's behind the seals is fuzzed too. Each is mounted,
+    checked, read, written and committed. 600 rounds in the unit tests; 20000 run once, without a crash or a hang.
+  - FAT (`src/fat/test/fuzz_test.hsc`): the boot sector, the start of each FAT and the first data clusters damaged,
+    each round put back after from an undo log of the sectors it changed. 400 rounds in the unit tests; 100000 run
+    once.
+  - `tools/unit_tests.py` gives each test 900 seconds, so one that hangs fails.
+- **Found by fuzzing, fixed**:
+  - FAT: a directory whose chain loops was read for up to 2 million slots, each found by walking the chain from its
+    start: hours on one directory. A directory now ends at FAT's 65536 slots, and the volume keeps where the last walk
+    along a chain was, so reading one forward follows it once. Finding a free alias tried up to a million `~N` tails,
+    scanning the directory for each; it's one scan for the tails taken.
+  - slopfs, found while making the fuzzer, before it ran: walking up a damaged volume's parents could take as many
+    steps as its next object's ID (now at most 4096); a chunk a search found but deleting didn't would loop; a key at
+    the largest offset stepped back to the start; a name hash past 56 bits broke `List`'s cursor.
+
 ## Alternatives considered
 - **A log for the space map (ZFS's space maps)**: cheaper to append to, but `storage.md` has a tree, and the tree
   answers "what's free near here" without replaying.
@@ -69,4 +98,4 @@ servers (8d).
 ## Consequences
 - 8d's volume servers hold a volume's tree and ask the container service for extents, as `Nodes` already asks
   through functions; the container's commit is what they'll ask to make durable.
-- 8c2's crash-state tester checks that every prefix of a commit's writes mounts to a prefix of the operations.
+- The crash-state tester and the fuzzer take 8d's services as they come: the same image, mounted through them.

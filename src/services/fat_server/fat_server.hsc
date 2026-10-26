@@ -322,7 +322,7 @@ Leaf :: struct {
     name : string,
 }
 
-leaf_of :: fn(volume: ptr[fat.Volume], directory: u32, path: string) -> Result[Leaf, fat.FatError] {
+leaf_of :: fn(volume: ptr[mut fat.Volume], directory: u32, path: string) -> Result[Leaf, fat.FatError] {
     last := path.count
     for character, i in path {
         if character == '/' {
@@ -430,7 +430,7 @@ open_directory_entry :: fn(volume: ptr[mut fat.Volume], directory: u32, path: st
 }
 
 // A listing's entry at or after cursor, matching pattern unless it's "".
-listing_of :: fn(volume: ptr[fat.Volume], directory: u32, cursor: u64, pattern: string, out: ptr[mut os.Outgoing]) -> Result[files.Listing?, fat.FatError] {
+listing_of :: fn(volume: ptr[mut fat.Volume], directory: u32, cursor: u64, pattern: string, out: ptr[mut os.Outgoing]) -> Result[files.Listing?, fat.FatError] {
     slot := cast[u32](cursor)
     loop {
         listed :: fat.next_entry(volume, directory, slot)? or_return .Ok(null)

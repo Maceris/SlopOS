@@ -2,7 +2,7 @@
  * The FAT package's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the
  * number of the first check that failed. A volume formatted in a buffer standing in for a disk is mounted; files and
  * directories are made with short and long names, written across clusters, read back, resized, renamed and removed;
- * and a buffer that isn't FAT isn't mounted.
+ * a buffer that isn't FAT isn't mounted; and the volume, damaged many ways, is used without crashing (fuzz_test.hsc).
  */
 package fat_test
 
@@ -12,8 +12,21 @@ import fat from ".."
 // 34 MiB of 512-byte sectors, a sector a cluster: just enough clusters to be FAT32
 SECTORS : u64 : 69632
 
+/*
+ * A disk in memory. Undoing, it keeps each sector's bytes from before it's first written, so the fuzzer puts back
+ * what a round changed without copying the whole image.
+ */
 Image :: struct {
     bytes : mut u8[],
+    undoing : bool,
+    undo : Undo[..],
+    saved : u8[..],
+}
+
+// A sector's bytes from before a round wrote it, at `at` in saved.
+Undo :: struct {
+    sector : u64,
+    at : usize,
 }
 
 main :: fn() -> int {
@@ -146,7 +159,7 @@ main :: fn() -> int {
     if read_back(&remounted, &still) != "hello, FAT" {
         return 36
     }
-    return 0
+    return check_fuzz(&image, device)
 }
 
 done :: fn(result: Result[void, fat.FatError]) -> bool {
@@ -157,7 +170,7 @@ done :: fn(result: Result[void, fat.FatError]) -> bool {
 }
 
 // The first entry's name in a directory, or "".
-next_name :: fn(volume: ptr[fat.Volume], directory: u32, slot: u32) -> string {
+next_name :: fn(volume: ptr[mut fat.Volume], directory: u32, slot: u32) -> string {
     match fat.next_entry(volume, directory, slot) {
         case Ok(found) => {
             listed := found or_return ""
@@ -171,7 +184,7 @@ written :: fn(volume: ptr[mut fat.Volume], entry: ptr[mut fat.Entry], offset: u6
     return (fat.write(volume, entry, offset, view_of(cast[ptr[u8]](text.data), text.count)) or_else 0) == cast[u64](text.count)
 }
 
-read_back :: fn(volume: ptr[fat.Volume], entry: ptr[fat.Entry]) -> string {
+read_back :: fn(volume: ptr[mut fat.Volume], entry: ptr[fat.Entry]) -> string {
     buffer, error :: runtime.new_array(u8, 64)
     if error != null || buffer.count == 0 {
         return ""
@@ -205,11 +218,16 @@ read_sectors :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> b
 }
 
 write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool {
-    image :: cast[ptr[Image]](context)
+    image :: cast[ptr[mut Image]](context)
     start :: first * fat.SECTOR_BYTES
     bytes :: count * fat.SECTOR_BYTES
     if start + bytes > cast[u64](image.bytes.count) || bytes > cast[u64](from.count) {
         return false
+    }
+    if image.undoing {
+        for sector in first..<first + count {
+            save_sector(image, sector)
+        }
     }
     for byte, i in from {
         at :: cast[usize](start) + i

@@ -39,6 +39,8 @@ FREE_CLUSTER : u32 : 0
 END_OF_CHAIN : u32 : 0x0ffffff8
 CHAIN_END_MARK : u32 : 0x0fffffff
 CLUSTER_MASK : u32 : 0x0fffffff
+// The most slots in a directory: 65536, as FAT has it, 2 MiB of entries
+MAX_DIRECTORY_SLOTS : u32 : 65536
 // The fewest clusters a FAT32 volume has
 MIN_CLUSTERS : u32 : 65525
 
@@ -83,6 +85,11 @@ Volume :: struct #scoped {
     info_sector : u64,
     next_free : u32,
     label : u8[11],
+    // Where a walk along a directory's chain last was: its first cluster, how many clusters in, and that cluster, so a
+    // directory read slot by slot follows its chain once, not from its start for each slot, even a chain that loops
+    chain_first : u32,
+    chain_index : u64,
+    chain_cluster : u32,
 }
 
 // Where an entry's short entry is: its directory's first cluster, and its slot in that directory, from 0.
@@ -191,23 +198,23 @@ mount :: fn(device: Device) -> Result[Volume, FatError] {
 }
 
 // The root directory's first cluster.
-root_of :: fn(volume: ptr[Volume]) -> u32 {
+root_of :: fn(volume: ptr[mut Volume]) -> u32 {
     return volume.root_cluster
 }
 
 // Clusters and the FAT
 
 // The first sector of a cluster.
-sector_of :: fn(volume: ptr[Volume], cluster: u32) -> u64 {
+sector_of :: fn(volume: ptr[mut Volume], cluster: u32) -> u64 {
     return volume.first_data_sector + cast[u64](cluster - 2) * volume.sectors_per_cluster
 }
 
-is_cluster :: fn(volume: ptr[Volume], cluster: u32) -> bool {
+is_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> bool {
     return cluster >= 2 && cluster < volume.cluster_count + 2
 }
 
 // The FAT's entry for a cluster, from the first FAT.
-fat_entry :: fn(volume: ptr[Volume], cluster: u32) -> Result[u32, FatError] {
+fat_entry :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[u32, FatError] {
     offset :: cast[u64](cluster) * 4
     sector : u8[512]
     if !volume.device.read(volume.device.context, volume.reserved_sectors + offset / SECTOR_BYTES, 1, sector) {
@@ -221,6 +228,8 @@ set_fat_entry :: fn(volume: ptr[mut Volume], cluster: u32, value: u32) -> FatErr
     if volume.device.read_only {
         return FatError.ReadOnly
     }
+    // A chain may have changed, so a walk along one starts again
+    volume.chain_first = FREE_CLUSTER
     offset :: cast[u64](cluster) * 4
     for copy in 0..<volume.fat_count {
         at :: volume.reserved_sectors + copy * volume.fat_sectors + offset / SECTOR_BYTES
@@ -238,7 +247,7 @@ set_fat_entry :: fn(volume: ptr[mut Volume], cluster: u32, value: u32) -> FatErr
 }
 
 // The cluster after one in its chain, or null at its end.
-next_cluster :: fn(volume: ptr[Volume], cluster: u32) -> Result[u32?, FatError] {
+next_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[u32?, FatError] {
     entry :: fat_entry(volume, cluster)?
     if entry >= END_OF_CHAIN {
         return .Ok(null)
@@ -282,7 +291,7 @@ allocate_cluster :: fn(volume: ptr[mut Volume], previous: u32) -> Result[u32, Fa
     return .Error(.NoSpace)
 }
 
-zero_cluster :: fn(volume: ptr[Volume], cluster: u32) -> Result[void, FatError] {
+zero_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[void, FatError] {
     zeros : u8[512]
     first :: sector_of(volume, cluster)
     for i in 0..<volume.sectors_per_cluster {
@@ -320,7 +329,7 @@ free_chain :: fn(volume: ptr[mut Volume], first: u32) -> FatError? {
 }
 
 // The index-th cluster of a chain from first, or null if it's shorter.
-cluster_at :: fn(volume: ptr[Volume], first: u32, index: u64) -> Result[u32?, FatError] {
+cluster_at :: fn(volume: ptr[mut Volume], first: u32, index: u64) -> Result[u32?, FatError] {
     cluster := first
     for step in 0..<index {
         step_result :: next_cluster(volume, cluster)?
@@ -340,15 +349,38 @@ SlotAt :: struct {
     offset : usize,
 }
 
-// Where a directory's slot is, or null past its chain's end.
-slot_at :: fn(volume: ptr[Volume], directory: u32, slot: u32) -> Result[SlotAt?, FatError] {
+// Where a directory's slot is, or null past its chain's end, from where the last walk along its chain was if that's before it.
+slot_at :: fn(volume: ptr[mut Volume], directory: u32, slot: u32) -> Result[SlotAt?, FatError] {
     per_cluster :: volume.cluster_bytes / ENTRY_BYTES
-    cluster :: cluster_at(volume, directory, cast[u64](slot) / per_cluster)? or_return .Ok(null)
+    // A directory ends at FAT's most slots, wherever its chain does, so one that loops ends too
+    if slot >= MAX_DIRECTORY_SLOTS || per_cluster == 0 {
+        return .Ok(null)
+    }
+    index :: cast[u64](slot) / per_cluster
+    if volume.chain_first != directory || volume.chain_index > index || directory == FREE_CLUSTER {
+        volume.chain_first = directory
+        volume.chain_index = 0
+        volume.chain_cluster = directory
+    }
+    for step in volume.chain_index..<index {
+        step_result :: next_cluster(volume, volume.chain_cluster)?
+        match step_result {
+            case Some(next) => {
+                volume.chain_cluster = next
+                volume.chain_index += 1
+            }
+            case None => return .Ok(null)
+        }
+    }
+    cluster :: volume.chain_cluster
+    if !is_cluster(volume, cluster) {
+        return .Ok(null)
+    }
     within :: (cast[u64](slot) % per_cluster) * ENTRY_BYTES
     return .Ok(SlotAt.{sector = sector_of(volume, cluster) + within / SECTOR_BYTES, offset = cast[usize](within % SECTOR_BYTES)})
 }
 
-read_slot :: fn(volume: ptr[Volume], at: SlotAt, into: ptr[mut u8[32]]) -> FatError? {
+read_slot :: fn(volume: ptr[mut Volume], at: SlotAt, into: ptr[mut u8[32]]) -> FatError? {
     sector : u8[512]
     if !volume.device.read(volume.device.context, at.sector, 1, sector) {
         return FatError.DeviceError
@@ -359,7 +391,7 @@ read_slot :: fn(volume: ptr[Volume], at: SlotAt, into: ptr[mut u8[32]]) -> FatEr
     return null
 }
 
-write_slot :: fn(volume: ptr[Volume], at: SlotAt, from: ptr[u8[32]]) -> FatError? {
+write_slot :: fn(volume: ptr[mut Volume], at: SlotAt, from: ptr[u8[32]]) -> FatError? {
     if volume.device.read_only {
         return FatError.ReadOnly
     }
@@ -389,13 +421,13 @@ Listed :: struct {
  * its long-name entries are whole and match its checksum, otherwise its short name. Volume labels and "." and ".."
  * are left out.
  */
-next_entry :: fn(volume: ptr[Volume], directory: u32, slot: u32) -> Result[Listed?, FatError] {
+next_entry :: fn(volume: ptr[mut Volume], directory: u32, slot: u32) -> Result[Listed?, FatError] {
     units : u16[MAX_NAME_UNITS + 13]
     long_count := cast[u32](0)
     expected := cast[u8](0)
     checksum := cast[u8](0)
     at_slot := slot
-    for step in 0..<cast[u32](0x200000) {
+    for step in 0..<MAX_DIRECTORY_SLOTS {
         place :: slot_at(volume, directory, at_slot)? or_return .Ok(null)
         bytes : u8[32]
         match read_slot(volume, place, &bytes) {
@@ -479,7 +511,7 @@ next_entry :: fn(volume: ptr[Volume], directory: u32, slot: u32) -> Result[Liste
  * The entry whose short entry is at place, as it is now, its name as given, so connections to one file see what each
  * writes; NotFound if it's been removed since.
  */
-entry_at :: fn(volume: ptr[Volume], place: Place, name: string) -> Result[Entry, FatError] {
+entry_at :: fn(volume: ptr[mut Volume], place: Place, name: string) -> Result[Entry, FatError] {
     at :: slot_at(volume, place.directory, place.slot)? or_return .Error(.NotFound)
     bytes : u8[32]
     match read_slot(volume, at, &bytes) {
@@ -500,7 +532,7 @@ entry_at :: fn(volume: ptr[Volume], place: Place, name: string) -> Result[Entry,
 }
 
 // The entry named name in directory, compared without regard to ASCII case, or NotFound.
-lookup :: fn(volume: ptr[Volume], directory: u32, name: string) -> Result[Entry, FatError] {
+lookup :: fn(volume: ptr[mut Volume], directory: u32, name: string) -> Result[Entry, FatError] {
     slot := cast[u32](0)
     loop {
         found :: next_entry(volume, directory, slot)? or_return .Error(.NotFound)
@@ -515,7 +547,7 @@ lookup :: fn(volume: ptr[Volume], directory: u32, name: string) -> Result[Entry,
  * The entry at path beneath directory, its components separated by '/': each but the last a directory. "." and ".."
  * aren't components, so nothing leads above directory (decisions/0046).
  */
-resolve :: fn(volume: ptr[Volume], directory: u32, path: string) -> Result[Entry, FatError] {
+resolve :: fn(volume: ptr[mut Volume], directory: u32, path: string) -> Result[Entry, FatError] {
     if path.count == 0 {
         return .Error(.InvalidName)
     }
@@ -543,14 +575,14 @@ resolve :: fn(volume: ptr[Volume], directory: u32, path: string) -> Result[Entry
 }
 
 // The first cluster of a directory entry's directory: the root's, for an entry whose cluster is 0 ("..", to the root).
-directory_cluster :: fn(volume: ptr[Volume], entry: ptr[Entry]) -> u32 {
+directory_cluster :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> u32 {
     return if entry.first_cluster == 0 { volume.root_cluster } else { entry.first_cluster }
 }
 
 // Reading and writing files
 
 // Bytes of a file from offset into into: how many, fewer at its end.
-read :: fn(volume: ptr[Volume], entry: ptr[Entry], offset: u64, into: mut u8[]) -> Result[u64, FatError] {
+read :: fn(volume: ptr[mut Volume], entry: ptr[Entry], offset: u64, into: mut u8[]) -> Result[u64, FatError] {
     if entry.attributes & DIRECTORY != 0 {
         return .Error(.IsADirectory)
     }
@@ -759,7 +791,7 @@ zero_range :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], start: u64, end
 }
 
 // An entry's first cluster and size, written back to its short entry.
-update_entry :: fn(volume: ptr[Volume], entry: ptr[Entry]) -> Result[void, FatError] {
+update_entry :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> Result[void, FatError] {
     at :: slot_at(volume, entry.place.directory, entry.place.slot)? or_return .Error(.Corrupt)
     bytes : u8[32]
     match read_slot(volume, at, &bytes) {
@@ -877,9 +909,12 @@ free_slots :: fn(volume: ptr[mut Volume], directory: u32, count: u32) -> Result[
     run_start := cast[u32](0)
     run := cast[u32](0)
     slot := cast[u32](0)
-    for step in 0..<cast[u32](0x200000) {
+    for step in 0..<MAX_DIRECTORY_SLOTS {
         at := slot_at(volume, directory, slot)?
         if at is_none {
+            if slot >= MAX_DIRECTORY_SLOTS {
+                return .Error(.NoSpace)
+            }
             // Past the chain: a new cluster at its end, whose slots are all free
             last :: last_cluster(volume, directory)?
             _ = allocate_cluster(volume, last)?
@@ -908,7 +943,7 @@ free_slots :: fn(volume: ptr[mut Volume], directory: u32, count: u32) -> Result[
     return .Error(.NoSpace)
 }
 
-last_cluster :: fn(volume: ptr[Volume], first: u32) -> Result[u32, FatError] {
+last_cluster :: fn(volume: ptr[mut Volume], first: u32) -> Result[u32, FatError] {
     cluster := first
     for step in 0..<volume.cluster_count {
         step_result :: next_cluster(volume, cluster)?
@@ -921,7 +956,7 @@ last_cluster :: fn(volume: ptr[Volume], first: u32) -> Result[u32, FatError] {
 }
 
 // An entry's slots, its long-name entries and its short one, marked free.
-free_entry_slots :: fn(volume: ptr[Volume], entry: ptr[Entry]) -> Result[void, FatError] {
+free_entry_slots :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> Result[void, FatError] {
     first :: entry.place.slot - entry.place.long_entries
     for slot in first..<entry.place.slot + 1 {
         at :: slot_at(volume, entry.place.directory, slot)? or_return .Error(.Corrupt)
@@ -1030,7 +1065,7 @@ rename :: fn(volume: ptr[mut Volume], entry: ptr[Entry], directory: u32, name: s
 }
 
 // Whether directory is ancestor, or beneath it, by following "..".
-is_beneath :: fn(volume: ptr[Volume], directory: u32, ancestor: u32) -> Result[bool, FatError] {
+is_beneath :: fn(volume: ptr[mut Volume], directory: u32, ancestor: u32) -> Result[bool, FatError] {
     current := directory
     for step in 0..<cast[u32](4096) {
         if current == ancestor {
@@ -1347,7 +1382,7 @@ is_short_character :: fn(byte: u8) -> bool {
  * A short alias for a long name, as Windows makes one: the name's short characters upper-cased, the last dot's part
  * as its extension, its base cut to 6 with "~N" after it, N from 1 until no entry in directory has it.
  */
-make_alias :: fn(volume: ptr[Volume], directory: u32, name: string, short: ptr[mut u8[11]]) -> Result[void, FatError] {
+make_alias :: fn(volume: ptr[mut Volume], directory: u32, name: string, short: ptr[mut u8[11]]) -> Result[void, FatError] {
     for &byte in short^ {
         byte^ = cast[u8](' ')
     }
@@ -1390,51 +1425,111 @@ make_alias :: fn(volume: ptr[Volume], directory: u32, name: string, short: ptr[m
             extension_count += 1
         }
     }
-    for tail in 1..<cast[u32](1000000) {
-        digits : u8[7]
-        digit_count : usize = 0
-        value := tail
-        loop {
-            if digit_count < digits.count {
-                digits[digit_count] = cast[u8]('0') + cast[u8](value % 10)
-                digit_count += 1
-            }
-            value /= 10
+    // The tails this base's aliases already have in the directory, found in one pass, and the first free one taken
+    taken : u64[MAX_TAILS / 64 + 1]
+    slot := cast[u32](0)
+    loop {
+        found :: next_entry(volume, directory, slot)? or_break
+        tail :: tail_of(&found.entry.short_name, short, &base, base_count)
+        word :: cast[usize](tail / 64)
+        if tail > 0 && tail <= MAX_TAILS && word < taken.count {
+            taken[word] = taken[word] | cast[u64](1) << cast[u64](tail % 64)
         }
-        while value != 0
-        keep :: if base_count + digit_count + 1 > 8 { 8 - digit_count - 1 } else { base_count }
-        for i in 0..<cast[usize](8) {
-            short^[i] = cast[u8](' ')
+        slot = found.next
+    }
+    for tail in 1..=MAX_TAILS {
+        word :: cast[usize](tail / 64)
+        if word < taken.count && taken[word] & (cast[u64](1) << cast[u64](tail % 64)) != 0 {
+            continue
         }
-        for i in 0..<keep {
-            if i < base.count {
-                short^[i] = base[i]
-            }
-        }
-        short^[keep % 8] = cast[u8]('~')
-        for d in 0..<digit_count {
-            at :: keep + 1 + d
-            from :: digit_count - 1 - d
-            if at < 8 && from < digits.count {
-                short^[at] = digits[from]
-            }
-        }
-        if !alias_taken(volume, directory, short)? {
-            return .Ok
-        }
+        put_alias(short, &base, base_count, tail)
+        return .Ok
     }
     return .Error(.NoSpace)
 }
 
-alias_taken :: fn(volume: ptr[Volume], directory: u32, short: ptr[u8[11]]) -> Result[bool, FatError] {
-    slot := cast[u32](0)
-    loop {
-        found :: next_entry(volume, directory, slot)? or_return .Ok(false)
-        if found.entry.short_name == short^ {
-            return .Ok(true)
+// The most tails tried: one more than a directory has entries.
+MAX_TAILS : u32 : 65537
+
+// short made base's alias with tail: as much of the base as fits before "~" and the tail's digits, the extension kept.
+put_alias :: fn(short: ptr[mut u8[11]], base: ptr[u8[8]], base_count: usize, tail: u32) {
+    digits : u8[7]
+    digit_count : usize = 0
+    value := tail
+    loop #at_least_once {
+        if digit_count < digits.count {
+            digits[digit_count] = cast[u8]('0') + cast[u8](value % 10)
+            digit_count += 1
         }
-        slot = found.next
+        value /= 10
     }
+    while value != 0
+    keep :: alias_keep(base_count, digit_count)
+    for i in 0..<cast[usize](8) {
+        short^[i] = cast[u8](' ')
+    }
+    for i in 0..<keep {
+        if i < base^.count {
+            short^[i] = base^[i]
+        }
+    }
+    short^[keep % 8] = cast[u8]('~')
+    for d in 0..<digit_count {
+        at :: keep + 1 + d
+        from :: digit_count - 1 - d
+        if at < 8 && from < digits.count {
+            short^[at] = digits[from]
+        }
+    }
+}
+
+// How much of a base an alias keeps, before "~" and digit_count digits.
+alias_keep :: fn(base_count: usize, digit_count: usize) -> usize {
+    return if base_count + digit_count + 1 > 8 { 8 - digit_count - 1 } else { base_count }
+}
+
+/*
+ * The tail of name, if it's an alias of base with extension's extension: as much of base as fits, "~", digits and
+ * spaces; or 0.
+ */
+tail_of :: fn(name: ptr[u8[11]], extension: ptr[u8[11]], base: ptr[u8[8]], base_count: usize) -> u32 {
+    for i in 8..<cast[usize](11) {
+        if name^[i] != extension^[i] {
+            return 0
+        }
+    }
+    tilde : usize = 8
+    for i in 1..<cast[usize](8) {
+        if name^[i] == cast[u8]('~') {
+            tilde = i
+            break
+        }
+    }
+    if tilde >= 7 {
+        return 0
+    }
+    value : u32 = 0
+    digit_count : usize = 0
+    for i in tilde + 1..<cast[usize](8) {
+        byte :: name^[i]
+        if byte == cast[u8](' ') {
+            break
+        }
+        if byte < cast[u8]('0') || byte > cast[u8]('9') || digit_count >= 6 {
+            return 0
+        }
+        value = value * 10 + cast[u32](byte - cast[u8]('0'))
+        digit_count += 1
+    }
+    if digit_count == 0 || tilde != alias_keep(base_count, digit_count) {
+        return 0
+    }
+    for i in 0..<tilde {
+        if i >= base^.count || name^[i] != base^[i] {
+            return 0
+        }
+    }
+    return value
 }
 
 // Formatting

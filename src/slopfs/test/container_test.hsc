@@ -177,6 +177,24 @@ check_volume :: fn(device: ptr[slopfs.Device]) -> int {
     if slopfs.free_blocks(container) + 8 * slopfs.NODE_BLOCKS < baseline {
         return 193
     }
+    // Blocks allocated and never used are a leak the check finds, and given back, it finds nothing
+    leaked :: container.nodes.allocate(container.nodes.space, 3, 1) or_return 194
+    match slopfs.commit(container) {
+        case Ok => {}
+        case Error(error) => return 195
+    }
+    match slopfs.verify(container) {
+        case Ok(report) => return 196
+        case Error(problem) => {
+            if problem != .Leak {
+                return 197
+            }
+        }
+    }
+    container.nodes.release(container.nodes.space, leaked, 3, 1, slopfs.durable_transaction(container))
+    if commit_failed(container) || commit_failed(container) {
+        return 198
+    }
     slopfs.unmount(container)
     failed = check_damage(device, data)
     if failed != 0 {
@@ -197,10 +215,21 @@ pattern :: fn(into: mut u8[], seed: u64) {
     }
 }
 
+// Whether a commit failed, or what it left doesn't check out whole.
 commit_failed :: fn(container: ptr[mut slopfs.Container]) -> bool {
     match slopfs.commit(container) {
-        case Ok => return false
+        case Ok => return !verified(container)
         case Error(error) => return true
+    }
+}
+
+verified :: fn(container: ptr[mut slopfs.Container]) -> bool {
+    match slopfs.verify(container) {
+        case Ok(report) => return true
+        case Error(problem) => {
+            runtime.log_error("verify: %", problem)
+            return false
+        }
     }
 }
 

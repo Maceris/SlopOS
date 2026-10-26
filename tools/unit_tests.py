@@ -17,6 +17,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# How long a test may take, so one that hangs, as a fuzzed image could make it, fails rather than stops the run
+TEST_SECONDS = 900
 
 
 def find_hemera() -> str:
@@ -51,7 +53,12 @@ def main() -> int:
         failed = 0
         for test in tests:
             name = test.name.removesuffix(suffix)
-            code = subprocess.run([str(test), str(programs)]).returncode
+            try:
+                code = subprocess.run([str(test), str(programs)], timeout=TEST_SECONDS).returncode
+            except subprocess.TimeoutExpired:
+                print(f"FAILED: {name}, still running after {TEST_SECONDS} seconds")
+                failed += 1
+                continue
             if code == 0:
                 print(f"passed: {name}")
             else:

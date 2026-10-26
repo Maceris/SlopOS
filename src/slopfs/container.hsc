@@ -99,6 +99,11 @@ has_text :: fn(bytes: u8[], text: string) -> bool {
     return true
 }
 
+// A checkpoint's bytes, for those who write one into a block themselves, as the fuzzer does.
+size_of_checkpoint :: fn() -> usize {
+    return size_of(Checkpoint)
+}
+
 // A record's seal: BLAKE3-256 of its bytes before the seal, which is its last 32.
 seal_record :: fn(record: u8[], seal: ptr[mut Seal]) {
     if record.count < 32 {
@@ -189,7 +194,7 @@ load_free :: fn(container: ptr[mut Container]) -> Result[void, Error] {
             return .Error(.Corrupt)
         }
         add_free(&container.space, start, blocks)
-        at = Key.{object = found.key.object, kind = found.key.kind, offset = found.key.offset + 1}
+        at = key_after(found.key) or_return .Ok
     }
 }
 
@@ -283,7 +288,7 @@ space_map_settle :: fn(container: ptr[mut Container]) -> Result[void, Error] {
         }
         extent :: cast[ptr[SpaceValue]](&value[0])
         runtime.array_add(&pending, Extent.{start = found.key.offset, blocks = cast[u64](extent.blocks)})
-        at = Key.{object = 0, kind = found.key.kind, offset = found.key.offset + 1}
+        at = key_after(found.key) or_break
     }
     for extent in pending {
         tree_delete(&container.nodes, &container.space_map, key_of(0, .Pending, extent.start))?

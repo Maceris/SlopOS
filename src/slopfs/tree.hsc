@@ -73,6 +73,20 @@ compare_keys :: fn(a: Key, b: Key) -> int {
     return 0
 }
 
+// The key just after key, for walking records in order, or null after the last there can be.
+key_after :: fn(key: Key) -> Key? {
+    if key.offset != 0xffffffffffffffff {
+        return Key.{object = key.object, kind = key.kind, offset = key.offset + 1}
+    }
+    if key.kind != 0xff {
+        return Key.{object = key.object, kind = key.kind + 1}
+    }
+    if key.object != 0xffffffffffffffff {
+        return Key.{object = key.object + 1}
+    }
+    return null
+}
+
 disk_key_of :: fn(key: Key) -> DiskKey {
     return DiskKey.{object = cast[u64le](key.object), kind = key.kind, offset = cast[u64le](key.offset)}
 }
