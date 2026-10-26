@@ -144,7 +144,7 @@ open_volume :: fn(container #escaping : ptr[mut Container], id: u64) -> Result[p
             return .Ok(volume)
         }
     }
-    value : u8[216]
+    value : u8[224]
     bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .VolumeEntry, 0), value)? or_return .Error(.NotFound)
     if bytes != size_of(VolumeRecord) {
         return .Error(.Corrupt)
@@ -851,7 +851,7 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
     else {
         blocks :: (cast[u64](used) + BLOCK_BYTES - 1) / BLOCK_BYTES
         nodes :: volume.nodes
-        address :: nodes.allocate(nodes.space, blocks, volume.id) or_return .Error(.NoSpace)
+        address :: nodes.allocate(nodes.space, blocks, volume.id, true) or_return .Error(.NoSpace)
         length :: cast[usize](blocks * BLOCK_BYTES)
         device :: volume.device
         extent := ExtentRecord.{kind = cast[u32le](cast[u32](ExtentKind.Blocks)), bytes = cast[u32le](cast[u32](used))}

@@ -7,6 +7,7 @@ import read_only_dir from "std/os/slop_os"
 import block from "../block"
 import partitions from "../partitions"
 import container from "../container"
+import slopfs from "../../slopfs"
 
 /*
  * The storage manager's protocol (roadmap 8a, decisions/0086): every partition of every disk it holds, by one index
@@ -57,6 +58,13 @@ SnapshotIndexOf :: struct {
     index : u64,
 }
 
+// A volume's quota: the most blocks it may have, its snapshots' included, 0 for none.
+QuotaFor :: struct {
+    partition : u32,
+    volume : slop_os.Relative[u8],
+    blocks : u64,
+}
+
 // A new volume named name, cloned from a volume's snapshot.
 CloneOf :: struct {
     partition : u32,
@@ -83,6 +91,9 @@ Request :: union {
     DeleteSnapshot(SnapshotOf),
     SnapshotAt(SnapshotIndexOf),
     Clone(CloneOf),
+    // A volume's quota set, and how much it has, its quota, and what its container has free past its reserve (8e)
+    SetQuota(QuotaFor),
+    Usage(VolumeNamed),
     // Serve another client, on its end
     Connect(os.Channel[Storage]),
 }
@@ -111,6 +122,7 @@ Response :: union {
     Done,
     // A snapshot, its name, transaction and when it was taken
     Snapshot(container.SnapshotInfo),
+    Used(slopfs.Usage),
     // Past the last snapshot
     NoMore,
     NoSnapshot,
@@ -132,6 +144,8 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case DeleteSnapshot(_) => false
         case SnapshotAt(_) => true
         case Clone(_) => false
+        case SetQuota(_) => true
+        case Usage(_) => true
         case Connect(_) => true
     }
 }

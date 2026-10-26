@@ -463,9 +463,11 @@ abandon_volume :: fn(container: ptr[mut Container], id: u64, undone: ptr[mut Cha
         }
         if change.change == .Allocated {
             add_free(space, change.start, change.blocks)
+            charge(space, id, change.blocks, false)
         }
         else if change.change == .Dead {}
         else if change.change == .FreedLater {
+            charge(space, id, change.blocks, true)
             for later, i in space.later {
                 if later.start == change.start && later.blocks == change.blocks && later.owner == id {
                     runtime.array_remove(&space.later, i)

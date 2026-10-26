@@ -496,6 +496,23 @@ serve_container :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.In
             case SnapshotAt(at) => response^ = snapshot_at(server, os.items(into, at.volume), at.index, &out)
             case Clone(cloning) => response^ = clone(server, os.items(into, cloning.volume), os.items(into, cloning.snapshot),
                 os.items(into, cloning.name), cloning.now)
+            case SetQuota(quota) => {
+                match volume_named(server, os.items(into, quota.volume)) {
+                    case Some(id) => {
+                        match slopfs.set_quota(server.container, id, quota.blocks) {
+                            case Ok => response^ = commit_own(server)
+                            case Error(error) => response^ = .Failed
+                        }
+                    }
+                    case None => response^ = .NoVolume
+                }
+            }
+            case Usage(named) => {
+                match volume_named(server, os.items(into, named)) {
+                    case Some(id) => response^ = .Used(slopfs.usage_of(server.container, id))
+                    case None => response^ = .NoVolume
+                }
+            }
             case Connect(other) => {
                 _ = add(server, .Unbound, other.end, NONE, 0)
                 continue
@@ -666,11 +683,12 @@ for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Reque
             return .Described(container.Described.{id = volume, record = record, transaction = server.container.nodes.transaction,
                 container = server.container.id, lineage = connection.lineage, read_only = connection.snapshot != 0})
         }
-        case Allocate(blocks) => {
+        case Allocate(allocation) => {
+            blocks :: allocation.blocks
             if blocks == 0 || blocks > MAX_ALLOCATE {
                 return .NoSpace
             }
-            start :: slopfs.space_allocate(cast[rawptr](&server.container.space), blocks, volume) or_return .NoSpace
+            start :: slopfs.space_allocate(cast[rawptr](&server.container.space), blocks, volume, allocation.data) or_return .NoSpace
             own(server, start, blocks, volume, server.container.space.transaction, true)
             return .Allocated(start)
         }

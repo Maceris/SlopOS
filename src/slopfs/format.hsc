@@ -16,7 +16,7 @@ package slopfs
 BLOCK_BYTES : u64 : 4096
 NODE_BYTES : u64 : 16384
 NODE_BLOCKS : u64 : 4
-// 2 from 8e: owners with their extents' births, clones, snapshots and dead lists
+// 2 from 8e: owners with their extents' births, clones, snapshots and dead lists, quotas
 FORMAT_VERSION : u32 : 2
 // The checkpoint ring: blocks 1 to RING_BLOCKS, the one for transaction t at 1 + t % RING_BLOCKS
 RING_BLOCKS : u64 : 16
@@ -196,7 +196,8 @@ VOLUME_NAME_BYTES :: 64
  * A volume's record in the container: its tree, its next object's ID, the key its names hash with, its cipher (a
  * Cipher, None for a volume sealed with BLAKE3 alone) and newest key generation, and its name. A clone's names the
  * volume it was cloned from, the snapshot and the transaction that snapshot holds, whose blocks are the origin's; and
- * every volume names whose key records it uses, its own, or for a clone, its origin's (snapshot.hsc).
+ * every volume names whose key records it uses, its own, or for a clone, its origin's (snapshot.hsc), and the most
+ * blocks it may have, 0 for no limit (space.hsc).
  */
 VolumeRecord :: struct #packed {
     root : BlockPointer,
@@ -212,9 +213,10 @@ VolumeRecord :: struct #packed {
     origin_snapshot : u64le,
     origin_transaction : u64le,
     key_owner : u64le,
+    quota : u64le,
 }
 
-#assert size_of(VolumeRecord) == 216
+#assert size_of(VolumeRecord) == 224
 
 ObjectKind :: enum #backed_by(u32) {
     File = 1,

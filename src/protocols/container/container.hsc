@@ -29,6 +29,18 @@ Released :: struct {
     birth : u64,
 }
 
+// An extent of so many 4 KiB blocks, for a file's bytes, which its volume's quota and the reserve hold back, or a tree's nodes.
+Allocation :: struct {
+    blocks : u64,
+    data : bool,
+}
+
+// A volume's quota, by name: the most blocks it may have, its snapshots' included, 0 for none.
+QuotaOf :: struct {
+    volume : slop_os.Relative[u8],
+    blocks : u64,
+}
+
 // A new key generation's record, and its number, the one after the volume's newest.
 AddedGeneration :: struct {
     number : u32,
@@ -80,8 +92,8 @@ Request :: union {
     // The volume with a name, on a new connection of its own, for the requests below
     OpenVolume(slop_os.Relative[u8]),
     Describe,
-    // An extent of so many 4 KiB blocks, for this volume
-    Allocate(u64),
+    // An extent for this volume
+    Allocate(Allocation),
     Release(Released),
     // A block connection to the container's partition, its reads and writes allowed only in this volume's extents
     OpenBlocks,
@@ -100,6 +112,9 @@ Request :: union {
     DeleteSnapshot(SnapshotNamed),
     SnapshotAt(SnapshotIndex),
     Clone(Cloning),
+    // On the listener's connections (8e): a volume's quota set, durable at once, and how much it has
+    SetQuota(QuotaOf),
+    Usage(slop_os.Relative[u8]),
     // Serve another client, on its end
     Connect(os.Channel[Container]),
 }
@@ -115,6 +130,7 @@ Response :: union {
     Wrap(slopfs.WrapRecord),
     Generation(slopfs.GenerationRecord),
     Snapshot(SnapshotInfo),
+    Used(slopfs.Usage),
     // Past the last wrap record, the newest generation or the last snapshot
     NoMore,
     // A snapshot or volume with that name is there already
@@ -150,6 +166,8 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case DeleteSnapshot(_) => false
         case SnapshotAt(_) => true
         case Clone(_) => false
+        case SetQuota(_) => true
+        case Usage(_) => true
         case Connect(_) => true
     }
 }

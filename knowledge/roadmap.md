@@ -213,7 +213,9 @@ volume, ChaCha20-Poly1305 by default, ordered crash semantics, no writable mappi
 on SlopOS beneath a working directory, with a directory-relative API on every OS. 8c done 2026-10-25
 (`decisions/0088`): slopfs hosted, its crash-state tester and fuzzer, and the image builder, whose disk SlopOS boots.
 8d done 2026-10-25 (`decisions/0089`): the container service and volume servers, Replace, transactions, change
-cursors, and programs loaded from the system volume, Limine's modules only the boot set.
+cursors, and programs loaded from the system volume, Limine's modules only the boot set. 8e done 2026-10-26
+(`decisions/0090`): encrypted volumes unlocked by a passphrase, their keys only in their volume servers, key
+generations, snapshots and clones by birth times and dead lists, and quotas and the reserve.
 
 - **Every filesystem in user space, in a process per volume.** The storage manager holds the disks' `block`
   capabilities; a partition server per disk hands out connections narrowed to a range of blocks; a container service

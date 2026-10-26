@@ -191,6 +191,11 @@ read_file_whole :: fn(opened: os.Channel[read_only_file.ReadOnlyFile], buffer: p
 
 // A new file at path beneath a directory holding text, written through a file connection and synced.
 write_new :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, text: string, buffer: ptr[Buffer]) -> bool {
+    return write_new_bytes(end, port, path, text, text.count, buffer)
+}
+
+// A new file at path beneath a directory, count bytes of the buffer starting with text, written and synced.
+write_new_bytes :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, text: string, count: usize, buffer: ptr[Buffer]) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
     opening :: os.begin[dir.Request](&out)
@@ -211,15 +216,15 @@ write_new :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, text: st
             window[i] = cast[u8](character)
         }
     }
-    requests := file.Request.[.UseBuffer(memory), .Write(files.Transfer.{offset = 0, count = cast[u32](text.count), buffer_offset = 0}), .Sync]
+    requests := file.Request.[.UseBuffer(memory), .Write(files.Transfer.{offset = 0, count = cast[u32](count), buffer_offset = 0}), .Sync]
     for request in requests {
         out = os.Outgoing.{}
         made :: os.begin[file.Request](&out)
         made^ = request
         match ask_file(opened.end, file_port, &out, &into) {
             case Done => {}
-            case Transferred(count) => {
-                if cast[usize](count) != text.count {
+            case Transferred(moved) => {
+                if cast[usize](moved) != count {
                     return false
                 }
             }

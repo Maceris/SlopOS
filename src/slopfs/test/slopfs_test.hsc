@@ -90,7 +90,7 @@ Bump :: struct {
     released : u64,
 }
 
-bump_allocate :: fn(space: rawptr, blocks: u64, owner: u64) -> u64? {
+bump_allocate :: fn(space: rawptr, blocks: u64, owner: u64, data: bool) -> u64? {
     bump :: cast[ptr[mut Bump]](space)
     if bump.next + blocks > BLOCKS {
         return null
@@ -141,6 +141,10 @@ main :: fn() -> int {
         return failed
     }
     failed = check_snapshots()
+    if failed != 0 {
+        return failed
+    }
+    failed = check_quotas()
     if failed != 0 {
         return failed
     }

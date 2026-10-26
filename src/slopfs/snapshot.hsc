@@ -181,7 +181,7 @@ delete_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], freed:
     for each in dead {
         if !held_by(remaining, cast[u64](each.value.birth), cast[u64](each.value.freed)) {
             tree_delete(&container.nodes, &container.volumes, key_of(id, .Dead, each.start))?
-            space_free_held(&container.space, each.start, cast[u64](each.value.blocks))
+            space_free_held(&container.space, each.start, cast[u64](each.value.blocks), id)
             match freed {
                 case Some(list) => runtime.array_add(list, Extent.{start = each.start, blocks = cast[u64](each.value.blocks)})
                 case None => {}
@@ -195,6 +195,7 @@ delete_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], freed:
             change.change = .FreedLater
             change.owner = 0
             runtime.array_add(&space.later, Later.{start = change.start, blocks = change.blocks, owner = 0})
+            charge(space, id, change.blocks, false)
             match freed {
                 case Some(list) => runtime.array_add(list, Extent.{start = change.start, blocks = change.blocks})
                 case None => {}
@@ -274,13 +275,24 @@ clone_snapshot :: fn(container: ptr[mut Container], id: u64, snapshot: u8[], nam
 
 /*
  * Every volume's floors, from their records and snapshots, when a container is mounted: a clone's origin's transaction,
- * and each volume's newest snapshot's.
+ * and each volume's newest snapshot's; and their accounts, every block each owns, and their quotas.
  */
 load_floors :: fn(container: ptr[mut Container]) -> Result[void, Error] {
+    container.space.reserve = reserve_of(container.device.block_count)
+    owner := OwnerValue.{}
+    owner_at := Key.{}
+    loop {
+        found :: tree_next(&container.nodes, &container.owners, owner_at, view_of(cast[ptr[mut u8]](&owner), size_of(OwnerValue)))? or_break
+        charge(&container.space, cast[u64](owner.volume), cast[u64](owner.blocks), true)
+        owner_at = key_after(found.key) or_break
+    }
     at : u64 = 0
     loop {
         id :: next_volume_id(container, at)? or_return .Ok
         record :: volume_record(container, id)?
+        if cast[u64](record.quota) != 0 {
+            set_quota_of(&container.space, id, cast[u64](record.quota))
+        }
         if cast[u64](record.origin) != 0 {
             set_floor(&container.space, id, null, cast[u64](record.origin_transaction))
         }
@@ -364,4 +376,38 @@ find_volume_named :: fn(container: ptr[mut Container], name: u8[]) -> Result[u64
         }
         at = id + 1
     }
+}
+
+// Quotas (space.hsc)
+
+/*
+ * The volume id's quota set: the most blocks it may have, its snapshots' included, 0 for none. It's durable with the
+ * next commit; a file's bytes past it are refused from now on.
+ */
+set_quota :: fn(container: ptr[mut Container], id: u64, blocks: u64) -> Result[void, Error] {
+    record := volume_record(container, id)?
+    record.quota = cast[u64le](blocks)
+    put_volume_record(container, id, &record)?
+    for volume in container.open {
+        if volume.id == id {
+            volume.opened.quota = cast[u64le](blocks)
+        }
+    }
+    set_quota_of(&container.space, id, blocks)
+    return .Ok
+}
+
+// A volume's blocks, its quota, and what's free in its container, past the reserve.
+Usage :: struct {
+    used : u64,
+    quota : u64,
+    free : u64,
+    reserve : u64,
+}
+
+usage_of :: fn(container: ptr[Container], id: u64) -> Usage {
+    account :: account_of(&container.space, id)
+    space :: &container.space
+    return Usage.{used = account.used, quota = account.quota,
+        free = if space.free_blocks > space.reserve { space.free_blocks - space.reserve } else { 0 }, reserve = space.reserve}
 }

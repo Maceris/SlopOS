@@ -127,7 +127,7 @@ check_snapshots :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop
         case _ => return 96
     }
     log_line.write(to, "disk_check: snapshots: read one of the system volume as it was, read only, wrote to its clone, couldn't delete it while cloned, and read one of the sealed volume")
-    return 0
+    return check_quotas(to, manager, port, clone, container)
 }
 
 SnapshotAction :: enum {

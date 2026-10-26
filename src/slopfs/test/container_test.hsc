@@ -178,7 +178,7 @@ check_volume :: fn(device: ptr[slopfs.Device]) -> int {
         return 193
     }
     // Blocks allocated and never used are a leak the check finds, and given back, it finds nothing
-    leaked :: container.nodes.allocate(container.nodes.space, 3, 1) or_return 194
+    leaked :: container.nodes.allocate(container.nodes.space, 3, 1, true) or_return 194
     match slopfs.commit(container) {
         case Ok => {}
         case Error(error) => return 195

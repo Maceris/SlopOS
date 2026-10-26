@@ -64,7 +64,7 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
         return .Error(.Unreadable)
     }
     // Each volume's tree, from its record, or as it is in memory where it's open
-    value : u8[216]
+    value : u8[224]
     at : u64 = 0
     loop {
         found := Found.{}

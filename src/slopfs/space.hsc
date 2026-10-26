@@ -9,6 +9,12 @@ import runtime from "base"
  * checkpoint is durable, since the last one still names it (design/storage.md §3). One a snapshot holds isn't free at
  * all: it goes on its volume's dead list until no snapshot holds it, and one a clone shares with its origin is the
  * origin's, which a clone giving it back doesn't touch (snapshot.hsc).
+ *
+ * Quotas and the reserve (roadmap 8e, design/storage.md §3): each volume's blocks are counted, every one it owns, its
+ * dead list's too, so its snapshots are charged to it, as ZFS's quota charges them; a clone's blocks from its origin
+ * are the origin's. A file's bytes are refused past its volume's quota, and past the reserve, a part of the container
+ * kept free for what only changes a tree. A tree's nodes are refused only when nothing is free: deleting needs new
+ * nodes too, so a volume at its quota, or a container full to its reserve, can always be emptied.
  */
 
 Extent :: struct {
@@ -46,6 +52,22 @@ Floor :: struct {
     origin : u64,
 }
 
+// A volume's blocks, every one it owns, and the most it may have, 0 for no limit.
+Account :: struct {
+    owner : u64,
+    used : u64,
+    quota : u64,
+}
+
+// The reserve: this part of a container's blocks, in hundredths, and never fewer than RESERVE_FLOOR.
+RESERVE_PERCENT : u64 : 3
+RESERVE_FLOOR : u64 : 128
+
+reserve_of :: fn(block_count: u64) -> u64 {
+    part :: block_count * RESERVE_PERCENT / 100
+    return if part > RESERVE_FLOOR { part } else { RESERVE_FLOOR }
+}
+
 // An extent freed, born before this transaction, by its owner: free once a commit that takes its owner's changes is durable.
 Later :: struct {
     start : u64,
@@ -67,6 +89,45 @@ Space :: struct {
     rotor : u64,
     free_blocks : u64,
     floors : Floor[..],
+    accounts : Account[..],
+    // What a file's bytes may not take (reserve_of)
+    reserve : u64,
+}
+
+account_of :: fn(space: ptr[Space], owner: u64) -> Account {
+    for account in space.accounts {
+        if account.owner == owner {
+            return account
+        }
+    }
+    return Account.{owner = owner}
+}
+
+// An owner's blocks counted up or down by blocks.
+charge :: fn(space: ptr[mut Space], owner: u64, blocks: u64, adding: bool) {
+    if owner == 0 {
+        return void
+    }
+    for &account in space.accounts {
+        if account.owner == owner {
+            account.used = if adding { account.used + blocks } else if account.used > blocks { account.used - blocks } else { 0 }
+            return void
+        }
+    }
+    if adding {
+        runtime.array_add(&space.accounts, Account.{owner = owner, used = blocks})
+    }
+}
+
+// An owner's quota set, 0 for none.
+set_quota_of :: fn(space: ptr[mut Space], owner: u64, quota: u64) {
+    for &account in space.accounts {
+        if account.owner == owner {
+            account.quota = quota
+            return void
+        }
+    }
+    runtime.array_add(&space.accounts, Account.{owner = owner, quota = quota})
 }
 
 floor_of :: fn(space: ptr[Space], owner: u64) -> Floor {
@@ -156,10 +217,19 @@ insert_extent :: fn(extents: ptr[mut Extent[..]], index: usize, extent: Extent) 
 
 /*
  * count blocks in one extent for owner: the first free extent big enough from the rotor on, then from the start.
- * The change is kept for the trees.
+ * The change is kept for the trees. For a file's bytes (data), none past the owner's quota, nor into the reserve.
  */
-space_allocate :: fn(context: rawptr, blocks: u64, owner: u64) -> u64? {
+space_allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u64? {
     space :: cast[ptr[mut Space]](context)
+    if data {
+        account :: account_of(space, owner)
+        if account.quota != 0 && account.used + blocks > account.quota {
+            return null
+        }
+        if space.free_blocks < space.reserve + blocks {
+            return null
+        }
+    }
     found := space.free.count
     for pass in 0..<2 {
         for extent, i in space.free {
@@ -184,6 +254,7 @@ space_allocate :: fn(context: rawptr, blocks: u64, owner: u64) -> u64? {
     take_free(space, found, start, blocks)
     space.rotor = start + blocks
     runtime.array_add(&space.changes, Change.{change = .Allocated, start = start, blocks = blocks, owner = owner, birth = space.transaction})
+    charge(space, owner, blocks, true)
     return start
 }
 
@@ -226,6 +297,7 @@ space_release :: fn(context: rawptr, start: u64, blocks: u64, owner: u64, birth:
         if change.change == .Allocated && change.start == start && change.blocks == blocks && change.owner == owner {
             runtime.array_remove(&space.changes, i)
             add_free(space, start, blocks)
+            charge(space, owner, blocks, false)
             return void
         }
     }
@@ -239,6 +311,7 @@ space_release :: fn(context: rawptr, start: u64, blocks: u64, owner: u64, birth:
         runtime.array_add(&space.changes, Change.{change = .Dead, start = start, blocks = blocks, owner = owner, birth = birth})
         return void
     }
+    charge(space, owner, blocks, false)
     if birth == space.transaction && owner == 0 {
         add_free(space, start, blocks)
         runtime.array_add(&space.changes, Change.{change = .FreedNow, start = start, blocks = blocks, owner = owner})
@@ -273,14 +346,19 @@ space_committed :: fn(space: ptr[mut Space], only: u64) {
     space.transaction += 1
 }
 
-// An extent a snapshot held, given back once none does: free once this commit is durable, whoever commits it.
-space_free_held :: fn(space: ptr[mut Space], start: u64, blocks: u64) {
+/*
+ * An extent a snapshot held, given back once none does: free once this commit is durable, whoever commits it, and no
+ * longer charged to owner.
+ */
+space_free_held :: fn(space: ptr[mut Space], start: u64, blocks: u64, owner: u64) {
+    charge(space, owner, blocks, false)
     runtime.array_add(&space.later, Later.{start = start, blocks = blocks, owner = 0})
     runtime.array_add(&space.changes, Change.{change = .FreedLater, start = start, blocks = blocks, owner = 0})
 }
 
 space_free :: fn(space: ptr[mut Space]) {
     runtime.array_free(&space.floors)
+    runtime.array_free(&space.accounts)
     runtime.array_free(&space.free)
     runtime.array_free(&space.later)
     runtime.array_free(&space.changes)

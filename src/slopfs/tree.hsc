@@ -155,14 +155,15 @@ owner_at :: fn(tree: ptr[Tree], birth: u64) -> u64 {
 
 /*
  * The nodes of one transaction: the device they're on, the dirty ones by address, and where extents come from and go
- * back to, for nodes: allocate gives count blocks for owner, or null; release takes an extent back, born in birth.
+ * back to: allocate gives count blocks for owner, or null, data saying they're for a file's bytes rather than a tree's
+ * nodes, which a quota and the reserve don't hold back (space.hsc); release takes an extent back, born in birth.
  */
 Nodes :: struct {
     device : Device,
     transaction : u64,
     dirty : maps.HashMap[u64, ptr[mut Node], maps.hash_integer[u64]],
     space : rawptr,
-    allocate : fn(space: rawptr, blocks: u64, owner: u64) -> u64?,
+    allocate : fn(space: rawptr, blocks: u64, owner: u64, data: bool) -> u64?,
     release : fn(space: rawptr, address: u64, blocks: u64, owner: u64, birth: u64),
 }
 
@@ -364,10 +365,10 @@ done :: fn(node: ptr[mut Node]) {
 
 // Blocks for a node of tree, and a second place for a tree written twice.
 place_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree]) -> Result[BlockPointer, Error] {
-    address :: nodes.allocate(nodes.space, NODE_BLOCKS, tree.owner) or_return .Error(.NoSpace)
+    address :: nodes.allocate(nodes.space, NODE_BLOCKS, tree.owner, false) or_return .Error(.NoSpace)
     copy : u64 = 0
     if tree.ditto {
-        copy = nodes.allocate(nodes.space, NODE_BLOCKS, tree.owner) or_else 0
+        copy = nodes.allocate(nodes.space, NODE_BLOCKS, tree.owner, false) or_else 0
         if copy == 0 {
             nodes.release(nodes.space, address, NODE_BLOCKS, tree.owner, nodes.transaction)
             return .Error(.NoSpace)

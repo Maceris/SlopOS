@@ -205,10 +205,10 @@ ask :: fn(server: ptr[mut Server], request: container.Request) -> container.Resp
     }
 }
 
-// An extent for the volume's tree or a file's chunk, from the container service.
-allocate :: fn(context: rawptr, blocks: u64, owner: u64) -> u64? {
+// An extent for the volume's tree or a file's chunk (data), from the container service.
+allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u64? {
     server :: cast[ptr[mut Server]](context)
-    return match ask(server, .Allocate(blocks)) {
+    return match ask(server, .Allocate(container.Allocation.{blocks = blocks, data = data})) {
         case Allocated(first) => first
         case _ => null
     }

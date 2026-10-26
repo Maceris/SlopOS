@@ -77,6 +77,7 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
     "file, wrote one, started key generation 2, wrote another and read all three",
     "--expect-line=[user] disk_check: snapshots: read one of the system volume as it was, read only, wrote to its clone, couldn't "
     "delete it while cloned, and read one of the sealed volume",
+    "--expect-line=[user] disk_check: quotas: its clone's refused a file past it and took a small one, and its usage says so",
     "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
     "--expect-disk-text=Written to the system volume by the guest, and synced",
     # What the encrypted volume's files hold, as the image builder and the disk check wrote them, is nowhere on the disk

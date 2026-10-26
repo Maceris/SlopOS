@@ -279,6 +279,22 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
                     response = to_container(state, cast[usize](at.partition), &out, &reply)
                 }
             }
+            case SetQuota(quota) => {
+                if is_container(state, quota.partition) {
+                    out := os.Outgoing.{}
+                    request :: os.begin[container.Request](&out)
+                    request^ = .SetQuota(container.QuotaOf.{volume = os.append(&out, os.items(into, quota.volume)), blocks = quota.blocks})
+                    response = to_container(state, cast[usize](quota.partition), &out, null)
+                }
+            }
+            case Usage(named) => {
+                if is_container(state, named.partition) {
+                    out := os.Outgoing.{}
+                    request :: os.begin[container.Request](&out)
+                    request^ = .Usage(os.append(&out, os.items(into, named.name)))
+                    response = to_container(state, cast[usize](named.partition), &out, null)
+                }
+            }
             case Clone(of) => {
                 if is_container(state, of.partition) {
                     out := os.Outgoing.{}
@@ -671,6 +687,7 @@ to_container :: fn(state: ptr[mut Manager], index: usize, out: ptr[mut os.Outgoi
         case AlreadyExists => .AlreadyExists
         case InUse => .InUse
         case NoMore => .NoMore
+        case Used(usage) => .Used(usage)
         case Snapshot(info) => match answer {
             case Some(reply) => .Snapshot(container.SnapshotInfo.{name = os.append(reply, os.items(&into, info.name)),
                 transaction = info.transaction, created = info.created})

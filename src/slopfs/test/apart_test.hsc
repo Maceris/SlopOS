@@ -17,9 +17,9 @@ Side :: struct {
     id : u64,
 }
 
-side_allocate :: fn(context: rawptr, blocks: u64, owner: u64) -> u64? {
+side_allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u64? {
     side :: cast[ptr[mut Side]](context)
-    return slopfs.space_allocate(cast[rawptr](&side.container.space), blocks, side.id)
+    return slopfs.space_allocate(cast[rawptr](&side.container.space), blocks, side.id, data)
 }
 
 side_release :: fn(context: rawptr, address: u64, blocks: u64, owner: u64, birth: u64) {

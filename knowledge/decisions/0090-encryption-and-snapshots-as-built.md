@@ -96,6 +96,23 @@ and key generations, 8e2 snapshots and clones, 8e3 quotas and the reserve. This 
   snapshot as it was, read only, finds it among the volume's snapshots, clones it and writes to the clone apart from
   the volume, is refused its deletion while cloned, and reads a snapshot of the encrypted volume.
 
+### 8e3: quotas and the reserve
+- **Counted** (`src/slopfs/space.hsc`): every block a volume owns, its dead list's too, so its snapshots are charged
+  to it, as ZFS's `quota` charges them; a clone's blocks from its origin are the origin's. The counts are kept as
+  extents are allocated, given back, put on and taken off dead lists, and as a volume's changes are undone, and are
+  worked out from the owners tree when a container is mounted; the quota is in the volume's record.
+- **Held back**: an allocation says whether it's for a file's bytes or a tree's nodes. A file's bytes are refused past
+  the volume's quota and past the reserve, 3% of the container's blocks and never fewer than 128; a tree's nodes only
+  when nothing is free. Deleting needs new nodes, so a volume at its quota, or a container full to its reserve, can
+  always be emptied (`design/storage.md` §1, §3).
+- **Services**: the container protocol's `Allocate` says which; `SetQuota` (durable at once) and `Usage` (what a
+  volume has, its quota, and what's free past the reserve) on the listener's connections, and the same through the
+  storage manager.
+- **Tests**: hosted (`src/slopfs/test/quota_test.hsc`), files written until the quota refuses more, one deleted at the
+  quota making room, a snapshot keeping what it holds charged until it's deleted, a container filled to its reserve
+  still deleting and committing, and every count matching the owners tree, across a mount. Booted, the disk check
+  gives its clone a quota a little past what it has, which refuses a file's chunk and takes a small file in the tree.
+
 ## Alternatives considered
 - **The storage manager unwrapping keys**: one process holding every unlocked volume's key, which is what a volume
   server per volume is for (`0085`).
@@ -105,6 +122,9 @@ and key generations, 8e2 snapshots and clones, 8e3 quotas and the reserve. This 
   need a key, which it's kept from holding.
 - **Reference counts per block** (as Btrfs keeps them): a write to every shared block's count on every change, where
   birth times and dead lists need nothing until a block is given back.
+- **Quotas on live data only** (ZFS's `refquota`): deleting would always free quota, but snapshots could fill the
+  disk past every quota; chosen with the owner.
+- **Holding a tree's nodes to the quota too**: a volume at its quota couldn't delete anything.
 - **A clone's own copy of its origin's key records**: wrapping the volume key for the clone needs the passphrase or the
   key, which the container service never holds; sharing them is what ZFS does with a clone's encryption root too.
 
