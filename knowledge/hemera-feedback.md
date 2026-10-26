@@ -38,11 +38,6 @@ Left over from what was built: known limits, each an error rather than wrong cod
 - Indexing through a pointer to a fixed array, `p[i]` with `p: ptr[u8[8]]`, isn't proven in bounds after
   `i < p.count` (E4031); a view, or the array as a struct's field (`p.bytes[i]`), is (found in 8c).
 
-- Seen once, 2026-10-25, building SlopOS's programs while the compiler's Debug build ran: "send_request is declared
-  by more than one imported package" (E4012) in `std/os/slop_os/dir`, where `dir`'s own `send_request`, from its
-  `#insert`, should have been found first. Not seen again in fifteen builds; it looks like an order that depends on
-  timing between targets built at once.
-
 ### Targets and runtime
 
 From the survey of Hemera's docs against its compiler (2026-10-24):
@@ -113,7 +108,9 @@ recovery dropped), relative pointers and endian-specific integers (whose proposa
 one crash. They're in this file's history, up to commit `d8db719`, and in Hemera's own commits and `docs/`; older
 references like "item 9" or "Resolved 2026-10-15" lead to commit `052f203`.
 Since then: optional views as results (`-> ((mut u8[])?)`), `match f()? { ... }`, and an optional that starts zeroed
-being `Some(0)`, now `None`, `None` being `Optional`'s first variant (decided with the owner, found in 8d3).
+being `Some(0)`, now `None`, `None` being `Optional`'s first variant (decided with the owner, found in 8d3); the
+intermittent E4012, a name called ambiguous between imports before the package's own `#insert`, which wins, was done;
+and `#code` starting a statement in a block, found fixing it.
 
 ## 4. Features That Look Like a Strong Fit
 
