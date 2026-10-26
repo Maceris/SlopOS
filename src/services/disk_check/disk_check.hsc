@@ -8,7 +8,8 @@
  * one with a long name, writes one of its own, makes a directory and moves its file into it, lists them, reads its file
  * back through the directory opened, and is refused a path above its working directory; and through the protocols
  * themselves, narrows EFI/SlopOS to read only, selects its files by a pattern, and is refused a file made in the set
- * the read-only directory gave. It says what it found in its
+ * the read-only directory gave. Given the system volume, it reads, writes and moves files there (system_check.hsc). It
+ * says what it found in its
  * debug log, and ends with 0 if all of it held, or the number of the first check that didn't.
  */
 package disk_check
@@ -51,7 +52,8 @@ Disk :: struct {
     buffer : u64,
 }
 
-main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, working_directory: os.Channel[dir.Dir]?) -> int {
+main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, working_directory: os.Channel[dir.Dir]?,
+    system: os.Channel[dir.Dir]?) -> int {
     block_of_startup :: slop_os.startup_block()
     to :: log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     dialing :: storage or_else os.Channel[connector.Connector].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
@@ -173,7 +175,17 @@ main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, wo
     if failed != 0 {
         return failed
     }
-    return check_protocols(to, working_directory or_return 31)
+    failed_protocols :: check_protocols(to, working_directory or_return 31)
+    if failed_protocols != 0 {
+        return failed_protocols
+    }
+    match system {
+        case Some(volume) => return check_system(to, volume, working_directory)
+        case None => {
+            log_line.write(to, "disk_check: no system volume")
+            return 0
+        }
+    }
 }
 
 // The EFI system partition, its working directory, through std's files.

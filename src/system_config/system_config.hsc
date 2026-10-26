@@ -14,7 +14,9 @@ import os from "std"
 import console from "../services/console"
 import disk_check from "../services/disk_check"
 import entropy from "../services/entropy"
+import container_service from "../services/container_service"
 import fat_server from "../services/fat_server"
+import volume_server from "../services/volume_server"
 import platform from "../services/platform"
 import partition_server from "../services/partition_server"
 import process_manager from "../services/process_manager"
@@ -86,20 +88,25 @@ SERVICES :: Service.[
         entry = type_of(process_manager.main)},
     Service.{name = "platform", module = "platform.elf", starter = .RootTask, by_manager = true, budget = 8 * MIB,
         entry = type_of(platform.main)},
-    Service.{name = "supervisor", module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 32 * MIB,
+    Service.{name = "supervisor", module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 48 * MIB,
         entry = type_of(supervisor.main)},
     Service.{name = "console", module = "console.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(console.main)},
     Service.{name = "hello", module = "hello.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(hello.main)},
     // Every disk's, and a partition server for each, which holds only its disk (decisions/0086)
-    Service.{name = "storage_manager", module = "storage_manager.elf", starter = .Supervisor, by_manager = true, budget = 8 * MIB,
+    Service.{name = "storage_manager", module = "storage_manager.elf", starter = .Supervisor, by_manager = true, budget = 20 * MIB,
         entry = type_of(storage_manager.main)},
     Service.{name = "partition_server", module = "partition_server.elf", starter = .StorageManager, by_manager = true, budget = 2 * MIB,
         entry = type_of(partition_server.main)},
     // For each FAT partition whose files are asked for, which holds only its partition (decisions/0087)
     Service.{name = "fat_server", module = "fat_server.elf", starter = .StorageManager, by_manager = true, budget = 2 * MIB,
         entry = type_of(fat_server.main)},
+    // For each SlopOS container, holding only its partition, and for its system volume (decisions/0089)
+    Service.{name = "container_service", module = "container_service.elf", starter = .StorageManager, by_manager = true,
+        budget = 4 * MIB, entry = type_of(container_service.main)},
+    Service.{name = "volume_server", module = "volume_server.elf", starter = .StorageManager, by_manager = true, budget = 6 * MIB,
+        entry = type_of(volume_server.main)},
     // Started only when there's a disk
     Service.{name = "disk_check", module = "disk_check.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(disk_check.main)},

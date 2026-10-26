@@ -329,7 +329,18 @@ commit :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     if container.failed {
         return .Error(.Failed)
     }
-    match commit_all(container) {
+    for volume in container.open {
+        if volume.failed {
+            container.failed = true
+            return .Error(.Failed)
+        }
+    }
+    return failing(container, commit_all(container))
+}
+
+// A commit's result, a device error stopping every later one.
+failing :: fn(container: ptr[mut Container], result: Result[void, Error]) -> Result[void, Error] {
+    match result {
         case Ok => return .Ok
         case Error(error) => {
             if error == .DeviceError {
@@ -343,20 +354,53 @@ commit :: fn(container: ptr[mut Container]) -> Result[void, Error] {
 commit_all :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     for volume in container.open {
         if volume.dirty {
-            tree_write(&container.nodes, &volume.tree)?
-            put_volume_record(container, volume)?
-            volume.dirty = false
+            record :: write_volume(volume)?
+            put_volume_record(container, volume.id, &record)?
         }
     }
+    return commit_changes(container, ALL_OWNERS)
+}
+
+/*
+ * A volume server's commit (decisions/0089): its tree already written, through block connections whose writes have all
+ * finished; its record put in the volumes tree, and its changes and the container's own made durable, other volumes'
+ * left waiting for their own commits. The transaction committed.
+ */
+commit_volume :: fn(container: ptr[mut Container], id: u64, record: ptr[VolumeRecord]) -> Result[u64, Error] {
+    if container.failed {
+        return .Error(.Failed)
+    }
+    committed :: container.nodes.transaction
+    match put_volume_record(container, id, record) {
+        case Ok => {}
+        case Error(error) => return .Error(error)
+    }
+    failing(container, commit_changes(container, id))?
+    return .Ok(committed)
+}
+
+// The space map and owners brought up to date with only's changes and the container's own, and the checkpoint written.
+commit_changes :: fn(container: ptr[mut Container], only: u64) -> Result[void, Error] {
     space_map_settle(container)?
-    // Each round takes the changes so far, and taking them may make more
+    // Each round takes the changes so far that this commit takes, and taking them may make more
     changes : Change[..]
+    waiting : Change[..]
     defer runtime.array_free(&changes)
+    defer runtime.array_free(&waiting)
     round := 0
     loop {
         runtime.array_reset(&changes)
-        runtime.array_copy(container.space.changes, &changes)
+        runtime.array_reset(&waiting)
+        for change in container.space.changes {
+            if takes(only, change.owner) {
+                runtime.array_add(&changes, change)
+            }
+            else {
+                runtime.array_add(&waiting, change)
+            }
+        }
         runtime.array_reset(&container.space.changes)
+        runtime.array_copy(waiting, &container.space.changes)
         for change in changes {
             apply_change(container, change)?
         }
@@ -365,7 +409,7 @@ commit_all :: fn(container: ptr[mut Container]) -> Result[void, Error] {
             return .Error(.Corrupt)
         }
     }
-    while container.space.changes.count > 0
+    while changes_taken(container, only)
     tree_write(&container.nodes, &container.space_map)?
     tree_write(&container.nodes, &container.owners)?
     tree_write(&container.nodes, &container.volumes)?
@@ -376,9 +420,19 @@ commit_all :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     if !container.device.flush(container.device.context) {
         return .Error(.DeviceError)
     }
-    space_committed(&container.space)
+    space_committed(&container.space, only)
     container.nodes.transaction += 1
     return .Ok
+}
+
+// Whether changes this commit takes are still waiting.
+changes_taken :: fn(container: ptr[Container], only: u64) -> bool {
+    for change in container.space.changes {
+        if takes(only, change.owner) {
+            return true
+        }
+    }
+    return false
 }
 
 write_checkpoint :: fn(container: ptr[mut Container]) -> Result[void, Error] {

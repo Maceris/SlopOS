@@ -128,6 +128,10 @@ main :: fn() -> int {
     if failed != 0 {
         return failed
     }
+    failed = check_apart()
+    if failed != 0 {
+        return failed
+    }
     failed = check_crashes()
     if failed != 0 {
         return failed

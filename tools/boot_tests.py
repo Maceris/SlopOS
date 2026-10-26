@@ -57,17 +57,23 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
     "--expect-line=[user] storage: disk 0 partition 4: SlopOS system, 65536 blocks from 139264",
     "--expect-line=[user] storage: started a FAT server for disk 0 partition 3",
     "--expect-line=[user] fat_server: serving a FAT32 volume of 128992 clusters of 512 bytes",
+    "--expect-line=[user] storage: started a container service for disk 0 partition 4",
+    "--expect-line=[user] storage: started a volume server for the system volume",
+    "--expect-line=[user] volume_server: serving volume 1 (system), from transaction 3",
     "--expect-line=[user] disk_check: on the EFI system partition, read the host's files, wrote, moved and read back its own, "
     "listed 3, and was refused a path above it",
     "--expect-line=[user] disk_check: narrowed EFI/SlopOS to read only, selected 2 of its files by *.TXT, and was refused a "
     "file made in the set",
+    "--expect-line=[user] disk_check: on the system volume, read modules/hello.elf as the EFI system partition has it, wrote, "
+    "synced and read back its own file, and moved it",
     "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
+    "--expect-disk-text=Written to the system volume by the guest, and synced",
     "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]
 
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 28 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 30 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] process manager: started supervisor", "--expect-line=[user] process manager: started hello",
         "--expect-line=[user] hello: heap working, random numbers working", "--expect-line=[user] root task: the supervisor started hello",

@@ -5,7 +5,9 @@
  * block connections narrowed to one, which the partition server makes. A FAT partition's files (an EFI system
  * partition's, or a basic data partition's) are served by a FAT server, started the first time they're asked for with
  * a connection narrowed to that partition and nothing else (decisions/0087); each client gets a connection of its own
- * to its root. SlopOS's own volumes come with 8d.
+ * to its root. A SlopOS container's partition gets a container service, holding only that partition, and its system
+ * volume a volume server, holding only a connection to the container service for that volume (decisions/0089); its
+ * files are the system volume's.
  */
 package storage_manager
 
@@ -19,13 +21,21 @@ import connector from "../../protocols/connector"
 import partitions from "../../protocols/partitions"
 import storage from "../../protocols/storage"
 import service_kit from "../../service_kit"
+import container from "../../protocols/container"
+import container_service from "../container_service"
 import fat_server from "../fat_server"
 import partition_server from "../partition_server"
+import volume_server from "../volume_server"
 
 MAX_DISKS :: 4
 MAX_PARTITIONS :: 32
 PARTITION_SERVER_BUDGET : u64 : 2 * 1024 * 1024
 FAT_SERVER_BUDGET : u64 : 2 * 1024 * 1024
+CONTAINER_SERVICE_BUDGET : u64 : 4 * 1024 * 1024
+VOLUME_SERVER_BUDGET : u64 : 6 * 1024 * 1024
+// A SlopOS container's partition type, "SLOPOS CONTAINER" in ASCII, and the volume its files are (decisions/0088, 0089)
+CONTAINER_TYPE :: u8.[0x53, 0x4c, 0x4f, 0x50, 0x4f, 0x53, 0x20, 0x43, 0x4f, 0x4e, 0x54, 0x41, 0x49, 0x4e, 0x45, 0x52]
+SYSTEM_VOLUME :: "system"
 // The GPT types whose partitions hold FAT volumes, as their bytes are on the disk: the EFI system partition
 // (C12A7328-F81F-11D2-BA4B-00A0C93EC93B) and a basic data partition (EBD0A0A2-B9E5-4433-87C0-68B6B72699C7)
 ESP_TYPE :: u8.[0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11, 0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b]
@@ -35,6 +45,20 @@ BASIC_DATA_TYPE :: u8.[0xa2, 0xa0, 0xd0, 0xeb, 0xe5, 0xb9, 0x33, 0x44, 0x87, 0xc
 FatServerGrants :: struct {
     log : slop_os.DebugLog?,
     partition : os.Channel[block.Block],
+    clients : os.Listener[dir.Dir],
+}
+
+// What a container service is given (container_service.main).
+ContainerServiceGrants :: struct {
+    log : slop_os.DebugLog?,
+    partition : os.Channel[block.Block],
+    clients : os.Listener[container.Container],
+}
+
+// What a volume server is given (volume_server.main).
+VolumeServerGrants :: struct {
+    log : slop_os.DebugLog?,
+    volume : os.Channel[container.Container],
     clients : os.Listener[dir.Dir],
 }
 
@@ -66,14 +90,18 @@ Manager :: struct {
     manager : os.Channel[process_manager.ProcessManager],
     manager_port : slop_os.Port,
     fat_server_module : slop_os.Memory,
+    container_service_module : slop_os.Memory,
+    volume_server_module : slop_os.Memory,
     clients : service_kit.Clients,
 }
 
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager], partition_server_module: slop_os.Memory,
-    fat_server_module: slop_os.Memory, disk0: os.Channel[connector.Connector]?, disk1: os.Channel[connector.Connector]?,
+    fat_server_module: slop_os.Memory, container_service_module: slop_os.Memory, volume_server_module: slop_os.Memory,
+    disk0: os.Channel[connector.Connector]?, disk1: os.Channel[connector.Connector]?,
     disk2: os.Channel[connector.Connector]?, disk3: os.Channel[connector.Connector]?, clients: os.Listener[storage.Storage]) -> int {
     startup :: slop_os.startup_block()
-    state := Manager.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE), manager = manager, fat_server_module = fat_server_module}
+    state := Manager.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE), manager = manager, fat_server_module = fat_server_module,
+        container_service_module = container_service_module, volume_server_module = volume_server_module}
     state.port = slop_os.port_create(startup.budget) or_return 1
     manager_port :: os.port_for(startup.budget, manager.end) or_return 1
     state.manager_port = manager_port
@@ -218,6 +246,9 @@ files_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
     startup :: slop_os.startup_block()
     if cast[slop_os.Handle](state.files[index].end) == slop_os.NO_HANDLE {
         partition :: state.partitions[index]
+        if partition.info.type_guid == CONTAINER_TYPE {
+            return system_volume_of(state, index)
+        }
         if partition.info.type_guid != ESP_TYPE && partition.info.type_guid != BASIC_DATA_TYPE {
             return null
         }
@@ -242,6 +273,79 @@ files_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
     }
     server :: state.files[index]
     return dir.connect(server.end, server.port, startup.budget)
+}
+
+/*
+ * The system volume's root, on a container's partition, started the first time: a container service with a connection
+ * narrowed to the partition, and a volume server with a connection to it for the system volume.
+ */
+system_volume_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
+    if index >= state.partitions.count || index >= state.files.count {
+        return null
+    }
+    startup :: slop_os.startup_block()
+    partition :: state.partitions[index]
+    narrowed := os.Channel[block.Block].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
+    match ask(state, cast[usize](partition.disk), .Open(partition.index)) {
+        case Opened(connection) => narrowed = connection
+        case _ => return null
+    }
+    listener :: os.channel_for[container.Container](startup.budget, 0) or_return null
+    grants := ContainerServiceGrants.{log = duplicate_log(state.log), partition = narrowed,
+        clients = os.Listener[container.Container].{end = listener.a}}
+    match os.launch(state.manager, state.manager_port, "container_service", state.container_service_module, CONTAINER_SERVICE_BUDGET,
+        container_service.main, grants) {
+        case Ok(launched) => {}
+        case Error(error) => {
+            log_line.write(state.log, "storage: no container service for disk % partition %: %", partition.disk, partition.index, error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](listener.b))
+            return null
+        }
+    }
+    log_line.write(state.log, "storage: started a container service for disk % partition %", partition.disk, partition.index)
+    listener_port :: os.port_for(startup.budget, listener.b) or_return null
+    volume := os.Channel[container.Container].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
+    out := os.Outgoing.{}
+    request :: os.begin[container.Request](&out)
+    request^ = .OpenVolume(os.append(&out, view_of(cast[ptr[u8]](SYSTEM_VOLUME.data), SYSTEM_VOLUME.count)))
+    match ask_container(listener.b, listener_port, &out) {
+        case OpenedVolume(made) => volume = made
+        case _ => {
+            log_line.write(state.log, "storage: no % volume in the container on disk % partition %", SYSTEM_VOLUME, partition.disk,
+                partition.index)
+            return null
+        }
+    }
+    pair :: os.channel_for[dir.Dir](startup.budget, 0) or_return null
+    volume_grants := VolumeServerGrants.{log = duplicate_log(state.log), volume = volume, clients = os.Listener[dir.Dir].{end = pair.a}}
+    match os.launch(state.manager, state.manager_port, "volume_server", state.volume_server_module, VOLUME_SERVER_BUDGET,
+        volume_server.main, volume_grants) {
+        case Ok(launched) => {}
+        case Error(error) => {
+            log_line.write(state.log, "storage: no volume server for the % volume: %", SYSTEM_VOLUME, error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+            return null
+        }
+    }
+    port :: os.port_for(startup.budget, pair.b) or_return null
+    state.files[index] = Disk.{end = pair.b, port = port}
+    log_line.write(state.log, "storage: started a volume server for the % volume", SYSTEM_VOLUME)
+    return dir.connect(pair.b, port, startup.budget)
+}
+
+// One request to a container service, sent from out, and its answer, waited for.
+ask_container :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing]) -> container.Response {
+    if container.send_request(end, port, out) is_some {
+        return .Unsupported
+    }
+    into := os.Incoming.{}
+    loop {
+        match container.receive_response(end, port, &into, true) {
+            case Received => return os.message_of[container.Response](&into)^
+            case Failed(error) => return .Unsupported
+            case _ => continue
+        }
+    }
 }
 
 // One request to a disk's partition server, and its answer, waited for.

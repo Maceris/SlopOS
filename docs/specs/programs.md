@@ -119,10 +119,12 @@ of its own with a memory budget split off its starter's, which owns it:
 | `virtio_blk` | the supervisor, through the manager, for each modern virtio block device | its device's bundle, `clients: Listener[Block]` | The disk as the `block` protocol (below) |
 | `virtio_input` | the supervisor, through the manager, for each modern virtio input device | its device's bundle, `clients: Listener[Input]` | Its keyboard, mouse or tablet as the `input` protocol (below) |
 | `edu_dma` | the supervisor, through the manager, for each QEMU edu device | its device's bundle | A driver that isn't trusted with DMA: writes outside its domain, for the test that it's stopped (`0084`) |
-| `storage_manager` | the supervisor, through the manager, once the drivers have started, if there's a disk | `log`, `manager`, `partition_server_module`, `fat_server_module`, `disk0` to `disk3: Channel[Connector]?`, `clients: Listener[Storage]` | Starts a partition server for each disk, and serves every disk's partitions, block connections narrowed to one, and a FAT partition's files, as the `storage` protocol (`0086`, `0087`) |
+| `storage_manager` | the supervisor, through the manager, once the drivers have started, if there's a disk | `log`, `manager`, `partition_server_module`, `fat_server_module`, `container_service_module`, `volume_server_module`, `disk0` to `disk3: Channel[Connector]?`, `clients: Listener[Storage]` | Starts a partition server for each disk, and serves every disk's partitions, block connections narrowed to one, a FAT partition's files, and a SlopOS container's system volume, as the `storage` protocol (`0086`, `0087`, `0089`) |
 | `partition_server` | the storage manager, through the manager, for each disk | `log`, `disk: Channel[Block]`, `clients: Listener[Partitions]` | Reads its disk's GPT, and serves its partitions and block connections narrowed to one as the `partitions` protocol, holding nothing but its disk (`0086`) |
 | `fat_server` | the storage manager, through the manager, for each FAT partition whose files are asked for | `log`, `partition: Channel[Block]`, `clients: Listener[Dir]` | Serves the FAT32 volume on its partition as the file protocols (below), holding nothing but a connection narrowed to that partition (`0087`) |
-| `disk_check` | the supervisor, through the manager, if there's a disk | `log`, `storage: Channel[Connector]?`, `working_directory: Channel[Dir]?` | Opens the partition named `SlopOS check` through the storage manager, reads, writes, flushes and reads back its blocks, and is refused the block past its end; then uses `std`'s files and the file protocols on the first EFI system partition, its working directory (`0087`); and says what it found. The supervisor says everything has started once it has ended |
+| `container_service` | the storage manager, through the manager, for each SlopOS container whose files are asked for | `log`, `partition: Channel[Block]`, `clients: Listener[Container]` | Owns a container's space map, owners and checkpoints, and serves the `container` protocol to its volumes' servers (below), holding nothing but a connection narrowed to its partition (`0089`) |
+| `volume_server` | the storage manager, through the manager, for each volume in use | `log`, `volume: Channel[Container]`, `clients: Listener[Dir]` | Holds a volume's tree and serves it as the file protocols, reaching nothing but its own extents, through the container service (`0089`) |
+| `disk_check` | the supervisor, through the manager, if there's a disk | `log`, `storage: Channel[Connector]?`, `working_directory: Channel[Dir]?`, `system: Channel[Dir]?` | Opens the partition named `SlopOS check` through the storage manager, reads, writes, flushes and reads back its blocks, and is refused the block past its end; then uses `std`'s files and the file protocols on the first EFI system partition, its working directory (`0087`), and the file protocols on the first SlopOS container's system volume (`0089`); and says what it found. The supervisor says everything has started once it has ended |
 
 **Wiring**: `system_config` names each service's entry, and checks when it's compiled that every
 `Channel[P]` one takes has a server: a service taking a `Listener[P]`, the root task, which serves the
@@ -255,6 +257,18 @@ The **FAT server** (`src/services/fat_server`, over `src/fat`) serves FAT32 with
 name gets an 8.3 alias (`~N`), names compare ignoring ASCII case, times are 1980-01-01, and FAT12 and FAT16 are
 refused. Each request re-reads its directory entry, so a file renamed or removed through another connection is seen
 at once. Up to 64 connections.
+
+A **SlopOS container** (`src/slopfs`, `0088`, `0089`) is served by two kinds of process. The **container service**
+(`src/services/container_service`) mounts it and keeps every extent a volume has, and serves the `container` protocol
+(`src/protocols/container`): on its listener, `OpenVolume` with a name gives a connection for that volume, on which
+its server describes it (its record, and the transaction its changes go into), allocates extents (`Allocate`) and
+gives them back (`Release`, refused with `NotYours` if they aren't the volume's), opens block connections
+(`OpenBlocks`) whose reads and writes the container service checks against the volume's extents, in whole 4 KiB
+blocks, before passing them to the driver with no copies, and commits (`Commit` with its record, its root in its own
+extents). A commit takes that volume's changes and the container's own, flushes, writes a checkpoint and flushes
+again; another volume's changes wait for its own commit. The **volume server** (`src/services/volume_server`) holds the
+volume's tree and serves the file protocols as the FAT server does, names compared exactly; it commits when a `Sync`
+asks, answering once that's durable, and a second after a change otherwise.
 
 **Hardware randomness** (`src/protocols/rng`): an RNG's driver makes a channel of the `rng` protocol (`Read` with a
 count, answered with `Bytes`) and offers it to the entropy service with `entropy.AddSource`. The entropy service

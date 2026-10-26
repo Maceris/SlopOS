@@ -13,8 +13,13 @@ import crypto from "std"
  * first held in its record while the file is at most 2 KiB. Chunks that were never written read as zeros.
  */
 
+/*
+ * A volume open: the nodes its tree changes in and the device it's on, the container's own in this process or, in a
+ * volume server, its own (decisions/0089), and what its record holds.
+ */
 Volume :: struct {
-    container : ptr[mut Container],
+    nodes : ptr[mut Nodes],
+    device : Device,
     id : u64,
     tree : Tree,
     next_object : u64,
@@ -26,6 +31,8 @@ Volume :: struct {
     dirty : bool,
     // The time it is, as its user says, for the records it writes
     now : u64,
+    // A data write failed, so its commits are refused
+    failed : bool,
 }
 
 // What an object is.
@@ -60,8 +67,8 @@ create_volume :: fn(container #escaping : ptr[mut Container], name: string, hash
         return .Error(.InvalidName)
     }
     volume := runtime.new(Volume)
-    volume^ = Volume.{container = container, id = container.next_volume, next_object = ROOT_OBJECT + 1, hash_key = hash_key,
-        created = now, name_bytes = cast[u16](name.count), dirty = true, now = now}
+    volume^ = Volume.{nodes = &container.nodes, device = container.device, id = container.next_volume, next_object = ROOT_OBJECT + 1,
+        hash_key = hash_key, created = now, name_bytes = cast[u16](name.count), dirty = true, now = now}
     volume.tree = Tree.{kind = .Volume, owner = volume.id}
     for character, i in name {
         if i < volume.name.count {
@@ -96,11 +103,42 @@ open_volume :: fn(container #escaping : ptr[mut Container], id: u64) -> Result[p
     }
     record :: cast[ptr[VolumeRecord]](&value[0])
     volume := runtime.new(Volume)
-    volume^ = Volume.{container = container, id = id, next_object = cast[u64](record.next_object), hash_key = record.hash_key,
-        created = cast[u64](record.created), name = record.name, name_bytes = cast[u16](record.name_bytes)}
+    volume^ = Volume.{nodes = &container.nodes, device = container.device, id = id, next_object = cast[u64](record.next_object),
+        hash_key = record.hash_key, created = cast[u64](record.created), name = record.name, name_bytes = cast[u16](record.name_bytes)}
     volume.tree = Tree.{root = record.root, kind = .Volume, owner = id}
     runtime.array_add(&container.open, volume)
     return .Ok(volume)
+}
+
+/*
+ * A volume from its record, its tree changing in nodes and read and written on device: as open_volume opens one in
+ * the container's own process, and as a volume server opens its own (decisions/0089).
+ */
+attach_volume :: fn(nodes #escaping : ptr[mut Nodes], device #escaping : Device, id: u64, record: VolumeRecord) -> ptr[mut Volume] {
+    volume := runtime.new(Volume)
+    volume^ = Volume.{nodes = nodes, device = device, id = id, next_object = cast[u64](record.next_object), hash_key = record.hash_key,
+        created = cast[u64](record.created), name = record.name, name_bytes = cast[u16](record.name_bytes)}
+    volume.tree = Tree.{root = record.root, kind = .Volume, owner = id}
+    return volume
+}
+
+// What a volume's record says now: its root as it was last written, and the rest.
+record_of :: fn(volume: ptr[Volume]) -> VolumeRecord {
+    return VolumeRecord.{root = volume.tree.root, next_object = cast[u64le](volume.next_object), hash_key = volume.hash_key,
+        created = cast[u64le](volume.created), name_bytes = cast[u16le](volume.name_bytes), name = volume.name}
+}
+
+/*
+ * A volume's dirty nodes written, children first, and its record as it then is: what a volume server gives the
+ * container service to commit (decisions/0089), once the writes have finished.
+ */
+write_volume :: fn(volume: ptr[mut Volume]) -> Result[VolumeRecord, Error] {
+    if volume.failed {
+        return .Error(.Failed)
+    }
+    tree_write(volume.nodes, &volume.tree)?
+    volume.dirty = false
+    return .Ok(record_of(volume))
 }
 
 // The volumes in the container, by ID, from at: the next one's ID, or null.
@@ -110,23 +148,59 @@ next_volume_id :: fn(container: ptr[mut Container], at: u64) -> Result[u64?, Err
     return .Ok(found.key.object)
 }
 
+// A volume open in the container's own process closed, what it changed since its last commit lost.
+close_volume :: fn(container: ptr[mut Container], id: u64) {
+    for volume, i in container.open {
+        if volume.id == id {
+            runtime.array_remove(&container.open, i)
+            free_volume(volume)
+            return void
+        }
+    }
+}
+
 free_volume :: fn(volume: ptr[mut Volume]) {
     runtime.free(volume)
 }
 
-put_volume_record :: fn(container: ptr[mut Container], volume: ptr[mut Volume]) -> Result[void, Error] {
-    record := VolumeRecord.{root = volume.tree.root, next_object = cast[u64le](volume.next_object), hash_key = volume.hash_key,
-        created = cast[u64le](volume.created), name_bytes = cast[u16le](volume.name_bytes), name = volume.name}
-    tree_put(&container.nodes, &container.volumes, key_of(volume.id, .VolumeEntry, 0),
-        view_of(cast[ptr[mut u8]](&record), size_of(VolumeRecord)))?
+put_volume_record :: fn(container: ptr[mut Container], id: u64, record: ptr[VolumeRecord]) -> Result[void, Error] {
+    tree_put(&container.nodes, &container.volumes, key_of(id, .VolumeEntry, 0), view_of(cast[ptr[u8]](record), size_of(VolumeRecord)))?
     return .Ok
+}
+
+// A volume's record, from the container's volumes tree.
+volume_record :: fn(container: ptr[mut Container], id: u64) -> Result[VolumeRecord, Error] {
+    record := VolumeRecord.{}
+    bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .VolumeEntry, 0),
+        view_of(cast[ptr[mut u8]](&record), size_of(VolumeRecord)))? or_return .Error(.NotFound)
+    if bytes != size_of(VolumeRecord) {
+        return .Error(.Corrupt)
+    }
+    return .Ok(record)
+}
+
+// The volume named name in the container: its ID, or null.
+find_volume :: fn(container: ptr[mut Container], name: string) -> Result[u64?, Error] {
+    at : u64 = 0
+    loop {
+        id :: next_volume_id(container, at)? or_return .Ok(null)
+        record :: volume_record(container, id)?
+        length :: cast[usize](cast[u16](record.name_bytes))
+        if length == name.count && length <= record.name.count && same_bytes(record.name[0..<length], name) {
+            return .Ok(id)
+        }
+        if id == 0xffffffffffffffff {
+            return .Ok(null)
+        }
+        at = id + 1
+    }
 }
 
 // Objects' records.
 
 get_object :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, Error] {
     record := ObjectRecord.{}
-    bytes :: tree_get(&volume.container.nodes, &volume.tree, key_of(object, .Object, 0),
+    bytes :: tree_get(volume.nodes, &volume.tree, key_of(object, .Object, 0),
         view_of(cast[ptr[mut u8]](&record), size_of(ObjectRecord)))? or_return .Error(.NotFound)
     if bytes != size_of(ObjectRecord) {
         return .Error(.Corrupt)
@@ -136,7 +210,7 @@ get_object :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, E
 
 put_object :: fn(volume: ptr[mut Volume], object: u64, record: ptr[ObjectRecord]) -> Result[void, Error] {
     volume.dirty = true
-    tree_put(&volume.container.nodes, &volume.tree, key_of(object, .Object, 0), view_of(cast[ptr[u8]](record), size_of(ObjectRecord)))?
+    tree_put(volume.nodes, &volume.tree, key_of(object, .Object, 0), view_of(cast[ptr[u8]](record), size_of(ObjectRecord)))?
     return .Ok
 }
 
@@ -161,7 +235,7 @@ directory_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRec
 
 touch :: fn(volume: ptr[mut Volume], object: u64, record: ptr[mut ObjectRecord]) -> Result[void, Error] {
     record.modified = cast[u64le](volume.now)
-    record.changed = cast[u64le](volume.container.nodes.transaction)
+    record.changed = cast[u64le](volume.nodes.transaction)
     return put_object(volume, object, record)
 }
 
@@ -260,7 +334,7 @@ find_in_list :: fn(list: ptr[EntryList], name: string) -> EntryAt? {
 }
 
 get_entries :: fn(volume: ptr[mut Volume], directory: u64, hash: u64, list: ptr[mut EntryList]) -> Result[void, Error] {
-    list.count = tree_get(&volume.container.nodes, &volume.tree, key_of(directory, .Entry, hash), list.bytes)? or_else 0
+    list.count = tree_get(volume.nodes, &volume.tree, key_of(directory, .Entry, hash), list.bytes)? or_else 0
     return .Ok
 }
 
@@ -268,13 +342,13 @@ put_entries :: fn(volume: ptr[mut Volume], directory: u64, hash: u64, list: ptr[
     volume.dirty = true
     key :: key_of(directory, .Entry, hash)
     if list.count == 0 {
-        tree_delete(&volume.container.nodes, &volume.tree, key)?
+        tree_delete(volume.nodes, &volume.tree, key)?
         return .Ok
     }
     if list.count > list.bytes.count {
         return .Error(.TooLarge)
     }
-    tree_put(&volume.container.nodes, &volume.tree, key, list.bytes[0..<list.count])?
+    tree_put(volume.nodes, &volume.tree, key, list.bytes[0..<list.count])?
     return .Ok
 }
 
@@ -329,6 +403,50 @@ remove_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Res
     return .Ok
 }
 
+// Paths: components with '/' between them, each a name, resolved beneath a directory, so nothing leads above it.
+
+// The object at path beneath directory, each component looked up in the one before.
+resolve :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[u64, Error] {
+    at := directory
+    start : usize = 0
+    for i in 0..<path.count + 1 {
+        if i < path.count && path[i] != '/' {
+            continue
+        }
+        if start > i {
+            return .Error(.InvalidName)
+        }
+        component :: path[start..<i]
+        start = i + 1
+        at = lookup(volume, at, component)? or_return .Error(.NotFound)
+    }
+    return .Ok(at)
+}
+
+// Where a path's last component goes: the directory holding it, and its name.
+Leaf :: struct {
+    directory : u64,
+    name : string,
+}
+
+leaf_of :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[Leaf, Error] {
+    last := path.count
+    for character, i in path {
+        if character == '/' {
+            last = i
+        }
+    }
+    if last == path.count {
+        return .Ok(Leaf.{directory = directory, name = path})
+    }
+    if last + 1 > path.count {
+        return .Error(.InvalidName)
+    }
+    parent :: resolve(volume, directory, path[0..<last])?
+    directory_record(volume, parent)?
+    return .Ok(Leaf.{directory = parent, name = path[last + 1..<path.count]})
+}
+
 /*
  * A new file or directory named name in directory: AlreadyExists if the name's taken.
  */
@@ -341,7 +459,7 @@ create :: fn(volume: ptr[mut Volume], directory: u64, name: string, kind: Object
     add_entry(volume, directory, name, object, kind)?
     volume.next_object += 1
     record := ObjectRecord.{kind = cast[u32le](cast[u32](kind)), parent = cast[u64le](directory), created = cast[u64le](volume.now),
-        modified = cast[u64le](volume.now), changed = cast[u64le](volume.container.nodes.transaction)}
+        modified = cast[u64le](volume.now), changed = cast[u64le](volume.nodes.transaction)}
     put_object(volume, object, &record)?
     touch(volume, directory, &parent)?
     return .Ok(object)
@@ -350,7 +468,7 @@ create :: fn(volume: ptr[mut Volume], directory: u64, name: string, kind: Object
 // Whether a directory has nothing in it.
 is_empty :: fn(volume: ptr[mut Volume], directory: u64) -> Result[bool, Error] {
     value : u8[1]
-    found :: tree_next(&volume.container.nodes, &volume.tree, key_of(directory, .Entry, 0), value)? or_return .Ok(true)
+    found :: tree_next(volume.nodes, &volume.tree, key_of(directory, .Entry, 0), value)? or_return .Ok(true)
     return .Ok(found.key.object != directory || found.key.kind != cast[u8](RecordKind.Entry))
 }
 
@@ -372,14 +490,14 @@ remove :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[vo
 destroy :: fn(volume: ptr[mut Volume], object: u64) -> Result[void, Error] {
     loop {
         extent := ExtentRecord.{}
-        found :: tree_next(&volume.container.nodes, &volume.tree, key_of(object, .Extent, 0),
+        found :: tree_next(volume.nodes, &volume.tree, key_of(object, .Extent, 0),
             view_of(cast[ptr[mut u8]](&extent), size_of(ExtentRecord)))? or_break
         if found.key.object != object || found.key.kind != cast[u8](RecordKind.Extent) {
             break
         }
         drop_chunk(volume, found.key, &extent)?
     }
-    tree_delete(&volume.container.nodes, &volume.tree, key_of(object, .Object, 0))?
+    tree_delete(volume.nodes, &volume.tree, key_of(object, .Object, 0))?
     volume.dirty = true
     return .Ok
 }
@@ -389,7 +507,7 @@ destroy :: fn(volume: ptr[mut Volume], object: u64) -> Result[void, Error] {
  * damaged tree's, and Corrupt, so the loops that drop chunks one by one always end.
  */
 drop_chunk :: fn(volume: ptr[mut Volume], key: Key, extent: ptr[ExtentRecord]) -> Result[void, Error] {
-    if !(tree_delete(&volume.container.nodes, &volume.tree, key)?) {
+    if !(tree_delete(volume.nodes, &volume.tree, key)?) {
         return .Error(.Corrupt)
     }
     release_extent(volume, extent)
@@ -399,7 +517,7 @@ drop_chunk :: fn(volume: ptr[mut Volume], key: Key, extent: ptr[ExtentRecord]) -
 
 release_extent :: fn(volume: ptr[mut Volume], extent: ptr[ExtentRecord]) {
     if cast[u32](extent.kind) == cast[u32](ExtentKind.Blocks) {
-        nodes :: &volume.container.nodes
+        nodes :: volume.nodes
         nodes.release(nodes.space, cast[u64](extent.pointer.address), cast[u64](cast[u32](extent.pointer.blocks)), volume.id,
             cast[u64](extent.pointer.birth))
     }
@@ -482,7 +600,7 @@ list :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: mut u8[])
     hash := cursor >> 8
     skip := cast[usize](cursor & 0xff)
     loop {
-        found :: tree_next(&volume.container.nodes, &volume.tree, key_of(directory, .Entry, hash), entries.bytes)? or_return .Ok(null)
+        found :: tree_next(volume.nodes, &volume.tree, key_of(directory, .Entry, hash), entries.bytes)? or_return .Ok(null)
         if found.key.object != directory || found.key.kind != cast[u8](RecordKind.Entry) {
             return .Ok(null)
         }
@@ -541,7 +659,7 @@ read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[
     }
     value := runtime.new(ValueBuffer)
     defer runtime.free(value)
-    bytes :: tree_get(&volume.container.nodes, &volume.tree, key_of(file, .Extent, index * CHUNK_BYTES), value.bytes)? or_return .Ok(0)
+    bytes :: tree_get(volume.nodes, &volume.tree, key_of(file, .Extent, index * CHUNK_BYTES), value.bytes)? or_return .Ok(0)
     if bytes < size_of(ExtentRecord) && bytes < cast[usize](INLINE_HEAD) {
         return .Error(.Corrupt)
     }
@@ -565,7 +683,7 @@ read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[
     if blocks == 0 || length > buffer.count || cast[u64](used) > blocks * BLOCK_BYTES {
         return .Error(.Corrupt)
     }
-    device :: volume.container.device
+    device :: volume.device
     if !device.read(device.context, cast[u64](extent.pointer.address), blocks, buffer) {
         return .Error(.DeviceError)
     }
@@ -584,7 +702,7 @@ read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[
 write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[], used: usize, inline: bool) -> Result[void, Error] {
     key :: key_of(file, .Extent, index * CHUNK_BYTES)
     old := ExtentRecord.{}
-    had :: tree_get(&volume.container.nodes, &volume.tree, key, view_of(cast[ptr[mut u8]](&old), size_of(ExtentRecord)))?
+    had :: tree_get(volume.nodes, &volume.tree, key, view_of(cast[ptr[mut u8]](&old), size_of(ExtentRecord)))?
     volume.dirty = true
     if inline {
         value := runtime.new(ValueBuffer)
@@ -593,16 +711,16 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
         head.kind = cast[u32le](cast[u32](ExtentKind.Inline))
         head.bytes = cast[u32le](cast[u32](used))
         copy_bytes(value.bytes, cast[usize](INLINE_HEAD), part(buffer, 0, used))
-        tree_put(&volume.container.nodes, &volume.tree, key, part(value.bytes, 0, cast[usize](INLINE_HEAD) + used))?
+        tree_put(volume.nodes, &volume.tree, key, part(value.bytes, 0, cast[usize](INLINE_HEAD) + used))?
     }
     else {
         blocks :: (cast[u64](used) + BLOCK_BYTES - 1) / BLOCK_BYTES
-        nodes :: &volume.container.nodes
+        nodes :: volume.nodes
         address :: nodes.allocate(nodes.space, blocks, volume.id) or_return .Error(.NoSpace)
         length :: cast[usize](blocks * BLOCK_BYTES)
-        device :: volume.container.device
+        device :: volume.device
         if length > buffer.count || !device.write(device.context, address, blocks, part(buffer, 0, length)) {
-            volume.container.failed = true
+            volume.failed = true
             return .Error(.DeviceError)
         }
         extent := ExtentRecord.{kind = cast[u32le](cast[u32](ExtentKind.Blocks)), bytes = cast[u32le](cast[u32](used))}
@@ -686,7 +804,7 @@ write :: fn(volume: ptr[mut Volume], file: u64, offset: u64, from: u8[]) -> Resu
 // A file's first chunk, if it's in its record, moved to blocks.
 move_inline :: fn(volume: ptr[mut Volume], file: u64, chunk: mut u8[]) -> Result[void, Error] {
     head := ExtentRecord.{}
-    had :: tree_get(&volume.container.nodes, &volume.tree, key_of(file, .Extent, 0), view_of(cast[ptr[mut u8]](&head), size_of(ExtentRecord)))?
+    had :: tree_get(volume.nodes, &volume.tree, key_of(file, .Extent, 0), view_of(cast[ptr[mut u8]](&head), size_of(ExtentRecord)))?
     if (had is_none) || cast[u32](head.kind) != cast[u32](ExtentKind.Inline) {
         return .Ok
     }
@@ -704,7 +822,7 @@ set_size :: fn(volume: ptr[mut Volume], file: u64, size: u64) -> Result[void, Er
     if size < old {
         loop {
             extent := ExtentRecord.{}
-            found :: tree_next(&volume.container.nodes, &volume.tree, key_of(file, .Extent, size),
+            found :: tree_next(volume.nodes, &volume.tree, key_of(file, .Extent, size),
                 view_of(cast[ptr[mut u8]](&extent), size_of(ExtentRecord)))? or_break
             if found.key.object != file || found.key.kind != cast[u8](RecordKind.Extent) {
                 break
@@ -733,6 +851,6 @@ set_size :: fn(volume: ptr[mut Volume], file: u64, size: u64) -> Result[void, Er
 
 is_inline :: fn(volume: ptr[mut Volume], file: u64) -> Result[bool, Error] {
     head := ExtentRecord.{}
-    had :: tree_get(&volume.container.nodes, &volume.tree, key_of(file, .Extent, 0), view_of(cast[ptr[mut u8]](&head), size_of(ExtentRecord)))?
+    had :: tree_get(volume.nodes, &volume.tree, key_of(file, .Extent, 0), view_of(cast[ptr[mut u8]](&head), size_of(ExtentRecord)))?
     return .Ok((had is_some) && cast[u32](head.kind) == cast[u32](ExtentKind.Inline))
 }

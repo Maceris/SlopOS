@@ -54,6 +54,8 @@ SupervisorGrants :: struct {
     storage_manager_module : slop_os.Memory?,
     partition_server_module : slop_os.Memory?,
     fat_server_module : slop_os.Memory?,
+    container_service_module : slop_os.Memory?,
+    volume_server_module : slop_os.Memory?,
     command_line : slop_os.Memory?,
 }
 
@@ -171,6 +173,8 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         storage_manager_module = module_copy(block, "storage_manager", module_rights),
         partition_server_module = module_copy(block, "partition_server", module_rights),
         fat_server_module = module_copy(block, "fat_server", module_rights),
+        container_service_module = module_copy(block, "container_service", module_rights),
+        volume_server_module = module_copy(block, "volume_server", module_rights),
     }
     match slop_os.handle_duplicate(cast[slop_os.Handle](command_line), module_rights) {
         case Ok(copy) => grants.command_line = cast[slop_os.Memory](copy)

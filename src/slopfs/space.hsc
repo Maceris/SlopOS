@@ -30,11 +30,21 @@ Change :: struct {
     owner : u64,
 }
 
+// An extent freed, born before this transaction, by its owner: free once a commit that takes its owner's changes is durable.
+Later :: struct {
+    start : u64,
+    blocks : u64,
+    owner : u64,
+}
+
+/*
+ * Every owner's changes wait in one list: the container's own (owner 0) go into every commit, and a volume's into the
+ * commit that takes its changes, so a volume server's are made durable only with its own tree (decisions/0089).
+ */
 Space :: struct {
     // Sorted by start, never two touching
     free : Extent[..],
-    // Freed in this transaction, born before it
-    later : Extent[..],
+    later : Later[..],
     changes : Change[..],
     transaction : u64,
     // Where the next search for a free extent starts, so allocations move along rather than crowding the start
@@ -167,25 +177,51 @@ take_free :: fn(space: ptr[mut Space], index: usize, start: u64, blocks: u64) {
     }
 }
 
-// An extent given back: free at once if this transaction made it, after its checkpoint otherwise.
+/*
+ * An extent given back: one whose allocation no commit has taken yet is simply free again, nothing ever naming it;
+ * one this commit's own rounds made is free at once in the space map too; and one a durable checkpoint may name is
+ * free once a commit taking its owner's changes is durable.
+ */
 space_release :: fn(context: rawptr, start: u64, blocks: u64, owner: u64, birth: u64) {
     space :: cast[ptr[mut Space]](context)
-    if birth == space.transaction {
+    for change, i in space.changes {
+        if change.change == .Allocated && change.start == start && change.blocks == blocks && change.owner == owner {
+            runtime.array_remove(&space.changes, i)
+            add_free(space, start, blocks)
+            return void
+        }
+    }
+    if birth == space.transaction && owner == 0 {
         add_free(space, start, blocks)
         runtime.array_add(&space.changes, Change.{change = .FreedNow, start = start, blocks = blocks, owner = owner})
     }
     else {
-        runtime.array_add(&space.later, Extent.{start = start, blocks = blocks})
+        runtime.array_add(&space.later, Later.{start = start, blocks = blocks, owner = owner})
         runtime.array_add(&space.changes, Change.{change = .FreedLater, start = start, blocks = blocks, owner = owner})
     }
 }
 
-// The transaction's checkpoint is durable: what it freed is free, and the next one starts.
-space_committed :: fn(space: ptr[mut Space]) {
+// Every owner's changes, for a commit of the whole container in one process.
+ALL_OWNERS : u64 : 0xffffffffffffffff
+
+// Whether a commit taking only's changes (or ALL_OWNERS's) takes owner's: the container's own are in every one.
+takes :: fn(only: u64, owner: u64) -> bool {
+    return only == ALL_OWNERS || owner == 0 || owner == only
+}
+
+// A commit that took only's changes is durable: what they freed is free, and the next transaction starts.
+space_committed :: fn(space: ptr[mut Space], only: u64) {
+    kept : Later[..]
     for extent in space.later {
-        add_free(space, extent.start, extent.blocks)
+        if takes(only, extent.owner) {
+            add_free(space, extent.start, extent.blocks)
+        }
+        else {
+            runtime.array_add(&kept, extent)
+        }
     }
-    runtime.array_reset(&space.later)
+    runtime.array_free(&space.later)
+    space.later = kept
     space.transaction += 1
 }
 

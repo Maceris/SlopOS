@@ -96,6 +96,7 @@ DiskCheckGrants :: struct {
     log : slop_os.DebugLog?,
     storage : os.Channel[connector.Connector]?,
     working_directory : os.Channel[dir.Dir]?,
+    system : os.Channel[dir.Dir]?,
 }
 
 MaybeConnector :: os.Channel[connector.Connector]?
@@ -106,6 +107,8 @@ StorageGrants :: struct {
     manager : os.Channel[process_manager.ProcessManager],
     partition_server_module : slop_os.Memory,
     fat_server_module : slop_os.Memory,
+    container_service_module : slop_os.Memory,
+    volume_server_module : slop_os.Memory,
     disk0 : os.Channel[connector.Connector]?,
     disk1 : os.Channel[connector.Connector]?,
     disk2 : os.Channel[connector.Connector]?,
@@ -171,6 +174,8 @@ Modules :: struct {
     storage_manager : slop_os.Memory?,
     partition_server : slop_os.Memory?,
     fat_server : slop_os.Memory?,
+    container_service : slop_os.Memory?,
+    volume_server : slop_os.Memory?,
 }
 
 // Something it started.
@@ -229,13 +234,15 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     console_module: slop_os.Memory?, disk_check_module: slop_os.Memory?, virtio_blk_module: slop_os.Memory?,
     virtio_console_module: slop_os.Memory?, virtio_input_module: slop_os.Memory?, virtio_rng_module: slop_os.Memory?,
     edu_dma_module: slop_os.Memory?, storage_manager_module: slop_os.Memory?, partition_server_module: slop_os.Memory?,
-    fat_server_module: slop_os.Memory?, command_line: slop_os.Memory?) -> int {
+    fat_server_module: slop_os.Memory?, container_service_module: slop_os.Memory?, volume_server_module: slop_os.Memory?,
+    command_line: slop_os.Memory?) -> int {
     startup :: slop_os.startup_block()
     supervisor := Supervisor.{block = startup, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, console = NOWHERE}
     supervisor.modules = Modules.{hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
-        storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module}
+        storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
+        container_service = container_service_module, volume_server = volume_server_module}
     supervisor.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     supervisor.manager_port = os.port_for(startup.budget, manager.end) or_return 1
     supervisor.root_port = os.port_for(startup.budget, root.end) or_return 2
@@ -624,6 +631,10 @@ start_storage :: fn(supervisor: ptr[mut Supervisor]) -> usize {
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     partition_server := cast[slop_os.Memory](slop_os.handle_duplicate(cast[slop_os.Handle](module), rights) or_return NOWHERE)
     fat_server := cast[slop_os.Memory](slop_os.handle_duplicate(cast[slop_os.Handle](fat_module), rights) or_return NOWHERE)
+    container_module :: supervisor.modules.container_service or_return NOWHERE
+    volume_module :: supervisor.modules.volume_server or_return NOWHERE
+    container_service := cast[slop_os.Memory](slop_os.handle_duplicate(cast[slop_os.Handle](container_module), rights) or_return NOWHERE)
+    volume_server := cast[slop_os.Memory](slop_os.handle_duplicate(cast[slop_os.Handle](volume_module), rights) or_return NOWHERE)
     manager :: process_manager.connect(supervisor.manager.end, supervisor.manager_port, supervisor.block.budget) or_return NOWHERE
     pair :: os.channel_for[storage.Storage](supervisor.block.budget, 0) or_return NOWHERE
     disks : MaybeConnector[4]
@@ -635,7 +646,7 @@ start_storage :: fn(supervisor: ptr[mut Supervisor]) -> usize {
         }
     }
     grants := StorageGrants.{log = duplicate_log(supervisor), manager = manager, partition_server_module = partition_server,
-        fat_server_module = fat_server, disk0 = disks[0],
+        fat_server_module = fat_server, container_service_module = container_service, volume_server_module = volume_server, disk0 = disks[0],
         disk1 = disks[1], disk2 = disks[2], disk3 = disks[3], clients = os.Listener[storage.Storage].{end = pair.a}}
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "storage_manager"), service.budget,
         storage_manager.main, grants) {
@@ -655,11 +666,12 @@ start_storage :: fn(supervisor: ptr[mut Supervisor]) -> usize {
 }
 
 /*
- * The root of the first EFI system partition the storage manager at storage_slot has, through a connection of the
- * supervisor's own. It's waited for on the supervisor's port, which goes on handling what arrives, connectors' Dials
- * among it, as the storage manager dials its disks through them before it answers.
+ * The files of the first partition of a type the storage manager at storage_slot has, through a connection of the
+ * supervisor's own: an EFI system partition's root, or a SlopOS container's system volume's. It's waited for on the
+ * supervisor's port, which goes on handling what arrives, connectors' Dials among it, as the storage manager dials its
+ * disks through them before it answers.
  */
-system_partition :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) -> os.Channel[dir.Dir]? {
+files_of_type :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize, kind: u8[16]) -> os.Channel[dir.Dir]? {
     end :: dial(supervisor, storage_slot) or_return null
     defer slop_os.handle_close(cast[slop_os.Handle](end))
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
@@ -671,7 +683,7 @@ system_partition :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) -> 
     for index in 0..<cast[u32](32) {
         match ask_storage(supervisor, end, .Describe(index)) {
             case Described(partition) => {
-                if partition.info.type_guid != storage_manager.ESP_TYPE {
+                if partition.info.type_guid != kind {
                     continue
                 }
                 match ask_storage(supervisor, end, .OpenFiles(index)) {
@@ -711,7 +723,8 @@ start_disk_check :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
     }
     service :: system_config.service("disk_check") or_return void
     grants := DiskCheckGrants.{log = duplicate_log(supervisor), storage = connector_to(supervisor, storage_slot),
-        working_directory = system_partition(supervisor, storage_slot)}
+        working_directory = files_of_type(supervisor, storage_slot, storage_manager.ESP_TYPE),
+        system = files_of_type(supervisor, storage_slot, storage_manager.CONTAINER_TYPE)}
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "disk_check"), service.budget,
         disk_check.main, grants) {
         case Ok(launched) => _ = started(supervisor, "disk_check", launched.process)
