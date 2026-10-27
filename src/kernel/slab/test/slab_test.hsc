@@ -75,13 +75,13 @@ main :: fn() -> int {
         return 9
     }
     for i in 0..<slab.MAGAZINE_SIZE - slab.MAGAZINE_BATCH + 1 {
-        slab.give(&magazine, &cache, &allocator, objects[0])
+        slab.give_back(&magazine, &cache, &allocator, objects[0])
         objects[0] = slab.allocate(&cache, &allocator) or_else 0
     }
     if magazine.count != slab.MAGAZINE_SIZE {
         return 10
     }
-    slab.give(&magazine, &cache, &allocator, first)
+    slab.give_back(&magazine, &cache, &allocator, first)
     if magazine.count != slab.MAGAZINE_SIZE - slab.MAGAZINE_BATCH + 1 {
         return 11
     }

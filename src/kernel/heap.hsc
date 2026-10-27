@@ -138,5 +138,5 @@ free_block :: fn(kernel: ptr[mut Kernel], address: u64, size: u64) {
     class :: class_of(size)
     runtime.assert(class < SIZE_CLASSES, "sizes up to LARGEST_SMALL have a class")
     cpu :: per_cpu()
-    slab.give(&cpu.heap.magazines[class], &kernel.heap.caches[class], &kernel.frames, address)
+    slab.give_back(&cpu.heap.magazines[class], &kernel.heap.caches[class], &kernel.frames, address)
 }

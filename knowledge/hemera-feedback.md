@@ -6,7 +6,7 @@ impossible, from building and running the code and from marker comments in the s
 (`grep -rn "HEMERA(\|STD(" src/`, see `conventions.md`).
 
 Designs still open live in `hemera-proposals/`; once one is in Hemera, Hemera's docs are the
-reference and the proposal is removed (code insertion and cryptography were, 2026-10-23, and relative pointers and endian-specific integers 2026-10-25). This file is
+reference and the proposal is removed (code insertion and cryptography were, 2026-10-23, relative pointers and endian-specific integers 2026-10-25, and builds as programs 2026-10-26). This file is
 the index and status board.
 Since `decisions/0030`, SlopOS changes Hemera's `base/`, `std/`, `examples/` and `docs/`
 directly; those changes are logged here too, with the reason. The compiler (`apps/`) is built out
@@ -22,35 +22,13 @@ Severity: **blocker** / **friction** / **nice**.
 
 | Topic | State | Details |
 |---|---|---|
-| Builds of many outputs | Adopted (2026-10-05) in `base/compiler/build.hsc`; `os.run_process` runs processes since 2026-10-19 (Windows and Linux); targets built several at once since 2026-10-23 (`--jobs`), SlopOS's build from 7.7 s to 4.0 s. Still open: sharing parsed files between targets, measured to save little so far | `hemera-proposals/build-programs.md`; `decisions/0028` |
 | Kernel entry on RISC-V | x86-64 and AArch64 done (`decisions/0062`, `0063`); RISC-V waits for the third architecture, on the same pattern: a frame type, `.entry`, an entry-table intrinsic, `return_to_user` (`sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
 
 ### Smaller gaps
 
-Left over from what was built: known limits, each an error rather than wrong code. Severity: nice.
+Known limits, each an error rather than wrong code. Severity: nice.
 
-- `#insert` in a generic type (E4024); in a generic function's body it works.
-- A generic type declared inside a function (E4024); a type declared there without its own parameters works.
-- `match` and `switch` cases on a `cstring`; a `string`'s work.
-- A constant's `#union` literal naming a member that overlaps another; a variable's works.
-- `f()?.member`: a result unwrapped and then a member of it doesn't parse; binding the result first works. Whether
-  `?.` should mean that, or optional chaining as in other languages, is a syntax question for the owner (found in 8c).
-- Indexing through a pointer to a fixed array, `p[i]` with `p: ptr[u8[8]]`, isn't proven in bounds after
-  `i < p.count` (E4031); a view, or the array as a struct's field (`p.bytes[i]`), is (found in 8c).
-- Found writing slopfs's encryption (8e1):
-  - A function can't give back an optional of a secret, like `Key256?` (E4037: `Optional` isn't a `#secret` type), so
-    keys come back through a pointer and a `bool`.
-  - `x := f() or_return k`, with `k` a secret, makes `x` secret even when `f`'s result isn't, which then can't be
-    pointed to (`&x`, E4037); a `match` on `f()` doesn't.
-  - `runtime.free_array` can't give back an array of a `#secret` type (its cast to `rawptr` is refused); allocating
-    bytes and viewing them as the secret type, then freeing the bytes, works.
-  - A function given a view of the caller's local and returning a pointer is taken to return one into the caller's
-    stack (E4030), even when it comes from `runtime.new`; the caller allocates and passes it in instead.
-  - `if at + i < into.count { into[at + i] = ... }` isn't proven in bounds; `j :: at + i` first is. And a slice after
-    `if a || length > buffer.count { return }` sometimes isn't, where the same check on its own is.
-- Found writing snapshots (8e2): a `Result` has no `is_ok` or `is_error` to go with an optional's `is_some` and
-  `is_none`, so checking one takes a `match`; and `x :: f() or_else { ...; return y }` isn't supported ("BLOCK isn't
-  supported in an expression yet"), so a fallback that does more than give a value takes a `match` too.
+- A generic function declared inside a function (E4024); a generic type declared there works.
 
 ### Targets and runtime
 
@@ -127,6 +105,17 @@ intermittent E4012, a name called ambiguous between imports before the package's
 and `#code` starting a statement in a block, found fixing it; and a `#run` seeing a type it
 describes before it was laid out, once, as `syscall_table`'s `Result[ChannelPair, ChannelError]` with no variants (it
 waits for what a description holds by value now).
+Then the smaller gaps (2026-10-26): `is_ok` and `is_error` for results; `f()?.member`, the result unwrapped and then
+its member, the error or `None` returned (decided with the owner); optionals and results of secrets (a public tag, a
+secret value), secrets zeroed when freed, and `or_return` no longer making a public result secret; what a function
+gives back pointers from, worked out from its body, so one returning `runtime.new`'s memory isn't taken to return the
+caller's stack; `compute[T] { ... give x }`, a block with a value, for `or_else`'s fallback that does more (decided
+with the owner: a block doesn't evaluate to its last expression); bounds proofs of `at + i` and through a pointer to a
+fixed array (the `||` one was a misdiagnosis); `#insert` in generic types; generic types declared in functions;
+constants of `#union` structs naming overlapping members; and `match` and `switch` on a `cstring`, decided against
+(a string knows its length) and now a clear error, pointing to std's `c_string.to_string`, which now takes a limit and
+gives `None` when there's no zero within it, rather than reading on (decided with the owner). Sharing parsed files between targets was dropped, since checking
+changes the trees, and with it `hemera-proposals/build-programs.md`, which had nothing else open.
 
 ## 4. Features That Look Like a Strong Fit
 

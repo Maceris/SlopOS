@@ -14,7 +14,7 @@ Pure code that everything else depends on, and that can be tested on a host.
 
 - **Build package** for the targets: kernel (`OS == .None`), user space (`OS == .SlopOS`),
   host (tests). Hemera has no build system, so this is a Hemera program registering targets
-  through the compiler API in `base/compiler` (`hemera-proposals/build-programs.md`,
+  through the compiler API in `base/compiler` (Hemera's `docs/compilation.md`, *Build Packages*;
   `decisions/0028`).
 - **Hemera `std`**: split into tiers (freestanding / allocating / os); add containers that
   work without an allocator (intrusive lists, fixed-capacity arrays, bitmaps, ring buffers)

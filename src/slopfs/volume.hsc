@@ -812,7 +812,7 @@ read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[
                 return .Error(.Corrupt)
             }
             if !open_block(keys, owner_at(&volume.tree, cast[u64](extent.pointer.birth)), &extent.pointer, part(sealed.bytes, 0, length),
-                mut_part(buffer, 0, length)) {
+                buffer[0..<length]) {
                 return .Error(.Corrupt)
             }
         }

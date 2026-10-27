@@ -169,7 +169,7 @@ take :: fn(magazine: ptr[mut Magazine], cache: ptr[mut SlabCache], allocator: pt
 }
 
 // Give an object to the calling CPU's magazine, emptying half of it into cache if it's full.
-give :: fn(magazine: ptr[mut Magazine], cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator], object: u64) {
+give_back :: fn(magazine: ptr[mut Magazine], cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator], object: u64) {
     if magazine.count == MAGAZINE_SIZE {
         free_batch(cache, allocator, magazine.objects[MAGAZINE_SIZE - MAGAZINE_BATCH..<MAGAZINE_SIZE])
         magazine.count = MAGAZINE_SIZE - MAGAZINE_BATCH

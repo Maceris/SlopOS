@@ -43,9 +43,12 @@ carved_size :: fn(count: usize, element_size: usize) -> u64 {
     return (cast[u64](count * element_size) + ARRAY_ALIGNMENT - 1) & ~(ARRAY_ALIGNMENT - 1)
 }
 
-// A C string's text, empty when there's none.
+// The most of a bootloader's string read looking for its end: a path, a name or the command line.
+TEXT_LIMIT :: 4096
+
+// A C string's text, empty when there's none, or when it doesn't end within TEXT_LIMIT bytes.
 text :: fn(value: cstring?) -> string {
-    return c_string.to_string(value or_return "")
+    return c_string.to_string(value or_return "", TEXT_LIMIT) or_else ""
 }
 
 build_boot_info :: fn(info: ptr[mut boot_info.BootInfo]) {
