@@ -552,9 +552,8 @@ bundle_of :: fn(platform: slop_os.Platform, state: ptr[mut Platform], function: 
     result.domain = slop_os.dma_domain_create(platform, block.budget, trust) or_else cast[slop_os.DmaDomain](slop_os.NO_HANDLE)
     attached := cast[slop_os.Handle](result.config) != slop_os.NO_HANDLE && cast[slop_os.Handle](result.domain) != slop_os.NO_HANDLE
     if attached {
-        match slop_os.device_attach(platform, result.device, result.domain) {
-            case Ok => {}
-            case Error(error) => attached = false
+        if slop_os.device_attach(platform, result.device, result.domain) is_error {
+            attached = false
         }
     }
     if !attached {

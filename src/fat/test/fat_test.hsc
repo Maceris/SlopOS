@@ -39,9 +39,8 @@ main :: fn() -> int {
     device := fat.Device.{context = cast[rawptr](&image), sector_count = SECTORS, read = read_sectors, write = write_sectors}
 
     // Nothing there yet
-    match fat.mount(device) {
-        case Ok(volume) => return 2
-        case Error(failure) => {}
+    if fat.mount(device) is_ok {
+        return 2
     }
     if fat.format(device, SECTORS, 1, "slopos test") is_some {
         return 3
@@ -81,9 +80,8 @@ main :: fn() -> int {
         }
     }
     for refused in string.["", "trailing.", "a/b", "star*", "colon:"] {
-        match fat.create(&volume, root, refused, false) {
-            case Ok(made) => return 16
-            case Error(failure) => {}
+        if fat.create(&volume, root, refused, false) is_ok {
+            return 16
         }
     }
 
@@ -113,9 +111,8 @@ main :: fn() -> int {
         return 23
     }
     for refused in string.["boot/../readme.txt", "./readme.txt", "readme.txt/x", "nowhere/x"] {
-        match fat.resolve(&volume, root, refused) {
-            case Ok(entry) => return 24
-            case Error(failure) => {}
+        if fat.resolve(&volume, root, refused) is_ok {
+            return 24
         }
     }
 
@@ -132,9 +129,8 @@ main :: fn() -> int {
 
     // Renamed into the directory, over nothing; then removed; a directory with something in it isn't
     _ = fat.rename(&volume, &first, boot_cluster, "moved.text") or_return 28
-    match fat.lookup(&volume, root, "A long file name.text") {
-        case Ok(entry) => return 29
-        case Error(failure) => {}
+    if fat.lookup(&volume, root, "A long file name.text") is_ok {
+        return 29
     }
     in_boot := fat.lookup(&volume, boot_cluster, "moved.text") or_return 30
     match fat.remove(&volume, &boot) {
@@ -148,9 +144,8 @@ main :: fn() -> int {
     if !done(fat.remove(&volume, &in_boot)) || !done(fat.remove(&volume, &resized)) || !done(fat.remove(&volume, &boot)) {
         return 32
     }
-    match fat.lookup(&volume, root, "boot") {
-        case Ok(entry) => return 33
-        case Error(failure) => {}
+    if fat.lookup(&volume, root, "boot") is_ok {
+        return 33
     }
 
     // Mounted again, it's all as it was left

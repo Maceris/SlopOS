@@ -64,9 +64,8 @@ main :: fn() -> int {
     // Both sets of entries broken: none
     flip(bytes, cast[usize](2 * gpt.BLOCK_BYTES))
     flip(bytes, cast[usize]((BLOCKS - gpt.ENTRY_BLOCKS - 1) * gpt.BLOCK_BYTES))
-    match gpt.read_table(&disk, entries) {
-        case Ok(read) => return 12
-        case Error(failure) => {}
+    if gpt.read_table(&disk, entries) is_ok {
+        return 12
     }
 
     // A partition outside the usable blocks isn't written

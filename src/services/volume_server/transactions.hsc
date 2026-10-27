@@ -75,9 +75,8 @@ begin :: fn(server: ptr[mut Server], directory: u64, memory: slop_os.Memory) -> 
         }
         startup :: slop_os.startup_block()
         address :: runtime.reserve_addresses(cast[usize](size)) or_return null
-        match slop_os.memory_map(memory, startup.space, address, 0, size, read_write()) {
-            case Ok => {}
-            case Error(error) => return null
+        if slop_os.memory_map(memory, startup.space, address, 0, size, read_write()) is_error {
+            return null
         }
         if i < server.transactions.count {
             server.transactions[i] = Transaction.{active = true, directory = directory, memory = memory, log = address, log_bytes = size}

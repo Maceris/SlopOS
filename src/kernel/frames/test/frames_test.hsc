@@ -146,8 +146,5 @@ main :: fn() -> int {
 
 // Whether a result is Ok.
 succeeded :: fn[T, E](result: Result[T, E]) -> bool {
-    return match result {
-        case Ok(value) => true
-        case Error(error) => false
-    }
+    return result is_ok
 }

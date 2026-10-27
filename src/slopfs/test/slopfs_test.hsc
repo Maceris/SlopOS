@@ -243,16 +243,14 @@ check_tree :: fn() -> int {
             seed :: next_random(&random)
             length :: cast[usize](seed % 600)
             fill(value, seed, length)
-            match slopfs.tree_put(&nodes, &tree, slopfs.key_of(object, .Object, 0), value[0..<length]) {
-                case Ok => {}
-                case Error(failure) => return 12
+            if slopfs.tree_put(&nodes, &tree, slopfs.key_of(object, .Object, 0), value[0..<length]) is_error {
+                return 12
             }
             maps.map_put(&model, object, seed)
         }
         if step % 997 == 996 {
-            match slopfs.tree_write(&nodes, &tree) {
-                case Ok => {}
-                case Error(failure) => return 13
+            if slopfs.tree_write(&nodes, &tree) is_error {
+                return 13
             }
             if nodes.dirty.count != 0 {
                 return 14

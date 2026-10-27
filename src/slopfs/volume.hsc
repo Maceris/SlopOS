@@ -1084,22 +1084,19 @@ unlock :: fn(container: u8[16], id: u64, record: VolumeRecord, wraps: WrapRecord
     keys.cipher = if cipher == cast[u8](Cipher.Aes256Gcm) { .Aes256Gcm } else { .ChaCha20Poly1305 }
     unwrapped := false
     for wrap in wraps {
-        if unwrapped {
-            break
-        }
         candidate := wrap
-        unwrapped = unwrap_with_passphrase(&candidate, passphrase, container, id, &keys.volume_key)
+        key := unwrap_with_passphrase(&candidate, passphrase, container, id) or_continue
+        keys.volume_key = key
+        zero_key(&key)
+        unwrapped = true
+        break
     }
     if !unwrapped {
         return .Error(.WrongKey)
     }
     for each in generations {
         wrapped := each.record
-        generation := GenerationKey.{}
-        if !unwrap_generation(&keys.volume_key, each.number, &wrapped, container, id, &generation) {
-            zero_key(&generation.key)
-            return .Error(.Corrupt)
-        }
+        generation := unwrap_generation(&keys.volume_key, each.number, &wrapped, container, id) or_return .Error(.Corrupt)
         runtime.array_add(&keys.generations, generation)
         zero_key(&generation.key)
     }

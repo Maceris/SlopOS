@@ -292,28 +292,29 @@ wrap_associated :: fn(what: string, container: u8[16], volume: u64) -> u8[48] {
 }
 
 /*
- * The key Argon2id derives from a passphrase with a wrap record's parameters and salt, into key: false if it
- * couldn't. Its memory, which held what the passphrase made, is zeroed before it's given back.
+ * The key Argon2id derives from a passphrase with a wrap record's parameters and salt: None if it couldn't. Its
+ * memory, which held what the passphrase made, is zeroed before it's given back.
  */
-passphrase_key #constant_time :: fn(passphrase: u8[], record: ptr[WrapRecord], key: ptr[mut crypto.Key256]) -> bool {
+passphrase_key #constant_time :: fn(passphrase: u8[], record: ptr[WrapRecord]) -> crypto.Key256? {
     parameters :: crypto.Argon2Parameters.{memory_kib = cast[u32](record.memory_kib), passes = cast[u32](record.passes),
         lanes = cast[u32](record.lanes)}
     count :: crypto.argon2_blocks_needed(parameters)
     memory, error :: runtime.new_array_aligned(u8, count * size_of(crypto.Argon2Block), align_of(crypto.Argon2Block))
     if error != null {
-        return false
+        return null
     }
     defer runtime.free_array_aligned(memory, align_of(crypto.Argon2Block))
     blocks :: view_of(cast[ptr[mut crypto.Argon2Block]](memory.data), count)
     defer zero_argon2(blocks)
     hash : crypto.SecretByte[32]
     if !crypto.argon2id(crypto.as_secret(passphrase), record.salt, parameters, blocks, hash) {
-        return false
+        return null
     }
+    key : crypto.Key256
     for i in cast[usize](0)..<32 {
         key[i] = cast[u8](hash[i])
     }
-    return true
+    return key
 }
 
 zero_argon2 #constant_time :: fn(blocks: mut crypto.Argon2Block[]) {
@@ -331,11 +332,8 @@ wrap_with_passphrase #constant_time :: fn(volume_key: ptr[crypto.Key256], passph
     record := WrapRecord.{kind = cast[u32le](cast[u32](WrapKind.Passphrase)), memory_kib = cast[u32le](parameters.memory_kib),
         passes = cast[u32le](parameters.passes), lanes = cast[u32le](parameters.lanes)}
     random.fill(record.salt)
-    wrapping : crypto.Key256
+    wrapping := passphrase_key(passphrase, &record) or_return null
     defer zero_key(&wrapping)
-    if !passphrase_key(passphrase, &record, &wrapping) {
-        return null
-    }
     // The wrapping key is new with each salt, so one nonce is enough
     nonce :: nonce_of(0)
     associated :: wrap_associated("slopfs volume key", container, volume)
@@ -354,18 +352,13 @@ wrap_with_passphrase #constant_time :: fn(volume_key: ptr[crypto.Key256], passph
     return compiler.declassify(record)
 }
 
-// The volume key a passphrase unwraps from record, into key: false if it's the wrong passphrase.
-unwrap_with_passphrase #constant_time :: fn(record: ptr[WrapRecord], passphrase: u8[], container: u8[16], volume: u64,
-    key: ptr[mut crypto.Key256]) -> bool {
-
+// The volume key a passphrase unwraps from record: None if it's the wrong passphrase.
+unwrap_with_passphrase #constant_time :: fn(record: ptr[WrapRecord], passphrase: u8[], container: u8[16], volume: u64) -> crypto.Key256? {
     if cast[u32](record.kind) != cast[u32](WrapKind.Passphrase) {
-        return false
+        return null
     }
-    wrapping : crypto.Key256
+    wrapping := passphrase_key(passphrase, record) or_return null
     defer zero_key(&wrapping)
-    if !passphrase_key(passphrase, record, &wrapping) {
-        return false
-    }
     nonce :: nonce_of(0)
     associated :: wrap_associated("slopfs volume key", container, volume)
     tag : crypto.Tag128
@@ -374,12 +367,13 @@ unwrap_with_passphrase #constant_time :: fn(record: ptr[WrapRecord], passphrase:
     }
     plain : crypto.SecretByte[32]
     if !crypto.chacha20_poly1305_open(&wrapping, &nonce, record.wrapped, associated, &tag, plain) {
-        return false
+        return null
     }
+    key : crypto.Key256
     for i in cast[usize](0)..<32 {
         key[i] = cast[u8](plain[i])
     }
-    return true
+    return key
 }
 
 // A generation's key wrapped by the volume key, its number the nonce, since each is wrapped once.
@@ -403,9 +397,9 @@ wrap_generation #constant_time :: fn(volume_key: ptr[crypto.Key256], generation:
     return compiler.declassify(record)
 }
 
-// A generation's key unwrapped by the volume key, into generation: false if it doesn't open.
+// A generation's key unwrapped by the volume key: None if it doesn't open.
 unwrap_generation #constant_time :: fn(volume_key: ptr[crypto.Key256], number: u32, record: ptr[GenerationRecord], container: u8[16],
-    volume: u64, generation: ptr[mut GenerationKey]) -> bool {
+    volume: u64) -> GenerationKey? {
 
     nonce :: nonce_of(number)
     associated :: wrap_associated("slopfs generation", container, volume)
@@ -415,13 +409,13 @@ unwrap_generation #constant_time :: fn(volume_key: ptr[crypto.Key256], number: u
     }
     plain : crypto.SecretByte[32]
     if !crypto.chacha20_poly1305_open(volume_key, &nonce, record.wrapped, associated, &tag, plain) {
-        return false
+        return null
     }
-    generation.number = number
+    generation := GenerationKey.{number = number}
     for i in cast[usize](0)..<32 {
         generation.key[i] = cast[u8](plain[i])
     }
-    return true
+    return generation
 }
 
 /*

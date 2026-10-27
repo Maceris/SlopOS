@@ -48,9 +48,8 @@ apart :: fn(container #escaping : ptr[mut slopfs.Container], id: u64) -> ptr[mut
 // A volume's commit, as a volume server makes one: its tree written, then its record committed by the container.
 commit_apart :: fn(made: ptr[mut Apart]) -> bool {
     record :: slopfs.write_volume(made.volume) or_return false
-    match slopfs.commit_volume(made.side.container, made.side.id, &record) {
-        case Ok(transaction) => {}
-        case Error(error) => return false
+    if slopfs.commit_volume(made.side.container, made.side.id, &record) is_error {
+        return false
     }
     made.nodes.transaction = made.side.container.nodes.transaction
     return true

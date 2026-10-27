@@ -109,15 +109,9 @@ main :: fn() -> int {
 }
 
 succeeded_frames :: fn(result: Result[boot_info.PhysicalAddress, frames.FrameError]) -> bool {
-    return match result {
-        case Ok(address) => true
-        case Error(error) => false
-    }
+    return result is_ok
 }
 
 succeeded :: fn(result: Result[u64, frames.FrameError]) -> bool {
-    return match result {
-        case Ok(object) => true
-        case Error(error) => false
-    }
+    return result is_ok
 }

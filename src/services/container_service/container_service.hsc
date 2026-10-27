@@ -265,9 +265,8 @@ load_owned :: fn(server: ptr[mut Server]) -> bool {
             }
         }
         runtime.array_free(&dead)
-        match listed {
-            case Ok => {}
-            case Error(error) => return false
+        if listed is_error {
+            return false
         }
         if id == 0xffffffffffffffff {
             break
@@ -613,9 +612,8 @@ snapshot_at :: fn(server: ptr[mut Server], volume: u8[], index: u64, out: ptr[mu
     id :: volume_named(server, volume) or_return .NoVolume
     snapshots : slopfs.NumberedSnapshot[..]
     defer runtime.array_free(&snapshots)
-    match slopfs.snapshot_records(server.container, id, &snapshots) {
-        case Ok => {}
-        case Error(error) => return .Failed
+    if slopfs.snapshot_records(server.container, id, &snapshots) is_error {
+        return .Failed
     }
     if index >= cast[u64](snapshots.count) {
         return .NoMore

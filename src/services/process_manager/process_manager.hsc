@@ -125,9 +125,8 @@ load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.R
     // The executable, mapped where the manager can read it
     size :: slop_os.memory_size(request.executable) or_return .NotLoaded(.BadRequest)
     address :: runtime.reserve_addresses(cast[usize](size)) or_return .NotLoaded(.NoMemory)
-    match slop_os.memory_map(request.executable, manager.block.space, address, 0, size, slop_os.PROTECTION_READ) {
-        case Ok => {}
-        case Error(error) => return .NotLoaded(.BadRequest)
+    if slop_os.memory_map(request.executable, manager.block.space, address, 0, size, slop_os.PROTECTION_READ) is_error {
+        return .NotLoaded(.BadRequest)
     }
     defer _ = slop_os.memory_unmap(manager.block.space, address)
     file :: view_of(cast[ptr[u8]](address), cast[usize](size))
@@ -156,9 +155,8 @@ draw :: fn(manager: ptr[mut Manager], bytes: mut u8[]) -> bool {
     out := os.Outgoing.{}
     request :: os.begin[entropy.Request](&out)
     request^ = .Fill(cast[u32](bytes.count))
-    match entropy.send_request(manager.entropy, manager.entropy_port, &out) {
-        case Some(error) => return false
-        case None => {}
+    if entropy.send_request(manager.entropy, manager.entropy_port, &out) is_some {
+        return false
     }
     into := os.Incoming.{}
     match entropy.receive_response(manager.entropy, manager.entropy_port, &into, true) {

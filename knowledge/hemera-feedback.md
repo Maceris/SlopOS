@@ -114,7 +114,8 @@ with the owner: a block doesn't evaluate to its last expression); bounds proofs 
 fixed array (the `||` one was a misdiagnosis); `#insert` in generic types; generic types declared in functions;
 constants of `#union` structs naming overlapping members; and `match` and `switch` on a `cstring`, decided against
 (a string knows its length) and now a clear error, pointing to std's `c_string.to_string`, which now takes a limit and
-gives `None` when there's no zero within it, rather than reading on (decided with the owner). Sharing parsed files between targets was dropped, since checking
+gives `None` when there's no zero within it, rather than reading on (decided with the owner), as base's
+`runtime.cstring_view` does too, for arguments, the environment and directory entries. Sharing parsed files between targets was dropped, since checking
 changes the trees, and with it `hemera-proposals/build-programs.md`, which had nothing else open.
 
 ## 4. Features That Look Like a Strong Fit

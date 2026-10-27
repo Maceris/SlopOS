@@ -403,9 +403,8 @@ fill_slopfs :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure
         flush = flushed}
     id : u8[16]
     random.fill(id)
-    match slopfs.format(device, id) {
-        case Ok => {}
-        case Error(error) => return .NotMade
+    if slopfs.format(device, id) is_error {
+        return .NotMade
     }
     container :: slopfs.mount(device) or_return .NotMounted
     defer slopfs.unmount(container)
@@ -423,18 +422,15 @@ fill_slopfs :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure
         sealed :: slopfs.create_sealed_volume(container, partition.sealed_name, sealed_key, 0, .ChaCha20Poly1305, passphrase,
             SEALED_ARGON2) or_return .NotMade
         made :: slopfs.create(sealed, slopfs.ROOT_OBJECT, "sealed.txt", .File) or_return .NotMade
-        match slopfs.write(sealed, made, 0, view_of(cast[ptr[u8]](SEALED_TEXT.data), SEALED_TEXT.count)) {
-            case Ok => {}
-            case Error(error) => return .NotWritten
+        if slopfs.write(sealed, made, 0, view_of(cast[ptr[u8]](SEALED_TEXT.data), SEALED_TEXT.count)) is_error {
+            return .NotWritten
         }
     }
-    match slopfs.commit(container) {
-        case Ok => {}
-        case Error(error) => return .NotCommitted
+    if slopfs.commit(container) is_error {
+        return .NotCommitted
     }
-    match slopfs.verify(container) {
-        case Ok(report) => {}
-        case Error(problem) => return .NotChecked
+    if slopfs.verify(container) is_error {
+        return .NotChecked
     }
     return null
 }
@@ -460,9 +456,8 @@ copy_to_slopfs :: fn(volume: ptr[mut slopfs.Volume], directory: u64, folder: str
         bytes :: os.read_entire_file(source) or_return .Unread
         defer runtime.free_array(bit_cast[u8[]](bytes))
         made :: slopfs.create(volume, directory, entry.name, .File) or_return .NotMade
-        match slopfs.write(volume, made, 0, view_of(cast[ptr[u8]](bytes.data), bytes.count)) {
-            case Ok => {}
-            case Error(error) => return .NotWritten
+        if slopfs.write(volume, made, 0, view_of(cast[ptr[u8]](bytes.data), bytes.count)) is_error {
+            return .NotWritten
         }
     }
     return null

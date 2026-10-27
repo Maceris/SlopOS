@@ -117,9 +117,8 @@ exercise :: fn(device: ptr[slopfs.Device], survived: ptr[mut Survived], sealed: 
     match slopfs.mount(device^) {
         case Ok(made) => {
             survived.mounted += 1
-            match slopfs.verify(made) {
-                case Ok(report) => survived.verified += 1
-                case Error(problem) => {}
+            if slopfs.verify(made) is_ok {
+                survived.verified += 1
             }
             for id in 1..=cast[u64](2) {
                 opened :: if sealed { slopfs.open_sealed_volume(made, id, passphrase()) } else { slopfs.open_volume(made, id) }
@@ -128,9 +127,8 @@ exercise :: fn(device: ptr[slopfs.Device], survived: ptr[mut Survived], sealed: 
                     case Error(failure) => {}
                 }
             }
-            match slopfs.commit(made) {
-                case Ok => survived.committed += 1
-                case Error(failure) => {}
+            if slopfs.commit(made) is_ok {
+                survived.committed += 1
             }
             slopfs.unmount(made)
         }

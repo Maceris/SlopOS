@@ -180,13 +180,11 @@ load_image :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], space: ptr[
         return "no memory to load it in"
     }
     defer runtime.free_array(buffer)
-    match elf_loader.load(executable, file, buffer) {
-        case Ok => {}
-        case Error(failed) => return "its segments don't load"
+    if elf_loader.load(executable, file, buffer) is_error {
+        return "its segments don't load"
     }
-    match elf_loader.relocate(executable, file, buffer, base) {
-        case Ok => {}
-        case Error(failed) => return "its relocations don't apply"
+    if elf_loader.relocate(executable, file, buffer, base) is_error {
+        return "its relocations don't apply"
     }
     image :: create_memory(kernel, cast[u64](process), kernel.root_budget, executable.size) or_return "no memory for its image"
     if !copy_into(kernel, image, buffer) {
@@ -291,9 +289,8 @@ write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], sp
     if kernel.firmware != 0 {
         firmware :: kernel.firmware
         kernel.firmware = 0
-        match adopt(cast[u64](process), firmware) {
-            case Ok => {}
-            case Error(error) => return "no firmware tables: it's being destroyed"
+        if adopt(cast[u64](process), firmware) is_error {
+            return "no firmware tables: it's being destroyed"
         }
         handle :: handle_for(kernel, process, firmware, .Memory, true) or_return "no handle to the firmware tables"
         count = add_grant(grants, count, "firmware", .Memory, handle)

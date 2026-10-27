@@ -23,9 +23,8 @@ check_container :: fn() -> int {
             }
         }
     }
-    match slopfs.format(device, id) {
-        case Ok => {}
-        case Error(error) => return 103
+    if slopfs.format(device, id) is_error {
+        return 103
     }
     return check_volume(&device)
 }
@@ -137,9 +136,8 @@ check_volume :: fn(device: ptr[slopfs.Device]) -> int {
     if moved.parent != docs {
         return 177
     }
-    match slopfs.rename(volume, root, "docs", docs, "inside") {
-        case Ok => return 178
-        case Error(error) => {}
+    if slopfs.rename(volume, root, "docs", docs, "inside") is_ok {
+        return 178
     }
     match slopfs.remove(volume, root, "docs") {
         case Ok => return 179
@@ -179,9 +177,8 @@ check_volume :: fn(device: ptr[slopfs.Device]) -> int {
     }
     // Blocks allocated and never used are a leak the check finds, and given back, it finds nothing
     leaked :: container.nodes.allocate(container.nodes.space, 3, 1, true) or_return 194
-    match slopfs.commit(container) {
-        case Ok => {}
-        case Error(error) => return 195
+    if slopfs.commit(container) is_error {
+        return 195
     }
     match slopfs.verify(container) {
         case Ok(report) => return 196

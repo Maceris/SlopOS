@@ -309,9 +309,8 @@ run_b :: fn(c0: slop_os.Channel) -> int {
     // Back to A, through c0
     reply_port :: os.port_for(block.budget, c0) or_return 103
     none : slop_os.Handle[1]
-    match os.send(c0, reply_port, os.bytes_of(&results), view_of(&none[0], 0)) {
-        case Some(error) => return 104
-        case None => {}
+    if os.send(c0, reply_port, os.bytes_of(&results), view_of(&none[0], 0)) is_some {
+        return 104
     }
     return 0
 }

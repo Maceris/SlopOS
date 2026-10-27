@@ -197,9 +197,8 @@ check_snapshots_of :: fn(sealed: bool, base: int) -> int {
         || !file_holds(volume, "later.txt", name_bytes(SECOND_TEXT)) {
         return base + 41
     }
-    match slopfs.open_snapshot(container, origin_id, name_bytes("one"), null) {
-        case Ok(gone) => return base + 42
-        case Error(error) => {}
+    if slopfs.open_snapshot(container, origin_id, name_bytes("one"), null) is_ok {
+        return base + 42
     }
     // Still holding what its clone shares: a change to the origin now, and the clone reads as it did
     pattern(data.bytes[0..<200000], 14)
@@ -256,13 +255,11 @@ unlocked_keys :: fn(container: ptr[mut slopfs.Container], id: u64) -> ptr[mut sl
     defer runtime.array_free(&wraps)
     generations : slopfs.NumberedGeneration[..]
     defer runtime.array_free(&generations)
-    match slopfs.volume_wraps(container, id, &wraps) {
-        case Ok => {}
-        case Error(error) => return null
+    if slopfs.volume_wraps(container, id, &wraps) is_error {
+        return null
     }
-    match slopfs.volume_generations(container, id, &generations) {
-        case Ok => {}
-        case Error(error) => return null
+    if slopfs.volume_generations(container, id, &generations) is_error {
+        return null
     }
     keys :: slopfs.new_keys(.None)
     match slopfs.unlock(container.id, id, record, wraps, generations, passphrase(), keys) {

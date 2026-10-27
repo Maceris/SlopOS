@@ -23,9 +23,8 @@ add_client :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slop_os.Cha
         return false
     }
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    match slop_os.port_bind(port, cast[slop_os.Handle](end), signals, cast[u64](index), .Persistent) {
-        case Ok => {}
-        case Error(error) => return false
+    if slop_os.port_bind(port, cast[slop_os.Handle](end), signals, cast[u64](index), .Persistent) is_error {
+        return false
     }
     clients.ends[index] = end
     clients.count = index + 1
@@ -56,9 +55,8 @@ text_of_label :: fn(label: ptr[u8[slop_os.GRANT_LABEL_SIZE]]) -> string {
 text_of :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> string? {
     size :: slop_os.memory_size(memory) or_return null
     address :: runtime.reserve_addresses(cast[usize](size)) or_return null
-    match slop_os.memory_map(memory, block.space, address, 0, size, slop_os.PROTECTION_READ) {
-        case Ok => {}
-        case Error(error) => return null
+    if slop_os.memory_map(memory, block.space, address, 0, size, slop_os.PROTECTION_READ) is_error {
+        return null
     }
     count : usize = 0
     for byte in view_of(cast[ptr[u8]](address), cast[usize](size)) {

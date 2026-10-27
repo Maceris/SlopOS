@@ -100,9 +100,8 @@ test_kernel_pages :: fn(kernel: ptr[mut arch.PageTable], memory: ptr[mut Memory]
     }
 
     // Protection changes, and the flush covers the page
-    match arch.protect(kernel, address(KERNEL_PAGE), .Size4K, KERNEL_READ_ONLY, &flush) {
-        case Ok => {}
-        case Error(error) => return 18
+    if arch.protect(kernel, address(KERNEL_PAGE), .Size4K, KERNEL_READ_ONLY, &flush) is_error {
+        return 18
     }
     if !translates_to(kernel, KERNEL_PAGE, 0x5000, KERNEL_READ_ONLY) || flush.count != 1 || cast[u64](flush.addresses[0]) != KERNEL_PAGE {
         return 19
@@ -247,10 +246,7 @@ mapped :: fn(
     mapping: arch_interface.Mapping,
     tables: ptr[mut arch_interface.TableFrames],
 ) -> bool {
-    return match arch.map(table, address(virtual_address), cast[arch_interface.PhysicalAddress](physical), size, mapping, tables) {
-        case Ok => true
-        case Error(error) => false
-    }
+    return arch.map(table, address(virtual_address), cast[arch_interface.PhysicalAddress](physical), size, mapping, tables) is_ok
 }
 
 // Whether map fails with expected.

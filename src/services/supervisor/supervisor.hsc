@@ -840,9 +840,8 @@ files_of_type :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize, kind: 
     end :: dial(supervisor, storage_slot) or_return null
     defer slop_os.handle_close(cast[slop_os.Handle](end))
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    match slop_os.port_bind(supervisor.port, cast[slop_os.Handle](end), signals, STORAGE_KEY, .Persistent) {
-        case Ok => {}
-        case Error(error) => return null
+    if slop_os.port_bind(supervisor.port, cast[slop_os.Handle](end), signals, STORAGE_KEY, .Persistent) is_error {
+        return null
     }
     defer slop_os.port_unbind(supervisor.port, STORAGE_KEY)
     for index in 0..<cast[u32](32) {
@@ -905,9 +904,8 @@ connector_to :: fn(supervisor: ptr[mut Supervisor], target: usize) -> os.Channel
     }
     pair :: os.channel_for[connector.Connector](supervisor.block.budget, 0) or_return null
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    match slop_os.port_bind(supervisor.port, cast[slop_os.Handle](pair.b), signals, CONNECTOR_KEY + cast[u64](index), .Persistent) {
-        case Ok => {}
-        case Error(error) => return null
+    if slop_os.port_bind(supervisor.port, cast[slop_os.Handle](pair.b), signals, CONNECTOR_KEY + cast[u64](index), .Persistent) is_error {
+        return null
     }
     supervisor.connectors[index] = Connector.{end = pair.b, target = target}
     supervisor.connector_count = index + 1
