@@ -1,6 +1,6 @@
 # Separately Compiled Libraries with Typed Imports
 
-Status: **proposed** 2026-10-27, its open questions decided the same day, for M9's 9e (`../decisions/0092`, `0045`,
+Status: **accepted** 2026-10-27, its open questions decided with the owner, for M9's 9e (`../decisions/0092`, `0045`,
 `../design/software.md` §7, `../design/system-abi.md` §7). The largest piece of Hemera work in M9.
 
 ## Why SlopOS Needs It

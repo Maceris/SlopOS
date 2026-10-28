@@ -1,6 +1,6 @@
 # Reproducible Builds
 
-Status: **proposed** 2026-10-27, its open questions decided the same day, for M9 (`../decisions/0092`): needed by 9b,
+Status: **accepted** 2026-10-27, its open questions decided with the owner, for M9 (`../decisions/0092`): needed by 9b,
 where programs are stored by hash.
 
 ## Why SlopOS Needs It
