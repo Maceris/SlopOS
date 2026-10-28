@@ -1,6 +1,6 @@
 # Software: Bundles, Configuration, Generations and Installations
 
-Status: **proposed** 2026-10-24, for roadmap M9 (and B). Builds on `../decisions/0044` (typed entry points and the
+Status: **proposed** 2026-10-24, for roadmap M9 (and B); its open questions decided 2026-10-27 (`../decisions/0092`). Builds on `../decisions/0044` (typed entry points and the
 system configuration), `0045` (content-addressed libraries), `0040` (schemas), `0012` (root task), `0017`
 (supervisor) and `../problems-and-directions.md` §5–§7 and §13. The choices still to make are at the end and in
 `../open-questions.md`, *Software*.
@@ -115,10 +115,8 @@ A content hash names a build, but an app's data has to outlive its updates, so i
 - The compiler's side (building libraries, interface records, typed imports) is the largest Hemera piece of M9 and is
   proposed in `../hemera-proposals/` when it starts.
 
-## 8. Open Questions
+## 8. Decided (`../decisions/0092`)
 
-- One bundle store on the system volume for every user's apps (shared code, but the administrator can see which apps
-  a user installed), or one per user in their volume (private, but no sharing between users).
-- Whether the system configuration as a generation's serialized value (§4) is the right reading of `0044`'s "runtime
-  changes go through the config store later, with the same types".
-- Whether B (the bootloader) comes with M9, so automatic fallback exists from the first update, or later.
+- One bundle store, on the system volume, for every user's apps.
+- The system configuration as a generation's serialized value (§4), validated at boot by the code the build runs.
+- B (the bootloader) after M9: until then, Limine's menu is the way back to the previous generation.

@@ -78,18 +78,14 @@ and 4 KiB blocks with 16 KiB B+tree nodes.
 
 ## Software
 
-Open, from `design/software.md` (2026-10-24):
+Answered 2026-10-27 (`decisions/0092`): one bundle store on the system volume; the system configuration serialized
+into each generation and validated at boot by the build's own code; `AppData` and `Config[T]` entry parameters,
+keyed by installation. Still open, as Hemera proposals for the owner to decide:
 
-- **The system configuration at run time** (`0044`'s "later, through the config store"): proposed as a value the
-  build serializes into each generation and the root task validates with the same validator and wiring check the
-  build runs (`software.md` §4).
-- **One bundle store for every user**, or one per user's volume (privacy of which apps a user installed against
-  sharing code between users).
-- **App data keyed by installation**, not by bundle hash, given as `AppData` and `Config[T]` entry parameters
-  (`software.md` §6). Proposed: yes; two new parameter kinds in the manifest.
-- **Typed linking**: imports naming each function's type hash, so a mismatch fails the load (`software.md` §7).
-  Proposed: yes; it's a Hemera compiler feature, to be proposed in `hemera-proposals/` when M9e starts.
-- **Reproducible builds** as a requirement on Hemera's compiler, since content addressing depends on it.
+- **Typed linking**: imports naming each function's type hash, so a mismatch fails the load
+  (`hemera-proposals/typed-linking.md`).
+- **Reproducible builds**: locations naming files relative to their roots, so the same sources built anywhere give
+  the same bytes (`hemera-proposals/reproducible-builds.md`).
 
 ## Console and sessions
 
@@ -117,8 +113,8 @@ Open, from `design/shell.md` (2026-10-24):
 
 Open, from `design/observability.md` (2026-10-24):
 
-- **Logs as format strings and typed arguments**, rendered when read, which changes what Hemera's logger interface
-  hands over (`observability.md` §2).
+- **Logs as format strings and typed arguments**: decided 2026-10-27 (`decisions/0092`). Hemera's logger already hands
+  over the format string and the arguments; what it needs is in `hemera-proposals/typed-log-records.md`.
 - **Replay's promise**: exact for a process on one carrier, best effort for several (`observability.md` §5).
 - **Debug information**: DWARF alone, or Hemera's schemas beside it for the debugger's view of values.
 
