@@ -61,3 +61,30 @@ what an export's type is.
   loader of its own (map the segments, apply relative relocations, check the interface record, fill the import table)
   before `main`; on Windows the program loads the DLL with `LoadLibrary`, finds exports with `GetProcAddress`, and
   checks the record and fills the table the same way.
+
+## Built (2026-10-27)
+
+- **Libraries**: `OutputType.DynamicLibrary` builds a package's `#export` functions as a typed library, position-
+  independent, with no entry, and only relative relocations (ELF: `-shared -Bsymbolic -z defs`). Its interface record
+  is the global `hemera_interface`, `runtime.LibraryInterface`: each export's name, its type's schema hash and address,
+  and the calling convention's version (`LIBRARY_CONVENTION`) and `Context`'s schema hash. An ELF library's entry is
+  the record's address; a DLL exports it by name. The hashes come from `std`'s `schema.hash`, which the compiler runs
+  while compiling, loading `std/schema` into any build that makes or calls a library.
+- **Programs**: a target lists its `libraries` (`compiler.LinkedLibrary`, a target or a package's folder and a file).
+  A call to one of the library package's non-generic `#export` functions goes through a slot of the program's import
+  table (`intrinsics.library_imports`), through a stub inlined into each call; nothing of the export is compiled in.
+  `runtime.bind_libraries` runs before `main`: loads each library, checks the convention, `Context` and each import's
+  name and type hash, and fills the slots, or stops the program with exit code 1, naming the import.
+- **Loaders**: on Windows, `LoadLibraryA` and `GetProcAddress("hemera_interface")`; on Linux, `base`'s own
+  (`base/runtime/linux_libraries.hsc`): the loadable segments mapped together, relative relocations applied, each
+  segment's protection set, the record found at the entry. SlopOS's loader (9e) does the same.
+- **`hemera --check-interface=<old> <new>`** reads both records from the files, without loading them: compatible if
+  the convention and `Context` match and every old export is in the new library with the same type hash; more
+  exports are allowed. A function type's schema covers every type it reaches, so the proposal's second condition,
+  types changed only as `0040`'s rules allow, can't apply to an export's signature: any change to a struct in it is a
+  different hash, and refused. Records carry no schemas, as nothing reads them yet.
+- **Tests**: Hemera's `Build.LinksTypedLibraries` (Windows) and the Linux tests' `typed_libraries` (both
+  architectures): a program calling a library through its exports, including a result through a pointer, an
+  allocation through the caller's context and an export taken as a function value; the program stopping without its
+  library; the library built again with one more export, which the check accepts and the program runs with; and built
+  with an export's type changed, which the check names and the program refuses.
