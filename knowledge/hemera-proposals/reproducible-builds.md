@@ -1,6 +1,6 @@
 # Reproducible Builds
 
-Status: **proposed** 2026-10-27, for M9 (`../decisions/0092`): needed by 9b, where programs are stored by hash.
+Status: **proposed** 2026-10-27, its open questions decided the same day, for M9 (`../decisions/0092`): needed by 9b, where programs are stored by hash.
 
 ## Why SlopOS Needs It
 
@@ -36,9 +36,9 @@ Debug info already names files relative to their roots (`<base>/runtime/assertio
 The same compiler means the same compiler's hash: SlopOS's builds record which compiler made them, and a new compiler
 is expected to change hashes.
 
-## Open Questions
+## Decided With the Owner (2026-10-27)
 
-- Whether a build package's `#run` code reading files or the clock should be flagged, or left as the code's choice
-  (`docs/compilation.md` leaves it to the code).
-- Cross-host reproducibility: whether a SlopOS program built on Windows and on Linux must match. Proposed yes, as the
-  same LLVM and the same target give the same code; the test would build on both.
+- **Compile-time code's inputs are its own choice**: a build package's or `#run`'s code that reads the clock or a
+  changing file makes its build differ, as `docs/compilation.md` already says; the compiler doesn't flag it.
+- **Reproducible across hosts**: a SlopOS program built on Windows and on Linux comes out the same, byte for byte;
+  the test builds on both, the Linux build on Hemera's Linux test host.

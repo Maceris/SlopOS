@@ -1,6 +1,6 @@
 # Typed Log Records
 
-Status: **proposed** 2026-10-27, for M9's 9a (`../decisions/0092`, `../design/observability.md` §2).
+Status: **proposed** 2026-10-27, its open questions decided the same day, for M9's 9a (`../decisions/0092`, `../design/observability.md` §2).
 
 ## Why SlopOS Needs It
 
@@ -41,9 +41,9 @@ can't do yet:
 
 Hosted programs keep today's logger, formatting lines as they do now.
 
-## Open Questions
+## Decided With the Owner (2026-10-27)
 
-- Whether the schema hash should cover documentation comments (which the shell's help reads) or only the layout.
-  Proposed: only what affects the layout and names, so a comment's change isn't a new type.
-- Whether `log_*` should refuse a format string that isn't a literal at compile time, rather than writing it as an
-  argument.
+- **The schema hash covers layout and names**: names, members in order, sizes, alignments and the schemas of what a
+  type holds, not its documentation comments, so editing a comment isn't a new type, or a new library interface.
+- **A format string that isn't a literal is written as an argument**: a literal is named by its place in the image,
+  anything else copied into the record, so every call that works today keeps working.

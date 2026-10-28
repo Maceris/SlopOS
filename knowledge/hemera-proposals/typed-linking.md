@@ -1,6 +1,6 @@
 # Separately Compiled Libraries with Typed Imports
 
-Status: **proposed** 2026-10-27, for M9's 9e (`../decisions/0092`, `0045`, `../design/software.md` §7,
+Status: **proposed** 2026-10-27, its open questions decided the same day, for M9's 9e (`../decisions/0092`, `0045`, `../design/software.md` §7,
 `../design/system-abi.md` §7). The largest piece of Hemera work in M9.
 
 ## Why SlopOS Needs It
@@ -42,13 +42,15 @@ what an export's type is.
 6. **Libraries' own data**: each process gets its own copy of a library's globals, mapped beside its text; a library's
    `#run` code runs when the library is built.
 
-## Open Questions
+## Decided With the Owner (2026-10-27)
 
-- **Inlining across the boundary**: a call into a library is never inlined, so a fix in the library reaches every
-  caller; small exported functions cost a call. Proposed: never inlined.
-- **What `#export` means for a program**: a program's exports today are for linkers and C. Proposed: unchanged; only a
-  `DynamicLibrary`'s exports form an interface record.
-- **The context**: every Hemera call passes the context (`system-abi.md` §7), so its layout is part of the library
-  ABI; whether the pinned version is a number the compiler declares, or the hash of `Context`'s schema.
-- **Hosted libraries**: whether Linux and Windows get the same typed libraries (as `.so`/`.dll` with the record
-  beside them), so libraries can be tested hosted, or only SlopOS's loader binds them.
+- **Never inlined across the boundary**: every call to an export goes through the import table, so a substituted
+  library's fix reaches every caller. Generics and `#insert`ed code still come from the library's source, as now.
+- **`#export` in a program is unchanged**: symbols for linkers and C; only a `DynamicLibrary`'s exports make an
+  interface record.
+- **The context pinned by its schema hash**: the interface record carries the schema hash of `Context`, with the
+  calling convention's version, so any change to its layout is a different ABI without anything to bump by hand
+  (`system-abi.md` §7's `hemera-abi-v1` becomes that hash).
+- **Typed libraries on Linux and Windows too**: built as `.so` and `.dll` with the interface record, and bound by a
+  small loader of Hemera's own, so libraries and the compatibility check are tested on the hosts the compiler runs
+  on, before SlopOS's loader binds them.
