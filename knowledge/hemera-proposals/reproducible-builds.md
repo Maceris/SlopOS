@@ -43,3 +43,16 @@ is expected to change hashes.
   changing file makes its build differ, as `docs/compilation.md` already says; the compiler doesn't flag it.
 - **Reproducible across hosts**: a SlopOS program built on Windows and on Linux comes out the same, byte for byte;
   the test builds on both, the Linux build on Hemera's Linux test host.
+
+## Built (2026-10-27)
+
+- `#caller_location` and debug info name files as `<base>/...`, `<std>/...`, or relative to the package being built;
+  a PDB names its sources the same way (`/pdbsourcepath:.`) and the program names its PDB by its file alone
+  (`/pdbaltpath`); `hemera --symbolize` reads the new names.
+- Hemera's `Hosted.BuildsTheSameWhereverTheSourcesAre` builds one package from two folders for Windows and Linux,
+  with and without debug info, and compares the bytes. The compiler has no thread-count option to vary; the
+  existing `Hosted.BuildsTheSameEveryTime` builds a program generated in parts twice.
+- A PE/COFF PDB also records the command that linked it, so a debug PE program matches only when written to the same
+  place; ELF programs, which SlopOS's are, match wherever they're written.
+- **Not yet tested across hosts**: Hemera's compiler isn't built on Linux anywhere yet (the Linux test machine runs
+  the programs, and has neither the memory nor a toolchain to build LLVM), so `docs/compilation.md` doesn't claim it.

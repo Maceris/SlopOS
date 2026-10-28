@@ -48,3 +48,18 @@ Hosted programs keep today's logger, formatting lines as they do now.
   type holds, not its documentation comments, so editing a comment isn't a new type, or a new library interface.
 - **A format string that isn't a literal is written as an argument**: a literal is named by its place in the image,
   anything else copied into the record, so every call that works today keeps working.
+
+## Built (2026-10-27)
+
+- **The schema hash is computed in `std`, not by the compiler** (chosen with the owner when building it): `std/schema`
+  serializes a type canonically from its `TypeInfo` (`schema.write`) and hashes the bytes with BLAKE3
+  (`schema.hash`), the same code at compile time and at run time, so the serialized schema and its hash can't
+  disagree. `TypeInfo` gains no field; the logger caches each type's hash. The compiler builds descriptors in two
+  places, and at compile time one can exist before its type is laid out, which a field would have had to cope with.
+- **`schema.write_value`** writes a value with what it points to after it, each pointer as a distance from the value's
+  start, and `rawptr`, functions, type values, `any` and `#union` structs holding pointers as 0, so nothing written
+  gives away an address.
+- **`runtime.in_image`** says whether an address is in the program's image, from the ELF or PE/COFF headers there,
+  so the logger can tell a literal format string from one that isn't.
+- On the way, a generic function's instances now keep what follows its name (`#no_context`, `#never_returns`,
+  `#calling_convention`), which they had lost.
