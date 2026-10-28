@@ -75,6 +75,8 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
     "--expect-line=[user] volume_server: volume 2 sealing with key generation 2",
     "--expect-line=[user] disk_check: on the sealed volume, was refused locked and with a wrong passphrase, unlocked it, read its "
     "file, wrote one, started key generation 2, wrote another and read all three",
+    "--expect-line=[user] disk_check: links: the system volume wrote and read through two from the sealed one; what one reached "
+    "granted nothing; one revoked opened nothing",
     "--expect-line=[user] disk_check: snapshots: read one of the system volume as it was, read only, wrote to its clone, couldn't "
     "delete it while cloned, and read one of the sealed volume",
     "--expect-line=[user] disk_check: quotas: its clone's refused a file past it and took a small one, and its usage says so",

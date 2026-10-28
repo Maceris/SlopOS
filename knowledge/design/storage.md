@@ -86,7 +86,8 @@ is a Merkle tree.
 | Object | `(id, .Object, 0)` | Kind (file, directory, link), size, schema hash (`0046`), creation and modification times, the transaction last changed in |
 | Directory entry | `(directory id, .Entry, name hash)` | Name, object id (a short list on a hash collision) |
 | Extent | `(file id, .Extent, offset)` | A block pointer, or the data itself for a small file (inline) |
-| Stored link | `(directory id, .Entry, name hash)` → an object of kind link | Target volume, object, rights (§6, `security.md` §8) |
+| Stored link | `(link id, .Link, 0)`, for an object of kind link | The volume it leads into (container and ID) and the number it was issued under there (§6, `security.md` §8, `../decisions/0091`) |
+| Issued link | `(0, .Issued, number)` | In the volume a link leads into: the object, whether it writes, and the volume holding the link |
 
 Names are UTF-8 without `/` or NUL, compared byte for byte (`0046`); the hash is keyed per volume, so a directory
 can't be filled with collisions chosen in advance. There are no hard links and no symlinks.
@@ -152,9 +153,11 @@ io_uring's fixed buffers do.
   opened from, for display only.
 - **Change cursors**: `Changes(since: Transaction)` answers with what changed beneath the handle since then, from
   the volume's recent transactions; a cursor older than what's kept answers `Resync`, and the client lists again.
-- **Stored links** (8f): the storage manager resolves a link to (volume, object, rights) and returns a fresh
-  connection if that volume is unlocked; the target volume keeps the links issued from it, so the granter can list
-  and revoke them (`security.md` §8).
+- **Stored links** (8f, `../decisions/0091`): `Grant` on a `dir` gives a `grant` connection, which `Link` on a
+  directory in another volume keeps as a link. A path through a link is opened by the volume it leads into, through
+  the storage manager, which knows which volume asks, if that volume is open; the volume it leads into keeps what it
+  issued, which it checks, lists (`Links`) and revokes (`Revoke`) (`security.md` §8). What a link reaches can't be
+  shared on.
 
 ## 7. Caching and Mapping
 

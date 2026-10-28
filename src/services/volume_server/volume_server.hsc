@@ -14,6 +14,8 @@
  * own protocol, before it serves anything, unwraps the volume's key with the passphrase from the records the container
  * service keeps sealed, and holds them until it ends. Rotate starts a new key generation. A snapshot is served read
  * only, its root a read_only_dir, and a clone's tree knows whose its older blocks are.
+ *
+ * Stored links (roadmap 8f) are in links.hsc: followed through the storage manager, made from grants, and issued.
  */
 package volume_server
 
@@ -24,12 +26,14 @@ import dir from "std/os/slop_os"
 import file from "std/os/slop_os"
 import file_set from "std/os/slop_os"
 import files from "std/os/slop_os"
+import grant from "std/os/slop_os"
 import read_only_dir from "std/os/slop_os"
 import read_only_file from "std/os/slop_os"
 import slopfs from "../../slopfs"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
 import container from "../../protocols/container"
+import links from "../../protocols/links"
 import volume_protocol from "../../protocols/volume"
 
 MAX_CONNECTIONS :: 64
@@ -54,6 +58,10 @@ Kind :: enum {
     Replacement,
     // The storage manager's, on the volume protocol
     Control,
+    // Stored links (links.hsc): a grant this volume gave, one it's claiming, and its connection to the storage manager
+    Grant,
+    Claim,
+    Links,
 }
 
 // A connection: the object it's to, its informational name (a set's pattern), and a file's buffer, mapped here.
@@ -69,8 +77,19 @@ Connection :: struct {
     buffer_memory : slop_os.Memory,
     // A transaction's index, for one in a transaction
     transaction : usize,
-    // A replacement's directory, where it's installed under its name
+    // A replacement's directory, where it's installed under its name; a claim's, where its link goes
     target : u64,
+    // Opened through a stored link, or from what was: it grants, links, and lists or revokes links not at all (8f)
+    linked : bool,
+    // Waiting for what it asked to be answered by the storage manager or a grant, so it isn't read meanwhile
+    waiting : bool,
+    // A grant's ticket, once it's claimed, and whether a link's been issued with it
+    ticket : u8[32],
+    claimed : bool,
+    issued : bool,
+    // A claim's: the connection waiting for it, and what the grant's server said
+    client : usize,
+    claim : grant.Claim,
 }
 
 Server :: struct {
@@ -94,13 +113,20 @@ Server :: struct {
     count : usize,
     added : bool,
     transactions : Transaction[MAX_TRANSACTIONS],
+    // Its connection to the storage manager for stored links, and what it's asked there, in order (links.hsc)
+    links : slop_os.Channel,
+    asked : Asked[MAX_CONNECTIONS],
+    asked_first : usize,
+    asked_count : usize,
+    // Whether connections added now are reached through a link
+    linking : bool,
 }
 
 main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clients: os.Listener[dir.Dir],
-    control: os.Listener[volume_protocol.Volume]) -> int {
+    control: os.Listener[volume_protocol.Volume], stored_links: os.Channel[links.Links]) -> int {
     startup :: slop_os.startup_block()
     server := runtime.new(Server)
-    server^ = Server.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE), container = volume.end}
+    server^ = Server.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE), container = volume.end, links = stored_links.end}
     server.container_port = os.port_for(startup.budget, volume.end) or_return 1
     server.port = slop_os.port_create(startup.budget) or_return 1
     described := container.Described.{}
@@ -153,6 +179,9 @@ main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clie
         return 5
     }
     if add(server, .Control, control.end, 0, false, "") is_none {
+        return 5
+    }
+    if add(server, .Links, stored_links.end, 0, false, "") is_none {
         return 5
     }
     into := os.Incoming.{}
@@ -351,7 +380,7 @@ add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, object: u64
             return null
         }
     }
-    connection := Connection.{kind = kind, end = end, object = object, read_only = read_only}
+    connection := Connection.{kind = kind, end = end, object = object, read_only = read_only, linked = server.linking}
     for character, i in name {
         if i < connection.name.count {
             connection.name[i] = cast[u8](character)
@@ -418,6 +447,9 @@ serve :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
         return void
     }
     kind :: server.connections[index].kind
+    if server.connections[index].waiting {
+        return void
+    }
     if kind == .Dir || kind == .Transaction {
         serve_dir(server, index, into)
     }
@@ -435,6 +467,15 @@ serve :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     }
     else if kind == .Control {
         serve_control(server, index, into)
+    }
+    else if kind == .Grant {
+        serve_grant(server, index, into)
+    }
+    else if kind == .Claim {
+        serve_claim(server, index, into)
+    }
+    else if kind == .Links {
+        serve_links(server, index, into)
     }
 }
 
@@ -466,6 +507,7 @@ file_error :: fn(error: slopfs.Error) -> files.FileError {
         case .Locked => files.FileError.DeviceError
         case .WrongKey => files.FileError.DeviceError
         case .InUse => files.FileError.DeviceError
+        case .IsALink => files.FileError.IsALink
     }
 }
 
@@ -478,6 +520,9 @@ open_file_object :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: str
             info :: slopfs.info(volume, object)?
             if info.kind == .Directory {
                 return .Error(.IsADirectory)
+            }
+            if info.kind == .Link {
+                return .Error(.IsALink)
             }
             if creation == .New {
                 return .Error(.AlreadyExists)
@@ -539,7 +584,7 @@ listing_of :: fn(volume: ptr[mut slopfs.Volume], directory: u64, cursor: u64, pa
             continue
         }
         info :: slopfs.info(volume, listed.object)?
-        kind :: if listed.kind == .Directory { files.Kind.Directory } else { files.Kind.File }
+        kind :: if listed.kind == .Directory { files.Kind.Directory } else if listed.kind == .Link { files.Kind.Link } else { files.Kind.File }
         return .Ok(files.Listing.{name = os.append(out, name[0..<listed.name_bytes]), kind = kind, size = info.size, next = at})
     }
 }
@@ -588,13 +633,27 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
         directory :: server.connections[index].object
         in_transaction :: server.connections[index].kind == .Transaction
         transaction :: server.connections[index].transaction
+        // What's opened from a linked connection is linked too
+        server.linking = server.connections[index].linked
+        defer server.linking = false
         out := os.Outgoing.{}
         response :: os.begin[dir.Response](&out)
         response^ = .Unsupported
         match os.message_of[dir.Request](into)^ {
             case OpenFile(open) => {
                 path :: path_of(into, open.path) or_else ""
-                if in_transaction {
+                followed :: if in_transaction { Followed.Local }
+                    else { follow(server, index, directory, path, links.Opening.{kind = .File, creation = open.creation}) }
+                failed : files.FileError? = null
+                match followed {
+                    case Asked => return void
+                    case Failed(error) => failed = error
+                    case Local => {}
+                }
+                if failed is_some {
+                    response^ = .Failed(failed or_else .Unavailable)
+                }
+                else if in_transaction {
                     response^ = open_in_transaction(server, transaction, path, open.creation)
                 }
                 else {
@@ -609,17 +668,30 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
                     }
                 }
             }
-            case OpenReadOnlyFile(at) => response^ = read_only_open(server, directory, path_of(into, at) or_else "")
+            case OpenReadOnlyFile(at) => {
+                path :: path_of(into, at) or_else ""
+                match follow(server, index, directory, path, links.Opening.{kind = .ReadOnlyFile, creation = .Existing}) {
+                    case Asked => return void
+                    case Failed(error) => response^ = .Failed(error)
+                    case Local => response^ = read_only_open(server, directory, path)
+                }
+            }
             case OpenDirectory(open) => {
                 path :: path_of(into, open.path) or_else ""
-                match open_directory_object(volume, directory, path, open.create) {
-                    case Ok(object) => {
-                        match open_connection[dir.Dir](server, .Dir, object, false, path) {
-                            case Some(made) => response^ = .OpenedDirectory(made)
-                            case None => response^ = .Failed(.NoSpace)
+                match follow(server, index, directory, path, links.Opening.{kind = .Directory, creation = .Existing, create = open.create}) {
+                    case Asked => return void
+                    case Failed(error) => response^ = .Failed(error)
+                    case Local => {
+                        match open_directory_object(volume, directory, path, open.create) {
+                            case Ok(object) => {
+                                match open_connection[dir.Dir](server, .Dir, object, false, path) {
+                                    case Some(made) => response^ = .OpenedDirectory(made)
+                                    case None => response^ = .Failed(.NoSpace)
+                                }
+                            }
+                            case Error(error) => response^ = .Failed(file_error(error))
                         }
                     }
-                    case Error(error) => response^ = .Failed(file_error(error))
                 }
             }
             case List(cursor) => {
@@ -710,6 +782,33 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
                 }
             }
             case Changes(cursor) => response^ = changes_of(server, directory, cursor, &out)
+            case Grant(granting) => {
+                if !in_transaction {
+                    response^ = grant_of(server, index, directory, path_of(into, granting.path) or_else "", granting.write)
+                }
+            }
+            case Link(linking) => {
+                if in_transaction || server.connections[index].linked {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](linking.grant.end))
+                    response^ = .Failed(if in_transaction { files.FileError.IsALink } else { files.FileError.ReadOnly })
+                }
+                else {
+                    match begin_link(server, index, directory, path_of(into, linking.path) or_else "", linking.grant) {
+                        case Some(error) => response^ = .Failed(error)
+                        case None => return void
+                    }
+                }
+            }
+            case Links(cursor) => {
+                if !in_transaction {
+                    response^ = issued_link(server, index, directory, cursor, &out)
+                }
+            }
+            case Revoke(number) => {
+                if !in_transaction {
+                    response^ = revoked(server, index, directory, number)
+                }
+            }
         }
         _ = dir.send_response(end, server.port, &out)
     }
@@ -745,6 +844,9 @@ read_only_open :: fn(server: ptr[mut Server], directory: u64, path: string) -> d
                     if info.kind == .Directory {
                         return .Failed(.IsADirectory)
                     }
+                    if info.kind == .Link {
+                        return .Failed(.IsALink)
+                    }
                 }
                 case Error(error) => return .Failed(file_error(error))
             }
@@ -779,27 +881,42 @@ serve_read_only_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut o
             }
         }
         directory :: server.connections[index].object
+        server.linking = server.connections[index].linked
+        defer server.linking = false
         out := os.Outgoing.{}
         response :: os.begin[read_only_dir.Response](&out)
         response^ = .Unsupported
         match os.message_of[read_only_dir.Request](into)^ {
             case OpenReadOnlyFile(at) => {
-                match read_only_open(server, directory, path_of(into, at) or_else "") {
-                    case OpenedReadOnlyFile(made) => response^ = .OpenedReadOnlyFile(made)
+                path :: path_of(into, at) or_else ""
+                match follow(server, index, directory, path, links.Opening.{kind = .ReadOnlyFile, creation = .Existing}) {
+                    case Asked => return void
                     case Failed(error) => response^ = .Failed(error)
-                    case _ => {}
+                    case Local => {
+                        match read_only_open(server, directory, path) {
+                            case OpenedReadOnlyFile(made) => response^ = .OpenedReadOnlyFile(made)
+                            case Failed(error) => response^ = .Failed(error)
+                            case _ => {}
+                        }
+                    }
                 }
             }
             case OpenDirectory(at) => {
                 path :: path_of(into, at) or_else ""
-                match open_directory_object(volume, directory, path, false) {
-                    case Ok(object) => {
-                        match open_connection[read_only_dir.ReadOnlyDir](server, .ReadOnlyDir, object, true, path) {
-                            case Some(made) => response^ = .OpenedDirectory(made)
-                            case None => response^ = .Failed(.NoSpace)
+                match follow(server, index, directory, path, links.Opening.{kind = .ReadOnlyDirectory, creation = .Existing}) {
+                    case Asked => return void
+                    case Failed(error) => response^ = .Failed(error)
+                    case Local => {
+                        match open_directory_object(volume, directory, path, false) {
+                            case Ok(object) => {
+                                match open_connection[read_only_dir.ReadOnlyDir](server, .ReadOnlyDir, object, true, path) {
+                                    case Some(made) => response^ = .OpenedDirectory(made)
+                                    case None => response^ = .Failed(.NoSpace)
+                                }
+                            }
+                            case Error(error) => response^ = .Failed(file_error(error))
                         }
                     }
-                    case Error(error) => response^ = .Failed(file_error(error))
                 }
             }
             case List(cursor) => {
@@ -863,6 +980,8 @@ serve_file_set :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inc
         }
         connection :: server.connections[index]
         pattern :: name_of(&connection)
+        server.linking = connection.linked
+        defer server.linking = false
         out := os.Outgoing.{}
         response :: os.begin[file_set.Response](&out)
         response^ = .Unsupported
@@ -1001,6 +1120,8 @@ serve_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomin
         }
         connection :: &server.connections[index]
         logged :: connection.kind == .TransactionFile
+        server.linking = connection.linked
+        defer server.linking = false
         out := os.Outgoing.{}
         response :: os.begin[file.Response](&out)
         response^ = .Unsupported
@@ -1108,6 +1229,8 @@ serve_read_only_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut 
             }
         }
         connection :: &server.connections[index]
+        server.linking = connection.linked
+        defer server.linking = false
         out := os.Outgoing.{}
         response :: os.begin[read_only_file.Response](&out)
         response^ = .Unsupported
@@ -1166,6 +1289,8 @@ wait_for_unlock :: fn(server: ptr[mut Server], end: slop_os.Channel) -> ptr[mut 
             }
             case Rotate => response = .Failed
             case Commit => response = .Failed
+            case IssueTo(_) => response = .Refused(.Unavailable)
+            case OpenIssued(_) => response = .Refused(.Unavailable)
         }
         out := os.Outgoing.{}
         made :: os.begin[volume_protocol.Response](&out)
@@ -1237,6 +1362,8 @@ serve_control :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inco
             }
         }
         response : volume_protocol.Response = .NotEncrypted
+        out := os.Outgoing.{}
+        made :: os.begin[volume_protocol.Response](&out)
         match os.message_of[volume_protocol.Request](into)^ {
             case Unlock(given) => {
                 if server.volume.tree.keys is_some {
@@ -1250,9 +1377,19 @@ serve_control :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inco
             case Commit => {
                 response = if server.described.read_only || !server.volume.dirty || commit(server) { .Committed } else { .Failed }
             }
+            case IssueTo(to) => {
+                response = if server.described.read_only { volume_protocol.Response.Refused(.ReadOnly) } else { issue_to(server, to) }
+            }
+            case OpenIssued(asked) => {
+                bytes :: os.items(into, asked.path)
+                if bytes.count > files.PATH_BYTES {
+                    response = .Refused(.InvalidPath)
+                }
+                else {
+                    response = open_issued(server, asked, if bytes.count == 0 { "" } else { string_of(&bytes[0], bytes.count) })
+                }
+            }
         }
-        out := os.Outgoing.{}
-        made :: os.begin[volume_protocol.Response](&out)
         made^ = response
         _ = volume_protocol.send_response(end, server.port, &out)
     }

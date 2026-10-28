@@ -17,7 +17,7 @@ BLOCK_BYTES : u64 : 4096
 NODE_BYTES : u64 : 16384
 NODE_BLOCKS : u64 : 4
 // 2 from 8e: owners with their extents' births, clones, snapshots and dead lists, quotas
-FORMAT_VERSION : u32 : 2
+FORMAT_VERSION : u32 : 3
 // The checkpoint ring: blocks 1 to RING_BLOCKS, the one for transaction t at 1 + t % RING_BLOCKS
 RING_BLOCKS : u64 : 16
 // The first block extents are allocated from, after the superblock and the ring
@@ -104,6 +104,10 @@ RecordKind :: enum #backed_by(u8) {
     Snapshot = 12,
     // The volumes: an extent it gave back that a snapshot still holds, keyed (volume, Dead, first block)
     Dead = 13,
+    // A volume: a stored link's record, what it leads to, keyed (link, Link, 0) (links.hsc)
+    Link = 14,
+    // A volume: a link it issued, keyed (0, Issued, number from 1), and the next number at 0
+    Issued = 15,
 }
 
 // A key as it's stored: ordered by object, then kind, then offset.
@@ -221,6 +225,8 @@ VolumeRecord :: struct #packed {
 ObjectKind :: enum #backed_by(u32) {
     File = 1,
     Directory = 2,
+    // A stored link to an object in another volume (links.hsc)
+    Link = 3,
 }
 
 // The object every volume's tree starts from, its root directory.

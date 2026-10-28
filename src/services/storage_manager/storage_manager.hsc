@@ -10,6 +10,11 @@
  * files are the system volume's. Any of a container's volumes is served by name, the same way; an encrypted one's
  * volume server is given room for Argon2id and the passphrase it's opened with, which it unwraps the volume's keys with
  * and checks each time it's opened again (roadmap 8e). The keys never leave it.
+ *
+ * Stored links (roadmap 8f): each volume server has a connection of its own here, the links protocol, so what it asks
+ * is known to be its volume's. A grant it claimed is issued to its volume by the volume the grant is from, and a link
+ * it holds is opened by the volume the link leads into, which checks what it issued; the connection opened goes back
+ * to the volume server that asked. A link leads only into a volume being served, unlocked, and not into its own.
  */
 package storage_manager
 
@@ -17,6 +22,7 @@ import os from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
 import dir from "std/os/slop_os"
+import grant from "std/os/slop_os"
 import read_only_dir from "std/os/slop_os"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
@@ -25,6 +31,7 @@ import partitions from "../../protocols/partitions"
 import storage from "../../protocols/storage"
 import service_kit from "../../service_kit"
 import container from "../../protocols/container"
+import links from "../../protocols/links"
 import volume_protocol from "../../protocols/volume"
 import container_service from "../container_service"
 import fat_server from "../fat_server"
@@ -41,6 +48,8 @@ VOLUME_SERVER_BUDGET : u64 : 6 * 1024 * 1024
 SEALED_VOLUME_SERVER_BUDGET : u64 : VOLUME_SERVER_BUDGET + 8 * 1024 * 1024
 MAX_VOLUMES :: 8
 VOLUME_NAME_BYTES :: 64
+// The keys volume servers' links connections are bound to the port with, after the clients'
+LINKS_KEY : u64 : 1000
 // A SlopOS container's partition type, "SLOPOS CONTAINER" in ASCII, and the volume its files are (decisions/0088, 0089)
 CONTAINER_TYPE :: u8.[0x53, 0x4c, 0x4f, 0x50, 0x4f, 0x53, 0x20, 0x43, 0x4f, 0x4e, 0x54, 0x41, 0x49, 0x4e, 0x45, 0x52]
 SYSTEM_VOLUME :: "system"
@@ -69,14 +78,19 @@ VolumeServerGrants :: struct {
     volume : os.Channel[container.Container],
     clients : os.Listener[dir.Dir],
     control : os.Listener[volume_protocol.Volume],
+    stored_links : os.Channel[links.Links],
 }
 
 /*
  * A volume being served: the partition it's on, its name, its volume server's listener and the end the storage manager
- * speaks the volume protocol on, with a port for each, and whether it's encrypted and unlocked yet.
+ * speaks the volume protocol on, with a port for each, and whether it's encrypted and unlocked yet; the volume by its
+ * container and ID, and the end its volume server's stored links are asked on.
  */
 Served :: struct {
     partition : usize,
+    container : u8[16],
+    id : u64,
+    links : slop_os.Channel,
     name : u8[VOLUME_NAME_BYTES],
     name_bytes : usize,
     root : Disk,
@@ -177,6 +191,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             i += 1
         }
         while i < state.clients.count
+        for i in 0..<state.served_count {
+            serve_links(&state, i, &into)
+        }
         packets : slop_os.Packet[8]
         _ = slop_os.port_wait(state.port, packets, slop_os.NO_DEADLINE)
     }
@@ -465,14 +482,18 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
         case OpenedVolume(made) => volume = made
         case _ => return .NoVolume
     }
-    // Whether it's encrypted, which needs its passphrase, and room for Argon2id's memory
+    // Whether it's encrypted, which needs its passphrase, and room for Argon2id's memory; and which volume it is
     encrypted := false
+    identity := container.Described.{}
     volume_port :: os.port_for(startup.budget, volume.end) or_return .Failed
     asking := os.Outgoing.{}
     describe :: os.begin[container.Request](&asking)
     describe^ = .Describe
     match ask_container(volume.end, volume_port, &asking) {
-        case Described(described) => encrypted = described.record.cipher != 0
+        case Described(described) => {
+            encrypted = described.record.cipher != 0
+            identity = described
+        }
         case _ => {}
     }
     _ = slop_os.handle_close(cast[slop_os.Handle](volume_port))
@@ -482,8 +503,9 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
     }
     pair :: os.channel_for[dir.Dir](startup.budget, 0) or_return .Failed
     control :: os.channel_for[volume_protocol.Volume](startup.budget, 0) or_return .Failed
+    stored_links :: os.channel_for[links.Links](startup.budget, 0) or_return .Failed
     volume_grants := VolumeServerGrants.{log = duplicate_log(state.log), volume = volume, clients = os.Listener[dir.Dir].{end = pair.a},
-        control = os.Listener[volume_protocol.Volume].{end = control.a}}
+        control = os.Listener[volume_protocol.Volume].{end = control.a}, stored_links = os.Channel[links.Links].{end = stored_links.a}}
     budget :: if encrypted { SEALED_VOLUME_SERVER_BUDGET } else { VOLUME_SERVER_BUDGET }
     match os.launch(state.manager, state.manager_port, "volume_server", state.volume_server_module, budget, volume_server.main, volume_grants) {
         case Ok(launched) => {}
@@ -491,6 +513,7 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
             log_line.write(state.log, "storage: no volume server for the % volume: %", string_of(&name[0], name.count), error)
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
             _ = slop_os.handle_close(cast[slop_os.Handle](control.b))
+            _ = slop_os.handle_close(cast[slop_os.Handle](stored_links.b))
             return .Failed
         }
     }
@@ -500,8 +523,13 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
     if slot >= state.served.count {
         return .Failed
     }
-    served := Served.{partition = index, name_bytes = name.count, root = Disk.{end = pair.b, port = root_port},
-        control = Disk.{end = control.b, port = control_port}, encrypted = encrypted, read_only = is_snapshot(name)}
+    signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+    if slop_os.port_bind(state.port, cast[slop_os.Handle](stored_links.b), signals, LINKS_KEY + cast[u64](slot), .Persistent) is_error {
+        return .Failed
+    }
+    served := Served.{partition = index, container = identity.container, id = identity.id, links = stored_links.b, name_bytes = name.count,
+        root = Disk.{end = pair.b, port = root_port}, control = Disk.{end = control.b, port = control_port}, encrypted = encrypted,
+        read_only = is_snapshot(name)}
     for byte, i in name {
         if i < served.name.count {
             served.name[i] = byte
@@ -694,5 +722,103 @@ to_container :: fn(state: ptr[mut Manager], index: usize, out: ptr[mut os.Outgoi
             case None => .Failed
         }
         case _ => .Failed
+    }
+}
+
+// Stored links (roadmap 8f)
+
+// A volume server's requests on its links connection, until it has none.
+serve_links :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incoming]) {
+    if index >= state.served_count || index >= state.served.count {
+        return void
+    }
+    end :: state.served[index].links
+    if cast[slop_os.Handle](end) == slop_os.NO_HANDLE {
+        return void
+    }
+    loop {
+        match links.receive_request(end, state.port, into, false) {
+            case Received => {}
+            case Empty => return void
+            case Unsupported => {
+                _ = links.answer_unsupported(end, state.port)
+                continue
+            }
+            case Invalid => continue
+            case WrongProtocol => continue
+            case Failed(error) => {
+                _ = slop_os.handle_close(cast[slop_os.Handle](end))
+                state.served[index].links = cast[slop_os.Channel](slop_os.NO_HANDLE)
+                return void
+            }
+        }
+        reply := os.Outgoing.{}
+        made :: os.begin[links.Response](&reply)
+        match os.message_of[links.Request](into)^ {
+            case Issue(claim) => made^ = issue(state, index, claim)
+            case Resolve(resolving) => made^ = resolve(state, index, resolving, os.items(into, resolving.path))
+        }
+        _ = links.send_response(end, state.port, &reply)
+    }
+}
+
+/*
+ * The volume being served as container's volume id, to issue or open links: not a snapshot, and unlocked if it's
+ * encrypted; null if there's none, which a link calls Unavailable.
+ */
+linked_volume :: fn(state: ptr[mut Manager], container: u8[16], id: u64) -> ptr[mut Served]? {
+    for i in 0..<state.served_count {
+        if i < state.served.count {
+            each :: &state.served[i]
+            if each.id == id && each.container == container && !each.read_only && (!each.encrypted || each.unlocked) {
+                return each
+            }
+        }
+    }
+    return null
+}
+
+// A grant the volume served at index claimed, issued to it by the volume the grant is from.
+issue :: fn(state: ptr[mut Manager], index: usize, claim: grant.Claim) -> links.Response {
+    if index >= state.served.count {
+        return .Failed(.Unavailable)
+    }
+    asking :: &state.served[index]
+    // A link within one volume, which its own names already reach
+    if claim.container == asking.container && claim.volume == asking.id {
+        return .Failed(.InvalidPath)
+    }
+    target :: linked_volume(state, claim.container, claim.volume) or_return .Failed(.Unavailable)
+    out := os.Outgoing.{}
+    request :: os.begin[volume_protocol.Request](&out)
+    request^ = .IssueTo(volume_protocol.IssueTo.{ticket = claim.ticket, recipient_container = asking.container, recipient = asking.id})
+    return match ask_volume(target, &out) {
+        case Issued(number) => links.Response.Issued(number)
+        case Refused(error) => links.Response.Failed(error)
+        case _ => links.Response.Failed(.Unavailable)
+    }
+}
+
+// What a link held by the volume served at index leads to, and path beneath it, opened by the volume it leads into.
+resolve :: fn(state: ptr[mut Manager], index: usize, resolving: links.Resolving, path: u8[]) -> links.Response {
+    if index >= state.served.count {
+        return .Failed(.Unavailable)
+    }
+    asking :: &state.served[index]
+    if resolving.container == asking.container && resolving.volume == asking.id {
+        return .Failed(.Unavailable)
+    }
+    target :: linked_volume(state, resolving.container, resolving.volume) or_return .Failed(.Unavailable)
+    out := os.Outgoing.{}
+    request :: os.begin[volume_protocol.Request](&out)
+    request^ = .OpenIssued(volume_protocol.OpenIssued.{number = resolving.number, recipient_container = asking.container,
+        recipient = asking.id, path = os.append(&out, path), opening = resolving.opening})
+    return match ask_volume(target, &out) {
+        case OpenedFile(made) => links.Response.OpenedFile(made)
+        case OpenedReadOnlyFile(made) => links.Response.OpenedReadOnlyFile(made)
+        case OpenedDirectory(made) => links.Response.OpenedDirectory(made)
+        case OpenedReadOnlyDirectory(made) => links.Response.OpenedReadOnlyDirectory(made)
+        case Refused(error) => links.Response.Failed(error)
+        case _ => links.Response.Failed(.Unavailable)
     }
 }

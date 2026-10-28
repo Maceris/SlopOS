@@ -40,6 +40,8 @@ Error :: enum {
     WrongKey,
     // A snapshot a clone was made from, which can't be deleted while it's there (snapshot.hsc)
     InUse,
+    // A stored link, where a file or a directory was needed (links.hsc)
+    IsALink,
 }
 
 /*

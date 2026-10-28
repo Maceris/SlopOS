@@ -9,8 +9,8 @@
  * back through the directory opened, and is refused a path above its working directory; and through the protocols
  * themselves, narrows EFI/SlopOS to read only, selects its files by a pattern, and is refused a file made in the set
  * the read-only directory gave. Given the system volume, it reads, writes and moves files there (system_check.hsc), and
- * unlocks an encrypted volume beside it through the storage manager (sealed_check.hsc), and takes, reads and clones
- * snapshots of them (snapshot_check.hsc). It says what it found in its
+ * unlocks an encrypted volume beside it through the storage manager (sealed_check.hsc), keeps links from one to the
+ * other (link_check.hsc), and takes, reads and clones snapshots of them (snapshot_check.hsc). It says what it found in its
  * debug log, and ends with 0 if all of it held, or the number of the first check that didn't.
  */
 package disk_check

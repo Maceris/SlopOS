@@ -29,6 +29,7 @@ import virtio_console from "../drivers/virtio_console"
 import virtio_input from "../drivers/virtio_input"
 import virtio_rng from "../drivers/virtio_rng"
 import connector from "../protocols/connector"
+import links from "../protocols/links"
 import platform_protocol from "../protocols/platform"
 import supervision from "../protocols/supervision"
 import test_channels from "../tests/test_channels"
@@ -161,6 +162,9 @@ ROOT_TASK_SERVES :: type.[os.Listener[supervision.Supervision]]
 // What the supervisor serves itself: connectors, which dial what it started (decisions/0077).
 SUPERVISOR_SERVES :: type.[os.Listener[connector.Connector]]
 
+// What the storage manager serves itself: each volume server's stored links, on a connection it makes for each (roadmap 8f).
+STORAGE_MANAGER_SERVES :: type.[os.Listener[links.Links]]
+
 // The service named name.
 service :: fn(name: string) -> Service? {
     for each in SERVICES {
@@ -173,8 +177,8 @@ service :: fn(name: string) -> Service? {
 
 /*
  * Every os.Channel[P] a service takes, or an optional one, has a server: a service taking an os.Listener[P], the
- * root task, which serves ROOT_TASK_SERVES, or the supervisor, which serves SUPERVISOR_SERVES. One without fails the
- * build, saying which.
+ * root task, which serves ROOT_TASK_SERVES, the supervisor, which serves SUPERVISOR_SERVES, or the storage manager,
+ * which serves STORAGE_MANAGER_SERVES. One without fails the build, saying which.
  */
 check_wiring :: fn() {
     for each in SERVICES {
@@ -194,6 +198,9 @@ check_wiring :: fn() {
                 served = served || os.end_tag(type_info_of(offered)) == tag
             }
             for offered in SUPERVISOR_SERVES {
+                served = served || os.end_tag(type_info_of(offered)) == tag
+            }
+            for offered in STORAGE_MANAGER_SERVES {
                 served = served || os.end_tag(type_info_of(offered)) == tag
             }
             if !served {

@@ -7,7 +7,8 @@ import crypto from "std"
  * A volume (design/storage.md §3): one tree of its objects, each directory's entries and each file's chunks, keyed
  * (object, kind, offset). A directory's entries are found by a hash of their names keyed per volume, so names chosen
  * in advance can't fill one bucket; those that hash alike share a record. Names are UTF-8 bytes without '/' or NUL,
- * compared exactly. There are no hard links, so each object has one parent, and no symbolic links.
+ * compared exactly. There are no hard links, so each object has one parent, and no symbolic links; a stored link
+ * (links.hsc) leads into another volume, and only a volume server follows it.
  *
  * A file's bytes are in chunks of 64 KiB, each an extent of up to 16 blocks written anew whenever it changes, the
  * first held in its record while the file is at most 2 KiB. Chunks that were never written read as zeros.
@@ -320,7 +321,14 @@ put_object :: fn(volume: ptr[mut Volume], object: u64, record: ptr[ObjectRecord]
 }
 
 kind_of_record :: fn(record: ptr[ObjectRecord]) -> ObjectKind {
-    return if cast[u32](record.kind) == cast[u32](ObjectKind.Directory) { .Directory } else { .File }
+    return kind_of(cast[u32](record.kind))
+}
+
+kind_of :: fn(kind: u32) -> ObjectKind {
+    if kind == cast[u32](ObjectKind.Directory) {
+        return .Directory
+    }
+    return if kind == cast[u32](ObjectKind.Link) { .Link } else { .File }
 }
 
 info :: fn(volume: ptr[mut Volume], object: u64) -> Result[Info, Error] {
@@ -329,10 +337,14 @@ info :: fn(volume: ptr[mut Volume], object: u64) -> Result[Info, Error] {
         created = cast[u64](record.created), modified = cast[u64](record.modified), changed = cast[u64](record.changed)})
 }
 
-// The record of an object that's a directory, or NotADirectory.
+// The record of an object that's a directory, or NotADirectory, or IsALink for a link.
 directory_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, Error] {
     record :: get_object(volume, object)?
-    if kind_of_record(&record) != .Directory {
+    kind :: kind_of_record(&record)
+    if kind == .Link {
+        return .Error(.IsALink)
+    }
+    if kind != .Directory {
         return .Error(.NotADirectory)
     }
     return .Ok(record)
@@ -593,8 +605,9 @@ remove :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[vo
     return .Ok
 }
 
-// An object's chunks and record gone, its blocks given back.
+// An object's chunks and record gone, its blocks given back, and a link's record.
 destroy :: fn(volume: ptr[mut Volume], object: u64) -> Result[void, Error] {
+    _ = tree_delete(volume.nodes, &volume.tree, key_of(object, .Link, 0))?
     loop {
         extent := ExtentRecord.{}
         found :: tree_next(volume.nodes, &volume.tree, key_of(object, .Extent, 0),
@@ -729,8 +742,7 @@ list :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: mut u8[])
             if cast[usize](index) >= skip {
                 text :: entry_name(entries, at, &head)
                 copy_bytes(name, 0, text)
-                kind :: if cast[u32](head.kind) == cast[u32](ObjectKind.Directory) { ObjectKind.Directory } else { ObjectKind.File }
-                return .Ok(Listed.{name_bytes = text.count, object = cast[u64](head.object), kind = kind,
+                return .Ok(Listed.{name_bytes = text.count, object = cast[u64](head.object), kind = kind_of(cast[u32](head.kind)),
                     next = hash << 8 | cast[u64](index + 1)})
             }
             at = next_entry_at(entries, at) or_break
@@ -892,10 +904,14 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
     return .Ok
 }
 
-// The file record of an object that's a file, or IsADirectory.
+// The file record of an object that's a file, or IsADirectory, or IsALink.
 file_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, Error] {
     record :: get_object(volume, object)?
-    if kind_of_record(&record) != .File {
+    kind :: kind_of_record(&record)
+    if kind == .Link {
+        return .Error(.IsALink)
+    }
+    if kind != .File {
         return .Error(.IsADirectory)
     }
     return .Ok(record)
