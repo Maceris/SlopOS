@@ -54,3 +54,10 @@ what an export's type is.
 - **Typed libraries on Linux and Windows too**: built as `.so` and `.dll` with the interface record, and bound by a
   small loader of Hemera's own, so libraries and the compatibility check are tested on the hosts the compiler runs
   on, before SlopOS's loader binds them.
+- **A library is named by a target or a built file**: a build package can register a library target and list it in a
+  program target's libraries, so one build makes and checks both, or name a library built elsewhere by its file. The
+  interface record is read from the built library either way.
+- **Hosted loaders**: on Linux, where Hemera's programs are static with no C library, `base`'s runtime has a small ELF
+  loader of its own (map the segments, apply relative relocations, check the interface record, fill the import table)
+  before `main`; on Windows the program loads the DLL with `LoadLibrary`, finds exports with `GetProcAddress`, and
+  checks the record and fills the table the same way.
