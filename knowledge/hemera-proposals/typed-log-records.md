@@ -1,6 +1,7 @@
 # Typed Log Records
 
-Status: **proposed** 2026-10-27, its open questions decided the same day, for M9's 9a (`../decisions/0092`, `../design/observability.md` §2).
+Status: **proposed** 2026-10-27, its open questions decided the same day, for M9's 9a (`../decisions/0092`,
+`../design/observability.md` §2).
 
 ## Why SlopOS Needs It
 
