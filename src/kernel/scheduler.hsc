@@ -23,8 +23,10 @@ import concurrency from "std"
  * higher level run; a thread made ready at a higher level than what its CPU runs gets a reschedule IPI
  * there at once.
  *
- * A thread's level is worked out when it's queued, so one whose budget comes back while it waits in the
- * background band moves up only once it's run again: within a tick, since the band is round robin.
+ * A thread's level is worked out when it's queued. One whose budget comes back while it waits in the background
+ * band is moved up at the next tick (relevel): without that, a thread queued there while its budget was spent would
+ * wait behind every thread running at its budget's priority, which could be for good, as a budget shared by threads
+ * that keep its CPUs busy never runs out again.
  *
  * Returning to user mode and going idle are quiescent points (objects.hsc): the CPU first switches its
  * page tables to what it runs next, then reads the epoch, then checks that the thread it resumes isn't
@@ -106,6 +108,9 @@ schedule :: fn(tick: bool) #never_returns {
         }
         next := cast[u64](0)
         concurrency.lock(&cpu.run_queue.lock)
+        if tick {
+            relevel(&cpu.run_queue, now)
+        }
         best :: highest_level(&cpu.run_queue)
         if best != IDLE_LEVEL && (current == 0 || best > current_level || (tick && best == current_level)) {
             next = dequeue(&cpu.run_queue, best)
@@ -272,6 +277,26 @@ enqueue :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread], level: u32) {
     queue.nonempty[index / 64 % 5] |= cast[u64](1) << cast[u64](index % 64)
     thread.queued = true
     intrinsics.atomic_store_u32_release(&queue.count, queue.count + 1)
+}
+
+/*
+ * Every thread in the background band whose budget has time again, moved up to its budget's level, behind what's
+ * there. Takes the lock as held.
+ */
+relevel :: fn(queue: ptr[mut RunQueue], now: u64) {
+    at := queue.first[BACKGROUND_LEVEL]
+    loop {
+        if at == 0 {
+            break
+        }
+        thread :: cast[ptr[mut Thread]](at)
+        at = thread.next
+        level :: level_of(thread, now)
+        if level != BACKGROUND_LEVEL {
+            unlink(queue, thread)
+            enqueue(queue, thread, level)
+        }
+    }
 }
 
 // The first thread at level, taken off. Takes the lock as held.

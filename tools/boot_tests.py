@@ -207,7 +207,7 @@ TESTS = [
     ("routes a device's interrupts through the I/O APIC", 0, ["--command-line=test_exit test_ioapic",
         "--expect-line=[info] test_ioapic: 10 interrupts arrived from the test device"]),
     ("gives a thread its CPU budget", 0, ["--command-line=test_exit test_budgets",
-        "--expect-line=[info] test_budgets: the budgeted thread got its budget at its priority, then shared the background"]),
+        "--expect-line=[info] test_budgets: the budgeted threads shared their budget at its priority, then the background"]),
     program_test("runs threads of its own, each preempted and with its own vector state", "test_threads",
         "4 threads of its own, each preempted and run again, each with its own vector state"),
     program_test("takes system calls on handles", "test_syscalls",

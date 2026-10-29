@@ -52,9 +52,13 @@ grows with each part.
   any range where the architecture has no ports). The arch interface has `has_io_ports`, `port_read` and `port_write`;
   AArch64's say there are none.
 - **The root budget is never charged**: its threads can't use more than every CPU has, and charging it let refills
-  merged past `MAX_REFILLS` hold back time it had, so the processes on it ran out and were moved to the background
-  band; on AArch64, `test_threads` and `test_control` then hung, every time. Why running out hangs them there isn't
-  found yet, and matters as soon as the scheduler service's budgets run out (9a2 looks into it).
+  merged past `MAX_REFILLS` hold back time it had, so it ran out now and then.
+- **A thread whose budget comes back is moved up at the next tick** (`scheduler.hsc`, `relevel`): a thread's level was
+  worked out only when it was queued, so one queued in the background band while its budget was spent waited behind
+  every thread running at that budget's priority. A budget its threads keep every CPU busy with never runs out again,
+  so on AArch64 `test_threads` and `test_control` waited for good once the root budget had run out. The kernel's
+  `test_budgets` now has two threads sharing a budget, which share its time alike only with the fix (a quarter to
+  three quarters without it).
 - **A launch watched from the start** (`os.launch`'s `LaunchWatch`): the root task bound its test's end only once the
   launch returned, so a test that ended at once, as `test_protocols` and `test_io_ports` can on AArch64, was gone
   before it was watched (the root task's exit 23). The binding is now made before the manager starts it.

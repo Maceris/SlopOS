@@ -6,18 +6,20 @@ import arch_interface from "../arch_interface"
 import frames from "frames"
 
 /*
- * test_budgets: on 1 CPU, a thread in user mode with a CPU budget of 30 ms every 100 ms at priority 10, and one
- * in the background band, each running budget_counter, mapped into a user address space from the kernel image's
- * own frames, counting in a page of its own. The first gets its budget at its priority, then shares the
- * background round robin: about 65% of the time, and up to a tick more each period, since budgets are charged at
- * ticks (knowledge/design/scheduling.md §2). So more than half, and the other isn't starved: up to 90%.
+ * test_budgets: on 1 CPU, two threads in user mode sharing a CPU budget of 30 ms every 100 ms at priority 10, and
+ * one in the background band, each running budget_counter, mapped into a user address space from the kernel image's
+ * own frames, counting in a page of its own. The two get their budget at its priority, then share the background
+ * round robin with the third: about 77% of the time between them, and up to a tick more each period, since budgets
+ * are charged at ticks (knowledge/design/scheduling.md §2). So more than half, and the third isn't starved: up to
+ * 95%. The two share alike: one queued in the background while their budget was spent is moved up when it comes back
+ * (scheduler.hsc, relevel), rather than waiting behind the other each time it has time.
  *
  * It stays in the kernel, since CPU budgets aren't objects a program can make yet; the other user-mode tests
  * are programs (src/tests, decisions/0069).
  */
 
 BUDGETS_TEST_TICKS : u64 : 50
-BUDGETS_TEST_THREADS :: 2
+BUDGETS_TEST_THREADS :: 3
 // Where the test maps things in its threads' address space
 TEST_CODE : u64 : 0x400000
 TEST_COUNTERS : u64 : 0x600000
@@ -84,7 +86,8 @@ test_budgets :: fn(kernel: ptr[mut Kernel]) {
             stack_pointer = cast[arch_interface.VirtualAddress](stack_address + frames.FRAME_SIZE - 8),
             argument = counter_address,
         }
-        budget :: if i == 0 { cast[u64](&test.budget) } else { cast[u64](0) }
+        // The first and the last share the budget; the one between is in the background
+        budget :: if i != 1 { cast[u64](&test.budget) } else { cast[u64](0) }
         match create_thread(kernel, cast[u64](process), space, &start, arch_interface.VectorConfig.{extended = false}, budget, 0) {
             case Ok(made) => test.threads[i] = cast[u64](made)
             case Error(error) => {
@@ -118,15 +121,22 @@ budgets_test_tick :: fn(kernel: ptr[mut Kernel], tick: u64) {
         return void
     }
     test :: cast[ptr[BudgetsTest]](address)
-    budgeted :: cast[ptr[Thread]](test.threads[0]).run_time
+    first :: cast[ptr[Thread]](test.threads[0]).run_time
     background :: cast[ptr[Thread]](test.threads[1]).run_time
+    second :: cast[ptr[Thread]](test.threads[2]).run_time
+    budgeted :: first + second
     total :: budgeted + background
-    // Percent of the time each ran
+    // Percent of the time the budgeted pair ran, and of that, the first
     share :: if total > 0 { budgeted * 100 / total } else { cast[u64](0) }
-    runtime.log_info("test_budgets: the budgeted thread ran % percent of the time", share)
-    if share <= 50 || share > 90 {
-        runtime.log_error("test_budgets: % percent is outside 50 to 90", share)
+    split :: if budgeted > 0 { first * 100 / budgeted } else { cast[u64](0) }
+    runtime.log_info("test_budgets: the budgeted threads ran % percent of the time, the first % percent of theirs", share, split)
+    if share <= 50 || share > 95 {
+        runtime.log_error("test_budgets: % percent is outside 50 to 95", share)
         return void
     }
-    runtime.log_info("test_budgets: the budgeted thread got its budget at its priority, then shared the background")
+    if split < 35 || split > 65 {
+        runtime.log_error("test_budgets: the first's % percent of the pair's time is outside 35 to 65", split)
+        return void
+    }
+    runtime.log_info("test_budgets: the budgeted threads shared their budget at its priority, then the background")
 }
