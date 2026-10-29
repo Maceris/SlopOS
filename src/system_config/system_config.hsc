@@ -12,6 +12,7 @@ import runtime from "base"
 import text_buffer from "std"
 import os from "std"
 import clock_service from "../services/clock"
+import events_service from "../services/events_service"
 import console from "../services/console"
 import disk_check from "../services/disk_check"
 import entropy from "../services/entropy"
@@ -124,7 +125,10 @@ SERVICES :: Service.[
         entry = type_of(platform.main)},
     Service.{name = "supervisor", boot_set = true, module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 96 * MIB,
         entry = type_of(supervisor.main)},
-    // The real-time clock's driver, first, so everything after it is given the clock page it keeps (decisions/0093)
+    // Every program's log records but the root task's and what it starts, first, so each is given a ring for them (decisions/0093)
+    Service.{name = "events", boot_set = true, module = "events_service.elf", starter = .Supervisor, by_manager = true, budget = 8 * MIB,
+        entry = type_of(events_service.main)},
+    // The real-time clock's driver, next, so everything after it is given the clock page it keeps (decisions/0093)
     Service.{name = "clock", boot_set = true, module = "clock.elf", starter = .Supervisor, by_manager = true, budget = 1 * MIB,
         entry = type_of(clock_service.main)},
     Service.{name = "console", module = "console.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,

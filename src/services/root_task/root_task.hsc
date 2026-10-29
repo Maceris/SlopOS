@@ -61,6 +61,7 @@ SupervisorGrants :: struct {
     command_line : slop_os.Memory?,
     scheduler : os.Channel[scheduler_protocol.Scheduler]?,
     clock_module : slop_os.Memory?,
+    events_module : slop_os.Memory?,
 }
 
 // What the scheduler service is given (scheduler.main).
@@ -192,6 +193,7 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         volume_server_module = module_copy(block, "volume_server", module_rights),
         scheduler = connect_scheduler(&root),
         clock_module = module_copy(block, "clock", module_rights),
+        events_module = module_copy(block, "events", module_rights),
     }
     match slop_os.handle_duplicate(cast[slop_os.Handle](command_line), module_rights) {
         case Ok(copy) => grants.command_line = cast[slop_os.Memory](copy)

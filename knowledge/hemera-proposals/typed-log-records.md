@@ -63,3 +63,12 @@ Hosted programs keep today's logger, formatting lines as they do now.
   so the logger can tell a literal format string from one that isn't.
 - On the way, a generic function's instances now keep what follows its name (`#no_context`, `#never_returns`,
   `#calling_convention`), which they had lost.
+
+## Built for SlopOS's Logger (2026-10-29, 9a3, `../decisions/0093`)
+
+- **The schema code is in `base`** (chosen with the owner): base's SlopOS logger writes records itself, so
+  `schema_write`, `schema_hash` and `schema_write_value` moved into `base`'s runtime, with a plain BLAKE3
+  (`hash_blake3`) beside std's; `std/schema`'s functions call them.
+- **Format strings and schemas go in the ring the first time a process uses them**, until the bundle store can give
+  them; a record still names a literal by its image offset and each argument by its schema hash.
+- **`schema.render`** reads a value back by its schema as base's `output_format` writes it, for the events service.

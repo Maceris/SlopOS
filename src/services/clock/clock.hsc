@@ -3,7 +3,8 @@
  * program reads the time from (base's runtime.SlopOsClockPage, given to each as its grant "clock"). It reads the clock
  * when it starts, and puts that time on the page at the monotonic reading it was read at; from there base's runtime
  * counts on with the monotonic clock. Who holds a connection to its listener (the clock_setting protocol) can set the
- * time, which it writes to the real-time clock and the page together.
+ * time, which it writes to the real-time clock and the page together. It logs through base's logger, to the events
+ * service.
  *
  * The clock is x86's MC146818, through its two I/O ports, or Arm's PL031, through its registers (the platform
  * protocol's RealTimeClock), each to the second. An MC146818 counts years to 99: its century is read from register
@@ -19,7 +20,6 @@ import os from "std"
 import time from "std"
 import slop_os from "std/os"
 import text_buffer from "std"
-import log_line from "../../log_line"
 import service_kit from "../../service_kit"
 import clock_setting from "../../protocols/clock_setting"
 
@@ -59,15 +59,14 @@ Rtc :: struct {
 }
 
 Clock :: struct {
-    log : slop_os.DebugLog,
     rtc : Rtc,
     page : ptr[mut runtime.SlopOsClockPage],
 }
 
-main :: fn(log: slop_os.DebugLog?, rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, clock_page: slop_os.Memory,
+main :: fn(rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, clock_page: slop_os.Memory,
     clients: os.Listener[clock_setting.ClockSetting]) -> int {
     block :: slop_os.startup_block()
-    service := Clock.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)}
+    service := Clock.{}
     service.rtc.ports = rtc_ports
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     page_address :: runtime.reserve_addresses(cast[usize](PAGE)) or_return 1
@@ -84,7 +83,7 @@ main :: fn(log: slop_os.DebugLog?, rtc_ports: slop_os.IoPortRange?, rtc_register
         case None => {}
     }
     if (service.rtc.ports is_none) && service.rtc.registers == 0 {
-        log_line.write(service.log, "clock: no real-time clock")
+        runtime.log_error("no real-time clock")
         return 3
     }
     match read_rtc(&service.rtc) {
@@ -93,9 +92,9 @@ main :: fn(log: slop_os.DebugLog?, rtc_ports: slop_os.IoPortRange?, rtc_register
             storage : u8[32]
             shown := text_buffer.make(storage)
             append_time(&shown, seconds)
-            log_line.write(service.log, "clock: the real-time clock reads %", text_buffer.as_string(&shown))
+            runtime.log_info("the real-time clock reads %", text_buffer.as_string(&shown))
         }
-        case None => log_line.write(service.log, "clock: the real-time clock holds no time it can read")
+        case None => runtime.log_warn("the real-time clock holds no time it can read")
     }
 
     port :: slop_os.port_create(block.budget) or_return 4
@@ -103,7 +102,7 @@ main :: fn(log: slop_os.DebugLog?, rtc_ports: slop_os.IoPortRange?, rtc_register
     if !service_kit.add_client(&connected, port, clients.end) {
         return 5
     }
-    log_line.write(service.log, "clock: serving")
+    runtime.log_info("serving")
     into := os.Incoming.{}
     loop {
         with {
@@ -170,7 +169,7 @@ set :: fn(service: ptr[mut Clock], utc: i64) -> bool {
         storage : u8[32]
         shown := text_buffer.make(storage)
         append_time(&shown, seconds)
-        log_line.write(service.log, "clock: can't set the real-time clock to %", text_buffer.as_string(&shown))
+        runtime.log_warn("can't set the real-time clock to %", text_buffer.as_string(&shown))
         return false
     }
     publish(service.page, utc, slop_os.clock_monotonic() or_else 0)
@@ -180,13 +179,13 @@ set :: fn(service: ptr[mut Clock], utc: i64) -> bool {
     shown := text_buffer.make(storage)
     append_time(&shown, seconds)
     if back >= seconds && back - seconds <= 1 {
-        log_line.write(service.log, "clock: set to %, and the real-time clock reads it back", text_buffer.as_string(&shown))
+        runtime.log_info("set to %, and the real-time clock reads it back", text_buffer.as_string(&shown))
     }
     else {
         other : u8[32]
         read := text_buffer.make(other)
         append_time(&read, back)
-        log_line.write(service.log, "clock: set to %, but the real-time clock reads %", text_buffer.as_string(&shown), text_buffer.as_string(&read))
+        runtime.log_warn("set to %, but the real-time clock reads %", text_buffer.as_string(&shown), text_buffer.as_string(&read))
     }
     return true
 }

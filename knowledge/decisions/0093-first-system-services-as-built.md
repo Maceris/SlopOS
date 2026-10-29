@@ -122,6 +122,51 @@ holds the connection that sets it, for now.
 - **Hemera**: a constant struct or array holding an optional of a struct, like `system_config`'s `cpu`, failed to lower,
   each `Some` being built in its own shape; those constants now take their parts' shapes (`MakesOptionalConstants`).
 
+### 9a3: The events service and the logger
+Chosen with the project's owner: `base` writes the records itself, the schema code and a BLAKE3 moving into it; until
+the bundle store (9b) a ring carries each format string's text and each type's schema the first time a process uses
+it; the events service shows every record on the debug log too, and hello and the clock service log through `base`
+now, the other services moving later.
+- **The ring** (Hemera's `runtime.SlopOsEventsRing`, `base/runtime/slop_os_events.hsc`): 16 KiB of shared memory per
+  program, a header and 8-byte-aligned entries that never wrap (a `Pad` fills the end): a `Format` (an image offset
+  and its text), a `Schema` (a hash and its bytes), a `Record` (monotonic time, level, the format string's offset or,
+  for one that isn't a literal, the string as its first argument, then each argument's schema hash and its value as
+  `schema_write_value` writes it) and `Dropped` (records the writer dropped while the ring was full, the newest).
+  `written` and `read` only grow. A reader sets `waiting` before it waits, and a writer that finds it set clears it and
+  writes one byte on the doorbell channel, so a record is no system call unless the service sleeps.
+- **`base`'s SlopOS logger** (`SLOP_OS_LOGGER`, the hosted context's on SlopOS): maps the grants `events` (the ring's
+  memory and its doorbell) the first time it logs, and keeps which format strings and types (up to 128 and 64) it has
+  given; a process without them logs as the standard logger does, which on SlopOS writes nowhere. `base` gained
+  `schema_write`, `schema_hash`, `schema_write_value` (std's `schema` calls them now) and `hash_blake3`, a plain BLAKE3
+  that `Hosted.HashesSchemas` checks against std's at chunk and block edges. std's `schema.render` reads a value back
+  by its schema as `output_format` writes it, the same scenario checking each kind and option; a pointer renders as
+  `<pointer>`, its address gone.
+- **The events service** (`src/services/events_service`, the `events` protocol): `Open(name)` makes a ring for a
+  program its client starts, the source labeled with that name (lowercase letters, digits and underscores), several
+  rings to a source as a service's processes come and go; each ring is an instance, and its records are numbered
+  with the source's. It reads each ring when it's woken, shows each record on the debug log as `source: text` (`source:
+  level: text` past info), and keeps them as they'd be stored, behind a `StoredStart` (this boot's random number and
+  the first record's number) and a `StoredInstance` per batch. Until `Store` gives a directory, a source keeps up to
+  32 KiB in memory, dropping records past it; from then on each source's go to `<source>.events` there, what memory had
+  first, opened, appended and closed each time; a file past 256 KiB is renamed `<source>.old` and the next started with
+  every format string and schema its records could need. `Query(source, from, level, wait)` gives one record of this
+  boot at a time, rendered, from the .old file, the file, then memory, saying whether it was stored; one with `wait`
+  is held until there's a record for it.
+- **The supervisor** starts the events service first, then the clock service, and asks it for a ring for everything it
+  starts after, by the service's name, which `os.launch` gives as the grants `events` (`os.LaunchOptions.events`); once
+  the storage manager has given the system volume, it gives the events service the volume's `events` directory, made
+  if it isn't there.
+- **The doorbell needs a read first**: a channel's next message wakes a port only after a read has found it empty, so
+  the service reads each doorbell once as it opens the ring; without it, a program that wrote while the service slept
+  was never read, which only a boot with nothing else going on showed.
+- **Tests**: "keeps every program's log records on the system volume once it's there", on both architectures: a query
+  for hello's first record, held from before hello starts, is answered; hello's first record and the clock service's
+  second are read back from the system volume, the clock's written there from memory when `Store` came. The clock and
+  hello lines the other tests expect now come through the events service.
+- **Not yet**: queries by the arguments' typed fields, records of earlier boots, `Watch` as its own request (a waiting
+  query stands in), a budget per source paid by its owner (the service pays for every ring), and the root task's
+  programs, which keep the debug log.
+
 ## Alternatives considered
 - **A CPU budget set per process**, by its handle: less kernel work, but nothing to split or hand on, and a budget
   couldn't cover several processes.
@@ -134,6 +179,12 @@ holds the connection that sets it, for now.
   still have to ask the scheduler for it.
 - **Records in memory only until M10**: less now, but nothing kept across a restart of the service.
 - **An events channel as an entry parameter**: explicit, but every program that logs would have to say so.
+- **The logger in std, installed by each program**: no move into `base`, but a program that didn't install it would
+  log nowhere.
+- **Every record carrying its format string and schemas until 9b**: no definitions to keep track of, but every record
+  far bigger.
+- **Every service moving to the logger in 9a3**: the debug log left to the root task at once, but a far larger change
+  for the same tests.
 - **Restarting only services marked stateless**: safer at first, but every other service ending would stay fatal.
 
 ## Consequences
