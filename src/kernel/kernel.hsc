@@ -85,6 +85,8 @@ Kernel :: struct {
     iommus_polled : u32,
     // test_shootdown's state, as an address, while CPUs are asked to read its page (shootdown_test.hsc)
     shootdown_test : u64,
+    // test_ioapic's interrupts so far (device_test.hsc)
+    test_device_count : u64,
     // test_ioapic's controller (device_test.hsc)
     test_controller : u32,
     // Where the kernel image's frames start, for mapping its code elsewhere.
