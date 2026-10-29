@@ -167,6 +167,31 @@ now, the other services moving later.
   query stands in), a budget per source paid by its owner (the service pays for every ring), and the root task's
   programs, which keep the debug log.
 
+### 9a4: Restarts
+- **Everything the supervisor starts is started again** when it ends other than by exiting with 0, as drivers were, up
+  to three times a minute, unless its `system_config` entry is `not_restarted`, as the disk check is, whose checks
+  write to the disks once a boot. Each start function takes the entry it restarts into (`place`); a service with a
+  listener gets a new one, which its clients' connectors dial (`0077`).
+- **The events service** is given the system volume's `events` directory again. Rings it gave the last one's programs
+  went with it: their records are lost until they're started again (their writers find the doorbell's other end gone,
+  and keep writing to a ring nothing reads). It draws a new boot number, so its queries don't reach records stored
+  before its restart.
+- **The storage manager**: killing it destroys its subtree, its partition, FAT, container and volume servers with it,
+  so a restart starts them anew as they're asked for, and its encrypted volumes are locked again, as only their
+  volume servers held their keys. The supervisor asks the new one for the system volume and gives the events service
+  its `events` directory again.
+- **A restart waits for its budget** (`wait_for_budget`, up to two seconds): what the last process had comes back once
+  its subtree is gone and a grace period has passed, and the storage manager's 64 MiB can't be split off the
+  supervisor's 96 MiB twice.
+- **The supervisor kept every program's budget alive**: `os.launch` gives the launcher a handle to the program's
+  budget, which the supervisor never closed, so a killed program's budget never came back; closing it at once destroys
+  the program's budget and the program with it. Each entry keeps it now, closed when the program ends.
+- **Tests**: "starts the events service, the clock service and the storage manager again when they're killed", on both
+  architectures, from the disk: with `test_restart_services`, once everything has started, the supervisor kills each in
+  turn and waits for it to be back; the clock service sets the time again, the events service has the new clock
+  service's records, and the storage manager gives the system volume again. That encrypted volumes are locked again
+  isn't checked by a test.
+
 ## Alternatives considered
 - **A CPU budget set per process**, by its handle: less kernel work, but nothing to split or hand on, and a budget
   couldn't cover several processes.
@@ -188,3 +213,10 @@ now, the other services moving later.
 - **Restarting only services marked stateless**: safer at first, but every other service ending would stay fatal.
 
 ## Consequences
+- 9a is done: every service the supervisor starts runs on a CPU budget it was configured for, can read the wall
+  clock, logs records the events service keeps on the system volume, and is started again if it fails.
+- What the root task starts (the entropy service, the process manager, the scheduler, the platform service, the
+  supervisor) still logs through the debug log and isn't restarted; a supervisor of its own for them is later work.
+- 9b's bundle store can replace the format strings and schemas the ring carries, and the events service's queries can
+  reach earlier boots once a boot's number is kept rather than drawn.
+- Every other service moves from `log_line` to `base`'s logger as it's next changed.

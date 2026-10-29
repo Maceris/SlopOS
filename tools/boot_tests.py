@@ -212,6 +212,15 @@ TESTS = [
         "--expect-line=[user] supervisor: test_events: the waiting query got hello's record 0: heap working, random numbers working",
         "--expect-line=[user] supervisor: test_events: hello's record 0 read back from the system volume: heap working, random numbers working",
         "--expect-line=[user] supervisor: test_events: clock's record 1 read back from the system volume: serving"])),
+    ("starts the events service, the clock service and the storage manager again when they're killed", 7, with_before_qemu(
+        [argument.replace("test_services", "test_services test_restart_services") for argument in BOOT_DISK_ARGUMENTS], [
+        "--expect-line=[user] supervisor: test_restart_services: killing events", "--expect-line=[user] supervisor: restarted events",
+        "--expect-line=[user] supervisor: test_restart_services: killing clock", "--expect-line=[user] supervisor: restarted clock",
+        "--expect-line=[user] supervisor: test_restart_services: the clock service, started again, set the time",
+        "--expect-line=[user] supervisor: test_restart_services: the events service, started again, has the clock service's record 1: serving",
+        "--expect-line=[user] supervisor: test_restart_services: killing storage_manager",
+        "--expect-line=[user] supervisor: restarted storage_manager",
+        "--expect-line=[user] supervisor: test_restart_services: the storage manager, started again, gave the system volume"])),
     ("doesn't start the root task with no_root_task", 0, [WITH_PROGRAMS, "--command-line=test_exit no_root_task",
         "--expect-line=[info] boot memory reclaimed"]),
     ("boots and halts (UEFI)", 0, ["--uefi", "--expect-line=[info] boot memory reclaimed"]),

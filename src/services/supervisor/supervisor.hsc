@@ -11,9 +11,14 @@
  * listener of whatever serves it now. The console service is given connectors to the first serial line and the first
  * keyboard, hello one to the console, and the disk check, if there's a disk, one to the first disk.
  *
- * A driver that ends other than by exiting with 0, killed or crashed, is started again with its device reissued by the
- * platform service, made anew, and a new listener, up to RESTARTS times in RESTART_WINDOW; its clients' connections went
- * with it, and they dial again. A driver whose device's DMA an IOMMU blocks (SIGNAL_DMA_FAULT, on a handle to its
+ * Whatever it starts that ends other than by exiting with 0, killed or crashed, is started again, up to RESTARTS times
+ * in RESTART_WINDOW, unless system_config says it's not_restarted (decisions/0093): a driver with its device reissued by
+ * the platform service, made anew, and anything with a new listener; its clients' connections went with it, and they
+ * dial again through their connectors. A restarted events service is given the system volume's events directory again;
+ * a restarted storage manager starts its servers anew as it's asked for them, its encrypted volumes locked again, as
+ * their volume servers went with it, and the supervisor asks it for the system volume again. With test_restart_services
+ * on the kernel's command line, once everything has started it kills the events service, the clock service, and the
+ * storage manager if there's one, one at a time, and checks each works once it's back. A driver whose device's DMA an IOMMU blocks (SIGNAL_DMA_FAULT, on a handle to its
  * Device the supervisor keeps) is killed, and so started again in the same way (decisions/0084). With test_dma_fault
  * on the kernel's command line, the supervisor says it has started all only once edu_dma has ended for good. With test_restart on the kernel's command line, the supervisor kills the first serial
  * line's driver once everything has started and the console has dialed it and shown its banner, and says it has
@@ -81,6 +86,9 @@ FAULT_KEY : u64 : 2000
 // The key of a connection of its own to the storage manager, while it waits on one
 STORAGE_KEY : u64 : 3000
 RESTARTS : u32 : 3
+// How long a restart waits for its service's budget to come back, and what it leaves for the launch itself
+RESTART_BUDGET_WAIT : u64 : 2_000_000_000
+RESTART_BUDGET_SPARE : u64 : 256 * 1024
 RESTART_WINDOW : u64 : 60_000_000_000
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 NOWHERE : usize : 0xffffffffffffffff
@@ -236,6 +244,8 @@ Started :: struct {
     watch : slop_os.Handle,
     // The clock service, a driver whose device is the real-time clock
     clock : bool,
+    // Its program's budget, closed once it's ended, so what it had comes back
+    budget : slop_os.MemoryBudget,
     // Ended, and not to be started again
     done : bool,
 }
@@ -264,6 +274,8 @@ Supervisor :: struct {
     clock_page : slop_os.Memory,
     clock_setting : slop_os.Channel,
     clock_setting_port : slop_os.Port,
+    // The budget of the program launched last, until its entry takes it
+    launched_budget : slop_os.MemoryBudget,
     // Its end of the events service's listener, NONE without
     events_end : slop_os.Channel,
     events_port : slop_os.Port,
@@ -306,7 +318,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     startup :: slop_os.startup_block()
     supervisor := Supervisor.{block = startup, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, console = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
-        events_end = NONE, relaunching = NOWHERE}
+        events_end = NONE, relaunching = NOWHERE, launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)}
     supervisor.modules = Modules.{events = events_module, clock = clock_module, hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
@@ -329,6 +341,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     test_dma_fault := false
     test_clock := false
     test_events := false
+    test_restart_services := false
     match command_line {
         case Some(memory) => {
             text :: service_kit.text_of(startup, memory) or_else ""
@@ -336,6 +349,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             test_dma_fault = service_kit.has_word(text, "test_dma_fault")
             test_clock = service_kit.has_word(text, "test_clock")
             test_events = service_kit.has_word(text, "test_events")
+            test_restart_services = service_kit.has_word(text, "test_restart_services")
         }
         case None => {}
     }
@@ -350,7 +364,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     }
     // The events service first, so everything after it has a ring for its records; then the clock, so everything after
     // it reads the time from its page
-    start_events(&supervisor)
+    start_events(&supervisor, NOWHERE)
     supervisor.clock_page = slop_os.memory_create(startup.budget, PAGE) or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
     start_clock(&supervisor, NOWHERE)
     if test_clock && supervisor.clock_setting != NONE {
@@ -359,16 +373,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         }
     }
     start_drivers(&supervisor, true)
-    storage_slot :: start_storage(&supervisor)
+    storage_slot :: start_storage(&supervisor, NOWHERE)
     if storage_slot != NOWHERE {
-        match files_of_type(&supervisor, storage_slot, storage_manager.CONTAINER_TYPE) {
-            case Some(root) => {
-                supervisor.system = root.end
-                supervisor.system_port = os.port_for(startup.budget, root.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
-                store_events(&supervisor)
-            }
-            case None => {}
-        }
+        open_system(&supervisor, storage_slot)
     }
     // A query for hello's first record, held from before hello starts, on a connection of its own
     waiting := Waiting.{end = NONE}
@@ -377,8 +384,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     }
     // Then every other driver, and the services that use them, each with connectors to what it uses
     start_drivers(&supervisor, false)
-    start_console(&supervisor)
-    start_hello(&supervisor)
+    start_console(&supervisor, NOWHERE)
+    start_hello(&supervisor, NOWHERE)
     start_disk_check(&supervisor, storage_slot)
     serial_line :: supervisor.first_serial
     if test_restart && serial_line < supervisor.started.count {
@@ -418,6 +425,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     }
     if test_events {
         check_events(&supervisor, waiting)
+    }
+    if test_restart_services {
+        restart_services(&supervisor, storage_slot)
     }
     log_line.write(supervisor.log, "supervisor: started % services", supervisor.started_count)
     tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))
@@ -459,6 +469,10 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
     entry :: &supervisor.started[index]
     entry.running = false
     log_line.write(supervisor.log, "supervisor: % ended", entry.name)
+    if cast[slop_os.Handle](entry.budget) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](entry.budget))
+        entry.budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)
+    }
     tell_root(supervisor, .Ended(report_of(entry.name, code)))
     if cast[slop_os.Handle](entry.listener) != slop_os.NO_HANDLE {
         _ = slop_os.handle_close(cast[slop_os.Handle](entry.listener))
@@ -469,7 +483,16 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
         _ = slop_os.handle_close(entry.watch)
         entry.watch = slop_os.NO_HANDLE
     }
-    if !entry.driver || code == 0 {
+    not_restarted := true
+    budget : u64 = 0
+    match system_config.service(entry.name) {
+        case Some(service) => {
+            not_restarted = service.not_restarted
+            budget = service.budget
+        }
+        case None => {}
+    }
+    if code == 0 || not_restarted {
         entry.done = true
         return void
     }
@@ -484,11 +507,17 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
         return void
     }
     entry.restarts += 1
+    wait_for_budget(supervisor, budget)
     // The last process's binding still has the key, though it fired: the next is watched under it from its launch
     _ = slop_os.port_unbind(supervisor.port, cast[u64](index))
-    if entry.clock {
+    if !entry.driver || entry.clock {
         supervisor.relaunching = index
-        start_clock(supervisor, index)
+        if entry.clock {
+            start_clock(supervisor, index)
+        }
+        else {
+            restart_service(supervisor, index)
+        }
         supervisor.relaunching = NOWHERE
         if entry.running {
             log_line.write(supervisor.log, "supervisor: restarted %", entry.name)
@@ -502,6 +531,143 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
     if entry.running {
         log_line.write(supervisor.log, "supervisor: restarted %", entry.name)
     }
+}
+
+/*
+ * Until the supervisor's budget has bytes to split off, or RESTART_BUDGET_WAIT has passed: what the last process had
+ * comes back once its subtree is gone and a grace period has passed, and a big service's budget can't be split off
+ * twice.
+ */
+wait_for_budget :: fn(supervisor: ptr[mut Supervisor], bytes: u64) {
+    give_up :: (slop_os.clock_monotonic() or_else 0) + RESTART_BUDGET_WAIT
+    loop {
+        info :: slop_os.memory_budget_info(supervisor.block.budget) or_return void
+        if info.used <= info.limit && info.limit - info.used >= bytes + RESTART_BUDGET_SPARE {
+            return void
+        }
+        if (slop_os.clock_monotonic() or_else 0) >= give_up {
+            return void
+        }
+        pause(supervisor, 10_000_000)
+    }
+}
+
+// A service that isn't a driver, started again into its entry at index, as it was started.
+restart_service :: fn(supervisor: ptr[mut Supervisor], index: usize) {
+    name :: supervisor.started[index % supervisor.started.count].name
+    if name == "events" {
+        start_events(supervisor, index)
+        store_events(supervisor)
+    }
+    else if name == "console" {
+        start_console(supervisor, index)
+    }
+    else if name == "hello" {
+        start_hello(supervisor, index)
+    }
+    else if name == "storage_manager" {
+        if start_storage(supervisor, index) != NOWHERE {
+            open_system(supervisor, index)
+        }
+    }
+}
+
+/*
+ * What's started under name, into its entry at again if that isn't NOWHERE, a restart, or a new one: its index, or
+ * MAX_STARTED if there's no room for it.
+ */
+place :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process: slop_os.Process, again: usize) -> usize {
+    if again == NOWHERE {
+        return started(supervisor, name, process)
+    }
+    if again >= supervisor.started.count {
+        return MAX_STARTED
+    }
+    entry :: &supervisor.started[again]
+    entry.process = process
+    entry.budget = take_budget(supervisor)
+    entry.running = true
+    entry.done = false
+    tell_root(supervisor, .Started(report_of(name, 0)))
+    return again
+}
+
+/*
+ * The storage manager at storage_slot's SlopOS container's system volume, where programs outside the boot set come
+ * from, given to the events service to keep records in.
+ */
+open_system :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
+    match files_of_type(supervisor, storage_slot, storage_manager.CONTAINER_TYPE) {
+        case Some(root) => {
+            if supervisor.system != NONE {
+                _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.system))
+                _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.system_port))
+            }
+            supervisor.system = root.end
+            supervisor.system_port = os.port_for(supervisor.block.budget, root.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+            store_events(supervisor)
+        }
+        case None => {}
+    }
+}
+
+/*
+ * test_restart_services: the events service, the clock service and the storage manager, if it was started, each killed
+ * and checked once it's back: the events service by a record of the clock service's, started again after it, the clock
+ * service by setting the time, and the storage manager by giving the system volume again.
+ */
+restart_services :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
+    if !kill_and_wait(supervisor, "events") {
+        return void
+    }
+    if !kill_and_wait(supervisor, "clock") {
+        return void
+    }
+    if supervisor.clock_setting != NONE && clock_setting.set(supervisor.clock_setting, supervisor.clock_setting_port, TEST_CLOCK_TIME) {
+        log_line.write(supervisor.log, "supervisor: test_restart_services: the clock service, started again, set the time")
+    }
+    if supervisor.events_end != NONE {
+        out := os.Outgoing.{}
+        request :: os.begin[events.Request](&out)
+        request^ = .Query(events.QueryOf.{source = bytes_of(&out, "clock"), from = 1, level = 0, wait = true})
+        into := os.Incoming.{}
+        match events.ask(supervisor.events_end, supervisor.events_port, &out, &into) {
+            case Found(found) => log_line.write(supervisor.log,
+                "supervisor: test_restart_services: the events service, started again, has the clock service's record %: %", found.number,
+                text_of_items(os.items(&into, found.text)))
+            case _ => log_line.write(supervisor.log, "supervisor: test_restart_services: the events service has no record of the clock service")
+        }
+    }
+    if storage_slot == NOWHERE {
+        return void
+    }
+    old_system :: supervisor.system
+    if kill_and_wait(supervisor, "storage_manager") && supervisor.system != NONE && supervisor.system != old_system {
+        log_line.write(supervisor.log, "supervisor: test_restart_services: the storage manager, started again, gave the system volume")
+    }
+}
+
+// What's started under name killed, and waited for until it's been started again: whether it has.
+kill_and_wait :: fn(supervisor: ptr[mut Supervisor], name: string) -> bool {
+    index := NOWHERE
+    for entry, i in supervisor.started {
+        if i < supervisor.started_count && entry.name == name && entry.running {
+            index = i
+        }
+    }
+    if index >= supervisor.started.count {
+        return false
+    }
+    restarts :: supervisor.started[index].restarts
+    log_line.write(supervisor.log, "supervisor: test_restart_services: killing %", name)
+    _ = slop_os.process_kill(supervisor.started[index].process)
+    // Not running from here, though its end arrives on the port later
+    supervisor.started[index].running = false
+    loop {
+        wait_and_handle(supervisor)
+    }
+    while !supervisor.started[index].done && !(supervisor.started[index].running && supervisor.started[index].restarts > restarts)
+    return supervisor.started[index].running
 }
 
 // A driver whose device's DMA an IOMMU blocked, at address: killed, if it's running, and so started again as one that crashed.
@@ -594,6 +760,9 @@ start_driver :: fn(supervisor: ptr[mut Supervisor], index: usize, device: platfo
     }
     entry :: &supervisor.started[slot]
     entry.process = launched
+    if again != NOWHERE {
+        entry.budget = take_budget(supervisor)
+    }
     entry.running = true
     entry.listener = listener
     entry.speaks = speaks
@@ -641,7 +810,7 @@ launch_serving :: fn[P](supervisor: ptr[mut Supervisor], service: system_config.
         bar4 = optional(device.bar4), bar5 = optional(device.bar5), clients = os.Listener[P].{end = end}}
     executable :: module_of(supervisor, service.name)
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, executable, service.budget, entry, grants, options_for(supervisor, service.name)) {
-        case Ok(launched) => return launched.process
+        case Ok(launched) => return kept(supervisor, launched)
         case Error(error) => {
             failed(supervisor, service.name, error)
             return cast[slop_os.Process](slop_os.NO_HANDLE)
@@ -659,7 +828,7 @@ launch_device_only :: fn(supervisor: ptr[mut Supervisor], service: system_config
         bar4 = optional(device.bar4), bar5 = optional(device.bar5)}
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
         entry, grants, options_for(supervisor, service.name)) {
-        case Ok(launched) => return launched.process
+        case Ok(launched) => return kept(supervisor, launched)
         case Error(error) => {
             failed(supervisor, service.name, error)
             return cast[slop_os.Process](slop_os.NO_HANDLE)
@@ -681,7 +850,7 @@ launch_virtio_rng :: fn(supervisor: ptr[mut Supervisor], service: system_config.
     }
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
         virtio_rng.main, grants, options_for(supervisor, service.name)) {
-        case Ok(launched) => return launched.process
+        case Ok(launched) => return kept(supervisor, launched)
         case Error(error) => {
             failed(supervisor, service.name, error)
             return cast[slop_os.Process](slop_os.NO_HANDLE)
@@ -717,15 +886,21 @@ options_for :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.LaunchOpt
     return options
 }
 
-// The events service, with a listener whose other end the supervisor keeps.
-start_events :: fn(supervisor: ptr[mut Supervisor]) {
+// The events service, with a listener whose other end the supervisor keeps; into its entry at again, unless that's NOWHERE.
+start_events :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     service :: system_config.service("events") or_return void
+    // The last one's end, which went with it
+    if supervisor.events_end != NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.events_end))
+        _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.events_port))
+        supervisor.events_end = NONE
+    }
     pair :: os.channel_for[events.Events](supervisor.block.budget, 0) or_return void
     grants := EventsGrants.{log = duplicate_log(supervisor), clients = os.Listener[events.Events].{end = pair.a}}
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
         events_service.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => {
-            _ = started(supervisor, service.name, launched.process)
+            _ = place(supervisor, "events", kept(supervisor, launched), again)
             supervisor.events_end = pair.b
             supervisor.events_port = os.port_for(supervisor.block.budget, pair.b) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
         }
@@ -882,7 +1057,7 @@ start_clock :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     launched := cast[slop_os.Process](slop_os.NO_HANDLE)
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
         clock_service.main, grants, options) {
-        case Ok(made) => launched = made.process
+        case Ok(made) => launched = kept(supervisor, made)
         case Error(error) => {
             failed(supervisor, service.name, error)
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
@@ -895,19 +1070,13 @@ start_clock :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     }
     supervisor.clock_setting = pair.b
     supervisor.clock_setting_port = os.port_for(supervisor.block.budget, pair.b) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
-    slot :: if again != NOWHERE { again } else { started(supervisor, "clock", launched) }
+    slot :: place(supervisor, "clock", launched, again)
     if slot >= supervisor.started.count {
         return void
     }
     entry :: &supervisor.started[slot]
-    entry.process = launched
-    entry.running = true
     entry.driver = true
     entry.clock = true
-    entry.done = false
-    if again != NOWHERE {
-        tell_root(supervisor, .Started(report_of("clock", 0)))
-    }
 }
 
 module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory {
@@ -1065,8 +1234,11 @@ start_drivers :: fn(supervisor: ptr[mut Supervisor], boot_set: bool) {
     }
 }
 
-// The console service, with connectors to the first serial line and keyboard, and a listener for its clients.
-start_console :: fn(supervisor: ptr[mut Supervisor]) {
+/*
+ * The console service, with connectors to the first serial line and keyboard, and a listener for its clients; into its
+ * entry at again, unless that's NOWHERE.
+ */
+start_console :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     service :: system_config.service("console") or_return void
     pair :: os.channel_for[console_log.ConsoleLog](supervisor.block.budget, 0) or_return void
     grants := ConsoleGrants.{log = duplicate_log(supervisor), serial_line = connector_to(supervisor, supervisor.first_serial),
@@ -1074,23 +1246,27 @@ start_console :: fn(supervisor: ptr[mut Supervisor]) {
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "console"), service.budget,
         console.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => {
-            slot :: started(supervisor, "console", launched.process)
+            slot :: place(supervisor, "console", kept(supervisor, launched), again)
             if slot < supervisor.started.count {
                 supervisor.started[slot].listener = pair.b
                 supervisor.started[slot].speaks = .ConsoleLog
                 supervisor.console = slot
             }
         }
-        case Error(error) => failed(supervisor, service.name, error)
+        case Error(error) => {
+            failed(supervisor, service.name, error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        }
     }
 }
 
-start_hello :: fn(supervisor: ptr[mut Supervisor]) {
+// hello, with a connector to the console and a connection to the process manager; into its entry at again, unless that's NOWHERE.
+start_hello :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     service :: system_config.service("hello") or_return void
     grants := HelloGrants.{console = connector_to(supervisor, supervisor.console)}
     grants.manager = process_manager.connect(supervisor.manager.end, supervisor.manager_port, supervisor.block.budget)
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "hello"), service.budget, hello.main, grants, options_for(supervisor, service.name)) {
-        case Ok(launched) => _ = started(supervisor, "hello", launched.process)
+        case Ok(launched) => _ = place(supervisor, "hello", kept(supervisor, launched), again)
         case Error(error) => failed(supervisor, service.name, error)
     }
 }
@@ -1098,9 +1274,10 @@ start_hello :: fn(supervisor: ptr[mut Supervisor]) {
 // The disk check, with a connector to the first disk, if there is one.
 /*
  * The storage manager, when there's a disk, with a connector to each of the first four disks' drivers, a connection
- * to the process manager and the partition server's module: its index in what's started, or NOWHERE.
+ * to the process manager and the partition server's module: its index in what's started, or NOWHERE; into its entry at
+ * again, unless that's NOWHERE.
  */
-start_storage :: fn(supervisor: ptr[mut Supervisor]) -> usize {
+start_storage :: fn(supervisor: ptr[mut Supervisor], again: usize) -> usize {
     if supervisor.first_disk == NOWHERE {
         return NOWHERE
     }
@@ -1130,7 +1307,7 @@ start_storage :: fn(supervisor: ptr[mut Supervisor]) -> usize {
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "storage_manager"), service.budget,
         storage_manager.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => {
-            slot :: started(supervisor, "storage_manager", launched.process)
+            slot :: place(supervisor, "storage_manager", kept(supervisor, launched), again)
             if slot < supervisor.started.count {
                 supervisor.started[slot].listener = pair.b
                 supervisor.started[slot].speaks = .Storage
@@ -1205,7 +1382,7 @@ start_disk_check :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
         system = files_of_type(supervisor, storage_slot, storage_manager.CONTAINER_TYPE)}
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "disk_check"), service.budget,
         disk_check.main, grants, options_for(supervisor, service.name)) {
-        case Ok(launched) => _ = started(supervisor, "disk_check", launched.process)
+        case Ok(launched) => _ = started(supervisor, "disk_check", kept(supervisor, launched))
         case Error(error) => failed(supervisor, service.name, error)
     }
 }
@@ -1383,7 +1560,7 @@ started :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process:
     if index >= supervisor.started.count {
         return MAX_STARTED
     }
-    supervisor.started[index] = Started.{name = name, process = process, running = true, listener = NONE}
+    supervisor.started[index] = Started.{name = name, process = process, running = true, listener = NONE, budget = take_budget(supervisor)}
     supervisor.started_count = index + 1
     return index
 }
@@ -1393,6 +1570,22 @@ failed :: fn(supervisor: ptr[mut Supervisor], name: string, error: os.LaunchErro
     _ = slop_os.port_unbind(supervisor.port, cast[u64](next_slot(supervisor)))
     log_line.write(supervisor.log, "supervisor: % didn't start: %", name, error)
     tell_root(supervisor, .Failed(report_of(name, cast[u64](error) + 1)))
+}
+
+/*
+ * A launched program's process, its budget's handle kept for the entry it's placed in (take_budget): the budget lasts
+ * as long as a handle to it, and goes back to the supervisor's once the entry's is closed as the program ends.
+ */
+kept :: fn(supervisor: ptr[mut Supervisor], launched: os.Launched) -> slop_os.Process {
+    supervisor.launched_budget = launched.budget
+    return launched.process
+}
+
+// The budget kept for the program launched last, for its entry.
+take_budget :: fn(supervisor: ptr[mut Supervisor]) -> slop_os.MemoryBudget {
+    budget :: supervisor.launched_budget
+    supervisor.launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)
+    return budget
 }
 
 // A copy of the supervisor's debug log, to give a service.

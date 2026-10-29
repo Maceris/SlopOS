@@ -98,6 +98,11 @@ Service :: struct {
     boot_set : bool,
     // Its CPU budget, which the scheduler service splits off the root's; None for the default (DEFAULT_CPU)
     cpu : CpuShare?,
+    /*
+     * Whether its starter leaves it ended when it ends other than by exiting with 0, rather than starting it again, as
+     * the supervisor does everything else it starts, up to three times a minute (decisions/0077, 0093)
+     */
+    not_restarted : bool,
 }
 
 // Whether a service is a driver, with devices it takes.
@@ -149,8 +154,9 @@ SERVICES :: Service.[
     Service.{name = "volume_server", boot_set = true, module = "volume_server.elf", starter = .StorageManager, by_manager = true, budget = 6 * MIB,
         entry = type_of(volume_server.main)},
     // Started only when there's a disk
+    // Its checks write to the disks, once a boot
     Service.{name = "disk_check", module = "disk_check.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
-        entry = type_of(disk_check.main)},
+        entry = type_of(disk_check.main), not_restarted = true},
     // A modern virtio entropy device (virtio's device ID 4, as PCI device 0x1040 + 4)
     Service.{name = "virtio_rng", module = "virtio_rng.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(virtio_rng.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1044,
