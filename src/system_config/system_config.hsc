@@ -38,6 +38,8 @@ import test_devices from "../tests/test_devices"
 import test_memory from "../tests/test_memory"
 import test_msi_dma from "../tests/test_msi_dma"
 import test_ports from "../tests/test_ports"
+import test_cpu_budgets from "../tests/test_cpu_budgets"
+import test_io_ports from "../tests/test_io_ports"
 import test_protocols from "../tests/test_protocols"
 import test_syscalls from "../tests/test_syscalls"
 import test_threads from "../tests/test_threads"
@@ -143,7 +145,8 @@ SERVICES :: Service.[
  * each as test_syscalls': so every one's entry has to be the same.
  */
 TEST_ENTRIES :: type.[type_of(test_channels.main), type_of(test_control.main), type_of(test_devices.main), type_of(test_memory.main),
-    type_of(test_msi_dma.main), type_of(test_ports.main), type_of(test_protocols.main), type_of(test_syscalls.main), type_of(test_threads.main)]
+    type_of(test_msi_dma.main), type_of(test_ports.main), type_of(test_protocols.main), type_of(test_syscalls.main), type_of(test_threads.main),
+    type_of(test_cpu_budgets.main), type_of(test_io_ports.main)]
 
 #assert same_test_entries()
 

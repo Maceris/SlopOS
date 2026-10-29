@@ -46,6 +46,7 @@ BGrants :: struct {
     manager : os.Channel[process_manager.ProcessManager]?,
     program : slop_os.Memory?,
     peer : slop_os.Channel?,
+    cpu_budget : slop_os.CpuBudget?,
 }
 
 /*
@@ -98,7 +99,7 @@ ring_receive :: fn(memory: u64, side: u64, port: slop_os.Port, once: ptr[mut u64
 }
 
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?) -> int {
+    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     match peer {
         case Some(c0) => return run_b(c0)
         case None => {}

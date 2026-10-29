@@ -164,3 +164,16 @@ idle_wait #calling_convention(.c) #no_context :: fn() #never_returns {
         aarch64.wfi()
     }
 }
+
+// AArch64 has no I/O ports: its devices are all memory (decisions/0093).
+has_io_ports :: fn() -> bool {
+    return false
+}
+
+port_read :: fn(port: u16, width: u32) -> u32? {
+    return null
+}
+
+port_write :: fn(port: u16, width: u32, value: u32) -> bool {
+    return false
+}

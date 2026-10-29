@@ -28,7 +28,7 @@ USER_DATA :: arch_interface.Mapping.{protection = .ReadWrite, cache = .WriteBack
 
 BudgetsTest :: struct {
     threads : u64[BUDGETS_TEST_THREADS],
-    budget : CpuBudget,
+    budget : CpuTime,
 }
 
 /*

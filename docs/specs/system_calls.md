@@ -122,10 +122,26 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 56 | `dma_memory_create` | domain, budget, size, limit | an owning handle to DMA memory in the domain: pinned, in one block of frames, zeroed, ending at or below limit (0 for none), charged for its whole block |
 | 57 | `memory_device_address` | memory | where DMA memory is to the devices in its domain |
 | 58 | `iommu_register` | platform, kind, registers, first, count, stream | the IOMMU's number: kind is an `IommuKind`, registers its registers as device memory (not a window), from the firmware tables, and it covers count requester IDs from first (`slop_os.device_address`, in one segment), which it knows as stream IDs from stream (on VT-d, the requester IDs themselves). The same IOMMU registered again, of the same kind at the same place, gives the same number and covers those requester IDs too (`0079`) |
+| 59 | `cpu_budget_create` | parent, budget, priority, period, time | an owning handle to a child CPU budget of parent: its threads get time ns every period ns at priority (at most the parent's), its share (time over period) out of the parent's, which its children's together can't pass (`0093`) |
+| 60 | `cpu_budget_set` | budget, priority, period, time | the budget's parameters changed, within its parent's share and priority and above its own children's; the root's can't be |
+| 61 | `cpu_budget_info` | budget, info | `CPU_BUDGET_INFO_WORDS` words into info: priority, period, time, share and children's share, in millionths of a CPU (`slop_os.cpu_budget_describe`) |
+| 62 | `process_set_cpu_budget` | process, budget | the process, and every thread of its, now and later, run on the budget; the process needs `RIGHT_PROCESS_THREADS`, the budget `RIGHT_CPU_BUDGET_BIND` |
+| 63 | `io_ports_create` | platform, budget, first, count | an owning handle to the I/O ports first to first + count - 1, on an architecture that has them (x86-64) |
+| 64 | `io_port_read` | ports, offset, width | width bytes (1, 2 or 4) read from the port at offset in the range |
+| 65 | `io_port_write` | ports, offset, width, value | width bytes of value written to the port at offset in the range |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the
 platform capability.
+
+## CPU Budgets
+
+Every process runs on a CPU budget, its creator's unless `process_set_cpu_budget` gives it another, and its threads
+with it. The root task is given the root budget, every CPU's whole time at the top priority (255), as its grant
+`cpu_budget`, without `RIGHT_CPU_BUDGET_SET`. A thread runs at its budget's priority while the budget has time
+left, and in the background band below every priority once it's spent, until its time comes back, one period after
+it was used (sporadic-server replenishment). Destroying a budget puts what ran on it, its processes, their threads and
+its child budgets, on its parent, and gives its share back (`0093`).
 
 ## Memory Budgets
 
@@ -312,7 +328,8 @@ The memory, `channel_memory_size(ring)` bytes:
 | 5 | `TableFull` | The process has 65535 handles |
 | 6 | `OutOfMemory` | |
 | 7 | `NoSuchCall` | No call has that number |
-| 25 | `BudgetExceeded` | The budget can't pay for it, or (`channel_take_handles`) the taker's can't take what the batch owns |
+| 25 | `BudgetExceeded` | The budget can't pay for it, or (`channel_take_handles`) the taker's can't take what the batch owns; a CPU budget's share past what its parent has left, or its priority above its parent's |
+| 46 | `InvalidArgument` | A CPU budget's period of 0, time of 0, or priority above 255 |
 
 Calls on a port fail with `slop_os.PortError`, whose tags mean the same where they're shared:
 
@@ -398,9 +415,9 @@ Devices, MSIs and DMA memory fail with `slop_os.DeviceError` too:
 | 43 | `TooManyIommus` | `iommu_register`: the kernel has every IOMMU (8) or range of requester IDs (32) it takes |
 | 44 | `WrongIommu` | `device_attach`: the device isn't behind the IOMMU the domain's devices are |
 | 45 | `Untrusted` | `dma_memory_create`: no IOMMU translates the domain, and it wasn't made trusted |
+| 46 | `InvalidArgument` | `io_ports_create`: no ports on this architecture, none asked for, or past the last; `io_port_read` and `io_port_write`: a port outside the range, or a width that isn't 1, 2 or 4 |
 
 ## Not Yet
 
-I/O-port ranges come with the drivers that need them, and I/O APIC lines through interrupt remapping when a driver
-needs one (`0082`); pagers for memory objects with memory-mapped files. Process memory is read and written through the
+I/O APIC lines through interrupt remapping when a driver needs one (`0082`); pagers for memory objects with memory-mapped files. Process memory is read and written through the
 page tables, so a memory object's pages no thread has touched yet can't be.

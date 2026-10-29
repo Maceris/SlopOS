@@ -52,7 +52,7 @@ level_of :: fn(thread: ptr[Thread], now: u64) -> u32 {
     if thread.budget == 0 {
         return BACKGROUND_LEVEL
     }
-    budget :: cast[ptr[mut CpuBudget]](thread.budget)
+    budget :: cast[ptr[mut CpuTime]](thread.budget)
     return if has_time(budget, now) { cast[u32](budget.priority) + 1 } else { BACKGROUND_LEVEL }
 }
 
@@ -140,7 +140,7 @@ account :: fn(cpu: ptr[mut PerCpu], thread: ptr[mut Thread], now: u64) {
     used :: now - cpu.run_start
     thread.run_time += used
     if thread.budget != 0 {
-        charge(cast[ptr[mut CpuBudget]](thread.budget), cpu.run_start, used, now)
+        charge(cast[ptr[mut CpuTime]](thread.budget), cpu.run_start, used, now)
     }
     cpu.run_start = now
 }

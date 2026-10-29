@@ -79,6 +79,7 @@ CopyGrants :: struct {
     manager : os.Channel[process_manager.ProcessManager]?,
     program : slop_os.Memory?,
     peer : slop_os.Channel?,
+    cpu_budget : slop_os.CpuBudget?,
 }
 
 // T2, and the thread D starts in T: counts in its page for good.
@@ -89,7 +90,7 @@ counter #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[16]]) #never
 }
 
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?) -> int {
+    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     match peer {
         case Some(end) => return run_copy(end)
         case None => {}

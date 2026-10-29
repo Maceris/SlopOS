@@ -35,7 +35,8 @@ import test_device from "../test_device"
 ROOT_STACK_SIZE : u64 : 256 * 1024
 // The free range the root task's runtime maps its own memory in, 1 TiB.
 ROOT_FREE_SIZE : u64 : 1 << 40
-MAX_ROOT_GRANTS :: 32
+// The most grants the root task is given: its own, and every boot module
+MAX_ROOT_GRANTS :: 64
 PAGE : u64 : frames.FRAME_SIZE
 
 // Where the root task's parts go in its address space.
@@ -81,7 +82,8 @@ load_root_task :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule) -> s
         case Ok(made) => space = made
         case Error(error) => return "no address space"
     }
-    grant_count :: kernel.modules.count + 3
+    // Room for as many grants as it can be given, which add_grant doesn't pass
+    grant_count :: MAX_ROOT_GRANTS
     block_size :: page_up(cast[u64](size_of(slop_os.StartupBlock)) + cast[u64](grant_count + 1) * cast[u64](size_of(slop_os.Grant)))
     layout :: choose_layout(kernel, executable.size, block_size)
     not_loaded :: load_image(kernel, process, space, &executable, file, layout.image)
@@ -282,6 +284,9 @@ write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], sp
     count : usize = 0
     platform :: handle_for(kernel, process, kernel.platform, .Platform, false) or_return "no handle to the platform"
     count = add_grant(grants, count, "platform", .Platform, platform)
+    // The root CPU budget, which it gives the scheduler service to split (decisions/0093)
+    cpu_budget :: handle_for(kernel, process, kernel.root_cpu_budget, .CpuBudget, false) or_return "no handle to the root CPU budget"
+    count = add_grant(grants, count, "cpu_budget", .CpuBudget, cpu_budget)
     log :: create_debug_log(kernel, process) or_return "no debug log"
     count = add_grant(grants, count, "debug_log", .DebugLog, log)
     command_line :: copy_of_command_line(kernel, process) or_return "no memory for its command line"
@@ -374,6 +379,7 @@ handle_for :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], object: u64
 // grants with one more, labeled label, after its first count: how many it has now.
 add_grant :: fn(grants: mut slop_os.Grant[], count: usize, label: string, kind: slop_os.ObjectKind, handle: slop_os.Handle) -> usize {
     if count >= grants.count {
+        runtime.log_error("the root task has room for % grants, so it isn't given %", grants.count, label)
         return count
     }
     grant :: &grants[count]

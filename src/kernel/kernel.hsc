@@ -95,6 +95,9 @@ Kernel :: struct {
     // The budget every other is split from, and the lock for changing two budgets at once (memory_budgets.hsc).
     root_budget : u64,
     budgets_lock : concurrency.SpinLock,
+    // The CPU budget every other is split from, and the lock for the shape of their tree (cpu_budgets.hsc).
+    root_cpu_budget : u64,
+    cpu_budgets_lock : concurrency.SpinLock,
     // The platform capability, for the root task (irqs.hsc); and the last CPU an IRQ was routed to.
     platform : u64,
     // The boot modules, the root task's first, their names kept past boot; the boot's random seed (keep_boot_info).
@@ -282,6 +285,8 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
             test_pool(kernel)
         }
         if !kernel.options.no_root_task {
+            // Of every CPU's time, which the root task's processes run on; the kernel's own tests above run on none
+            kernel.root_cpu_budget = make_root_cpu_budget(kernel)
             start_root_task(kernel)
         }
         runtime.log_info("idle")

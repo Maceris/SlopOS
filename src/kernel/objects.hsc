@@ -81,6 +81,8 @@ KernelObjects :: struct {
     debug_log : DebugLog,
     device : Device,
     dma_domain : DmaDomain,
+    cpu_budget : CpuBudget,
+    io_port_range : IoPortRange,
 }
 
 // Pools for kinds by their slop_os.ObjectKind value, which is below this.
@@ -166,25 +168,27 @@ pool_of :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind) -> ptr[mut slab
 
 /*
  * What's left in the pools, once everything but the kernel's own objects should be gone, as when the root task
- * has ended: the kernel keeps the root budget and the platform capability, and nothing else.
+ * has ended: the kernel keeps the root budget, the root CPU budget and the platform capability, and nothing else.
  */
 log_objects_left :: fn(kernel: ptr[mut Kernel]) {
     pools :: &kernel.pools
     others : u64 = 0
     for pool, i in pools.objects {
-        if i != cast[usize](cast[u8](slop_os.ObjectKind.MemoryBudget)) && i != cast[usize](cast[u8](slop_os.ObjectKind.Platform)) {
+        if i != cast[usize](cast[u8](slop_os.ObjectKind.MemoryBudget)) && i != cast[usize](cast[u8](slop_os.ObjectKind.Platform))
+            && i != cast[usize](cast[u8](slop_os.ObjectKind.CpuBudget)) {
             others += pool.allocated
         }
     }
     budgets :: pool_of(kernel, .MemoryBudget).allocated
     platforms :: pool_of(kernel, .Platform).allocated
-    if others == 0 && budgets == 1 && platforms <= 1 && pools.bindings.allocated == 0 && pools.channel_cores.allocated == 0
+    cpu_budgets :: pool_of(kernel, .CpuBudget).allocated
+    if others == 0 && budgets == 1 && platforms <= 1 && cpu_budgets <= 1 && pools.bindings.allocated == 0 && pools.channel_cores.allocated == 0
         && pools.mappings.allocated == 0 {
         runtime.log_info("objects left: only the kernel's own")
         return void
     }
-    runtime.log_error("objects left: % budgets, % platforms, % other objects, % bindings, % channel cores, % mappings", budgets, platforms,
-        others, pools.bindings.allocated, pools.channel_cores.allocated, pools.mappings.allocated)
+    runtime.log_error("objects left: % budgets, % CPU budgets, % platforms, % other objects, % bindings, % channel cores, % mappings", budgets,
+        cpu_budgets, platforms, others, pools.bindings.allocated, pools.channel_cores.allocated, pools.mappings.allocated)
     for pool, i in pools.objects {
         if pool.allocated != 0 {
             runtime.log_error("objects left: % of kind %", pool.allocated, i)

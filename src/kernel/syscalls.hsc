@@ -946,3 +946,100 @@ sys_process_give_handles :: fn(thread: ptr[mut Thread], process: slop_os.Process
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_THREADS)?
     return control_done(give_handles(per_cpu().kernel, thread, target, handles, given))
 }
+
+// CPU budgets and I/O ports (roadmap 9a, decisions/0093)
+
+cpu_budget_failure :: fn(error: CpuBudgetError) -> slop_os.HandleError {
+    return match error {
+        case .OutOfMemory => slop_os.HandleError.OutOfMemory
+        case .OwnerGone => slop_os.HandleError.ObjectGone
+        case .BudgetExceeded => slop_os.HandleError.BudgetExceeded
+        case .TooMuch => slop_os.HandleError.BudgetExceeded
+        case .InvalidArgument => slop_os.HandleError.InvalidArgument
+    }
+}
+
+// A child of the parent budget, owned by the caller's process: an owning handle to it.
+sys_cpu_budget_create :: fn(thread: ptr[mut Thread], parent: slop_os.CpuBudget, budget: slop_os.MemoryBudget, priority: u32, period: u64,
+    time: u64) -> Result[slop_os.CpuBudget, slop_os.HandleError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    from :: object_of[slop_os.HandleError](process, cast[slop_os.Handle](parent), slop_os.ObjectKind.CpuBudget, slop_os.RIGHT_CPU_BUDGET_SPLIT)?
+    paying :: paying_budget[slop_os.HandleError](process, budget)?
+    made := cast[ptr[mut CpuBudget]](0)
+    match create_cpu_budget(kernel, cast[u64](process), paying, cast[ptr[mut CpuBudget]](from), priority, period, time) {
+        case Ok(created) => made = created
+        case Error(error) => return .Error(cpu_budget_failure(error))
+    }
+    handle :: owning_handle[slop_os.HandleError](kernel, process, cast[u64](made), false)?
+    return .Ok(cast[slop_os.CpuBudget](handle))
+}
+
+sys_cpu_budget_set :: fn(thread: ptr[mut Thread], budget: slop_os.CpuBudget, priority: u32, period: u64, time: u64) -> Result[void, slop_os.HandleError] {
+    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](budget), slop_os.ObjectKind.CpuBudget, slop_os.RIGHT_CPU_BUDGET_SET)?
+    match set_cpu_budget(per_cpu().kernel, cast[ptr[mut CpuBudget]](object), priority, period, time) {
+        case Ok => return .Ok
+        case Error(error) => return .Error(cpu_budget_failure(error))
+    }
+}
+
+sys_cpu_budget_info :: fn(thread: ptr[mut Thread], budget: slop_os.CpuBudget, info: slop_os.UserBuffer) -> Result[void, slop_os.HandleError] {
+    kernel :: per_cpu().kernel
+    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](budget), slop_os.ObjectKind.CpuBudget, cast[slop_os.Rights](0))?
+    if info.count < cast[u64](slop_os.CPU_BUDGET_INFO_WORDS) {
+        return .Error(.BadBuffer)
+    }
+    words : u64[slop_os.CPU_BUDGET_INFO_WORDS]
+    cpu_budget_words(kernel, cast[ptr[CpuBudget]](object), words)
+    if !copy_to_user(kernel, thread.space, info.address, cast[u64](&words[0]), cast[u64](size_of(u64[slop_os.CPU_BUDGET_INFO_WORDS]))) {
+        return .Error(.BadBuffer)
+    }
+    return .Ok
+}
+
+// The process, which must be in the caller's subtree, put on the budget, with every thread of its.
+sys_process_set_cpu_budget :: fn(thread: ptr[mut Thread], process: slop_os.Process, budget: slop_os.CpuBudget) -> Result[void, slop_os.HandleError] {
+    caller :: process_of(thread)
+    target :: object_of[slop_os.HandleError](caller, cast[slop_os.Handle](process), slop_os.ObjectKind.Process, slop_os.RIGHT_PROCESS_THREADS)?
+    object :: object_of[slop_os.HandleError](caller, cast[slop_os.Handle](budget), slop_os.ObjectKind.CpuBudget, slop_os.RIGHT_CPU_BUDGET_BIND)?
+    if !set_process_budget(per_cpu().kernel, cast[ptr[mut Process]](target), cast[ptr[mut CpuBudget]](object)) {
+        return .Error(.ObjectGone)
+    }
+    return .Ok
+}
+
+sys_io_ports_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget, first: u32, count: u32)
+    -> Result[slop_os.IoPortRange, slop_os.DeviceError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    _ = platform_of(thread, platform)?
+    paying :: paying_budget[slop_os.DeviceError](process, budget)?
+    made := cast[ptr[mut IoPortRange]](0)
+    match create_io_ports(kernel, cast[u64](process), paying, first, count) {
+        case Ok(created) => made = created
+        case Error(error) => return .Error(match error {
+            case .OutOfMemory => slop_os.DeviceError.OutOfMemory
+            case .OwnerGone => slop_os.DeviceError.ObjectGone
+            case .BudgetExceeded => slop_os.DeviceError.BudgetExceeded
+            case .InvalidArgument => slop_os.DeviceError.InvalidArgument
+        })
+    }
+    handle :: owning_handle[slop_os.DeviceError](kernel, process, cast[u64](made), false)?
+    return .Ok(cast[slop_os.IoPortRange](handle))
+}
+
+sys_io_port_read :: fn(thread: ptr[mut Thread], ports: slop_os.IoPortRange, offset: u32, width: u32) -> Result[u32, slop_os.DeviceError] {
+    object :: object_of[slop_os.DeviceError](process_of(thread), cast[slop_os.Handle](ports), slop_os.ObjectKind.IoPortRange, slop_os.RIGHT_IO_PORTS_ACCESS)?
+    port :: port_at(cast[ptr[IoPortRange]](object), offset, width) or_return .Error(.InvalidArgument)
+    value :: arch.port_read(port, width) or_return .Error(.InvalidArgument)
+    return .Ok(value)
+}
+
+sys_io_port_write :: fn(thread: ptr[mut Thread], ports: slop_os.IoPortRange, offset: u32, width: u32, value: u32) -> Result[void, slop_os.DeviceError] {
+    object :: object_of[slop_os.DeviceError](process_of(thread), cast[slop_os.Handle](ports), slop_os.ObjectKind.IoPortRange, slop_os.RIGHT_IO_PORTS_ACCESS)?
+    port :: port_at(cast[ptr[IoPortRange]](object), offset, width) or_return .Error(.InvalidArgument)
+    if !arch.port_write(port, width, value) {
+        return .Error(.InvalidArgument)
+    }
+    return .Ok
+}

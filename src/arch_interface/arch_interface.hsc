@@ -473,6 +473,15 @@ unmask_interrupts : fn() : ---
 // it failed.
 hardware_entropy : fn() -> u64? : ---
 
+// Whether the architecture has I/O ports (x86-64), which port_read and port_write reach (decisions/0093).
+has_io_ports : fn() -> bool : ---
+
+// width bytes (1, 2 or 4) read from the I/O port, or null where there are none.
+port_read : fn(port: u16, width: u32) -> u32? : ---
+
+// width bytes (1, 2 or 4) of value written to the I/O port; false where there are none.
+port_write : fn(port: u16, width: u32, value: u32) -> bool : ---
+
 /*
  * Set up the architecture's early console. Called once, by L0, before anything is written to it, with the
  * bootloader's direct map at direct_map_offset, through which a console in memory-mapped registers (AArch64's

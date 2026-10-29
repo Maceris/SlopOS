@@ -139,3 +139,37 @@ hardware_entropy :: fn() -> u64? {
     }
     return x86_64.rdseed()
 }
+
+// I/O ports (decisions/0093), which x86-64 has.
+has_io_ports :: fn() -> bool {
+    return true
+}
+
+port_read :: fn(port: u16, width: u32) -> u32? {
+    if width == 1 {
+        return cast[u32](x86_64.in_u8(port))
+    }
+    if width == 2 {
+        return cast[u32](x86_64.in_u16(port))
+    }
+    if width == 4 {
+        return x86_64.in_u32(port)
+    }
+    return null
+}
+
+port_write :: fn(port: u16, width: u32, value: u32) -> bool {
+    if width == 1 {
+        x86_64.out_u8(port, cast[u8](value & 0xff))
+        return true
+    }
+    if width == 2 {
+        x86_64.out_u16(port, cast[u16](value & 0xffff))
+        return true
+    }
+    if width == 4 {
+        x86_64.out_u32(port, value)
+        return true
+    }
+    return false
+}

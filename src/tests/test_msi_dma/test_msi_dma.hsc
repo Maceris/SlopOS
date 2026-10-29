@@ -61,7 +61,7 @@ IRQ_KEY : u64 : 3
 DMA_LIMIT : u64 : 1 << 32
 
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?) -> int {
+    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     block :: slop_os.startup_block()
     space :: block.space
     hardware :: platform or_return 100

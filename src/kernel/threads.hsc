@@ -44,8 +44,12 @@ Thread :: struct #align(16) {
     vector : u64,
     vector_size : u64,
     space : ptr[mut AddressSpace],
-    // Its CpuBudget, or 0 for the background band only.
+    // Its CpuTime (budgets.hsc), or 0 for the background band only.
     budget : u64,
+    // The CpuBudget object that time is, and its neighbors among what runs on it (cpu_budgets.hsc), under kernel.cpu_budgets_lock.
+    budget_object : u64,
+    budget_next : u64,
+    budget_previous : u64,
     state : ThreadState,
     // The CPU it's on, or last ran on; the run-queue level it's on there, and whether it's queued, which
     // that CPU's run-queue lock guards (scheduler.hsc).
@@ -134,6 +138,7 @@ create_thread :: fn(kernel: ptr[mut Kernel], owner: u64, space #escaping : ptr[m
     arch.init_vector_state(cast[ptr[mut arch.VectorState]](thread.vector), config)
     arch.init_user_registers(&thread.registers, start)
     thread.space = space
+    // A CpuTime of its own, as the kernel's tests give, or its process's budget once it's adopted
     thread.budget = budget
     thread.wait_timer = make_timer()
     thread.id = intrinsics.interlocked_increment_u64(&kernel.next_thread_id) + 1
@@ -149,6 +154,9 @@ create_thread :: fn(kernel: ptr[mut Kernel], owner: u64, space #escaping : ptr[m
         return .Error(.OwnerGone)
     }
     link_thread(kernel, thread)
+    if budget == 0 && owner != 0 {
+        join_process_budget(kernel, thread, cast[ptr[Process]](owner))
+    }
     return .Ok(thread)
 }
 
@@ -164,6 +172,7 @@ start_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
  * is told, and doesn't resume it.
  */
 destroy_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
+    leave_thread_budget(kernel, thread)
     cancel_wait(kernel, thread)
     leave_space(thread)
     forget_stop(thread)

@@ -82,6 +82,8 @@ TestGrants :: struct {
     program : slop_os.Memory?,
     // What a copy is given by the test that launched it; never by the root task
     peer : slop_os.Channel?,
+    // The root CPU budget, for the test of CPU budgets (decisions/0093)
+    cpu_budget : slop_os.CpuBudget?,
 }
 
 // A test program's memory budget.
@@ -109,7 +111,7 @@ Root :: struct {
     started_count : usize,
 }
 
-main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line: slop_os.Memory) -> int {
+main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line: slop_os.Memory, cpu_budget: slop_os.CpuBudget) -> int {
     block :: slop_os.startup_block()
     root := Root.{block = block, log = debug_log}
     log_line.write(root.log, "root task: started, with % grants", block.grant_count)
@@ -143,7 +145,7 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     start_itself(&root, "process_manager", manager_grants) or_return 7
 
     match service_kit.word_after(words, "test_program=") {
-        case Some(name) => return run_test(&root, name, platform)
+        case Some(name) => return run_test(&root, name, platform, cpu_budget)
         case None => {}
     }
 
@@ -326,7 +328,7 @@ start_with_loader :: fn(root: ptr[mut Root], name: string, grants: process_build
  * The test program name, launched through the manager with TestGrants, and watched until it ends: 0 if it
  * ended with 0, and its budget, once its grace period has passed, is back to nothing.
  */
-run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform) -> int {
+run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform, cpu_budget: slop_os.CpuBudget) -> int {
     block :: root.block
     module_storage : u8[slop_os.GRANT_LABEL_SIZE]
     module_name := text_buffer.make(module_storage)
@@ -343,8 +345,17 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform) ->
         case Some(connection) => grants.manager = connection
         case None => {}
     }
+    // Only the test of CPU budgets is given the root one
+    if name == "test_cpu_budgets" {
+        budget_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER)
+            | cast[u32](slop_os.RIGHT_CPU_BUDGET_SPLIT) | cast[u32](slop_os.RIGHT_CPU_BUDGET_BIND))
+        match slop_os.handle_duplicate(cast[slop_os.Handle](cpu_budget), budget_rights) {
+            case Ok(copy) => grants.cpu_budget = cast[slop_os.CpuBudget](copy)
+            case Error(error) => {}
+        }
+    }
     // Only the devices tests are given the hardware, and the firmware tables that describe it
-    if name == "test_devices" || name == "test_msi_dma" {
+    if name == "test_devices" || name == "test_msi_dma" || name == "test_io_ports" {
         platform_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
         match slop_os.handle_duplicate(cast[slop_os.Handle](platform), platform_rights) {
             case Ok(copy) => grants.platform = cast[slop_os.Platform](copy)
@@ -365,17 +376,17 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform) ->
         }
     }
     manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
-    // Every test's entry has the same type, test_syscalls.main's (system_config checks it)
+    // Every test's entry has the same type, test_syscalls.main's (system_config checks it); its end watched from before it starts
+    port :: slop_os.port_create(block.budget) or_return 23
     launched := os.Launched.{}
-    match os.launch(manager, root.manager_port, name, cast[slop_os.Memory](module), TEST_BUDGET, test_syscalls.main, grants) {
+    match os.launch(manager, root.manager_port, name, cast[slop_os.Memory](module), TEST_BUDGET, test_syscalls.main, grants,
+        os.LaunchWatch.{port = port, key = 0}) {
         case Ok(made) => launched = made
         case Error(error) => {
             log_line.write(root.log, "root task: % didn't start: %", name, error)
             return 22
         }
     }
-    port :: slop_os.port_create(block.budget) or_return 23
-    slop_os.port_bind(port, cast[slop_os.Handle](launched.process), slop_os.SIGNAL_TERMINATED, 0, .Once) or_return 23
     packets : slop_os.Packet[1]
     _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_return 23
     code :: packets[0].data[1]

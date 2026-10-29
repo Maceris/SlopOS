@@ -24,6 +24,10 @@ Process :: struct #align(16) {
     // Set by process_exit, with its code; a process destroyed without it was killed.
     exited : bool,
     exit_code : u32,
+    // The CpuBudget it and its threads run on, and its neighbors among what runs there (cpu_budgets.hsc)
+    cpu_budget : u64,
+    cpu_budget_next : u64,
+    cpu_budget_previous : u64,
 }
 
 /*
@@ -41,6 +45,8 @@ create_process :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> (made 
             return .Error(error)
         }
     }
+    // On its creator's CPU budget, until process_set_cpu_budget gives it another
+    join_creators_budget(kernel, cast[ptr[mut Process]](object), owner)
     return .Ok(cast[ptr[mut Process]](object))
 }
 
@@ -49,6 +55,7 @@ create_process :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> (made 
  * reaches the whole subtree.
  */
 destroy_process :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
+    leave_process_budget(kernel, process)
     ended :: if process.exited { cast[u64](process.exit_code) } else { slop_os.EXIT_KILLED }
     raise_watchers(kernel, &process.watchers, &process.watch_lock, cast[u32](slop_os.SIGNAL_TERMINATED), ended)
     /*

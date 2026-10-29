@@ -4,8 +4,8 @@ import runtime from "base"
 import concurrency from "std"
 
 /*
- * CPU budgets (roadmap M4, knowledge/design/scheduling.md §2, decisions/0011, 0037): a priority, and
- * how much CPU time per period its threads get at that priority. Once it's spent they run in the
+ * CPU time (roadmap M4, knowledge/design/scheduling.md §2, decisions/0011, 0037): a priority, and
+ * how much CPU time per period its threads get at that priority, which a CPU budget (cpu_budgets.hsc) holds. Once it's spent they run in the
  * background band (Demote, the only kind so far) until it's replenished.
  *
  * Replenishment follows the sporadic-server rule: time used from some moment comes back one period
@@ -14,7 +14,7 @@ import concurrency from "std"
  */
 //SPEC: Sprunt, Sha and Lehoczky, "Aperiodic Task Scheduling for Hard-Real-Time Systems" (1989), the sporadic server;
 //      as seL4 MCS keeps it (Lyons et al., "Scheduling-context capabilities", EuroSys 2018)
-//TODO(claude): Throttle, budgets as objects behind capabilities, and splitting them (M5)
+//TODO(claude): Throttle
 
 // Refills a budget keeps track of; past that, a new one is merged into the last.
 MAX_REFILLS :: 8
@@ -25,7 +25,7 @@ Refill :: struct {
     amount : u64,
 }
 
-CpuBudget :: struct {
+CpuTime :: struct {
     lock : concurrency.SpinLock,
     priority : u8,
     period : u64,
@@ -36,14 +36,16 @@ CpuBudget :: struct {
     refills : Refill[MAX_REFILLS],
     first : usize,
     count : usize,
+    // Every CPU's whole time, like the root CPU budget's (cpu_budgets.hsc): what can't be overspent isn't counted
+    unlimited : bool,
 }
 
 /*
  * A budget of budget_ns every period_ns at priority, full to start with. The counter's frequency is
  * known by then.
  */
-make_budget :: fn(kernel: ptr[Kernel], priority: u8, period_ns: u64, budget_ns: u64) -> CpuBudget {
-    result : CpuBudget
+make_budget :: fn(kernel: ptr[Kernel], priority: u8, period_ns: u64, budget_ns: u64) -> CpuTime {
+    result : CpuTime
     result.priority = priority
     result.period = ticks_of(kernel, period_ns)
     result.budget = ticks_of(kernel, budget_ns)
@@ -57,7 +59,10 @@ ticks_of :: fn(kernel: ptr[Kernel], nanoseconds: u64) -> u64 {
 }
 
 // Whether there's time left at now.
-has_time :: fn(budget: ptr[mut CpuBudget], now: u64) -> bool {
+has_time :: fn(budget: ptr[mut CpuTime], now: u64) -> bool {
+    if budget.unlimited {
+        return true
+    }
     concurrency.lock(&budget.lock)
     defer concurrency.unlock(&budget.lock)
     replenish(budget, now)
@@ -68,7 +73,10 @@ has_time :: fn(budget: ptr[mut CpuBudget], now: u64) -> bool {
  * Charge used ticks, from start on, to the budget: they come back one period after start. Running past
  * what's left, by at most a tick, is accepted (knowledge/design/scheduling.md §2).
  */
-charge :: fn(budget: ptr[mut CpuBudget], start: u64, used: u64, now: u64) {
+charge :: fn(budget: ptr[mut CpuTime], start: u64, used: u64, now: u64) {
+    if budget.unlimited {
+        return void
+    }
     concurrency.lock(&budget.lock)
     defer concurrency.unlock(&budget.lock)
     replenish(budget, now)
@@ -87,7 +95,7 @@ charge :: fn(budget: ptr[mut CpuBudget], start: u64, used: u64, now: u64) {
 }
 
 // Takes the lock as held.
-replenish :: fn(budget: ptr[mut CpuBudget], now: u64) {
+replenish :: fn(budget: ptr[mut CpuTime], now: u64) {
     loop {
         refill :: budget.refills[budget.first % MAX_REFILLS]
         if refill.at > now {
