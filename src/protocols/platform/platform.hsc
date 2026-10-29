@@ -4,13 +4,15 @@ import os from "std"
 import slop_os from "std/os"
 
 /*
- * The platform service's protocol (decisions/0074, 0077): the devices it found, each claimed once, by the supervisor, for
- * a driver system_config names, with everything the driver holds of it, and given again for a driver that's restarted. Connections arrive on its listener as Connects.
+ * The platform service's protocol (decisions/0074, 0077, 0093): the devices it found, each claimed once, by the supervisor,
+ * for a driver system_config names, with everything the driver holds of it, and given again for a driver that's
+ * restarted; and the real-time clock, for the clock service, claimed by one client, which may claim it again, made anew.
+ * Connections arrive on its listener as Connects.
  */
 
 Platform :: struct {}
 
-PROTOCOL :: slop_os.Protocol.{name = "platform", major_version = 2, lending = .Server}
+PROTOCOL :: slop_os.Protocol.{name = "platform", major_version = 3, lending = .Server}
 
 // A DeviceMatch's vendor, device or class that matches any.
 ANY_ID : u16 : 0xffff
@@ -52,6 +54,21 @@ PciDevice :: struct {
     domain : slop_os.DmaDomain,
 }
 
+// Which real-time clock a ClaimedClock is.
+ClockKind :: enum #backed_by(u32) {
+    // x86's MC146818, at I/O ports 0x70 and 0x71: its index register, then its data register
+    Mc146818 = 1,
+    // Arm's PL031, its registers' 4 KiB, from the device tree's arm,pl031
+    Pl031 = 2,
+}
+
+// The real-time clock, and what its driver holds of it: its ports, or its registers, NO_HANDLE for the other.
+RealTimeClock :: struct {
+    kind : ClockKind,
+    ports : slop_os.IoPortRange,
+    registers : slop_os.Memory,
+}
+
 Request :: union {
     // The next device that matches and nothing has claimed, which nothing else will
     Claim(Wanted),
@@ -59,6 +76,8 @@ Request :: union {
     Connect(os.Channel[Platform]),
     // A device this client claimed, at its address, given again, made anew: the last bundle died with its driver
     Reissue(u32),
+    // The real-time clock, unless another client has claimed it; given again, made anew, to the client that has
+    ClaimClock,
 }
 
 Response :: union {
@@ -66,6 +85,7 @@ Response :: union {
     // No device left that matches
     NoDevice,
     Unsupported,
+    ClaimedClock(RealTimeClock),
 }
 
 // A claim sent again would claim another device.
@@ -74,6 +94,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Claim(_) => false
         case Connect(_) => true
         case Reissue(_) => false
+        case ClaimClock => true
     }
 }
 

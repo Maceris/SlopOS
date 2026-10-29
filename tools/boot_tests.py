@@ -45,6 +45,9 @@ AARCH64_IOMMU_LINE = "[info] IOMMU 0: SMMUv3, 128 KiB of registers at 0x00000000
 # What test_io_ports says: x86-64 has ports, AArch64 none
 X86_PORTS_LINE = "[user] test_io_ports: the RTC's status read through its ports, and ports outside them refused"
 AARCH64_PORTS_LINE = "[user] test_io_ports: no ports here, and every range refused"
+# The real-time clock the platform service finds: the MC146818 on x86-64, and the device tree's PL031 on AArch64
+X86_CLOCK_LINE = "[user] platform: the real-time clock (Mc146818) claimed"
+AARCH64_CLOCK_LINE = "[user] platform: the real-time clock (Pl031) claimed"
 X86_TRANSLATING_LINE = "[info] IOMMU 0: translating, 256 interrupts remapped, its faults to CPU 0's interrupt 48"
 AARCH64_TRANSLATING_LINE = "[info] IOMMU 0: translating, 0 interrupts remapped, its faults read at CPU 0's ticks"
 
@@ -95,11 +98,13 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 33 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 35 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
+        "--expect-line=[user] scheduler: 3 budgets and the default split off the root's, 800000 of its 1000000 millionths of a CPU",
+        "--expect-line=[user] root task: started scheduler",
         "--expect-line=[user] process manager: started supervisor", "--expect-line=[user] process manager: started hello",
         "--expect-line=[user] hello: heap working, random numbers working", "--expect-line=[user] root task: the supervisor started hello",
-        "--expect-line=[user] platform: serving", "--expect-line=[user] root task: the supervisor started all 2 of its services",
+        "--expect-line=[user] platform: serving", "--expect-line=[user] root task: the supervisor started all 3 of its services",
         "--expect-line=[info] root task ended with code 0"]),
     # The IOMMU the platform service found in the firmware tables, which the kernel identified
     ("registers the IOMMU from the firmware tables", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
@@ -188,6 +193,11 @@ TESTS = [
         "--expect-line=[user] root task: process_manager was killed",
         "--expect-line=[user] hello: still running after the process manager ended",
         "--expect-line=[user] root task: the supervisor's hello ended with 0", "--expect-line=[info] root task ended with code 0"]),
+    ("keeps the time with the real-time clock, and sets it", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_clock", f"--expect-line={X86_CLOCK_LINE}",
+        "--expect-line=[user] clock: serving",
+        "--expect-line=[user] clock: set to 2030-01-02 03:04:05 UTC, and the real-time clock reads it back",
+        "--expect-line=[user] hello: the wall clock says it's 2030-01-02", "--expect-line=[info] root task ended with code 0"]),
     ("doesn't start the root task with no_root_task", 0, [WITH_PROGRAMS, "--command-line=test_exit no_root_task",
         "--expect-line=[info] boot memory reclaimed"]),
     ("boots and halts (UEFI)", 0, ["--uefi", "--expect-line=[info] boot memory reclaimed"]),
@@ -264,7 +274,8 @@ def aarch64_tests(tests: list) -> list:
     """The tests for AArch64, named so, with AArch64's own baseline check and IOMMU among them."""
     lines = {f"--expect-line={X86_IOMMU_LINE}": f"--expect-line={AARCH64_IOMMU_LINE}",
              f"--expect-line={X86_TRANSLATING_LINE}": f"--expect-line={AARCH64_TRANSLATING_LINE}",
-             f"--expect-line={X86_PORTS_LINE}": f"--expect-line={AARCH64_PORTS_LINE}"}
+             f"--expect-line={X86_PORTS_LINE}": f"--expect-line={AARCH64_PORTS_LINE}",
+             f"--expect-line={X86_CLOCK_LINE}": f"--expect-line={AARCH64_CLOCK_LINE}"}
     adapted = [(f"AArch64: {AARCH64_NAMES.get(name, name)}", expected, [lines.get(argument, argument) for argument in arguments])
                for name, expected, arguments in tests if name not in AARCH64_LEFT_OUT]
     return adapted + [("AArch64: refuses a CPU below ARMv8.2-A with LSE", 2, ["--cpu=cortex-a57"])]

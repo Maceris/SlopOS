@@ -23,11 +23,13 @@ import log_line from "../../log_line"
 import process_builder from "../../process_builder"
 import entropy from "../../protocols/entropy"
 import platform_protocol from "../../protocols/platform"
+import scheduler_protocol from "../../protocols/scheduler"
 import supervision from "../../protocols/supervision"
 import random_stream from "../../random_stream"
 import service_kit from "../../service_kit"
 import system_config from "../../system_config"
 import platform from "../platform"
+import scheduler from "../scheduler"
 import supervisor from "../supervisor"
 import test_kit from "../../test_kit"
 import test_syscalls from "../../tests/test_syscalls"
@@ -57,6 +59,15 @@ SupervisorGrants :: struct {
     container_service_module : slop_os.Memory?,
     volume_server_module : slop_os.Memory?,
     command_line : slop_os.Memory?,
+    scheduler : os.Channel[scheduler_protocol.Scheduler]?,
+    clock_module : slop_os.Memory?,
+}
+
+// What the scheduler service is given (scheduler.main).
+SchedulerGrants :: struct {
+    log : slop_os.DebugLog?,
+    cpu_budget : slop_os.CpuBudget,
+    clients : os.Listener[scheduler_protocol.Scheduler],
 }
 
 // What the platform service is given (platform.main).
@@ -107,13 +118,16 @@ Root :: struct {
     manager_port : slop_os.Port,
     // Its end of the supervisor's reports
     supervision : slop_os.Channel,
+    // Its end of the scheduler service's listener, and the port its answers wake, or NO_HANDLE without one
+    scheduler : slop_os.Channel,
+    scheduler_port : slop_os.Port,
     started : Started[MAX_STARTED],
     started_count : usize,
 }
 
 main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line: slop_os.Memory, cpu_budget: slop_os.CpuBudget) -> int {
     block :: slop_os.startup_block()
-    root := Root.{block = block, log = debug_log}
+    root := Root.{block = block, log = debug_log, scheduler = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     log_line.write(root.log, "root task: started, with % grants", block.grant_count)
     words :: service_kit.text_of(block, command_line) or_return 4
     test_services :: service_kit.has_word(words, "test_services")
@@ -151,6 +165,7 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
 
     module_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
+    start_scheduler(&root, cpu_budget)
     platform_connection :: start_platform(&root, platform, command_line, module_rights)
 
     // The supervisor, through the manager, with a connection of its own
@@ -175,12 +190,15 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         fat_server_module = module_copy(block, "fat_server", module_rights),
         container_service_module = module_copy(block, "container_service", module_rights),
         volume_server_module = module_copy(block, "volume_server", module_rights),
+        scheduler = connect_scheduler(&root),
+        clock_module = module_copy(block, "clock", module_rights),
     }
     match slop_os.handle_duplicate(cast[slop_os.Handle](command_line), module_rights) {
         case Ok(copy) => grants.command_line = cast[slop_os.Memory](copy)
         case Error(error) => {}
     }
-    match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, supervisor.main, grants) {
+    match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, supervisor.main, grants,
+        os.LaunchOptions.{cpu_budget = budget_for(&root, service.name)}) {
         case Ok(launched) => {
             remember(&root, service.name, launched.process)
             log_line.write(root.log, "root task: started %", service.name)
@@ -380,7 +398,7 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform, cp
     port :: slop_os.port_create(block.budget) or_return 23
     launched := os.Launched.{}
     match os.launch(manager, root.manager_port, name, cast[slop_os.Memory](module), TEST_BUDGET, test_syscalls.main, grants,
-        os.LaunchWatch.{port = port, key = 0}) {
+        os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = 0}}) {
         case Ok(made) => launched = made
         case Error(error) => {
             log_line.write(root.log, "root task: % didn't start: %", name, error)
@@ -425,7 +443,8 @@ start_platform :: fn(root: ptr[mut Root], platform_capability: slop_os.Platform,
         case Error(error) => {}
     }
     manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
-    match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, platform.main, grants) {
+    match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, platform.main, grants,
+        os.LaunchOptions.{cpu_budget = budget_for(root, service.name)}) {
         case Ok(launched) => {
             remember(root, service.name, launched.process)
             log_line.write(root.log, "root task: started %", service.name)
@@ -439,6 +458,52 @@ start_platform :: fn(root: ptr[mut Root], platform_capability: slop_os.Platform,
 }
 
 // A copy of the module a service is started from, for whoever starts it, or null.
+/*
+ * The scheduler service, through the manager, with the root CPU budget to split (decisions/0093): every service the
+ * root task starts after it, and every one the supervisor does, runs on a budget it splits. Without it, they run on
+ * the root's, as before.
+ */
+start_scheduler :: fn(root: ptr[mut Root], cpu_budget: slop_os.CpuBudget) {
+    block :: root.block
+    service :: system_config.service("scheduler") or_return void
+    module :: find_module(block, service.module) or_return void
+    pair :: os.channel_for[scheduler_protocol.Scheduler](block.budget, 0) or_return void
+    port :: os.port_for(block.budget, pair.b) or_return void
+    budget_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER)
+        | cast[u32](slop_os.RIGHT_CPU_BUDGET_SPLIT) | cast[u32](slop_os.RIGHT_CPU_BUDGET_BIND))
+    grants :: SchedulerGrants.{
+        log = duplicate_log(root),
+        cpu_budget = cast[slop_os.CpuBudget](slop_os.handle_duplicate(cast[slop_os.Handle](cpu_budget), budget_rights) or_return void),
+        clients = os.Listener[scheduler_protocol.Scheduler].{end = pair.a},
+    }
+    manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
+    match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, scheduler.main, grants) {
+        case Ok(launched) => {
+            remember(root, service.name, launched.process)
+            log_line.write(root.log, "root task: started %", service.name)
+            root.scheduler = pair.b
+            root.scheduler_port = port
+        }
+        case Error(error) => log_line.write(root.log, "root task: % didn't start: %", service.name, error)
+    }
+}
+
+// The CPU budget the scheduler service gives the service named name, or null to run it on the root's.
+budget_for :: fn(root: ptr[mut Root], name: string) -> slop_os.CpuBudget? {
+    if cast[slop_os.Handle](root.scheduler) == slop_os.NO_HANDLE {
+        return null
+    }
+    return scheduler_protocol.budget_for(root.scheduler, root.scheduler_port, name)
+}
+
+// A connection of its own to the scheduler service, or null without one.
+connect_scheduler :: fn(root: ptr[mut Root]) -> os.Channel[scheduler_protocol.Scheduler]? {
+    if cast[slop_os.Handle](root.scheduler) == slop_os.NO_HANDLE {
+        return null
+    }
+    return scheduler_protocol.connect(root.scheduler, root.scheduler_port, root.block.budget)
+}
+
 module_copy :: fn(block: ptr[slop_os.StartupBlock], name: string, rights: slop_os.Rights) -> slop_os.Memory? {
     service :: system_config.service(name) or_return null
     module :: find_module(block, service.module) or_return null

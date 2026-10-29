@@ -11,6 +11,7 @@ import compiler from "base"
 import runtime from "base"
 import text_buffer from "std"
 import os from "std"
+import clock_service from "../services/clock"
 import console from "../services/console"
 import disk_check from "../services/disk_check"
 import entropy from "../services/entropy"
@@ -20,6 +21,7 @@ import volume_server from "../services/volume_server"
 import platform from "../services/platform"
 import partition_server from "../services/partition_server"
 import process_manager from "../services/process_manager"
+import scheduler_service from "../services/scheduler"
 import storage_manager from "../services/storage_manager"
 import supervisor from "../services/supervisor"
 import hello from "../apps/hello"
@@ -51,6 +53,25 @@ Starter :: enum {
     StorageManager,
 }
 
+/*
+ * A CPU budget the scheduler service splits off the root's (decisions/0037, 0093): time nanoseconds every period
+ * nanoseconds at priority, which a service runs at while it has time, and in the background band after.
+ */
+CpuShare :: struct {
+    priority : u32,
+    period_ns : u64,
+    time_ns : u64,
+}
+
+/*
+ * The budget every service without one of its own runs on, at a middling priority: half a CPU, so that what has budgets
+ * of its own is never kept waiting by everything else, which runs on in the background band once this is spent.
+ */
+DEFAULT_CPU :: CpuShare.{priority = 100, period_ns = 10_000_000, time_ns = 5_000_000}
+
+// What talks to people runs first: a tenth of a CPU each, at a high priority
+INTERACTIVE_CPU :: CpuShare.{priority = 200, period_ns = 10_000_000, time_ns = 1_000_000}
+
 Service :: struct {
     // Its name, as the supervisor reports it, and the boot module it's started from
     name : string,
@@ -74,6 +95,8 @@ Service :: struct {
      * everything else is loaded from the volume's modules folder, Limine's modules standing in where there's none.
      */
     boot_set : bool,
+    // Its CPU budget, which the scheduler service splits off the root's; None for the default (DEFAULT_CPU)
+    cpu : CpuShare?,
 }
 
 // Whether a service is a driver, with devices it takes.
@@ -94,12 +117,18 @@ SERVICES :: Service.[
         entry = type_of(entropy.main)},
     Service.{name = "process_manager", boot_set = true, module = "process_manager.elf", starter = .RootTask, by_manager = false, budget = 8 * MIB,
         entry = type_of(process_manager.main)},
+    // Before what the root task starts through the manager, which it puts on their budgets (decisions/0093)
+    Service.{name = "scheduler", boot_set = true, module = "scheduler.elf", starter = .RootTask, by_manager = true, budget = 1 * MIB,
+        entry = type_of(scheduler_service.main)},
     Service.{name = "platform", boot_set = true, module = "platform.elf", starter = .RootTask, by_manager = true, budget = 8 * MIB,
         entry = type_of(platform.main)},
     Service.{name = "supervisor", boot_set = true, module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 96 * MIB,
         entry = type_of(supervisor.main)},
+    // The real-time clock's driver, first, so everything after it is given the clock page it keeps (decisions/0093)
+    Service.{name = "clock", boot_set = true, module = "clock.elf", starter = .Supervisor, by_manager = true, budget = 1 * MIB,
+        entry = type_of(clock_service.main)},
     Service.{name = "console", module = "console.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
-        entry = type_of(console.main)},
+        entry = type_of(console.main), cpu = INTERACTIVE_CPU},
     Service.{name = "hello", module = "hello.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(hello.main)},
     // Every disk's, and a partition server for each, which holds only its disk (decisions/0086)
@@ -129,11 +158,11 @@ SERVICES :: Service.[
     // A modern virtio console (virtio's device ID 3)
     Service.{name = "virtio_console", module = "virtio_console.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(virtio_console.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1043,
-        class = platform_protocol.ANY_CLASS}, trusted_with_dma = true},
+        class = platform_protocol.ANY_CLASS}, trusted_with_dma = true, cpu = INTERACTIVE_CPU},
     // A modern virtio input device (virtio's device ID 18), a keyboard, mouse or tablet
     Service.{name = "virtio_input", module = "virtio_input.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(virtio_input.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1052,
-        class = platform_protocol.ANY_CLASS}, trusted_with_dma = true},
+        class = platform_protocol.ANY_CLASS}, trusted_with_dma = true, cpu = INTERACTIVE_CPU},
     // QEMU's edu device, for the test that a driver that DMAs outside its domain is stopped: not trusted
     Service.{name = "edu_dma", module = "edu_dma.elf", starter = .Supervisor, by_manager = true, budget = 1 * MIB,
         entry = type_of(edu_dma.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1234, device = 0x11e8,

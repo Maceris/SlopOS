@@ -10,6 +10,8 @@
  * host's windows, or behind a bridge, in that bridge's, never in a window of a bridge it isn't behind. I/O BARs aren't
  * placed. With test_reassign on the kernel's command line, every virtio device's BARs and every bridge's bus numbers
  * are taken as unset, so assigning them is tested on emulators whose firmware assigns everything.
+ *
+ * It finds the real-time clock too (clock.hsc), which one client, the supervisor for the clock service, claims.
  */
 package platform
 
@@ -69,6 +71,10 @@ Platform :: struct {
     reassign : bool,
     placed : u32,
     unplaced : u32,
+    // The real-time clock, if there is one, and the client that claimed it
+    clock : Clock?,
+    clock_claimed : bool,
+    clock_claimer : usize,
 }
 
 main :: fn(log: slop_os.DebugLog?, platform: slop_os.Platform, firmware: slop_os.Memory, clients: os.Listener[protocol.Platform],
@@ -84,6 +90,7 @@ main :: fn(log: slop_os.DebugLog?, platform: slop_os.Platform, firmware: slop_os
     tables_size :: slop_os.memory_size(firmware) or_return 2
     tables :: runtime.reserve_addresses(cast[usize](tables_size)) or_return 2
     slop_os.memory_map(firmware, space, tables, 0, tables_size, read) or_return 2
+    state.clock = find_clock(tables, tables_size)
     match pci.find_host(tables, tables_size) {
         case Some(found) => state.host = found
         case None => {
@@ -473,6 +480,12 @@ serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
                 out := os.Outgoing.{}
                 response :: os.begin[protocol.Response](&out)
                 response^ = reissue(to, platform, state, index, address)
+                _ = protocol.send_response(end, port, &out)
+            }
+            case ClaimClock => {
+                out := os.Outgoing.{}
+                response :: os.begin[protocol.Response](&out)
+                response^ = claim_clock(to, platform, state, index)
                 _ = protocol.send_response(end, port, &out)
             }
         }

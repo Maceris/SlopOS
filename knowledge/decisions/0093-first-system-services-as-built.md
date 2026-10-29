@@ -72,12 +72,66 @@ grows with each part.
   and is refused ports outside the range and a width of 3; on AArch64, every range is refused. `boot_tests.py` runs
   only some tests with `SLOPOS_BOOT_TESTS`.
 
+### 9a2: The scheduler and clock services
+Chosen with the project's owner: budgets come from `system_config` and are bound at launch, by whoever starts a service
+asking the scheduler service for it by name; the clock service is the real-time clock's driver, which the platform
+service finds and the supervisor starts like a driver; programs read the time from a startup grant; the supervisor
+holds the connection that sets it, for now.
+- **The scheduler service** (`src/services/scheduler`, the `scheduler` protocol): the root task starts it through the
+  manager right after the process manager, with a handle to the root budget that can split and bind. It splits a budget
+  off for each service whose `system_config` entry has a `CpuShare` (`cpu`: the console and the virtio console and
+  keyboard drivers, `INTERACTIVE_CPU`, a tenth of a CPU each at priority 200) and one more, the default
+  (`DEFAULT_CPU`, half a CPU at priority 100), for every other service. `BudgetFor(name)` gives a handle that can only
+  bind, to the service's budget or the default. The entropy service and the process manager, which the root task
+  starts before it, stay on the root budget with the root task; so do the tests `test_program=` runs.
+- **Bound at launch**: `os.launch` takes `LaunchOptions` (Hemera's `std/os`), which replaced its `watch` parameter: a
+  `LaunchWatch`, a CPU budget, which it moves the process to with `process_set_cpu_budget` before the manager loads it,
+  and the clock page. The root task launches the platform service and the supervisor so, and gives the supervisor a
+  connection of its own to the scheduler service (grant `scheduler`), which it asks for everything it starts. What the
+  storage manager starts runs on the storage manager's budget.
+- **The supervisor watches what it starts from its launch**: it bound each program's end only once the launch
+  returned, as the root task had (9a1), and binding a port to a process that has already ended never fires; on budgets
+  the timing changed enough that a fast `edu_dma` ended first now and then, and the supervisor waited for it for good.
+  Each launch now watches its end under the key of the entry it's to have (the next one, or a restart's), and a launch
+  that fails gives the key up.
+- **The clock page** (Hemera's `runtime.SlopOsClockPage`): a page holding a UTC time, in nanoseconds since 1970 without
+  leap seconds, at a monotonic reading, under a sequence its writer makes odd while it writes and even after, 0 until
+  the time is known. Rather than a connection to the clock service, which `base` can't speak protocols over, every
+  program the supervisor starts after the clock service is given the page read-only as its grant `clock`, whatever its
+  entry takes; `base`'s SlopOS runtime maps it the first time the wall clock is read, and gives the page's time plus the
+  monotonic clock since its reading, read again if it was being written, `NotSynchronized` while the sequence is 0, and
+  `Unavailable` without the grant. The supervisor makes the page; only the clock service can write it.
+- **The real-time clock** (the platform protocol's `ClaimClock`, major version 3): on x86-64, the MC146818 at ports 0x70
+  and 0x71, as an `IoPortRange`, unless the FADT's `IAPC_BOOT_ARCH` says there's no CMOS RTC; on AArch64, the device
+  tree's `arm,pl031`, as device memory, disabled or not, since UEFI marks it disabled for its runtime services, which
+  SlopOS doesn't call. One client claims it, and may claim it again, made anew, for a restart.
+- **The clock service** (`src/services/clock`, the `clock_setting` protocol): it reads the clock when it starts, to the
+  second, and writes that time on the page at the monotonic reading; `Set(utc)` writes the clock and then the page, and
+  is refused for a year outside 2000 to 2099. An MC146818 is read outside its update, until two reads agree, in BCD or
+  binary and 12 or 24 hours as its status register B says, and written with `SET` held; its century is register 0x32's
+  if that holds 19 to 21, and 20 otherwise, as grants can't carry the FADT's century index. A PL031 is its 32-bit
+  seconds (`RTCDR`, `RTCLR`), started if it wasn't.
+- **The supervisor and the clock**: it starts the clock service first, before the boot set's drivers, so everything
+  after it gets the page; and starts it again, as a driver, with the clock claimed again, if it ends other than with 0.
+  It keeps the other end of the clock service's listener; `test_clock` on the command line sets the time to
+  2030-01-02T03:04:05Z before anything else starts.
+- **Tests**: "starts the first services" expects the scheduler's line, with its budgets, and the root task's 34
+  grants; "keeps the time with the real-time clock, and sets it", on both architectures, expects the clock claimed, the
+  time set and read back, and hello saying the wall clock's date is 2030-01-02, through `base`'s runtime and the page.
+  A restart of the clock service isn't tested yet (9a4).
+- **Hemera**: a constant struct or array holding an optional of a struct, like `system_config`'s `cpu`, failed to lower,
+  each `Some` being built in its own shape; those constants now take their parts' shapes (`MakesOptionalConstants`).
+
 ## Alternatives considered
 - **A CPU budget set per process**, by its handle: less kernel work, but nothing to split or hand on, and a budget
   couldn't cover several processes.
 - **TSS I/O permission bitmaps**: `in` and `out` straight from user mode, but switched with every process that has one,
   and x86-only state in the arch interface.
 - **The kernel reading the RTC once at boot**: no ports in user space, but the RTC never read again or set.
+- **Reading the time over a connection to the clock service**: one protocol for reading and setting, but `base` would
+  have to speak SlopOS's protocols, and every read would be a round trip.
+- **A CPU budget as an entry parameter**: explicit, but every service's entry would change, and the launcher would
+  still have to ask the scheduler for it.
 - **Records in memory only until M10**: less now, but nothing kept across a restart of the service.
 - **An events channel as an entry parameter**: explicit, but every program that logs would have to say so.
 - **Restarting only services marked stateless**: safer at first, but every other service ending would stay fatal.

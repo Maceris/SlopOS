@@ -73,13 +73,21 @@ find_compatible :: fn(tree: ptr[Tree], compatible: string) -> Node? {
     return find_node(tree, compatible, 0)
 }
 
+/*
+ * The first node that lists compatible, disabled or not: a device firmware keeps for itself, and marks disabled, like
+ * the real-time clock UEFI's runtime services use, which SlopOS doesn't call.
+ */
+find_compatible_even_disabled :: fn(tree: ptr[Tree], compatible: string) -> Node? {
+    return find_node(tree, compatible, 0, true)
+}
+
 // The node whose phandle is phandle, as another node's property refers to it (like iommu-map's), if it isn't disabled.
 find_phandle :: fn(tree: ptr[Tree], phandle: u32) -> Node? {
     return if phandle == 0 { null } else { find_node(tree, "", phandle) }
 }
 
-// The first node that isn't disabled and lists compatible, unless it's "", or has phandle, unless it's 0.
-find_node :: fn(tree: ptr[Tree], compatible: string, phandle: u32) -> Node? {
+// The first node that isn't disabled, unless even_disabled, and lists compatible, unless it's "", or has phandle, unless it's 0.
+find_node :: fn(tree: ptr[Tree], compatible: string, phandle: u32, even_disabled: bool = false) -> Node? {
     // The cells each depth gives its children: 2 and 1 by default
     address_cells : u32[MAX_DEPTH]
     size_cells : u32[MAX_DEPTH]
@@ -97,7 +105,7 @@ find_node :: fn(tree: ptr[Tree], compatible: string, phandle: u32) -> Node? {
         offset += 4
         if token == TOKEN_BEGIN_NODE || token == TOKEN_END_NODE || token == TOKEN_END {
             // The node before is done: it's the one, if it matched and isn't disabled
-            if matched && !disabled {
+            if matched && (!disabled || even_disabled) {
                 return current
             }
             matched = false

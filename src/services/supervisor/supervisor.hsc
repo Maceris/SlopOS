@@ -1,7 +1,8 @@
 /*
  * The supervisor (decisions/0017, 0058, 0067, 0068, 0074, 0075, 0076, 0077): it starts the services system_config gives
  * it through the process manager, with std/os's launch, each in a process of its own that it owns and pays for from
- * its budget, and tells the root task as each starts and ends, and once all have.
+ * its budget, and tells the root task as each starts and ends, and once all have. Each runs on the CPU budget the
+ * scheduler service gives it (decisions/0093), and is watched from its launch.
  *
  * A driver's service names the devices it takes: the supervisor claims each from the platform service and starts a
  * driver for it, with what it holds of it (platform.PciDevice). Drivers start first, since services need them. A
@@ -17,6 +18,13 @@
  * on the kernel's command line, the supervisor says it has started all only once edu_dma has ended for good. With test_restart on the kernel's command line, the supervisor kills the first serial
  * line's driver once everything has started and the console has dialed it and shown its banner, and says it has
  * started all only once that driver is back, and dialed again.
+ *
+ * The clock service (decisions/0093), the real-time clock's driver, is started first, with the real-time clock the
+ * platform service gives and the clock page, which the supervisor makes: the clock service writes the time on it, and
+ * everything started after it is given it read-only, as its grant "clock", which base's runtime reads the wall clock
+ * from. The supervisor holds the connection that sets the time; with test_clock on the kernel's command line, it sets
+ * it to TEST_CLOCK_TIME before it starts anything else. Like a driver, the clock service is started again if it ends
+ * other than by exiting with 0, with the real-time clock given again.
  *
  * The storage manager (decisions/0086, 0087), started when there's a disk, is given connectors to every disk's driver,
  * the process manager, and the partition server's and FAT server's modules; the disk check a connector to it, and the
@@ -38,12 +46,15 @@ import console_log from "../../protocols/console_log"
 import entropy from "../../protocols/entropy"
 import input from "../../protocols/input"
 import platform from "../../protocols/platform"
+import scheduler_protocol from "../../protocols/scheduler"
 import serial from "../../protocols/serial"
 import storage from "../../protocols/storage"
 import supervision from "../../protocols/supervision"
+import clock_setting from "../../protocols/clock_setting"
 import service_kit from "../../service_kit"
 import system_config from "../../system_config"
 import hello from "../../apps/hello"
+import clock_service from "../clock"
 import console from "../console"
 import disk_check from "../disk_check"
 import storage_manager from "../storage_manager"
@@ -65,6 +76,9 @@ RESTARTS : u32 : 3
 RESTART_WINDOW : u64 : 60_000_000_000
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 NOWHERE : usize : 0xffffffffffffffff
+PAGE : u64 : 4096
+// What test_clock sets the time to: 2030-01-02T03:04:05Z, in nanoseconds since 1970
+TEST_CLOCK_TIME : i64 : 1_893_553_445_000_000_000
 // How long test_restart waits once the console has dialed its serial line, for its banner to be shown, before it kills
 // the line's driver, and once it's dialed it again, before it says everything has started
 TEST_RESTART_PAUSE : u64 : 500_000_000
@@ -77,6 +91,15 @@ Speaks :: enum {
     Input,
     ConsoleLog,
     Storage,
+}
+
+// What the clock service is given (clock.main): the real-time clock, its ports or its registers, and the clock page to write.
+ClockGrants :: struct {
+    log : slop_os.DebugLog?,
+    rtc_ports : slop_os.IoPortRange?,
+    rtc_registers : slop_os.Memory?,
+    clock_page : slop_os.Memory,
+    clients : os.Listener[clock_setting.ClockSetting],
 }
 
 // What hello is given (hello.main).
@@ -166,6 +189,7 @@ ServingGrants :: struct[P] {
 
 // The modules of what the supervisor starts.
 Modules :: struct {
+    clock : slop_os.Memory?,
     hello : slop_os.Memory?,
     console : slop_os.Memory?,
     disk_check : slop_os.Memory?,
@@ -197,6 +221,8 @@ Started :: struct {
     restarts_since : u64,
     // A driver's: a handle to its Device, which the port watches for its DMA faults; NO_HANDLE without
     watch : slop_os.Handle,
+    // The clock service, a driver whose device is the real-time clock
+    clock : bool,
     // Ended, and not to be started again
     done : bool,
 }
@@ -218,6 +244,15 @@ Supervisor :: struct {
     platform_end : slop_os.Channel,
     platform_port : slop_os.Port,
     entropy_service : os.Channel[entropy.Entropy]?,
+    // Its connection to the scheduler service, and the port its answers wake, or NONE without one
+    scheduler_end : slop_os.Channel,
+    scheduler_port : slop_os.Port,
+    // The clock page, NO_HANDLE without; and its end of the clock service's listener, which sets the time, NONE without
+    clock_page : slop_os.Memory,
+    clock_setting : slop_os.Channel,
+    clock_setting_port : slop_os.Port,
+    // The entry in started a restart is launching into, whose key its process is watched under; NOWHERE otherwise
+    relaunching : usize,
     modules : Modules,
     // What it started, which its port watches under their indexes
     started : Started[MAX_STARTED],
@@ -250,11 +285,12 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     virtio_console_module: slop_os.Memory?, virtio_input_module: slop_os.Memory?, virtio_rng_module: slop_os.Memory?,
     edu_dma_module: slop_os.Memory?, storage_manager_module: slop_os.Memory?, partition_server_module: slop_os.Memory?,
     fat_server_module: slop_os.Memory?, container_service_module: slop_os.Memory?, volume_server_module: slop_os.Memory?,
-    command_line: slop_os.Memory?) -> int {
+    command_line: slop_os.Memory?, scheduler: os.Channel[scheduler_protocol.Scheduler]?, clock_module: slop_os.Memory?) -> int {
     startup :: slop_os.startup_block()
     supervisor := Supervisor.{block = startup, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
-        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, console = NOWHERE, system = NONE}
-    supervisor.modules = Modules.{hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
+        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, console = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
+        relaunching = NOWHERE}
+    supervisor.modules = Modules.{clock = clock_module, hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
         container_service = container_service_module, volume_server = volume_server_module}
@@ -262,13 +298,25 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     supervisor.manager_port = os.port_for(startup.budget, manager.end) or_return 1
     supervisor.root_port = os.port_for(startup.budget, root.end) or_return 2
     supervisor.port = slop_os.port_create(startup.budget) or_return 3
+    match scheduler {
+        case Some(connection) => match os.port_for(startup.budget, connection.end) {
+            case Some(port) => {
+                supervisor.scheduler_end = connection.end
+                supervisor.scheduler_port = port
+            }
+            case None => {}
+        }
+        case None => {}
+    }
     test_restart := false
     test_dma_fault := false
+    test_clock := false
     match command_line {
         case Some(memory) => {
             text :: service_kit.text_of(startup, memory) or_else ""
             test_restart = service_kit.has_word(text, "test_restart")
             test_dma_fault = service_kit.has_word(text, "test_dma_fault")
+            test_clock = service_kit.has_word(text, "test_clock")
         }
         case None => {}
     }
@@ -280,6 +328,14 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             supervisor.platform_port = os.port_for(startup.budget, platform_end.end) or_return 4
         }
         case None => {}
+    }
+    // The clock first, so everything after it reads the time from its page
+    supervisor.clock_page = slop_os.memory_create(startup.budget, PAGE) or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
+    start_clock(&supervisor, NOWHERE)
+    if test_clock && supervisor.clock_setting != NONE {
+        if !clock_setting.set(supervisor.clock_setting, supervisor.clock_setting_port, TEST_CLOCK_TIME) {
+            log_line.write(supervisor.log, "supervisor: test_clock: the clock service didn't set the time")
+        }
     }
     start_drivers(&supervisor, true)
     storage_slot :: start_storage(&supervisor)
@@ -398,8 +454,21 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
         return void
     }
     entry.restarts += 1
+    // The last process's binding still has the key, though it fired: the next is watched under it from its launch
+    _ = slop_os.port_unbind(supervisor.port, cast[u64](index))
+    if entry.clock {
+        supervisor.relaunching = index
+        start_clock(supervisor, index)
+        supervisor.relaunching = NOWHERE
+        if entry.running {
+            log_line.write(supervisor.log, "supervisor: restarted %", entry.name)
+        }
+        return void
+    }
     device :: request_device(supervisor, .Reissue(entry.address)) or_return void
+    supervisor.relaunching = index
     start_driver(supervisor, entry.service, device, index)
+    supervisor.relaunching = NOWHERE
     if entry.running {
         log_line.write(supervisor.log, "supervisor: restarted %", entry.name)
     }
@@ -507,9 +576,6 @@ start_driver :: fn(supervisor: ptr[mut Supervisor], index: usize, device: platfo
         _ = slop_os.port_bind(supervisor.port, watch, slop_os.SIGNAL_DMA_FAULT, FAULT_KEY + cast[u64](slot), .Persistent)
     }
     if again != NOWHERE {
-        // The last process's binding still has the key, though it fired
-        _ = slop_os.port_unbind(supervisor.port, cast[u64](slot))
-        _ = slop_os.port_bind(supervisor.port, cast[slop_os.Handle](launched), slop_os.SIGNAL_TERMINATED, cast[u64](slot), .Once)
         tell_root(supervisor, .Started(report_of(name, 0)))
     }
     // The first of each kind is what the services are given
@@ -544,7 +610,7 @@ launch_serving :: fn[P](supervisor: ptr[mut Supervisor], service: system_config.
         bar0 = optional(device.bar0), bar1 = optional(device.bar1), bar2 = optional(device.bar2), bar3 = optional(device.bar3),
         bar4 = optional(device.bar4), bar5 = optional(device.bar5), clients = os.Listener[P].{end = end}}
     executable :: module_of(supervisor, service.name)
-    match os.launch(supervisor.manager, supervisor.manager_port, service.name, executable, service.budget, entry, grants) {
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, executable, service.budget, entry, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => return launched.process
         case Error(error) => {
             failed(supervisor, service.name, error)
@@ -562,7 +628,7 @@ launch_device_only :: fn(supervisor: ptr[mut Supervisor], service: system_config
         bar0 = optional(device.bar0), bar1 = optional(device.bar1), bar2 = optional(device.bar2), bar3 = optional(device.bar3),
         bar4 = optional(device.bar4), bar5 = optional(device.bar5)}
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
-        entry, grants) {
+        entry, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => return launched.process
         case Error(error) => {
             failed(supervisor, service.name, error)
@@ -584,7 +650,7 @@ launch_virtio_rng :: fn(supervisor: ptr[mut Supervisor], service: system_config.
         case None => {}
     }
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
-        virtio_rng.main, grants) {
+        virtio_rng.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => return launched.process
         case Error(error) => {
             failed(supervisor, service.name, error)
@@ -597,6 +663,98 @@ launch_virtio_rng :: fn(supervisor: ptr[mut Supervisor], service: system_config.
  * A service's program: one outside the boot set from the system volume, read once and kept, once the storage manager
  * has given it; otherwise, or where it isn't there, Limine's module.
  */
+/*
+ * What launching the service named name does beyond its grants: watch its end, run it on the CPU budget the scheduler
+ * service gives it, and give it the clock page, read-only.
+ */
+options_for :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.LaunchOptions {
+    options := os.LaunchOptions.{}
+    if supervisor.scheduler_end != NONE {
+        options.cpu_budget = scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, name)
+    }
+    // Its end watched from before it starts, under the key of the entry it's to have: one that ends at once is seen to
+    options.watch = os.LaunchWatch.{port = supervisor.port, key = cast[u64](next_slot(supervisor))}
+    if cast[slop_os.Handle](supervisor.clock_page) != slop_os.NO_HANDLE {
+        rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+        match slop_os.handle_duplicate(cast[slop_os.Handle](supervisor.clock_page), rights) {
+            case Ok(copy) => options.clock = cast[slop_os.Memory](copy)
+            case Error(error) => {}
+        }
+    }
+    return options
+}
+
+// The entry in started the program launched next is to have: the one a restart is launching into, or the next.
+next_slot :: fn(supervisor: ptr[Supervisor]) -> usize {
+    return if supervisor.relaunching != NOWHERE { supervisor.relaunching } else { supervisor.started_count }
+}
+
+/*
+ * The clock service, with the real-time clock the platform service gives, the clock page to write, and a listener whose
+ * other end sets the time; into the started entry again, a restart, unless again is NOWHERE.
+ */
+start_clock :: fn(supervisor: ptr[mut Supervisor], again: usize) {
+    service :: system_config.service("clock") or_return void
+    if cast[slop_os.Handle](supervisor.clock_page) == slop_os.NO_HANDLE {
+        return void
+    }
+    rtc := platform.RealTimeClock.{}
+    match request_clock(supervisor) {
+        case Some(claimed) => rtc = claimed
+        case None => {
+            log_line.write(supervisor.log, "supervisor: no real-time clock, so no clock service")
+            return void
+        }
+    }
+    pair :: os.channel_for[clock_setting.ClockSetting](supervisor.block.budget, 0) or_return void
+    page_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    page :: slop_os.handle_duplicate(cast[slop_os.Handle](supervisor.clock_page), page_rights) or_return void
+    grants := ClockGrants.{log = duplicate_log(supervisor), clock_page = cast[slop_os.Memory](page),
+        clients = os.Listener[clock_setting.ClockSetting].{end = pair.a}}
+    if cast[slop_os.Handle](rtc.ports) != slop_os.NO_HANDLE {
+        grants.rtc_ports = rtc.ports
+    }
+    if cast[slop_os.Handle](rtc.registers) != slop_os.NO_HANDLE {
+        grants.rtc_registers = rtc.registers
+    }
+    // The clock service doesn't read the time from the page it writes
+    options := options_for(supervisor, service.name)
+    match options.clock {
+        case Some(copy) => _ = slop_os.handle_close(cast[slop_os.Handle](copy))
+        case None => {}
+    }
+    options.clock = null
+    launched := cast[slop_os.Process](slop_os.NO_HANDLE)
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
+        clock_service.main, grants, options) {
+        case Ok(made) => launched = made.process
+        case Error(error) => {
+            failed(supervisor, service.name, error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+            return void
+        }
+    }
+    // Its setting end, the last one gone with the last process
+    if supervisor.clock_setting != NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.clock_setting))
+    }
+    supervisor.clock_setting = pair.b
+    supervisor.clock_setting_port = os.port_for(supervisor.block.budget, pair.b) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+    slot :: if again != NOWHERE { again } else { started(supervisor, "clock", launched) }
+    if slot >= supervisor.started.count {
+        return void
+    }
+    entry :: &supervisor.started[slot]
+    entry.process = launched
+    entry.running = true
+    entry.driver = true
+    entry.clock = true
+    entry.done = false
+    if again != NOWHERE {
+        tell_root(supervisor, .Started(report_of("clock", 0)))
+    }
+}
+
 module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory {
     service :: system_config.service(name)
     match service {
@@ -616,7 +774,7 @@ module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory
         else if name == "virtio_blk" { modules.virtio_blk } else if name == "virtio_input" { modules.virtio_input }
         else if name == "edu_dma" { modules.edu_dma } else if name == "storage_manager" { modules.storage_manager }
         else if name == "console" { modules.console } else if name == "disk_check" { modules.disk_check }
-        else if name == "hello" { modules.hello } else { cast[slop_os.Memory?](null) }
+        else if name == "hello" { modules.hello } else if name == "clock" { modules.clock } else { cast[slop_os.Memory?](null) }
     return found or_else none
 }
 
@@ -758,7 +916,7 @@ start_console :: fn(supervisor: ptr[mut Supervisor]) {
     grants := ConsoleGrants.{log = duplicate_log(supervisor), serial_line = connector_to(supervisor, supervisor.first_serial),
         keyboard = connector_to(supervisor, supervisor.first_keyboard), clients = os.Listener[console_log.ConsoleLog].{end = pair.a}}
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "console"), service.budget,
-        console.main, grants) {
+        console.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => {
             slot :: started(supervisor, "console", launched.process)
             if slot < supervisor.started.count {
@@ -775,7 +933,7 @@ start_hello :: fn(supervisor: ptr[mut Supervisor]) {
     service :: system_config.service("hello") or_return void
     grants := HelloGrants.{log = duplicate_log(supervisor), console = connector_to(supervisor, supervisor.console)}
     grants.manager = process_manager.connect(supervisor.manager.end, supervisor.manager_port, supervisor.block.budget)
-    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "hello"), service.budget, hello.main, grants) {
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "hello"), service.budget, hello.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => _ = started(supervisor, "hello", launched.process)
         case Error(error) => failed(supervisor, service.name, error)
     }
@@ -814,7 +972,7 @@ start_storage :: fn(supervisor: ptr[mut Supervisor]) -> usize {
         fat_server_module = fat_server, container_service_module = container_service, volume_server_module = volume_server, disk0 = disks[0],
         disk1 = disks[1], disk2 = disks[2], disk3 = disks[3], clients = os.Listener[storage.Storage].{end = pair.a}}
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "storage_manager"), service.budget,
-        storage_manager.main, grants) {
+        storage_manager.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => {
             slot :: started(supervisor, "storage_manager", launched.process)
             if slot < supervisor.started.count {
@@ -890,7 +1048,7 @@ start_disk_check :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
         working_directory = files_of_type(supervisor, storage_slot, storage_manager.ESP_TYPE),
         system = files_of_type(supervisor, storage_slot, storage_manager.CONTAINER_TYPE)}
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "disk_check"), service.budget,
-        disk_check.main, grants) {
+        disk_check.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => _ = started(supervisor, "disk_check", launched.process)
         case Error(error) => failed(supervisor, service.name, error)
     }
@@ -997,6 +1155,31 @@ dial :: fn(supervisor: ptr[mut Supervisor], target: usize) -> slop_os.Channel? {
 }
 
 // A device from the platform service, claimed or reissued, or null.
+// The real-time clock, claimed from the platform service, made anew each time; or null if there's none.
+request_clock :: fn(supervisor: ptr[mut Supervisor]) -> platform.RealTimeClock? {
+    if cast[slop_os.Handle](supervisor.platform_end) == slop_os.NO_HANDLE {
+        return null
+    }
+    out := os.Outgoing.{}
+    made :: os.begin[platform.Request](&out)
+    made^ = .ClaimClock
+    if platform.send_request(supervisor.platform_end, supervisor.platform_port, &out) != null {
+        return null
+    }
+    into := os.Incoming.{}
+    loop {
+        match platform.receive_response(supervisor.platform_end, supervisor.platform_port, &into, true) {
+            case Received => break
+            case Failed(error) => return null
+            case _ => continue
+        }
+    }
+    return match os.message_of[platform.Response](&into)^ {
+        case ClaimedClock(clock) => clock
+        case _ => null
+    }
+}
+
 request_device :: fn(supervisor: ptr[mut Supervisor], request: platform.Request) -> platform.PciDevice? {
     if cast[slop_os.Handle](supervisor.platform_end) == slop_os.NO_HANDLE {
         return null
@@ -1046,11 +1229,12 @@ started :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process:
     }
     supervisor.started[index] = Started.{name = name, process = process, running = true, listener = NONE}
     supervisor.started_count = index + 1
-    _ = slop_os.port_bind(supervisor.port, cast[slop_os.Handle](process), slop_os.SIGNAL_TERMINATED, cast[u64](index), .Once)
     return index
 }
 
 failed :: fn(supervisor: ptr[mut Supervisor], name: string, error: os.LaunchError) {
+    // Its end was watched under the key of the entry it didn't get, which the next launch is watched under
+    _ = slop_os.port_unbind(supervisor.port, cast[u64](next_slot(supervisor)))
     log_line.write(supervisor.log, "supervisor: % didn't start: %", name, error)
     tell_root(supervisor, .Failed(report_of(name, cast[u64](error) + 1)))
 }
