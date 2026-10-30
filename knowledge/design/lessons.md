@@ -1,11 +1,13 @@
 # Lessons From Other Systems, by Milestone
 
-Status: **proposed** 2026-10-29. A pass over the roadmap from B onward, looking for what other operating systems,
+Status: **decided in part** 2026-10-30. Proposed 2026-10-29; A pass over the roadmap from B onward, looking for what other operating systems,
 modern and historical, get wrong (gripes, design flaws, performance and UX problems, bug classes, security holes)
 that the plans so far don't answer yet. Each milestone's design note already has a *What Goes Wrong Elsewhere*
 table; this note doesn't repeat those. It adds what they miss, says where each answer lands (a milestone and stage,
-or a new track), and lists the decisions it would revisit. Nothing here is decided: items move into a milestone's
-plan when it's planned, as `0058` and `0070` did, and the choices are in `../open-questions.md`, *Lessons*.
+or a new track), and lists the decisions it would revisit. Decided 2026-10-29 and 2026-10-30: R (§9.5, `../decisions/0096`);
+Perf (§9.1), memory pressure (§9.2), the boot items of §1, the trusted path's budgets and `Ping` (§3.1), names (§3.5),
+and the CPU log of §10.2 (`../decisions/0097`). The rest is proposed in each milestone's design note and decided when
+that milestone is planned; §10.1 and §10.3 stay in `../open-questions.md`, *Lessons*.
 
 Each table has the same columns as the design notes': the problem, where it happens, and SlopOS's answer, with the
 stage it lands in.

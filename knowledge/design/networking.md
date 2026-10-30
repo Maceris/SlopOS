@@ -94,6 +94,15 @@ the network), `0014` (servers authorize by connection), `0037` (lending), `0043`
   failure replays; scripted packet tests in the style of packetdrill for TCP's state machine.
 - QEMU user-mode networking for boot tests, a tap device for talking to the development machine.
 
+## Also Proposed (`lessons.md` §7, 2026-10-30)
+
+Decided when M13 is planned:
+- No loopback for local services, which are reached through capabilities; loopback only in a policy that names it.
+- A destination by name never reaches private, loopback or link-local addresses unless the policy names that range
+  (DNS rebinding, §7.1).
+- A floor for the wall clock from the generation's build time and the last saved time, so certificates can be checked
+  before NTS has run (§7.2).
+
 ## 9. Open Questions
 
 - Whether `Narrow` policies are enough, or a session wants a per-program prompt the first time a program connects

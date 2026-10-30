@@ -85,6 +85,17 @@ As `0043` decided, made concrete:
 - **Sharing between users** is a shared volume, a link in each member's namespace and a wrapped key for each
   (`0042`), set up through the storage manager by the volume's owner.
 
+## Also Proposed (`lessons.md` §3, 2026-10-30)
+
+Decided when M10 is planned (the trusted path's reserved budgets and the lifecycle channel's `Ping` in 10a are decided,
+`../decisions/0097`):
+- A recovery key at setup: each volume key wrapped once more under a random code shown once (§3.2).
+- New keyboards read only by the trusted path until accepted by typing a code shown on screen (§3.3).
+- The keyboard layout shown on the status line during login, and switchable there.
+- `Locale` as a context value from the user's configuration, read only by human-facing formatters (§3.4).
+- Password rules by length, no rotation, a list of common passwords refused (NIST SP 800-63B).
+- Bidirectional and invisible characters shown as visible substitutes in all terminal text (§3.5).
+
 ## 6. Open Questions
 
 - The secure attention key's combination on each kind of console.

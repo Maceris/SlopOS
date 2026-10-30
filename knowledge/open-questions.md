@@ -96,9 +96,7 @@ Open, from `design/console-and-sessions.md` (2026-10-24):
 - **One powerbox per session** (answers `design/services.md`'s open item). Proposed: per session.
 - **Elevation without `sudo`**: re-authentication on the trusted path granting one capability to one program
   (`console-and-sessions.md` §5).
-- **The secure attention key**'s combination, and the input service as the place it's recognized.
-- **A lifecycle channel for every launched program** (`Stop`, as a `std` protocol), since the kernel has no request
-  to end (`shell.md` §6).
+- **The secure attention key**'s combination, and the input service as the place it's recognized. The lifecycle channel, also open here, moved to 10a with `Ping` (`decisions/0097`).
 
 ## Shell
 
@@ -136,17 +134,14 @@ Open, from `design/display.md` (2026-10-24):
 
 ## Lessons
 
-Open, from `design/lessons.md` (2026-10-29):
+From `design/lessons.md` (2026-10-29). Answered: R (`decisions/0096`); Perf, memory pressure, the boot items, the
+trusted path's budgets and the lifecycle channel in 10a, names without invisible characters, and a log of the CPU's
+transient-execution issues (`0097`). The smaller items are proposed in each milestone's design note. Still open:
 
-- **New tracks**: Perf (benchmarks with baselines from 9c, tickless idle, large pages, storage bandwidth by budget), memory
-  pressure (a budget signal, evictable pager pages, no swap), and R (fault injection, wrap starts, lock order checking,
-  chaos tests, starting now). Proposed: all three, R first; R planned 2026-10-29 (`decisions/0096`).
-- **Dependency kinds in `system_config`** (required with a deadline, optional, late) and degraded boots, with 9d.
-- **A recovery generation**, pinned, booted after the counter runs out everywhere else (B, 9d).
-- **The trusted path on reserved budgets**, and `Ping` on the lifecycle channel, moved to 10a.
-- **Refusing invisible and bidirectional characters in native names**, keeping byte comparison (`0046`).
-- **Revisiting `0013`**: sealing the system volume's key to a measured boot set as an option in B; logging which
-  transient-execution issues apply to the CPU, in H.
+- **Sealing the system volume's key to a measured boot set** (a TPM measuring the bootloader and the generation), an
+  option off by default against an evil maid, not an administrator (`lessons.md` §10.1, `0013`). Decided when B is
+  planned.
+- **Forgetting a volume's key on suspend** (`lessons.md` §10.3, `0042`), once suspend exists after P.
 
 ## Hemera Threads
 

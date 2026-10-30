@@ -82,7 +82,7 @@ copy ~/notes/plan.md usb:/backup/ or { warn "no stick" }   # handling an error
   (`console-and-sessions.md` §2); the shell sends the foreground job `Stop` over its lifecycle channel and kills it
   (the `kill` right, `0017`) if it hasn't ended after a grace period. The kernel has no such request (`0056`'s
   termination signals report an end, they don't ask for one), so the lifecycle channel is a `std` protocol every
-  launched program is given (proposed for 11a), which `std` turns into a cancellation the program can wait on.
+  launched program is given (in 10a, with `Ping`, `0097`), which `std` turns into a cancellation the program can wait on.
   Background jobs get their own terminal or none.
 
 ## 7. Scripts Are Programs
@@ -100,6 +100,14 @@ copy ~/notes/plan.md usb:/backup/ or { warn "no stick" }   # handling an error
 - A tree-walking interpreter in Hemera to start: a parser producing tagged unions, values allocated in per-command
   arenas, calls through `std/os`'s `launch` with the startup block built from the parsed arguments.
 - The same manifest code generates GUI forms in M15 (`display.md`).
+
+## Also Proposed (`lessons.md` §4, 2026-10-30)
+
+Decided when M11 is planned:
+- Automatic snapshots per volume, and removal from the shell's tools recoverable through `recover` (§4.1).
+- `Progress` on the lifecycle channel, drawn on the job's line (§4.2).
+- Errors rendered with the parameter they came from, and hints per error variant from the manifest (§4.2).
+- Completion inserting stored bytes, and "did you mean" for paths that match only after normalization (§4).
 
 ## 9. Open Questions
 

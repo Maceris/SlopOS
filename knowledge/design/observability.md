@@ -91,6 +91,15 @@ type's schema hash, writing a value from its `TypeInfo`, naming the format strin
   thread's user program counter and its frame-pointer chain (read with fault handling, bounded in depth), delivered as
   packets to a port. Symbols as in §3.
 
+## Also Proposed (`lessons.md` §6, §9.4, 2026-10-30)
+
+Decided when M12 is planned:
+- The process tree showing what services spent on each process's behalf, from lent budgets and connection charges (§6.1).
+- Lockup detection between CPUs, with an NMI writing the stuck CPU's state into the panic record; a hardware watchdog
+  petted by the supervisor (with P) (§6.2).
+- DWARF from crash reports parsed by a decoder process holding nothing else (§9.4).
+- The boot timeline from the trace ring, which may move earlier than 12d for it (§1.2).
+
 ## 7. Open Questions
 
 - Whether the debugger reads Hemera's types from DWARF alone, or Hemera's own schemas are worth carrying beside it.

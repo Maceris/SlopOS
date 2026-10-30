@@ -87,6 +87,16 @@ Each is asked for through the powerbox and granted by the user on the trusted pa
   underruns, which must be zero; that's the soft real-time goal of `scheduling.md` made a test.
 - **Capture** is a powerbox capability, shown on the trusted path while held.
 
+## Also Proposed (`lessons.md` §8, 2026-10-30)
+
+Decided when M15 and M16 are planned:
+- The lock screen in the trusted layer, so a crashed locker leaves the screen locked.
+- Focus moving only on the user's gesture or with an activation token from the focused client.
+- Notifications as a capability per installation, rate-limited and listed with the session's grants.
+- Surfaces declaring a scale from the first protocol version; the UI library laying out in logical units.
+- A boot test of input-to-photon latency, as the audio test counts underruns.
+- Fonts and images decoded in processes holding nothing else (§9.4).
+
 ## 8. Open Questions
 
 - Whether the identity band is always on, or only on windows that ask for input (a video player full screen).

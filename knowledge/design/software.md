@@ -115,6 +115,18 @@ A content hash names a build, but an app's data has to outlive its updates, so i
 - The compiler's side (building libraries, interface records, typed imports) is the largest Hemera piece of M9 and is
   proposed in `../hemera-proposals/` when it starts.
 
+## Also Proposed (`lessons.md` §2, 2026-10-30)
+
+Decided when 9c to 9e are planned:
+- Data that TCB services load (the substitution policy, the trust store, keymaps, time zones) is part of a generation,
+  never loaded live; update metadata has a staged-rollout field (`lessons.md` §2.1).
+- Bundles from elsewhere checked through The Update Framework's metadata: key thresholds, versions against rollback,
+  expiry against freezing; rolling back to a generation with a replaced hash warns (§2.2).
+- Generations that change only services apply live by restarting them; a new kernel or boot set waits for the next
+  boot, and nothing reboots without the user (§2.3).
+- The config store answers what's overridden field by field, and settings tools render values from their schemas (§2.4).
+- `Secret[T]` in `std`: never formatted, never copied into a log record, zeroed when freed; proposed to Hemera (§2.5).
+
 ## 8. Decided (`../decisions/0092`)
 
 - One bundle store, on the system volume, for every user's apps.

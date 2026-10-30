@@ -89,7 +89,8 @@ is a Merkle tree.
 | Stored link | `(link id, .Link, 0)`, for an object of kind link | The volume it leads into (container and ID) and the number it was issued under there (§6, `security.md` §8, `../decisions/0091`) |
 | Issued link | `(0, .Issued, number)` | In the volume a link leads into: the object, whether it writes, and the volume holding the link |
 
-Names are UTF-8 without `/` or NUL, compared byte for byte (`0046`); the hash is keyed per volume, so a directory
+Names are UTF-8 without `/` or NUL, compared byte for byte (`0046`), and without C0 or C1 controls, bidirectional
+controls or UTS #39's invisible characters (`0097`, in 9c); the hash is keyed per volume, so a directory
 can't be filled with collisions chosen in advance. There are no hard links and no symlinks.
 
 **Snapshots and clones**, as ZFS does them. A snapshot pins a volume's root at a transaction. A block freed in
