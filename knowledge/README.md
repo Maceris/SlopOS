@@ -29,6 +29,7 @@ system as built lives in `../docs/` instead.
 | `design/observability.md` | Proposed (M9, M12): typed logs, crash reports, the debugger, record and replay, tracing |
 | `design/networking.md` | Proposed (M13, M14): the user-space stack, network authority as capabilities, DNS, TLS, SSH |
 | `design/display.md` | Proposed (M15, M16): the compositor, GUI capabilities and trusted path, text, audio |
+| `design/lessons.md` | Proposed: what other systems get wrong that the plans from B onward didn't answer yet, by milestone, with new tracks (Perf, memory pressure, R for robustness) |
 | `hemera-proposals/` | Designs for Hemera changes still open: what SlopOS needs, and what the compiler (`apps/`, built out as SlopOS needs it, `decisions/0047`) must implement. Once one is in Hemera, its docs are the reference and the proposal is removed |
 | `hemera-feedback.md` | Log of where Hemera helped, hurt or was missing something. The experiment's real output |
 | `prior-art.md` | Other systems and papers worth studying |

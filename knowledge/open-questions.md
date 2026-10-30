@@ -134,6 +134,20 @@ Open, from `design/display.md` (2026-10-24):
   programs.
 - **Where fonts and rasterizing live**: Hemera's `std` (general-purpose) or SlopOS.
 
+## Lessons
+
+Open, from `design/lessons.md` (2026-10-29):
+
+- **New tracks**: Perf (benchmarks with baselines from 9c, tickless idle, large pages, storage bandwidth by budget), memory
+  pressure (a budget signal, evictable pager pages, no swap), and R (fault injection, wrap starts, lock order checking,
+  chaos tests, starting now). Proposed: all three, R first; R planned 2026-10-29 (`decisions/0096`).
+- **Dependency kinds in `system_config`** (required with a deadline, optional, late) and degraded boots, with 9d.
+- **A recovery generation**, pinned, booted after the counter runs out everywhere else (B, 9d).
+- **The trusted path on reserved budgets**, and `Ping` on the lifecycle channel, moved to 10a.
+- **Refusing invisible and bidirectional characters in native names**, keeping byte comparison (`0046`).
+- **Revisiting `0013`**: sealing the system volume's key to a measured boot set as an option in B; logging which
+  transient-execution issues apply to the CPU, in H.
+
 ## Hemera Threads
 
 * Nothing open. Segmented stacks for plain threads were adopted
