@@ -99,6 +99,11 @@ test_device_interrupts :: fn(on: bool) {
     x86_64.out_u8(PIT_CHANNEL_0, cast[u8](divisor >> 8))
 }
 
+// Whether the calling CPU takes interrupts now: RFLAGS.IF.
+interrupts_enabled :: fn() -> bool {
+    return x86_64.read_rflags() & 0x200 != 0
+}
+
 // Stop the calling CPU for good, with interrupts disabled. NMIs still wake it, so it halts again.
 halt :: fn() #never_returns {
     loop {

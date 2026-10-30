@@ -49,8 +49,12 @@ test_fibers :: fn(kernel #escaping : ptr[mut Kernel]) {
     second :: make_fiber(kernel, test, fiber_b) or_return void
     // Round and round: start each, then resume each until both have finished
     // While a fiber resumes, its stack holds frames above the stack pointer, which an interrupt would overwrite
+    // Masked as they were found after (boot runs with them masked; unmasking them left it running unmasked, decisions/0106)
+    unmasked :: arch.interrupts_enabled()
     arch.mask_interrupts()
-    defer arch.unmask_interrupts()
+    defer if unmasked {
+        arch.unmask_interrupts()
+    }
     started : bool[2]
     finished : bool[2]
     for turn in 0..<cast[usize](8) {
@@ -199,8 +203,12 @@ test_segments :: fn(kernel #escaping : ptr[mut Kernel]) {
         carrier.segment_cache_count += 1
     }
     fiber :: make_fiber(kernel, test, fiber_deep) or_return void
+    // Masked as they were found after (boot runs with them masked; unmasking them left it running unmasked, decisions/0106)
+    unmasked :: arch.interrupts_enabled()
     arch.mask_interrupts()
-    defer arch.unmask_interrupts()
+    defer if unmasked {
+        arch.unmask_interrupts()
+    }
     exit := intrinsics.fiber_start(fiber)
     if exit == .Yielded {
         test.outside_count = intrinsics.capture_fiber_stack_trace(fiber, test.outside)

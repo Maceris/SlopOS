@@ -109,9 +109,9 @@ create_address_space :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> 
 destroy_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace]) {
     take_down_space_mappings(kernel, space)
     loop {
-        concurrency.lock(&space.threads_lock)
+        lock_at(&space.threads_lock, .SpaceThreads)
         first :: space.first_thread
-        concurrency.unlock(&space.threads_lock)
+        unlock_at(&space.threads_lock, .SpaceThreads)
         if first == 0 {
             break
         }
@@ -128,9 +128,9 @@ release_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace
         return void
     }
     loop {
-        concurrency.lock(&space.lock)
+        lock_at(&space.lock, .Space)
         ring :: take_ring(space)
-        concurrency.unlock(&space.lock)
+        unlock_at(&space.lock, .Space)
         if ring == 0 {
             break
         }
@@ -157,8 +157,8 @@ release_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace
 
 // Add a thread to the ones that run in space, unless space is being destroyed.
 join_space :: fn(space: ptr[mut AddressSpace], thread: ptr[mut Thread]) -> bool {
-    concurrency.lock(&space.threads_lock)
-    defer concurrency.unlock(&space.threads_lock)
+    lock_at(&space.threads_lock, .SpaceThreads)
+    defer unlock_at(&space.threads_lock, .SpaceThreads)
     if intrinsics.atomic_load_u32_acquire(&space.header.dying) != 0 {
         return false
     }
@@ -174,8 +174,8 @@ join_space :: fn(space: ptr[mut AddressSpace], thread: ptr[mut Thread]) -> bool 
 
 leave_space :: fn(thread: ptr[mut Thread]) {
     space :: thread.space
-    concurrency.lock(&space.threads_lock)
-    defer concurrency.unlock(&space.threads_lock)
+    lock_at(&space.threads_lock, .SpaceThreads)
+    defer unlock_at(&space.threads_lock, .SpaceThreads)
     if !thread.in_space {
         return void
     }
@@ -211,8 +211,8 @@ allocate_tag :: fn(kernel: ptr[mut Kernel]) -> arch_interface.AddressSpaceTag? {
         return cast[arch_interface.AddressSpaceTag](0)
     }
     tags :: &kernel.tags
-    concurrency.lock(&tags.lock)
-    defer concurrency.unlock(&tags.lock)
+    lock_at(&tags.lock, .Tags)
+    defer unlock_at(&tags.lock, .Tags)
     // From TAG_SEARCH_FROM tags before the top, round to 1: the highest tags are used first in a robustness kernel
     first :: if TAG_SEARCH_FROM != 0 && count > TAG_SEARCH_FROM + 1 { count - TAG_SEARCH_FROM } else { cast[usize](1) }
     for step in 0..<count - 1 {
@@ -230,9 +230,9 @@ allocate_tag :: fn(kernel: ptr[mut Kernel]) -> arch_interface.AddressSpaceTag? {
 free_tag :: fn(kernel: ptr[mut Kernel], tag: arch_interface.AddressSpaceTag) {
     index :: cast[usize](cast[u16](tag))
     tags :: &kernel.tags
-    concurrency.lock(&tags.lock)
+    lock_at(&tags.lock, .Tags)
     tags.used[index / 64 % (MAX_TAGS / 64)] &= ~(cast[u64](1) << cast[u64](index % 64))
-    concurrency.unlock(&tags.lock)
+    unlock_at(&tags.lock, .Tags)
 }
 
 /*
@@ -254,8 +254,8 @@ map_user :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u
 // How many pages it mapped, and why it stopped if it didn't map them all.
 map_pages :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, physical: u64, size: u64,
     mapping: arch_interface.Mapping) -> (mapped: u64, error: SpaceError?) {
-    concurrency.lock(&space.lock)
-    defer concurrency.unlock(&space.lock)
+    lock_at(&space.lock, .Space)
+    defer unlock_at(&space.lock, .Space)
     return map_pages_locked(kernel, space, address, physical, size, mapping)
 }
 
@@ -303,9 +303,9 @@ unmap_user :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address:
         if page >= pages {
             break
         }
-        concurrency.lock(&space.lock)
+        lock_at(&space.lock, .Space)
         page = unmap_some(&space.table, address, page, pages, &freed, &flush)
-        concurrency.unlock(&space.lock)
+        unlock_at(&space.lock, .Space)
         // Every CPU forgets the old entries before an emptied table can be reused
         shootdown(kernel, &flush)
         flush = arch_interface.TlbBatch.{}

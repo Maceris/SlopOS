@@ -59,7 +59,7 @@ create_process :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> (made 
 destroy_process :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
     leave_process_budget(kernel, process)
     ended :: if process.exited { cast[u64](process.exit_code) } else { slop_os.EXIT_KILLED }
-    raise_watchers(kernel, &process.watchers, &process.watch_lock, cast[u32](slop_os.SIGNAL_TERMINATED), ended)
+    raise_watchers(kernel, &process.watchers, &process.watch_lock, .Watchers, cast[u32](slop_os.SIGNAL_TERMINATED), ended)
     /*
      * The root task's end is the machine's: once its subtree is destroyed and a grace period has passed, the
      * boot CPU's timer says what's left and stops (timer.hsc, root_task_ended)

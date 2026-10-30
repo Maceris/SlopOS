@@ -67,9 +67,9 @@ make_timer :: fn() -> TimerEntry {
 arm_timer :: fn(entry: ptr[mut TimerEntry], deadline: u64) -> bool {
     cpu :: per_cpu()
     heap :: &cpu.timers
-    concurrency.lock(&heap.lock)
+    lock_at(&heap.lock, .Timers)
     if !grow_heap(heap) {
-        concurrency.unlock(&heap.lock)
+        unlock_at(&heap.lock, .Timers)
         return false
     }
     entry.deadline = deadline
@@ -81,7 +81,7 @@ arm_timer :: fn(entry: ptr[mut TimerEntry], deadline: u64) -> bool {
     entry.index = cast[u32](count)
     heap.count = count + 1
     sift_up(heap, count)
-    concurrency.unlock(&heap.lock)
+    unlock_at(&heap.lock, .Timers)
     program_deadline(cpu)
     return true
 }
@@ -94,8 +94,8 @@ cancel_timer :: fn(kernel: ptr[Kernel], entry: ptr[mut TimerEntry]) -> bool {
         return false
     }
     heap :: &cast[ptr[mut PerCpu]](per_cpus[cpu_index]).timers
-    concurrency.lock(&heap.lock)
-    defer concurrency.unlock(&heap.lock)
+    lock_at(&heap.lock, .Timers)
+    defer unlock_at(&heap.lock, .Timers)
     index :: entry.index
     if index == NOT_QUEUED || cast[usize](index) >= heap.count {
         return false
@@ -112,20 +112,20 @@ fire_timers :: fn(kernel: ptr[mut Kernel], now: u64) {
     cpu :: per_cpu()
     heap :: &cpu.timers
     loop {
-        concurrency.lock(&heap.lock)
+        lock_at(&heap.lock, .Timers)
         entries :: heap.entries
         if heap.count == 0 || entries.count == 0 {
-            concurrency.unlock(&heap.lock)
+            unlock_at(&heap.lock, .Timers)
             break
         }
         first :: cast[ptr[mut TimerEntry]](entries[0])
         if first.deadline > now {
-            concurrency.unlock(&heap.lock)
+            unlock_at(&heap.lock, .Timers)
             break
         }
         fired :: first^
         remove_at(heap, 0)
-        concurrency.unlock(&heap.lock)
+        unlock_at(&heap.lock, .Timers)
         match fired.kind {
             case .PortTimer => fire_port_timer(kernel, &fired)
             case .WaitTimeout => fire_wait_timeout(kernel, &fired)
@@ -137,13 +137,13 @@ fire_timers :: fn(kernel: ptr[mut Kernel], now: u64) {
 program_deadline :: fn(cpu: ptr[mut PerCpu]) {
     deadline := cpu.next_tick
     heap :: &cpu.timers
-    concurrency.lock(&heap.lock)
+    lock_at(&heap.lock, .Timers)
     entries :: heap.entries
     if heap.count > 0 && entries.count > 0 {
         earliest :: cast[ptr[TimerEntry]](entries[0]).deadline
         deadline = if earliest < deadline { earliest } else { deadline }
     }
-    concurrency.unlock(&heap.lock)
+    unlock_at(&heap.lock, .Timers)
     arch.set_deadline(deadline)
 }
 

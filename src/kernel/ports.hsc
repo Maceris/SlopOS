@@ -112,8 +112,8 @@ create_port :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> Result[pt
 
 // A wake binding for key.
 port_bind_wake :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64) -> slop_os.PortError? {
-    concurrency.lock(&port.lock)
-    defer concurrency.unlock(&port.lock)
+    lock_at(&port.lock, .Port)
+    defer unlock_at(&port.lock, .Port)
     if is_dying(cast[u64](port)) {
         return .ObjectGone
     }
@@ -128,8 +128,8 @@ port_bind_wake :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64) -> 
 
 // Raise bits on key's wake binding: its packet is queued, or takes the bits in if it already is.
 port_wake :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, bits: u64) -> slop_os.PortError? {
-    concurrency.lock(&port.lock)
-    defer concurrency.unlock(&port.lock)
+    lock_at(&port.lock, .Port)
+    defer unlock_at(&port.lock, .Port)
     if is_dying(cast[u64](port)) {
         return .ObjectGone
     }
@@ -144,8 +144,8 @@ port_wake :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, bits: u6
  * then. Setting it again moves the deadline.
  */
 port_set_timer :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, deadline: u64) -> slop_os.PortError? {
-    concurrency.lock(&port.lock)
-    defer concurrency.unlock(&port.lock)
+    lock_at(&port.lock, .Port)
+    defer unlock_at(&port.lock, .Port)
     if is_dying(cast[u64](port)) {
         return .ObjectGone
     }
@@ -175,8 +175,8 @@ port_set_timer :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, dea
 
 // Take key's binding off the port, with its packet and its timer.
 port_unbind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64) -> slop_os.PortError? {
-    concurrency.lock(&port.lock)
-    defer concurrency.unlock(&port.lock)
+    lock_at(&port.lock, .Port)
+    defer unlock_at(&port.lock, .Port)
     if is_dying(cast[u64](port)) {
         return .ObjectGone
     }
@@ -247,15 +247,15 @@ set_wait_result :: fn(thread: ptr[mut Thread], tag: u64, value: u64) {
 finish_or_block :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> WaitOutcome? {
     port :: cast[ptr[mut Port]](thread.wait_port)
     packets : slop_os.Packet[slop_os.MAX_PACKETS_PER_WAIT]
-    concurrency.lock(&port.lock)
+    lock_at(&port.lock, .Port)
     if port.header.generation != thread.wait_port_generation || is_dying(cast[u64](port)) {
-        concurrency.unlock(&port.lock)
+        unlock_at(&port.lock, .Port)
         thread.wait_port = 0
         return WaitOutcome.Failed(.ObjectGone)
     }
     taken :: take_packets(port, &packets, thread.wait_capacity)
     if taken > 0 {
-        concurrency.unlock(&port.lock)
+        unlock_at(&port.lock, .Port)
         thread.wait_port = 0
         if !copy_to_user(kernel, thread.space, thread.wait_buffer, cast[u64](&packets[0]), cast[u64](taken) * cast[u64](size_of(slop_os.Packet))) {
             return WaitOutcome.Failed(.BadBuffer)
@@ -264,7 +264,7 @@ finish_or_block :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> WaitO
     }
     now :: arch.counter()
     if thread.wait_deadline != slop_os.NO_DEADLINE && thread.wait_deadline <= now {
-        concurrency.unlock(&port.lock)
+        unlock_at(&port.lock, .Port)
         thread.wait_port = 0
         return WaitOutcome.Done(0)
     }
@@ -285,7 +285,7 @@ finish_or_block :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> WaitO
         _ = arm_timer(&thread.wait_timer, thread.wait_deadline)
     }
     push_waiter(port, thread)
-    concurrency.unlock(&port.lock)
+    unlock_at(&port.lock, .Port)
     return null
 }
 
@@ -404,8 +404,8 @@ unlink_waiter :: fn(port: ptr[mut Port], thread: ptr[mut Thread]) {
 fire_port_timer :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
     port :: cast[ptr[mut Port]](fired.port)
     binding :: cast[ptr[mut Binding]](fired.owner)
-    concurrency.lock(&port.lock)
-    defer concurrency.unlock(&port.lock)
+    lock_at(&port.lock, .Port)
+    defer unlock_at(&port.lock, .Port)
     if is_dying(cast[u64](port)) || cast[u64](binding.generation) != fired.owner_generation || binding.port != cast[u64](port)
         || binding.timer.index != NOT_QUEUED {
         return void
@@ -417,8 +417,8 @@ fire_port_timer :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
 fire_wait_timeout :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
     port :: cast[ptr[mut Port]](fired.port)
     thread :: cast[ptr[mut Thread]](fired.owner)
-    concurrency.lock(&port.lock)
-    defer concurrency.unlock(&port.lock)
+    lock_at(&port.lock, .Port)
+    defer unlock_at(&port.lock, .Port)
     expected :: (cast[u64](thread.header.generation) << 32) | (thread.wait_sequence & 0xffffffff)
     if !thread.waiting || thread.wait_port != cast[u64](port) || expected != fired.owner_generation {
         return void
@@ -434,15 +434,15 @@ cancel_wait :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
         return void
     }
     port :: cast[ptr[mut Port]](port_address)
-    concurrency.lock(&port.lock)
+    lock_at(&port.lock, .Port)
     unlink_waiter(port, thread)
-    concurrency.unlock(&port.lock)
+    unlock_at(&port.lock, .Port)
     _ = cancel_timer(kernel, &thread.wait_timer)
 }
 
 // Destroying a port wakes its waiters, who find it gone, and drops its bindings.
 destroy_port :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
-    concurrency.lock(&port.lock)
+    lock_at(&port.lock, .Port)
     loop {
         if port.waiters == 0 {
             break
@@ -459,7 +459,7 @@ destroy_port :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
     maps.map_free(&port.bindings)
     port.ready_first = 0
     port.ready_last = 0
-    concurrency.unlock(&port.lock)
+    unlock_at(&port.lock, .Port)
 }
 
 release_port :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
@@ -484,11 +484,11 @@ lock_bound_port :: fn(binding: ptr[Binding], generation: u32) -> ptr[mut Port]? 
         return null
     }
     port :: cast[ptr[mut Port]](address)
-    concurrency.lock(&port.lock)
+    lock_at(&port.lock, .Port)
     if binding.generation == generation && binding.port == address && !is_dying(address) {
         return port
     }
-    concurrency.unlock(&port.lock)
+    unlock_at(&port.lock, .Port)
     return null
 }
 
@@ -547,8 +547,8 @@ is_user_writable :: fn(space: ptr[mut AddressSpace], address: u64, size: u64) ->
     if address < cast[u64](low) || address >= cast[u64](high) || size > cast[u64](high) - address {
         return false
     }
-    concurrency.lock(&space.lock)
-    defer concurrency.unlock(&space.lock)
+    lock_at(&space.lock, .Space)
+    defer unlock_at(&space.lock, .Space)
     page := address & ~cast[u64](4095)
     loop {
         found :: arch.translate(&space.table, cast[arch_interface.VirtualAddress](page)) or_return false

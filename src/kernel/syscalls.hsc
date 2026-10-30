@@ -362,18 +362,18 @@ sys_port_bind :: fn(thread: ptr[mut Thread], port: slop_os.Port, object: slop_os
             return .Error(.MissingRight)
         }
         watched :: cast[ptr[mut Process]](found.object)
-        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.watch_lock, signals, key, once))
+        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.watch_lock, .Watchers, signals, key, once))
     }
     if found.kind == .Thread {
         watched :: cast[ptr[mut Thread]](found.object)
-        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.control, signals, key, once))
+        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.control, .ThreadControl, signals, key, once))
     }
     if found.kind == .Irq {
         return port_done(irq_bind(kernel, found_port, cast[ptr[mut Irq]](found.object), key, once))
     }
     if found.kind == .Device {
         watched :: cast[ptr[mut Device]](found.object)
-        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.watch_lock, signals, key, once))
+        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.watch_lock, .Watchers, signals, key, once))
     }
     if found.kind != .Channel {
         return .Error(.WrongKind)
@@ -902,8 +902,8 @@ sys_thread_read_registers :: fn(thread: ptr[mut Thread], process: slop_os.Proces
     if registers.count < cast[u64](slop_os.THREAD_REGISTERS) {
         return .Error(.BadBuffer)
     }
-    concurrency.lock(&found.control)
-    defer concurrency.unlock(&found.control)
+    lock_at(&found.control, .ThreadControl)
+    defer unlock_at(&found.control, .ThreadControl)
     if !found.parked {
         return .Error(.NotStopped)
     }
@@ -918,8 +918,8 @@ sys_thread_write_registers :: fn(thread: ptr[mut Thread], process: slop_os.Proce
     if registers.count < cast[u64](slop_os.THREAD_REGISTERS) {
         return .Error(.BadBuffer)
     }
-    concurrency.lock(&found.control)
-    defer concurrency.unlock(&found.control)
+    lock_at(&found.control, .ThreadControl)
+    defer unlock_at(&found.control, .ThreadControl)
     if !found.parked {
         return .Error(.NotStopped)
     }

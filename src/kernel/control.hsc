@@ -36,8 +36,8 @@ MAX_OWNER_DEPTH :: 4096
 
 // Hold thread for bit: parked at once if it's on a run queue; told, if it runs on another CPU.
 hold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) {
-    concurrency.lock(&thread.control)
-    defer concurrency.unlock(&thread.control)
+    lock_at(&thread.control, .ThreadControl)
+    defer unlock_at(&thread.control, .ThreadControl)
     thread.held |= bit
     if thread.parked {
         return void
@@ -48,9 +48,9 @@ hold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) {
         index :: intrinsics.atomic_load_u32_acquire(&thread.cpu)
         runtime.assert(cast[usize](index) < per_cpus.count, "a thread's CPU is one of the kernel's")
         cpu :: cast[ptr[mut PerCpu]](per_cpus[index])
-        concurrency.lock(&cpu.run_queue.lock)
+        lock_at(&cpu.run_queue.lock, .RunQueue)
         if thread.cpu != index {
-            concurrency.unlock(&cpu.run_queue.lock)
+            unlock_at(&cpu.run_queue.lock, .RunQueue)
             continue
         }
         if thread.queued {
@@ -59,7 +59,7 @@ hold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) {
             thread.state = .Stopped
         }
         running :: cpu.current == cast[u64](thread)
-        concurrency.unlock(&cpu.run_queue.lock)
+        unlock_at(&cpu.run_queue.lock, .RunQueue)
         if running && cpu != per_cpu() {
             cpus :: kernel.cpus
             runtime.assert(cast[usize](index) < cpus.count, "every online CPU is in kernel.cpus")
@@ -71,8 +71,8 @@ hold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) {
 
 // Let go of thread for bit: made ready if it's parked and nothing else holds it.
 unhold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) {
-    concurrency.lock(&thread.control)
-    defer concurrency.unlock(&thread.control)
+    lock_at(&thread.control, .ThreadControl)
+    defer unlock_at(&thread.control, .ThreadControl)
     thread.held &= ~bit
     if thread.held == 0 && thread.parked && !is_dying(cast[u64](thread)) {
         thread.parked = false
@@ -88,8 +88,8 @@ park_if_held :: fn(thread: ptr[mut Thread], saved: bool) -> bool {
     if intrinsics.atomic_load_u32_acquire(&thread.held) == 0 {
         return false
     }
-    concurrency.lock(&thread.control)
-    defer concurrency.unlock(&thread.control)
+    lock_at(&thread.control, .ThreadControl)
+    defer unlock_at(&thread.control, .ThreadControl)
     if thread.held == 0 {
         return false
     }
@@ -103,8 +103,8 @@ park_if_held :: fn(thread: ptr[mut Thread], saved: bool) -> bool {
 
 // Whether a thread is held and parked, so its registers are its own to read and write.
 is_parked :: fn(thread: ptr[mut Thread]) -> bool {
-    concurrency.lock(&thread.control)
-    defer concurrency.unlock(&thread.control)
+    lock_at(&thread.control, .ThreadControl)
+    defer unlock_at(&thread.control, .ThreadControl)
     return thread.parked
 }
 
@@ -112,15 +112,15 @@ is_parked :: fn(thread: ptr[mut Thread]) -> bool {
  * Bind object, a process or a thread, to port under key, for its watchers: a Signal packet when it raises
  * any of signals, which only SIGNAL_TERMINATED is so far. Takes object's lock (lock) itself.
  */
-watch_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], object: u64, watchers: ptr[mut EndBinding[2]], lock: ptr[mut concurrency.SpinLock],
+watch_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], object: u64, watchers: ptr[mut EndBinding[2]], lock: ptr[mut concurrency.SpinLock], rank: LockRank,
     signals: slop_os.Signals, key: u64, mode: slop_os.BindMode) -> slop_os.PortError? {
-    concurrency.lock(lock)
-    defer concurrency.unlock(lock)
+    lock_at(lock, rank)
+    defer unlock_at(lock, rank)
     if is_dying(object) {
         return slop_os.PortError.ObjectGone
     }
-    concurrency.lock(&port.lock)
-    defer concurrency.unlock(&port.lock)
+    lock_at(&port.lock, .Port)
+    defer unlock_at(&port.lock, .Port)
     if is_dying(cast[u64](port)) {
         return slop_os.PortError.ObjectGone
     }
@@ -159,10 +159,10 @@ watch_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], object: u64, watc
 }
 
 // Raise signals on the bindings watching an object. Takes its lock (lock) itself.
-raise_watchers :: fn(kernel: ptr[mut Kernel], watchers: ptr[mut EndBinding[2]], lock: ptr[mut concurrency.SpinLock], signals: u32,
+raise_watchers :: fn(kernel: ptr[mut Kernel], watchers: ptr[mut EndBinding[2]], lock: ptr[mut concurrency.SpinLock], rank: LockRank, signals: u32,
     detail: u64) {
-    concurrency.lock(lock)
-    defer concurrency.unlock(lock)
+    lock_at(lock, rank)
+    defer unlock_at(lock, rank)
     for i in 0..<2 {
         slot :: &watchers^[i]
         if slot.binding != 0 {
@@ -172,7 +172,7 @@ raise_watchers :: fn(kernel: ptr[mut Kernel], watchers: ptr[mut EndBinding[2]], 
                 case Some(port) => {
                     binding.detail = detail
                     signal_binding(kernel, port, binding, signals)
-                    concurrency.unlock(&port.lock)
+                    unlock_at(&port.lock, .Port)
                 }
                 case None => {}
             }
@@ -197,7 +197,7 @@ in_subtree :: fn(object: u64, process: u64) -> bool {
 
 // Every thread, on the kernel's list, for finding one by its ID.
 link_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
-    concurrency.lock(&kernel.threads_lock)
+    lock_at(&kernel.threads_lock, .Threads)
     thread.all_previous = 0
     thread.all_next = kernel.first_thread
     if kernel.first_thread != 0 {
@@ -205,12 +205,12 @@ link_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     }
     kernel.first_thread = cast[u64](thread)
     thread.on_list = true
-    concurrency.unlock(&kernel.threads_lock)
+    unlock_at(&kernel.threads_lock, .Threads)
 }
 
 unlink_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
-    concurrency.lock(&kernel.threads_lock)
-    defer concurrency.unlock(&kernel.threads_lock)
+    lock_at(&kernel.threads_lock, .Threads)
+    defer unlock_at(&kernel.threads_lock, .Threads)
     if !thread.on_list {
         return void
     }
@@ -228,8 +228,8 @@ unlink_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
 
 // The live thread with id in process's subtree, or null.
 thread_in :: fn(kernel: ptr[mut Kernel], process: u64, id: u64) -> ptr[mut Thread]? {
-    concurrency.lock(&kernel.threads_lock)
-    defer concurrency.unlock(&kernel.threads_lock)
+    lock_at(&kernel.threads_lock, .Threads)
+    defer unlock_at(&kernel.threads_lock, .Threads)
     with {
         address := kernel.first_thread
     }
@@ -248,8 +248,8 @@ thread_in :: fn(kernel: ptr[mut Kernel], process: u64, id: u64) -> ptr[mut Threa
 
 // How many threads process's subtree has; the first capacity's IDs, written at ids.
 threads_of :: fn(kernel: ptr[mut Kernel], process: u64, ids: ptr[mut u64[64]], capacity: u32) -> u32 {
-    concurrency.lock(&kernel.threads_lock)
-    defer concurrency.unlock(&kernel.threads_lock)
+    lock_at(&kernel.threads_lock, .Threads)
+    defer unlock_at(&kernel.threads_lock, .Threads)
     count := cast[u32](0)
     with {
         address := kernel.first_thread

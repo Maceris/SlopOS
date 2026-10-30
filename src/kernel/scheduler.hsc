@@ -72,10 +72,10 @@ make_ready :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], asked: u32) {
     target :: cast[ptr[mut PerCpu]](per_cpus[cpu_index])
     level :: level_of(thread, arch.counter())
     thread.state = .Ready
-    concurrency.lock(&target.run_queue.lock)
+    lock_at(&target.run_queue.lock, .RunQueue)
     intrinsics.atomic_store_u32_release(&thread.cpu, cpu_index)
     enqueue(&target.run_queue, thread, level)
-    concurrency.unlock(&target.run_queue.lock)
+    unlock_at(&target.run_queue.lock, .RunQueue)
     running :: intrinsics.atomic_load_u32_acquire(&target.current_level)
     if target != per_cpu() && (running == IDLE_LEVEL || level > running) {
         cpus :: kernel.cpus
@@ -144,12 +144,12 @@ schedule :: fn(tick: bool) #never_returns {
             make_ready(kernel, thread, cpu.index)
         }
         next := cast[u64](0)
-        concurrency.lock(&cpu.run_queue.lock)
+        lock_at(&cpu.run_queue.lock, .RunQueue)
         if tick {
             relevel(&cpu.run_queue, now)
         }
         next = pick(&cpu.run_queue, now, current, current_level, tick)
-        concurrency.unlock(&cpu.run_queue.lock)
+        unlock_at(&cpu.run_queue.lock, .RunQueue)
         // Queued here before its budget's CPUs changed
         if next != 0 && cpu_for(kernel, cast[ptr[Thread]](next), cpu.index) != cpu.index {
             make_ready(kernel, cast[ptr[mut Thread]](next), cpu.index)
@@ -170,9 +170,9 @@ schedule :: fn(tick: bool) #never_returns {
             thread :: cast[ptr[mut Thread]](current)
             arch.save_vector_state(cast[ptr[mut arch.VectorState]](thread.vector))
             thread.state = .Ready
-            concurrency.lock(&cpu.run_queue.lock)
+            lock_at(&cpu.run_queue.lock, .RunQueue)
             enqueue(&cpu.run_queue, thread, current_level)
-            concurrency.unlock(&cpu.run_queue.lock)
+            unlock_at(&cpu.run_queue.lock, .RunQueue)
             cpu.current = 0
         }
         run(kernel, cpu, cast[ptr[mut Thread]](next), now)
@@ -265,9 +265,9 @@ steal :: fn(kernel: ptr[Kernel], cpu: ptr[PerCpu]) -> u64 {
         if intrinsics.atomic_load_u32_acquire(&other.run_queue.count) == 0 {
             continue
         }
-        concurrency.lock(&other.run_queue.lock)
+        lock_at(&other.run_queue.lock, .RunQueue)
         taken :: take_for(&other.run_queue, cpu.index)
-        concurrency.unlock(&other.run_queue.lock)
+        unlock_at(&other.run_queue.lock, .RunQueue)
         if taken != 0 {
             return taken
         }

@@ -145,7 +145,7 @@ unmap_from_window :: fn(kernel: ptr[mut Kernel], address: u64, size: u64) {
         page : u64 = 0
     }
     loop {
-        concurrency.lock(&kernel.page_table_lock)
+        lock_at(&kernel.page_table_lock, .PageTable)
         loop {
             result :: arch.unmap(&kernel.page_table, cast[arch_interface.VirtualAddress](address + page * frames.FRAME_SIZE), .Size4K,
                 &freed, &flush)
@@ -158,7 +158,7 @@ unmap_from_window :: fn(kernel: ptr[mut Kernel], address: u64, size: u64) {
             }
         }
         while page < pages
-        concurrency.unlock(&kernel.page_table_lock)
+        unlock_at(&kernel.page_table_lock, .PageTable)
         // Every CPU forgets the old entries before an emptied table can be reused
         shootdown(kernel, &flush)
         flush = arch_interface.TlbBatch.{}
@@ -189,8 +189,8 @@ give_back_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[mut arch_interface.T
 
 // size bytes of the window's addresses, the first free range that's big enough: their start.
 take_addresses :: fn(window: ptr[mut Window], size: u64) -> u64? {
-    concurrency.lock(&window.lock)
-    defer concurrency.unlock(&window.lock)
+    lock_at(&window.lock, .Window)
+    defer unlock_at(&window.lock, .Window)
     count :: window.count
     runtime.assert(count <= MAX_WINDOW_EXTENTS, "the window keeps up to MAX_WINDOW_EXTENTS free ranges")
     for i in 0..<count {
@@ -210,8 +210,8 @@ take_addresses :: fn(window: ptr[mut Window], size: u64) -> u64? {
 
 // Give back addresses take_addresses gave, merged with the free ranges on either side.
 give_addresses :: fn(window: ptr[mut Window], start: u64, size: u64) {
-    concurrency.lock(&window.lock)
-    defer concurrency.unlock(&window.lock)
+    lock_at(&window.lock, .Window)
+    defer unlock_at(&window.lock, .Window)
     count :: window.count
     runtime.assert(count <= MAX_WINDOW_EXTENTS, "the window keeps up to MAX_WINDOW_EXTENTS free ranges")
     // The first free range after it

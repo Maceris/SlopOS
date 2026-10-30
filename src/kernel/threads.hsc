@@ -186,7 +186,7 @@ destroy_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     leave_space(thread)
     forget_stop(thread)
     unlink_thread(kernel, thread)
-    raise_watchers(kernel, &thread.watchers, &thread.control, cast[u32](slop_os.SIGNAL_TERMINATED), 0)
+    raise_watchers(kernel, &thread.watchers, &thread.control, .ThreadControl, cast[u32](slop_os.SIGNAL_TERMINATED), 0)
     end_process_if_last(kernel, thread)
     per_cpus :: kernel.per_cpus
     // Its CPU may change until its run queue's lock is held and it's still that CPU
@@ -194,16 +194,16 @@ destroy_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
         index :: intrinsics.atomic_load_u32_acquire(&thread.cpu)
         runtime.assert(cast[usize](index) < per_cpus.count, "a thread's CPU is one of the kernel's")
         cpu :: cast[ptr[mut PerCpu]](per_cpus[index])
-        concurrency.lock(&cpu.run_queue.lock)
+        lock_at(&cpu.run_queue.lock, .RunQueue)
         if thread.cpu != index {
-            concurrency.unlock(&cpu.run_queue.lock)
+            unlock_at(&cpu.run_queue.lock, .RunQueue)
             continue
         }
         if thread.queued {
             unlink(&cpu.run_queue, thread)
         }
         running :: cpu.current == cast[u64](thread)
-        concurrency.unlock(&cpu.run_queue.lock)
+        unlock_at(&cpu.run_queue.lock, .RunQueue)
         if running && cpu != per_cpu() {
             cpus :: kernel.cpus
             runtime.assert(cast[usize](index) < cpus.count, "every online CPU is in kernel.cpus")

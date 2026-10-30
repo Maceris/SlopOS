@@ -78,11 +78,11 @@ lock_budget_of :: fn(object: u64) -> ptr[mut MemoryBudget]? {
             return null
         }
         budget :: cast[ptr[mut MemoryBudget]](address)
-        concurrency.lock(&budget.lock)
+        lock_at(&budget.lock, .MemoryBudget)
         if intrinsics.atomic_load_u64(&header.budget) == address {
             return budget
         }
-        concurrency.unlock(&budget.lock)
+        unlock_at(&budget.lock, .MemoryBudget)
     }
 }
 
@@ -101,8 +101,8 @@ charge_new :: fn(budget_address: u64, object: u64, bytes: u64) -> bool {
         return false
     }
     budget :: cast[ptr[mut MemoryBudget]](budget_address)
-    concurrency.lock(&budget.lock)
-    defer concurrency.unlock(&budget.lock)
+    lock_at(&budget.lock, .MemoryBudget)
+    defer unlock_at(&budget.lock, .MemoryBudget)
     if budget.closed || bytes > budget.limit - budget.used {
         return false
     }
@@ -117,7 +117,7 @@ charge_new :: fn(budget_address: u64, object: u64, bytes: u64) -> bool {
 charge_more :: fn(object: u64, bytes: u64) -> bool {
     header :: cast[ptr[mut ObjectHeader]](object)
     budget :: lock_budget_of(object) or_return true
-    defer concurrency.unlock(&budget.lock)
+    defer unlock_at(&budget.lock, .MemoryBudget)
     if fails(.Budget) || budget.closed || bytes > budget.limit - budget.used {
         return false
     }
@@ -133,7 +133,7 @@ charge_more :: fn(object: u64, bytes: u64) -> bool {
 uncharge :: fn(object: u64, generation: u32, bytes: u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
     budget :: lock_budget_of(object) or_return void
-    defer concurrency.unlock(&budget.lock)
+    defer unlock_at(&budget.lock, .MemoryBudget)
     if intrinsics.atomic_load_u32_acquire(&header.generation) != generation || bytes > header.charge {
         return void
     }
@@ -145,7 +145,7 @@ uncharge :: fn(object: u64, generation: u32, bytes: u64) {
 return_charge :: fn(object: u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
     budget :: lock_budget_of(object) or_return void
-    defer concurrency.unlock(&budget.lock)
+    defer unlock_at(&budget.lock, .MemoryBudget)
     budget.used -= header.charge
     unlink_charged(budget, object)
     header.charge = 0
@@ -175,18 +175,18 @@ create_budget :: fn(kernel: ptr[mut Kernel], owner: u64, parent: u64, limit: u64
  * what the child didn't use. Its own slot stays charged to the parent until it's released.
  */
 destroy_memory_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut MemoryBudget]) {
-    concurrency.lock(&kernel.budgets_lock)
-    defer concurrency.unlock(&kernel.budgets_lock)
-    concurrency.lock(&budget.lock)
-    defer concurrency.unlock(&budget.lock)
-    budget.closed = true
+    lock_at(&kernel.budgets_lock, .Budgets)
+    defer unlock_at(&kernel.budgets_lock, .Budgets)
+    // Its parent doesn't change with budgets_lock held; the two locks by address (lock_budgets)
     parent_address :: budget.header.budget
+    lock_budgets(cast[u64](budget), parent_address)
+    defer unlock_budget(cast[u64](budget))
+    defer unlock_budget(parent_address)
+    budget.closed = true
     if parent_address == 0 {
         return void
     }
     parent :: cast[ptr[mut MemoryBudget]](parent_address)
-    concurrency.lock(&parent.lock)
-    defer concurrency.unlock(&parent.lock)
     loop {
         object :: budget.first_charged
         if object == 0 {
@@ -213,8 +213,8 @@ release_memory_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut MemoryBudge
  * of them grew in the meantime.
  */
 move_charges :: fn(kernel: ptr[mut Kernel], objects: ptr[u64[64]], count: u32, to_address: u64) -> bool {
-    concurrency.lock(&kernel.budgets_lock)
-    defer concurrency.unlock(&kernel.budgets_lock)
+    lock_at(&kernel.budgets_lock, .Budgets)
+    defer unlock_at(&kernel.budgets_lock, .Budgets)
     from : u64[64]
     for object, i in objects^ {
         if i >= cast[usize](count) {
@@ -223,9 +223,8 @@ move_charges :: fn(kernel: ptr[mut Kernel], objects: ptr[u64[64]], count: u32, t
         from_address :: cast[ptr[ObjectHeader]](object).budget
         from[i] = from_address
         if from_address != to_address {
-            // With budgets_lock held, no one else holds two budgets' locks, so these can be taken in any order
-            lock_budget(to_address)
-            lock_budget(from_address)
+            // With budgets_lock held, no one else holds two budgets' locks; they're taken by address, the order checked
+            lock_budgets(to_address, from_address)
             done :: move_locked(object, from_address, to_address, true)
             unlock_budget(from_address)
             unlock_budget(to_address)
@@ -236,8 +235,7 @@ move_charges :: fn(kernel: ptr[mut Kernel], objects: ptr[u64[64]], count: u32, t
                     }
                     back :: from[j]
                     if back != to_address {
-                        lock_budget(to_address)
-                        lock_budget(back)
+                        lock_budgets(to_address, back)
                         _ = move_locked(earlier, to_address, back, false)
                         unlock_budget(back)
                         unlock_budget(to_address)
@@ -271,22 +269,34 @@ move_locked :: fn(object: u64, from_address: u64, to_address: u64, checked: bool
     return true
 }
 
+// Two budgets' locks, the lower address's first (locks.hsc, lock_after); one, if they're the same budget or either is 0.
+lock_budgets :: fn(first: u64, second: u64) {
+    low :: if first < second { first } else { second }
+    high :: if first < second { second } else { first }
+    if low == high || low == 0 {
+        lock_budget(high)
+        return void
+    }
+    lock_budget(low)
+    lock_after(&cast[ptr[mut MemoryBudget]](high).lock, .MemoryBudget)
+}
+
 lock_budget :: fn(address: u64) {
     if address != 0 {
-        concurrency.lock(&cast[ptr[mut MemoryBudget]](address).lock)
+        lock_at(&cast[ptr[mut MemoryBudget]](address).lock, .MemoryBudget)
     }
 }
 
 unlock_budget :: fn(address: u64) {
     if address != 0 {
-        concurrency.unlock(&cast[ptr[mut MemoryBudget]](address).lock)
+        unlock_at(&cast[ptr[mut MemoryBudget]](address).lock, .MemoryBudget)
     }
 }
 
 // What it may charge, and what it has charged.
 budget_info :: fn(budget: ptr[mut MemoryBudget]) -> (limit: u64, used: u64) {
-    concurrency.lock(&budget.lock)
-    defer concurrency.unlock(&budget.lock)
+    lock_at(&budget.lock, .MemoryBudget)
+    defer unlock_at(&budget.lock, .MemoryBudget)
     return budget.limit, budget.used
 }
 

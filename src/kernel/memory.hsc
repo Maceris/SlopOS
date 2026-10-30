@@ -209,7 +209,7 @@ create_window :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, parent: pt
     window.cache = parent.cache
     window.allowed = parent.allowed & allowed
     // On the parent's list before anyone can have it, so destroying the parent reaches it
-    concurrency.lock(&parent.lock)
+    lock_at(&parent.lock, .MemoryParent)
     gone :: is_dying(cast[u64](parent))
     if !gone {
         window.window_previous = 0
@@ -220,7 +220,7 @@ create_window :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, parent: pt
         parent.first_window = object
         window.in_parent = true
     }
-    concurrency.unlock(&parent.lock)
+    unlock_at(&parent.lock, .MemoryParent)
     if gone {
         release_object(kernel, object)
         return .Error(.ObjectGone)
@@ -316,19 +316,19 @@ destroy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
     unmap_dma_memory(kernel, memory)
     // Paged memory's waiting threads touch their pages again, which are no longer mapped
     if memory.pager_binding != 0 {
-        concurrency.lock(&memory.page_lock)
+        lock_at(&memory.page_lock, .MemoryPages)
         wake_fault_waiters(kernel, memory)
-        concurrency.unlock(&memory.page_lock)
+        unlock_at(&memory.page_lock, .MemoryPages)
     }
     destroy_windows(kernel, memory)
     if memory.parent != 0 {
         parent :: cast[ptr[mut Memory]](memory.parent)
-        concurrency.lock(&parent.lock)
+        lock_at(&parent.lock, .MemoryParent)
         unlink_window(parent, memory)
-        concurrency.unlock(&parent.lock)
+        unlock_at(&parent.lock, .MemoryParent)
     }
     loop {
-        concurrency.lock(&memory.lock)
+        lock_at(&memory.lock, .Memory)
         claimed := cast[u64](0)
         with {
             mapping := memory.first_mapping
@@ -343,7 +343,7 @@ destroy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
             }
             mapping = cast[ptr[MemoryMapping]](mapping).memory_next
         }
-        concurrency.unlock(&memory.lock)
+        unlock_at(&memory.lock, .Memory)
         // One claimed elsewhere is being taken down there, and is gone before this is released
         if claimed == 0 {
             break
@@ -358,12 +358,12 @@ destroy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
  */
 destroy_windows :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
     loop {
-        concurrency.lock(&memory.lock)
+        lock_at(&memory.lock, .Memory)
         window :: memory.first_window
         if window != 0 {
             unlink_window(memory, cast[ptr[mut Memory]](window))
         }
-        concurrency.unlock(&memory.lock)
+        unlock_at(&memory.lock, .Memory)
         if window == 0 {
             break
         }
@@ -522,8 +522,8 @@ memory_map :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], space: ptr[mu
         size = size, offset = offset, protection = protection,
     }
     failure := cast[u32](0)
-    concurrency.lock(&memory.lock)
-    concurrency.lock(&space.lock)
+    lock_at(&memory.lock, .Memory)
+    lock_at(&space.lock, .Space)
     if is_dying(cast[u64](memory)) || is_dying(cast[u64](space)) {
         failure = cast[u32](slop_os.MemoryError.ObjectGone)
     }
@@ -534,8 +534,8 @@ memory_map :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], space: ptr[mu
         link_to_space(space, mapping)
         link_to_memory(memory, mapping)
     }
-    concurrency.unlock(&space.lock)
-    concurrency.unlock(&memory.lock)
+    unlock_at(&space.lock, .Space)
+    unlock_at(&memory.lock, .Memory)
     if failure != 0 {
         slab.free(&kernel.pools.mappings, &kernel.frames, address_of_mapping)
         uncharge(cast[u64](space), generation, slot_size)
@@ -546,7 +546,7 @@ memory_map :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], space: ptr[mu
 
 // Unmap the mapping that starts at address in space.
 memory_unmap :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64) -> slop_os.MemoryError? {
-    concurrency.lock(&space.lock)
+    lock_at(&space.lock, .Space)
     found := cast[u64](0)
     with {
         mapping := space.first_mapping
@@ -562,7 +562,7 @@ memory_unmap :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], addres
         mapping = cast[ptr[MemoryMapping]](mapping).space_next
     }
     claimed :: found != 0 && claim(cast[ptr[mut MemoryMapping]](found))
-    concurrency.unlock(&space.lock)
+    unlock_at(&space.lock, .Space)
     if found == 0 {
         return slop_os.MemoryError.NotMapped
     }
@@ -576,7 +576,7 @@ memory_unmap :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], addres
 // Destroying a space takes down the memory mapped in it, so no memory object reaches it once it's released.
 take_down_space_mappings :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace]) {
     loop {
-        concurrency.lock(&space.lock)
+        lock_at(&space.lock, .Space)
         claimed := cast[u64](0)
         with {
             mapping := space.first_mapping
@@ -591,7 +591,7 @@ take_down_space_mappings :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSp
             }
             mapping = cast[ptr[MemoryMapping]](mapping).space_next
         }
-        concurrency.unlock(&space.lock)
+        unlock_at(&space.lock, .Space)
         if claimed == 0 {
             break
         }
@@ -612,13 +612,13 @@ claim :: fn(mapping: ptr[mut MemoryMapping]) -> bool {
 take_down :: fn(kernel: ptr[mut Kernel], mapping: ptr[mut MemoryMapping]) {
     space :: cast[ptr[mut AddressSpace]](mapping.space)
     memory :: cast[ptr[mut Memory]](mapping.memory)
-    concurrency.lock(&space.lock)
+    lock_at(&space.lock, .Space)
     unlink_from_space(space, mapping)
-    concurrency.unlock(&space.lock)
+    unlock_at(&space.lock, .Space)
     unmap_user(kernel, space, mapping.address, mapping.size)
-    concurrency.lock(&memory.lock)
+    lock_at(&memory.lock, .Memory)
     unlink_from_memory(memory, mapping)
-    concurrency.unlock(&memory.lock)
+    unlock_at(&memory.lock, .Memory)
     generation :: mapping.space_generation
     slab.free(&kernel.pools.mappings, &kernel.frames, cast[u64](mapping))
     uncharge(cast[u64](space), generation, kernel.pools.mappings.object_size)
@@ -633,8 +633,8 @@ take_down :: fn(kernel: ptr[mut Kernel], mapping: ptr[mut MemoryMapping]) {
 resolve_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arch_interface.PageFault) -> FaultOutcome {
     space :: thread.space
     address :: cast[u64](fault.address) & ~(frames.FRAME_SIZE - 1)
-    concurrency.lock(&space.lock)
-    defer concurrency.unlock(&space.lock)
+    lock_at(&space.lock, .Space)
+    defer unlock_at(&space.lock, .Space)
     found := cast[ptr[mut MemoryMapping]](0)
     with {
         mapping := space.first_mapping

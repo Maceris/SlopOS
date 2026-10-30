@@ -191,8 +191,8 @@ page_bytes :: fn(size: arch_interface.PageSize) -> u64 {
 
 // Map one page in the kernel's table, giving it more table frames as it needs them.
 map_page :: fn(kernel: ptr[mut Kernel], virtual_address: u64, physical: u64, size: arch_interface.PageSize, mapping: arch_interface.Mapping, mapper: ptr[mut Mapper]) {
-    concurrency.lock(&kernel.page_table_lock)
-    defer concurrency.unlock(&kernel.page_table_lock)
+    lock_at(&kernel.page_table_lock, .PageTable)
+    defer unlock_at(&kernel.page_table_lock, .PageTable)
     loop {
         result :: arch.map(&kernel.page_table, cast[arch_interface.VirtualAddress](virtual_address),
             cast[arch_interface.PhysicalAddress](physical), size, mapping, &mapper.tables)

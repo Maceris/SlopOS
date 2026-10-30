@@ -96,16 +96,16 @@ register_controller :: fn(kernel: ptr[mut Kernel], kind: arch_interface.Controll
             return .Error(if error == .UnsupportedKind { InterruptError.UnsupportedKind } else { InterruptError.NotFound })
         }
     }
-    concurrency.lock(&kernel.interrupts_lock)
+    lock_at(&kernel.interrupts_lock, .Interrupts)
     index :: kernel.controller_count
     if cast[usize](index) >= MAX_CONTROLLERS {
-        concurrency.unlock(&kernel.interrupts_lock)
+        unlock_at(&kernel.interrupts_lock, .Interrupts)
         unmap_device(kernel, mapped, CONTROLLER_REGISTERS_SIZE)
         return .Error(.TooManyControllers)
     }
     kernel.controllers[index] = WiredController.{controller = controller, kind = kind, registers = mapped, physical = cast[u64](registers), lines = lines}
     intrinsics.atomic_store_u32_release(&kernel.controller_count, index + 1)
-    concurrency.unlock(&kernel.interrupts_lock)
+    unlock_at(&kernel.interrupts_lock, .Interrupts)
     return .Ok(index)
 }
 
@@ -135,10 +135,10 @@ route_line :: fn(
     first, count :: arch.device_interrupt_range()
     runtime.assert(cast[usize](count) <= MAX_DEVICE_INTERRUPTS, "MAX_DEVICE_INTERRUPTS covers every architecture's device interrupt IDs")
     slot : usize = MAX_DEVICE_INTERRUPTS
-    concurrency.lock(&kernel.interrupts_lock)
+    lock_at(&kernel.interrupts_lock, .Interrupts)
     // A line an IRQ has is routed for nothing else
     if irq != 0 && line_has_irq(kernel, controller_index, line) {
-        concurrency.unlock(&kernel.interrupts_lock)
+        unlock_at(&kernel.interrupts_lock, .Interrupts)
         return .Error(.LineInUse)
     }
     for i in 0..<cast[usize](count) {
@@ -150,14 +150,14 @@ route_line :: fn(
     if slot < MAX_DEVICE_INTERRUPTS {
         cpu.device_routes[slot] = DeviceRoute.{used = true, controller = controller_index, line = line, trigger = trigger, count = 0, irq = irq}
     }
-    concurrency.unlock(&kernel.interrupts_lock)
+    unlock_at(&kernel.interrupts_lock, .Interrupts)
     if slot == MAX_DEVICE_INTERRUPTS {
         return .Error(.NoFreeInterrupt)
     }
     id :: cast[arch_interface.InterruptId](cast[u32](first) + cast[u32](slot))
-    concurrency.lock(&wired.lock)
+    lock_at(&wired.lock, .Wired)
     arch.route_wired(&wired.controller, line, cpus[cpu_index].hardware_id, id, trigger, polarity)
-    concurrency.unlock(&wired.lock)
+    unlock_at(&wired.lock, .Wired)
     return .Ok(id)
 }
 
@@ -178,7 +178,7 @@ route_message :: fn(kernel: ptr[mut Kernel], cpu_index: u32, event: u32, irq: u6
     first, count :: arch.device_interrupt_range()
     runtime.assert(cast[usize](count) <= MAX_DEVICE_INTERRUPTS, "MAX_DEVICE_INTERRUPTS covers every architecture's device interrupt IDs")
     slot : usize = MAX_DEVICE_INTERRUPTS
-    concurrency.lock(&kernel.interrupts_lock)
+    lock_at(&kernel.interrupts_lock, .Interrupts)
     for i in 0..<cast[usize](count) {
         if !cpu.device_routes[i].used {
             slot = i
@@ -188,7 +188,7 @@ route_message :: fn(kernel: ptr[mut Kernel], cpu_index: u32, event: u32, irq: u6
     if slot < MAX_DEVICE_INTERRUPTS {
         cpu.device_routes[slot] = DeviceRoute.{used = true, controller = controller, line = event, trigger = .Edge, count = 0, irq = irq}
     }
-    concurrency.unlock(&kernel.interrupts_lock)
+    unlock_at(&kernel.interrupts_lock, .Interrupts)
     if slot == MAX_DEVICE_INTERRUPTS {
         return .Error(.NoFreeInterrupt)
     }
@@ -198,17 +198,17 @@ route_message :: fn(kernel: ptr[mut Kernel], cpu_index: u32, event: u32, irq: u6
 mask_line :: fn(kernel: ptr[mut Kernel], controller_index: u32, line: u32) {
     wired :: controller_at(kernel, controller_index) or_return void
     runtime.assert(line < wired.lines, "mask_line takes one of the controller's lines")
-    concurrency.lock(&wired.lock)
+    lock_at(&wired.lock, .Wired)
     arch.mask_wired(&wired.controller, line)
-    concurrency.unlock(&wired.lock)
+    unlock_at(&wired.lock, .Wired)
 }
 
 unmask_line :: fn(kernel: ptr[mut Kernel], controller_index: u32, line: u32) {
     wired :: controller_at(kernel, controller_index) or_return void
     runtime.assert(line < wired.lines, "unmask_line takes one of the controller's lines")
-    concurrency.lock(&wired.lock)
+    lock_at(&wired.lock, .Wired)
     arch.unmask_wired(&wired.controller, line)
-    concurrency.unlock(&wired.lock)
+    unlock_at(&wired.lock, .Wired)
 }
 
 // Whether an IRQ has controller_index's line, on any CPU. Takes interrupts_lock as held.
@@ -233,9 +233,9 @@ unroute :: fn(kernel: ptr[mut Kernel], cpu_index: u32, slot: u32) {
         return void
     }
     cpu :: cast[ptr[mut PerCpu]](per_cpus[cpu_index])
-    concurrency.lock(&kernel.interrupts_lock)
+    lock_at(&kernel.interrupts_lock, .Interrupts)
     cpu.device_routes[slot] = DeviceRoute.{}
-    concurrency.unlock(&kernel.interrupts_lock)
+    unlock_at(&kernel.interrupts_lock, .Interrupts)
 }
 
 controller_at :: fn(kernel: ptr[mut Kernel], index: u32) -> ptr[mut WiredController]? {

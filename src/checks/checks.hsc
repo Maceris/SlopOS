@@ -25,8 +25,9 @@ check_program :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.Pr
     raw_hold := check_raw_pointers(program)
     layouts_hold := check_hardware_layouts(program)
     discards_hold := check_kernel_discards(target, program)
+    locks_hold := check_kernel_locks(target, program)
     return tiers_hold && arch_holds && iommus_hold && protocols_hold && floats_hold && results_hold && interrupts_hold
-        && imports_hold && raw_hold && layouts_hold && discards_hold
+        && imports_hold && raw_hold && layouts_hold && discards_hold && locks_hold
 }
 
 // std tiers
@@ -751,6 +752,35 @@ asserts_size :: fn(text: string, name: string) -> bool {
         at = find(text, "#assert", end)
     }
 }
+
+/*
+ * The kernel's locks are ranked (decisions/0096, 0106): no kernel function takes or gives back a std spin lock itself
+ * but the ranked ones of locks.hsc, which check the order with robustness=on. The frame allocator's, the slab's and the
+ * architectures' leaves are other packages, outside this.
+ */
+check_kernel_locks :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
+    if !is_kernel(target) {
+        return true
+    }
+    kernel :: package_named(program, "kernel") or_return true
+    holds := true
+    for &function in kernel.functions {
+        if is_listed_in(LOCK_WRAPPERS, function.name) {
+            continue
+        }
+        for &call in function.calls {
+            if (call.name == "lock" || call.name == "unlock") && (ends_with(call.package_path, "/concurrency")
+                || ends_with(call.package_path, "\\concurrency")) {
+                compiler.report_error(call.location, "% takes a spin lock unranked: use lock_at and unlock_at (locks.hsc)", function.name)
+                holds = false
+            }
+        }
+    }
+    return holds
+}
+
+// The kernel's functions that take std's spin locks themselves: the ranked ones (kernel/locks.hsc).
+LOCK_WRAPPERS :: string.["lock_at", "lock_after", "unlock_at"]
 
 /*
  * Errors aren't ignored in the kernel (decisions/0029, 0100): no function of its discards a Result with _ =, unless

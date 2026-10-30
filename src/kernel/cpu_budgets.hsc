@@ -99,9 +99,9 @@ create_cpu_budget :: fn(kernel: ptr[mut Kernel], owner: u64, memory_budget: u64,
         case Error(error) => return .Error(if error == .BudgetExceeded { CpuBudgetError.BudgetExceeded } else { CpuBudgetError.OutOfMemory })
     }
     budget :: cast[ptr[mut CpuBudget]](object)
-    concurrency.lock(&kernel.cpu_budgets_lock)
+    lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if parent.header.dying != 0 || priority > cast[u32](parent.time.priority) || parent.children_share + share > parent.share {
-        concurrency.unlock(&kernel.cpu_budgets_lock)
+        unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
         release_object(kernel, object)
         return .Error(.TooMuch)
     }
@@ -113,7 +113,7 @@ create_cpu_budget :: fn(kernel: ptr[mut Kernel], owner: u64, memory_budget: u64,
     budget.parent = cast[u64](parent)
     parent.children_share += share
     link_child(parent, budget)
-    concurrency.unlock(&kernel.cpu_budgets_lock)
+    unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     match adopt(owner, object) {
         case Ok => {}
         case Error(error) => {
@@ -130,8 +130,8 @@ set_cpu_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget], priori
     if priority > TOP_PRIORITY || time_ns == 0 {
         return .Error(.InvalidArgument)
     }
-    concurrency.lock(&kernel.cpu_budgets_lock)
-    defer concurrency.unlock(&kernel.cpu_budgets_lock)
+    lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
+    defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if budget.parent == 0 {
         // The root's is every CPU's, which nothing changes
         return .Error(.TooMuch)
@@ -145,12 +145,12 @@ set_cpu_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget], priori
     budget.share = share
     budget.period_ns = period_ns
     budget.time_ns = time_ns
-    concurrency.lock(&budget.time.lock)
+    lock_at(&budget.time.lock, .CpuTime)
     budget.time.priority = cast[u8](priority)
     budget.time.period = ticks_of(kernel, period_ns)
     budget.time.budget = ticks_of(kernel, time_ns)
     budget.time.available = min_u64(budget.time.available, budget.time.budget)
-    concurrency.unlock(&budget.time.lock)
+    unlock_at(&budget.time.lock, .CpuTime)
     return .Ok
 }
 
@@ -164,8 +164,8 @@ set_cpu_budget_cpus :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget], c
     if cpus & online_mask == 0 {
         return .Error(.InvalidArgument)
     }
-    concurrency.lock(&kernel.cpu_budgets_lock)
-    defer concurrency.unlock(&kernel.cpu_budgets_lock)
+    lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
+    defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if budget.parent == 0 {
         // The root's are every CPU
         return .Error(.TooMuch)
@@ -191,8 +191,8 @@ set_cpu_budget_cpus :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget], c
 
 // The CPUs a process's threads may run on, as its budget has them.
 cpus_of :: fn(kernel: ptr[mut Kernel], process: ptr[Process]) -> u64 {
-    concurrency.lock(&kernel.cpu_budgets_lock)
-    defer concurrency.unlock(&kernel.cpu_budgets_lock)
+    lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
+    defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if process.cpu_budget == 0 {
         return ~cast[u64](0)
     }
@@ -316,8 +316,8 @@ unlink_thread_budget :: fn(budget: ptr[mut CpuBudget], thread: ptr[mut Thread]) 
  * A new process on its creator's budget (owner, a Process, or 0 for the kernel's, which puts it on the root budget).
  */
 join_creators_budget :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], creator: u64) {
-    concurrency.lock(&kernel.cpu_budgets_lock)
-    defer concurrency.unlock(&kernel.cpu_budgets_lock)
+    lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
+    defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     from :: if creator != 0 { cast[ptr[Process]](creator).cpu_budget } else { kernel.root_cpu_budget }
     if from != 0 {
         move_process(process, cast[ptr[mut CpuBudget]](from))
@@ -326,8 +326,8 @@ join_creators_budget :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], c
 
 // A process, and every thread of its, put on budget.
 set_process_budget :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], budget: ptr[mut CpuBudget]) -> bool {
-    concurrency.lock(&kernel.cpu_budgets_lock)
-    defer concurrency.unlock(&kernel.cpu_budgets_lock)
+    lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
+    defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if budget.header.dying != 0 || process.header.dying != 0 {
         return false
     }
@@ -351,8 +351,8 @@ set_process_budget :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], bud
 
 // A new thread on its process's budget.
 join_process_budget :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], process: ptr[Process]) {
-    concurrency.lock(&kernel.cpu_budgets_lock)
-    defer concurrency.unlock(&kernel.cpu_budgets_lock)
+    lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
+    defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if process.cpu_budget != 0 {
         move_thread(thread, cast[ptr[mut CpuBudget]](process.cpu_budget))
     }
@@ -360,16 +360,16 @@ join_process_budget :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], proc
 
 // A thread or process that's going, off its budget.
 leave_thread_budget :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
-    concurrency.lock(&kernel.cpu_budgets_lock)
-    defer concurrency.unlock(&kernel.cpu_budgets_lock)
+    lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
+    defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if thread.budget_object != 0 {
         unlink_thread_budget(cast[ptr[mut CpuBudget]](thread.budget_object), thread)
     }
 }
 
 leave_process_budget :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
-    concurrency.lock(&kernel.cpu_budgets_lock)
-    defer concurrency.unlock(&kernel.cpu_budgets_lock)
+    lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
+    defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if process.cpu_budget != 0 {
         unlink_process(cast[ptr[mut CpuBudget]](process.cpu_budget), process)
     }
@@ -380,8 +380,8 @@ leave_process_budget :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
  * A tick may still be charging it; its memory stays until every CPU has passed a quiescent point (objects.hsc).
  */
 destroy_cpu_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget]) {
-    concurrency.lock(&kernel.cpu_budgets_lock)
-    defer concurrency.unlock(&kernel.cpu_budgets_lock)
+    lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
+    defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if budget.parent == 0 {
         return void
     }
@@ -418,8 +418,8 @@ release_cpu_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget]) {
 
 // What cpu_budget_info gives, in its words.
 cpu_budget_words :: fn(kernel: ptr[mut Kernel], budget: ptr[CpuBudget], words: mut u64[]) {
-    concurrency.lock(&kernel.cpu_budgets_lock)
-    defer concurrency.unlock(&kernel.cpu_budgets_lock)
+    lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
+    defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     values :: u64.[cast[u64](budget.time.priority), budget.period_ns, budget.time_ns, budget.share, budget.children_share, budget.time.cpus]
     for value, i in values {
         if i < words.count {

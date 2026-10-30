@@ -75,7 +75,7 @@ start_translation :: fn(kernel: ptr[mut Kernel], index: u32) {
             return void
         }
     }
-    concurrency.lock(&registered.lock)
+    lock_at(&registered.lock, .Iommu)
     enabled :: iommu_unit.enable(&registered.unit, cast[iommu_interface.PhysicalAddress](memory), kernel.frames.direct_map_offset)
     failed := false
     match enabled {
@@ -88,7 +88,7 @@ start_translation :: fn(kernel: ptr[mut Kernel], index: u32) {
         }
         case Error(error) => failed = true
     }
-    concurrency.unlock(&registered.lock)
+    unlock_at(&registered.lock, .Iommu)
     if failed {
         // What it may have taken of the memory stays its own
         runtime.log_error("IOMMU %: translation didn't go on", index)
@@ -107,9 +107,9 @@ start_translation :: fn(kernel: ptr[mut Kernel], index: u32) {
             cpus :: kernel.cpus
             hardware_id :: if cpus.count > 0 { cpus[0].hardware_id } else { cast[u64](0) }
             message :: arch.route_msi(0, index, hardware_id, id)
-            concurrency.lock(&registered.lock)
+            lock_at(&registered.lock, .Iommu)
             iommu_unit.route_faults(&registered.unit, iommu_interface.MsiMessage.{address = message.address, data = message.data})
-            concurrency.unlock(&registered.lock)
+            unlock_at(&registered.lock, .Iommu)
             runtime.log_info("IOMMU %: translating, % interrupts remapped, its faults to CPU 0's interrupt %", index,
                 registered.interrupt_limit, cast[u32](id))
         }
@@ -139,12 +139,12 @@ handle_dma_faults :: fn(kernel: ptr[mut Kernel], index: u32) {
     }
     registered :: &kernel.iommus[cast[usize](index)]
     for taken in 0..<MAX_FAULTS_TAKEN {
-        concurrency.lock(&registered.lock)
+        lock_at(&registered.lock, .Iommu)
         found :: iommu_unit.next_fault(&registered.unit)
         if found is_some {
             registered.faults += 1
         }
-        concurrency.unlock(&registered.lock)
+        unlock_at(&registered.lock, .Iommu)
         fault :: found or_return void
         signal_dma_fault(kernel, index, fault)
         bus, slot, function :: (fault.stream >> 8) & 0xff, (fault.stream >> 3) & 0x1f, fault.stream & 7
@@ -161,8 +161,8 @@ handle_dma_faults :: fn(kernel: ptr[mut Kernel], index: u32) {
 
 // SIGNAL_DMA_FAULT on the Device translated through the IOMMU as the fault's stream, if there's one.
 signal_dma_fault :: fn(kernel: ptr[mut Kernel], index: u32, fault: iommu_interface.DmaFault) {
-    concurrency.lock(&kernel.devices_lock)
-    defer concurrency.unlock(&kernel.devices_lock)
+    lock_at(&kernel.devices_lock, .Devices)
+    defer unlock_at(&kernel.devices_lock, .Devices)
     with {
         other := kernel.first_device
     }
@@ -172,7 +172,7 @@ signal_dma_fault :: fn(kernel: ptr[mut Kernel], index: u32, fault: iommu_interfa
         }
         device :: cast[ptr[mut Device]](other)
         if device.translated && device.iommu.iommu == index + 1 && device.iommu.stream == fault.stream {
-            raise_watchers(kernel, &device.watchers, &device.watch_lock, cast[u32](slop_os.SIGNAL_DMA_FAULT), fault.address)
+            raise_watchers(kernel, &device.watchers, &device.watch_lock, .Watchers, cast[u32](slop_os.SIGNAL_DMA_FAULT), fault.address)
             return void
         }
         other = device.next
@@ -195,8 +195,8 @@ translating_iommu :: fn(kernel: ptr[mut Kernel], iommu: u32) -> ptr[mut Register
 translate_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device], domain: ptr[mut DmaDomain], path: IommuPath)
     -> Result[void, slop_os.DeviceError] {
     registered :: translating_iommu(kernel, path.iommu) or_return .Ok
-    concurrency.lock(&registered.lock)
-    defer concurrency.unlock(&registered.lock)
+    lock_at(&registered.lock, .Iommu)
+    defer unlock_at(&registered.lock, .Iommu)
     if !domain.translating {
         id :: take_domain_id(registered) or_return .Error(.OutOfMemory)
         if !charge_more(cast[u64](domain), frames.FRAME_SIZE) {
@@ -283,9 +283,9 @@ untranslate_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
     device.translated = false
     registered :: translating_iommu(kernel, device.iommu.iommu) or_return void
     domain :: cast[ptr[mut DmaDomain]](device.domain)
-    concurrency.lock(&registered.lock)
+    lock_at(&registered.lock, .Iommu)
     iommu_unit.detach(&registered.unit, &domain.unit, device.iommu.stream)
-    concurrency.unlock(&registered.lock)
+    unlock_at(&registered.lock, .Iommu)
 }
 
 /*
@@ -295,8 +295,8 @@ untranslate_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
 map_dma_memory :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain], memory: ptr[mut Memory], limit: u64)
     -> Result[void, slop_os.DeviceError] {
     registered :: translating_iommu(kernel, domain.iommu) or_return .Ok
-    concurrency.lock(&registered.lock)
-    defer concurrency.unlock(&registered.lock)
+    lock_at(&registered.lock, .Iommu)
+    defer unlock_at(&registered.lock, .Iommu)
     if !domain.translating {
         return .Ok
     }
@@ -346,7 +346,7 @@ unmap_dma_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
     memory.device_address = 0
     domain :: cast[ptr[mut DmaDomain]](memory.domain)
     registered :: translating_iommu(kernel, domain.iommu) or_return void
-    concurrency.lock(&registered.lock)
+    lock_at(&registered.lock, .Iommu)
     if domain.translating && intrinsics.atomic_load_u32_acquire(&domain.header.generation) == memory.domain_generation {
         for page in 0..<memory.size / frames.FRAME_SIZE {
             iommu_unit.unmap(&registered.unit, &domain.unit, address + page * frames.FRAME_SIZE)
@@ -354,7 +354,7 @@ unmap_dma_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
         iommu_unit.invalidate(&registered.unit, &domain.unit, false)
         give_device_addresses(domain, address, memory.size)
     }
-    concurrency.unlock(&registered.lock)
+    unlock_at(&registered.lock, .Iommu)
 }
 
 /*
@@ -364,7 +364,7 @@ unmap_dma_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
 stop_domain :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain]) {
     loop {
         found := cast[u64](0)
-        concurrency.lock(&kernel.devices_lock)
+        lock_at(&kernel.devices_lock, .Devices)
         with {
             other := kernel.first_device
         }
@@ -378,23 +378,23 @@ stop_domain :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain]) {
             }
             other = cast[ptr[Device]](other).next
         }
-        concurrency.unlock(&kernel.devices_lock)
+        unlock_at(&kernel.devices_lock, .Devices)
         if found == 0 {
             break
         }
         device :: cast[ptr[mut Device]](found)
-        concurrency.lock(&device.lock)
+        lock_at(&device.lock, .Device)
         if device.domain == cast[u64](domain) {
             untranslate_device(kernel, device)
             device.domain = 0
         }
-        concurrency.unlock(&device.lock)
+        unlock_at(&device.lock, .Device)
     }
     registered :: translating_iommu(kernel, domain.iommu) or_return void
-    concurrency.lock(&registered.lock)
+    lock_at(&registered.lock, .Iommu)
     domain.stopped = domain.translating
     domain.translating = false
-    concurrency.unlock(&registered.lock)
+    unlock_at(&registered.lock, .Iommu)
 }
 
 // Once nothing can reach them: a stopped domain's tables, its root and its ID.
@@ -404,7 +404,7 @@ release_domain_tables :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain])
     }
     domain.stopped = false
     registered :: translating_iommu(kernel, domain.iommu) or_return void
-    concurrency.lock(&registered.lock)
+    lock_at(&registered.lock, .Iommu)
     loop {
         freed : iommu_interface.FreedFrames
         done :: iommu_unit.release_domain(&registered.unit, &domain.unit, &freed)
@@ -419,7 +419,7 @@ release_domain_tables :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain])
     }
     frames.free(&kernel.frames, cast[boot_info.PhysicalAddress](domain.root), 0)
     give_domain_id(registered, domain.id)
-    concurrency.unlock(&registered.lock)
+    unlock_at(&registered.lock, .Iommu)
 }
 
 /*
@@ -435,8 +435,8 @@ remap_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], device: ptr[Device],
     if !registered.remapping {
         return message
     }
-    concurrency.lock(&registered.lock)
-    defer concurrency.unlock(&registered.lock)
+    lock_at(&registered.lock, .Iommu)
+    defer unlock_at(&registered.lock, .Iommu)
     index := registered.interrupt_limit
     for i in 0..<registered.interrupt_limit {
         word :: cast[usize](i / 64) % registered.interrupts.count
@@ -460,9 +460,9 @@ remap_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], device: ptr[Device],
 repoint_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[Irq], device: ptr[Device], hardware_id: u64, id: arch_interface.InterruptId) {
     registered :: translating_iommu(kernel, irq.remap_iommu) or_return void
     path :: iommu_path(kernel, device.address)
-    concurrency.lock(&registered.lock)
+    lock_at(&registered.lock, .Iommu)
     _ = iommu_unit.remap_interrupt(&registered.unit, irq.remap_index, path.stream, hardware_id, cast[u32](id))
-    concurrency.unlock(&registered.lock)
+    unlock_at(&registered.lock, .Iommu)
 }
 
 // A remapped IRQ's entry raising nothing again, and free.
@@ -472,10 +472,10 @@ unremap_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
     }
     registered :: translating_iommu(kernel, irq.remap_iommu) or_return void
     irq.remap_iommu = 0
-    concurrency.lock(&registered.lock)
+    lock_at(&registered.lock, .Iommu)
     iommu_unit.unmap_interrupt(&registered.unit, irq.remap_index)
     registered.interrupts[cast[usize](irq.remap_index / 64) % registered.interrupts.count] &= ~(cast[u64](1) << cast[u64](irq.remap_index % 64))
-    concurrency.unlock(&registered.lock)
+    unlock_at(&registered.lock, .Iommu)
 }
 
 /*

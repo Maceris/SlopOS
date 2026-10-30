@@ -130,7 +130,7 @@ create_device :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, address: u
             }
         }
     }
-    concurrency.lock(&kernel.devices_lock)
+    lock_at(&kernel.devices_lock, .Devices)
     taken := false
     with {
         other := kernel.first_device
@@ -152,7 +152,7 @@ create_device :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, address: u
         kernel.first_device = object
         device.listed = true
     }
-    concurrency.unlock(&kernel.devices_lock)
+    unlock_at(&kernel.devices_lock, .Devices)
     if taken {
         release_object(kernel, object)
         return .Error(.DeviceExists)
@@ -179,16 +179,16 @@ PCI_COMMAND_BUS_MASTER : u16 : 1 << 2
 // The device's DMA in domain, from now on, if it's behind the IOMMU domain's other devices are.
 attach_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device], domain: ptr[mut DmaDomain]) -> Result[void, slop_os.DeviceError] {
     path :: iommu_path(kernel, device.address)
-    concurrency.lock(&device.lock)
-    concurrency.lock(&kernel.iommus_lock)
+    lock_at(&device.lock, .Device)
+    lock_at(&kernel.iommus_lock, .Iommus)
     fits :: !domain.bound || domain.iommu == path.iommu
     if fits {
         domain.bound = true
         domain.iommu = path.iommu
     }
-    concurrency.unlock(&kernel.iommus_lock)
+    unlock_at(&kernel.iommus_lock, .Iommus)
     if !fits {
-        concurrency.unlock(&device.lock)
+        unlock_at(&device.lock, .Device)
         return .Error(.WrongIommu)
     }
     // Away from the domain it was in, if it was
@@ -200,11 +200,11 @@ attach_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device], domain: pt
         case Ok => {}
         case Error(error) => {
             device.domain = 0
-            concurrency.unlock(&device.lock)
+            unlock_at(&device.lock, .Device)
             return .Error(error)
         }
     }
-    concurrency.unlock(&device.lock)
+    unlock_at(&device.lock, .Device)
     return .Ok
 }
 
@@ -222,23 +222,23 @@ destroy_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
         intrinsics.volatile_store_u16(command, intrinsics.volatile_load_u16(command) & ~PCI_COMMAND_BUS_MASTER)
     }
     // And blocked by its IOMMU, which won't reach its domain's tables once they go
-    concurrency.lock(&device.lock)
+    lock_at(&device.lock, .Device)
     untranslate_device(kernel, device)
     device.domain = 0
-    concurrency.unlock(&device.lock)
+    unlock_at(&device.lock, .Device)
     loop {
-        concurrency.lock(&device.lock)
+        lock_at(&device.lock, .Device)
         first :: device.first_irq
         if first != 0 {
             unlink_irq(device, cast[ptr[mut Irq]](first))
         }
-        concurrency.unlock(&device.lock)
+        unlock_at(&device.lock, .Device)
         if first == 0 {
             break
         }
         destroy_later(kernel, first, cast[ptr[ObjectHeader]](first).generation)
     }
-    concurrency.lock(&kernel.devices_lock)
+    lock_at(&kernel.devices_lock, .Devices)
     if device.listed {
         if device.previous != 0 {
             cast[ptr[mut Device]](device.previous).next = device.next
@@ -254,7 +254,7 @@ destroy_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
             arch.remove_msi_device(device.msi_source)
         }
     }
-    concurrency.unlock(&kernel.devices_lock)
+    unlock_at(&kernel.devices_lock, .Devices)
 }
 
 // Once no CPU can use it: what the interrupt controller kept for it.
@@ -306,7 +306,7 @@ create_msi_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, device: p
     irq.slot = cast[u32](MAX_DEVICE_INTERRUPTS)
     irq.device = cast[u64](device)
     irq.msi_source = device.msi_source
-    concurrency.lock(&device.lock)
+    lock_at(&device.lock, .Device)
     event : u32 = slop_os.MAX_DEVICE_MSIS
     if !is_dying(cast[u64](device)) {
         for bit in 0..<slop_os.MAX_DEVICE_MSIS {
@@ -328,7 +328,7 @@ create_msi_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, device: p
         device.first_irq = object
         irq.in_device = true
     }
-    concurrency.unlock(&device.lock)
+    unlock_at(&device.lock, .Device)
     if gone || event == slop_os.MAX_DEVICE_MSIS {
         release_object(kernel, object)
         return .Error(if gone { slop_os.DeviceError.ObjectGone } else { slop_os.DeviceError.TooManyVectors })
@@ -346,9 +346,9 @@ create_msi_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, device: p
                 case Some(message) => irq.message = message
                 case None => {
                     unroute(kernel, irq.cpu, irq.slot)
-                    concurrency.lock(&device.lock)
+                    lock_at(&device.lock, .Device)
                     unlink_irq(device, irq)
-                    concurrency.unlock(&device.lock)
+                    unlock_at(&device.lock, .Device)
                     release_object(kernel, object)
                     return .Error(.NoFreeInterrupt)
                 }
@@ -356,9 +356,9 @@ create_msi_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, device: p
         }
         case Error(error) => {
             // Its event, free again: nothing else has it yet
-            concurrency.lock(&device.lock)
+            lock_at(&device.lock, .Device)
             unlink_irq(device, irq)
-            concurrency.unlock(&device.lock)
+            unlock_at(&device.lock, .Device)
             release_object(kernel, object)
             return .Error(.NoFreeInterrupt)
         }
@@ -385,8 +385,8 @@ move_msi_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], cpu_index: u32) -
         return .Error(.InvalidArgument)
     }
     device :: cast[ptr[mut Device]](irq.device)
-    concurrency.lock(&device.lock)
-    defer concurrency.unlock(&device.lock)
+    lock_at(&device.lock, .Device)
+    defer unlock_at(&device.lock, .Device)
     if !irq.in_device || cast[usize](irq.slot) >= MAX_DEVICE_INTERRUPTS {
         return .Error(.ObjectGone)
     }
@@ -420,12 +420,12 @@ move_msi_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], cpu_index: u32) -
  */
 destroy_msi_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
     device :: cast[ptr[mut Device]](irq.device)
-    concurrency.lock(&device.lock)
+    lock_at(&device.lock, .Device)
     if irq.in_device {
         arch.unroute_msi(irq.msi_source, irq.line)
         unlink_irq(device, irq)
     }
-    concurrency.unlock(&device.lock)
+    unlock_at(&device.lock, .Device)
     unremap_msi(kernel, irq)
     if cast[usize](irq.slot) < MAX_DEVICE_INTERRUPTS {
         unroute(kernel, irq.cpu, irq.slot)
@@ -467,12 +467,12 @@ release_dma_domain :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain]) {
  */
 create_dma_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, domain: ptr[mut DmaDomain], size: u64, limit: u64)
     -> Result[ptr[mut Memory], slop_os.DeviceError] {
-    concurrency.lock(&kernel.iommus_lock)
+    lock_at(&kernel.iommus_lock, .Iommus)
     if !domain.bound {
         domain.bound = true
         domain.iommu = 0
     }
-    concurrency.unlock(&kernel.iommus_lock)
+    unlock_at(&kernel.iommus_lock, .Iommus)
     translates :: translating_iommu(kernel, domain.iommu) is_some
     if !translates && !domain.trusted {
         return .Error(.Untrusted)

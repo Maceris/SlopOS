@@ -79,8 +79,8 @@ Resolved :: struct {
  */
 install :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], object: u64, generation: u32, kind: slop_os.ObjectKind,
     rights: slop_os.Rights, owning: bool) -> Result[slop_os.Handle, slop_os.HandleError] {
-    concurrency.lock(&table.lock)
-    defer concurrency.unlock(&table.lock)
+    lock_at(&table.lock, .HandleTable)
+    defer unlock_at(&table.lock, .HandleTable)
     if table.closed {
         return .Error(.ObjectGone)
     }
@@ -155,8 +155,8 @@ lookup :: fn(table: ptr[HandleTable], handle: slop_os.Handle) -> Result[Resolved
 remove :: fn(table: ptr[mut HandleTable], handle: slop_os.Handle) -> Result[Resolved, slop_os.HandleError] {
     index :: cast[u32](handle) & 0xffff
     wanted :: cast[u64](cast[u32](handle) >> 16)
-    concurrency.lock(&table.lock)
-    defer concurrency.unlock(&table.lock)
+    lock_at(&table.lock, .HandleTable)
+    defer unlock_at(&table.lock, .HandleTable)
     if index == 0 {
         return .Error(.InvalidHandle)
     }
@@ -242,9 +242,9 @@ zeroed_frame :: fn(kernel: ptr[mut Kernel]) -> u64? {
 
 // No more handles go in; the entries stay readable until the table is freed.
 close_table :: fn(table: ptr[mut HandleTable]) {
-    concurrency.lock(&table.lock)
+    lock_at(&table.lock, .HandleTable)
     table.closed = true
-    concurrency.unlock(&table.lock)
+    unlock_at(&table.lock, .HandleTable)
 }
 
 // Free a closed table's pages and directory, once no CPU can be reading them.

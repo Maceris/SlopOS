@@ -44,7 +44,7 @@ FaultOutcome :: enum {
  */
 create_paged_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, port: ptr[mut Port], key: u64, size: u64)
     -> Result[ptr[mut Memory], slop_os.MemoryError] {
-    concurrency.lock(&port.lock)
+    lock_at(&port.lock, .Port)
     binding_address := cast[u64](0)
     generation : u32 = 0
     if !is_dying(cast[u64](port)) {
@@ -56,7 +56,7 @@ create_paged_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, port
             case None => {}
         }
     }
-    concurrency.unlock(&port.lock)
+    unlock_at(&port.lock, .Port)
     if binding_address == 0 {
         return .Error(.NoPager)
     }
@@ -86,11 +86,11 @@ paged_root :: fn(memory: ptr[Memory], page: u64) -> (ptr[mut Memory], u64) {
  */
 resolve_paged_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], space: ptr[mut AddressSpace], address: u64,
     memory: ptr[mut Memory], page: u64, mapping: arch_interface.Mapping) -> FaultOutcome {
-    concurrency.lock(&memory.page_lock)
+    lock_at(&memory.page_lock, .MemoryPages)
     slot :: page_slot(memory, page)
     held :: intrinsics.atomic_load_u64_acquire(slot)
     if held >= frames.FRAME_SIZE {
-        concurrency.unlock(&memory.page_lock)
+        unlock_at(&memory.page_lock, .MemoryPages)
         mapped, error :: map_pages_locked(kernel, space, address, held, frames.FRAME_SIZE, mapping)
         return match error {
             case Some(failure) => if failure == .AlreadyMapped { FaultOutcome.Mapped } else { FaultOutcome.Failed }
@@ -100,7 +100,7 @@ resolve_paged_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], spac
     port :: match lock_bound_port(cast[ptr[Binding]](memory.pager_binding), memory.pager_generation) {
         case Some(locked) => locked
         case None => {
-            concurrency.unlock(&memory.page_lock)
+            unlock_at(&memory.page_lock, .MemoryPages)
             return .Failed
         }
     }
@@ -110,7 +110,7 @@ resolve_paged_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], spac
         binding.data |= 1
         queue_binding(kernel, port, binding)
     }
-    concurrency.unlock(&port.lock)
+    unlock_at(&port.lock, .Port)
     // Saved first, then where supply finds it, as a port's waiter is
     cpu :: per_cpu()
     if cpu.current == cast[u64](thread) {
@@ -125,7 +125,7 @@ resolve_paged_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], spac
         cast[ptr[mut Thread]](memory.fault_waiters).wait_previous = cast[u64](thread)
     }
     memory.fault_waiters = cast[u64](thread)
-    concurrency.unlock(&memory.page_lock)
+    unlock_at(&memory.page_lock, .MemoryPages)
     return .Blocked
 }
 
@@ -157,7 +157,7 @@ cancel_fault_wait :: fn(thread: ptr[mut Thread]) {
         return void
     }
     memory :: cast[ptr[mut Memory]](address)
-    concurrency.lock(&memory.page_lock)
+    lock_at(&memory.page_lock, .MemoryPages)
     if thread.fault_memory == address {
         if thread.wait_previous != 0 {
             cast[ptr[mut Thread]](thread.wait_previous).wait_next = thread.wait_next
@@ -170,7 +170,7 @@ cancel_fault_wait :: fn(thread: ptr[mut Thread]) {
         }
         thread.fault_memory = 0
     }
-    concurrency.unlock(&memory.page_lock)
+    unlock_at(&memory.page_lock, .MemoryPages)
 }
 
 // The offset of a wanted page not reported yet, reported now.
@@ -178,8 +178,8 @@ page_wanted :: fn(memory: ptr[mut Memory]) -> Result[u64, slop_os.MemoryError] {
     if memory.pager_binding == 0 {
         return .Error(.NotPaged)
     }
-    concurrency.lock(&memory.page_lock)
-    defer concurrency.unlock(&memory.page_lock)
+    lock_at(&memory.page_lock, .MemoryPages)
+    defer unlock_at(&memory.page_lock, .MemoryPages)
     pages :: memory.size / frames.FRAME_SIZE
     for page in cast[u64](0)..<pages {
         slot :: page_slot(memory, page)
@@ -211,7 +211,7 @@ supply_page :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64,
     frame :: frames.take_frame(&per_cpu().frame_cache, &kernel.frames) or_return .OutOfMemory
     intrinsics.mem_copy_non_overlapping(cast[mut rawptr](frames.virtual_of(&kernel.frames, frame)),
         cast[rawptr](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](from))), cast[usize](frames.FRAME_SIZE))
-    concurrency.lock(&memory.page_lock)
+    lock_at(&memory.page_lock, .MemoryPages)
     slot :: page_slot(memory, offset / frames.FRAME_SIZE)
     if intrinsics.atomic_load_u64_acquire(slot) >= frames.FRAME_SIZE {
         frames.give_frame(&per_cpu().frame_cache, &kernel.frames, frame)
@@ -220,6 +220,6 @@ supply_page :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64,
         intrinsics.atomic_store_u64_release(slot, cast[u64](frame))
     }
     wake_fault_waiters(kernel, memory)
-    concurrency.unlock(&memory.page_lock)
+    unlock_at(&memory.page_lock, .MemoryPages)
     return null
 }

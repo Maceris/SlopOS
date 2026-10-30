@@ -148,6 +148,9 @@ PerCpu :: struct #align(64) {
     context : runtime.Context,
     kernel : ptr[mut Kernel],
     index : u32,
+    // The locks this CPU holds, by rank, and whether it's reporting a broken order (locks.hsc), with robustness=on
+    held_ranks : concurrency.HeldRanks,
+    reporting_locks : bool,
     arch : arch.ArchCpu,
     stacks : arch_interface.CpuStacks,
     timer_ticks : u64,

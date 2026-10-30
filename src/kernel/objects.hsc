@@ -242,8 +242,8 @@ adopt :: fn(owner: u64, object: u64) -> Result[void, ObjectError] {
     }
     process :: cast[ptr[mut Process]](owner)
     list :: &process.owned
-    concurrency.lock(&list.lock)
-    defer concurrency.unlock(&list.lock)
+    lock_at(&list.lock, .ObjectList)
+    defer unlock_at(&list.lock, .ObjectList)
     // Under the lock, so destroying the owner either sees it, or this sees the owner dying
     if intrinsics.atomic_load_u32_acquire(&process.header.dying) != 0 {
         return .Error(.OwnerGone)
@@ -266,8 +266,8 @@ disown :: fn(object: u64) {
     }
     owner :: cast[ptr[mut Process]](header.owner)
     list :: &owner.owned
-    concurrency.lock(&list.lock)
-    defer concurrency.unlock(&list.lock)
+    lock_at(&list.lock, .ObjectList)
+    defer unlock_at(&list.lock, .ObjectList)
     if !header.owned {
         return void
     }
@@ -285,8 +285,8 @@ disown :: fn(object: u64) {
 
 // The first object list's owner owns, taken off it, or 0.
 take_owned :: fn(list: ptr[mut OwnedList]) -> u64 {
-    concurrency.lock(&list.lock)
-    defer concurrency.unlock(&list.lock)
+    lock_at(&list.lock, .ObjectList)
+    defer unlock_at(&list.lock, .ObjectList)
     first :: list.first
     if first == 0 {
         return 0

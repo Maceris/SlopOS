@@ -113,6 +113,11 @@ test_exit :: fn(code: u32) {
     aarch64.semihosting(SEMIHOSTING_EXIT, cast[rawptr](&block))
 }
 
+// Whether the calling CPU takes interrupts now: DAIF's I bit clear.
+interrupts_enabled :: fn() -> bool {
+    return aarch64.read_system_register(.DAIF) & 0x80 == 0
+}
+
 // Stop the calling CPU for good, with interrupts masked.
 halt :: fn() #never_returns {
     loop {

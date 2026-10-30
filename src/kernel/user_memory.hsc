@@ -38,8 +38,8 @@ copy_user :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address: u64,
     if address < cast[u64](low) || address >= cast[u64](high) || size > cast[u64](high) - address {
         return false
     }
-    concurrency.lock(&space.lock)
-    defer concurrency.unlock(&space.lock)
+    lock_at(&space.lock, .Space)
+    defer unlock_at(&space.lock, .Space)
     copied : u64 = 0
     loop {
         at :: address + copied

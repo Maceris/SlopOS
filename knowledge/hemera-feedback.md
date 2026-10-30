@@ -121,7 +121,9 @@ Then from the `rawptr` review and R1 (2026-10-30): `string_bytes(text)`, a strin
 a `rawptr` (`0103`); casts between an address and a float, `bool` or `char` refused, and an untyped constant cast to an
 address checked as its own type (`cast[ptr[u8]](1.5)` had compiled); `--output=name.exe` no longer making
 `name.exe.exe`; `-o value` taken as well as `-o=value`; and `std`'s `memory.FailingAllocator`, which fails the nth
-allocation for fault injection's hosted sweeps (`0096`, `0104`).
+allocation for fault injection's hosted sweeps (`0096`, `0104`); base's `array_try_reserve`, `array_try_add` and
+`array_try_copy` (`0104`); and `std`'s ranked spin locks, `lock_ranked`, `lock_ranked_after` and `unlock_ranked` over a
+`HeldRanks` (`0106`).
 
 ## 4. Features That Look Like a Strong Fit
 

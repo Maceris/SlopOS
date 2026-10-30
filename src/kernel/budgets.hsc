@@ -67,8 +67,8 @@ has_time :: fn(budget: ptr[mut CpuTime], now: u64) -> bool {
     if budget.unlimited {
         return true
     }
-    concurrency.lock(&budget.lock)
-    defer concurrency.unlock(&budget.lock)
+    lock_at(&budget.lock, .CpuTime)
+    defer unlock_at(&budget.lock, .CpuTime)
     replenish(budget, now)
     return budget.available > 0
 }
@@ -81,8 +81,8 @@ charge :: fn(budget: ptr[mut CpuTime], start: u64, used: u64, now: u64) {
     if budget.unlimited {
         return void
     }
-    concurrency.lock(&budget.lock)
-    defer concurrency.unlock(&budget.lock)
+    lock_at(&budget.lock, .CpuTime)
+    defer unlock_at(&budget.lock, .CpuTime)
     replenish(budget, now)
     // What ran past what was left is owed, and paid from the refills before they give time again: every tick used
     // comes back, so a budget's time left, its refills and its debt always add up to its budget

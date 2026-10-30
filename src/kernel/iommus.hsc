@@ -84,7 +84,7 @@ register_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, p
         number = made
     }
     index :: number or_else 0
-    concurrency.lock(&kernel.iommus_lock)
+    lock_at(&kernel.iommus_lock, .Iommus)
     known := false
     for i in 0..<cast[usize](kernel.iommu_scope_count) {
         scope :: &kernel.iommu_scopes[i % MAX_IOMMU_SCOPES]
@@ -96,7 +96,7 @@ register_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, p
         kernel.iommu_scopes[slot] = IommuScope.{iommu = index, first = first, count = count, stream = stream}
         kernel.iommu_scope_count += 1
     }
-    concurrency.unlock(&kernel.iommus_lock)
+    unlock_at(&kernel.iommus_lock, .Iommus)
     if full {
         return .Error(.TooManyIommus)
     }
@@ -129,7 +129,7 @@ add_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, physic
             return .Error(.NoIommu)
         }
     }
-    concurrency.lock(&kernel.iommus_lock)
+    lock_at(&kernel.iommus_lock, .Iommus)
     index :: kernel.iommu_count
     // Another registration of it, since find_iommu looked
     again :: find_iommu(kernel, kind, physical)
@@ -138,7 +138,7 @@ add_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, physic
         kernel.iommus[cast[usize](index)] = RegisteredIommu.{unit = unit, kind = kind, info = info, registers = mapped, physical = physical, size = size}
         intrinsics.atomic_store_u32_release(&kernel.iommu_count, index + 1)
     }
-    concurrency.unlock(&kernel.iommus_lock)
+    unlock_at(&kernel.iommus_lock, .Iommus)
     if (again is_some) || full {
         unmap_device(kernel, mapped, size)
         return if full { .Error(.TooManyIommus) } else { .Ok(again or_else 0) }
@@ -180,7 +180,7 @@ iommu_kind :: fn(kind: u32) -> iommu_interface.IommuKind? {
 iommu_path :: fn(kernel: ptr[mut Kernel], address: u32) -> IommuPath {
     path := IommuPath.{}
     narrowest := cast[u32](0)
-    concurrency.lock(&kernel.iommus_lock)
+    lock_at(&kernel.iommus_lock, .Iommus)
     for i in 0..<cast[usize](kernel.iommu_scope_count) {
         scope :: &kernel.iommu_scopes[i % MAX_IOMMU_SCOPES]
         if address >> 16 == scope.first >> 16 && address >= scope.first && address - scope.first < scope.count
@@ -189,6 +189,6 @@ iommu_path :: fn(kernel: ptr[mut Kernel], address: u32) -> IommuPath {
             narrowest = scope.count
         }
     }
-    concurrency.unlock(&kernel.iommus_lock)
+    unlock_at(&kernel.iommus_lock, .Iommus)
     return path
 }

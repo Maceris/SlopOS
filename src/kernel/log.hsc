@@ -90,12 +90,12 @@ write_console :: fn(text: string) {
         return void
     }
     kernel :: per_cpu().kernel
-    concurrency.lock(&kernel.console_lock)
+    lock_at(&kernel.console_lock, .Console)
     arch.early_console_write(text)
     if kernel.has_framebuffer_console {
         console.write(&kernel.framebuffer_console, text)
     }
-    concurrency.unlock(&kernel.console_lock)
+    unlock_at(&kernel.console_lock, .Console)
 }
 
 /*

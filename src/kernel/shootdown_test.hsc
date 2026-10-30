@@ -59,9 +59,9 @@ test_shootdown :: fn(kernel: ptr[mut Kernel]) {
     // The same address, another frame
     flush : arch_interface.TlbBatch
     freed : arch_interface.FreedTables
-    concurrency.lock(&kernel.page_table_lock)
+    lock_at(&kernel.page_table_lock, .PageTable)
     _ = arch.unmap(&kernel.page_table, cast[arch_interface.VirtualAddress](test.address), .Size4K, &freed, &flush)
-    concurrency.unlock(&kernel.page_table_lock)
+    unlock_at(&kernel.page_table_lock, .PageTable)
     shootdown(kernel, &flush)
     free_tables(kernel, &freed)
     mapper : Mapper

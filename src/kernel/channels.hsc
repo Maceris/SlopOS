@@ -254,7 +254,7 @@ destroy_channel :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel]) {
     dropped : u64[16]
     unmap := false
     kept :: side_of(core, side)
-    concurrency.lock(&core.lock)
+    lock_at(&core.lock, .ChannelCore)
     kept.closed = true
     for i in 0..<MAX_END_BINDINGS {
         drop_end_binding(kernel, &kept.bindings[i])
@@ -275,7 +275,7 @@ destroy_channel :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel]) {
         mapping.doomed = true
     }
     raise_signals(kernel, core, 1 - side, cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    concurrency.unlock(&core.lock)
+    unlock_at(&core.lock, .ChannelCore)
     if unmap {
         unmap_ring(kernel, core, side)
     }
@@ -319,62 +319,62 @@ channel_map :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel], space: ptr[mut
         return slop_os.ChannelError.BadAddress
     }
     mapping :: &side_of(core, side).mapping
-    concurrency.lock(&core.lock)
+    lock_at(&core.lock, .ChannelCore)
     if is_dying(cast[u64](end)) {
-        concurrency.unlock(&core.lock)
+        unlock_at(&core.lock, .ChannelCore)
         return slop_os.ChannelError.ObjectGone
     }
     if mapping.state != .None {
-        concurrency.unlock(&core.lock)
+        unlock_at(&core.lock, .ChannelCore)
         return slop_os.ChannelError.Mapped
     }
     if end.sending != 0 {
-        concurrency.unlock(&core.lock)
+        unlock_at(&core.lock, .ChannelCore)
         return slop_os.ChannelError.InFlight
     }
     mapping.state = .Mapping
     mapping.doomed = false
     mapping.space = cast[u64](space)
     mapping.address = address
-    concurrency.unlock(&core.lock)
+    unlock_at(&core.lock, .ChannelCore)
     // On the space's list first, so releasing the space lets go of what it maps
-    concurrency.lock(&space.lock)
+    lock_at(&space.lock, .Space)
     if is_dying(cast[u64](space)) {
-        concurrency.unlock(&space.lock)
+        unlock_at(&space.lock, .Space)
         set_mapping_state(core, mapping, .None)
         return slop_os.ChannelError.ObjectGone
     }
     // A memory mapping there may have nothing in its page tables yet
     if !range_free(kernel, space, address, size) {
-        concurrency.unlock(&space.lock)
+        unlock_at(&space.lock, .Space)
         set_mapping_state(core, mapping, .None)
         return slop_os.ChannelError.BadAddress
     }
     link_ring(space, mapping)
     _ = intrinsics.interlocked_increment_u32(&core.references)
-    concurrency.unlock(&space.lock)
+    unlock_at(&space.lock, .Space)
     match map_user(kernel, space, address, core.memory, size, RING_MAPPING) {
         case Ok => {}
         case Error(error) => {
-            concurrency.lock(&space.lock)
+            lock_at(&space.lock, .Space)
             unlink_ring(space, mapping)
-            concurrency.unlock(&space.lock)
+            unlock_at(&space.lock, .Space)
             drop_core(kernel, cast[u64](core))
             set_mapping_state(core, mapping, .None)
             return if error == .OutOfMemory { slop_os.ChannelError.OutOfMemory }
                 else if error == .BudgetExceeded { slop_os.ChannelError.BudgetExceeded } else { slop_os.ChannelError.BadAddress }
         }
     }
-    concurrency.lock(&core.lock)
+    lock_at(&core.lock, .ChannelCore)
     if mapping.doomed {
         // The end was destroyed meanwhile, and left this for the mapper
         mapping.state = .Unmapping
-        concurrency.unlock(&core.lock)
+        unlock_at(&core.lock, .ChannelCore)
         unmap_ring(kernel, core, side)
         return slop_os.ChannelError.ObjectGone
     }
     mapping.state = .Mapped
-    concurrency.unlock(&core.lock)
+    unlock_at(&core.lock, .ChannelCore)
     return null
 }
 
@@ -384,21 +384,21 @@ RING_MAPPING :: arch_interface.Mapping.{protection = .ReadWrite, cache = .WriteB
 channel_unmap :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel]) -> slop_os.ChannelError? {
     core :: core_of(end)
     mapping :: &side_of(core, end.side).mapping
-    concurrency.lock(&core.lock)
+    lock_at(&core.lock, .ChannelCore)
     if mapping.state != .Mapped {
-        concurrency.unlock(&core.lock)
+        unlock_at(&core.lock, .ChannelCore)
         return slop_os.ChannelError.BadAddress
     }
     mapping.state = .Unmapping
-    concurrency.unlock(&core.lock)
+    unlock_at(&core.lock, .ChannelCore)
     unmap_ring(kernel, core, end.side)
     return null
 }
 
 set_mapping_state :: fn(core: ptr[mut ChannelCore], mapping: ptr[mut RingMapping], state: MappingState) {
-    concurrency.lock(&core.lock)
+    lock_at(&core.lock, .ChannelCore)
     mapping.state = state
-    concurrency.unlock(&core.lock)
+    unlock_at(&core.lock, .ChannelCore)
 }
 
 /*
@@ -415,9 +415,9 @@ unmap_ring :: fn(kernel: ptr[mut Kernel], core: ptr[mut ChannelCore], side: u32)
     page : u64 = 0
     dropped := false
     loop {
-        concurrency.lock(&space.lock)
+        lock_at(&space.lock, .Space)
         if !mapping.linked {
-            concurrency.unlock(&space.lock)
+            unlock_at(&space.lock, .Space)
             break
         }
         page = unmap_some(&space.table, mapping.address, page, pages, &freed, &flush)
@@ -425,7 +425,7 @@ unmap_ring :: fn(kernel: ptr[mut Kernel], core: ptr[mut ChannelCore], side: u32)
             unlink_ring(space, mapping)
             dropped = true
         }
-        concurrency.unlock(&space.lock)
+        unlock_at(&space.lock, .Space)
         shootdown(kernel, &flush)
         flush = arch_interface.TlbBatch.{}
         free_tables(kernel, &freed)
@@ -479,8 +479,8 @@ take_ring :: fn(space: ptr[mut AddressSpace]) -> u64 {
 // Raise Readable or Writable on the other end.
 channel_notify :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel], signals: slop_os.Signals) -> slop_os.ChannelError? {
     core :: core_of(end)
-    concurrency.lock(&core.lock)
-    defer concurrency.unlock(&core.lock)
+    lock_at(&core.lock, .ChannelCore)
+    defer unlock_at(&core.lock, .ChannelCore)
     if side_of(core, 1 - end.side).closed {
         return slop_os.ChannelError.PeerClosed
     }
@@ -506,7 +506,7 @@ raise_signals :: fn(kernel: ptr[mut Kernel], core: ptr[mut ChannelCore], side: u
             match lock_bound_port(binding, slot.generation) {
                 case Some(port) => {
                     signal_binding(kernel, port, binding, signals)
-                    concurrency.unlock(&port.lock)
+                    unlock_at(&port.lock, .Port)
                 }
                 case None => {}
             }
@@ -537,7 +537,7 @@ drop_end_binding :: fn(kernel: ptr[mut Kernel], slot: ptr[mut EndBinding]) {
         case Some(port) => {
             _ = maps.map_remove(&port.bindings, binding.key)
             free_binding(kernel, port, binding)
-            concurrency.unlock(&port.lock)
+            unlock_at(&port.lock, .Port)
         }
         case None => {}
     }
@@ -555,13 +555,13 @@ port_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], end: ptr[mut Chann
     mode: slop_os.BindMode) -> slop_os.PortError? {
     core :: core_of(end)
     side :: end.side
-    concurrency.lock(&core.lock)
-    defer concurrency.unlock(&core.lock)
+    lock_at(&core.lock, .ChannelCore)
+    defer unlock_at(&core.lock, .ChannelCore)
     if is_dying(cast[u64](end)) {
         return slop_os.PortError.ObjectGone
     }
-    concurrency.lock(&port.lock)
-    defer concurrency.unlock(&port.lock)
+    lock_at(&port.lock, .Port)
+    defer unlock_at(&port.lock, .Port)
     if is_dying(cast[u64](port)) {
         return slop_os.PortError.ObjectGone
     }
@@ -623,8 +623,8 @@ channel_write :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end: ptr[m
     if batch != slop_os.NO_BATCH && batch >= slop_os.HANDLE_BATCHES {
         return slop_os.ChannelError.NoSuchBatch
     }
-    concurrency.lock(&core.lock)
-    defer concurrency.unlock(&core.lock)
+    lock_at(&core.lock, .ChannelCore)
+    defer unlock_at(&core.lock, .ChannelCore)
     if side_of(core, 1 - side).closed {
         return slop_os.ChannelError.PeerClosed
     }
@@ -688,8 +688,8 @@ channel_read :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end: ptr[mu
     core :: core_of(end)
     peer :: 1 - end.side
     ring_bytes :: core.ring_bytes
-    concurrency.lock(&core.lock)
-    defer concurrency.unlock(&core.lock)
+    lock_at(&core.lock, .ChannelCore)
+    defer unlock_at(&core.lock, .ChannelCore)
     indices :: indices_of(kernel, core, peer)
     intrinsics.atomic_store_u32(&indices.consumer_waiting, 0)
     head :: intrinsics.atomic_load_u32(&indices.head)
@@ -783,7 +783,7 @@ channel_send_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end
     filled.sender_generation = end.header.generation
     peer :: 1 - end.side
     slot :: &side_of(core, peer).batches[cast[usize](batch) % 16]
-    concurrency.lock(&core.lock)
+    lock_at(&core.lock, .ChannelCore)
     failure := cast[u32](0)
     if side_of(core, peer).closed {
         failure = cast[u32](slop_os.ChannelError.PeerClosed)
@@ -794,7 +794,7 @@ channel_send_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end
     else {
         slot^ = RESERVED
     }
-    concurrency.unlock(&core.lock)
+    unlock_at(&core.lock, .ChannelCore)
     if failure != 0 {
         free_batch(kernel, block)
         return cast[slop_os.ChannelError](failure)
@@ -822,10 +822,10 @@ channel_send_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end
         }
     }
     filled.count = count
-    concurrency.lock(&core.lock)
+    lock_at(&core.lock, .ChannelCore)
     closed :: side_of(core, peer).closed
     slot^ = if closed { cast[u64](0) } else { block }
-    concurrency.unlock(&core.lock)
+    unlock_at(&core.lock, .ChannelCore)
     if closed {
         drop_batch(kernel, filled)
         return slop_os.ChannelError.PeerClosed
@@ -834,16 +834,16 @@ channel_send_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end
 }
 
 set_batch :: fn(core: ptr[mut ChannelCore], slot: ptr[mut u64], value: u64) {
-    concurrency.lock(&core.lock)
+    lock_at(&core.lock, .ChannelCore)
     slot^ = value
-    concurrency.unlock(&core.lock)
+    unlock_at(&core.lock, .ChannelCore)
 }
 
 // An end is about to be sent: unless its rings are mapped, it can't be mapped until it arrives.
 hold_for_sending :: fn(end: ptr[mut Channel]) -> bool {
     core :: core_of(end)
-    concurrency.lock(&core.lock)
-    defer concurrency.unlock(&core.lock)
+    lock_at(&core.lock, .ChannelCore)
+    defer unlock_at(&core.lock, .ChannelCore)
     if side_of(core, end.side).mapping.state != .None {
         return false
     }
@@ -853,11 +853,11 @@ hold_for_sending :: fn(end: ptr[mut Channel]) -> bool {
 
 let_go_of_end :: fn(end: ptr[mut Channel], generation: u32) {
     core :: core_of(end)
-    concurrency.lock(&core.lock)
+    lock_at(&core.lock, .ChannelCore)
     if end.header.generation == generation && end.sending != 0 {
         end.sending -= 1
     }
-    concurrency.unlock(&core.lock)
+    unlock_at(&core.lock, .ChannelCore)
 }
 
 // The ends among the first count handles, held by hold_for_sending, let go of again.
@@ -916,20 +916,20 @@ channel_take_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end
     }
     core :: core_of(end)
     slot :: &side_of(core, end.side).batches[cast[usize](batch) % 16]
-    concurrency.lock(&core.lock)
+    lock_at(&core.lock, .ChannelCore)
     address :: slot^
     if address <= RESERVED {
-        concurrency.unlock(&core.lock)
+        unlock_at(&core.lock, .ChannelCore)
         return .Failed(.NoSuchBatch, 0)
     }
     taken :: cast[ptr[mut HandleBatch]](address)
     count :: taken.count
     if count > capacity {
-        concurrency.unlock(&core.lock)
+        unlock_at(&core.lock, .ChannelCore)
         return .Failed(.BufferTooSmall, count)
     }
     if !is_user_writable(thread.space, handles, cast[u64](count) * 4) {
-        concurrency.unlock(&core.lock)
+        unlock_at(&core.lock, .ChannelCore)
         return .Failed(.BadBuffer, 0)
     }
     process :: process_of(thread)
@@ -946,11 +946,11 @@ channel_take_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end
         }
     }
     if !move_charges(kernel, &owned, owned_count, process.header.budget) {
-        concurrency.unlock(&core.lock)
+        unlock_at(&core.lock, .ChannelCore)
         return .Failed(.BudgetExceeded, 0)
     }
     slot^ = 0
-    concurrency.unlock(&core.lock)
+    unlock_at(&core.lock, .ChannelCore)
     installed : slop_os.Handle[64]
     for entry, i in taken.entries {
         if i >= cast[usize](count) {

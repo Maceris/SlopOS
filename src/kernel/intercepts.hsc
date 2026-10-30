@@ -68,7 +68,7 @@ create_intercept :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, process
     intercept.calls = calls
     intercept.points = points
     // Its binding first, so a stop always has somewhere to go
-    concurrency.lock(&port.lock)
+    lock_at(&port.lock, .Port)
     failure := cast[u32](0)
     if is_dying(cast[u64](port)) {
         failure = cast[u32](slop_os.ControlError.ObjectGone)
@@ -88,7 +88,7 @@ create_intercept :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, process
             case None => failure = cast[u32](if port.short_of_budget { slop_os.ControlError.BudgetExceeded } else { slop_os.ControlError.OutOfMemory })
         }
     }
-    concurrency.unlock(&port.lock)
+    unlock_at(&port.lock, .Port)
     if failure != 0 {
         release_object(kernel, object)
         return .Error(cast[slop_os.ControlError](failure))
@@ -124,22 +124,22 @@ destroy_intercept :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) 
         }
     }
     loop {
-        concurrency.lock(&intercept.lock)
+        lock_at(&intercept.lock, .Intercept)
         first :: intercept.first_stopped
         if first != 0 {
             unlink_stopped(intercept, cast[ptr[mut Thread]](first))
         }
-        concurrency.unlock(&intercept.lock)
+        unlock_at(&intercept.lock, .Intercept)
         if first == 0 {
             break
         }
         let_go(kernel, cast[ptr[mut Thread]](first), .Continue)
     }
-    concurrency.lock(&intercept.lock)
+    lock_at(&intercept.lock, .Intercept)
     binding :: intercept.binding
     generation :: intercept.binding_generation
     intercept.binding = 0
-    concurrency.unlock(&intercept.lock)
+    unlock_at(&intercept.lock, .Intercept)
     if binding != 0 {
         drop_binding(kernel, binding, generation)
     }
@@ -206,12 +206,12 @@ stop_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], point: slop_
     if !wanted {
         return false
     }
-    concurrency.lock(&intercept.lock)
-    defer concurrency.unlock(&intercept.lock)
+    lock_at(&intercept.lock, .Intercept)
+    defer unlock_at(&intercept.lock, .Intercept)
     if is_dying(found) {
         return false
     }
-    concurrency.lock(&thread.control)
+    lock_at(&thread.control, .ThreadControl)
     thread.held |= HELD_STOP
     if current {
         arch.save_vector_state(cast[ptr[mut arch.VectorState]](thread.vector))
@@ -223,7 +223,7 @@ stop_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], point: slop_
     thread.stop_number = cast[u32](number)
     thread.stop_address = address
     thread.stop_reported = false
-    concurrency.unlock(&thread.control)
+    unlock_at(&thread.control, .ThreadControl)
     link_stopped(intercept, thread)
     report_stop(kernel, intercept)
     return true
@@ -240,7 +240,7 @@ report_stop :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) {
     }
     binding :: cast[ptr[mut Binding]](intercept.binding)
     port :: lock_bound_port(binding, intercept.binding_generation) or_return void
-    defer concurrency.unlock(&port.lock)
+    defer unlock_at(&port.lock, .Port)
     binding.data += 1
     queue_binding(kernel, port, binding)
 }
@@ -249,7 +249,7 @@ report_stop :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) {
 intercept_next :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], space: ptr[mut AddressSpace], buffer: u64) -> slop_os.ControlError? {
     info := slop_os.StopInfo.{}
     found := false
-    concurrency.lock(&intercept.lock)
+    lock_at(&intercept.lock, .Intercept)
     with {
         address := intercept.first_stopped
     }
@@ -267,7 +267,7 @@ intercept_next :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], spa
         }
         address = thread.stop_next
     }
-    concurrency.unlock(&intercept.lock)
+    unlock_at(&intercept.lock, .Intercept)
     if !found {
         return slop_os.ControlError.Empty
     }
@@ -279,7 +279,7 @@ intercept_next :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], spa
 
 // Let a thread the intercept stopped go on as action says.
 intercept_resume :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], id: u64, action: slop_os.InterceptAction) -> slop_os.ControlError? {
-    concurrency.lock(&intercept.lock)
+    lock_at(&intercept.lock, .Intercept)
     found := cast[ptr[mut Thread]](0)
     with {
         address := intercept.first_stopped
@@ -296,15 +296,15 @@ intercept_resume :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], i
         address = thread.stop_next
     }
     if cast[u64](found) == 0 {
-        concurrency.unlock(&intercept.lock)
+        unlock_at(&intercept.lock, .Intercept)
         return slop_os.ControlError.NoSuchThread
     }
     if action == .Skip && found.stop_point != cast[u32](slop_os.StopPoint.SyscallEntry) {
-        concurrency.unlock(&intercept.lock)
+        unlock_at(&intercept.lock, .Intercept)
         return slop_os.ControlError.NotStopped
     }
     unlink_stopped(intercept, found)
-    concurrency.unlock(&intercept.lock)
+    unlock_at(&intercept.lock, .Intercept)
     let_go(kernel, found, action)
     return null
 }
@@ -332,9 +332,9 @@ forget_stop :: fn(thread: ptr[mut Thread]) {
         return void
     }
     intercept :: cast[ptr[mut Intercept]](address)
-    concurrency.lock(&intercept.lock)
+    lock_at(&intercept.lock, .Intercept)
     unlink_stopped(intercept, thread)
-    concurrency.unlock(&intercept.lock)
+    unlock_at(&intercept.lock, .Intercept)
 }
 
 // Takes the intercept's lock as held.

@@ -140,11 +140,11 @@ destroy_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
         mask_line(kernel, irq.controller, irq.line)
         unroute(kernel, irq.cpu, irq.slot)
     }
-    concurrency.lock(&irq.lock)
+    lock_at(&irq.lock, .Irq)
     binding :: irq.binding
     generation :: irq.binding_generation
     irq.binding = 0
-    concurrency.unlock(&irq.lock)
+    unlock_at(&irq.lock, .Irq)
     if binding != 0 {
         drop_binding(kernel, binding, generation)
     }
@@ -159,15 +159,15 @@ irq_ack :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
 
 // An interrupt for irq: its binding's count goes up, and its packet is queued if it wasn't.
 deliver_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
-    concurrency.lock(&irq.lock)
-    defer concurrency.unlock(&irq.lock)
+    lock_at(&irq.lock, .Irq)
+    defer unlock_at(&irq.lock, .Irq)
     if irq.binding == 0 {
         return void
     }
     binding :: cast[ptr[mut Binding]](irq.binding)
     // A binding the port dropped is no longer this one
     port :: lock_bound_port(binding, irq.binding_generation) or_return void
-    defer concurrency.unlock(&port.lock)
+    defer unlock_at(&port.lock, .Port)
     if !binding.armed {
         return void
     }
@@ -183,13 +183,13 @@ deliver_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
  * same key again arms it again (BindMode.Once).
  */
 irq_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], irq: ptr[mut Irq], key: u64, mode: slop_os.BindMode) -> slop_os.PortError? {
-    concurrency.lock(&irq.lock)
-    defer concurrency.unlock(&irq.lock)
+    lock_at(&irq.lock, .Irq)
+    defer unlock_at(&irq.lock, .Irq)
     if is_dying(cast[u64](irq)) {
         return slop_os.PortError.ObjectGone
     }
-    concurrency.lock(&port.lock)
-    defer concurrency.unlock(&port.lock)
+    lock_at(&port.lock, .Port)
+    defer unlock_at(&port.lock, .Port)
     if is_dying(cast[u64](port)) {
         return slop_os.PortError.ObjectGone
     }
@@ -225,7 +225,7 @@ drop_binding :: fn(kernel: ptr[mut Kernel], address: u64, generation: u32) {
     port :: lock_bound_port(binding, generation) or_return void
     _ = maps.map_remove(&port.bindings, binding.key)
     free_binding(kernel, port, binding)
-    concurrency.unlock(&port.lock)
+    unlock_at(&port.lock, .Port)
 }
 
 // The controller kind a call names, if the kernel has one by that kind.
