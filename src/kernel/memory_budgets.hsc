@@ -34,9 +34,13 @@ MemoryBudget :: struct #align(16) {
     closed : bool,
 }
 
+MIB : u64 : 1024 * 1024
+// The least the kernel keeps out of the root budget for its own allocations (kernel_reserve)
+MIN_KERNEL_RESERVE : u64 : 8 * MIB
+
 /*
- * The root budget, of every frame free once the kernel is up, which the kernel keeps: the budgets
- * processes are given are split from it.
+ * The root budget, of the frames free once the kernel is up, but the kernel's own share (kernel_reserve), which the
+ * kernel keeps: the budgets processes are given are split from it.
  */
 make_root_budget :: fn(kernel: ptr[mut Kernel]) -> u64 {
     object :: new_object(kernel, .MemoryBudget, 0, 0) or_else 0
@@ -44,8 +48,25 @@ make_root_budget :: fn(kernel: ptr[mut Kernel]) -> u64 {
         return 0
     }
     budget :: cast[ptr[mut MemoryBudget]](object)
-    budget.limit = kernel.frames.free_frames * frames.FRAME_SIZE
+    free :: kernel.frames.free_frames * frames.FRAME_SIZE
+    held :: kernel_reserve(free, kernel.options.kernel_reserve_mib)
+    budget.limit = free - held
+    // Said when it was asked for: a line here, early, shifts test_pool's timing enough to fail it
+    if kernel.options.kernel_reserve_mib != 0 {
+        runtime.log_info("memory: % MiB kept out of the root budget for the kernel's own", held / MIB)
+    }
     return object
+}
+
+/*
+ * What the kernel keeps out of the root budget, of free bytes (decisions/0098): its heap, the objects it makes for
+ * itself and objects' page arrays come from the same frames as everything charged to budgets, so a fully charged root
+ * budget would leave it none. mib asks for that many MiB; otherwise a sixteenth, and at least MIN_KERNEL_RESERVE. Never
+ * more than half.
+ */
+kernel_reserve :: fn(free: u64, mib: u64) -> u64 {
+    asked :: if mib != 0 { mib * MIB } else { max_u64(free / 16, MIN_KERNEL_RESERVE) }
+    return min_u64(asked, free / 2)
 }
 
 // Lock the budget object is charged to, following it if it moves meanwhile: null for the kernel's own.

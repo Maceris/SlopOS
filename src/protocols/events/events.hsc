@@ -10,7 +10,9 @@ import dir from "std/os/slop_os"
  * writes the program's records there, and the service labels them with the name Open was given, so a program can't
  * claim another's. Records are kept in memory until Store gives a directory, then there. Query reads a source's
  * records, one at a time, rendered as text; one that waits is answered once there's a record to give. Connections
- * arrive on its listener, and as Connects.
+ * arrive on its listener, and as Connects. Open's answer holds the ring's owning handle, which the launcher keeps,
+ * giving the program one that doesn't own it, and gives back with Retire once the program has ended: so a ring outlives
+ * both its program and the service, until its last records are read (decisions/0098).
  */
 
 Events :: struct {}
@@ -53,6 +55,11 @@ Request :: union {
     Query(QueryOf),
     // Serve another client, on its end
     Connect(os.Channel[Events]),
+    /*
+     * A ring whose program has ended, its owning handle given back by whoever launched it: its records read, every
+     * ring's, then closed (decisions/0098)
+     */
+    Retire(slop_os.Memory),
 }
 
 Response :: union {
@@ -73,6 +80,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Store(_) => true
         case Query(_) => true
         case Connect(_) => true
+        case Retire(_) => false
     }
 }
 

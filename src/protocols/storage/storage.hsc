@@ -96,6 +96,12 @@ Request :: union {
     Usage(VolumeNamed),
     // Serve another client, on its end
     Connect(os.Channel[Storage]),
+    /*
+     * For a test only, refused (Unsupported) unless the storage manager was started with test_storage_restart on the
+     * kernel's command line: the partition server of the disk at an index killed, and answered once it's started
+     * again (decisions/0098)
+     */
+    TestRestart(u32),
 }
 
 Response :: union {
@@ -147,6 +153,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case SetQuota(_) => true
         case Usage(_) => true
         case Connect(_) => true
+        case TestRestart(_) => false
     }
 }
 

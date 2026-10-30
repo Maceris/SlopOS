@@ -273,6 +273,41 @@ frame_for :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], page: u64) -> u64 
 }
 
 /*
+ * count bytes of anonymous memory from offset copied to the user buffer at address in space, or from it with to_user
+ * false, a page at a time through the direct map, filling pages nothing touched yet (decisions/0098). Not device
+ * memory, DMA memory or paged memory, whose pages aren't the kernel's to fill.
+ */
+copy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], offset: u64, space: ptr[mut AddressSpace], address: u64, count: u64,
+    to_user: bool) -> slop_os.MemoryError? {
+    if memory.physical != 0 || memory.pager_binding != 0 || memory.domain != 0 || memory.parent != 0 {
+        return .WrongKind
+    }
+    if offset > memory.size || count > memory.size - offset {
+        return .InvalidSize
+    }
+    done : u64 = 0
+    loop {
+        if done >= count {
+            break
+        }
+        at :: offset + done
+        within :: at % frames.FRAME_SIZE
+        part :: min_u64(frames.FRAME_SIZE - within, count - done)
+        frame :: frame_for(kernel, memory, at / frames.FRAME_SIZE)
+        if frame == 0 {
+            return .OutOfMemory
+        }
+        page :: cast[u64](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](frame))) + within
+        copied :: if to_user { copy_to_user(kernel, space, address + done, page, part) } else { copy_from_user(kernel, space, address + done, page, part) }
+        if !copied {
+            return .BadAddress
+        }
+        done += part
+    }
+    return null
+}
+
+/*
  * Destroying a memory object takes down every mapping of it, and destroys its windows; a window leaves
  * its parent's list.
  */

@@ -50,6 +50,13 @@ Store :: struct {
     raw_port : slop_os.Port,
     directory : os.Directory,
     objects : Open[MAX_OBJECTS],
+    // Pages wanted that couldn't be read, kept until there's a directory to read them through again
+    unread : Unread[..],
+}
+
+Unread :: struct {
+    slot : usize,
+    offset : u64,
 }
 
 main :: fn(store: os.Channel[dir.Dir], clients: os.Listener[bundle_store.BundleStore]) -> int {
@@ -145,6 +152,7 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
                 }
             }
             case Collect => response^ = .Collected(collect(service))
+            case UseDirectory(directory) => response^ = if use_directory(service, directory.end) { .Done } else { .Refused }
             case Connect(connection) => {
                 if !service_kit.add_client(&service.connected, service.port, connection.end) {
                     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
@@ -260,29 +268,126 @@ close_open :: fn(service: ptr[Store], open: ptr[mut Open]) {
     }
 }
 
+/*
+ * The store's directory from now on: the same directory served again, as when the system volume's server was started
+ * again. Open objects' files are opened again as their pages are next wanted.
+ */
+use_directory :: fn(service: ptr[mut Store], end: slop_os.Channel) -> bool {
+    port :: os.port_for(service.block.budget, end) or_return false
+    second :: dir.connect(end, port, service.block.budget) or_return false
+    directory, error :: os.directory_on(second.end)
+    if error != null {
+        return false
+    }
+    os.close_directory(service.directory)
+    _ = slop_os.handle_close(cast[slop_os.Handle](service.raw))
+    _ = slop_os.handle_close(cast[slop_os.Handle](service.raw_port))
+    service.raw = end
+    service.raw_port = port
+    service.directory = directory
+    runtime.log_info("using its directory again")
+    // The pages that couldn't be read meanwhile, read now
+    waiting : Unread[..]
+    defer runtime.array_free(&waiting)
+    for each in service.unread {
+        runtime.array_add(&waiting, each)
+    }
+    runtime.array_reset(&service.unread)
+    for each in waiting {
+        if !supply_page(service, each.slot, each.offset) {
+            runtime.array_add(&service.unread, each)
+        }
+    }
+    return true
+}
+
+/*
+ * An open object's file opened again, through the store's directory, after its connection went with the server it was
+ * on: whether it was.
+ */
+reopen :: fn(service: ptr[mut Store], open: ptr[mut Open]) -> bool {
+    for each in slop_os.Handle.[cast[slop_os.Handle](open.file), cast[slop_os.Handle](open.file_port)] {
+        if each != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(each)
+        }
+    }
+    hex_storage : u8[64]
+    path_storage : u8[80]
+    path :: path_in("objects/", bundle.hex(open.hash, &hex_storage), &path_storage)
+    out := os.Outgoing.{}
+    request :: os.begin[dir.Request](&out)
+    request^ = .OpenReadOnlyFile(os.append(&out, view_of(cast[ptr[u8]](path.data), path.count)))
+    into := os.Incoming.{}
+    match ask_dir(service, &out, &into) {
+        case OpenedReadOnlyFile(connection) => open.file = connection.end
+        case _ => return false
+    }
+    open.file_port = os.port_for(service.block.budget, open.file) or_return false
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    given :: slop_os.handle_duplicate(cast[slop_os.Handle](open.buffer), rights) or_return false
+    buffering := os.Outgoing.{}
+    buffer_request :: os.begin[read_only_file.Request](&buffering)
+    buffer_request^ = .UseBuffer(cast[slop_os.Memory](given))
+    return match ask_file(open, &buffering, &into) {
+        case Done => true
+        case _ => false
+    }
+}
+
 // Each page of the open object at slot that's wanted, read from its file and supplied.
 supply_wanted :: fn(service: ptr[mut Store], slot: usize) {
     if slot >= MAX_OBJECTS || !service.objects[slot].used {
         return void
     }
-    open :: &service.objects[slot]
     loop {
-        offset :: slop_os.memory_page_wanted(open.memory) or_break
-        reading := os.Outgoing.{}
-        request :: os.begin[read_only_file.Request](&reading)
-        request^ = .Read(files.Transfer.{offset = offset, count = cast[u32](PAGE), buffer_offset = 0})
-        into := os.Incoming.{}
-        read : u64 = 0
+        offset :: slop_os.memory_page_wanted(service.objects[slot].memory) or_break
+        // Nothing to read it from until the store's given its directory again: kept for then, never supplied wrong
+        if !supply_page(service, slot, offset) {
+            runtime.array_add(&service.unread, Unread.{slot = slot, offset = offset})
+        }
+    }
+}
+
+/*
+ * The page at offset of the open object at slot, read from its file, its file opened again if its connection went with
+ * the server it was on, and supplied: false, with nothing supplied, if it couldn't be read.
+ */
+supply_page :: fn(service: ptr[mut Store], slot: usize, offset: u64) -> bool {
+    if slot >= MAX_OBJECTS || !service.objects[slot].used {
+        return true
+    }
+    open :: &service.objects[slot]
+    reading := os.Outgoing.{}
+    request :: os.begin[read_only_file.Request](&reading)
+    request^ = .Read(files.Transfer.{offset = offset, count = cast[u32](PAGE), buffer_offset = 0})
+    into := os.Incoming.{}
+    read : u64 = 0
+    transferred := false
+    match ask_file(open, &reading, &into) {
+        case Transferred(count) => {
+            read = cast[u64](count)
+            transferred = true
+        }
+        case _ => {}
+    }
+    if !transferred && reopen(service, open) {
         match ask_file(open, &reading, &into) {
-            case Transferred(count) => read = cast[u64](count)
+            case Transferred(count) => {
+                read = cast[u64](count)
+                transferred = true
+            }
             case _ => {}
         }
-        // Past the object's end, zeros
-        for i in read..<PAGE {
-            intrinsics.volatile_store_u8(cast[ptr[mut u8]](cast[rawptr](open.buffer_at + i)), 0)
-        }
-        _ = slop_os.memory_supply(open.memory, offset, open.buffer, 0)
     }
+    if !transferred {
+        return false
+    }
+    // Past the object's end, zeros
+    for i in read..<PAGE {
+        intrinsics.volatile_store_u8(cast[ptr[mut u8]](cast[rawptr](open.buffer_at + i)), 0)
+    }
+    _ = slop_os.memory_supply(open.memory, offset, open.buffer, 0)
+    return true
 }
 
 // An object put: its bytes, the first size of the memory given, kept if they have its hash; whether they're kept.

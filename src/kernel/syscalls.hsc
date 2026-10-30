@@ -610,6 +610,20 @@ sys_memory_supply :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset:
     return memory_done(supply_page(per_cpu().kernel, cast[ptr[mut Memory]](found), offset, cast[ptr[Memory]](from), source_offset))
 }
 
+// The memory needs RIGHT_MEMORY_READ.
+sys_memory_read :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u64, buffer: slop_os.UserBuffer)
+    -> Result[void, slop_os.MemoryError] {
+    found :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_READ)?
+    return memory_done(copy_memory(per_cpu().kernel, cast[ptr[Memory]](found), offset, thread.space, buffer.address, buffer.count, true))
+}
+
+// The memory needs RIGHT_MEMORY_WRITE.
+sys_memory_write :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u64, bytes: slop_os.UserBuffer)
+    -> Result[void, slop_os.MemoryError] {
+    found :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_WRITE)?
+    return memory_done(copy_memory(per_cpu().kernel, cast[ptr[Memory]](found), offset, thread.space, bytes.address, bytes.count, false))
+}
+
 sys_memory_unmap :: fn(thread: ptr[mut Thread], space: slop_os.AddressSpace, address: u64) -> Result[void, slop_os.MemoryError] {
     target :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](space), slop_os.ObjectKind.AddressSpace, slop_os.RIGHT_SPACE_MAP)?
     return memory_done(memory_unmap(per_cpu().kernel, cast[ptr[mut AddressSpace]](target), address))

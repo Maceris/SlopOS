@@ -47,6 +47,9 @@ Slot :: struct {
     client : usize,
     tag : u64,
     head : u16,
+    // The client's generation when it was asked for, and the buffer the device reads or writes for it
+    generation : u32,
+    memory : slop_os.Memory,
 }
 
 // A connection's buffer, once it has one: the memory, and where it is to the device.
@@ -68,6 +71,9 @@ Driver :: struct {
     requests_device : u64,
     slots : Slot[SLOTS],
     buffers : Buffer[service_kit.MAX_CLIENTS],
+    // Each client's place's generation, moved on as a client leaves it, so what the device finishes for one that left
+    // isn't answered to another in its place
+    generations : u32[service_kit.MAX_CLIENTS],
     port : slop_os.Port,
     clients : service_kit.Clients,
 }
@@ -148,6 +154,14 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
             }
             case Failed(error) => {
                 service_kit.drop_client(&driver.clients, index)
+                // Its buffer goes with it, windows and all, so a client taking its place never sees what it held: now,
+                // or once the device has finished what it was asked for with it
+                if index < driver.buffers.count {
+                    driver.generations[index] += 1
+                    old :: driver.buffers[index].memory
+                    driver.buffers[index] = Buffer.{memory = cast[slop_os.Memory](slop_os.NO_HANDLE)}
+                    release_buffer(driver, old)
+                }
                 return void
             }
             case _ => continue
@@ -227,8 +241,23 @@ send_slot :: fn(driver: ptr[mut Driver], slot: usize, client: usize, tag: u64, p
     if head == virtio.NO_DESCRIPTOR || slot >= driver.slots.count {
         return finished(tag, .Busy)
     }
-    driver.slots[slot] = Slot.{used = true, client = client, tag = tag, head = head}
+    generation :: if client < driver.generations.count { driver.generations[client] } else { cast[u32](0) }
+    memory :: if client < driver.buffers.count { driver.buffers[client].memory } else { cast[slop_os.Memory](slop_os.NO_HANDLE) }
+    driver.slots[slot] = Slot.{used = true, client = client, tag = tag, head = head, generation = generation, memory = memory}
     return null
+}
+
+// A buffer its client left, closed, unless the device still has requests with it, the last of which closes it.
+release_buffer :: fn(driver: ptr[Driver], memory: slop_os.Memory) {
+    if cast[slop_os.Handle](memory) == slop_os.NO_HANDLE {
+        return void
+    }
+    for slot in driver.slots {
+        if slot.used && slot.memory == memory {
+            return void
+        }
+    }
+    _ = slop_os.handle_close(cast[slop_os.Handle](memory))
 }
 
 free_slot :: fn(driver: ptr[Driver]) -> usize? {
@@ -269,11 +298,16 @@ finish :: fn(driver: ptr[mut Driver]) {
             }
             slot.used = false
             status :: intrinsics.volatile_load_u8(cast[ptr[u8]](driver.requests + STATUS_AT + cast[u64](index)))
-            if slot.client < driver.clients.ends.count {
+            current :: slot.client < driver.generations.count && driver.generations[slot.client] == slot.generation
+            if current && slot.client < driver.clients.ends.count {
                 end :: driver.clients.ends[slot.client]
                 if cast[slop_os.Handle](end) != slop_os.NO_HANDLE {
                     answer(driver, end, finished(slot.tag, if status == STATUS_OK { block.Status.Done } else { block.Status.DeviceError }))
                 }
+            }
+            // The last request with a buffer its client left closes it
+            if !current {
+                release_buffer(driver, slot.memory)
             }
             break
         }

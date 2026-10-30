@@ -53,6 +53,11 @@ Options :: struct {
     test_device : bool,
     // no_root_task: don't start the root task from the first boot module (root_task.hsc).
     no_root_task : bool,
+    /*
+     * kernel_reserve=<MiB>: how much of the memory free at boot the kernel keeps out of the root budget, for its own
+     * allocations (decisions/0098); 0, or no such word, for the default, a sixteenth of it and at least 8 MiB.
+     */
+    kernel_reserve_mib : u64,
 }
 
 parse_command_line :: fn(command_line: string) -> Options {
@@ -124,4 +129,20 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     if word == "test_device" {
         options.test_device = true
     }
+    prefix :: "kernel_reserve="
+    if word.count > prefix.count && word[0..<prefix.count] == prefix {
+        options.kernel_reserve_mib = number_of(word[prefix.count..<word.count])
+    }
+}
+
+// A decimal number's value, or 0 if it isn't one.
+number_of :: fn(text: string) -> u64 {
+    value : u64 = 0
+    for character in text {
+        if character < '0' || character > '9' {
+            return 0
+        }
+        value = value * 10 + cast[u64](character) - cast[u64]('0')
+    }
+    return value
 }

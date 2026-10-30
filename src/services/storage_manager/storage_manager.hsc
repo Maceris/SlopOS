@@ -168,6 +168,13 @@ Manager :: struct {
     container_service_module : slop_os.Memory,
     volume_server_module : slop_os.Memory,
     clients : service_kit.Clients,
+    // test_storage_restart on the kernel's command line: the first disk's partition server killed once it's listed its
+    // partitions, and TestRestart taken
+    test_restart : bool,
+    // How many times a partition server was started, which a test waits on; and whether a wait took the port's packets
+    // meant for the main loop, whose clients are read again before it waits
+    partition_server_starts : u64,
+    serve_again : bool,
 }
 
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager], partition_server_module: slop_os.Memory,
@@ -179,9 +186,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     state := Manager.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE), manager = manager, fat_server_module = fat_server_module,
         container_service_module = container_service_module, volume_server_module = volume_server_module,
         partition_server_module = partition_server_module}
-    test_restart := false
     match command_line {
-        case Some(memory) => test_restart = service_kit.has_word(service_kit.text_of(startup, memory) or_else "", "test_storage_restart")
+        case Some(memory) => state.test_restart = service_kit.has_word(service_kit.text_of(startup, memory) or_else "", "test_storage_restart")
         case None => {}
     }
     state.port = slop_os.port_create(startup.budget) or_return 1
@@ -204,19 +210,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         list_partitions(&state, index)
     }
     // test_storage_restart: the first disk's partition server killed, and waited for until it's started again
-    if test_restart && state.disk_count > 0 {
-        log_line.write(state.log, "storage: test_storage_restart: killing the partition server for disk 0")
-        _ = slop_os.process_kill(state.disk_running[0].process)
-        loop {
-            packets : slop_os.Packet[8]
-            taken :: slop_os.port_wait(state.port, packets, slop_os.NO_DEADLINE) or_else 0
-            for packet, i in packets {
-                if i < cast[usize](taken) && packet.kind == .Signal && packet.key >= PARTITION_SERVER_KEY {
-                    ended(&state, packet.key)
-                }
-            }
-        }
-        while state.disk_running[0].ended
+    if state.test_restart && state.disk_count > 0 {
+        _ = kill_and_restart(&state, 0)
     }
     log_line.write(state.log, "storage: serving % partitions on % disks", state.partition_count, state.disk_count)
 
@@ -237,6 +232,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         for i in 0..<state.served_count {
             serve_links(&state, i, &into)
         }
+        if state.serve_again {
+            state.serve_again = false
+            continue
+        }
         packets : slop_os.Packet[8]
         taken :: slop_os.port_wait(state.port, packets, slop_os.NO_DEADLINE) or_else 0
         for packet, i in packets {
@@ -245,6 +244,32 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             }
         }
     }
+}
+
+/*
+ * For tests: a disk's partition server killed, and what arrives on the port handled until it's started again, or not
+ * to be; whether it was.
+ */
+kill_and_restart :: fn(state: ptr[mut Manager], index: usize) -> bool {
+    if index >= MAX_DISKS {
+        return false
+    }
+    log_line.write(state.log, "storage: test_storage_restart: killing the partition server for disk %", index)
+    starts :: state.partition_server_starts
+    _ = slop_os.process_kill(state.disk_running[index].process)
+    // What else arrives meanwhile is read once this is done
+    state.serve_again = true
+    loop {
+        packets : slop_os.Packet[8]
+        taken :: slop_os.port_wait(state.port, packets, slop_os.NO_DEADLINE) or_else 0
+        for packet, i in packets {
+            if i < cast[usize](taken) && packet.kind == .Signal && packet.key >= PARTITION_SERVER_KEY {
+                ended(state, packet.key)
+            }
+        }
+    }
+    while state.partition_server_starts == starts && !(state.disk_running[index].ended && state.disk_running[index].restarts >= RESTARTS)
+    return state.partition_server_starts != starts
 }
 
 /*
@@ -271,6 +296,7 @@ start_partition_server :: fn(state: ptr[mut Manager], index: usize) -> bool {
     }
     server_port :: os.port_for(startup.budget, pair.b) or_return false
     state.disks[index] = Disk.{end = pair.b, port = server_port}
+    state.partition_server_starts += 1
     return true
 }
 
@@ -341,22 +367,11 @@ ended :: fn(state: ptr[mut Manager], key: u64) {
         return void
     }
     if key >= CONTAINER_KEY {
-        index :: cast[usize](key - CONTAINER_KEY)
-        if index < MAX_PARTITIONS {
-            let_go(&state.containers_running[index])
-            close_disk(&state.containers[index])
-            log_line.write(state.log, "storage: the container service for partition % ended", index)
-            kill_volumes(state, index)
-        }
+        container_gone(state, cast[usize](key - CONTAINER_KEY))
         return void
     }
     if key >= FAT_SERVER_KEY {
-        index :: cast[usize](key - FAT_SERVER_KEY)
-        if index < MAX_PARTITIONS {
-            let_go(&state.files_running[index])
-            close_disk(&state.files[index])
-            log_line.write(state.log, "storage: the FAT server for partition % ended", index)
-        }
+        files_gone(state, cast[usize](key - FAT_SERVER_KEY))
         return void
     }
     index :: cast[usize](key - PARTITION_SERVER_KEY)
@@ -366,12 +381,20 @@ ended :: fn(state: ptr[mut Manager], key: u64) {
     let_go(&state.disk_running[index])
     close_disk(&state.disks[index])
     log_line.write(state.log, "storage: the partition server for disk % ended", index)
-    // What's served from its partitions held connections it narrowed
+    // What's served from its partitions held connections it narrowed: gone now, so a client asking again meanwhile
+    // finds nothing it was served before, and has it started again
     for partition, i in state.partitions {
         if i < state.partition_count && cast[usize](partition.disk) == index && i < MAX_PARTITIONS {
-            kill_running(&state.files_running[i])
-            kill_running(&state.containers_running[i])
-            kill_volumes(state, i)
+            if cast[slop_os.Handle](state.files_running[i].process) != slop_os.NO_HANDLE {
+                _ = slop_os.port_unbind(state.port, FAT_SERVER_KEY + cast[u64](i))
+                kill_running(&state.files_running[i])
+                files_gone(state, i)
+            }
+            if cast[slop_os.Handle](state.containers_running[i].process) != slop_os.NO_HANDLE {
+                _ = slop_os.port_unbind(state.port, CONTAINER_KEY + cast[u64](i))
+                kill_running(&state.containers_running[i])
+                container_gone(state, i)
+            }
         }
     }
     if may_start(&state.disk_running[index]) && start_partition_server(state, index) {
@@ -382,11 +405,34 @@ ended :: fn(state: ptr[mut Manager], key: u64) {
     }
 }
 
-// Every volume server serving a volume of the partition at index killed.
+// A FAT server that ended, or was killed: let go of, and its slot freed for the next request to start another.
+files_gone :: fn(state: ptr[mut Manager], index: usize) {
+    if index >= MAX_PARTITIONS {
+        return void
+    }
+    let_go(&state.files_running[index])
+    close_disk(&state.files[index])
+    log_line.write(state.log, "storage: the FAT server for partition % ended", index)
+}
+
+// A container service that ended, or was killed, and its volume servers with it.
+container_gone :: fn(state: ptr[mut Manager], index: usize) {
+    if index >= MAX_PARTITIONS {
+        return void
+    }
+    let_go(&state.containers_running[index])
+    close_disk(&state.containers[index])
+    log_line.write(state.log, "storage: the container service for partition % ended", index)
+    kill_volumes(state, index)
+}
+
+// Every volume server serving a volume of the partition at index killed, and gone now.
 kill_volumes :: fn(state: ptr[mut Manager], index: usize) {
     for i in 0..<state.served_count {
         if i < state.served.count && state.served[i].partition == index && !state.served[i].gone {
+            _ = slop_os.port_unbind(state.port, VOLUME_KEY + cast[u64](i))
             kill_running(&state.served[i].running)
+            volume_gone(state, i)
         }
     }
 }
@@ -553,6 +599,14 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
                     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
                 }
                 continue
+            }
+            case TestRestart(disk) => {
+                if !state.test_restart {
+                    response = .Unsupported
+                }
+                else if cast[usize](disk) < state.disk_count && kill_and_restart(state, cast[usize](disk)) {
+                    response = .Done
+                }
             }
         }
         made^ = response

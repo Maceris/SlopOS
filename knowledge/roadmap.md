@@ -311,20 +311,25 @@ manager restarting its servers, and manifests). In four parts, before 9c, each c
    missing required grant (exit 126) and an ABI version mismatch (125, `0068`); a test of a partition server's
    dependents killed and served again (`0095`); the supervisor, the events service and the bundle store reconnecting to
    the system volume when its server is started again (`0095`). Typed files in `Dir` (`0046`) go to 9c, with the
-   config store's typed values.
+   config store's typed values. Done 2026-10-30 (`decisions/0098`), with five bugs restarts made reachable, and rings
+   owned by their programs (ABI 9).
 2. **M9's**: `test_budgets` moved from the kernel to a program (`0069`); CPU affinity for IRQs and CPU budgets, with
    the scheduler service applying it from `system_config` and AArch64's ITS moving an LPI (`0055`, `0073`); every service
    the supervisor starts logging through `base`'s logger (`0093`). The process manager loading by bundle hash stays with
-   9e (`0094`).
+   9e (`0094`). Chosen with the owner: a CPU budget's mask comes from `system_config`, which the scheduler service sets
+   (`cpu_budget_set_cpus`), and a driver moves its IRQ to a CPU in its budget's (`irq_set_cpu`).
 3. **House-rule checks** (`0007`, `0021`, `0029`), as far as Hemera's reflection reaches: no floating point in the
    kernel, programs don't import programs, no `rawptr` outside allowed packages, no pointers in system call results,
    interrupt handlers don't allocate, hardware structs have layout asserts (by a convention to settle); `Result`s
-   discarded in the kernel need the compiler to report them, proposed to Hemera.
+   discarded in the kernel need the compiler to report them. Chosen with the owner: a `#packed` struct in a hardware
+   package (arch, drivers, iommu, virtio, pci, gpt, fat, slopfs) is hardware, and has a `size_of` assert in its
+   package; Hemera's `FunctionInfo` records where a body discards a `Result` with `_ =`, which the check refuses in the
+   kernel outside an allow-list.
 4. **Deferred items** placed: done now, FAT timestamps and FSInfo's free count (`0087`), and the entropy service for
    programs the supervisor starts (`0067`); in M10, the root task's services restarted and logging to the events
    service (`0093`), and interrupt controllers unregistered when the platform service restarts (`0049`); in M12,
    debuggers reading pages nothing has touched (`0056`); in P, with the AML service, ACPI's `_CRS` for x86-64's PCI
-   windows (`0074`); the per-thread page shared with the kernel (`0041`) placed with the owner.
+   windows (`0074`); in M12, with tracing and profiling, the per-thread page shared with the kernel (`0041`).
 
 ## R — Robustness Testing (all layers)
 

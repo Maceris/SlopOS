@@ -2,6 +2,7 @@ package bundle_store
 
 import os from "std"
 import slop_os from "std/os"
+import dir from "std/os/slop_os"
 import bundle from "../../bundle"
 
 /*
@@ -46,6 +47,8 @@ Request :: union {
     // Everything no root reaches removed
     Collect,
     Connect(os.Channel[BundleStore]),
+    // The store's directory from now on, the same one served again, as when its volume server was started again
+    UseDirectory(os.Channel[dir.Dir]),
 }
 
 Response :: union {

@@ -101,11 +101,15 @@ Source :: struct {
     filed : bool,
 }
 
-// A ring a program writes to, mapped at address; its source NOWHERE when it's free.
+/*
+ * A ring a program writes to; its source NOWHERE when it's free. Its launcher owns it, and the service reads and writes
+ * it through the kernel (memory_read, memory_write) with a handle that doesn't own it, never mapping it: so the service
+ * ending leaves its programs' rings to them, and a ring retired (Retire) is ObjectGone to it once its last records are
+ * read (decisions/0098).
+ */
 Ring :: struct {
     source : usize,
     instance : u32,
-    address : u64,
     memory : slop_os.Memory,
     doorbell : slop_os.Channel,
 }
@@ -174,9 +178,13 @@ main :: fn(log: slop_os.DebugLog?, clients: os.Listener[events.Events]) -> int {
         for i in cast[usize](0)..<MAX_RINGS {
             ring :: &service.rings[i]
             if ring.source != NOWHERE {
-                header :: cast[ptr[mut runtime.SlopOsEventsRing]](cast[rawptr](ring.address))
-                _ = intrinsics.interlocked_exchange_u32(&header.waiting, 1)
-                written = written || intrinsics.atomic_load_u64_acquire(&header.written) != header.read
+                waiting : u32 = 1
+                _ = slop_os.memory_write(ring.memory, cast[u64](offset_of(runtime.SlopOsEventsRing, waiting)),
+                    view_of(cast[ptr[u8]](cast[rawptr](&waiting)), size_of(u32)))
+                match read_header(ring.memory) {
+                    case Some(header) => written = written || header.written != header.read
+                    case None => release(service, i)
+                }
             }
         }
         if written {
@@ -257,6 +265,17 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
                     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
                 }
             }
+            case Retire(ring) => {
+                // Whichever ring it is, every ring's records read first, so its last ones are kept
+                for i in cast[usize](0)..<MAX_RINGS {
+                    drain(service, i)
+                }
+                _ = slop_os.handle_close(cast[slop_os.Handle](ring))
+                out := os.Outgoing.{}
+                response :: os.begin[events.Response](&out)
+                response^ = .Done
+                _ = events.send_response(end, service.port, &out)
+            }
         }
     }
 }
@@ -299,23 +318,22 @@ open :: fn(service: ptr[mut Service], name: u8[]) -> events.Source? {
         return null
     }
     block :: service.block
+    // Made here, and its owning handle given away with the doorbell, to whoever launches the program, and on to it
     memory :: slop_os.memory_create(block.budget, RING_BYTES) or_return null
-    address :: runtime.reserve_addresses(cast[usize](RING_BYTES)) or_else 0
-    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    if address == 0 || (slop_os.memory_map(memory, block.space, address, 0, RING_BYTES, read_write) is_error) {
+    header := runtime.SlopOsEventsRing.{magic = runtime.SLOP_OS_EVENTS_MAGIC, version = runtime.SLOP_OS_EVENTS_VERSION,
+        size = RING_BYTES - cast[u64](size_of(runtime.SlopOsEventsRing))}
+    if slop_os.memory_write(memory, 0, view_of(cast[ptr[u8]](cast[rawptr](&header)), size_of(runtime.SlopOsEventsRing))) is_error {
         _ = slop_os.handle_close(cast[slop_os.Handle](memory))
         return null
     }
-    header :: cast[ptr[mut runtime.SlopOsEventsRing]](cast[rawptr](address))
-    header.magic = runtime.SLOP_OS_EVENTS_MAGIC
-    header.version = runtime.SLOP_OS_EVENTS_VERSION
-    header.size = RING_BYTES - cast[u64](size_of(runtime.SlopOsEventsRing))
-    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
-    given := slop_os.NO_HANDLE
+    // The service's own: to read and write it, not to own it
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE))
+    kept := slop_os.NO_HANDLE
     match slop_os.handle_duplicate(cast[slop_os.Handle](memory), rights) {
-        case Ok(copy) => given = copy
+        case Ok(copy) => kept = copy
         case Error(error) => {}
     }
+    given :: cast[slop_os.Handle](memory)
     pair_made := false
     pair := slop_os.ChannelPair.{}
     match slop_os.channel_create(block.budget, 0, 0) {
@@ -326,22 +344,21 @@ open :: fn(service: ptr[mut Service], name: u8[]) -> events.Source? {
         case Error(error) => {}
     }
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if given == slop_os.NO_HANDLE || !pair_made
+    if kept == slop_os.NO_HANDLE || !pair_made
         || (slop_os.port_bind(service.port, cast[slop_os.Handle](pair.a), signals, DOORBELL_KEY + cast[u64](slot), .Persistent) is_error) {
-        if given != slop_os.NO_HANDLE {
-            _ = slop_os.handle_close(given)
+        if kept != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(kept)
         }
         if pair_made {
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         }
-        _ = slop_os.memory_unmap(block.space, address)
         _ = slop_os.handle_close(cast[slop_os.Handle](memory))
         return null
     }
     source :: &service.sources[index % MAX_SOURCES]
     source.instances += 1
-    service.rings[slot % MAX_RINGS] = Ring.{source = index, instance = source.instances, address = address, memory = memory, doorbell = pair.a}
+    service.rings[slot % MAX_RINGS] = Ring.{source = index, instance = source.instances, memory = cast[slop_os.Memory](kept), doorbell = pair.a}
     // A read that finds nothing, so the doorbell's next message wakes the port
     ring_doorbell(service, slot)
     return events.Source.{ring = cast[slop_os.Memory](given), doorbell = pair.b}
@@ -397,6 +414,15 @@ add_bytes :: fn(into: ptr[mut u8[..]], data: rawptr, count: usize) {
     }
 }
 
+// A ring's header, read through the kernel; null once its program, which owns it, has ended.
+read_header :: fn(memory: slop_os.Memory) -> runtime.SlopOsEventsRing? {
+    header := runtime.SlopOsEventsRing.{}
+    if slop_os.memory_read(memory, 0, view_of(cast[ptr[mut u8]](cast[rawptr](&header)), size_of(runtime.SlopOsEventsRing))) is_error {
+        return null
+    }
+    return header
+}
+
 // What a ring's doorbell says: messages read until there are none, and the ring let go once its writer's gone.
 ring_doorbell :: fn(service: ptr[mut Service], slot: usize) {
     if slot >= MAX_RINGS || service.rings[slot].source == NOWHERE {
@@ -421,7 +447,6 @@ ring_doorbell :: fn(service: ptr[mut Service], slot: usize) {
 release :: fn(service: ptr[mut Service], slot: usize) {
     ring :: &service.rings[slot % MAX_RINGS]
     _ = slop_os.port_unbind(service.port, DOORBELL_KEY + cast[u64](slot))
-    _ = slop_os.memory_unmap(service.block.space, ring.address)
     _ = slop_os.handle_close(cast[slop_os.Handle](ring.memory))
     _ = slop_os.handle_close(cast[slop_os.Handle](ring.doorbell))
     ring.source = NOWHERE
@@ -437,14 +462,34 @@ drain :: fn(service: ptr[mut Service], slot: usize) {
     }
     ring :: service.rings[slot]
     source :: &service.sources[ring.source % MAX_SOURCES]
-    header :: cast[ptr[mut runtime.SlopOsEventsRing]](cast[rawptr](ring.address))
+    header :: match read_header(ring.memory) {
+        case Some(found) => found
+        case None => {
+            release(service, slot)
+            return void
+        }
+    }
     size :: header.size
-    data :: ring.address + cast[u64](size_of(runtime.SlopOsEventsRing))
     read := header.read
-    written :: intrinsics.atomic_load_u64_acquire(&header.written)
+    written :: header.written
     if read == written {
         return void
     }
+    // Its entries, copied out whole: what's published, and nothing past it, as written is read first
+    if size == 0 || size + cast[u64](size_of(runtime.SlopOsEventsRing)) > RING_BYTES {
+        return void
+    }
+    copied : u8[..]
+    defer runtime.array_free(&copied)
+    runtime.array_reserve(&copied, cast[usize](size))
+    for i in cast[u64](0)..<size {
+        runtime.array_add(&copied, cast[u8](0))
+    }
+    if slop_os.memory_read(ring.memory, cast[u64](size_of(runtime.SlopOsEventsRing)), copied) is_error {
+        release(service, slot)
+        return void
+    }
+    data :: cast[u64](cast[uintptr](copied.data))
     fresh : u8[..]
     defer runtime.array_free(&fresh)
     add_instance(&fresh, ring.instance)
@@ -496,7 +541,8 @@ drain :: fn(service: ptr[mut Service], slot: usize) {
         }
         read += entry_size
     }
-    intrinsics.atomic_store_u64_release(&header.read, read)
+    _ = slop_os.memory_write(ring.memory, cast[u64](offset_of(runtime.SlopOsEventsRing, read)),
+        view_of(cast[ptr[u8]](cast[rawptr](&read)), size_of(u64)))
     show(service, source, fresh)
     keep(service, source, fresh, first)
 }

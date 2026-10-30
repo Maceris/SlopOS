@@ -13,6 +13,9 @@
  * within a page, and which takes no more than the file has of it, is mapped from it rather than from the image, where
  * the handle allows executing it: so every process running a program from the bundle store shares its code
  * (decisions/0094). Relocations only ever go to writable segments (elf_loader).
+ *
+ * The startup block says the kernel's ABI version, unless a test asks for another (abi_version), to see a program
+ * refuse it.
  */
 package process_builder
 
@@ -85,8 +88,8 @@ Layout :: struct {
  * On a failure, what was made is closed, and the grants are the caller's still; the target is the
  * requester's to destroy.
  */
-build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: ptr[mut random_stream.Stream], source: slop_os.Memory? = null)
-    -> Result[u64, BuildError] {
+build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: ptr[mut random_stream.Stream], source: slop_os.Memory? = null,
+    abi_version: u32 = slop_os.ABI_VERSION) -> Result[u64, BuildError] {
     if grants.count > MAX_GRANTS {
         return .Error(.TooManyGrants)
     }
@@ -151,7 +154,7 @@ build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: p
     made.count = 0
 
     block :: cast[ptr[mut slop_os.StartupBlock]](block_staging)
-    block.abi_version = slop_os.ABI_VERSION
+    block.abi_version = abi_version
     block.size = cast[u32](size_of(slop_os.StartupBlock))
     block.process = cast[slop_os.Process](given[1])
     block.space = cast[slop_os.AddressSpace](given[0])

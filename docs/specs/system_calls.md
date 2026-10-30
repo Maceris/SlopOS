@@ -132,6 +132,8 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 66 | `memory_create_paged` | budget, port, key, size | an owning handle to paged memory of size bytes, charged for all of it, whose pager raises key's wake binding on port (`RIGHT_PORT_BIND`), which it made (`0094`) |
 | 67 | `memory_page_wanted` | memory | the offset of a page of paged memory a touch waits for, each reported once; needs `RIGHT_MEMORY_WRITE` |
 | 68 | `memory_supply` | memory, offset, source, source offset | nothing: the page at offset, a copy of source's page at source offset, unless it's there already, and whoever waited for it woken; needs `RIGHT_MEMORY_WRITE` on the memory, `RIGHT_MEMORY_READ` on source |
+| 69 | `memory_read` | memory, offset, buffer | nothing: bytes of anonymous memory from offset copied into buffer through the kernel, with no mapping, its untouched pages zeros; `RIGHT_MEMORY_READ`. For memory another process owns, whose end is `ObjectGone`, never a fault (`0098`) |
+| 70 | `memory_write` | memory, offset, bytes | nothing: bytes copied into anonymous memory from offset, through the kernel; `RIGHT_MEMORY_WRITE` |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the

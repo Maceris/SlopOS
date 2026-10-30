@@ -96,6 +96,15 @@ CONNECTOR_KEY : u64 : 1000
 FAULT_KEY : u64 : 2000
 // The key of a connection of its own to the storage manager, while it waits on one
 STORAGE_KEY : u64 : 3000
+/*
+ * The system volume's connection is watched for its other end closing under this key plus its generation, a number of
+ * opens, so a close of one already replaced is told apart
+ */
+SYSTEM_KEY : u64 : 4000
+SYSTEM_GENERATIONS : u64 : 1000
+// The timer a lost system volume is opened again on, and how soon after it's tried and fails
+SYSTEM_RETRY_KEY : u64 : 5000
+SYSTEM_RETRY : u64 : 100_000_000
 RESTARTS : u32 : 3
 // How long a restart waits for its service's budget to come back, and what it leaves for the launch itself
 RESTART_BUDGET_WAIT : u64 : 2_000_000_000
@@ -263,8 +272,10 @@ Started :: struct {
     watch : slop_os.Handle,
     // The clock service, a driver whose device is the real-time clock
     clock : bool,
-    // Its program's budget, closed once it's ended, so what it had comes back
+    // Its program's budget, closed once it's ended, so what it had comes back; and its ring for its log records, which
+    // the supervisor owns, given back to the events service once it's ended
     budget : slop_os.MemoryBudget,
+    ring : slop_os.Memory,
     // Ended, and not to be started again
     done : bool,
 }
@@ -293,11 +304,18 @@ Supervisor :: struct {
     clock_page : slop_os.Memory,
     clock_setting : slop_os.Channel,
     clock_setting_port : slop_os.Port,
-    // The budget of the program launched last, until its entry takes it
+    // The budget of the program launched last, and its ring, until its entry takes them
     launched_budget : slop_os.MemoryBudget,
+    launched_ring : slop_os.Memory,
     // Its end of the events service's listener, NONE without
     events_end : slop_os.Channel,
     events_port : slop_os.Port,
+    // The storage manager's place in started, NOWHERE without one; and how many times the system volume was opened
+    storage_slot : usize,
+    system_generation : u64,
+    // Its connection closed, and it's to be opened again; and whether it's being opened, which waits on the port meanwhile
+    system_lost : bool,
+    system_opening : bool,
     // The kernel's command line, to give on to the storage manager, which reads its test words
     command_line : slop_os.Memory?,
     // Its end of the bundle store's listener, NONE without
@@ -342,7 +360,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     startup :: slop_os.startup_block()
     supervisor := Supervisor.{block = startup, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, console = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
-        events_end = NONE, store_end = NONE, relaunching = NOWHERE, launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)}
+        events_end = NONE, store_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)}
     supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, clock = clock_module, hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
@@ -401,6 +419,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     }
     start_drivers(&supervisor, true)
     storage_slot :: start_storage(&supervisor, NOWHERE)
+    supervisor.storage_slot = storage_slot
     if storage_slot != NOWHERE {
         open_system(&supervisor, storage_slot)
     }
@@ -481,6 +500,12 @@ wait_and_handle :: fn(supervisor: ptr[mut Supervisor]) {
         if packet.kind == .Signal && index < supervisor.started_count && index < supervisor.started.count {
             ended(supervisor, index, packet.data[1])
         }
+        // The system volume's server ended, and its storage manager is still there: opened again through it
+        if packet.kind == .Signal && packet.key >= SYSTEM_KEY && packet.key < SYSTEM_KEY + SYSTEM_GENERATIONS
+            && packet.key - SYSTEM_KEY == supervisor.system_generation % SYSTEM_GENERATIONS && is_running(supervisor, supervisor.storage_slot) {
+            log_line.write(supervisor.log, "supervisor: the system volume's connection closed; opening it again")
+            supervisor.system_lost = true
+        }
         faulted :: cast[usize](packet.key - FAULT_KEY)
         if packet.kind == .Signal && packet.key >= FAULT_KEY && faulted < supervisor.started_count && faulted < supervisor.started.count {
             dma_fault(supervisor, faulted, packet.data[1])
@@ -488,6 +513,16 @@ wait_and_handle :: fn(supervisor: ptr[mut Supervisor]) {
     }
     for i in 0..<supervisor.connector_count {
         serve_connector(supervisor, i)
+    }
+    // Opened again once the storage manager serves it again, tried again a little later until then
+    if supervisor.system_lost && !supervisor.system_opening && is_running(supervisor, supervisor.storage_slot) {
+        supervisor.system_lost = false
+        reopened_from :: supervisor.system_generation
+        open_system(supervisor, supervisor.storage_slot)
+        if supervisor.system_generation == reopened_from {
+            supervisor.system_lost = true
+            _ = slop_os.port_set_timer(supervisor.port, SYSTEM_RETRY_KEY, (slop_os.clock_monotonic() or_else 0) + SYSTEM_RETRY)
+        }
     }
 }
 
@@ -503,6 +538,8 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
         _ = slop_os.handle_close(cast[slop_os.Handle](entry.budget))
         entry.budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)
     }
+    retire_ring(supervisor, entry.ring)
+    entry.ring = cast[slop_os.Memory](slop_os.NO_HANDLE)
     tell_root(supervisor, .Ended(report_of(entry.name, code)))
     if cast[slop_os.Handle](entry.listener) != slop_os.NO_HANDLE {
         _ = slop_os.handle_close(cast[slop_os.Handle](entry.listener))
@@ -619,6 +656,7 @@ place :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process: s
     entry :: &supervisor.started[again]
     entry.process = process
     entry.budget = take_budget(supervisor)
+    entry.ring = take_ring(supervisor)
     entry.running = true
     entry.done = false
     tell_root(supervisor, .Started(report_of(name, 0)))
@@ -627,20 +665,36 @@ place :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process: s
 
 /*
  * The storage manager at storage_slot's SlopOS container's system volume, where programs outside the boot set come
- * from, given to the events service to keep records in.
+ * from, given to the events service to keep records in, and to the bundle store, started the first time. Its
+ * connection is watched, and opened again when it closes, as when the volume's server is started again (decisions/0098).
  */
 open_system :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
+    if supervisor.system_opening {
+        return void
+    }
+    supervisor.system_opening = true
+    defer supervisor.system_opening = false
     match files_of_type(supervisor, storage_slot, storage_manager.CONTAINER_TYPE) {
         case Some(root) => {
             if supervisor.system != NONE {
+                _ = slop_os.port_unbind(supervisor.port, SYSTEM_KEY + supervisor.system_generation % SYSTEM_GENERATIONS)
                 _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.system))
                 _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.system_port))
             }
+            supervisor.system_generation += 1
             supervisor.system = root.end
             supervisor.system_port = os.port_for(supervisor.block.budget, root.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+            _ = slop_os.port_bind(supervisor.port, cast[slop_os.Handle](root.end), slop_os.SIGNAL_PEER_CLOSED,
+                SYSTEM_KEY + supervisor.system_generation % SYSTEM_GENERATIONS, .Once)
             store_events(supervisor)
             if supervisor.store_end == NONE {
                 start_store(supervisor, NOWHERE)
+            }
+            else {
+                match system_directory(supervisor, "store") {
+                    case Some(directory) => _ = store_request(supervisor, .UseDirectory(directory))
+                    case None => {}
+                }
             }
         }
         case None => {}
@@ -677,8 +731,44 @@ restart_services :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
     if storage_slot == NOWHERE {
         return void
     }
-    old_system :: supervisor.system
-    if kill_and_wait(supervisor, "storage_manager") && supervisor.system != NONE && supervisor.system != old_system {
+    // The first disk's partition server killed, so the system volume's server goes with it, and is served again
+    reopened_from :: supervisor.system_generation
+    match ask_storage_once(supervisor, storage_slot, .TestRestart(0)) {
+        case Done => {
+            loop {
+                wait_and_handle(supervisor)
+            }
+            while supervisor.system_generation == reopened_from
+            manifest_read := false
+            match stored_hash(supervisor, "hello", 1) {
+                case Some(manifest) => {
+                    match mapped_object(supervisor, manifest) {
+                        case Some(object) => {
+                            manifest_read = object.bytes.count >= 4 && object.bytes[0] == 0x48 && object.bytes[1] == 0x53
+                            unmap_object(supervisor, object)
+                        }
+                        case None => {}
+                    }
+                }
+                case None => {}
+            }
+            log_line.write(supervisor.log, "supervisor: test_restart_services: the system volume, served again after disk 0's partition server was, %",
+                if manifest_read { "and the bundle store reads through it" } else { "but the bundle store can't read through it" })
+        }
+        case _ => log_line.write(supervisor.log, "supervisor: test_restart_services: the storage manager didn't restart disk 0's partition server")
+    }
+    old_generation :: supervisor.system_generation
+    restarted :: kill_and_wait(supervisor, "storage_manager")
+    // The system volume opened again through the new one, once it serves it
+    if restarted {
+        loop {
+            if supervisor.system_generation != old_generation {
+                break
+            }
+            wait_and_handle(supervisor)
+        }
+    }
+    if restarted && supervisor.system != NONE {
         log_line.write(supervisor.log, "supervisor: test_restart_services: the storage manager, started again, gave the system volume")
     }
 }
@@ -798,6 +888,7 @@ start_driver :: fn(supervisor: ptr[mut Supervisor], index: usize, device: platfo
     entry.process = launched
     if again != NOWHERE {
         entry.budget = take_budget(supervisor)
+        entry.ring = take_ring(supervisor)
     }
     entry.running = true
     entry.listener = listener
@@ -916,10 +1007,57 @@ options_for :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.LaunchOpt
             case Error(error) => {}
         }
     }
+    // A ring for its records, which the supervisor keeps, giving the program a handle to it that doesn't own it
     if supervisor.events_end != NONE {
-        options.events = events.open(supervisor.events_end, supervisor.events_port, name)
+        match events.open(supervisor.events_end, supervisor.events_port, name) {
+            case Some(opened) => {
+                rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE)
+                    | cast[u32](slop_os.RIGHT_TRANSFER))
+                match slop_os.handle_duplicate(cast[slop_os.Handle](opened.ring), rights) {
+                    case Ok(copy) => {
+                        retire_ring(supervisor, supervisor.launched_ring)
+                        supervisor.launched_ring = opened.ring
+                        options.events = os.LaunchEvents.{ring = cast[slop_os.Memory](copy), doorbell = opened.doorbell}
+                    }
+                    case Error(error) => {
+                        _ = slop_os.handle_close(cast[slop_os.Handle](opened.ring))
+                        _ = slop_os.handle_close(cast[slop_os.Handle](opened.doorbell))
+                    }
+                }
+            }
+            case None => {}
+        }
     }
     return options
+}
+
+/*
+ * A ring a program that's ended had, given back to the events service, which reads its last records and closes it; or
+ * closed, without one.
+ */
+retire_ring :: fn(supervisor: ptr[mut Supervisor], ring: slop_os.Memory) {
+    if cast[slop_os.Handle](ring) == slop_os.NO_HANDLE {
+        return void
+    }
+    if supervisor.events_end != NONE {
+        out := os.Outgoing.{}
+        request :: os.begin[events.Request](&out)
+        request^ = .Retire(ring)
+        into := os.Incoming.{}
+        match events.ask(supervisor.events_end, supervisor.events_port, &out, &into) {
+            case Done => return void
+            case _ => {}
+        }
+    }
+    // Not taken, if it wasn't sent
+    _ = slop_os.handle_close(cast[slop_os.Handle](ring))
+}
+
+// The ring kept for the program launched last, for its entry.
+take_ring :: fn(supervisor: ptr[mut Supervisor]) -> slop_os.Memory {
+    ring :: supervisor.launched_ring
+    supervisor.launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE)
+    return ring
 }
 
 // The events service, with a listener whose other end the supervisor keeps; into its entry at again, unless that's NOWHERE.
@@ -1663,6 +1801,18 @@ files_of_type :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize, kind: 
     return null
 }
 
+// One request to the storage manager on a connection of its own, and its answer, handling the rest meanwhile.
+ask_storage_once :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize, request: storage.Request) -> storage.Response {
+    end :: dial(supervisor, storage_slot) or_return .Unsupported
+    defer slop_os.handle_close(cast[slop_os.Handle](end))
+    signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+    if slop_os.port_bind(supervisor.port, cast[slop_os.Handle](end), signals, STORAGE_KEY, .Persistent) is_error {
+        return .Unsupported
+    }
+    defer slop_os.port_unbind(supervisor.port, STORAGE_KEY)
+    return ask_storage(supervisor, end, request)
+}
+
 // One request to the storage manager on end, bound to the supervisor's port, and its answer, handling the rest meanwhile.
 ask_storage :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, request: storage.Request) -> storage.Response {
     out := os.Outgoing.{}
@@ -1786,7 +1936,10 @@ dial :: fn(supervisor: ptr[mut Supervisor], target: usize) -> slop_os.Channel? {
     if cast[slop_os.Handle](entry.listener) == slop_os.NO_HANDLE {
         return null
     }
+    // A port of its own for the Connect, closed after it, which takes its binding to the listener with it: an end has
+    // room for only a few bindings
     port :: os.port_for(supervisor.block.budget, entry.listener) or_return null
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
     budget :: supervisor.block.budget
     return match entry.speaks {
         case .Serial => (serial.connect(entry.listener, port, budget) or_return null).end
@@ -1871,7 +2024,8 @@ started :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process:
     if index >= supervisor.started.count {
         return MAX_STARTED
     }
-    supervisor.started[index] = Started.{name = name, process = process, running = true, listener = NONE, budget = take_budget(supervisor)}
+    supervisor.started[index] = Started.{name = name, process = process, running = true, listener = NONE, budget = take_budget(supervisor),
+        ring = take_ring(supervisor)}
     supervisor.started_count = index + 1
     return index
 }

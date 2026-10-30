@@ -163,12 +163,16 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
             }
             case Connect(connection) => {
                 // A new client sees what arrives from now on
-                added :: driver.clients.count
-                if service_kit.add_client(&driver.clients, driver.port, connection.end) && added < driver.next_of.count {
-                    driver.next_of[added] = driver.written
-                }
-                else if added >= driver.next_of.count {
-                    _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
+                match service_kit.add_client_index(&driver.clients, driver.port, connection.end) {
+                    case Some(added) => {
+                        if added < driver.next_of.count {
+                            driver.next_of[added] = driver.written
+                        }
+                        if added < driver.held.count {
+                            driver.held[added] = 0
+                        }
+                    }
+                    case None => _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
                 }
             }
         }

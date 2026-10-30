@@ -16,19 +16,37 @@ Clients :: struct {
     count : usize,
 }
 
-// One more client, bound to port: false if there's no room, or it can't be bound.
+/*
+ * One more client, bound to port, in the place of one that went away if there is one, so a service has room for
+ * MAX_CLIENTS at once rather than in its life: false if there's no room, or it can't be bound.
+ */
 add_client :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slop_os.Channel) -> bool {
-    index :: clients.count
-    if index >= clients.ends.count {
-        return false
+    return add_client_index(clients, port, end) is_some
+}
+
+// add_client's, giving where the client went, for state a service keeps per client.
+add_client_index :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slop_os.Channel) -> usize? {
+    index := clients.count
+    for i in cast[usize](0)..<clients.count {
+        if i < clients.ends.count && cast[slop_os.Handle](clients.ends[i]) == slop_os.NO_HANDLE {
+            index = i
+            break
+        }
     }
+    if index >= clients.ends.count {
+        return null
+    }
+    // The binding the one before had, if it's still there
+    _ = slop_os.port_unbind(port, cast[u64](index))
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     if slop_os.port_bind(port, cast[slop_os.Handle](end), signals, cast[u64](index), .Persistent) is_error {
-        return false
+        return null
     }
     clients.ends[index] = end
-    clients.count = index + 1
-    return true
+    if index == clients.count {
+        clients.count = index + 1
+    }
+    return index
 }
 
 // A client that went away, closed.

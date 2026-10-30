@@ -106,7 +106,7 @@ def with_before_qemu(arguments: list[str], more: list[str]) -> list[str]:
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 38 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 39 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 3 budgets and the default split off the root's, 800000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -213,7 +213,11 @@ TESTS = [
         "--expect-line=[user] supervisor: test_events: hello's record 0 read back from the system volume: heap working, random numbers working",
         "--expect-line=[user] supervisor: test_events: clock's record 1 read back from the system volume: serving"])),
     ("starts the events service, the clock service and the storage manager again when they're killed", 7, with_before_qemu(
-        [argument.replace("test_services", "test_services test_restart_services") for argument in BOOT_DISK_ARGUMENTS], [
+        [argument.replace("test_services", "test_services test_restart_services test_storage_restart") for argument in BOOT_DISK_ARGUMENTS], [
+        "--expect-line=[user] storage: the volume server for the system volume ended",
+        "--expect-line=[user] supervisor: the system volume's connection closed; opening it again",
+        "--expect-line=[user] supervisor: test_restart_services: the system volume, served again after disk 0's partition server was, "
+        "and the bundle store reads through it",
         "--expect-line=[user] supervisor: test_restart_services: killing events", "--expect-line=[user] supervisor: restarted events",
         "--expect-line=[user] supervisor: test_restart_services: killing clock", "--expect-line=[user] supervisor: restarted clock",
         "--expect-line=[user] supervisor: test_restart_services: the clock service, started again, set the time",
@@ -232,6 +236,9 @@ TESTS = [
         "--expect-line=[user] storage: test_storage_restart: killing the partition server for disk 0",
         "--expect-line=[user] storage: the partition server for disk 0 ended",
         "--expect-line=[user] storage: restarted the partition server for disk 0"])),
+    ("keeps the kernel's share of memory out of the root budget", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services kernel_reserve=24",
+        "--expect-line=[info] memory: 24 MiB kept out of the root budget for the kernel's own",
+        "--expect-line=[user] root task: the supervisor started all 4 of its services"]),
     ("doesn't start the root task with no_root_task", 0, [WITH_PROGRAMS, "--command-line=test_exit no_root_task",
         "--expect-line=[info] boot memory reclaimed"]),
     ("boots and halts (UEFI)", 0, ["--uefi", "--expect-line=[info] boot memory reclaimed"]),
@@ -268,6 +275,8 @@ TESTS = [
         "budgets split off the root's share and refused past it, set, and destroyed, what ran on them going to their parent"),
     program_test("reads I/O ports through a range of them", "test_io_ports",
         "the RTC's status read through its ports, and ports outside them refused"),
+    program_test("ends a program missing a grant, or told another ABI version, as its starter sees", "test_exits",
+        "a copy missing a grant it requires ended with 126, one told another ABI version with 125"),
     program_test("supplies paged memory's pages from a pager in user mode", "test_pager",
         "2 pages supplied as they were touched, read at two addresses, and writing them refused"),
     program_test("drives a device from user mode with the platform capability", "test_devices",
