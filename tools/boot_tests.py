@@ -609,7 +609,7 @@ def robustness() -> int:
     points, then runs that fail one each, which must each end as judge allows. SLOPOS_BOOT_TESTS chooses tests by name,
     as for the boot tests.
     """
-    global PROGRAMS, PROGRAMS_AARCH64
+    global PROGRAMS, PROGRAMS_AARCH64, IMAGE_BUILDER
     only = [part for part in os.environ.get("SLOPOS_BOOT_TESTS", "").split(",") if part]
     with tempfile.TemporaryDirectory(prefix="slopos-robustness-") as temporary:
         PROGRAMS = Path(temporary) / "programs"
@@ -620,13 +620,19 @@ def robustness() -> int:
                 and build_robustness_kernel(kernel, "x86_64") and build_robustness_kernel(aarch64_kernel, "aarch64")):
             print("FAILED: the robustness kernels or the programs don't build")
             return 1
-        failed = 0
+        tools = Path(temporary) / "tools"
+        if not build_tools(tools):
+            print("FAILED: the tools don't build")
+            return 1
+        IMAGE_BUILDER = next(tools.glob("image_builder*"))
+        # Every boot test once more on the robustness kernels, whose counters start near their wraps (R2, decisions/0105)
+        failed = run_tests(kernel, TESTS) + run_tests(aarch64_kernel, AARCH64_TESTS, ["--arch=aarch64"])
         for name, words, arguments in SWEEP_TESTS:
             if only and not any(part in name for part in only):
                 continue
             failed += sweep(kernel, name, words, arguments)
             failed += sweep(aarch64_kernel, name, words, arguments, ["--arch=aarch64"], "AArch64: ")
-        print("every sweep passed" if failed == 0 else f"{failed} swept runs went wrong")
+        print("every test and sweep passed" if failed == 0 else f"{failed} tests and swept runs went wrong")
         return 0 if failed == 0 else 1
 
 

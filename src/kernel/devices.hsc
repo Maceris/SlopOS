@@ -82,6 +82,8 @@ DmaDomain :: struct #align(16) {
     root : u64,
     next_address : u64,
     address_limit : u64,
+    // Where the high range starts, which is handed out from its free range, 0 for none (translation.hsc, HIGH_DEVICE_BYTES)
+    high_start : u64,
     // The MSI doorbell's page, mapped at its own address, 0 for none.
     reserved : u64,
     free_ranges : AddressRange[MAX_FREE_RANGES],

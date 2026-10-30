@@ -6,6 +6,7 @@ import arch_interface from "../arch_interface"
 import boot_info from "../boot_info"
 import concurrency from "std"
 import frames from "frames"
+import robustness from "../robustness"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -191,6 +192,17 @@ leave_space :: fn(thread: ptr[mut Thread]) {
 }
 
 /*
+ * Where the search for a free tag starts, before the top of the range: 0, from the bottom, or with robustness=on 4, so
+ * PCIDs and ASIDs at the end of their range are used, and the search wraps (decisions/0096, 0105).
+ */
+#if robustness.ON {
+    TAG_SEARCH_FROM : usize : 4
+}
+#else {
+    TAG_SEARCH_FROM : usize : 0
+}
+
+/*
  * A free tag, or with only one tag (no PCIDs), that one: every switch flushes the TLB then anyway.
  */
 allocate_tag :: fn(kernel: ptr[mut Kernel]) -> arch_interface.AddressSpaceTag? {
@@ -201,7 +213,10 @@ allocate_tag :: fn(kernel: ptr[mut Kernel]) -> arch_interface.AddressSpaceTag? {
     tags :: &kernel.tags
     concurrency.lock(&tags.lock)
     defer concurrency.unlock(&tags.lock)
-    for tag in 1..<count {
+    // From TAG_SEARCH_FROM tags before the top, round to 1: the highest tags are used first in a robustness kernel
+    first :: if TAG_SEARCH_FROM != 0 && count > TAG_SEARCH_FROM + 1 { count - TAG_SEARCH_FROM } else { cast[usize](1) }
+    for step in 0..<count - 1 {
+        tag :: 1 + (first - 1 + step) % (count - 1)
         word :: tag / 64 % (MAX_TAGS / 64)
         bit :: cast[u64](1) << cast[u64](tag % 64)
         if tags.used[word] & bit == 0 {

@@ -27,6 +27,9 @@ DMA_TO_RAM : u64 : 1 << 1
 // How long it waits to be stopped, before it says it wasn't
 WAIT_NANOSECONDS : u64 : 10_000_000_000
 
+// The edu device's DMA reach: 28 bits of address
+EDU_DMA_LIMIT : u64 : 1 << 28
+
 main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memory, bar0: slop_os.Memory?, bar1: slop_os.Memory?,
     bar2: slop_os.Memory?, bar3: slop_os.Memory?, bar4: slop_os.Memory?, bar5: slop_os.Memory?, domain: slop_os.DmaDomain) -> int {
     block :: slop_os.startup_block()
@@ -37,7 +40,8 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
         return 3
     }
     memory := cast[slop_os.Memory](slop_os.NO_HANDLE)
-    match slop_os.dma_memory_create(domain, block.budget, PAGE, 0) {
+    // Where the device reaches: QEMU's edu device addresses 28 bits (its dma_mask), which R2's high addresses are past
+    match slop_os.dma_memory_create(domain, block.budget, PAGE, EDU_DMA_LIMIT) {
         case Ok(made) => memory = made
         case Error(error) => {
             if error == .Untrusted {

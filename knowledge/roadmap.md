@@ -345,7 +345,7 @@ failing allocator in `std` for hosted tests and programs); **R2** counters start
 generations, PCIDs and ASIDs, IOVAs, ring indices); **R3** lock ranks checked at every acquisition, with a ranked spin
 lock in `std`; **R4** storage faults, with 9c (failed and torn writes, every `Sync` after a failed write told); **R5**
 chaos, after 10a (random services killed, budgets checked); **R6** schedule exploration for lock-free code, when
-Hemera's atomics can be intercepted. R1 to R3 run after the catch-up, before 9c. R1 done 2026-10-30 (`decisions/0104`).
+Hemera's atomics can be intercepted. R1 to R3 run after the catch-up, before 9c. R1 done 2026-10-30 (`decisions/0104`), R2 (`decisions/0105`).
 
 Specs: none; prior art in Linux's `failslab`, `INITIAL_JIFFIES` and `lockdep`, `loom` and CHESS.
 Stresses: compile-time settings read by target code, code left out when a setting is off, `Allocator` wrappers,
@@ -564,5 +564,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | M9 | planned 2026-10-27 (`decisions/0092`), in five stages: one bundle store on the system volume, log records as format strings and typed arguments, the system configuration serialized per generation, `AppData` and `Config[T]`, B after M9; Hemera's reproducible output, typed linking and typed log records proposed (`hemera-proposals/`). Not started |
 | Catch-up | done 2026-10-30, in four parts (`decisions/0098` to `0101`): what M5 to M9 planned and hadn't built, the house-rule checks, and deferred items done or placed in M10, M12 and P |
 | Perf | planned 2026-10-30 (`decisions/0097`): benchmarks with baselines in 9c, then stages between milestones; not started |
-| R | planned 2026-10-29 (`decisions/0096`), in six stages, R1 to R3 before 9c. R1 done 2026-10-30 (`decisions/0104`): failure points in the kernel, `fail=` and `boot_tests.py --robustness` on both architectures, std's failing allocator and `unit_tests.py --robustness`; what the sweeps found, fixed (a process ending with its last thread, decided with the owner; slopfs and the services handling running out, with base's `array_try_*`; the bundle store collecting what was still reachable) |
+| R | planned 2026-10-29 (`decisions/0096`), in six stages, R1 to R3 before 9c. R1 done 2026-10-30 (`decisions/0104`): failure points in the kernel, `fail=` and `boot_tests.py --robustness` on both architectures, std's failing allocator and `unit_tests.py --robustness`; what the sweeps found, fixed (a process ending with its last thread, decided with the owner; slopfs and the services handling running out, with base's `array_try_*`; the bundle store collecting what was still reachable). R2 done 2026-10-30 (`decisions/0105`): monotonic time from 2^63 ns (decided with the owner), generations, tags, DMA addresses and ring indices near their wraps, every boot test on the robustness kernels |
 | M10–M16, B, P, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |

@@ -1,6 +1,7 @@
 package kernel
 
 import runtime from "base"
+import robustness from "../robustness"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -15,6 +16,17 @@ import runtime from "base"
  * and its frequency, the same on every CPU. Wall-clock time is a server's (decisions/0009), so the
  * kernel has none.
  */
+
+/*
+ * Where monotonic time starts: 0, or 2^63 nanoseconds (about 292 years) with robustness=on (decisions/0096, 0105), so
+ * code that narrows a time to 32 bits, or makes it signed, fails at once; now plus a timeout still never wraps.
+ */
+#if robustness.ON {
+    MONOTONIC_START : u64 : 0x8000000000000000
+}
+#else {
+    MONOTONIC_START : u64 : 0
+}
 
 // What context.clock points at, in Kernel: its data is the Kernel.
 init_clock :: fn(kernel #escaping : ptr[mut Kernel]) {
@@ -34,13 +46,14 @@ kernel_monotonic :: fn(data: mut rawptr) -> runtime.MonotonicTime {
     kernel :: cast[ptr[Kernel]](data)
     frequency :: kernel.clock_frequency
     if frequency == 0 {
-        return 0
+        return cast[runtime.MonotonicTime](MONOTONIC_START)
     }
     ticks :: arch.counter() - kernel.clock_start
     // Whole seconds and what's left, so the nanoseconds don't overflow
     seconds :: ticks / frequency
     left :: ticks % frequency
-    return cast[runtime.MonotonicTime](seconds * runtime.NANOSECONDS_PER_SECOND + left * runtime.NANOSECONDS_PER_SECOND / frequency)
+    return cast[runtime.MonotonicTime](MONOTONIC_START + seconds * runtime.NANOSECONDS_PER_SECOND
+        + left * runtime.NANOSECONDS_PER_SECOND / frequency)
 }
 
 kernel_wall :: fn(data: mut rawptr) -> Result[runtime.Instant, runtime.ClockError] {

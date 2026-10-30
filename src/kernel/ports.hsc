@@ -534,7 +534,11 @@ ticks_at :: fn(kernel: ptr[Kernel], nanoseconds: u64) -> u64 {
     if nanoseconds == slop_os.NO_DEADLINE {
         return slop_os.NO_DEADLINE
     }
-    return kernel.clock_start + ticks_of(kernel, nanoseconds)
+    // A monotonic time, from where it starts (clock.hsc); one before that is now
+    if nanoseconds < MONOTONIC_START {
+        return kernel.clock_start
+    }
+    return kernel.clock_start + ticks_of(kernel, nanoseconds - MONOTONIC_START)
 }
 
 // Whether size bytes at address in space are all mapped for user mode and writable.

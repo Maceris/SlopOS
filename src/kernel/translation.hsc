@@ -8,6 +8,7 @@ import boot_info from "../boot_info"
 import concurrency from "std"
 import slop_os from "std/os"
 import frames from "frames"
+import robustness from "../robustness"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -217,6 +218,12 @@ translate_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device], domain:
         domain.root = root
         domain.next_address = FIRST_DEVICE_ADDRESS
         domain.address_limit = cast[u64](1) << cast[u64](registered.info.address_bits)
+        // With robustness=on, the domain's last addresses are a free range from the start, so what can reach them gets them
+        if HIGH_DEVICE_BYTES != 0 && domain.address_limit > FIRST_DEVICE_ADDRESS + 2 * HIGH_DEVICE_BYTES {
+            domain.high_start = domain.address_limit - HIGH_DEVICE_BYTES
+            domain.free_ranges[0] = AddressRange.{start = domain.high_start, size = HIGH_DEVICE_BYTES}
+            domain.free_count = 1
+        }
         match map_doorbell(kernel, registered, domain) {
             case Some(error) => {
                 runtime.log_warn("a domain on IOMMU % has no MSI doorbell, so its devices' MSIs won't arrive", path.iommu - 1)
@@ -471,6 +478,17 @@ unremap_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
     concurrency.unlock(&registered.lock)
 }
 
+/*
+ * How much at the top of each DMA domain's addresses is free from the start: 0, or with robustness=on 64 MiB, so
+ * devices that can reach the top of the domain use addresses just below it (decisions/0096, 0105).
+ */
+#if robustness.ON {
+    HIGH_DEVICE_BYTES : u64 : 64 << 20
+}
+#else {
+    HIGH_DEVICE_BYTES : u64 : 0
+}
+
 // The lowest free range of size bytes below top: from the ranges freed, or past every one taken.
 take_device_addresses :: fn(domain: ptr[mut DmaDomain], size: u64, top: u64) -> u64? {
     if fails(.Iova) {
@@ -496,7 +514,9 @@ take_device_addresses :: fn(domain: ptr[mut DmaDomain], size: u64, top: u64) -> 
     if domain.reserved != 0 && domain.next_address < domain.reserved + frames.FRAME_SIZE && domain.next_address + size > domain.reserved {
         domain.next_address = domain.reserved + frames.FRAME_SIZE
     }
-    if domain.next_address > top || size > top - domain.next_address {
+    // Below the high range, if there is one: it's handed out from its free range
+    ceiling :: if domain.high_start != 0 && domain.high_start < top { domain.high_start } else { top }
+    if domain.next_address > ceiling || size > ceiling - domain.next_address {
         return null
     }
     start :: domain.next_address

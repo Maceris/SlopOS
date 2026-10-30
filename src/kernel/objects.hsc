@@ -6,6 +6,7 @@ import runtime from "base"
 import concurrency from "std"
 import slop_os from "std/os"
 import slab from "slab"
+import robustness from "../robustness"
 
 /*
  * Kernel objects (roadmap M5, decisions/0008, 0034): every object has exactly one owner, a Process, and
@@ -155,9 +156,22 @@ kind_of :: fn(field: compiler.StructMember) -> slop_os.ObjectKind {
     return .Process
 }
 
+/*
+ * A fresh object's generation: whatever its slot's memory held, or with robustness=on a few uses before 0xffffffff,
+ * where a slot is retired (decisions/0096, 0105), so retiring runs in every test.
+ */
+#if robustness.ON {
+    OBJECT_GENERATION_START : u32 : 0xfffffffc
+}
+#else {
+    OBJECT_GENERATION_START : u32 : 0
+}
+
 object_cache :: fn(size: u64, alignment: u64) -> slab.SlabCache {
     cache := slab.make_cache(size, alignment)
     cache.type_stable = true
+    cache.fresh_offset = cast[u64](offset_of(ObjectHeader, generation))
+    cache.fresh_value = OBJECT_GENERATION_START
     return cache
 }
 
@@ -410,8 +424,9 @@ release_object :: fn(kernel: ptr[mut Kernel], object: u64) {
     kind :: header.kind
     #insert per_kind("release_")
     return_charge(object)
-    // A slot whose generation would wrap is never used again (decisions/0008)
+    // A slot whose generation would wrap is never used again (decisions/0008), nor counted as in use
     if header.generation == 0xffffffff {
+        slab.retire(pool_of(kernel, kind), object)
         return void
     }
     slab.free(pool_of(kernel, kind), &kernel.frames, object)

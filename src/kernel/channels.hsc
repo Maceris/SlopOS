@@ -9,6 +9,7 @@ import maps from "std"
 import slop_os from "std/os"
 import frames from "frames"
 import slab from "slab"
+import robustness from "../robustness"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -179,6 +180,10 @@ create_channel :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, ring_byte
     core.tag = tag
     for side in 0..<2 {
         core.sides[side].mapping.core = core_address
+        // Each ring's indices from where they start, which only the kernel reads and writes
+        indices :: indices_of(kernel, core, cast[u32](side))
+        indices.head = RING_INDEX_START
+        indices.tail = RING_INDEX_START
     }
     end_a :: cast[ptr[mut Channel]](a)
     end_b :: cast[ptr[mut Channel]](b)
@@ -213,6 +218,17 @@ core_of :: fn(end: ptr[Channel]) -> ptr[mut ChannelCore] {
 // Where the ring memory is in the direct map.
 memory_of :: fn(kernel: ptr[Kernel], core: ptr[ChannelCore]) -> u64 {
     return frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](core.memory))
+}
+
+/*
+ * Where a ring's indices start: 0, or with robustness=on 256 bytes before u32 wraps (decisions/0096, 0105), so every
+ * ring's indices wrap within its first few messages. They're free-running, masked to the ring.
+ */
+#if robustness.ON {
+    RING_INDEX_START : u32 : 0xffffff00
+}
+#else {
+    RING_INDEX_START : u32 : 0
 }
 
 // The indices of the ring side writes.

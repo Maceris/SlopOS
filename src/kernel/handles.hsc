@@ -6,6 +6,7 @@ import concurrency from "std"
 import slop_os from "std/os"
 import boot_info from "../boot_info"
 import frames from "frames"
+import robustness from "../robustness"
 
 /*
  * Handle tables (roadmap M5, decisions/0008, 0010): one per process. A handle is an entry's index in
@@ -26,6 +27,16 @@ MAX_HANDLES :: ENTRIES_PER_PAGE * TABLE_PAGES
 TAG_VALID : u64 : 1 << 40
 TAG_OWNING : u64 : 1 << 41
 TAG_GENERATION_SHIFT : u64 : 48
+/*
+ * A fresh entry's generation: 0, or with robustness=on a few uses before 0xffff, where an entry is retired (decisions/0096,
+ * 0105), so retiring runs in every test.
+ */
+#if robustness.ON {
+    HANDLE_GENERATION_START : u64 : 0xfffc
+}
+#else {
+    HANDLE_GENERATION_START : u64 : 0
+}
 
 HandleEntry :: struct #align(32) {
     tag : u64,
@@ -88,6 +99,7 @@ install :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], object: u64,
             return .Error(.TableFull)
         }
         entry = make_entry(kernel, table, index) or_return .Error(if table.short_of_budget { slop_os.HandleError.BudgetExceeded } else { slop_os.HandleError.OutOfMemory })
+        entry.tag = HANDLE_GENERATION_START << TAG_GENERATION_SHIFT
         table.next_unused = index + 1
     }
     entry_generation :: intrinsics.atomic_load_u64(&entry.tag) >> TAG_GENERATION_SHIFT

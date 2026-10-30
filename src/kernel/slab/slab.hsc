@@ -83,6 +83,11 @@ SlabCache :: struct {
      * there, which kernel objects' generational handles depend on (decisions/0008).
      */
     type_stable : bool,
+    // Written as a u32 at fresh_offset in each object of a new slab, when it's not 0: kernel objects' first generation
+    fresh_offset : u64,
+    fresh_value : u32,
+    // Objects retired: handed out once and never given back, as a slot whose generation would wrap is
+    retired : u64,
 }
 
 // One CPU's stack of free objects from one cache. Used only by its CPU, so it needs no lock.
@@ -124,6 +129,14 @@ allocate :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocat
     concurrency.lock(&cache.lock)
     defer concurrency.unlock(&cache.lock)
     return take_object(cache, allocator)
+}
+
+// An object allocate gave, never given back nor counted any more: its slot is retired.
+retire :: fn(cache: ptr[mut SlabCache], object: u64) {
+    concurrency.lock(&cache.lock)
+    defer concurrency.unlock(&cache.lock)
+    cache.allocated -= 1
+    cache.retired += 1
 }
 
 // Give back an object allocate gave.
@@ -267,6 +280,12 @@ new_slab :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocat
     base :: frames.virtual_of(allocator, frames.allocate(allocator, cache.slab_order)?)
     header :: header_of(cache, base)
     header^ = SlabHeader.{}
+    if cache.fresh_value != 0 {
+        for i in 0..<cache.capacity {
+            at :: base + i * cache.object_size + cache.fresh_offset
+            cast[ptr[mut u32]](at)^ = cache.fresh_value
+        }
+    }
     cache.slab_count += 1
     return .Ok(base)
 }
