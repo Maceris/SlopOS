@@ -70,10 +70,14 @@ Descriptor :: struct #packed {
     next : u16le,
 }
 
+#assert size_of(Descriptor) == 16
+
 UsedElement :: struct #packed {
     id : u32le,
     length : u32le,
 }
+
+#assert size_of(UsedElement) == 8
 
 // A device's registers, through its BARs as its driver mapped them.
 Transport :: struct {

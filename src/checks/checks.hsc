@@ -1,5 +1,5 @@
 /*
- * SlopOS's house rules (decisions/0007, 0029), run by the build package on every target once it's
+ * SlopOS's house rules (decisions/0007, 0029, 0100), run by the build package on every target once it's
  * checked: check_program, registered with compiler.add_check. Each rule reports every problem it
  * finds with compiler.report_error, at the most specific place, and returns false if it found any.
  *
@@ -9,6 +9,8 @@
 package checks
 
 import compiler from "base"
+import runtime from "base"
+import os from "std"
 import reflection from "std"
 
 check_program :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
@@ -16,7 +18,15 @@ check_program :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.Pr
     arch_holds := check_arch_interface(program)
     iommus_hold := check_iommu_interface(program)
     protocols_hold := check_protocols(program)
-    return tiers_hold && arch_holds && iommus_hold && protocols_hold
+    floats_hold := check_kernel_floats(target, program)
+    results_hold := check_syscall_results(target, program)
+    interrupts_hold := check_interrupt_allocation(target, program)
+    imports_hold := check_program_imports(program)
+    raw_hold := check_raw_pointers(program)
+    layouts_hold := check_hardware_layouts(program)
+    discards_hold := check_kernel_discards(target, program)
+    return tiers_hold && arch_holds && iommus_hold && protocols_hold && floats_hold && results_hold && interrupts_hold
+        && imports_hold && raw_hold && layouts_hold && discards_hold
 }
 
 // std tiers
@@ -345,6 +355,502 @@ is_listed :: fn(names: any, name: string) -> bool {
         }
     }
     return false
+}
+
+// The kernel's code (decisions/0029, 0100)
+
+// Whether the target is the kernel: built for no operating system.
+is_kernel :: fn(target: ptr[compiler.BuildOptions]) -> bool {
+    return target.target_options.os == .None
+}
+
+// Whether a package is the project's own: not base's, and not std's.
+is_own :: fn(program: ptr[compiler.ProgramInfo], package: ptr[compiler.PackageInfo]) -> bool {
+    return !starts_with(package.path, "<base>/") && !is_std(program, package.path)
+}
+
+/*
+ * No floating point in the kernel, which is built without SIMD or floating-point state: no float, complex or
+ * quaternion type, or vector of them, in what a function of its takes, gives or uses.
+ */
+check_kernel_floats :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
+    if !is_kernel(target) {
+        return true
+    }
+    holds := true
+    for &package in program.packages {
+        if !is_own(program, package) {
+            continue
+        }
+        for &function in package.functions {
+            for &parameter in function.parameters {
+                if is_floating(parameter.type) {
+                    compiler.report_error(function.location, "%.% takes floating point (%), which the kernel has none of",
+                        package.name, function.name, parameter.name)
+                    holds = false
+                }
+            }
+            for &result in function.return_values {
+                if is_floating(result.type) {
+                    compiler.report_error(function.location, "%.% gives floating point, which the kernel has none of", package.name, function.name)
+                    holds = false
+                }
+            }
+            for &use in function.used_types {
+                if is_floating(use.type) {
+                    compiler.report_error(use.location, "floating point, which the kernel has none of")
+                    holds = false
+                }
+            }
+        }
+    }
+    return holds
+}
+
+is_floating :: fn(checked: type) -> bool {
+    info :: unaliased(type_info_of(checked))
+    if info.variant == .FLOAT || info.variant == .COMPLEX || info.variant == .QUATERNION {
+        return true
+    }
+    if info.variant == .VECTOR {
+        vector :: cast[ptr[compiler.TypeInfoVector]](info)
+        return !vector.is_bits && is_floating(described_type(vector.element_type))
+    }
+    return false
+}
+
+unaliased :: fn(info: ptr[compiler.TypeInfo]) -> ptr[compiler.TypeInfo] {
+    at := info
+    loop {
+        if at.variant != .ALIAS {
+            return at
+        }
+        at = cast[ptr[compiler.TypeInfoAlias]](at).base_type
+    }
+}
+
+/*
+ * No kernel address reaches user space through a system call's result (decisions/0021): what a sys_ function of the
+ * kernel's gives has no pointer in it, however deep.
+ */
+check_syscall_results :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
+    if !is_kernel(target) {
+        return true
+    }
+    kernel :: package_named(program, "kernel") or_return true
+    holds := true
+    for &function in kernel.functions {
+        if !starts_with(function.name, "sys_") {
+            continue
+        }
+        for &result in function.return_values {
+            seen : uintptr[..]
+            defer runtime.array_free(&seen)
+            if has_pointer(type_info_of(result.type), &seen) {
+                compiler.report_error(function.location, "%'s result has a pointer in it, which would give user space a kernel address",
+                    function.name)
+                holds = false
+            }
+        }
+    }
+    return holds
+}
+
+// Whether a value of the type holds a pointer: itself, or a member's, element's or variant's, however deep.
+has_pointer :: fn(info: ptr[compiler.TypeInfo], seen: ptr[mut uintptr[..]]) -> bool {
+    for each in seen^ {
+        if each == cast[uintptr](info) {
+            return false
+        }
+    }
+    runtime.array_add(seen, cast[uintptr](info))
+    if info.variant == .POINTER {
+        return true
+    }
+    if info.variant == .ALIAS {
+        return has_pointer(cast[ptr[compiler.TypeInfoAlias]](info).base_type, seen)
+    }
+    if info.variant == .ARRAY {
+        return has_pointer(cast[ptr[compiler.TypeInfoArray]](info).base_type, seen)
+    }
+    if info.variant == .STRUCT {
+        for &member in cast[ptr[compiler.TypeInfoStruct]](info).members {
+            if has_pointer(member.member_type, seen) {
+                return true
+            }
+        }
+    }
+    if info.variant == .UNION {
+        for &variant in cast[ptr[compiler.TypeInfoUnion]](info).variants {
+            for held in variant.types {
+                if has_pointer(held, seen) {
+                    return true
+                }
+            }
+        }
+    }
+    return false
+}
+
+/*
+ * Interrupt handlers don't allocate: nothing the kernel's entry for an interrupt reaches, by calls it names, calls an
+ * allocator. A call through a function value isn't followed.
+ */
+check_interrupt_allocation :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
+    if !is_kernel(target) {
+        return true
+    }
+    entry :: package_named(program, "kernel_entry") or_return true
+    handler :: compiler.find_function(entry, "interrupt") or_return true
+    visited : compiler.FunctionCall[..]
+    defer runtime.array_free(&visited)
+    return !allocates(program, handler, entry.name, &visited)
+}
+
+// The allocators: base's, and the kernel's heap's and objects'.
+ALLOCATORS :: string.["new", "new_aligned", "new_array", "new_array_aligned", "array_reserve", "allocate_block", "new_object"]
+
+// Whether a function, or anything it calls by name, calls an allocator; each such call reported.
+allocates :: fn(program: ptr[compiler.ProgramInfo], function: compiler.FunctionInfo, package: string,
+    visited: ptr[mut compiler.FunctionCall[..]]) -> bool {
+    if is_listed_function(INTERRUPT_ALLOCATIONS, package, function.name) {
+        return false
+    }
+    found := false
+    for &call in function.calls {
+        if call.name == "" {
+            continue
+        }
+        called_name :: generic_name(call.name)
+        for name in ALLOCATORS {
+            if called_name == name {
+                compiler.report_error(call.location, "% allocates, and an interrupt handler reaches it", function.name)
+                found = true
+            }
+        }
+        already := false
+        for &each in visited^ {
+            already = already || (each.name == call.name && each.package_path == call.package_path)
+        }
+        if already {
+            continue
+        }
+        runtime.array_add(visited, call^)
+        called_package :: package_at(program, call.package_path) or_continue
+        if !is_own(program, called_package) && !starts_with(called_package.path, "<base>/") {
+            continue
+        }
+        called :: compiler.find_function(called_package, called_name) or_continue
+        found = allocates(program, called, called_package.name, visited) || found
+    }
+    return found
+}
+
+// Programs
+
+// Folders whose packages that declare main are programs.
+PROGRAM_FOLDERS :: string.["/src/apps/", "/src/services/", "/src/drivers/", "/src/tests/"]
+
+// Whether a package is a program: one of the project's, in a program folder, that declares main.
+is_program :: fn(package: ptr[compiler.PackageInfo]) -> bool {
+    if compiler.find_function(package, "main") is_none {
+        return false
+    }
+    for folder in PROGRAM_FOLDERS {
+        if in_folder(package.path, folder) {
+            return true
+        }
+    }
+    return false
+}
+
+/*
+ * Programs don't share code by importing each other (decisions/0029, 0100): a program may import another to launch it,
+ * for its entry's type and its constants, but calls nothing of it. What two programs share goes in a library package.
+ */
+check_program_imports :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
+    holds := true
+    for &importer in program.packages {
+        if !is_program(importer) {
+            continue
+        }
+        for &edge in importer.imports {
+            imported :: package_at(program, edge.path) or_continue
+            if imported.path == importer.path || !is_program(imported) {
+                continue
+            }
+            for &function in importer.functions {
+                for &call in function.calls {
+                    if call.package_path == imported.path {
+                        compiler.report_error(call.location, "% calls %.%, but programs don't share code: move it to a library package",
+                            importer.name, imported.name, call.name)
+                        holds = false
+                    }
+                }
+            }
+        }
+    }
+    return holds
+}
+
+/*
+ * rawptr only where it's needed (decisions/0029, 0100): in the packages RAW_POINTERS names, each one that works with
+ * memory as bytes or as hardware sees it. Everywhere else, a pointer has a type.
+ */
+check_raw_pointers :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
+    holds := true
+    for &package in program.packages {
+        if !is_own(program, package) || is_listed_in(RAW_POINTERS, package.name) {
+            continue
+        }
+        for &function in package.functions {
+            for &use in function.used_types {
+                if is_raw_pointer(use.type) {
+                    compiler.report_error(use.location, "rawptr in %, which isn't in RAW_POINTERS (src/checks)", package.name)
+                    holds = false
+                }
+            }
+        }
+    }
+    return holds
+}
+
+is_raw_pointer :: fn(checked: type) -> bool {
+    info :: unaliased(type_info_of(checked))
+    return info.variant == .POINTER && (cast[ptr[compiler.TypeInfoPointer]](info).base_type is_none)
+}
+
+/*
+ * Hardware structs have their layouts checked (decisions/0029, 0100): a #packed struct in a hardware package is
+ * hardware's, and its package asserts its size, an #assert with size_of(Name) in one of its files.
+ */
+HARDWARE_FOLDERS :: string.["/src/arch/", "/src/drivers/", "/src/iommu/", "/src/virtio", "/src/pci", "/src/gpt", "/src/fat", "/src/slopfs"]
+
+check_hardware_layouts :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
+    holds := true
+    for &package in program.packages {
+        hardware := false
+        for folder in HARDWARE_FOLDERS {
+            hardware = hardware || in_folder(package.path, folder)
+        }
+        if !hardware {
+            continue
+        }
+        text : string[..]
+        defer runtime.array_free(&text)
+        for path in package.files {
+            match os.read_entire_file(path) {
+                case Ok(read) => runtime.array_add(&text, read)
+                case Error(error) => {}
+            }
+        }
+        for &declared in package.types {
+            info :: type_info_of(declared.type)
+            if info.variant != .STRUCT || !cast[ptr[compiler.TypeInfoStruct]](info).is_packed {
+                continue
+            }
+            asserted := false
+            for each in text {
+                asserted = asserted || asserts_size(each, declared.name)
+            }
+            if !asserted {
+                compiler.report_error(declared.location, "% is #packed, so it's hardware's: assert its size (#assert size_of(%) == ...)",
+                    declared.name, declared.name)
+                holds = false
+            }
+        }
+    }
+    return holds
+}
+
+// Whether text has a line with #assert and size_of(name) on it.
+asserts_size :: fn(text: string, name: string) -> bool {
+    at := find(text, "#assert", 0)
+    loop {
+        if at == NOT_FOUND {
+            return false
+        }
+        end := find(text, NEWLINE, at)
+        if end == NOT_FOUND {
+            end = text.count
+        }
+        if has_size_of(text, name, at, end) {
+            return true
+        }
+        at = find(text, "#assert", end)
+    }
+}
+
+/*
+ * Errors aren't ignored in the kernel (decisions/0029, 0100): no function of its discards a Result with _ =, unless
+ * DISCARDED_RESULTS names it, as package.function, where losing the error is right.
+ */
+check_kernel_discards :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
+    if !is_kernel(target) {
+        return true
+    }
+    holds := true
+    for &package in program.packages {
+        if !is_own(program, package) {
+            continue
+        }
+        for &function in package.functions {
+            for &discard in function.discards {
+                if is_result(discard.type) && !is_listed_function(DISCARDED_RESULTS, package.name, function.name) {
+                    compiler.report_error(discard.location, "%.% discards a Result: handle its error, or list it in DISCARDED_RESULTS (src/checks)",
+                        package.name, function.name)
+                    holds = false
+                }
+            }
+        }
+    }
+    return holds
+}
+
+is_result :: fn(checked: type) -> bool {
+    info :: unaliased(type_info_of(checked))
+    return info.variant == .UNION && starts_with(cast[ptr[compiler.TypeInfoUnion]](info).name, "Result")
+}
+
+// Allow-lists
+
+/*
+ * Packages whose code may use rawptr: those that did when the rule came in (decisions/0100), each working with memory
+ * as bytes, or as hardware or another program sees it. A package joins only for such a reason.
+ */
+RAW_POINTERS :: string.[
+    "arch_aarch64", "arch_x86_64", "bundle_store_service", "clock", "console_log", "container_service", "disk_check",
+    "elf_loader", "elf_loader_test", "events", "events_service", "fat", "fat_server", "fat_test", "frames", "gpt",
+    "gpt_test", "image_builder", "iommu_vtd", "kernel", "limine_boot", "log_line", "partition_server", "pci",
+    "platform", "scheduler", "service_kit", "slopfs", "slopfs_test", "storage_manager", "store_builder",
+    "supervisor", "test_affinity", "test_budgets", "test_msi_dma", "test_pager", "volume_server", "x86_64_test",
+]
+
+// Functions of the kernel's, as package.function, that may discard a Result: losing its error is right there.
+DISCARDED_RESULTS :: string.[
+    // A block another one's tables already cover is mapped already
+    "arch_aarch64.init_kernel_page_table",
+    // Cleaning up after a failure, whose own error is the one given
+    "kernel.sys_channel_create",
+    // A test's unmap of a page it mapped
+    "kernel.test_shootdown",
+]
+
+/*
+ * Functions of the kernel's, as package.function, that an interrupt handler may reach though they allocate: what
+ * they do without memory is right there.
+ */
+INTERRUPT_ALLOCATIONS :: string.[
+    // A woken thread's wait, armed again as it's resumed, which without memory waits without its deadline
+    "kernel.grow_heap",
+]
+
+is_listed_in :: fn(names: string[], name: string) -> bool {
+    for listed in names {
+        if listed == name {
+            return true
+        }
+    }
+    return false
+}
+
+// Whether names has package.function.
+is_listed_function :: fn(names: string[], package: string, function: string) -> bool {
+    for listed in names {
+        if listed.count == package.count + 1 + function.count && package.count < listed.count && starts_with(listed, package)
+            && listed[package.count] == '.' && ends_with(listed, function) {
+            return true
+        }
+    }
+    return false
+}
+
+// Text
+
+contains :: fn(text: string, part: string) -> bool {
+    return find(text, part, 0) != NOT_FOUND
+}
+
+NOT_FOUND : usize : 0xffffffffffffffff
+NEWLINE :: "\n"
+
+// Where part is in text, at or after from, or NOT_FOUND.
+find :: fn(text: string, part: string, from: usize) -> usize {
+    if part.count > text.count {
+        return NOT_FOUND
+    }
+    for start in from..<text.count - part.count + 1 {
+        matched := true
+        for index in 0..<part.count {
+            at :: start + index
+            if at >= text.count || text[at] != part[index] {
+                matched = false
+                break
+            }
+        }
+        if matched {
+            return start
+        }
+    }
+    return NOT_FOUND
+}
+
+// Whether text has size_of(name), name whole, between from and to.
+has_size_of :: fn(text: string, name: string, from: usize, to: usize) -> bool {
+    at := find(text, "size_of(", from)
+    loop {
+        if at == NOT_FOUND || at >= to {
+            return false
+        }
+        start :: at + 8
+        end :: start + name.count
+        if end < to && end < text.count && text[end] == ')' && matches_at(text, start, name) {
+            return true
+        }
+        at = find(text, "size_of(", start)
+    }
+}
+
+// A call's name without its generic arguments: new for new[u64].
+generic_name :: fn(name: string) -> string {
+    for character, index in name {
+        if character == '[' {
+            return string_of(cast[ptr[u8]](name.data), index)
+        }
+    }
+    return name
+}
+
+// Whether a path has folder, written with /, in it, whichever separator the path uses.
+in_folder :: fn(path: string, folder: string) -> bool {
+    if folder.count > path.count {
+        return false
+    }
+    for start in 0..<path.count - folder.count + 1 {
+        matched := true
+        for character, index in folder {
+            at :: start + index
+            found :: if at < path.count { path[at] } else { cast[char](0) }
+            if found != character && !(character == '/' && found == '\\') {
+                matched = false
+                break
+            }
+        }
+        if matched {
+            return true
+        }
+    }
+    return false
+}
+
+// Whether part is in text at at.
+matches_at :: fn(text: string, at: usize, part: string) -> bool {
+    for character, index in part {
+        if at + index >= text.count || text[at + index] != character {
+            return false
+        }
+    }
+    return true
 }
 
 // Finding packages

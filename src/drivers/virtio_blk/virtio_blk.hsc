@@ -40,6 +40,8 @@ RequestHeader :: struct #packed {
     sector : u64le,
 }
 
+#assert size_of(RequestHeader) == 16
+
 // A request in flight: whose, its tag, and the chain the device has.
 Slot :: struct {
     used : bool,

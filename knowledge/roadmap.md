@@ -326,7 +326,8 @@ manager restarting its servers, and manifests). In four parts, before 9c, each c
    discarded in the kernel need the compiler to report them. Chosen with the owner: a `#packed` struct in a hardware
    package (arch, drivers, iommu, virtio, pci, gpt, fat, slopfs) is hardware, and has a `size_of` assert in its
    package; Hemera's `FunctionInfo` records where a body discards a `Result` with `_ =`, which the check refuses in the
-   kernel outside an allow-list.
+   kernel outside an allow-list. Done 2026-10-30 (`decisions/0100`), with four virtio structs given size asserts, and
+   Hemera's `FunctionInfo.discards`.
 4. **Deferred items** placed: done now, FAT timestamps and FSInfo's free count (`0087`), and the entropy service for
    programs the supervisor starts (`0067`); in M10, the root task's services restarted and logging to the events
    service (`0093`), and interrupt controllers unregistered when the platform service restarts (`0049`); in M12,

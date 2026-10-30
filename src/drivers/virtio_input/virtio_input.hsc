@@ -56,6 +56,8 @@ DeviceEvent :: struct #packed {
     value : u32le,
 }
 
+#assert size_of(DeviceEvent) == 8
+
 Driver :: struct {
     log : slop_os.DebugLog,
     transport : virtio.Transport,
