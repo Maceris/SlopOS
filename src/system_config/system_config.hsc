@@ -135,8 +135,9 @@ SERVICES :: Service.[
     // Every program's log records but the root task's and what it starts, first, so each is given a ring for them (decisions/0093)
     Service.{name = "events", boot_set = true, module = "events_service.elf", starter = .Supervisor, by_manager = true, budget = 8 * MIB,
         entry = type_of(events_service.main)},
-    // The real-time clock's driver, next, so everything after it is given the clock page it keeps (decisions/0093)
-    Service.{name = "clock", boot_set = true, module = "clock.elf", starter = .Supervisor, by_manager = true, budget = 1 * MIB,
+    // The real-time clock's driver, next, so everything after it is given the clock page it keeps (decisions/0093).
+    // Its stack, image, heap chunks and events ring come to about 1 MiB, before the page tables its space needs
+    Service.{name = "clock", boot_set = true, module = "clock.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(clock_service.main)},
     Service.{name = "console", module = "console.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(console.main), cpu = INTERACTIVE_CPU},
