@@ -293,6 +293,10 @@ installations; **9e** shared libraries and substitution. 9a done 2026-10-29 (`de
 events services, with every service the supervisor starts restarted. 9b done 2026-10-29 (`decisions/0094`): the bundle store, paged memory, and
 programs outside the boot set booted from the store, their code shared.
 
+9c planned 2026-10-30 (`decisions/0107`), in five parts: **9c1** typed files and names; **9c2** the config store and
+`Config[T]`; **9c3** the system configuration at run time; **9c4** memory pressure; **9c5** the Perf baselines and R4's
+storage faults.
+
 Added by `decisions/0097`: in **9c**, the benchmarks with baselines (*Perf*, below), the memory pressure signal and
 evictable pager pages, and slopfs refusing names with control, bidirectional or invisible characters; in **9d**,
 dependency kinds in `system_config` (required with a deadline, optional, late) with degraded boots instead of hangs,
