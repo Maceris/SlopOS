@@ -486,13 +486,14 @@ raise_signals :: fn(kernel: ptr[mut Kernel], core: ptr[mut ChannelCore], side: u
         slot :: &kept.bindings[i]
         if slot.binding != 0 {
             binding :: cast[ptr[mut Binding]](slot.binding)
-            port :: cast[ptr[mut Port]](intrinsics.atomic_load_u64(&binding.port))
-            concurrency.lock(&port.lock)
             // A binding the port dropped is no longer this one, whatever its slot holds now
-            if binding.generation == slot.generation && binding.port == cast[u64](port) && !is_dying(cast[u64](port)) {
-                signal_binding(kernel, port, binding, signals)
+            match lock_bound_port(binding, slot.generation) {
+                case Some(port) => {
+                    signal_binding(kernel, port, binding, signals)
+                    concurrency.unlock(&port.lock)
+                }
+                case None => {}
             }
-            concurrency.unlock(&port.lock)
         }
     }
 }
@@ -516,13 +517,14 @@ drop_end_binding :: fn(kernel: ptr[mut Kernel], slot: ptr[mut EndBinding]) {
         return void
     }
     binding :: cast[ptr[mut Binding]](slot.binding)
-    port :: cast[ptr[mut Port]](intrinsics.atomic_load_u64(&binding.port))
-    concurrency.lock(&port.lock)
-    if binding.generation == slot.generation && binding.port == cast[u64](port) && !is_dying(cast[u64](port)) {
-        _ = maps.map_remove(&port.bindings, binding.key)
-        free_binding(kernel, port, binding)
+    match lock_bound_port(binding, slot.generation) {
+        case Some(port) => {
+            _ = maps.map_remove(&port.bindings, binding.key)
+            free_binding(kernel, port, binding)
+            concurrency.unlock(&port.lock)
+        }
+        case None => {}
     }
-    concurrency.unlock(&port.lock)
     slot.binding = 0
 }
 

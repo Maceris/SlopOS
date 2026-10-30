@@ -239,12 +239,8 @@ report_stop :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) {
         return void
     }
     binding :: cast[ptr[mut Binding]](intercept.binding)
-    port :: cast[ptr[mut Port]](intrinsics.atomic_load_u64(&binding.port))
-    concurrency.lock(&port.lock)
+    port :: lock_bound_port(binding, intercept.binding_generation) or_return void
     defer concurrency.unlock(&port.lock)
-    if binding.generation != intercept.binding_generation || binding.port != cast[u64](port) || is_dying(cast[u64](port)) {
-        return void
-    }
     binding.data += 1
     queue_binding(kernel, port, binding)
 }

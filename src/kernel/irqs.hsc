@@ -165,11 +165,10 @@ deliver_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
         return void
     }
     binding :: cast[ptr[mut Binding]](irq.binding)
-    port :: cast[ptr[mut Port]](intrinsics.atomic_load_u64(&binding.port))
-    concurrency.lock(&port.lock)
-    defer concurrency.unlock(&port.lock)
     // A binding the port dropped is no longer this one
-    if binding.generation != irq.binding_generation || binding.port != cast[u64](port) || is_dying(cast[u64](port)) || !binding.armed {
+    port :: lock_bound_port(binding, irq.binding_generation) or_return void
+    defer concurrency.unlock(&port.lock)
+    if !binding.armed {
         return void
     }
     binding.data += 1
@@ -223,12 +222,9 @@ irq_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], irq: ptr[mut Irq], 
 // Drop a binding from its port, if it's still the one with generation.
 drop_binding :: fn(kernel: ptr[mut Kernel], address: u64, generation: u32) {
     binding :: cast[ptr[mut Binding]](address)
-    port :: cast[ptr[mut Port]](intrinsics.atomic_load_u64(&binding.port))
-    concurrency.lock(&port.lock)
-    if binding.generation == generation && binding.port == cast[u64](port) && !is_dying(cast[u64](port)) {
-        _ = maps.map_remove(&port.bindings, binding.key)
-        free_binding(kernel, port, binding)
-    }
+    port :: lock_bound_port(binding, generation) or_return void
+    _ = maps.map_remove(&port.bindings, binding.key)
+    free_binding(kernel, port, binding)
     concurrency.unlock(&port.lock)
 }
 

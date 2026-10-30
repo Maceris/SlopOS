@@ -167,14 +167,15 @@ raise_watchers :: fn(kernel: ptr[mut Kernel], watchers: ptr[mut EndBinding[2]], 
         slot :: &watchers^[i]
         if slot.binding != 0 {
             binding :: cast[ptr[mut Binding]](slot.binding)
-            port :: cast[ptr[mut Port]](intrinsics.atomic_load_u64(&binding.port))
-            concurrency.lock(&port.lock)
             // A binding the port dropped is no longer this one, whatever its slot holds now
-            if binding.generation == slot.generation && binding.port == cast[u64](port) && !is_dying(cast[u64](port)) {
-                binding.detail = detail
-                signal_binding(kernel, port, binding, signals)
+            match lock_bound_port(binding, slot.generation) {
+                case Some(port) => {
+                    binding.detail = detail
+                    signal_binding(kernel, port, binding, signals)
+                    concurrency.unlock(&port.lock)
+                }
+                case None => {}
             }
-            concurrency.unlock(&port.lock)
         }
     }
 }

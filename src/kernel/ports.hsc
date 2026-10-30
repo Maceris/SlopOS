@@ -472,6 +472,26 @@ binding_of :: fn(port: ptr[mut Port], key: u64, kind: BindingKind) -> ptr[mut Bi
     return if binding.kind == kind { binding } else { null }
 }
 
+/*
+ * The port of a binding kept elsewhere (an end's, a watcher's, an IRQ's, an intercept's), locked, if it's still the
+ * binding with generation and its port isn't dying; otherwise null. Bindings are type-stable, so one its port freed
+ * is still a Binding, its generation changed; but while new_binding makes the slot anew, for any port, its port
+ * reads 0 for a moment, and it isn't this binding then either.
+ */
+lock_bound_port :: fn(binding: ptr[Binding], generation: u32) -> ptr[mut Port]? {
+    address :: intrinsics.atomic_load_u64(&binding.port)
+    if address == 0 {
+        return null
+    }
+    port :: cast[ptr[mut Port]](address)
+    concurrency.lock(&port.lock)
+    if binding.generation == generation && binding.port == address && !is_dying(address) {
+        return port
+    }
+    concurrency.unlock(&port.lock)
+    return null
+}
+
 // A binding for key, in the port's map, with no packet yet. Takes the lock as held.
 new_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, kind: BindingKind) -> ptr[mut Binding]? {
     port.short_of_budget = false
