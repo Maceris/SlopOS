@@ -261,7 +261,7 @@ unlocked_keys :: fn(container: ptr[mut slopfs.Container], id: u64) -> ptr[mut sl
     if slopfs.volume_generations(container, id, &generations) is_error {
         return null
     }
-    keys :: slopfs.new_keys(.None)
+    keys :: slopfs.new_keys(.None) or_return null
     match slopfs.unlock(container.id, id, record, wraps, generations, passphrase(), keys) {
         case Ok => return keys
         case Error(error) => {

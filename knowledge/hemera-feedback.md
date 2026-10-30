@@ -117,6 +117,11 @@ constants of `#union` structs naming overlapping members; and `match` and `switc
 gives `None` when there's no zero within it, rather than reading on (decided with the owner), as base's
 `runtime.cstring_view` does too, for arguments, the environment and directory entries. Sharing parsed files between targets was dropped, since checking
 changes the trees, and with it `hemera-proposals/build-programs.md`, which had nothing else open.
+Then from the `rawptr` review and R1 (2026-10-30): `string_bytes(text)`, a string's bytes without reading its `data` as
+a `rawptr` (`0103`); casts between an address and a float, `bool` or `char` refused, and an untyped constant cast to an
+address checked as its own type (`cast[ptr[u8]](1.5)` had compiled); `--output=name.exe` no longer making
+`name.exe.exe`; `-o value` taken as well as `-o=value`; and `std`'s `memory.FailingAllocator`, which fails the nth
+allocation for fault injection's hosted sweeps (`0096`, `0104`).
 
 ## 4. Features That Look Like a Strong Fit
 

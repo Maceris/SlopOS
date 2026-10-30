@@ -42,6 +42,20 @@ Error :: enum {
     InUse,
     // A stored link, where a file or a directory was needed (links.hsc)
     IsALink,
+    // No memory for a node or a buffer (decisions/0104): nothing was changed for want of it
+    OutOfMemory,
+}
+
+/*
+ * A new T, or OutOfMemory: every node and buffer slopfs takes comes from here (decisions/0104), each taken before
+ * what it's for changes anything, so a caller can fail without it and nothing is left half done.
+ */
+make :: fn[T](T: type, location := #caller_location) -> Result[ptr[mut T], Error] {
+    made, error :: runtime.new_aligned(T, align_of(T), context.allocator, location)
+    if error != null {
+        return .Error(.OutOfMemory)
+    }
+    return .Ok(made)
 }
 
 /*
@@ -307,7 +321,7 @@ load :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointer]) -
             case None => {}
         }
     }
-    node := runtime.new(Node)
+    node :: make(Node)?
     node.dirty = false
     node.copy = cast[u64](pointer.copy)
     for place in u64.[address, cast[u64](pointer.copy)] {
@@ -330,7 +344,8 @@ read_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointe
     match tree.keys {
         case None => return nodes.device.read(nodes.device.context, place, NODE_BLOCKS, node.bytes)
         case Some(keys) => {
-            sealed := runtime.new(Node)
+            // Without memory to open it in, it's as if it couldn't be read
+            sealed :: make(Node) or_return false
             defer runtime.free(sealed)
             if !nodes.device.read(nodes.device.context, place, NODE_BLOCKS, sealed.bytes) {
                 return false
@@ -380,6 +395,14 @@ place_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree]) -> Result[BlockPointer,
         blocks = cast[u32le](cast[u32](NODE_BLOCKS))})
 }
 
+// A placed node's blocks given back, unused: what place_node gave, when what it was for couldn't be made.
+unplace :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: BlockPointer) {
+    nodes.release(nodes.space, cast[u64](pointer.address), NODE_BLOCKS, tree.owner, nodes.transaction)
+    if cast[u64](pointer.copy) != 0 {
+        nodes.release(nodes.space, cast[u64](pointer.copy), NODE_BLOCKS, tree.owner, nodes.transaction)
+    }
+}
+
 // A node and where it is.
 Placed :: struct {
     node : ptr[mut Node],
@@ -388,12 +411,24 @@ Placed :: struct {
 
 // A new, empty, dirty node of tree at level.
 new_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], level: u16) -> Result[Placed, Error] {
-    pointer :: place_node(nodes, tree)?
-    node := runtime.new(Node)
+    // Its memory first, so a node placed is a node made
+    node :: make(Node)?
+    pointer := BlockPointer.{}
+    match place_node(nodes, tree) {
+        case Ok(placed) => pointer = placed
+        case Error(error) => {
+            runtime.free(node)
+            return .Error(error)
+        }
+    }
     start_node(node, tree, level, nodes.transaction, cast[u64](pointer.address))
     node.copy = cast[u64](pointer.copy)
     node.dirty = true
-    maps.map_put(&nodes.dirty, cast[u64](pointer.address), node)
+    if maps.map_try_put(&nodes.dirty, cast[u64](pointer.address), node) != null {
+        unplace(nodes, tree, pointer)
+        runtime.free(node)
+        return .Error(.OutOfMemory)
+    }
     return .Ok(Placed.{node = node, pointer = pointer})
 }
 
@@ -406,20 +441,35 @@ writable :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockPoi
     if node.dirty {
         return .Ok(node)
     }
-    placed := BlockPointer.{}
-    match place_node(nodes, tree) {
-        case Ok(made) => placed = made
+    // The copy's memory before anything moves
+    copy :: match make(Node) {
+        case Ok(made) => made
         case Error(error) => {
             done(node)
             return .Error(error)
         }
+    }
+    placed := BlockPointer.{}
+    match place_node(nodes, tree) {
+        case Ok(made) => placed = made
+        case Error(error) => {
+            runtime.free(copy)
+            done(node)
+            return .Error(error)
+        }
+    }
+    // Kept among the dirty nodes before the old one's given back, so there's nothing to undo past here
+    if maps.map_try_put(&nodes.dirty, cast[u64](placed.address), copy) != null {
+        unplace(nodes, tree, placed)
+        runtime.free(copy)
+        done(node)
+        return .Error(.OutOfMemory)
     }
     nodes.release(nodes.space, cast[u64](pointer.address), NODE_BLOCKS, tree.owner, cast[u64](pointer.birth))
     if cast[u64](pointer.copy) != 0 {
         nodes.release(nodes.space, cast[u64](pointer.copy), NODE_BLOCKS, tree.owner, cast[u64](pointer.birth))
     }
     // The copy, in memory of its own, as what load read is given back
-    copy := runtime.new(Node)
     copy^ = node^
     done(node)
     header :: header_of(copy)
@@ -429,7 +479,6 @@ writable :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockPoi
     header.owner = cast[u64le](tree.owner)
     copy.copy = cast[u64](placed.copy)
     copy.dirty = true
-    maps.map_put(&nodes.dirty, cast[u64](placed.address), copy)
     pointer^ = placed
     return .Ok(copy)
 }
@@ -490,21 +539,51 @@ branch_find :: fn(node: ptr[mut Node], key: Key) -> usize {
     return low - 1
 }
 
-// A leaf's values packed at its end again, without the holes removals left.
+/*
+ * A leaf's values packed at its end again, without the holes removals left, in place: each moved up in turn, the
+ * highest first, so none is written over before it's moved, and nothing needs memory of its own (decisions/0104).
+ */
 leaf_compact :: fn(node: ptr[mut Node]) {
-    scratch := runtime.new(Node)
-    defer runtime.free(scratch)
+    count :: count_of(node)
     end : usize = NODE_SIZE
-    for i in 0..<count_of(node) {
-        value :: value_of(node, i)
-        end = end - value.count
-        copy_bytes(scratch.bytes, end, value)
-        item_at(node, i).value_offset = cast[u16le](cast[u16](end))
-    }
-    for i in end..<NODE_SIZE {
-        if i < node.bytes.count && i < scratch.bytes.count {
-            node.bytes[i] = scratch.bytes[i]
+    // The last value moved: its offset, and its item, for values at the same offset (empty ones)
+    above_offset : usize = NODE_SIZE + 1
+    above_index : usize = count
+    for moved in 0..<count {
+        // The value not yet moved that's highest in the node, by its offset, then its item
+        best := count
+        best_offset : usize = 0
+        for i in 0..<count {
+            offset :: cast[usize](cast[u16](item_at(node, i).value_offset))
+            unmoved :: offset < above_offset || (offset == above_offset && i < above_index)
+            if unmoved && (best == count || offset > best_offset || (offset == best_offset && i > best)) {
+                best = i
+                best_offset = offset
+            }
         }
+        if best == count {
+            break
+        }
+        value :: value_of(node, best)
+        length :: value.count
+        to :: end - length
+        // Up, never down: from its last byte, as the two may overlap
+        with {
+            j := length
+        }
+        loop {
+            if j == 0 {
+                break
+            }
+            j -= 1
+            if to + j < node.bytes.count && best_offset + j < node.bytes.count {
+                node.bytes[to + j] = node.bytes[best_offset + j]
+            }
+        }
+        item_at(node, best).value_offset = cast[u16le](cast[u16](to))
+        end = to
+        above_offset = best_offset
+        above_index = best
     }
     header_of(node).values_start = cast[u16le](cast[u16](end))
 }
@@ -589,9 +668,10 @@ Split :: struct {
  * in it and the rest in a new leaf.
  */
 split_leaf :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], node: ptr[mut Node], index: usize, key: Key, value: u8[]) -> Result[Split, Error] {
-    right :: new_node(nodes, tree, 0)?
-    old := runtime.new(Node)
+    // Its memory first, so nothing's changed without it
+    old :: make(Node)?
     defer runtime.free(old)
+    right :: new_node(nodes, tree, 0)?
     old^ = node^
     count :: count_of(old)
     total := leaf_used(old) + ITEM_SIZE + value.count
@@ -933,7 +1013,7 @@ write_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockP
     // Encrypted, the sealed bytes are written, and the pointer takes their seal and generation
     match tree.keys {
         case Some(keys) => {
-            sealed :: runtime.new(Node)
+            sealed :: make(Node)?
             defer runtime.free(sealed)
             if !seal_block(keys, tree.owner, pointer, node.bytes, sealed.bytes) {
                 return .Error(.Corrupt)

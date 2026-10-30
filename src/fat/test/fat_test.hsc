@@ -8,6 +8,7 @@ package fat_test
 
 import runtime from "base"
 import fat from ".."
+import hosted_faults from "../../robustness/hosted"
 
 // 34 MiB of 512-byte sectors, a sector a cluster: just enough clusters to be FAT32
 SECTORS : u64 : 69632
@@ -29,7 +30,7 @@ Undo :: struct {
     at : usize,
 }
 
-main :: fn() -> int {
+checks :: fn() -> int {
     bytes, error :: runtime.new_array(u8, cast[usize](SECTORS * fat.SECTOR_BYTES))
     if error != null {
         return 1
@@ -258,4 +259,9 @@ write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool
         }
     }
     return true
+}
+
+// The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness)
+main :: fn() -> int {
+    return hosted_faults.run(checks)
 }

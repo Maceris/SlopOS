@@ -218,6 +218,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         case Ok(allocator) => allocator
         case Error(error) => out_of_memory(&options, "no usable memory for the frame allocator's state")
     }
+    // Every pass from here on counts, the Kernel's own frames' first
+    made.faults.spec = options.fail
+    made.faults.on_fail = log_failure
     /*
      * Its frames' address, not allocate_object: made is on this stack, so what allocate_object gives
      * for it would count as pointing here (Hemera's docs/memory.md, Returning). A frame's address
@@ -257,8 +260,12 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         start_msis(kernel)
         leave_boot_stacks(kernel)
         // Of the memory free once boot memory is back
+        // Everything the root task's processes are charged to, and the hardware: without them, nothing can run
         kernel.root_budget = make_root_budget(kernel)
         kernel.platform = new_object(kernel, .Platform, 0, 0) or_else 0
+        if kernel.root_budget == 0 || kernel.platform == 0 {
+            out_of_memory(&kernel.options, "no memory for the root budget or the platform capability")
+        }
         if kernel.options.test_clock {
             test_clock(kernel)
         }
@@ -284,6 +291,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         if !kernel.options.no_root_task {
             // Of every CPU's time, which the root task's processes run on; the kernel's own tests above run on none
             kernel.root_cpu_budget = make_root_cpu_budget(kernel)
+            if kernel.root_cpu_budget == 0 {
+                out_of_memory(&kernel.options, "no memory for the root CPU budget")
+            }
             start_root_task(kernel)
         }
         runtime.log_info("idle")
@@ -326,6 +336,10 @@ log_memory :: fn(allocator: ptr[frames.FrameAllocator]) {
 
 out_of_memory :: fn(options: ptr[Options], message: string) #never_returns {
     runtime.log_fatal(message)
+    // Once there's a kernel, every CPU stops, as for any other reason
+    if intrinsics.carrier().program_data != null {
+        stop(.OutOfMemory)
+    }
     stop_with(options, .OutOfMemory)
 }
 

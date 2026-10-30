@@ -6,7 +6,13 @@ AArch64 tests kernels built for AArch64 (its arch setting), the same two ways.
 Exits 0 if every test passed. SLOPOS_BOOT_TESTS, names separated by commas, runs only the tests whose names have one of
 them in them.
 
+With --robustness it runs the robustness sweeps instead (knowledge/decisions/0096, 0104): kernels built with robustness=on
+boot each of SWEEP_TESTS once counting the passes through the kernel's failure points (fail=count), then once for each
+pass chosen, failing it (fail=any:<n>). Each run must halt, stop for want of memory, or end its root task with nothing
+of anyone else's left, never fault, fail an assertion or hang.
+
     python tools/boot_tests.py
+    python tools/boot_tests.py --robustness
 """
 
 import os
@@ -485,5 +491,144 @@ def run_tests(kernel: Path, tests: list, more: list = []) -> int:
     return failed
 
 
+# Robustness sweeps (knowledge/decisions/0096, 0104): `boot_tests.py --robustness`
+
+# boot.py's codes for a run that didn't stop by itself (tools/boot.py)
+TIMED_OUT = 124
+NO_EXIT_CODE = 125
+# StopReason's codes a swept run may end with (src/kernel/stop.hsc): halted, out of memory, the root task ended
+HALTED, OUT_OF_MEMORY, ROOT_TASK_ENDED = 0, 6, 7
+# Every pass up to SWEEP_BOUND fails in turn, then about SWEEP_BEYOND more, evenly spread over the rest
+SWEEP_BOUND = 48
+SWEEP_BEYOND = 48
+# Swept runs at once, each its own QEMU
+SWEEP_WORKERS = 8
+# How long a test program has before the root task kills it (its test_deadline), and a run before it's a hang
+TEST_DEADLINE_SECONDS = 20
+SWEEP_TIMEOUT_SECONDS = 150
+
+# Name, the kernel command line's words besides fail=, and boot.py's other arguments
+SWEEP_TESTS = [
+    ("the kernel boots alone", "test_exit", []),
+    *[(f"{program}", f"test_exit test_deadline={TEST_DEADLINE_SECONDS} test_program={program}", [WITH_PROGRAMS, "--", "-smp", "2"])
+      for program in ["test_channels", "test_memory", "test_threads", "test_control", "test_exits"]],
+]
+
+
+def sweep_values(passes: int) -> list:
+    """The passes a sweep fails, one run each: every one up to SWEEP_BOUND, then a stride through the rest."""
+    values = list(range(1, min(passes, SWEEP_BOUND) + 1))
+    if passes > SWEEP_BOUND:
+        stride = max(1, (passes - SWEEP_BOUND) // SWEEP_BEYOND)
+        values += list(range(SWEEP_BOUND + stride, passes + 1, stride))
+    return values
+
+
+def boot_once(kernel: Path, words: str, arguments: list, more: list) -> tuple:
+    """Boots kernel with words on its command line: the code it stopped with, and its serial output."""
+    programs = PROGRAMS_AARCH64 if "--arch=aarch64" in more else PROGRAMS
+    arguments = [f"--programs={programs}" if argument == WITH_PROGRAMS else argument for argument in arguments]
+    # boot.py's own arguments go before the "--" that starts QEMU's
+    split = arguments.index("--") if "--" in arguments else len(arguments)
+    command = [sys.executable, str(BOOT), f"--kernel={kernel}", f"--timeout={SWEEP_TIMEOUT_SECONDS}", f"--command-line={words}",
+               *more, *arguments[:split], *arguments[split:]]
+    result = subprocess.run(command, capture_output=True, text=True, errors="replace")
+    return result.returncode, result.stdout
+
+
+def judge(code: int, output: str) -> str | None:
+    """
+    Why a swept run went wrong, or None if it's what a failed allocation may end in: the kernel halted, stopped for want of
+    memory, or saw the root task end (with whatever code) and nothing of anyone else's left behind.
+    """
+    lines = output.splitlines()
+    if code == TIMED_OUT:
+        return "it hung"
+    if code == ROOT_TASK_ENDED:
+        if "[info] objects left: only the kernel's own" not in lines:
+            return "objects were left once the root task ended"
+        return None
+    if code in (HALTED, OUT_OF_MEMORY):
+        # A robustness kernel checks a root task that didn't start left nothing behind
+        if any(line.startswith("[error] objects left:") for line in lines):
+            return "objects were left once the root task didn't start"
+        return None
+    return {NO_EXIT_CODE: "QEMU ended without an exit code"}.get(code, f"the kernel stopped with {code}")
+
+
+def passes_of(output: str) -> int | None:
+    """The passes through every failure point a fail=count run made, from its report (src/robustness)."""
+    for line in output.splitlines():
+        if line.startswith("[info] faults: passes "):
+            return int(line.rsplit("all ", 1)[1])
+    return None
+
+
+def sweep(kernel: Path, name: str, words: str, arguments: list, more: list = [], label: str = "") -> int:
+    """Counts a test's passes, then fails each chosen pass in a run of its own: how many runs went wrong."""
+    from concurrent.futures import ThreadPoolExecutor
+    code, output = boot_once(kernel, f"{words} fail=count", arguments, more)
+    passes = passes_of(output)
+    problem = judge(code, output)
+    if passes is None or problem is not None:
+        print(f"FAILED: {label}{name}: the counting run went wrong ({problem or 'no pass count'})")
+        logged = [line for line in output.splitlines() if line.startswith("[")]
+        sys.stdout.write("".join(f"    {line}\n" for line in logged[-40:]))
+        return 1
+    values = sweep_values(passes)
+
+    def one(value: int) -> tuple:
+        code, output = boot_once(kernel, f"{words} fail=any:{value}", arguments, more)
+        return value, judge(code, output), output
+
+    failed = 0
+    with ThreadPoolExecutor(max_workers=SWEEP_WORKERS) as pool:
+        for value, problem, output in pool.map(one, values):
+            if problem is not None:
+                failed += 1
+                print(f"FAILED: {label}{name}, fail=any:{value}: {problem}")
+                failing = [line for line in output.splitlines() if "faults:" in line or line.startswith("[fatal]")
+                           or line.startswith("[error]") or "stopped by a fault" in line]
+                sys.stdout.write("".join(f"    {line}\n" for line in failing[-30:]))
+    print(f"{'passed' if failed == 0 else 'FAILED'}: {label}{name}: {len(values) - failed} of {len(values)} runs, "
+          f"failing passes up to {passes}")
+    return failed
+
+
+def build_robustness_kernel(output: Path, architecture: str) -> bool:
+    """The kernel with robustness=on (decisions/0096), which fail= on its command line can make fail."""
+    command = ["hemera", f"--setting=targets=kernel,robustness=on,kernel_output={output},arch={architecture}", str(ROOT / "src" / "build")]
+    if os.environ.get("HEMERA_INSTALL"):
+        command.insert(1, f"--install-path={os.environ['HEMERA_INSTALL']}")
+    return subprocess.run(command).returncode == 0
+
+
+def robustness() -> int:
+    """
+    The sweeps: for each test in SWEEP_TESTS, on both architectures, a run that counts the passes through the failure
+    points, then runs that fail one each, which must each end as judge allows. SLOPOS_BOOT_TESTS chooses tests by name,
+    as for the boot tests.
+    """
+    global PROGRAMS, PROGRAMS_AARCH64
+    only = [part for part in os.environ.get("SLOPOS_BOOT_TESTS", "").split(",") if part]
+    with tempfile.TemporaryDirectory(prefix="slopos-robustness-") as temporary:
+        PROGRAMS = Path(temporary) / "programs"
+        PROGRAMS_AARCH64 = Path(temporary) / "programs_aarch64"
+        kernel = Path(temporary) / "kernel.elf"
+        aarch64_kernel = Path(temporary) / "kernel_aarch64.elf"
+        if not (build_programs(PROGRAMS) and build_programs(PROGRAMS_AARCH64, "aarch64")
+                and build_robustness_kernel(kernel, "x86_64") and build_robustness_kernel(aarch64_kernel, "aarch64")):
+            print("FAILED: the robustness kernels or the programs don't build")
+            return 1
+        failed = 0
+        for name, words, arguments in SWEEP_TESTS:
+            if only and not any(part in name for part in only):
+                continue
+            failed += sweep(kernel, name, words, arguments)
+            failed += sweep(aarch64_kernel, name, words, arguments, ["--arch=aarch64"], "AArch64: ")
+        print("every sweep passed" if failed == 0 else f"{failed} swept runs went wrong")
+        return 0 if failed == 0 else 1
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(robustness() if "--robustness" in sys.argv[1:] else main())

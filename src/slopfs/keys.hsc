@@ -85,10 +85,10 @@ SEAL_COUNT : usize : 24
 // Argon2id's parameters for a passphrase, unless they're given (RFC 9106's second choice, with less memory).
 DEFAULT_PASSPHRASE :: crypto.Argon2Parameters.{memory_kib = 65536, passes = 3, lanes = 1}
 
-new_keys :: fn(cipher: Cipher) -> ptr[mut Keys] {
-    keys := runtime.new(Keys)
+new_keys :: fn(cipher: Cipher) -> Result[ptr[mut Keys], Error] {
+    keys :: make(Keys)?
     keys^ = Keys.{cipher = cipher}
-    return keys
+    return .Ok(keys)
 }
 
 zero_key #constant_time :: fn(key: ptr[mut crypto.Key256]) {
@@ -425,7 +425,10 @@ unwrap_generation #constant_time :: fn(volume_key: ptr[crypto.Key256], number: u
 start_generation #constant_time :: fn(keys: ptr[mut Keys], began: u64, container: u8[16], volume: u64) -> GenerationRecord? {
     generation := GenerationKey.{number = keys.current + 1, key = random_key()}
     record :: wrap_generation(&keys.volume_key, &generation, began, container, volume) or_return null
-    runtime.array_add(&keys.generations, generation)
+    if runtime.array_try_add(&keys.generations, generation) != null {
+        zero_key(&generation.key)
+        return null
+    }
     keys.current = generation.number
     // The next block sealed derives its transaction's key from the new generation
     keys.transaction = 0

@@ -35,8 +35,8 @@ last_block :: fn(device: Device) -> u64 {
 }
 
 // A container in memory, before anything is read or written: no trees, and the transaction after `transaction`.
-new_container :: fn(device #escaping : Device, transaction: u64) -> ptr[mut Container] {
-    container := runtime.new(Container)
+new_container :: fn(device #escaping : Device, transaction: u64) -> Result[ptr[mut Container], Error] {
+    container :: make(Container)?
     container^ = Container.{device = device}
     container.space.transaction = transaction + 1
     container.nodes = Nodes.{device = device, transaction = transaction + 1, space = cast[rawptr](&container.space),
@@ -45,7 +45,7 @@ new_container :: fn(device #escaping : Device, transaction: u64) -> ptr[mut Cont
     container.owners = Tree.{kind = .Owners, ditto = true}
     container.volumes = Tree.{kind = .Volumes, ditto = true}
     container.next_volume = 1
-    return container
+    return .Ok(container)
 }
 
 /*
@@ -56,7 +56,7 @@ format :: fn(device #escaping : Device, id: u8[16]) -> Result[void, Error] {
     if device.block_count < MIN_BLOCKS {
         return .Error(.NoSpace)
     }
-    container :: new_container(device, 0)
+    container :: new_container(device, 0)?
     defer unmount(container)
     container.id = id
     add_free(&container.space, FIRST_DATA, last_block(device) - FIRST_DATA)
@@ -66,7 +66,7 @@ format :: fn(device #escaping : Device, id: u8[16]) -> Result[void, Error] {
         block_count = cast[u64le](device.block_count), ring_first = cast[u64le](1)}
     copy_text(superblock.magic, SUPERBLOCK_MAGIC)
     seal_record(view_of(cast[ptr[mut u8]](&superblock), size_of(Superblock)), &superblock.seal)
-    block := runtime.new(BlockBuffer)
+    block :: make(BlockBuffer)?
     defer runtime.free(block)
     copy_bytes(block.bytes, 0, view_of(cast[ptr[mut u8]](&superblock), size_of(Superblock)))
     if !device.write(device.context, 0, 1, block.bytes) || !device.write(device.context, last_block(device), 1, block.bytes) {
@@ -126,7 +126,7 @@ mount :: fn(device #escaping : Device) -> Result[ptr[mut Container], Error] {
     if device.block_count < MIN_BLOCKS {
         return .Error(.NotSlopfs)
     }
-    block := runtime.new(BlockBuffer)
+    block :: make(BlockBuffer)?
     defer runtime.free(block)
     superblock := Superblock.{}
     found_superblock := false
@@ -163,7 +163,7 @@ mount :: fn(device #escaping : Device) -> Result[ptr[mut Container], Error] {
     if !found_checkpoint {
         return .Error(.NotSlopfs)
     }
-    container :: new_container(device, cast[u64](checkpoint.transaction))
+    container :: new_container(device, cast[u64](checkpoint.transaction))?
     container.id = superblock.container
     container.space_map.root = checkpoint.space_map
     container.owners.root = checkpoint.owners
@@ -294,7 +294,9 @@ space_map_settle :: fn(container: ptr[mut Container]) -> Result[void, Error] {
             break
         }
         extent :: cast[ptr[SpaceValue]](&value[0])
-        runtime.array_add(&pending, Extent.{start = found.key.offset, blocks = cast[u64](extent.blocks)})
+        if runtime.array_try_add(&pending, Extent.{start = found.key.offset, blocks = cast[u64](extent.blocks)}) != null {
+            return .Error(.OutOfMemory)
+        }
         at = key_after(found.key) or_break
     }
     for extent in pending {
@@ -415,6 +417,11 @@ commit_changes :: fn(container: ptr[mut Container], only: u64) -> Result[void, E
     loop {
         runtime.array_reset(&changes)
         runtime.array_reset(&waiting)
+        // Room for every change in both, so sorting them can't stop halfway
+        count :: container.space.changes.count
+        if runtime.array_try_reserve(&changes, count) != null || runtime.array_try_reserve(&waiting, count) != null {
+            return .Error(.OutOfMemory)
+        }
         for change in container.space.changes {
             if takes(only, change.owner) {
                 runtime.array_add(&changes, change)
@@ -453,9 +460,16 @@ commit_changes :: fn(container: ptr[mut Container], only: u64) -> Result[void, E
  * A volume's waiting changes undone, as if it had made none since its last commit (forget, on its side): its
  * allocations free again, and the extents it gave back still its own. What was undone, for whoever keeps who owns what.
  */
-abandon_volume :: fn(container: ptr[mut Container], id: u64, undone: ptr[mut Change[..]]) {
+abandon_volume :: fn(container: ptr[mut Container], id: u64, undone: ptr[mut Change[..]]) -> bool {
     kept : Change[..]
     space :: &container.space
+    // Room for every change in what's kept and what's undone, and for the free extents they make, before any's undone
+    count :: space.changes.count
+    if runtime.array_try_reserve(&kept, count) != null || runtime.array_try_reserve(undone, undone.count + count) != null
+        || !space_room(space, 0, 0, count, 0) {
+        runtime.array_free(&kept)
+        return false
+    }
     for change in space.changes {
         if change.owner != id {
             runtime.array_add(&kept, change)
@@ -479,6 +493,7 @@ abandon_volume :: fn(container: ptr[mut Container], id: u64, undone: ptr[mut Cha
     }
     runtime.array_free(&space.changes)
     space.changes = kept
+    return true
 }
 
 // Whether changes this commit takes are still waiting.
@@ -498,7 +513,7 @@ write_checkpoint :: fn(container: ptr[mut Container]) -> Result[void, Error] {
         free_blocks = cast[u64le](container.space.free_blocks), next_volume = cast[u64le](container.next_volume)}
     copy_text(checkpoint.magic, CHECKPOINT_MAGIC)
     seal_record(view_of(cast[ptr[mut u8]](&checkpoint), size_of(Checkpoint)), &checkpoint.seal)
-    block := runtime.new(BlockBuffer)
+    block :: make(BlockBuffer)?
     defer runtime.free(block)
     for i in 0..<block.bytes.count {
         block.bytes[i] = 0

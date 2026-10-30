@@ -16,6 +16,9 @@
  * - stack_check: what the kernel's prologue checks do without room, trap (the default) or morestack,
  *   which a boot test of stack segments builds.
  * - arch: the kernel's and the programs' architecture, x86_64 (the default) or aarch64 (roadmap A).
+ * - robustness: on, for robustness testing's machinery (src/robustness, decisions/0096): the kernel's failure points,
+ *   which fail= on its command line makes fail, and the hosted tests' (SLOPOS_FAIL). off by default, and then none of
+ *   it is compiled in. Read by the code with compiler.target_setting, as every target gets the command line's settings.
  */
 package build
 

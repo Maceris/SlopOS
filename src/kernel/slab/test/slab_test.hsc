@@ -10,6 +10,7 @@ package slab_test
 import slab from ".."
 import frames from "../../frames"
 import boot_info from "../../../boot_info"
+import hosted_faults from "../../../robustness/hosted"
 
 MEMORY_BASE : u64 : 0x40000
 MEMORY_SIZE : u64 : 0x40000
@@ -20,13 +21,15 @@ REGIONS :: boot_info.MemoryRegion.[
     .{range = .{base = cast[boot_info.PhysicalAddress](MEMORY_BASE), size = MEMORY_SIZE}, kind = .Usable},
 ]
 
-main :: fn() -> int {
+checks :: fn() -> int {
     memory : u64[32768]
     direct_map_offset :: cast[u64](&memory[0]) - MEMORY_BASE
     allocator := match frames.make(REGIONS, direct_map_offset) {
         case Ok(made) => made
         case Error(error) => return 1
     }
+    allocator.faults.spec = hosted_faults.point_spec()
+    defer hosted_faults.report_points(&allocator.faults)
 
     // 64-byte objects, 63 to a one-frame slab with its header at the end
     cache := slab.make_cache(64, 8)
@@ -69,6 +72,9 @@ main :: fn() -> int {
 
     // A magazine takes half its size at once, and gives half back once full
     objects[0] = slab.allocate(&cache, &allocator) or_else 0
+    if objects[0] == 0 {
+        return 15
+    }
     magazine : slab.Magazine
     first :: slab.take(&magazine, &cache, &allocator) or_else 0
     if first == 0 || magazine.count != slab.MAGAZINE_BATCH - 1 || cache.allocated != slab.MAGAZINE_BATCH + 1 {
@@ -77,6 +83,9 @@ main :: fn() -> int {
     for i in 0..<slab.MAGAZINE_SIZE - slab.MAGAZINE_BATCH + 1 {
         slab.give_back(&magazine, &cache, &allocator, objects[0])
         objects[0] = slab.allocate(&cache, &allocator) or_else 0
+        if objects[0] == 0 {
+            return 16
+        }
     }
     if magazine.count != slab.MAGAZINE_SIZE {
         return 10
@@ -114,4 +123,9 @@ succeeded_frames :: fn(result: Result[boot_info.PhysicalAddress, frames.FrameErr
 
 succeeded :: fn(result: Result[u64, frames.FrameError]) -> bool {
     return result is_ok
+}
+
+// The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness)
+main :: fn() -> int {
+    return hosted_faults.run(checks)
 }

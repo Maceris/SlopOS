@@ -473,6 +473,9 @@ unremap_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
 
 // The lowest free range of size bytes below top: from the ranges freed, or past every one taken.
 take_device_addresses :: fn(domain: ptr[mut DmaDomain], size: u64, top: u64) -> u64? {
+    if fails(.Iova) {
+        return null
+    }
     for i in 0..<cast[usize](domain.free_count) {
         if i >= MAX_FREE_RANGES {
             break

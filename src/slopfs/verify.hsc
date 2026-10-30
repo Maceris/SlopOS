@@ -23,6 +23,8 @@ Problem :: enum {
     OutOfRange,
     // The owners tree doesn't say what's in use, or by whom
     Owners,
+    // No memory to keep what the walk found (decisions/0104), so nothing's known either way
+    OutOfMemory,
 }
 
 // What a check found.
@@ -48,6 +50,22 @@ Walk :: struct {
     report : Report,
     // Every node and chunk found so far, by its first block, since snapshots and clones share them
     seen : maps.HashMap[u64, bool, maps.hash_integer[u64]],
+    // Out of memory: the walk stopped short, and what it found says nothing
+    short : bool,
+}
+
+// Why a walk stopped: what it couldn't read, or the memory it hadn't.
+stopped :: fn(walk: ptr[Walk]) -> Problem {
+    return if walk.short { Problem.OutOfMemory } else { Problem.Unreadable }
+}
+
+// A used extent kept, or false, the walk stopped short, without the memory for it.
+add_used :: fn(walk: ptr[mut Walk], used: Used) -> bool {
+    if runtime.array_try_add(&walk.used, used) != null {
+        walk.short = true
+        return false
+    }
+    return true
 }
 
 verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
@@ -55,13 +73,13 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
     defer runtime.array_free(&walk.used)
     defer maps.map_free(&walk.seen)
     if !walk_tree(container, &walk, &container.space_map) {
-        return .Error(.Unreadable)
+        return .Error(stopped(&walk))
     }
     if !walk_tree(container, &walk, &container.owners) {
-        return .Error(.Unreadable)
+        return .Error(stopped(&walk))
     }
     if !walk_tree(container, &walk, &container.volumes) {
-        return .Error(.Unreadable)
+        return .Error(stopped(&walk))
     }
     // Each volume's tree, from its record, or as it is in memory where it's open
     value : u8[224]
@@ -70,17 +88,17 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
         found := Found.{}
         match tree_next(&container.nodes, &container.volumes, key_of(at, .VolumeEntry, 0), value) {
             case Ok(next) => found = next or_break
-            case Error(error) => return .Error(.Unreadable)
+            case Error(error) => return .Error(stopped(&walk))
         }
         if found.key.kind != cast[u8](RecordKind.VolumeEntry) || found.bytes != size_of(VolumeRecord) {
-            return .Error(.Unreadable)
+            return .Error(stopped(&walk))
         }
         record := cast[ptr[VolumeRecord]](&value[0])^
         id :: found.key.object
         tree := Tree.{root = record.root, kind = .Volume, owner = id}
         match lineage_of(container, &record) {
             case Ok(lineage) => tree.lineage = lineage
-            case Error(error) => return .Error(.Unreadable)
+            case Error(error) => return .Error(stopped(&walk))
         }
         open := false
         for volume in container.open {
@@ -91,13 +109,13 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
         }
         if !open && record.cipher != cast[u8](Cipher.None) {
             if !add_owned(container, &walk, id) {
-                return .Error(.Unreadable)
+                return .Error(stopped(&walk))
             }
             walk.report.locked += 1
         }
         else {
             if !walk_tree(container, &walk, &tree) {
-                return .Error(.Unreadable)
+                return .Error(stopped(&walk))
             }
             // Its snapshots, whose trees share what hasn't changed since
             snapshots : NumberedSnapshot[..]
@@ -115,7 +133,7 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
             }
             runtime.array_free(&snapshots)
             if !walked {
-                return .Error(.Unreadable)
+                return .Error(stopped(&walk))
             }
         }
         walk.report.volumes += 1
@@ -123,6 +141,10 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
             break
         }
         at = found.key.object + 1
+    }
+    // A walk that stopped short found less than there is, which would look like a leak
+    if walk.short {
+        return .Error(.OutOfMemory)
     }
     sort_used(walk.used)
     // In use, and free, each block once, from the first data block to the last
@@ -168,7 +190,7 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
         found := Found.{}
         match tree_next(&container.nodes, &container.owners, owner_at, view_of(cast[ptr[mut u8]](&owner_value), size_of(OwnerValue))) {
             case Ok(next_owner) => found = next_owner or_break
-            case Error(error) => return .Error(.Unreadable)
+            case Error(error) => return .Error(stopped(&walk))
         }
         if index >= walk.used.count {
             return .Error(.Owners)
@@ -197,7 +219,9 @@ add_owned :: fn(container: ptr[mut Container], walk: ptr[mut Walk], owner: u64) 
             case Error(error) => return false
         }
         if cast[u64](value.volume) == owner && first_time(walk, found.key.object) {
-            runtime.array_add(&walk.used, Used.{start = found.key.object, blocks = cast[u64](value.blocks), owner = owner})
+            if !add_used(walk, Used.{start = found.key.object, blocks = cast[u64](value.blocks), owner = owner}) {
+                return false
+            }
         }
         at = key_after(found.key) or_break
     }
@@ -217,7 +241,10 @@ first_time :: fn(walk: ptr[mut Walk], start: u64) -> bool {
     if maps.map_get(&walk.seen, start) is_some {
         return false
     }
-    maps.map_put(&walk.seen, start, true)
+    if maps.map_try_put(&walk.seen, start, true) != null {
+        walk.short = true
+        return false
+    }
     return true
 }
 
@@ -233,9 +260,11 @@ walk_node :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tr
     }
     walk.report.nodes += 1
     owner :: owner_at(tree, cast[u64](pointer.birth))
-    runtime.array_add(&walk.used, Used.{start = cast[u64](pointer.address), blocks = NODE_BLOCKS, owner = owner})
-    if cast[u64](pointer.copy) != 0 {
-        runtime.array_add(&walk.used, Used.{start = cast[u64](pointer.copy), blocks = NODE_BLOCKS, owner = owner})
+    if !add_used(walk, Used.{start = cast[u64](pointer.address), blocks = NODE_BLOCKS, owner = owner}) {
+        return false
+    }
+    if cast[u64](pointer.copy) != 0 && !add_used(walk, Used.{start = cast[u64](pointer.copy), blocks = NODE_BLOCKS, owner = owner}) {
+        return false
     }
     if level_of(node) > 0 {
         for i in 0..<count_of(node) {
@@ -258,8 +287,10 @@ walk_node :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tr
         extent :: cast[ptr[ExtentRecord]](&value[0])
         if cast[u32](extent.kind) == cast[u32](ExtentKind.Blocks) && first_time(walk, cast[u64](extent.pointer.address)) {
             walk.report.chunks += 1
-            runtime.array_add(&walk.used, Used.{start = cast[u64](extent.pointer.address),
-                blocks = cast[u64](cast[u32](extent.pointer.blocks)), owner = owner_at(tree, cast[u64](extent.pointer.birth))})
+            if !add_used(walk, Used.{start = cast[u64](extent.pointer.address), blocks = cast[u64](cast[u32](extent.pointer.blocks)),
+                owner = owner_at(tree, cast[u64](extent.pointer.birth))}) {
+                return false
+            }
         }
     }
     return true

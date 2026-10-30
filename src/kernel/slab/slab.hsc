@@ -25,6 +25,7 @@ import runtime from "base"
 import concurrency from "std"
 import boot_info from "../../boot_info"
 import frames from "../frames"
+import robustness from "../../robustness"
 
 // Objects are at least this big, and their sizes a multiple of it: room for the free list's link.
 OBJECT_GRANULE : u64 : 16
@@ -117,6 +118,9 @@ objects_in :: fn(order: u64, size: u64) -> u64 {
 
 // One object from the cache: its address in the direct map. Its contents are whatever was there.
 allocate :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator]) -> Result[u64, frames.FrameError] {
+    if robustness.fails(&allocator.faults, .Slab) {
+        return .Error(.OutOfMemory)
+    }
     concurrency.lock(&cache.lock)
     defer concurrency.unlock(&cache.lock)
     return take_object(cache, allocator)
@@ -156,6 +160,9 @@ free_batch :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAlloc
 
 // An object from the calling CPU's magazine, refilled from cache if it's empty.
 take :: fn(magazine: ptr[mut Magazine], cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator]) -> Result[u64, frames.FrameError] {
+    if robustness.fails(&allocator.faults, .Slab) {
+        return .Error(.OutOfMemory)
+    }
     if magazine.count == 0 {
         magazine.count = cast[u64](allocate_batch(cache, allocator, magazine.objects[0..<MAGAZINE_BATCH]))
         if magazine.count == 0 {

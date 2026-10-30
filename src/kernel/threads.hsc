@@ -63,6 +63,8 @@ Thread :: struct #align(16) {
     space_next : u64,
     space_previous : u64,
     in_space : bool,
+    // Started, so counted among its process's live threads (Process.live_threads)
+    counted : bool,
     // Counter ticks it's run.
     run_time : u64,
     id : u64,
@@ -164,6 +166,11 @@ create_thread :: fn(kernel: ptr[mut Kernel], owner: u64, space #escaping : ptr[m
 
 // Make a new thread ready on the next CPU in turn that its budget has.
 start_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
+    owner :: thread.header.owner
+    if owner != 0 && !thread.counted && cast[ptr[ObjectHeader]](owner).kind == .Process {
+        thread.counted = true
+        _ = intrinsics.interlocked_increment_u32(&cast[ptr[mut Process]](owner).live_threads)
+    }
     cpus :: if thread.budget != 0 { intrinsics.atomic_load_u64_acquire(&cast[ptr[mut CpuTime]](thread.budget).cpus) } else { ~cast[u64](0) }
     make_ready(kernel, thread, next_cpu_of(kernel, &kernel.next_start_cpu, cpus))
 }
@@ -180,6 +187,7 @@ destroy_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     forget_stop(thread)
     unlink_thread(kernel, thread)
     raise_watchers(kernel, &thread.watchers, &thread.control, cast[u32](slop_os.SIGNAL_TERMINATED), 0)
+    end_process_if_last(kernel, thread)
     per_cpus :: kernel.per_cpus
     // Its CPU may change until its run queue's lock is held and it's still that CPU
     loop {
@@ -202,6 +210,23 @@ destroy_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
             arch.send_ipi(cpus[index].hardware_id, .Reschedule)
         }
         break
+    }
+}
+
+/*
+ * A started thread's process, once that was its last live thread, ends as killed, unless it's ending already
+ * (decisions/0104): so a process whose threads all fault, with nothing to fix them, doesn't linger with none, and
+ * whoever watches it learns it ended. After the destroy this one's part of, if any.
+ */
+end_process_if_last :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
+    if !thread.counted {
+        return void
+    }
+    thread.counted = false
+    owner :: thread.header.owner
+    process :: cast[ptr[mut Process]](owner)
+    if intrinsics.interlocked_decrement_u32(&process.live_threads) == 1 && !is_dying(owner) {
+        destroy_later(kernel, owner, intrinsics.atomic_load_u32_acquire(&process.header.generation))
     }
 }
 

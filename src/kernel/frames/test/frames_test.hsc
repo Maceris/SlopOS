@@ -11,6 +11,7 @@ package frames_test
 
 import frames from ".."
 import boot_info from "../../../boot_info"
+import hosted_faults from "../../../robustness/hosted"
 
 MEMORY_BASE : u64 : 0x40000
 MEMORY_SIZE : u64 : 0x40000
@@ -24,7 +25,7 @@ REGIONS :: boot_info.MemoryRegion.[
     .{range = .{base = cast[boot_info.PhysicalAddress](MEMORY_BASE), size = MEMORY_SIZE}, kind = .Usable},
 ]
 
-main :: fn() -> int {
+checks :: fn() -> int {
     memory : u64[32768]
     direct_map_offset :: cast[u64](&memory[0]) - MEMORY_BASE
     made :: frames.make(REGIONS, direct_map_offset)
@@ -32,6 +33,8 @@ main :: fn() -> int {
         case Ok(made_allocator) => made_allocator
         case Error(error) => return 1
     }
+    allocator.faults.spec = hosted_faults.point_spec()
+    defer hosted_faults.report_points(&allocator.faults)
     if allocator.total_frames != FREE_FRAMES || allocator.free_frames != FREE_FRAMES || allocator.frame_count != 128 {
         return 2
     }
@@ -110,6 +113,9 @@ main :: fn() -> int {
     taken : boot_info.PhysicalAddress[frames.FRAME_CACHE_SIZE]
     for i in 0..<frames.FRAME_CACHE_SIZE {
         taken[i] = frames.allocate(&allocator, 0) or_else NO_FRAME
+        if taken[i] == NO_FRAME {
+            return 22
+        }
     }
     for i in 0..<frames.FRAME_CACHE_SIZE {
         frames.give_frame(&cache, &allocator, taken[i])
@@ -147,4 +153,9 @@ main :: fn() -> int {
 // Whether a result is Ok.
 succeeded :: fn[T, E](result: Result[T, E]) -> bool {
     return result is_ok
+}
+
+// The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness)
+main :: fn() -> int {
+    return hosted_faults.run(checks)
 }

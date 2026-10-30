@@ -60,7 +60,12 @@ Unread :: struct {
 }
 
 main :: fn(store: os.Channel[dir.Dir], clients: os.Listener[bundle_store.BundleStore]) -> int {
-    service :: runtime.new(Store)
+    // Its state; without the memory for it, it ends with 99 (decisions/0104)
+    service_made, service_error :: runtime.new_aligned(Store, align_of(Store))
+    if service_error != null {
+        return 99
+    }
+    service :: service_made
     service.block = slop_os.startup_block()
     service.port = slop_os.port_create(service.block.budget) or_return 1
     service.raw = store.end
@@ -289,6 +294,10 @@ use_directory :: fn(service: ptr[mut Store], end: slop_os.Channel) -> bool {
     // The pages that couldn't be read meanwhile, read now
     waiting : Unread[..]
     defer runtime.array_free(&waiting)
+    // Without the memory to sort them, they wait for the next time it's given its directory
+    if runtime.array_try_reserve(&waiting, service.unread.count) != null {
+        return true
+    }
     for each in service.unread {
         runtime.array_add(&waiting, each)
     }
@@ -342,8 +351,10 @@ supply_wanted :: fn(service: ptr[mut Store], slot: usize) {
     loop {
         offset :: slop_os.memory_page_wanted(service.objects[slot].memory) or_break
         // Nothing to read it from until the store's given its directory again: kept for then, never supplied wrong
-        if !supply_page(service, slot, offset) {
-            runtime.array_add(&service.unread, Unread.{slot = slot, offset = offset})
+        if !supply_page(service, slot, offset) && runtime.array_try_add(&service.unread, Unread.{slot = slot, offset = offset}) != null {
+            // Kept nowhere, it's asked for again by the next fault on it
+            runtime.log_warn("a wanted page can't be kept until the directory's back")
+            break
         }
     }
 }
@@ -457,25 +468,38 @@ read_hash :: fn(service: ptr[Store], path: string) -> bundle.Hash? {
 collect :: fn(service: ptr[mut Store]) -> u64 {
     marked : bundle.Hash[..]
     defer runtime.array_free(&marked)
+    // Anything not marked through is collected, so a root or a pin that can't be read through stops the collection
     match read_hash(service, "root") {
-        case Some(root) => mark(service, root, &marked, 0)
+        case Some(root) => {
+            if !mark(service, root, &marked, 0) {
+                return 0
+            }
+        }
         case None => {}
     }
     match os.list_directory_in(service.directory, "pins") {
         case Ok(pins) => {
+            whole := true
             for pin in pins {
                 if ends_with(pin.name, ".part") {
                     continue
                 }
                 path_storage : u8[80]
                 match read_hash(service, path_in("pins/", pin.name, &path_storage)) {
-                    case Some(hash) => mark(service, hash, &marked, 0)
+                    case Some(hash) => whole = whole && mark(service, hash, &marked, 0)
                     case None => {}
                 }
             }
             os.free_directory_listing(pins)
+            if !whole {
+                return 0
+            }
         }
-        case Error(error) => {}
+        case Error(error) => {
+            if error != .NotFound {
+                return 0
+            }
+        }
     }
     removed : u64 = 0
     match os.list_directory_in(service.directory, "objects") {
@@ -501,34 +525,56 @@ collect :: fn(service: ptr[mut Store]) -> u64 {
     return removed
 }
 
-// hash marked, and what it refers to, if it's a root or a bundle; no deeper than a root's bundles' objects.
-mark :: fn(service: ptr[Store], hash: bundle.Hash, marked: ptr[mut bundle.Hash[..]], depth: int) {
+/*
+ * hash marked, and what it refers to, if it's a root or a bundle; no deeper than a root's bundles' objects. False if it
+ * couldn't be read through, for want of memory or a failed read: then what it refers to isn't known, and nothing may be
+ * collected (decisions/0104). A hash with no object behind it is marked, and nothing more.
+ */
+mark :: fn(service: ptr[Store], hash: bundle.Hash, marked: ptr[mut bundle.Hash[..]], depth: int) -> bool {
     if is_marked(marked, hash) || depth > 2 {
-        return void
+        return true
     }
-    runtime.array_add(marked, hash)
+    if runtime.array_try_add(marked, hash) != null {
+        return false
+    }
     hex_storage : u8[64]
     path_storage : u8[80]
-    record :: os.read_entire_file_in(service.directory, path_in("objects/", bundle.hex(hash, &hex_storage), &path_storage)) or_return void
+    record :: match os.read_entire_file_in(service.directory, path_in("objects/", bundle.hex(hash, &hex_storage), &path_storage)) {
+        case Ok(read) => read
+        case Error(error) => return error == .NotFound
+    }
     defer runtime.free_array(bit_cast[u8[]](record))
     bytes :: bit_cast[u8[]](record)
     referred : bundle.Hash[..]
     defer runtime.array_free(&referred)
     names : string[..]
     defer runtime.array_free(&names)
-    if bundle.bundle_refers(bytes, &referred) {
-        for each in referred {
-            if !is_marked(marked, each) {
-                runtime.array_add(marked, each)
+    match bundle.bundle_refers(bytes, &referred) {
+        case Ok(is_bundle) => {
+            if is_bundle {
+                for each in referred {
+                    if !is_marked(marked, each) && runtime.array_try_add(marked, each) != null {
+                        return false
+                    }
+                }
+                return true
             }
         }
-        return void
+        case Error(error) => return false
     }
-    if bundle.root_entries(bytes, &names, &referred) {
+    runtime.array_reset(&referred)
+    is_root :: match bundle.root_entries(bytes, &names, &referred) {
+        case Ok(found) => found
+        case Error(error) => return false
+    }
+    if is_root {
         for each in referred {
-            mark(service, each, marked, depth + 1)
+            if !mark(service, each, marked, depth + 1) {
+                return false
+            }
         }
     }
+    return true
 }
 
 is_marked :: fn(marked: ptr[bundle.Hash[..]], hash: bundle.Hash) -> bool {

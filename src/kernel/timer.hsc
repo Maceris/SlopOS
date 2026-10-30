@@ -2,6 +2,7 @@ package kernel
 
 import intrinsics from "base"
 import runtime from "base"
+import robustness from "../robustness"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -57,6 +58,12 @@ handle_timer :: fn() -> bool {
     device_test_tick(kernel, cpu.timer_ticks)
     root_task_ended(kernel, cpu.timer_ticks)
     if cpu.timer_ticks >= kernel.stop_after_ticks {
+        // A root task that didn't start left nothing behind, as one that ended doesn't (decisions/0104)
+        #if robustness.ON {
+            if kernel.root_task == 0 && kernel.modules.count > 0 {
+                log_objects_left(kernel)
+            }
+        }
         stop(.Halted)
     }
     return true

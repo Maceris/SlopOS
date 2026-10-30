@@ -72,6 +72,9 @@ heap_function : runtime.AllocatorFn : fn(
         return view_of(cast[ptr[mut u8]](old_memory), size), null
     }
     result := empty
+    if size > 0 && fails(.Heap) {
+        return empty, runtime.AllocatorError.OutOfMemory
+    }
     if size > 0 {
         match allocate_block(kernel, block_bytes(cast[u64](size), cast[u64](alignment))) {
             case Ok(address) => result = view_of(cast[ptr[mut u8]](address), size)

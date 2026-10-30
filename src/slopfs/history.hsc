@@ -34,7 +34,7 @@ note_change :: fn(volume: ptr[mut Volume], kind: ChangeKind, object: u64, parent
     first := cast[u64](state.first)
     next := cast[u64](state.next)
     transaction :: volume.nodes.transaction
-    value := runtime.new(ValueBuffer)
+    value :: make(ValueBuffer)?
     defer runtime.free(value)
     // A file written again in the same transaction is one change
     if kind == .Written && next > first {
@@ -101,7 +101,7 @@ changes_since :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: 
     if cursor < first {
         return .Ok(ChangesFound.{are = .Resync, next = next})
     }
-    value := runtime.new(ValueBuffer)
+    value :: make(ValueBuffer)?
     defer runtime.free(value)
     for sequence in cursor..<next {
         bytes :: tree_get(volume.nodes, &volume.tree, key_of(0, .Change, sequence), value.bytes)? or_else 0
@@ -248,8 +248,9 @@ forget :: fn(volume: ptr[mut Volume], record: VolumeRecord) {
     for i in 0..<used.count {
         if i < values.count && i < keys.count && used[i] {
             node :: values[i]
-            if cast[u64](header_of(node).owner) == volume.id {
-                runtime.array_add(&dropped, keys[i])
+            // Without the memory to list it, a node stays among the dirty ones, written with the next commit
+            if cast[u64](header_of(node).owner) == volume.id && runtime.array_try_add(&dropped, keys[i]) != null {
+                break
             }
         }
     }

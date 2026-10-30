@@ -2,6 +2,7 @@ package kernel
 
 import intrinsics from "base"
 import runtime from "base"
+import robustness from "../robustness"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -36,6 +37,7 @@ stop :: fn(reason: StopReason) #never_returns {
     }
     kernel :: per_cpu().kernel
     stop_other_cpus(kernel)
+    robustness.report(&kernel.frames.faults)
     stop_with(&kernel.options, reason)
 }
 

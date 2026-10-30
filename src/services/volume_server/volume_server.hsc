@@ -125,7 +125,12 @@ Server :: struct {
 main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clients: os.Listener[dir.Dir],
     control: os.Listener[volume_protocol.Volume], stored_links: os.Channel[links.Links]) -> int {
     startup :: slop_os.startup_block()
-    server := runtime.new(Server)
+    // Its state; without the memory for it, it ends with 99 (decisions/0104)
+    server_made, server_error :: runtime.new_aligned(Server, align_of(Server))
+    if server_error != null {
+        return 99
+    }
+    server :: server_made
     server^ = Server.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE), container = volume.end, links = stored_links.end}
     server.container_port = os.port_for(startup.budget, volume.end) or_return 1
     server.port = slop_os.port_create(startup.budget) or_return 1
@@ -162,7 +167,7 @@ main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clie
     if described.record.cipher != cast[u8](slopfs.Cipher.None) {
         keys = wait_for_unlock(server, control.end) or_return 6
     }
-    server.volume = slopfs.attach_volume(&server.nodes, device, described.id, described.record, keys)
+    server.volume = slopfs.attach_volume(&server.nodes, device, described.id, described.record, keys) or_return 7
     server.volume.tree.lineage = described.lineage
     if !described.read_only {
         server.volume.history_bytes = slopfs.HISTORY_BYTES
@@ -508,6 +513,7 @@ file_error :: fn(error: slopfs.Error) -> files.FileError {
         case .WrongKey => files.FileError.DeviceError
         case .InUse => files.FileError.DeviceError
         case .IsALink => files.FileError.IsALink
+        case .OutOfMemory => files.FileError.NoMemory
     }
 }
 
@@ -1280,7 +1286,7 @@ wait_for_unlock :: fn(server: ptr[mut Server], end: slop_os.Channel) -> ptr[mut 
             case _ => continue
         }
         response : volume_protocol.Response = .Failed
-        keys :: slopfs.new_keys(.None)
+        keys :: slopfs.new_keys(.None) or_return null
         unlocked := false
         match os.message_of[volume_protocol.Request](&into)^ {
             case Unlock(given) => {
@@ -1313,7 +1319,11 @@ unlock_keys :: fn(server: ptr[mut Server], passphrase: u8[], keys: ptr[mut slopf
     defer runtime.array_free(&wraps)
     for index in 0..<cast[u64](16) {
         match ask(server, .WrapAt(index)) {
-            case Wrap(record) => runtime.array_add(&wraps, record)
+            case Wrap(record) => {
+                if runtime.array_try_add(&wraps, record) != null {
+                    return false
+                }
+            }
             case NoMore => break
             case _ => return false
         }
@@ -1323,7 +1333,11 @@ unlock_keys :: fn(server: ptr[mut Server], passphrase: u8[], keys: ptr[mut slopf
     number : u32 = 1
     loop {
         match ask(server, .GenerationAt(number)) {
-            case Generation(record) => runtime.array_add(&generations, slopfs.NumberedGeneration.{number = number, record = record})
+            case Generation(record) => {
+                if runtime.array_try_add(&generations, slopfs.NumberedGeneration.{number = number, record = record}) != null {
+                    return false
+                }
+            }
             case NoMore => break
             case _ => return false
         }
@@ -1368,9 +1382,13 @@ serve_control :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inco
             case Unlock(given) => {
                 if server.volume.tree.keys is_some {
                     // Unlocked already: the passphrase checked, for whoever asks the storage manager for the volume again
-                    checked :: slopfs.new_keys(.None)
-                    response = if unlock_keys(server, os.items(into, given), checked) { .Unlocked } else { .WrongKey }
-                    slopfs.free_keys(checked)
+                    match slopfs.new_keys(.None) {
+                        case Ok(checked) => {
+                            response = if unlock_keys(server, os.items(into, given), checked) { .Unlocked } else { .WrongKey }
+                            slopfs.free_keys(checked)
+                        }
+                        case Error(error) => response = .Failed
+                    }
                 }
             }
             case Rotate => response = rotate(server)

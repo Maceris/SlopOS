@@ -81,7 +81,12 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     bar2: slop_os.Memory?, bar3: slop_os.Memory?, bar4: slop_os.Memory?, bar5: slop_os.Memory?, domain: slop_os.DmaDomain,
     clients: os.Listener[input.Input]) -> int {
     startup :: slop_os.startup_block()
-    driver := runtime.new(Driver)
+    // Its state; without the memory for it, it ends with 99 (decisions/0104)
+    driver_made, driver_error :: runtime.new_aligned(Driver, align_of(Driver))
+    if driver_error != null {
+        return 99
+    }
+    driver :: driver_made
     driver.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     config_at :: driver_kit.map_device(config) or_return 2
     bars := driver_kit.map_bars(bar0, bar1, bar2, bar3, bar4, bar5)

@@ -9,6 +9,9 @@
  * - test_services, once the supervisor has started all of its services;
  * - test_outlive_manager, which kills the process manager once the supervisor reports hello started, and
  *   ends once hello has, after it said it's still running;
+ * - test_deadline=<seconds>, with test_program: how long the test program has to end before the root task kills it
+ *   and ends with 26, so a test that waits for good, as one can when fault injection fails what it set up
+ *   (decisions/0104), ends instead; none without the word.
  * - test_program=<name>, which launches the test program src/tests/<name> in place of the supervisor, and
  *   ends once it has, with 0 if it ended with 0 and its budget is back to nothing (decisions/0069).
  */
@@ -161,7 +164,10 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     start_itself(&root, "process_manager", manager_grants) or_return 7
 
     match service_kit.word_after(words, "test_program=") {
-        case Some(name) => return run_test(&root, name, platform, cpu_budget)
+        case Some(name) => {
+            seconds :: service_kit.number_of(service_kit.word_after(words, "test_deadline=") or_else "") or_else 0
+            return run_test(&root, name, platform, cpu_budget, seconds)
+        }
         case None => {}
     }
 
@@ -219,10 +225,17 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         if i >= root.started_count {
             break
         }
-        _ = slop_os.port_bind(port, cast[slop_os.Handle](started.process), slop_os.SIGNAL_TERMINATED, cast[u64](i), .Once)
+        // Without the watch it wouldn't know the process ended, and would wait for it for good
+        if slop_os.port_bind(port, cast[slop_os.Handle](started.process), slop_os.SIGNAL_TERMINATED, cast[u64](i), .Once) is_error {
+            log_line.write(root.log, "root task: can't watch %", started.name)
+            return 14
+        }
     }
     supervisor_signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    _ = slop_os.port_bind(port, cast[slop_os.Handle](root.supervision), supervisor_signals, SUPERVISOR_KEY, .Persistent)
+    if slop_os.port_bind(port, cast[slop_os.Handle](root.supervision), supervisor_signals, SUPERVISOR_KEY, .Persistent) is_error {
+        log_line.write(root.log, "root task: can't watch the supervisor's channel")
+        return 15
+    }
     into := os.Incoming.{}
     loop {
         loop {
@@ -350,7 +363,7 @@ start_with_loader :: fn(root: ptr[mut Root], name: string, grants: process_build
  * The test program name, launched through the manager with TestGrants, and watched until it ends: 0 if it
  * ended with 0, and its budget, once its grace period has passed, is back to nothing.
  */
-run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform, cpu_budget: slop_os.CpuBudget) -> int {
+run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform, cpu_budget: slop_os.CpuBudget, seconds: u64) -> int {
     block :: root.block
     module_storage : u8[slop_os.GRANT_LABEL_SIZE]
     module_name := text_buffer.make(module_storage)
@@ -410,7 +423,14 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform, cp
         }
     }
     packets : slop_os.Packet[1]
-    _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_return 23
+    deadline :: if seconds == 0 { slop_os.NO_DEADLINE } else { (slop_os.clock_monotonic() or_else 0) + seconds * 1_000_000_000 }
+    if (slop_os.port_wait(port, packets, deadline) or_return 23) == 0 {
+        log_line.write(root.log, "root task: % didn't end within % seconds, so it's killed", name, seconds)
+        _ = slop_os.process_kill(launched.process)
+        _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_return 23
+        _ = test_kit.wait_for_budget(launched.budget, 0, 2_000_000_000)
+        return 26
+    }
     code :: packets[0].data[1]
     emptied :: test_kit.wait_for_budget(launched.budget, 0, 2_000_000_000)
     left :: test_kit.used(launched.budget)

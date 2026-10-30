@@ -9,10 +9,11 @@ import runtime from "base"
 import os from "std"
 import text_buffer from "std"
 import elf_loader from ".."
+import hosted_faults from "../../robustness/hosted"
 
 BASE : u64 : 0x7000_0000_0000
 
-main :: fn() -> int {
+checks :: fn() -> int {
     arguments :: os.arguments()
     if arguments.count < 2 {
         return 1
@@ -148,4 +149,9 @@ refusals :: fn(file: u8[], executable: elf_loader.Executable) -> int {
         return 28
     }
     return 0
+}
+
+// The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness)
+main :: fn() -> int {
+    return hosted_faults.run(checks)
 }

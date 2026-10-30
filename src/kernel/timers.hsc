@@ -152,6 +152,9 @@ grow_heap :: fn(heap: ptr[mut TimerHeap]) -> bool {
     if heap.count < heap.entries.count {
         return true
     }
+    if fails(.Timers) {
+        return false
+    }
     size :: if heap.entries.count == 0 { cast[usize](16) } else { heap.entries.count * 2 }
     grown, error :: runtime.new_array(u64, size)
     if error != null {

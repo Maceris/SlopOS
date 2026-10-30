@@ -1,5 +1,7 @@
 package kernel
 
+import robustness from "../robustness"
+
 /*
  * The kernel's command line: words separated by spaces. Unknown words are ignored, so a command
  * line written for a newer kernel still boots an older one.
@@ -56,6 +58,11 @@ Options :: struct {
      * allocations (decisions/0098); 0, or no such word, for the default, a sixteenth of it and at least 8 MiB.
      */
     kernel_reserve_mib : u64,
+    /*
+     * fail=<point>:<n>, fail=any:<n> or fail=count: fault injection (robustness.hsc, decisions/0096), in a kernel built
+     * with robustness=on only. Any other kernel ignores the word.
+     */
+    fail : robustness.FailSpec,
 }
 
 parse_command_line :: fn(command_line: string) -> Options {
@@ -127,6 +134,15 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     prefix :: "kernel_reserve="
     if word.count > prefix.count && word[0..<prefix.count] == prefix {
         options.kernel_reserve_mib = number_of(word[prefix.count..<word.count])
+    }
+    #if robustness.ON {
+        fail :: "fail="
+        if word.count > fail.count && word[0..<fail.count] == fail {
+            match robustness.fail_of(word[fail.count..<word.count]) {
+                case Some(spec) => options.fail = spec
+                case None => {}
+            }
+        }
     }
 }
 

@@ -7,6 +7,7 @@ package gpt_test
 
 import runtime from "base"
 import gpt from ".."
+import hosted_faults from "../../robustness/hosted"
 
 BLOCKS : u64 : 256
 
@@ -14,7 +15,7 @@ Image :: struct {
     bytes : mut u8[],
 }
 
-main :: fn() -> int {
+checks :: fn() -> int {
     // The CRC everyone checks against
     check :: "123456789"
     if gpt.crc32(string_bytes(check)) != 0xcbf43926 {
@@ -105,4 +106,9 @@ read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bo
         }
     }
     return true
+}
+
+// The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness)
+main :: fn() -> int {
+    return hosted_faults.run(checks)
 }

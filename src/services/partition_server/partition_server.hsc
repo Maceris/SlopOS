@@ -53,7 +53,12 @@ Server :: struct {
 
 main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Listener[partitions.Partitions]) -> int {
     startup :: slop_os.startup_block()
-    server := runtime.new(Server)
+    // Its state; without the memory for it, it ends with 99 (decisions/0104)
+    server_made, server_error :: runtime.new_aligned(Server, align_of(Server))
+    if server_error != null {
+        return 99
+    }
+    server :: server_made
     server.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     server.disk = disk.end
     server.disk_port = os.port_for(startup.budget, disk.end) or_return 1
@@ -224,7 +229,11 @@ open :: fn(server: ptr[mut Server], first: u64, count: u64, client: slop_os.Chan
     }
     startup :: slop_os.startup_block()
     driver :: block.connect(server.disk, server.disk_port, startup.budget) or_return null
-    driver_port :: os.port_for(startup.budget, driver.end) or_return null
+    driver_port :: os.port_for(startup.budget, driver.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+    if cast[slop_os.Handle](driver_port) == slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](driver.end))
+        return null
+    }
     info := block.Info.{}
     match call(driver.end, driver_port, .Describe) {
         case Described(described) => info = described
@@ -237,13 +246,29 @@ open :: fn(server: ptr[mut Server], first: u64, count: u64, client: slop_os.Chan
     ours := client
     theirs := NONE
     if cast[slop_os.Handle](client) == slop_os.NO_HANDLE {
-        pair :: os.channel_for[block.Block](startup.budget, 0) or_return null
-        ours = pair.a
-        theirs = pair.b
+        match os.channel_for[block.Block](startup.budget, 0) {
+            case Ok(pair) => {
+                ours = pair.a
+                theirs = pair.b
+            }
+            case Error(error) => {
+                _ = slop_os.handle_close(cast[slop_os.Handle](driver.end))
+                return null
+            }
+        }
     }
+    // Unwatched, a connection's requests would never be read: without both, there's no connection
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    _ = slop_os.port_bind(server.port, cast[slop_os.Handle](ours), signals, CLIENT_KEY + cast[u64](slot), .Persistent)
-    _ = slop_os.port_bind(server.port, cast[slop_os.Handle](driver.end), signals, DRIVER_KEY + cast[u64](slot), .Persistent)
+    if (slop_os.port_bind(server.port, cast[slop_os.Handle](ours), signals, CLIENT_KEY + cast[u64](slot), .Persistent) is_error)
+        || (slop_os.port_bind(server.port, cast[slop_os.Handle](driver.end), signals, DRIVER_KEY + cast[u64](slot), .Persistent) is_error) {
+        _ = slop_os.port_unbind(server.port, CLIENT_KEY + cast[u64](slot))
+        _ = slop_os.handle_close(cast[slop_os.Handle](driver.end))
+        if cast[slop_os.Handle](theirs) != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(cast[slop_os.Handle](ours))
+            _ = slop_os.handle_close(cast[slop_os.Handle](theirs))
+        }
+        return null
+    }
     info.block_count = count
     server.narrowed[slot] = Narrowed.{client = ours, driver = driver.end, first = first, count = count, info = info}
     server.narrowed_count = slot + 1

@@ -686,8 +686,10 @@ open_system :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
             supervisor.system_generation += 1
             supervisor.system = root.end
             supervisor.system_port = os.port_for(supervisor.block.budget, root.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
-            _ = slop_os.port_bind(supervisor.port, cast[slop_os.Handle](root.end), slop_os.SIGNAL_PEER_CLOSED,
-                SYSTEM_KEY + supervisor.system_generation % SYSTEM_GENERATIONS, .Once)
+            if slop_os.port_bind(supervisor.port, cast[slop_os.Handle](root.end), slop_os.SIGNAL_PEER_CLOSED,
+                SYSTEM_KEY + supervisor.system_generation % SYSTEM_GENERATIONS, .Once) is_error {
+                log_line.write(supervisor.log, "supervisor: can't watch the system volume's root for its end")
+            }
             store_events(supervisor)
             if supervisor.store_end == NONE {
                 start_store(supervisor, NOWHERE)
@@ -900,8 +902,9 @@ start_driver :: fn(supervisor: ptr[mut Supervisor], index: usize, device: platfo
     entry.address = device.address
     entry.done = false
     entry.watch = watch
-    if watch != slop_os.NO_HANDLE {
-        _ = slop_os.port_bind(supervisor.port, watch, slop_os.SIGNAL_DMA_FAULT, FAULT_KEY + cast[u64](slot), .Persistent)
+    if watch != slop_os.NO_HANDLE
+        && (slop_os.port_bind(supervisor.port, watch, slop_os.SIGNAL_DMA_FAULT, FAULT_KEY + cast[u64](slot), .Persistent) is_error) {
+        log_line.write(supervisor.log, "supervisor: %'s DMA faults go unwatched", name)
     }
     if again != NOWHERE {
         tell_root(supervisor, .Started(report_of(name, 0)))
@@ -1550,13 +1553,13 @@ stored_hash :: fn(supervisor: ptr[mut Supervisor], name: string, which: usize) -
     defer runtime.array_free(&names)
     bundles : bundle.Hash[..]
     defer runtime.array_free(&bundles)
-    if bundle.root_entries(root_object.bytes, &names, &bundles) {
+    if bundle.root_entries(root_object.bytes, &names, &bundles) or_else false {
         for entry_name, i in names {
             if entry_name == name && i < bundles.count {
                 match mapped_object(supervisor, bundles[i]) {
                     case Some(record) => {
                         referred : bundle.Hash[..]
-                        if bundle.bundle_refers(record.bytes, &referred) && which < referred.count {
+                        if (bundle.bundle_refers(record.bytes, &referred) or_else false) && which < referred.count {
                             found = referred[which]
                             have = true
                         }

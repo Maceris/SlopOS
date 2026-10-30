@@ -47,7 +47,9 @@ snapshot_records :: fn(container: ptr[mut Container], id: u64, found: ptr[mut Nu
         if item.bytes != size_of(SnapshotRecord) {
             return .Error(.Corrupt)
         }
-        runtime.array_add(found, NumberedSnapshot.{number = item.key.offset, record = record})
+        if runtime.array_try_add(found, NumberedSnapshot.{number = item.key.offset, record = record}) != null {
+            return .Error(.OutOfMemory)
+        }
         at = key_after(item.key) or_break
     }
     return .Ok
@@ -111,6 +113,10 @@ take_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], now: u64
         }
     }
     transaction :: durable_transaction(container)
+    // The floor's room, before the snapshot's record is put
+    if !space_room(&container.space, 0, 0, 0, 1) {
+        return .Error(.OutOfMemory)
+    }
     snapshot := SnapshotRecord.{root = record.root, transaction = cast[u64le](transaction), next_object = record.next_object,
         created = cast[u64le](now), name_bytes = cast[u16le](cast[u16](name.count))}
     for byte, i in name {
@@ -135,7 +141,9 @@ dead_extents :: fn(container: ptr[mut Container], id: u64, found: ptr[mut DeadEx
         if item.bytes != size_of(DeadValue) {
             return .Error(.Corrupt)
         }
-        runtime.array_add(found, DeadExtent.{start = item.key.offset, value = value})
+        if runtime.array_try_add(found, DeadExtent.{start = item.key.offset, value = value}) != null {
+            return .Error(.OutOfMemory)
+        }
         at = key_after(item.key) or_break
     }
     return .Ok
@@ -178,6 +186,20 @@ delete_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], freed:
     dead : DeadExtent[..]
     defer runtime.array_free(&dead)
     dead_extents(container, id, &dead)?
+    // Room for each dead extent freed, and each waiting to be, before any is
+    space :: &container.space
+    count :: dead.count + space.changes.count
+    if !space_room(space, count, count, 0, 1) {
+        return .Error(.OutOfMemory)
+    }
+    match freed {
+        case Some(list) => {
+            if runtime.array_try_reserve(list, list.count + count) != null {
+                return .Error(.OutOfMemory)
+            }
+        }
+        case None => {}
+    }
     for each in dead {
         if !held_by(remaining, cast[u64](each.value.birth), cast[u64](each.value.freed)) {
             tree_delete(&container.nodes, &container.volumes, key_of(id, .Dead, each.start))?
@@ -189,7 +211,6 @@ delete_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], freed:
         }
     }
     // What's waiting to go on the dead list this transaction, freed in it
-    space :: &container.space
     for &change in space.changes {
         if change.change == .Dead && change.owner == id && !held_by(remaining, change.birth, container.nodes.transaction) {
             change.change = .FreedLater
@@ -266,6 +287,10 @@ clone_snapshot :: fn(container: ptr[mut Container], id: u64, snapshot: u8[], nam
             clone.name[i] = byte
         }
     }
+    // The floor's room, before the clone's record is put
+    if !space_room(&container.space, 0, 0, 0, 1) {
+        return .Error(.OutOfMemory)
+    }
     made :: container.next_volume
     container.next_volume += 1
     put_volume_record(container, made, &clone)?
@@ -283,6 +308,9 @@ load_floors :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     owner_at := Key.{}
     loop {
         found :: tree_next(&container.nodes, &container.owners, owner_at, view_of(cast[ptr[mut u8]](&owner), size_of(OwnerValue)))? or_break
+        if !space_room(&container.space, 0, 0, 0, 1) {
+            return .Error(.OutOfMemory)
+        }
         charge(&container.space, cast[u64](owner.volume), cast[u64](owner.blocks), true)
         owner_at = key_after(found.key) or_break
     }
@@ -290,6 +318,9 @@ load_floors :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     loop {
         id :: next_volume_id(container, at)? or_return .Ok
         record :: volume_record(container, id)?
+        if !space_room(&container.space, 0, 0, 0, 1) {
+            return .Error(.OutOfMemory)
+        }
         if cast[u64](record.quota) != 0 {
             set_quota_of(&container.space, id, cast[u64](record.quota))
         }
@@ -338,7 +369,16 @@ open_snapshot :: fn(container #escaping : ptr[mut Container], id: u64, name: u8[
         return .Error(.Locked)
     }
     snapshot := found.record
-    volume :: attach_volume(&container.nodes, container.device, id, snapshot_volume_record(&record, &snapshot), keys)
+    volume :: match attach_volume(&container.nodes, container.device, id, snapshot_volume_record(&record, &snapshot), keys) {
+        case Ok(made) => made
+        case Error(error) => {
+            match keys {
+                case Some(given) => free_keys(given)
+                case None => {}
+            }
+            return .Error(error)
+        }
+    }
     match lineage_of(container, &record) {
         case Ok(lineage) => volume.tree.lineage = lineage
         case Error(error) => {
@@ -386,6 +426,9 @@ find_volume_named :: fn(container: ptr[mut Container], name: u8[]) -> Result[u64
  */
 set_quota :: fn(container: ptr[mut Container], id: u64, blocks: u64) -> Result[void, Error] {
     record := volume_record(container, id)?
+    if !space_room(&container.space, 0, 0, 0, 1) {
+        return .Error(.OutOfMemory)
+    }
     record.quota = cast[u64le](blocks)
     put_volume_record(container, id, &record)?
     for volume in container.open {

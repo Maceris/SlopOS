@@ -156,7 +156,12 @@ Scan :: struct {
 }
 
 main :: fn(log: slop_os.DebugLog?, clients: os.Listener[events.Events]) -> int {
-    service :: runtime.new(Service)
+    // Its state; without the memory for it, it ends with 99 (decisions/0104)
+    service_made, service_error :: runtime.new_aligned(Service, align_of(Service))
+    if service_error != null {
+        return 99
+    }
+    service :: service_made
     service.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     service.block = slop_os.startup_block()
     service.boot = random.next_u64()
@@ -540,7 +545,15 @@ drain :: fn(service: ptr[mut Service], slot: usize) {
     }
     copied : u8[..]
     defer runtime.array_free(&copied)
-    runtime.array_reserve(&copied, cast[usize](size))
+    fresh : u8[..]
+    defer runtime.array_free(&fresh)
+    /*
+     * Room for everything these entries can add, before any's read (decisions/0104): without it, they're left in the
+     * ring for a later drain, and a ring that fills says what it dropped, so nothing goes missing unsaid
+     */
+    if !room_to_drain(service, source, cast[usize](size), &copied, &fresh) {
+        return void
+    }
     for i in cast[u64](0)..<size {
         runtime.array_add(&copied, cast[u8](0))
     }
@@ -549,8 +562,6 @@ drain :: fn(service: ptr[mut Service], slot: usize) {
         return void
     }
     data :: cast[u64](cast[uintptr](copied.data))
-    fresh : u8[..]
-    defer runtime.array_free(&fresh)
     add_instance(&fresh, ring.instance)
     first :: source.count
     if written - read > size || size + cast[u64](size_of(runtime.SlopOsEventsRing)) > RING_BYTES {
@@ -659,6 +670,10 @@ keep :: fn(service: ptr[mut Service], source: ptr[mut Source], entries: u8[], fi
             // A new file: from a StoredStart, with every format string and schema its records could need
             header : u8[..]
             defer runtime.array_free(&header)
+            if runtime.array_try_reserve(&header, header_bound(service, source)) != null {
+                add_pending(source, entries, first)
+                return void
+            }
             file_header(service, source, first, &header)
             if !write_file(service, source, header) {
                 start_pending(service, source, first)
@@ -673,6 +688,30 @@ keep :: fn(service: ptr[mut Service], source: ptr[mut Source], entries: u8[], fi
         return void
     }
     add_pending(source, entries, first)
+}
+
+/*
+ * Room in what draining a ring of size bytes may grow, copied and fresh among them: false, and nothing read, without
+ * the memory. Each list gets as much as entries that size could add to it, and the pending bytes all they may hold.
+ */
+room_to_drain :: fn(service: ptr[mut Service], source: ptr[mut Source], size: usize, copied: ptr[mut u8[..]], fresh: ptr[mut u8[..]])
+    -> bool {
+    entries :: size / 8 + 1
+    return runtime.array_try_reserve(copied, size) == null
+        && runtime.array_try_reserve(fresh, size + size_of(StoredInstance) + 8) == null
+        && runtime.array_try_reserve(&source.texts, source.texts.count + size) == null
+        && runtime.array_try_reserve(&source.formats, source.formats.count + entries) == null
+        && runtime.array_try_reserve(&source.used, source.used.count + entries) == null
+        && runtime.array_try_reserve(&service.schema_bytes, service.schema_bytes.count + size) == null
+        && runtime.array_try_reserve(&service.schemas, service.schemas.count + entries) == null
+        && runtime.array_try_reserve(&source.pending, PENDING_BYTES + header_bound(service, source) + size) == null
+}
+
+// The most bytes file_header writes for source, with what draining size more bytes of entries could add to it.
+header_bound :: fn(service: ptr[Service], source: ptr[Source]) -> usize {
+    return size_of(StoredStart) + cast[usize](source.instances + 2) * (size_of(StoredInstance) + 8)
+        + source.formats.capacity * (size_of(runtime.SlopOsEventsFormat) + 8) + source.texts.capacity
+        + source.used.capacity * (size_of(runtime.SlopOsEventsSchema) + 8) + service.schema_bytes.capacity
 }
 
 add_pending :: fn(source: ptr[mut Source], entries: u8[], first: u64) {
@@ -888,7 +927,10 @@ render :: fn(service: ptr[Service], entries #escaping : u8[], at: usize, formats
         }
         none : u8[]
         value :: part(entries, value_at, value_count)
-        runtime.array_add(&arguments, schema.Argument.{schema = schema_of(service, argument.hash) or_else none, value = value})
+        // Without the memory for more, what's read so far is shown
+        if runtime.array_try_add(&arguments, schema.Argument.{schema = schema_of(service, argument.hash) or_else none, value = value}) != null {
+            break
+        }
         count += 1
         cursor = value_at + padded(value_count)
     }
@@ -1037,7 +1079,8 @@ find :: fn(service: ptr[mut Service], bytes: u8[], scan: ptr[mut Scan], from: u6
         else if kind == runtime.SLOP_OS_EVENTS_FORMAT && size >= size_of(runtime.SlopOsEventsFormat) {
             format :: cast[ptr[runtime.SlopOsEventsFormat]](address_in(bytes, at))
             if cast[usize](format.count) <= size - size_of(runtime.SlopOsEventsFormat) {
-                runtime.array_add(&scan.formats, FormatText.{instance = scan.instance, offset = format.offset,
+                // Without the memory to keep it, its records are shown without their format string
+                _ = runtime.array_try_add(&scan.formats, FormatText.{instance = scan.instance, offset = format.offset,
                     at = at + size_of(runtime.SlopOsEventsFormat), count = cast[usize](format.count)})
             }
         }
@@ -1090,6 +1133,9 @@ read_file :: fn(service: ptr[mut Service], source: ptr[Source], extension: strin
         }
         if count == 0 {
             return true
+        }
+        if runtime.array_try_reserve(into, into.count + cast[usize](count)) != null {
+            return false
         }
         for i in cast[usize](0)..<count {
             if i < buffer.count {

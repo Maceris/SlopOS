@@ -72,7 +72,12 @@ Server :: struct {
 
 main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: os.Listener[dir.Dir]) -> int {
     startup :: slop_os.startup_block()
-    server := runtime.new(Server)
+    // Its state; without the memory for it, it ends with 99 (decisions/0104)
+    server_made, server_error :: runtime.new_aligned(Server, align_of(Server))
+    if server_error != null {
+        return 99
+    }
+    server :: server_made
     server.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     server.disk = partition.end
     server.disk_port = os.port_for(startup.budget, partition.end) or_return 1

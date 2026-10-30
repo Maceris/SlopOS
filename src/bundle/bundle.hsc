@@ -110,52 +110,61 @@ value_of :: fn(record: u8[], expected: u8[32]) -> u8[]? {
 
 /*
  * Each hash a bundle refers to: its program's, its manifest's, its libraries' and its resources'; false if the bytes
- * aren't a bundle.
+ * aren't a bundle, and the allocator's error, apart from that, without the memory to list them (decisions/0104).
  */
-bundle_refers :: fn(record: u8[], each: ptr[mut Hash[..]]) -> bool {
-    value :: value_of(record, BUNDLE_SCHEMA) or_return false
+bundle_refers :: fn(record: u8[], each: ptr[mut Hash[..]]) -> Result[bool, runtime.AllocatorError] {
+    value :: value_of(record, BUNDLE_SCHEMA) or_return .Ok(false)
     if value.count < size_of(Bundle) {
-        return false
+        return .Ok(false)
     }
-    runtime.array_add(each, hash_at(value, 0))
-    runtime.array_add(each, hash_at(value, 32))
+    for first in usize.[0, 32] {
+        if runtime.array_try_add(each, hash_at(value, first)) != null {
+            return .Error(.OutOfMemory)
+        }
+    }
     for list in usize.[offset_of(Bundle, libraries), offset_of(Bundle, resources)] {
         count :: cast[usize](word(value, list))
         at :: cast[usize](word(value, list + 8))
         if count > 0 && (at >= value.count || count > (value.count - at) / 32) {
-            return false
+            return .Ok(false)
         }
         for i in cast[usize](0)..<count {
-            runtime.array_add(each, hash_at(value, at + i * 32))
+            if runtime.array_try_add(each, hash_at(value, at + i * 32)) != null {
+                return .Error(.OutOfMemory)
+            }
         }
     }
-    return true
+    return .Ok(true)
 }
 
-// A root's entries, each name and bundle; false if the bytes aren't a root.
-root_entries :: fn(record #escaping : u8[], names: ptr[mut string[..]], bundles: ptr[mut Hash[..]]) -> bool {
-    value :: value_of(record, ROOT_SCHEMA) or_return false
+// A root's entries, each name and bundle; false if the bytes aren't a root, and the allocator's error without the memory.
+root_entries :: fn(record #escaping : u8[], names: ptr[mut string[..]], bundles: ptr[mut Hash[..]]) -> Result[bool, runtime.AllocatorError] {
+    value :: value_of(record, ROOT_SCHEMA) or_return .Ok(false)
     if value.count < size_of(Root) {
-        return false
+        return .Ok(false)
     }
     count :: cast[usize](word(value, 0))
     at :: cast[usize](word(value, 8))
     entry_size :: size_of(RootEntry)
     if count > 0 && (at >= value.count || count > (value.count - at) / entry_size) {
-        return false
+        return .Ok(false)
+    }
+    // Room for every entry, so the lists stay whole
+    if runtime.array_try_reserve(names, names.count + count) != null || runtime.array_try_reserve(bundles, bundles.count + count) != null {
+        return .Error(.OutOfMemory)
     }
     for i in cast[usize](0)..<count {
         entry :: at + i * entry_size
         name_count :: cast[usize](word(value, entry + offset_of(RootEntry, name)))
         name_at :: cast[usize](word(value, entry + offset_of(RootEntry, name) + 8))
         if name_count > 0 && (name_at >= value.count || name_count > value.count - name_at) {
-            return false
+            return .Ok(false)
         }
         name :: if name_count > 0 && name_at < value.count { string_of(&value[name_at], name_count) } else { "" }
         runtime.array_add(names, name)
         runtime.array_add(bundles, hash_at(value, entry + offset_of(RootEntry, bundle)))
     }
-    return true
+    return .Ok(true)
 }
 
 hash_at :: fn(bytes: u8[], at: usize) -> Hash {

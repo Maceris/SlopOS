@@ -24,6 +24,8 @@ Process :: struct #align(16) {
     // Set by process_exit, with its code; a process destroyed without it was killed.
     exited : bool,
     exit_code : u32,
+    // Its threads started and not yet destroyed; when the last goes, so does it (threads.hsc, end_process_if_last)
+    live_threads : u32,
     // The CpuBudget it and its threads run on, and its neighbors among what runs there (cpu_budgets.hsc)
     cpu_budget : u64,
     cpu_budget_next : u64,

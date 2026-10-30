@@ -24,6 +24,7 @@ import intrinsics from "base"
 import runtime from "base"
 import concurrency from "std"
 import boot_info from "../../boot_info"
+import robustness from "../../robustness"
 
 FRAME_SIZE : u64 : 4096
 // Single frames a FrameCache holds, and what it takes or gives back at once.
@@ -79,6 +80,11 @@ FrameAllocator :: struct {
     // Frames given to the allocator, and those free now.
     total_frames : u64,
     free_frames : u64,
+    /*
+     * Fault injection's state, with robustness=on (decisions/0096): here because everything in the kernel that can run
+     * out reaches the frame allocator, so one place counts the passes through every failure point.
+     */
+    faults : robustness.Faults,
 }
 
 /*
@@ -165,6 +171,9 @@ add_range :: fn(allocator: ptr[mut FrameAllocator], start: u64, end: u64) {
  * contents are whatever was there before.
  */
 allocate :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[boot_info.PhysicalAddress, FrameError] {
+    if robustness.fails(&allocator.faults, .Frame) {
+        return .Error(.OutOfMemory)
+    }
     concurrency.lock(&allocator.lock)
     defer concurrency.unlock(&allocator.lock)
     return take_block(allocator, order)
@@ -193,6 +202,9 @@ allocate_below :: fn(allocator: ptr[mut FrameAllocator], order: u64, limit: u64)
     runtime.assert(order <= MAX_ORDER, "allocate_below takes an order up to MAX_ORDER")
     if limit == 0 {
         return allocate(allocator, order)
+    }
+    if robustness.fails(&allocator.faults, .Frame) {
+        return .Error(.OutOfMemory)
     }
     concurrency.lock(&allocator.lock)
     defer concurrency.unlock(&allocator.lock)
@@ -265,6 +277,9 @@ give_block :: fn(allocator: ptr[mut FrameAllocator], address: boot_info.Physical
 
 // A single frame from the calling CPU's cache, refilled from the allocator if it's empty.
 take_frame :: fn(cache: ptr[mut FrameCache], allocator: ptr[mut FrameAllocator]) -> Result[boot_info.PhysicalAddress, FrameError] {
+    if robustness.fails(&allocator.faults, .Frame) {
+        return .Error(.OutOfMemory)
+    }
     if cache.count == 0 {
         concurrency.lock(&allocator.lock)
         defer concurrency.unlock(&allocator.lock)

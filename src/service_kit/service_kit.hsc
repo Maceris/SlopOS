@@ -101,6 +101,21 @@ word_after :: fn(text: string, prefix: string) -> string? {
     return word_from(text, start, text.count, prefix)
 }
 
+// A decimal number, or null if text isn't one or it's too big for a u64.
+number_of :: fn(text: string) -> u64? {
+    if text.count == 0 || text.count > 19 {
+        return null
+    }
+    value : u64 = 0
+    for character in text {
+        if character < '0' || character > '9' {
+            return null
+        }
+        value = value * 10 + cast[u64](character) - cast[u64]('0')
+    }
+    return value
+}
+
 // What follows prefix in text's bytes from start to end, if they start with it.
 word_from :: fn(text: string, start: usize, end: usize, prefix: string) -> string? {
     if end < start || end > text.count {

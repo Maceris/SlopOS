@@ -84,7 +84,12 @@ main :: fn(log: slop_os.DebugLog?, platform: slop_os.Platform, firmware: slop_os
     space :: block.space
     read :: slop_os.PROTECTION_READ
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    state := runtime.new(Platform)
+    // Its state; without the memory for it, it ends with 99 (decisions/0104)
+    state_made, state_error :: runtime.new_aligned(Platform, align_of(Platform))
+    if state_error != null {
+        return 99
+    }
+    state :: state_made
 
     // The firmware tables, and the host bridge they describe
     tables_size :: slop_os.memory_size(firmware) or_return 2

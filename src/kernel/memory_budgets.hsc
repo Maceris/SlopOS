@@ -97,6 +97,9 @@ charge_new :: fn(budget_address: u64, object: u64, bytes: u64) -> bool {
     if budget_address == 0 {
         return true
     }
+    if fails(.Budget) {
+        return false
+    }
     budget :: cast[ptr[mut MemoryBudget]](budget_address)
     concurrency.lock(&budget.lock)
     defer concurrency.unlock(&budget.lock)
@@ -115,7 +118,7 @@ charge_more :: fn(object: u64, bytes: u64) -> bool {
     header :: cast[ptr[mut ObjectHeader]](object)
     budget :: lock_budget_of(object) or_return true
     defer concurrency.unlock(&budget.lock)
-    if budget.closed || bytes > budget.limit - budget.used {
+    if fails(.Budget) || budget.closed || bytes > budget.limit - budget.used {
         return false
     }
     budget.used += bytes

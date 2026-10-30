@@ -52,6 +52,12 @@ later, mark the check `//HEMERA(gap)` and log the need in `hemera-feedback.md`.
 - Fallible functions return `Result[T, E]` (or an optional), with `E` a tagged union specific
   to that subsystem. No sentinel values.
 - Not-yet-implemented paths return an explicit `NotSupported` variant, never a fake success.
+- Every kernel resource that can run out has a named failure point (`robustness.Point`, decisions/0096, 0104): a
+  `fails(.Point)` (`kernel/faults.hsc`), or `robustness.fails` with the frame allocator's `faults`, where it's taken,
+  before anything is changed, so a sweep (`boot_tests.py --robustness`) runs its error path. A new kind of resource
+  gets a new point.
+- A call's error is handled where it can happen, never discarded where the program then waits for what the call
+  would have set up: a `port_bind` that fails means a wait that would never end.
 
 ## Tests
 - Pure logic (allocators, parsers, containers, formatting) gets tests in the package's

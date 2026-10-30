@@ -41,7 +41,13 @@ apart :: fn(container #escaping : ptr[mut slopfs.Container], id: u64) -> ptr[mut
     made.side = Side.{container = container, id = id}
     made.nodes = slopfs.Nodes.{device = container.device, transaction = container.nodes.transaction, space = cast[rawptr](&made.side),
         allocate = side_allocate, release = side_release}
-    made.volume = slopfs.attach_volume(&made.nodes, container.device, id, record, null)
+    match slopfs.attach_volume(&made.nodes, container.device, id, record, null) {
+        case Ok(volume) => made.volume = volume
+        case Error(error) => {
+            runtime.free(made)
+            return null
+        }
+    }
     return made
 }
 

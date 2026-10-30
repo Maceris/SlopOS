@@ -206,6 +206,9 @@ make_entry :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], index: u3
 
 // A zeroed frame for table, charged to its process; its whole charge comes back once the process is released.
 charged_frame :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) -> u64? {
+    if fails(.Handles) {
+        return null
+    }
     if table.account != 0 && !charge_more(table.account, frames.FRAME_SIZE) {
         table.short_of_budget = true
         return null

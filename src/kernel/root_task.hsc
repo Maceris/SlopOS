@@ -9,6 +9,7 @@ import boot_info from "../boot_info"
 import elf_loader from "../elf_loader"
 import frames from "frames"
 import test_device from "../test_device"
+import robustness from "../robustness"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -58,7 +59,19 @@ start_root_task :: fn(kernel: ptr[mut Kernel]) {
     }
     module :: kernel.modules[0]
     match load_root_task(kernel, module) {
-        case Some(failure) => runtime.log_error("root task %: %", module.name, failure)
+        case Some(failure) => {
+            runtime.log_error("root task %: %", module.name, failure)
+            // What was kept for it, nobody else is given
+            if kernel.firmware != 0 {
+                _ = destroy_object(kernel, kernel.firmware)
+                kernel.firmware = 0
+            }
+            // Its process's destruction takes a grace period for each step, as a root task's end does, before what's
+            // left is checked when the kernel halts (timer.hsc)
+            #if robustness.ON {
+                kernel.stop_after_ticks += ROOT_END_TICKS
+            }
+        }
         case None => {}
     }
 }
@@ -77,6 +90,18 @@ load_root_task :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule) -> s
         case Ok(made) => process = made
         case Error(error) => return "no process"
     }
+    // What it was given goes with it if it can't start (decisions/0104): destroying it destroys everything it owns
+    failure :: start_in(kernel, module, process, &executable, file)
+    if failure is_some {
+        _ = destroy_object(kernel, cast[u64](process))
+    }
+    return failure
+}
+
+// The root task's address space, image, stack, startup block and thread, in process, and it started; or what failed.
+start_in :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule, process: ptr[mut Process], executable: ptr[elf_loader.Executable],
+    file: u8[]) -> string? #unrestricted {
+    budget :: kernel.root_budget
     space := cast[ptr[mut AddressSpace]](0)
     match create_address_space(kernel, cast[u64](process), budget) {
         case Ok(made) => space = made
@@ -86,7 +111,7 @@ load_root_task :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule) -> s
     grant_count :: MAX_ROOT_GRANTS
     block_size :: page_up(cast[u64](size_of(slop_os.StartupBlock)) + cast[u64](grant_count + 1) * cast[u64](size_of(slop_os.Grant)))
     layout :: choose_layout(kernel, executable.size, block_size)
-    not_loaded :: load_image(kernel, process, space, &executable, file, layout.image)
+    not_loaded :: load_image(kernel, process, space, executable, file, layout.image)
     if (not_loaded is_some) {
         return not_loaded
     }

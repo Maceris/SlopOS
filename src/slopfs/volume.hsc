@@ -82,7 +82,7 @@ create_sealed_volume :: fn(container #escaping : ptr[mut Container], name: strin
         return create_volume(container, name, hash_key, now)
     }
     id :: container.next_volume
-    keys :: new_keys(cipher)
+    keys :: new_keys(cipher)?
     keys.volume_key = random_key()
     match make_first_keys(container, id, keys, passphrase, parameters) {
         case Ok => {}
@@ -115,7 +115,16 @@ create_keyed_volume :: fn(container #escaping : ptr[mut Container], name: string
         }
         return .Error(.InvalidName)
     }
-    volume := runtime.new(Volume)
+    volume :: match make(Volume) {
+        case Ok(made) => made
+        case Error(error) => {
+            match keys {
+                case Some(given) => free_keys(given)
+                case None => {}
+            }
+            return .Error(error)
+        }
+    }
     volume^ = Volume.{nodes = &container.nodes, device = container.device, id = container.next_volume, next_object = ROOT_OBJECT + 1,
         hash_key = hash_key, created = now, name_bytes = cast[u16](name.count), dirty = true, now = now}
     volume.tree = Tree.{kind = .Volume, owner = volume.id, keys = keys}
@@ -134,7 +143,10 @@ create_keyed_volume :: fn(container #escaping : ptr[mut Container], name: string
             return .Error(error)
         }
     }
-    runtime.array_add(&container.open, volume)
+    if runtime.array_try_add(&container.open, volume) != null {
+        free_volume(volume)
+        return .Error(.OutOfMemory)
+    }
     return .Ok(volume)
 }
 
@@ -155,9 +167,12 @@ open_volume :: fn(container #escaping : ptr[mut Container], id: u64) -> Result[p
         return .Error(.Locked)
     }
     lineage :: lineage_of(container, record)?
-    volume :: attach_volume(&container.nodes, container.device, id, record^, null)
+    volume :: attach_volume(&container.nodes, container.device, id, record^, null)?
     volume.tree.lineage = lineage
-    runtime.array_add(&container.open, volume)
+    if runtime.array_try_add(&container.open, volume) != null {
+        free_volume(volume)
+        return .Error(.OutOfMemory)
+    }
     return .Ok(volume)
 }
 
@@ -181,7 +196,7 @@ open_sealed_volume :: fn(container #escaping : ptr[mut Container], id: u64, pass
     generations : NumberedGeneration[..]
     defer runtime.array_free(&generations)
     volume_generations(container, key_owner, &generations)?
-    keys :: new_keys(.None)
+    keys :: new_keys(.None)?
     match unlock(container.id, key_owner, record, wraps, generations, passphrase, keys) {
         case Ok => {}
         case Error(error) => {
@@ -189,9 +204,18 @@ open_sealed_volume :: fn(container #escaping : ptr[mut Container], id: u64, pass
             return .Error(error)
         }
     }
-    volume :: attach_volume(&container.nodes, container.device, id, record, keys)
+    volume :: match attach_volume(&container.nodes, container.device, id, record, keys) {
+        case Ok(made) => made
+        case Error(error) => {
+            free_keys(keys)
+            return .Error(error)
+        }
+    }
     volume.tree.lineage = lineage
-    runtime.array_add(&container.open, volume)
+    if runtime.array_try_add(&container.open, volume) != null {
+        free_volume(volume)
+        return .Error(.OutOfMemory)
+    }
     return .Ok(volume)
 }
 
@@ -200,14 +224,14 @@ open_sealed_volume :: fn(container #escaping : ptr[mut Container], id: u64, pass
  * the container's own process, and as a volume server opens its own (decisions/0089).
  */
 attach_volume :: fn(nodes #escaping : ptr[mut Nodes], device #escaping : Device, id: u64, record: VolumeRecord,
-    keys #escaping : ptr[mut Keys]?) -> ptr[mut Volume] {
+    keys #escaping : ptr[mut Keys]?) -> Result[ptr[mut Volume], Error] {
 
-    volume := runtime.new(Volume)
+    volume :: make(Volume)?
     volume^ = Volume.{nodes = nodes, device = device, id = id, next_object = cast[u64](record.next_object), hash_key = record.hash_key,
         created = cast[u64](record.created), name = record.name, name_bytes = cast[u16](record.name_bytes)}
     volume.tree = Tree.{root = record.root, kind = .Volume, owner = id, keys = keys}
     volume.opened = record
-    return volume
+    return .Ok(volume)
 }
 
 // What a volume's record says now: its root as it was last written, its cipher and newest key generation, and the rest.
@@ -475,7 +499,7 @@ lookup :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[u6
     if !name_holds(name) {
         return .Error(.InvalidName)
     }
-    list := runtime.new(EntryList)
+    list :: make(EntryList)?
     defer runtime.free(list)
     get_entries(volume, directory, hash_name(volume, name), list)?
     found :: find_in_list(list, name) or_return .Ok(null)
@@ -485,7 +509,7 @@ lookup :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[u6
 // A new entry in directory, naming object of kind.
 add_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string, object: u64, kind: ObjectKind) -> Result[void, Error] {
     hash :: hash_name(volume, name)
-    list := runtime.new(EntryList)
+    list :: make(EntryList)?
     defer runtime.free(list)
     get_entries(volume, directory, hash, list)?
     if find_in_list(list, name) is_some {
@@ -504,7 +528,7 @@ add_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string, object: u
 
 remove_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[void, Error] {
     hash :: hash_name(volume, name)
-    list := runtime.new(EntryList)
+    list :: make(EntryList)?
     defer runtime.free(list)
     get_entries(volume, directory, hash, list)?
     found :: find_in_list(list, name) or_return .Error(.NotFound)
@@ -718,7 +742,7 @@ rename :: fn(volume: ptr[mut Volume], from: u64, from_name: string, to: u64, to_
  */
 list :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: mut u8[]) -> Result[Listed?, Error] {
     directory_record(volume, directory)?
-    entries := runtime.new(EntryList)
+    entries :: make(EntryList)?
     defer runtime.free(entries)
     hash := cursor >> 8
     skip := cast[usize](cursor & 0xff)
@@ -786,7 +810,7 @@ read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[
     for i in 0..<buffer.count {
         buffer[i] = 0
     }
-    value := runtime.new(ValueBuffer)
+    value :: make(ValueBuffer)?
     defer runtime.free(value)
     bytes :: tree_get(volume.nodes, &volume.tree, key_of(file, .Extent, index * CHUNK_BYTES), value.bytes)? or_return .Ok(0)
     if bytes < size_of(ExtentRecord) && bytes < cast[usize](INLINE_HEAD) {
@@ -815,7 +839,7 @@ read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[
     device :: volume.device
     match volume.tree.keys {
         case Some(keys) => {
-            sealed := runtime.new(ChunkBuffer)
+            sealed :: make(ChunkBuffer)?
             defer runtime.free(sealed)
             if !device.read(device.context, cast[u64](extent.pointer.address), blocks, sealed.bytes) {
                 return .Error(.DeviceError)
@@ -852,7 +876,7 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
     had :: tree_get(volume.nodes, &volume.tree, key, view_of(cast[ptr[mut u8]](&old), size_of(ExtentRecord)))?
     volume.dirty = true
     if inline {
-        value := runtime.new(ValueBuffer)
+        value :: make(ValueBuffer)?
         defer runtime.free(value)
         head :: cast[ptr[mut ExtentRecord]](&value.bytes[0])
         head.kind = cast[u32le](cast[u32](ExtentKind.Inline))
@@ -877,7 +901,13 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
         sealed : ptr[mut ChunkBuffer]? = null
         match volume.tree.keys {
             case Some(keys) => {
-                made :: runtime.new(ChunkBuffer)
+                made :: match make(ChunkBuffer) {
+                    case Ok(chunk) => chunk
+                    case Error(error) => {
+                        nodes.release(nodes.space, address, blocks, volume.id, nodes.transaction)
+                        return .Error(error)
+                    }
+                }
                 sealed = made
                 if !seal_block(keys, volume.id, &extent.pointer, part(buffer, 0, length), mut_part(made.bytes, 0, length)) {
                     runtime.free(made)
@@ -925,7 +955,7 @@ read :: fn(volume: ptr[mut Volume], file: u64, offset: u64, into: mut u8[]) -> R
         return .Ok(0)
     }
     end :: if size - offset < cast[u64](into.count) { size } else { offset + cast[u64](into.count) }
-    chunk := runtime.new(ChunkBuffer)
+    chunk :: make(ChunkBuffer)?
     defer runtime.free(chunk)
     at := offset
     loop {
@@ -949,7 +979,7 @@ write :: fn(volume: ptr[mut Volume], file: u64, offset: u64, from: u8[]) -> Resu
     }
     size :: if end > cast[u64](record.size) { end } else { cast[u64](record.size) }
     inline :: size <= INLINE_BYTES
-    chunk := runtime.new(ChunkBuffer)
+    chunk :: make(ChunkBuffer)?
     defer runtime.free(chunk)
     at := offset
     loop {
@@ -994,6 +1024,9 @@ set_size :: fn(volume: ptr[mut Volume], file: u64, size: u64) -> Result[void, Er
     record := file_record(volume, file)?
     old :: cast[u64](record.size)
     if size < old {
+        // Its memory before any of the file is cut
+        chunk :: make(ChunkBuffer)?
+        defer runtime.free(chunk)
         loop {
             extent := ExtentRecord.{}
             found :: tree_next(volume.nodes, &volume.tree, key_of(file, .Extent, size),
@@ -1004,8 +1037,6 @@ set_size :: fn(volume: ptr[mut Volume], file: u64, size: u64) -> Result[void, Er
             drop_chunk(volume, found.key, &extent)?
         }
         if size % CHUNK_BYTES != 0 {
-            chunk := runtime.new(ChunkBuffer)
-            defer runtime.free(chunk)
             index :: size / CHUNK_BYTES
             used := read_chunk(volume, file, index, chunk.bytes)?
             cut :: cast[usize](size - index * CHUNK_BYTES)
@@ -1061,7 +1092,9 @@ volume_wraps :: fn(container: ptr[mut Container], id: u64, found: ptr[mut WrapRe
         if item.bytes != size_of(WrapRecord) {
             return .Error(.Corrupt)
         }
-        runtime.array_add(found, record)
+        if runtime.array_try_add(found, record) != null {
+            return .Error(.OutOfMemory)
+        }
         at = key_after(item.key) or_break
     }
     return .Ok
@@ -1079,7 +1112,9 @@ volume_generations :: fn(container: ptr[mut Container], id: u64, found: ptr[mut 
         if item.bytes != size_of(GenerationRecord) || item.key.offset == 0 || item.key.offset > 0xffffffff {
             return .Error(.Corrupt)
         }
-        runtime.array_add(found, NumberedGeneration.{number = cast[u32](item.key.offset), record = record})
+        if runtime.array_try_add(found, NumberedGeneration.{number = cast[u32](item.key.offset), record = record}) != null {
+            return .Error(.OutOfMemory)
+        }
         at = key_after(item.key) or_break
     }
     return .Ok
@@ -1113,8 +1148,11 @@ unlock :: fn(container: u8[16], id: u64, record: VolumeRecord, wraps: WrapRecord
     for each in generations {
         wrapped := each.record
         generation := unwrap_generation(&keys.volume_key, each.number, &wrapped, container, id) or_return .Error(.Corrupt)
-        runtime.array_add(&keys.generations, generation)
+        added :: runtime.array_try_add(&keys.generations, generation)
         zero_key(&generation.key)
+        if added != null {
+            return .Error(.OutOfMemory)
+        }
     }
     keys.current = cast[u32](record.generation)
     if generation_key(keys, keys.current) is_none {

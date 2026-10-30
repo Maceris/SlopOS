@@ -176,6 +176,9 @@ read_file_whole :: fn(opened: os.Channel[read_only_file.ReadOnlyFile], buffer: p
             case _ => return false
         }
         window :: window_of(buffer)
+        if runtime.array_try_reserve(bytes, bytes.count + cast[usize](count)) != null {
+            return false
+        }
         for i in 0..<cast[usize](count) {
             if i < window.count {
                 runtime.array_add(bytes, window[i])

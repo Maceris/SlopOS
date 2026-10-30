@@ -103,6 +103,19 @@ account_of :: fn(space: ptr[Space], owner: u64) -> Account {
     return Account.{owner = owner}
 }
 
+/*
+ * Room in the space's lists for that many more entries in each, so recording a change can't fail halfway for want of
+ * memory (decisions/0104): reserved before anything changes, and false, with nothing changed, without it. What the
+ * functions below add to a list fits in the room their callers made for it.
+ */
+space_room :: fn(space: ptr[mut Space], changes: usize, later: usize, free: usize, owners: usize) -> bool {
+    return runtime.array_try_reserve(&space.changes, space.changes.count + changes) == null
+        && runtime.array_try_reserve(&space.later, space.later.count + later) == null
+        && runtime.array_try_reserve(&space.free, space.free.count + free) == null
+        && runtime.array_try_reserve(&space.accounts, space.accounts.count + owners) == null
+        && runtime.array_try_reserve(&space.floors, space.floors.count + owners) == null
+}
+
 // An owner's blocks counted up or down by blocks.
 charge :: fn(space: ptr[mut Space], owner: u64, blocks: u64, adding: bool) {
     if owner == 0 {
@@ -221,6 +234,13 @@ insert_extent :: fn(extents: ptr[mut Extent[..]], index: usize, extent: Extent) 
  */
 space_allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u64? {
     space :: cast[ptr[mut Space]](context)
+    /*
+     * Room for this change and the two releases a copy made with it brings (writable's of the old node and its
+     * copy), and for the free extents they split and join; without it, as without the blocks, there are none
+     */
+    if !space_room(space, 3, 2, 3, 1) {
+        return null
+    }
     if data {
         account :: account_of(space, owner)
         if account.quota != 0 && account.used + blocks > account.quota {
@@ -293,6 +313,13 @@ take_free :: fn(space: ptr[mut Space], index: usize, start: u64, blocks: u64) {
  */
 space_release :: fn(context: rawptr, start: u64, blocks: u64, owner: u64, birth: u64) {
     space :: cast[ptr[mut Space]](context)
+    /*
+     * Without the memory to record it, the extent stays allocated: lost to the space until it's checked, but never
+     * given out while something may still name it (decisions/0104)
+     */
+    if !space_room(space, 1, 1, 1, 0) {
+        return void
+    }
     for change, i in space.changes {
         if change.change == .Allocated && change.start == start && change.blocks == blocks && change.owner == owner {
             runtime.array_remove(&space.changes, i)
@@ -333,6 +360,11 @@ takes :: fn(only: u64, owner: u64) -> bool {
 // A commit that took only's changes is durable: what they freed is free, and the next transaction starts.
 space_committed :: fn(space: ptr[mut Space], only: u64) {
     kept : Later[..]
+    // Without the memory to sort them, every extent waits for a later commit, still not free
+    if runtime.array_try_reserve(&kept, space.later.count) != null || !space_room(space, 0, 0, space.later.count, 0) {
+        space.transaction += 1
+        return void
+    }
     for extent in space.later {
         if takes(only, extent.owner) {
             add_free(space, extent.start, extent.blocks)
@@ -351,6 +383,10 @@ space_committed :: fn(space: ptr[mut Space], only: u64) {
  * longer charged to owner.
  */
 space_free_held :: fn(space: ptr[mut Space], start: u64, blocks: u64, owner: u64) {
+    // As a release: without the memory to record it, held still
+    if !space_room(space, 1, 1, 0, 0) {
+        return void
+    }
     charge(space, owner, blocks, false)
     runtime.array_add(&space.later, Later.{start = start, blocks = blocks, owner = 0})
     runtime.array_add(&space.changes, Change.{change = .FreedLater, start = start, blocks = blocks, owner = 0})

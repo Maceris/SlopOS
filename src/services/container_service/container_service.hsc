@@ -89,7 +89,12 @@ Server :: struct {
 
 main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: os.Listener[container.Container]) -> int {
     startup :: slop_os.startup_block()
-    server := runtime.new(Server)
+    // Its state; without the memory for it, it ends with 99 (decisions/0104)
+    server_made, server_error :: runtime.new_aligned(Server, align_of(Server))
+    if server_error != null {
+        return 99
+    }
+    server :: server_made
     server^ = Server.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE), disk = partition.end}
     server.disk_port = os.port_for(startup.budget, partition.end) or_return 1
     server.port = slop_os.port_create(startup.budget) or_return 1
@@ -243,9 +248,9 @@ load_owned :: fn(server: ptr[mut Server]) -> bool {
             case Ok(next) => found = next or_break
             case Error(error) => return false
         }
-        if cast[u64](value.volume) != 0 {
-            runtime.array_add(&server.owned, Owned.{start = found.key.object, blocks = cast[u64](value.blocks), owner = cast[u64](value.volume),
-                birth = cast[u64](value.birth)})
+        if cast[u64](value.volume) != 0 && runtime.array_try_add(&server.owned, Owned.{start = found.key.object, blocks = cast[u64](value.blocks),
+            owner = cast[u64](value.volume), birth = cast[u64](value.birth)}) != null {
+            return false
         }
         at = slopfs.key_after(found.key) or_break
     }
@@ -293,9 +298,12 @@ owned_index :: fn(server: ptr[Server], start: u64) -> usize {
     return low
 }
 
-own :: fn(server: ptr[mut Server], start: u64, blocks: u64, owner: u64, birth: u64, fresh: bool) {
+// Whether it could be kept: false, and nothing changed, without the memory (decisions/0104).
+own :: fn(server: ptr[mut Server], start: u64, blocks: u64, owner: u64, birth: u64, fresh: bool) -> bool {
     index :: owned_index(server, start)
-    runtime.array_add(&server.owned, Owned.{})
+    if runtime.array_try_add(&server.owned, Owned.{}) != null {
+        return false
+    }
     with {
         i := server.owned.count - 1
     }
@@ -310,6 +318,7 @@ own :: fn(server: ptr[mut Server], start: u64, blocks: u64, owner: u64, birth: u
     if index < server.owned.count {
         server.owned[index] = Owned.{start = start, blocks = blocks, owner = owner, birth = birth, fresh = fresh}
     }
+    return true
 }
 
 // The extent holding blocks from first, count of them, whoever's it is, if one does.
@@ -418,8 +427,13 @@ add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, driver: slo
             return null
         }
     }
-    if cast[slop_os.Handle](driver) != slop_os.NO_HANDLE {
-        _ = slop_os.port_bind(server.port, cast[slop_os.Handle](driver), signals, DRIVER_KEY + cast[u64](slot), .Persistent)
+    if cast[slop_os.Handle](driver) != slop_os.NO_HANDLE
+        && (slop_os.port_bind(server.port, cast[slop_os.Handle](driver), signals, DRIVER_KEY + cast[u64](slot), .Persistent) is_error) {
+        // Its driver unwatched, its replies would never be read
+        _ = slop_os.port_unbind(server.port, cast[u64](slot))
+        _ = slop_os.handle_close(cast[slop_os.Handle](end))
+        _ = slop_os.handle_close(cast[slop_os.Handle](driver))
+        return null
     }
     server.connections[slot] = Connection.{kind = kind, end = end, driver = driver, volume = volume}
     server.added = true
@@ -687,7 +701,11 @@ for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Reque
                 return .NoSpace
             }
             start :: slopfs.space_allocate(cast[rawptr](&server.container.space), blocks, volume, allocation.data) or_return .NoSpace
-            own(server, start, blocks, volume, server.container.space.transaction, true)
+            // Kept as the volume's, or not allocated at all
+            if !own(server, start, blocks, volume, server.container.space.transaction, true) {
+                slopfs.space_release(cast[rawptr](&server.container.space), start, blocks, volume, server.container.space.transaction)
+                return .NoSpace
+            }
             return .Allocated(start)
         }
         case Release(released) => {
@@ -714,14 +732,18 @@ for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Reque
         case Abandon => {
             undone : slopfs.Change[..]
             defer runtime.array_free(&undone)
-            slopfs.abandon_volume(server.container, volume, &undone)
+            // Room to own again every extent it gave back, before anything's undone
+            if runtime.array_try_reserve(&server.owned, server.owned.count + server.container.space.changes.count) != null
+                || !slopfs.abandon_volume(server.container, volume, &undone) {
+                return .Failed
+            }
             // Its allocations aren't its own any more, and what it gave back is again
             for change in undone {
                 if change.change == .Allocated {
                     _ = disown(server, volume, change.start, change.blocks)
                 }
                 else if change.change == .FreedLater {
-                    own(server, change.start, change.blocks, volume, change.birth, false)
+                    _ = own(server, change.start, change.blocks, volume, change.birth, false)
                 }
                 else if change.change == .Dead {
                     mark_dead(server, change.start, false)

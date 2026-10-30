@@ -8,6 +8,7 @@ package slopfs_test
 import runtime from "base"
 import maps from "std"
 import slopfs from ".."
+import hosted_faults from "../../robustness/hosted"
 
 // 32 MiB of 4 KiB blocks
 BLOCKS : u64 : 8192
@@ -119,7 +120,7 @@ next_random :: fn(random: ptr[mut Random]) -> u64 {
     return x * 0x2545f4914f6cdd1d
 }
 
-main :: fn() -> int {
+checks :: fn() -> int {
     failed := check_tree()
     if failed != 0 {
         return failed
@@ -371,4 +372,9 @@ same :: fn(a: u8[], b: u8[]) -> bool {
         }
     }
     return true
+}
+
+// The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness)
+main :: fn() -> int {
+    return hosted_faults.run(checks)
 }
