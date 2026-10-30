@@ -67,8 +67,8 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
     "--expect-line=[user] storage: started a container service for disk 0 partition 4",
     "--expect-line=[user] storage: started a volume server for the system volume",
     "--expect-line=[user] volume_server: serving volume 1 (system), from transaction 3",
-    "--expect-line=[user] supervisor: console from the system volume", "--expect-line=[user] supervisor: hello from the system volume",
-    "--expect-line=[user] supervisor: disk_check from the system volume", "--expect-line=[user] hello: heap working, random numbers working",
+    "--expect-line=[user] supervisor: console from the bundle store", "--expect-line=[user] supervisor: hello from the bundle store",
+    "--expect-line=[user] supervisor: disk_check from the bundle store", "--expect-line=[user] hello: heap working, random numbers working",
     "--expect-line=[user] disk_check: on the EFI system partition, read the host's files, wrote, moved and read back its own, "
     "listed 3, and was refused a path above it",
     "--expect-line=[user] disk_check: narrowed EFI/SlopOS to read only, selected 2 of its files by *.TXT, and was refused a "

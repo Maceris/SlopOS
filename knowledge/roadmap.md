@@ -283,7 +283,8 @@ In five stages: **9a** the scheduler, clock and events services; **9b** the bund
 and loading from storage (the system boots from its disk image: the boot set from the ESP, everything else from the
 system volume); **9c** the config store and the system configuration at run time; **9d** generations, updates and
 installations; **9e** shared libraries and substitution. 9a done 2026-10-29 (`decisions/0093`): the scheduler, clock and
-events services, with every service the supervisor starts restarted.
+events services, with every service the supervisor starts restarted. 9b done 2026-10-29 (`decisions/0094`): the bundle store, paged memory, and
+programs outside the boot set booted from the store, their code shared.
 
 Specs: ELF-64 dynamic linking, as far as typed linking needs it; the MC146818 and PL031 datasheets.
 Stresses: deterministic, reproducible compiler output (content addressing depends on it); code run both by `#run`

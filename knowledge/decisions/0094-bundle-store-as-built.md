@@ -68,6 +68,32 @@ Delivered in parts, each committed as it passes, with one report at the end: 9b1
   `test_store`, the supervisor puts hello's program in the store and reads it back whole through paged memory, is
   refused it under a wrong hash, and sees an object it never read kept while it's pinned and collected once unpinned.
 
+### 9b3: Booting from the store
+- **The store builder** (`src/tools/store_builder`, a hosted tool `tools/boot.py` runs): every program outside the
+  boot set becomes an object, with a bundle naming it, and a boot root names each bundle by the program's name; it
+  writes them as the store keeps them, `store/objects/<hex>` and `store/root`, into the folder the image builder copies
+  into the system volume. A bundle's manifest is all zeros for now: nothing gives the schema of a program's entry type
+  from its build yet (`0044`'s extraction step), which the store doesn't need, but the shell will.
+- **The supervisor loads from the store** (`stored_program`): a service outside the boot set is the program of the
+  bundle its boot root names after it, given as the store's paged memory, which the supervisor passes to the process
+  manager as it passed the module it read before. Without a store or a root, it reads `modules/` as before, which the
+  disk check still compares with the EFI system partition's copy.
+- **Code shared between processes** (`process_builder`): given the memory object a program's file is in, a read-only
+  segment whose place in the file and in the image agree within a page, and which takes no more than the file has of
+  it, is mapped straight from that object, read or executed, rather than copied into the process's image; the loader
+  puts relocations only in writable segments. `os.launch` passes the executable with `RIGHT_MEMORY_EXECUTE` where the
+  caller's handle has it. So a program from the store has its code and read-only data paged in by the store once, and
+  every process running it maps the same pages; a boot module, which Limine's handle doesn't let execute, shares only
+  its read-only data, and its code is copied.
+- **The process manager doesn't ask the store itself yet**: it's started before the store and the system volume, and
+  takes what it loads as a memory object, which from the store is paged; loading by bundle hash, with the
+  substitution policy (`0045`), comes with shared libraries (9e).
+- **Tests**: the boot-disk tests expect console, hello and the disk check "from the bundle store"; that their code is
+  mapped from the store's memory was checked by hand, not by a test.
+- **Reproducible output** (`../hemera-proposals/reproducible-builds.md`), where hashes first matter: SlopOS's 34
+  programs, built twice into different folders on the same host, came out the same bytes, so the same objects. Across
+  hosts it isn't checked yet.
+
 ## Alternatives considered
 - **The store in the volume server**, paging straight from its block cache: fewer copies, but the volume server would
   grow a second protocol and the store's logic.
@@ -77,3 +103,11 @@ Delivered in parts, each committed as it passes, with one report at the end: 9b1
 - **A SlopOS binary format for bundles**: independent of Hemera's schemas, but a second way to describe typed data.
 
 ## Consequences
+- Programs outside the boot set come from the bundle store, their code paged in once and shared; the boot set still
+  comes from the EFI system partition through Limine, as `0092` planned.
+- The store's paged memory belongs to the store: if it ends, every object it gave out is destroyed with it, and the
+  processes whose code was mapped from one fault and end. Restarting the store doesn't bring them back; the supervisor
+  restarts them as their own failures.
+- An open object stays open, and its memory with it, until the store ends; up to 64 at once.
+- Paged memory waiting on a pager whose binding is gone waits until it's killed.
+- Manifests, and the process manager loading by bundle hash, are still to come (above).

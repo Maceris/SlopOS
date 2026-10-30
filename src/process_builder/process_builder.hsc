@@ -8,6 +8,11 @@
  * The image, its stack and its startup block (docs/specs/programs.md) are memory objects charged to the
  * target's budget, each at a random place, and go to the process with its address space, its handles to
  * itself and its budget, and its grants; then its first thread starts. The builder keeps none of it.
+ *
+ * Given the memory object the file is in (source), a read-only segment whose place in the file and in the image agree
+ * within a page, and which takes no more than the file has of it, is mapped from it rather than from the image, where
+ * the handle allows executing it: so every process running a program from the bundle store shares its code
+ * (decisions/0094). Relocations only ever go to writable segments (elf_loader).
  */
 package process_builder
 
@@ -80,7 +85,8 @@ Layout :: struct {
  * On a failure, what was made is closed, and the grants are the caller's still; the target is the
  * requester's to destroy.
  */
-build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: ptr[mut random_stream.Stream]) -> Result[u64, BuildError] {
+build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: ptr[mut random_stream.Stream], source: slop_os.Memory? = null)
+    -> Result[u64, BuildError] {
     if grants.count > MAX_GRANTS {
         return .Error(.TooManyGrants)
     }
@@ -107,7 +113,7 @@ build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: p
     slop_os.memory_unmap(own, staging) or_return .Error(.Failed)
     loaded or_return .Error(.NotAProgram)
     relocated or_return .Error(.NotAProgram)
-    map_segments(&executable, image, space, layout.image)?
+    map_segments(&executable, image, space, layout.image, source)?
 
     stack :: memory(&made, target.budget, STACK_SIZE)?
     slop_os.memory_map(stack, space, layout.stack, 0, STACK_SIZE, read_write) or_return .Error(.NoMemory)
@@ -206,8 +212,8 @@ memory :: fn(made: ptr[mut Made], budget: slop_os.MemoryBudget, size: u64) -> Re
  * The image's segments, mapped in space from base, each with its protection, and its RELRO pages
  * read-only.
  */
-map_segments :: fn(executable: ptr[elf_loader.Executable], image: slop_os.Memory, space: slop_os.AddressSpace, base: u64)
-    -> Result[void, BuildError] {
+map_segments :: fn(executable: ptr[elf_loader.Executable], image: slop_os.Memory, space: slop_os.AddressSpace, base: u64,
+    source: slop_os.Memory?) -> Result[void, BuildError] {
     relro_start :: executable.relro_address & ~(PAGE - 1)
     relro_end :: (executable.relro_address + executable.relro_size) & ~(PAGE - 1)
     for i in 0..<executable.segment_count {
@@ -227,6 +233,18 @@ map_segments :: fn(executable: ptr[elf_loader.Executable], image: slop_os.Memory
             map_part(image, space, base, middle_start, middle_end, slop_os.PROTECTION_READ)?
             map_part(image, space, base, middle_end, end, protection)?
             continue
+        }
+        // Read-only, straight from the file's memory, shared, where it can be
+        if !writable && segment.memory_size == segment.file_size && segment.offset % PAGE == segment.address % PAGE && end > start {
+            match source {
+                case Some(file) => {
+                    file_start :: segment.offset & ~(PAGE - 1)
+                    if slop_os.memory_map(file, space, base + start, file_start, end - start, protection) is_ok {
+                        continue
+                    }
+                }
+                case None => {}
+            }
         }
         map_part(image, space, base, start, end, protection)?
     }

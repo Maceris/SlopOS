@@ -561,6 +561,12 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
     (system / "modules").mkdir(parents=True)
     for program in programs:
         shutil.copy(program, system / "modules" / program.name)
+    # The bundle store, with a bundle for every program outside the boot set, which the supervisor loads from it
+    store_builder = next(image_builder.parent.glob("store_builder*"))
+    stored = subprocess.run([str(store_builder), str(system / "store")] + [str(program) for program in programs if program.stem not in BOOT_SET],
+                            capture_output=True, text=True)
+    if stored.returncode != 0:
+        sys.exit(f"boot.py: the store builder failed:\n{stored.stdout}{stored.stderr}")
     built = subprocess.run([str(image_builder), str(path), str(BOOT_DISK_SECTORS), f"--sealed={SEALED_VOLUME}:{SEALED_PASSPHRASE}",
                             f"test,{PARTITIONS[0][0]},{PARTITIONS[0][2]}",
                             f"test,{PARTITIONS[1][0]},{PARTITIONS[1][2]}", "bios,BIOS boot,2048",

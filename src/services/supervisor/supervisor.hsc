@@ -1300,7 +1300,11 @@ module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory
     return found or_else none
 }
 
-// The program a service's module names, from the system volume's modules folder: read already, or now.
+/*
+ * The program a service's module names: from the bundle store, the program of the bundle its boot root names after the
+ * service, as paged memory, which processes running it share; or, without one, read from the system volume's modules
+ * folder. Got already, or now.
+ */
 loaded_module :: fn(supervisor: ptr[mut Supervisor], service: system_config.Service) -> slop_os.Memory? {
     place := system_config.SERVICES.count
     for each, i in system_config.SERVICES {
@@ -1316,12 +1320,94 @@ loaded_module :: fn(supervisor: ptr[mut Supervisor], service: system_config.Serv
         case Some(module) => return module
         case None => {}
     }
-    module :: read_module(supervisor, service.module) or_return null
+    from_store :: stored_program(supervisor, service.module)
+    module :: from_store or_else (read_module(supervisor, service.module) or_return null)
     if place < loaded.count {
         loaded[place] = Loaded.{module = module}
     }
-    log_line.write(supervisor.log, "supervisor: % from the system volume", service.name)
+    log_line.write(supervisor.log, "supervisor: % from the %", service.name, if from_store is_some { "bundle store" } else { "system volume" })
     return module
+}
+
+/*
+ * The program the bundle store's boot root names after a module, without its extension, as the store gives it: paged
+ * memory, read and execute only. Null without a store, a root, or a bundle of that name.
+ */
+stored_program :: fn(supervisor: ptr[mut Supervisor], module: string) -> slop_os.Memory? {
+    if supervisor.store_end == NONE {
+        return null
+    }
+    name := module
+    for character, i in module {
+        if character == '.' {
+            name = string_of(cast[ptr[u8]](module.data), i)
+            break
+        }
+    }
+    root :: match store_request(supervisor, .Root) {
+        case Rooted(hash) => hash
+        case _ => return null
+    }
+    // The root's entry of that name, then its bundle's program
+    program := bundle.Hash.{}
+    found := false
+    root_object :: mapped_object(supervisor, root) or_return null
+    names : string[..]
+    defer runtime.array_free(&names)
+    bundles : bundle.Hash[..]
+    defer runtime.array_free(&bundles)
+    if bundle.root_entries(root_object.bytes, &names, &bundles) {
+        for entry_name, i in names {
+            if entry_name == name && i < bundles.count {
+                match mapped_object(supervisor, bundles[i]) {
+                    case Some(record) => {
+                        referred : bundle.Hash[..]
+                        if bundle.bundle_refers(record.bytes, &referred) && referred.count > 0 {
+                            program = referred[0]
+                            found = true
+                        }
+                        runtime.array_free(&referred)
+                        unmap_object(supervisor, record)
+                    }
+                    case None => {}
+                }
+                break
+            }
+        }
+    }
+    unmap_object(supervisor, root_object)
+    if !found {
+        return null
+    }
+    return match store_request(supervisor, .Get(program)) {
+        case Got(object) => object.memory
+        case _ => null
+    }
+}
+
+// An object of the bundle store's, mapped to read: its memory, where, and its bytes.
+MappedObject :: struct {
+    memory : slop_os.Memory,
+    address : u64,
+    bytes : u8[],
+}
+
+mapped_object :: fn(supervisor: ptr[mut Supervisor], hash: bundle.Hash) -> MappedObject? {
+    object :: match store_request(supervisor, .Get(hash)) {
+        case Got(got) => got
+        case _ => return null
+    }
+    address :: map_in(supervisor, object.memory, (object.size + 4095) & ~cast[u64](4095), slop_os.PROTECTION_READ)
+    if address == 0 {
+        _ = slop_os.handle_close(cast[slop_os.Handle](object.memory))
+        return null
+    }
+    return MappedObject.{memory = object.memory, address = address, bytes = view_of(cast[ptr[u8]](address), cast[usize](object.size))}
+}
+
+unmap_object :: fn(supervisor: ptr[mut Supervisor], object: MappedObject) {
+    _ = slop_os.memory_unmap(supervisor.block.space, object.address)
+    _ = slop_os.handle_close(cast[slop_os.Handle](object.memory))
 }
 
 /*
