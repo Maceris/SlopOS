@@ -257,8 +257,8 @@ place_bars :: fn(to: slop_os.DebugLog, state: ptr[mut Platform], index: usize) {
                     pci.write_u32(function.config, offset + 4, cast[u32](address >> 32))
                 }
                 state.placed += 1
-                log_line.write(to, "platform: BAR % of %:%.% placed at %, % bytes", bar, function.bus, function.device, function.function,
-                    cast[rawptr](address), current.size)
+                log_line.write(to, "platform: BAR % of %:%.% placed at %{#018x}, % bytes", bar, function.bus, function.device, function.function,
+                    address, current.size)
             }
             case None => {
                 every = false

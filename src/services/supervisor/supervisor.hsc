@@ -804,7 +804,7 @@ dma_fault :: fn(supervisor: ptr[mut Supervisor], index: usize, address: u64) {
     if !entry.running {
         return void
     }
-    log_line.write(supervisor.log, "supervisor: %'s DMA was blocked, at %; killing it", entry.name, cast[rawptr](address))
+    log_line.write(supervisor.log, "supervisor: %'s DMA was blocked, at %{#018x}; killing it", entry.name, address)
     _ = slop_os.process_kill(entry.process)
     // Not running from here, though its end arrives on the port later
     entry.running = false
@@ -1201,7 +1201,7 @@ check_store :: fn(supervisor: ptr[mut Supervisor]) {
             if mapped != 0 && object.size == size {
                 read_back = true
                 for byte, i in program {
-                    if cast[ptr[u8]](cast[rawptr](mapped + cast[u64](i)))^ != byte {
+                    if cast[ptr[u8]](mapped + cast[u64](i))^ != byte {
                         read_back = false
                         break
                     }
@@ -1273,7 +1273,7 @@ put_object :: fn(supervisor: ptr[mut Supervisor], hash: bundle.Hash, bytes: u8[]
         return false
     }
     for byte, i in bytes {
-        cast[ptr[mut u8]](cast[rawptr](address + cast[u64](i)))^ = byte
+        cast[ptr[mut u8]](address + cast[u64](i))^ = byte
     }
     _ = slop_os.memory_unmap(supervisor.block.space, address)
     return match store_request(supervisor, .Put(bundle_store.PutOf.{hash = hash, size = cast[u64](bytes.count), data = data})) {

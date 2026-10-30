@@ -166,7 +166,7 @@ add_sdt :: fn(kernel: ptr[mut Kernel], found: ptr[mut FoundTables], physical: u6
     read_physical(kernel, physical, 8, cast[u64](&header))
     size :: cast[u64](u32_at(cast[u64](&header), 4))
     if size < 8 || size > MAX_TABLE_BYTES {
-        runtime.log_warn("a firmware table at % has a length of %, and isn't copied", cast[rawptr](physical), size)
+        runtime.log_warn("a firmware table at %{#018x} has a length of %, and isn't copied", physical, size)
         return 0
     }
     signature : u8[4]

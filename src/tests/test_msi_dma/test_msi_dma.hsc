@@ -81,7 +81,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     results[1] = if header.magic == slop_os.FIRMWARE_MAGIC { cast[u64](1) } else { cast[u64](0) }
     results[2] = if tables_right(tables_at) { cast[u64](1) } else { cast[u64](0) }
     host := pci.find_host(tables_at, tables_size) or_return 104
-    log_line.write(log, "%: % firmware tables, ECAM at %", NAME, header.count, cast[rawptr](host.ecam))
+    log_line.write(log, "%: % firmware tables, ECAM at %{#018x}", NAME, header.count, host.ecam)
 
     // edu, on bus 0
     config_memory :: slop_os.memory_create_physical(hardware, budget, host.ecam, BUS_BYTES, .Device) or_return 104

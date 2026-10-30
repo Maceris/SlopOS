@@ -75,7 +75,7 @@ claim_clock :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[m
             match slop_os.memory_create_physical(platform, block.budget, clock.registers, PL031_SIZE, .Device) {
                 case Ok(registers) => result.registers = registers
                 case Error(error) => {
-                    log_line.write(to, "platform: the real-time clock's registers at % can't be given out: %", cast[rawptr](clock.registers), error)
+                    log_line.write(to, "platform: the real-time clock's registers at %{#018x} can't be given out: %", clock.registers, error)
                     return .NoDevice
                 }
             }

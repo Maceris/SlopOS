@@ -109,7 +109,7 @@ counted :: fn(sleeper: slop_os.Port, counts_at: u64) -> u64 {
 }
 
 slot :: fn(counts_at: u64, index: u64) -> u64 {
-    return intrinsics.volatile_load_u64(cast[ptr[u64]](cast[rawptr](counts_at + index * 8)))
+    return intrinsics.volatile_load_u64(cast[ptr[u64]](counts_at + index * 8))
 }
 
 // Asleep, on the root budget, taking none of the CPU.
@@ -151,5 +151,5 @@ run_copy :: fn(peer: slop_os.Channel, counts: slop_os.Memory) -> int {
     at :: runtime.reserve_addresses(cast[usize](PAGE)) or_return 4
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     slop_os.memory_map(counts, block.space, at, 0, PAGE, read_write) or_return 4
-    counter(cast[ptr[mut u64]](cast[rawptr](at + (which % 2) * 8)))
+    counter(cast[ptr[mut u64]](at + (which % 2) * 8))
 }

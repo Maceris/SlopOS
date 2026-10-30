@@ -130,7 +130,8 @@ LimineFramebuffer :: struct {
     edid : ptr[u8]?,
     // Response revision 1
     mode_count : u64,
-    modes : rawptr,
+    // Where the array of pointers to the modes is, which SlopOS doesn't read
+    modes : u64,
 }
 
 #assert size_of(LimineFramebuffer) == 80
@@ -282,17 +283,17 @@ ModuleResponse :: struct {
     modules : ptr[ptr[File]]?,
 }
 
-// Firmware tables, each in the direct map, or null when the firmware has none
+// Firmware tables, each at its address in the direct map, or 0 when the firmware has none
 
 AddressResponse :: struct {
     revision : u64,
-    address : rawptr,
+    address : u64,
 }
 
 SmbiosResponse :: struct {
     revision : u64,
-    entry_32 : rawptr,
-    entry_64 : rawptr,
+    entry_32 : u64,
+    entry_64 : u64,
 }
 
 // Date at boot

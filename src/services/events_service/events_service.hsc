@@ -187,7 +187,7 @@ main :: fn(log: slop_os.DebugLog?, clients: os.Listener[events.Events]) -> int {
             if ring.source != NOWHERE {
                 waiting : u32 = 1
                 _ = slop_os.memory_write(ring.memory, cast[u64](offset_of(runtime.SlopOsEventsRing, waiting)),
-                    view_of(cast[ptr[u8]](cast[rawptr](&waiting)), size_of(u32)))
+                    view_of(cast[ptr[u8]](&waiting), size_of(u32)))
                 match read_header(ring.memory) {
                     case Some(header) => written = written || header.written != header.read
                     case None => release(service, i)
@@ -323,7 +323,7 @@ open :: fn(service: ptr[mut Service], name: u8[]) -> events.Source? {
     memory :: slop_os.memory_create(block.budget, RING_BYTES) or_return null
     header := runtime.SlopOsEventsRing.{magic = runtime.SLOP_OS_EVENTS_MAGIC, version = runtime.SLOP_OS_EVENTS_VERSION,
         size = RING_BYTES - cast[u64](size_of(runtime.SlopOsEventsRing))}
-    if slop_os.memory_write(memory, 0, view_of(cast[ptr[u8]](cast[rawptr](&header)), size_of(runtime.SlopOsEventsRing))) is_error {
+    if slop_os.memory_write(memory, 0, view_of(cast[ptr[u8]](&header), size_of(runtime.SlopOsEventsRing))) is_error {
         _ = slop_os.handle_close(cast[slop_os.Handle](memory))
         return null
     }
@@ -383,7 +383,7 @@ adopt :: fn(service: ptr[mut Service], name: u8[], memory: slop_os.Memory) -> bo
     // Its writer gives everything again, for a reader that knows nothing of it
     reader :: (header or_else runtime.SlopOsEventsRing.{}).reader + 1
     _ = slop_os.memory_write(memory, cast[u64](offset_of(runtime.SlopOsEventsRing, reader)),
-        view_of(cast[ptr[u8]](cast[rawptr](&reader)), size_of(u32)))
+        view_of(cast[ptr[u8]](&reader), size_of(u32)))
     source :: &service.sources[index % MAX_SOURCES]
     source.instances += 1
     service.rings[slot % MAX_RINGS] = Ring.{source = index, instance = source.instances, memory = memory,
@@ -456,17 +456,17 @@ start_pending :: fn(service: ptr[Service], source: ptr[mut Source], first: u64) 
 add_start :: fn(service: ptr[Service], into: ptr[mut u8[..]], first: u64) {
     start := StoredStart.{boot = service.boot, first = first}
     start.entry = runtime.SlopOsEventsEntry.{size = cast[u32](size_of(StoredStart)), kind = STORED_START}
-    add_bytes(into, cast[rawptr](&start), size_of(StoredStart))
+    add_bytes(into, view_of(cast[ptr[u8]](&start), size_of(StoredStart)))
 }
 
 add_instance :: fn(into: ptr[mut u8[..]], instance: u32) {
     marker := StoredInstance.{instance = instance}
     marker.entry = runtime.SlopOsEventsEntry.{size = cast[u32](size_of(StoredInstance)), kind = STORED_INSTANCE}
-    add_bytes(into, cast[rawptr](&marker), size_of(StoredInstance))
+    add_bytes(into, view_of(cast[ptr[u8]](&marker), size_of(StoredInstance)))
 }
 
-add_bytes :: fn(into: ptr[mut u8[..]], data: rawptr, count: usize) {
-    for byte in view_of(cast[ptr[u8]](data), count) {
+add_bytes :: fn(into: ptr[mut u8[..]], bytes: u8[]) {
+    for byte in bytes {
         runtime.array_add(into, byte)
     }
 }
@@ -474,7 +474,7 @@ add_bytes :: fn(into: ptr[mut u8[..]], data: rawptr, count: usize) {
 // A ring's header, read through the kernel; null once its program, which owns it, has ended.
 read_header :: fn(memory: slop_os.Memory) -> runtime.SlopOsEventsRing? {
     header := runtime.SlopOsEventsRing.{}
-    if slop_os.memory_read(memory, 0, view_of(cast[ptr[mut u8]](cast[rawptr](&header)), size_of(runtime.SlopOsEventsRing))) is_error {
+    if slop_os.memory_read(memory, 0, view_of(cast[ptr[mut u8]](&header), size_of(runtime.SlopOsEventsRing))) is_error {
         return null
     }
     return header
@@ -561,47 +561,47 @@ drain :: fn(service: ptr[mut Service], slot: usize) {
             break
         }
         at :: read % size
-        entry :: cast[ptr[runtime.SlopOsEventsEntry]](cast[rawptr](data + at))
+        entry :: cast[ptr[runtime.SlopOsEventsEntry]](data + at)
         entry_size :: cast[u64](entry.size)
         if entry_size < 8 || (entry_size & 7) != 0 || entry_size > size - at {
             read = written
             break
         }
-        bytes :: view_of(cast[ptr[u8]](cast[rawptr](data + at)), cast[usize](entry_size))
+        bytes :: view_of(cast[ptr[u8]](data + at), cast[usize](entry_size))
         kind :: entry.kind
         if kind == runtime.SLOP_OS_EVENTS_FORMAT && bytes.count >= size_of(runtime.SlopOsEventsFormat) {
-            format :: cast[ptr[runtime.SlopOsEventsFormat]](cast[rawptr](entry))
+            format :: cast[ptr[runtime.SlopOsEventsFormat]](entry)
             count :: cast[usize](format.count)
             if count <= bytes.count - size_of(runtime.SlopOsEventsFormat) {
                 text_at :: source.texts.count
-                add_bytes(&source.texts, cast[rawptr](data + at + cast[u64](size_of(runtime.SlopOsEventsFormat))), count)
+                add_bytes(&source.texts, view_of(cast[ptr[u8]](data + at + cast[u64](size_of(runtime.SlopOsEventsFormat))), count))
                 runtime.array_add(&source.formats, FormatText.{instance = ring.instance, offset = format.offset, at = text_at, count = count})
-                add_bytes(&fresh, cast[rawptr](entry), bytes.count)
+                add_bytes(&fresh, bytes)
             }
         }
         else if kind == runtime.SLOP_OS_EVENTS_SCHEMA && bytes.count >= size_of(runtime.SlopOsEventsSchema) {
-            given :: cast[ptr[runtime.SlopOsEventsSchema]](cast[rawptr](entry))
+            given :: cast[ptr[runtime.SlopOsEventsSchema]](entry)
             count :: cast[usize](given.count)
             if count <= bytes.count - size_of(runtime.SlopOsEventsSchema) {
-                learn_schema(service, given.hash, view_of(cast[ptr[u8]](cast[rawptr](data + at + cast[u64](size_of(runtime.SlopOsEventsSchema)))), count))
+                learn_schema(service, given.hash, view_of(cast[ptr[u8]](data + at + cast[u64](size_of(runtime.SlopOsEventsSchema))), count))
                 note_used(source, given.hash)
-                add_bytes(&fresh, cast[rawptr](entry), bytes.count)
+                add_bytes(&fresh, bytes)
             }
         }
         else if kind == runtime.SLOP_OS_EVENTS_RECORD && bytes.count >= size_of(runtime.SlopOsEventsRecord) {
             source.count += 1
-            add_bytes(&fresh, cast[rawptr](entry), bytes.count)
+            add_bytes(&fresh, bytes)
         }
         else if kind == runtime.SLOP_OS_EVENTS_DROPPED && bytes.count >= size_of(runtime.SlopOsEventsDropped) {
-            dropped :: cast[ptr[runtime.SlopOsEventsDropped]](cast[rawptr](entry)).count
+            dropped :: cast[ptr[runtime.SlopOsEventsDropped]](entry).count
             source.dropped += dropped
             log_line.write(service.log, "events: % dropped % records while its ring was full", name_of(source), dropped)
-            add_bytes(&fresh, cast[rawptr](entry), bytes.count)
+            add_bytes(&fresh, bytes)
         }
         read += entry_size
     }
     _ = slop_os.memory_write(ring.memory, cast[u64](offset_of(runtime.SlopOsEventsRing, read)),
-        view_of(cast[ptr[u8]](cast[rawptr](&read)), size_of(u64)))
+        view_of(cast[ptr[u8]](&read), size_of(u64)))
     show(service, source, fresh)
     keep(service, source, fresh, first)
 }
@@ -696,7 +696,7 @@ file_header :: fn(service: ptr[Service], source: ptr[Source], first: u64, into: 
                 entry := runtime.SlopOsEventsFormat.{offset = format.offset, count = cast[u32](format.count)}
                 entry.entry = runtime.SlopOsEventsEntry.{size = cast[u32](padded(size_of(runtime.SlopOsEventsFormat) + format.count)),
                     kind = runtime.SLOP_OS_EVENTS_FORMAT}
-                add_bytes(into, cast[rawptr](&entry), size_of(runtime.SlopOsEventsFormat))
+                add_bytes(into, view_of(cast[ptr[u8]](&entry), size_of(runtime.SlopOsEventsFormat)))
                 for byte in part(source.texts, format.at, format.count) {
                     runtime.array_add(into, byte)
                 }
@@ -712,7 +712,7 @@ file_header :: fn(service: ptr[Service], source: ptr[Source], first: u64, into: 
         entry := runtime.SlopOsEventsSchema.{hash = used.hash, count = cast[u32](known.count)}
         entry.entry = runtime.SlopOsEventsEntry.{size = cast[u32](padded(size_of(runtime.SlopOsEventsSchema) + known.count)),
             kind = runtime.SLOP_OS_EVENTS_SCHEMA}
-        add_bytes(into, cast[rawptr](&entry), size_of(runtime.SlopOsEventsSchema))
+        add_bytes(into, view_of(cast[ptr[u8]](&entry), size_of(runtime.SlopOsEventsSchema)))
         for byte in known {
             runtime.array_add(into, byte)
         }
@@ -943,8 +943,8 @@ kind_at :: fn(entries: u8[], at: usize) -> u16 {
     return cast[ptr[runtime.SlopOsEventsEntry]](address_in(entries, at)).kind
 }
 
-address_in :: fn(entries: u8[], at: usize) -> rawptr {
-    return cast[rawptr](cast[uintptr](entries.data) + cast[uintptr](at))
+address_in :: fn(entries: u8[], at: usize) -> uintptr {
+    return cast[uintptr](entries.data) + cast[uintptr](at)
 }
 
 /*

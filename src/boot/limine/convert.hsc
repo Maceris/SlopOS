@@ -289,17 +289,17 @@ firmware :: fn() -> boot_info.Firmware {
     return .Uefi
 }
 
-// A table's physical address, from its address in the direct map, which is null when there's none.
-table_address :: fn(address: rawptr, hhdm_offset: u64) -> boot_info.PhysicalAddress? {
-    if address == null {
+// A table's physical address, from its address in the direct map, which is 0 when there's none.
+table_address :: fn(address: u64, hhdm_offset: u64) -> boot_info.PhysicalAddress? {
+    if address == 0 {
         return null
     }
-    return cast[boot_info.PhysicalAddress](cast[u64](address) - hhdm_offset)
+    return cast[boot_info.PhysicalAddress](address - hhdm_offset)
 }
 
 // A table's address, from a request answered with one.
-address_of_table :: fn(response: ptr[AddressResponse]?) -> rawptr {
-    answered :: response or_return null
+address_of_table :: fn(response: ptr[AddressResponse]?) -> u64 {
+    answered :: response or_return 0
     return answered.address
 }
 
@@ -310,7 +310,7 @@ firmware_tables :: fn(hhdm_offset: u64) -> boot_info.FirmwareTables {
     tables.efi_system_table = table_address(address_of_table(EFI_SYSTEM_TABLE_REQUEST.response), hhdm_offset)
     tables.smbios = null
     match SMBIOS_REQUEST.response {
-        case Some(smbios) => tables.smbios = table_address(if smbios.entry_64 != null { smbios.entry_64 } else { smbios.entry_32 }, hhdm_offset)
+        case Some(smbios) => tables.smbios = table_address(if smbios.entry_64 != 0 { smbios.entry_64 } else { smbios.entry_32 }, hhdm_offset)
         case None => {}
     }
     return tables

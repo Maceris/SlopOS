@@ -103,14 +103,14 @@ word_after :: fn(text: string, prefix: string) -> string? {
 
 // What follows prefix in text's bytes from start to end, if they start with it.
 word_from :: fn(text: string, start: usize, end: usize, prefix: string) -> string? {
-    if end < start || end - start < prefix.count {
+    if end < start || end > text.count {
         return null
     }
-    word :: string_of(cast[ptr[u8]](cast[u64](text.data) + cast[u64](start)), end - start)
-    if string_of(cast[ptr[u8]](word.data), prefix.count) != prefix {
+    word :: text[start..<end]
+    if word.count < prefix.count || word[0..<prefix.count] != prefix {
         return null
     }
-    return string_of(cast[ptr[u8]](cast[u64](word.data) + cast[u64](prefix.count)), word.count - prefix.count)
+    return word[prefix.count..<word.count]
 }
 
 // Whether word is one of the words of text, which spaces separate.
@@ -129,5 +129,8 @@ has_word :: fn(text: string, word: string) -> bool {
 
 // Whether text's bytes from start to end are word.
 is_word_at :: fn(text: string, start: usize, end: usize, word: string) -> bool {
-    return end >= start && end - start == word.count && string_of(cast[ptr[u8]](cast[u64](text.data) + cast[u64](start)), word.count) == word
+    if end < start || end > text.count {
+        return false
+    }
+    return text[start..<end] == word
 }

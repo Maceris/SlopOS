@@ -594,8 +594,9 @@ check_program_imports :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
 }
 
 /*
- * rawptr only where it's needed (decisions/0029, 0100): in the packages RAW_POINTERS names, each one that works with
- * memory as bytes or as hardware sees it. Everywhere else, a pointer has a type.
+ * rawptr only where it's needed (decisions/0029, 0100, 0102): in the packages RAW_POINTERS names, each one that works
+ * with memory as bytes or as hardware sees it. Everywhere else, a pointer has a type: in what functions use, and in the
+ * members of the structs and unions a package declares.
  */
 check_raw_pointers :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     holds := true
@@ -611,6 +612,13 @@ check_raw_pointers :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
                 }
             }
         }
+        for &declared in package.types {
+            if declares_raw_pointer(type_info_of(declared.type)) {
+                compiler.report_error(declared.location, "% holds a rawptr, and %'s not in RAW_POINTERS (src/checks)",
+                    declared.name, package.name)
+                holds = false
+            }
+        }
     }
     return holds
 }
@@ -618,6 +626,69 @@ check_raw_pointers :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
 is_raw_pointer :: fn(checked: type) -> bool {
     info :: unaliased(type_info_of(checked))
     return info.variant == .POINTER && (cast[ptr[compiler.TypeInfoPointer]](info).base_type is_none)
+}
+
+// Whether a declared struct's members, or a union's variants, spell a rawptr (spells_raw_pointer).
+declares_raw_pointer :: fn(info: ptr[compiler.TypeInfo]) -> bool {
+    if info.variant == .STRUCT {
+        for &member in cast[ptr[compiler.TypeInfoStruct]](info).members {
+            if spells_raw_pointer(member.member_type) {
+                return true
+            }
+        }
+    }
+    if info.variant == .UNION {
+        for &variant in cast[ptr[compiler.TypeInfoUnion]](info).variants {
+            for held in variant.types {
+                if spells_raw_pointer(held) {
+                    return true
+                }
+            }
+        }
+    }
+    return false
+}
+
+/*
+ * Whether a member's type is a rawptr, or has one in it as written: an array's elements, an optional's value, a pointer's
+ * target, or a function type's parameters and results. Another named type, an alias or a struct or union, is its own
+ * package's to answer for, so it isn't looked into.
+ */
+spells_raw_pointer :: fn(info: ptr[compiler.TypeInfo]) -> bool {
+    if info.variant == .POINTER {
+        target :: cast[ptr[compiler.TypeInfoPointer]](info).base_type or_return true
+        return spells_raw_pointer(target)
+    }
+    if info.variant == .ARRAY {
+        return spells_raw_pointer(cast[ptr[compiler.TypeInfoArray]](info).base_type)
+    }
+    if info.variant == .UNION {
+        optional :: cast[ptr[compiler.TypeInfoUnion]](info)
+        if !starts_with(optional.name, "Optional[") {
+            return false
+        }
+        for &variant in optional.variants {
+            for held in variant.types {
+                if spells_raw_pointer(held) {
+                    return true
+                }
+            }
+        }
+    }
+    if info.variant == .FUNCTION {
+        function :: cast[ptr[compiler.TypeInfoFunction]](info)
+        for &input in function.input {
+            if spells_raw_pointer(input.type) {
+                return true
+            }
+        }
+        for &output in function.output {
+            if spells_raw_pointer(output.type) {
+                return true
+            }
+        }
+    }
+    return false
 }
 
 /*
@@ -715,15 +786,21 @@ is_result :: fn(checked: type) -> bool {
 // Allow-lists
 
 /*
- * Packages whose code may use rawptr: those that did when the rule came in (decisions/0100), each working with memory
- * as bytes, or as hardware or another program sees it. A package joins only for such a reason.
+ * Packages whose code may use rawptr (decisions/0100, 0102), for one of these reasons, and a package joins only for one:
+ * - an instruction, or base's mem_copy and mem_zero, takes an address without a type (the architectures, the kernel,
+ *   frames, elf_loader, pci, iommu_vtd, x86_64_test);
+ * - base's own interfaces hide a type: the allocator's, the clock's and the context's data, the carrier's, the stack
+ *   trace's addresses (the kernel, limine_boot);
+ * - a device's callbacks take their context without a type, which Hemera's function values, capturing nothing, need
+ *   (fat, gpt, slopfs, the servers and tests that give one, image_builder);
+ * - a string's or a view's bytes are read through its data, which base gives as a rawptr (bundle_store_service,
+ *   console_log, disk_check, elf_loader_test, events, events_service, log_line, scheduler, supervisor).
  */
 RAW_POINTERS :: string.[
-    "arch_aarch64", "arch_x86_64", "bundle_store_service", "clock", "console_log", "container_service", "disk_check",
-    "elf_loader", "elf_loader_test", "events", "events_service", "fat", "fat_server", "fat_test", "frames", "gpt",
-    "gpt_test", "image_builder", "iommu_vtd", "kernel", "limine_boot", "log_line", "partition_server", "pci",
-    "platform", "scheduler", "service_kit", "slopfs", "slopfs_test", "storage_manager", "store_builder",
-    "supervisor", "test_affinity", "test_budgets", "test_msi_dma", "test_pager", "volume_server", "x86_64_test",
+    "arch_aarch64", "arch_x86_64", "bundle_store_service", "console_log", "container_service", "disk_check", "elf_loader",
+    "elf_loader_test", "events", "events_service", "fat", "fat_server", "fat_test", "frames", "gpt", "gpt_test",
+    "image_builder", "iommu_vtd", "kernel", "limine_boot", "log_line", "partition_server", "pci", "scheduler", "slopfs",
+    "slopfs_test", "supervisor", "volume_server", "x86_64_test",
 ]
 
 // Functions of the kernel's, as package.function, that may discard a Result: losing its error is right there.

@@ -112,8 +112,8 @@ BootCpu :: struct {
      * on AArch64, the hart ID on RISC-V.
      */
     hardware_id : u64,
-    // L0's own data for starting this CPU. Never read outside L0.
-    boot_handle : rawptr,
+    // The address of L0's own data for starting this CPU, whose type only L0 knows. Never read outside L0.
+    boot_handle : uintptr,
 }
 
 BootModule :: struct {

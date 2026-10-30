@@ -71,7 +71,7 @@ start_window :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo], direc
     kernel.window.base = base
     kernel.window.count = 1
     kernel.window.free[0] = Extent.{base, WINDOW_SIZE}
-    runtime.log_info("kernel window at %", cast[rawptr](base))
+    runtime.log_info("kernel window at %{#018x}", base)
 }
 
 /*

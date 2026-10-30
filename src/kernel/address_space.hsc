@@ -67,8 +67,8 @@ start_address_space :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]
         frames.give_frame(&per_cpu().frame_cache, &kernel.frames, mapper.tables.frames[i])
     }
     arch.activate(&kernel.page_table)
-    runtime.log_info("kernel page tables active: % MiB of RAM in the direct map at %, the image in % segments",
-        mapper.direct_bytes >> 20, cast[rawptr](info.direct_map_offset), info.kernel_image.segments.count)
+    runtime.log_info("kernel page tables active: % MiB of RAM in the direct map at %{#018x}, the image in % segments",
+        mapper.direct_bytes >> 20, info.direct_map_offset, info.kernel_image.segments.count)
     start_window(kernel, info, mapper.direct_bytes)
 }
 

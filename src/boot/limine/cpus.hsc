@@ -65,7 +65,7 @@ cpus :: fn(mp: ptr[MpResponse], cpus: mut boot_info.BootCpu[], starting #escapin
         }
         runtime.assert(index < cpus.count && index < starting.count, "cpus needs room for every CPU")
         starting[index].info = cast[ptr[mut MpInfo]](cpu)
-        cpus[index] = boot_info.BootCpu.{hardware_id(cpu), cast[rawptr](&starting[index])}
+        cpus[index] = boot_info.BootCpu.{hardware_id(cpu), cast[uintptr](&starting[index])}
     }
     return cpus
 }

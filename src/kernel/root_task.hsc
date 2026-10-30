@@ -114,7 +114,7 @@ load_root_task :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule) -> s
     // From here, the root task's end is the kernel's, not a number of ticks
     kernel.stop_after_ticks = 0xffffffffffffffff
     start_thread(kernel, thread)
-    runtime.log_info("root task % started at %", module.name, cast[rawptr](layout.image))
+    runtime.log_info("root task % started at %{#018x}", module.name, layout.image)
     return null
 }
 

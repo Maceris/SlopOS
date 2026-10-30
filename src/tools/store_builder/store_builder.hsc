@@ -46,7 +46,7 @@ main :: fn() -> int {
         put(objects, program_bytes) or_return 4
         made := bundle.Bundle.{program = program_hash}
         manifest_storage : u8[1024]
-        manifest_path :: joined(string_of(cast[ptr[u8]](path.data), path.count - extension_bytes(path)), ".manifest", &manifest_storage)
+        manifest_path :: joined(without_extension(path), ".manifest", &manifest_storage)
         match os.read_entire_file(manifest_path) {
             case Ok(manifest) => made.manifest = put(objects, bit_cast[u8[]](manifest)) or_return 4
             case Error(error) => {}
@@ -84,6 +84,15 @@ put :: fn(objects: string, bytes: u8[]) -> bundle.Hash? {
     return hash
 }
 
+// A path without its extension.
+without_extension :: fn(path: string) -> string {
+    kept :: path.count - extension_bytes(path)
+    if kept > path.count {
+        return path
+    }
+    return path[0..<kept]
+}
+
 // How many bytes of a path its extension takes, its dot's among them; 0 without one.
 extension_bytes :: fn(path: string) -> usize {
     count : usize = 0
@@ -111,7 +120,10 @@ stem :: fn(path: string) -> string {
             end = i
         }
     }
-    return if end > start { string_of(cast[ptr[u8]](cast[uintptr](path.data) + cast[uintptr](start)), end - start) } else { "" }
+    if end <= start || end > path.count {
+        return ""
+    }
+    return path[start..<end]
 }
 
 joined :: fn(a: string, b: string, storage: ptr[mut u8[1024]]) -> string {

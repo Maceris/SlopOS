@@ -68,7 +68,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     source_at :: runtime.reserve_addresses(cast[usize](PAGES * PAGE)) or_return 106
     slop_os.memory_map(shared.source, block.space, source_at, 0, PAGES * PAGE, read_write) or_return 106
     for i in cast[u64](0)..<PAGES * PAGE {
-        intrinsics.volatile_store_u8(cast[ptr[mut u8]](cast[rawptr](source_at + i)), cast[u8]((i / PAGE + 1) * 0x11))
+        intrinsics.volatile_store_u8(cast[ptr[mut u8]](source_at + i), cast[u8]((i / PAGE + 1) * 0x11))
     }
     first :: runtime.reserve_addresses(cast[usize](PAGES * PAGE)) or_return 107
     second :: runtime.reserve_addresses(cast[usize](PAGES * PAGE)) or_return 107
@@ -77,9 +77,9 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     thread :: test_kit.start_thread(budget, cast[u64](pager), cast[u64](shared)) or_return 109
 
     results : u64[8]
-    results[0] = cast[u64](intrinsics.volatile_load_u8(cast[ptr[u8]](cast[rawptr](first))))
-    results[1] = cast[u64](intrinsics.volatile_load_u8(cast[ptr[u8]](cast[rawptr](first + 2 * PAGE + 8))))
-    results[2] = cast[u64](intrinsics.volatile_load_u8(cast[ptr[u8]](cast[rawptr](second + 100))))
+    results[0] = cast[u64](intrinsics.volatile_load_u8(cast[ptr[u8]](first)))
+    results[1] = cast[u64](intrinsics.volatile_load_u8(cast[ptr[u8]](first + 2 * PAGE + 8)))
+    results[2] = cast[u64](intrinsics.volatile_load_u8(cast[ptr[u8]](second + 100)))
     results[3] = intrinsics.atomic_load_u64(&shared.supplied)
     // Writing it is refused, as is asking what it's waited for without the right to write it, and a pager with no binding
     results[4] = test_kit.tag_of(slop_os.memory_map(shared.paged, block.space, runtime.reserve_addresses(cast[usize](PAGE)) or_else 0, 0, PAGE,

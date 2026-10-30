@@ -16,8 +16,8 @@ log_boot_info :: fn(info: ptr[boot_info.BootInfo]) {
     }
     runtime.log_info("memory map: % regions, % KiB usable", info.memory_map.count, usable / 1024)
     // As pointers, so they're written in hexadecimal
-    runtime.log_info("kernel image at %, physical %, % segments", cast[rawptr](info.kernel_image.virtual_base),
-        cast[rawptr](info.kernel_image.physical.base), info.kernel_image.segments.count)
+    runtime.log_info("kernel image at %{#018x}, physical %{#018x}, % segments", info.kernel_image.virtual_base,
+        info.kernel_image.physical.base, info.kernel_image.segments.count)
     runtime.log_info("% CPUs, % modules, % framebuffers", info.cpus.count, info.modules.count, info.framebuffers.count)
     for module in info.modules {
         runtime.log_info("module %", module.name)

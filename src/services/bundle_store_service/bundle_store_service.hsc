@@ -384,7 +384,7 @@ supply_page :: fn(service: ptr[mut Store], slot: usize, offset: u64) -> bool {
     }
     // Past the object's end, zeros
     for i in read..<PAGE {
-        intrinsics.volatile_store_u8(cast[ptr[mut u8]](cast[rawptr](open.buffer_at + i)), 0)
+        intrinsics.volatile_store_u8(cast[ptr[mut u8]](open.buffer_at + i), 0)
     }
     _ = slop_os.memory_supply(open.memory, offset, open.buffer, 0)
     return true

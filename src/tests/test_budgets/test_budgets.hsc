@@ -76,9 +76,9 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     sleeper :: slop_os.port_create(block.budget) or_return 110
     packets : slop_os.Packet[1]
     _ = slop_os.port_wait(sleeper, packets, (slop_os.clock_monotonic() or_else 0) + RUN_NANOSECONDS)
-    first :: intrinsics.volatile_load_u64(cast[ptr[u64]](cast[rawptr](counts_at + SLOT_FIRST * 8)))
-    second :: intrinsics.volatile_load_u64(cast[ptr[u64]](cast[rawptr](counts_at + SLOT_SECOND * 8)))
-    other :: intrinsics.volatile_load_u64(cast[ptr[u64]](cast[rawptr](counts_at + SLOT_RIVAL * 8)))
+    first :: intrinsics.volatile_load_u64(cast[ptr[u64]](counts_at + SLOT_FIRST * 8))
+    second :: intrinsics.volatile_load_u64(cast[ptr[u64]](counts_at + SLOT_SECOND * 8))
+    other :: intrinsics.volatile_load_u64(cast[ptr[u64]](counts_at + SLOT_RIVAL * 8))
     _ = slop_os.process_kill(pair)
     _ = slop_os.process_kill(rival)
     budgeted :: first + second
@@ -134,7 +134,7 @@ run_copy :: fn(peer: slop_os.Channel, counts: slop_os.Memory) -> int {
     threads :: slop_os.memory_budget_create(block.budget, 1 << 20) or_return 5
     if role == ROLE_PAIR {
         _ = test_kit.start_thread(threads, cast[u64](counter), at + SLOT_SECOND * 8) or_return 6
-        counter(cast[ptr[mut u64]](cast[rawptr](at + SLOT_FIRST * 8)))
+        counter(cast[ptr[mut u64]](at + SLOT_FIRST * 8))
     }
-    counter(cast[ptr[mut u64]](cast[rawptr](at + SLOT_RIVAL * 8)))
+    counter(cast[ptr[mut u64]](at + SLOT_RIVAL * 8))
 }

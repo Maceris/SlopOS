@@ -143,8 +143,8 @@ add_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, physic
         unmap_device(kernel, mapped, size)
         return if full { .Error(.TooManyIommus) } else { .Ok(again or_else 0) }
     }
-    runtime.log_info("IOMMU %: %, % KiB of registers at %, version %.%, %-bit I/O addresses", index, kind_name(kind), size / 1024,
-        cast[rawptr](physical), info.major, info.minor, info.address_bits)
+    runtime.log_info("IOMMU %: %, % KiB of registers at %{#018x}, version %.%, %-bit I/O addresses", index, kind_name(kind), size / 1024,
+        physical, info.major, info.minor, info.address_bits)
     start_translation(kernel, index)
     return .Ok(index)
 }

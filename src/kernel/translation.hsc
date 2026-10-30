@@ -152,8 +152,8 @@ handle_dma_faults :: fn(kernel: ptr[mut Kernel], index: u32) {
                 bus, slot, function, fault.reason)
         }
         else {
-            runtime.log_warn("IOMMU %: blocked a DMA % at % from %:%.%, reason %", index, if fault.write { "write" } else { "read" },
-                cast[rawptr](fault.address), bus, slot, function, fault.reason)
+            runtime.log_warn("IOMMU %: blocked a DMA % at %{#018x} from %:%.%, reason %", index, if fault.write { "write" } else { "read" },
+                fault.address, bus, slot, function, fault.reason)
         }
     }
 }

@@ -155,13 +155,13 @@ register :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, kind: slop_os.I
     block :: slop_os.startup_block()
     memory :: slop_os.memory_create_physical(platform, block.budget, registers, size, .Device) or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
     if cast[slop_os.Handle](memory) == slop_os.NO_HANDLE {
-        log_line.write(to, "platform: an IOMMU's registers at % aren't device memory", cast[rawptr](registers))
+        log_line.write(to, "platform: an IOMMU's registers at %{#018x} aren't device memory", registers)
         return 0
     }
     taken := cast[u32](0)
     match slop_os.iommu_register(platform, kind, memory, first, count, stream) {
         case Ok => taken = 1
-        case Error(error) => log_line.write(to, "platform: the kernel took no IOMMU at %: %", cast[rawptr](registers), error)
+        case Error(error) => log_line.write(to, "platform: the kernel took no IOMMU at %{#018x}: %", registers, error)
     }
     _ = slop_os.handle_close(cast[slop_os.Handle](memory))
     return taken

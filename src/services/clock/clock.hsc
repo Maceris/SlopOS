@@ -71,7 +71,7 @@ main :: fn(rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, cloc
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     page_address :: runtime.reserve_addresses(cast[usize](PAGE)) or_return 1
     slop_os.memory_map(clock_page, block.space, page_address, 0, PAGE, read_write) or_return 1
-    service.page = cast[ptr[mut runtime.SlopOsClockPage]](cast[rawptr](page_address))
+    service.page = cast[ptr[mut runtime.SlopOsClockPage]](page_address)
     match rtc_registers {
         case Some(registers) => {
             address :: runtime.reserve_addresses(cast[usize](PAGE)) or_return 2
@@ -362,11 +362,11 @@ cmos_write :: fn(ports: slop_os.IoPortRange, index: u32, value: u32) -> Result[v
 }
 
 read_register :: fn(base: u64, offset: u64) -> u32 {
-    return intrinsics.volatile_load_u32(cast[ptr[u32]](cast[rawptr](base + offset)))
+    return intrinsics.volatile_load_u32(cast[ptr[u32]](base + offset))
 }
 
 write_register :: fn(base: u64, offset: u64, value: u32) {
-    intrinsics.volatile_store_u32(cast[ptr[mut u32]](cast[rawptr](base + offset)), value)
+    intrinsics.volatile_store_u32(cast[ptr[mut u32]](base + offset), value)
 }
 
 // Seconds since 1970 as a UTC date and time, like 2030-01-02 03:04:05 UTC, appended to line.

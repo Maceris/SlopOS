@@ -637,7 +637,7 @@ files_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
     if cast[slop_os.Handle](state.files[index].end) == slop_os.NO_HANDLE {
         partition :: state.partitions[index]
         if partition.info.type_guid == CONTAINER_TYPE {
-            return match volume_of(state, index, view_of(cast[ptr[u8]](SYSTEM_VOLUME.data), SYSTEM_VOLUME.count), u8.[], false) {
+            return match volume_of(state, index, cast[u8[]](SYSTEM_VOLUME), u8.[], false) {
                 case OpenedFiles(root) => root
                 case _ => null
             }
