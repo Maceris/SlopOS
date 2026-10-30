@@ -296,7 +296,10 @@ programs outside the boot set booted from the store, their code shared.
 9c planned 2026-10-30 (`decisions/0107`), in five parts: **9c1** typed files and names; **9c2** the config store and
 `Config[T]`; **9c3** the system configuration at run time; **9c4** memory pressure; **9c5** the Perf baselines and R4's
 storage faults. 9c1 done 2026-10-30 (`decisions/0108`): typed files through the files protocol and `std`, kept by the
-volume server and refused by the FAT server, and slopfs refusing names that show something other than their bytes.
+volume server and refused by the FAT server, and slopfs refusing names that show something other than their bytes. 9c2 done
+2026-10-30 (`decisions/0109`): the config service and `Config[T]`, values declared with their defaults, overrides
+merged field by field by the program, 16 versions kept with rollback and `Next`; transactions over several values and
+the user's override left for later.
 
 Added by `decisions/0097`: in **9c**, the benchmarks with baselines (*Perf*, below), the memory pressure signal and
 evictable pager pages, and slopfs refusing names with control, bidirectional or invisible characters; in **9d**,

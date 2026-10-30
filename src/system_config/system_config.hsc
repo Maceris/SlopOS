@@ -14,6 +14,7 @@ import os from "std"
 import clock_service from "../services/clock"
 import events_service from "../services/events_service"
 import bundle_store_service from "../services/bundle_store_service"
+import config_service from "../services/config_service"
 import console from "../services/console"
 import disk_check from "../services/disk_check"
 import entropy from "../services/entropy"
@@ -32,6 +33,7 @@ import virtio_blk from "../drivers/virtio_blk"
 import virtio_console from "../drivers/virtio_console"
 import virtio_input from "../drivers/virtio_input"
 import virtio_rng from "../drivers/virtio_rng"
+import config from "../protocols/config"
 import connector from "../protocols/connector"
 import links from "../protocols/links"
 import platform_protocol from "../protocols/platform"
@@ -151,6 +153,9 @@ SERVICES :: Service.[
     // Objects by their hashes, on the system volume, paged into whoever reads them (decisions/0094)
     Service.{name = "bundle_store", boot_set = true, module = "bundle_store_service.elf", starter = .Supervisor, by_manager = true,
         budget = 16 * MIB, entry = type_of(bundle_store_service.main)},
+    // Programs' settings, on the system volume, each reached through a connection the supervisor gives (decisions/0109)
+    Service.{name = "config", module = "config_service.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,
+        entry = type_of(config_service.main)},
     // Every disk's, and a partition server for each, which holds only its disk (decisions/0086)
     Service.{name = "storage_manager", boot_set = true, module = "storage_manager.elf", starter = .Supervisor, by_manager = true, budget = 64 * MIB,
         entry = type_of(storage_manager.main)},
@@ -238,11 +243,12 @@ check_wiring :: fn() {
     for each in SERVICES {
         for input in cast[ptr[compiler.TypeInfoFunction]](type_info_of(each.entry)).input {
             held :: held_type(input.type)
-            if !is_named(held, "Channel[") {
+            if !is_named(held, "Channel[") && !is_named(held, "Config[") {
                 continue
             }
             served := false
-            tag :: os.end_tag(held)
+            // A Config[T] is a channel to the config store's values (decisions/0109)
+            tag :: if is_named(held, "Config[") { os.end_tag(type_info_of(os.Channel[config.ConfigValue])) } else { os.end_tag(held) }
             for server in SERVICES {
                 for offered in cast[ptr[compiler.TypeInfoFunction]](type_info_of(server.entry)).input {
                     served = served || (is_named(offered.type, "Listener[") && os.end_tag(offered.type) == tag)

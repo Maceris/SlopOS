@@ -76,6 +76,8 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
     "--expect-line=[user] volume_server: serving volume 1 (system), from transaction 3",
     "--expect-line=[user] supervisor: console from the bundle store", "--expect-line=[user] supervisor: hello from the bundle store",
     "--expect-line=[user] supervisor: disk_check from the bundle store", "--expect-line=[user] hello: heap working, random numbers working",
+    "--expect-line=[user] config: serving",
+    "--expect-line=[user] hello: config: declared repeats 1, wrote an override kept, read it back merged, by hello; rolled back kept, repeats 1",
     "--expect-line=[user] disk_check: on the EFI system partition, read the host's files, wrote, moved and read back its own, "
     "listed 3, and was refused a path above it",
     "--expect-line=[user] disk_check: narrowed EFI/SlopOS to read only, selected 2 of its files by *.TXT, and was refused a "
@@ -115,7 +117,7 @@ def with_before_qemu(arguments: list[str], more: list[str]) -> list[str]:
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 41 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 42 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 3 budgets and the default split off the root's, 800000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",

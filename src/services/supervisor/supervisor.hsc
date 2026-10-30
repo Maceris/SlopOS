@@ -71,6 +71,7 @@ import supervision from "../../protocols/supervision"
 import clock_setting from "../../protocols/clock_setting"
 import events from "../../protocols/events"
 import bundle_store from "../../protocols/bundle_store"
+import config_protocol from "../../protocols/config"
 import bundle from "../../bundle"
 import schema from "std"
 import service_kit from "../../service_kit"
@@ -79,6 +80,7 @@ import hello from "../../apps/hello"
 import clock_service from "../clock"
 import events_service from "../events_service"
 import bundle_store_service from "../bundle_store_service"
+import config_service from "../config_service"
 import console from "../console"
 import disk_check from "../disk_check"
 import storage_manager from "../storage_manager"
@@ -149,11 +151,18 @@ StoreGrants :: struct {
     clients : os.Listener[bundle_store.BundleStore],
 }
 
+// What the config store is given (config_service.main).
+ConfigGrants :: struct {
+    store : os.Channel[dir.Dir],
+    admin : os.Listener[config_protocol.ConfigValue],
+}
+
 // What hello is given (hello.main).
 HelloGrants :: struct {
     manager : os.Channel[process_manager.ProcessManager]?,
     console : os.Channel[connector.Connector]?,
     entropy_service : os.Channel[entropy.Entropy]?,
+    settings : config_protocol.Config[hello.HelloSettings]?,
 }
 
 // What the console service is given (console.main).
@@ -239,6 +248,7 @@ ServingGrants :: struct[P] {
 Modules :: struct {
     events : slop_os.Memory?,
     bundle_store : slop_os.Memory?,
+    config : slop_os.Memory?,
     clock : slop_os.Memory?,
     hello : slop_os.Memory?,
     console : slop_os.Memory?,
@@ -322,6 +332,9 @@ Supervisor :: struct {
     // Its end of the bundle store's listener, NONE without
     store_end : slop_os.Channel,
     store_port : slop_os.Port,
+    // The config store's admin connection
+    config_end : slop_os.Channel,
+    config_port : slop_os.Port,
     // The entry in started a restart is launching into, whose key its process is watched under; NOWHERE otherwise
     relaunching : usize,
     modules : Modules,
@@ -357,12 +370,12 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     edu_dma_module: slop_os.Memory?, storage_manager_module: slop_os.Memory?, partition_server_module: slop_os.Memory?,
     fat_server_module: slop_os.Memory?, container_service_module: slop_os.Memory?, volume_server_module: slop_os.Memory?,
     command_line: slop_os.Memory?, scheduler: os.Channel[scheduler_protocol.Scheduler]?, clock_module: slop_os.Memory?,
-    events_module: slop_os.Memory?, bundle_store_module: slop_os.Memory?) -> int {
+    events_module: slop_os.Memory?, bundle_store_module: slop_os.Memory?, config_module: slop_os.Memory?) -> int {
     startup :: slop_os.startup_block()
     supervisor := Supervisor.{block = startup, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, console = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
-        events_end = NONE, store_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)}
-    supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, clock = clock_module, hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
+        events_end = NONE, store_end = NONE, config_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)}
+    supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, clock = clock_module, hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
         container_service = container_service_module, volume_server = volume_server_module}
@@ -637,6 +650,9 @@ restart_service :: fn(supervisor: ptr[mut Supervisor], index: usize) {
     else if name == "bundle_store" {
         start_store(supervisor, index)
     }
+    else if name == "config" {
+        start_config(supervisor, index)
+    }
     else if name == "storage_manager" {
         if start_storage(supervisor, index) != NOWHERE {
             open_system(supervisor, index)
@@ -697,6 +713,15 @@ open_system :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
             else {
                 match system_directory(supervisor, "store") {
                     case Some(directory) => _ = store_request(supervisor, .UseDirectory(directory))
+                    case None => {}
+                }
+            }
+            if supervisor.config_end == NONE {
+                start_config(supervisor, NOWHERE)
+            }
+            else {
+                match system_directory(supervisor, "config") {
+                    case Some(directory) => _ = config_request(supervisor, .UseDirectory(directory))
                     case None => {}
                 }
             }
@@ -1148,6 +1173,58 @@ start_store :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     }
 }
 
+/*
+ * The config store, with the system volume's "config" directory, made if it isn't there, and a listener whose other
+ * end the supervisor keeps, which it asks for programs' connections to their values on; into its entry at again,
+ * unless that's NOWHERE.
+ */
+start_config :: fn(supervisor: ptr[mut Supervisor], again: usize) {
+    service :: system_config.service("config") or_return void
+    directory :: system_directory(supervisor, "config") or_return void
+    if supervisor.config_end != NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.config_end))
+        _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.config_port))
+        supervisor.config_end = NONE
+    }
+    pair :: os.channel_for[config_protocol.ConfigValue](supervisor.block.budget, 0) or_return void
+    grants := ConfigGrants.{store = directory, admin = os.Listener[config_protocol.ConfigValue].{end = pair.a}}
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
+        config_service.main, grants, options_for(supervisor, service.name)) {
+        case Ok(launched) => {
+            _ = place(supervisor, "config", kept(supervisor, launched), again)
+            supervisor.config_end = pair.b
+            supervisor.config_port = os.port_for(supervisor.block.budget, pair.b) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+        }
+        case Error(error) => {
+            failed(supervisor, service.name, error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        }
+    }
+}
+
+config_request :: fn(supervisor: ptr[mut Supervisor], request: config_protocol.Request) -> config_protocol.Response {
+    out := os.Outgoing.{}
+    made :: os.begin[config_protocol.Request](&out)
+    made^ = request
+    into := os.Incoming.{}
+    return config_protocol.ask(supervisor.config_end, supervisor.config_port, &out, &into)
+}
+
+// A connection to owner's value name in the config store, for its program: null without a config store.
+config_for :: fn[T](supervisor: ptr[mut Supervisor], owner: string, name: string) -> config_protocol.Config[T]? {
+    if supervisor.config_end == NONE {
+        return null
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[config_protocol.Request](&out)
+    request^ = .ValueFor(config_protocol.ValueFor.{owner = bytes_of(&out, owner), name = bytes_of(&out, name)})
+    into := os.Incoming.{}
+    return match config_protocol.ask(supervisor.config_end, supervisor.config_port, &out, &into) {
+        case Opened(connection) => config_protocol.Config[T].{end = connection.end}
+        case _ => null
+    }
+}
+
 // A directory of the system volume's root, made if it isn't there, or null.
 system_directory :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.Channel[dir.Dir]? {
     if supervisor.system == NONE {
@@ -1482,6 +1559,7 @@ module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory
         else if name == "console" { modules.console } else if name == "disk_check" { modules.disk_check }
         else if name == "hello" { modules.hello } else if name == "clock" { modules.clock }
         else if name == "events" { modules.events } else if name == "bundle_store" { modules.bundle_store }
+        else if name == "config" { modules.config }
         else { cast[slop_os.Memory?](null) }
     return found or_else none
 }
@@ -1740,6 +1818,7 @@ start_hello :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     grants := HelloGrants.{console = connector_to(supervisor, supervisor.console)}
     grants.manager = process_manager.connect(supervisor.manager.end, supervisor.manager_port, supervisor.block.budget)
     grants.entropy_service = entropy_connection(supervisor)
+    grants.settings = config_for[hello.HelloSettings](supervisor, "hello", "settings")
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "hello"), service.budget, hello.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => _ = place(supervisor, "hello", kept(supervisor, launched), again)
         case Error(error) => failed(supervisor, service.name, error)

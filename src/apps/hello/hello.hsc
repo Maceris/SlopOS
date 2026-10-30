@@ -7,6 +7,7 @@ import text_buffer from "std"
 import time from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
+import config from "../../protocols/config"
 import connector from "../../protocols/connector"
 import console_log from "../../protocols/console_log"
 import entropy from "../../protocols/entropy"
@@ -18,10 +19,11 @@ import entropy from "../../protocols/entropy"
  * it then waits for the manager to be gone and says it's still running, which shows a program outlives the
  * manager that loaded it (decisions/0067). It says the date the wall clock gives too, which it reads from the clock
  * page it's given (decisions/0093). Given a connection to the entropy service, it asks it for random bytes too
- * (decisions/0067, 0101). It ends with 0 if its heap worked.
+ * (decisions/0067, 0101). Given its settings in the config store (decisions/0109), it declares them, writes an override,
+ * reads them back merged, and rolls the override back. It ends with 0 if its heap worked.
  */
 main :: fn(manager: os.Channel[process_manager.ProcessManager]?, console: os.Channel[connector.Connector]?,
-    entropy_service: os.Channel[entropy.Entropy]?) -> int {
+    entropy_service: os.Channel[entropy.Entropy]?, settings: config.Config[HelloSettings]?) -> int {
     code :: fill_heap()
     // Two draws of 64 bits alike would be one chance in 2^64
     random_works :: random.next_u64() != random.next_u64()
@@ -29,6 +31,10 @@ main :: fn(manager: os.Channel[process_manager.ProcessManager]?, console: os.Cha
         if random_works { "working" } else { "broken" })
     match entropy_service {
         case Some(connection) => runtime.log_info("the entropy service gave % random bytes", entropy_bytes(connection.end))
+        case None => {}
+    }
+    match settings {
+        case Some(value) => check_settings(value)
         case None => {}
     }
     match time.now() {
@@ -65,6 +71,55 @@ main :: fn(manager: os.Channel[process_manager.ProcessManager]?, console: os.Cha
         case None => {}
     }
     return code
+}
+
+// hello's settings, in the config store: only what it's been asked to show.
+HelloSettings :: struct {
+    greeting : slop_os.Relative[u8],
+    repeats : u32 = 1,
+    loud : bool,
+}
+
+/*
+ * Its settings declared, an override of greeting and repeats written and read back over the default, which loud keeps,
+ * Next answered at once for a version already past, and the override rolled back to the declared version's.
+ */
+check_settings :: fn(settings: config.Config[HelloSettings]) {
+    port :: os.port_for(slop_os.startup_block().budget, settings.end) or_return void
+    declared :: match config.declare(settings, port) {
+        case Ok(version) => version
+        case Error(error) => {
+            runtime.log_info("config: declaring its settings failed (%)", error)
+            return void
+        }
+    }
+    value := os.Outgoing.{}
+    first :: if config.read(settings, port, &value) is_ok { os.typed_value[HelloSettings](os.value_bytes(&value)).repeats } else { 0 }
+    override := os.Outgoing.{}
+    written :: os.begin[HelloSettings](&override)
+    written.repeats = 3
+    written.loud = true
+    written.greeting = os.append(&override, string_bytes("hi"))
+    fields :: config.field_bit[HelloSettings]("greeting") | config.field_bit[HelloSettings]("repeats")
+    wrote :: config.write(settings, port, os.value_bytes(&override), fields) is_ok
+    // Next for the declared version, which the write is past
+    merged := "not read"
+    if config.next(settings, port, declared, &value) is_ok {
+        bytes :: os.value_bytes(&value)
+        read :: os.typed_value[HelloSettings](bytes)
+        greeting :: os.items_of(bytes, read.greeting)
+        merged = if read.repeats == 3 && !read.loud && greeting.count == 2 && string_of(&greeting[0], 2) == "hi" { "merged" } else { "not merged" }
+    }
+    author_storage : u8[..]
+    defer runtime.array_free(&author_storage)
+    author :: match config.history(settings, port, 0, &author_storage) {
+        case Some(kept) => if author_storage.count > 0 { string_of(&author_storage[0], author_storage.count) } else { "nobody" }
+        case None => "nobody"
+    }
+    rolled :: config.roll_back(settings, port, declared) is_ok
+    after :: if config.read(settings, port, &value) is_ok { os.typed_value[HelloSettings](os.value_bytes(&value)).repeats } else { 0 }
+    runtime.log_info("config: declared repeats %, wrote an override %, read it back %, by %; rolled back %, repeats %", first,
+        if wrote { "kept" } else { "refused" }, merged, author, if rolled { "kept" } else { "refused" }, after)
 }
 
 // How many random bytes the entropy service gives, through end, for 32 asked for: 0 if it gives none.
