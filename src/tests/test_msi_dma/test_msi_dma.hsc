@@ -5,8 +5,9 @@
  *   FADT, DSDT and MCFG on x86-64, the device tree on AArch64;
  * - the PCIe configuration space, through ECAM where the MCFG or the device tree says (src/pci), has edu on bus 0;
  * - a Device for it, a second for its address refused, and one without the platform capability; an MSI for it,
- *   whose message is programmed into edu's MSI capability, then edu raises it, and the IRQ's packet arrives; 31
- *   more fit, and no more;
+ *   whose message is programmed into edu's MSI capability, then edu raises it, and the IRQ's packet arrives; moved to
+ *   the other CPU (irq_set_cpu, decisions/0099), its message programmed again, it arrives again, and a CPU that isn't
+ *   one is refused; 31 more fit, and no more;
  * - DMA memory in a domain the device is attached to, below a limit: edu copies a page of it into its buffer and
  *   back into the next page, and says it's done with its MSI; ordinary memory has no device address;
  * - closing the device destroys its IRQs, and closing the domain leaves its memory without a device address; what
@@ -69,7 +70,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     budget :: slop_os.memory_budget_create(block.budget, 4 << 20) or_return 102
     read :: slop_os.PROTECTION_READ
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    results : u64[32]
+    results : u64[35]
 
     // The firmware tables' copy: read-only, its header, its tables
     tables_size :: slop_os.memory_size(tables_memory) or_return 103
@@ -138,6 +139,14 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     write_edu(edu, EDU_INTERRUPT_RAISE, 1)
     results[12] = if wait_for_interrupt(port) { cast[u64](1) } else { cast[u64](0) }
     write_edu(edu, EDU_INTERRUPT_ACK, 1)
+    // Moved to the other CPU, then raised again; and to a CPU that isn't one
+    results[32] = test_kit.tag_of(slop_os.irq_set_cpu(irq, 1))
+    moved :: slop_os.irq_message(irq) or_else slop_os.MsiMessage.{}
+    _ = program_msi(config, moved)
+    write_edu(edu, EDU_INTERRUPT_RAISE, 1)
+    results[33] = if wait_for_interrupt(port) { cast[u64](1) } else { cast[u64](0) }
+    write_edu(edu, EDU_INTERRUPT_ACK, 1)
+    results[34] = test_kit.tag_of(slop_os.irq_set_cpu(irq, 64))
     // 31 more, and no more
     more : slop_os.Irq[31]
     fitted := cast[u64](0)
@@ -211,6 +220,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
         1, 1, 1, 1,
         0, test_kit.tag(slop_os.HandleError.ObjectGone), 0, test_kit.tag(slop_os.DeviceError.NotDmaMemory),
         test_kit.tag(slop_os.DeviceError.BadAddress), 1, 0, 0,
+        0, 1, test_kit.tag(slop_os.DeviceError.InvalidArgument),
     ]
     failed := test_kit.check(log, NAME, results, expected)
     if failed != 0 {

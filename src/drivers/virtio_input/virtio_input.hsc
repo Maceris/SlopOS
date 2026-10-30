@@ -12,7 +12,6 @@ import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
 import driver_kit from "../../driver_kit"
-import log_line from "../../log_line"
 import pci from "../../pci"
 import input from "../../protocols/input"
 import service_kit from "../../service_kit"
@@ -112,7 +111,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     if !service_kit.add_client(&driver.clients, driver.port, clients.end) {
         return 9
     }
-    log_line.write(driver.log, "virtio_input: serving")
+    runtime.log_info("serving")
     into := os.Incoming.{}
     loop {
         with {

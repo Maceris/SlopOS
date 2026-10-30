@@ -23,7 +23,6 @@ import text_buffer from "std"
 import dir from "std/os/slop_os"
 import file_set from "std/os/slop_os"
 import read_only_dir from "std/os/slop_os"
-import log_line from "../../log_line"
 import block from "../../protocols/block"
 import connector from "../../protocols/connector"
 import partitions from "../../protocols/partitions"
@@ -59,7 +58,7 @@ main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, wo
     to :: log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     dialing :: storage or_else os.Channel[connector.Connector].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     if cast[slop_os.Handle](dialing.end) == slop_os.NO_HANDLE {
-        log_line.write(to, "disk_check: no storage manager")
+        runtime.log_info("no storage manager")
         return 0
     }
     dial_port :: os.port_for(block_of_startup.budget, dialing.end) or_return 1
@@ -82,7 +81,7 @@ main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, wo
         }
     }
     if found == 0xffffffff {
-        log_line.write(to, "disk_check: no partition named %", CHECKED)
+        runtime.log_info("no partition named %", CHECKED)
         return 13
     }
     connection := os.Channel[block.Block].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
@@ -109,7 +108,7 @@ main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, wo
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     slop_os.memory_map(window, block_of_startup.space, checked.buffer, 0, info.buffer_bytes, read_write) or_return 4
     if info.block_count < 10 {
-        log_line.write(to, "disk_check: the disk has only % blocks", info.block_count)
+        runtime.log_info("the disk has only % blocks", info.block_count)
         return 5
     }
 
@@ -118,7 +117,7 @@ main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, wo
         return 6
     }
     if !starts_with(&checked, READ_AT, HOST_MARK) {
-        log_line.write(to, "disk_check: block 0 hasn't the host's mark")
+        runtime.log_info("block 0 hasn't the host's mark")
         return 7
     }
     // Its own, in block 1, flushed, and read back
@@ -162,14 +161,14 @@ main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, wo
         label := text_buffer.make(storage)
         text_buffer.append_format(&label, "block %", 2 + i)
         if !starts_with(&checked, MANY_AT + cast[u32](i) * cast[u32](block.BLOCK_BYTES), text_buffer.as_string(&label)) {
-            log_line.write(to, "disk_check: block % doesn't hold its number", 2 + i)
+            runtime.log_info("block % doesn't hold its number", 2 + i)
             return 12
         }
     }
-    log_line.write(to, "disk_check: in %, % blocks from % of disk %, read the host's mark, wrote, flushed and read back block 1, read 8 blocks at once, and was refused the block past its end",
+    runtime.log_info("in %, % blocks from % of disk %, read the host's mark, wrote, flushed and read back block 1, read 8 blocks at once, and was refused the block past its end",
         CHECKED, info.block_count, partition.info.first, partition.disk)
     if working_directory is_none {
-        log_line.write(to, "disk_check: no EFI system partition")
+        runtime.log_info("no EFI system partition")
         return 0
     }
     failed :: check_files(to)
@@ -190,7 +189,7 @@ main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, wo
             return check_sealed(to, manager.end, manager_port, volume)
         }
         case None => {
-            log_line.write(to, "disk_check: no system volume")
+            runtime.log_info("no system volume")
             return 0
         }
     }
@@ -201,7 +200,7 @@ check_files :: fn(to: slop_os.DebugLog) -> int {
     host :: os.read_entire_file(HOST_FILE) or_return 20
     long :: os.read_entire_file(LONG_FILE) or_return 21
     if !strings.equal(host, HOST_TEXT) || !strings.equal(long, LONG_TEXT) {
-        log_line.write(to, "disk_check: the host's files hold % and %", host, long)
+        runtime.log_info("the host's files hold % and %", host, long)
         return 22
     }
     if os.write_entire_file(GUEST_FILE, GUEST_TEXT) != null || os.make_directory("EFI/SlopOS/made") != null {
@@ -237,7 +236,7 @@ check_files :: fn(to: slop_os.DebugLog) -> int {
             }
         }
     }
-    log_line.write(to, "disk_check: on the EFI system partition, read the host's files, wrote, moved and read back its own, listed %, and was refused a path above it",
+    runtime.log_info("on the EFI system partition, read the host's files, wrote, moved and read back its own, listed %, and was refused a path above it",
         count)
     return 0
 }
@@ -372,7 +371,7 @@ check_protocols :: fn(to: slop_os.DebugLog, working_directory: os.Channel[dir.Di
         }
         case _ => return 36
     }
-    log_line.write(to, "disk_check: narrowed EFI/SlopOS to read only, selected % of its files by *.TXT, and was refused a file made in the set",
+    runtime.log_info("narrowed EFI/SlopOS to read only, selected % of its files by *.TXT, and was refused a file made in the set",
         matched)
     return 0
 }

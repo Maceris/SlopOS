@@ -288,7 +288,7 @@ unlink_irq :: fn(device: ptr[mut Device], irq: ptr[mut Irq]) {
 
 /*
  * A message-signaled IRQ for one of device's events, owned by owner and charged to budget: routed to the next CPU in
- * turn, its message what the device's driver programs into it.
+ * turn that owner's CPU budget has, its message what the device's driver programs into it.
  */
 create_msi_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, device: ptr[mut Device]) -> Result[ptr[mut Irq], slop_os.DeviceError] {
     _ = arch.msi_device_memory() or_return .Error(.NoMsi)
@@ -331,8 +331,8 @@ create_msi_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, device: p
         release_object(kernel, object)
         return .Error(if gone { slop_os.DeviceError.ObjectGone } else { slop_os.DeviceError.TooManyVectors })
     }
-    online :: intrinsics.atomic_load_u32_acquire(&kernel.online_cpus)
-    cpu :: intrinsics.interlocked_increment_u32(&kernel.next_irq_cpu) % online
+    cpus :: if owner != 0 { cpus_of(kernel, cast[ptr[Process]](owner)) } else { ~cast[u64](0) }
+    cpu :: next_cpu_of(kernel, &kernel.next_irq_cpu, cpus)
     first, count :: arch.device_interrupt_range()
     match route_message(kernel, cpu, event, object) {
         case Ok(id) => {
@@ -369,6 +369,47 @@ create_msi_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, device: p
         }
     }
     return .Ok(irq)
+}
+
+/*
+ * A message-signaled IRQ routed to the CPU with index cpu_index instead (decisions/0099): a route there first, then its
+ * IOMMU's entry for it pointed there, or its event moved (the ITS's MOVI), or a new message for its driver to program,
+ * and its old route forgotten. Where the message changes (x86-64 without interrupt remapping), what the device raises
+ * before its driver programs the new one is lost.
+ */
+move_msi_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], cpu_index: u32) -> Result[void, slop_os.DeviceError] {
+    cpus :: kernel.cpus
+    if cast[usize](cpu_index) >= cpus.count {
+        return .Error(.InvalidArgument)
+    }
+    device :: cast[ptr[mut Device]](irq.device)
+    concurrency.lock(&device.lock)
+    defer concurrency.unlock(&device.lock)
+    if !irq.in_device || cast[usize](irq.slot) >= MAX_DEVICE_INTERRUPTS {
+        return .Error(.ObjectGone)
+    }
+    if cpu_index == irq.cpu {
+        return .Ok
+    }
+    first, count :: arch.device_interrupt_range()
+    id := first
+    match route_message(kernel, cpu_index, irq.line, cast[u64](irq)) {
+        case Ok(routed) => id = routed
+        case Error(error) => return .Error(.NoFreeInterrupt)
+    }
+    hardware_id :: cpus[cast[usize](cpu_index)].hardware_id
+    if irq.remap_iommu != 0 {
+        repoint_msi(kernel, irq, device, hardware_id, id)
+    }
+    else {
+        irq.message = arch.move_msi(irq.msi_source, irq.line, hardware_id, id)
+    }
+    old_cpu :: irq.cpu
+    old_slot :: irq.slot
+    irq.cpu = cpu_index
+    irq.slot = cast[u32](id) - cast[u32](first)
+    unroute(kernel, old_cpu, old_slot)
+    return .Ok
 }
 
 /*

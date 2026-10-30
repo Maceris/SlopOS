@@ -1,9 +1,9 @@
 package disk_check
 
+import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
-import log_line from "../../log_line"
 import storage from "../../protocols/storage"
 
 /*
@@ -101,7 +101,7 @@ check_sealed :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os
         case OpenedFiles(again) => _ = slop_os.handle_close(cast[slop_os.Handle](again.end))
         case _ => return 72
     }
-    log_line.write(to, "disk_check: on the sealed volume, was refused locked and with a wrong passphrase, unlocked it, read its file, wrote one, started key generation %, wrote another and read all three",
+    runtime.log_info("on the sealed volume, was refused locked and with a wrong passphrase, unlocked it, read its file, wrote one, started key generation %, wrote another and read all three",
         generation)
     // Stored links between it and the system volume, while it's served
     failed :: check_links(to, manager, port, system, sealed, container)

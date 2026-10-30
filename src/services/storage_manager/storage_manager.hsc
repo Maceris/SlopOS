@@ -18,13 +18,14 @@
  */
 package storage_manager
 
+import runtime from "base"
+import log_line from "../../log_line"
 import os from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
 import dir from "std/os/slop_os"
 import grant from "std/os/slop_os"
 import read_only_dir from "std/os/slop_os"
-import log_line from "../../log_line"
 import block from "../../protocols/block"
 import connector from "../../protocols/connector"
 import partitions from "../../protocols/partitions"
@@ -213,7 +214,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     if state.test_restart && state.disk_count > 0 {
         _ = kill_and_restart(&state, 0)
     }
-    log_line.write(state.log, "storage: serving % partitions on % disks", state.partition_count, state.disk_count)
+    runtime.log_info("serving % partitions on % disks", state.partition_count, state.disk_count)
 
     if !service_kit.add_client(&state.clients, state.port, clients.end) {
         return 2
@@ -254,7 +255,7 @@ kill_and_restart :: fn(state: ptr[mut Manager], index: usize) -> bool {
     if index >= MAX_DISKS {
         return false
     }
-    log_line.write(state.log, "storage: test_storage_restart: killing the partition server for disk %", index)
+    runtime.log_info("test_storage_restart: killing the partition server for disk %", index)
     starts :: state.partition_server_starts
     _ = slop_os.process_kill(state.disk_running[index].process)
     // What else arrives meanwhile is read once this is done
@@ -289,7 +290,7 @@ start_partition_server :: fn(state: ptr[mut Manager], index: usize) -> bool {
         partition_server.main, grants, watched(state, PARTITION_SERVER_KEY + cast[u64](index))) {
         case Ok(launched) => keep(&state.disk_running[index], launched)
         case Error(error) => {
-            log_line.write(state.log, "storage: no partition server for disk %: %", index, error)
+            runtime.log_info("no partition server for disk %: %", index, error)
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
             return false
         }
@@ -380,7 +381,7 @@ ended :: fn(state: ptr[mut Manager], key: u64) {
     }
     let_go(&state.disk_running[index])
     close_disk(&state.disks[index])
-    log_line.write(state.log, "storage: the partition server for disk % ended", index)
+    runtime.log_info("the partition server for disk % ended", index)
     // What's served from its partitions held connections it narrowed: gone now, so a client asking again meanwhile
     // finds nothing it was served before, and has it started again
     for partition, i in state.partitions {
@@ -398,10 +399,10 @@ ended :: fn(state: ptr[mut Manager], key: u64) {
         }
     }
     if may_start(&state.disk_running[index]) && start_partition_server(state, index) {
-        log_line.write(state.log, "storage: restarted the partition server for disk %", index)
+        runtime.log_info("restarted the partition server for disk %", index)
     }
     else {
-        log_line.write(state.log, "storage: the partition server for disk % isn't started again", index)
+        runtime.log_info("the partition server for disk % isn't started again", index)
     }
 }
 
@@ -412,7 +413,7 @@ files_gone :: fn(state: ptr[mut Manager], index: usize) {
     }
     let_go(&state.files_running[index])
     close_disk(&state.files[index])
-    log_line.write(state.log, "storage: the FAT server for partition % ended", index)
+    runtime.log_info("the FAT server for partition % ended", index)
 }
 
 // A container service that ended, or was killed, and its volume servers with it.
@@ -422,7 +423,7 @@ container_gone :: fn(state: ptr[mut Manager], index: usize) {
     }
     let_go(&state.containers_running[index])
     close_disk(&state.containers[index])
-    log_line.write(state.log, "storage: the container service for partition % ended", index)
+    runtime.log_info("the container service for partition % ended", index)
     kill_volumes(state, index)
 }
 
@@ -451,7 +452,7 @@ volume_gone :: fn(state: ptr[mut Manager], slot: usize) {
     served.gone = true
     served.unlocked = false
     count :: if served.name_bytes < served.name.count { served.name_bytes } else { served.name.count }
-    log_line.write(state.log, "storage: the volume server for the % volume ended", if count > 0 { string_of(&served.name[0], count) } else { "" })
+    runtime.log_info("the volume server for the % volume ended", if count > 0 { string_of(&served.name[0], count) } else { "" })
 }
 
 close_disk :: fn(disk: ptr[mut Disk]) {
@@ -476,7 +477,7 @@ list_partitions :: fn(state: ptr[mut Manager], disk: usize) {
                 state.partitions[slot] = storage.Partition.{disk = cast[u32](disk), index = index, info = info}
                 state.partition_count = slot + 1
                 described := info
-                log_line.write(state.log, "storage: disk % partition %: %, % blocks from %", disk, index, partitions.name_of(&described),
+                runtime.log_info("disk % partition %: %, % blocks from %", disk, index, partitions.name_of(&described),
                     info.count, info.first)
             }
             case _ => return void
@@ -648,14 +649,14 @@ files_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
             watched(state, FAT_SERVER_KEY + cast[u64](index))) {
             case Ok(launched) => keep(&state.files_running[index], launched)
             case Error(error) => {
-                log_line.write(state.log, "storage: no FAT server for disk % partition %: %", partition.disk, partition.index, error)
+                runtime.log_info("no FAT server for disk % partition %: %", partition.disk, partition.index, error)
                 _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
                 return null
             }
         }
         port :: os.port_for(startup.budget, pair.b) or_return null
         state.files[index] = Disk.{end = pair.b, port = port}
-        log_line.write(state.log, "storage: started a FAT server for disk % partition %", partition.disk, partition.index)
+        runtime.log_info("started a FAT server for disk % partition %", partition.disk, partition.index)
     }
     server :: state.files[index]
     return dir.connect(server.end, server.port, startup.budget)
@@ -689,12 +690,12 @@ container_of :: fn(state: ptr[mut Manager], index: usize) -> Disk? {
         container_service.main, grants, watched(state, CONTAINER_KEY + cast[u64](index))) {
         case Ok(launched) => keep(&state.containers_running[index], launched)
         case Error(error) => {
-            log_line.write(state.log, "storage: no container service for disk % partition %: %", partition.disk, partition.index, error)
+            runtime.log_info("no container service for disk % partition %: %", partition.disk, partition.index, error)
             _ = slop_os.handle_close(cast[slop_os.Handle](listener.b))
             return null
         }
     }
-    log_line.write(state.log, "storage: started a container service for disk % partition %", partition.disk, partition.index)
+    runtime.log_info("started a container service for disk % partition %", partition.disk, partition.index)
     port :: os.port_for(startup.budget, listener.b) or_return null
     state.containers[index] = Disk.{end = listener.b, port = port}
     return state.containers[index]
@@ -800,7 +801,7 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
         watched(state, VOLUME_KEY + cast[u64](slot))) {
         case Ok(launched) => keep(&launched_volume, launched)
         case Error(error) => {
-            log_line.write(state.log, "storage: no volume server for the % volume: %", string_of(&name[0], name.count), error)
+            runtime.log_info("no volume server for the % volume: %", string_of(&name[0], name.count), error)
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
             _ = slop_os.handle_close(cast[slop_os.Handle](control.b))
             _ = slop_os.handle_close(cast[slop_os.Handle](stored_links.b))
@@ -825,7 +826,7 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
     if slot == state.served_count {
         state.served_count = slot + 1
     }
-    log_line.write(state.log, "storage: started a volume server for the % volume%", string_of(&name[0], name.count),
+    runtime.log_info("started a volume server for the % volume%", string_of(&name[0], name.count),
         if encrypted { ", encrypted" } else { "" })
     if encrypted {
         // A wrong passphrase leaves it waiting, locked, for the next

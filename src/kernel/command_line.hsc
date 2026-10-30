@@ -44,8 +44,6 @@ Options :: struct {
     test_shootdown : bool,
     // test_ioapic: once booted, route the emulator's test device through its interrupt controller.
     test_ioapic : bool,
-    // test_budgets: once booted, run a thread with a CPU budget against one without (on 1 CPU).
-    test_budgets : bool,
     /*
      * test_device: grant the root task what the firmware tables say of the emulator's test device, and run the
      * device while an IRQ for its line exists, for the test_devices program (decisions/0069).
@@ -122,9 +120,6 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_ioapic" {
         options.test_ioapic = true
-    }
-    if word == "test_budgets" {
-        options.test_budgets = true
     }
     if word == "test_device" {
         options.test_device = true

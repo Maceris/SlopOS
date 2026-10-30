@@ -759,6 +759,22 @@ sys_irq_message :: fn(thread: ptr[mut Thread], irq: slop_os.Irq) -> Result[slop_
     return .Ok(slop_os.MsiMessage.{address = found.message.address, data = found.message.data})
 }
 
+// A message-signaled IRQ routed to the CPU with index cpu instead, which the caller's CPU budget must have.
+sys_irq_set_cpu :: fn(thread: ptr[mut Thread], irq: slop_os.Irq, cpu: u32) -> Result[void, slop_os.DeviceError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    object :: object_of[slop_os.DeviceError](process, cast[slop_os.Handle](irq), slop_os.ObjectKind.Irq, cast[slop_os.Rights](0))?
+    found :: cast[ptr[mut Irq]](object)
+    if !found.msi {
+        return .Error(.NoMsi)
+    }
+    online :: intrinsics.atomic_load_u32_acquire(&kernel.online_cpus)
+    if cpu >= online || (cpu < 64 && (cpus_of(kernel, process) >> cast[u64](cpu)) & 1 == 0) {
+        return .Error(.InvalidArgument)
+    }
+    return move_msi_irq(kernel, found, cpu)
+}
+
 sys_dma_domain_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget, flags: u32)
     -> Result[slop_os.DmaDomain, slop_os.DeviceError] {
     kernel :: per_cpu().kernel
@@ -1023,6 +1039,14 @@ sys_cpu_budget_create :: fn(thread: ptr[mut Thread], parent: slop_os.CpuBudget, 
 sys_cpu_budget_set :: fn(thread: ptr[mut Thread], budget: slop_os.CpuBudget, priority: u32, period: u64, time: u64) -> Result[void, slop_os.HandleError] {
     object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](budget), slop_os.ObjectKind.CpuBudget, slop_os.RIGHT_CPU_BUDGET_SET)?
     match set_cpu_budget(per_cpu().kernel, cast[ptr[mut CpuBudget]](object), priority, period, time) {
+        case Ok => return .Ok
+        case Error(error) => return .Error(cpu_budget_failure(error))
+    }
+}
+
+sys_cpu_budget_set_cpus :: fn(thread: ptr[mut Thread], budget: slop_os.CpuBudget, cpus: u64) -> Result[void, slop_os.HandleError] {
+    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](budget), slop_os.ObjectKind.CpuBudget, slop_os.RIGHT_CPU_BUDGET_SET)?
+    match set_cpu_budget_cpus(per_cpu().kernel, cast[ptr[mut CpuBudget]](object), cpus) {
         case Ok => return .Ok
         case Error(error) => return .Error(cpu_budget_failure(error))
     }

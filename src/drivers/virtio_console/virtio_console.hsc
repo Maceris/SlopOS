@@ -11,7 +11,6 @@ import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
 import driver_kit from "../../driver_kit"
-import log_line from "../../log_line"
 import pci from "../../pci"
 import serial from "../../protocols/serial"
 import service_kit from "../../service_kit"
@@ -85,7 +84,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     if !service_kit.add_client(&driver.clients, driver.port, clients.end) {
         return 9
     }
-    log_line.write(driver.log, "virtio_console: serving")
+    runtime.log_info("serving")
     into := os.Incoming.{}
     loop {
         with {
@@ -172,7 +171,7 @@ send :: fn(driver: ptr[mut Driver], bytes: u8[]) -> u32 {
         }
         _ = virtio.offer(&driver.transmit, driver.buffers_device + cast[u64](RECEIVE_BUFFERS) * BUFFER_BYTES, cast[u32](count), false)
         if !wait_sent(driver) {
-            log_line.write(driver.log, "virtio_console: the device didn't take % bytes to send", count)
+            runtime.log_info("the device didn't take % bytes to send", count)
             break
         }
         sent += count

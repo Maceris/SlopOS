@@ -8,10 +8,10 @@
  */
 package console
 
+import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
 import text_buffer from "std"
-import log_line from "../../log_line"
 import connector from "../../protocols/connector"
 import console_log from "../../protocols/console_log"
 import input from "../../protocols/input"
@@ -76,7 +76,7 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
     }
     dial_keyboard(&console)
     dial_serial(&console)
-    log_line.write(console.log, "console: serving")
+    runtime.log_info("serving")
     into := os.Incoming.{}
     loop {
         with {
@@ -222,7 +222,7 @@ take_typed :: fn(console: ptr[mut Console], into: ptr[mut os.Incoming]) {
             case Failed(error) => {
                 _ = slop_os.handle_close(cast[slop_os.Handle](console.line_end))
                 console.line_end = NONE
-                log_line.write(console.log, "console: its serial line went; dialing again")
+                runtime.log_info("its serial line went; dialing again")
                 dial_serial(console)
                 // Read the new one until it's empty, since only a read that finds nothing has its next answer wake the port
                 if cast[slop_os.Handle](console.line_end) == slop_os.NO_HANDLE {
@@ -256,7 +256,7 @@ take_keys :: fn(console: ptr[mut Console], into: ptr[mut os.Incoming]) {
             case Failed(error) => {
                 _ = slop_os.handle_close(cast[slop_os.Handle](console.keyboard_end))
                 console.keyboard_end = NONE
-                log_line.write(console.log, "console: its keyboard went; dialing again")
+                runtime.log_info("its keyboard went; dialing again")
                 dial_keyboard(console)
                 // As a serial line dialed again
                 if cast[slop_os.Handle](console.keyboard_end) == slop_os.NO_HANDLE {
@@ -341,7 +341,7 @@ finish_line :: fn(console: ptr[mut Console]) {
         return void
     }
     line :: string_of(&console.typed[0], console.typed_count)
-    log_line.write(console.log, "console: read %", line)
+    runtime.log_info("read %", line)
     storage : u8[LINE_BYTES + 8]
     echo := text_buffer.make(storage)
     text_buffer.append(&echo, "echo: ")

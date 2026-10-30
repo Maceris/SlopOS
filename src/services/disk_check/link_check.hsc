@@ -1,11 +1,11 @@
 package disk_check
 
+import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
 import files from "std/os/slop_os"
 import grant from "std/os/slop_os"
-import log_line from "../../log_line"
 
 /*
  * Stored links (roadmap 8f): the encrypted volume grants a directory, to write, and a file in it, to read, and the
@@ -189,7 +189,7 @@ check_links :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.
     }
     _ = slop_os.handle_close(cast[slop_os.Handle](system_port))
     _ = slop_os.handle_close(cast[slop_os.Handle](sealed_port))
-    log_line.write(to, "disk_check: links: the system volume wrote and read through two from the sealed one; what one reached granted nothing; one revoked opened nothing")
+    runtime.log_info("links: the system volume wrote and read through two from the sealed one; what one reached granted nothing; one revoked opened nothing")
     return 0
 }
 

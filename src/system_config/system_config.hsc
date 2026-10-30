@@ -46,6 +46,8 @@ import test_cpu_budgets from "../tests/test_cpu_budgets"
 import test_io_ports from "../tests/test_io_ports"
 import test_pager from "../tests/test_pager"
 import test_exits from "../tests/test_exits"
+import test_budgets from "../tests/test_budgets"
+import test_affinity from "../tests/test_affinity"
 import test_protocols from "../tests/test_protocols"
 import test_syscalls from "../tests/test_syscalls"
 import test_threads from "../tests/test_threads"
@@ -65,6 +67,8 @@ CpuShare :: struct {
     priority : u32,
     period_ns : u64,
     time_ns : u64,
+    // The CPUs its threads run on, and its IRQs are routed to, a bit per CPU's index; 0 for every CPU (decisions/0099)
+    cpus : u64,
 }
 
 /*
@@ -192,7 +196,8 @@ SERVICES :: Service.[
  */
 TEST_ENTRIES :: type.[type_of(test_channels.main), type_of(test_control.main), type_of(test_devices.main), type_of(test_memory.main),
     type_of(test_msi_dma.main), type_of(test_ports.main), type_of(test_protocols.main), type_of(test_syscalls.main), type_of(test_threads.main),
-    type_of(test_cpu_budgets.main), type_of(test_io_ports.main), type_of(test_pager.main), type_of(test_exits.main)]
+    type_of(test_cpu_budgets.main), type_of(test_io_ports.main), type_of(test_pager.main), type_of(test_exits.main), type_of(test_budgets.main),
+    type_of(test_affinity.main)]
 
 #assert same_test_entries()
 

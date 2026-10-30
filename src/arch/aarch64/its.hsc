@@ -62,6 +62,7 @@ MAX_DEVICE_BITS : u64 : 16
 COMMAND_SIZE : u64 : 32
 
 // ITS commands
+COMMAND_MOVI : u64 : 0x01
 COMMAND_SYNC : u64 : 0x05
 COMMAND_MAPD : u64 : 0x08
 COMMAND_MAPC : u64 : 0x09
@@ -369,6 +370,35 @@ route_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interfac
     run_command(its, COMMAND_INV | cast[u64](source) << 32, cast[u64](event), 0)
     if cast[usize](collection) < MAX_COLLECTIONS {
         run_command(its, COMMAND_SYNC, 0, its.collections[collection].target)
+    }
+    return message
+}
+
+// Source's event's LPI moved to the collection of the CPU with this hardware ID (MOVI), and routed to id there.
+move_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interface.InterruptId) -> arch_interface.MsiMessage {
+    system :: current_system()
+    its :: &system.its
+    message :: arch_interface.MsiMessage.{address = its.physical + GITS_TRANSLATER, data = event}
+    if !its.ready {
+        return message
+    }
+    affinity :: ((cpu_hardware_id >> 32) & 0xff) << 24 | (cpu_hardware_id & 0xffffff)
+    collection := cast[u64](0)
+    for found, index in its.collections {
+        if cast[u32](index) < its.collection_count && found.affinity == affinity {
+            collection = cast[u64](index)
+        }
+    }
+    concurrency.lock(&its.lock)
+    defer concurrency.unlock(&its.lock)
+    for route in its.routes {
+        if route.used && route.source == source && route.event == event {
+            record_route(system, cpu_hardware_id & 0xff00ffffff, cast[u32](id), route.lpi)
+            run_command(its, COMMAND_MOVI | cast[u64](source) << 32, cast[u64](event), collection)
+            if cast[usize](collection) < MAX_COLLECTIONS {
+                run_command(its, COMMAND_SYNC, 0, its.collections[collection].target)
+            }
+        }
     }
     return message
 }

@@ -367,8 +367,8 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform, cp
         case Some(connection) => grants.manager = connection
         case None => {}
     }
-    // Only the test of CPU budgets is given the root one
-    if name == "test_cpu_budgets" {
+    // Only the tests of CPU budgets are given the root one
+    if name == "test_cpu_budgets" || name == "test_budgets" || name == "test_affinity" {
         budget_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER)
             | cast[u32](slop_os.RIGHT_CPU_BUDGET_SPLIT) | cast[u32](slop_os.RIGHT_CPU_BUDGET_BIND))
         match slop_os.handle_duplicate(cast[slop_os.Handle](cpu_budget), budget_rights) {

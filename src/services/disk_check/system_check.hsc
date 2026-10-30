@@ -8,7 +8,6 @@ import file from "std/os/slop_os"
 import files from "std/os/slop_os"
 import read_only_dir from "std/os/slop_os"
 import read_only_file from "std/os/slop_os"
-import log_line from "../../log_line"
 
 /*
  * The system volume (decisions/0089): a SlopOS container's, served by a volume server through a container service.
@@ -121,7 +120,7 @@ check_system :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], esp: os.Ch
         case Done => {}
         case _ => return 50
     }
-    log_line.write(to, "disk_check: on the system volume, read % as the EFI system partition has it, wrote, synced and read back its own file, and moved it",
+    runtime.log_info("on the system volume, read % as the EFI system partition has it, wrote, synced and read back its own file, and moved it",
         MODULE_ON_VOLUME)
     return check_transactions(to, system, &buffer)
 }

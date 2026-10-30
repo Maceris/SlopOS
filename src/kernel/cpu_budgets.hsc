@@ -14,6 +14,9 @@ import concurrency from "std"
  * Destroyed, a budget's threads, processes and children go to its parent: nothing that ran on it stops running. The
  * shape of the tree, and who runs on what, changes only under kernel.cpu_budgets_lock; what a budget has left changes
  * under its CpuTime's lock, which the scheduler takes at every tick.
+ *
+ * A budget's threads run only on its CPUs (cpu_budget_set_cpus, decisions/0099): a child starts with its parent's, and
+ * a budget's are within its parent's and over its children's.
  */
 
 // The root budget's period, and the most a budget's priority can be.
@@ -106,6 +109,7 @@ create_cpu_budget :: fn(kernel: ptr[mut Kernel], owner: u64, memory_budget: u64,
     budget.time_ns = time_ns
     budget.share = share
     budget.time = make_budget(kernel, cast[u8](priority), period_ns, time_ns)
+    budget.time.cpus = parent.time.cpus
     budget.parent = cast[u64](parent)
     parent.children_share += share
     link_child(parent, budget)
@@ -148,6 +152,67 @@ set_cpu_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget], priori
     budget.time.available = min_u64(budget.time.available, budget.time.budget)
     concurrency.unlock(&budget.time.lock)
     return .Ok
+}
+
+/*
+ * The CPUs a budget's threads may run on, a bit per CPU's index: one of them online, within its parent's, and over each
+ * of its children's. Its threads move at their next tick, or the next time they're made ready.
+ */
+set_cpu_budget_cpus :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget], cpus: u64) -> Result[void, CpuBudgetError] {
+    online :: intrinsics.atomic_load_u32_acquire(&kernel.online_cpus)
+    online_mask :: if online >= 64 { ~cast[u64](0) } else { (cast[u64](1) << cast[u64](online)) - 1 }
+    if cpus & online_mask == 0 {
+        return .Error(.InvalidArgument)
+    }
+    concurrency.lock(&kernel.cpu_budgets_lock)
+    defer concurrency.unlock(&kernel.cpu_budgets_lock)
+    if budget.parent == 0 {
+        // The root's are every CPU
+        return .Error(.TooMuch)
+    }
+    parent :: cast[ptr[CpuBudget]](budget.parent)
+    if cpus & ~parent.time.cpus != 0 {
+        return .Error(.TooMuch)
+    }
+    at := budget.first_child
+    loop {
+        if at == 0 {
+            break
+        }
+        child :: cast[ptr[CpuBudget]](at)
+        if child.time.cpus & ~cpus != 0 {
+            return .Error(.TooMuch)
+        }
+        at = child.sibling_next
+    }
+    intrinsics.atomic_store_u64_release(&budget.time.cpus, cpus)
+    return .Ok
+}
+
+// The CPUs a process's threads may run on, as its budget has them.
+cpus_of :: fn(kernel: ptr[mut Kernel], process: ptr[Process]) -> u64 {
+    concurrency.lock(&kernel.cpu_budgets_lock)
+    defer concurrency.unlock(&kernel.cpu_budgets_lock)
+    if process.cpu_budget == 0 {
+        return ~cast[u64](0)
+    }
+    return cast[ptr[CpuBudget]](process.cpu_budget).time.cpus
+}
+
+/*
+ * The next online CPU in turn from counter that's among cpus, a bit per CPU's index, for something to be routed or
+ * started on: the next in turn, if none is.
+ */
+next_cpu_of :: fn(kernel: ptr[mut Kernel], counter: ptr[mut u32], cpus: u64) -> u32 {
+    online :: intrinsics.atomic_load_u32_acquire(&kernel.online_cpus)
+    start :: intrinsics.interlocked_increment_u32(counter) % online
+    for offset in 0..<online {
+        index :: (start + offset) % online
+        if index >= 64 || (cpus >> cast[u64](index)) & 1 != 0 {
+            return index
+        }
+    }
+    return start
 }
 
 // Whether every child's priority is at most priority, with the tree's lock held.
@@ -355,7 +420,7 @@ release_cpu_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget]) {
 cpu_budget_words :: fn(kernel: ptr[mut Kernel], budget: ptr[CpuBudget], words: mut u64[]) {
     concurrency.lock(&kernel.cpu_budgets_lock)
     defer concurrency.unlock(&kernel.cpu_budgets_lock)
-    values :: u64.[cast[u64](budget.time.priority), budget.period_ns, budget.time_ns, budget.share, budget.children_share]
+    values :: u64.[cast[u64](budget.time.priority), budget.period_ns, budget.time_ns, budget.share, budget.children_share, budget.time.cpus]
     for value, i in values {
         if i < words.count {
             words[i] = value

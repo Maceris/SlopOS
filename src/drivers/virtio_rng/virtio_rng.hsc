@@ -10,7 +10,6 @@ import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
 import driver_kit from "../../driver_kit"
-import log_line from "../../log_line"
 import pci from "../../pci"
 import entropy from "../../protocols/entropy"
 import rng from "../../protocols/rng"
@@ -81,7 +80,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
         }
         case None => _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
     }
-    log_line.write(driver.log, "virtio_rng: serving, a source of the entropy service's")
+    runtime.log_info("serving, a source of the entropy service's")
     serve(&driver, pair.b)
     return 0
 }

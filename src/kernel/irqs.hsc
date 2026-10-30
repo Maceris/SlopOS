@@ -66,7 +66,7 @@ Irq :: struct #align(16) {
 
 /*
  * An IRQ for controller's line, owned by owner (a Process's address), charged to budget: routed to the
- * next CPU in turn, then unmasked.
+ * next CPU in turn that owner's CPU budget has, then unmasked.
  */
 create_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, controller: u32, line: u32, trigger: arch_interface.Trigger,
     polarity: arch_interface.Polarity) -> Result[ptr[mut Irq], slop_os.DeviceError] {
@@ -85,8 +85,8 @@ create_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, controller: u
         release_object(kernel, object)
         return .Error(.NoController)
     }
-    online :: intrinsics.atomic_load_u32_acquire(&kernel.online_cpus)
-    cpu :: intrinsics.interlocked_increment_u32(&kernel.next_irq_cpu) % online
+    cpus :: if owner != 0 { cpus_of(kernel, cast[ptr[Process]](owner)) } else { ~cast[u64](0) }
+    cpu :: next_cpu_of(kernel, &kernel.next_irq_cpu, cpus)
     first, count :: arch.device_interrupt_range()
     match route_line(kernel, controller, line, cpu, trigger, polarity, object) {
         case Ok(id) => {

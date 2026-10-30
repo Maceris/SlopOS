@@ -624,6 +624,7 @@ restart_service :: fn(supervisor: ptr[mut Supervisor], index: usize) {
     name :: supervisor.started[index % supervisor.started.count].name
     if name == "events" {
         start_events(supervisor, index)
+        adopt_rings(supervisor, index)
         store_events(supervisor)
     }
     else if name == "console" {
@@ -1051,6 +1052,31 @@ retire_ring :: fn(supervisor: ptr[mut Supervisor], ring: slop_os.Memory) {
     }
     // Not taken, if it wasn't sent
     _ = slop_os.handle_close(cast[slop_os.Handle](ring))
+}
+
+/*
+ * The rings of what's still running given to an events service started again into its entry at events_slot, as the
+ * last one's went with it, so it reads their records from where that one stopped.
+ */
+adopt_rings :: fn(supervisor: ptr[mut Supervisor], events_slot: usize) {
+    if supervisor.events_end == NONE {
+        return void
+    }
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    for entry, i in supervisor.started {
+        if i != events_slot && entry.running && cast[slop_os.Handle](entry.ring) != slop_os.NO_HANDLE {
+            match slop_os.handle_duplicate(cast[slop_os.Handle](entry.ring), rights) {
+                case Ok(copy) => {
+                    out := os.Outgoing.{}
+                    request :: os.begin[events.Request](&out)
+                    request^ = .Adopt(events.AdoptOf.{source = bytes_of(&out, entry.name), ring = cast[slop_os.Memory](copy)})
+                    into := os.Incoming.{}
+                    _ = events.ask(supervisor.events_end, supervisor.events_port, &out, &into)
+                }
+                case Error(error) => {}
+            }
+        }
+    }
 }
 
 // The ring kept for the program launched last, for its entry.

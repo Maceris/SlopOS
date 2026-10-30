@@ -12,7 +12,8 @@ import dir from "std/os/slop_os"
  * records, one at a time, rendered as text; one that waits is answered once there's a record to give. Connections
  * arrive on its listener, and as Connects. Open's answer holds the ring's owning handle, which the launcher keeps,
  * giving the program one that doesn't own it, and gives back with Retire once the program has ended: so a ring outlives
- * both its program and the service, until its last records are read (decisions/0098).
+ * both its program and the service, until its last records are read (decisions/0098). A service started again is
+ * given the rings of the programs still running with Adopt, and reads them from where the last one stopped.
  */
 
 Events :: struct {}
@@ -34,6 +35,13 @@ QueryOf :: struct {
     level : u8,
     // Whether to wait for a record at or after from, if there isn't one yet, rather than answering End
     wait : bool,
+}
+
+AdoptOf :: struct {
+    // The source its records are, as Open was given it
+    source : slop_os.Relative[u8],
+    // A handle to it that doesn't own it
+    ring : slop_os.Memory,
 }
 
 Found :: struct {
@@ -60,6 +68,8 @@ Request :: union {
      * ring's, then closed (decisions/0098)
      */
     Retire(slop_os.Memory),
+    // A ring a service before this one opened, its program still running, read from here on
+    Adopt(AdoptOf),
 }
 
 Response :: union {
@@ -81,6 +91,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Query(_) => true
         case Connect(_) => true
         case Retire(_) => false
+        case Adopt(_) => false
     }
 }
 

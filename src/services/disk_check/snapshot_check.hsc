@@ -5,7 +5,6 @@ import os from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
 import read_only_dir from "std/os/slop_os"
-import log_line from "../../log_line"
 import storage from "../../protocols/storage"
 
 /*
@@ -126,7 +125,7 @@ check_snapshots :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop
         }
         case _ => return 96
     }
-    log_line.write(to, "disk_check: snapshots: read one of the system volume as it was, read only, wrote to its clone, couldn't delete it while cloned, and read one of the sealed volume")
+    runtime.log_info("snapshots: read one of the system volume as it was, read only, wrote to its clone, couldn't delete it while cloned, and read one of the sealed volume")
     return check_quotas(to, manager, port, clone, container)
 }
 

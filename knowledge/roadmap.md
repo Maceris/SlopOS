@@ -317,7 +317,9 @@ manager restarting its servers, and manifests). In four parts, before 9c, each c
    the scheduler service applying it from `system_config` and AArch64's ITS moving an LPI (`0055`, `0073`); every service
    the supervisor starts logging through `base`'s logger (`0093`). The process manager loading by bundle hash stays with
    9e (`0094`). Chosen with the owner: a CPU budget's mask comes from `system_config`, which the scheduler service sets
-   (`cpu_budget_set_cpus`), and a driver moves its IRQ to a CPU in its budget's (`irq_set_cpu`).
+   (`cpu_budget_set_cpus`), and a driver moves its IRQ to a CPU in its budget's (`irq_set_cpu`). Done 2026-10-30
+   (`decisions/0099`, ABI 10), with two scheduler bugs `test_budgets` found, and a restarted events service adopting
+   the rings of programs still running.
 3. **House-rule checks** (`0007`, `0021`, `0029`), as far as Hemera's reflection reaches: no floating point in the
    kernel, programs don't import programs, no `rawptr` outside allowed packages, no pointers in system call results,
    interrupt handlers don't allocate, hardware structs have layout asserts (by a convention to settle); `Result`s

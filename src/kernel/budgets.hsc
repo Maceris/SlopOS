@@ -30,14 +30,17 @@ CpuTime :: struct {
     priority : u8,
     period : u64,
     budget : u64,
-    // Time left now.
+    // Time left now, and what was used past it, which refills pay first
     available : u64,
+    debt : u64,
     // Oldest first, in a ring.
     refills : Refill[MAX_REFILLS],
     first : usize,
     count : usize,
     // Every CPU's whole time, like the root CPU budget's (cpu_budgets.hsc): what can't be overspent isn't counted
     unlimited : bool,
+    // The CPUs its threads may run on, a bit per CPU's index; a CPU past 63 is always one (decisions/0099)
+    cpus : u64,
 }
 
 /*
@@ -50,6 +53,7 @@ make_budget :: fn(kernel: ptr[Kernel], priority: u8, period_ns: u64, budget_ns: 
     result.period = ticks_of(kernel, period_ns)
     result.budget = ticks_of(kernel, budget_ns)
     result.available = result.budget
+    result.cpus = ~cast[u64](0)
     return result
 }
 
@@ -80,7 +84,15 @@ charge :: fn(budget: ptr[mut CpuTime], start: u64, used: u64, now: u64) {
     concurrency.lock(&budget.lock)
     defer concurrency.unlock(&budget.lock)
     replenish(budget, now)
-    budget.available = if budget.available > used { budget.available - used } else { cast[u64](0) }
+    // What ran past what was left is owed, and paid from the refills before they give time again: every tick used
+    // comes back, so a budget's time left, its refills and its debt always add up to its budget
+    if used > budget.available {
+        budget.debt += used - budget.available
+        budget.available = 0
+    }
+    else {
+        budget.available -= used
+    }
     count :: budget.count
     runtime.assert(count <= MAX_REFILLS, "a budget keeps up to MAX_REFILLS refills")
     if count == MAX_REFILLS {
@@ -101,7 +113,9 @@ replenish :: fn(budget: ptr[mut CpuTime], now: u64) {
         if refill.at > now {
             break
         }
-        budget.available = min_u64(budget.available + refill.amount, budget.budget)
+        paid :: min_u64(budget.debt, refill.amount)
+        budget.debt -= paid
+        budget.available = min_u64(budget.available + refill.amount - paid, budget.budget)
         budget.first = (budget.first + 1) % MAX_REFILLS
         budget.count -= 1
     }

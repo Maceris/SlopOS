@@ -15,6 +15,10 @@
  *
  * A query gives a source's records from this boot one at a time, rendered: from its .old file, its file, then what's
  * in memory. One that waits is answered when the source has a record for it.
+ *
+ * A service started again is given the rings of programs still running (Adopt). Their doorbells went with the service
+ * before, so they're read every ADOPTED_POLL instead; and their reader is moved on, so their writers give their format
+ * strings and schemas again.
  */
 package events_service
 
@@ -43,6 +47,8 @@ FILE_BYTES : u64 : 256 * 1024
 // The most of a record's text a query gives
 TEXT_LIMIT :: 1024
 NOWHERE : usize : 0xffffffffffffffff
+// How often adopted rings, without doorbells, are read
+ADOPTED_POLL : u64 : 20_000_000
 
 // What's stored beside the ring's entries: where a boot's records start, numbering them, and which ring they're from
 STORED_START : u16 : 16
@@ -111,6 +117,7 @@ Ring :: struct {
     source : usize,
     instance : u32,
     memory : slop_os.Memory,
+    // NO_HANDLE for an adopted ring
     doorbell : slop_os.Channel,
 }
 
@@ -190,8 +197,14 @@ main :: fn(log: slop_os.DebugLog?, clients: os.Listener[events.Events]) -> int {
         if written {
             continue
         }
+        deadline := slop_os.NO_DEADLINE
+        for i in cast[usize](0)..<MAX_RINGS {
+            if service.rings[i].source != NOWHERE && cast[slop_os.Handle](service.rings[i].doorbell) == slop_os.NO_HANDLE {
+                deadline = (slop_os.clock_monotonic() or_else 0) + ADOPTED_POLL
+            }
+        }
         packets : slop_os.Packet[8]
-        taken :: slop_os.port_wait(service.port, packets, slop_os.NO_DEADLINE) or_else 0
+        taken :: slop_os.port_wait(service.port, packets, deadline) or_else 0
         for packet, i in packets {
             if i >= cast[usize](taken) {
                 break
@@ -276,6 +289,12 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
                 response^ = .Done
                 _ = events.send_response(end, service.port, &out)
             }
+            case Adopt(adopted) => {
+                out := os.Outgoing.{}
+                response :: os.begin[events.Response](&out)
+                response^ = if adopt(service, os.items(into, adopted.source), adopted.ring) { .Done } else { .Refused }
+                _ = events.send_response(end, service.port, &out)
+            }
         }
     }
 }
@@ -285,27 +304,9 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
  * program, or null if there's no room, or the name isn't one (1 to NAME_BYTES letters, digits and underscores).
  */
 open :: fn(service: ptr[mut Service], name: u8[]) -> events.Source? {
-    if name.count == 0 || name.count > NAME_BYTES {
-        return null
-    }
-    for byte in name {
-        if !((byte >= cast[u8]('a') && byte <= cast[u8]('z')) || (byte >= cast[u8]('0') && byte <= cast[u8]('9')) || byte == cast[u8]('_')) {
-            return null
-        }
-    }
-    index := find_source(service, name)
+    index :: source_named(service, name)
     if index == NOWHERE {
-        if service.source_count >= MAX_SOURCES {
-            return null
-        }
-        index = service.source_count
-        service.source_count += 1
-        source :: &service.sources[index % MAX_SOURCES]
-        for byte, i in name {
-            source.name[i % NAME_BYTES] = byte
-        }
-        source.name_count = name.count
-        start_pending(service, source, 0)
+        return null
     }
     slot := NOWHERE
     for i in cast[usize](0)..<MAX_RINGS {
@@ -362,6 +363,62 @@ open :: fn(service: ptr[mut Service], name: u8[]) -> events.Source? {
     // A read that finds nothing, so the doorbell's next message wakes the port
     ring_doorbell(service, slot)
     return events.Source.{ring = cast[slop_os.Memory](given), doorbell = pair.b}
+}
+
+// A ring another service opened, read from here on as the source named name's: whether it's taken, or closed.
+adopt :: fn(service: ptr[mut Service], name: u8[], memory: slop_os.Memory) -> bool {
+    index :: source_named(service, name)
+    slot := NOWHERE
+    for i in cast[usize](0)..<MAX_RINGS {
+        if service.rings[i].source == NOWHERE {
+            slot = i
+            break
+        }
+    }
+    header :: read_header(memory)
+    if index == NOWHERE || slot == NOWHERE || (header is_none) {
+        _ = slop_os.handle_close(cast[slop_os.Handle](memory))
+        return false
+    }
+    // Its writer gives everything again, for a reader that knows nothing of it
+    reader :: (header or_else runtime.SlopOsEventsRing.{}).reader + 1
+    _ = slop_os.memory_write(memory, cast[u64](offset_of(runtime.SlopOsEventsRing, reader)),
+        view_of(cast[ptr[u8]](cast[rawptr](&reader)), size_of(u32)))
+    source :: &service.sources[index % MAX_SOURCES]
+    source.instances += 1
+    service.rings[slot % MAX_RINGS] = Ring.{source = index, instance = source.instances, memory = memory,
+        doorbell = cast[slop_os.Channel](slop_os.NO_HANDLE)}
+    return true
+}
+
+/*
+ * The source named name, made one if it isn't: its index, or NOWHERE if there's no room, or the name isn't one (1 to
+ * NAME_BYTES letters, digits and underscores).
+ */
+source_named :: fn(service: ptr[mut Service], name: u8[]) -> usize {
+    if name.count == 0 || name.count > NAME_BYTES {
+        return NOWHERE
+    }
+    for byte in name {
+        if !((byte >= cast[u8]('a') && byte <= cast[u8]('z')) || (byte >= cast[u8]('0') && byte <= cast[u8]('9')) || byte == cast[u8]('_')) {
+            return NOWHERE
+        }
+    }
+    index := find_source(service, name)
+    if index == NOWHERE {
+        if service.source_count >= MAX_SOURCES {
+            return NOWHERE
+        }
+        index = service.source_count
+        service.source_count += 1
+        source :: &service.sources[index % MAX_SOURCES]
+        for byte, i in name {
+            source.name[i % NAME_BYTES] = byte
+        }
+        source.name_count = name.count
+        start_pending(service, source, 0)
+    }
+    return index
 }
 
 find_source :: fn(service: ptr[Service], name: u8[]) -> usize {
@@ -448,7 +505,9 @@ release :: fn(service: ptr[mut Service], slot: usize) {
     ring :: &service.rings[slot % MAX_RINGS]
     _ = slop_os.port_unbind(service.port, DOORBELL_KEY + cast[u64](slot))
     _ = slop_os.handle_close(cast[slop_os.Handle](ring.memory))
-    _ = slop_os.handle_close(cast[slop_os.Handle](ring.doorbell))
+    if cast[slop_os.Handle](ring.doorbell) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](ring.doorbell))
+    }
     ring.source = NOWHERE
 }
 

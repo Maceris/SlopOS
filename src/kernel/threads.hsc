@@ -162,11 +162,10 @@ create_thread :: fn(kernel: ptr[mut Kernel], owner: u64, space #escaping : ptr[m
     return .Ok(thread)
 }
 
-// Make a new thread ready on the next CPU in turn.
+// Make a new thread ready on the next CPU in turn that its budget has.
 start_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
-    online :: intrinsics.atomic_load_u32_acquire(&kernel.online_cpus)
-    cpu :: cast[u32](intrinsics.interlocked_increment_u32(&kernel.next_start_cpu)) % online
-    make_ready(kernel, thread, cpu)
+    cpus :: if thread.budget != 0 { intrinsics.atomic_load_u64_acquire(&cast[ptr[mut CpuTime]](thread.budget).cpus) } else { ~cast[u64](0) }
+    make_ready(kernel, thread, next_cpu_of(kernel, &kernel.next_start_cpu, cpus))
 }
 
 /*

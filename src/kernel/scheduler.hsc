@@ -28,6 +28,9 @@ import concurrency from "std"
  * wait behind every thread running at its budget's priority, which could be for good, as a budget shared by threads
  * that keep its CPUs busy never runs out again.
  *
+ * A thread runs only on its budget's CPUs (decisions/0099): it's made ready on one of them, a CPU steals only threads
+ * that may run on it, and one found on a CPU it may no longer run on, as its budget's CPUs changed, is moved.
+ *
  * Returning to user mode and going idle are quiescent points (objects.hsc): the CPU first switches its
  * page tables to what it runs next, then reads the epoch, then checks that the thread it resumes isn't
  * being destroyed, and only then says it's quiescent. So a thread destroyed in an earlier epoch is never
@@ -62,8 +65,9 @@ level_of :: fn(thread: ptr[Thread], now: u64) -> u32 {
  * Put thread on cpu_index's run queue, and if it should run there before what runs there now, tell that
  * CPU at once.
  */
-make_ready :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], cpu_index: u32) {
+make_ready :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], asked: u32) {
     per_cpus :: kernel.per_cpus
+    cpu_index :: cpu_for(kernel, thread, asked)
     runtime.assert(cast[usize](cpu_index) < per_cpus.count, "make_ready takes an online CPU")
     target :: cast[ptr[mut PerCpu]](per_cpus[cpu_index])
     level :: level_of(thread, arch.counter())
@@ -78,6 +82,30 @@ make_ready :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], cpu_index: u3
         runtime.assert(cast[usize](cpu_index) < cpus.count, "every online CPU is in kernel.cpus")
         arch.send_ipi(cpus[cpu_index].hardware_id, .Reschedule)
     }
+}
+
+// Whether thread may run on the CPU with index cpu_index: any, without a budget, or one of its budget's.
+may_run_on :: fn(thread: ptr[Thread], cpu_index: u32) -> bool {
+    if thread.budget == 0 || cpu_index >= 64 {
+        return true
+    }
+    cpus :: intrinsics.atomic_load_u64_acquire(&cast[ptr[mut CpuTime]](thread.budget).cpus)
+    return (cpus >> cast[u64](cpu_index)) & 1 != 0
+}
+
+// cpu_index if thread may run there, otherwise the next online CPU after it that it may, or cpu_index if none.
+cpu_for :: fn(kernel: ptr[Kernel], thread: ptr[Thread], cpu_index: u32) -> u32 {
+    if may_run_on(thread, cpu_index) {
+        return cpu_index
+    }
+    online :: intrinsics.atomic_load_u32_acquire(&kernel.online_cpus)
+    for offset in 1..<online {
+        index :: (cpu_index + offset) % online
+        if may_run_on(thread, index) {
+            return index
+        }
+    }
+    return cpu_index
 }
 
 /*
@@ -106,16 +134,27 @@ schedule :: fn(tick: bool) #never_returns {
             account(cpu, cast[ptr[mut Thread]](current), now)
             current_level = level_of(cast[ptr[Thread]](current), now)
         }
+        // Its budget's CPUs changed while it ran, and this isn't one: made ready on one that is
+        if current != 0 && cpu_for(kernel, cast[ptr[Thread]](current), cpu.index) != cpu.index {
+            thread :: cast[ptr[mut Thread]](current)
+            arch.save_vector_state(cast[ptr[mut arch.VectorState]](thread.vector))
+            cpu.current = 0
+            current = 0
+            current_level = IDLE_LEVEL
+            make_ready(kernel, thread, cpu.index)
+        }
         next := cast[u64](0)
         concurrency.lock(&cpu.run_queue.lock)
         if tick {
             relevel(&cpu.run_queue, now)
         }
-        best :: highest_level(&cpu.run_queue)
-        if best != IDLE_LEVEL && (current == 0 || best > current_level || (tick && best == current_level)) {
-            next = dequeue(&cpu.run_queue, best)
-        }
+        next = pick(&cpu.run_queue, now, current, current_level, tick)
         concurrency.unlock(&cpu.run_queue.lock)
+        // Queued here before its budget's CPUs changed
+        if next != 0 && cpu_for(kernel, cast[ptr[Thread]](next), cpu.index) != cpu.index {
+            make_ready(kernel, cast[ptr[mut Thread]](next), cpu.index)
+            continue
+        }
         if next == 0 && current == 0 {
             next = steal(kernel, cpu)
         }
@@ -213,7 +252,7 @@ go_idle :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu]) #never_returns {
     arch.idle()
 }
 
-// A ready thread from another online CPU's run queue, its highest level's first, or 0.
+// A ready thread that may run on cpu from another online CPU's run queue, the first at its highest level, or 0.
 steal :: fn(kernel: ptr[Kernel], cpu: ptr[PerCpu]) -> u64 {
     per_cpus :: kernel.per_cpus
     online :: cast[usize](intrinsics.atomic_load_u32_acquire(&kernel.online_cpus))
@@ -227,8 +266,7 @@ steal :: fn(kernel: ptr[Kernel], cpu: ptr[PerCpu]) -> u64 {
             continue
         }
         concurrency.lock(&other.run_queue.lock)
-        level :: highest_level(&other.run_queue)
-        taken :: if level != IDLE_LEVEL { dequeue(&other.run_queue, level) } else { cast[u64](0) }
+        taken :: take_for(&other.run_queue, cpu.index)
         concurrency.unlock(&other.run_queue.lock)
         if taken != 0 {
             return taken
@@ -297,6 +335,49 @@ relevel :: fn(queue: ptr[mut RunQueue], now: u64) {
             enqueue(queue, thread, level)
         }
     }
+}
+
+/*
+ * The thread to run next instead of current, at current_level, or 0 to go on with it: the first at the highest level,
+ * if that's above current's, or the same at a tick. A thread waiting at a level its budget no longer has time for, spent
+ * by another of its budget's threads meanwhile, is moved down to where it belongs first, so a budget's threads together
+ * never run past it by more than a tick. Takes the lock as held.
+ */
+pick :: fn(queue: ptr[mut RunQueue], now: u64, current: u64, current_level: u32, tick: bool) -> u64 {
+    loop {
+        best :: highest_level(queue)
+        if best == IDLE_LEVEL || (current != 0 && best < current_level) || (current != 0 && best == current_level && !tick) {
+            return 0
+        }
+        candidate :: dequeue(queue, best)
+        level :: level_of(cast[ptr[Thread]](candidate), now)
+        if level == best || level == BACKGROUND_LEVEL && best == BACKGROUND_LEVEL {
+            return candidate
+        }
+        enqueue(queue, cast[ptr[mut Thread]](candidate), level)
+    }
+}
+
+// The first thread at the highest level that may run on cpu_index, taken off, or 0. Takes the lock as held.
+take_for :: fn(queue: ptr[mut RunQueue], cpu_index: u32) -> u64 {
+    for level in 0..<LEVELS #reverse {
+        index :: cast[usize](level)
+        if queue.nonempty[index / 64 % 5] & (cast[u64](1) << cast[u64](index % 64)) != 0 {
+            at := queue.first[index]
+            loop {
+                if at == 0 {
+                    break
+                }
+                thread :: cast[ptr[mut Thread]](at)
+                if may_run_on(thread, cpu_index) {
+                    unlink(queue, thread)
+                    return at
+                }
+                at = thread.next
+            }
+        }
+    }
+    return 0
 }
 
 // The first thread at level, taken off. Takes the lock as held.

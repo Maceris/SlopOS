@@ -449,6 +449,15 @@ remap_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], device: ptr[Device],
     return arch_interface.MsiMessage.{address = remapped.address, data = remapped.data}
 }
 
+// A remapped IRQ's entry pointed at id on the CPU with this hardware ID instead; its message stays as it was.
+repoint_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[Irq], device: ptr[Device], hardware_id: u64, id: arch_interface.InterruptId) {
+    registered :: translating_iommu(kernel, irq.remap_iommu) or_return void
+    path :: iommu_path(kernel, device.address)
+    concurrency.lock(&registered.lock)
+    _ = iommu_unit.remap_interrupt(&registered.unit, irq.remap_index, path.stream, hardware_id, cast[u32](id))
+    concurrency.unlock(&registered.lock)
+}
+
 // A remapped IRQ's entry raising nothing again, and free.
 unremap_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
     if irq.remap_iommu == 0 {

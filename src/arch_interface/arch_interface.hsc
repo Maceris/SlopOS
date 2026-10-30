@@ -288,6 +288,12 @@ remove_msi_device : fn(source: u32) : ---
 // Source's event, delivered as id to the CPU with this hardware ID: the message the device sends to raise it.
 route_msi : fn(source: u32, event: u32, cpu_hardware_id: u64, id: InterruptId) -> MsiMessage : ---
 
+/*
+ * Source's event, routed by route_msi, delivered as id to the CPU with this hardware ID instead: the message the device
+ * sends to raise it now, which may be the one it had.
+ */
+move_msi : fn(source: u32, event: u32, cpu_hardware_id: u64, id: InterruptId) -> MsiMessage : ---
+
 // Source's event no longer delivered.
 unroute_msi : fn(source: u32, event: u32) : ---
 

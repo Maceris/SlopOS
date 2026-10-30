@@ -131,6 +131,11 @@ route_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interfac
     }
 }
 
+// A new message: the device's driver programs it.
+move_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interface.InterruptId) -> arch_interface.MsiMessage {
+    return route_msi(source, event, cpu_hardware_id, id)
+}
+
 // Nothing to undo: the device stops sending it once its driver stops asking for it.
 unroute_msi :: fn(source: u32, event: u32) {
 }

@@ -2,8 +2,9 @@
  * The scheduler service (roadmap 9a, decisions/0037, 0093): it holds the root CPU budget, which the root task gives it,
  * and splits a budget off it for each service system_config gives a CpuShare, and one more, the default, for every
  * service without one. Whoever starts a service asks it for that service's budget by name (the scheduler protocol), and
- * puts the service on it before it starts. It adjusts nothing on its own yet; if it ends, every budget keeps what it
- * was given, as the kernel keeps them.
+ * puts the service on it before it starts, with the CPUs its share names, if it names any (decisions/0099), so its
+ * threads run there and its IRQs are routed there. It adjusts nothing on its own yet; if it ends, every budget keeps
+ * what it was given, as the kernel keeps them.
  */
 package scheduler
 
@@ -52,6 +53,12 @@ main :: fn(log: slop_os.DebugLog?, cpu_budget: slop_os.CpuBudget, clients: os.Li
             case Ok(made) => {
                 service.budgets[at] = Split.{name = each.name, budget = made}
                 service.count = at + 1
+                if own.cpus != 0 {
+                    match slop_os.cpu_budget_set_cpus(made, own.cpus) {
+                        case Ok => {}
+                        case Error(error) => log_line.write(service.log, "scheduler: % can't run on CPUs %: %", each.name, own.cpus, error)
+                    }
+                }
             }
             case Error(error) => log_line.write(service.log, "scheduler: no budget for %: %", each.name, error)
         }

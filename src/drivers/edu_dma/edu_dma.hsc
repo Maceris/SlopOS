@@ -7,10 +7,10 @@
  */
 package edu_dma
 
+import runtime from "base"
 import intrinsics from "base"
 import slop_os from "std/os"
 import driver_kit from "../../driver_kit"
-import log_line from "../../log_line"
 import pci from "../../pci"
 
 PAGE : u64 : 4096
@@ -41,7 +41,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
         case Ok(made) => memory = made
         case Error(error) => {
             if error == .Untrusted {
-                log_line.write(to, "edu_dma: no DMA memory, as no IOMMU confines its device and it isn't trusted")
+                runtime.log_info("no DMA memory, as no IOMMU confines its device and it isn't trusted")
                 return 0
             }
             return 4
@@ -51,7 +51,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     // Its memory and its DMA on
     command :: pci.read_u16(config_at, pci.COMMAND)
     pci.write_u16(config_at, pci.COMMAND, command | pci.COMMAND_MEMORY | pci.COMMAND_BUS_MASTER)
-    log_line.write(to, "edu_dma: writing outside its domain, at %", cast[rawptr](address + OUTSIDE))
+    runtime.log_info("writing outside its domain, at %{#018x}", cast[u64](address + OUTSIDE))
     write_u64(edu, DMA_SOURCE, EDU_BUFFER)
     write_u64(edu, DMA_DESTINATION, address + OUTSIDE)
     write_u64(edu, DMA_COUNT, PAGE)
@@ -67,10 +67,10 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
         }
         match slop_os.port_wait(port, packets, deadline) {
             case Ok(taken) => {}
-            case Error(error) => log_line.write(to, "edu_dma: waiting failed: %", error)
+            case Error(error) => runtime.log_info("waiting failed: %", error)
         }
     }
-    log_line.write(to, "edu_dma: wasn't stopped")
+    runtime.log_info("wasn't stopped")
     return 6
 }
 

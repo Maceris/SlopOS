@@ -129,8 +129,6 @@ Kernel :: struct {
     tags : TagSet,
     // The boot CPU's tick the kernel stops at (timer.hsc).
     stop_after_ticks : u64,
-    // test_budgets' state, as an address, while it runs (budgets_test.hsc)
-    budgets_test : u64,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : concurrency.SpinLock,
     // test_pool's state, as an address, once the boot CPU has set it up for the other CPUs (pool_test.hsc)
@@ -269,9 +267,6 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         }
         if kernel.options.test_ioapic {
             test_io_apic(kernel)
-        }
-        if kernel.options.test_budgets {
-            test_budgets(kernel)
         }
         memory_tests(kernel)
         if kernel.options.test_nmi {

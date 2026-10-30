@@ -12,7 +12,6 @@ import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
 import driver_kit from "../../driver_kit"
-import log_line from "../../log_line"
 import pci from "../../pci"
 import block from "../../protocols/block"
 import service_kit from "../../service_kit"
@@ -119,7 +118,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     if !service_kit.add_client(&driver.clients, driver.port, clients.end) {
         return 9
     }
-    log_line.write(driver.log, "virtio_blk: serving % blocks%", driver.block_count, if driver.read_only { ", read-only" } else { "" })
+    runtime.log_info("serving % blocks%", driver.block_count, if driver.read_only { ", read-only" } else { "" })
     into := os.Incoming.{}
     loop {
         with {

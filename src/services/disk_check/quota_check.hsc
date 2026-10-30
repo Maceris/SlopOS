@@ -1,9 +1,9 @@
 package disk_check
 
+import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
-import log_line from "../../log_line"
 import storage from "../../protocols/storage"
 import slopfs from "../../slopfs"
 
@@ -42,7 +42,7 @@ check_quotas :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os
     if after.quota != quota || after.used > quota + 16 {
         return 106
     }
-    log_line.write(to, "disk_check: quotas: its clone's refused a file past it and took a small one, and its usage says so")
+    runtime.log_info("quotas: its clone's refused a file past it and took a small one, and its usage says so")
     return 0
 }
 

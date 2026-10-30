@@ -531,7 +531,9 @@ drop_end_binding :: fn(kernel: ptr[mut Kernel], slot: ptr[mut EndBinding]) {
 /*
  * A binding for key on port, queuing a Signal packet when end raises any of signals: Persistent, or Once,
  * disarmed after each packet. Binding key again to the same end arms it again, with the new signals.
- * PeerClosed stays raised, so binding to an end whose peer is closed queues a packet at once.
+ * PeerClosed stays raised, so binding to an end whose peer is closed queues a packet at once; and so does
+ * binding for Readable to an end with messages waiting, which no read has found empty, so nothing else would
+ * raise it (decisions/0099).
  */
 port_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], end: ptr[mut Channel], signals: slop_os.Signals, key: u64,
     mode: slop_os.BindMode) -> slop_os.PortError? {
@@ -580,6 +582,10 @@ port_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], end: ptr[mut Chann
     binding.armed = true
     if side_of(core, 1 - side).closed {
         signal_binding(kernel, port, binding, cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+    }
+    incoming :: indices_of(kernel, core, 1 - side)
+    if intrinsics.atomic_load_u32_acquire(&incoming.tail) != intrinsics.atomic_load_u32(&incoming.head) {
+        signal_binding(kernel, port, binding, cast[u32](slop_os.SIGNAL_READABLE))
     }
     return null
 }
