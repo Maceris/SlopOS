@@ -225,7 +225,13 @@ TESTS = [
         [argument.replace("test_services", "test_services test_store") for argument in BOOT_DISK_ARGUMENTS], [
         "--expect-line=[user] bundle_store: serving",
         "--expect-line=[user] supervisor: test_store: put hello's program, read it back whole as paged memory, a wrong hash refused; "
-        "a pinned object kept (0 collected), and collected once unpinned (1)"])),
+        "a pinned object kept (0 collected), and collected once unpinned (1)",
+        "--expect-line=[user] supervisor: test_store: hello's bundle's manifest is its entry's schema"])),
+    ("starts a disk's partition server again when it's killed, and serves its volumes through the new one", 7, with_before_qemu(
+        [argument.replace("test_services", "test_services test_storage_restart") for argument in BOOT_DISK_ARGUMENTS], [
+        "--expect-line=[user] storage: test_storage_restart: killing the partition server for disk 0",
+        "--expect-line=[user] storage: the partition server for disk 0 ended",
+        "--expect-line=[user] storage: restarted the partition server for disk 0"])),
     ("doesn't start the root task with no_root_task", 0, [WITH_PROGRAMS, "--command-line=test_exit no_root_task",
         "--expect-line=[info] boot memory reclaimed"]),
     ("boots and halts (UEFI)", 0, ["--uefi", "--expect-line=[info] boot memory reclaimed"]),

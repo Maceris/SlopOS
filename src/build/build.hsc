@@ -8,7 +8,9 @@
  * Settings (--setting=name=value):
  * - targets: all (the default), kernel, programs, tests, or tools.
  * - kernel_output: the kernel's ELF, kernel.elf by default.
- * - programs_output: the folder programs go in, each <name>.elf, the current folder by default.
+ * - programs_output: the folder programs go in, each <name>.elf, the current folder by default, each with its manifest
+ *   beside it, <name>.manifest: the schema of its entry's type (decisions/0044), which the store builder puts in its
+ *   bundle (decisions/0094).
  * - tests_output: the folder test programs go in, the current folder by default.
  * - tools_output: the folder tools go in, the current folder by default.
  * - stack_check: what the kernel's prologue checks do without room, trap (the default) or morestack,
@@ -19,6 +21,8 @@ package build
 
 import compiler from "base"
 import runtime from "base"
+import os from "std"
+import schema from "std"
 import text_buffer from "std"
 import checks from "../checks"
 
@@ -40,6 +44,37 @@ build :: fn() {
         add_tools("../tools")
     }
     compiler.add_check(checks.check_program)
+    compiler.add_check(write_manifest)
+}
+
+/*
+ * A SlopOS program's manifest (decisions/0044): the schema of its main's type (std's schema.write), written beside
+ * the program as <name>.manifest. Other targets have none.
+ */
+write_manifest :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
+    if target.target_options.os != .SlopOS || !target.target_options.startup_code || !checks.ends_with(target.output_path, ".elf") {
+        return true
+    }
+    main :: match compiler.find_function(program.root, "main") {
+        case Some(found) => found
+        case None => {
+            compiler.report_error(program.root.location, "% has no main, so no manifest", target.name)
+            return false
+        }
+    }
+    bytes : u8[..]
+    defer runtime.array_free(&bytes)
+    schema.write(type_info_of(main.type), &bytes)
+    path_storage : u8[512]
+    path := text_buffer.make(path_storage)
+    text_buffer.append(&path, string_of(cast[ptr[u8]](target.output_path.data), target.output_path.count - 4))
+    text_buffer.append(&path, ".manifest")
+    written :: if bytes.count > 0 { string_of(cast[ptr[u8]](bytes.data), bytes.count) } else { "" }
+    if os.write_entire_file(text_buffer.as_string(&path), written) != null {
+        compiler.report_error(program.root.location, "couldn't write %", text_buffer.as_string(&path))
+        return false
+    }
+    return true
 }
 
 /*

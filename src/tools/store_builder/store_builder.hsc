@@ -6,8 +6,8 @@
  *
  *     store_builder <store folder> <program>...
  *
- * A bundle's manifest is all zeros for now: nothing extracts a program's entry type's schema from its build yet
- * (decisions/0044).
+ * A bundle's manifest is the program's <name>.manifest beside it, which the build writes (the schema of its entry's
+ * type, decisions/0044), put as an object of its own; all zeros if there's none.
  */
 package store_builder
 
@@ -44,7 +44,13 @@ main :: fn() -> int {
         program_bytes :: bit_cast[u8[]](program)
         program_hash :: bundle.hash_of(program_bytes)
         put(objects, program_bytes) or_return 4
-        made :: bundle.Bundle.{program = program_hash}
+        made := bundle.Bundle.{program = program_hash}
+        manifest_storage : u8[1024]
+        manifest_path :: joined(string_of(cast[ptr[u8]](path.data), path.count - extension_bytes(path)), ".manifest", &manifest_storage)
+        match os.read_entire_file(manifest_path) {
+            case Ok(manifest) => made.manifest = put(objects, bit_cast[u8[]](manifest)) or_return 4
+            case Error(error) => {}
+        }
         record : u8[..]
         bundle.write(made, &record)
         bundle_hash :: put(objects, record) or_return 4
@@ -76,6 +82,20 @@ put :: fn(objects: string, bytes: u8[]) -> bundle.Hash? {
         return null
     }
     return hash
+}
+
+// How many bytes of a path its extension takes, its dot's among them; 0 without one.
+extension_bytes :: fn(path: string) -> usize {
+    count : usize = 0
+    for character, i in path {
+        if character == '/' || character == '\\' {
+            count = 0
+        }
+        else if character == '.' {
+            count = path.count - i
+        }
+    }
+    return count
 }
 
 // A path's last part, without its extension.

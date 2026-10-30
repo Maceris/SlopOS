@@ -72,6 +72,7 @@ import clock_setting from "../../protocols/clock_setting"
 import events from "../../protocols/events"
 import bundle_store from "../../protocols/bundle_store"
 import bundle from "../../bundle"
+import schema from "std"
 import service_kit from "../../service_kit"
 import system_config from "../../system_config"
 import hello from "../../apps/hello"
@@ -176,6 +177,7 @@ StorageGrants :: struct {
     disk2 : os.Channel[connector.Connector]?,
     disk3 : os.Channel[connector.Connector]?,
     clients : os.Listener[storage.Storage],
+    command_line : slop_os.Memory?,
 }
 
 // What a virtio-rng driver is given (virtio_rng.main): its device, and a connection to the entropy service.
@@ -296,6 +298,8 @@ Supervisor :: struct {
     // Its end of the events service's listener, NONE without
     events_end : slop_os.Channel,
     events_port : slop_os.Port,
+    // The kernel's command line, to give on to the storage manager, which reads its test words
+    command_line : slop_os.Memory?,
     // Its end of the bundle store's listener, NONE without
     store_end : slop_os.Channel,
     store_port : slop_os.Port,
@@ -363,6 +367,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     test_events := false
     test_restart_services := false
     test_store := false
+    supervisor.command_line = command_line
     match command_line {
         case Some(memory) => {
             text :: service_kit.text_of(startup, memory) or_else ""
@@ -1057,6 +1062,14 @@ check_store :: fn(supervisor: ptr[mut Supervisor]) {
     once_unpinned :: collected(supervisor)
     log_line.write(supervisor.log, "supervisor: test_store: put hello's program, read it back % as paged memory, a wrong hash %; a pinned object kept (% collected), and collected once unpinned (%)",
         if put && read_back { "whole" } else { "not whole" }, if refused { "refused" } else { "taken" }, while_pinned, once_unpinned)
+    // The manifest the build wrote for hello is the schema of its entry's type, as it's worked out here
+    expected :: bundle.Hash.{bytes = schema.hash(type_info_of(type_of(hello.main)))}
+    manifest :: stored_hash(supervisor, "hello", 1)
+    matches :: match manifest {
+        case Some(stored) => bundle.same(stored, expected)
+        case None => false
+    }
+    log_line.write(supervisor.log, "supervisor: test_store: hello's bundle's manifest % its entry's schema", if matches { "is" } else { "isn't" })
 }
 
 // What the bundle store's Collect removed, or 99 if it didn't answer.
@@ -1334,9 +1347,6 @@ loaded_module :: fn(supervisor: ptr[mut Supervisor], service: system_config.Serv
  * memory, read and execute only. Null without a store, a root, or a bundle of that name.
  */
 stored_program :: fn(supervisor: ptr[mut Supervisor], module: string) -> slop_os.Memory? {
-    if supervisor.store_end == NONE {
-        return null
-    }
     name := module
     for character, i in module {
         if character == '.' {
@@ -1344,13 +1354,27 @@ stored_program :: fn(supervisor: ptr[mut Supervisor], module: string) -> slop_os
             break
         }
     }
+    program :: stored_hash(supervisor, name, 0) or_return null
+    return match store_request(supervisor, .Get(program)) {
+        case Got(object) => object.memory
+        case _ => null
+    }
+}
+
+/*
+ * What the bundle the store's boot root names name refers to, by its place: 0 its program, 1 its manifest. Null without
+ * a store, a root, or a bundle of that name.
+ */
+stored_hash :: fn(supervisor: ptr[mut Supervisor], name: string, which: usize) -> bundle.Hash? {
+    if supervisor.store_end == NONE {
+        return null
+    }
     root :: match store_request(supervisor, .Root) {
         case Rooted(hash) => hash
         case _ => return null
     }
-    // The root's entry of that name, then its bundle's program
-    program := bundle.Hash.{}
-    found := false
+    found := bundle.Hash.{}
+    have := false
     root_object :: mapped_object(supervisor, root) or_return null
     names : string[..]
     defer runtime.array_free(&names)
@@ -1362,9 +1386,9 @@ stored_program :: fn(supervisor: ptr[mut Supervisor], module: string) -> slop_os
                 match mapped_object(supervisor, bundles[i]) {
                     case Some(record) => {
                         referred : bundle.Hash[..]
-                        if bundle.bundle_refers(record.bytes, &referred) && referred.count > 0 {
-                            program = referred[0]
-                            found = true
+                        if bundle.bundle_refers(record.bytes, &referred) && which < referred.count {
+                            found = referred[which]
+                            have = true
                         }
                         runtime.array_free(&referred)
                         unmap_object(supervisor, record)
@@ -1376,13 +1400,7 @@ stored_program :: fn(supervisor: ptr[mut Supervisor], module: string) -> slop_os
         }
     }
     unmap_object(supervisor, root_object)
-    if !found {
-        return null
-    }
-    return match store_request(supervisor, .Get(program)) {
-        case Got(object) => object.memory
-        case _ => null
-    }
+    return if have { found } else { null }
 }
 
 // An object of the bundle store's, mapped to read: its memory, where, and its bytes.
@@ -1587,6 +1605,16 @@ start_storage :: fn(supervisor: ptr[mut Supervisor], again: usize) -> usize {
     grants := StorageGrants.{log = duplicate_log(supervisor), manager = manager, partition_server_module = partition_server,
         fat_server_module = fat_server, container_service_module = container_service, volume_server_module = volume_server, disk0 = disks[0],
         disk1 = disks[1], disk2 = disks[2], disk3 = disks[3], clients = os.Listener[storage.Storage].{end = pair.a}}
+    match supervisor.command_line {
+        case Some(text) => {
+            text_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+            match slop_os.handle_duplicate(cast[slop_os.Handle](text), text_rights) {
+                case Ok(copy) => grants.command_line = cast[slop_os.Memory](copy)
+                case Error(error) => {}
+            }
+        }
+        case None => {}
+    }
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "storage_manager"), service.budget,
         storage_manager.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => {
