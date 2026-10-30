@@ -476,7 +476,7 @@ listing_of :: fn(volume: ptr[mut fat.Volume], directory: u32, cursor: u64, patte
             continue
         }
         kind :: if listed.entry.attributes & fat.DIRECTORY != 0 { files.Kind.Directory } else { files.Kind.File }
-        return .Ok(files.Listing.{name = os.append(out, view_of(cast[ptr[u8]](name.data), name.count)), kind = kind,
+        return .Ok(files.Listing.{name = os.append(out, string_bytes(name)), kind = kind,
             size = cast[u64](listed.entry.size), next = cast[u64](slot)})
     }
 }
@@ -486,7 +486,7 @@ same_byte :: fn(a: u8, b: u8) -> bool {
 }
 
 info_of :: fn(out: ptr[mut os.Outgoing], kind: files.Kind, size: u64, name: string) -> files.Info {
-    return files.Info.{kind = kind, size = size, name = os.append(out, view_of(cast[ptr[u8]](name.data), name.count))}
+    return files.Info.{kind = kind, size = size, name = os.append(out, string_bytes(name))}
 }
 
 features :: fn() -> files.Features {

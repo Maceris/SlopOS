@@ -20,7 +20,7 @@ TEST_ARGON2 :: crypto.Argon2Parameters.{memory_kib = 64, passes = 1, lanes = 1}
 MARKER :: "a sealed volume's own words"
 
 text_of :: fn(text: string) -> u8[] {
-    return view_of(cast[ptr[u8]](text.data), text.count)
+    return string_bytes(text)
 }
 
 passphrase :: fn() -> u8[] {

@@ -69,7 +69,7 @@ follow :: fn(server: ptr[mut Server], index: usize, directory: u64, path: string
     out := os.Outgoing.{}
     request :: os.begin[links.Request](&out)
     request^ = .Resolve(links.Resolving.{container = link.container, volume = cast[u64](link.volume), number = cast[u64](link.number),
-        path = os.append(&out, view_of(cast[ptr[u8]](walked.rest.data), walked.rest.count)), opening = opening})
+        path = os.append(&out, string_bytes(walked.rest)), opening = opening})
     if !ask_links(server, &out, Asked.{client = index, claim = null}) {
         return .Failed(.Unavailable)
     }

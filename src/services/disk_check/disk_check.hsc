@@ -378,7 +378,7 @@ check_protocols :: fn(to: slop_os.DebugLog, working_directory: os.Channel[dir.Di
 
 // A path's bytes appended to out, as a Relative.
 bytes_of :: fn(out: ptr[mut os.Outgoing], text: string) -> slop_os.Relative[u8] {
-    return os.append(out, view_of(cast[ptr[u8]](text.data), text.count))
+    return os.append(out, string_bytes(text))
 }
 
 // One request on a dir connection, and its answer, waited for.

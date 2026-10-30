@@ -375,7 +375,7 @@ HASH_MASK : u64 : 0x00ffffffffffffff
 // A name's hash, keyed by the volume's key: 56 bits, so a List cursor holds it and a place among those alike.
 hash_name :: fn(volume: ptr[Volume], name: string) -> u64 {
     hasher := crypto.blake3_start_keyed(crypto.as_secret(volume.hash_key)) or_return 0
-    crypto.blake3_update(&hasher, view_of(cast[ptr[u8]](name.data), name.count))
+    crypto.blake3_update(&hasher, string_bytes(name))
     digest : u8[8]
     crypto.blake3_finish(&hasher, digest)
     hash : u64 = 0
@@ -496,7 +496,7 @@ add_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string, object: u
     }
     head := EntryHead.{object = cast[u64le](object), kind = cast[u32le](cast[u32](kind)), name_bytes = cast[u16le](cast[u16](name.count))}
     copy_bytes(list.bytes, list.count, view_of(cast[ptr[mut u8]](&head), size_of(EntryHead)))
-    copy_bytes(list.bytes, list.count + size_of(EntryHead), view_of(cast[ptr[u8]](name.data), name.count))
+    copy_bytes(list.bytes, list.count + size_of(EntryHead), string_bytes(name))
     list.count += size_of(EntryHead) + name.count
     put_entries(volume, directory, hash, list)?
     return .Ok

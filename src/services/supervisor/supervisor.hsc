@@ -1215,7 +1215,7 @@ check_store :: fn(supervisor: ptr[mut Supervisor]) {
     _ = slop_os.memory_unmap(supervisor.block.space, address)
     // Another object, never read, kept while it's pinned and collected once it isn't
     other :: "an object only a pin keeps"
-    other_bytes :: view_of(cast[ptr[u8]](other.data), other.count)
+    other_bytes :: string_bytes(other)
     other_hash :: bundle.hash_of(other_bytes)
     _ = put_object(supervisor, other_hash, other_bytes)
     pin_out := os.Outgoing.{}
@@ -1386,7 +1386,7 @@ check_events :: fn(supervisor: ptr[mut Supervisor], waiting: Waiting) {
 }
 
 bytes_of :: fn(out: ptr[mut os.Outgoing], text: string) -> slop_os.Relative[u8] {
-    return os.append(out, view_of(cast[ptr[u8]](text.data), text.count))
+    return os.append(out, string_bytes(text))
 }
 
 text_of_items :: fn(bytes: u8[]) -> string {
@@ -1520,7 +1520,7 @@ stored_program :: fn(supervisor: ptr[mut Supervisor], module: string) -> slop_os
     name := module
     for character, i in module {
         if character == '.' {
-            name = string_of(cast[ptr[u8]](module.data), i)
+            name = module[0..<i]
             break
         }
     }
@@ -1611,7 +1611,7 @@ read_module :: fn(supervisor: ptr[mut Supervisor], module: string) -> slop_os.Me
     out := os.Outgoing.{}
     opening :: os.begin[dir.Request](&out)
     text :: text_buffer.as_string(&path)
-    opening^ = .OpenReadOnlyFile(os.append(&out, view_of(cast[ptr[u8]](text.data), text.count)))
+    opening^ = .OpenReadOnlyFile(os.append(&out, string_bytes(text)))
     opened := cast[slop_os.Channel](slop_os.NO_HANDLE)
     match ask_system_dir(supervisor.system, supervisor.system_port, &out, &into) {
         case OpenedReadOnlyFile(made) => opened = made.end

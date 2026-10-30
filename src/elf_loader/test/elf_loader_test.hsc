@@ -22,7 +22,7 @@ main :: fn() -> int {
     text_buffer.append(&path, arguments[1])
     text_buffer.append(&path, "/hello.elf")
     contents :: os.read_entire_file(text_buffer.as_string(&path)) or_return 2
-    file :: view_of(cast[ptr[u8]](contents.data), contents.count)
+    file :: string_bytes(contents)
     executable :: elf_loader.read(file) or_return 3
     if executable.segment_count < 2 || executable.relocation_count == 0 || executable.size % elf_loader.PAGE_SIZE != 0 {
         return 4

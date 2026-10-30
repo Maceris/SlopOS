@@ -786,21 +786,21 @@ is_result :: fn(checked: type) -> bool {
 // Allow-lists
 
 /*
- * Packages whose code may use rawptr (decisions/0100, 0102), for one of these reasons, and a package joins only for one:
+ * Packages whose code may use rawptr (decisions/0100, 0102, 0103), for one of these reasons, and a package joins only for
+ * one:
  * - an instruction, or base's mem_copy and mem_zero, takes an address without a type (the architectures, the kernel,
  *   frames, elf_loader, pci, iommu_vtd, x86_64_test);
  * - base's own interfaces hide a type: the allocator's, the clock's and the context's data, the carrier's, the stack
  *   trace's addresses (the kernel, limine_boot);
  * - a device's callbacks take their context without a type, which Hemera's function values, capturing nothing, need
  *   (fat, gpt, slopfs, the servers and tests that give one, image_builder);
- * - a string's or a view's bytes are read through its data, which base gives as a rawptr (bundle_store_service,
- *   console_log, disk_check, elf_loader_test, events, events_service, log_line, scheduler, supervisor).
+ * - structs are read at offsets in a buffer of bytes, from the address of its data, which base gives as a rawptr
+ *   (events_service). A string's bytes are string_bytes(text), not its data.
  */
 RAW_POINTERS :: string.[
-    "arch_aarch64", "arch_x86_64", "bundle_store_service", "console_log", "container_service", "disk_check", "elf_loader",
-    "elf_loader_test", "events", "events_service", "fat", "fat_server", "fat_test", "frames", "gpt", "gpt_test",
-    "image_builder", "iommu_vtd", "kernel", "limine_boot", "log_line", "partition_server", "pci", "scheduler", "slopfs",
-    "slopfs_test", "supervisor", "volume_server", "x86_64_test",
+    "arch_aarch64", "arch_x86_64", "container_service", "elf_loader", "events_service", "fat", "fat_server", "fat_test",
+    "frames", "gpt", "gpt_test", "image_builder", "iommu_vtd", "kernel", "limine_boot", "partition_server", "pci",
+    "slopfs", "slopfs_test", "volume_server", "x86_64_test",
 ]
 
 // Functions of the kernel's, as package.function, that may discard a Result: losing its error is right there.

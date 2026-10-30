@@ -335,7 +335,7 @@ write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], sp
 copy_of_command_line :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> slop_os.Handle? {
     text :: kernel.command_line
     memory :: create_memory(kernel, cast[u64](process), kernel.root_budget, page_up(cast[u64](text.count) + 1)) or_return null
-    if !copy_into(kernel, memory, view_of(cast[ptr[u8]](text.data), text.count)) {
+    if !copy_into(kernel, memory, string_bytes(text)) {
         return null
     }
     return handle_for(kernel, process, cast[u64](memory), .Memory, true)

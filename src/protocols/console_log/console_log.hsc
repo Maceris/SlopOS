@@ -56,7 +56,7 @@ connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBu
 write :: fn(end: slop_os.Channel, port: slop_os.Port, line: string) -> bool {
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
-    count :: if line.count < MAX_BYTES { line.count } else { MAX_BYTES }
-    request^ = .Line(os.append(&out, view_of(cast[ptr[u8]](line.data), count)))
+    bytes :: string_bytes(line)
+    request^ = .Line(os.append(&out, if bytes.count > MAX_BYTES { bytes[0..<MAX_BYTES] } else { bytes }))
     return send_request(end, port, &out) == null
 }

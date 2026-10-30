@@ -14,5 +14,5 @@ write :: fn(log: slop_os.DebugLog, format: string, values: any...) {
     line := text_buffer.make(storage)
     text_buffer.append_format(&line, format, values)
     text :: text_buffer.as_string(&line)
-    _ = slop_os.debug_log(log, view_of(cast[ptr[u8]](text.data), text.count))
+    _ = slop_os.debug_log(log, string_bytes(text))
 }

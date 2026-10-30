@@ -203,7 +203,7 @@ next_name :: fn(volume: ptr[mut fat.Volume], directory: u32, slot: u32) -> strin
 }
 
 written :: fn(volume: ptr[mut fat.Volume], entry: ptr[mut fat.Entry], offset: u64, text: string) -> bool {
-    return (fat.write(volume, entry, offset, view_of(cast[ptr[u8]](text.data), text.count)) or_else 0) == cast[u64](text.count)
+    return (fat.write(volume, entry, offset, string_bytes(text)) or_else 0) == cast[u64](text.count)
 }
 
 read_back :: fn(volume: ptr[mut fat.Volume], entry: ptr[fat.Entry]) -> string {

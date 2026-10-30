@@ -116,7 +116,7 @@ ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], i
 open :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> os.LaunchEvents? {
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
-    request^ = .Open(os.append(&out, view_of(cast[ptr[u8]](name.data), name.count)))
+    request^ = .Open(os.append(&out, string_bytes(name)))
     into := os.Incoming.{}
     return match ask(end, port, &out, &into) {
         case Opened(source) => os.LaunchEvents.{ring = source.ring, doorbell = source.doorbell}

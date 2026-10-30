@@ -391,7 +391,7 @@ copy_to_fat :: fn(volume: ptr[mut fat.Volume], directory: u32, folder: string, d
         bytes :: os.read_entire_file(source) or_return .Unread
         defer runtime.free_array(bit_cast[u8[]](bytes))
         made := fat.create(volume, directory, entry.name, false) or_return .NotMade
-        written :: fat.write(volume, &made, 0, view_of(cast[ptr[u8]](bytes.data), bytes.count)) or_return .NotWritten
+        written :: fat.write(volume, &made, 0, string_bytes(bytes)) or_return .NotWritten
         if written != cast[u64](bytes.count) {
             return .NotWritten
         }
@@ -426,11 +426,11 @@ fill_slopfs :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure
     if partition.sealed_name.count > 0 {
         sealed_key : u8[32]
         random.fill(sealed_key)
-        passphrase :: view_of(cast[ptr[u8]](partition.sealed_passphrase.data), partition.sealed_passphrase.count)
+        passphrase :: string_bytes(partition.sealed_passphrase)
         sealed :: slopfs.create_sealed_volume(container, partition.sealed_name, sealed_key, 0, .ChaCha20Poly1305, passphrase,
             SEALED_ARGON2) or_return .NotMade
         made :: slopfs.create(sealed, slopfs.ROOT_OBJECT, "sealed.txt", .File) or_return .NotMade
-        if slopfs.write(sealed, made, 0, view_of(cast[ptr[u8]](SEALED_TEXT.data), SEALED_TEXT.count)) is_error {
+        if slopfs.write(sealed, made, 0, string_bytes(SEALED_TEXT)) is_error {
             return .NotWritten
         }
     }
@@ -464,7 +464,7 @@ copy_to_slopfs :: fn(volume: ptr[mut slopfs.Volume], directory: u64, folder: str
         bytes :: os.read_entire_file(source) or_return .Unread
         defer runtime.free_array(bit_cast[u8[]](bytes))
         made :: slopfs.create(volume, directory, entry.name, .File) or_return .NotMade
-        if slopfs.write(volume, made, 0, view_of(cast[ptr[u8]](bytes.data), bytes.count)) is_error {
+        if slopfs.write(volume, made, 0, string_bytes(bytes)) is_error {
             return .NotWritten
         }
     }

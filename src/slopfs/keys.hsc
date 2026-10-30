@@ -172,7 +172,7 @@ derive_block_key #constant_time :: fn(generation: ptr[crypto.Key256], transactio
     match crypto.blake3_start_keyed(key_bytes) {
         case Some(started) => {
             hasher := started
-            crypto.blake3_update_secret(&hasher, crypto.as_secret(view_of(cast[ptr[u8]](BLOCK_KEY_CONTEXT.data), BLOCK_KEY_CONTEXT.count)))
+            crypto.blake3_update_secret(&hasher, crypto.as_secret(string_bytes(BLOCK_KEY_CONTEXT)))
             transaction_bytes : u8[8]
             put_u64(transaction_bytes, 0, transaction)
             crypto.blake3_update_secret(&hasher, crypto.as_secret(transaction_bytes))

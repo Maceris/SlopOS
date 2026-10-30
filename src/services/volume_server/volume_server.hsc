@@ -595,7 +595,7 @@ same_byte :: fn(a: u8, b: u8) -> bool {
 }
 
 info_of :: fn(out: ptr[mut os.Outgoing], kind: files.Kind, size: u64, name: string) -> files.Info {
-    return files.Info.{kind = kind, size = size, name = os.append(out, view_of(cast[ptr[u8]](name.data), name.count))}
+    return files.Info.{kind = kind, size = size, name = os.append(out, string_bytes(name))}
 }
 
 features :: fn() -> files.Features {

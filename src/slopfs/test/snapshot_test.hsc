@@ -17,7 +17,7 @@ FIRST_TEXT :: "what the volume held when the snapshot was taken"
 SECOND_TEXT :: "what it holds now"
 
 name_bytes :: fn(text: string) -> u8[] {
-    return view_of(cast[ptr[u8]](text.data), text.count)
+    return string_bytes(text)
 }
 
 // Whether the file at name in a volume's root holds text and only that.

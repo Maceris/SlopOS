@@ -17,7 +17,7 @@ Image :: struct {
 main :: fn() -> int {
     // The CRC everyone checks against
     check :: "123456789"
-    if gpt.crc32(view_of(cast[ptr[u8]](check.data), check.count)) != 0xcbf43926 {
+    if gpt.crc32(string_bytes(check)) != 0xcbf43926 {
         return 1
     }
     bytes, error :: runtime.new_array(u8, cast[usize](BLOCKS * gpt.BLOCK_BYTES))

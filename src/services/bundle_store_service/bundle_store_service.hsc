@@ -186,7 +186,7 @@ get :: fn(service: ptr[mut Store], hash: bundle.Hash) -> bundle_store.Object? {
     path :: path_in("objects/", bundle.hex(hash, &hex_storage), &path_storage)
     out := os.Outgoing.{}
     request :: os.begin[dir.Request](&out)
-    request^ = .OpenReadOnlyFile(os.append(&out, view_of(cast[ptr[u8]](path.data), path.count)))
+    request^ = .OpenReadOnlyFile(os.append(&out, string_bytes(path)))
     into := os.Incoming.{}
     file :: match ask_dir(service, &out, &into) {
         case OpenedReadOnlyFile(connection) => connection.end
@@ -316,7 +316,7 @@ reopen :: fn(service: ptr[mut Store], open: ptr[mut Open]) -> bool {
     path :: path_in("objects/", bundle.hex(open.hash, &hex_storage), &path_storage)
     out := os.Outgoing.{}
     request :: os.begin[dir.Request](&out)
-    request^ = .OpenReadOnlyFile(os.append(&out, view_of(cast[ptr[u8]](path.data), path.count)))
+    request^ = .OpenReadOnlyFile(os.append(&out, string_bytes(path)))
     into := os.Incoming.{}
     match ask_dir(service, &out, &into) {
         case OpenedReadOnlyFile(connection) => open.file = connection.end

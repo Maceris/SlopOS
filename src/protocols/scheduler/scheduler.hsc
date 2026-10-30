@@ -57,7 +57,7 @@ connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBu
 budget_for :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> slop_os.CpuBudget? {
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
-    request^ = .BudgetFor(os.append(&out, view_of(cast[ptr[u8]](name.data), name.count)))
+    request^ = .BudgetFor(os.append(&out, string_bytes(name)))
     if send_request(end, port, &out) is_some {
         return null
     }

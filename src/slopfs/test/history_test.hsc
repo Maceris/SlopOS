@@ -131,5 +131,5 @@ check_history :: fn() -> int {
 }
 
 text_bytes :: fn(text: string) -> u8[] {
-    return view_of(cast[ptr[u8]](text.data), text.count)
+    return string_bytes(text)
 }

@@ -122,8 +122,8 @@ log_op :: fn(server: ptr[mut Server], index: usize, op: Op, creation: u32, numbe
         data_bytes = cast[u32le](cast[u32](data.count)), path_bytes = cast[u16le](cast[u16](path.count)), to_bytes = cast[u16le](cast[u16](to.count))}
     at := cast[usize](transaction.used)
     at = put_bytes(log, at, view_of(cast[ptr[u8]](&head), size_of(LogHead)))
-    at = put_bytes(log, at, view_of(cast[ptr[u8]](path.data), path.count))
-    at = put_bytes(log, at, view_of(cast[ptr[u8]](to.data), to.count))
+    at = put_bytes(log, at, string_bytes(path))
+    at = put_bytes(log, at, string_bytes(to))
     at = put_bytes(log, at, data)
     transaction.used += length
     return true
