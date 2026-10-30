@@ -13,6 +13,7 @@ import text_buffer from "std"
 import os from "std"
 import clock_service from "../services/clock"
 import events_service from "../services/events_service"
+import bundle_store_service from "../services/bundle_store_service"
 import console from "../services/console"
 import disk_check from "../services/disk_check"
 import entropy from "../services/entropy"
@@ -129,7 +130,7 @@ SERVICES :: Service.[
         entry = type_of(scheduler_service.main)},
     Service.{name = "platform", boot_set = true, module = "platform.elf", starter = .RootTask, by_manager = true, budget = 8 * MIB,
         entry = type_of(platform.main)},
-    Service.{name = "supervisor", boot_set = true, module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 96 * MIB,
+    Service.{name = "supervisor", boot_set = true, module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 128 * MIB,
         entry = type_of(supervisor.main)},
     // Every program's log records but the root task's and what it starts, first, so each is given a ring for them (decisions/0093)
     Service.{name = "events", boot_set = true, module = "events_service.elf", starter = .Supervisor, by_manager = true, budget = 8 * MIB,
@@ -141,6 +142,9 @@ SERVICES :: Service.[
         entry = type_of(console.main), cpu = INTERACTIVE_CPU},
     Service.{name = "hello", module = "hello.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(hello.main)},
+    // Objects by their hashes, on the system volume, paged into whoever reads them (decisions/0094)
+    Service.{name = "bundle_store", boot_set = true, module = "bundle_store_service.elf", starter = .Supervisor, by_manager = true,
+        budget = 16 * MIB, entry = type_of(bundle_store_service.main)},
     // Every disk's, and a partition server for each, which holds only its disk (decisions/0086)
     Service.{name = "storage_manager", boot_set = true, module = "storage_manager.elf", starter = .Supervisor, by_manager = true, budget = 64 * MIB,
         entry = type_of(storage_manager.main)},

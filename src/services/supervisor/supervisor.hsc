@@ -37,12 +37,19 @@
  * test_events on the kernel's command line, a query waits for hello's first record from before hello starts, and once
  * everything has, records of hello's and the clock service's are read back from the system volume.
  *
+ * The bundle store (decisions/0094) is started once the storage manager has given the system volume, with its "store"
+ * directory, made if it isn't there; the supervisor keeps the other end of its listener. With test_store on the kernel's
+ * command line, once everything has started, the supervisor puts hello's program in it and reads it back as paged
+ * memory, is refused one whose bytes don't have the hash given, and sees an object kept while it's pinned and
+ * collected once it isn't.
+ *
  * The storage manager (decisions/0086, 0087), started when there's a disk, is given connectors to every disk's driver,
  * the process manager, and the partition server's and FAT server's modules; the disk check a connector to it, and the
  * first EFI system partition's root, which it asks the storage manager for, as its working directory.
  */
 package supervisor
 
+import runtime from "base"
 import os from "std"
 import text_buffer from "std"
 import slop_os from "std/os"
@@ -63,11 +70,14 @@ import storage from "../../protocols/storage"
 import supervision from "../../protocols/supervision"
 import clock_setting from "../../protocols/clock_setting"
 import events from "../../protocols/events"
+import bundle_store from "../../protocols/bundle_store"
+import bundle from "../../bundle"
 import service_kit from "../../service_kit"
 import system_config from "../../system_config"
 import hello from "../../apps/hello"
 import clock_service from "../clock"
 import events_service from "../events_service"
+import bundle_store_service from "../bundle_store_service"
 import console from "../console"
 import disk_check from "../disk_check"
 import storage_manager from "../storage_manager"
@@ -121,6 +131,12 @@ ClockGrants :: struct {
 EventsGrants :: struct {
     log : slop_os.DebugLog?,
     clients : os.Listener[events.Events],
+}
+
+// What the bundle store is given (bundle_store_service.main).
+StoreGrants :: struct {
+    store : os.Channel[dir.Dir],
+    clients : os.Listener[bundle_store.BundleStore],
 }
 
 // What hello is given (hello.main).
@@ -210,6 +226,7 @@ ServingGrants :: struct[P] {
 // The modules of what the supervisor starts.
 Modules :: struct {
     events : slop_os.Memory?,
+    bundle_store : slop_os.Memory?,
     clock : slop_os.Memory?,
     hello : slop_os.Memory?,
     console : slop_os.Memory?,
@@ -279,6 +296,9 @@ Supervisor :: struct {
     // Its end of the events service's listener, NONE without
     events_end : slop_os.Channel,
     events_port : slop_os.Port,
+    // Its end of the bundle store's listener, NONE without
+    store_end : slop_os.Channel,
+    store_port : slop_os.Port,
     // The entry in started a restart is launching into, whose key its process is watched under; NOWHERE otherwise
     relaunching : usize,
     modules : Modules,
@@ -314,12 +334,12 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     edu_dma_module: slop_os.Memory?, storage_manager_module: slop_os.Memory?, partition_server_module: slop_os.Memory?,
     fat_server_module: slop_os.Memory?, container_service_module: slop_os.Memory?, volume_server_module: slop_os.Memory?,
     command_line: slop_os.Memory?, scheduler: os.Channel[scheduler_protocol.Scheduler]?, clock_module: slop_os.Memory?,
-    events_module: slop_os.Memory?) -> int {
+    events_module: slop_os.Memory?, bundle_store_module: slop_os.Memory?) -> int {
     startup :: slop_os.startup_block()
     supervisor := Supervisor.{block = startup, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, console = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
-        events_end = NONE, relaunching = NOWHERE, launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)}
-    supervisor.modules = Modules.{events = events_module, clock = clock_module, hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
+        events_end = NONE, store_end = NONE, relaunching = NOWHERE, launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)}
+    supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, clock = clock_module, hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
         container_service = container_service_module, volume_server = volume_server_module}
@@ -342,6 +362,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     test_clock := false
     test_events := false
     test_restart_services := false
+    test_store := false
     match command_line {
         case Some(memory) => {
             text :: service_kit.text_of(startup, memory) or_else ""
@@ -350,6 +371,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             test_clock = service_kit.has_word(text, "test_clock")
             test_events = service_kit.has_word(text, "test_events")
             test_restart_services = service_kit.has_word(text, "test_restart_services")
+            test_store = service_kit.has_word(text, "test_store")
         }
         case None => {}
     }
@@ -425,6 +447,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     }
     if test_events {
         check_events(&supervisor, waiting)
+    }
+    if test_store {
+        check_store(&supervisor)
     }
     if test_restart_services {
         restart_services(&supervisor, storage_slot)
@@ -565,6 +590,9 @@ restart_service :: fn(supervisor: ptr[mut Supervisor], index: usize) {
     else if name == "hello" {
         start_hello(supervisor, index)
     }
+    else if name == "bundle_store" {
+        start_store(supervisor, index)
+    }
     else if name == "storage_manager" {
         if start_storage(supervisor, index) != NOWHERE {
             open_system(supervisor, index)
@@ -606,6 +634,9 @@ open_system :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
             supervisor.system = root.end
             supervisor.system_port = os.port_for(supervisor.block.budget, root.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
             store_events(supervisor)
+            if supervisor.store_end == NONE {
+                start_store(supervisor, NOWHERE)
+            }
         }
         case None => {}
     }
@@ -911,6 +942,171 @@ start_events :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     }
 }
 
+/*
+ * The bundle store, with the system volume's "store" directory, made if it isn't there, and a listener whose other end
+ * the supervisor keeps; into its entry at again, unless that's NOWHERE.
+ */
+start_store :: fn(supervisor: ptr[mut Supervisor], again: usize) {
+    service :: system_config.service("bundle_store") or_return void
+    directory :: system_directory(supervisor, "store") or_return void
+    if supervisor.store_end != NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.store_end))
+        _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.store_port))
+        supervisor.store_end = NONE
+    }
+    pair :: os.channel_for[bundle_store.BundleStore](supervisor.block.budget, 0) or_return void
+    grants := StoreGrants.{store = directory, clients = os.Listener[bundle_store.BundleStore].{end = pair.a}}
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
+        bundle_store_service.main, grants, options_for(supervisor, service.name)) {
+        case Ok(launched) => {
+            _ = place(supervisor, "bundle_store", kept(supervisor, launched), again)
+            supervisor.store_end = pair.b
+            supervisor.store_port = os.port_for(supervisor.block.budget, pair.b) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+        }
+        case Error(error) => {
+            failed(supervisor, service.name, error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        }
+    }
+}
+
+// A directory of the system volume's root, made if it isn't there, or null.
+system_directory :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.Channel[dir.Dir]? {
+    if supervisor.system == NONE {
+        return null
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[dir.Request](&out)
+    request^ = .OpenDirectory(dir.OpenDirectory.{path = bytes_of(&out, name), create = true})
+    if dir.send_request(supervisor.system, supervisor.system_port, &out) is_some {
+        return null
+    }
+    into := os.Incoming.{}
+    loop {
+        match dir.receive_response(supervisor.system, supervisor.system_port, &into, true) {
+            case Received => break
+            case Failed(error) => return null
+            case _ => continue
+        }
+    }
+    return match os.message_of[dir.Response](&into)^ {
+        case OpenedDirectory(opened) => opened
+        case _ => null
+    }
+}
+
+/*
+ * test_store, once everything has started: hello's program put in the bundle store and read back as paged memory,
+ * whole; one whose bytes don't have the hash given refused; and the program kept while it's pinned, and collected once
+ * it isn't.
+ */
+check_store :: fn(supervisor: ptr[mut Supervisor]) {
+    if supervisor.store_end == NONE {
+        log_line.write(supervisor.log, "supervisor: test_store: no bundle store")
+        return void
+    }
+    module :: module_of(supervisor, "hello")
+    size :: slop_os.memory_size(module) or_else 0
+    address :: map_in(supervisor, module, size, slop_os.PROTECTION_READ)
+    if address == 0 {
+        log_line.write(supervisor.log, "supervisor: test_store: hello's program couldn't be read")
+        return void
+    }
+    program :: view_of(cast[ptr[u8]](address), cast[usize](size))
+    hash :: bundle.hash_of(program)
+    put :: put_object(supervisor, hash, program)
+    wrong := hash
+    wrong.bytes[0] = wrong.bytes[0] ~ 1
+    refused :: !put_object(supervisor, wrong, program)
+    // Read back through paged memory, every byte
+    read_back := false
+    match store_request(supervisor, .Get(hash)) {
+        case Got(object) => {
+            mapped :: map_in(supervisor, object.memory, (object.size + 4095) & ~cast[u64](4095), slop_os.PROTECTION_READ)
+            if mapped != 0 && object.size == size {
+                read_back = true
+                for byte, i in program {
+                    if cast[ptr[u8]](cast[rawptr](mapped + cast[u64](i)))^ != byte {
+                        read_back = false
+                        break
+                    }
+                }
+                _ = slop_os.memory_unmap(supervisor.block.space, mapped)
+            }
+            _ = slop_os.handle_close(cast[slop_os.Handle](object.memory))
+        }
+        case _ => {}
+    }
+    _ = slop_os.memory_unmap(supervisor.block.space, address)
+    // Another object, never read, kept while it's pinned and collected once it isn't
+    other :: "an object only a pin keeps"
+    other_bytes :: view_of(cast[ptr[u8]](other.data), other.count)
+    other_hash :: bundle.hash_of(other_bytes)
+    _ = put_object(supervisor, other_hash, other_bytes)
+    pin_out := os.Outgoing.{}
+    pin :: os.begin[bundle_store.Request](&pin_out)
+    pin^ = .Pin(bundle_store.PinOf.{name = bytes_of(&pin_out, "test"), hash = other_hash})
+    pin_into := os.Incoming.{}
+    _ = bundle_store.ask(supervisor.store_end, supervisor.store_port, &pin_out, &pin_into)
+    while_pinned :: collected(supervisor)
+    unpin_out := os.Outgoing.{}
+    unpin :: os.begin[bundle_store.Request](&unpin_out)
+    unpin^ = .Unpin(bytes_of(&unpin_out, "test"))
+    unpin_into := os.Incoming.{}
+    _ = bundle_store.ask(supervisor.store_end, supervisor.store_port, &unpin_out, &unpin_into)
+    once_unpinned :: collected(supervisor)
+    log_line.write(supervisor.log, "supervisor: test_store: put hello's program, read it back % as paged memory, a wrong hash %; a pinned object kept (% collected), and collected once unpinned (%)",
+        if put && read_back { "whole" } else { "not whole" }, if refused { "refused" } else { "taken" }, while_pinned, once_unpinned)
+}
+
+// What the bundle store's Collect removed, or 99 if it didn't answer.
+collected :: fn(supervisor: ptr[mut Supervisor]) -> u64 {
+    return match store_request(supervisor, .Collect) {
+        case Collected(count) => count
+        case _ => cast[u64](99)
+    }
+}
+
+// Memory mapped in the supervisor's space, size bytes of it: where, or 0.
+map_in :: fn(supervisor: ptr[mut Supervisor], memory: slop_os.Memory, size: u64, protection: slop_os.Protection) -> u64 {
+    if size == 0 {
+        return 0
+    }
+    address :: runtime.reserve_addresses(cast[usize](size)) or_return 0
+    if slop_os.memory_map(memory, supervisor.block.space, address, 0, size, protection) is_error {
+        return 0
+    }
+    return address
+}
+
+// An object put in the bundle store from a copy of bytes: whether it took it.
+put_object :: fn(supervisor: ptr[mut Supervisor], hash: bundle.Hash, bytes: u8[]) -> bool {
+    size :: (cast[u64](bytes.count) + 4095) & ~cast[u64](4095)
+    data :: slop_os.memory_create(supervisor.block.budget, if size == 0 { cast[u64](4096) } else { size }) or_return false
+    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
+    address :: map_in(supervisor, data, size, read_write)
+    if address == 0 {
+        _ = slop_os.handle_close(cast[slop_os.Handle](data))
+        return false
+    }
+    for byte, i in bytes {
+        cast[ptr[mut u8]](cast[rawptr](address + cast[u64](i)))^ = byte
+    }
+    _ = slop_os.memory_unmap(supervisor.block.space, address)
+    return match store_request(supervisor, .Put(bundle_store.PutOf.{hash = hash, size = cast[u64](bytes.count), data = data})) {
+        case Done => true
+        case _ => false
+    }
+}
+
+store_request :: fn(supervisor: ptr[mut Supervisor], request: bundle_store.Request) -> bundle_store.Response {
+    out := os.Outgoing.{}
+    made :: os.begin[bundle_store.Request](&out)
+    made^ = request
+    into := os.Incoming.{}
+    return bundle_store.ask(supervisor.store_end, supervisor.store_port, &out, &into)
+}
+
 // The system volume's "events" directory, made if it isn't there, given to the events service to keep records in.
 store_events :: fn(supervisor: ptr[mut Supervisor]) {
     if supervisor.events_end == NONE || supervisor.system == NONE {
@@ -1099,7 +1295,8 @@ module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory
         else if name == "edu_dma" { modules.edu_dma } else if name == "storage_manager" { modules.storage_manager }
         else if name == "console" { modules.console } else if name == "disk_check" { modules.disk_check }
         else if name == "hello" { modules.hello } else if name == "clock" { modules.clock }
-        else if name == "events" { modules.events } else { cast[slop_os.Memory?](null) }
+        else if name == "events" { modules.events } else if name == "bundle_store" { modules.bundle_store }
+        else { cast[slop_os.Memory?](null) }
     return found or_else none
 }
 

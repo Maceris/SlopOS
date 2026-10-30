@@ -45,6 +45,29 @@ Delivered in parts, each committed as it passes, with one report at the end: 9b1
   mapping supplied once; mapping it to write, asking what's wanted without the right to write it, and a pager with no
   binding are refused.
 
+### 9b2: The store service
+- **Records** (`src/bundle`): `Hash`, `Bundle` (program, manifest, libraries, resources) and `Root` (entries, each a
+  name and a bundle) are written as their type's schema hash, then the value as `schema.write_value` writes it; the
+  store reads back only what it needs, the hashes a bundle refers to and a root's entries, checking the schema hash
+  first.
+- **The store** (`src/services/bundle_store_service`, the `bundle_store` protocol), in the system volume's `store`
+  directory, which the supervisor makes and gives it once the storage manager has given the volume: `objects/<hex>`,
+  each written as `objects/<hex>.part` and renamed once whole; `root`, the boot root's hash in hex; `pins/<name>`.
+  - `Get(hash)` opens the object's file read-only, has the file server read into a page of the store's own memory
+    (`UseBuffer`), and makes paged memory of the object's size in pages, bound to the store's port; each wanted page is
+    read into that page, zeroed past the object's end, and supplied. The same memory is given to everyone who asks,
+    read and execute only; up to 64 objects are open at once, and stay open.
+  - `Put(hash, size, data)` maps the memory given, hashes its first size bytes, and keeps them only if the hash is the
+    one given.
+  - `Pin` and `Unpin` by name; `SetRoot`, for an object it has, and `Root`.
+  - `Collect` marks the boot root, every pin, a root's bundles and a bundle's program, manifest, libraries and
+    resources, and removes every other object but those open, and every `.part` left over.
+- **The supervisor** starts it with the system volume, restarts it like anything else, and keeps its listener's other
+  end; its budget grew to 128 MiB, as the store's 16 joined the storage manager's 64.
+- **Tests**: "keeps objects in the bundle store and pages them in", on both architectures, from the disk: with
+  `test_store`, the supervisor puts hello's program in the store and reads it back whole through paged memory, is
+  refused it under a wrong hash, and sees an object it never read kept while it's pinned and collected once unpinned.
+
 ## Alternatives considered
 - **The store in the volume server**, paging straight from its block cache: fewer copies, but the volume server would
   grow a second protocol and the store's logic.

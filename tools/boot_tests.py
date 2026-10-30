@@ -106,7 +106,7 @@ def with_before_qemu(arguments: list[str], more: list[str]) -> list[str]:
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 37 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 38 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 3 budgets and the default split off the root's, 800000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -221,6 +221,11 @@ TESTS = [
         "--expect-line=[user] supervisor: test_restart_services: killing storage_manager",
         "--expect-line=[user] supervisor: restarted storage_manager",
         "--expect-line=[user] supervisor: test_restart_services: the storage manager, started again, gave the system volume"])),
+    ("keeps objects in the bundle store and pages them in", 7, with_before_qemu(
+        [argument.replace("test_services", "test_services test_store") for argument in BOOT_DISK_ARGUMENTS], [
+        "--expect-line=[user] bundle_store: serving",
+        "--expect-line=[user] supervisor: test_store: put hello's program, read it back whole as paged memory, a wrong hash refused; "
+        "a pinned object kept (0 collected), and collected once unpinned (1)"])),
     ("doesn't start the root task with no_root_task", 0, [WITH_PROGRAMS, "--command-line=test_exit no_root_task",
         "--expect-line=[info] boot memory reclaimed"]),
     ("boots and halts (UEFI)", 0, ["--uefi", "--expect-line=[info] boot memory reclaimed"]),
