@@ -1,7 +1,8 @@
 /*
  * The scheduler service (roadmap 9a, decisions/0037, 0093): it holds the root CPU budget, which the root task gives it,
- * and splits a budget off it for each service system_config gives a CpuShare, and one more, the default, for every
- * service without one. Whoever starts a service asks it for that service's budget by name (the scheduler protocol), and
+ * and splits a budget off it for each service the system configuration gives a CPU share, and one more, the default,
+ * for every service without one. The system configuration is the boot set's, which the root task gives it, and it
+ * checks again (decisions/0110). Whoever starts a service asks it for that service's budget by name (the scheduler protocol), and
  * puts the service on it before it starts, with the CPUs its share names, if it names any (decisions/0099), so its
  * threads run there and its IRQs are routed there. It adjusts nothing on its own yet; if it ends, every budget keeps
  * what it was given, as the kernel keeps them.
@@ -13,7 +14,7 @@ import slop_os from "std/os"
 import log_line from "../../log_line"
 import service_kit from "../../service_kit"
 import protocol from "../../protocols/scheduler"
-import system_config from "../../system_config"
+import system_records from "../../system_records"
 
 // The budgets it splits: one per service with a share, and the default
 MAX_BUDGETS :: 32
@@ -32,35 +33,50 @@ Scheduler :: struct {
     default_budget : slop_os.CpuBudget,
 }
 
-main :: fn(log: slop_os.DebugLog?, cpu_budget: slop_os.CpuBudget, clients: os.Listener[protocol.Scheduler]) -> int {
+main :: fn(log: slop_os.DebugLog?, cpu_budget: slop_os.CpuBudget, clients: os.Listener[protocol.Scheduler], system: slop_os.Memory) -> int {
     block :: slop_os.startup_block()
     service := Scheduler.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE),
         default_budget = cast[slop_os.CpuBudget](slop_os.NO_HANDLE)}
     service.port = slop_os.port_create(block.budget) or_return 1
+    records :: match service_kit.read_records(block, system) {
+        case Ok(read) => read
+        case Error(problem) => {
+            log_line.write(service.log, "scheduler: the system configuration %", problem.reason)
+            return 3
+        }
+    }
     // The default first, so the services' own shares are what's refused if there isn't room for all of them
-    share :: system_config.DEFAULT_CPU
+    share :: records.default_cpu
     match slop_os.cpu_budget_create(cpu_budget, block.budget, share.priority, share.period_ns, share.time_ns) {
         case Ok(made) => service.default_budget = made
         case Error(error) => log_line.write(service.log, "scheduler: no default budget: %", error)
     }
-    for each in system_config.SERVICES {
-        own :: each.cpu or_continue
+    for i in cast[usize](0)..<records.services.count {
+        if i >= cast[usize](records.service_count) {
+            break
+        }
+        each :: &records.services[i]
+        own :: each.cpu
+        if own.has == 0 {
+            continue
+        }
+        name :: system_records.text_of(&each.name)
         at :: service.count
         if at >= service.budgets.count {
             break
         }
         match slop_os.cpu_budget_create(cpu_budget, block.budget, own.priority, own.period_ns, own.time_ns) {
             case Ok(made) => {
-                service.budgets[at] = Split.{name = each.name, budget = made}
+                service.budgets[at] = Split.{name = name, budget = made}
                 service.count = at + 1
                 if own.cpus != 0 {
                     match slop_os.cpu_budget_set_cpus(made, own.cpus) {
                         case Ok => {}
-                        case Error(error) => log_line.write(service.log, "scheduler: % can't run on CPUs %: %", each.name, own.cpus, error)
+                        case Error(error) => log_line.write(service.log, "scheduler: % can't run on CPUs %: %", name, own.cpus, error)
                     }
                 }
             }
-            case Error(error) => log_line.write(service.log, "scheduler: no budget for %: %", each.name, error)
+            case Error(error) => log_line.write(service.log, "scheduler: no budget for %: %", name, error)
         }
     }
     root :: slop_os.cpu_budget_describe(cpu_budget) or_else slop_os.CpuBudgetInfo.{}

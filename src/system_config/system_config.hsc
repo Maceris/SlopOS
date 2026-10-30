@@ -1,9 +1,10 @@
 /*
  * The system's configuration (decisions/0044, 0058, 0067, 0068): the services it starts at boot, a
- * compile-time value compiled into the root task and the supervisor. Each service names its entry, whose
+ * compile-time value, which the build writes into the boot set as data (RECORDS). Each service names its entry, whose
  * parameters are what it's given, each the grant of its name: so the wiring is checked when it's compiled
- * (check_wiring, below), every os.Channel[P] a service takes needing a service, or the root task, that serves P
- * with an os.Listener[P].
+ * (check_records, below), every os.Channel[P] a service takes needing a service, or the root task, that serves P
+ * with an os.Listener[P]. The build writes it into the boot set as data, RECORDS, which the root task checks with the
+ * same code and gives the supervisor and the scheduler service (decisions/0110).
  */
 package system_config
 
@@ -11,6 +12,7 @@ import compiler from "base"
 import runtime from "base"
 import text_buffer from "std"
 import os from "std"
+import system_records from "../system_records"
 import clock_service from "../services/clock"
 import events_service from "../services/events_service"
 import bundle_store_service from "../services/bundle_store_service"
@@ -235,52 +237,121 @@ service :: fn(name: string) -> Service? {
 }
 
 /*
- * Every os.Channel[P] a service takes, or an optional one, has a server: a service taking an os.Listener[P], the
- * root task, which serves ROOT_TASK_SERVES, the supervisor, which serves SUPERVISOR_SERVES, or the storage manager,
- * which serves STORAGE_MANAGER_SERVES. One without fails the build, saying which.
+ * SERVICES as data (decisions/0110): what the build writes into the boot set as system.records, which the root task
+ * checks at boot, and gives the supervisor and the scheduler service. Each entry's parameters are recorded with their
+ * kinds and their protocols' tags, an os.Channel[P], an os.Listener[P] or a config.Config[T]; and what the root task,
+ * the supervisor and the storage manager serve themselves.
  */
-check_wiring :: fn() {
-    for each in SERVICES {
-        for input in cast[ptr[compiler.TypeInfoFunction]](type_info_of(each.entry)).input {
-            held :: held_type(input.type)
-            if !is_named(held, "Channel[") && !is_named(held, "Config[") {
-                continue
-            }
-            served := false
-            // A Config[T] is a channel to the config store's values (decisions/0109)
-            tag :: if is_named(held, "Config[") { os.end_tag(type_info_of(os.Channel[config.ConfigValue])) } else { os.end_tag(held) }
-            for server in SERVICES {
-                for offered in cast[ptr[compiler.TypeInfoFunction]](type_info_of(server.entry)).input {
-                    served = served || (is_named(offered.type, "Listener[") && os.end_tag(offered.type) == tag)
-                }
-            }
-            for offered in ROOT_TASK_SERVES {
-                served = served || os.end_tag(type_info_of(offered)) == tag
-            }
-            for offered in SUPERVISOR_SERVES {
-                served = served || os.end_tag(type_info_of(offered)) == tag
-            }
-            for offered in STORAGE_MANAGER_SERVES {
-                served = served || os.end_tag(type_info_of(offered)) == tag
-            }
-            if !served {
-                storage : u8[160]
-                message := text_buffer.make(storage)
-                text_buffer.append_format(&message, "system_config: %'s % has no service that serves it", each.name, input.name)
-                runtime.assert(false, text_buffer.as_string(&message))
-            }
+RECORDS :: #run make_records()
+
+make_records :: fn() -> system_records.SystemRecords {
+    made := system_records.SystemRecords.{magic = system_records.MAGIC}
+    made.default_cpu = system_records.CpuRecord.{has = 1, priority = DEFAULT_CPU.priority, period_ns = DEFAULT_CPU.period_ns,
+        time_ns = DEFAULT_CPU.time_ns, cpus = DEFAULT_CPU.cpus}
+    for offered in ROOT_TASK_SERVES {
+        serve(&made, os.end_tag(type_info_of(offered)), system_records.SERVED_BY_ROOT_TASK)
+    }
+    for offered in SUPERVISOR_SERVES {
+        serve(&made, os.end_tag(type_info_of(offered)), system_records.SERVED_BY_SUPERVISOR)
+    }
+    for offered in STORAGE_MANAGER_SERVES {
+        serve(&made, os.end_tag(type_info_of(offered)), system_records.SERVED_BY_STORAGE_MANAGER)
+    }
+    for each, i in SERVICES {
+        if i >= made.services.count {
+            made.magic = 0
+            break
         }
+        record :: &made.services[i]
+        fits := system_records.set_name(&record.name, each.name) && system_records.set_name(&record.module, each.module)
+        record.starter = cast[u8](each.starter)
+        record.by_manager = if each.by_manager { 1 } else { 0 }
+        record.trusted_with_dma = if each.trusted_with_dma { 1 } else { 0 }
+        record.boot_set = if each.boot_set { 1 } else { 0 }
+        record.not_restarted = if each.not_restarted { 1 } else { 0 }
+        record.budget = each.budget
+        record.vendor = each.devices.vendor
+        record.device = each.devices.device
+        record.class = each.devices.class
+        match each.cpu {
+            case Some(share) => record.cpu = system_records.CpuRecord.{has = 1, priority = share.priority, period_ns = share.period_ns,
+                time_ns = share.time_ns, cpus = share.cpus}
+            case None => {}
+        }
+        record.first_parameter = made.parameter_count
+        for input in cast[ptr[compiler.TypeInfoFunction]](type_info_of(each.entry)).input {
+            at :: cast[usize](made.parameter_count)
+            if at >= made.parameters.count {
+                made.magic = 0
+                break
+            }
+            parameter :: &made.parameters[at]
+            fits = fits && system_records.set_name(&parameter.name, input.name)
+            held :: held_type(input.type)
+            parameter.optional = if held != input.type { 1 } else { 0 }
+            if is_named(held, "Channel[") {
+                parameter.kind = system_records.KIND_CHANNEL
+                parameter.tag = os.end_tag(held)
+            }
+            else if is_named(held, "Listener[") {
+                parameter.kind = system_records.KIND_LISTENER
+                parameter.tag = os.end_tag(held)
+            }
+            else if is_named(held, "Config[") {
+                // A Config[T] is a channel to the config store's values (decisions/0109)
+                parameter.kind = system_records.KIND_CONFIG
+                parameter.tag = os.end_tag(type_info_of(os.Channel[config.ConfigValue]))
+            }
+            made.parameter_count += 1
+            record.parameter_count += 1
+        }
+        if !fits {
+            made.magic = 0
+        }
+        made.service_count += 1
+    }
+    return made
+}
+
+serve :: fn(records: ptr[mut system_records.SystemRecords], tag: u64, by: u8) {
+    at :: cast[usize](records.served_count)
+    if at >= records.served.count || at >= records.served_by.count {
+        records.magic = 0
+        return void
+    }
+    records.served[at] = tag
+    records.served_by[at] = by
+    records.served_count += 1
+}
+
+/*
+ * RECORDS checked with system_records.check, as the root task checks them at boot: every os.Channel[P] and
+ * config.Config[T] a service takes has a server, and the rest is well formed. One that isn't fails the build, saying
+ * which.
+ */
+check_records :: fn() {
+    match system_records.check(&RECORDS) {
+        case Some(problem) => {
+            storage : u8[200]
+            message := text_buffer.make(storage)
+            name :: if cast[usize](problem.service) < SERVICES.count { SERVICES[cast[usize](problem.service)].name } else { "the configuration" }
+            text_buffer.append_format(&message, "system_config: % %", name, problem.reason)
+            runtime.assert(false, text_buffer.as_string(&message))
+        }
+        case None => {}
     }
 }
 
-#run check_wiring()
+#run check_records()
 
 // What an optional holds, or the type itself.
 held_type :: fn(type: ptr[compiler.TypeInfo]) -> ptr[compiler.TypeInfo] {
     if type.variant == .UNION {
         optional :: cast[ptr[compiler.TypeInfoUnion]](type)
-        if optional.variants.count != 0 && optional.variants[0].types.count == 1 {
-            return optional.variants[0].types[0]
+        for variant in optional.variants {
+            if variant.name == "Some" && variant.types.count == 1 {
+                return variant.types[0]
+            }
         }
     }
     return type

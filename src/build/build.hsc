@@ -10,7 +10,7 @@
  * - kernel_output: the kernel's ELF, kernel.elf by default.
  * - programs_output: the folder programs go in, each <name>.elf, the current folder by default, each with its manifest
  *   beside it, <name>.manifest: the schema of its entry's type (decisions/0044), which the store builder puts in its
- *   bundle (decisions/0094).
+ *   bundle (decisions/0094); and beside the root task, system.records, the system configuration as data (decisions/0110).
  * - tests_output: the folder test programs go in, the current folder by default.
  * - tools_output: the folder tools go in, the current folder by default.
  * - stack_check: what the kernel's prologue checks do without room, trap (the default) or morestack,
@@ -48,6 +48,45 @@ build :: fn() {
     }
     compiler.add_check(checks.check_program)
     compiler.add_check(write_manifest)
+    compiler.add_check(write_system_records)
+}
+
+/*
+ * The system configuration as data (decisions/0110): system_config's RECORDS, as the root task's program has them,
+ * which system_config checked with system_records.check as it was compiled, written beside the root task as
+ * system.records, a module of the boot set, which the root task checks again at boot.
+ */
+write_system_records :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
+    if target.name != "root_task.elf" {
+        return true
+    }
+    for &package in program.packages {
+        if package.name != "system_config" {
+            continue
+        }
+        records :: match compiler.find_constant(package, "RECORDS") {
+            case Some(found) => found
+            case None => {
+                compiler.report_error(package.location, "system_config has no RECORDS to write")
+                return false
+            }
+        }
+        size :: type_info_of(records.value.type).size
+        bytes :: string_of(cast[ptr[u8]](records.value.data), size)
+        separator :: separator_after(target.output_path)
+        folder :: if separator <= target.output_path.count { target.output_path[0..<separator] } else { "" }
+        path_storage : u8[512]
+        path := text_buffer.make(path_storage)
+        text_buffer.append(&path, folder)
+        text_buffer.append(&path, "system.records")
+        if os.write_entire_file(text_buffer.as_string(&path), bytes) != null {
+            compiler.report_error(package.location, "couldn't write %", text_buffer.as_string(&path))
+            return false
+        }
+        return true
+    }
+    compiler.report_error(program.root.location, "the root task has no system_config to write system.records from")
+    return false
 }
 
 /*

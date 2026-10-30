@@ -1,9 +1,13 @@
 /*
  * The root task (decisions/0012, 0060, 0067, 0068): the one process the kernel starts, given everything. It
- * splits its budget and starts the services system_config gives it: the entropy service and the process
+ * splits its budget and starts the services the system configuration gives it: the entropy service and the process
  * manager with its own loader (src/process_builder), since the manager needs both, then the supervisor
  * through the manager, with std/os's launch. It owns each, serves the supervisor's reports, and watches
  * them. A working system's root task never ends; restarting the supervisor comes later.
+ *
+ * The system configuration is the boot set's system.records, which the build wrote from system_config (decisions/0110):
+ * the root task checks it as the build did, and ends with 30 if it isn't one, before it starts anything; and gives it
+ * to the scheduler service and the supervisor. It imports system_config only so the build has it to write.
  *
  * Words on the kernel's command line are for boot tests, and end it with 0 if what they test works:
  * - test_services, once the supervisor has started all of its services;
@@ -30,7 +34,9 @@ import scheduler_protocol from "../../protocols/scheduler"
 import supervision from "../../protocols/supervision"
 import random_stream from "../../random_stream"
 import service_kit from "../../service_kit"
+// Only for the build, which writes system.records from the root task's program (decisions/0110)
 import system_config from "../../system_config"
+import system_records from "../../system_records"
 import platform from "../platform"
 import scheduler from "../scheduler"
 import supervisor from "../supervisor"
@@ -67,6 +73,7 @@ SupervisorGrants :: struct {
     events_module : slop_os.Memory?,
     bundle_store_module : slop_os.Memory?,
     config_module : slop_os.Memory?,
+    system : slop_os.Memory,
 }
 
 // What the scheduler service is given (scheduler.main).
@@ -74,6 +81,7 @@ SchedulerGrants :: struct {
     log : slop_os.DebugLog?,
     cpu_budget : slop_os.CpuBudget,
     clients : os.Listener[scheduler_protocol.Scheduler],
+    system : slop_os.Memory,
 }
 
 // What the platform service is given (platform.main).
@@ -115,6 +123,9 @@ Started :: struct {
 Root :: struct {
     block : ptr[slop_os.StartupBlock],
     log : slop_os.DebugLog,
+    // The system configuration, checked, and the boot set's module it came from
+    records : ptr[system_records.SystemRecords],
+    records_module : slop_os.Memory,
     stream : random_stream.Stream,
     // Its ends of the entropy service's and the process manager's listeners, through which it connects
     // services to them, and the manager's also its own connection; and the ports their answers wake
@@ -133,8 +144,19 @@ Root :: struct {
 
 main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line: slop_os.Memory, cpu_budget: slop_os.CpuBudget) -> int {
     block :: slop_os.startup_block()
-    root := Root.{block = block, log = debug_log, scheduler = cast[slop_os.Channel](slop_os.NO_HANDLE)}
-    log_line.write(root.log, "root task: started, with % grants", block.grant_count)
+    log_line.write(debug_log, "root task: started, with % grants", block.grant_count)
+    // The system configuration, checked before anything is started from it
+    records_module :: cast[slop_os.Memory](find_module(block, RECORDS_MODULE) or_else slop_os.NO_HANDLE)
+    records :: match service_kit.read_records(block, records_module) {
+        case Ok(read) => read
+        case Error(problem) => {
+            service :: if problem.service < system_records.MAX_SERVICES { problem.service } else { 0 }
+            log_line.write(debug_log, "root task: % %, at service %", RECORDS_MODULE, problem.reason, service)
+            return 30
+        }
+    }
+    root := Root.{block = block, log = debug_log, records = records, records_module = records_module,
+        scheduler = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     words :: service_kit.text_of(block, command_line) or_return 4
     test_services :: service_kit.has_word(words, "test_services")
     test_outlive_manager :: service_kit.has_word(words, "test_outlive_manager")
@@ -178,32 +200,33 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     platform_connection :: start_platform(&root, platform, command_line, module_rights)
 
     // The supervisor, through the manager, with a connection of its own
-    service :: system_config.service("supervisor") or_return 8
+    service :: service_of(&root, "supervisor") or_return 8
     module :: find_module(block, service.module) or_return 8
     grants := SupervisorGrants.{
         log = duplicate_log(&root),
         manager = process_manager.connect(root.manager, root.manager_port, block.budget) or_return 9,
         root = os.Channel[supervision.Supervision].{end = supervision_pair.b},
-        hello_module = module_copy(block, "hello", module_rights),
+        hello_module = module_copy(&root, "hello", module_rights),
         platform_service = platform_connection,
         entropy_service = entropy.connect(root.entropy, root.entropy_port, block.budget),
-        console_module = module_copy(block, "console", module_rights),
-        disk_check_module = module_copy(block, "disk_check", module_rights),
-        virtio_blk_module = module_copy(block, "virtio_blk", module_rights),
-        virtio_console_module = module_copy(block, "virtio_console", module_rights),
-        virtio_input_module = module_copy(block, "virtio_input", module_rights),
-        virtio_rng_module = module_copy(block, "virtio_rng", module_rights),
-        edu_dma_module = module_copy(block, "edu_dma", module_rights),
-        storage_manager_module = module_copy(block, "storage_manager", module_rights),
-        partition_server_module = module_copy(block, "partition_server", module_rights),
-        fat_server_module = module_copy(block, "fat_server", module_rights),
-        container_service_module = module_copy(block, "container_service", module_rights),
-        volume_server_module = module_copy(block, "volume_server", module_rights),
+        console_module = module_copy(&root, "console", module_rights),
+        disk_check_module = module_copy(&root, "disk_check", module_rights),
+        virtio_blk_module = module_copy(&root, "virtio_blk", module_rights),
+        virtio_console_module = module_copy(&root, "virtio_console", module_rights),
+        virtio_input_module = module_copy(&root, "virtio_input", module_rights),
+        virtio_rng_module = module_copy(&root, "virtio_rng", module_rights),
+        edu_dma_module = module_copy(&root, "edu_dma", module_rights),
+        storage_manager_module = module_copy(&root, "storage_manager", module_rights),
+        partition_server_module = module_copy(&root, "partition_server", module_rights),
+        fat_server_module = module_copy(&root, "fat_server", module_rights),
+        container_service_module = module_copy(&root, "container_service", module_rights),
+        volume_server_module = module_copy(&root, "volume_server", module_rights),
         scheduler = connect_scheduler(&root),
-        clock_module = module_copy(block, "clock", module_rights),
-        events_module = module_copy(block, "events", module_rights),
-        bundle_store_module = module_copy(block, "bundle_store", module_rights),
-        config_module = module_copy(block, "config", module_rights),
+        clock_module = module_copy(&root, "clock", module_rights),
+        events_module = module_copy(&root, "events", module_rights),
+        bundle_store_module = module_copy(&root, "bundle_store", module_rights),
+        config_module = module_copy(&root, "config", module_rights),
+        system = records_copy(&root) or_return 8,
     }
     match slop_os.handle_duplicate(cast[slop_os.Handle](command_line), module_rights) {
         case Ok(copy) => grants.command_line = cast[slop_os.Memory](copy)
@@ -341,7 +364,7 @@ start_itself :: fn(root: ptr[mut Root], name #escaping : string, grants: process
 
 start_with_loader :: fn(root: ptr[mut Root], name: string, grants: process_builder.Grant[]) -> Result[slop_os.Process, string] {
     block :: root.block
-    service :: system_config.service(name) or_return .Error("system_config doesn't have it")
+    service :: service_of(root, name) or_return .Error("the system configuration doesn't have it")
     budget :: slop_os.memory_budget_create(block.budget, service.budget) or_return .Error("no budget")
     process :: slop_os.process_create(budget) or_return .Error("no process")
     space :: slop_os.address_space_create(budget) or_return .Error("no address space")
@@ -453,7 +476,7 @@ start_platform :: fn(root: ptr[mut Root], platform_capability: slop_os.Platform,
     -> os.Channel[platform_protocol.Platform]? {
     block :: root.block
     firmware :: slop_os.find_grant(block, "firmware", .Memory) or_return null
-    service :: system_config.service("platform") or_return null
+    service :: service_of(root, "platform") or_return null
     module :: find_module(block, service.module) or_return null
     pair :: os.channel_for[platform_protocol.Platform](block.budget, 0) or_return null
     port :: os.port_for(block.budget, pair.b) or_return null
@@ -491,7 +514,7 @@ start_platform :: fn(root: ptr[mut Root], platform_capability: slop_os.Platform,
  */
 start_scheduler :: fn(root: ptr[mut Root], cpu_budget: slop_os.CpuBudget) {
     block :: root.block
-    service :: system_config.service("scheduler") or_return void
+    service :: service_of(root, "scheduler") or_return void
     module :: find_module(block, service.module) or_return void
     pair :: os.channel_for[scheduler_protocol.Scheduler](block.budget, 0) or_return void
     port :: os.port_for(block.budget, pair.b) or_return void
@@ -501,6 +524,7 @@ start_scheduler :: fn(root: ptr[mut Root], cpu_budget: slop_os.CpuBudget) {
         log = duplicate_log(root),
         cpu_budget = cast[slop_os.CpuBudget](slop_os.handle_duplicate(cast[slop_os.Handle](cpu_budget), budget_rights) or_return void),
         clients = os.Listener[scheduler_protocol.Scheduler].{end = pair.a},
+        system = records_copy(root) or_return void,
     }
     manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
     match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, scheduler.main, grants) {
@@ -530,9 +554,9 @@ connect_scheduler :: fn(root: ptr[mut Root]) -> os.Channel[scheduler_protocol.Sc
     return scheduler_protocol.connect(root.scheduler, root.scheduler_port, root.block.budget)
 }
 
-module_copy :: fn(block: ptr[slop_os.StartupBlock], name: string, rights: slop_os.Rights) -> slop_os.Memory? {
-    service :: system_config.service(name) or_return null
-    module :: find_module(block, service.module) or_return null
+module_copy :: fn(root: ptr[Root], name: string, rights: slop_os.Rights) -> slop_os.Memory? {
+    service :: service_of(root, name) or_return null
+    module :: find_module(root.block, service.module) or_return null
     match slop_os.handle_duplicate(module, rights) {
         case Ok(copy) => return cast[slop_os.Memory](copy)
         case Error(error) => return null
@@ -545,6 +569,31 @@ remember :: fn(root: ptr[mut Root], name #escaping : string, process: slop_os.Pr
     if index < root.started.count {
         root.started[index] = Started.{name = name, process = process}
         root.started_count = index + 1
+    }
+}
+
+// The boot set's module the system configuration is in.
+RECORDS_MODULE :: "system.records"
+
+// A service of the system configuration's: its name, its module and its memory budget.
+Service :: struct {
+    name : string,
+    module : string,
+    budget : u64,
+}
+
+// The service of the system configuration named name, or null.
+service_of :: fn(root: ptr[Root], name: string) -> Service? {
+    record :: system_records.service_of(root.records, name) or_return null
+    return Service.{name = system_records.text_of(&record.name), module = system_records.text_of(&record.module), budget = record.budget}
+}
+
+// A read-only copy of the system configuration's module, to give a service.
+records_copy :: fn(root: ptr[Root]) -> slop_os.Memory? {
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+    match slop_os.handle_duplicate(cast[slop_os.Handle](root.records_module), rights) {
+        case Ok(copy) => return cast[slop_os.Memory](copy)
+        case Error(error) => return null
     }
 }
 

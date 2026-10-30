@@ -523,6 +523,8 @@ BOOT_DISK_SECTORS = 206848
 # come from it (src/system_config's boot_set, decisions/0089)
 BOOT_SET = ["root_task", "entropy", "process_manager", "scheduler", "platform", "supervisor", "events_service", "bundle_store_service", "clock", "virtio_blk", "storage_manager", "partition_server",
             "fat_server", "container_service", "volume_server"]
+# The system configuration, which the build writes beside the programs
+SYSTEM_RECORDS = "system.records"
 BOOT_ESP_SECTORS = 131072
 BOOT_SYSTEM_SECTORS = 65536
 
@@ -548,7 +550,7 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
     modules = ""
     for program in programs:
         shutil.copy(program, esp / "boot" / "modules" / program.name)
-        if program.stem in BOOT_SET:
+        if program.stem in BOOT_SET or program.name == SYSTEM_RECORDS:
             modules += f"    module_path: boot():/boot/modules/{program.name}\n"
     config = LIMINE_CONFIG.format(command_line=command_line, kaslr="yes" if kaslr else "no", modules=modules)
     (esp / "boot" / "limine" / "limine.conf").write_text(config, newline="\n")
@@ -563,7 +565,8 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
         shutil.copy(program, system / "modules" / program.name)
     # The bundle store, with a bundle for every program outside the boot set, which the supervisor loads from it
     store_builder = next(image_builder.parent.glob("store_builder*"))
-    stored = subprocess.run([str(store_builder), str(system / "store")] + [str(program) for program in programs if program.stem not in BOOT_SET],
+    stored = subprocess.run([str(store_builder), str(system / "store")] + [str(program) for program in programs
+                                                                           if program.stem not in BOOT_SET and program.suffix == ".elf"],
                             capture_output=True, text=True)
     if stored.returncode != 0:
         sys.exit(f"boot.py: the store builder failed:\n{stored.stdout}{stored.stderr}")
@@ -658,6 +661,9 @@ def main() -> int:
             programs_folder = folder / "programs"
             build_slopos_programs(programs_folder, arguments.arch)
         programs = sorted(programs_folder.glob("*.elf"), key=lambda path: (path.name != "root_task.elf", path.name))             if programs_folder is not None else []
+        # The system configuration as data, which the build writes beside the root task, a module of the boot set (decisions/0110)
+        if programs_folder is not None and (programs_folder / SYSTEM_RECORDS).exists():
+            programs.append(programs_folder / SYSTEM_RECORDS)
         # The kernel's own regions follow its command line; the image and the direct map, Limine's configuration
         command_line = arguments.command_line + (" no_kaslr" if arguments.no_kaslr else "")
         image = None

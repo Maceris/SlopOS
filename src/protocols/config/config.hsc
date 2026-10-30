@@ -30,6 +30,8 @@ Config :: struct[T] {
 MAX_VALUE_BYTES :: 1792
 // The versions a value keeps; a write past them drops the oldest
 MAX_VERSIONS :: 16
+// The rings a connection to a value has, so the largest message, a default and an override, fits one
+RING_BYTES : u32 : 8192
 
 ValueFor :: struct {
     // Whose value: a service's or an installation's name; and which of its values: its entry's parameter's name

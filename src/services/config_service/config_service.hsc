@@ -400,7 +400,7 @@ connection_for :: fn(service: ptr[mut Store], owner: string, name: string) -> os
         }
         service.value_count += 1
     }
-    pair :: os.channel_for[config.ConfigValue](service.block.budget, 0) or_return null
+    pair :: os.channel_for[config.ConfigValue](service.block.budget, config.RING_BYTES) or_return null
     match service_kit.add_client_index(&service.connected, service.port, pair.a) {
         case Some(index) => if index < service.clients.count {
             service.clients[index] = Client.{value = value}

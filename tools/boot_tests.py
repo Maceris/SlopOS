@@ -77,6 +77,7 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
     "--expect-line=[user] supervisor: console from the bundle store", "--expect-line=[user] supervisor: hello from the bundle store",
     "--expect-line=[user] supervisor: disk_check from the bundle store", "--expect-line=[user] hello: heap working, random numbers working",
     "--expect-line=[user] config: serving",
+    "--expect-line=[user] supervisor: the system configuration's override tunes 0 services",
     "--expect-line=[user] hello: config: declared repeats 1, wrote an override kept, read it back merged, by hello; rolled back kept, repeats 1",
     "--expect-line=[user] disk_check: on the EFI system partition, read the host's files, wrote, moved and read back its own, "
     "listed 3, and was refused a path above it",
@@ -117,7 +118,7 @@ def with_before_qemu(arguments: list[str], more: list[str]) -> list[str]:
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 42 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 43 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 3 budgets and the default split off the root's, 800000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -243,6 +244,12 @@ TESTS = [
         "--expect-line=[user] supervisor: test_store: put hello's program, read it back whole as paged memory, a wrong hash refused; "
         "a pinned object kept (0 collected), and collected once unpinned (1)",
         "--expect-line=[user] supervisor: test_store: hello's bundle's manifest is its entry's schema"])),
+    ("keeps an override of the system configuration in the config store, and starts what it tunes as it says", 7, with_before_qemu(
+        [argument.replace("test_services", "test_services test_system_config") for argument in BOOT_DISK_ARGUMENTS], [
+        "--expect-line=[user] supervisor: the system configuration's override tunes 1 services",
+        "--expect-line=[user] supervisor: test_system_config: killing hello",
+        "--expect-line=[user] supervisor: test_system_config: an override of hello's budget taken, one of 0 refused; hello started again "
+        "on 3 MiB"])),
     ("starts a disk's partition server again when it's killed, and serves its volumes through the new one", 7, with_before_qemu(
         [argument.replace("test_services", "test_services test_storage_restart") for argument in BOOT_DISK_ARGUMENTS], [
         "--expect-line=[user] storage_manager: test_storage_restart: killing the partition server for disk 0",

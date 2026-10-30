@@ -6,6 +6,7 @@ package service_kit
 
 import runtime from "base"
 import slop_os from "std/os"
+import system_records from "../system_records"
 
 // The most clients one service serves.
 MAX_CLIENTS :: 16
@@ -84,6 +85,37 @@ text_of :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> strin
         count += 1
     }
     return string_of(cast[ptr[u8]](address), count)
+}
+
+/*
+ * The system configuration in memory, as the build wrote it into the boot set as system.records (decisions/0110):
+ * copied out of it, and checked with system_records.check, as the build checked it. The copy, or why not.
+ */
+read_records :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> Result[ptr[mut system_records.SystemRecords], system_records.Problem] {
+    unreadable :: system_records.Problem.{reason = "can't be read", service = system_records.MAX_SERVICES}
+    size :: slop_os.memory_size(memory) or_return .Error(unreadable)
+    if size < cast[u64](size_of(system_records.SystemRecords)) {
+        return .Error(system_records.Problem.{reason = "is too small to be system records", service = system_records.MAX_SERVICES})
+    }
+    address :: runtime.reserve_addresses(cast[usize](size)) or_return .Error(unreadable)
+    if slop_os.memory_map(memory, block.space, address, 0, size, slop_os.PROTECTION_READ) is_error {
+        return .Error(unreadable)
+    }
+    made, error :: runtime.new_aligned(system_records.SystemRecords, align_of(system_records.SystemRecords))
+    if error == null {
+        made^ = cast[ptr[system_records.SystemRecords]](address)^
+    }
+    _ = slop_os.memory_unmap(block.space, address)
+    if error != null {
+        return .Error(system_records.Problem.{reason = "can't be copied without memory", service = system_records.MAX_SERVICES})
+    }
+    match system_records.check(made) {
+        case Some(problem) => {
+            runtime.free(made)
+            return .Error(problem)
+        }
+        case None => return .Ok(made)
+    }
 }
 
 // What follows prefix in the word of text that starts with it, or null.
