@@ -82,6 +82,8 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
     "file made in the set",
     "--expect-line=[user] disk_check: on the system volume, read modules/hello.elf as the EFI system partition has it, wrote, "
     "synced and read back its own file, and moved it",
+    "--expect-line=[user] disk_check: a typed file written, read back checked, and refused as another type; a value that "
+    "isn't one refused",
     "--expect-line=[user] disk_check: on the system volume, replaced an open file, committed a transaction, was refused a conflicting "
     "one, had a failing one leave nothing, and followed every change",
     "--expect-line=[user] storage_manager: started a volume server for the sealed volume, encrypted",

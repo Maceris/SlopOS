@@ -514,11 +514,17 @@ file_error :: fn(error: slopfs.Error) -> files.FileError {
         case .InUse => files.FileError.DeviceError
         case .IsALink => files.FileError.IsALink
         case .OutOfMemory => files.FileError.NoMemory
+        case .WrongType => files.FileError.WrongType
     }
 }
 
 // The file at path beneath directory, opened as creation says.
-open_file_object :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: string, creation: files.Creation) -> Result[u64, slopfs.Error] {
+/*
+ * The file at path beneath directory, opened as creation says; with a schema hash (decisions/0046, 0108), one made is of
+ * that type, and one there must be, or it's WrongType. All zeros asks for no type.
+ */
+open_file_object :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: string, creation: files.Creation, schema: u8[32])
+    -> Result[u64, slopfs.Error] {
     leaf :: slopfs.leaf_of(volume, directory, path)?
     existing :: slopfs.lookup(volume, leaf.directory, leaf.name)?
     match existing {
@@ -533,6 +539,9 @@ open_file_object :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: str
             if creation == .New {
                 return .Error(.AlreadyExists)
             }
+            if !untyped(schema) && info.schema != schema {
+                return .Error(.WrongType)
+            }
             if creation == .Truncate && info.size != 0 {
                 slopfs.set_size(volume, object, 0)?
             }
@@ -542,9 +551,29 @@ open_file_object :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: str
             if creation == .Existing {
                 return .Error(.NotFound)
             }
-            return slopfs.create(volume, leaf.directory, leaf.name, .File)
+            made :: slopfs.create(volume, leaf.directory, leaf.name, .File)?
+            if !untyped(schema) {
+                slopfs.set_schema(volume, made, schema)?
+            }
+            return .Ok(made)
         }
     }
+}
+
+// A schema hash that asks for no type.
+no_schema :: fn() -> u8[32] {
+    none : u8[32]
+    return none
+}
+
+// Whether a schema hash asks for no type: all zeros.
+untyped :: fn(schema: u8[32]) -> bool {
+    for byte in schema {
+        if byte != 0 {
+            return false
+        }
+    }
+    return true
 }
 
 // The directory at path beneath directory, made, with any missing on the way to it, if create.
@@ -648,7 +677,9 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
         match os.message_of[dir.Request](into)^ {
             case OpenFile(open) => {
                 path :: path_of(into, open.path) or_else ""
-                followed :: if in_transaction { Followed.Local }
+                // A typed open stays on this volume: a link on its way is refused (IsALink), not followed untyped
+                typed :: !untyped(open.schema)
+                followed :: if in_transaction || typed { Followed.Local }
                     else { follow(server, index, directory, path, links.Opening.{kind = .File, creation = open.creation}) }
                 failed : files.FileError? = null
                 match followed {
@@ -659,11 +690,15 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
                 if failed is_some {
                     response^ = .Failed(failed or_else .Unavailable)
                 }
+                else if in_transaction && typed {
+                    // A transaction's log keeps no types yet (decisions/0108)
+                    response^ = .Failed(.WrongType)
+                }
                 else if in_transaction {
                     response^ = open_in_transaction(server, transaction, path, open.creation)
                 }
                 else {
-                    match open_file_object(volume, directory, path, open.creation) {
+                    match open_file_object(volume, directory, path, open.creation, open.schema) {
                         case Ok(object) => {
                             match open_connection[file.File](server, .File, object, false, path) {
                                 case Some(made) => response^ = .OpenedFile(made)
@@ -1012,7 +1047,7 @@ serve_file_set :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inc
                     response^ = .Failed(.NotFound)
                 }
                 else {
-                    match open_file_object(volume, connection.object, name, open.creation) {
+                    match open_file_object(volume, connection.object, name, open.creation, no_schema()) {
                         case Ok(object) => {
                             match open_connection[file.File](server, .File, object, false, name) {
                                 case Some(made) => response^ = .OpenedFile(made)
@@ -1099,7 +1134,11 @@ read_file :: fn(server: ptr[mut Server], connection: ptr[Connection], transfer: 
 
 file_info :: fn(server: ptr[mut Server], connection: ptr[Connection], out: ptr[mut os.Outgoing]) -> Result[files.Info, files.FileError] {
     match slopfs.info(server.volume, connection.object) {
-        case Ok(info) => return .Ok(info_of(out, .File, info.size, name_of(connection)))
+        case Ok(info) => {
+            described := info_of(out, .File, info.size, name_of(connection))
+            described.schema = info.schema
+            return .Ok(described)
+        }
         case Error(error) => return .Error(file_error(error))
     }
 }

@@ -490,6 +490,16 @@ same_byte :: fn(a: u8, b: u8) -> bool {
     return fat.upper(a) == fat.upper(b)
 }
 
+// Whether a schema hash asks for no type: all zeros.
+untyped :: fn(schema: u8[32]) -> bool {
+    for byte in schema {
+        if byte != 0 {
+            return false
+        }
+    }
+    return true
+}
+
 info_of :: fn(out: ptr[mut os.Outgoing], kind: files.Kind, size: u64, name: string) -> files.Info {
     return files.Info.{kind = kind, size = size, name = os.append(out, string_bytes(name))}
 }
@@ -529,6 +539,10 @@ serve_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usi
                 path :: path_of(into, open.path) or_else ""
                 if path.count == 0 {
                     response^ = .Failed(.InvalidPath)
+                }
+                // FAT keeps no types (decisions/0108)
+                else if !untyped(open.schema) {
+                    response^ = .Failed(.WrongType)
                 }
                 else if server.read_only && open.creation != .Existing {
                     response^ = .Failed(.ReadOnly)

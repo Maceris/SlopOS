@@ -49,6 +49,8 @@ Info :: struct {
     created : u64,
     modified : u64,
     changed : u64,
+    // A typed file's schema hash, all zeros for bytes alone (decisions/0046, 0108)
+    schema : u8[32],
 }
 
 // An entry List gives: its name's bytes in the caller's buffer, what it names, and the cursor after it.
@@ -358,7 +360,16 @@ kind_of :: fn(kind: u32) -> ObjectKind {
 info :: fn(volume: ptr[mut Volume], object: u64) -> Result[Info, Error] {
     record :: get_object(volume, object)?
     return .Ok(Info.{object = object, kind = kind_of_record(&record), parent = cast[u64](record.parent), size = cast[u64](record.size),
-        created = cast[u64](record.created), modified = cast[u64](record.modified), changed = cast[u64](record.changed)})
+        created = cast[u64](record.created), modified = cast[u64](record.modified), changed = cast[u64](record.changed),
+        schema = record.schema})
+}
+
+// A file made typed (decisions/0046, 0108): its schema hash, kept in its record, which only a new file's is given.
+set_schema :: fn(volume: ptr[mut Volume], object: u64, schema: u8[32]) -> Result[void, Error] {
+    record := get_object(volume, object)?
+    record.schema = schema
+    put_object(volume, object, &record)?
+    return .Ok
 }
 
 // The record of an object that's a directory, or NotADirectory, or IsALink for a link.
@@ -382,17 +393,100 @@ touch :: fn(volume: ptr[mut Volume], object: u64, record: ptr[mut ObjectRecord])
 
 // Names.
 
+/*
+ * Whether name can name something: not empty, not too long, not "." or "..", no '/', and UTF-8 with nothing that can't
+ * be seen (decisions/0097, 0108): no C0 or C1 controls, no bidirectional controls, and none of Unicode's default
+ * ignorable code points, which UTS #39 counts as invisible. Names are compared byte for byte (0046), so these are what
+ * would let two names look the same, or one look like another.
+ */
 name_holds :: fn(name: string) -> bool {
     if name.count == 0 || name.count > NAME_BYTES || name == "." || name == ".." {
         return false
     }
-    for character in name {
-        if character == '/' || character == cast[char](0) {
+    bytes :: string_bytes(name)
+    at : usize = 0
+    loop {
+        if at >= bytes.count {
+            break
+        }
+        point, length :: decode_utf8(bytes, at)
+        if length == 0 || point == cast[u32]('/') || !visible(point) {
+            return false
+        }
+        at += length
+    }
+    return true
+}
+
+// The code point at at in bytes, and its length; length 0 for bytes that aren't UTF-8, overlong or a surrogate.
+decode_utf8 :: fn(bytes: u8[], at: usize) -> (point: u32, length: usize) {
+    if at >= bytes.count {
+        return 0, 0
+    }
+    first :: cast[u32](bytes[at])
+    length : usize = 0
+    point := cast[u32](0)
+    smallest := cast[u32](0)
+    if first < 0x80 {
+        return first, 1
+    }
+    else if first & 0xe0 == 0xc0 {
+        length = 2
+        point = first & 0x1f
+        smallest = 0x80
+    }
+    else if first & 0xf0 == 0xe0 {
+        length = 3
+        point = first & 0x0f
+        smallest = 0x800
+    }
+    else if first & 0xf8 == 0xf0 {
+        length = 4
+        point = first & 0x07
+        smallest = 0x10000
+    }
+    else {
+        return 0, 0
+    }
+    if at + length > bytes.count {
+        return 0, 0
+    }
+    for i in 1..<length {
+        if at + i >= bytes.count {
+            return 0, 0
+        }
+        next :: cast[u32](bytes[at + i])
+        if next & 0xc0 != 0x80 {
+            return 0, 0
+        }
+        point = (point << 6) | (next & 0x3f)
+    }
+    if point < smallest || point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff) {
+        return 0, 0
+    }
+    return point, length
+}
+
+// Whether a code point shows: not a control, a bidirectional control, or a default ignorable (DerivedCoreProperties).
+visible :: fn(point: u32) -> bool {
+    if point < 0x20 || (point >= 0x7f && point <= 0x9f) {
+        return false
+    }
+    for i in 0..<INVISIBLE.count / 2 {
+        low :: 2 * i
+        if low + 1 < INVISIBLE.count && point >= INVISIBLE[low] && point <= INVISIBLE[low + 1] {
             return false
         }
     }
     return true
 }
+
+// Unicode's Default_Ignorable_Code_Point ranges (Unicode 15.1), the bidirectional controls among them: low, high
+INVISIBLE :: u32.[
+    0x00ad, 0x00ad, 0x034f, 0x034f, 0x061c, 0x061c, 0x115f, 0x1160, 0x17b4, 0x17b5, 0x180b, 0x180f, 0x200b, 0x200f,
+    0x202a, 0x202e, 0x2060, 0x206f, 0x3164, 0x3164, 0xfe00, 0xfe0f, 0xfeff, 0xfeff, 0xffa0, 0xffa0, 0xfff0, 0xfff8,
+    0x1bca0, 0x1bca3, 0x1d173, 0x1d17a, 0xe0000, 0xe0fff,
+]
 
 HASH_MASK : u64 : 0x00ffffffffffffff
 

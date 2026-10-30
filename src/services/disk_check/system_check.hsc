@@ -122,7 +122,107 @@ check_system :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], esp: os.Ch
     }
     runtime.log_info("on the system volume, read % as the EFI system partition has it, wrote, synced and read back its own file, and moved it",
         MODULE_ON_VOLUME)
+    typed :: check_typed(system, system_port, esp)
+    if typed != 0 {
+        return typed
+    }
     return check_transactions(to, system, &buffer)
+}
+
+// A typed file's value (decisions/0046, 0108), as the system check writes it and reads it back
+CheckedNote :: struct {
+    mark : u32,
+    kept : bool,
+    text : slop_os.Relative[u8],
+}
+
+// Another type, which the note's file isn't
+OtherNote :: struct {
+    mark : u64,
+}
+
+TYPED_FILE :: "A typed note"
+TYPED_TEXT :: "kept with its type"
+
+/*
+ * A typed file on the system volume: written as a CheckedNote, read back checked, refused as an OtherNote; and refused
+ * on the EFI system partition, whose FAT keeps no types.
+ */
+check_typed :: fn(system: os.Channel[dir.Dir], port: slop_os.Port, esp: os.Channel[dir.Dir]?) -> int {
+    directory :: second_connection(system, port) or_return 60
+    defer os.close_directory(directory)
+    out := os.Outgoing.{}
+    note :: os.begin[CheckedNote](&out)
+    note.mark = 0x51ed
+    note.kept = true
+    note.text = os.append(&out, string_bytes(TYPED_TEXT))
+    if os.write_typed_in[CheckedNote](directory, TYPED_FILE, os.value_bytes(&out)) != null {
+        return 61
+    }
+    back :: os.read_typed_in[CheckedNote](directory, TYPED_FILE) or_return 62
+    defer runtime.free_array(back)
+    read :: os.typed_value[CheckedNote](back)
+    text :: os.items_of(back, read.text)
+    if read.mark != 0x51ed || !read.kept || text.count != TYPED_TEXT.count {
+        return 63
+    }
+    for byte, i in text {
+        if i < TYPED_TEXT.count && byte != cast[u8](TYPED_TEXT[i]) {
+            return 63
+        }
+    }
+    // Of another type: refused, opened or read
+    match os.open_typed_in[OtherNote](directory, TYPED_FILE, .READ) {
+        case Ok(file) => {
+            os.close(file)
+            return 64
+        }
+        case Error(error) => {
+            if error != .WrongType {
+                return 64
+            }
+        }
+    }
+    // A value that isn't a CheckedNote isn't written as one: a bool that's 2
+    bad := os.Outgoing.{}
+    wrong :: os.begin[CheckedNote](&bad)
+    wrong.mark = 1
+    cast[ptr[mut u8]](&wrong.kept)^ = 2
+    if os.write_typed_in[CheckedNote](directory, "Not a note", os.value_bytes(&bad)) != OsError.WrongType {
+        return 65
+    }
+    match esp {
+        case Some(partition) => {
+            esp_port :: os.port_for(slop_os.startup_block().budget, partition.end) or_return 66
+            fat :: second_connection(partition, esp_port) or_return 66
+            defer os.close_directory(fat)
+            if os.write_typed_in[CheckedNote](fat, "A typed note.bin", os.value_bytes(&out)) != OsError.WrongType {
+                return 67
+            }
+        }
+        case None => {}
+    }
+    runtime.log_info("a typed file written, read back checked, and refused as another type; a value that isn't one refused")
+    return 0
+}
+
+// Another connection to a directory, as an os.Directory, which closes it.
+second_connection :: fn(directory: os.Channel[dir.Dir], port: slop_os.Port) -> os.Directory? {
+    budget :: slop_os.startup_block().budget
+    pair :: os.channel_for[dir.Dir](budget, 0) or_return null
+    out := os.Outgoing.{}
+    request :: os.begin[dir.Request](&out)
+    request^ = .Connect(os.Channel[dir.Dir].{end = pair.a})
+    if dir.send_request(directory.end, port, &out) is_some {
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        return null
+    }
+    made, error :: os.directory_on(pair.b)
+    if error != null {
+        return null
+    }
+    return made
 }
 
 // The file at path beneath a directory, read whole into bytes through a read_only_file connection.

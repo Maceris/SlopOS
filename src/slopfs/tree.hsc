@@ -44,6 +44,8 @@ Error :: enum {
     IsALink,
     // No memory for a node or a buffer (decisions/0104): nothing was changed for want of it
     OutOfMemory,
+    // A typed file of another type than the one asked for (decisions/0108)
+    WrongType,
 }
 
 /*

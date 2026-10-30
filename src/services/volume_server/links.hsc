@@ -433,7 +433,7 @@ open_issued :: fn(server: ptr[mut Server], asked: volume_protocol.OpenIssued, pa
     if kind == .File || kind == .ReadOnlyFile {
         found := object
         if path.count != 0 {
-            opened :: if kind == .File { open_file_object(volume, object, path, asked.opening.creation) } else { readable_file(volume, object, path) }
+            opened :: if kind == .File { open_file_object(volume, object, path, asked.opening.creation, no_schema()) } else { readable_file(volume, object, path) }
             match opened {
                 case Ok(made) => found = made
                 case Error(error) => return .Refused(file_error(error))

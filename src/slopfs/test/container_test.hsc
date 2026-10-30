@@ -75,6 +75,23 @@ check_volume :: fn(device: ptr[slopfs.Device]) -> int {
             }
         }
     }
+    // Names that would show something other than their bytes (decisions/0108): a zero-width space, a right-to-left
+    // override, an escape, a C1 control, and bytes that aren't UTF-8; and a name with an accent, which shows as it is
+    if !refused(volume, root, u8.[0x61, 0xe2, 0x80, 0x8b, 0x62]) || !refused(volume, root, u8.[0xe2, 0x80, 0xae, 0x61])
+        || !refused(volume, root, u8.[0x61, 0x1b]) || !refused(volume, root, u8.[0xc2, 0x85]) || !refused(volume, root, u8.[0x61, 0xff]) {
+        return 436
+    }
+    accented :: slopfs.create(volume, root, string_of(&ACCENTED[0], ACCENTED.count), .File) or_return 437
+    // A typed file's schema, kept in its record
+    schema : u8[32]
+    schema[0] = 0x5c
+    schema[31] = 0x1e
+    slopfs.set_schema(volume, accented, schema) or_return 438
+    typed :: slopfs.info(volume, accented) or_return 438
+    if typed.schema != schema {
+        return 439
+    }
+    slopfs.remove(volume, root, string_of(&ACCENTED[0], ACCENTED.count)) or_return 440
     data := runtime.new(Data)
     defer runtime.free(data)
     pattern(data.bytes, 1)
@@ -510,4 +527,18 @@ compare_file :: fn(volume: ptr[mut slopfs.Volume], model: ptr[mut Model], back: 
         return base + 3
     }
     return 0
+}
+
+// "naïve": an accent, which a name may have
+ACCENTED :: u8.[0x6e, 0x61, 0xc3, 0xaf, 0x76, 0x65]
+
+// Whether a name of these bytes is refused as InvalidName.
+refused :: fn(volume: ptr[mut slopfs.Volume], directory: u64, bytes: u8[]) -> bool {
+    if bytes.count == 0 {
+        return false
+    }
+    match slopfs.create(volume, directory, string_of(&bytes[0], bytes.count), .File) {
+        case Ok(made) => return false
+        case Error(error) => return error == .InvalidName
+    }
 }

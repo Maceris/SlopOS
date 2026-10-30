@@ -300,7 +300,7 @@ commit_transaction :: fn(server: ptr[mut Server], index: usize) -> dir.Response 
 apply :: fn(server: ptr[mut Server], directory: u64, logged: ptr[Logged]) -> files.FileError? {
     volume :: server.volume
     if logged.op == cast[u32](Op.OpenFile) {
-        match open_file_object(volume, directory, logged.path, creation_of(logged.creation)) {
+        match open_file_object(volume, directory, logged.path, creation_of(logged.creation), no_schema()) {
             case Ok(object) => return null
             case Error(error) => return file_error(error)
         }

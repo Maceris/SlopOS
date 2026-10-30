@@ -295,7 +295,8 @@ programs outside the boot set booted from the store, their code shared.
 
 9c planned 2026-10-30 (`decisions/0107`), in five parts: **9c1** typed files and names; **9c2** the config store and
 `Config[T]`; **9c3** the system configuration at run time; **9c4** memory pressure; **9c5** the Perf baselines and R4's
-storage faults.
+storage faults. 9c1 done 2026-10-30 (`decisions/0108`): typed files through the files protocol and `std`, kept by the
+volume server and refused by the FAT server, and slopfs refusing names that show something other than their bytes.
 
 Added by `decisions/0097`: in **9c**, the benchmarks with baselines (*Perf*, below), the memory pressure signal and
 evictable pager pages, and slopfs refusing names with control, bidirectional or invisible characters; in **9d**,
