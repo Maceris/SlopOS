@@ -521,7 +521,7 @@ def fat32_volume(sectors: int, files: list) -> bytes:
 BOOT_DISK_SECTORS = 206848
 # The programs Limine loads from the boot disk, enough to reach the system volume, which holds every program; the rest
 # come from it (src/system_config's boot_set, decisions/0089)
-BOOT_SET = ["root_task", "entropy", "process_manager", "scheduler", "platform", "supervisor", "events_service", "clock", "virtio_blk", "storage_manager", "partition_server",
+BOOT_SET = ["root_task", "entropy", "process_manager", "scheduler", "platform", "supervisor", "events_service", "bundle_store_service", "clock", "virtio_blk", "storage_manager", "partition_server",
             "fat_server", "container_service", "volume_server"]
 BOOT_ESP_SECTORS = 131072
 BOOT_SYSTEM_SECTORS = 65536
