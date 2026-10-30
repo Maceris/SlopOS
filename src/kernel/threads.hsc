@@ -76,6 +76,8 @@ Thread :: struct #align(16) {
     waiting : bool,
     wait_next : u64,
     wait_previous : u64,
+    // The paged memory it waits on for a page (paging.hsc), 0 if none; linked there through wait_next and wait_previous.
+    fault_memory : u64,
     // Counts its waits, so a deadline from an earlier one doesn't wake a later one.
     wait_sequence : u64,
     wait_timer : TimerEntry,
@@ -174,6 +176,7 @@ start_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
 destroy_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     leave_thread_budget(kernel, thread)
     cancel_wait(kernel, thread)
+    cancel_fault_wait(thread)
     leave_space(thread)
     forget_stop(thread)
     unlink_thread(kernel, thread)

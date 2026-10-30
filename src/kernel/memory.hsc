@@ -78,6 +78,12 @@ Memory :: struct #align(16) {
     domain : u64,
     domain_generation : u32,
     device_address : u64,
+    // Paged memory's (paging.hsc): its pager's wake binding and that binding's generation, 0 for other memory; the
+    // lock its pages' states and its waiting threads are under, and the first of those, linked through wait_next.
+    pager_binding : u64,
+    pager_generation : u32,
+    page_lock : concurrency.SpinLock,
+    fault_waiters : u64,
 }
 
 // A range of a memory object, mapped in an address space.
@@ -248,6 +254,10 @@ frame_for :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], page: u64) -> u64 
     }
     slot :: page_slot(memory, page)
     held :: intrinsics.atomic_load_u64_acquire(slot)
+    // Paged memory's pages are its pager's to supply, and none is a frame until it is
+    if memory.pager_binding != 0 {
+        return if held >= frames.FRAME_SIZE { held } else { cast[u64](0) }
+    }
     if held != 0 {
         return held
     }
@@ -269,6 +279,12 @@ frame_for :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], page: u64) -> u64 
 destroy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
     // DMA memory's devices reach it no more, before its frames can go
     unmap_dma_memory(kernel, memory)
+    // Paged memory's waiting threads touch their pages again, which are no longer mapped
+    if memory.pager_binding != 0 {
+        concurrency.lock(&memory.page_lock)
+        wake_fault_waiters(kernel, memory)
+        concurrency.unlock(&memory.page_lock)
+    }
     destroy_windows(kernel, memory)
     if memory.parent != 0 {
         parent :: cast[ptr[mut Memory]](memory.parent)
@@ -420,7 +436,8 @@ release_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
         if leaf != 0 {
             for page in 0..<PAGES_PER_LEAF {
                 frame :: cast[ptr[u64]](leaf + cast[u64](page) * 8)^
-                if frame != 0 {
+                // Paged memory's wanted pages hold a mark, not a frame
+                if frame >= frames.FRAME_SIZE {
                     frames.give_frame(&per_cpu().frame_cache, &kernel.frames, cast[boot_info.PhysicalAddress](frame))
                 }
             }
@@ -574,10 +591,11 @@ take_down :: fn(kernel: ptr[mut Kernel], mapping: ptr[mut MemoryMapping]) {
 
 /*
  * A page fault in user mode: if it's in memory mapped in the thread's space, and the access is one the
- * mapping allows, the page is mapped, with a frame filled with zeros if it hadn't been touched. False if
- * it isn't, and the thread can't go on.
+ * mapping allows, the page is mapped, with a frame filled with zeros if it hadn't been touched, or for paged memory,
+ * the one its pager supplied, the thread waiting for it if it hasn't yet (paging.hsc). Failed if it isn't, and the
+ * thread can't go on.
  */
-resolve_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arch_interface.PageFault) -> bool {
+resolve_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arch_interface.PageFault) -> FaultOutcome {
     space :: thread.space
     address :: cast[u64](fault.address) & ~(frames.FRAME_SIZE - 1)
     concurrency.lock(&space.lock)
@@ -598,7 +616,7 @@ resolve_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arc
         mapping = candidate.space_next
     }
     if cast[u64](found) == 0 {
-        return false
+        return .Failed
     }
     protection :: found.protection
     allowed :: match fault.access {
@@ -608,19 +626,23 @@ resolve_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arc
     }
     // Pages are mapped with the mapping's protection, so a fault on one that's there broke it
     if !allowed || fault.present {
-        return false
+        return .Failed
     }
     memory :: cast[ptr[Memory]](found.memory)
     page :: (address - found.address + found.offset) / frames.FRAME_SIZE
+    root, root_page :: paged_root(memory, page)
+    if root.pager_binding != 0 {
+        return resolve_paged_fault(kernel, thread, space, address, root, root_page, mapping_for(protection, memory.cache))
+    }
     frame :: frame_for(kernel, memory, page)
     if frame == 0 {
-        return false
+        return .Failed
     }
     mapped, error :: map_pages_locked(kernel, space, address, frame, frames.FRAME_SIZE, mapping_for(protection, memory.cache))
     // Another CPU may have mapped it meanwhile, for a fault of its own
     return match error {
-        case Some(failure) => failure == .AlreadyMapped
-        case None => true
+        case Some(failure) => if failure == .AlreadyMapped { FaultOutcome.Mapped } else { FaultOutcome.Failed }
+        case None => FaultOutcome.Mapped
     }
 }
 

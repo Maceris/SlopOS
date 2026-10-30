@@ -72,18 +72,22 @@ handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interfac
     kernel :: cpu.kernel
     runtime.assert(cpu.current != 0, "a fault from user mode comes from a thread")
     thread :: cast[ptr[mut Thread]](cpu.current)
-    resolved := false
+    outcome := FaultOutcome.Failed
     access := cast[u64](0)
     address := cast[u64](0)
     match fault {
         case Page(page) => {
-            resolved = resolve_fault(kernel, thread, page)
+            outcome = resolve_fault(kernel, thread, page)
             access = cast[u64](cast[u8](page.access))
             address = cast[u64](page.address)
         }
         case _ => access = 0xff
     }
-    if !resolved {
+    // Waiting for its pager: it runs again, touching the page again, once it's supplied
+    if outcome == .Blocked {
+        leave_cpu(cpu)
+    }
+    if outcome == .Failed {
         if stop_thread(kernel, thread, .Fault, access, address, true) {
             leave_cpu(cpu)
         }
@@ -577,6 +581,33 @@ sys_memory_map :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, space: slo
     found :: object_of[slop_os.MemoryError](process, cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, cast[slop_os.Rights](needed))?
     target :: object_of[slop_os.MemoryError](process, cast[slop_os.Handle](space), slop_os.ObjectKind.AddressSpace, slop_os.RIGHT_SPACE_MAP)?
     return memory_done(memory_map(per_cpu().kernel, cast[ptr[mut Memory]](found), cast[ptr[mut AddressSpace]](target), address, offset, size, bits))
+}
+
+// A port for the pager, which may be bound to (RIGHT_PORT_BIND), and the budget paged memory is charged to.
+sys_memory_create_paged :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, port: slop_os.Port, key: u64, size: u64)
+    -> Result[slop_os.Memory, slop_os.MemoryError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    pager :: object_of[slop_os.MemoryError](process, cast[slop_os.Handle](port), slop_os.ObjectKind.Port, slop_os.RIGHT_PORT_BIND)?
+    paying :: paying_budget[slop_os.MemoryError](process, budget)?
+    made :: create_paged_memory(kernel, cast[u64](process), paying, cast[ptr[mut Port]](pager), key, size)?
+    handle :: owning_handle[slop_os.MemoryError](kernel, process, cast[u64](made), false)?
+    return .Ok(cast[slop_os.Memory](handle))
+}
+
+// Only a handle that may write the paged memory asks what it's waited for.
+sys_memory_page_wanted :: fn(thread: ptr[mut Thread], memory: slop_os.Memory) -> Result[u64, slop_os.MemoryError] {
+    found :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_WRITE)?
+    return page_wanted(cast[ptr[mut Memory]](found))
+}
+
+// The paged memory's handle may write it, and source's read it.
+sys_memory_supply :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u64, source: slop_os.Memory, source_offset: u64)
+    -> Result[void, slop_os.MemoryError] {
+    process :: process_of(thread)
+    found :: object_of[slop_os.MemoryError](process, cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_WRITE)?
+    from :: object_of[slop_os.MemoryError](process, cast[slop_os.Handle](source), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_READ)?
+    return memory_done(supply_page(per_cpu().kernel, cast[ptr[mut Memory]](found), offset, cast[ptr[Memory]](from), source_offset))
 }
 
 sys_memory_unmap :: fn(thread: ptr[mut Thread], space: slop_os.AddressSpace, address: u64) -> Result[void, slop_os.MemoryError] {

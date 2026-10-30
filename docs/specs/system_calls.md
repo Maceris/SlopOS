@@ -129,6 +129,9 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 63 | `io_ports_create` | platform, budget, first, count | an owning handle to the I/O ports first to first + count - 1, on an architecture that has them (x86-64) |
 | 64 | `io_port_read` | ports, offset, width | width bytes (1, 2 or 4) read from the port at offset in the range |
 | 65 | `io_port_write` | ports, offset, width, value | width bytes of value written to the port at offset in the range |
+| 66 | `memory_create_paged` | budget, port, key, size | an owning handle to paged memory of size bytes, charged for all of it, whose pager raises key's wake binding on port (`RIGHT_PORT_BIND`), which it made (`0094`) |
+| 67 | `memory_page_wanted` | memory | the offset of a page of paged memory a touch waits for, each reported once; needs `RIGHT_MEMORY_WRITE` |
+| 68 | `memory_supply` | memory, offset, source, source offset | nothing: the page at offset, a copy of source's page at source offset, unless it's there already, and whoever waited for it woken; needs `RIGHT_MEMORY_WRITE` on the memory, `RIGHT_MEMORY_READ` on source |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the
@@ -180,6 +183,12 @@ unmaps it from every address space; destroying an address space takes down what'
   charged only its slot. Closing the memory destroys its windows, unmapping them everywhere; closing a
   window leaves the memory and its other windows. A window made through a handle without
   `RIGHT_MEMORY_WRITE` can't be mapped writable, whatever its own handle's rights; so for execute.
+- **Paged memory** (`memory_create_paged`, `0094`) is for content that can't change: its pages come from its
+  pager, a process that made a wake binding on its port for it. A touch of a page that isn't there marks it
+  wanted, raises the binding, and waits; the pager asks what's wanted (`memory_page_wanted`) and supplies each
+  page (`memory_supply`), copying it from memory of its own, which wakes whoever waited, to touch it again. A
+  page stays once supplied. It can be mapped only to read or execute, by any number of address spaces; a touch
+  with the pager's binding gone destroys the thread, as a touch of nothing mapped does.
 
 ## IRQs
 
@@ -369,6 +378,9 @@ Calls on a memory budget or a memory object fail with `slop_os.MemoryError`:
 | 24 | `InvalidSize` | Not a whole number of pages, none, more than `MAX_MEMORY_SIZE`, or past the memory's end |
 | 26 | `NotMapped` | No mapping starts at that address |
 | 27 | `BadProtection` | Writable and executable at once, or no access at all |
+| 28 | `NoPager` | `memory_create_paged`: the port has no wake binding with that key, or is gone |
+| 29 | `NothingWanted` | `memory_page_wanted`: no page is waited for that hasn't been reported |
+| 30 | `NotPaged` | `memory_page_wanted`, `memory_supply`: not paged memory |
 
 Registering a controller, making an IRQ or device memory fail with `slop_os.DeviceError`:
 
@@ -419,5 +431,5 @@ Devices, MSIs and DMA memory fail with `slop_os.DeviceError` too:
 
 ## Not Yet
 
-I/O APIC lines through interrupt remapping when a driver needs one (`0082`); pagers for memory objects with memory-mapped files. Process memory is read and written through the
+I/O APIC lines through interrupt remapping when a driver needs one (`0082`); writable memory-mapped files; a paged memory's waiting threads woken when its pager's binding goes. Process memory is read and written through the
 page tables, so a memory object's pages no thread has touched yet can't be.

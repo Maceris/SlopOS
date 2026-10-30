@@ -106,7 +106,7 @@ def with_before_qemu(arguments: list[str], more: list[str]) -> list[str]:
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 36 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 37 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 3 budgets and the default split off the root's, 800000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -257,6 +257,8 @@ TESTS = [
         "budgets split off the root's share and refused past it, set, and destroyed, what ran on them going to their parent"),
     program_test("reads I/O ports through a range of them", "test_io_ports",
         "the RTC's status read through its ports, and ports outside them refused"),
+    program_test("supplies paged memory's pages from a pager in user mode", "test_pager",
+        "2 pages supplied as they were touched, read at two addresses, and writing them refused"),
     program_test("drives a device from user mode with the platform capability", "test_devices",
         "a driver registered a controller, took an IRQ's interrupts through its port, read device memory, and lost a window "
         "with its memory; IOMMUs that aren't were refused", "test_device"),

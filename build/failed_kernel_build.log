@@ -1,3 +1,36 @@
 --- hemera --setting=targets=kernel,stack_check=trap,kernel_output=C:\Users\chesb\AppData\Local\Temp\slopos-boot-tests-bb26wsyb\kernel.elf,arch=x86_64 D:\Documents\Programming\SlopOS\src\build
 exit code 3221225477
 
+--- hemera --setting=targets=kernel,stack_check=trap,kernel_output=C:\Users\chesb\AppData\Local\Temp\slopos-boot-tests-gzqtae9m\kernel.elf,arch=x86_64 D:\Documents\Programming\SlopOS\src\build
+exit code 4294967295
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(6,0): error E4005: Could not find package. D:\Documents\Programming\SlopOS\src\concurrency
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(7,0): error E4005: Could not find package. D:\Documents\Programming\SlopOS\src\frames
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(89,4): error E4008: Undeclared name. concurrency
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(47,4): error E4008: Undeclared name. concurrency
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(181,4): error E4008: Undeclared name. concurrency
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(92,15): error E4008: Undeclared name. frames
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(203,17): error E4008: Undeclared name. frames
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(93,8): error E4008: Undeclared name. concurrency
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(203,90): error E4008: Undeclared name. frames
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(182,10): error E4008: Undeclared name. concurrency
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(207,54): error E4008: Undeclared name. frames
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(183,27): error E4008: Undeclared name. frames
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(94,72): error E4008: Undeclared name. frames
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(211,13): error E4008: Undeclared name. frames
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(160,4): error E4008: Undeclared name. concurrency
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(212,57): error E4008: Undeclared name. frames
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(173,4): error E4008: Undeclared name. concurrency
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(213,21): error E4008: Undeclared name. frames
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(213,60): error E4008: Undeclared name. boot_info
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(103,12): error E4008: Undeclared name. concurrency
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(213,108): error E4008: Undeclared name. frames
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(214,4): error E4008: Undeclared name. concurrency
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(188,30): error E4008: Undeclared name. frames
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(215,39): error E4008: Undeclared name. frames
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(216,51): error E4008: Undeclared name. frames
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(217,8): error E4008: Undeclared name. frames
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(113,4): error E4008: Undeclared name. concurrency
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(223,4): error E4008: Undeclared name. concurrency
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(59,4): error E4008: Undeclared name. concurrency
+D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(128,4): error E4008: Undeclared name. concurrency
+
