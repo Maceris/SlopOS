@@ -303,7 +303,17 @@ start_partition_server :: fn(state: ptr[mut Manager], index: usize) -> bool {
 
 // A launch watched from its start under key, on the storage manager's port.
 watched :: fn(state: ptr[Manager], key: u64) -> os.LaunchOptions {
-    return os.LaunchOptions.{watch = os.LaunchWatch.{port = state.port, key = key}}
+    options := os.LaunchOptions.{watch = os.LaunchWatch.{port = state.port, key = key}}
+    // The clock page the storage manager was given, so its servers have the wall clock too, as a FAT server's times need
+    clock :: runtime.os_entry_grant("clock", "Memory", "", false)
+    if clock != 0 {
+        rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+        match slop_os.handle_duplicate(cast[slop_os.Handle](clock), rights) {
+            case Ok(copy) => options.clock = cast[slop_os.Memory](copy)
+            case Error(error) => {}
+        }
+    }
+    return options
 }
 
 // What a launch gave, kept while the server runs.

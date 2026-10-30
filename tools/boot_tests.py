@@ -64,6 +64,7 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
     "--expect-line=[user] storage_manager: disk 0 partition 4: SlopOS system, 65536 blocks from 139264",
     "--expect-line=[user] storage_manager: started a FAT server for disk 0 partition 3",
     "--expect-line=[user] fat_server: serving a FAT32 volume of 128992 clusters of 512 bytes",
+    "--expect-line=[user] fat_server: FSInfo's free count is the FAT's", "--expect-line=[user] hello: the entropy service gave 32 random bytes",
     "--expect-line=[user] storage_manager: started a container service for disk 0 partition 4",
     "--expect-line=[user] storage_manager: started a volume server for the system volume",
     "--expect-line=[user] volume_server: serving volume 1 (system), from transaction 3",
@@ -111,7 +112,8 @@ TESTS = [
         "--expect-line=[user] scheduler: 3 budgets and the default split off the root's, 800000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
         "--expect-line=[user] process manager: started supervisor", "--expect-line=[user] process manager: started hello",
-        "--expect-line=[user] hello: heap working, random numbers working", "--expect-line=[user] root task: the supervisor started hello",
+        "--expect-line=[user] hello: heap working, random numbers working",
+        "--expect-line=[user] hello: the entropy service gave 32 random bytes", "--expect-line=[user] root task: the supervisor started hello",
         "--expect-line=[user] platform: serving", "--expect-line=[user] root task: the supervisor started all 4 of its services",
         "--expect-line=[info] root task ended with code 0"]),
     # The IOMMU the platform service found in the firmware tables, which the kernel identified

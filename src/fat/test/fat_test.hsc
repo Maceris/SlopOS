@@ -50,6 +50,14 @@ main :: fn() -> int {
     if next_name(&volume, root, 0) != "" {
         return 5
     }
+    // Formatted, every cluster but the root's is free, as FSInfo says
+    formatted_free :: fat.free_clusters(&volume) or_return 40
+    if formatted_free != volume.cluster_count - 1 {
+        return 41
+    }
+    // Made and written to with a stamp, it has it
+    stamp :: fat.stamp_of(2026, 10, 30, 12, 34, 56)
+    volume.stamp = stamp
 
     // An 8.3 name in lower case, kept by its case flags, found in any case
     readme := fat.create(&volume, root, "readme.txt", false) or_return 6
@@ -59,6 +67,13 @@ main :: fn() -> int {
     found := fat.lookup(&volume, root, "README.TXT") or_return 8
     if fat.name_of(&found) != "readme.txt" || found.size != 10 || read_back(&volume, &found) != "hello, FAT" {
         return 9
+    }
+    if found.written != stamp || stamp >> 16 != (46 << 9 | 10 << 5 | 30) || stamp & 0xffff != (12 << 11 | 34 << 5 | 28) {
+        return 42
+    }
+    // A cluster taken for its bytes, counted
+    if (fat.free_clusters(&volume) or_else 0) != formatted_free - 1 {
+        return 43
     }
 
     // Long names, and their aliases
@@ -148,11 +163,23 @@ main :: fn() -> int {
         return 33
     }
 
-    // Mounted again, it's all as it was left
+    // Mounted again, it's all as it was left, FSInfo's count with it once it's written
+    free_before :: fat.free_clusters(&volume) or_return 44
+    if fat.write_info(&volume) is_some {
+        return 45
+    }
     remounted := fat.mount(device) or_return 34
     still := fat.lookup(&remounted, fat.root_of(&remounted), "readme.txt") or_return 35
-    if read_back(&remounted, &still) != "hello, FAT" {
+    if read_back(&remounted, &still) != "hello, FAT" || still.written != stamp {
         return 36
+    }
+    if remounted.free_count != free_before {
+        return 46
+    }
+    // Counted through the FAT, the same
+    remounted.free_count = fat.UNKNOWN_FREE
+    if (fat.free_clusters(&remounted) or_else 0) != free_before {
+        return 47
     }
     return check_fuzz(&image, device)
 }

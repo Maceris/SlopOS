@@ -7,11 +7,14 @@
  * gives it, mapped here; every connection to one file sees what the others write, as each reads its entry afresh.
  *
  * Every request is done before the next is read, and every write goes straight to the disk, so a Sync is a Flush.
+ * What's made or written to has the wall clock's time, from the clock page the storage manager passes on, and
+ * FSInfo's free count is written back after each pass of requests that changed it (decisions/0101).
  */
 package fat_server
 
 import runtime from "base"
 import os from "std"
+import time from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
 import file from "std/os/slop_os"
@@ -100,6 +103,21 @@ main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: 
     }
     log_line.write(server.log, "fat_server: serving a FAT32 volume of % clusters of % bytes%", volume.cluster_count, volume.cluster_bytes,
         if info.read_only { ", read-only" } else { "" })
+    // FSInfo's free count checked against the FAT's, and the FAT's kept if they differ, as after another system's writes
+    match fat.count_free(&volume) {
+        case Ok(counted) => {
+            if counted == volume.free_count {
+                log_line.write(server.log, "fat_server: FSInfo's free count is the FAT's")
+            }
+            else {
+                log_line.write(server.log, "fat_server: FSInfo's free count was %, and the FAT has %, which it is now",
+                    volume.free_count, counted)
+                volume.free_count = counted
+                volume.info_changed = true
+            }
+        }
+        case Error(failure) => {}
+    }
     // The listener is a connection to the root, as any client's Connect on it gives another
     if add(server, .Dir, clients.end, volume.root_cluster, fat.Place.{}, false, "") is_none {
         return 6
@@ -107,6 +125,8 @@ main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: 
     into := os.Incoming.{}
     loop {
         // Connections made meanwhile are read in another pass, as a channel wakes its reader only once it's found empty
+        // What's made or written to now has the wall clock's time, if there's a wall clock
+        volume.stamp = stamp_now()
         loop #at_least_once {
             server.added = false
             with {
@@ -119,8 +139,24 @@ main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: 
             while i < server.count
         }
         while server.added
+        // FSInfo's free count kept as the FAT is: written once the requests that changed it are done
+        match fat.write_info(&volume) {
+            case Some(failure) => log_line.write(server.log, "fat_server: FSInfo not written: %", failure)
+            case None => {}
+        }
         packets : slop_os.Packet[8]
         _ = slop_os.port_wait(server.port, packets, slop_os.NO_DEADLINE)
+    }
+}
+
+// The wall clock's time as FAT holds it, or the epoch without a wall clock.
+stamp_now :: fn() -> u32 {
+    match time.now() {
+        case Ok(now) => {
+            at :: time.utc(now)
+            return fat.stamp_of(at.year, at.month, at.day, at.hour, at.minute, at.second)
+        }
+        case Error(error) => return fat.EPOCH_STAMP
     }
 }
 

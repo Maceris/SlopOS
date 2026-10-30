@@ -350,7 +350,15 @@ fill_fat :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
         return .TooSmallForFat
     }
     volume := fat.mount(device) or_return .NotMounted
-    return copy_to_fat(&volume, fat.root_of(&volume), partition.folder, 0)
+    copied :: copy_to_fat(&volume, fat.root_of(&volume), partition.folder, 0)
+    if copied is_some {
+        return copied
+    }
+    // FSInfo's free count, as the copies left it
+    if fat.write_info(&volume) is_some {
+        return .NotWritten
+    }
+    return null
 }
 
 // path/name, in a buffer.

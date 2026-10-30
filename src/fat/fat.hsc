@@ -7,9 +7,14 @@
  * cluster chain like any other. A directory is known by its first cluster, and an entry by where its short entry is.
  * Names are UTF-8, as long names' UTF-16 converts to, compared without regard to ASCII case, as FAT compares them; a
  * name that isn't an upper-case 8.3 name gets long-name entries before a short alias made as Windows makes them
- * ("LONGNA~1.TXT"). There are no access or modification times written (SlopOS has no wall clock yet): every time is
- * 1980-01-01. Every FAT is written alike. FAT12 and FAT16, which a volume of fewer than 65525 clusters is by the
- * specification, aren't read.
+ * ("LONGNA~1.TXT"). An entry's times are the volume's stamp, which its user sets from the wall clock (stamp_of), or
+ * 1980-01-01 without one: made, it has it as its creation, write and access times; written to, as its write and
+ * access times. Reading changes no time. Every FAT is written alike. FAT12 and FAT16, which a volume of fewer than
+ * 65525 clusters is by the specification, aren't read.
+ *
+ * FSInfo's free count and next free cluster are read at mount, if its signatures are there and they fit the volume;
+ * the count is kept as clusters are taken and freed, and written back with write_info (decisions/0101). A volume whose
+ * count is unknown counts its free clusters the first time free_clusters is asked.
  */
 //SPEC: Microsoft Extensible Firmware Initiative FAT32 File System Specification, version 1.03 (2000): §3 (the boot
 //SPEC: sector and BPB), §4 (the FAT), §5 (FSInfo), §6 (directories), §7 (long names); UEFI Specification 2.10 §13.3
@@ -71,6 +76,9 @@ Device :: struct #scoped {
     read_only : bool,
 }
 
+// FSInfo's count of free clusters when it's unknown.
+UNKNOWN_FREE : u32 : 0xffffffff
+
 // A mounted volume: its device, its layout, and where the next free cluster is likely to be.
 Volume :: struct #scoped {
     device : Device,
@@ -84,6 +92,11 @@ Volume :: struct #scoped {
     root_cluster : u32,
     info_sector : u64,
     next_free : u32,
+    // How many clusters are free, or UNKNOWN_FREE; and whether that, or next_free, changed since FSInfo was written
+    free_count : u32,
+    info_changed : bool,
+    // The date, in its high 16 bits, and time an entry made or written to now gets, as FAT holds them (stamp_of)
+    stamp : u32,
     label : u8[11],
     // Where a walk along a directory's chain last was: its first cluster, how many clusters in, and that cluster, so a
     // directory read slot by slot follows its chain once, not from its start for each slot, even a chain that loops
@@ -109,6 +122,8 @@ Entry :: struct {
     first_cluster : u32,
     size : u32,
     place : Place,
+    // When it was last written to: the date in the high 16 bits, the time in the low
+    written : u32,
 }
 
 // A short directory entry, as it is on the volume.
@@ -145,6 +160,21 @@ LongEntry :: struct #packed {
 
 // 1980-01-01, the earliest date FAT holds: day 1, month 1, year 0
 EPOCH_DATE : u16 : (1 << 5) | 1
+EPOCH_STAMP : u32 : cast[u32](EPOCH_DATE) << 16
+
+/*
+ * A date and time as FAT holds them, for a volume's stamp: the date in the high 16 bits (day, month, years since 1980),
+ * the time in the low (seconds / 2, minutes, hours). A date before 1980 or after 2107 is the epoch.
+ */
+stamp_of :: fn(year: i64, month: int, day: int, hour: int, minute: int, second: int) -> u32 {
+    if year < 1980 || year > 2107 || month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0
+        || minute > 59 || second < 0 || second > 59 {
+        return EPOCH_STAMP
+    }
+    date :: cast[u32](year - 1980) << 9 | cast[u32](month) << 5 | cast[u32](day)
+    time :: cast[u32](hour) << 11 | cast[u32](minute) << 5 | cast[u32](second / 2)
+    return date << 16 | time
+}
 // The case flags: an all-lower-case base name, or extension, kept in an 8.3 name with no long name
 LOWER_BASE : u8 : 0x08
 LOWER_EXTENSION : u8 : 0x10
@@ -190,11 +220,94 @@ mount :: fn(device: Device) -> Result[Volume, FatError] {
     }
     volume := Volume.{device = device, sectors_per_cluster = per_cluster, cluster_bytes = per_cluster * SECTOR_BYTES, reserved_sectors = reserved,
         fat_count = fats, fat_sectors = fat_sectors, first_data_sector = first_data, cluster_count = cast[u32](clusters), root_cluster = root,
-        info_sector = info, next_free = 2}
+        info_sector = info, next_free = 2, free_count = UNKNOWN_FREE, stamp = EPOCH_STAMP}
     for i in 0..<cast[usize](11) {
         volume.label[i] = get_u8(sector, 71 + i)
     }
+    read_info(&volume)
     return .Ok(volume)
+}
+
+// FSInfo's free count and next free cluster, where its signatures are and they fit the volume.
+read_info :: fn(volume: ptr[mut Volume]) {
+    if volume.info_sector == 0 || volume.info_sector >= volume.reserved_sectors {
+        return void
+    }
+    info : u8[512]
+    if !volume.device.read(volume.device.context, volume.info_sector, 1, info) || get_u32(info, 0) != 0x41615252
+        || get_u32(info, 484) != 0x61417272 || get_u32(info, 508) != 0xaa550000 {
+        return void
+    }
+    free :: get_u32(info, 488)
+    if free <= volume.cluster_count {
+        volume.free_count = free
+    }
+    next :: get_u32(info, 492)
+    if is_cluster(volume, next) {
+        volume.next_free = next
+    }
+}
+
+/*
+ * FSInfo's free count and next free cluster written, and its backup's, after the backup boot sector, if they changed
+ * and the volume has an FSInfo.
+ */
+write_info :: fn(volume: ptr[mut Volume]) -> FatError? {
+    if !volume.info_changed || volume.device.read_only || volume.info_sector == 0 || volume.info_sector >= volume.reserved_sectors {
+        return null
+    }
+    info : u8[512]
+    if !volume.device.read(volume.device.context, volume.info_sector, 1, info) {
+        return FatError.DeviceError
+    }
+    if get_u32(info, 0) != 0x41615252 || get_u32(info, 484) != 0x61417272 {
+        return null
+    }
+    put_u32(info, 488, volume.free_count)
+    put_u32(info, 492, volume.next_free)
+    // The backup boot sector, at 6 as the BPB says, has FSInfo's backup after it
+    backup :: cast[u64](6) + volume.info_sector
+    for at in u64.[volume.info_sector, backup] {
+        if at < volume.reserved_sectors && !volume.device.write(volume.device.context, at, 1, info) {
+            return FatError.DeviceError
+        }
+    }
+    volume.info_changed = false
+    return null
+}
+
+// How many clusters are free: FSInfo's count, or counted through the FAT the first time it isn't known.
+free_clusters :: fn(volume: ptr[mut Volume]) -> Result[u32, FatError] {
+    if volume.free_count == UNKNOWN_FREE {
+        volume.free_count = count_free(volume)?
+        volume.info_changed = true
+    }
+    return .Ok(volume.free_count)
+}
+
+// How many clusters the first FAT has free, read a sector at a time.
+count_free :: fn(volume: ptr[mut Volume]) -> Result[u32, FatError] {
+    free : u32 = 0
+    sector : u8[512]
+    entries_per_sector :: SECTOR_BYTES / 4
+    last :: cast[u64](volume.cluster_count) + 2
+    at := cast[u64](0)
+    loop {
+        if at >= last {
+            break
+        }
+        if !volume.device.read(volume.device.context, volume.reserved_sectors + at / entries_per_sector, 1, sector) {
+            return .Error(.DeviceError)
+        }
+        for index in 0..<entries_per_sector {
+            cluster :: at + index
+            if cluster >= 2 && cluster < last && get_u32(sector, cast[usize](index * 4)) & CLUSTER_MASK == FREE_CLUSTER {
+                free += 1
+            }
+        }
+        at += entries_per_sector
+    }
+    return .Ok(free)
 }
 
 // The root directory's first cluster.
@@ -286,6 +399,10 @@ allocate_cluster :: fn(volume: ptr[mut Volume], previous: u32) -> Result[u32, Fa
             }
         }
         volume.next_free = cluster + 1
+        if volume.free_count != UNKNOWN_FREE && volume.free_count > 0 {
+            volume.free_count -= 1
+        }
+        volume.info_changed = true
         return .Ok(cluster)
     }
     return .Error(.NoSpace)
@@ -320,6 +437,10 @@ free_chain :: fn(volume: ptr[mut Volume], first: u32) -> FatError? {
         if cluster < volume.next_free {
             volume.next_free = cluster
         }
+        if volume.free_count != UNKNOWN_FREE && volume.free_count < volume.cluster_count {
+            volume.free_count += 1
+        }
+        volume.info_changed = true
         if following == 0 {
             return null
         }
@@ -488,6 +609,7 @@ next_entry :: fn(volume: ptr[mut Volume], directory: u32, slot: u32) -> Result[L
         }
         entry.first_cluster = cast[u32](get_u16(bytes, 20)) << 16 | cast[u32](get_u16(bytes, 26))
         entry.size = get_u32(bytes, 28)
+        entry.written = cast[u32](get_u16(bytes, 24)) << 16 | cast[u32](get_u16(bytes, 22))
         entry.place = Place.{directory = directory, slot = current, long_entries = 0}
         if long_count != 0 && expected == 0 && short_checksum(&entry.short_name) == checksum {
             entry.name_length = utf8_of_units(view_of(&units[0], cast[usize](long_count) * 13), &entry.name)
@@ -527,6 +649,7 @@ entry_at :: fn(volume: ptr[mut Volume], place: Place, name: string) -> Result[En
     }
     entry.first_cluster = cast[u32](get_u16(bytes, 20)) << 16 | cast[u32](get_u16(bytes, 26))
     entry.size = get_u32(bytes, 28)
+    entry.written = cast[u32](get_u16(bytes, 24)) << 16 | cast[u32](get_u16(bytes, 22))
     entry.name_length = copy_name(name, &entry.name)
     return .Ok(entry)
 }
@@ -790,8 +913,8 @@ zero_range :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], start: u64, end
     return .Ok
 }
 
-// An entry's first cluster and size, written back to its short entry.
-update_entry :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> Result[void, FatError] {
+// An entry's first cluster and size, written back to its short entry, with the volume's stamp as its write and access times.
+update_entry :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry]) -> Result[void, FatError] {
     at :: slot_at(volume, entry.place.directory, entry.place.slot)? or_return .Error(.Corrupt)
     bytes : u8[32]
     match read_slot(volume, at, &bytes) {
@@ -801,6 +924,10 @@ update_entry :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> Result[void, F
     put_u16(bytes, 20, cast[u16](entry.first_cluster >> 16))
     put_u16(bytes, 26, cast[u16](entry.first_cluster & 0xffff))
     put_u32(bytes, 28, if entry.attributes & DIRECTORY != 0 { cast[u32](0) } else { entry.size })
+    put_u16(bytes, 18, cast[u16](volume.stamp >> 16))
+    put_u16(bytes, 22, cast[u16](volume.stamp & 0xffff))
+    put_u16(bytes, 24, cast[u16](volume.stamp >> 16))
+    entry.written = volume.stamp
     match write_slot(volume, at, &bytes) {
         case Some(error) => return .Error(error)
         case None => return .Ok
@@ -827,7 +954,7 @@ create :: fn(volume: ptr[mut Volume], directory: u32, name: string, is_directory
             }
         }
     }
-    entry := Entry.{attributes = if is_directory { DIRECTORY } else { ARCHIVE }}
+    entry := Entry.{attributes = if is_directory { DIRECTORY } else { ARCHIVE }, written = volume.stamp}
     needs_long :: !short_name_exactly(name, &entry.short_name)
     if needs_long {
         make_alias(volume, directory, name, &entry.short_name)?
@@ -874,7 +1001,7 @@ create :: fn(volume: ptr[mut Volume], directory: u32, name: string, is_directory
 // A directory's "." and "..", in its first cluster: ".." of the root's directories is cluster 0.
 make_dots :: fn(volume: ptr[mut Volume], cluster: u32, parent: u32) -> Result[void, FatError] {
     for which in 0..<cast[u32](2) {
-        dots := Entry.{attributes = DIRECTORY, first_cluster = if which == 0 { cluster } else if parent == volume.root_cluster { cast[u32](0) } else { parent }}
+        dots := Entry.{attributes = DIRECTORY, written = volume.stamp, first_cluster = if which == 0 { cluster } else if parent == volume.root_cluster { cast[u32](0) } else { parent }}
         for i in 0..<cast[usize](11) {
             dots.short_name[i] = if i == 0 || (i == 1 && which == 1) { cast[u8]('.') } else { cast[u8](' ') }
         }
@@ -895,10 +1022,14 @@ short_entry_of :: fn(entry: ptr[Entry], case_flags: u8) -> u8[32] {
     }
     bytes[11] = entry.attributes
     bytes[12] = case_flags
-    put_u16(bytes, 16, EPOCH_DATE)
-    put_u16(bytes, 18, EPOCH_DATE)
+    // Made, written to and read now: entry.written, the epoch for an entry that has none
+    stamp :: if entry.written == 0 { EPOCH_STAMP } else { entry.written }
+    put_u16(bytes, 14, cast[u16](stamp & 0xffff))
+    put_u16(bytes, 16, cast[u16](stamp >> 16))
+    put_u16(bytes, 18, cast[u16](stamp >> 16))
     put_u16(bytes, 20, cast[u16](entry.first_cluster >> 16))
-    put_u16(bytes, 24, EPOCH_DATE)
+    put_u16(bytes, 22, cast[u16](stamp & 0xffff))
+    put_u16(bytes, 24, cast[u16](stamp >> 16))
     put_u16(bytes, 26, cast[u16](entry.first_cluster & 0xffff))
     put_u32(bytes, 28, if entry.attributes & DIRECTORY != 0 { cast[u32](0) } else { entry.size })
     return bytes
@@ -1050,7 +1181,7 @@ rename :: fn(volume: ptr[mut Volume], entry: ptr[Entry], directory: u32, name: s
     free_entry_slots(volume, &old)?
     if old.attributes & DIRECTORY != 0 && old.first_cluster != 0 && old.place.directory != directory {
         // Its ".." is its second slot
-        dots := Entry.{attributes = DIRECTORY, first_cluster = if directory == volume.root_cluster { cast[u32](0) } else { directory }}
+        dots := Entry.{attributes = DIRECTORY, written = volume.stamp, first_cluster = if directory == volume.root_cluster { cast[u32](0) } else { directory }}
         for i in 0..<cast[usize](11) {
             dots.short_name[i] = if i < 2 { cast[u8]('.') } else { cast[u8](' ') }
         }
@@ -1592,12 +1723,12 @@ format :: fn(device: Device, sector_count: u64, sectors_per_cluster: u64, label:
     }
     put_u8(boot, 510, 0x55)
     put_u8(boot, 511, 0xaa)
-    // FSInfo: its signatures, and free counts unknown
+    // FSInfo: its signatures, every cluster but the root's free, and the next after it
     info : u8[512]
     put_u32(info, 0, 0x41615252)
     put_u32(info, 484, 0x61417272)
-    put_u32(info, 488, 0xffffffff)
-    put_u32(info, 492, 0xffffffff)
+    put_u32(info, 488, cast[u32](clusters) - 1)
+    put_u32(info, 492, 3)
     put_u32(info, 508, 0xaa550000)
     // Each FAT's first sector: the media byte, the end marker, and the root's one cluster
     fat : u8[512]

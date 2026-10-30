@@ -153,6 +153,7 @@ StoreGrants :: struct {
 HelloGrants :: struct {
     manager : os.Channel[process_manager.ProcessManager]?,
     console : os.Channel[connector.Connector]?,
+    entropy_service : os.Channel[entropy.Entropy]?,
 }
 
 // What the console service is given (console.main).
@@ -964,18 +965,23 @@ launch_device_only :: fn(supervisor: ptr[mut Supervisor], service: system_config
     }
 }
 
+/*
+ * A connection of its own to the entropy service, for a program the supervisor starts (decisions/0101), through the
+ * supervisor's; null without one. The port the Connect is sent with is closed after it, taking its binding with it.
+ */
+entropy_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[entropy.Entropy]? {
+    service_end :: supervisor.entropy_service or_return null
+    port :: os.port_for(supervisor.block.budget, service_end.end) or_return null
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    return entropy.connect(service_end.end, port, supervisor.block.budget)
+}
+
 // A driver for a virtio entropy device, with a connection of its own to the entropy service: its process, or NO_HANDLE.
 launch_virtio_rng :: fn(supervisor: ptr[mut Supervisor], service: system_config.Service, device: platform.PciDevice) -> slop_os.Process {
     grants := VirtioRngGrants.{log = duplicate_log(supervisor), device = device.device, config = device.config, domain = device.domain,
         bar0 = optional(device.bar0), bar1 = optional(device.bar1), bar2 = optional(device.bar2), bar3 = optional(device.bar3),
         bar4 = optional(device.bar4), bar5 = optional(device.bar5)}
-    match supervisor.entropy_service {
-        case Some(service_end) => {
-            entropy_port :: os.port_for(supervisor.block.budget, service_end.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
-            grants.entropy_service = entropy.connect(service_end.end, entropy_port, supervisor.block.budget)
-        }
-        case None => {}
-    }
+    grants.entropy_service = entropy_connection(supervisor)
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
         virtio_rng.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => return kept(supervisor, launched)
@@ -1730,6 +1736,7 @@ start_hello :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     service :: system_config.service("hello") or_return void
     grants := HelloGrants.{console = connector_to(supervisor, supervisor.console)}
     grants.manager = process_manager.connect(supervisor.manager.end, supervisor.manager_port, supervisor.block.budget)
+    grants.entropy_service = entropy_connection(supervisor)
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "hello"), service.budget, hello.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => _ = place(supervisor, "hello", kept(supervisor, launched), again)
         case Error(error) => failed(supervisor, service.name, error)

@@ -9,6 +9,7 @@ import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
 import connector from "../../protocols/connector"
 import console_log from "../../protocols/console_log"
+import entropy from "../../protocols/entropy"
 
 /*
  * The first SlopOS program (roadmap M6): it fills memory from its heap, draws random numbers, and says
@@ -16,15 +17,20 @@ import console_log from "../../protocols/console_log"
  * console service, through a connector to it (decisions/0075, 0077). Given a connection to the process manager,
  * it then waits for the manager to be gone and says it's still running, which shows a program outlives the
  * manager that loaded it (decisions/0067). It says the date the wall clock gives too, which it reads from the clock
- * page it's given (decisions/0093). It ends with 0 if its heap worked.
+ * page it's given (decisions/0093). Given a connection to the entropy service, it asks it for random bytes too
+ * (decisions/0067, 0101). It ends with 0 if its heap worked.
  */
-main :: fn(manager: os.Channel[process_manager.ProcessManager]?, console: os.Channel[connector.Connector]?)
-    -> int {
+main :: fn(manager: os.Channel[process_manager.ProcessManager]?, console: os.Channel[connector.Connector]?,
+    entropy_service: os.Channel[entropy.Entropy]?) -> int {
     code :: fill_heap()
     // Two draws of 64 bits alike would be one chance in 2^64
     random_works :: random.next_u64() != random.next_u64()
     runtime.log_info("heap %, random numbers %", if code == 0 { "working" } else { "broken" },
         if random_works { "working" } else { "broken" })
+    match entropy_service {
+        case Some(connection) => runtime.log_info("the entropy service gave % random bytes", entropy_bytes(connection.end))
+        case None => {}
+    }
     match time.now() {
         case Ok(now) => {
             today :: time.utc(now)
@@ -59,6 +65,29 @@ main :: fn(manager: os.Channel[process_manager.ProcessManager]?, console: os.Cha
         case None => {}
     }
     return code
+}
+
+// How many random bytes the entropy service gives, through end, for 32 asked for: 0 if it gives none.
+entropy_bytes :: fn(end: slop_os.Channel) -> usize {
+    port :: os.port_for(slop_os.startup_block().budget, end) or_return 0
+    out := os.Outgoing.{}
+    request :: os.begin[entropy.Request](&out)
+    request^ = .Fill(32)
+    if entropy.send_request(end, port, &out) is_some {
+        return 0
+    }
+    into := os.Incoming.{}
+    loop {
+        match entropy.receive_response(end, port, &into, true) {
+            case Received => break
+            case Failed(error) => return 0
+            case _ => continue
+        }
+    }
+    return match os.message_of[entropy.Response](&into)^ {
+        case Filled(bytes) => os.items(&into, bytes).count
+        case _ => 0
+    }
 }
 
 // A field of a date, with a 0 in front of it below 10.
