@@ -1105,6 +1105,21 @@ sys_process_set_cpu_budget :: fn(thread: ptr[mut Thread], process: slop_os.Proce
     return .Ok
 }
 
+// The calling thread on a lent budget, or its process's again with NO_HANDLE (decisions/0130).
+sys_thread_use_cpu_budget :: fn(thread: ptr[mut Thread], budget: slop_os.CpuBudget) -> Result[void, slop_os.HandleError] {
+    kernel :: per_cpu().kernel
+    process :: process_of(thread)
+    if cast[slop_os.Handle](budget) == slop_os.NO_HANDLE {
+        _ = set_thread_budget(kernel, thread, process.cpu_budget)
+        return .Ok
+    }
+    object :: object_of[slop_os.HandleError](process, cast[slop_os.Handle](budget), slop_os.ObjectKind.CpuBudget, slop_os.RIGHT_CPU_BUDGET_BIND)?
+    if !set_thread_budget(kernel, thread, cast[u64](object)) {
+        return .Error(.ObjectGone)
+    }
+    return .Ok
+}
+
 sys_io_ports_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget, first: u32, count: u32)
     -> Result[slop_os.IoPortRange, slop_os.DeviceError] {
     kernel :: per_cpu().kernel

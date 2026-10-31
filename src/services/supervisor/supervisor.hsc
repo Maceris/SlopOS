@@ -514,6 +514,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     test_degraded := false
     test_installations := false
     test_substitution := false
+    test_lending := false
     supervisor.started_at = slop_os.clock_monotonic() or_else 0
     supervisor.command_line = command_line
     match command_line {
@@ -529,6 +530,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             test_degraded = service_kit.has_word(text, "test_degraded")
             test_installations = service_kit.has_word(text, "test_installations")
             test_substitution = service_kit.has_word(text, "test_substitution")
+            test_lending = service_kit.has_word(text, "test_lending")
             supervisor.recovery = service_kit.has_word(text, "recovery")
             // The generation booted, and its store root, as its limine.conf entry says (decisions/0114, 0116)
             supervisor.generation = service_kit.number_of(service_kit.word_after(text, "generation=") or_else "") or_else 0
@@ -629,6 +631,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     }
     if test_substitution {
         check_substitution(&supervisor)
+    }
+    if test_lending {
+        check_lending(&supervisor)
     }
     if test_restart_services {
         restart_services(&supervisor, storage_slot)
@@ -893,7 +898,7 @@ open_system :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
                 start_store(supervisor, NOWHERE)
             }
             else {
-                match system_directory(supervisor, "store") {
+                match lent_directory(supervisor, "store", "bundle_store") {
                     case Some(directory) => _ = store_request(supervisor, .UseDirectory(directory))
                     case None => {}
                 }
@@ -906,7 +911,7 @@ open_system :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
                 start_update(supervisor, NOWHERE)
             }
             else {
-                match system_directory(supervisor, "config") {
+                match lent_directory(supervisor, "config", "config") {
                     case Some(directory) => _ = config_request(supervisor, .UseDirectory(directory))
                     case None => {}
                 }
@@ -984,7 +989,7 @@ start_update :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     }
     service :: service_named(supervisor, "update") or_return void
     esp :: files_of_type(supervisor, supervisor.storage_slot, storage_manager.ESP_TYPE) or_return void
-    updates :: system_directory(supervisor, "updates") or_return void
+    updates :: lent_directory(supervisor, "updates", "update") or_return void
     // A connection of its own to the store, its one end sent to the store, which takes it without answering
     store_pair :: os.channel_for[bundle_store.BundleStore](supervisor.block.budget, 0) or_return void
     connecting := os.Outgoing.{}
@@ -1817,7 +1822,7 @@ start_events :: fn(supervisor: ptr[mut Supervisor], again: usize) {
  */
 start_store :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     service :: service_named(supervisor, "bundle_store") or_return void
-    directory :: system_directory(supervisor, "store") or_return void
+    directory :: lent_directory(supervisor, "store", "bundle_store") or_return void
     if supervisor.store_end != NONE {
         _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.store_end))
         _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.store_port))
@@ -1846,7 +1851,7 @@ start_store :: fn(supervisor: ptr[mut Supervisor], again: usize) {
  */
 start_config :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     service :: service_named(supervisor, "config") or_return void
-    directory :: system_directory(supervisor, "config") or_return void
+    directory :: lent_directory(supervisor, "config", "config") or_return void
     if supervisor.config_end != NONE {
         _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.config_end))
         _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.config_port))
@@ -2077,6 +2082,154 @@ check_system_config :: fn(supervisor: ptr[mut Supervisor]) {
     log_line.write(supervisor.log, "supervisor: test_system_config: an override of hello's budget %, one of 0 %; hello % on % MiB",
         if taken { "taken" } else { "refused" }, if refused { "refused" } else { "taken" }, if restarted { "started again" } else { "not started again" },
         budget / (1024 * 1024))
+}
+
+/*
+ * A directory of the system volume's root for a service, lent the service's CPU budget (Perf's Pc, decisions/0037,
+ * 0130): the volume server runs the service's work in it, and what it opens there, on the service's budget, and serves
+ * it by its priority. Without a scheduler service, or a budget for it, it's not lent anything.
+ */
+lent_directory :: fn(supervisor: ptr[mut Supervisor], name: string, service: string) -> os.Channel[dir.Dir]? {
+    directory :: system_directory(supervisor, name) or_return null
+    if supervisor.scheduler_end != NONE {
+        match scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, service) {
+            case Some(budget) => _ = lend(supervisor, directory, budget)
+            case None => {}
+        }
+    }
+    return directory
+}
+
+// A CPU budget lent to a dir connection, which takes it: whether the server took it.
+lend :: fn(supervisor: ptr[mut Supervisor], directory: os.Channel[dir.Dir], budget: slop_os.CpuBudget) -> bool {
+    port :: os.port_for(supervisor.block.budget, directory.end) or_return false
+    defer _ = slop_os.handle_close(cast[slop_os.Handle](port))
+    out := os.Outgoing.{}
+    os.begin[dir.Request](&out)^ = .Lend(budget)
+    if dir.send_request(directory.end, port, &out) is_some {
+        return false
+    }
+    into := os.Incoming.{}
+    loop {
+        match dir.receive_response(directory.end, port, &into, true) {
+            case Received => break
+            case Failed(error) => return false
+            case _ => continue
+        }
+    }
+    return match os.message_of[dir.Response](&into)^ {
+        case Done => true
+        case _ => false
+    }
+}
+
+// test_lending's connections of the lower priority, and how many requests each queues
+LENDING_LOW :: 6
+LENDING_BACKLOG :: 4
+
+/*
+ * test_lending, on a boot disk: connections to a directory of the system volume, one lent the console's CPU budget, of a
+ * high priority, and LENDING_LOW lent hello's, of the default's. Through the first of those, a change and a Sync, which
+ * keeps the volume server committing; behind it, LENDING_BACKLOG requests through each of them; then two through the
+ * high one, sent at the supervisor's priority, no higher than the volume server's, so on one CPU it doesn't take them as
+ * they come; then the answers ahead of them waited for and counted on the console's budget, so the server, of a lower
+ * priority, doesn't go on answering before they're counted. Served by priority, both are
+ * answered next, ahead of every backlog; taking connections in turn, as the server would without loans, the second
+ * would wait for one of each of the others, and serving each queue whole, for all of them.
+ */
+check_lending :: fn(supervisor: ptr[mut Supervisor]) {
+    if supervisor.scheduler_end == NONE {
+        return void
+    }
+    // The high one first, so taking turns would come to it last
+    high :: system_directory(supervisor, "lending") or_return void
+    high_budget :: scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, "console") or_return void
+    if !lend(supervisor, high, high_budget) {
+        log_line.write(supervisor.log, "supervisor: test_lending: the volume server took no loan")
+        return void
+    }
+    high_port :: os.port_for(supervisor.block.budget, high.end) or_return void
+    lows : slop_os.Channel[LENDING_LOW]
+    low_ports : slop_os.Port[LENDING_LOW]
+    for i in 0..<LENDING_LOW {
+        low :: system_directory(supervisor, "lending") or_return void
+        low_budget :: scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, "hello") or_return void
+        if !lend(supervisor, low, low_budget) {
+            return void
+        }
+        lows[i] = low.end
+        low_ports[i] = os.port_for(supervisor.block.budget, low.end) or_return void
+    }
+    // For counting, at the console's priority, above the volume server's own
+    mine :: scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, "console") or_return void
+    sent : u64[LENDING_LOW]
+    for i in 0..<LENDING_LOW {
+        count :: if i == 0 { LENDING_BACKLOG + 2 } else { LENDING_BACKLOG }
+        for j in 0..<count {
+            out := os.Outgoing.{}
+            request :: os.begin[dir.Request](&out)
+            request^ = if i == 0 && j == 0 { dir.Request.OpenDirectory(dir.OpenDirectory.{path = bytes_of(&out, "changed"), create = true}) }
+                else if i == 0 && j == 1 { dir.Request.Sync } else { dir.Request.Info }
+            if dir.send_request(lows[i], low_ports[i], &out) is_none {
+                sent[i] += 1
+            }
+        }
+    }
+    // Two through the high one: taking turns, the second would wait for one of every other connection's
+    for i in 0..<2 {
+        out := os.Outgoing.{}
+        os.begin[dir.Request](&out)^ = .Info
+        _ = dir.send_request(high.end, high_port, &out)
+    }
+    _ = slop_os.thread_use_cpu_budget(mine)
+    into := os.Incoming.{}
+    high_answers := 0
+    loop {
+        if high_answers == 2 {
+            break
+        }
+        match dir.receive_response(high.end, high_port, &into, true) {
+            case Received => high_answers += 1
+            case Failed(error) => return void
+            case _ => continue
+        }
+    }
+    // The low ones' answered before it, counted still on the console's budget, so the server doesn't answer more meanwhile
+    answered : u64[LENDING_LOW]
+    ahead := cast[u64](0)
+    for i in 0..<LENDING_LOW {
+        loop {
+            match dir.receive_response(lows[i], low_ports[i], &into, false) {
+                case Received => answered[i] += 1
+                case _ => break
+            }
+        }
+        ahead += answered[i]
+    }
+    _ = slop_os.thread_use_cpu_budget(cast[slop_os.CpuBudget](slop_os.NO_HANDLE))
+    _ = slop_os.handle_close(cast[slop_os.Handle](mine))
+    // Then the rest
+    total := cast[u64](0)
+    for i in 0..<LENDING_LOW {
+        total += sent[i]
+        loop {
+            if answered[i] >= sent[i] {
+                break
+            }
+            match dir.receive_response(lows[i], low_ports[i], &into, true) {
+                case Received => answered[i] += 1
+                case Failed(error) => break
+                case _ => continue
+            }
+        }
+    }
+    // The change and the Sync, and perhaps one more the server had started on
+    if ahead <= 3 && total == LENDING_LOW * LENDING_BACKLOG + 2 {
+        log_line.write(supervisor.log, "supervisor: test_lending: a request lent the console's budget was answered ahead of the backlogs lent hello's")
+    }
+    else {
+        log_line.write(supervisor.log, "supervisor: test_lending: % of % requests lent hello's budget were answered first", ahead, total)
+    }
 }
 
 // A directory of the system volume's root, made if it isn't there, or null.

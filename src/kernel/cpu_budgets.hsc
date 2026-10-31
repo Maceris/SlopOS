@@ -4,6 +4,13 @@ import intrinsics from "base"
 import runtime from "base"
 import concurrency from "std"
 
+#if TARGET_ARCH == .x86_64 {
+    import arch from "../arch/x86_64"
+}
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
+
 /*
  * CPU budgets as kernel objects (roadmap 9a, decisions/0037, 0093): a CpuTime (budgets.hsc) with a parent, behind
  * handles, split and adjusted from user space by the scheduler service. A budget's share is its time over its period,
@@ -346,6 +353,25 @@ set_process_budget :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], bud
             }
         }
     }
+    return true
+}
+
+/*
+ * The calling thread moved onto budget, an address, its process's or one lent it (decisions/0130), what it's run so far
+ * charged to the one it was on: false if the budget's going.
+ */
+set_thread_budget :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], budget: u64) -> bool {
+    lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
+    defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
+    if budget == 0 || thread.budget_object == budget {
+        return true
+    }
+    target :: cast[ptr[mut CpuBudget]](budget)
+    if target.header.dying != 0 {
+        return false
+    }
+    account(per_cpu(), thread, arch.counter())
+    move_thread(thread, target)
     return true
 }
 

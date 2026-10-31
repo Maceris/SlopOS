@@ -42,3 +42,7 @@ D:\Documents\Programming\SlopOS\src\kernel\scheduler.hsc(89,90): error E4031: In
 exit code 4294967295
 D:\Documents\Programming\SlopOS\src\kernel\spaces.hsc(305,45): error E4015: Type mismatch. && and || take booleans, not Optional[SpaceError]
 
+--- hemera --setting=targets=kernel,stack_check=trap,kernel_output=C:\Users\chesb\AppData\Local\Temp\slopos-boot-tests-uof8gn8h\kernel.elf,arch=x86_64 D:\Documents\Programming\SlopOS\src\build
+exit code 4294967295
+D:\Documents\Programming\SlopOS\src\kernel\cpu_budgets.hsc(366,31): error E4008: Undeclared name. arch
+

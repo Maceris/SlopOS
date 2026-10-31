@@ -139,6 +139,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 73 | `memory_budget_set_threshold` | budget, threshold | nothing: the budget's pressure threshold in bytes, 0 for none, `SIGNAL_PRESSURE` raised at once if it's reached; `RIGHT_BUDGET_CHARGE` (`0111`) |
 | 74 | `memory_evict` | memory, offset | nothing: the supplied page at offset of paged memory given back, unmapped everywhere, freed and uncharged; `RIGHT_MEMORY_WRITE` (`0111`) |
 | 75 | `memory_page_accessed` | memory, offset | 1 if any mapping touched the page at offset of paged memory since this last asked, 0 if not, the marks cleared; always 0 where the hardware doesn't keep them; `RIGHT_MEMORY_WRITE` (`0111`) |
+| 76 | `thread_use_cpu_budget` | budget | the calling thread runs on the budget from now on, as a server does for a connection whose client lent it the budget, or on its process's again with `NO_HANDLE`; `RIGHT_CPU_BUDGET_BIND` (`0130`) |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the

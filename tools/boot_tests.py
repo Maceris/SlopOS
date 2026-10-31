@@ -117,6 +117,12 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
 
 
 
+def one_cpu(arguments: list[str]) -> list[str]:
+    """boot.py's arguments with QEMU given one CPU, where they gave it more."""
+    at = arguments.index("-smp")
+    return arguments[:at + 1] + ["1"] + arguments[at + 2:]
+
+
 def with_before_qemu(arguments: list[str], more: list[str]) -> list[str]:
     """boot.py's arguments with more added before those it passes on to QEMU, after "--"."""
     split = arguments.index("--") if "--" in arguments else len(arguments)
@@ -308,6 +314,10 @@ TESTS = [
         "--expect-boot-line=2:[user] root task: booted generation 2",
         "--expect-boot-line=2:[user] supervisor: test_substitution: booted generation 2 with service_kit_plus in service_kit's place",
         "--expect-boot-line=2:[user] update: generation 2 made permanent"])),
+    # On one CPU, where requests wait for the volume server rather than it waiting for them
+    ("serves a volume's clients by the priority of the CPU budgets they lend it", 7, with_before_qemu(
+        one_cpu([argument.replace("test_services", "test_services test_lending") for argument in BOOT_DISK_ARGUMENTS]), [
+        "--expect-line=[user] supervisor: test_lending: a request lent the console's budget was answered ahead of the backlogs lent hello's"])),
     ("starts a disk's partition server again when it's killed, and serves its volumes through the new one", 7, with_before_qemu(
         [argument.replace("test_services", "test_services test_storage_restart") for argument in BOOT_DISK_ARGUMENTS], [
         "--expect-line=[user] storage_manager: test_storage_restart: killing the partition server for disk 0",

@@ -16,6 +16,12 @@
  * only, its root a read_only_dir, and a clone's tree knows whose its older blocks are.
  *
  * Stored links (roadmap 8f) are in links.hsc: followed through the storage manager, made from grants, and issued.
+ *
+ * Loans (Perf's Pc, decisions/0037, 0127, 0130): a client may lend a dir connection a CPU budget (Lend), which what's
+ * opened through it has too. Requests are served one at a time, always from the connection whose loan has the highest
+ * priority of those with one waiting, the server's thread running on that loan while it serves it; a connection
+ * without one is served at the server's own priority, 0 here. So a background writer's queue doesn't hold up an
+ * interactive client's reads.
  */
 package volume_server
 
@@ -37,6 +43,8 @@ import links from "../../protocols/links"
 import volume_protocol from "../../protocols/volume"
 
 MAX_CONNECTIONS :: 64
+// What the server keeps of a loan, for what's opened through its connection too
+LOAN_RIGHTS :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_CPU_BUDGET_BIND) | cast[u32](slop_os.RIGHT_DUPLICATE))
 // The most bytes of a client's buffer mapped here
 MAX_BUFFER_BYTES : u64 : 16 << 20
 SECTORS_PER_BLOCK : u64 : 8
@@ -90,6 +98,9 @@ Connection :: struct {
     // A claim's: the connection waiting for it, and what the grant's server said
     client : usize,
     claim : grant.Claim,
+    // The CPU budget lent for its work, NO_HANDLE for none, and that budget's priority
+    loan : slop_os.CpuBudget,
+    priority : u32,
 }
 
 Server :: struct {
@@ -120,6 +131,13 @@ Server :: struct {
     asked_count : usize,
     // Whether connections added now are reached through a link
     linking : bool,
+    // The connection being served, whose loan what it opens has too; whether a request of a client's was served, which
+    // is one at a time; and whether the thread runs on a loan now
+    serving : usize,
+    handled : bool,
+    on_loan : bool,
+    // Where the next search for a request starts, among connections of the same priority
+    next_first : usize,
 }
 
 main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clients: os.Listener[dir.Dir],
@@ -191,18 +209,13 @@ main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clie
     }
     into := os.Incoming.{}
     loop {
-        loop #at_least_once {
+        // One request at a time, from the highest priority with one waiting, and again from the top after each
+        loop {
             server.added = false
-            with {
-                i : usize = 0
+            if !serve_one(server, &into) && !server.added {
+                break
             }
-            loop {
-                serve(server, i, &into)
-                i += 1
-            }
-            while i < server.count
         }
-        while server.added
         now :: slop_os.clock_monotonic() or_else 0
         if server.volume.dirty && server.commit_at == 0 {
             server.commit_at = now + COMMIT_NANOSECONDS
@@ -385,7 +398,20 @@ add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, object: u64
             return null
         }
     }
-    connection := Connection.{kind = kind, end = end, object = object, read_only = read_only, linked = server.linking}
+    connection := Connection.{kind = kind, end = end, object = object, read_only = read_only, linked = server.linking,
+        loan = cast[slop_os.CpuBudget](slop_os.NO_HANDLE)}
+    // What's opened through a connection with a loan has a copy of it
+    serving :: server.serving
+    if serving < server.connections.count && serving < server.count
+        && cast[slop_os.Handle](server.connections[serving].loan) != slop_os.NO_HANDLE {
+        match slop_os.handle_duplicate(cast[slop_os.Handle](server.connections[serving].loan), LOAN_RIGHTS) {
+            case Ok(copy) => {
+                connection.loan = cast[slop_os.CpuBudget](copy)
+                connection.priority = server.connections[serving].priority
+            }
+            case Error(error) => {}
+        }
+    }
     for character, i in name {
         if i < connection.name.count {
             connection.name[i] = cast[u8](character)
@@ -417,6 +443,11 @@ drop :: fn(server: ptr[mut Server], index: usize) {
     connection :: &server.connections[index]
     _ = slop_os.port_unbind(server.port, cast[u64](index))
     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
+    if cast[slop_os.Handle](connection.loan) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](connection.loan))
+        connection.loan = cast[slop_os.CpuBudget](slop_os.NO_HANDLE)
+        connection.priority = 0
+    }
     release_buffer(connection)
     kind :: connection.kind
     object :: connection.object
@@ -445,6 +476,62 @@ release_buffer :: fn(connection: ptr[mut Connection]) {
 
 name_of :: fn(connection: ptr[Connection]) -> string {
     return string_of(&connection.name[0], cast[usize](if connection.name_length > files.PATH_BYTES { cast[u32](files.PATH_BYTES) } else { connection.name_length }))
+}
+
+/*
+ * One client's request served, the connections tried by their loans' priorities, highest first, the server's own
+ * connections (the storage manager's, its links) drained as they come: whether anything was.
+ */
+serve_one :: fn(server: ptr[mut Server], into: ptr[mut os.Incoming]) -> bool {
+    tried : bool[MAX_CONNECTIONS]
+    loop {
+        // Ties go round, from the one after the last served
+        best := server.connections.count
+        for k in 0..<server.count {
+            i :: (server.next_first + k) % server.count
+            if i < server.connections.count && i < tried.count && !tried[i] && server.connections[i].kind != .Free
+                && (best >= server.connections.count || server.connections[i].priority > server.connections[best].priority) {
+                best = i
+            }
+        }
+        if best >= server.connections.count || best >= tried.count {
+            return false
+        }
+        tried[best] = true
+        server.handled = false
+        server.serving = best
+        serve(server, best, into)
+        if server.on_loan {
+            _ = slop_os.thread_use_cpu_budget(cast[slop_os.CpuBudget](slop_os.NO_HANDLE))
+            server.on_loan = false
+        }
+        if server.handled {
+            server.next_first = best + 1
+            return true
+        }
+    }
+}
+
+// A client's request received on a connection: it's served on the connection's loan, if it has one, and it's the one.
+received :: fn(server: ptr[mut Server], index: usize) {
+    server.handled = true
+    if index < server.connections.count && cast[slop_os.Handle](server.connections[index].loan) != slop_os.NO_HANDLE {
+        server.on_loan = slop_os.thread_use_cpu_budget(server.connections[index].loan) is_ok
+    }
+}
+
+// A loan for a connection's work, in place of the one it had.
+lend :: fn(server: ptr[mut Server], index: usize, budget: slop_os.CpuBudget) {
+    if index >= server.connections.count {
+        _ = slop_os.handle_close(cast[slop_os.Handle](budget))
+        return void
+    }
+    connection :: &server.connections[index]
+    if cast[slop_os.Handle](connection.loan) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](connection.loan))
+    }
+    connection.loan = budget
+    connection.priority = cast[u32]((slop_os.cpu_budget_describe(budget) or_else slop_os.CpuBudgetInfo.{}).priority)
 }
 
 serve :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
@@ -651,8 +738,11 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
     end :: server.connections[index].end
     volume :: server.volume
     loop {
+        if server.handled {
+            return void
+        }
         match dir.receive_request(end, server.port, into, false) {
-            case Received => {}
+            case Received => received(server, index)
             case Empty => return void
             case Unsupported => {
                 _ = dir.answer_unsupported(end, server.port)
@@ -675,6 +765,10 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
         response :: os.begin[dir.Response](&out)
         response^ = .Unsupported
         match os.message_of[dir.Request](into)^ {
+            case Lend(budget) => {
+                lend(server, index, budget)
+                response^ = .Done
+            }
             case OpenFile(open) => {
                 path :: path_of(into, open.path) or_else ""
                 // A typed open stays on this volume: a link on its way is refused (IsALink), not followed untyped
@@ -909,8 +1003,11 @@ serve_read_only_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut o
     end :: server.connections[index].end
     volume :: server.volume
     loop {
+        if server.handled {
+            return void
+        }
         match read_only_dir.receive_request(end, server.port, into, false) {
-            case Received => {}
+            case Received => received(server, index)
             case Empty => return void
             case Unsupported => {
                 _ = read_only_dir.answer_unsupported(end, server.port)
@@ -1007,8 +1104,11 @@ serve_file_set :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inc
     end :: server.connections[index].end
     volume :: server.volume
     loop {
+        if server.handled {
+            return void
+        }
         match file_set.receive_request(end, server.port, into, false) {
-            case Received => {}
+            case Received => received(server, index)
             case Empty => return void
             case Unsupported => {
                 _ = file_set.answer_unsupported(end, server.port)
@@ -1151,8 +1251,11 @@ serve_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomin
     }
     end :: server.connections[index].end
     loop {
+        if server.handled {
+            return void
+        }
         match file.receive_request(end, server.port, into, false) {
-            case Received => {}
+            case Received => received(server, index)
             case Empty => return void
             case Unsupported => {
                 _ = file.answer_unsupported(end, server.port)
@@ -1261,8 +1364,11 @@ serve_read_only_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut 
     }
     end :: server.connections[index].end
     loop {
+        if server.handled {
+            return void
+        }
         match read_only_file.receive_request(end, server.port, into, false) {
-            case Received => {}
+            case Received => received(server, index)
             case Empty => return void
             case Unsupported => {
                 _ = read_only_file.answer_unsupported(end, server.port)
