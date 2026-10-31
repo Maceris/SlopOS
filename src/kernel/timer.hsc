@@ -39,6 +39,7 @@ handle_timer :: fn() -> bool {
     cpu :: per_cpu()
     kernel :: cpu.kernel
     now :: arch.counter()
+    cpu.timer_interrupts += 1
     fire_timers(kernel, now)
     period :: kernel.counter_frequency / TICKS_PER_SECOND
     tick :: now >= cpu.next_tick
@@ -56,6 +57,7 @@ handle_timer :: fn() -> bool {
     }
     poll_dma_faults(kernel)
     device_test_tick(kernel, cpu.timer_ticks)
+    tickless_test_tick(kernel, cpu.timer_ticks)
     root_task_ended(kernel, cpu.timer_ticks)
     if cpu.timer_ticks >= kernel.stop_after_ticks {
         // A root task that didn't start left nothing behind, as one that ended doesn't (decisions/0104)

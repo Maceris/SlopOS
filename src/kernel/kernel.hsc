@@ -129,6 +129,8 @@ Kernel :: struct {
     tags : TagSet,
     // The boot CPU's tick the kernel stops at (timer.hsc).
     stop_after_ticks : u64,
+    // test_tickless's count of the other CPUs' timer interrupts at its start (tickless_test.hsc)
+    tickless_baseline : u64,
     // Held while writing a line to the console, so lines from different CPUs don't mix.
     console_lock : concurrency.SpinLock,
     // test_pool's state, as an address, once the boot CPU has set it up for the other CPUs (pool_test.hsc)
@@ -183,6 +185,9 @@ PerCpu :: struct #align(64) {
     // Its armed timers, and when its next tick is (timers.hsc, timer.hsc).
     timers : TimerHeap,
     next_tick : u64,
+    // 1 while it's idle without ticking, which only an interrupt ends (decisions/0128); and its timer interrupts
+    tickless : u32,
+    timer_interrupts : u64,
     // While ChannelNotifyAndWait notifies: threads it wakes are made ready here (ports.hsc, wake_waiter).
     handoff : bool,
     // Destroys running on this CPU, nested; whether the outermost is finishing those left for later, and
@@ -274,6 +279,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         }
         if kernel.options.test_shootdown {
             test_shootdown(kernel)
+        }
+        if kernel.options.test_tickless {
+            start_tickless_test(kernel)
         }
         if kernel.options.test_ioapic {
             test_io_apic(kernel)

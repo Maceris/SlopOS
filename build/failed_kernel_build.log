@@ -34,3 +34,7 @@ D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(223,4): error E4008: Undec
 D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(59,4): error E4008: Undeclared name. concurrency
 D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(128,4): error E4008: Undeclared name. concurrency
 
+--- hemera --setting=targets=kernel,stack_check=trap,kernel_output=C:\Users\chesb\AppData\Local\Temp\slopos-boot-tests-i4___r2f\kernel.elf,arch=x86_64 D:\Documents\Programming\SlopOS\src\build
+exit code 4294967295
+D:\Documents\Programming\SlopOS\src\kernel\scheduler.hsc(89,90): error E4031: Index not proven in bounds. this index isn't proven to be in bounds: check it against the count first, or loop over the elements (docs/types.md, Bounds Checking)
+

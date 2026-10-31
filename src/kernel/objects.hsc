@@ -403,6 +403,12 @@ pass_quiescent :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], epoch: u64) 
     cpu.limbo = kept
 }
 
+/*
+ * The quiescent epoch of a CPU idle without ticking (decisions/0128): it holds nothing, so it's past every quiescent
+ * point until an interrupt wakes it, which records the epoch then before anything runs (leave_idle).
+ */
+IDLE_EPOCH : u64 : 0xffffffffffffffff
+
 // The earliest epoch an online CPU last passed a quiescent point in.
 oldest_quiescent :: fn(kernel: ptr[Kernel]) -> u64 {
     per_cpus :: kernel.per_cpus

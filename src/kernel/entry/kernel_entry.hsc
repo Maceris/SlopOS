@@ -54,7 +54,8 @@ interrupt #never_returns :: fn(from: Interrupted, source: InterruptSource) {
     kernel.left_boot_stack()
     match from {
         case User(registers) => kernel.save_user_registers(registers)
-        case Idle => {}
+        // One idle without ticking records the epoch first (decisions/0128)
+        case Idle => kernel.leave_idle()
     }
     match source {
         case Timer => kernel.schedule(kernel.handle_timer())

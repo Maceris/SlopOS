@@ -82,6 +82,14 @@ make_ready :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], asked: u32) {
         runtime.assert(cast[usize](cpu_index) < cpus.count, "every online CPU is in kernel.cpus")
         arch.send_ipi(cpus[cpu_index].hardware_id, .Reschedule)
     }
+    else if running != IDLE_LEVEL {
+        // Queued behind what runs there: an idle CPU that isn't ticking wouldn't look to steal it, so it's woken to
+        idle :: tickless_cpu(kernel, cpu_index)
+        cpus :: kernel.cpus
+        if idle != NO_CPU && cast[usize](idle) < cpus.count && idle != per_cpu().index {
+            arch.send_ipi(cpus[idle].hardware_id, .Reschedule)
+        }
+    }
 }
 
 // Whether thread may run on the CPU with index cpu_index: any, without a budget, or one of its budget's.
@@ -249,8 +257,51 @@ go_idle :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu]) #never_returns {
         cpu.space = 0
     }
     pass_quiescent(kernel, cpu, intrinsics.atomic_load_u64(&kernel.epoch))
+    /*
+     * Tickless (decisions/0127, 0128): with nothing queued and nothing waiting for a grace period, its timer is armed
+     * only for its own timers, and it counts as quiescent until an interrupt wakes it. Not the boot CPU, whose ticks
+     * keep the kernel's own time for stopping and its tests. A thread made ready here wakes it (make_ready).
+     */
+    if cpu.index != 0 && intrinsics.atomic_load_u32_acquire(&cpu.run_queue.count) == 0 && cpu.limbo == 0 {
+        intrinsics.atomic_store_u32_release(&cpu.tickless, 1)
+        intrinsics.atomic_store_u64(&cpu.quiescent_epoch, IDLE_EPOCH)
+        program_deadline(cpu)
+    }
     arch.idle()
 }
+
+/*
+ * An interrupt woke an idle CPU: one that wasn't ticking records the epoch now, before anything it runs could reach an
+ * object, and ticks again from now.
+ */
+leave_idle :: fn() {
+    cpu :: per_cpu()
+    if intrinsics.atomic_load_u32_acquire(&cpu.tickless) == 0 {
+        return void
+    }
+    intrinsics.atomic_store_u64(&cpu.quiescent_epoch, intrinsics.atomic_load_u64(&cpu.kernel.epoch))
+    intrinsics.fence_sequentially_consistent()
+    intrinsics.atomic_store_u32_release(&cpu.tickless, 0)
+    cpu.next_tick = arch.counter() + cpu.kernel.counter_frequency / TICKS_PER_SECOND
+    program_deadline(cpu)
+}
+
+// An idle CPU that isn't ticking, other than skip, by index, or NO_CPU: which a busy CPU's queue wakes to steal from it.
+tickless_cpu :: fn(kernel: ptr[Kernel], skip: u32) -> u32 {
+    per_cpus :: kernel.per_cpus
+    online :: cast[usize](intrinsics.atomic_load_u32_acquire(&kernel.online_cpus))
+    for index in 0..<online {
+        if index < per_cpus.count && per_cpus[index] != 0 && cast[u32](index) != skip {
+            other :: cast[ptr[PerCpu]](per_cpus[index])
+            if intrinsics.atomic_load_u32_acquire(&other.tickless) == 1 {
+                return cast[u32](index)
+            }
+        }
+    }
+    return NO_CPU
+}
+
+NO_CPU : u32 : 0xffffffff
 
 // A ready thread that may run on cpu from another online CPU's run queue, the first at its highest level, or 0.
 steal :: fn(kernel: ptr[Kernel], cpu: ptr[PerCpu]) -> u64 {

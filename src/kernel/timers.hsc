@@ -1,5 +1,6 @@
 package kernel
 
+import intrinsics from "base"
 import runtime from "base"
 import concurrency from "std"
 
@@ -133,9 +134,9 @@ fire_timers :: fn(kernel: ptr[mut Kernel], now: u64) {
     }
 }
 
-// The calling CPU's timer, for its next tick or its earliest deadline.
+// The calling CPU's timer, for its next tick or its earliest deadline; only the latter while it's idle without ticking.
 program_deadline :: fn(cpu: ptr[mut PerCpu]) {
-    deadline := cpu.next_tick
+    deadline := if intrinsics.atomic_load_u32_acquire(&cpu.tickless) == 1 { ~cast[u64](0) } else { cpu.next_tick }
     heap :: &cpu.timers
     lock_at(&heap.lock, .Timers)
     entries :: heap.entries

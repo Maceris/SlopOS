@@ -44,6 +44,8 @@ Options :: struct {
     test_clock : bool,
     // test_shootdown: once booted, change a mapping every CPU has used, and check they all see the change.
     test_shootdown : bool,
+    // test_tickless: once booted, count the timer interrupts of the CPUs other than the boot CPU, idle (decisions/0128).
+    test_tickless : bool,
     // test_ioapic: once booted, route the emulator's test device through its interrupt controller.
     test_ioapic : bool,
     /*
@@ -124,6 +126,9 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_shootdown" {
         options.test_shootdown = true
+    }
+    if word == "test_tickless" {
+        options.test_tickless = true
     }
     if word == "test_ioapic" {
         options.test_ioapic = true

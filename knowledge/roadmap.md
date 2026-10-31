@@ -415,7 +415,8 @@ in the volume and container services (Linux's bug 12309).
 Planned 2026-10-31 (`decisions/0127`), before M10, in three stages: **Pa** tickless idle; **Pb** large pages for anonymous
 memory objects of 2 MiB or more (the direct map already has them; with the owner, paged objects stay 4 KiB); **Pc**
 per-connection CPU loans (`0037`'s level 1) in the storage servers, which queue requests by the loan's priority (with
-the owner).
+the owner). Pa done 2026-10-31 (`decisions/0128`): idle CPUs other than the boot CPU stop ticking, counted
+quiescent until an interrupt wakes them.
 
 Stresses: timing and counting inside boot tests, results compared across builds.
 
