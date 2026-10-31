@@ -102,6 +102,24 @@ main :: fn() -> int {
     if system_records.check(&changed) is_some {
         return 17
     }
+    // Installations: named, with programs, no two of one name, within their array
+    changed = made^
+    changed.installations.count = 2
+    _ = system_records.set_name(&changed.installations.entries[0].name, "counter")
+    _ = system_records.set_name(&changed.installations.entries[0].program, "counter")
+    _ = system_records.set_name(&changed.installations.entries[1].name, "other")
+    _ = system_records.set_name(&changed.installations.entries[1].program, "counter")
+    if system_records.check(&changed) is_some {
+        return 18
+    }
+    _ = system_records.set_name(&changed.installations.entries[1].name, "counter")
+    if system_records.check(&changed) is_none {
+        return 19
+    }
+    changed.installations.count = system_records.MAX_INSTALLATIONS + 1
+    if system_records.installations_check(&changed.installations) is_none {
+        return 20
+    }
     // A protocol's tag is std/os's: FNV-1a of its name
     if system_records.tag_of("") != 0xcbf29ce484222325 || system_records.tag_of("a") != 0xaf63dc4c8601ec8c {
         return 15

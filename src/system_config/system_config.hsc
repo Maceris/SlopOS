@@ -89,6 +89,18 @@ CpuShare :: struct {
  * degraded.
  */
 LATE :: string.["edu_dma", "virtio_input", "disk_check"]
+
+/*
+ * The system's installations (decisions/0113, 0117): each a name, which names its data directory and its configuration's
+ * owner, and the program it runs, a bundle in the store's boot root whose entry the supervisor was built with
+ * (counter_app's). At run time they're the config store's value "installations" of owner "system", these its default.
+ */
+Installation :: struct {
+    name : string,
+    program : string,
+}
+
+INSTALLATIONS :: Installation.[Installation.{name = "counter", program = "counter"}]
 DEFAULT_DEADLINE_MS : u32 : 120_000
 
 DEFAULT_CPU :: CpuShare.{priority = 100, period_ns = 10_000_000, time_ns = 5_000_000}
@@ -328,6 +340,15 @@ make_records :: fn() -> system_records.SystemRecords {
             made.magic = 0
         }
         made.service_count += 1
+    }
+    for each, i in INSTALLATIONS {
+        if i < made.installations.entries.count {
+            entry :: &made.installations.entries[i]
+            if !system_records.set_name(&entry.name, each.name) || !system_records.set_name(&entry.program, each.program) {
+                made.magic = 0
+            }
+            made.installations.count += 1
+        }
     }
     return made
 }

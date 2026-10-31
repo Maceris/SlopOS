@@ -142,6 +142,14 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
                     case None => response^ = .Failed(.Refused)
                 }
             }
+            case Forget(owner) => {
+                if !client.admin {
+                    refuse(end, service.port, .Refused)
+                    continue
+                }
+                response :: os.begin[config.Response](&out)
+                response^ = if forget(service, as_text(os.items(into, owner))) { .Done } else { .Failed(.NotKept) }
+            }
             case UseDirectory(directory) => {
                 if !client.admin {
                     _ = slop_os.handle_close(cast[slop_os.Handle](directory.end))
@@ -332,6 +340,16 @@ roll_back :: fn(service: ptr[mut Store], value: ptr[mut Value], version: u64) ->
  */
 write_stored :: fn(service: ptr[mut Store], value: ptr[mut Value], schema: u8[32], default: u8[], fields: u64, override: u8[])
     -> config.ConfigError? {
+    // Its directory made again, if its owner's values were forgotten since it was opened
+    owner :: owner_of(value)
+    if os.path_kind_in(service.directory, owner) != .DIRECTORY {
+        _ = os.make_directory_in(service.directory, owner)
+    }
+    folder_path := Path.{}
+    folder :: value_path(&folder_path, value, "")
+    if os.path_kind_in(service.directory, folder) != .DIRECTORY {
+        _ = os.make_directory_in(service.directory, folder)
+    }
     version :: value.newest + 1
     written := cast[i64](0)
     match time.now() {
@@ -433,6 +451,47 @@ open_value :: fn(service: ptr[mut Store], value: ptr[mut Value]) -> bool {
         case Error(error) => {}
     }
     return true
+}
+
+/*
+ * Every value of owner's removed: its directory, each value's versions and newest, and each value's own directory, and
+ * the values known in memory starting again from nothing, as a declaration finds them. Whether it was removed whole.
+ */
+forget :: fn(service: ptr[mut Store], owner: string) -> bool {
+    if !valid_name(owner) {
+        return false
+    }
+    for i in cast[usize](0)..<service.values.count {
+        if i < service.value_count && owner_of(&service.values[i]) == owner {
+            service.values[i].newest = 0
+        }
+    }
+    if os.path_kind_in(service.directory, owner) != .DIRECTORY {
+        return true
+    }
+    whole := true
+    names :: os.list_directory_in(service.directory, owner) or_return false
+    defer os.free_directory_listing(names)
+    for name in names {
+        folder := Path.{}
+        add(&folder, owner)
+        add(&folder, "/")
+        add(&folder, name.name)
+        folder_text :: text_of_path(&folder)
+        versions :: os.list_directory_in(service.directory, folder_text) or_continue
+        for version in versions {
+            file := Path.{}
+            add(&file, folder_text)
+            add(&file, "/")
+            add(&file, version.name)
+            whole = os.delete_file_in(service.directory, text_of_path(&file)) == null && whole
+        }
+        os.free_directory_listing(versions)
+        whole = os.remove_directory_in(service.directory, folder_text) == null && whole
+    }
+    whole = os.remove_directory_in(service.directory, owner) == null && whole
+    runtime.log_info("forgot %'s values", owner)
+    return whole
 }
 
 // The store's directory from now on, as when its volume server was started again: whether it took it.

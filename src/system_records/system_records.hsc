@@ -100,6 +100,8 @@ SystemRecords :: struct {
     served_by : u8[MAX_SERVED],
     services : ServiceRecord[MAX_SERVICES],
     parameters : ParameterRecord[MAX_PARAMETERS],
+    // The system's installations as the build made them (decisions/0117), which the config store's override replaces
+    installations : Installations,
 }
 
 // What an override can change about a service
@@ -117,6 +119,50 @@ Tunables :: struct {
     padding : u8[2],
     budget : u64,
     cpu : CpuRecord,
+}
+
+// The most installations the system has
+MAX_INSTALLATIONS :: 8
+
+/*
+ * An installation (roadmap 9d4, decisions/0113, 0117): its name, which names its data directory and its configuration's
+ * owner; the program it runs, a bundle the bundle store's boot root names; and the bundle it runs instead, by hash, all
+ * zeros to run the one the root names.
+ */
+InstallationRecord :: struct {
+    name : u8[NAME_BYTES],
+    program : u8[NAME_BYTES],
+    bundle : u8[32],
+}
+
+// The system's installations: the build's, in the records, and as the config store's value "installations" of owner "system".
+Installations :: struct {
+    count : u32,
+    // 1 once it's been written: the config store's default, all zeros, is no list at all, and the build's stands
+    set : u32,
+    entries : InstallationRecord[MAX_INSTALLATIONS],
+}
+
+// Whether installations are well formed: within their array, named and with programs, no two of one name.
+installations_check :: fn(installations: ptr[Installations]) -> string? {
+    if installations.count > MAX_INSTALLATIONS {
+        return "has more installations than there's room for"
+    }
+    for i in cast[usize](0)..<installations.entries.count {
+        if i >= cast[usize](installations.count) {
+            break
+        }
+        entry :: &installations.entries[i]
+        if !valid_name(&entry.name, false) || !valid_name(&entry.program, false) {
+            return "has an installation without a name or a program"
+        }
+        for j in cast[usize](0)..<i {
+            if j < installations.entries.count && text_of(&installations.entries[j].name) == text_of(&entry.name) {
+                return "has two installations of one name"
+            }
+        }
+    }
+    return null
 }
 
 // The system configuration's override, the config store's value "services" of owner "system".
@@ -143,6 +189,10 @@ check :: fn(records: ptr[SystemRecords]) -> Problem? {
     }
     if records.service_count > MAX_SERVICES || records.parameter_count > MAX_PARAMETERS || records.served_count > MAX_SERVED {
         return Problem.{reason = "has more than there's room for", service = MAX_SERVICES}
+    }
+    match installations_check(&records.installations) {
+        case Some(reason) => return Problem.{reason = reason, service = MAX_SERVICES}
+        case None => {}
     }
     if records.default_cpu.has != 1 || !cpu_holds(records.default_cpu) {
         return Problem.{reason = "has no default CPU share within its period", service = MAX_SERVICES}

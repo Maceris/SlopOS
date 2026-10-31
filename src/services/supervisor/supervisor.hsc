@@ -83,6 +83,10 @@ import bundle_store_service from "../bundle_store_service"
 import config_service from "../config_service"
 import update_service from "../update_service"
 import update_protocol from "../../protocols/update"
+import installations from "../../installations"
+import counter_app from "../../counter_app"
+import counter from "../../apps/counter"
+import strings from "std"
 import console from "../console"
 import disk_check from "../disk_check"
 import storage_manager from "../storage_manager"
@@ -160,6 +164,15 @@ ConfigGrants :: struct {
 }
 
 // What the update service is given (update_service.main).
+// What an installation is given (counter_app's entry, which every installation's bundle has, decisions/0117).
+InstallationGrants :: struct {
+    data : installations.AppData,
+    settings : config_protocol.Config[counter_app.CounterSettings]?,
+}
+
+// An installation's memory budget
+INSTALLATION_BUDGET : u64 : 4 * 1024 * 1024
+
 UpdateGrants :: struct {
     esp : os.Channel[dir.Dir],
     updates : os.Channel[dir.Dir],
@@ -358,6 +371,9 @@ Supervisor :: struct {
     // The config store's admin connection
     config_end : slop_os.Channel,
     // The update service's connection, NONE without one; the generation booted, 0 for none, and the store's root it boots with
+    // Its connection to the system's installations in the config store, NONE until it's made
+    installations_end : slop_os.Channel,
+    installations_port : slop_os.Port,
     update_end : slop_os.Channel,
     update_port : slop_os.Port,
     generation : u64,
@@ -463,7 +479,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     boot_records^ = records^
     supervisor := Supervisor.{block = startup, records = records, boot_records = boot_records, overrides_end = NONE, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, console = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
-        events_end = NONE, store_end = NONE, config_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)}
+        events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)}
     supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
@@ -490,6 +506,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     test_store := false
     test_system_config := false
     test_degraded := false
+    test_installations := false
     supervisor.started_at = slop_os.clock_monotonic() or_else 0
     supervisor.command_line = command_line
     match command_line {
@@ -503,6 +520,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             test_store = service_kit.has_word(text, "test_store")
             test_system_config = service_kit.has_word(text, "test_system_config")
             test_degraded = service_kit.has_word(text, "test_degraded")
+            test_installations = service_kit.has_word(text, "test_installations")
             // The generation booted, and its store root, as its limine.conf entry says (decisions/0114, 0116)
             supervisor.generation = service_kit.number_of(service_kit.word_after(text, "generation=") or_else "") or_else 0
             supervisor.boot_root = bundle.from_hex(service_kit.word_after(text, "store_root=") or_else "")
@@ -543,6 +561,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     start_drivers(&supervisor, false)
     start_console(&supervisor, NOWHERE)
     start_hello(&supervisor, NOWHERE)
+    start_installations(&supervisor)
     start_disk_check(&supervisor, storage_slot)
     serial_line :: supervisor.first_serial
     if test_restart && serial_line < supervisor.started.count {
@@ -595,6 +614,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     }
     if test_restart_services {
         restart_services(&supervisor, storage_slot)
+    }
+    if test_installations {
+        check_installations(&supervisor)
     }
     if test_degraded {
         // hello, killed until it isn't started again, which leaves the boot degraded
@@ -784,6 +806,15 @@ restart_service :: fn(supervisor: ptr[mut Supervisor], index: usize) {
             open_system(supervisor, index)
         }
     }
+    else {
+        // An installation, as the list has it now
+        list :: read_installations(supervisor)
+        for i in cast[usize](0)..<list.entries.count {
+            if i < cast[usize](list.count) && system_records.text_of(&list.entries[i].name) == name {
+                _ = start_installation(supervisor, list.entries[i])
+            }
+        }
+    }
 }
 
 /*
@@ -956,6 +987,294 @@ start_update :: fn(supervisor: ptr[mut Supervisor], again: usize) {
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         }
     }
+}
+
+// Installations (decisions/0113, 0117)
+
+// Every installation the system has, started, once there's a bundle store, a config store and the system volume.
+start_installations :: fn(supervisor: ptr[mut Supervisor]) {
+    if supervisor.store_end == NONE || supervisor.config_end == NONE || supervisor.system == NONE {
+        return void
+    }
+    list :: read_installations(supervisor)
+    for i in cast[usize](0)..<list.entries.count {
+        if i < cast[usize](list.count) {
+            _ = start_installation(supervisor, list.entries[i])
+        }
+    }
+}
+
+/*
+ * The system's installations: the config store's value "installations" of owner "system", if it's been written, or the
+ * build's, as the system records have them.
+ */
+read_installations :: fn(supervisor: ptr[mut Supervisor]) -> system_records.Installations {
+    built :: supervisor.boot_records.installations
+    settings :: installations_connection(supervisor) or_return built
+    value := os.Outgoing.{}
+    if config_protocol.read(settings, supervisor.installations_port, &value) is_error {
+        return built
+    }
+    stored :: os.typed_value[system_records.Installations](os.value_bytes(&value))^
+    if stored.set == 0 || (system_records.installations_check(&stored) is_some) {
+        return built
+    }
+    return stored
+}
+
+// The system's installations written to the config store, marked written: whether it kept them.
+write_installations :: fn(supervisor: ptr[mut Supervisor], list: system_records.Installations) -> bool {
+    settings :: installations_connection(supervisor) or_return false
+    written := list
+    written.set = 1
+    if system_records.installations_check(&written) is_some {
+        return false
+    }
+    value := os.Outgoing.{}
+    os.begin[system_records.Installations](&value)^ = written
+    fields :: config_protocol.field_bit[system_records.Installations]("count") | config_protocol.field_bit[system_records.Installations]("set")
+        | config_protocol.field_bit[system_records.Installations]("entries")
+    return config_protocol.write(settings, supervisor.installations_port, os.value_bytes(&value), fields) is_ok
+}
+
+// The supervisor's connection to the system's installations, declared, made the first time: null without one.
+installations_connection :: fn(supervisor: ptr[mut Supervisor]) -> config_protocol.Config[system_records.Installations]? {
+    if supervisor.installations_end != NONE {
+        return config_protocol.Config[system_records.Installations].{end = supervisor.installations_end}
+    }
+    settings :: config_for[system_records.Installations](supervisor, "system", "installations") or_return null
+    port :: os.port_for(supervisor.block.budget, settings.end) or_return null
+    if config_protocol.declare(settings, port) is_error {
+        _ = slop_os.handle_close(cast[slop_os.Handle](settings.end))
+        _ = slop_os.handle_close(cast[slop_os.Handle](port))
+        return null
+    }
+    supervisor.installations_end = settings.end
+    supervisor.installations_port = port
+    return settings
+}
+
+/*
+ * An installation started: its bundle's program (the bundle it names, or the one the store's boot root names after its
+ * program), if the bundle's manifest is the entry installations are launched with; its data directory, the system
+ * volume's apps/<name>, made if it isn't there; and its settings, the config store's values of owner <name>. Into the
+ * entry it had, if it was started before. Whether it started.
+ */
+start_installation :: fn(supervisor: ptr[mut Supervisor], entry: system_records.InstallationRecord) -> bool {
+    name :: strings.clone(system_records.text_of(&entry.name)) or_return false
+    bundle_hash :: match installation_bundle(supervisor, entry) {
+        case Some(found) => found
+        case None => {
+            log_line.write(supervisor.log, "supervisor: installation %: no bundle for %", name, system_records.text_of(&entry.program))
+            return false
+        }
+    }
+    program :: match installation_program(supervisor, bundle_hash) {
+        case Some(found) => found
+        case None => {
+            log_line.write(supervisor.log, "supervisor: installation %: its bundle isn't one an installation can run", name)
+            return false
+        }
+    }
+    data :: installation_data(supervisor, name) or_return false
+    grants := InstallationGrants.{data = installations.AppData.{end = data.end}}
+    grants.settings = config_for[counter_app.CounterSettings](supervisor, name, "settings")
+    again := NOWHERE
+    for i in cast[usize](0)..<supervisor.started_count {
+        if i < supervisor.started.count && supervisor.started[i].name == name && !supervisor.started[i].running {
+            again = i
+        }
+    }
+    // Into its old entry, watched under its key, as a restart is
+    if again != NOWHERE {
+        _ = slop_os.port_unbind(supervisor.port, cast[u64](again))
+        supervisor.relaunching = again
+    }
+    defer supervisor.relaunching = NOWHERE
+    match os.launch(supervisor.manager, supervisor.manager_port, name, program, INSTALLATION_BUDGET, counter.main, grants,
+        options_for(supervisor, name)) {
+        case Ok(launched) => {
+            _ = place(supervisor, name, kept(supervisor, launched), again)
+            return true
+        }
+        case Error(error) => {
+            failed(supervisor, name, error)
+            return false
+        }
+    }
+}
+
+// The bundle an installation runs: the one it names, or the store's boot root's of its program's name.
+installation_bundle :: fn(supervisor: ptr[mut Supervisor], entry: system_records.InstallationRecord) -> bundle.Hash? {
+    named := bundle.Hash.{bytes = entry.bundle}
+    if !bundle.same(named, bundle.Hash.{}) {
+        return named
+    }
+    return bundle_named(supervisor, system_records.text_of(&entry.program))
+}
+
+// The bundle the store's boot root names name, or null.
+bundle_named :: fn(supervisor: ptr[mut Supervisor], name: string) -> bundle.Hash? {
+    root := bundle.Hash.{}
+    match supervisor.boot_root {
+        case Some(given) => root = given
+        case None => match store_request(supervisor, .Root) {
+            case Rooted(hash) => root = hash
+            case _ => return null
+        }
+    }
+    root_object :: mapped_object(supervisor, root) or_return null
+    defer unmap_object(supervisor, root_object)
+    names : string[..]
+    defer runtime.array_free(&names)
+    bundles : bundle.Hash[..]
+    defer runtime.array_free(&bundles)
+    if !(bundle.root_entries(root_object.bytes, &names, &bundles) or_else false) {
+        return null
+    }
+    for entry_name, i in names {
+        if entry_name == name && i < bundles.count {
+            return bundles[i]
+        }
+    }
+    return null
+}
+
+/*
+ * A bundle's program, as paged memory from the store, if its manifest is the entry installations are launched with
+ * (counter_app's, the schema of counter.main's type): null for one of another entry, which can't be given what it takes.
+ */
+installation_program :: fn(supervisor: ptr[mut Supervisor], bundle_hash: bundle.Hash) -> slop_os.Memory? {
+    record :: mapped_object(supervisor, bundle_hash) or_return null
+    referred : bundle.Hash[..]
+    defer runtime.array_free(&referred)
+    read :: bundle.bundle_refers(record.bytes, &referred) or_else false
+    unmap_object(supervisor, record)
+    if !read || referred.count < 2 {
+        return null
+    }
+    manifest :: referred[1 % referred.count]
+    program :: referred[0]
+    expected :: bundle.Hash.{bytes = schema.hash(type_info_of(type_of(counter.main)))}
+    if !bundle.same(manifest, expected) {
+        return null
+    }
+    return match store_request(supervisor, .Get(program)) {
+        case Got(object) => object.memory
+        case _ => null
+    }
+}
+
+// An installation's data directory, the system volume's apps/<name>, made if it isn't there, or null.
+installation_data :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.Channel[dir.Dir]? {
+    apps :: system_directory(supervisor, "apps") or_return null
+    defer slop_os.handle_close(cast[slop_os.Handle](apps.end))
+    port :: os.port_for(supervisor.block.budget, apps.end) or_return null
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    out := os.Outgoing.{}
+    request :: os.begin[dir.Request](&out)
+    request^ = .OpenDirectory(dir.OpenDirectory.{path = bytes_of(&out, name), create = true})
+    into := os.Incoming.{}
+    return match ask_system_dir(apps.end, port, &out, &into) {
+        case OpenedDirectory(opened) => opened
+        case _ => null
+    }
+}
+
+// An installation removed: from the list, its data directory, and its configuration. Whether all of it went.
+uninstall :: fn(supervisor: ptr[mut Supervisor], name: string) -> bool {
+    list := read_installations(supervisor)
+    kept := system_records.Installations.{}
+    for i in cast[usize](0)..<list.entries.count {
+        if i < cast[usize](list.count) && system_records.text_of(&list.entries[i].name) != name {
+            at :: cast[usize](kept.count)
+            if at < kept.entries.count {
+                kept.entries[at] = list.entries[i]
+                kept.count += 1
+            }
+        }
+    }
+    whole := write_installations(supervisor, kept)
+    // Its data: the files in its directory, then the directory
+    apps :: system_directory(supervisor, "apps") or_return false
+    directory, error :: os.directory_on(apps.end)
+    if error == null {
+        match os.list_directory_in(directory, name) {
+            case Ok(listed) => {
+                for each in listed {
+                    storage : u8[256]
+                    path :: joined_path(name, each.name, &storage)
+                    whole = os.delete_file_in(directory, path) == null && whole
+                }
+                os.free_directory_listing(listed)
+                whole = os.remove_directory_in(directory, name) == null && whole
+            }
+            case Error(failure) => {}
+        }
+        os.close_directory(directory)
+    }
+    // Its configuration
+    out := os.Outgoing.{}
+    request :: os.begin[config_protocol.Request](&out)
+    request^ = .Forget(bytes_of(&out, name))
+    into := os.Incoming.{}
+    match config_protocol.ask(supervisor.config_end, supervisor.config_port, &out, &into) {
+        case Done => {}
+        case _ => whole = false
+    }
+    return whole
+}
+
+// a/b, into storage.
+joined_path :: fn(a: string, b: string, storage: ptr[mut u8[256]]) -> string {
+    count := cast[usize](0)
+    for text in string.[a, "/", b] {
+        for character in text {
+            if count < storage.count {
+                storage^[count] = cast[u8](character)
+                count += 1
+            }
+        }
+    }
+    return if count > 0 { string_of(&storage^[0], count) } else { "" }
+}
+
+// Until the installation named name has ended, as one run of the counter does.
+wait_for_installation :: fn(supervisor: ptr[mut Supervisor], name: string) {
+    loop {
+        wait_and_handle(supervisor)
+    }
+    while !ended_for_good(supervisor, name)
+}
+
+/*
+ * test_installations: the counter installation, once it's run: refused an update to hello's bundle, whose entry isn't
+ * the installations'; updated to counter_next's, which counts on from its data; uninstalled, its data and settings with
+ * it; and installed again, counting from 1.
+ */
+check_installations :: fn(supervisor: ptr[mut Supervisor]) {
+    wait_for_installation(supervisor, "counter")
+    list := read_installations(supervisor)
+    if list.count == 0 {
+        log_line.write(supervisor.log, "supervisor: test_installations: no installations")
+        return void
+    }
+    // An update to a bundle of another entry is refused before it's written
+    hello_bundle :: bundle_named(supervisor, "hello") or_else bundle.Hash.{}
+    refused :: installation_program(supervisor, hello_bundle) is_none
+    // Updated: the bundle it runs replaced, its data kept
+    next :: bundle_named(supervisor, "counter_next") or_else bundle.Hash.{}
+    list.entries[0].bundle = next.bytes
+    updated :: write_installations(supervisor, list) && start_installation(supervisor, list.entries[0])
+    wait_for_installation(supervisor, "counter")
+    // Uninstalled, and installed again from the build's list
+    removed :: uninstall(supervisor, "counter")
+    reinstalled :: write_installations(supervisor, supervisor.boot_records.installations)
+        && start_installation(supervisor, supervisor.boot_records.installations.entries[0])
+    wait_for_installation(supervisor, "counter")
+    log_line.write(supervisor.log, "supervisor: test_installations: an update to hello's bundle %, updated to counter_next %, uninstalled %, installed again %",
+        if refused { "refused" } else { "taken" }, if updated { "and run" } else { "not run" }, if removed { "whole" } else { "not whole" },
+        if reinstalled { "and run" } else { "not run" })
 }
 
 // The boot's assessment told to the update service, if there's one, and its acting on it waited for.

@@ -96,6 +96,8 @@ Request :: union {
     Rollback(u64),
     // On the supervisor's connection: the store's directory from now on, as when its volume server was started again
     UseDirectory(os.Channel[dir.Dir]),
+    // On the supervisor's connection: every value of an owner's removed, every version, as when it's uninstalled
+    Forget(slop_os.Relative[u8]),
 }
 
 Response :: union {
@@ -114,6 +116,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Write(_) => false
         case Rollback(_) => false
+        case Forget(_) => true
         case _ => true
     }
 }

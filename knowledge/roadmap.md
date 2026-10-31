@@ -319,7 +319,9 @@ which it booted. 9d2 done 2026-10-31 (`decisions/0115`): late services and deadl
 supervisor's assessment of each boot, healthy or degraded, and a degraded boot's record on the system volume. 9d3 done
 2026-10-31 (`decisions/0116`): the update service installing staged generations, checked by hash and against
 the ESP's room, making them permanent once healthy, rolling back degraded ones, and collecting; tested by booting
-the same disk two and three times.
+the same disk two and three times. 9d4 done 2026-10-31 (`decisions/0117`): system installations with `AppData` and
+`Config[T]`, run from bundles whose entry the supervisor was built with (decided with the owner), updated with their
+data kept, and uninstalled with their data and configuration.
 
 Added by `decisions/0097`: in **9c**, the benchmarks with baselines (*Perf*, below), the memory pressure signal and
 evictable pager pages, and slopfs refusing names with control, bidirectional or invisible characters; in **9d**,
