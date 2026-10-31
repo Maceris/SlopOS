@@ -1,6 +1,6 @@
 # Software: Bundles, Configuration, Generations and Installations
 
-Status: **proposed** 2026-10-24, for roadmap M9 (and B); its open questions decided 2026-10-27 (`../decisions/0092`). Builds on `../decisions/0044` (typed entry points and the
+Status: **built** in M9 (`../decisions/0093` to `0122`, follow-ups `0123`), but B's automatic fallback; proposed 2026-10-24, its open questions decided 2026-10-27 (`../decisions/0092`). Builds on `../decisions/0044` (typed entry points and the
 system configuration), `0045` (content-addressed libraries), `0040` (schemas), `0012` (root task), `0017`
 (supervisor) and `../problems-and-directions.md` §5–§7 and §13. The choices still to make are at the end and in
 `../open-questions.md`, *Software*.
@@ -117,7 +117,9 @@ A content hash names a build, but an app's data has to outlive its updates, so i
 
 ## Also Proposed (`lessons.md` §2, 2026-10-30)
 
-Decided when 9c to 9e are planned:
+Decided 2026-10-31 (`../decisions/0123`): data TCB services load is in the generation, the substitution policy first
+(9f2); generations that change only services apply live (9f3); no `Secret[T]`, but Hemera's `#secret` extended in 10b;
+The Update Framework with bundles from elsewhere (M13); settings tools with the shell (M11). As proposed:
 - Data that TCB services load (the substitution policy, the trust store, keymaps, time zones) is part of a generation,
   never loaded live; update metadata has a staged-rollout field (`lessons.md` §2.1).
 - Bundles from elsewhere checked through The Update Framework's metadata: key thresholds, versions against rollback,

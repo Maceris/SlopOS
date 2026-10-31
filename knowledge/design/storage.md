@@ -1,6 +1,6 @@
 # Storage: Volume Servers, the Native Filesystem, FAT32
 
-Status: **proposed** 2026-10-24, for roadmap M8; its open questions decided 2026-10-25 (`../decisions/0085`). Builds on `../decisions/0015` (`Dir`, `ReadOnlyDir`), `0016`
+Status: **built** in M8 (`../decisions/0085` to `0091`); proposed 2026-10-24, its open questions decided 2026-10-25 (`../decisions/0085`). Builds on `../decisions/0015` (`Dir`, `ReadOnlyDir`), `0016`
 (per-user volumes), `0018` (`FileSet`, informational names), `0042` (unlocking, key generations), `0046` (typed bytes,
 handle-relative trees, transactions in the filesystem) and `security.md` §8 (stored links). The choices still to
 make are listed at the end and in `../open-questions.md`, *Storage*.

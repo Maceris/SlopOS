@@ -135,7 +135,7 @@ mistake can leave a machine that doesn't start at all.
 - This is the "signing as a later layer" `0013` left open; it guards distribution, not the administrator (§10.1).
 - **Rollback by the user is still allowed**, since it's the administrator's choice; rolling back to a generation
   containing a hash the substitution policy has since replaced warns which fixes it loses.
-- Reproducible builds (`../hemera-proposals/reproducible-builds.md`) are what lets anyone check a distributor's hash
+- Reproducible builds (Hemera's `docs/compilation.md`, *Deterministic Output*) are what lets anyone check a distributor's hash
   against a build of their own, the defence TUF doesn't give against a compromised build (xz, CVE-2024-3094; SolarWinds).
 
 ### 2.3 Updates without lost work
@@ -156,9 +156,10 @@ mistake can leave a machine that doesn't start at all.
 
 ### 2.5 Secrets in Hemera
 
-- `Secret[T]`, a `distinct` wrapper in `std` that the formatter prints as `<secret>`, that the typed log records
-  (`../hemera-proposals/typed-log-records.md`) refuse to copy, and whose memory is zeroed when freed. Passphrases in
-  the account service, volume keys and TLS keys use it. Proposed to Hemera with 9c.
+- `Secret[T]`, a `distinct` wrapper in `std` that the formatter prints as `<secret>`, that typed log records refuse
+  to copy, and whose memory is zeroed when freed. Passphrases in the account service, volume keys and TLS keys use it.
+  Proposed to Hemera with 9c. Decided otherwise (`../decisions/0123`): Hemera already has `#secret` types, so these
+  become more of what `#secret` means, designed in 10b.
 
 ---
 

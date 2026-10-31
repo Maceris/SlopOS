@@ -2,9 +2,8 @@
  * What the first services share (decisions/0067, 0071, 0074): a set of clients, each an end bound to the service's
  * port under its index, grants' labels as text, and the words of the kernel's command line.
  *
- * A typed library (decisions/0121), service_kit.library, whose text every service shares: its #export functions are
- * called through it. text_of and read_records aren't exported, so each program compiles them in: they reserve
- * addresses, which needs the program's process state, and a library's copy of base has its own, empty.
+ * A typed library (decisions/0121, 0124), service_kit.library, whose text every service shares: its #export functions
+ * are called through it.
  */
 package service_kit
 
@@ -89,7 +88,7 @@ text_of_label #export :: fn(label: ptr[u8[slop_os.GRANT_LABEL_SIZE]]) -> string 
 }
 
 // Text in memory, like the kernel's command line: its bytes up to its first zero, mapped read-only.
-text_of :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> string? {
+text_of #export :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> string? {
     size :: slop_os.memory_size(memory) or_return null
     address :: runtime.reserve_addresses(cast[usize](size)) or_return null
     if slop_os.memory_map(memory, block.space, address, 0, size, slop_os.PROTECTION_READ) is_error {
@@ -109,7 +108,7 @@ text_of :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> strin
  * The system configuration in memory, as the build wrote it into the boot set as system.records (decisions/0110):
  * copied out of it, and checked with system_records.check, as the build checked it. The copy, or why not.
  */
-read_records :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> Result[ptr[mut system_records.SystemRecords], system_records.Problem] {
+read_records #export :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> Result[ptr[mut system_records.SystemRecords], system_records.Problem] {
     unreadable :: system_records.Problem.{reason = "can't be read", service = system_records.MAX_SERVICES}
     size :: slop_os.memory_size(memory) or_return .Error(unreadable)
     if size < cast[u64](size_of(system_records.SystemRecords)) {

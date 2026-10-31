@@ -10,7 +10,7 @@
  */
 package library_interface
 
-LIBRARY_MAGIC : u64 : 0x31494152454d4548
+LIBRARY_MAGIC : u64 : 0x32494152454d4548
 PT_LOAD : u32 : 1
 PT_DYNAMIC : u32 : 2
 DT_NULL : u64 : 0

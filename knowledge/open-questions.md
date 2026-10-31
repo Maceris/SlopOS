@@ -78,14 +78,8 @@ and 4 KiB blocks with 16 KiB B+tree nodes.
 
 ## Software
 
-Answered 2026-10-27 (`decisions/0092`): one bundle store on the system volume; the system configuration serialized
-into each generation and validated at boot by the build's own code; `AppData` and `Config[T]` entry parameters,
-keyed by installation. Still open, as Hemera proposals for the owner to decide:
-
-- **Typed linking**: imports naming each function's type hash, so a mismatch fails the load
-  (`hemera-proposals/typed-linking.md`).
-- **Reproducible builds**: locations naming files relative to their roots, so the same sources built anywhere give
-  the same bytes (`hemera-proposals/reproducible-builds.md`).
+Nothing open. Answered 2026-10-27 (`decisions/0092`) and built in M9: one bundle store, the system configuration per
+generation, `AppData` and `Config[T]`, and Hemera's typed linking and reproducible output (its `docs/compilation.md`).
 
 ## Console and sessions
 
@@ -111,8 +105,6 @@ Open, from `design/shell.md` (2026-10-24):
 
 Open, from `design/observability.md` (2026-10-24):
 
-- **Logs as format strings and typed arguments**: decided 2026-10-27 (`decisions/0092`). Hemera's logger already hands
-  over the format string and the arguments; what it needs is in `hemera-proposals/typed-log-records.md`.
 - **Replay's promise**: exact for a process on one carrier, best effort for several (`observability.md` §5).
 - **Debug information**: DWARF alone, or Hemera's schemas beside it for the debugger's view of values.
 

@@ -91,6 +91,8 @@ Context for the open items, and choices SlopOS relies on.
   with no capabilities at all, which answers the untrusted-compilation problem.
 - **Code insertion, later if needed** (its proposal, done 2026-10-23, is in Hemera's `docs/compilation.md` now):
   parsing text into code (`compiler.parse`), and typed expression quotes (`Code[T]`). Nothing needs either yet.
+- **Typed linking, reproducible output and typed log records** (their proposals, done 2026-10-27 to 2026-10-29, are
+  in Hemera's `docs/compilation.md`, *Typed Libraries* and *Deterministic Output*, and `docs/types.md`, *Schemas*).
 - **Cryptography** (its proposal, done 2026-10-21, is in Hemera's `docs/memory.md`, *Secrets*, and `std/crypto`):
   value barriers beyond `intrinsics.select`'s own mask weren't added; the machine code is checked under
   Valgrind (`--valgrind-secrets`) instead.

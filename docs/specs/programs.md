@@ -81,6 +81,13 @@ an optional of one, which is `None` without its grant. A `Channel[P]` or `Listen
 ends before `main` with `slop_os.EXIT_MISSING_GRANT` (126). Other grants, like boot
 modules, are still found by label.
 
+**Typed libraries** (`0120`, `0121`): a program built calling a Hemera typed library is given it as a grant labeled
+`library:<file>`, `Memory` holding the library's file. Before `main`, `base`'s runtime binds every library its import
+table names from those grants: the library's unwritten segments mapped straight from the memory (so every process
+using it shares their pages, its code read and execute), its written ones copied and relocated (only relative
+relocations, only within the copies), its interface record checked, and its process state the program's. A library
+that's missing or doesn't match ends the process before `main` with exit code 1.
+
 ## The Root Task
 
 The kernel starts one process itself, the root task, from the first boot module (`0012`, `0060`), with the
@@ -94,7 +101,8 @@ loader above, at random places for its image, its 256 KiB stack with its startup
 | `command_line` | `Memory` | The kernel's command line, its bytes then zeros (`0067`) |
 | `firmware` | `Memory` | The firmware tables, which the kernel copied before boot memory was reclaimed, read-only, if the boot has them (`0073`): a `slop_os.FirmwareTables` (its magic, `FIRMWARE_MAGIC`; its kind, `Acpi` or `DeviceTree`; how many tables), then a `FirmwareTable` for each (its signature, size, offset in the copy, and the physical address it was at, which ACPI's tables point at one another by), then the tables. ACPI's are the RSDP, every table the XSDT (or RSDT) lists, and the FADT's DSDT and FACS; the device tree's is its blob, `DTB `. Last is the kernel's own `RAM `, a `slop_os.PhysicalRange` for each range of RAM it owns, at physical address 0 (`0074`) |
 | `test_device` | `Memory` | With `test_device` on the command line: what the firmware tables say of the emulator's test device (`src/test_device`), for `test_devices` (`0069`) |
-| `module:<name>` | `Memory` | Each other boot module: a read-only memory object over the frames it was loaded into, which go back to the kernel when it's destroyed |
+| `module:<name>` | `Memory` | Each other boot module: a memory object over the frames it was loaded into, which go back to the kernel when it's destroyed, mappable to read or run but never written |
+| `library:<name>` | `Memory` | A boot module whose name ends in `.library`, a typed library, which the root task's runtime binds as any program's does (`0121`) |
 
 When the root task ends, the kernel logs how, destroys everything it owned, waits a grace period of 20 ticks,
 logs what's left in its pools, which should be only its own (the root budget and the platform capability), and
@@ -167,13 +175,16 @@ block's memory objects, and its grants (`process_give_handles`), and its first t
 **Launching** (`os.launch` in `std/os`) takes the program's entry and a struct of its grants, whose fields the
 compiler checks are the entry's parameters: it splits the budget off the caller's, makes the process and its
 address space, and sends the manager a `LOAD`, each field's handle labeled with its name and tagged with its
-protocol, an optional's `None` left out.
+protocol, an optional's `None` left out. The executable goes with `RIGHT_MEMORY_EXECUTE` where the caller's handle has
+it, so its code is mapped from it, shared. The program is given each library its launcher holds, `library:<file>`,
+except those `LaunchOptions.libraries` names, which it's given instead (`0121`).
 
-**The process manager's protocol** (`std/os/slop_os/process_manager`), generated (`0071`), on channels with 2 KiB
+**The process manager's protocol** (`std/os/slop_os/process_manager`), generated (`0071`), on channels with 4 KiB
 rings (`RING_BYTES`):
 - `Load`: the program's name; the process (with `RIGHT_PROCESS_THREADS`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`),
   its address space (owning), its budget (with `RIGHT_BUDGET_CHARGE`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`) and the
-  executable (with `RIGHT_MEMORY_READ`); and up to 24 grants (16 before version 2), each with its label. The requester makes the process,
+  executable (with `RIGHT_MEMORY_READ`, and `RIGHT_MEMORY_EXECUTE` to share its code); and up to 32 grants (16
+  before version 2, 24 before 9c3), each with its label. The requester makes the process,
   its space and its budget, so the result is never the manager's. The answer is `Loaded` with the first thread's
   ID, or `NotLoaded` with a `LoadStatus`; either way the manager keeps none of the handles.
 - `Connect`: a `Channel[ProcessManager]`, which becomes another client.

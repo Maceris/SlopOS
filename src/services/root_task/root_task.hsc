@@ -212,6 +212,8 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     }
 
     module_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    // A program's module may be run too, so whoever loads it maps its code from it, shared (decisions/0124)
+    program_rights :: cast[slop_os.Rights](cast[u32](module_rights) | cast[u32](slop_os.RIGHT_MEMORY_EXECUTE))
     manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
     start_scheduler(&root, cpu_budget)
     platform_connection :: start_platform(&root, platform, command_line, module_rights)
@@ -223,27 +225,27 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         log = duplicate_log(&root),
         manager = process_manager.connect(root.manager, root.manager_port, block.budget) or_return 9,
         root = os.Channel[supervision.Supervision].{end = supervision_pair.b},
-        hello_module = module_copy(&root, "hello", module_rights),
+        hello_module = module_copy(&root, "hello", program_rights),
         platform_service = platform_connection,
         entropy_service = entropy.connect(root.entropy, root.entropy_port, block.budget),
-        console_module = module_copy(&root, "console", module_rights),
-        disk_check_module = module_copy(&root, "disk_check", module_rights),
-        virtio_blk_module = module_copy(&root, "virtio_blk", module_rights),
-        virtio_console_module = module_copy(&root, "virtio_console", module_rights),
-        virtio_input_module = module_copy(&root, "virtio_input", module_rights),
-        virtio_rng_module = module_copy(&root, "virtio_rng", module_rights),
-        edu_dma_module = module_copy(&root, "edu_dma", module_rights),
-        storage_manager_module = module_copy(&root, "storage_manager", module_rights),
-        partition_server_module = module_copy(&root, "partition_server", module_rights),
-        fat_server_module = module_copy(&root, "fat_server", module_rights),
-        container_service_module = module_copy(&root, "container_service", module_rights),
-        volume_server_module = module_copy(&root, "volume_server", module_rights),
+        console_module = module_copy(&root, "console", program_rights),
+        disk_check_module = module_copy(&root, "disk_check", program_rights),
+        virtio_blk_module = module_copy(&root, "virtio_blk", program_rights),
+        virtio_console_module = module_copy(&root, "virtio_console", program_rights),
+        virtio_input_module = module_copy(&root, "virtio_input", program_rights),
+        virtio_rng_module = module_copy(&root, "virtio_rng", program_rights),
+        edu_dma_module = module_copy(&root, "edu_dma", program_rights),
+        storage_manager_module = module_copy(&root, "storage_manager", program_rights),
+        partition_server_module = module_copy(&root, "partition_server", program_rights),
+        fat_server_module = module_copy(&root, "fat_server", program_rights),
+        container_service_module = module_copy(&root, "container_service", program_rights),
+        volume_server_module = module_copy(&root, "volume_server", program_rights),
         scheduler = connect_scheduler(&root),
-        clock_module = module_copy(&root, "clock", module_rights),
-        events_module = module_copy(&root, "events", module_rights),
-        bundle_store_module = module_copy(&root, "bundle_store", module_rights),
-        config_module = module_copy(&root, "config", module_rights),
-        update_module = module_copy(&root, "update", module_rights),
+        clock_module = module_copy(&root, "clock", program_rights),
+        events_module = module_copy(&root, "events", program_rights),
+        bundle_store_module = module_copy(&root, "bundle_store", program_rights),
+        config_module = module_copy(&root, "config", program_rights),
+        update_module = module_copy(&root, "update", program_rights),
         system = records_copy(&root) or_return 8,
     }
     match slop_os.handle_duplicate(cast[slop_os.Handle](command_line), module_rights) {
@@ -422,7 +424,7 @@ start_with_loader :: fn(root: ptr[mut Root], name: string, grants: process_build
     }
     target :: process_builder.Target.{process = process, space = space, budget = budget}
     given :: if count <= all.count { all[0..<count] } else { all[0..<0] }
-    match process_builder.build(target, file, given, seed, &root.stream) {
+    match process_builder.build(target, file, given, seed, &root.stream, cast[slop_os.Memory](module)) {
         case Ok(thread) => return .Ok(process)
         case Error(error) => return .Error("its loader failed")
     }

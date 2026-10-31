@@ -1,6 +1,6 @@
 # Observability: Events, Crash Reports, Debugging, Replay
 
-Status: **proposed** 2026-10-24, for roadmap M9 (the events service) and M12; log records decided 2026-10-27 (`../decisions/0092`). Builds on `../decisions/0009`
+Status: the events service **built** in M9 (`../decisions/0093`); the rest **proposed** 2026-10-24, for roadmap M12; log records decided 2026-10-27 (`../decisions/0092`). Builds on `../decisions/0009`
 (logging as a startup grant, replay through system calls), `0017` and `0056` (process control and intercepts),
 `0024` (replay is opt-in), `0053` (kernel-copied channel access for recorded processes) and
 `../problems-and-directions.md` §14. The choices still to make are at the end and in `../open-questions.md`,
@@ -37,9 +37,8 @@ Status: **proposed** 2026-10-24, for roadmap M9 (the events service) and M12; lo
   like `runtime.log_info`'s output.
 - **The debug log** (`0058`) stays for the root task and for boot, before the events service runs.
 
-On the Hemera side, the logger interface already hands over the format string and the arguments; what's missing (a
-type's schema hash, writing a value from its `TypeInfo`, naming the format string) is in
-`../hemera-proposals/typed-log-records.md`.
+On the Hemera side, the logger hands over the format string and the arguments, and a type's schema hash and its values
+written from its `TypeInfo` are `std`'s `schema` (Hemera's `docs/types.md`, *Schemas*), built for 9a (`../decisions/0093`).
 
 ## 3. Crash Reports (12a)
 
