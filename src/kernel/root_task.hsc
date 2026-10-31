@@ -28,7 +28,9 @@ import robustness from "../robustness"
  * - "command_line", the kernel's command line, its bytes then zeros;
  * - "firmware", the firmware tables' copy (firmware.hsc, slop_os.FirmwareTables), read-only, if the boot has them;
  * - "test_device", with test_device on the command line: what the firmware tables say of the test device;
- * - "module:<name>", each other boot module, a read-only memory object over the frames it was loaded into.
+ * - "module:<name>", each other boot module, a read-only memory object over the frames it was loaded into; or
+ *   "library:<name>" for a typed library, <name> ending in .library, which the root task's runtime binds before its
+ *   main as any program's does (decisions/0121), mappable to run.
  * Its own handles are to itself, its address space and the root memory budget, and its startup block
  * has the boot's random seed. Its end is the machine's: the kernel stops (processes.hsc), and only then.
  */
@@ -338,7 +340,7 @@ write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], sp
         handle :: handle_for(kernel, process, cast[u64](memory), .Memory, true) or_return "no handle to a module"
         label_storage : u8[slop_os.GRANT_LABEL_SIZE]
         label := text_buffer.make(label_storage)
-        text_buffer.append(&label, "module:")
+        text_buffer.append(&label, if is_library(module.name) { "library:" } else { "module:" })
         text_buffer.append(&label, module.name)
         count = add_grant(grants, count, text_buffer.as_string(&label), .Memory, handle)
     }
@@ -416,4 +418,14 @@ add_grant :: fn(grants: mut slop_os.Grant[], count: usize, label: string, kind: 
     grant.kind = kind
     grant.handle = handle
     return count + 1
+}
+
+// Whether a boot module is a typed library, by its name's ending: .library.
+is_library :: fn(name: string) -> bool {
+    ending :: ".library"
+    if name.count < ending.count {
+        return false
+    }
+    start :: name.count - ending.count
+    return start <= name.count && name[start..<name.count] == ending
 }

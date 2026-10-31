@@ -25,7 +25,7 @@ import log_line from "../../log_line"
 import block from "../../protocols/block"
 import partitions from "../../protocols/partitions"
 import robustness from "../../robustness"
-import service_kit from "../../service_kit"
+import service_kit from "../../libraries/service_kit"
 
 // Narrowed connections, at most; each is bound to the port twice, its client from CLIENT_KEY and the driver from DRIVER_KEY
 MAX_NARROWED :: 16

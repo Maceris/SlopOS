@@ -25,7 +25,7 @@ import slop_os from "std/os"
 import dir from "std/os/slop_os"
 import read_only_file from "std/os/slop_os"
 import files from "std/os/slop_os"
-import service_kit from "../../service_kit"
+import service_kit from "../../libraries/service_kit"
 import bundle from "../../bundle"
 import bundle_store from "../../protocols/bundle_store"
 

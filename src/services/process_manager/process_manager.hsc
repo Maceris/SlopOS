@@ -15,7 +15,7 @@ import log_line from "../../log_line"
 import process_builder from "../../process_builder"
 import entropy from "../../protocols/entropy"
 import random_stream from "../../random_stream"
-import service_kit from "../../service_kit"
+import service_kit from "../../libraries/service_kit"
 
 Manager :: struct {
     block : ptr[slop_os.StartupBlock],

@@ -16,7 +16,7 @@ import connector from "../../protocols/connector"
 import console_log from "../../protocols/console_log"
 import input from "../../protocols/input"
 import serial from "../../protocols/serial"
-import service_kit from "../../service_kit"
+import service_kit from "../../libraries/service_kit"
 
 // The serial line and the keyboard are bound to the port above the clients
 SERIAL_KEY : u64 : 1000

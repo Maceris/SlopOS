@@ -22,7 +22,7 @@ import dir from "std/os/slop_os"
 import files from "std/os/slop_os"
 import bundle from "../../bundle"
 import generations from "../../generations"
-import service_kit from "../../service_kit"
+import service_kit from "../../libraries/service_kit"
 import bundle_store from "../../protocols/bundle_store"
 import update from "../../protocols/update"
 

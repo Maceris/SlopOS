@@ -12,8 +12,8 @@
  * (decisions/0118), as an installation writes it once; with --boot-recovery, its entry is the one Limine boots.
  *
  * The files are the boot set, root_task.elf first, each named for the kernel by its file name; the store folder is the
- * store builder's, whose root its record names. The generation is permanent: one built on the host is what's known to
- * boot.
+ * store builder's, whose root its record names, and each typed library is put in its objects too. The generation is
+ * permanent: one built on the host is what's known to boot.
  *
  * Staged instead (decisions/0116), it's an update for the update service to install: its objects put in the store
  * folder's objects, as the bundle store keeps them, and its record, tentative, as the system volume's updates/pending.
@@ -24,6 +24,7 @@ package generation_builder
 
 import runtime from "base"
 import os from "std"
+import strings from "std"
 import bundle from "../../bundle"
 import generations from "../../generations"
 
@@ -88,6 +89,11 @@ main :: fn() -> int {
         }
         made.files[at].hash = hash
         made.file_count += 1
+        // A typed library is in the store too, where a substitution names it by its hash, pinned so it's kept (decisions/0122)
+        if strings.ends_with(argument(arguments, i), ".library") && !pin_library(argument(arguments, base + 1), argument(arguments, i)) {
+            runtime.log_error("generation_builder: can't put % in the store", argument(arguments, i))
+            return 4
+        }
     }
     match generations.check(&made) {
         case Some(problem) => {
@@ -223,6 +229,25 @@ put_in :: fn(folder: string, objects: string, path: string) -> bundle.Hash? {
         return null
     }
     return hash
+}
+
+/*
+ * A library put in the store folder's objects, and pinned there as library_<its name without .library>, as the bundle
+ * store keeps pins (pins/<name>, its hash in hex): whether it was.
+ */
+pin_library :: fn(store: string, path: string) -> bool {
+    hash :: put_in(store, "/objects/", path) or_return false
+    folder_storage : u8[1024]
+    pins :: joined(store, "/pins", "", &folder_storage)
+    if !os.is_directory(pins) && os.make_directory(pins) != null {
+        return false
+    }
+    name :: file_name(path)
+    stem :: name.count - ".library".count
+    pin_storage : u8[1024]
+    pin :: joined(pins, "/library_", if stem <= name.count { name[0..<stem] } else { name }, &pin_storage)
+    hex_storage : u8[64]
+    return os.write_entire_file(pin, bundle.hex(hash, &hex_storage)) == null
 }
 
 // A file put in the ESP's objects, named by its hash: the hash, or null if it couldn't be read or written.

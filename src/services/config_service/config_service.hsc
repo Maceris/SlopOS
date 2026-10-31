@@ -16,7 +16,7 @@ import os from "std"
 import time from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
-import service_kit from "../../service_kit"
+import service_kit from "../../libraries/service_kit"
 import config from "../../protocols/config"
 
 // The most values, at once, that connections reach

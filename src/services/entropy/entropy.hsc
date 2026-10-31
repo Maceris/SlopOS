@@ -16,7 +16,7 @@ import log_line from "../../log_line"
 import entropy as protocol from "../../protocols/entropy"
 import rng from "../../protocols/rng"
 import random_stream from "../../random_stream"
-import service_kit from "../../service_kit"
+import service_kit from "../../libraries/service_kit"
 
 MAX_SOURCES :: 4
 // Sources are bound to the port from here on, clients below

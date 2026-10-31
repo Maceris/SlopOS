@@ -22,7 +22,7 @@ import slop_os from "std/os"
 import log_line from "../../log_line"
 import pci from "../../pci"
 import platform as protocol from "../../protocols/platform"
-import service_kit from "../../service_kit"
+import service_kit from "../../libraries/service_kit"
 
 MAX_FUNCTIONS :: 64
 NO_PARENT : u32 : 0xffffffff

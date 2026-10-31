@@ -178,6 +178,8 @@ add_programs :: fn(folder: string) {
         program.target_options.startup_code = true
         // Built apart from the program, which holds its output's storage
         linked : compiler.LinkedLibrary[..]
+        // Every program's calls to service_kit go through its library, which none that doesn't call it is given
+        runtime.array_add(&linked, compiler.LinkedLibrary.{target = "service_kit"})
         for i in 0..<PROGRAM_LIBRARIES.count {
             if PROGRAM_LIBRARIES[i].program == name {
                 runtime.array_add(&linked, compiler.LinkedLibrary.{target = PROGRAM_LIBRARIES[i].library})
@@ -188,7 +190,7 @@ add_programs :: fn(folder: string) {
     }
 }
 
-// A program that calls a library (decisions/0120), by their names
+// A program that calls a library other than service_kit, which all do (decisions/0120, 0121), by their names
 ProgramLibrary :: struct {
     program : string,
     library : string,
@@ -224,6 +226,20 @@ add_libraries :: fn(folder: string) {
         library.target_options.relocation_model = .Default
         library.target_options.output_type = .DynamicLibrary
         target :: compiler.add_target(library)
+        // service_kit's second build, with one export more, for substitution's test (decisions/0122)
+        if name == "service_kit" {
+            plus_storage : u8[512]
+            plus := text_buffer.make(plus_storage)
+            text_buffer.append(&plus, compiler.target_setting("programs_output", default = "."))
+            text_buffer.append(&plus, "/service_kit_plus.library")
+            second := library
+            second.name = "service_kit_plus"
+            second.output_path = text_buffer.as_string(&plus)
+            settings : compiler.TargetSetting[..]
+            runtime.array_add(&settings, compiler.TargetSetting.{name = "service_kit_build", value = "plus"})
+            second.settings = settings
+            plus_target :: compiler.add_target(second)
+        }
     }
 }
 

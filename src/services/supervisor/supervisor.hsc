@@ -74,7 +74,8 @@ import bundle_store from "../../protocols/bundle_store"
 import config_protocol from "../../protocols/config"
 import bundle from "../../bundle"
 import schema from "std"
-import service_kit from "../../service_kit"
+import service_kit from "../../libraries/service_kit"
+import library_interface from "../../library_interface"
 import system_records from "../../system_records"
 import hello from "../../apps/hello"
 import clock_service from "../clock"
@@ -413,6 +414,14 @@ Supervisor :: struct {
     // Its connection to the system configuration's override in the config store, once it's had one
     overrides_end : slop_os.Channel,
     overrides_port : slop_os.Port,
+    // Its connection to the substitution policy in the config store, once it's had one (decisions/0122)
+    substitutions_end : slop_os.Channel,
+    substitutions_port : slop_os.Port,
+    // The libraries the policy puts in place of its own: each its own's file name, and the substitute's memory
+    substituted : os.LaunchLibrary[bundle.MAX_SUBSTITUTIONS],
+    substituted_count : usize,
+    // What options_for gives a launch of them: a copy of each substitute's handle
+    launch_libraries : os.LaunchLibrary[bundle.MAX_SUBSTITUTIONS],
 }
 
 // A service of the system configuration's, as the supervisor starts it.
@@ -479,7 +488,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         return 99
     }
     boot_records^ = records^
-    supervisor := Supervisor.{block = startup, records = records, boot_records = boot_records, overrides_end = NONE, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
+    supervisor := Supervisor.{block = startup, records = records, boot_records = boot_records, overrides_end = NONE, substitutions_end = NONE, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, console = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
         events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)}
     supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
@@ -509,6 +518,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     test_system_config := false
     test_degraded := false
     test_installations := false
+    test_substitution := false
     supervisor.started_at = slop_os.clock_monotonic() or_else 0
     supervisor.command_line = command_line
     match command_line {
@@ -523,6 +533,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             test_system_config = service_kit.has_word(text, "test_system_config")
             test_degraded = service_kit.has_word(text, "test_degraded")
             test_installations = service_kit.has_word(text, "test_installations")
+            test_substitution = service_kit.has_word(text, "test_substitution")
             supervisor.recovery = service_kit.has_word(text, "recovery")
             // The generation booted, and its store root, as its limine.conf entry says (decisions/0114, 0116)
             supervisor.generation = service_kit.number_of(service_kit.word_after(text, "generation=") or_else "") or_else 0
@@ -620,6 +631,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     }
     if test_system_config {
         check_system_config(&supervisor)
+    }
+    if test_substitution {
+        check_substitution(&supervisor)
     }
     if test_restart_services {
         restart_services(&supervisor, storage_slot)
@@ -885,6 +899,7 @@ open_system :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
             if supervisor.config_end == NONE {
                 start_config(supervisor, NOWHERE)
                 read_overrides(supervisor)
+                _ = read_substitutions(supervisor)
             }
             if supervisor.update_end == NONE && !supervisor.recovery {
                 start_update(supervisor, NOWHERE)
@@ -1658,6 +1673,21 @@ options_for :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.LaunchOpt
             case None => {}
         }
     }
+    // The substitution policy's libraries in place of its own (decisions/0122); the rest, its own, os.launch gives
+    given := cast[usize](0)
+    for &kept, i in supervisor.substituted {
+        if i >= supervisor.substituted_count || given >= supervisor.launch_libraries.count {
+            break
+        }
+        match slop_os.handle_duplicate(cast[slop_os.Handle](kept.memory), LIBRARY_RIGHTS) {
+            case Ok(copy) => {
+                supervisor.launch_libraries[given] = os.LaunchLibrary.{name = kept.name, memory = cast[slop_os.Memory](copy)}
+                given += 1
+            }
+            case Error(error) => {}
+        }
+    }
+    options.libraries = if given <= supervisor.launch_libraries.count { supervisor.launch_libraries[0..<given] } else { supervisor.launch_libraries[0..<0] }
     return options
 }
 
@@ -1884,6 +1914,203 @@ write_overrides :: fn(supervisor: ptr[mut Supervisor], overrides: system_records
     os.begin[system_records.SystemOverrides](&value)^ = overrides
     fields :: config_protocol.field_bit[system_records.SystemOverrides]("count") | config_protocol.field_bit[system_records.SystemOverrides]("tuned")
     return config_protocol.write(settings, supervisor.overrides_port, os.value_bytes(&value), fields) is_ok
+}
+
+// What a launched program, and the supervisor reading one, may do with a library's memory: read it, run it, and pass it on
+LIBRARY_RIGHTS :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_EXECUTE)
+    | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+
+/*
+ * The substitution policy, the config store's value "substitutions" of owner "system" (decisions/0119, 0122), read:
+ * each entry taken whose from is the hash of one of the supervisor's own libraries, and whose to the bundle store has
+ * and library_interface.check passes against it. What the supervisor launches from then on is given each substitute in
+ * its library's place, and what that launches has it in turn (os.launch); what's running keeps what it was bound to.
+ * Read once the config store has started, as at every boot: how many it took.
+ */
+read_substitutions :: fn(supervisor: ptr[mut Supervisor]) -> u64 {
+    for &kept, i in supervisor.substituted {
+        if i < supervisor.substituted_count {
+            _ = slop_os.handle_close(cast[slop_os.Handle](kept.memory))
+        }
+    }
+    supervisor.substituted_count = 0
+    settings :: substitutions_connection(supervisor) or_return 0
+    value := os.Outgoing.{}
+    match config_protocol.read(settings, supervisor.substitutions_port, &value) {
+        case Ok(version) => {}
+        case Error(error) => {
+            log_line.write(supervisor.log, "supervisor: the substitution policy couldn't be read: %", error)
+            return 0
+        }
+    }
+    policy :: os.typed_value[bundle.Substitutions](os.value_bytes(&value))
+    for &entry, i in policy.entries {
+        if cast[u64](i) >= policy.count || supervisor.substituted_count >= supervisor.substituted.count {
+            break
+        }
+        match substitute(supervisor, entry) {
+            case Ok(library) => {
+                place :: supervisor.substituted_count
+                if place < supervisor.substituted.count {
+                    supervisor.substituted[place] = library
+                    supervisor.substituted_count = place + 1
+                }
+                hex_storage : u8[64]
+                log_line.write(supervisor.log, "supervisor: % is substituted by %", library.name, bundle.hex(entry.to, &hex_storage))
+            }
+            case Error(why) => log_line.write(supervisor.log, "supervisor: a substitution is refused: %", why)
+        }
+    }
+    log_line.write(supervisor.log, "supervisor: the substitution policy puts % libraries in others' places", supervisor.substituted_count)
+    return cast[u64](supervisor.substituted_count)
+}
+
+// One substitution's library, its own one's name and the substitute from the store, if the check passes; or why not.
+substitute :: fn(supervisor: ptr[mut Supervisor], entry: ptr[bundle.Substitution]) -> Result[os.LaunchLibrary, string] {
+    own :: own_library(supervisor, entry.from) or_return .Error("it isn't one of the supervisor's libraries")
+    object := bundle_store.Object.{}
+    match store_request(supervisor, .Get(entry.to)) {
+        case Got(found) => object = found
+        case _ => return .Error("the bundle store doesn't have its substitute")
+    }
+    why := cast[string?]("its substitute can't be read")
+    match mapped_library(supervisor, cast[slop_os.Handle](own.memory)) {
+        case Some(old) => {
+            match mapped_library(supervisor, cast[slop_os.Handle](object.memory)) {
+                case Some(new) => {
+                    why = library_interface.check(old.bytes, new.bytes)
+                    _ = slop_os.memory_unmap(supervisor.block.space, new.address)
+                }
+                case None => {}
+            }
+            _ = slop_os.memory_unmap(supervisor.block.space, old.address)
+        }
+        case None => {}
+    }
+    match why {
+        case Some(reason) => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](object.memory))
+            return .Error(reason)
+        }
+        case None => return .Ok(os.LaunchLibrary.{name = own.name, memory = object.memory})
+    }
+}
+
+// The supervisor's own library whose file has hash: its name and memory, or null.
+own_library :: fn(supervisor: ptr[mut Supervisor], hash: bundle.Hash) -> os.LaunchLibrary? {
+    prefix :: "library:"
+    for &grant in slop_os.grants_of(supervisor.block) {
+        label :: slop_os.label_of(grant)
+        if grant.kind != .Memory || !strings.starts_with(label, prefix) || prefix.count > label.count {
+            continue
+        }
+        match mapped_library(supervisor, grant.handle) {
+            case Some(mapped) => {
+                same :: bundle.same(bundle.hash_of(mapped.bytes), hash)
+                _ = slop_os.memory_unmap(supervisor.block.space, mapped.address)
+                if same {
+                    return os.LaunchLibrary.{name = label[prefix.count..<label.count], memory = cast[slop_os.Memory](grant.handle)}
+                }
+            }
+            case None => {}
+        }
+    }
+    return null
+}
+
+/*
+ * A library's file in memory, mapped read-only: its bytes, as long as its ELF headers say it is, which a boot module's
+ * memory, a page's multiple, can be longer than. Unmapped by whoever reads it.
+ */
+mapped_library :: fn(supervisor: ptr[mut Supervisor], memory: slop_os.Handle) -> MappedLibrary? {
+    size :: slop_os.memory_size(cast[slop_os.Memory](memory)) or_return null
+    address :: runtime.reserve_addresses(cast[usize](size)) or_return null
+    if slop_os.memory_map(cast[slop_os.Memory](memory), supervisor.block.space, address, 0, size, slop_os.PROTECTION_READ) is_error {
+        return null
+    }
+    whole :: view_of(cast[ptr[u8]](address), cast[usize](size))
+    length :: cast[usize](library_interface.file_size(whole))
+    if length == 0 || length > whole.count {
+        _ = slop_os.memory_unmap(supervisor.block.space, address)
+        return null
+    }
+    return MappedLibrary.{bytes = whole[0..<length], address = address}
+}
+
+// A library's file mapped: its bytes, and where the mapping is.
+MappedLibrary :: struct {
+    bytes : u8[],
+    address : u64,
+}
+
+// The supervisor's connection to the substitution policy, declared, made the first time: null without one.
+substitutions_connection :: fn(supervisor: ptr[mut Supervisor]) -> config_protocol.Config[bundle.Substitutions]? {
+    if supervisor.substitutions_end != NONE {
+        return config_protocol.Config[bundle.Substitutions].{end = supervisor.substitutions_end}
+    }
+    settings :: config_for[bundle.Substitutions](supervisor, "system", "substitutions") or_return null
+    port :: os.port_for(supervisor.block.budget, settings.end) or_return null
+    match config_protocol.declare(settings, port) {
+        case Ok(version) => {}
+        case Error(error) => {
+            log_line.write(supervisor.log, "supervisor: the substitution policy couldn't be declared: %", error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](settings.end))
+            _ = slop_os.handle_close(cast[slop_os.Handle](port))
+            return null
+        }
+    }
+    supervisor.substitutions_end = settings.end
+    supervisor.substitutions_port = port
+    return settings
+}
+
+// The substitution policy written, unchecked: the supervisor checks each entry when it reads it. Whether the store kept it.
+write_substitutions :: fn(supervisor: ptr[mut Supervisor], policy: bundle.Substitutions) -> bool {
+    settings :: substitutions_connection(supervisor) or_return false
+    value := os.Outgoing.{}
+    os.begin[bundle.Substitutions](&value)^ = policy
+    fields :: config_protocol.field_bit[bundle.Substitutions]("count") | config_protocol.field_bit[bundle.Substitutions]("entries")
+    return config_protocol.write(settings, supervisor.substitutions_port, os.value_bytes(&value), fields) is_ok
+}
+
+// The hash of the supervisor's own library named name, or null.
+own_hash :: fn(supervisor: ptr[mut Supervisor], name: string) -> bundle.Hash? {
+    storage : u8[slop_os.GRANT_LABEL_SIZE]
+    label := text_buffer.make(storage)
+    text_buffer.append(&label, "library:")
+    text_buffer.append(&label, name)
+    memory :: slop_os.find_grant(supervisor.block, text_buffer.as_string(&label), .Memory) or_return null
+    mapped :: mapped_library(supervisor, memory) or_return null
+    hash :: bundle.hash_of(mapped.bytes)
+    _ = slop_os.memory_unmap(supervisor.block.space, mapped.address)
+    return hash
+}
+
+/*
+ * test_substitution, once everything has started: a policy putting greeting in service_kit's place, refused, as it
+ * doesn't export what service_kit does; then service_kit_plus, service_kit's second build with one export more, taken,
+ * and hello started again with it; then the policy emptied, and hello started again with service_kit.
+ */
+check_substitution :: fn(supervisor: ptr[mut Supervisor]) {
+    original :: own_hash(supervisor, "service_kit.library") or_return void
+    plus :: own_hash(supervisor, "service_kit_plus.library") or_return void
+    greeting :: own_hash(supervisor, "greeting.library") or_return void
+    policy := bundle.Substitutions.{count = 1}
+    policy.entries[0] = bundle.Substitution.{from = original, to = greeting}
+    written := write_substitutions(supervisor, policy)
+    refused :: read_substitutions(supervisor) == 0
+    policy.entries[0].to = plus
+    written = written && write_substitutions(supervisor, policy)
+    taken :: read_substitutions(supervisor) == 1
+    on_plus :: kill_and_wait(supervisor, "hello", "test_substitution")
+    policy.count = 0
+    written = written && write_substitutions(supervisor, policy)
+    taken_back :: read_substitutions(supervisor) == 0
+    on_original :: kill_and_wait(supervisor, "hello", "test_substitution")
+    log_line.write(supervisor.log, "supervisor: test_substitution: greeting for service_kit %, service_kit_plus %, hello %; taken back %, hello %",
+        if refused { "refused" } else { "taken" }, if taken && written { "taken" } else { "refused" },
+        if on_plus { "started again on it" } else { "not started again" }, if taken_back { "yes" } else { "no" },
+        if on_original { "started again on service_kit" } else { "not started again" })
 }
 
 /*

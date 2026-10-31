@@ -39,6 +39,11 @@ From the survey of Hemera's docs against its compiler (2026-10-24):
   can't be built.
 - **Signals**: `multitasking.md` describes per-carrier alternate signal stacks, but the runtime installs no signal
   handlers on Linux. This doesn't affect SlopOS (section 2, *Fibers*).
+- **A typed library's process state** (found 2026-10-31, `decisions/0121`): a library has its own copy of `base`, and
+  `intrinsics.process_state()` there is the library's own global, zeroed, so `base` code in a library that reads it,
+  like SlopOS's `runtime.reserve_addresses` or entry grants, finds no startup block. `service_kit` keeps the two
+  functions that reserve addresses out of its exports for now. `runtime.bind_libraries` could hand each library the
+  program's state, through its interface record.
 
 ## 2. Design Notes
 

@@ -14,7 +14,7 @@ import slop_os from "std/os"
 import driver_kit from "../../driver_kit"
 import pci from "../../pci"
 import input from "../../protocols/input"
-import service_kit from "../../service_kit"
+import service_kit from "../../libraries/service_kit"
 import virtio from "../../virtio"
 
 PAGE : u64 : 4096

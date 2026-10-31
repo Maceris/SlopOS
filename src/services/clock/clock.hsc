@@ -20,7 +20,7 @@ import os from "std"
 import time from "std"
 import slop_os from "std/os"
 import text_buffer from "std"
-import service_kit from "../../service_kit"
+import service_kit from "../../libraries/service_kit"
 import clock_setting from "../../protocols/clock_setting"
 
 NANOSECONDS : i64 : 1_000_000_000

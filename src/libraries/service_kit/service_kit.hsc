@@ -1,12 +1,30 @@
 /*
  * What the first services share (decisions/0067, 0071, 0074): a set of clients, each an end bound to the service's
  * port under its index, grants' labels as text, and the words of the kernel's command line.
+ *
+ * A typed library (decisions/0121), service_kit.library, whose text every service shares: its #export functions are
+ * called through it. text_of and read_records aren't exported, so each program compiles them in: they reserve
+ * addresses, which needs the program's process state, and a library's copy of base has its own, empty.
  */
 package service_kit
 
+import compiler from "base"
 import runtime from "base"
 import slop_os from "std/os"
-import system_records from "../system_records"
+import system_records from "../../system_records"
+
+/*
+ * The second build, service_kit_plus.library (decisions/0122): the build's setting service_kit_build=plus, one export
+ * more, which substitution's test puts in this build's place.
+ */
+PLUS :: #run compiler.target_setting("service_kit_build", default = "") == "plus"
+
+#if PLUS {
+    // Which build this is
+    build_name #export :: fn() -> string {
+        return "plus"
+    }
+}
 
 // The most clients one service serves.
 MAX_CLIENTS :: 16
@@ -21,12 +39,12 @@ Clients :: struct {
  * One more client, bound to port, in the place of one that went away if there is one, so a service has room for
  * MAX_CLIENTS at once rather than in its life: false if there's no room, or it can't be bound.
  */
-add_client :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slop_os.Channel) -> bool {
+add_client #export :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slop_os.Channel) -> bool {
     return add_client_index(clients, port, end) is_some
 }
 
 // add_client's, giving where the client went, for state a service keeps per client.
-add_client_index :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slop_os.Channel) -> usize? {
+add_client_index #export :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slop_os.Channel) -> usize? {
     index := clients.count
     for i in cast[usize](0)..<clients.count {
         if i < clients.ends.count && cast[slop_os.Handle](clients.ends[i]) == slop_os.NO_HANDLE {
@@ -51,7 +69,7 @@ add_client_index :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slop_
 }
 
 // A client that went away, closed.
-drop_client :: fn(clients: ptr[mut Clients], index: usize) {
+drop_client #export :: fn(clients: ptr[mut Clients], index: usize) {
     if index < clients.ends.count {
         _ = slop_os.handle_close(cast[slop_os.Handle](clients.ends[index]))
         clients.ends[index] = cast[slop_os.Channel](slop_os.NO_HANDLE)
@@ -59,7 +77,7 @@ drop_client :: fn(clients: ptr[mut Clients], index: usize) {
 }
 
 // A label's text, without its padding.
-text_of_label :: fn(label: ptr[u8[slop_os.GRANT_LABEL_SIZE]]) -> string {
+text_of_label #export :: fn(label: ptr[u8[slop_os.GRANT_LABEL_SIZE]]) -> string {
     count : usize = 0
     for byte in label^ {
         if byte == 0 {
@@ -119,7 +137,7 @@ read_records :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> 
 }
 
 // What follows prefix in the word of text that starts with it, or null.
-word_after :: fn(text: string, prefix: string) -> string? {
+word_after #export :: fn(text: string, prefix: string) -> string? {
     start : usize = 0
     for character, i in text {
         if character == ' ' {
@@ -134,7 +152,7 @@ word_after :: fn(text: string, prefix: string) -> string? {
 }
 
 // A decimal number, or null if text isn't one or it's too big for a u64.
-number_of :: fn(text: string) -> u64? {
+number_of #export :: fn(text: string) -> u64? {
     if text.count == 0 || text.count > 19 {
         return null
     }
@@ -161,7 +179,7 @@ word_from :: fn(text: string, start: usize, end: usize, prefix: string) -> strin
 }
 
 // Whether word is one of the words of text, which spaces separate.
-has_word :: fn(text: string, word: string) -> bool {
+has_word #export :: fn(text: string, word: string) -> bool {
     start : usize = 0
     for character, i in text {
         if character == ' ' {

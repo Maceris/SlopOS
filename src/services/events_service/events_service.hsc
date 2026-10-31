@@ -30,7 +30,7 @@ import schema from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
 import log_line from "../../log_line"
-import service_kit from "../../service_kit"
+import service_kit from "../../libraries/service_kit"
 import events from "../../protocols/events"
 
 MAX_SOURCES :: 32

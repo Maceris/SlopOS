@@ -126,7 +126,7 @@ def with_before_qemu(arguments: list[str], more: list[str]) -> list[str]:
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 50 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 52 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 3 budgets and the default split off the root's, 800000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -290,6 +290,13 @@ TESTS = [
         "--expect-line=[user] supervisor: test_system_config: killing hello",
         "--expect-line=[user] supervisor: test_system_config: an override of hello's budget taken, one of 0 refused; hello started again "
         "on 3 MiB"])),
+    ("substitutes a library by the config store's policy, only by one whose interface stands in for it", 7, with_before_qemu(
+        [argument.replace("test_services", "test_services test_substitution") for argument in BOOT_DISK_ARGUMENTS], [
+        "--expect-line=[user] supervisor: the substitution policy puts 0 libraries in others' places",
+        "--expect-line=[user] supervisor: a substitution is refused: an export isn't there any more",
+        "--expect-line=[user] supervisor: the substitution policy puts 1 libraries in others' places",
+        "--expect-line=[user] supervisor: test_substitution: greeting for service_kit refused, service_kit_plus taken, hello started again "
+        "on it; taken back yes, hello started again on service_kit"])),
     ("starts a disk's partition server again when it's killed, and serves its volumes through the new one", 7, with_before_qemu(
         [argument.replace("test_services", "test_services test_storage_restart") for argument in BOOT_DISK_ARGUMENTS], [
         "--expect-line=[user] storage_manager: test_storage_restart: killing the partition server for disk 0",

@@ -34,7 +34,7 @@ import platform_protocol from "../../protocols/platform"
 import scheduler_protocol from "../../protocols/scheduler"
 import supervision from "../../protocols/supervision"
 import random_stream from "../../random_stream"
-import service_kit from "../../service_kit"
+import service_kit from "../../libraries/service_kit"
 // Only for the build, which writes system.records from the root task's program (decisions/0110)
 import system_config from "../../system_config"
 import system_records from "../../system_records"
@@ -47,6 +47,8 @@ import test_syscalls from "../../tests/test_syscalls"
 MAX_STARTED :: 8
 // The most typed libraries a test is given
 MAX_TEST_LIBRARIES :: 4
+// The most grants a service the root task loads itself is given, its libraries among them
+MAX_SELF_GRANTS :: 24
 // The port's key for the supervisor's reports; a started service's is its index.
 SUPERVISOR_KEY : u64 : 1000
 
@@ -395,8 +397,32 @@ start_with_loader :: fn(root: ptr[mut Root], name: string, grants: process_build
     // Its seed, drawn from the root task's stream, so the two never share one
     seed : u8[32]
     random_stream.fill(&root.stream, seed)
+    // With the root task's own libraries, as os.launch gives a launched program its launcher's (decisions/0121)
+    all : process_builder.Grant[MAX_SELF_GRANTS]
+    count := cast[usize](0)
+    for grant in grants {
+        if count >= all.count {
+            return .Error("too many grants")
+        }
+        all[count] = grant
+        count += 1
+    }
+    library_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_EXECUTE)
+        | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    for &grant in slop_os.grants_of(block) {
+        label :: slop_os.label_of(grant)
+        if grant.kind != .Memory || !strings.starts_with(label, "library:") {
+            continue
+        }
+        if count >= all.count {
+            return .Error("too many grants")
+        }
+        all[count] = process_builder.grant(label, slop_os.handle_duplicate(grant.handle, library_rights) or_return .Error("a library can't be shared"))
+        count += 1
+    }
     target :: process_builder.Target.{process = process, space = space, budget = budget}
-    match process_builder.build(target, file, grants, seed, &root.stream) {
+    given :: if count <= all.count { all[0..<count] } else { all[0..<0] }
+    match process_builder.build(target, file, given, seed, &root.stream) {
         case Ok(thread) => return .Ok(process)
         case Error(error) => return .Error("its loader failed")
     }
@@ -457,32 +483,40 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform, cp
     manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
     // Every test's entry has the same type, test_syscalls.main's (system_config checks it); its end watched from before it starts
     port :: slop_os.port_create(block.budget) or_return 23
-    // Every typed library in the boot set, for the tests that import one (decisions/0120): the program's runtime binds
-    // those it imports from them, and ignores the rest. A library's changed build, <name>_changed.library, is given
-    // only in its place.
+    // A test is given the root task's own libraries (os.launch, decisions/0121); with test_changed_library, each
+    // library's changed build, <name>_changed.library, in its place, as a substitution would (0120)
     library_storage : os.LaunchLibrary[MAX_TEST_LIBRARIES]
     library_count := cast[usize](0)
+    changed_ending :: "_changed.library"
     for &grant in slop_os.grants_of(block) {
         label :: slop_os.label_of(grant)
-        if grant.kind != .Memory || !strings.starts_with(label, "module:") || !strings.ends_with(label, ".library")
-            || strings.ends_with(label, "_changed.library") || library_count >= library_storage.count {
+        if !changed_libraries || grant.kind != .Memory || !strings.starts_with(label, "library:") || !strings.ends_with(label, changed_ending)
+            || library_count >= library_storage.count {
             continue
         }
-        given := grant.handle
-        if changed_libraries {
-            changed_storage : u8[slop_os.GRANT_LABEL_SIZE]
-            changed := text_buffer.make(changed_storage)
-            stem :: label.count - ".library".count
-            text_buffer.append(&changed, if stem <= label.count { label[0..<stem] } else { label })
-            text_buffer.append(&changed, "_changed.library")
-            given = slop_os.find_grant(block, text_buffer.as_string(&changed), .Memory) or_else given
+        // Named as what it stands in for: its label without library: and _changed, then .library
+        start :: "library:".count
+        stem :: label.count - changed_ending.count
+        replaced :: if start <= stem && stem <= label.count { label[start..<stem] } else { label }
+        // The name from the label of the library it stands in for, which the startup block holds
+        wanted_storage : u8[slop_os.GRANT_LABEL_SIZE]
+        wanted := text_buffer.make(wanted_storage)
+        text_buffer.append(&wanted, "library:")
+        text_buffer.append(&wanted, replaced)
+        text_buffer.append(&wanted, ".library")
+        file := ""
+        for &other in slop_os.grants_of(block) {
+            other_label :: slop_os.label_of(other)
+            if other_label == text_buffer.as_string(&wanted) && start <= other_label.count {
+                file = other_label[start..<other_label.count]
+            }
         }
-        // Its text is mapped to run, shared
+        if file.count == 0 {
+            continue
+        }
         library_rights :: cast[slop_os.Rights](cast[u32](module_rights) | cast[u32](slop_os.RIGHT_MEMORY_EXECUTE))
-        match slop_os.handle_duplicate(given, library_rights) {
+        match slop_os.handle_duplicate(grant.handle, library_rights) {
             case Ok(copy) => {
-                start :: "module:".count
-                file :: if start <= label.count { label[start..<label.count] } else { label }
                 library_storage[library_count] = os.LaunchLibrary.{name = file, memory = cast[slop_os.Memory](copy)}
                 library_count += 1
             }

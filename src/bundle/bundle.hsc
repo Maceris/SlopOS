@@ -34,6 +34,23 @@ Root :: struct {
     entries : RootEntry[],
 }
 
+/*
+ * The substitution policy (roadmap 9e3, decisions/0119, 0122), the config store's value "substitutions" of owner
+ * "system": each library by its hash, from, replaced by another, to, where to's interface record passes the check
+ * against from's. The supervisor applies it to what it launches after it reads it.
+ */
+Substitution :: struct {
+    from : Hash,
+    to : Hash,
+}
+
+MAX_SUBSTITUTIONS :: 8
+
+Substitutions :: struct {
+    count : u64,
+    entries : Substitution[MAX_SUBSTITUTIONS],
+}
+
 BUNDLE_SCHEMA :: #run schema.hash(type_info_of(Bundle))
 ROOT_SCHEMA :: #run schema.hash(type_info_of(Root))
 
