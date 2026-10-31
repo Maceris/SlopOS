@@ -129,11 +129,16 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 63 | `io_ports_create` | platform, budget, first, count | an owning handle to the I/O ports first to first + count - 1, on an architecture that has them (x86-64) |
 | 64 | `io_port_read` | ports, offset, width | width bytes (1, 2 or 4) read from the port at offset in the range |
 | 65 | `io_port_write` | ports, offset, width, value | width bytes of value written to the port at offset in the range |
-| 66 | `memory_create_paged` | budget, port, key, size | an owning handle to paged memory of size bytes, charged for all of it, whose pager raises key's wake binding on port (`RIGHT_PORT_BIND`), which it made (`0094`) |
+| 66 | `memory_create_paged` | budget, port, key, size | an owning handle to paged memory of size bytes, charged for its page array, and for each page once it's supplied (`0111`), whose pager raises key's wake binding on port (`RIGHT_PORT_BIND`), which it made (`0094`) |
 | 67 | `memory_page_wanted` | memory | the offset of a page of paged memory a touch waits for, each reported once; needs `RIGHT_MEMORY_WRITE` |
-| 68 | `memory_supply` | memory, offset, source, source offset | nothing: the page at offset, a copy of source's page at source offset, unless it's there already, and whoever waited for it woken; needs `RIGHT_MEMORY_WRITE` on the memory, `RIGHT_MEMORY_READ` on source |
+| 68 | `memory_supply` | memory, offset, source, source offset | nothing: the page at offset, a copy of source's page at source offset, unless it's there already, charged to the memory's budget (`BudgetExceeded` if it can't take it), and whoever waited for it woken; needs `RIGHT_MEMORY_WRITE` on the memory, `RIGHT_MEMORY_READ` on source |
 | 69 | `memory_read` | memory, offset, buffer | nothing: bytes of anonymous memory from offset copied into buffer through the kernel, with no mapping, its untouched pages zeros; `RIGHT_MEMORY_READ`. For memory another process owns, whose end is `ObjectGone`, never a fault (`0098`) |
 | 70 | `memory_write` | memory, offset, bytes | nothing: bytes copied into anonymous memory from offset, through the kernel; `RIGHT_MEMORY_WRITE` |
+| 71 | `cpu_budget_set_cpus` | budget, CPUs | nothing: the CPUs the budget's threads may run on, a bit per CPU's index (`0099`) |
+| 72 | `irq_set_cpu` | IRQ, CPU | nothing: a message-signaled IRQ routed to the CPU with that index, one of the caller's CPU budget's CPUs (`0099`) |
+| 73 | `memory_budget_set_threshold` | budget, threshold | nothing: the budget's pressure threshold in bytes, 0 for none, `SIGNAL_PRESSURE` raised at once if it's reached; `RIGHT_BUDGET_CHARGE` (`0111`) |
+| 74 | `memory_evict` | memory, offset | nothing: the supplied page at offset of paged memory given back, unmapped everywhere, freed and uncharged; `RIGHT_MEMORY_WRITE` (`0111`) |
+| 75 | `memory_page_accessed` | memory, offset | 1 if any mapping touched the page at offset of paged memory since this last asked, 0 if not, the marks cleared; always 0 where the hardware doesn't keep them; `RIGHT_MEMORY_WRITE` (`0111`) |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the
@@ -189,8 +194,10 @@ unmaps it from every address space; destroying an address space takes down what'
   pager, a process that made a wake binding on its port for it. A touch of a page that isn't there marks it
   wanted, raises the binding, and waits; the pager asks what's wanted (`memory_page_wanted`) and supplies each
   page (`memory_supply`), copying it from memory of its own, which wakes whoever waited, to touch it again. A
-  page stays once supplied. It can be mapped only to read or execute, by any number of address spaces; a touch
-  with the pager's binding gone destroys the thread, as a touch of nothing mapped does.
+  page stays until its pager gives it back (`memory_evict`, `0111`), as under pressure on its budget, which pays
+  for each page while it's there; `memory_page_accessed` tells the pager which pages were touched. It can be
+  mapped only to read or execute, by any number of address spaces; a touch with the pager's binding gone destroys
+  the thread, as a touch of nothing mapped does.
 
 ## IRQs
 
@@ -269,6 +276,10 @@ rflags. Writing them refuses an instruction or stack pointer outside user addres
 rflags' status flags and DF.
 
 **DMA faults**: a Device raises `SIGNAL_DMA_FAULT` each time an IOMMU blocks its DMA (`0084`).
+
+**Pressure**: a memory budget raises `SIGNAL_PRESSURE` (bit 5) when what it has charged reaches the threshold its
+holder set (`memory_budget_set_threshold`), and again only once it has fallen below it and reached it again; a
+handle with `RIGHT_BUDGET_CHARGE` binds it (`0111`). Its `Signal` packet's `data[1]` is what the budget had charged.
 
 **Ends**: a process or a thread raises `SIGNAL_TERMINATED` when it's destroyed, which stays raised. A
 process's `Signal` packet for it says how it ended in `data[1]`: the code it gave `process_exit`, or
@@ -382,7 +393,9 @@ Calls on a memory budget or a memory object fail with `slop_os.MemoryError`:
 | 27 | `BadProtection` | Writable and executable at once, or no access at all |
 | 28 | `NoPager` | `memory_create_paged`: the port has no wake binding with that key, or is gone |
 | 29 | `NothingWanted` | `memory_page_wanted`: no page is waited for that hasn't been reported |
-| 30 | `NotPaged` | `memory_page_wanted`, `memory_supply`: not paged memory |
+| 30 | `NotPaged` | `memory_page_wanted`, `memory_supply`, `memory_evict`, `memory_page_accessed`: not paged memory |
+| 31 | `NotSupplied` | `memory_evict`: the page hasn't been supplied |
+| 32 | `MappedWidely` | `memory_evict`: more address spaces map the page than one call takes it from (`MAX_EVICT_SPACES`, 16) |
 
 Registering a controller, making an IRQ or device memory fail with `slop_os.DeviceError`:
 

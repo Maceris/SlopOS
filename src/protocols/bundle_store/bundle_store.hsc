@@ -10,7 +10,9 @@ import bundle from "../../bundle"
  * Get gives an object as paged memory, read-only, which the store pages in as it's touched, one memory object per
  * object however many ask for it; Put takes one from memory given, kept only if its bytes have the hash given. Roots
  * keep objects, and what bundles and roots they are refer to, from Collect, which removes everything else: the boot
- * root, and pins by name. Connections arrive on its listener, and as Connects.
+ * root, and pins by name. Connections arrive on its listener, and as Connects. The pages it has supplied are a cache
+ * it gives back under pressure on its budget (decisions/0111): CacheLimit sets how much of them it keeps, and
+ * Evictions says how many it's given back.
  */
 
 BundleStore :: struct {}
@@ -49,6 +51,10 @@ Request :: union {
     Connect(os.Channel[BundleStore]),
     // The store's directory from now on, the same one served again, as when its volume server was started again
     UseDirectory(os.Channel[dir.Dir]),
+    // The most bytes of objects' pages it keeps in memory from now on; 0 for as much as its budget's threshold allows
+    CacheLimit(u64),
+    // How many pages it's given back, as Collected
+    Evictions,
 }
 
 Response :: union {

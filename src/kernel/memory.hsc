@@ -119,11 +119,17 @@ page_array_bytes :: fn(size: u64) -> u64 {
  * budget for all of it, with its page array.
  */
 create_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, size: u64) -> Result[ptr[mut Memory], slop_os.MemoryError] {
+    return create_memory_charging(kernel, owner, budget, size, size)
+}
+
+// create_memory's, charging charged bytes for its pages: its size, or for paged memory, none until each is supplied.
+create_memory_charging :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, size: u64, charged: u64)
+    -> Result[ptr[mut Memory], slop_os.MemoryError] {
     if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || size > slop_os.MAX_MEMORY_SIZE {
         return .Error(.InvalidSize)
     }
     object := cast[u64](0)
-    match new_object(kernel, .Memory, budget, size + page_array_bytes(size)) {
+    match new_object(kernel, .Memory, budget, charged + page_array_bytes(size)) {
         case Ok(made) => object = made
         case Error(error) => return .Error(if error == .BudgetExceeded { slop_os.MemoryError.BudgetExceeded } else { slop_os.MemoryError.OutOfMemory })
     }

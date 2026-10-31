@@ -54,6 +54,8 @@ MAIR_VALUE : u64 : 0x00_44_ff
 TCR_ASID_16 : u64 : 1 << 36
 TCR_TTBR0_WALKS_OFF : u64 : 1 << 7
 TCR_ASID_FROM_TTBR1 : u64 : 1 << 22
+// TCR_EL1.HA: the hardware sets a page's access flag as it's touched, rather than faulting (FEAT_HAFDBS)
+TCR_HARDWARE_ACCESS : u64 : 1 << 39
 TTBR_ASID_SHIFT : u64 : 48
 
 // Physical addresses go up to 48 bits.
@@ -476,9 +478,10 @@ invalidate_everywhere :: fn(table: ptr[PageTable], address: u64) {
 }
 
 /*
- * The paging state init_cpu sets: the memory attributes, and 16-bit ASIDs where the CPU has them, taken from
- * TTBR0, with TTBR0's walks off until an address space is activated. The bootloader's TCR_EL1 is kept
- * otherwise: 48-bit halves, 4 KiB granules, walks cached and inner shareable, and the CPU's physical address size.
+ * The paging state init_cpu sets: the memory attributes, 16-bit ASIDs where the CPU has them, taken from TTBR0, and
+ * the access flag kept by the hardware where it can, with TTBR0's walks off until an address space is activated. The
+ * bootloader's TCR_EL1 is kept otherwise: 48-bit halves, 4 KiB granules, walks cached and inner shareable, and the
+ * CPU's physical address size.
  */
 init_paging :: fn(system: ptr[ArchSystem]) {
     aarch64.write_system_register(.MAIR_EL1, MAIR_VALUE)
@@ -486,6 +489,9 @@ init_paging :: fn(system: ptr[ArchSystem]) {
     control |= TCR_TTBR0_WALKS_OFF
     if system.asid16 {
         control |= TCR_ASID_16
+    }
+    if system.hardware_access_flag {
+        control |= TCR_HARDWARE_ACCESS
     }
     aarch64.write_system_register(.TCR_EL1, control)
     aarch64.isb()
@@ -569,6 +575,23 @@ walk :: fn(table: ptr[PageTable], address: u64, leaf: u64) -> Result[Path, arch_
         current = table_at(table, entry & ENTRY_ADDRESS)
     }
     return .Ok(path)
+}
+
+/*
+ * Whether the 4 KiB page at virtual_address was touched since its access flag was last cleared, the flag cleared: where
+ * the hardware sets it (TCR_EL1.HA), and false everywhere else, since every page is mapped with the flag set, which
+ * clearing would turn into faults.
+ */
+take_accessed :: fn(table: ptr[mut PageTable], virtual_address: arch_interface.VirtualAddress) -> bool {
+    if aarch64.read_system_register(.TCR_EL1) & TCR_HARDWARE_ACCESS == 0 {
+        return false
+    }
+    path :: match walk(table, cast[u64](virtual_address), 0) {
+        case Ok(found) => found
+        case Error(error) => return false
+    }
+    old :: intrinsics.interlocked_and_u64(cast[ptr[mut u64]](path.leaf_slot), ~ENTRY_ACCESSED)
+    return old & ENTRY_ACCESSED != 0
 }
 
 // Whether a valid entry at level maps a block rather than pointing at a table. Level 0's are pages.

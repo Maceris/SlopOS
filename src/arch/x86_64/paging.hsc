@@ -27,6 +27,8 @@ KERNEL_HALF_FIRST :: 256
 KERNEL_HALF_COUNT :: 256
 
 ENTRY_PRESENT : u64 : 1 << 0
+// Set by the hardware as the page is touched
+ENTRY_ACCESSED : u64 : 1 << 5
 ENTRY_WRITABLE : u64 : 1 << 1
 ENTRY_USER : u64 : 1 << 2
 ENTRY_WRITE_THROUGH : u64 : 1 << 3
@@ -437,6 +439,16 @@ init_paging :: fn(cpu: ptr[mut ArchCpu]) {
 }
 
 // Which entries walk passed through, by level, as addresses in the direct map.
+// Whether the 4 KiB page at virtual_address was touched since its accessed bit was last cleared, the bit cleared.
+take_accessed :: fn(table: ptr[mut PageTable], virtual_address: arch_interface.VirtualAddress) -> bool {
+    path :: match walk(table, cast[u64](virtual_address), 0) {
+        case Ok(found) => found
+        case Error(error) => return false
+    }
+    old :: intrinsics.interlocked_and_u64(cast[ptr[mut u64]](path.leaf_slot), ~ENTRY_ACCESSED)
+    return old & ENTRY_ACCESSED != 0
+}
+
 Path :: struct {
     slots : u64[4],
     // slots[leaf], the leaf's entry.

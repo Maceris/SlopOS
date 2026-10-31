@@ -243,6 +243,8 @@ TESTS = [
         "--expect-line=[user] bundle_store: serving",
         "--expect-line=[user] supervisor: test_store: put hello's program, read it back whole as paged memory, a wrong hash refused; "
         "a pinned object kept (0 collected), and collected once unpinned (1)",
+        "--expect-line=[user] supervisor: test_store: with 64 KiB of pages kept, read hello's program back whole twice, the rest given back "
+        "under pressure",
         "--expect-line=[user] supervisor: test_store: hello's bundle's manifest is its entry's schema"])),
     ("keeps an override of the system configuration in the config store, and starts what it tunes as it says", 7, with_before_qemu(
         [argument.replace("test_services", "test_services test_system_config") for argument in BOOT_DISK_ARGUMENTS], [
@@ -302,6 +304,8 @@ TESTS = [
         "a copy missing a grant it requires ended with 126, one told another ABI version with 125"),
     program_test("supplies paged memory's pages from a pager in user mode", "test_pager",
         "2 pages supplied as they were touched, read at two addresses, and writing them refused"),
+    program_test("charges paged memory a page at a time, raises pressure at a threshold, and gives pages back", "test_pager",
+        "pages charged as they're supplied, touches reported, pressure raised at the threshold, and a page given back read again"),
     program_test("drives a device from user mode with the platform capability", "test_devices",
         "a driver registered a controller, took an IRQ's interrupts through its port, read device memory, and lost a window "
         "with its memory; IOMMUs that aren't were refused", "test_device"),

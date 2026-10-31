@@ -8,6 +8,12 @@
  * own memory the file server reads into, which it supplies from. Put takes an object's bytes in memory given, kept
  * only if they have the hash given. Collect marks the boot root, every pin, and what each refers to (a root's bundles,
  * a bundle's program, manifest, libraries and resources), and removes every other object, but those it has open.
+ *
+ * The pages it has supplied are a cache, which its budget pays for a page at a time (decisions/0111): once they bring
+ * its budget to its threshold, three quarters of its limit, or what CacheLimit sets, the kernel raises SIGNAL_PRESSURE,
+ * and the store gives pages back until it's below LOW_WATER of the threshold, by a clock over them: a page touched
+ * since the hand last passed it is passed again, one that wasn't is given back. A page given back is read again when
+ * it's next wanted. A supply its budget refuses gives pages back first, too.
  */
 package bundle_store_service
 
@@ -26,6 +32,10 @@ import bundle_store from "../../protocols/bundle_store"
 MAX_OBJECTS :: 64
 // The keys open objects' pager bindings are bound to the port with, after the clients'
 PAGER_KEY : u64 : 1000
+// The key its budget's pressure is bound to the port with, between the clients' and the objects'
+PRESSURE_KEY : u64 : 900
+// What it gives pages back down to, under pressure: this many sixteenths of the threshold, past what its pages don't pay for
+LOW_WATER_SIXTEENTHS : u64 : 12
 PAGE : u64 : 4096
 NOWHERE : usize : 0xffffffffffffffff
 
@@ -52,6 +62,14 @@ Store :: struct {
     objects : Open[MAX_OBJECTS],
     // Pages wanted that couldn't be read, kept until there's a directory to read them through again
     unread : Unread[..],
+    // The pages supplied, in the order the clock's hand goes round them, and where it is
+    resident : Unread[..],
+    hand : usize,
+    // Pages given back since it started
+    evicted : u64,
+    // What its budget has charged that isn't pages, when its threshold was last set from a cache limit; and the limit
+    cache_base : u64,
+    cache_limit : u64,
 }
 
 Unread :: struct {
@@ -68,6 +86,9 @@ main :: fn(store: os.Channel[dir.Dir], clients: os.Listener[bundle_store.BundleS
     service :: service_made
     service.block = slop_os.startup_block()
     service.port = slop_os.port_create(service.block.budget) or_return 1
+    // Pressure on its budget, which its pages bring it to, wakes it to give some back
+    slop_os.port_bind(service.port, cast[slop_os.Handle](service.block.budget), slop_os.SIGNAL_PRESSURE, PRESSURE_KEY, .Persistent) or_return 1
+    set_cache_limit(service, 0)
     service.raw = store.end
     service.raw_port = os.port_for(service.block.budget, store.end) or_return 2
     second :: dir.connect(store.end, service.raw_port, service.block.budget) or_return 3
@@ -98,6 +119,9 @@ main :: fn(store: os.Channel[dir.Dir], clients: os.Listener[bundle_store.BundleS
             }
             if packet.key >= PAGER_KEY {
                 supply_wanted(service, cast[usize](packet.key - PAGER_KEY))
+            }
+            else if packet.key == PRESSURE_KEY {
+                relieve(service)
             }
         }
     }
@@ -158,6 +182,12 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
             }
             case Collect => response^ = .Collected(collect(service))
             case UseDirectory(directory) => response^ = if use_directory(service, directory.end) { .Done } else { .Refused }
+            case CacheLimit(bytes) => {
+                set_cache_limit(service, bytes)
+                relieve(service)
+                response^ = .Done
+            }
+            case Evictions => response^ = .Collected(service.evicted)
             case Connect(connection) => {
                 if !service_kit.add_client(&service.connected, service.port, connection.end) {
                     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
@@ -397,8 +427,99 @@ supply_page :: fn(service: ptr[mut Store], slot: usize, offset: u64) -> bool {
     for i in read..<PAGE {
         intrinsics.volatile_store_u8(cast[ptr[mut u8]](open.buffer_at + i), 0)
     }
-    _ = slop_os.memory_supply(open.memory, offset, open.buffer, 0)
+    supplied := slop_os.memory_supply(open.memory, offset, open.buffer, 0)
+    // Its budget full: pages given back first, then supplied again
+    match supplied {
+        case Error(error) => if error == .BudgetExceeded {
+            evict(service, 1)
+            supplied = slop_os.memory_supply(open.memory, offset, open.buffer, 0)
+        }
+        case Ok => {}
+    }
+    match supplied {
+        case Ok => _ = runtime.array_try_add(&service.resident, Unread.{slot = slot, offset = offset})
+        case Error(error) => {}
+    }
     return true
+}
+
+/*
+ * Its budget's threshold, for a cache of at most limit bytes of pages, past what its budget has charged for everything
+ * else; or for 0, three quarters of its budget's limit.
+ */
+set_cache_limit :: fn(service: ptr[mut Store], limit: u64) {
+    info :: slop_os.memory_budget_info(service.block.budget) or_return void
+    pages :: cast[u64](service.resident.count) * PAGE
+    service.cache_limit = limit
+    service.cache_base = if info.used > pages { info.used - pages } else { 0 }
+    threshold :: if limit == 0 { info.limit / 4 * 3 } else { service.cache_base + limit }
+    _ = slop_os.memory_budget_set_threshold(service.block.budget, threshold)
+}
+
+// Pages given back until its budget is below its low water, as pressure on it asks.
+relieve :: fn(service: ptr[mut Store]) {
+    info :: slop_os.memory_budget_info(service.block.budget) or_return void
+    threshold :: if service.cache_limit == 0 { info.limit / 4 * 3 } else { service.cache_base + service.cache_limit }
+    base :: if service.cache_limit == 0 { cast[u64](0) } else { service.cache_base }
+    low :: base + (threshold - base) / 16 * LOW_WATER_SIXTEENTHS
+    if info.used <= low {
+        return void
+    }
+    evict(service, (info.used - low + PAGE - 1) / PAGE)
+}
+
+/*
+ * Up to count pages given back, by the clock: going round the pages supplied from the hand, one touched since the hand
+ * last passed it is passed, its mark cleared, and one that wasn't is given back. Twice round at most, so a cache of only
+ * touched pages still gives some back.
+ */
+evict :: fn(service: ptr[mut Store], count: u64) {
+    given := cast[u64](0)
+    steps := cast[usize](0)
+    limit :: service.resident.count * 2
+    loop {
+        if given >= count || service.resident.count == 0 || steps >= limit {
+            break
+        }
+        steps += 1
+        at :: if service.hand < service.resident.count { service.hand } else { cast[usize](0) }
+        service.hand = at
+        if at >= service.resident.count {
+            break
+        }
+        page :: service.resident[at]
+        if page.slot >= MAX_OBJECTS || !service.objects[page.slot].used {
+            forget(service, at)
+            continue
+        }
+        memory :: service.objects[page.slot].memory
+        touched :: slop_os.memory_page_accessed(memory, page.offset) or_else 0
+        if touched != 0 && steps <= service.resident.count {
+            service.hand = at + 1
+            continue
+        }
+        match slop_os.memory_evict(memory, page.offset) {
+            case Ok => {
+                forget(service, at)
+                given += 1
+                service.evicted += 1
+            }
+            // Mapped by too many to give back now: passed, as a touched one is
+            case Error(error) => if error == .MappedWidely {
+                service.hand = at + 1
+            }
+            else {
+                forget(service, at)
+            }
+        }
+    }
+}
+
+// The page at index of the pages supplied, taken off them, the hand staying on the one after it.
+forget :: fn(service: ptr[mut Store], index: usize) {
+    if index < service.resident.count {
+        runtime.array_remove(&service.resident, index)
+    }
 }
 
 // An object put: its bytes, the first size of the memory given, kept if they have its hash; whether they're kept.

@@ -375,6 +375,14 @@ sys_port_bind :: fn(thread: ptr[mut Thread], port: slop_os.Port, object: slop_os
         watched :: cast[ptr[mut Device]](found.object)
         return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.watch_lock, .Watchers, signals, key, once))
     }
+    // A budget's holder, who may charge it, watches it for pressure (decisions/0111)
+    if found.kind == .MemoryBudget {
+        if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_BUDGET_CHARGE) == 0 {
+            return .Error(.MissingRight)
+        }
+        watched :: cast[ptr[mut MemoryBudget]](found.object)
+        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.watch_lock, .Watchers, signals, key, once))
+    }
     if found.kind != .Channel {
         return .Error(.WrongKind)
     }
@@ -546,6 +554,14 @@ sys_memory_budget_info :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudg
     return .Ok(slop_os.BudgetInfo.{limit = limit, used = used})
 }
 
+// The budget's holder, who may charge it, sets its threshold.
+sys_memory_budget_set_threshold :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, threshold: u64) -> Result[void, slop_os.HandleError] {
+    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](budget), slop_os.ObjectKind.MemoryBudget,
+        slop_os.RIGHT_BUDGET_CHARGE)?
+    set_threshold(cast[ptr[mut MemoryBudget]](object), threshold)
+    return .Ok
+}
+
 sys_memory_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, size: u64) -> Result[slop_os.Memory, slop_os.MemoryError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
@@ -608,6 +624,18 @@ sys_memory_supply :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset:
     found :: object_of[slop_os.MemoryError](process, cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_WRITE)?
     from :: object_of[slop_os.MemoryError](process, cast[slop_os.Handle](source), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_READ)?
     return memory_done(supply_page(per_cpu().kernel, cast[ptr[mut Memory]](found), offset, cast[ptr[Memory]](from), source_offset))
+}
+
+// Only a handle that may write the paged memory gives its pages back.
+sys_memory_evict :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u64) -> Result[void, slop_os.MemoryError] {
+    found :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_WRITE)?
+    return memory_done(evict_page(per_cpu().kernel, cast[ptr[mut Memory]](found), offset))
+}
+
+// Only a handle that may write the paged memory asks which of its pages were touched.
+sys_memory_page_accessed :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u64) -> Result[u64, slop_os.MemoryError] {
+    found :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_WRITE)?
+    return page_accessed(per_cpu().kernel, cast[ptr[mut Memory]](found), offset)
 }
 
 // The memory needs RIGHT_MEMORY_READ.

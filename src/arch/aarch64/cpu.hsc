@@ -51,6 +51,8 @@ ArchSystem :: struct {
     console : u64,
     // Whether the CPU has 16-bit ASIDs, which init_cpu turns on.
     asid16 : bool,
+    // Whether the hardware sets a page's access flag as it's touched (FEAT_HAFDBS), which init_cpu turns on.
+    hardware_access_flag : bool,
     // The GIC's distributor and redistributor region, through the direct map, from the device tree, or 0.
     distributor : u64,
     distributor_physical : u64,
@@ -123,6 +125,7 @@ init_system :: fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareT
     }
     features :: detect_features()
     system.asid16 = has(&features, .Aarch64Asid16)
+    system.hardware_access_flag = has(&features, .Aarch64HardwareAccessFlag)
     system.timer_interrupt = DEFAULT_TIMER_INTERRUPT
     system.test_timer_interrupt = DEFAULT_TEST_TIMER_INTERRUPT
     tree := devicetree.open(devicetree_address(firmware, direct_map_offset)) or_return void

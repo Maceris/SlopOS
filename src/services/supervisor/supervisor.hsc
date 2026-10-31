@@ -1423,24 +1423,16 @@ check_store :: fn(supervisor: ptr[mut Supervisor]) {
     wrong.bytes[0] = wrong.bytes[0] ~ 1
     refused :: !put_object(supervisor, wrong, program)
     // Read back through paged memory, every byte
-    read_back := false
-    match store_request(supervisor, .Get(hash)) {
-        case Got(object) => {
-            mapped :: map_in(supervisor, object.memory, (object.size + 4095) & ~cast[u64](4095), slop_os.PROTECTION_READ)
-            if mapped != 0 && object.size == size {
-                read_back = true
-                for byte, i in program {
-                    if cast[ptr[u8]](mapped + cast[u64](i))^ != byte {
-                        read_back = false
-                        break
-                    }
-                }
-                _ = slop_os.memory_unmap(supervisor.block.space, mapped)
-            }
-            _ = slop_os.handle_close(cast[slop_os.Handle](object.memory))
-        }
-        case _ => {}
+    read_back :: read_whole(supervisor, hash, program)
+    // Again, twice, with only CACHE_TEST_BYTES of pages kept, which pressure on the store's budget gives the rest back of
+    // (decisions/0111): each page read again once it's given back
+    _ = store_request(supervisor, .CacheLimit(CACHE_TEST_BYTES))
+    under_pressure :: read_whole(supervisor, hash, program) && read_whole(supervisor, hash, program)
+    given_back :: match store_request(supervisor, .Evictions) {
+        case Collected(count) => count
+        case _ => cast[u64](0)
     }
+    _ = store_request(supervisor, .CacheLimit(0))
     _ = slop_os.memory_unmap(supervisor.block.space, address)
     // Another object, never read, kept while it's pinned and collected once it isn't
     other :: "an object only a pin keeps"
@@ -1461,6 +1453,8 @@ check_store :: fn(supervisor: ptr[mut Supervisor]) {
     once_unpinned :: collected(supervisor)
     log_line.write(supervisor.log, "supervisor: test_store: put hello's program, read it back % as paged memory, a wrong hash %; a pinned object kept (% collected), and collected once unpinned (%)",
         if put && read_back { "whole" } else { "not whole" }, if refused { "refused" } else { "taken" }, while_pinned, once_unpinned)
+    log_line.write(supervisor.log, "supervisor: test_store: with % KiB of pages kept, read hello's program back % twice, % given back under pressure",
+        CACHE_TEST_BYTES / 1024, if under_pressure { "whole" } else { "not whole" }, if given_back * 4096 + CACHE_TEST_BYTES >= size { "the rest" } else { "too few" })
     // The manifest the build wrote for hello is the schema of its entry's type, as it's worked out here
     expected :: bundle.Hash.{bytes = schema.hash(type_info_of(type_of(hello.main)))}
     manifest :: stored_hash(supervisor, "hello", 1)
@@ -1469,6 +1463,34 @@ check_store :: fn(supervisor: ptr[mut Supervisor]) {
         case None => false
     }
     log_line.write(supervisor.log, "supervisor: test_store: hello's bundle's manifest % its entry's schema", if matches { "is" } else { "isn't" })
+}
+
+// The pages of objects the bundle store keeps, in test_store's second reading
+CACHE_TEST_BYTES : u64 : 64 * 1024
+
+// The object with hash, from the bundle store, read whole as paged memory: whether it's program, byte for byte.
+read_whole :: fn(supervisor: ptr[mut Supervisor], hash: bundle.Hash, program: u8[]) -> bool {
+    read_back := false
+    match store_request(supervisor, .Get(hash)) {
+        case Got(object) => {
+            mapped :: map_in(supervisor, object.memory, (object.size + 4095) & ~cast[u64](4095), slop_os.PROTECTION_READ)
+            if mapped != 0 && object.size == cast[u64](program.count) {
+                read_back = true
+                for byte, i in program {
+                    if cast[ptr[u8]](mapped + cast[u64](i))^ != byte {
+                        read_back = false
+                        break
+                    }
+                }
+            }
+            if mapped != 0 {
+                _ = slop_os.memory_unmap(supervisor.block.space, mapped)
+            }
+            _ = slop_os.handle_close(cast[slop_os.Handle](object.memory))
+        }
+        case _ => {}
+    }
+    return read_back
 }
 
 // What the bundle store's Collect removed, or 99 if it didn't answer.

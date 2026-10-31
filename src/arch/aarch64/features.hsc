@@ -46,6 +46,8 @@ FEATURE_FIELDS :: FeatureField.[
     .{.Aarch64PointerAuthentication, .Isar1, 4, 1},
     .{.Aarch64PointerAuthentication, .Isar1, 8, 1},
     .{.Aarch64Asid16, .Mmfr0, 4, 2},
+    // HAFDBS: the access flag set by the hardware as a page is touched
+    .{.Aarch64HardwareAccessFlag, .Mmfr1, 0, 1},
     .{.Aarch64Pan, .Mmfr1, 20, 1},
 ]
 

@@ -302,7 +302,10 @@ merged field by field by the program, 16 versions kept with rollback and `Next`;
 the user's override left for later. 9c3 done 2026-10-30 (`decisions/0110`): the system configuration as
 checked data in the boot set, which the root task, the scheduler service and the supervisor read instead of linking
 `system_config`, and overrides of services' tunables in the config store, which the supervisor applies to what it
-starts once the store is up (both decided with the owner).
+starts once the store is up (both decided with the owner). 9c4 done 2026-10-30 (`decisions/0111`): paged memory charged a page at a time,
+a pressure signal on memory budgets at a threshold their holders set, pages given back by their pager through
+`memory_evict`, chosen by a clock over accessed bits (both decided with the owner), and the bundle store giving its
+pages back under pressure.
 
 Added by `decisions/0097`: in **9c**, the benchmarks with baselines (*Perf*, below), the memory pressure signal and
 evictable pager pages, and slopfs refusing names with control, bidirectional or invisible characters; in **9d**,

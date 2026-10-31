@@ -20,6 +20,11 @@ import frames from "frames"
  * Each budget has a lock for its counts and its list of what's charged to it. Anything that changes two
  * budgets at once, a child closing or a charge moving with an owning handle, takes kernel.budgets_lock
  * first, so it never waits on another.
+ *
+ * Pressure (roadmap 9c4, decisions/0111): a budget's holder can set a threshold, and SIGNAL_PRESSURE is raised for
+ * the bindings watching it once what it has charged reaches it, so its holder can give something back, a cache's
+ * pages, before an allocation fails. It's raised again only once its charges have fallen below the threshold and
+ * reached it again. It's raised after the budget's lock is let go, by raise_pressure.
  */
 
 MemoryBudget :: struct #align(16) {
@@ -32,6 +37,12 @@ MemoryBudget :: struct #align(16) {
     first_charged : u64,
     // Once it's destroyed: what it had went to its parent, and nothing more is charged to it.
     closed : bool,
+    // Its pressure threshold, 0 for none, and whether SIGNAL_PRESSURE was raised since it last fell below it
+    threshold : u64,
+    pressured : bool,
+    // Bindings watching for pressure (SIGNAL_PRESSURE), under watch_lock.
+    watch_lock : concurrency.SpinLock,
+    watchers : EndBinding[2],
 }
 
 MIB : u64 : 1024 * 1024
@@ -102,14 +113,19 @@ charge_new :: fn(budget_address: u64, object: u64, bytes: u64) -> bool {
     }
     budget :: cast[ptr[mut MemoryBudget]](budget_address)
     lock_at(&budget.lock, .MemoryBudget)
-    defer unlock_at(&budget.lock, .MemoryBudget)
     if budget.closed || bytes > budget.limit - budget.used {
+        unlock_at(&budget.lock, .MemoryBudget)
         return false
     }
     budget.used += bytes
     header.charge = bytes
     link_charged(budget, object)
     intrinsics.atomic_store_u64_release(&header.budget, budget_address)
+    raise :: pressing(budget)
+    unlock_at(&budget.lock, .MemoryBudget)
+    if raise {
+        raise_pressure(budget)
+    }
     return true
 }
 
@@ -117,12 +133,17 @@ charge_new :: fn(budget_address: u64, object: u64, bytes: u64) -> bool {
 charge_more :: fn(object: u64, bytes: u64) -> bool {
     header :: cast[ptr[mut ObjectHeader]](object)
     budget :: lock_budget_of(object) or_return true
-    defer unlock_at(&budget.lock, .MemoryBudget)
     if fails(.Budget) || budget.closed || bytes > budget.limit - budget.used {
+        unlock_at(&budget.lock, .MemoryBudget)
         return false
     }
     budget.used += bytes
     header.charge += bytes
+    raise :: pressing(budget)
+    unlock_at(&budget.lock, .MemoryBudget)
+    if raise {
+        raise_pressure(budget)
+    }
     return true
 }
 
@@ -139,6 +160,7 @@ uncharge :: fn(object: u64, generation: u32, bytes: u64) {
     }
     header.charge -= bytes
     budget.used -= bytes
+    ease(budget)
 }
 
 // A released object's whole charge, back to its budget.
@@ -147,6 +169,7 @@ return_charge :: fn(object: u64) {
     budget :: lock_budget_of(object) or_return void
     defer unlock_at(&budget.lock, .MemoryBudget)
     budget.used -= header.charge
+    ease(budget)
     unlink_charged(budget, object)
     header.charge = 0
     intrinsics.atomic_store_u64_release(&header.budget, 0)
@@ -198,6 +221,7 @@ destroy_memory_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut MemoryBudge
     }
     // Its limit was charged to the parent; what it used is now
     parent.used = parent.used - budget.limit + budget.used
+    ease(parent)
     budget.header.charge -= budget.limit
     budget.used = 0
     budget.limit = 0
@@ -226,8 +250,12 @@ move_charges :: fn(kernel: ptr[mut Kernel], objects: ptr[u64[64]], count: u32, t
             // With budgets_lock held, no one else holds two budgets' locks; they're taken by address, the order checked
             lock_budgets(to_address, from_address)
             done :: move_locked(object, from_address, to_address, true)
+            raise :: done && to_address != 0 && pressing(cast[ptr[mut MemoryBudget]](to_address))
             unlock_budget(from_address)
             unlock_budget(to_address)
+            if raise {
+                raise_pressure(cast[ptr[mut MemoryBudget]](to_address))
+            }
             if !done {
                 for earlier, j in objects^ {
                     if j >= i {
@@ -259,6 +287,7 @@ move_locked :: fn(object: u64, from_address: u64, to_address: u64, checked: bool
     if from_address != 0 {
         from :: cast[ptr[mut MemoryBudget]](from_address)
         from.used -= charge
+        ease(from)
         unlink_charged(from, object)
     }
     if to_address != 0 {
@@ -290,6 +319,43 @@ lock_budget :: fn(address: u64) {
 unlock_budget :: fn(address: u64) {
     if address != 0 {
         unlock_at(&cast[ptr[mut MemoryBudget]](address).lock, .MemoryBudget)
+    }
+}
+
+/*
+ * Whether budget has just reached its threshold, so SIGNAL_PRESSURE is to be raised once its lock is let go: it's
+ * marked raised, so it isn't again until it falls below. Takes the budget's lock as held.
+ */
+pressing :: fn(budget: ptr[mut MemoryBudget]) -> bool {
+    if budget.threshold == 0 || budget.pressured || budget.used < budget.threshold {
+        return false
+    }
+    budget.pressured = true
+    return true
+}
+
+// A budget that has fallen below its threshold, raised again when it next reaches it. Takes the budget's lock as held.
+ease :: fn(budget: ptr[mut MemoryBudget]) {
+    if budget.used < budget.threshold {
+        budget.pressured = false
+    }
+}
+
+// SIGNAL_PRESSURE raised for the bindings watching budget, with what it has charged. Called with no budget's lock held.
+raise_pressure :: fn(budget: ptr[mut MemoryBudget]) {
+    raise_watchers(per_cpu().kernel, &budget.watchers, &budget.watch_lock, .Watchers, cast[u32](slop_os.SIGNAL_PRESSURE),
+        intrinsics.atomic_load_u64(&budget.used))
+}
+
+// The budget's threshold set, 0 for none, and SIGNAL_PRESSURE raised at once if it's reached already.
+set_threshold :: fn(budget: ptr[mut MemoryBudget], threshold: u64) {
+    lock_at(&budget.lock, .MemoryBudget)
+    budget.threshold = threshold
+    budget.pressured = false
+    raise :: pressing(budget)
+    unlock_at(&budget.lock, .MemoryBudget)
+    if raise {
+        raise_pressure(budget)
     }
 }
 

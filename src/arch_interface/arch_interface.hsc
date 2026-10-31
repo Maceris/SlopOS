@@ -236,6 +236,12 @@ release_user_tables : fn(table: ptr[mut PageTable], freed: ptr[mut FreedTables])
 // Where virtual_address is mapped, or null if nothing is mapped there.
 translate : fn(table: ptr[PageTable], virtual_address: VirtualAddress) -> Translation? : ---
 
+/*
+ * Whether the 4 KiB page mapped at virtual_address was touched since this last asked, the mark that says so cleared,
+ * without a TLB flush: false where nothing's mapped there, or the hardware doesn't keep the mark.
+ */
+take_accessed : fn(table: ptr[mut PageTable], virtual_address: VirtualAddress) -> bool : ---
+
 // Switch the calling CPU to table. The first switch from the bootloader's tables flushes the whole TLB.
 activate : fn(table: ptr[PageTable]) : ---
 
