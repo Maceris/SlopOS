@@ -794,6 +794,8 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
             }
             case Sync => response^ = if synced(server) { dir.Response.Done } else { dir.Response.Failed(.DeviceError) }
             case Features => response^ = .Supports(features())
+            // A volume's room is its container's, which it doesn't know: Unsupported
+            case Room => {}
             case Connect(connection) => {
                 _ = add(server, .Dir, connection.end, directory, false, name_of(&server.connections[index]))
                 continue

@@ -125,7 +125,7 @@ def with_before_qemu(arguments: list[str], more: list[str]) -> list[str]:
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 44 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 45 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 3 budgets and the default split off the root's, 800000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -259,6 +259,19 @@ TESTS = [
         "--expect-line=[user] supervisor: degraded: hello ended for good, 4294967296",
         "--expect-line=[user] root task: the boot is degraded: 1 services the system needs aren't up",
         "--expect-disk-text=hello: ended for good"])),
+    ("installs a staged generation, boots it, and makes it permanent once it's healthy", 7, with_before_qemu(BOOT_DISK_ARGUMENTS, [
+        "--stage-generation=test_exit test_services", "--boots=2",
+        "--expect-line=[user] update: installed generation 2, tentative",
+        "--expect-boot-line=2:[user] root task: booted generation 2",
+        "--expect-boot-line=2:[user] root task: the system is healthy",
+        "--expect-boot-line=2:[user] update: generation 2 made permanent"])),
+    ("rolls a staged generation back when it boots degraded, and boots the one before", 7, with_before_qemu(BOOT_DISK_ARGUMENTS, [
+        "--stage-generation=test_exit test_services test_degraded", "--boots=3",
+        "--expect-line=[user] update: installed generation 2, tentative",
+        "--expect-boot-line=2:[user] root task: booted generation 2",
+        "--expect-boot-line=2:[user] update: generation 2 booted degraded, and is rolled back",
+        "--expect-boot-line=3:[user] root task: booted generation 1",
+        "--expect-boot-line=3:[user] root task: the system is healthy"])),
     ("keeps an override of the system configuration in the config store, and starts what it tunes as it says", 7, with_before_qemu(
         [argument.replace("test_services", "test_services test_system_config") for argument in BOOT_DISK_ARGUMENTS], [
         "--expect-line=[user] supervisor: the system configuration's override tunes 1 services",

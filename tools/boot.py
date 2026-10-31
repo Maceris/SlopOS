@@ -536,7 +536,7 @@ SEALED_PASSPHRASE = "slopos test passphrase"
 
 
 def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path, image_builder: Path, folder: Path,
-                   command_line: str, kaslr: bool, mark: str) -> None:
+                   command_line: str, kaslr: bool, mark: str, staged: str | None = None) -> None:
     """
     A disk that boots kernel through Limine, from BIOS or UEFI, made by the image builder: Limine, the kernel and the
     programs on its EFI system partition, as make_image puts them on the ISO, but only the boot set loaded by Limine,
@@ -573,6 +573,13 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
                                 str(kernel)] + [str(program) for program in boot_set], capture_output=True, text=True)
     if generated.returncode != 0:
         sys.exit(f"boot.py: the generation builder failed:\n{generated.stdout}{generated.stderr}")
+    # Generation 2 staged, its objects in the store and its record in the system volume's updates directory
+    if staged is not None:
+        (system / "updates").mkdir(parents=True, exist_ok=True)
+        staging = subprocess.run([str(generation_builder), "--stage", str(system), str(system / "store"), "2", "yes" if kaslr else "no",
+                                  staged, str(kernel)] + [str(program) for program in boot_set], capture_output=True, text=True)
+        if staging.returncode != 0:
+            sys.exit(f"boot.py: the generation builder couldn't stage generation 2:\n{staging.stdout}{staging.stderr}")
     built = subprocess.run([str(image_builder), str(path), str(BOOT_DISK_SECTORS), f"--sealed={SEALED_VOLUME}:{SEALED_PASSPHRASE}",
                             f"test,{PARTITIONS[0][0]},{PARTITIONS[0][2]}",
                             f"test,{PARTITIONS[1][0]},{PARTITIONS[1][2]}", "bios,BIOS boot,2048",
@@ -639,6 +646,13 @@ def main() -> int:
     parser.add_argument("--expect-disk-block", action="append", default=[],
                         help="N=TEXT: block N of the --disk image starts with TEXT once the kernel has stopped, with --expect; "
                              "may be repeated")
+    parser.add_argument("--boots", type=int, default=1,
+                        help="with --boot-disk: boot the same disk this many times, each after the last stopped, as a reboot would")
+    parser.add_argument("--expect-boot-line", action="append", default=[],
+                        help="with --boots: <boot>:<line>, a line that boot's serial output must have, from 2")
+    parser.add_argument("--stage-generation",
+                        help="with --boot-disk: stage generation 2 on the system volume, the same programs with this command line, "
+                             "for the update service to install (decisions/0116)")
     parser.add_argument("qemu_arguments", nargs="*", help="more arguments for QEMU, after --")
     arguments = parser.parse_args()
 
@@ -683,7 +697,7 @@ def main() -> int:
                 build_slopos_tools(folder / "tools")
                 image_builder = next((folder / "tools").glob("image_builder*"))
             make_boot_disk(disk, kernel.resolve(), [program.resolve() for program in programs], limine, image_builder.resolve(), folder,
-                           command_line, not arguments.no_kaslr, arguments.disk or "")
+                           command_line, not arguments.no_kaslr, arguments.disk or "", arguments.stage_generation)
             extra += ["-drive", f"file={disk},if=none,id=disk,format=raw",
                       "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on,bootindex=0"]
         elif arguments.disk is not None:
@@ -704,6 +718,15 @@ def main() -> int:
         if console is not None:
             console.thread.join(timeout=5)
         output = serial.read_text(errors="replace") if serial.exists() else ""
+        # The same disk booted again, as a reboot would, for what the boots before wrote onto it (decisions/0116)
+        later = []
+        for boot in range(2, arguments.boots + 1):
+            serial.unlink(missing_ok=True)
+            if aarch64:
+                again = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra, not arguments.no_iommu)
+            else:
+                again = run(image, qemu, serial, arguments.timeout, arguments.uefi, arguments.cpu, extra)
+            later.append((boot, again, serial.read_text(errors="replace") if serial.exists() else ""))
         unwritten = [expected for expected in arguments.expect_disk_block if not disk.exists() or not disk_block_starts(disk, expected)]
         image_bytes = disk.read_bytes() if disk.exists() and (arguments.expect_disk_text or arguments.refuse_disk_text) else b""
         unwritten += [f"text {text}" for text in arguments.expect_disk_text if text.encode() not in image_bytes]
@@ -711,6 +734,9 @@ def main() -> int:
         if arguments.serial is not None:
             arguments.serial.write_text(output)
     sys.stdout.write(output)
+    for boot, again, text in later:
+        print(f"boot.py: boot {boot}")
+        sys.stdout.write(text)
     if console is not None:
         for line in console.lines():
             if line:
@@ -730,8 +756,23 @@ def main() -> int:
             print(f"boot.py: the disk has no block {expected!r}", file=sys.stderr)
         for text in leaked:
             print(f"boot.py: the disk holds {text!r}, which it mustn't", file=sys.stderr)
-        return 0 if code == arguments.expect and not missing and not missing_shown and not unwritten and not leaked else 1
+        later_failed = False
+        for boot, again, text in later:
+            if again != arguments.expect:
+                print(f"boot.py: boot {boot} {description_of(again)}", file=sys.stderr)
+                later_failed = True
+            wanted = [line.split(":", 1)[1] for line in arguments.expect_boot_line if line.split(":", 1)[0] == str(boot)]
+            for line in wanted:
+                if line not in text.splitlines():
+                    print(f"boot.py: boot {boot}'s serial output has no line {line!r}", file=sys.stderr)
+                    later_failed = True
+        return 0 if code == arguments.expect and not missing and not missing_shown and not unwritten and not leaked and not later_failed else 1
     return code
+
+
+def description_of(code: int) -> str:
+    """How a boot ended, as boot.py says it."""
+    return {TIMED_OUT: "timed out", NO_EXIT_CODE: "ended without an exit code"}.get(code, f"exited with {code}")
 
 
 if __name__ == "__main__":

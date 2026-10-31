@@ -10,6 +10,11 @@
  * The files are the boot set, root_task.elf first, each named for the kernel by its file name; the store folder is the
  * store builder's, whose root its record names. The generation is permanent: one built on the host is what's known to
  * boot.
+ *
+ * Staged instead (decisions/0116), it's an update for the update service to install: its objects put in the store
+ * folder's objects, as the bundle store keeps them, and its record, tentative, as the system volume's updates/pending.
+ *
+ *     generation_builder --stage <system volume folder> <store folder> <number> <yes|no> <command line> <kernel> <file>...
  */
 package generation_builder
 
@@ -20,6 +25,9 @@ import generations from "../../generations"
 
 main :: fn() -> int {
     arguments :: os.arguments()
+    if argument(arguments, 1) == "--stage" {
+        return stage(arguments)
+    }
     if arguments.count < 9 {
         runtime.log_error("usage: generation_builder <esp folder> <store folder> <number> <timeout> <yes|no> <command line> <kernel> <file>...")
         return 1
@@ -126,6 +134,63 @@ before :: fn(a: generations.Generation, b: generations.Generation) -> bool {
         return b_recovery
     }
     return a.number > b.number
+}
+
+// A generation staged in the system volume's folder, its objects in the store folder's.
+stage :: fn(arguments: string[]) -> int {
+    if arguments.count < 9 {
+        runtime.log_error("usage: generation_builder --stage <system volume folder> <store folder> <number> <yes|no> <command line> <kernel> <file>...")
+        return 1
+    }
+    system :: argument(arguments, 2)
+    store :: argument(arguments, 3)
+    made := generations.Generation.{magic = generations.MAGIC, state = generations.STATE_TENTATIVE}
+    made.number = number_of(argument(arguments, 4)) or_return 3
+    made.kaslr = if argument(arguments, 5) == "yes" { 1 } else { 0 }
+    if !generations.set_line(&made.command_line, argument(arguments, 6)) {
+        return 3
+    }
+    root_storage : u8[1024]
+    made.store_root = bundle.from_hex(os.read_entire_file(joined(store, "/root", "", &root_storage)) or_else "") or_else bundle.Hash.{}
+    // The store keeps objects as objects/<hex>, as the ESP does under boot/
+    made.kernel = put_in(store, "/objects/", argument(arguments, 7)) or_return 4
+    for i in cast[usize](8)..<arguments.count {
+        at :: cast[usize](made.file_count)
+        if at >= made.files.count {
+            return 5
+        }
+        made.files[at].hash = put_in(store, "/objects/", argument(arguments, i)) or_return 4
+        if !generations.set_name(&made.files[at].name, file_name(argument(arguments, i))) {
+            return 5
+        }
+        made.file_count += 1
+    }
+    match generations.check(&made) {
+        case Some(problem) => {
+            runtime.log_error("generation_builder: the generation %", problem)
+            return 6
+        }
+        case None => {}
+    }
+    path_storage : u8[1024]
+    if os.write_entire_file(joined(system, "/updates/pending", "", &path_storage), bit_cast[string](generations.bytes_of(&made))) != null {
+        return 7
+    }
+    runtime.log_info("generation_builder: generation % staged", made.number)
+    return 0
+}
+
+// A file put in folder + objects, named by its hash in hex: the hash, or null if it couldn't be read or written.
+put_in :: fn(folder: string, objects: string, path: string) -> bundle.Hash? {
+    contents :: os.read_entire_file(path) or_return null
+    hash :: bundle.hash_of(bit_cast[u8[]](contents))
+    hex_storage : u8[64]
+    folder_storage : u8[1024]
+    path_storage : u8[1024]
+    if os.write_entire_file(joined(joined(folder, objects, "", &folder_storage), bundle.hex(hash, &hex_storage), "", &path_storage), contents) != null {
+        return null
+    }
+    return hash
 }
 
 // A file put in the ESP's objects, named by its hash: the hash, or null if it couldn't be read or written.

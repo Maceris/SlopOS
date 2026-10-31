@@ -144,6 +144,12 @@ limine_conf :: fn(generations: Generation[], timeout: u64, into: ptr[mut u8[..]]
         add(into, line_of(&generation.command_line))
         add(into, " generation=")
         add(into, decimal(generation.number, &digits))
+        // The bundle store's root it boots with, which the supervisor loads programs by
+        if !bundle.same(generation.store_root, bundle.Hash.{}) {
+            hex_storage : u8[64]
+            add(into, " store_root=")
+            add(into, bundle.hex(generation.store_root, &hex_storage))
+        }
         add(into, "\n")
         for i in cast[usize](0)..<generation.files.count {
             if i >= cast[usize](generation.file_count) {

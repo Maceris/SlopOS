@@ -623,6 +623,13 @@ serve_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usi
             // After a failed write, every Sync fails, not only the first (decisions/0112)
             case Sync => response^ = if !volume.failed && done(call(server, .Flush(3))) { dir.Response.Done } else { dir.Response.Failed(.DeviceError) }
             case Features => response^ = .Supports(features())
+            case Room => {
+                match fat.free_clusters(volume) {
+                    case Ok(free) => response^ = .Room(files.Room.{free = cast[u64](free) * volume.cluster_bytes,
+                        size = cast[u64](volume.cluster_count) * volume.cluster_bytes})
+                    case Error(failure) => response^ = .Failed(file_error(failure))
+                }
+            }
             case Connect(connection) => {
                 _ = add(server, .Dir, connection.end, directory, fat.Place.{}, false, name_of(&server.connections[index]))
                 continue

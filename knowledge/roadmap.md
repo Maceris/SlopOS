@@ -316,7 +316,10 @@ update service (staged updates installed, tentative made permanent, rollback, co
 **9d4** installations with `AppData` and `Config[T]`; **9d5** the recovery generation. 9d1 done 2026-10-30 (`decisions/0114`):
 generations' records and their objects on the ESP by hash, `limine.conf` written from them, and the root task told
 which it booted. 9d2 done 2026-10-31 (`decisions/0115`): late services and deadlines in the system records, the
-supervisor's assessment of each boot, healthy or degraded, and a degraded boot's record on the system volume.
+supervisor's assessment of each boot, healthy or degraded, and a degraded boot's record on the system volume. 9d3 done
+2026-10-31 (`decisions/0116`): the update service installing staged generations, checked by hash and against
+the ESP's room, making them permanent once healthy, rolling back degraded ones, and collecting; tested by booting
+the same disk two and three times.
 
 Added by `decisions/0097`: in **9c**, the benchmarks with baselines (*Perf*, below), the memory pressure signal and
 evictable pager pages, and slopfs refusing names with control, bidirectional or invisible characters; in **9d**,

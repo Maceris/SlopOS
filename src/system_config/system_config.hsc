@@ -17,6 +17,7 @@ import clock_service from "../services/clock"
 import events_service from "../services/events_service"
 import bundle_store_service from "../services/bundle_store_service"
 import config_service from "../services/config_service"
+import update_service from "../services/update_service"
 import console from "../services/console"
 import disk_check from "../services/disk_check"
 import entropy from "../services/entropy"
@@ -82,11 +83,12 @@ CpuShare :: struct {
  */
 /*
  * Dependencies (decisions/0113, 0115): an os.Channel[P] a service takes is required, and an optional one optional; a
- * service named in LATE is one the system is healthy without, as the test devices' drivers are. What isn't late, and is
+ * service named in LATE is one the system is healthy without, as the test devices' drivers are, and the disk check, whose
+ * checks expect a disk as the image builder made it, not as a boot before left it. What isn't late, and is
  * started, has to be up within its deadline, DEFAULT_DEADLINE_MS from boot unless it has its own, or the boot is
  * degraded.
  */
-LATE :: string.["edu_dma", "virtio_input"]
+LATE :: string.["edu_dma", "virtio_input", "disk_check"]
 DEFAULT_DEADLINE_MS : u32 : 120_000
 
 DEFAULT_CPU :: CpuShare.{priority = 100, period_ns = 10_000_000, time_ns = 5_000_000}
@@ -170,6 +172,9 @@ SERVICES :: Service.[
     // Programs' settings, on the system volume, each reached through a connection the supervisor gives (decisions/0109)
     Service.{name = "config", module = "config_service.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,
         entry = type_of(config_service.main)},
+    // What writes generations onto the ESP, told each boot's assessment by the supervisor (decisions/0116)
+    Service.{name = "update", module = "update_service.elf", starter = .Supervisor, by_manager = true, budget = 8 * MIB,
+        entry = type_of(update_service.main)},
     // Every disk's, and a partition server for each, which holds only its disk (decisions/0086)
     Service.{name = "storage_manager", boot_set = true, module = "storage_manager.elf", starter = .Supervisor, by_manager = true, budget = 64 * MIB,
         entry = type_of(storage_manager.main)},

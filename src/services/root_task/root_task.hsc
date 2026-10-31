@@ -73,6 +73,7 @@ SupervisorGrants :: struct {
     events_module : slop_os.Memory?,
     bundle_store_module : slop_os.Memory?,
     config_module : slop_os.Memory?,
+    update_module : slop_os.Memory?,
     system : slop_os.Memory,
 }
 
@@ -231,6 +232,7 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         events_module = module_copy(&root, "events", module_rights),
         bundle_store_module = module_copy(&root, "bundle_store", module_rights),
         config_module = module_copy(&root, "config", module_rights),
+        update_module = module_copy(&root, "update", module_rights),
         system = records_copy(&root) or_return 8,
     }
     match slop_os.handle_duplicate(cast[slop_os.Handle](command_line), module_rights) {

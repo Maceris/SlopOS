@@ -81,6 +81,8 @@ import clock_service from "../clock"
 import events_service from "../events_service"
 import bundle_store_service from "../bundle_store_service"
 import config_service from "../config_service"
+import update_service from "../update_service"
+import update_protocol from "../../protocols/update"
 import console from "../console"
 import disk_check from "../disk_check"
 import storage_manager from "../storage_manager"
@@ -155,6 +157,14 @@ StoreGrants :: struct {
 ConfigGrants :: struct {
     store : os.Channel[dir.Dir],
     admin : os.Listener[config_protocol.ConfigValue],
+}
+
+// What the update service is given (update_service.main).
+UpdateGrants :: struct {
+    esp : os.Channel[dir.Dir],
+    updates : os.Channel[dir.Dir],
+    store : os.Channel[bundle_store.BundleStore],
+    clients : os.Listener[update_protocol.Update],
 }
 
 // What hello is given (hello.main).
@@ -249,6 +259,7 @@ Modules :: struct {
     events : slop_os.Memory?,
     bundle_store : slop_os.Memory?,
     config : slop_os.Memory?,
+    update : slop_os.Memory?,
     clock : slop_os.Memory?,
     hello : slop_os.Memory?,
     console : slop_os.Memory?,
@@ -346,6 +357,11 @@ Supervisor :: struct {
     store_port : slop_os.Port,
     // The config store's admin connection
     config_end : slop_os.Channel,
+    // The update service's connection, NONE without one; the generation booted, 0 for none, and the store's root it boots with
+    update_end : slop_os.Channel,
+    update_port : slop_os.Port,
+    generation : u64,
+    boot_root : bundle.Hash?,
     config_port : slop_os.Port,
     // The entry in started a restart is launching into, whose key its process is watched under; NOWHERE otherwise
     relaunching : usize,
@@ -429,7 +445,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     edu_dma_module: slop_os.Memory?, storage_manager_module: slop_os.Memory?, partition_server_module: slop_os.Memory?,
     fat_server_module: slop_os.Memory?, container_service_module: slop_os.Memory?, volume_server_module: slop_os.Memory?,
     command_line: slop_os.Memory?, scheduler: os.Channel[scheduler_protocol.Scheduler]?, clock_module: slop_os.Memory?,
-    events_module: slop_os.Memory?, bundle_store_module: slop_os.Memory?, config_module: slop_os.Memory?, system: slop_os.Memory) -> int {
+    events_module: slop_os.Memory?, bundle_store_module: slop_os.Memory?, config_module: slop_os.Memory?, system: slop_os.Memory,
+    update_module: slop_os.Memory?) -> int {
     startup :: slop_os.startup_block()
     // The system configuration, which the root task checked, checked again
     records :: match service_kit.read_records(startup, system) {
@@ -446,8 +463,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     boot_records^ = records^
     supervisor := Supervisor.{block = startup, records = records, boot_records = boot_records, overrides_end = NONE, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, console = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
-        events_end = NONE, store_end = NONE, config_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)}
-    supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, clock = clock_module, hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
+        events_end = NONE, store_end = NONE, config_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)}
+    supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, hello = hello_module, console = console_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
         container_service = container_service_module, volume_server = volume_server_module}
@@ -486,6 +503,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             test_store = service_kit.has_word(text, "test_store")
             test_system_config = service_kit.has_word(text, "test_system_config")
             test_degraded = service_kit.has_word(text, "test_degraded")
+            // The generation booted, and its store root, as its limine.conf entry says (decisions/0114, 0116)
+            supervisor.generation = service_kit.number_of(service_kit.word_after(text, "generation=") or_else "") or_else 0
+            supervisor.boot_root = bundle.from_hex(service_kit.word_after(text, "store_root=") or_else "")
         }
         case None => {}
     }
@@ -588,7 +608,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     // A benchmark (decisions/0112): the time since the kernel's clock started, a boot's to everything started
     log_line.write(supervisor.log, "supervisor: perf: boot_to_healthy %", slop_os.clock_monotonic() or_else 0)
     // Assessed first, which the root task hears before it's told everything has started
-    assess(&supervisor)
+    healthy :: assess(&supervisor)
+    tell_update(&supervisor, healthy)
     tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))
     loop {
         wait_and_handle(&supervisor)
@@ -755,6 +776,9 @@ restart_service :: fn(supervisor: ptr[mut Supervisor], index: usize) {
     else if name == "config" {
         start_config(supervisor, index)
     }
+    else if name == "update" {
+        start_update(supervisor, index)
+    }
     else if name == "storage_manager" {
         if start_storage(supervisor, index) != NOWHERE {
             open_system(supervisor, index)
@@ -822,6 +846,9 @@ open_system :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
                 start_config(supervisor, NOWHERE)
                 read_overrides(supervisor)
             }
+            if supervisor.update_end == NONE {
+                start_update(supervisor, NOWHERE)
+            }
             else {
                 match system_directory(supervisor, "config") {
                     case Some(directory) => _ = config_request(supervisor, .UseDirectory(directory))
@@ -847,7 +874,7 @@ open_system :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
  * degraded. A degraded boot is logged, said to the root task, and its record written to the system volume as
  * boot/degraded, if there's one.
  */
-assess :: fn(supervisor: ptr[mut Supervisor]) {
+assess :: fn(supervisor: ptr[mut Supervisor]) -> bool {
     for i in cast[usize](0)..<supervisor.started_count {
         if i < supervisor.started.count {
             entry :: supervisor.started[i]
@@ -859,7 +886,7 @@ assess :: fn(supervisor: ptr[mut Supervisor]) {
     if supervisor.missing_count == 0 {
         log_line.write(supervisor.log, "supervisor: healthy: every service the system needs is up")
         tell_root(supervisor, .Healthy)
-        return void
+        return true
     }
     record : u8[..]
     defer runtime.array_free(&record)
@@ -887,6 +914,59 @@ assess :: fn(supervisor: ptr[mut Supervisor]) {
         case None => {}
     }
     tell_root(supervisor, .Degraded(cast[u32](supervisor.missing_count)))
+    return false
+}
+
+/*
+ * The update service, when there's an ESP and the bundle store: given the ESP's root, the system volume's updates
+ * directory, a connection to the store, and a listener whose other end the supervisor keeps; into its entry at again,
+ * unless that's NOWHERE.
+ */
+start_update :: fn(supervisor: ptr[mut Supervisor], again: usize) {
+    if supervisor.store_end == NONE || supervisor.storage_slot == NOWHERE {
+        return void
+    }
+    service :: service_named(supervisor, "update") or_return void
+    esp :: files_of_type(supervisor, supervisor.storage_slot, storage_manager.ESP_TYPE) or_return void
+    updates :: system_directory(supervisor, "updates") or_return void
+    // A connection of its own to the store, its one end sent to the store, which takes it without answering
+    store_pair :: os.channel_for[bundle_store.BundleStore](supervisor.block.budget, 0) or_return void
+    connecting := os.Outgoing.{}
+    os.begin[bundle_store.Request](&connecting)^ = .Connect(os.Channel[bundle_store.BundleStore].{end = store_pair.a})
+    if bundle_store.send_request(supervisor.store_end, supervisor.store_port, &connecting) is_some {
+        return void
+    }
+    if supervisor.update_end != NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.update_end))
+        _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.update_port))
+        supervisor.update_end = NONE
+    }
+    pair :: os.channel_for[update_protocol.Update](supervisor.block.budget, 0) or_return void
+    grants := UpdateGrants.{esp = esp, updates = updates, store = os.Channel[bundle_store.BundleStore].{end = store_pair.b},
+        clients = os.Listener[update_protocol.Update].{end = pair.a}}
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
+        update_service.main, grants, options_for(supervisor, service.name)) {
+        case Ok(launched) => {
+            _ = place(supervisor, "update", kept(supervisor, launched), again)
+            supervisor.update_end = pair.b
+            supervisor.update_port = os.port_for(supervisor.block.budget, pair.b) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+        }
+        case Error(error) => {
+            failed(supervisor, service.name, error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        }
+    }
+}
+
+// The boot's assessment told to the update service, if there's one, and its acting on it waited for.
+tell_update :: fn(supervisor: ptr[mut Supervisor], healthy: bool) {
+    if supervisor.update_end == NONE {
+        return void
+    }
+    out := os.Outgoing.{}
+    os.begin[update_protocol.Request](&out)^ = .Booted(update_protocol.Booted.{generation = supervisor.generation, healthy = healthy})
+    into := os.Incoming.{}
+    _ = update_protocol.ask(supervisor.update_end, supervisor.update_port, &out, &into)
 }
 
 // A service the system needs noted missing, unless it's late, or noted already, or there's no room left to note it.
@@ -1854,7 +1934,7 @@ module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory
         else if name == "console" { modules.console } else if name == "disk_check" { modules.disk_check }
         else if name == "hello" { modules.hello } else if name == "clock" { modules.clock }
         else if name == "events" { modules.events } else if name == "bundle_store" { modules.bundle_store }
-        else if name == "config" { modules.config }
+        else if name == "config" { modules.config } else if name == "update" { modules.update }
         else { cast[slop_os.Memory?](null) }
     return found or_else none
 }
@@ -1910,9 +1990,14 @@ stored_hash :: fn(supervisor: ptr[mut Supervisor], name: string, which: usize) -
     if supervisor.store_end == NONE {
         return null
     }
-    root :: match store_request(supervisor, .Root) {
-        case Rooted(hash) => hash
-        case _ => return null
+    // The root the booted generation names, or without one, the store's own
+    root := bundle.Hash.{}
+    match supervisor.boot_root {
+        case Some(given) => root = given
+        case None => match store_request(supervisor, .Root) {
+            case Rooted(hash) => root = hash
+            case _ => return null
+        }
     }
     found := bundle.Hash.{}
     have := false
