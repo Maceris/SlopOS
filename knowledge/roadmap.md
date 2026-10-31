@@ -310,6 +310,11 @@ under `-icount` held to baselines (decided with the owner; AArch64 only, as QEMU
 R4: failed writes remembered by slopfs and the FAT library, reported to every `Sync` after them and refused to reads,
 and the partition server's faulty block connection swept under `robustness=on`. 9c done.
 
+9d planned 2026-10-30 (`decisions/0113`), in five parts: **9d1** generations on the ESP (records, boot-set files by hash,
+`limine.conf` entries); **9d2** dependency kinds, degraded boots and the supervisor's report of healthy; **9d3** the
+update service (staged updates installed, tentative made permanent, rollback, collection; booting a disk twice);
+**9d4** installations with `AppData` and `Config[T]`; **9d5** the recovery generation.
+
 Added by `decisions/0097`: in **9c**, the benchmarks with baselines (*Perf*, below), the memory pressure signal and
 evictable pager pages, and slopfs refusing names with control, bidirectional or invisible characters; in **9d**,
 dependency kinds in `system_config` (required with a deadline, optional, late) with degraded boots instead of hangs,
