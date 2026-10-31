@@ -187,6 +187,20 @@ add_programs :: fn(folder: string) {
         }
         program.libraries = linked
         target :: compiler.add_target(program)
+        // hello's second build, which says so, for the test of generations applied live (decisions/0126)
+        if name == "hello" {
+            next_storage : u8[512]
+            next := text_buffer.make(next_storage)
+            text_buffer.append(&next, compiler.target_setting("programs_output", default = "."))
+            text_buffer.append(&next, "/hello_next.elf")
+            second := program
+            second.name = "hello_next"
+            second.output_path = text_buffer.as_string(&next)
+            settings : compiler.TargetSetting[..]
+            runtime.array_add(&settings, compiler.TargetSetting.{name = "hello_build", value = "next"})
+            second.settings = settings
+            next_target :: compiler.add_target(second)
+        }
     }
 }
 

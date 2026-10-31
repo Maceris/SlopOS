@@ -271,12 +271,21 @@ TESTS = [
         "--expect-line=[user] root task: booted the recovery generation",
         "--expect-line=[user] supervisor: recovery: the boot set, the drivers and the console only",
         "--expect-line=[user] console: serving", HEALTHY_LINE]),
+    # Its command line another word, so it isn't one that changes only services, which is applied live
     ("installs a staged generation, boots it, and makes it permanent once it's healthy", 7, with_before_qemu(BOOT_DISK_ARGUMENTS, [
-        "--stage-generation=test_exit test_services", "--boots=2",
+        "--stage-generation=test_exit test_services next_boot", "--boots=2",
         "--expect-line=[user] update: installed generation 2, tentative",
         "--expect-boot-line=2:[user] root task: booted generation 2",
         "--expect-boot-line=2:[user] root task: the system is healthy",
         "--expect-boot-line=2:[user] update: generation 2 made permanent"])),
+    ("applies a staged generation that changes only a service live, restarting it from its new bundle", 7,
+        with_before_qemu(BOOT_DISK_ARGUMENTS, [
+        "--stage-generation=test_exit test_services", "--stage-next-hello",
+        "--expect-line=[user] update: installed generation 2, tentative",
+        "--expect-line=[user] update: generation 2 changes only services, and is applied live",
+        "--expect-line=[user] supervisor: generation 2 applied live, 1 services started again from their new bundles",
+        "--expect-line=[user] hello: the next build",
+        "--expect-line=[user] update: generation 2 made permanent"])),
     ("rolls a staged generation back when it boots degraded, and boots the one before", 7, with_before_qemu(BOOT_DISK_ARGUMENTS, [
         "--stage-generation=test_exit test_services test_degraded", "--boots=3",
         "--expect-line=[user] update: installed generation 2, tentative",

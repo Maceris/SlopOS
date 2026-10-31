@@ -36,8 +36,17 @@ Request :: union {
     Substitute(SubstituteOf),
 }
 
+// A generation installed that changes only services, applied live (decisions/0126): its number and its store root.
+LiveOf :: struct {
+    generation : u64,
+    store_root : bundle.Hash,
+}
+
 Response :: union {
     Done,
+    // To Booted: a staged generation installed whose kernel, boot set and command line are the booted one's, for the
+    // supervisor to apply live, restarting the services whose bundles changed, then telling Booted of it
+    Live(LiveOf),
     // A generation staged with the policy, by its number: tentative, the default for the next boot
     Staged(u64),
     // A policy whose entries don't all pass the check, or a generation that can't be staged

@@ -8,7 +8,9 @@
  *   removed, so the generation before it is the default again;
  * - an update staged in updates/pending (a generation's record, its kernel and boot set in the bundle store) is
  *   installed: each object read from the store and checked by its hash, the ESP's room checked first, the objects
- *   written as boot/objects/<hex>, its record, tentative, then limine.conf with it first, the default;
+ *   written as boot/objects/<hex>, its record, tentative, then limine.conf with it first, the default. One whose
+ *   kernel, boot set and command line are the booted generation's changes only services, and is answered Live, for the
+ *   supervisor to apply now (decisions/0126);
  * - what isn't kept is collected: the records of all but the generation that booted, any newer one, the newest
  *   permanent one before it, and the recovery generation, and every object none of those names. limine.conf is written
  *   again from what's kept.
@@ -121,7 +123,7 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
         }
         answer := update.Response.Done
         match os.message_of[update.Request](into)^ {
-            case Booted(booted) => booted_as(service, booted)
+            case Booted(booted) => answer = booted_as(service, booted)
             case Substitute(asked) => answer = substitute(service, asked)
         }
         out := os.Outgoing.{}
@@ -131,7 +133,7 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
 }
 
 // A boot's assessment acted on: its generation made permanent or rolled back, a staged update installed, and collection.
-booted_as :: fn(service: ptr[mut Service], booted: update.Booted) {
+booted_as :: fn(service: ptr[mut Service], booted: update.Booted) -> update.Response {
     current := booted.generation
     match read_record(service, booted.generation) {
         case Some(found) => {
@@ -153,34 +155,65 @@ booted_as :: fn(service: ptr[mut Service], booted: update.Booted) {
         }
         case None => {}
     }
-    install(service)
+    installed :: install(service)
     collect(service, current)
+    // One that changes only services applies now
+    match installed {
+        case Some(found) => match read_record(service, booted.generation) {
+            case Some(booted_record) => {
+                running := booted_record
+                staged := found
+                if booted.healthy && same_but_services(&running, &staged) {
+                runtime.log_info("generation % changes only services, and is applied live", staged.number)
+                return .Live(update.LiveOf.{generation = staged.number, store_root = staged.store_root})
+            }
+            }
+            case None => {}
+        }
+        case None => {}
+    }
+    return .Done
+}
+
+// Whether two generations have the same kernel, boot set and command line, so they differ only in their store roots.
+same_but_services :: fn(a: ptr[generations.Generation], b: ptr[generations.Generation]) -> bool {
+    if !bundle.same(a.kernel, b.kernel) || a.file_count != b.file_count || a.kaslr != b.kaslr
+        || generations.line_of(&a.command_line) != generations.line_of(&b.command_line) {
+        return false
+    }
+    for i in cast[usize](0)..<a.files.count {
+        if i < cast[usize](a.file_count) && (generations.text_of(&a.files[i].name) != generations.text_of(&b.files[i].name)
+            || !bundle.same(a.files[i].hash, b.files[i].hash)) {
+            return false
+        }
+    }
+    return true
 }
 
 /*
  * The update staged in updates/pending installed, if there's one, and it's a generation's record whose objects the store
  * has with their hashes, and the ESP has room for them: its objects, then its record, tentative.
  */
-install :: fn(service: ptr[mut Service]) {
-    pending_bytes :: os.read_entire_file_in(service.updates, PENDING) or_return void
+install :: fn(service: ptr[mut Service]) -> generations.Generation? {
+    pending_bytes :: os.read_entire_file_in(service.updates, PENDING) or_return null
     defer runtime.free_array(bit_cast[u8[]](pending_bytes))
     staged := match generations.generation_of(bit_cast[u8[]](pending_bytes)) {
         case Some(found) => found
         case None => {
             runtime.log_warn("updates/pending isn't a generation's record")
-            return void
+            return null
         }
     }
     // The recovery generation is written once, with the system, and never by an update
     if staged.state == generations.STATE_RECOVERY {
         runtime.log_warn("updates/pending is a recovery generation, which an update can't install")
         _ = os.delete_file_in(service.updates, PENDING)
-        return void
+        return null
     }
     if read_record(service, staged.number) is_some {
         runtime.log_warn("generation % is installed already", staged.number)
         _ = os.delete_file_in(service.updates, PENDING)
-        return void
+        return null
     }
     // What the ESP lacks, read from the store and checked first, so nothing's written that doesn't fit
     wanted : bundle.Hash[..]
@@ -200,7 +233,7 @@ install :: fn(service: ptr[mut Service]) {
             case Some(read) => read
             case None => {
                 runtime.log_warn("the store hasn't an object generation % names, whole", staged.number)
-                return void
+                return null
             }
         }
         runtime.array_add(&objects, Object.{bytes = bytes})
@@ -209,23 +242,24 @@ install :: fn(service: ptr[mut Service]) {
     room :: room_of(service) or_else files.Room.{}
     if room.size != 0 && needed > room.free {
         runtime.log_warn("generation % doesn't fit on the ESP: it needs % bytes, which has %", staged.number, needed, room.free)
-        return void
+        return null
     }
     for object, i in objects {
         if i < wanted.count {
             path_storage : u8[128]
             if os.write_entire_file_in(service.esp, generations.object_path(wanted[i], &path_storage), bit_cast[string](object.bytes)) != null {
                 runtime.log_warn("generation %'s objects couldn't be written", staged.number)
-                return void
+                return null
             }
         }
     }
     staged.state = generations.STATE_TENTATIVE
     if !write_record(service, &staged) {
-        return void
+        return null
     }
     _ = os.delete_file_in(service.updates, PENDING)
     runtime.log_info("installed generation %, tentative", staged.number)
+    return staged
 }
 
 /*

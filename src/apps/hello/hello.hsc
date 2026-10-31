@@ -1,5 +1,6 @@
 package hello
 
+import compiler from "base"
 import runtime from "base"
 import os from "std"
 import random from "std"
@@ -21,9 +22,17 @@ import entropy from "../../protocols/entropy"
  * page it's given (decisions/0093). Given a connection to the entropy service, it asks it for random bytes too
  * (decisions/0067, 0101). Given its settings in the config store (decisions/0109), it declares them, writes an override,
  * reads them back merged, and rolls the override back. It ends with 0 if its heap worked.
+ *
+ * Built a second time as hello_next.elf (the build's setting hello_build=next), it says it's the next build first: a
+ * changed bundle for the test of generations applied live (decisions/0126).
  */
+NEXT :: #run compiler.target_setting("hello_build", default = "") == "next"
+
 main :: fn(manager: os.Channel[process_manager.ProcessManager]?, console: os.Channel[connector.Connector]?,
     entropy_service: os.Channel[entropy.Entropy]?, settings: config.Config[HelloSettings]?) -> int {
+    #if NEXT {
+        runtime.log_info("the next build")
+    }
     code :: fill_heap()
     // Two draws of 64 bits alike would be one chance in 2^64
     random_works :: random.next_u64() != random.next_u64()

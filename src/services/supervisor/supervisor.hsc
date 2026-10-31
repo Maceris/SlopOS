@@ -649,7 +649,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     log_line.write(supervisor.log, "supervisor: perf: boot_to_healthy %", slop_os.clock_monotonic() or_else 0)
     // Assessed first, which the root task hears before it's told everything has started
     healthy :: assess(&supervisor)
-    tell_update(&supervisor, healthy)
+    match tell_update(&supervisor, healthy) {
+        case Live(live) => apply_live(&supervisor, live)
+        case _ => {}
+    }
     // The substitution policy the config store asks for, staged as the next generation if it's new (decisions/0125)
     if healthy {
         _ = ask_substitute(&supervisor, read_substitutions(&supervisor))
@@ -1299,15 +1302,70 @@ check_installations :: fn(supervisor: ptr[mut Supervisor]) {
         if reinstalled { "and run" } else { "not run" })
 }
 
-// The boot's assessment told to the update service, if there's one, and its acting on it waited for.
-tell_update :: fn(supervisor: ptr[mut Supervisor], healthy: bool) {
+// The boot's assessment told to the update service, if there's one, and its acting on it waited for: its answer.
+tell_update :: fn(supervisor: ptr[mut Supervisor], healthy: bool) -> update_protocol.Response {
     if supervisor.update_end == NONE {
-        return void
+        return .Unsupported
     }
     out := os.Outgoing.{}
     os.begin[update_protocol.Request](&out)^ = .Booted(update_protocol.Booted.{generation = supervisor.generation, healthy = healthy})
     into := os.Incoming.{}
-    _ = update_protocol.ask(supervisor.update_end, supervisor.update_port, &out, &into)
+    return update_protocol.ask(supervisor.update_end, supervisor.update_port, &out, &into)
+}
+
+/*
+ * A generation that changes only services applied live (decisions/0123, 0126): its store root the supervisor's from
+ * now on, and each running service from the store whose bundle's program changed started again from it, between its
+ * clients' requests, which redial through their connectors. Then the update service is told it as booted, healthy if
+ * every one of them came back, so it's made permanent, or rolled back for the next boot.
+ */
+apply_live :: fn(supervisor: ptr[mut Supervisor], live: update_protocol.LiveOf) {
+    old_root :: supervisor.boot_root
+    restarted := cast[u64](0)
+    healthy := true
+    for entry, i in supervisor.started {
+        if i >= supervisor.started_count || !entry.running || entry.driver {
+            continue
+        }
+        service :: service_named(supervisor, entry.name) or_continue
+        if service.boot_set {
+            continue
+        }
+        name :: program_name(service.module)
+        supervisor.boot_root = old_root
+        before :: stored_hash(supervisor, name, 0)
+        supervisor.boot_root = live.store_root
+        after :: stored_hash(supervisor, name, 0)
+        if (before is_none) || (after is_none) || bundle.same(before or_else bundle.Hash.{}, after or_else bundle.Hash.{}) {
+            continue
+        }
+        // Read again from the new bundle when it's started again
+        place :: system_records.index_of(supervisor.records, service.name)
+        if place < supervisor.loaded.count {
+            match supervisor.loaded[place].module {
+                case Some(module) => _ = slop_os.handle_close(cast[slop_os.Handle](module))
+                case None => {}
+            }
+            supervisor.loaded[place] = Loaded.{}
+        }
+        healthy = kill_and_wait(supervisor, entry.name, "a live update") && healthy
+        restarted += 1
+    }
+    supervisor.boot_root = live.store_root
+    supervisor.generation = live.generation
+    log_line.write(supervisor.log, "supervisor: generation % applied live, % services started again from their new bundles",
+        live.generation, restarted)
+    _ = tell_update(supervisor, healthy)
+}
+
+// A module's name without its extension, as the store's boot root names its bundle.
+program_name :: fn(module: string) -> string {
+    for character, i in module {
+        if character == '.' {
+            return module[0..<i]
+        }
+    }
+    return module
 }
 
 // A service the system needs noted missing, unless it's late, or noted already, or there's no room left to note it.

@@ -536,7 +536,8 @@ SEALED_PASSPHRASE = "slopos test passphrase"
 
 
 def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path, image_builder: Path, folder: Path,
-                   command_line: str, kaslr: bool, mark: str, staged: str | None = None, boot_recovery: bool = False) -> None:
+                   command_line: str, kaslr: bool, mark: str, staged: str | None = None, boot_recovery: bool = False,
+                   staged_next: Path | None = None) -> None:
     """
     A disk that boots kernel through Limine, from BIOS or UEFI, made by the image builder: Limine, the kernel and the
     programs on its EFI system partition, as make_image puts them on the ISO, but only the boot set loaded by Limine,
@@ -578,6 +579,17 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
     # Generation 2 staged, its objects in the store and its record in the system volume's updates directory
     if staged is not None:
         (system / "updates").mkdir(parents=True, exist_ok=True)
+        # With hello's next build as hello's bundle: a store root that changes only a service (decisions/0126)
+        if staged_next is not None:
+            renamed = folder / "next_programs"
+            renamed.mkdir(parents=True, exist_ok=True)
+            shutil.copy(staged_next, renamed / "hello.elf")
+            shutil.copy(staged_next.with_suffix(".manifest"), renamed / "hello.manifest")
+            stored = subprocess.run([str(store_builder), str(system / "store")] + [
+                str(renamed / "hello.elf") if program.stem == "hello" else str(program) for program in programs
+                if program.stem not in BOOT_SET and program.suffix == ".elf"], capture_output=True, text=True)
+            if stored.returncode != 0:
+                sys.exit(f"boot.py: the store builder failed on the next build:\n{stored.stdout}{stored.stderr}")
         staging = subprocess.run([str(generation_builder), "--stage", str(system), str(system / "store"), "2", "yes" if kaslr else "no",
                                   staged, str(kernel)] + [str(program) for program in boot_set], capture_output=True, text=True)
         if staging.returncode != 0:
@@ -657,6 +669,9 @@ def main() -> int:
     parser.add_argument("--stage-generation",
                         help="with --boot-disk: stage generation 2 on the system volume, the same programs with this command line, "
                              "for the update service to install (decisions/0116)")
+    parser.add_argument("--stage-next-hello", action="store_true",
+                        help="with --stage-generation: generation 2's store root has hello's next build (hello_next.elf) as hello's "
+                             "bundle, so it changes only a service, which the supervisor applies live (decisions/0126)")
     parser.add_argument("qemu_arguments", nargs="*", help="more arguments for QEMU, after --")
     arguments = parser.parse_args()
 
@@ -681,7 +696,9 @@ def main() -> int:
         if programs_folder is None and arguments.kernel is None and arguments.package is None:
             programs_folder = folder / "programs"
             build_slopos_programs(programs_folder, arguments.arch)
-        programs = sorted(programs_folder.glob("*.elf"), key=lambda path: (path.name != "root_task.elf", path.name))             if programs_folder is not None else []
+        # hello_next.elf is only ever a staged generation's hello (--stage-next-hello)
+        programs = sorted([path for path in programs_folder.glob("*.elf") if path.name != "hello_next.elf"],
+                          key=lambda path: (path.name != "root_task.elf", path.name))             if programs_folder is not None else []
         # The typed libraries the programs import, modules like them (decisions/0120)
         if programs_folder is not None:
             programs += sorted(programs_folder.glob("*.library"))
@@ -704,7 +721,8 @@ def main() -> int:
                 build_slopos_tools(folder / "tools")
                 image_builder = next((folder / "tools").glob("image_builder*"))
             make_boot_disk(disk, kernel.resolve(), [program.resolve() for program in programs], limine, image_builder.resolve(), folder,
-                           command_line, not arguments.no_kaslr, arguments.disk or "", arguments.stage_generation, arguments.boot_recovery)
+                           command_line, not arguments.no_kaslr, arguments.disk or "", arguments.stage_generation, arguments.boot_recovery,
+                           (programs_folder / "hello_next.elf").resolve() if arguments.stage_next_hello and programs_folder is not None else None)
             extra += ["-drive", f"file={disk},if=none,id=disk,format=raw",
                       "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on,bootindex=0"]
         elif arguments.disk is not None:
