@@ -24,6 +24,7 @@ package root_task
 import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
+import strings from "std"
 import text_buffer from "std"
 import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
@@ -44,6 +45,8 @@ import test_kit from "../../test_kit"
 import test_syscalls from "../../tests/test_syscalls"
 
 MAX_STARTED :: 8
+// The most typed libraries a test is given
+MAX_TEST_LIBRARIES :: 4
 // The port's key for the supervisor's reports; a started service's is its index.
 SUPERVISOR_KEY : u64 : 1000
 
@@ -200,7 +203,8 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     match service_kit.word_after(words, "test_program=") {
         case Some(name) => {
             seconds :: service_kit.number_of(service_kit.word_after(words, "test_deadline=") or_else "") or_else 0
-            return run_test(&root, name, platform, cpu_budget, seconds)
+            // test_changed_library: each library's changed build given in its place, as a substitution would (decisions/0120)
+            return run_test(&root, name, platform, cpu_budget, seconds, service_kit.has_word(words, "test_changed_library"))
         }
         case None => {}
     }
@@ -402,7 +406,8 @@ start_with_loader :: fn(root: ptr[mut Root], name: string, grants: process_build
  * The test program name, launched through the manager with TestGrants, and watched until it ends: 0 if it
  * ended with 0, and its budget, once its grace period has passed, is back to nothing.
  */
-run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform, cpu_budget: slop_os.CpuBudget, seconds: u64) -> int {
+run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform, cpu_budget: slop_os.CpuBudget, seconds: u64,
+    changed_libraries: bool) -> int {
     block :: root.block
     module_storage : u8[slop_os.GRANT_LABEL_SIZE]
     module_name := text_buffer.make(module_storage)
@@ -452,9 +457,42 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform, cp
     manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
     // Every test's entry has the same type, test_syscalls.main's (system_config checks it); its end watched from before it starts
     port :: slop_os.port_create(block.budget) or_return 23
+    // Every typed library in the boot set, for the tests that import one (decisions/0120): the program's runtime binds
+    // those it imports from them, and ignores the rest. A library's changed build, <name>_changed.library, is given
+    // only in its place.
+    library_storage : os.LaunchLibrary[MAX_TEST_LIBRARIES]
+    library_count := cast[usize](0)
+    for &grant in slop_os.grants_of(block) {
+        label :: slop_os.label_of(grant)
+        if grant.kind != .Memory || !strings.starts_with(label, "module:") || !strings.ends_with(label, ".library")
+            || strings.ends_with(label, "_changed.library") || library_count >= library_storage.count {
+            continue
+        }
+        given := grant.handle
+        if changed_libraries {
+            changed_storage : u8[slop_os.GRANT_LABEL_SIZE]
+            changed := text_buffer.make(changed_storage)
+            stem :: label.count - ".library".count
+            text_buffer.append(&changed, if stem <= label.count { label[0..<stem] } else { label })
+            text_buffer.append(&changed, "_changed.library")
+            given = slop_os.find_grant(block, text_buffer.as_string(&changed), .Memory) or_else given
+        }
+        // Its text is mapped to run, shared
+        library_rights :: cast[slop_os.Rights](cast[u32](module_rights) | cast[u32](slop_os.RIGHT_MEMORY_EXECUTE))
+        match slop_os.handle_duplicate(given, library_rights) {
+            case Ok(copy) => {
+                start :: "module:".count
+                file :: if start <= label.count { label[start..<label.count] } else { label }
+                library_storage[library_count] = os.LaunchLibrary.{name = file, memory = cast[slop_os.Memory](copy)}
+                library_count += 1
+            }
+            case Error(error) => {}
+        }
+    }
+    libraries :: if library_count <= library_storage.count { library_storage[0..<library_count] } else { library_storage[0..<0] }
     launched := os.Launched.{}
     match os.launch(manager, root.manager_port, name, cast[slop_os.Memory](module), TEST_BUDGET, test_syscalls.main, grants,
-        os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = 0}}) {
+        os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = 0}, libraries = libraries}) {
         case Ok(made) => launched = made
         case Error(error) => {
             log_line.write(root.log, "root task: % didn't start: %", name, error)

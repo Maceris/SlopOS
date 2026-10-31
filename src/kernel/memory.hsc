@@ -396,7 +396,9 @@ unlink_window :: fn(parent: ptr[mut Memory], window: ptr[mut Memory]) {
 
 /*
  * A boot module's memory (root_task.hsc), read-only: the size bytes of frames at physical Limine loaded it into,
- * owned by owner and charged to budget for its slot. Its frames go to the frame allocator once it's released.
+ * owned by owner and charged to budget for its slot. Its frames go to the frame allocator once it's released. It may
+ * be mapped to run, never written: a typed library's text is mapped from it, shared (decisions/0120), as a handle with
+ * RIGHT_MEMORY_EXECUTE allows.
  */
 create_module_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, physical: u64, size: u64) -> Result[ptr[mut Memory], ObjectError] {
     object :: new_object(kernel, .Memory, budget, 0)?
@@ -404,7 +406,7 @@ create_module_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, phy
     memory.size = size
     memory.physical = physical
     memory.cache = .WriteBack
-    memory.allowed = cast[u32](slop_os.PROTECTION_READ)
+    memory.allowed = cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_EXECUTE)
     memory.boot_module = true
     match adopt(owner, object) {
         case Ok => {}

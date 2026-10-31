@@ -126,7 +126,7 @@ def with_before_qemu(arguments: list[str], more: list[str]) -> list[str]:
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 47 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 50 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 3 budgets and the default split off the root's, 800000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -354,6 +354,11 @@ TESTS = [
         qemu=["-device", "edu,dma_mask=0xffffffffff"]),
     program_test("sends and checks messages with generated protocol code", "test_protocols",
         "messages went through with their handles and data, and broken, unknown and mistyped ones were refused"),
+    program_test("binds a typed library from its grant, and calls its exports", "test_libraries",
+        "bound greeting, and called its exports"),
+    ("refuses a typed library whose export's type changed", 7, [WITH_PROGRAMS, "--command-line=test_exit test_changed_library test_program=test_libraries",
+        "--expect-line=[user] root task: test_libraries ended with 1, and its budget is back to nothing",
+        "--expect-line=[info] objects left: only the kernel's own", "--", "-smp", "2"]),
     program_test("controls a process from a debugger in user mode", "test_control",
         "a debugger skipped and changed calls, fixed a fault, read and wrote memory, suspended, resumed and started threads, "
         "gave a handle and killed its target; an exit's code came with its end"),

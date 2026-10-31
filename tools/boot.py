@@ -567,7 +567,7 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
         sys.exit(f"boot.py: the store builder failed:\n{stored.stdout}{stored.stderr}")
     # Generation 1 (decisions/0113): the kernel and the boot set as objects named by their hashes, its record, and
     # limine.conf's entry for it, the root task first
-    boot_set = [program for program in programs if program.stem in BOOT_SET or program.name == SYSTEM_RECORDS]
+    boot_set = [program for program in programs if program.stem in BOOT_SET or program.name == SYSTEM_RECORDS or program.suffix == ".library"]
     generation_builder = next(image_builder.parent.glob("generation_builder*"))
     # The recovery generation beside it, of the same boot set (decisions/0118), its entry the one booted if asked
     flags = ["--recovery"] + (["--boot-recovery"] if boot_recovery else [])
@@ -682,6 +682,9 @@ def main() -> int:
             programs_folder = folder / "programs"
             build_slopos_programs(programs_folder, arguments.arch)
         programs = sorted(programs_folder.glob("*.elf"), key=lambda path: (path.name != "root_task.elf", path.name))             if programs_folder is not None else []
+        # The typed libraries the programs import, modules like them (decisions/0120)
+        if programs_folder is not None:
+            programs += sorted(programs_folder.glob("*.library"))
         # The system configuration as data, which the build writes beside the root task, a module of the boot set (decisions/0110)
         if programs_folder is not None and (programs_folder / SYSTEM_RECORDS).exists():
             programs.append(programs_folder / SYSTEM_RECORDS)

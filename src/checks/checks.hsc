@@ -105,6 +105,11 @@ tier_name :: fn(tier: int) -> string {
 
 // Whether the package at path is std's: something in the program imports it from "std".
 is_std :: fn(program: ptr[compiler.ProgramInfo], path: string) -> bool {
+    // What the compiler loads itself, as std/schema into a build that makes or calls a typed library, has no edge
+    // importing it: it's std's by where it is, Hemera's std folder
+    if contains(path, "/std/") || contains(path, "\\std\\") {
+        return true
+    }
     for &package in program.packages {
         for &edge in package.imports {
             if edge.path == path && (edge.from == "std" || starts_with(edge.from, "std/")) {

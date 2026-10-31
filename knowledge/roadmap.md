@@ -327,7 +327,8 @@ done.
 
 9e planned 2026-10-31 (`decisions/0119`), in three parts: **9e1** libraries on SlopOS (built, bound by the program's
 runtime from grants, text shared); **9e2** `service_kit` as a library every service binds; **9e3** substitution by the
-config store's policy, checked against interface records.
+config store's policy, checked against interface records. 9e1 done 2026-10-31 (`decisions/0120`): libraries built for
+SlopOS, bound by `base`'s runtime from their grants, text mapped from boot-module memory, a changed export refused.
 
 Added by `decisions/0097`: in **9c**, the benchmarks with baselines (*Perf*, below), the memory pressure signal and
 evictable pager pages, and slopfs refusing names with control, bidirectional or invisible characters; in **9d**,

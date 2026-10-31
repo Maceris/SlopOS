@@ -35,6 +35,7 @@ build :: fn() {
         add_kernel()
     }
     if targets == "all" || targets == "programs" {
+        add_libraries("../libraries")
         add_programs("../apps")
         add_programs("../services")
         add_programs("../drivers")
@@ -175,7 +176,54 @@ add_programs :: fn(folder: string) {
         }
         program.target_options.relocation_model = .Default
         program.target_options.startup_code = true
+        // Built apart from the program, which holds its output's storage
+        linked : compiler.LinkedLibrary[..]
+        for i in 0..<PROGRAM_LIBRARIES.count {
+            if PROGRAM_LIBRARIES[i].program == name {
+                runtime.array_add(&linked, compiler.LinkedLibrary.{target = PROGRAM_LIBRARIES[i].library})
+            }
+        }
+        program.libraries = linked
         target :: compiler.add_target(program)
+    }
+}
+
+// A program that calls a library (decisions/0120), by their names
+ProgramLibrary :: struct {
+    program : string,
+    library : string,
+}
+
+PROGRAM_LIBRARIES :: ProgramLibrary.[ProgramLibrary.{program = "test_libraries", library = "greeting"}]
+
+/*
+ * Every folder in folder, as a SlopOS typed library named after it (decisions/0119, 0120), <name>.library beside the
+ * programs: its #export functions its interface, position-independent, for the programs' architecture, which a
+ * program's runtime binds from the grant it's given (library:<name>.library).
+ */
+add_libraries :: fn(folder: string) {
+    for subfolder in compiler.subfolders(folder) {
+        name :: last_part(subfolder)
+        output_storage : u8[512]
+        output := text_buffer.make(output_storage)
+        text_buffer.append(&output, compiler.target_setting("programs_output", default = "."))
+        text_buffer.append(&output, "/")
+        text_buffer.append(&output, name)
+        text_buffer.append(&output, ".library")
+        library := compiler.command_line_options()
+        library.name = name
+        library.root = subfolder
+        library.output_path = text_buffer.as_string(&output)
+        library.target_options.os = .SlopOS
+        library.target_options.architecture = .x86_64
+        library.target_options.cpu = "x86-64-v3"
+        if compiler.target_setting("arch", default = "x86_64") == "aarch64" {
+            library.target_options.architecture = .arm64
+            library.target_options.cpu = ""
+        }
+        library.target_options.relocation_model = .Default
+        library.target_options.output_type = .DynamicLibrary
+        target :: compiler.add_target(library)
     }
 }
 
