@@ -2,7 +2,9 @@
  * The FAT package's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the
  * number of the first check that failed. A volume formatted in a buffer standing in for a disk is mounted; files and
  * directories are made with short and long names, written across clusters, read back, resized, renamed and removed;
- * a buffer that isn't FAT isn't mounted; and the volume, damaged many ways, is used without crashing (fuzz_test.hsc).
+ * a buffer that isn't FAT isn't mounted; a write the disk fails is remembered, its sectors refused to reads until
+ * they're written again and the volume failed for good (decisions/0112); and the volume, damaged many ways, is used
+ * without crashing (fuzz_test.hsc).
  */
 package fat_test
 
@@ -22,6 +24,8 @@ Image :: struct {
     undoing : bool,
     undo : Undo[..],
     saved : u8[..],
+    // Writes fail while it's set, writing nothing
+    failing : bool,
 }
 
 // A sector's bytes from before a round wrote it, at `at` in saved.
@@ -182,7 +186,57 @@ checks :: fn() -> int {
     if (fat.free_clusters(&remounted) or_else 0) != free_before {
         return 47
     }
+    failed :: check_failed_writes(&image, device)
+    if failed != 0 {
+        return failed
+    }
     return check_fuzz(&image, device)
+}
+
+/*
+ * A write the disk fails (decisions/0112): refused, the volume failed from then on, and what it was to change refused
+ * to reads rather than given as it was, while other files read; written whole again, it reads again, the volume still
+ * failed. A volume mounted afresh starts whole.
+ */
+check_failed_writes :: fn(image: ptr[mut Image], device: fat.Device) -> int {
+    volume := fat.mount(device) or_return 60
+    root :: fat.root_of(&volume)
+    kept := fat.create(&volume, root, "kept.txt", false) or_return 61
+    lost := fat.create(&volume, root, "lost.txt", false) or_return 61
+    if !written(&volume, &kept, 0, "kept") || !written(&volume, &lost, 0, "before") || volume.failed {
+        return 62
+    }
+    image.failing = true
+    if written(&volume, &lost, 0, "after!") || !volume.failed {
+        image.failing = false
+        return 63
+    }
+    image.failing = false
+    // Neither the old bytes nor the new: refused
+    buffer : u8[16]
+    if fat.read(&volume, &lost, 0, buffer) is_ok {
+        return 64
+    }
+    if read_back(&volume, &kept) != "kept" {
+        return 65
+    }
+    // Part of it can't be written, which would need what's there; written whole again, it reads, and the volume stays
+    // failed, so every Sync after the failure fails
+    if written(&volume, &lost, 0, "again!") {
+        return 66
+    }
+    whole : u8[512]
+    for i in 0..<whole.count {
+        whole[i] = cast[u8]('w')
+    }
+    if (fat.write(&volume, &lost, 0, whole) or_else 0) != 512 || !(read_back(&volume, &lost) == "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww") || !volume.failed {
+        return 69
+    }
+    remounted := fat.mount(device) or_return 67
+    if remounted.failed {
+        return 68
+    }
+    return 0
 }
 
 done :: fn(result: Result[void, fat.FatError]) -> bool {
@@ -245,6 +299,9 @@ write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool
     start :: first * fat.SECTOR_BYTES
     bytes :: count * fat.SECTOR_BYTES
     if start + bytes > cast[u64](image.bytes.count) || bytes > cast[u64](from.count) {
+        return false
+    }
+    if image.failing {
         return false
     }
     if image.undoing {

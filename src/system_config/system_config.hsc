@@ -50,6 +50,7 @@ import test_cpu_budgets from "../tests/test_cpu_budgets"
 import test_io_ports from "../tests/test_io_ports"
 import test_pager from "../tests/test_pager"
 import test_exits from "../tests/test_exits"
+import test_perf from "../tests/test_perf"
 import test_budgets from "../tests/test_budgets"
 import test_affinity from "../tests/test_affinity"
 import test_protocols from "../tests/test_protocols"
@@ -203,7 +204,7 @@ SERVICES :: Service.[
  */
 TEST_ENTRIES :: type.[type_of(test_channels.main), type_of(test_control.main), type_of(test_devices.main), type_of(test_memory.main),
     type_of(test_msi_dma.main), type_of(test_ports.main), type_of(test_protocols.main), type_of(test_syscalls.main), type_of(test_threads.main),
-    type_of(test_cpu_budgets.main), type_of(test_io_ports.main), type_of(test_pager.main), type_of(test_exits.main), type_of(test_budgets.main),
+    type_of(test_cpu_budgets.main), type_of(test_io_ports.main), type_of(test_pager.main), type_of(test_exits.main), type_of(test_perf.main), type_of(test_budgets.main),
     type_of(test_affinity.main)]
 
 #assert same_test_entries()

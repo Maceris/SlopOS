@@ -1,0 +1,12 @@
+{
+    "aarch64": {
+        "boot_to_healthy": 16374798665,
+        "file_create_sync": 441268827,
+        "ipc_round_trip": 33573,
+        "page_fault": 8881,
+        "process_create": 807348,
+        "program_start": 41376970,
+        "thread_create": 53302
+    },
+    "x86_64": {}
+}

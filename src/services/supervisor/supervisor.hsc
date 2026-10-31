@@ -553,6 +553,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         restart_services(&supervisor, storage_slot)
     }
     log_line.write(supervisor.log, "supervisor: started % services", supervisor.started_count)
+    // A benchmark (decisions/0112): the time since the kernel's clock started, a boot's to everything started
+    log_line.write(supervisor.log, "supervisor: perf: boot_to_healthy %", slop_os.clock_monotonic() or_else 0)
     tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))
     loop {
         wait_and_handle(&supervisor)
@@ -1986,8 +1988,15 @@ start_hello :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     grants.manager = process_manager.connect(supervisor.manager.end, supervisor.manager_port, supervisor.block.budget)
     grants.entropy_service = entropy_connection(supervisor)
     grants.settings = config_for[hello.HelloSettings](supervisor, "hello", "settings")
+    // A benchmark (decisions/0112), the first time: a program's start, from the bundle store to its process loaded
+    started :: slop_os.clock_monotonic() or_else 0
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "hello"), service.budget, hello.main, grants, options_for(supervisor, service.name)) {
-        case Ok(launched) => _ = place(supervisor, "hello", kept(supervisor, launched), again)
+        case Ok(launched) => {
+            if again == NOWHERE {
+                log_line.write(supervisor.log, "supervisor: perf: program_start %", (slop_os.clock_monotonic() or_else 0) - started)
+            }
+            _ = place(supervisor, "hello", kept(supervisor, launched), again)
+        }
         case Error(error) => failed(supervisor, service.name, error)
     }
 }
@@ -2027,7 +2036,9 @@ start_storage :: fn(supervisor: ptr[mut Supervisor], again: usize) -> usize {
         disk1 = disks[1], disk2 = disks[2], disk3 = disks[3], clients = os.Listener[storage.Storage].{end = pair.a}}
     match supervisor.command_line {
         case Some(text) => {
-            text_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+            // To duplicate too, for the partition servers it starts (decisions/0112)
+            text_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER)
+                | cast[u32](slop_os.RIGHT_DUPLICATE))
             match slop_os.handle_duplicate(cast[slop_os.Handle](text), text_rights) {
                 case Ok(copy) => grants.command_line = cast[slop_os.Memory](copy)
                 case Error(error) => {}

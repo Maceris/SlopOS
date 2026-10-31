@@ -11,6 +11,10 @@ import slopfs from ".."
  * each write torn halfway. Every one must mount, check out whole, take another commit, and hold the state after the
  * last acknowledged commit, or the one being made: a prefix of what was acknowledged (decisions/0085). A snapshot is
  * taken partway and deleted later, so its record and the dead list are in the commits checked too. Checks from 500.
+ *
+ * Failed writes beside torn ones (decisions/0096's R4, 0112): a write the disk refuses is refused, the chunk it was for
+ * refused to reads rather than given as it was, while other files read; every commit after it fails, not only the
+ * first; and the disk, mounted again, holds the last acknowledged commit. Checks from 560.
  */
 
 CRASH_BLOCKS : u64 : 1024
@@ -365,3 +369,57 @@ check_image :: fn(device: ptr[slopfs.Device], acknowledged: Acknowledged[], dura
     }
     return 0
 }
+
+// The data a failed write is tried with: big enough to be written as blocks, not inline in its record
+FAILED_BYTES :: 8192
+
+check_failed_writes :: fn(sealed: bool) -> int {
+    device :: new_device_of(CRASH_BLOCKS) or_return 560
+    defer free_device(device)
+    disk :: cast[ptr[mut Disk]](device.context)
+    id : u8[16]
+    for i in 0..<id.count {
+        id[i] = cast[u8](0xd0 + i)
+    }
+    slopfs.format(device, id) or_return 561
+    container :: slopfs.mount(device) or_return 562
+    defer slopfs.unmount(container)
+    volume := create_test_volume(container, "failing", sealed) or_return 563
+    data := runtime.new(Data)
+    defer runtime.free(data)
+    fill(data.bytes, 1, FAILED_BYTES)
+    kept :: slopfs.create(volume, slopfs.ROOT_OBJECT, "kept", .File) or_return 564
+    lost :: slopfs.create(volume, slopfs.ROOT_OBJECT, "lost", .File) or_return 564
+    if (slopfs.write(volume, kept, 0, data.bytes[0..<FAILED_BYTES]) is_error) || (slopfs.write(volume, lost, 0, data.bytes[0..<FAILED_BYTES]) is_error)
+        || commit_failed(container) {
+        return 565
+    }
+    acknowledged :: state_digest(volume) or_return 566
+    // The disk refuses the next write: refused, and the chunk it was for refused to reads, the other file's read
+    fill(data.bytes, 2, FAILED_BYTES)
+    disk.read_only = true
+    refused :: slopfs.write(volume, lost, 0, data.bytes[0..<FAILED_BYTES]) is_error
+    disk.read_only = false
+    if !refused {
+        return 567
+    }
+    if slopfs.read(volume, lost, 0, data.bytes[0..<FAILED_BYTES]) is_ok {
+        return 568
+    }
+    if slopfs.read(volume, kept, 0, data.bytes[0..<FAILED_BYTES]) is_error {
+        return 569
+    }
+    // Every commit after it fails, the second as the first
+    if (slopfs.commit(container) is_ok) || (slopfs.commit(container) is_ok) {
+        return 570
+    }
+    // Mounted again, the disk holds the last acknowledged commit
+    again :: slopfs.mount(device) or_return 571
+    defer slopfs.unmount(again)
+    reopened :: open_test_volume(again, sealed) or_return 572
+    if (state_digest(reopened) or_return 573) != acknowledged {
+        return 574
+    }
+    return 0
+}
+

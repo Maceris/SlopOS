@@ -9,6 +9,11 @@
  * Writes are checked against the partition's blocks and moved by its first, and one past its end is answered
  * OutOfRange without reaching the driver; Describe is answered with the partition's size; everything the driver
  * answers goes back to the client as it is.
+ *
+ * Built with robustness=on (decisions/0096's R4, 0112), it's a faulty block connection when the kernel's command line,
+ * which it's given, says faulty_block=<read|write|tear>:<n>: the nth read or write through its narrowed connections fails
+ * as a device's would, DeviceError, without reaching the disk, or for tear, with only its first half written. Without
+ * robustness=on, none of that is compiled in.
  */
 package partition_server
 
@@ -19,6 +24,7 @@ import gpt from "../../gpt"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
 import partitions from "../../protocols/partitions"
+import robustness from "../../robustness"
 import service_kit from "../../service_kit"
 
 // Narrowed connections, at most; each is bound to the port twice, its client from CLIENT_KEY and the driver from DRIVER_KEY
@@ -34,6 +40,24 @@ Narrowed :: struct {
     first : u64,
     count : u64,
     info : block.Info,
+    // A torn write's tag, whose answer goes back as a failure, while torn
+    torn : bool,
+    torn_tag : u64,
+}
+
+// What faulty_block asks for (robustness=on only): which request fails, and how, and the reads and writes so far.
+FaultyBlock :: struct {
+    kind : FaultKind,
+    nth : u64,
+    reads : u64,
+    writes : u64,
+}
+
+FaultKind :: enum {
+    None,
+    Read,
+    Write,
+    Tear,
 }
 
 Server :: struct {
@@ -49,9 +73,11 @@ Server :: struct {
     clients : service_kit.Clients,
     narrowed : Narrowed[MAX_NARROWED],
     narrowed_count : usize,
+    faulty : FaultyBlock,
 }
 
-main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Listener[partitions.Partitions]) -> int {
+main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Listener[partitions.Partitions], command_line: slop_os.Memory?)
+    -> int {
     startup :: slop_os.startup_block()
     // Its state; without the memory for it, it ends with 99 (decisions/0104)
     server_made, server_error :: runtime.new_aligned(Server, align_of(Server))
@@ -63,6 +89,12 @@ main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Li
     server.disk = disk.end
     server.disk_port = os.port_for(startup.budget, disk.end) or_return 1
     server.port = slop_os.port_create(startup.budget) or_return 1
+    #if robustness.ON {
+        match command_line {
+            case Some(memory) => server.faulty = faulty_of(service_kit.word_after(service_kit.text_of(startup, memory) or_else "", "faulty_block=") or_else "")
+            case None => {}
+        }
+    }
 
     // The disk, its buffer, and its table
     info := block.Info.{}
@@ -311,6 +343,10 @@ serve_narrowed :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inc
                     answer(narrowed.client, server.port, .Finished(block.Completion.{tag = transfer.tag, status = .OutOfRange}))
                     continue
                 }
+                if faulty_read(server) {
+                    answer(narrowed.client, server.port, .Finished(block.Completion.{tag = transfer.tag, status = .DeviceError}))
+                    continue
+                }
                 moved := transfer
                 moved.first += narrowed.first
                 forwarded = .Read(moved)
@@ -321,6 +357,19 @@ serve_narrowed :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inc
                     continue
                 }
                 moved := transfer
+                match faulty_write(server) {
+                    case .Write => {
+                        answer(narrowed.client, server.port, .Finished(block.Completion.{tag = transfer.tag, status = .DeviceError}))
+                        continue
+                    }
+                    // Its first half written, and its answer a failure
+                    case .Tear => {
+                        moved.count = if transfer.count > 1 { transfer.count / 2 } else { transfer.count }
+                        narrowed.torn = true
+                        narrowed.torn_tag = transfer.tag
+                    }
+                    case _ => {}
+                }
                 moved.first += narrowed.first
                 forwarded = .Write(moved)
             }
@@ -363,8 +412,57 @@ pass_back :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
             }
             case _ => continue
         }
-        answer(narrowed.client, server.port, os.message_of[block.Response](into)^)
+        response := os.message_of[block.Response](into)^
+        match response {
+            case Finished(completion) => if narrowed.torn && completion.tag == narrowed.torn_tag {
+                narrowed.torn = false
+                response = .Finished(block.Completion.{tag = completion.tag, status = .DeviceError})
+            }
+            case _ => {}
+        }
+        answer(narrowed.client, server.port, response)
     }
+}
+
+// faulty_block's value: read:<n>, write:<n> or tear:<n>, n from 1; nothing fails for anything else.
+faulty_of :: fn(text: string) -> FaultyBlock {
+    for kind in FaultKind.[.Read, .Write, .Tear] {
+        prefix :: prefix_of(kind)
+        if text.count > prefix.count && text[0..<prefix.count] == prefix {
+            nth :: robustness.number_of(text[prefix.count..<text.count]) or_return FaultyBlock.{}
+            return FaultyBlock.{kind = kind, nth = nth}
+        }
+    }
+    return FaultyBlock.{}
+}
+
+prefix_of :: fn(kind: FaultKind) -> string {
+    return if kind == .Read { "read:" } else if kind == .Write { "write:" } else { "tear:" }
+}
+
+// Whether this read is the one faulty_block fails.
+faulty_read :: fn(server: ptr[mut Server]) -> bool {
+    #if robustness.ON {
+        server.faulty.reads += 1
+        if server.faulty.kind == .Read && server.faulty.reads == server.faulty.nth {
+            log_line.write(server.log, "partition_server: faulty_block: failed read %", server.faulty.nth)
+            return true
+        }
+    }
+    return false
+}
+
+// How this write fails, if it's the one faulty_block fails: Write, Tear, or None.
+faulty_write :: fn(server: ptr[mut Server]) -> FaultKind {
+    #if robustness.ON {
+        server.faulty.writes += 1
+        if (server.faulty.kind == .Write || server.faulty.kind == .Tear) && server.faulty.writes == server.faulty.nth {
+            log_line.write(server.log, "partition_server: faulty_block: % write %", if server.faulty.kind == .Tear { "tore" } else { "failed" },
+                server.faulty.nth)
+            return server.faulty.kind
+        }
+    }
+    return .None
 }
 
 // Whether a transfer's blocks are all the partition's.

@@ -83,10 +83,12 @@ check_system :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], esp: os.Ch
         }
         case None => {}
     }
-    // A file of its own, written, synced and read back
+    // A file of its own, written, synced and read back; how long making and syncing it took is a benchmark (decisions/0112)
+    started :: slop_os.clock_monotonic() or_else 0
     if !write_new(system.end, system_port, SYSTEM_FILE, SYSTEM_TEXT, &buffer) {
         return 46
     }
+    runtime.log_info("perf: file_create_sync %", (slop_os.clock_monotonic() or_else 0) - started)
     back : u8[..]
     defer runtime.array_free(&back)
     if !read_whole(system.end, system_port, SYSTEM_FILE, &buffer, &back) || back.count != SYSTEM_TEXT.count {

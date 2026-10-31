@@ -15,6 +15,10 @@
  * FSInfo's free count and next free cluster are read at mount, if its signatures are there and they fit the volume;
  * the count is kept as clusters are taken and freed, and written back with write_info (decisions/0101). A volume whose
  * count is unknown counts its free clusters the first time free_clusters is asked.
+ *
+ * A write the device fails (decisions/0112, after fsyncgate) marks the volume failed, which every Sync after it reports,
+ * not only the first, and its sectors are remembered: a read of them is refused, since what's there isn't what was
+ * written, until a later write of all of each succeeds; a write of part of one, which needs what's there, is refused too.
  */
 //SPEC: Microsoft Extensible Firmware Initiative FAT32 File System Specification, version 1.03 (2000): §3 (the boot
 //SPEC: sector and BPB), §4 (the FAT), §5 (FSInfo), §6 (directories), §7 (long names); UEFI Specification 2.10 §13.3
@@ -103,6 +107,65 @@ Volume :: struct #scoped {
     chain_first : u32,
     chain_index : u64,
     chain_cluster : u32,
+    // Whether a write has failed since it was mounted, and the sectors failed writes were for, past MAX_FAILED_SECTORS all
+    failed : bool,
+    failed_sectors : u64[MAX_FAILED_SECTORS],
+    failed_count : u32,
+}
+
+// The most sectors of failed writes a volume remembers; past it, every read is refused
+MAX_FAILED_SECTORS :: 32
+
+// count sectors from first read into into, unless a failed write was for one of them: whether they were.
+read_sectors :: fn(volume: ptr[mut Volume], first: u64, count: u64, into: mut u8[]) -> bool {
+    if volume.failed_count > MAX_FAILED_SECTORS {
+        return false
+    }
+    for sector, i in volume.failed_sectors {
+        if i < cast[usize](volume.failed_count) && sector >= first && sector - first < count {
+            return false
+        }
+    }
+    return volume.device.read(volume.device.context, first, count, into)
+}
+
+// count sectors from first written from from: whether they were. One that wasn't marks the volume failed, and its sectors.
+write_sectors :: fn(volume: ptr[mut Volume], first: u64, count: u64, from: u8[]) -> bool {
+    wrote :: volume.device.write(volume.device.context, first, count, from)
+    for sector in first..<first + count {
+        note_sector(volume, sector, !wrote)
+    }
+    if !wrote {
+        volume.failed = true
+    }
+    return wrote
+}
+
+// A sector a write failed for, or one written whole since.
+note_sector :: fn(volume: ptr[mut Volume], sector: u64, failed: bool) {
+    if volume.failed_count > MAX_FAILED_SECTORS {
+        return void
+    }
+    for i in cast[usize](0)..<volume.failed_sectors.count {
+        if i < cast[usize](volume.failed_count) && volume.failed_sectors[i] == sector {
+            if !failed {
+                last :: cast[usize](volume.failed_count) - 1
+                if last < volume.failed_sectors.count {
+                    volume.failed_sectors[i] = volume.failed_sectors[last]
+                }
+                volume.failed_count -= 1
+            }
+            return void
+        }
+    }
+    if !failed {
+        return void
+    }
+    at :: cast[usize](volume.failed_count)
+    if at < volume.failed_sectors.count {
+        volume.failed_sectors[at] = sector
+    }
+    volume.failed_count += 1
 }
 
 // Where an entry's short entry is: its directory's first cluster, and its slot in that directory, from 0.
@@ -234,7 +297,7 @@ read_info :: fn(volume: ptr[mut Volume]) {
         return void
     }
     info : u8[512]
-    if !volume.device.read(volume.device.context, volume.info_sector, 1, info) || get_u32(info, 0) != 0x41615252
+    if !read_sectors(volume, volume.info_sector, 1, info) || get_u32(info, 0) != 0x41615252
         || get_u32(info, 484) != 0x61417272 || get_u32(info, 508) != 0xaa550000 {
         return void
     }
@@ -257,7 +320,7 @@ write_info :: fn(volume: ptr[mut Volume]) -> FatError? {
         return null
     }
     info : u8[512]
-    if !volume.device.read(volume.device.context, volume.info_sector, 1, info) {
+    if !read_sectors(volume, volume.info_sector, 1, info) {
         return FatError.DeviceError
     }
     if get_u32(info, 0) != 0x41615252 || get_u32(info, 484) != 0x61417272 {
@@ -268,7 +331,7 @@ write_info :: fn(volume: ptr[mut Volume]) -> FatError? {
     // The backup boot sector, at 6 as the BPB says, has FSInfo's backup after it
     backup :: cast[u64](6) + volume.info_sector
     for at in u64.[volume.info_sector, backup] {
-        if at < volume.reserved_sectors && !volume.device.write(volume.device.context, at, 1, info) {
+        if at < volume.reserved_sectors && !write_sectors(volume, at, 1, info) {
             return FatError.DeviceError
         }
     }
@@ -296,7 +359,7 @@ count_free :: fn(volume: ptr[mut Volume]) -> Result[u32, FatError] {
         if at >= last {
             break
         }
-        if !volume.device.read(volume.device.context, volume.reserved_sectors + at / entries_per_sector, 1, sector) {
+        if !read_sectors(volume, volume.reserved_sectors + at / entries_per_sector, 1, sector) {
             return .Error(.DeviceError)
         }
         for index in 0..<entries_per_sector {
@@ -330,7 +393,7 @@ is_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> bool {
 fat_entry :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[u32, FatError] {
     offset :: cast[u64](cluster) * 4
     sector : u8[512]
-    if !volume.device.read(volume.device.context, volume.reserved_sectors + offset / SECTOR_BYTES, 1, sector) {
+    if !read_sectors(volume, volume.reserved_sectors + offset / SECTOR_BYTES, 1, sector) {
         return .Error(.DeviceError)
     }
     return .Ok(get_u32(sector, cast[usize](offset % SECTOR_BYTES)) & CLUSTER_MASK)
@@ -347,12 +410,12 @@ set_fat_entry :: fn(volume: ptr[mut Volume], cluster: u32, value: u32) -> FatErr
     for copy in 0..<volume.fat_count {
         at :: volume.reserved_sectors + copy * volume.fat_sectors + offset / SECTOR_BYTES
         sector : u8[512]
-        if !volume.device.read(volume.device.context, at, 1, sector) {
+        if !read_sectors(volume, at, 1, sector) {
             return FatError.DeviceError
         }
         within :: cast[usize](offset % SECTOR_BYTES)
         put_u32(sector, within, (get_u32(sector, within) & ~CLUSTER_MASK) | (value & CLUSTER_MASK))
-        if !volume.device.write(volume.device.context, at, 1, sector) {
+        if !write_sectors(volume, at, 1, sector) {
             return FatError.DeviceError
         }
     }
@@ -412,7 +475,7 @@ zero_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[void, FatErr
     zeros : u8[512]
     first :: sector_of(volume, cluster)
     for i in 0..<volume.sectors_per_cluster {
-        if !volume.device.write(volume.device.context, first + i, 1, zeros) {
+        if !write_sectors(volume, first + i, 1, zeros) {
             return .Error(.DeviceError)
         }
     }
@@ -503,7 +566,7 @@ slot_at :: fn(volume: ptr[mut Volume], directory: u32, slot: u32) -> Result[Slot
 
 read_slot :: fn(volume: ptr[mut Volume], at: SlotAt, into: ptr[mut u8[32]]) -> FatError? {
     sector : u8[512]
-    if !volume.device.read(volume.device.context, at.sector, 1, sector) {
+    if !read_sectors(volume, at.sector, 1, sector) {
         return FatError.DeviceError
     }
     for i in 0..<cast[usize](32) {
@@ -517,13 +580,13 @@ write_slot :: fn(volume: ptr[mut Volume], at: SlotAt, from: ptr[u8[32]]) -> FatE
         return FatError.ReadOnly
     }
     sector : u8[512]
-    if !volume.device.read(volume.device.context, at.sector, 1, sector) {
+    if !read_sectors(volume, at.sector, 1, sector) {
         return FatError.DeviceError
     }
     for byte, i in from^ {
         put_u8(sector, at.offset + i, byte)
     }
-    if !volume.device.write(volume.device.context, at.sector, 1, sector) {
+    if !write_sectors(volume, at.sector, 1, sector) {
         return FatError.DeviceError
     }
     return null
@@ -723,7 +786,7 @@ read :: fn(volume: ptr[mut Volume], entry: ptr[Entry], offset: u64, into: mut u8
             break
         }
         at :: sector_of(volume, cluster) + within / SECTOR_BYTES
-        if !volume.device.read(volume.device.context, at, 1, sector) {
+        if !read_sectors(volume, at, 1, sector) {
             return .Error(.DeviceError)
         }
         from :: within % SECTOR_BYTES
@@ -775,7 +838,7 @@ write :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], offset: u64, from: u
         start :: within % SECTOR_BYTES
         count :: if SECTOR_BYTES - start < cast[u64](from.count) - done { SECTOR_BYTES - start } else { cast[u64](from.count) - done }
         if start != 0 || count != SECTOR_BYTES {
-            if !volume.device.read(volume.device.context, at, 1, sector) {
+            if !read_sectors(volume, at, 1, sector) {
                 return .Error(.DeviceError)
             }
         }
@@ -785,7 +848,7 @@ write :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], offset: u64, from: u
                 put_u8(sector, cast[usize](start + i), from[source])
             }
         }
-        if !volume.device.write(volume.device.context, at, 1, sector) {
+        if !write_sectors(volume, at, 1, sector) {
             return .Error(.DeviceError)
         }
         done += count
@@ -899,13 +962,13 @@ zero_range :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], start: u64, end
         cluster :: cluster_at(volume, entry.first_cluster, at / volume.cluster_bytes)? or_return .Error(.Corrupt)
         sector_at :: sector_of(volume, cluster) + (at % volume.cluster_bytes) / SECTOR_BYTES
         sector : u8[512]
-        if !volume.device.read(volume.device.context, sector_at, 1, sector) {
+        if !read_sectors(volume, sector_at, 1, sector) {
             return .Error(.DeviceError)
         }
         for i in 0..<count {
             put_u8(sector, cast[usize](at % SECTOR_BYTES + i), 0)
         }
-        if !volume.device.write(volume.device.context, sector_at, 1, sector) {
+        if !write_sectors(volume, sector_at, 1, sector) {
             return .Error(.DeviceError)
         }
         at += count

@@ -9,7 +9,9 @@ them in them.
 With --robustness it runs the robustness sweeps instead (knowledge/decisions/0096, 0104): kernels built with robustness=on
 boot each of SWEEP_TESTS once counting the passes through the kernel's failure points (fail=count), then once for each
 pass chosen, failing it (fail=any:<n>). Each run must halt, stop for want of memory, or end its root task with nothing
-of anyone else's left, never fault, fail an assertion or hang.
+of anyone else's left, never fault, fail an assertion or hang. Then a boot from the image builder's disk, its programs
+built with robustness=on too, for each of FAULTY_BLOCKS: the partition server fails that read or write, or tears that
+write (faulty_block, decisions/0112), and the run must end as a failed allocation's may.
 
     python tools/boot_tests.py
     python tools/boot_tests.py --robustness
@@ -118,7 +120,7 @@ def with_before_qemu(arguments: list[str], more: list[str]) -> list[str]:
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 43 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 44 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 3 budgets and the default split off the root's, 800000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -304,6 +306,7 @@ TESTS = [
         "a copy missing a grant it requires ended with 126, one told another ABI version with 125"),
     program_test("supplies paged memory's pages from a pager in user mode", "test_pager",
         "2 pages supplied as they were touched, read at two addresses, and writing them refused"),
+    program_test("measures the kernel's benchmarks", "test_perf", "measured ipc_round_trip, page_fault, thread_create and process_create"),
     program_test("charges paged memory a page at a time, raises pressure at a threshold, and gives pages back", "test_pager",
         "pages charged as they're supplied, touches reported, pressure raised at the threshold, and a page given back read again"),
     program_test("drives a device from user mode with the platform capability", "test_devices",
@@ -393,10 +396,11 @@ def build_tools(output: Path) -> bool:
     return subprocess.run(command).returncode == 0
 
 
-def build_programs(output: Path, architecture: str = "x86_64") -> bool:
+def build_programs(output: Path, architecture: str = "x86_64", robustness: bool = False) -> bool:
     """Builds SlopOS's programs through the build package, for an architecture, into the folder output."""
     output.mkdir(parents=True, exist_ok=True)
-    command = ["hemera", f"--setting=targets=programs,programs_output={output.as_posix()},arch={architecture}",
+    setting = ",robustness=on" if robustness else ""
+    command = ["hemera", f"--setting=targets=programs,programs_output={output.as_posix()},arch={architecture}{setting}",
                str(ROOT / "src" / "build")]
     if os.environ.get("HEMERA_INSTALL"):
         command.insert(1, f"--install-path={os.environ['HEMERA_INSTALL']}")
@@ -530,6 +534,33 @@ SWEEP_TESTS = [
 ]
 
 
+# The reads and writes a faulty block connection fails (faulty_block=<kind>:<n>): every one of the first few, then some
+FAULTY_BLOCKS = [*[f"write:{n}" for n in [*range(1, 13), 16, 24, 32, 48, 64, 96]], *[f"tear:{n}" for n in [*range(1, 7), 12, 24, 48]],
+                 *[f"read:{n}" for n in [*range(1, 7), 12, 24, 48]]]
+
+
+def sweep_faulty(kernel: Path, more: list = [], label: str = "") -> int:
+    """A boot from the image builder's disk for each of FAULTY_BLOCKS: how many runs went wrong."""
+    from concurrent.futures import ThreadPoolExecutor
+    disk = [WITH_PROGRAMS, f"--image-builder={IMAGE_BUILDER}", "--boot-disk", "--disk=SlopOS disk check: from the host"]
+
+    def one(fault: str) -> tuple:
+        code, output = boot_once(kernel, f"test_exit test_services faulty_block={fault}", disk, more)
+        return fault, judge(code, output), output
+
+    failed = 0
+    with ThreadPoolExecutor(max_workers=SWEEP_WORKERS) as pool:
+        for fault, problem, output in pool.map(one, FAULTY_BLOCKS):
+            if problem is not None:
+                failed += 1
+                print(f"FAILED: {label}faulty_block={fault}: {problem}")
+                logged = [line for line in output.splitlines() if line.startswith("[")]
+                sys.stdout.write("".join(f"    {line}\n" for line in logged[-30:]))
+    print(f"{'passed' if failed == 0 else 'FAILED'}: {label}a faulty block connection: {len(FAULTY_BLOCKS) - failed} of "
+          f"{len(FAULTY_BLOCKS)} runs")
+    return failed
+
+
 def sweep_values(passes: int) -> list:
     """The passes a sweep fails, one run each: every one up to SWEEP_BOUND, then a stride through the rest."""
     values = list(range(1, min(passes, SWEEP_BOUND) + 1))
@@ -631,7 +662,7 @@ def robustness() -> int:
         PROGRAMS_AARCH64 = Path(temporary) / "programs_aarch64"
         kernel = Path(temporary) / "kernel.elf"
         aarch64_kernel = Path(temporary) / "kernel_aarch64.elf"
-        if not (build_programs(PROGRAMS) and build_programs(PROGRAMS_AARCH64, "aarch64")
+        if not (build_programs(PROGRAMS, robustness=True) and build_programs(PROGRAMS_AARCH64, "aarch64", robustness=True)
                 and build_robustness_kernel(kernel, "x86_64") and build_robustness_kernel(aarch64_kernel, "aarch64")):
             print("FAILED: the robustness kernels or the programs don't build")
             return 1
@@ -647,6 +678,9 @@ def robustness() -> int:
                 continue
             failed += sweep(kernel, name, words, arguments)
             failed += sweep(aarch64_kernel, name, words, arguments, ["--arch=aarch64"], "AArch64: ")
+        if not only or any(part in "a faulty block connection" for part in only):
+            failed += sweep_faulty(kernel)
+            failed += sweep_faulty(aarch64_kernel, ["--arch=aarch64"], "AArch64: ")
         print("every test and sweep passed" if failed == 0 else f"{failed} tests and swept runs went wrong")
         return 0 if failed == 0 else 1
 

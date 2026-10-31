@@ -267,4 +267,5 @@ forget :: fn(volume: ptr[mut Volume], record: VolumeRecord) {
     volume.next_object = cast[u64](record.next_object)
     volume.dirty = false
     volume.failed = false
+    volume.failed_count = 0
 }

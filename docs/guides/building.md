@@ -131,6 +131,8 @@ The root task reads the command line too (`docs/specs/programs.md`):
 ```
 python tools/boot_tests.py
 python tools/unit_tests.py
+python tools/perf_tests.py
+python tools/boot_tests.py --robustness
 ```
 
 - **Boot tests** build the kernel, plus one with `stack_check=morestack`, and boot them in every way
@@ -140,6 +142,14 @@ python tools/unit_tests.py
 - **Unit tests** build each `test/` package under `src/` as a hosted program and run it: the frame
   allocator, the slab allocator and x86-64 paging, over buffers standing in for physical memory. A test
   program returns 0, or the number of the check that failed.
+- **Perf tests** boot `test_perf` and a boot from the image builder's disk on each architecture, under QEMU's
+  `-icount`, where a guest nanosecond is an instruction, and again as usual: the instruction counts are held to
+  `tools/perf_baselines.json`, failing more than 10% above one, and the wall times are only reported. x86-64 is wall
+  time only for now, as QEMU stops it under `-icount`. `--update`
+  records the counts as the baselines, after a change that's meant to move them (`knowledge/decisions/0112`).
+- **Robustness sweeps** boot kernels built with `robustness=on`, failing each chosen pass through the kernel's
+  failure points (`fail=`), and boots from the image builder's disk with a faulty block connection
+  (`faulty_block=`); every run must end without a fault, a hang, or anything left behind (`0096`, `0104`, `0112`).
 
 Under heavy load on the host, the fiber pool test can fail when QEMU starves one of its CPUs, since it
 needs every CPU to take part.

@@ -620,7 +620,8 @@ serve_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usi
                     case None => response^ = .Failed(.NoSpace)
                 }
             }
-            case Sync => response^ = if done(call(server, .Flush(3))) { dir.Response.Done } else { dir.Response.Failed(.DeviceError) }
+            // After a failed write, every Sync fails, not only the first (decisions/0112)
+            case Sync => response^ = if !volume.failed && done(call(server, .Flush(3))) { dir.Response.Done } else { dir.Response.Failed(.DeviceError) }
             case Features => response^ = .Supports(features())
             case Connect(connection) => {
                 _ = add(server, .Dir, connection.end, directory, fat.Place.{}, false, name_of(&server.connections[index]))
@@ -949,7 +950,7 @@ serve_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: us
                     case Error(error) => response^ = .Failed(file_error(error))
                 }
             }
-            case Sync => response^ = if done(call(server, .Flush(4))) { file.Response.Done } else { file.Response.Failed(.DeviceError) }
+            case Sync => response^ = if !volume.failed && done(call(server, .Flush(4))) { file.Response.Done } else { file.Response.Failed(.DeviceError) }
             case Narrow => {
                 match open_connection[read_only_file.ReadOnlyFile](server, .ReadOnlyFile, 0, connection.place, true, name_of(connection)) {
                     case Some(made) => response^ = .Narrowed(made)

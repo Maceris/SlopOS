@@ -135,6 +135,8 @@ PartitionServerGrants :: struct {
     log : slop_os.DebugLog?,
     disk : os.Channel[block.Block],
     clients : os.Listener[partitions.Partitions],
+    // The kernel's command line, for faulty_block, which a robustness build reads (decisions/0112)
+    command_line : slop_os.Memory?,
 }
 
 // A disk's partition server: the end it's spoken to on, and a port for that end.
@@ -146,6 +148,8 @@ Disk :: struct {
 Manager :: struct {
     log : slop_os.DebugLog,
     port : slop_os.Port,
+    // The kernel's command line, if it was given, for the partition servers
+    command_line : slop_os.Memory,
     disks : Disk[MAX_DISKS],
     disk_count : usize,
     // Each disk's connector, kept to dial its driver again for a restarted partition server, and its partition server
@@ -188,7 +192,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         container_service_module = container_service_module, volume_server_module = volume_server_module,
         partition_server_module = partition_server_module}
     match command_line {
-        case Some(memory) => state.test_restart = service_kit.has_word(service_kit.text_of(startup, memory) or_else "", "test_storage_restart")
+        case Some(memory) => {
+            state.test_restart = service_kit.has_word(service_kit.text_of(startup, memory) or_else "", "test_storage_restart")
+            state.command_line = memory
+        }
         case None => {}
     }
     state.port = slop_os.port_create(startup.budget) or_return 1
@@ -285,7 +292,8 @@ start_partition_server :: fn(state: ptr[mut Manager], index: usize) -> bool {
     dialing :: state.connectors[index]
     disk :: connector.dial[block.Block](dialing.end, dialing.port) or_return false
     pair :: os.channel_for[partitions.Partitions](startup.budget, 0) or_return false
-    grants := PartitionServerGrants.{log = duplicate_log(state.log), disk = disk, clients = os.Listener[partitions.Partitions].{end = pair.a}}
+    grants := PartitionServerGrants.{log = duplicate_log(state.log), disk = disk, clients = os.Listener[partitions.Partitions].{end = pair.a},
+        command_line = command_line_copy(state)}
     match os.launch(state.manager, state.manager_port, "partition_server", state.partition_server_module, PARTITION_SERVER_BUDGET,
         partition_server.main, grants, watched(state, PARTITION_SERVER_KEY + cast[u64](index))) {
         case Ok(launched) => keep(&state.disk_running[index], launched)
@@ -953,6 +961,18 @@ duplicate_log :: fn(log: slop_os.DebugLog) -> slop_os.DebugLog? {
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     match slop_os.handle_duplicate(cast[slop_os.Handle](log), rights) {
         case Ok(copy) => return cast[slop_os.DebugLog](copy)
+        case Error(error) => return null
+    }
+}
+
+// A read-only copy of the kernel's command line, to give a partition server, or null without one.
+command_line_copy :: fn(state: ptr[Manager]) -> slop_os.Memory? {
+    if cast[slop_os.Handle](state.command_line) == slop_os.NO_HANDLE {
+        return null
+    }
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+    match slop_os.handle_duplicate(cast[slop_os.Handle](state.command_line), rights) {
+        case Ok(copy) => return cast[slop_os.Memory](copy)
         case Error(error) => return null
     }
 }

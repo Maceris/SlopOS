@@ -32,12 +32,66 @@ Volume :: struct {
     dirty : bool,
     // The time it is, as its user says, for the records it writes
     now : u64,
-    // A data write failed, so its commits are refused
+    // A data write failed, so its commits are refused, every one after it (decisions/0112)
     failed : bool,
+    /*
+     * The chunks failed writes were for, each a file and the chunk's index, which reads are refused, since what's there
+     * isn't what was written; past MAX_FAILED_CHUNKS, every chunk's
+     */
+    failed_chunks : FailedChunk[MAX_FAILED_CHUNKS],
+    failed_count : u32,
     // The bytes of change history it keeps (history.hsc), or 0 for none
     history_bytes : u64,
     // Its record as it was opened, for what the volume doesn't change: a clone's origin, whose keys it uses
     opened : VolumeRecord,
+}
+
+// The most failed writes a volume remembers by their chunks
+MAX_FAILED_CHUNKS :: 32
+
+FailedChunk :: struct {
+    file : u64,
+    index : u64,
+}
+
+// Whether a failed write was for a file's chunk, so it can't be read (decisions/0112): every one, past MAX_FAILED_CHUNKS.
+chunk_failed :: fn(volume: ptr[Volume], file: u64, index: u64) -> bool {
+    if volume.failed_count > MAX_FAILED_CHUNKS {
+        return true
+    }
+    for each, i in volume.failed_chunks {
+        if i < cast[usize](volume.failed_count) && each.file == file && each.index == index {
+            return true
+        }
+    }
+    return false
+}
+
+// A file's chunk a write failed for, or, written since, one that's whole again.
+note_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, failed: bool) {
+    if volume.failed_count > MAX_FAILED_CHUNKS {
+        return void
+    }
+    for i in cast[usize](0)..<volume.failed_chunks.count {
+        if i < cast[usize](volume.failed_count) && volume.failed_chunks[i].file == file && volume.failed_chunks[i].index == index {
+            if !failed {
+                last :: cast[usize](volume.failed_count) - 1
+                if last < volume.failed_chunks.count {
+                    volume.failed_chunks[i] = volume.failed_chunks[last]
+                }
+                volume.failed_count -= 1
+            }
+            return void
+        }
+    }
+    if !failed {
+        return void
+    }
+    at :: cast[usize](volume.failed_count)
+    if at < volume.failed_chunks.count {
+        volume.failed_chunks[at] = FailedChunk.{file = file, index = index}
+    }
+    volume.failed_count += 1
 }
 
 // What an object is.
@@ -901,6 +955,10 @@ ChunkBuffer :: struct {
 
 // A chunk's bytes, into a buffer of CHUNK_BYTES: how many were written, the rest of the buffer zeros.
 read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[]) -> Result[usize, Error] {
+    // What a failed write should have changed isn't given as if it hadn't (decisions/0112)
+    if chunk_failed(volume, file, index) {
+        return .Error(.DeviceError)
+    }
     for i in 0..<buffer.count {
         buffer[i] = 0
     }
@@ -977,6 +1035,7 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
         head.bytes = cast[u32le](cast[u32](used))
         copy_bytes(value.bytes, cast[usize](INLINE_HEAD), part(buffer, 0, used))
         tree_put(volume.nodes, &volume.tree, key, part(value.bytes, 0, cast[usize](INLINE_HEAD) + used))?
+        note_chunk(volume, file, index, false)
     }
     else {
         blocks :: (cast[u64](used) + BLOCK_BYTES - 1) / BLOCK_BYTES
@@ -1018,8 +1077,11 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
         }
         if !wrote {
             volume.failed = true
+            note_chunk(volume, file, index, true)
+            nodes.release(nodes.space, address, blocks, volume.id, nodes.transaction)
             return .Error(.DeviceError)
         }
+        note_chunk(volume, file, index, false)
         tree_put(nodes, &volume.tree, key, view_of(cast[ptr[mut u8]](&extent), size_of(ExtentRecord)))?
     }
     if had is_some {

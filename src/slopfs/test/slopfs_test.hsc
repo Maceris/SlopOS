@@ -159,6 +159,10 @@ checks :: fn() -> int {
         if failed != 0 {
             return failed
         }
+        failed = check_failed_writes(sealed)
+        if failed != 0 {
+            return failed
+        }
         failed = check_fuzz(sealed)
         if failed != 0 {
             return failed
