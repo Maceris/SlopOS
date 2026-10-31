@@ -43,6 +43,17 @@ main :: fn() -> int {
     if generations.check(&broken) is_none {
         return 6
     }
+    // Only the recovery generation is numbered as it, and it's numbered so
+    broken = made
+    broken.number = generations.RECOVERY_NUMBER
+    if generations.check(&broken) is_none {
+        return 12
+    }
+    broken = made
+    broken.state = generations.STATE_RECOVERY
+    if generations.check(&broken) is_none {
+        return 13
+    }
     // Read back from its bytes, and not from bytes of another size
     back :: generations.generation_of(generations.bytes_of(&made)) or_return 7
     if back.number != 7 || generations.text_of(&back.files[1].name) != "system.records" {
@@ -52,14 +63,14 @@ main :: fn() -> int {
         return 9
     }
     // limine.conf: an entry each, in the order given, the kernel and every module by its object, named for the kernel
-    recovery := generation(1, generations.STATE_RECOVERY)
+    recovery := generation(generations.RECOVERY_NUMBER, generations.STATE_RECOVERY)
     text : u8[..]
     defer runtime.array_free(&text)
-    generations.limine_conf(generations.Generation.[made, recovery], 3, &text)
+    generations.limine_conf(generations.Generation.[made, recovery], 3, 0, &text)
     conf :: bit_cast[string](text[0..<text.count])
     hex_storage : u8[64]
     kernel_hex :: bundle.hex(made.kernel, &hex_storage)
-    for expected in string.["timeout: 3\n", "/SlopOS generation 7\n", "/SlopOS generation 1 (recovery)\n", "cmdline: test_exit generation=7\n",
+    for expected in string.["timeout: 3\n", "/SlopOS generation 7\n", "/SlopOS recovery\n", "cmdline: test_exit generation=7\n",
         "module_cmdline: root_task.elf\n", "module_cmdline: system.records\n", "kaslr: yes\n"] {
         if !strings.contains(conf, expected) {
             runtime.log_error("limine.conf lacks %", expected)
@@ -67,7 +78,7 @@ main :: fn() -> int {
         }
     }
     newest :: strings.find(conf, "generation 7") or_return 11
-    oldest :: strings.find(conf, "generation 1") or_return 11
+    oldest :: strings.find(conf, "/SlopOS recovery") or_return 11
     if !strings.contains(conf, kernel_hex) || newest > oldest {
         return 11
     }

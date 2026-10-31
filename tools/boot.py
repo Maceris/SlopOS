@@ -536,7 +536,7 @@ SEALED_PASSPHRASE = "slopos test passphrase"
 
 
 def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path, image_builder: Path, folder: Path,
-                   command_line: str, kaslr: bool, mark: str, staged: str | None = None) -> None:
+                   command_line: str, kaslr: bool, mark: str, staged: str | None = None, boot_recovery: bool = False) -> None:
     """
     A disk that boots kernel through Limine, from BIOS or UEFI, made by the image builder: Limine, the kernel and the
     programs on its EFI system partition, as make_image puts them on the ISO, but only the boot set loaded by Limine,
@@ -569,8 +569,10 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
     # limine.conf's entry for it, the root task first
     boot_set = [program for program in programs if program.stem in BOOT_SET or program.name == SYSTEM_RECORDS]
     generation_builder = next(image_builder.parent.glob("generation_builder*"))
-    generated = subprocess.run([str(generation_builder), str(esp), str(system / "store"), "1", "0", "yes" if kaslr else "no", command_line,
-                                str(kernel)] + [str(program) for program in boot_set], capture_output=True, text=True)
+    # The recovery generation beside it, of the same boot set (decisions/0118), its entry the one booted if asked
+    flags = ["--recovery"] + (["--boot-recovery"] if boot_recovery else [])
+    generated = subprocess.run([str(generation_builder), *flags, str(esp), str(system / "store"), "1", "0", "yes" if kaslr else "no",
+                                command_line, str(kernel)] + [str(program) for program in boot_set], capture_output=True, text=True)
     if generated.returncode != 0:
         sys.exit(f"boot.py: the generation builder failed:\n{generated.stdout}{generated.stderr}")
     # Generation 2 staged, its objects in the store and its record in the system volume's updates directory
@@ -650,6 +652,8 @@ def main() -> int:
                         help="with --boot-disk: boot the same disk this many times, each after the last stopped, as a reboot would")
     parser.add_argument("--expect-boot-line", action="append", default=[],
                         help="with --boots: <boot>:<line>, a line that boot's serial output must have, from 2")
+    parser.add_argument("--boot-recovery", action="store_true",
+                        help="with --boot-disk: boot the recovery generation, which Limine boots by default otherwise only by its menu")
     parser.add_argument("--stage-generation",
                         help="with --boot-disk: stage generation 2 on the system volume, the same programs with this command line, "
                              "for the update service to install (decisions/0116)")
@@ -697,7 +701,7 @@ def main() -> int:
                 build_slopos_tools(folder / "tools")
                 image_builder = next((folder / "tools").glob("image_builder*"))
             make_boot_disk(disk, kernel.resolve(), [program.resolve() for program in programs], limine, image_builder.resolve(), folder,
-                           command_line, not arguments.no_kaslr, arguments.disk or "", arguments.stage_generation)
+                           command_line, not arguments.no_kaslr, arguments.disk or "", arguments.stage_generation, arguments.boot_recovery)
             extra += ["-drive", f"file={disk},if=none,id=disk,format=raw",
                       "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on,bootindex=0"]
         elif arguments.disk is not None:

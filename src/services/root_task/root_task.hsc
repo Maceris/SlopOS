@@ -160,9 +160,14 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         scheduler = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     words :: service_kit.text_of(block, command_line) or_return 4
     // The generation Limine's entry booted, which it says on the command line (decisions/0113); none from an ISO
-    match service_kit.word_after(words, "generation=") {
-        case Some(number) => log_line.write(debug_log, "root task: booted generation %", number)
-        case None => {}
+    if service_kit.has_word(words, "recovery") {
+        log_line.write(debug_log, "root task: booted the recovery generation")
+    }
+    else {
+        match service_kit.word_after(words, "generation=") {
+            case Some(number) => log_line.write(debug_log, "root task: booted generation %", number)
+            case None => {}
+        }
     }
     test_services :: service_kit.has_word(words, "test_services")
     test_outlive_manager :: service_kit.has_word(words, "test_outlive_manager")

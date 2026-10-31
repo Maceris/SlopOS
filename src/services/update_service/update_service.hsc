@@ -159,6 +159,12 @@ install :: fn(service: ptr[mut Service]) {
             return void
         }
     }
+    // The recovery generation is written once, with the system, and never by an update
+    if staged.state == generations.STATE_RECOVERY {
+        runtime.log_warn("updates/pending is a recovery generation, which an update can't install")
+        _ = os.delete_file_in(service.updates, PENDING)
+        return void
+    }
     if read_record(service, staged.number) is_some {
         runtime.log_warn("generation % is installed already", staged.number)
         _ = os.delete_file_in(service.updates, PENDING)
@@ -247,7 +253,7 @@ collect :: fn(service: ptr[mut Service], current: u64) {
     sort(kept[0..<kept.count])
     text : u8[..]
     defer runtime.array_free(&text)
-    generations.limine_conf(kept[0..<kept.count], MENU_TIMEOUT, &text)
+    generations.limine_conf(kept[0..<kept.count], MENU_TIMEOUT, 0, &text)
     if os.write_entire_file_in(service.esp, generations.LIMINE_CONF, bit_cast[string](text[0..<text.count])) != null {
         runtime.log_warn("limine.conf couldn't be written")
         return void

@@ -26,6 +26,11 @@ COMMAND_LINE_BYTES :: 512
 STATE_TENTATIVE : u8 : 0
 STATE_PERMANENT : u8 : 1
 STATE_RECOVERY : u8 : 2
+/*
+ * The recovery generation's number, and only its (roadmap 9d5, decisions/0118): written once, beside the first, pinned,
+ * never collected, and booting the boot set and the console only.
+ */
+RECOVERY_NUMBER : u64 : 0xffffffff
 
 // A boot-set file: the name the kernel gives its module (Limine's module_cmdline), and its hash, which names its object.
 BootFile :: struct {
@@ -67,6 +72,9 @@ check :: fn(generation: ptr[Generation]) -> string? {
     }
     if generation.state > STATE_RECOVERY || generation.kaslr > 1 {
         return "has a state or a flag that isn't one"
+    }
+    if (generation.state == STATE_RECOVERY) != (generation.number == RECOVERY_NUMBER) {
+        return "is numbered as the recovery generation and isn't it, or is it and isn't numbered as it"
     }
     if generation.file_count == 0 || generation.file_count > MAX_BOOT_FILES {
         return "has no boot set, or more files than there's room for"
@@ -119,19 +127,30 @@ record_path :: fn(number: u64, storage: ptr[mut u8[128]]) -> string {
 }
 
 /*
- * limine.conf for generations, in the order given, the first the default: an entry each, loading its kernel and its
- * boot set by their objects, each module named for the kernel by its module_cmdline; timeout seconds at the menu.
+ * limine.conf for generations, in the order given, the default the first, or the default_entry'th from 1: an entry
+ * each, loading its kernel and its boot set by their objects, each module named for the kernel by its module_cmdline;
+ * timeout seconds at the menu. The recovery generation's entry says so, and its command line has the word recovery.
  */
-limine_conf :: fn(generations: Generation[], timeout: u64, into: ptr[mut u8[..]]) {
+limine_conf :: fn(generations: Generation[], timeout: u64, default_entry: u64, into: ptr[mut u8[..]]) {
     digits : u8[20]
     add(into, "timeout: ")
     add(into, decimal(timeout, &digits))
     add(into, "\n")
+    if default_entry != 0 {
+        add(into, "default_entry: ")
+        add(into, decimal(default_entry, &digits))
+        add(into, "\n")
+    }
     for at in cast[usize](0)..<generations.count {
         generation :: &generations[at]
-        add(into, "\n/SlopOS generation ")
-        add(into, decimal(generation.number, &digits))
-        add(into, if generation.state == STATE_RECOVERY { " (recovery)" } else if generation.state == STATE_TENTATIVE { " (trial)" } else { "" })
+        if generation.state == STATE_RECOVERY {
+            add(into, "\n/SlopOS recovery")
+        }
+        else {
+            add(into, "\n/SlopOS generation ")
+            add(into, decimal(generation.number, &digits))
+            add(into, if generation.state == STATE_TENTATIVE { " (trial)" } else { "" })
+        }
         add(into, "\n    protocol: limine\n    kaslr: ")
         kaslr :: if generation.kaslr == 1 { "yes" } else { "no" }
         add(into, kaslr)
@@ -144,6 +163,9 @@ limine_conf :: fn(generations: Generation[], timeout: u64, into: ptr[mut u8[..]]
         add(into, line_of(&generation.command_line))
         add(into, " generation=")
         add(into, decimal(generation.number, &digits))
+        if generation.state == STATE_RECOVERY {
+            add(into, " recovery")
+        }
         // The bundle store's root it boots with, which the supervisor loads programs by
         if !bundle.same(generation.store_root, bundle.Hash.{}) {
             hex_storage : u8[64]

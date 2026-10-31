@@ -375,6 +375,8 @@ Supervisor :: struct {
     installations_end : slop_os.Channel,
     installations_port : slop_os.Port,
     update_end : slop_os.Channel,
+    // Booted as the recovery generation (decisions/0118): the boot set, the drivers and the console only
+    recovery : bool,
     update_port : slop_os.Port,
     generation : u64,
     boot_root : bundle.Hash?,
@@ -521,6 +523,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             test_system_config = service_kit.has_word(text, "test_system_config")
             test_degraded = service_kit.has_word(text, "test_degraded")
             test_installations = service_kit.has_word(text, "test_installations")
+            supervisor.recovery = service_kit.has_word(text, "recovery")
             // The generation booted, and its store root, as its limine.conf entry says (decisions/0114, 0116)
             supervisor.generation = service_kit.number_of(service_kit.word_after(text, "generation=") or_else "") or_else 0
             supervisor.boot_root = bundle.from_hex(service_kit.word_after(text, "store_root=") or_else "")
@@ -560,9 +563,15 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     // Then every other driver, and the services that use them, each with connectors to what it uses
     start_drivers(&supervisor, false)
     start_console(&supervisor, NOWHERE)
-    start_hello(&supervisor, NOWHERE)
-    start_installations(&supervisor)
-    start_disk_check(&supervisor, storage_slot)
+    // The recovery generation starts nothing more than the boot set, the drivers and the console
+    if supervisor.recovery {
+        log_line.write(supervisor.log, "supervisor: recovery: the boot set, the drivers and the console only")
+    }
+    else {
+        start_hello(&supervisor, NOWHERE)
+        start_installations(&supervisor)
+        start_disk_check(&supervisor, storage_slot)
+    }
     serial_line :: supervisor.first_serial
     if test_restart && serial_line < supervisor.started.count {
         // Once the console has its connection, which the driver's end takes with it
@@ -877,7 +886,7 @@ open_system :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
                 start_config(supervisor, NOWHERE)
                 read_overrides(supervisor)
             }
-            if supervisor.update_end == NONE {
+            if supervisor.update_end == NONE && !supervisor.recovery {
                 start_update(supervisor, NOWHERE)
             }
             else {

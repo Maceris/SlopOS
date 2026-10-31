@@ -5,7 +5,11 @@
  * configuration with an entry for every generation the folder has records of, newest first, the recovery generation
  * last. tools/boot.py runs it.
  *
- *     generation_builder <esp folder> <store folder> <number> <timeout> <yes|no, for KASLR> <command line> <kernel> <file>...
+ *     generation_builder [--recovery] [--boot-recovery] <esp folder> <store folder> <number> <timeout> <yes|no, for KASLR>
+ *         <command line> <kernel> <file>...
+ *
+ * With --recovery, the recovery generation is written beside it, of the same kernel and boot set and command line
+ * (decisions/0118), as an installation writes it once; with --boot-recovery, its entry is the one Limine boots.
  *
  * The files are the boot set, root_task.elf first, each named for the kernel by its file name; the store folder is the
  * store builder's, whose root its record names. The generation is permanent: one built on the host is what's known to
@@ -28,11 +32,28 @@ main :: fn() -> int {
     if argument(arguments, 1) == "--stage" {
         return stage(arguments)
     }
-    if arguments.count < 9 {
+    // The flags first, then the arguments from base
+    recovery := false
+    boot_recovery := false
+    base := cast[usize](1)
+    loop {
+        flag :: argument(arguments, base)
+        if flag == "--recovery" {
+            recovery = true
+        }
+        else if flag == "--boot-recovery" {
+            boot_recovery = true
+        }
+        else {
+            break
+        }
+        base += 1
+    }
+    if arguments.count < base + 8 {
         runtime.log_error("usage: generation_builder <esp folder> <store folder> <number> <timeout> <yes|no> <command line> <kernel> <file>...")
         return 1
     }
-    esp :: argument(arguments, 1)
+    esp :: argument(arguments, base)
     for folder in string.["boot", generations.OBJECTS, generations.RECORDS, "boot/limine"] {
         storage : u8[1024]
         path :: joined(esp, "/", folder, &storage)
@@ -42,19 +63,19 @@ main :: fn() -> int {
         }
     }
     made := generations.Generation.{magic = generations.MAGIC, state = generations.STATE_PERMANENT}
-    made.number = number_of(argument(arguments, 3)) or_return 3
-    timeout :: number_of(argument(arguments, 4)) or_return 3
-    made.kaslr = if argument(arguments, 5) == "yes" { 1 } else { 0 }
-    if !generations.set_line(&made.command_line, argument(arguments, 6)) {
+    made.number = number_of(argument(arguments, base + 2)) or_return 3
+    timeout :: number_of(argument(arguments, base + 3)) or_return 3
+    made.kaslr = if argument(arguments, base + 4) == "yes" { 1 } else { 0 }
+    if !generations.set_line(&made.command_line, argument(arguments, base + 5)) {
         runtime.log_error("generation_builder: the command line is too long")
         return 3
     }
     // The store's root, which the store builder wrote as hex
     root_storage : u8[1024]
-    root_text :: os.read_entire_file(joined(argument(arguments, 2), "/root", "", &root_storage)) or_else ""
+    root_text :: os.read_entire_file(joined(argument(arguments, base + 1), "/root", "", &root_storage)) or_else ""
     made.store_root = bundle.from_hex(root_text) or_else bundle.Hash.{}
-    made.kernel = put(esp, argument(arguments, 7)) or_return 4
-    for i in cast[usize](8)..<arguments.count {
+    made.kernel = put(esp, argument(arguments, base + 6)) or_return 4
+    for i in base + 7..<arguments.count {
         at :: cast[usize](made.file_count)
         if at >= made.files.count {
             runtime.log_error("generation_builder: more boot-set files than a generation has room for")
@@ -82,14 +103,23 @@ main :: fn() -> int {
         bit_cast[string](record)) != null {
         return 7
     }
-    return write_limine_conf(esp, timeout)
+    if recovery {
+        rescue := made
+        rescue.state = generations.STATE_RECOVERY
+        rescue.number = generations.RECOVERY_NUMBER
+        if os.write_entire_file(joined(esp, "/", generations.record_path(rescue.number, &record_storage), &path_storage),
+            bit_cast[string](generations.bytes_of(&rescue))) != null {
+            return 7
+        }
+    }
+    return write_limine_conf(esp, timeout, boot_recovery)
 }
 
 /*
  * limine.conf, for every generation the ESP folder has a record of: the others by number, newest first, then the
  * recovery generation.
  */
-write_limine_conf :: fn(esp: string, timeout: u64) -> int {
+write_limine_conf :: fn(esp: string, timeout: u64, boot_recovery: bool) -> int {
     folder_storage : u8[1024]
     listed :: os.list_directory(joined(esp, "/", generations.RECORDS, &folder_storage)) or_return 8
     defer os.free_directory_listing(listed)
@@ -104,7 +134,9 @@ write_limine_conf :: fn(esp: string, timeout: u64) -> int {
     sort(kept[0..<kept.count])
     text : u8[..]
     defer runtime.array_free(&text)
-    generations.limine_conf(kept, timeout, &text)
+    // The recovery generation's entry is the last
+    default_entry :: if boot_recovery { cast[u64](kept.count) } else { cast[u64](0) }
+    generations.limine_conf(kept[0..<kept.count], timeout, default_entry, &text)
     path_storage : u8[1024]
     if os.write_entire_file(joined(esp, "/", generations.LIMINE_CONF, &path_storage), bit_cast[string](text[0..<text.count])) != null {
         return 9

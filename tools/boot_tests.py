@@ -266,6 +266,11 @@ TESTS = [
         "--expect-line=[user] config: forgot counter's values",
         "--expect-line=[user] supervisor: test_installations: an update to hello's bundle refused, updated to counter_next and run, "
         "uninstalled whole, installed again and run"])),
+    ("boots the recovery generation: the boot set, the drivers and the console", 7, [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk",
+        "--timeout=120", "--command-line=test_exit test_services", "--disk=SlopOS disk check: from the host", "--boot-recovery",
+        "--expect-line=[user] root task: booted the recovery generation",
+        "--expect-line=[user] supervisor: recovery: the boot set, the drivers and the console only",
+        "--expect-line=[user] console: serving", HEALTHY_LINE]),
     ("installs a staged generation, boots it, and makes it permanent once it's healthy", 7, with_before_qemu(BOOT_DISK_ARGUMENTS, [
         "--stage-generation=test_exit test_services", "--boots=2",
         "--expect-line=[user] update: installed generation 2, tentative",
