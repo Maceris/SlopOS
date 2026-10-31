@@ -75,7 +75,7 @@ import config_protocol from "../../protocols/config"
 import bundle from "../../bundle"
 import schema from "std"
 import service_kit from "../../libraries/service_kit"
-import library_interface from "../../library_interface"
+import substitution from "../../substitution"
 import system_records from "../../system_records"
 import hello from "../../apps/hello"
 import clock_service from "../clock"
@@ -417,11 +417,6 @@ Supervisor :: struct {
     // Its connection to the substitution policy in the config store, once it's had one (decisions/0122)
     substitutions_end : slop_os.Channel,
     substitutions_port : slop_os.Port,
-    // The libraries the policy puts in place of its own: each its own's file name, and the substitute's memory
-    substituted : os.LaunchLibrary[bundle.MAX_SUBSTITUTIONS],
-    substituted_count : usize,
-    // What options_for gives a launch of them: a copy of each substitute's handle
-    launch_libraries : os.LaunchLibrary[bundle.MAX_SUBSTITUTIONS],
 }
 
 // A service of the system configuration's, as the supervisor starts it.
@@ -655,6 +650,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     // Assessed first, which the root task hears before it's told everything has started
     healthy :: assess(&supervisor)
     tell_update(&supervisor, healthy)
+    // The substitution policy the config store asks for, staged as the next generation if it's new (decisions/0125)
+    if healthy {
+        _ = ask_substitute(&supervisor, read_substitutions(&supervisor))
+    }
     tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))
     loop {
         wait_and_handle(&supervisor)
@@ -899,7 +898,6 @@ open_system :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
             if supervisor.config_end == NONE {
                 start_config(supervisor, NOWHERE)
                 read_overrides(supervisor)
-                _ = read_substitutions(supervisor)
             }
             if supervisor.update_end == NONE && !supervisor.recovery {
                 start_update(supervisor, NOWHERE)
@@ -996,7 +994,7 @@ start_update :: fn(supervisor: ptr[mut Supervisor], again: usize) {
         _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.update_port))
         supervisor.update_end = NONE
     }
-    pair :: os.channel_for[update_protocol.Update](supervisor.block.budget, 0) or_return void
+    pair :: os.channel_for[update_protocol.Update](supervisor.block.budget, update_protocol.RING_BYTES) or_return void
     grants := UpdateGrants.{esp = esp, updates = updates, store = os.Channel[bundle_store.BundleStore].{end = store_pair.b},
         clients = os.Listener[update_protocol.Update].{end = pair.a}}
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
@@ -1673,21 +1671,6 @@ options_for :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.LaunchOpt
             case None => {}
         }
     }
-    // The substitution policy's libraries in place of its own (decisions/0122); the rest, its own, os.launch gives
-    given := cast[usize](0)
-    for &kept, i in supervisor.substituted {
-        if i >= supervisor.substituted_count || given >= supervisor.launch_libraries.count {
-            break
-        }
-        match slop_os.handle_duplicate(cast[slop_os.Handle](kept.memory), LIBRARY_RIGHTS) {
-            case Ok(copy) => {
-                supervisor.launch_libraries[given] = os.LaunchLibrary.{name = kept.name, memory = cast[slop_os.Memory](copy)}
-                given += 1
-            }
-            case Error(error) => {}
-        }
-    }
-    options.libraries = if given <= supervisor.launch_libraries.count { supervisor.launch_libraries[0..<given] } else { supervisor.launch_libraries[0..<0] }
     return options
 }
 
@@ -1916,131 +1899,33 @@ write_overrides :: fn(supervisor: ptr[mut Supervisor], overrides: system_records
     return config_protocol.write(settings, supervisor.overrides_port, os.value_bytes(&value), fields) is_ok
 }
 
-// What a launched program, and the supervisor reading one, may do with a library's memory: read it, run it, and pass it on
-LIBRARY_RIGHTS :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_EXECUTE)
-    | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
-
 /*
- * The substitution policy, the config store's value "substitutions" of owner "system" (decisions/0119, 0122), read:
- * each entry taken whose from is the hash of one of the supervisor's own libraries, and whose to the bundle store has
- * and library_interface.check passes against it. What the supervisor launches from then on is given each substitute in
- * its library's place, and what that launches has it in turn (os.launch); what's running keeps what it was bound to.
- * Read once the config store has started, as at every boot: how many it took.
+ * The substitution policy the config store asks for, its value "substitutions" of owner "system" (decisions/0123,
+ * 0125), read: what the update service is told after a healthy boot, and stages a generation with if it's new. Nothing
+ * applies it live; the root task applies a generation's policy at boot. An empty policy without one.
  */
-read_substitutions :: fn(supervisor: ptr[mut Supervisor]) -> u64 {
-    for &kept, i in supervisor.substituted {
-        if i < supervisor.substituted_count {
-            _ = slop_os.handle_close(cast[slop_os.Handle](kept.memory))
-        }
-    }
-    supervisor.substituted_count = 0
-    settings :: substitutions_connection(supervisor) or_return 0
+read_substitutions :: fn(supervisor: ptr[mut Supervisor]) -> bundle.Substitutions {
+    settings :: substitutions_connection(supervisor) or_return bundle.Substitutions.{}
     value := os.Outgoing.{}
     match config_protocol.read(settings, supervisor.substitutions_port, &value) {
         case Ok(version) => {}
         case Error(error) => {
             log_line.write(supervisor.log, "supervisor: the substitution policy couldn't be read: %", error)
-            return 0
+            return bundle.Substitutions.{}
         }
     }
-    policy :: os.typed_value[bundle.Substitutions](os.value_bytes(&value))
-    for &entry, i in policy.entries {
-        if cast[u64](i) >= policy.count || supervisor.substituted_count >= supervisor.substituted.count {
-            break
-        }
-        match substitute(supervisor, entry) {
-            case Ok(library) => {
-                place :: supervisor.substituted_count
-                if place < supervisor.substituted.count {
-                    supervisor.substituted[place] = library
-                    supervisor.substituted_count = place + 1
-                }
-                hex_storage : u8[64]
-                log_line.write(supervisor.log, "supervisor: % is substituted by %", library.name, bundle.hex(entry.to, &hex_storage))
-            }
-            case Error(why) => log_line.write(supervisor.log, "supervisor: a substitution is refused: %", why)
-        }
-    }
-    log_line.write(supervisor.log, "supervisor: the substitution policy puts % libraries in others' places", supervisor.substituted_count)
-    return cast[u64](supervisor.substituted_count)
+    return os.typed_value[bundle.Substitutions](os.value_bytes(&value))^
 }
 
-// One substitution's library, its own one's name and the substitute from the store, if the check passes; or why not.
-substitute :: fn(supervisor: ptr[mut Supervisor], entry: ptr[bundle.Substitution]) -> Result[os.LaunchLibrary, string] {
-    own :: own_library(supervisor, entry.from) or_return .Error("it isn't one of the supervisor's libraries")
-    object := bundle_store.Object.{}
-    match store_request(supervisor, .Get(entry.to)) {
-        case Got(found) => object = found
-        case _ => return .Error("the bundle store doesn't have its substitute")
+// The substitution policy passed on to the update service, for the generation booted: its answer.
+ask_substitute :: fn(supervisor: ptr[mut Supervisor], policy: bundle.Substitutions) -> update_protocol.Response {
+    if supervisor.update_end == NONE || supervisor.generation == 0 {
+        return .Unsupported
     }
-    why := cast[string?]("its substitute can't be read")
-    match mapped_library(supervisor, cast[slop_os.Handle](own.memory)) {
-        case Some(old) => {
-            match mapped_library(supervisor, cast[slop_os.Handle](object.memory)) {
-                case Some(new) => {
-                    why = library_interface.check(old.bytes, new.bytes)
-                    _ = slop_os.memory_unmap(supervisor.block.space, new.address)
-                }
-                case None => {}
-            }
-            _ = slop_os.memory_unmap(supervisor.block.space, old.address)
-        }
-        case None => {}
-    }
-    match why {
-        case Some(reason) => {
-            _ = slop_os.handle_close(cast[slop_os.Handle](object.memory))
-            return .Error(reason)
-        }
-        case None => return .Ok(os.LaunchLibrary.{name = own.name, memory = object.memory})
-    }
-}
-
-// The supervisor's own library whose file has hash: its name and memory, or null.
-own_library :: fn(supervisor: ptr[mut Supervisor], hash: bundle.Hash) -> os.LaunchLibrary? {
-    prefix :: "library:"
-    for &grant in slop_os.grants_of(supervisor.block) {
-        label :: slop_os.label_of(grant)
-        if grant.kind != .Memory || !strings.starts_with(label, prefix) || prefix.count > label.count {
-            continue
-        }
-        match mapped_library(supervisor, grant.handle) {
-            case Some(mapped) => {
-                same :: bundle.same(bundle.hash_of(mapped.bytes), hash)
-                _ = slop_os.memory_unmap(supervisor.block.space, mapped.address)
-                if same {
-                    return os.LaunchLibrary.{name = label[prefix.count..<label.count], memory = cast[slop_os.Memory](grant.handle)}
-                }
-            }
-            case None => {}
-        }
-    }
-    return null
-}
-
-/*
- * A library's file in memory, mapped read-only: its bytes, as long as its ELF headers say it is, which a boot module's
- * memory, a page's multiple, can be longer than. Unmapped by whoever reads it.
- */
-mapped_library :: fn(supervisor: ptr[mut Supervisor], memory: slop_os.Handle) -> MappedLibrary? {
-    size :: slop_os.memory_size(cast[slop_os.Memory](memory)) or_return null
-    address :: runtime.reserve_addresses(cast[usize](size)) or_return null
-    if slop_os.memory_map(cast[slop_os.Memory](memory), supervisor.block.space, address, 0, size, slop_os.PROTECTION_READ) is_error {
-        return null
-    }
-    whole :: view_of(cast[ptr[u8]](address), cast[usize](size))
-    length :: cast[usize](library_interface.file_size(whole))
-    if length == 0 || length > whole.count {
-        _ = slop_os.memory_unmap(supervisor.block.space, address)
-        return null
-    }
-    return MappedLibrary.{bytes = whole[0..<length], address = address}
-}
-
-// A library's file mapped: its bytes, and where the mapping is.
-MappedLibrary :: struct {
-    bytes : u8[],
-    address : u64,
+    out := os.Outgoing.{}
+    os.begin[update_protocol.Request](&out)^ = .Substitute(update_protocol.SubstituteOf.{generation = supervisor.generation, policy = policy})
+    into := os.Incoming.{}
+    return update_protocol.ask(supervisor.update_end, supervisor.update_port, &out, &into)
 }
 
 // The supervisor's connection to the substitution policy, declared, made the first time: null without one.
@@ -2064,7 +1949,7 @@ substitutions_connection :: fn(supervisor: ptr[mut Supervisor]) -> config_protoc
     return settings
 }
 
-// The substitution policy written, unchecked: the supervisor checks each entry when it reads it. Whether the store kept it.
+// The substitution policy written, unchecked: the update service checks it. Whether the store kept it.
 write_substitutions :: fn(supervisor: ptr[mut Supervisor], policy: bundle.Substitutions) -> bool {
     settings :: substitutions_connection(supervisor) or_return false
     value := os.Outgoing.{}
@@ -2080,37 +1965,40 @@ own_hash :: fn(supervisor: ptr[mut Supervisor], name: string) -> bundle.Hash? {
     text_buffer.append(&label, "library:")
     text_buffer.append(&label, name)
     memory :: slop_os.find_grant(supervisor.block, text_buffer.as_string(&label), .Memory) or_return null
-    mapped :: mapped_library(supervisor, memory) or_return null
-    hash :: bundle.hash_of(mapped.bytes)
-    _ = slop_os.memory_unmap(supervisor.block.space, mapped.address)
-    return hash
+    return substitution.library_hash(supervisor.block, memory)
 }
 
 /*
- * test_substitution, once everything has started: a policy putting greeting in service_kit's place, refused, as it
- * doesn't export what service_kit does; then service_kit_plus, service_kit's second build with one export more, taken,
- * and hello started again with it; then the policy emptied, and hello started again with service_kit.
+ * test_substitution, over two boots of a disk. The first: a policy putting greeting in service_kit's place, refused by
+ * the update service, as it doesn't export what service_kit does; then service_kit_plus, service_kit's second build
+ * with one export more, staged as the next generation. The second, that generation: the supervisor's own service_kit
+ * is service_kit_plus, as the root task gave it.
  */
 check_substitution :: fn(supervisor: ptr[mut Supervisor]) {
     original :: own_hash(supervisor, "service_kit.library") or_return void
     plus :: own_hash(supervisor, "service_kit_plus.library") or_return void
+    if bundle.same(original, plus) {
+        log_line.write(supervisor.log, "supervisor: test_substitution: booted generation % with service_kit_plus in service_kit's place",
+            supervisor.generation)
+        return void
+    }
     greeting :: own_hash(supervisor, "greeting.library") or_return void
     policy := bundle.Substitutions.{count = 1}
     policy.entries[0] = bundle.Substitution.{from = original, to = greeting}
     written := write_substitutions(supervisor, policy)
-    refused :: read_substitutions(supervisor) == 0
+    refused :: match ask_substitute(supervisor, policy) {
+        case Refused => true
+        case _ => false
+    }
     policy.entries[0].to = plus
     written = written && write_substitutions(supervisor, policy)
-    taken :: read_substitutions(supervisor) == 1
-    on_plus :: kill_and_wait(supervisor, "hello", "test_substitution")
-    policy.count = 0
-    written = written && write_substitutions(supervisor, policy)
-    taken_back :: read_substitutions(supervisor) == 0
-    on_original :: kill_and_wait(supervisor, "hello", "test_substitution")
-    log_line.write(supervisor.log, "supervisor: test_substitution: greeting for service_kit %, service_kit_plus %, hello %; taken back %, hello %",
-        if refused { "refused" } else { "taken" }, if taken && written { "taken" } else { "refused" },
-        if on_plus { "started again on it" } else { "not started again" }, if taken_back { "yes" } else { "no" },
-        if on_original { "started again on service_kit" } else { "not started again" })
+    staged := cast[u64](0)
+    match ask_substitute(supervisor, policy) {
+        case Staged(number) => staged = number
+        case _ => {}
+    }
+    log_line.write(supervisor.log, "supervisor: test_substitution: greeting for service_kit %, service_kit_plus staged as generation %",
+        if refused && written { "refused" } else { "taken" }, staged)
 }
 
 /*

@@ -12,6 +12,12 @@
  * - what isn't kept is collected: the records of all but the generation that booted, any newer one, the newest
  *   permanent one before it, and the recovery generation, and every object none of those names. limine.conf is written
  *   again from what's kept.
+ *
+ * And when the supervisor passes on the substitution policy the config store asks for (Substitute, decisions/0123,
+ * 0125): unless the newest generation has it already, each entry is checked, from a library of the booted generation's
+ * boot set and to one there or in the bundle store, by library_interface.check; if every one passes, the booted
+ * generation is staged again, numbered after the newest, with the policy as its substitutions.records and each
+ * substitute in its boot set, tentative and the default, so the next boot runs with it and a bad one is rolled back.
  */
 package update_service
 
@@ -23,6 +29,10 @@ import files from "std/os/slop_os"
 import bundle from "../../bundle"
 import generations from "../../generations"
 import service_kit from "../../libraries/service_kit"
+import library_interface from "../../library_interface"
+import strings from "std"
+import text_buffer from "std"
+import substitution from "../../substitution"
 import bundle_store from "../../protocols/bundle_store"
 import update from "../../protocols/update"
 
@@ -109,11 +119,13 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
                 return void
             }
         }
+        answer := update.Response.Done
         match os.message_of[update.Request](into)^ {
             case Booted(booted) => booted_as(service, booted)
+            case Substitute(asked) => answer = substitute(service, asked)
         }
         out := os.Outgoing.{}
-        os.begin[update.Response](&out)^ = .Done
+        os.begin[update.Response](&out)^ = answer
         _ = update.send_response(end, service.port, &out)
     }
 }
@@ -277,6 +289,166 @@ collect :: fn(service: ptr[mut Service], current: u64) {
             _ = os.delete_file_in(service.esp, generations.object_path(hash, &path_storage))
         }
     }
+}
+
+/*
+ * The substitution policy asked for: nothing if the newest generation has it, refused if an entry doesn't pass the
+ * check, or the booted generation staged again with it.
+ */
+substitute :: fn(service: ptr[mut Service], asked: update.SubstituteOf) -> update.Response {
+    booted :: read_record(service, asked.generation) or_return .Refused
+    newest :: newest_number(service)
+    current :: read_record(service, newest) or_else booted
+    if same_policy(policy_in(service, &current), asked.policy) {
+        return .Done
+    }
+    made := booted
+    made.number = newest + 1
+    made.state = generations.STATE_TENTATIVE
+    // Its boot set without the booted generation's policy
+    kept := cast[u32](0)
+    for i in cast[usize](0)..<made.files.count {
+        if i < cast[usize](made.file_count) && generations.text_of(&made.files[i].name) != substitution.POLICY_FILE {
+            if cast[usize](kept) < made.files.count {
+                made.files[kept] = made.files[i]
+            }
+            kept += 1
+        }
+    }
+    made.file_count = kept
+    for &entry, i in asked.policy.entries {
+        if cast[u64](i) >= asked.policy.count {
+            break
+        }
+        old :: library_in(service, &booted, entry.from) or_else bundle.Hash.{}
+        if !bundle.same(old, entry.from) {
+            runtime.log_warn("a substitution is refused: generation % has no library with its hash", booted.number)
+            return .Refused
+        }
+        old_bytes :: object_on_esp(service, entry.from) or_return .Refused
+        defer runtime.free_array(old_bytes)
+        new_bytes :: match object_on_esp(service, entry.to) {
+            case Some(found) => found
+            case None => match object_of(service, entry.to) {
+                case Some(found) => found
+                case None => {
+                    runtime.log_warn("a substitution is refused: its substitute is neither on the ESP nor in the store")
+                    return .Refused
+                }
+            }
+        }
+        defer runtime.free_array(new_bytes)
+        match library_interface.check(old_bytes, new_bytes) {
+            case Some(why) => {
+                runtime.log_warn("a substitution is refused: %", why)
+                return .Refused
+            }
+            case None => {}
+        }
+        // The substitute in the boot set, as <the start of its hash>.library, unless it's there already
+        if library_in(service, &made, entry.to) is_none {
+            if !on_esp(service, entry.to) && !write_object(service, entry.to, new_bytes) {
+                return .Refused
+            }
+            hex_storage : u8[64]
+            hex :: bundle.hex(entry.to, &hex_storage)
+            name_storage : u8[64]
+            name := text_buffer.make(name_storage)
+            text_buffer.append(&name, if hex.count >= 16 { hex[0..<16] } else { hex })
+            text_buffer.append(&name, ".library")
+            if !add_file(&made, text_buffer.as_string(&name), entry.to) {
+                return .Refused
+            }
+        }
+    }
+    record :: substitution.policy_record(asked.policy)
+    record_hash :: bundle.hash_of(record)
+    if !on_esp(service, record_hash) && !write_object(service, record_hash, record) {
+        return .Refused
+    }
+    if !add_file(&made, substitution.POLICY_FILE, record_hash) || (generations.check(&made) is_some) || !write_record(service, &made) {
+        return .Refused
+    }
+    runtime.log_info("generation % staged with % substitutions, booted next", made.number, asked.policy.count)
+    collect(service, asked.generation)
+    return .Staged(made.number)
+}
+
+// The policy a generation's boot set has, or none.
+policy_in :: fn(service: ptr[mut Service], generation: ptr[generations.Generation]) -> bundle.Substitutions {
+    for i in cast[usize](0)..<generation.files.count {
+        if i >= cast[usize](generation.file_count) || generations.text_of(&generation.files[i].name) != substitution.POLICY_FILE {
+            continue
+        }
+        bytes :: object_on_esp(service, generation.files[i].hash) or_return bundle.Substitutions.{}
+        defer runtime.free_array(bytes)
+        return substitution.policy_of(bytes) or_else bundle.Substitutions.{}
+    }
+    return bundle.Substitutions.{}
+}
+
+same_policy :: fn(a: bundle.Substitutions, b: bundle.Substitutions) -> bool {
+    if a.count != b.count {
+        return false
+    }
+    for i in cast[usize](0)..<a.entries.count {
+        if cast[u64](i) < a.count && (!bundle.same(a.entries[i].from, b.entries[i].from) || !bundle.same(a.entries[i].to, b.entries[i].to)) {
+            return false
+        }
+    }
+    return true
+}
+
+// The hash of a library in a generation's boot set whose file has hash, or null.
+library_in :: fn(service: ptr[mut Service], generation: ptr[generations.Generation], hash: bundle.Hash) -> bundle.Hash? {
+    for i in cast[usize](0)..<generation.files.count {
+        if i < cast[usize](generation.file_count) && strings.ends_with(generations.text_of(&generation.files[i].name), ".library")
+            && bundle.same(generation.files[i].hash, hash) {
+            return hash
+        }
+    }
+    return null
+}
+
+// A file added to a generation's boot set: whether there was room and the name fits.
+add_file :: fn(generation: ptr[mut generations.Generation], name: string, hash: bundle.Hash) -> bool {
+    at :: cast[usize](generation.file_count)
+    if at >= generation.files.count || !generations.set_name(&generation.files[at].name, name) {
+        return false
+    }
+    generation.files[at].hash = hash
+    generation.file_count += 1
+    return true
+}
+
+// The newest generation's number but the recovery generation's, 0 if there's none.
+newest_number :: fn(service: ptr[mut Service]) -> u64 {
+    newest := cast[u64](0)
+    listed :: os.list_directory_in(service.esp, generations.RECORDS) or_return 0
+    defer os.free_directory_listing(listed)
+    for entry in listed {
+        number :: number_of(entry.name) or_continue
+        if number != generations.RECOVERY_NUMBER && number > newest {
+            newest = number
+        }
+    }
+    return newest
+}
+
+// An object's bytes from the ESP, which the caller frees, or null.
+object_on_esp :: fn(service: ptr[mut Service], hash: bundle.Hash) -> u8[]? {
+    path_storage : u8[128]
+    text :: os.read_entire_file_in(service.esp, generations.object_path(hash, &path_storage)) or_return null
+    return bit_cast[u8[]](text)
+}
+
+write_object :: fn(service: ptr[mut Service], hash: bundle.Hash, bytes: u8[]) -> bool {
+    path_storage : u8[128]
+    if os.write_entire_file_in(service.esp, generations.object_path(hash, &path_storage), bit_cast[string](bytes)) != null {
+        runtime.log_warn("an object couldn't be written to the ESP")
+        return false
+    }
+    return true
 }
 
 // The kernel's hash, and every boot-set file's.

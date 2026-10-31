@@ -39,11 +39,6 @@ From the survey of Hemera's docs against its compiler (2026-10-24):
   can't be built.
 - **Signals**: `multitasking.md` describes per-carrier alternate signal stacks, but the runtime installs no signal
   handlers on Linux. This doesn't affect SlopOS (section 2, *Fibers*).
-- **A typed library's process state** (found 2026-10-31, `decisions/0121`): a library has its own copy of `base`, and
-  `intrinsics.process_state()` there is the library's own global, zeroed, so `base` code in a library that reads it,
-  like SlopOS's `runtime.reserve_addresses` or entry grants, finds no startup block. `service_kit` keeps the two
-  functions that reserve addresses out of its exports for now. `runtime.bind_libraries` could hand each library the
-  program's state, through its interface record.
 
 ## 2. Design Notes
 
@@ -131,6 +126,9 @@ address checked as its own type (`cast[ptr[u8]](1.5)` had compiled); `--output=n
 allocation for fault injection's hosted sweeps (`0096`, `0104`); base's `array_try_reserve`, `array_try_add` and
 `array_try_copy` (`0104`); and `std`'s ranked spin locks, `lock_ranked`, `lock_ranked_after` and `unlock_ranked` over a
 `HeldRanks` (`0106`).
+Then from 9e and 9f (2026-10-31): typed libraries on SlopOS, `base`'s loader binding them from grants (`0120`), and a
+library's `base` sharing the program's process state, found when `service_kit` couldn't reserve addresses (`0121`,
+`0124`).
 
 ## 4. Features That Look Like a Strong Fit
 

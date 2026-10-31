@@ -35,6 +35,8 @@ import scheduler_protocol from "../../protocols/scheduler"
 import supervision from "../../protocols/supervision"
 import random_stream from "../../random_stream"
 import service_kit from "../../libraries/service_kit"
+import bundle from "../../bundle"
+import substitution from "../../substitution"
 // Only for the build, which writes system.records from the root task's program (decisions/0110)
 import system_config from "../../system_config"
 import system_records from "../../system_records"
@@ -146,6 +148,12 @@ Root :: struct {
     scheduler_port : slop_os.Port,
     started : Started[MAX_STARTED],
     started_count : usize,
+    // The generation's substitution policy applied (decisions/0125): each library of its own the policy replaces, by
+    // its name, and the substitute's memory, which every launch is given in its place
+    substituted : os.LaunchLibrary[bundle.MAX_SUBSTITUTIONS],
+    substituted_count : usize,
+    // What a launch is given of them: a copy of each substitute's handle
+    launch_libraries : os.LaunchLibrary[bundle.MAX_SUBSTITUTIONS],
 }
 
 main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line: slop_os.Memory, cpu_budget: slop_os.CpuBudget) -> int {
@@ -164,6 +172,7 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     root := Root.{block = block, log = debug_log, records = records, records_module = records_module,
         scheduler = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     words :: service_kit.text_of(block, command_line) or_return 4
+    apply_substitutions(&root)
     // The generation Limine's entry booted, which it says on the command line (decisions/0113); none from an ISO
     if service_kit.has_word(words, "recovery") {
         log_line.write(debug_log, "root task: booted the recovery generation")
@@ -253,7 +262,7 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         case Error(error) => {}
     }
     match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, supervisor.main, grants,
-        os.LaunchOptions.{cpu_budget = budget_for(&root, service.name)}) {
+        os.LaunchOptions.{cpu_budget = budget_for(&root, service.name), libraries = substitutes(&root)}) {
         case Ok(launched) => {
             remember(&root, service.name, launched.process)
             log_line.write(root.log, "root task: started %", service.name)
@@ -419,7 +428,13 @@ start_with_loader :: fn(root: ptr[mut Root], name: string, grants: process_build
         if count >= all.count {
             return .Error("too many grants")
         }
-        all[count] = process_builder.grant(label, slop_os.handle_duplicate(grant.handle, library_rights) or_return .Error("a library can't be shared"))
+        given := grant.handle
+        for &kept, i in root.substituted {
+            if i < root.substituted_count && label.count == "library:".count + kept.name.count && strings.ends_with(label, kept.name) {
+                given = cast[slop_os.Handle](kept.memory)
+            }
+        }
+        all[count] = process_builder.grant(label, slop_os.handle_duplicate(given, library_rights) or_return .Error("a library can't be shared"))
         count += 1
     }
     target :: process_builder.Target.{process = process, space = space, budget = budget}
@@ -525,7 +540,9 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform, cp
             case Error(error) => {}
         }
     }
-    libraries :: if library_count <= library_storage.count { library_storage[0..<library_count] } else { library_storage[0..<0] }
+    // Without changed builds, the generation's substitutes
+    libraries :: if library_count == 0 { substitutes(root) } else if library_count <= library_storage.count { library_storage[0..<library_count] }
+        else { library_storage[0..<0] }
     launched := os.Launched.{}
     match os.launch(manager, root.manager_port, name, cast[slop_os.Memory](module), TEST_BUDGET, test_syscalls.main, grants,
         os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = 0}, libraries = libraries}) {
@@ -581,7 +598,7 @@ start_platform :: fn(root: ptr[mut Root], platform_capability: slop_os.Platform,
     }
     manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
     match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, platform.main, grants,
-        os.LaunchOptions.{cpu_budget = budget_for(root, service.name)}) {
+        os.LaunchOptions.{cpu_budget = budget_for(root, service.name), libraries = substitutes(root)}) {
         case Ok(launched) => {
             remember(root, service.name, launched.process)
             log_line.write(root.log, "root task: started %", service.name)
@@ -615,7 +632,8 @@ start_scheduler :: fn(root: ptr[mut Root], cpu_budget: slop_os.CpuBudget) {
         system = records_copy(root) or_return void,
     }
     manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
-    match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, scheduler.main, grants) {
+    match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, scheduler.main, grants,
+        os.LaunchOptions.{libraries = substitutes(root)}) {
         case Ok(launched) => {
             remember(root, service.name, launched.process)
             log_line.write(root.log, "root task: started %", service.name)
@@ -702,6 +720,64 @@ kill :: fn(root: ptr[mut Root], name: string) {
             _ = slop_os.process_kill(started.process)
         }
     }
+}
+
+/*
+ * The generation's substitution policy, its boot-set file substitutions.records if it has one (decisions/0123, 0125),
+ * applied: each entry whose from is one of the root task's libraries, by its file's hash, and whose to is another that
+ * passes the check against it, its substitute from then on. The root task itself keeps what it was bound to.
+ */
+apply_substitutions :: fn(root: ptr[mut Root]) {
+    module :: find_module(root.block, substitution.POLICY_FILE) or_return void
+    file :: substitution.mapped(root.block, module) or_return void
+    policy :: substitution.policy_of(file.bytes)
+    substitution.unmap(root.block, file)
+    found :: match policy {
+        case Some(read) => read
+        case None => {
+            log_line.write(root.log, "root task: % isn't a substitution policy", substitution.POLICY_FILE)
+            return void
+        }
+    }
+    for &entry, i in found.entries {
+        if cast[u64](i) >= found.count || root.substituted_count >= root.substituted.count {
+            break
+        }
+        old :: substitution.own_library(root.block, entry.from) or_continue
+        new :: substitution.own_library(root.block, entry.to) or_continue
+        match substitution.check(root.block, cast[slop_os.Handle](old.memory), cast[slop_os.Handle](new.memory)) {
+            case Some(why) => log_line.write(root.log, "root task: a substitution of % is refused: %", old.name, why)
+            case None => {
+                place :: root.substituted_count
+                if place < root.substituted.count {
+                    root.substituted[place] = os.LaunchLibrary.{name = old.name, memory = new.memory}
+                    root.substituted_count = place + 1
+                    hex_storage : u8[64]
+                    log_line.write(root.log, "root task: % is substituted by %", old.name, bundle.hex(entry.to, &hex_storage))
+                }
+            }
+        }
+    }
+}
+
+// What a launch is given in place of the root task's own libraries: a copy of each substitute's handle.
+substitutes :: fn(root: ptr[mut Root]) -> os.LaunchLibrary[] {
+    library_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_EXECUTE)
+        | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    given := cast[usize](0)
+    for &kept, i in root.substituted {
+        if i >= root.substituted_count || given >= root.launch_libraries.count {
+            break
+        }
+        match slop_os.handle_duplicate(cast[slop_os.Handle](kept.memory), library_rights) {
+            case Ok(copy) => {
+                root.launch_libraries[given] = os.LaunchLibrary.{name = kept.name, memory = cast[slop_os.Memory](copy)}
+                given += 1
+            }
+            case Error(error) => {}
+        }
+    }
+    return if given <= root.launch_libraries.count { root.launch_libraries[0..<given] } else { root.launch_libraries[0..<0] }
 }
 
 // The boot module's grant, "module:<module>".

@@ -339,7 +339,10 @@ mapped from their memory, a library's `base` sharing the program's process state
 generations, a change staged by the update service and kept only if it boots healthy (with the owner, from
 `design/lessons.md` §2.1); **9f3** generations that change only services applied live (§2.3). Closed there: the
 process manager loading by bundle hash, as launchers resolve bundles; `Secret[T]`, as Hemera's `#secret` is extended
-in 10b. Then B and Perf's stages, each planned as it starts, before M10.
+in 10b. Then B and Perf's stages, each planned as it starts, before M10. 9f1 done 2026-10-31 (`decisions/0124`): boot
+modules' code mapped from their memory, and a library's `base` sharing the program's process state. 9f2 done 2026-10-31
+(`decisions/0125`): the policy a boot-set file the root task applies, a change asked for in the config store staged by
+the update service as the next generation.
 
 Added by `decisions/0097`: in **9c**, the benchmarks with baselines (*Perf*, below), the memory pressure signal and
 evictable pager pages, and slopfs refusing names with control, bidirectional or invisible characters; in **9d**,
