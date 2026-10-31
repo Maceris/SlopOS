@@ -59,6 +59,9 @@ AARCH64_CLOCK_LINE = "[user] platform: the real-time clock (Pl031) claimed"
 X86_TRANSLATING_LINE = "[info] IOMMU 0: translating, 256 interrupts remapped, its faults to CPU 0's interrupt 48"
 AARCH64_TRANSLATING_LINE = "[info] IOMMU 0: translating, 0 interrupts remapped, its faults read at CPU 0's ticks"
 
+# What the root task says of a boot every service the system needs came up in (decisions/0115)
+HEALTHY_LINE = "--expect-line=[user] root task: the system is healthy"
+
 # Name, the code expected, and boot.py's arguments
 # What booting from the image builder's disk checks: the disk's five partitions, the FAT server on its EFI system
 # partition, which Limine was read from, and the disk check's lines and writes, as on the test disk
@@ -80,6 +83,7 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
     "--expect-line=[user] supervisor: disk_check from the bundle store", "--expect-line=[user] hello: heap working, random numbers working",
     "--expect-line=[user] config: serving",
     "--expect-line=[user] root task: booted generation 1",
+    HEALTHY_LINE,
     "--expect-line=[user] supervisor: the system configuration's override tunes 0 services",
     "--expect-line=[user] hello: config: declared repeats 1, wrote an override kept, read it back merged, by hello; rolled back kept, repeats 1",
     "--expect-line=[user] disk_check: on the EFI system partition, read the host's files, wrote, moved and read back its own, "
@@ -129,6 +133,7 @@ TESTS = [
         "--expect-line=[user] hello: heap working, random numbers working",
         "--expect-line=[user] hello: the entropy service gave 32 random bytes", "--expect-line=[user] root task: the supervisor started hello",
         "--expect-line=[user] platform: serving", "--expect-line=[user] root task: the supervisor started all 4 of its services",
+        HEALTHY_LINE,
         "--expect-line=[info] root task ended with code 0"]),
     # The IOMMU the platform service found in the firmware tables, which the kernel identified
     ("registers the IOMMU from the firmware tables", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
@@ -249,6 +254,11 @@ TESTS = [
         "--expect-line=[user] supervisor: test_store: with 64 KiB of pages kept, read hello's program back whole twice, the rest given back "
         "under pressure",
         "--expect-line=[user] supervisor: test_store: hello's bundle's manifest is its entry's schema"])),
+    ("boots degraded, with a record of why, when a service the system needs ends for good", 7, with_before_qemu(
+        [argument.replace("test_services", "test_services test_degraded") for argument in BOOT_DISK_ARGUMENTS if argument != HEALTHY_LINE], [
+        "--expect-line=[user] supervisor: degraded: hello ended for good, 4294967296",
+        "--expect-line=[user] root task: the boot is degraded: 1 services the system needs aren't up",
+        "--expect-disk-text=hello: ended for good"])),
     ("keeps an override of the system configuration in the config store, and starts what it tunes as it says", 7, with_before_qemu(
         [argument.replace("test_services", "test_services test_system_config") for argument in BOOT_DISK_ARGUMENTS], [
         "--expect-line=[user] supervisor: the system configuration's override tunes 1 services",

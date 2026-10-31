@@ -80,6 +80,15 @@ CpuShare :: struct {
  * The budget every service without one of its own runs on, at a middling priority: half a CPU, so that what has budgets
  * of its own is never kept waiting by everything else, which runs on in the background band once this is spent.
  */
+/*
+ * Dependencies (decisions/0113, 0115): an os.Channel[P] a service takes is required, and an optional one optional; a
+ * service named in LATE is one the system is healthy without, as the test devices' drivers are. What isn't late, and is
+ * started, has to be up within its deadline, DEFAULT_DEADLINE_MS from boot unless it has its own, or the boot is
+ * degraded.
+ */
+LATE :: string.["edu_dma", "virtio_input"]
+DEFAULT_DEADLINE_MS : u32 : 120_000
+
 DEFAULT_CPU :: CpuShare.{priority = 100, period_ns = 10_000_000, time_ns = 5_000_000}
 
 // What talks to people runs first: a tenth of a CPU each, at a high priority
@@ -115,6 +124,8 @@ Service :: struct {
      * the supervisor does everything else it starts, up to three times a minute (decisions/0077, 0093)
      */
     not_restarted : bool,
+    // How long it has to be up, from boot, in milliseconds (decisions/0115); 0 for DEFAULT_DEADLINE_MS
+    deadline_ms : u32,
 }
 
 // Whether a service is a driver, with devices it takes.
@@ -246,7 +257,7 @@ service :: fn(name: string) -> Service? {
 RECORDS :: #run make_records()
 
 make_records :: fn() -> system_records.SystemRecords {
-    made := system_records.SystemRecords.{magic = system_records.MAGIC}
+    made := system_records.SystemRecords.{magic = system_records.MAGIC, default_deadline_ms = DEFAULT_DEADLINE_MS}
     made.default_cpu = system_records.CpuRecord.{has = 1, priority = DEFAULT_CPU.priority, period_ns = DEFAULT_CPU.period_ns,
         time_ns = DEFAULT_CPU.time_ns, cpus = DEFAULT_CPU.cpus}
     for offered in ROOT_TASK_SERVES {
@@ -270,6 +281,8 @@ make_records :: fn() -> system_records.SystemRecords {
         record.trusted_with_dma = if each.trusted_with_dma { 1 } else { 0 }
         record.boot_set = if each.boot_set { 1 } else { 0 }
         record.not_restarted = if each.not_restarted { 1 } else { 0 }
+        record.late = if is_late(each.name) { 1 } else { 0 }
+        record.deadline_ms = each.deadline_ms
         record.budget = each.budget
         record.vendor = each.devices.vendor
         record.device = each.devices.device
@@ -312,6 +325,16 @@ make_records :: fn() -> system_records.SystemRecords {
         made.service_count += 1
     }
     return made
+}
+
+// Whether a service is in LATE.
+is_late :: fn(name: string) -> bool {
+    for each in LATE {
+        if each == name {
+            return true
+        }
+    }
+    return false
 }
 
 serve :: fn(records: ptr[mut system_records.SystemRecords], tag: u64, by: u8) {

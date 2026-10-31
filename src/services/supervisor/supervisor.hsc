@@ -289,6 +289,18 @@ Started :: struct {
     ring : slop_os.Memory,
     // Ended, and not to be started again
     done : bool,
+    // The code it last ended with
+    code : u64,
+}
+
+// The most services a boot's assessment notes missing besides those that ended for good
+MAX_MISSING :: 16
+
+// A service the system needs that isn't up (decisions/0115): which, why, and the code that says more, or 0.
+Missing :: struct {
+    name : string,
+    reason : string,
+    code : u64,
 }
 
 // A connector the supervisor serves: its end, what it dials, by index in started, and how many times it has.
@@ -359,6 +371,11 @@ Supervisor :: struct {
     records : ptr[mut system_records.SystemRecords],
     // The boot set's, as the root task gave it, which an override is applied to
     boot_records : ptr[system_records.SystemRecords],
+    // What a boot's assessment finds missing besides what ended for good: what didn't start, was skipped, or was late
+    missing : Missing[MAX_MISSING],
+    missing_count : usize,
+    // When it started, from which each service's deadline counts
+    started_at : u64,
     // Its connection to the system configuration's override in the config store, once it's had one
     overrides_end : slop_os.Channel,
     overrides_port : slop_os.Port,
@@ -455,6 +472,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     test_restart_services := false
     test_store := false
     test_system_config := false
+    test_degraded := false
+    supervisor.started_at = slop_os.clock_monotonic() or_else 0
     supervisor.command_line = command_line
     match command_line {
         case Some(memory) => {
@@ -466,6 +485,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             test_restart_services = service_kit.has_word(text, "test_restart_services")
             test_store = service_kit.has_word(text, "test_store")
             test_system_config = service_kit.has_word(text, "test_system_config")
+            test_degraded = service_kit.has_word(text, "test_degraded")
         }
         case None => {}
     }
@@ -528,11 +548,15 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         // And has had time to show its banner again, and echo what's typed after it, before the root task's last second
         pause(&supervisor, TEST_RESTART_PAUSE)
     }
-    // The disk check is done once it's checked, which it reports before everything has started
+    // The disk check is done once it's checked, which it reports before everything has started, or by its deadline
+    disk_check_by :: deadline_of(&supervisor, "disk_check")
     loop {
-        wait_and_handle(&supervisor)
+        wait_and_handle_until(&supervisor, disk_check_by)
     }
-    while !ended_for_good(&supervisor, "disk_check")
+    while !ended_for_good(&supervisor, "disk_check") && (slop_os.clock_monotonic() or_else 0) < disk_check_by
+    if !ended_for_good(&supervisor, "disk_check") {
+        note_missing(&supervisor, "disk_check", "not done by its deadline", 0)
+    }
     if test_dma_fault {
         // Until edu_dma has ended for good: refused DMA memory and ended with 0, or killed too often
         loop {
@@ -552,9 +576,19 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     if test_restart_services {
         restart_services(&supervisor, storage_slot)
     }
+    if test_degraded {
+        // hello, killed until it isn't started again, which leaves the boot degraded
+        loop {
+            if !kill_and_wait(&supervisor, "hello", "test_degraded") {
+                break
+            }
+        }
+    }
     log_line.write(supervisor.log, "supervisor: started % services", supervisor.started_count)
     // A benchmark (decisions/0112): the time since the kernel's clock started, a boot's to everything started
     log_line.write(supervisor.log, "supervisor: perf: boot_to_healthy %", slop_os.clock_monotonic() or_else 0)
+    // Assessed first, which the root task hears before it's told everything has started
+    assess(&supervisor)
     tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))
     loop {
         wait_and_handle(&supervisor)
@@ -566,8 +600,13 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
  * empty, as each is once it's made, since only a read that finds nothing has a channel's next message wake the port.
  */
 wait_and_handle :: fn(supervisor: ptr[mut Supervisor]) {
+    wait_and_handle_until(supervisor, slop_os.NO_DEADLINE)
+}
+
+// wait_and_handle's, waiting no later than deadline.
+wait_and_handle_until :: fn(supervisor: ptr[mut Supervisor], deadline: u64) {
     packets : slop_os.Packet[8]
-    taken :: slop_os.port_wait(supervisor.port, packets, slop_os.NO_DEADLINE) or_else 0
+    taken :: slop_os.port_wait(supervisor.port, packets, deadline) or_else 0
     for packet, i in packets {
         if i >= cast[usize](taken) {
             break
@@ -609,6 +648,7 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
     }
     entry :: &supervisor.started[index]
     entry.running = false
+    entry.code = code
     log_line.write(supervisor.log, "supervisor: % ended", entry.name)
     if cast[slop_os.Handle](entry.budget) != slop_os.NO_HANDLE {
         _ = slop_os.handle_close(cast[slop_os.Handle](entry.budget))
@@ -789,8 +829,90 @@ open_system :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
                 }
             }
         }
+        // What needs the system volume can't start without it, if it hadn't started before
+        case None => {
+            if supervisor.store_end == NONE {
+                note_missing(supervisor, "bundle_store", "skipped: the storage manager gave no system volume", 0)
+            }
+            if supervisor.config_end == NONE {
+                note_missing(supervisor, "config", "skipped: the storage manager gave no system volume", 0)
+            }
+        }
+    }
+}
+
+/*
+ * The boot's assessment (decisions/0115), once everything has started: every service the system needs, any that isn't
+ * late, is up, but those that ended for good with a code that isn't 0, and those noted missing: it's healthy, or
+ * degraded. A degraded boot is logged, said to the root task, and its record written to the system volume as
+ * boot/degraded, if there's one.
+ */
+assess :: fn(supervisor: ptr[mut Supervisor]) {
+    for i in cast[usize](0)..<supervisor.started_count {
+        if i < supervisor.started.count {
+            entry :: supervisor.started[i]
+            if entry.done && entry.code != 0 {
+                note_missing(supervisor, entry.name, "ended for good", entry.code)
+            }
+        }
+    }
+    if supervisor.missing_count == 0 {
+        log_line.write(supervisor.log, "supervisor: healthy: every service the system needs is up")
+        tell_root(supervisor, .Healthy)
+        return void
+    }
+    record : u8[..]
+    defer runtime.array_free(&record)
+    for i in cast[usize](0)..<supervisor.missing_count {
+        if i < supervisor.missing.count {
+            each :: supervisor.missing[i]
+            log_line.write(supervisor.log, "supervisor: degraded: % %, %", each.name, each.reason, each.code)
+            for text in string.[each.name, ": ", each.reason, "\n"] {
+                for character in text {
+                    _ = runtime.array_try_add(&record, cast[u8](character))
+                }
+            }
+        }
+    }
+    match system_directory(supervisor, "boot") {
+        case Some(boot) => {
+            directory, error :: os.directory_on(boot.end)
+            if error == null {
+                if os.write_entire_file_in(directory, "degraded", bit_cast[string](record[0..<record.count])) != null {
+                    log_line.write(supervisor.log, "supervisor: the degraded boot's record couldn't be written")
+                }
+                os.close_directory(directory)
+            }
+        }
         case None => {}
     }
+    tell_root(supervisor, .Degraded(cast[u32](supervisor.missing_count)))
+}
+
+// A service the system needs noted missing, unless it's late, or noted already, or there's no room left to note it.
+note_missing :: fn(supervisor: ptr[mut Supervisor], name: string, reason #escaping : string, code: u64) {
+    // Its name as the system records keep it, which outlives the caller's
+    service :: system_records.service_of(supervisor.records, name) or_return void
+    if service.late == 1 {
+        return void
+    }
+    kept :: system_records.text_of(&service.name)
+    for i in cast[usize](0)..<supervisor.missing_count {
+        if i < supervisor.missing.count && supervisor.missing[i].name == name {
+            return void
+        }
+    }
+    at :: supervisor.missing_count
+    if at < supervisor.missing.count {
+        supervisor.missing[at] = Missing.{name = kept, reason = reason, code = code}
+        supervisor.missing_count = at + 1
+    }
+}
+
+// When the service named name has to be up by, from when the supervisor started.
+deadline_of :: fn(supervisor: ptr[Supervisor], name: string) -> u64 {
+    service :: system_records.service_of(supervisor.records, name) or_return slop_os.NO_DEADLINE
+    return supervisor.started_at + system_records.deadline_of(supervisor.records, service)
 }
 
 /*
@@ -2327,6 +2449,7 @@ failed :: fn(supervisor: ptr[mut Supervisor], name: string, error: os.LaunchErro
     // Its end was watched under the key of the entry it didn't get, which the next launch is watched under
     _ = slop_os.port_unbind(supervisor.port, cast[u64](next_slot(supervisor)))
     log_line.write(supervisor.log, "supervisor: % didn't start: %", name, error)
+    note_missing(supervisor, name, "didn't start", cast[u64](error) + 1)
     tell_root(supervisor, .Failed(report_of(name, cast[u64](error) + 1)))
 }
 

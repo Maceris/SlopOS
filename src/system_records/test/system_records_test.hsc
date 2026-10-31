@@ -92,6 +92,16 @@ main :: fn() -> int {
     if system_records.apply(&changed, &overrides) is_none {
         return 14
     }
+    // What the system needs can't require what only a late service serves
+    changed = made^
+    changed.services[0].late = 1
+    if system_records.check(&changed) is_none {
+        return 16
+    }
+    changed.services[1].late = 1
+    if system_records.check(&changed) is_some {
+        return 17
+    }
     // A protocol's tag is std/os's: FNV-1a of its name
     if system_records.tag_of("") != 0xcbf29ce484222325 || system_records.tag_of("a") != 0xaf63dc4c8601ec8c {
         return 15

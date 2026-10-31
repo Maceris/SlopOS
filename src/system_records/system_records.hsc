@@ -11,6 +11,10 @@
  *
  * Everything here is fixed-size plain data, flags and enums as bytes, so a copy's bytes are checked before they're
  * trusted, by check, wherever they came from.
+ *
+ * Dependencies (roadmap 9d2, decisions/0113, 0115): a channel parameter is required, or optional if its type is, and a
+ * service is late if the system needn't have it to be healthy. A required channel's server can't be late unless what
+ * requires it is too. Each service has a deadline to be up by, its own or the configuration's default.
  */
 package system_records
 
@@ -64,7 +68,11 @@ ServiceRecord :: struct {
     trusted_with_dma : u8,
     boot_set : u8,
     not_restarted : u8,
-    padding : u8[3],
+    // Whether the system is healthy without it (decisions/0115)
+    late : u8,
+    padding : u8[2],
+    // How long it has to be up, from boot, in milliseconds; 0 for the configuration's default
+    deadline_ms : u32,
     first_parameter : u32,
     parameter_count : u32,
 }
@@ -83,7 +91,8 @@ SystemRecords :: struct {
     service_count : u32,
     parameter_count : u32,
     served_count : u32,
-    padding : u32,
+    // A service's deadline to be up by, in milliseconds, unless it has its own
+    default_deadline_ms : u32,
     // The CPU share of every service without one of its own, as system_config.DEFAULT_CPU
     default_cpu : CpuRecord,
     // Protocols served by the root task, the supervisor or the storage manager themselves: their tags, and by which
@@ -170,7 +179,7 @@ check :: fn(records: ptr[SystemRecords]) -> Problem? {
             }
         }
         if service.starter > STARTER_STORAGE_MANAGER || service.by_manager > 1 || service.trusted_with_dma > 1 || service.boot_set > 1
-            || service.not_restarted > 1 {
+            || service.not_restarted > 1 || service.late > 1 {
             return Problem.{reason = "has a service with a flag that isn't one", service = at}
         }
         if service.budget == 0 || service.budget > MAX_BUDGET {
@@ -188,6 +197,10 @@ check :: fn(records: ptr[SystemRecords]) -> Problem? {
         for parameter in parameters_of(records, service) {
             if (parameter.kind == KIND_CHANNEL || parameter.kind == KIND_CONFIG) && !served(records, parameter.tag) {
                 return Problem.{reason = "has a channel no service serves", service = at}
+            }
+            // What the system needs can't require what it doesn't
+            if parameter.kind == KIND_CHANNEL && parameter.optional == 0 && service.late == 0 && served_only_late(records, parameter.tag) {
+                return Problem.{reason = "requires a channel only a late service serves", service = at}
             }
         }
     }
@@ -215,6 +228,37 @@ served :: fn(records: ptr[SystemRecords], tag: u64) -> bool {
         }
     }
     return false
+}
+
+// Whether only late services serve tag: no service that isn't late takes a listener for it, nor anything else serves it.
+served_only_late :: fn(records: ptr[SystemRecords], tag: u64) -> bool {
+    for i in cast[usize](0)..<records.served.count {
+        if i < cast[usize](records.served_count) && records.served[i] == tag {
+            return false
+        }
+    }
+    late_server := false
+    for i in cast[usize](0)..<records.services.count {
+        if i >= cast[usize](records.service_count) {
+            break
+        }
+        service :: &records.services[i]
+        for parameter in parameters_of(records, service) {
+            if parameter.kind == KIND_LISTENER && parameter.tag == tag {
+                if service.late == 0 {
+                    return false
+                }
+                late_server = true
+            }
+        }
+    }
+    return late_server
+}
+
+// A service's deadline to be up by, in nanoseconds: its own, or the configuration's default.
+deadline_of :: fn(records: ptr[SystemRecords], service: ptr[ServiceRecord]) -> u64 {
+    milliseconds :: if service.deadline_ms != 0 { service.deadline_ms } else { records.default_deadline_ms }
+    return cast[u64](milliseconds) * 1_000_000
 }
 
 /*

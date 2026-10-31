@@ -25,6 +25,10 @@ Request :: union {
     Failed(Report),
     // Everything it starts at boot has started or failed: how many started
     AllStarted(u32),
+    // The boot's assessment (decisions/0115), just before AllStarted: every service the system needs is up
+    Healthy,
+    // Or how many of them aren't: the boot is degraded, and its record says which and why
+    Degraded(u32),
 }
 
 Response :: union {
@@ -38,6 +42,8 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Ended(_) => true
         case Failed(_) => true
         case AllStarted(_) => true
+        case Healthy => true
+        case Degraded(_) => true
     }
 }
 

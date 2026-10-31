@@ -309,6 +309,8 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
                         return 13
                     }
                 }
+                case Healthy => log_line.write(root.log, "root task: the system is healthy")
+                case Degraded(count) => log_line.write(root.log, "root task: the boot is degraded: % services the system needs aren't up", count)
                 case AllStarted(count) => {
                     log_line.write(root.log, "root task: the supervisor started all % of its services", count)
                     if test_services {
