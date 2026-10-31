@@ -207,8 +207,10 @@ module_files :: fn() -> ptr[File][] {
 boot_modules :: fn(files: ptr[File][], hhdm_offset: u64, modules: mut boot_info.BootModule[]) -> boot_info.BootModule[] {
     runtime.assert(files.count <= modules.count, "boot_modules needs room for every module")
     for file, i in files {
+        // A generation's boot-set files are named by their hashes, and by their command lines for the kernel (decisions/0113)
+        line :: text(file.string)
         modules[i] = .{
-            name = file_name(text(file.path)),
+            name = if line.count != 0 { line } else { file_name(text(file.path)) },
             command_line = text(file.string),
             contents = .{cast[boot_info.PhysicalAddress](cast[u64](file.address) - hhdm_offset), file.size},
         }

@@ -79,6 +79,7 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
     "--expect-line=[user] supervisor: console from the bundle store", "--expect-line=[user] supervisor: hello from the bundle store",
     "--expect-line=[user] supervisor: disk_check from the bundle store", "--expect-line=[user] hello: heap working, random numbers working",
     "--expect-line=[user] config: serving",
+    "--expect-line=[user] root task: booted generation 1",
     "--expect-line=[user] supervisor: the system configuration's override tunes 0 services",
     "--expect-line=[user] hello: config: declared repeats 1, wrote an override kept, read it back merged, by hello; rolled back kept, repeats 1",
     "--expect-line=[user] disk_check: on the EFI system partition, read the host's files, wrote, moved and read back its own, "

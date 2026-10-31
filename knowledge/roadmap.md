@@ -313,7 +313,9 @@ and the partition server's faulty block connection swept under `robustness=on`. 
 9d planned 2026-10-30 (`decisions/0113`), in five parts: **9d1** generations on the ESP (records, boot-set files by hash,
 `limine.conf` entries); **9d2** dependency kinds, degraded boots and the supervisor's report of healthy; **9d3** the
 update service (staged updates installed, tentative made permanent, rollback, collection; booting a disk twice);
-**9d4** installations with `AppData` and `Config[T]`; **9d5** the recovery generation.
+**9d4** installations with `AppData` and `Config[T]`; **9d5** the recovery generation. 9d1 done 2026-10-30 (`decisions/0114`):
+generations' records and their objects on the ESP by hash, `limine.conf` written from them, and the root task told
+which it booted.
 
 Added by `decisions/0097`: in **9c**, the benchmarks with baselines (*Perf*, below), the memory pressure signal and
 evictable pager pages, and slopfs refusing names with control, bidirectional or invisible characters; in **9d**,

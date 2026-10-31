@@ -546,14 +546,9 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
     esp = folder / "boot_esp"
     for part in [esp / "EFI" / "BOOT", esp / "EFI" / "SlopOS", esp / "boot" / "limine", esp / "boot" / "modules"]:
         part.mkdir(parents=True)
-    shutil.copy(kernel, esp / "boot" / "kernel")
-    modules = ""
+    # Every program, as the disk check finds them there; the boot set boots from the generation's objects
     for program in programs:
         shutil.copy(program, esp / "boot" / "modules" / program.name)
-        if program.stem in BOOT_SET or program.name == SYSTEM_RECORDS:
-            modules += f"    module_path: boot():/boot/modules/{program.name}\n"
-    config = LIMINE_CONFIG.format(command_line=command_line, kaslr="yes" if kaslr else "no", modules=modules)
-    (esp / "boot" / "limine" / "limine.conf").write_text(config, newline="\n")
     shutil.copy(limine / "limine-bios.sys", esp / "boot" / "limine" / "limine-bios.sys")
     for name in ["BOOTX64.EFI", "BOOTAA64.EFI"]:
         shutil.copy(limine / name, esp / "EFI" / "BOOT" / name)
@@ -570,6 +565,14 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
                             capture_output=True, text=True)
     if stored.returncode != 0:
         sys.exit(f"boot.py: the store builder failed:\n{stored.stdout}{stored.stderr}")
+    # Generation 1 (decisions/0113): the kernel and the boot set as objects named by their hashes, its record, and
+    # limine.conf's entry for it, the root task first
+    boot_set = [program for program in programs if program.stem in BOOT_SET or program.name == SYSTEM_RECORDS]
+    generation_builder = next(image_builder.parent.glob("generation_builder*"))
+    generated = subprocess.run([str(generation_builder), str(esp), str(system / "store"), "1", "0", "yes" if kaslr else "no", command_line,
+                                str(kernel)] + [str(program) for program in boot_set], capture_output=True, text=True)
+    if generated.returncode != 0:
+        sys.exit(f"boot.py: the generation builder failed:\n{generated.stdout}{generated.stderr}")
     built = subprocess.run([str(image_builder), str(path), str(BOOT_DISK_SECTORS), f"--sealed={SEALED_VOLUME}:{SEALED_PASSPHRASE}",
                             f"test,{PARTITIONS[0][0]},{PARTITIONS[0][2]}",
                             f"test,{PARTITIONS[1][0]},{PARTITIONS[1][2]}", "bios,BIOS boot,2048",
