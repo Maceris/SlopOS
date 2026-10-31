@@ -352,8 +352,8 @@ TESTS = [
         "handles moved, messages went through the kernel and the rings, doorbells and Once bindings woke the right waiters, "
         "and closing an end reached the other"),
     program_test("maps memory objects, paid for by budgets", "test_memory",
-        "budgets split and closed, memory filled as it was touched and shared between mappings, and a write it didn't allow "
-        "stopped the thread"),
+        "budgets split and closed, memory filled as it was touched and shared between mappings, a write it didn't allow "
+        "stopped the thread, and 4 MiB mapped with large pages"),
     program_test("splits, sets and destroys CPU budgets", "test_cpu_budgets",
         "budgets split off the root's share and refused past it, set, and destroyed, what ran on them going to their parent"),
     program_test("reads I/O ports through a range of them", "test_io_ports",

@@ -247,6 +247,28 @@ split_down :: fn(allocator: ptr[mut FrameAllocator], block: u64, found: u64, ord
     return cast[boot_info.PhysicalAddress](block << FRAME_SHIFT)
 }
 
+/*
+ * A block of 2^order frames, each allocated on its own, as take_frame's are, so each is freed alone (give_frame) and
+ * the block merges again once they all are: memory mapped with a large page, whose frames are given back one at a
+ * time (decisions/0127, 0129).
+ */
+allocate_frames :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[boot_info.PhysicalAddress, FrameError] {
+    if robustness.fails(&allocator.faults, .Frame) {
+        return .Error(.OutOfMemory)
+    }
+    concurrency.lock(&allocator.lock)
+    defer concurrency.unlock(&allocator.lock)
+    block :: take_block(allocator, order)?
+    first :: cast[u64](block) >> FRAME_SHIFT
+    states :: allocator.states
+    for i in cast[u64](0)..<(cast[u64](1) << order) {
+        if first + i < cast[u64](states.count) {
+            states[first + i] = STATE_ALLOCATED
+        }
+    }
+    return .Ok(block)
+}
+
 // Like allocate, with the block's bytes zeroed.
 allocate_zeroed :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[boot_info.PhysicalAddress, FrameError] {
     address :: allocate(allocator, order)?

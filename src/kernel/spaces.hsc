@@ -290,6 +290,27 @@ map_pages_locked :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], ad
 }
 
 /*
+ * A large page mapped at address in a user address space, to the 2 MiB at physical: whether it was, which it isn't if
+ * any page of it is mapped already, as a fault in another of its pages may have done. Takes the space's lock as held.
+ */
+map_large_locked :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, physical: u64,
+    mapping: arch_interface.Mapping) -> bool {
+    tables : arch_interface.TableFrames
+    defer give_back_user_tables(kernel, space, &tables)
+    loop {
+        match arch.map(&space.table, cast[arch_interface.VirtualAddress](address), cast[arch_interface.PhysicalAddress](physical), .Size2M,
+            mapping, &tables) {
+            case Ok => return true
+            case Error(error) => {
+                if error != .NeedTableFrames || (refill_user_tables(kernel, space, &tables) is_some) {
+                    return false
+                }
+            }
+        }
+    }
+}
+
+/*
  * Unmap size bytes at address in a user address space, what of it is mapped, then shoot down the TLB
  * entries, and only then free the tables it emptied. The space must not be released meanwhile.
  */
@@ -331,6 +352,18 @@ unmap_some :: fn(table: ptr[mut arch.PageTable], address: u64, first: u64, pages
             case Error(error) => {
                 if error == .NeedFreedSpace {
                     break
+                }
+                // A large page of anonymous memory (decisions/0129): it's unmapped whole, as the mapping holds all of it
+                if error == .PartOfLargerPage {
+                    large :: (address + page * frames.FRAME_SIZE) & ~(LARGE_PAGE - 1)
+                    match arch.unmap(table, cast[arch_interface.VirtualAddress](large), .Size2M, freed, flush) {
+                        case Ok(physical) => {}
+                        case Error(again) => if again == .NeedFreedSpace {
+                            break
+                        }
+                    }
+                    page = (large + LARGE_PAGE - address) / frames.FRAME_SIZE
+                    continue
                 }
                 page += 1
             }

@@ -677,6 +677,16 @@ resolve_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arc
     if root.pager_binding != 0 {
         return resolve_paged_fault(kernel, thread, space, address, root, root_page, mapping_for(protection, memory.cache))
     }
+    // A whole 2 MiB of anonymous memory, where the mapping lines it up with a large page (decisions/0129)
+    match large_frame(kernel, memory, found, address, page) {
+        case Some(large) => {
+            start :: address & ~(LARGE_PAGE - 1)
+            if map_large_locked(kernel, space, start, large, mapping_for(protection, memory.cache)) {
+                return .Mapped
+            }
+        }
+        case None => {}
+    }
     frame :: frame_for(kernel, memory, page)
     if frame == 0 {
         return .Failed
@@ -687,6 +697,59 @@ resolve_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arc
         case Some(failure) => if failure == .AlreadyMapped { FaultOutcome.Mapped } else { FaultOutcome.Failed }
         case None => FaultOutcome.Mapped
     }
+}
+
+// A large page's bytes, and pages: a leaf of a memory object's page array.
+LARGE_PAGE : u64 : 2 * 1024 * 1024
+LARGE_ORDER : u64 : 9
+
+/*
+ * Large pages for anonymous memory (decisions/0127, 0129): the frame of the 2 MiB of memory around page, if a large
+ * page can map it at address: anonymous memory, not paged, a window or device memory, of 2 MiB or more, whose 2 MiB
+ * around page is whole, the mapping holds all of it at a 2 MiB-aligned address, and its leaf holds a 2 MiB block,
+ * given now if the leaf held nothing (with a block of the frame allocator's, frames each allocated on its own, so
+ * they're freed one at a time as any others are). Null if not, and the fault maps a page as before.
+ */
+large_frame :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], mapping: ptr[MemoryMapping], address: u64, page: u64) -> u64? {
+    if memory.physical != 0 || memory.parent != 0 || memory.pager_binding != 0 || memory.domain != 0 || memory.size < LARGE_PAGE {
+        return null
+    }
+    first :: page / PAGES_PER_LEAF * PAGES_PER_LEAF
+    start :: address - (page - first) * frames.FRAME_SIZE
+    if (first + PAGES_PER_LEAF) * frames.FRAME_SIZE > memory.size || start & (LARGE_PAGE - 1) != 0 || start < mapping.address
+        || start + LARGE_PAGE > mapping.address + mapping.size {
+        return null
+    }
+    held :: intrinsics.atomic_load_u64_acquire(page_slot(memory, first))
+    if held == 0 {
+        block :: cast[u64](frames.allocate_frames(&kernel.frames, LARGE_ORDER) or_return null)
+        intrinsics.mem_zero(cast[mut rawptr](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](block))), cast[usize](LARGE_PAGE))
+        // Each page claimed for the block; one a fault on the same page gave a frame first keeps it, and the block's
+        // frames that weren't claimed go back
+        whole := true
+        for i in cast[u64](0)..<PAGES_PER_LEAF {
+            frame :: block + i * frames.FRAME_SIZE
+            other, given :: intrinsics.interlocked_compare_exchange_u64(page_slot(memory, first + i), frame, 0)
+            if !given {
+                whole = false
+                frames.give_frame(&per_cpu().frame_cache, &kernel.frames, cast[boot_info.PhysicalAddress](frame))
+            }
+        }
+        if !whole {
+            return null
+        }
+        return block
+    }
+    // Given already, by a fault in another mapping: a large page maps it only if it's one block
+    if held & (LARGE_PAGE - 1) != 0 {
+        return null
+    }
+    for i in cast[u64](1)..<PAGES_PER_LEAF {
+        if intrinsics.atomic_load_u64_acquire(page_slot(memory, first + i)) != held + i * frames.FRAME_SIZE {
+            return null
+        }
+    }
+    return held
 }
 
 // How a mapping with protection, of memory with cache, is mapped.

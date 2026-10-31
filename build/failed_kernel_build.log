@@ -38,3 +38,7 @@ D:\Documents\Programming\SlopOS\src\kernel\paging.hsc(128,4): error E4008: Undec
 exit code 4294967295
 D:\Documents\Programming\SlopOS\src\kernel\scheduler.hsc(89,90): error E4031: Index not proven in bounds. this index isn't proven to be in bounds: check it against the count first, or loop over the elements (docs/types.md, Bounds Checking)
 
+--- hemera --setting=targets=kernel,stack_check=trap,kernel_output=C:\Users\chesb\AppData\Local\Temp\slopos-boot-tests-yftjydu_\kernel.elf,arch=x86_64 D:\Documents\Programming\SlopOS\src\build
+exit code 4294967295
+D:\Documents\Programming\SlopOS\src\kernel\spaces.hsc(305,45): error E4015: Type mismatch. && and || take booleans, not Optional[SpaceError]
+

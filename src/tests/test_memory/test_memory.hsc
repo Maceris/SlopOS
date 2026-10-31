@@ -28,6 +28,9 @@ MEMORY_SIZE : u64 : 32768
 MEMORY_PAGES :: 8
 TEST_LIMIT : u64 : 1 << 20
 CHILD_LIMIT : u64 : 65536
+// Large pages (decisions/0129): memory of two of them, mapped on a 2 MiB boundary, then a page off it
+LARGE : u64 : 2 * 1024 * 1024
+LARGE_MEMORY : u64 : 2 * LARGE
 // How long A gives B to be stopped.
 STOP_NANOSECONDS : u64 : 20_000_000
 // What A and B share, by its slots, and where B writes.
@@ -138,6 +141,53 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
         log_line.write(log, "%: its budget still has % bytes charged", NAME, test_kit.used(budget))
         return 31
     }
-    log_line.write(log, "%: budgets split and closed, memory filled as it was touched and shared between mappings, and a write it didn't allow stopped the thread", NAME)
+    // 4 MiB mapped 2 MiB-aligned takes two large pages, so none of the tables of 4 KiB pages it takes mapped a page off
+    costs :: page_tables_touching(block) or_return 32
+    if costs.aligned + 2 * PAGE > costs.unaligned {
+        log_line.write(log, "%: 4 MiB took % bytes of page tables mapped 2 MiB-aligned, and % mapped a page off", NAME, costs.aligned,
+            costs.unaligned)
+        return 34
+    }
+    log_line.write(log, "%: budgets split and closed, memory filled as it was touched and shared between mappings, a write it didn't allow stopped the thread, and 4 MiB mapped with large pages", NAME)
     return 0
+}
+
+/*
+ * What the page tables cost the process's budget as two objects of 4 MiB are touched, a page at a time: one mapped on a
+ * 2 MiB boundary, the other a page past one. Both are made and mapped first, and closed after, so nothing else is
+ * charged or given back meanwhile. Null if they can't be made or mapped.
+ */
+// What touching 4 MiB cost in page tables, mapped on a 2 MiB boundary and a page past one.
+TableCosts :: struct {
+    aligned : u64,
+    unaligned : u64,
+}
+
+page_tables_touching :: fn(block: ptr[slop_os.StartupBlock]) -> TableCosts? {
+    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
+    places : u64[2]
+    memories : slop_os.Memory[2]
+    for i in 0..<2 {
+        reserved :: runtime.reserve_addresses(cast[usize](LARGE_MEMORY + 2 * LARGE)) or_return null
+        boundary :: (reserved + LARGE - 1) & ~(LARGE - 1)
+        places[i] = if i == 0 { boundary } else { boundary + PAGE }
+        memories[i] = slop_os.memory_create(block.budget, LARGE_MEMORY) or_return null
+        if slop_os.memory_map(memories[i], block.space, places[i], 0, LARGE_MEMORY, read_write) is_error {
+            return null
+        }
+    }
+    costs : u64[2]
+    for at, i in places {
+        before :: test_kit.used(block.budget)
+        for page in cast[u64](0)..<LARGE_MEMORY / PAGE {
+            intrinsics.volatile_store_u64(cast[ptr[mut u64]](at + page * PAGE), page)
+        }
+        after :: test_kit.used(block.budget)
+        costs[i] = if after > before { after - before } else { 0 }
+    }
+    for i in 0..<2 {
+        _ = slop_os.memory_unmap(block.space, places[i])
+        _ = slop_os.handle_close(cast[slop_os.Handle](memories[i]))
+    }
+    return TableCosts.{aligned = costs[0], unaligned = costs[1]}
 }

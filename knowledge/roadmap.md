@@ -416,7 +416,8 @@ Planned 2026-10-31 (`decisions/0127`), before M10, in three stages: **Pa** tickl
 memory objects of 2 MiB or more (the direct map already has them; with the owner, paged objects stay 4 KiB); **Pc**
 per-connection CPU loans (`0037`'s level 1) in the storage servers, which queue requests by the loan's priority (with
 the owner). Pa done 2026-10-31 (`decisions/0128`): idle CPUs other than the boot CPU stop ticking, counted
-quiescent until an interrupt wakes them.
+quiescent until an interrupt wakes them. Pb done 2026-10-31 (`decisions/0129`): anonymous memory of 2 MiB or more mapped with 2 MiB pages
+where it lines up, its frames 2 MiB blocks freed a frame at a time.
 
 Stresses: timing and counting inside boot tests, results compared across builds.
 
