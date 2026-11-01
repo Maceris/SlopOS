@@ -76,6 +76,8 @@ BootInfo :: struct {
     counter_frequency_hint : u64?,
     // Wall-clock time at boot, in seconds since the Unix epoch, if the bootloader read one.
     boot_wall_time : i64?,
+    // A page for the kernel's panic record (PanicRecord), kept where the next boot finds it; null without one.
+    panic_record : PhysicalRange?,
 }
 
 StartCpu :: alias fn(cpu: ptr[BootCpu], carrier: ptr[mut runtime.CarrierBlock], entry: CpuEntry)
@@ -243,6 +245,14 @@ them go. `KernelImage`, `BootModule`, `Framebuffer`, `FirmwareReserved`, `Reserv
 own source (`RDSEED` on x86-64, `RNDR` on AArch64, Zkr `seed` on RISC-V). The kernel never relies
 on it alone.
 
+### Panic Record
+`panic_record`, from SlopOS's bootloader only (`0134`), is a page outside every `Usable` region, listed as
+`FirmwareReserved` so the direct map covers it, at the same physical address every boot. The kernel adds each fatal
+line to it (`PanicRecord`, `src/boot_info/panic_record.hsc`) and seals it, with its stop reason and a check, when it
+stops for a fault; with `panic_reset` on the command line it then resets the machine warm, which keeps RAM. The next
+boot's bootloader finds the sealed record, keeps its text on the ESP as `EFI/SlopOS/LAST_PANIC`, adds it as the module
+`last_panic`, and empties the page.
+
 ## Limine (`boot/limine`)
 
 The `boot/limine` package implements L0 for the Limine boot protocol, base revision 6, on every
@@ -312,7 +322,8 @@ The `boot/slopos` package implements L0 for SlopOS's own bootloader (`src/uefi/b
 never `Usable`, the kernel image and its segments, the modules by name, the CPUs with their mailboxes, the framebuffer,
 the bootloader's entropy and the firmware tables' physical addresses. `BootInfo`'s arrays are filled in the handoff's
 own room and point into it, through the direct map. `start_cpu` writes a parked CPU's mailbox, its argument and then
-its goto address, as Limine's MP protocol does. The kernel is built for it with the build's setting `boot=slopos`.
+its goto address, as Limine's MP protocol does. `panic_record` is the handoff's page for it, when the bootloader kept
+one. The kernel is built for it with the build's setting `boot=slopos`.
 
 ## Not Covered
 

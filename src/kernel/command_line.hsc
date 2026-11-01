@@ -53,6 +53,13 @@ Options :: struct {
      * device while an IRQ for its line exists, for the test_devices program (decisions/0069).
      */
     test_device : bool,
+    /*
+     * panic_reset: when the kernel stops for a fault, reset the machine rather than halt, so the boot after keeps its
+     * panic record (boot_info.PanicRecord, decisions/0134); before test_exit.
+     */
+    panic_reset : bool,
+    // test_panic_once: once booted, fail an assertion, unless the bootloader handed over the record of the last one.
+    test_panic_once : bool,
     // no_root_task: don't start the root task from the first boot module (root_task.hsc).
     no_root_task : bool,
     /*
@@ -114,6 +121,12 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_heap" {
         options.test_heap = true
+    }
+    if word == "panic_reset" {
+        options.panic_reset = true
+    }
+    if word == "test_panic_once" {
+        options.test_panic_once = true
     }
     if word == "no_root_task" {
         options.no_root_task = true

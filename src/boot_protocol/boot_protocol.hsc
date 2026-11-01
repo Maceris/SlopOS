@@ -101,6 +101,8 @@ Handoff :: struct {
     devicetree : u64,
     smbios : u64,
     efi_system_table : u64,
+    // The panic record's page (boot_info.PanicRecord), 0 for none
+    panic_record : u64,
     /*
      * Room the kernel's boot adapter fills with BootInfo's arrays, which point at the handoff's own fields, so it
      * needs no memory of its own; the bootloader leaves it zeroed

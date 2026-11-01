@@ -141,6 +141,7 @@ booted_as :: fn(service: ptr[mut Service], booted: update.Booted) -> update.Resp
             if record.state == generations.STATE_TENTATIVE {
                 if booted.healthy {
                     record.state = generations.STATE_PERMANENT
+                    record.tries_left = 0
                     if write_record(service, &record) {
                         runtime.log_info("generation % made permanent", record.number)
                     }
@@ -155,6 +156,7 @@ booted_as :: fn(service: ptr[mut Service], booted: update.Booted) -> update.Resp
         }
         case None => {}
     }
+    give_up_on_spent(service, booted.generation)
     installed :: install(service)
     collect(service, current)
     // One that changes only services applies now
@@ -173,6 +175,24 @@ booted_as :: fn(service: ptr[mut Service], booted: update.Booted) -> update.Resp
         case None => {}
     }
     return .Done
+}
+
+/*
+ * Tentative generations newer than the one booted that have no tries left (generations.tries_left): the bootloader
+ * booted an older one as they never came up healthy, so they're rolled back, their records removed.
+ */
+give_up_on_spent :: fn(service: ptr[mut Service], booted: u64) {
+    listed :: os.list_directory_in(service.esp, generations.RECORDS) or_return void
+    defer os.free_directory_listing(listed)
+    for entry in listed {
+        number :: number_of(entry.name) or_continue
+        found :: read_record(service, number) or_continue
+        if number > booted && found.state == generations.STATE_TENTATIVE && found.tries_left == 0 {
+            path_storage : u8[128]
+            _ = os.delete_file_in(service.esp, generations.record_path(number, &path_storage))
+            runtime.log_info("generation % never came up healthy in its tries, and is rolled back", number)
+        }
+    }
 }
 
 // Whether two generations have the same kernel, boot set and command line, so they differ only in their store roots.
@@ -254,6 +274,7 @@ install :: fn(service: ptr[mut Service]) -> generations.Generation? {
         }
     }
     staged.state = generations.STATE_TENTATIVE
+    staged.tries_left = generations.TRIES
     if !write_record(service, &staged) {
         return null
     }
@@ -339,6 +360,7 @@ substitute :: fn(service: ptr[mut Service], asked: update.SubstituteOf) -> updat
     made := booted
     made.number = newest + 1
     made.state = generations.STATE_TENTATIVE
+    made.tries_left = generations.TRIES
     // Its boot set without the booted generation's policy
     kept := cast[u32](0)
     for i in cast[usize](0)..<made.files.count {

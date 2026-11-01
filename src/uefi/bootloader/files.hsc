@@ -89,6 +89,31 @@ read_file :: fn(root: ptr[uefi.File], path: string, memory_kind: u32) -> Pages? 
     return Pages.{address = address, size = size}
 }
 
+/*
+ * bytes written over the start of the file at path, made if it isn't there, and flushed: whether they all were. What's
+ * written here, a generation's record or the seed, is always the same size, so nothing's left past it.
+ */
+write_file :: fn(root: ptr[uefi.File], path: string, bytes: u8[]) -> bool {
+    name : u16[256]
+    if !path16(path, &name) || bytes.count == 0 {
+        return false
+    }
+    opened : rawptr = null
+    if root.open(root, &opened, &name[0], uefi.FILE_READ | uefi.FILE_WRITE | uefi.FILE_CREATE, 0) != uefi.SUCCESS || opened == null {
+        return false
+    }
+    file :: cast[ptr[uefi.File]](opened)
+    defer _ = file.close(file)
+    if file.set_position(file, 0) != uefi.SUCCESS {
+        return false
+    }
+    size := bytes.count
+    if file.write(file, &size, cast[rawptr](&bytes[0])) != uefi.SUCCESS || size != bytes.count {
+        return false
+    }
+    return file.flush(file) == uefi.SUCCESS
+}
+
 // The names in the folder at path, as text, which the caller frees, or null.
 folder_names :: fn(root: ptr[uefi.File], path: string) -> string[..]? {
     folder :: open_file(root, path) or_return null

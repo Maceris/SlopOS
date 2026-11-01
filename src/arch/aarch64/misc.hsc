@@ -113,6 +113,34 @@ test_exit :: fn(code: u32) {
     aarch64.semihosting(SEMIHOSTING_EXIT, cast[rawptr](&block))
 }
 
+// PSCI's SYSTEM_RESET
+PSCI_SYSTEM_RESET : u64 : 0x84000009
+
+// How the machine resets: by PSCI, through the conduit the device tree's psci node names, 1 for HVC and 2 for SMC; 0 for none.
+reset_method :: fn(firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) -> u8 {
+    if direct_map_offset == 0 {
+        return 0
+    }
+    tree := devicetree.open(devicetree_address(firmware, direct_map_offset)) or_return 0
+    psci := devicetree.find_compatible(&tree, "arm,psci-1.0")
+    if psci is_none {
+        psci = devicetree.find_compatible(&tree, "arm,psci-0.2")
+    }
+    node := psci or_return 0
+    method :: devicetree.property(&tree, &node, "method") or_return 0
+    return if devicetree.lists(method, "smc") { 2 } else { 1 }
+}
+
+// The machine reset by PSCI's SYSTEM_RESET, which keeps RAM on QEMU; nothing without a conduit.
+reset :: fn(method: u8) {
+    if method == 1 {
+        _ = aarch64.hvc(PSCI_SYSTEM_RESET)
+    }
+    if method == 2 {
+        _ = aarch64.smc(PSCI_SYSTEM_RESET)
+    }
+}
+
 // Whether the calling CPU takes interrupts now: DAIF's I bit clear.
 interrupts_enabled :: fn() -> bool {
     return aarch64.read_system_register(.DAIF) & 0x80 == 0

@@ -22,6 +22,9 @@ MAX_BOOT_FILES :: 32
 NAME_BYTES :: 32
 COMMAND_LINE_BYTES :: 512
 
+// The boots a tentative generation is given to come up healthy in (tries_left)
+TRIES : u8 : 3
+
 // What a generation is: booted only as a trial until it's reported healthy, kept for good, or the recovery generation
 STATE_TENTATIVE : u8 : 0
 STATE_PERMANENT : u8 : 1
@@ -44,7 +47,13 @@ Generation :: struct {
     state : u8,
     // Whether Limine lays the kernel and the direct map out at random (decisions/0021)
     kaslr : u8,
-    padding : u8[6],
+    /*
+     * A tentative generation's boots left before it's given up on (roadmap B3, decisions/0131): the update service
+     * installs it with TRIES, SlopOS's bootloader takes one each time it boots it, and one with none left isn't booted
+     * again, the one before it booted instead; 0 for a permanent one, which never runs out
+     */
+    tries_left : u8,
+    padding : u8[5],
     kernel : bundle.Hash,
     store_root : bundle.Hash,
     file_count : u32,
@@ -70,7 +79,7 @@ check :: fn(generation: ptr[Generation]) -> string? {
     if generation.number == 0 {
         return "has no number"
     }
-    if generation.state > STATE_RECOVERY || generation.kaslr > 1 {
+    if generation.state > STATE_RECOVERY || generation.kaslr > 1 || generation.tries_left > TRIES {
         return "has a state or a flag that isn't one"
     }
     if (generation.state == STATE_RECOVERY) != (generation.number == RECOVERY_NUMBER) {

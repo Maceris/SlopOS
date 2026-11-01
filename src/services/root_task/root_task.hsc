@@ -28,6 +28,7 @@ import strings from "std"
 import text_buffer from "std"
 import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
+import boot_info from "../../boot_info"
 import process_builder from "../../process_builder"
 import entropy from "../../protocols/entropy"
 import platform_protocol from "../../protocols/platform"
@@ -182,6 +183,31 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
             case Some(number) => log_line.write(debug_log, "root task: booted generation %", number)
             case None => {}
         }
+    }
+    // The boot before stopped for a fault, and its panic record's text is here (boot_info.PanicRecord, decisions/0134)
+    match find_module(block, boot_info.LAST_PANIC_MODULE) {
+        case Some(module) => {
+            text :: service_kit.text_of(block, cast[slop_os.Memory](module)) or_else ""
+            // Its first line, without where in the kernel, which the whole record on the ESP keeps
+            first := text
+            for character, i in text {
+                if character == '\n' {
+                    first = text[0..<i]
+                    break
+                }
+            }
+            for character, i in first {
+                end :: i + 4
+                if character == ' ' && end <= first.count && i < end {
+                    if first[i..<end] == " at " {
+                        first = first[0..<i]
+                        break
+                    }
+                }
+            }
+            log_line.write(debug_log, "root task: the boot before stopped for a fault: %", first)
+        }
+        case None => {}
     }
     test_services :: service_kit.has_word(words, "test_services")
     test_outlive_manager :: service_kit.has_word(words, "test_outlive_manager")

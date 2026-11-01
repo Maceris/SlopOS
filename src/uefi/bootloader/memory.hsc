@@ -19,6 +19,10 @@ memory_kind :: fn(kind: u32) -> boot_info.MemoryKind {
     if kind == MODULE_MEMORY {
         return .BootModule
     }
+    // Nothing uses or frees it, and the direct map covers it, so the kernel writes it there
+    if kind == PANIC_MEMORY {
+        return .FirmwareReserved
+    }
     conventional :: kind == cast[u32](uefi.MemoryKind.Conventional) || kind == cast[u32](uefi.MemoryKind.BootServicesCode)
         || kind == cast[u32](uefi.MemoryKind.BootServicesData)
     if conventional {

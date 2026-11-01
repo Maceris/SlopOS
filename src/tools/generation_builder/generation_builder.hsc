@@ -182,7 +182,7 @@ stage :: fn(arguments: string[]) -> int {
     }
     system :: argument(arguments, 2)
     store :: argument(arguments, 3)
-    made := generations.Generation.{magic = generations.MAGIC, state = generations.STATE_TENTATIVE}
+    made := generations.Generation.{magic = generations.MAGIC, state = generations.STATE_TENTATIVE, tries_left = generations.TRIES}
     made.number = number_of(argument(arguments, 4)) or_return 3
     made.kaslr = if argument(arguments, 5) == "yes" { 1 } else { 0 }
     if !generations.set_line(&made.command_line, argument(arguments, 6)) {

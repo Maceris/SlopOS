@@ -41,6 +41,8 @@ BootInfo :: struct {
     counter_frequency_hint : u64?,
     // Wall-clock time at boot, in seconds since the Unix epoch, if the bootloader read one.
     boot_wall_time : i64?,
+    // A page for the kernel's panic record (PanicRecord), kept where the next boot finds it; null without one.
+    panic_record : PhysicalRange?,
 }
 
 /*

@@ -71,8 +71,14 @@ HEALTHY_LINE = "--expect-line=[user] root task: the system is healthy"
 # Name, the code expected, and boot.py's arguments
 # What booting from the image builder's disk checks: the disk's five partitions, the FAT server on its EFI system
 # partition, which Limine was read from, and the disk check's lines and writes, as on the test disk
-BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--timeout=120",
-    "--command-line=test_exit test_services", "--disk=SlopOS disk check: from the host",
+# A boot disk to healthy without the disk check, which the boot's assessment waits for, and most tests of a disk don't need
+BOOT_DISK_BASE = [
+    WITH_PROGRAMS,
+    WITH_IMAGE_BUILDER,
+    "--boot-disk",
+    "--timeout=120",
+    "--command-line=test_exit test_services no_disk_check",
+    "--disk=SlopOS disk check: from the host",
     "--expect-line=[user] virtio_blk: serving 206848 blocks",
     "--expect-line=[user] partition_server: 5 partitions on a disk of 206848 blocks",
     "--expect-line=[user] storage_manager: disk 0 partition 0: SlopOS check, 2048 blocks from 2048",
@@ -81,45 +87,51 @@ BOOT_DISK_ARGUMENTS = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--time
     "--expect-line=[user] storage_manager: disk 0 partition 4: SlopOS system, 65536 blocks from 139264",
     "--expect-line=[user] storage_manager: started a FAT server for disk 0 partition 3",
     "--expect-line=[user] fat_server: serving a FAT32 volume of 128992 clusters of 512 bytes",
-    "--expect-line=[user] fat_server: FSInfo's free count is the FAT's", "--expect-line=[user] hello: the entropy service gave 32 random bytes",
+    "--expect-line=[user] fat_server: FSInfo's free count is the FAT's",
+    "--expect-line=[user] hello: the entropy service gave 32 random bytes",
     "--expect-line=[user] storage_manager: started a container service for disk 0 partition 4",
     "--expect-line=[user] storage_manager: started a volume server for the system volume",
     "--expect-line=[user] volume_server: serving volume 1 (system), from transaction 3",
-    "--expect-line=[user] supervisor: console from the bundle store", "--expect-line=[user] supervisor: hello from the bundle store",
-    "--expect-line=[user] supervisor: disk_check from the bundle store", "--expect-line=[user] hello: heap working, random numbers working",
+    "--expect-line=[user] supervisor: console from the bundle store",
+    "--expect-line=[user] supervisor: hello from the bundle store",
+    "--expect-line=[user] hello: heap working, random numbers working",
     "--expect-line=[user] config: serving",
     "--expect-line=[user] root task: booted generation 1",
     "--expect-line=[user] counter: run 1, version 1",
     HEALTHY_LINE,
     "--expect-line=[user] supervisor: the system configuration's override tunes 0 services",
     "--expect-line=[user] hello: config: declared repeats 1, wrote an override kept, read it back merged, by hello; rolled back kept, repeats 1",
-    "--expect-line=[user] disk_check: on the EFI system partition, read the host's files, wrote, moved and read back its own, "
-    "listed 3, and was refused a path above it",
-    "--expect-line=[user] disk_check: narrowed EFI/SlopOS to read only, selected 2 of its files by *.TXT, and was refused a "
-    "file made in the set",
-    "--expect-line=[user] disk_check: on the system volume, read modules/hello.elf as the EFI system partition has it, wrote, "
-    "synced and read back its own file, and moved it",
-    "--expect-line=[user] disk_check: a typed file written, read back checked, and refused as another type; a value that "
-    "isn't one refused",
-    "--expect-line=[user] disk_check: on the system volume, replaced an open file, committed a transaction, was refused a conflicting "
-    "one, had a failing one leave nothing, and followed every change",
+    "--expect-line=[info] root task ended with code 0",
+    "--",
+    "-smp",
+    "2",
+]
+
+# What the disk check says, and writes, which the tests of booting a disk itself check
+DISK_CHECK_LINES = [
+    "--expect-line=[user] supervisor: disk_check from the bundle store",
+    "--expect-line=[user] disk_check: on the EFI system partition, read the host's files, wrote, moved and read back its own, listed 3, and was refused a path above it",
+    "--expect-line=[user] disk_check: narrowed EFI/SlopOS to read only, selected 2 of its files by *.TXT, and was refused a file made in the set",
+    "--expect-line=[user] disk_check: on the system volume, read modules/hello.elf as the EFI system partition has it, wrote, synced and read back its own file, and moved it",
+    "--expect-line=[user] disk_check: a typed file written, read back checked, and refused as another type; a value that isn't one refused",
+    "--expect-line=[user] disk_check: on the system volume, replaced an open file, committed a transaction, was refused a conflicting one, had a failing one leave nothing, and followed every change",
     "--expect-line=[user] storage_manager: started a volume server for the sealed volume, encrypted",
     "--expect-line=[user] volume_server: volume 2 unlocked",
     "--expect-line=[user] volume_server: volume 2 sealing with key generation 2",
-    "--expect-line=[user] disk_check: on the sealed volume, was refused locked and with a wrong passphrase, unlocked it, read its "
-    "file, wrote one, started key generation 2, wrote another and read all three",
-    "--expect-line=[user] disk_check: links: the system volume wrote and read through two from the sealed one; what one reached "
-    "granted nothing; one revoked opened nothing",
-    "--expect-line=[user] disk_check: snapshots: read one of the system volume as it was, read only, wrote to its clone, couldn't "
-    "delete it while cloned, and read one of the sealed volume",
+    "--expect-line=[user] disk_check: on the sealed volume, was refused locked and with a wrong passphrase, unlocked it, read its file, wrote one, started key generation 2, wrote another and read all three",
+    "--expect-line=[user] disk_check: links: the system volume wrote and read through two from the sealed one; what one reached granted nothing; one revoked opened nothing",
+    "--expect-line=[user] disk_check: snapshots: read one of the system volume as it was, read only, wrote to its clone, couldn't delete it while cloned, and read one of the sealed volume",
     "--expect-line=[user] disk_check: quotas: its clone's refused a file past it and took a small one, and its usage says so",
-    "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
+    "--expect-disk-block=2049=SlopOS disk check: from the guest",
+    "--expect-disk-text=Written by the guest, through std's files",
     "--expect-disk-text=Written to the system volume by the guest, and synced",
-    # What the encrypted volume's files hold, as the image builder and the disk check wrote them, is nowhere on the disk
     "--refuse-disk-text=ONLY ITS PASSPHRASE OPENS THIS",
     "--refuse-disk-text=WRITTEN TO THE SEALED VOLUME WITH ITS FIRST KEY GENERATION",
     "--refuse-disk-text=WRITTEN TO THE SEALED VOLUME WITH ITS SECOND KEY GENERATION",
-    "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]
+]
+
+# A boot disk with the disk check, its lines before the arguments for QEMU
+BOOT_DISK_ARGUMENTS = [argument.replace(" no_disk_check", "") for argument in BOOT_DISK_BASE[:-3]] + DISK_CHECK_LINES + BOOT_DISK_BASE[-3:]
 
 
 
@@ -138,7 +150,7 @@ def with_before_qemu(arguments: list[str], more: list[str]) -> list[str]:
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
     # Hemera's UEFI target (roadmap B1, decisions/0132): a program the firmware runs, which turns the machine off
-    ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, ["--efi=uefi_hello",
+    ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
         "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 52 grants",
@@ -244,13 +256,13 @@ TESTS = [
         "--expect-line=[user] clock: set to 2030-01-02 03:04:05 UTC, and the real-time clock reads it back",
         "--expect-line=[user] hello: the wall clock says it's 2030-01-02", "--expect-line=[info] root task ended with code 0"]),
     ("keeps every program's log records on the system volume once it's there", 7, with_before_qemu(
-        [argument.replace("test_services", "test_services test_events") for argument in BOOT_DISK_ARGUMENTS], [
+        [argument.replace("test_services", "test_services test_events") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] events: serving",
         "--expect-line=[user] supervisor: test_events: the waiting query got hello's record 0: heap working, random numbers working",
         "--expect-line=[user] supervisor: test_events: hello's record 0 read back from the system volume: heap working, random numbers working",
         "--expect-line=[user] supervisor: test_events: clock's record 1 read back from the system volume: serving"])),
     ("starts the events service, the clock service and the storage manager again when they're killed", 7, with_before_qemu(
-        [argument.replace("test_services", "test_services test_restart_services test_storage_restart") for argument in BOOT_DISK_ARGUMENTS], [
+        [argument.replace("test_services", "test_services test_restart_services test_storage_restart") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] storage_manager: the volume server for the system volume ended",
         "--expect-line=[user] supervisor: the system volume's connection closed; opening it again",
         "--expect-line=[user] supervisor: test_restart_services: the system volume, served again after disk 0's partition server was, "
@@ -263,7 +275,7 @@ TESTS = [
         "--expect-line=[user] supervisor: restarted storage_manager",
         "--expect-line=[user] supervisor: test_restart_services: the storage manager, started again, gave the system volume"])),
     ("keeps objects in the bundle store and pages them in", 7, with_before_qemu(
-        [argument.replace("test_services", "test_services test_store") for argument in BOOT_DISK_ARGUMENTS], [
+        [argument.replace("test_services", "test_services test_store") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] bundle_store: serving",
         "--expect-line=[user] supervisor: test_store: put hello's program, read it back whole as paged memory, a wrong hash refused; "
         "a pinned object kept (0 collected), and collected once unpinned (1)",
@@ -271,12 +283,14 @@ TESTS = [
         "under pressure",
         "--expect-line=[user] supervisor: test_store: hello's bundle's manifest is its entry's schema"])),
     ("boots degraded, with a record of why, when a service the system needs ends for good", 7, with_before_qemu(
-        [argument.replace("test_services", "test_services test_degraded") for argument in BOOT_DISK_ARGUMENTS if argument != HEALTHY_LINE], [
+        # hello's own lines too, which it may not get to before it's killed
+        [argument.replace("test_services", "test_services test_degraded") for argument in BOOT_DISK_BASE
+         if argument != HEALTHY_LINE and not argument.startswith("--expect-line=[user] hello: ")], [
         "--expect-line=[user] supervisor: degraded: hello ended for good, 4294967296",
         "--expect-line=[user] root task: the boot is degraded: 1 services the system needs aren't up",
         "--expect-disk-text=hello: ended for good"])),
     ("runs installations with their data and settings, updates one keeping its data, and uninstalls it", 7, with_before_qemu(
-        [argument.replace("test_services", "test_services test_installations") for argument in BOOT_DISK_ARGUMENTS], [
+        [argument.replace("test_services", "test_services test_installations") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] counter: run 2, version 2",
         "--expect-line=[user] config: forgot counter's values",
         "--expect-line=[user] supervisor: test_installations: an update to hello's bundle refused, updated to counter_next and run, "
@@ -287,25 +301,52 @@ TESTS = [
         "--expect-line=[user] supervisor: recovery: the boot set, the drivers and the console only",
         "--expect-line=[user] console: serving", HEALTHY_LINE]),
     # SlopOS's own bootloader (roadmap B2, decisions/0133), which starts the other CPUs as Limine did
-    ("boots a disk through SlopOS's own bootloader, every CPU started", 7, with_before_qemu(BOOT_DISK_ARGUMENTS, [
+    ("boots a disk through SlopOS's own bootloader, every CPU started", 7, with_before_qemu(BOOT_DISK_BASE, [
         "--bootloader", "--expect-line=[info] bootloader: booting generation 1",
         "--expect-line=[boot] SlopOS, booted by SlopOS's bootloader (UEFI)", "--expect-line=[info] 2 of 2 CPUs online"])),
+    # Boot counting (roadmap B3): generation 2 boots three times without ever being assessed, then is given up on
+    ("falls back to the generation before when a new one never comes up healthy in its tries, and rolls it back", 7,
+        with_before_qemu(BOOT_DISK_BASE, [
+        "--bootloader", "--stage-generation=test_exit test_services no_disk_check test_unassessed", "--boots=5",
+        "--expect-line=[info] bootloader: a seed file written, for the next boot",
+        "--expect-line=[user] update: installed generation 2, tentative",
+        "--expect-boot-line=2:[info] bootloader: the seed file mixed in, and replaced",
+        "--expect-boot-line=2:[info] bootloader: generation 2 is tentative, 2 tries left after this one",
+        "--expect-boot-line=2:[user] supervisor: test_unassessed: the update service isn't told how the boot went",
+        "--expect-boot-line=4:[info] bootloader: generation 2 is tentative, 0 tries left after this one",
+        "--expect-boot-line=5:[info] bootloader: generation 2 never came up healthy in its tries, so the one before it boots",
+        "--expect-boot-line=5:[user] root task: booted generation 1",
+        "--expect-boot-line=5:[user] update: generation 2 never came up healthy in its tries, and is rolled back"])),
+    # Without the normal boot's lines, which the recovery generation's doesn't have
+    ("boots the recovery generation when its key is held as the machine starts", 7, with_before_qemu(
+        [argument for argument in BOOT_DISK_BASE if not argument.startswith("--expect-line=") or argument == HEALTHY_LINE], [
+        "--bootloader", "--recovery-key", "--expect-line=[info] bootloader: the recovery generation, as a key asks",
+        "--expect-line=[user] root task: booted the recovery generation",
+        "--expect-line=[user] supervisor: recovery: the boot set, the drivers and the console only"])),
+    # The panic record (decisions/0134): the first boot panics and resets, keeping RAM; the next finds its record
+    ("keeps a panic's record across a warm reset, on the ESP and for the root task", 7, with_before_qemu(
+        [argument.replace("test_services", "test_services panic_reset test_panic_once") for argument in BOOT_DISK_BASE], [
+        "--bootloader", "--allow-reboot", "--expect-line=[info] test_panic_once: failing an assertion",
+        "--expect-line=[info] resetting, the panic record kept",
+        "--expect-line=[info] bootloader: the boot before stopped for a fault, its panic record kept as EFI/SlopOS/LAST_PANIC",
+        "--expect-disk-text=assertion failed: test_panic_once",
+        "--expect-line=[user] root task: the boot before stopped for a fault: [fatal] assertion failed: test_panic_once"])),
     # Its command line another word, so it isn't one that changes only services, which is applied live
-    ("installs a staged generation, boots it, and makes it permanent once it's healthy", 7, with_before_qemu(BOOT_DISK_ARGUMENTS, [
+    ("installs a staged generation, boots it, and makes it permanent once it's healthy", 7, with_before_qemu(BOOT_DISK_BASE, [
         "--stage-generation=test_exit test_services next_boot", "--boots=2",
         "--expect-line=[user] update: installed generation 2, tentative",
         "--expect-boot-line=2:[user] root task: booted generation 2",
         "--expect-boot-line=2:[user] root task: the system is healthy",
         "--expect-boot-line=2:[user] update: generation 2 made permanent"])),
     ("applies a staged generation that changes only a service live, restarting it from its new bundle", 7,
-        with_before_qemu(BOOT_DISK_ARGUMENTS, [
-        "--stage-generation=test_exit test_services", "--stage-next-hello",
+        with_before_qemu(BOOT_DISK_BASE, [
+        "--stage-generation=test_exit test_services no_disk_check", "--stage-next-hello",
         "--expect-line=[user] update: installed generation 2, tentative",
         "--expect-line=[user] update: generation 2 changes only services, and is applied live",
         "--expect-line=[user] supervisor: generation 2 applied live, 1 services started again from their new bundles",
         "--expect-line=[user] hello: the next build",
         "--expect-line=[user] update: generation 2 made permanent"])),
-    ("rolls a staged generation back when it boots degraded, and boots the one before", 7, with_before_qemu(BOOT_DISK_ARGUMENTS, [
+    ("rolls a staged generation back when it boots degraded, and boots the one before", 7, with_before_qemu(BOOT_DISK_BASE, [
         "--stage-generation=test_exit test_services test_degraded", "--boots=3",
         "--expect-line=[user] update: installed generation 2, tentative",
         "--expect-boot-line=2:[user] root task: booted generation 2",
@@ -313,13 +354,13 @@ TESTS = [
         "--expect-boot-line=3:[user] root task: booted generation 1",
         "--expect-boot-line=3:[user] root task: the system is healthy"])),
     ("keeps an override of the system configuration in the config store, and starts what it tunes as it says", 7, with_before_qemu(
-        [argument.replace("test_services", "test_services test_system_config") for argument in BOOT_DISK_ARGUMENTS], [
+        [argument.replace("test_services", "test_services test_system_config") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] supervisor: the system configuration's override tunes 1 services",
         "--expect-line=[user] supervisor: test_system_config: killing hello",
         "--expect-line=[user] supervisor: test_system_config: an override of hello's budget taken, one of 0 refused; hello started again "
         "on 3 MiB"])),
     ("stages a generation with a substitution the config store asks for, only by a library that stands in, and boots it", 7,
-        with_before_qemu([argument.replace("test_services", "test_services test_substitution") for argument in BOOT_DISK_ARGUMENTS], [
+        with_before_qemu([argument.replace("test_services", "test_services test_substitution") for argument in BOOT_DISK_BASE], [
         "--boots=2",
         "--expect-line=[user] update: warn: a substitution is refused: an export isn't there any more",
         "--expect-line=[user] update: generation 2 staged with 1 substitutions, booted next",
@@ -329,10 +370,10 @@ TESTS = [
         "--expect-boot-line=2:[user] update: generation 2 made permanent"])),
     # On one CPU, where requests wait for the volume server rather than it waiting for them
     ("serves a volume's clients by the priority of the CPU budgets they lend it", 7, with_before_qemu(
-        one_cpu([argument.replace("test_services", "test_services test_lending") for argument in BOOT_DISK_ARGUMENTS]), [
+        one_cpu([argument.replace("test_services", "test_services test_lending") for argument in BOOT_DISK_BASE]), [
         "--expect-line=[user] supervisor: test_lending: a request lent the console's budget was answered ahead of the backlogs lent hello's"])),
     ("starts a disk's partition server again when it's killed, and serves its volumes through the new one", 7, with_before_qemu(
-        [argument.replace("test_services", "test_services test_storage_restart") for argument in BOOT_DISK_ARGUMENTS], [
+        [argument.replace("test_services", "test_services test_storage_restart") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] storage_manager: test_storage_restart: killing the partition server for disk 0",
         "--expect-line=[user] storage_manager: the partition server for disk 0 ended",
         "--expect-line=[user] storage_manager: restarted the partition server for disk 0"])),

@@ -5,6 +5,7 @@ import runtime from "base"
 import text_buffer from "std"
 import console from "console"
 import concurrency from "std"
+import boot_info from "../boot_info"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -71,6 +72,22 @@ write_log_line :: fn(level: string, location: runtime.SourceCodeLocation?, forma
     }
     text_buffer.append(&line, "\n")
     write_console(text_buffer.as_string(&line))
+    if level == "fatal" {
+        keep_in_panic_record(text_buffer.as_string(&line))
+    }
+}
+
+// A fatal line, kept in the panic record too, once there's a kernel with one.
+keep_in_panic_record :: fn(text: string) {
+    if intrinsics.carrier().program_data == null {
+        return void
+    }
+    kernel :: per_cpu().kernel
+    if kernel.panic_record != 0 {
+        lock_at(&kernel.console_lock, .Console)
+        boot_info.panic_record_add(cast[ptr[mut boot_info.PanicRecord]](kernel.panic_record), text)
+        unlock_at(&kernel.console_lock, .Console)
+    }
 }
 
 append_location :: fn(line: ptr[mut text_buffer.TextBuffer], location: runtime.SourceCodeLocation) {

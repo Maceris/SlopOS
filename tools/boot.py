@@ -182,27 +182,34 @@ def make_image(kernel: Path, programs: list[Path], limine: Path, xorriso: Path, 
     return image
 
 
-def run(image: Path | None, qemu: Path, serial: Path, timeout: float, uefi: bool, cpu: str, extra: list[str]) -> int:
+def run(image: Path | None, qemu: Path, serial: Path, timeout: float, uefi: bool, cpu: str, extra: list[str],
+        keys: "SerialKeys | None" = None, reboot: bool = False) -> int:
     """Boots the image, or with none the disk in extra, and gives the code the kernel wrote to the debug exit device."""
     # The CD first: a test disk's protective MBR looks bootable to the BIOS
     boot = ["-cdrom", str(image), "-boot", "order=d"] if image is not None else []
     command = [
         str(qemu), "-M", "q35", "-m", "256M", "-cpu", cpu, *boot,
-        "-serial", f"file:{serial}", "-display", "none", "-no-reboot",
+        *serial_arguments(serial, keys), "-display", "none", *([] if reboot else ["-no-reboot"]),
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
     ]
     if uefi:
         firmware = find_tool("OVMF", ["edk2-x86_64-code.fd", "OVMF_CODE.fd", "OVMF.fd"], [qemu.parent / "share"])
         command += ["-drive", f"if=pflash,format=raw,readonly=on,file={firmware}"]
+    if keys is not None:
+        keys.thread.start()
     try:
         result = subprocess.run(command + extra, timeout=timeout)
     except subprocess.TimeoutExpired:
         return TIMED_OUT
+    finally:
+        if keys is not None:
+            keys.thread.join(timeout=5)
     # An odd code came from the debug exit device; anything else is QEMU's own (a reset, a crash)
     return result.returncode >> 1 if result.returncode % 2 == 1 else NO_EXIT_CODE
 
 
-def run_aarch64(image: Path | None, qemu: Path, serial: Path, timeout: float, cpu: str, extra: list[str], iommu: bool) -> int:
+def run_aarch64(image: Path | None, qemu: Path, serial: Path, timeout: float, cpu: str, extra: list[str], iommu: bool,
+                keys: "SerialKeys | None" = None, reboot: bool = False) -> int:
     """Boots the image, or with none the disk in extra, on QEMU's virt machine through UEFI, and gives the code the kernel ended with."""
     cd = ["-device", "virtio-scsi-pci", "-device", "scsi-cd,drive=cd", "-drive", f"if=none,id=cd,media=cdrom,format=raw,file={image}"] \
         if image is not None else []
@@ -214,15 +221,71 @@ def run_aarch64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
         str(qemu), "-M", machine, "-m", "256M", "-cpu", cpu,
         *(["-global", "arm-smmuv3.stage=2"] if iommu else []),
         "-drive", f"if=pflash,format=raw,readonly=on,file={firmware}", *cd,
-        "-serial", f"file:{serial}", "-display", "none", "-no-reboot",
+        *serial_arguments(serial, keys), "-display", "none", *([] if reboot else ["-no-reboot"]),
         "-semihosting-config", "enable=on,target=native",
     ]
+    if keys is not None:
+        keys.thread.start()
     try:
         result = subprocess.run(command + extra, timeout=timeout)
     except subprocess.TimeoutExpired:
         return TIMED_OUT
+    finally:
+        if keys is not None:
+            keys.thread.join(timeout=5)
     # As with the debug exit device, the kernel's test_exit ends QEMU with (code << 1) | 1
     return result.returncode >> 1 if result.returncode % 2 == 1 else NO_EXIT_CODE
+
+
+def serial_arguments(serial: Path, keys: "SerialKeys | None") -> list[str]:
+    """The serial port's output kept in the file, or with keys, going through them."""
+    return keys.qemu_arguments() if keys is not None else ["-serial", f"file:{serial}"]
+
+
+class SerialKeys:
+    """
+    The serial port on a TCP socket QEMU serves on the loopback, in place of a file, for a key held down as the
+    machine starts (--recovery-key): the firmware's console takes what arrives on the serial port as typed, so this
+    sends the key over and over until the bootloader says what it boots, and keeps the output in the serial file.
+    """
+
+    def __init__(self, serial: Path, key: str):
+        self.port = free_port()
+        self.serial = serial
+        self.key = key.encode()
+        self.thread = threading.Thread(target=self.talk, daemon=True)
+
+    def qemu_arguments(self) -> list[str]:
+        return ["-chardev", f"socket,id=serial,host=127.0.0.1,port={self.port},server=on,wait=on", "-serial", "chardev:serial"]
+
+    def talk(self) -> None:
+        connection = None
+        deadline = time.monotonic() + 30
+        while connection is None and time.monotonic() < deadline:
+            try:
+                connection = socket.create_connection(("127.0.0.1", self.port), timeout=1)
+            except OSError:
+                time.sleep(0.2)
+        if connection is None:
+            return
+        connection.settimeout(0.1)
+        shown = b""
+        with connection, self.serial.open("wb") as out:
+            while True:
+                held = b"bootloader: booting generation" not in shown
+                try:
+                    if held:
+                        connection.sendall(self.key)
+                    data = connection.recv(4096)
+                except socket.timeout:
+                    continue
+                except OSError:
+                    return
+                if not data:
+                    return
+                out.write(data)
+                out.flush()
+                shown += data
 
 
 # On q35, VT-d with interrupt remapping (decisions/0079): before every other PCI device, as QEMU wants it
@@ -678,6 +741,12 @@ def main() -> int:
     parser.add_argument("--bootloader", action="store_true",
                         help="with --boot-disk: boot through SlopOS's own bootloader (src/uefi/bootloader) rather than Limine, the "
                              "kernel built for it (boot=slopos), by UEFI (roadmap B2, decisions/0133)")
+    parser.add_argument("--recovery-key", action="store_true",
+                        help="with --bootloader: hold the bootloader's recovery key, r, on the serial console as the machine starts, "
+                             "the first boot only (roadmap B3)")
+    parser.add_argument("--allow-reboot", action="store_true",
+                        help="let the first boot reset the machine and boot again in the same QEMU, which keeps RAM, as a warm "
+                             "reset does, rather than ending QEMU (the panic record, decisions/0134)")
     parser.add_argument("--efi",
                         help="boot a UEFI program of SlopOS's build (src/uefi), NAME.efi, by itself under the firmware, rather than "
                              "the kernel: as EFI/BOOT/BOOTX64.EFI (or BOOTAA64.EFI) on a FAT drive; turning the machine off is "
@@ -727,6 +796,9 @@ def main() -> int:
         extra = (X86_IOMMU if not aarch64 and not arguments.no_iommu else []) + list(arguments.qemu_arguments)
         console = None
         disk = folder / "disk.img"
+        # How long each phase takes, said at the end, to see where a test's time goes
+        phases = []
+        phase_started = time.monotonic()
         if arguments.boot_disk:
             image_builder = arguments.image_builder
             if image_builder is None:
@@ -738,6 +810,7 @@ def main() -> int:
                            (programs_folder / "bootloader.efi").resolve() if arguments.bootloader and programs_folder is not None else None)
             extra += ["-drive", f"file={disk},if=none,id=disk,format=raw",
                       "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on,bootindex=0"]
+            phases.append(("making the disk", time.monotonic() - phase_started))
         elif arguments.disk is not None:
             make_disk(disk, arguments.disk)
             extra += ["-drive", f"file={disk},if=none,id=disk,format=raw", "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on"]
@@ -749,10 +822,15 @@ def main() -> int:
             console = ConsoleLink(arguments.console_input, arguments.keyboard_input, keyboard)
             extra += console.qemu_arguments()
             console.thread.start()
+        booting_started = time.monotonic()
+        keys = SerialKeys(serial, "r") if arguments.recovery_key else None
         if aarch64:
-            code = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra, not arguments.no_iommu)
+            code = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra, not arguments.no_iommu, keys,
+                               arguments.allow_reboot)
         else:
-            code = run(image, qemu, serial, arguments.timeout, arguments.uefi or arguments.bootloader, arguments.cpu, extra)
+            code = run(image, qemu, serial, arguments.timeout, arguments.uefi or arguments.bootloader, arguments.cpu, extra, keys,
+                       arguments.allow_reboot)
+        phases.append(("boot 1", time.monotonic() - booting_started))
         if console is not None:
             console.thread.join(timeout=5)
         output = serial.read_text(errors="replace") if serial.exists() else ""
@@ -760,10 +838,12 @@ def main() -> int:
         later = []
         for boot in range(2, arguments.boots + 1):
             serial.unlink(missing_ok=True)
+            booting_started = time.monotonic()
             if aarch64:
                 again = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra, not arguments.no_iommu)
             else:
                 again = run(image, qemu, serial, arguments.timeout, arguments.uefi or arguments.bootloader, arguments.cpu, extra)
+            phases.append((f"boot {boot}", time.monotonic() - booting_started))
             later.append((boot, again, serial.read_text(errors="replace") if serial.exists() else ""))
         unwritten = [expected for expected in arguments.expect_disk_block if not disk.exists() or not disk_block_starts(disk, expected)]
         image_bytes = disk.read_bytes() if disk.exists() and (arguments.expect_disk_text or arguments.refuse_disk_text) else b""
@@ -781,6 +861,7 @@ def main() -> int:
                 print(f"[console] {line}")
     description = {TIMED_OUT: "timed out", NO_EXIT_CODE: "ended without an exit code"}.get(code, f"exited with {code}")
     print(f"boot.py: the kernel {description}", file=sys.stderr)
+    print("boot.py: took " + ", ".join(f"{seconds:.1f} s {phase}" for phase, seconds in phases), file=sys.stderr)
     if arguments.expect is not None:
         lines = output.splitlines()
         missing = [line for line in arguments.expect_line if line not in lines]

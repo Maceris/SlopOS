@@ -30,6 +30,8 @@ BAUD_DIVISOR : u16 : 1
 
 // QEMU's isa-debug-exit device, which the test harness adds (tools/boot.py)
 DEBUG_EXIT_PORT : u16 : 0xf4
+// The chipset's reset control register
+RESET_CONTROL_PORT : u16 : 0xcf9
 
 /*
  * The test device: QEMU's PIT, ISA IRQ 0, which QEMU's MADT routes to line 2 of its I/O APIC, at the
@@ -76,6 +78,17 @@ write_byte :: fn(byte: u8) {
 
 test_exit :: fn(code: u32) {
     x86_64.out_u32(DEBUG_EXIT_PORT, code)
+}
+
+// How the machine resets: always by the reset control register, which needs nothing from the firmware.
+reset_method :: fn(firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) -> u8 {
+    return 1
+}
+
+// The machine reset, warm, by the chipset's reset control register (0xcf9): RAM is kept.
+reset :: fn(method: u8) {
+    x86_64.out_u8(RESET_CONTROL_PORT, 0x02)
+    x86_64.out_u8(RESET_CONTROL_PORT, 0x06)
 }
 
 test_device :: fn() -> arch_interface.TestDevice {

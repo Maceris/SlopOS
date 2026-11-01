@@ -3,6 +3,7 @@ package kernel
 import intrinsics from "base"
 import runtime from "base"
 import robustness from "../robustness"
+import boot_info from "../boot_info"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -38,6 +39,15 @@ stop :: fn(reason: StopReason) #never_returns {
     kernel :: per_cpu().kernel
     stop_other_cpus(kernel)
     robustness.report(&kernel.frames.faults)
+    // A fault's record sealed for the next boot (decisions/0134), which a reset keeps it for
+    fault :: reason != .Halted && reason != .RootTaskEnded
+    if fault && kernel.panic_record != 0 {
+        boot_info.panic_record_seal(cast[ptr[mut boot_info.PanicRecord]](kernel.panic_record), cast[u64](reason))
+        if kernel.options.panic_reset {
+            runtime.log_info("resetting, the panic record kept")
+            arch.reset(kernel.reset_method)
+        }
+    }
     stop_with(&kernel.options, reason)
 }
 

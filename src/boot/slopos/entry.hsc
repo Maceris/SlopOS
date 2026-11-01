@@ -147,6 +147,10 @@ build_boot_info :: fn(handoff_address: u64, info: ptr[mut boot_info.BootInfo]) {
     info.bootloader_entropy = if handoff.has_entropy != 0 { handoff.entropy } else { null }
     info.counter_frequency_hint = null
     info.boot_wall_time = null
+    info.panic_record = if handoff.panic_record != 0 {
+        boot_info.PhysicalRange.{cast[boot_info.PhysicalAddress](handoff.panic_record), cast[u64](size_of(boot_info.PanicRecord))}
+    }
+    else { null }
 }
 
 // The firmware tables the handoff names, by their physical addresses.

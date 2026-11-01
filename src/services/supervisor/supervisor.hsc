@@ -515,6 +515,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     test_installations := false
     test_substitution := false
     test_lending := false
+    // A boot that never tells the update service how it went, as one that hangs or resets before it's assessed would
+    test_unassessed := false
+    // For tests that don't need the disk check, which the boot's assessment otherwise waits for
+    no_disk_check := false
     supervisor.started_at = slop_os.clock_monotonic() or_else 0
     supervisor.command_line = command_line
     match command_line {
@@ -531,6 +535,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             test_installations = service_kit.has_word(text, "test_installations")
             test_substitution = service_kit.has_word(text, "test_substitution")
             test_lending = service_kit.has_word(text, "test_lending")
+            test_unassessed = service_kit.has_word(text, "test_unassessed")
+            no_disk_check = service_kit.has_word(text, "no_disk_check")
             supervisor.recovery = service_kit.has_word(text, "recovery")
             // The generation booted, and its store root, as its limine.conf entry says (decisions/0114, 0116)
             supervisor.generation = service_kit.number_of(service_kit.word_after(text, "generation=") or_else "") or_else 0
@@ -578,7 +584,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     else {
         start_hello(&supervisor, NOWHERE)
         start_installations(&supervisor)
-        start_disk_check(&supervisor, storage_slot)
+        if !no_disk_check {
+            start_disk_check(&supervisor, storage_slot)
+        }
     }
     serial_line :: supervisor.first_serial
     if test_restart && serial_line < supervisor.started.count {
@@ -607,10 +615,13 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     // The disk check is done once it's checked, which it reports before everything has started, or by its deadline
     disk_check_by :: deadline_of(&supervisor, "disk_check")
     loop {
+        if no_disk_check {
+            break
+        }
         wait_and_handle_until(&supervisor, disk_check_by)
     }
     while !ended_for_good(&supervisor, "disk_check") && (slop_os.clock_monotonic() or_else 0) < disk_check_by
-    if !ended_for_good(&supervisor, "disk_check") {
+    if !no_disk_check && !ended_for_good(&supervisor, "disk_check") {
         note_missing(&supervisor, "disk_check", "not done by its deadline", 0)
     }
     if test_dma_fault {
@@ -654,9 +665,14 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     log_line.write(supervisor.log, "supervisor: perf: boot_to_healthy %", slop_os.clock_monotonic() or_else 0)
     // Assessed first, which the root task hears before it's told everything has started
     healthy :: assess(&supervisor)
-    match tell_update(&supervisor, healthy) {
-        case Live(live) => apply_live(&supervisor, live)
-        case _ => {}
+    if test_unassessed {
+        log_line.write(supervisor.log, "supervisor: test_unassessed: the update service isn't told how the boot went")
+    }
+    else {
+        match tell_update(&supervisor, healthy) {
+            case Live(live) => apply_live(&supervisor, live)
+            case _ => {}
+        }
     }
     // The substitution policy the config store asks for, staged as the next generation if it's new (decisions/0125)
     if healthy {

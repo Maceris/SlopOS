@@ -118,6 +118,10 @@ Kernel :: struct {
     first_device : u64,
     // The firmware tables' copy, a Memory's address, for the root task's "firmware" grant, 0 without (firmware.hsc).
     firmware : u64,
+    // The panic record's page in the direct map, 0 without one (boot_info.PanicRecord, stop.hsc)
+    panic_record : u64,
+    // How the machine is reset, as arch.reset_method says, for panic_reset
+    reset_method : u8,
     // Every thread, for finding one by ID, and how many intercepts there are (control.hsc, intercepts.hsc).
     threads_lock : concurrency.SpinLock,
     first_thread : u64,
@@ -249,6 +253,11 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     kernel.image_base = cast[u64](info.kernel_image.virtual_base)
     runtime.assert(info.cpus.count >= 1, "the boot information lists the boot CPU")
     keep_boot_info(kernel, info)
+    match info.panic_record {
+        case Some(range) => kernel.panic_record = info.direct_map_offset + cast[u64](range.base)
+        case None => {}
+    }
+    kernel.reset_method = arch.reset_method(&info.firmware_tables, info.direct_map_offset)
     kernel.online_cpus = 1
     cpu :: allocate_cpu(kernel, 0) or_else out_of_memory(&options, "no memory for the boot CPU's state")
     // The boot CPU keeps its boot stack's limit until it first enters through the kernel stack
@@ -287,6 +296,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
             test_io_apic(kernel)
         }
         memory_tests(kernel)
+        if kernel.options.test_panic_once {
+            test_panic_once(info)
+        }
         if kernel.options.test_nmi {
             test_nmi(kernel, cpu)
         }
@@ -330,6 +342,17 @@ memory_tests :: fn(kernel: ptr[mut Kernel]) {
         runtime.log_info("test_assert: failing an assertion")
         runtime.assert(false, "test_assert")
     }
+}
+
+// An assertion failed, unless the bootloader handed over the last panic's record (decisions/0134).
+test_panic_once :: fn(info: ptr[boot_info.BootInfo]) {
+    for module in info.modules {
+        if module.name == boot_info.LAST_PANIC_MODULE {
+            return void
+        }
+    }
+    runtime.log_info("test_panic_once: failing an assertion")
+    runtime.assert(false, "test_panic_once")
 }
 
 /*
