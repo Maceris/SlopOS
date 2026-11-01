@@ -131,6 +131,9 @@ def with_before_qemu(arguments: list[str], more: list[str]) -> list[str]:
 
 TESTS = [
     ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
+    # Hemera's UEFI target (roadmap B1, decisions/0132): a program the firmware runs, which turns the machine off
+    ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, ["--efi=uefi_hello",
+        "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
         "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 52 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",

@@ -443,7 +443,9 @@ Alongside M9; required before automatic rollback.
 Planned 2026-10-31 (`decisions/0131`), before M10, in four stages: **B1** Hemera's UEFI target (`OS == .UEFI`, PE32+);
 **B2** the bootloader booting disks, the kernel given SlopOS's `BootInfo`; **B3** boot counting in the generation record,
 automatic fallback, recovery by a key or when every counter's out, the panic record in reserved RAM, the seed file;
-**B4** ISOs through it, and Limine and BIOS boot removed (with the owner). TPM sealing goes to H.
+**B4** ISOs through it, and Limine and BIOS boot removed (with the owner). TPM sealing goes to H. B1 done 2026-10-31
+(`decisions/0132`): `OS == .UEFI` in Hemera, PE32+ EFI applications on both architectures, `base`'s runtime on the
+boot services, and function types with a calling convention.
 
 ## M10 — Console, Accounts and Sessions (L4)
 

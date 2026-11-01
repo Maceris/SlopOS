@@ -40,6 +40,7 @@ build :: fn() {
         add_programs("../services")
         add_programs("../drivers")
         add_programs("../tests")
+        add_uefi_programs("../uefi")
     }
     if targets == "all" || targets == "tests" {
         add_tests("..")
@@ -254,6 +255,36 @@ add_libraries :: fn(folder: string) {
             second.settings = settings
             plus_target :: compiler.add_target(second)
         }
+    }
+}
+
+/*
+ * Every folder in folder, as a UEFI application named after it (roadmap B, decisions/0131), <name>.efi beside the
+ * programs, for the programs' architecture, which the firmware runs: the bootloader, and the tests of Hemera's UEFI
+ * target.
+ */
+add_uefi_programs :: fn(folder: string) {
+    for subfolder in compiler.subfolders(folder) {
+        name :: last_part(subfolder)
+        output_storage : u8[512]
+        output := text_buffer.make(output_storage)
+        text_buffer.append(&output, compiler.target_setting("programs_output", default = "."))
+        text_buffer.append(&output, "/")
+        text_buffer.append(&output, name)
+        text_buffer.append(&output, ".efi")
+        program := compiler.command_line_options()
+        program.name = name
+        program.root = subfolder
+        program.output_path = text_buffer.as_string(&output)
+        program.target_options.os = .UEFI
+        program.target_options.architecture = .x86_64
+        program.target_options.cpu = "x86-64"
+        if compiler.target_setting("arch", default = "x86_64") == "aarch64" {
+            program.target_options.architecture = .arm64
+            program.target_options.cpu = ""
+        }
+        program.target_options.startup_code = true
+        target :: compiler.add_target(program)
     }
 }
 

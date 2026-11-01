@@ -38,6 +38,7 @@ Tools are found from the environment, then the PATH:
 import argparse
 import json
 import os
+import re
 import shutil
 import socket
 import struct
@@ -672,6 +673,10 @@ def main() -> int:
     parser.add_argument("--stage-next-hello", action="store_true",
                         help="with --stage-generation: generation 2's store root has hello's next build (hello_next.elf) as hello's "
                              "bundle, so it changes only a service, which the supervisor applies live (decisions/0126)")
+    parser.add_argument("--efi",
+                        help="boot a UEFI program of SlopOS's build (src/uefi), NAME.efi, by itself under the firmware, rather than "
+                             "the kernel: as EFI/BOOT/BOOTX64.EFI (or BOOTAA64.EFI) on a FAT drive; turning the machine off is "
+                             "exit code 0 (roadmap B1, decisions/0132)")
     parser.add_argument("qemu_arguments", nargs="*", help="more arguments for QEMU, after --")
     arguments = parser.parse_args()
 
@@ -679,6 +684,8 @@ def main() -> int:
     aarch64 = arguments.arch == "aarch64"
     if aarch64:
         qemu = find_tool("QEMU_AARCH64", ["qemu-system-aarch64.exe", "qemu-system-aarch64"], [qemu.parent, Path(r"C:\Program Files\qemu")])
+    if arguments.efi is not None:
+        return run_efi(arguments, qemu, aarch64)
     limine = find_limine()
     xorriso = find_tool("XORRISO", ["xorriso.exe", "xorriso"], [])
     with tempfile.TemporaryDirectory(prefix="slopos-boot-") as temporary:
@@ -793,6 +800,50 @@ def main() -> int:
                     later_failed = True
         return 0 if code == arguments.expect and not missing and not missing_shown and not unwritten and not leaked and not later_failed else 1
     return code
+
+
+# What the firmware's console writes besides text: ANSI escape sequences (CSI and the like), and carriage returns
+TERMINAL_ESCAPES = re.compile(r"\x1b(\[[0-9;=?]*[A-Za-z]|[()][0-9A-Za-z]|[0-9A-Za-z])|\r")
+
+
+def run_efi(arguments: argparse.Namespace, qemu: Path, aarch64: bool) -> int:
+    """
+    Boots a UEFI program of SlopOS's build by itself (--efi): the firmware starts it from a FAT drive as its default
+    boot file. Exit code 0 if it turned the machine off, with --expect's lines in its output once the console's
+    escape sequences are taken out.
+    """
+    with tempfile.TemporaryDirectory(prefix="slopos-efi-") as temporary:
+        folder = Path(temporary)
+        programs_folder = arguments.programs
+        if programs_folder is None:
+            programs_folder = folder / "programs"
+            build_slopos_programs(programs_folder, arguments.arch)
+        program = programs_folder / f"{arguments.efi}.efi"
+        if not program.is_file():
+            sys.exit(f"boot.py: there's no {program.name} in the build")
+        drive = folder / "drive"
+        (drive / "EFI" / "BOOT").mkdir(parents=True)
+        shutil.copy(program, drive / "EFI" / "BOOT" / ("BOOTAA64.EFI" if aarch64 else "BOOTX64.EFI"))
+        serial = folder / "serial.txt"
+        fat = f"fat:rw:{drive}"
+        if aarch64:
+            code = run_aarch64(None, qemu, serial, arguments.timeout, arguments.cpu,
+                               ["-drive", f"if=none,id=efi,file={fat},format=raw", "-device", "virtio-blk-pci,drive=efi",
+                                *arguments.qemu_arguments], False)
+        else:
+            code = run(None, qemu, serial, arguments.timeout, True, arguments.cpu,
+                       ["-drive", f"file={fat},format=raw", *arguments.qemu_arguments])
+        output = TERMINAL_ESCAPES.sub("", serial.read_text(errors="replace") if serial.exists() else "")
+    sys.stdout.write(output)
+    # Turned off, the program's way to end, rather than an exit code
+    code = 0 if code == NO_EXIT_CODE else code
+    print(f"boot.py: the program {description_of(code)}", file=sys.stderr)
+    if arguments.expect is None:
+        return code
+    missing = [line for line in arguments.expect_line if line not in output.splitlines()]
+    for line in missing:
+        print(f"boot.py: the serial output has no line {line!r}", file=sys.stderr)
+    return 0 if code == arguments.expect and not missing else 1
 
 
 def description_of(code: int) -> str:
