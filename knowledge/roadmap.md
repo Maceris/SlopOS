@@ -127,30 +127,26 @@ Stresses: `std` design, the system ABI, the context register at process start.
 
 ## M7 — Platform and Drivers (L3)
 
-- Platform service: ACPI static tables, PCIe enumeration (ECAM via MCFG).
-- virtio over PCI (modern transport), then virtio-blk, virtio-console, virtio-rng, virtio-input.
-- Device-class protocols: `block`, `serial`, `entropy`, `input`.
-- Supervisor restarts crashed drivers.
+Done 2026-10-25 (`decisions/0070`, `0071`, `0073` to `0077`): the platform service (ACPI's static tables, PCIe through ECAM, the
+virtio-pci transport); virtio-rng, virtio-console, virtio-blk and virtio-input behind the `entropy`, `serial`, `block`
+and `input` device-class protocols, generated from Hemera types (`0040`); and the supervisor restarting crashed
+drivers, which their clients reach again through connectors (`0077`). In six stages: 7a generated protocols, 7b the
+kernel for drivers (MSI-X, DMA memory, firmware tables), 7c the platform service and virtio-rng, 7d virtio-console, 7e
+virtio-blk, 7f virtio-input and restarts.
 
-In six stages (`decisions/0070`): 7a generated protocols (`0040`), with channel tags in the kernel and the first
-services' protocols moved to them; 7b the kernel for drivers (MSI-X, DMA memory, the firmware tables for the root
-task); 7c the platform service, PCIe through ECAM, the virtio-pci transport and virtio-rng; 7d virtio-console; 7e
-virtio-blk; 7f virtio-input and supervisor restarts. Drivers stay trusted until an IOMMU stage after M7.
-
-Specs: PCIe base spec (config space), virtio 1.2.
-Stresses: volatile MMIO, fences (Hemera's `base/intrinsics/atomics.hsc`), protocol unions, driver isolation.
+Specs: PCIe base spec, virtio 1.2.
+Stresses: volatile MMIO, fences, protocol unions, driver isolation.
 
 ---
 
 ## After M7
 
-Planned 2026-10-24. **The order is decided** (`decisions/0072`): storage first, with D, the IOMMUs, before it. The
-stages below are still a draft, decided milestone by milestone when each starts, as `0058` and `0070` were. Each milestone's design is in a note in `design/`, which says what
+Planned 2026-10-24. **The order is decided** (`decisions/0072`): storage first, with D, the IOMMUs, before it. Each
+milestone's stages are decided when it starts. Each milestone's design is in a note in `design/`, which says what
 existing systems got wrong and what SlopOS does instead; the choices that need deciding are in `open-questions.md`.
-`design/lessons.md` (2026-10-29) adds what those notes missed, milestone by milestone, and three tracks to run alongside
-them; decided in `decisions/0096` (R) and `0097` (Perf, memory pressure, and items placed in 9c, 9d, B, 10a, 10c and H
-below); its smaller items are proposed in each milestone's design note.
-Stages keep the pattern so far: each gets an "as built" record and runs on both architectures.
+`design/lessons.md` (2026-10-29) adds what those notes missed, and three tracks to run alongside them, decided in
+`decisions/0096` (R) and `0097` (Perf, memory pressure, and items placed in the milestones below); its smaller items are
+proposed in each milestone's design note. Each stage gets an "as built" record and runs on both architectures.
 
 ```
  M7 drivers ─► D IOMMU ─► M8 storage ─► M9 system services ─► M10 console, accounts ─► M11 shell
@@ -168,290 +164,109 @@ volume; a shell runs installed programs, whose typed parameters it turns into co
 files survive a reboot, and a crash at any moment leaves every volume consistent; an update to the system is a new
 generation, which can be rolled back.
 
-The kernel's work after M7, by milestone, so it isn't a surprise inside a user-space stage:
+The kernel's work still to come, by milestone, so it isn't a surprise inside a user-space stage (D's IOMMUs, M9's
+pager-backed and shared read-only memory objects and pressure signal, R's fault injection, Perf's tickless idle and
+large pages, and B's panic record are built):
 
 | Kernel feature | For | Milestone |
 |---|---|---|
-| IOMMU domains, interrupt remapping (`0039`'s `iommu_interface`) | Drivers out of the TCB | D |
-| Pager-backed memory objects: faults on a memory object become packets to a pager, which supplies the pages | Programs and libraries mapped from storage without reading them whole | M9 |
-| Read-only memory objects shared between processes, mapped at different addresses | Shared library text | M9 |
 | Power: system off and reset, through a capability (PSCI on AArch64, ACPI's reset register and `\_S5` from the AML service on x86-64) | Shutting down | P |
 | Single-stepping and hardware breakpoints and watchpoints, under `write_state` | The debugger | M12 |
 | A sampling capability over a process subtree (user PC and frame-pointer walk at ticks), a trace ring of scheduler and IPC events | Profiling and tracing | M12 |
 | Pinning a process's threads to one CPU, `RDTSC` trapping per process (`0009`) | Record and replay | M12 |
-| A pressure signal on memory budgets; clean pages of pager-backed objects given back under pressure (`0097`) | Services' caches before allocations fail | M9 (9c) |
-| Fault injection points, counters started near their wrap, lock ranks, under `robustness=on` (`0096`) | Running every error path | R |
-| Tickless idle, large pages (`0097`) | Performance | Perf |
-| A panic record kept across the reset; the CPU's transient-execution issues logged (`0097`) | Lost panics; the trade `0013` made, made visible | B, H |
+| The CPU's transient-execution issues logged (`0097`) | The trade `0013` made, made visible | H |
 | Shadow stacks and IBT, PAC, BTI and GCS state in threads, if `H` decides for them | Hardening | H |
 
 ## D — Device Isolation (L2, L3)
 
-Planned 2026-10-25 (`decisions/0079`), in five stages: Da the interface and registration, Db VT-d DMA remapping, Dc
-VT-d interrupt remapping, Dd SMMUv3, De drivers out of the TCB. IOVAs are allocated per domain, only DMA memory is
-mapped, and a DMA fault is reported on the Device for the supervisor to restart its driver. Da done 2026-10-25
-(`decisions/0080`): `iommu_interface` with VT-d and SMMUv3 identified, `iommu_register`, and the platform service
-registering them from DMAR and `iommu-map`. Db done 2026-10-25 (`decisions/0081`): VT-d translates each domain, with
-the invalidation queue, domains' own I/O virtual addresses, and faults logged. Dc done 2026-10-25 (`decisions/0082`):
-VT-d remaps every device's MSIs, each taken only from its device. Dd done 2026-10-25 (`decisions/0083`): SMMUv3
-translates each domain through stage 2, the ITS's doorbell mapped into each. De done 2026-10-25 (`decisions/0084`), so
-D is done: a driver that isn't trusted gets no DMA memory without an IOMMU, and one whose DMA is blocked is killed and
-started again.
+Done 2026-10-25 (`decisions/0079` to `0084`): Intel VT-d and Arm SMMUv3 behind `iommu_interface` (`0039`), registered
+by the platform service from DMAR and `iommu-map`; a DMA domain per driver with its own I/O virtual addresses, only DMA
+memory mapped; every MSI remapped, taken only from its device; and drivers out of the TCB: one that isn't trusted gets
+no DMA memory without an IOMMU, and one whose DMA is blocked is killed and started again. In five stages: Da the
+interface and registration, Db VT-d DMA remapping, Dc VT-d interrupt remapping, Dd SMMUv3, De drivers out of the TCB.
 
-- Intel VT-d and Arm SMMUv3 behind `iommu_interface` (`0039`), registered by the platform service: a DMA domain per
-  driver, DMA memory mapped into its device's domain only, interrupt remapping so a device can't forge MSIs.
-- Drivers leave the TCB: a driver without a domain gets no DMA memory (`0039`, "only drivers the boot configuration
-  marks as trusted get DMA").
-- Right after M7 and before M8, with VT-d and SMMUv3 themselves rather than `virtio-iommu` first (`0072`).
-- A test driver that tries to DMA outside its domain, and is stopped.
-
-Specs: Intel VT-d (rev. 4.x), Arm SMMUv3 (IHI 0070). QEMU: `-device intel-iommu,intremap=on` on q35,
-`-machine virt,iommu=smmuv3`.
-Stresses: a second compile-time interface (`iommu_interface`) checked like `arch_interface`, bit-packed descriptor
-formats (`hemera-proposals/bitfields.md`), invalidation queues and their fences.
+Specs: Intel VT-d (rev. 4.x), Arm SMMUv3 (IHI 0070).
+Stresses: a second compile-time interface checked like `arch_interface`, bit-packed descriptor formats, invalidation
+queues and their fences.
 
 ## M8 — Storage (L4)
 
-Design: `design/storage.md`. Planned 2026-10-25 (`decisions/0085`): the six stages below, a process per unlocked
-volume, ChaCha20-Poly1305 by default, ordered crash semantics, no writable mappings, no intent log to begin with,
-4 KiB blocks and 16 KiB nodes, and SlopOS booting from the disk image the image builder makes, the ISO kept. 8a done
-2026-10-25 (`decisions/0086`): the storage manager, GPT, partition servers and narrowed `block` connections. 8b done
-2026-10-25 (`decisions/0087`): FAT32 read and write, the file protocols in `std`, the FAT server, and `std`'s files
-on SlopOS beneath a working directory, with a directory-relative API on every OS. 8c done 2026-10-25
-(`decisions/0088`): slopfs hosted, its crash-state tester and fuzzer, and the image builder, whose disk SlopOS boots.
-8d done 2026-10-25 (`decisions/0089`): the container service and volume servers, Replace, transactions, change
-cursors, and programs loaded from the system volume, Limine's modules only the boot set. 8e done 2026-10-26
-(`decisions/0090`): encrypted volumes unlocked by a passphrase, their keys only in their volume servers, key
-generations, snapshots and clones by birth times and dead lists, and quotas and the reserve. 8f done 2026-10-27
-(`decisions/0091`), so M8 is done: stored links, made from a grant a connection gives, followed anywhere in a path
-through the storage manager, listed and revoked by the volume that issued them, and never shared on.
+Design: `design/storage.md`. Done 2026-10-27 (`decisions/0085` to `0091`): every filesystem in user space, in a process
+per volume. The storage manager holds the disks; a partition server per disk hands out narrowed `block` connections; a
+FAT server serves the ESP; slopfs, the native filesystem (pooled volumes, copy-on-write B+trees, every block checked
+through its parent, ordered crash semantics, atomic replacement and transactions, change cursors), runs as a container
+service per partition and a volume server per unlocked volume, which alone holds its key (ChaCha20-Poly1305, key
+generations). Snapshots, clones, quotas and the reserve; stored links listed and revoked by the volume that issued them.
+`std`'s files over the `Dir`, `File` and `FileSet` protocols. slopfs is tested hosted, with a crash-state tester and a
+fuzzer, and the hosted image builder makes the disk SlopOS boots from. In six stages: 8a partitions, 8b FAT32 and the
+file protocols, 8c slopfs hosted, 8d slopfs as services, 8e encryption and snapshots, 8f stored links.
 
-- **Every filesystem in user space, in a process per volume.** The storage manager holds the disks' `block`
-  capabilities; a partition server per disk hands out connections narrowed to a range of blocks; a container service
-  per SlopOS partition manages free space and never sees plaintext; a volume server per unlocked volume holds that
-  volume's key. Foreign filesystems run as unprivileged servers holding only their partition.
-- **FAT32**, for the EFI system partition (which the update service writes boot generations to, M9) and later USB
-  sticks; atomic replacement is best effort (`0046`).
-- **The native filesystem**: pooled like APFS (many volumes share a container's space), copy-on-write B+trees
-  (Rodeh), every block checked through its parent's pointer, snapshots and clones by birth time and dead lists (ZFS),
-  authenticated encryption per volume with key generations (`0042`), crash states that are always a prefix of the
-  operations committed, atomic replacement and transactions under a `Dir` (`0046`), change cursors instead of
-  watches that overflow.
-- **The `Dir`, `File` and `FileSet` protocols** (`0015`, `0018`, `0046`), bulk data through a buffer each connection
-  shares, and `std`'s files over them.
-- **Hosted first**: the filesystems are portable packages, unit-tested over a buffer standing in for a disk, tested
-  for crash consistency by replaying every prefix of recorded writes (as CrashMonkey does), fuzzed with mutated
-  images, and used by a hosted image builder that makes the disk image SlopOS boots from.
-
-In six stages:
-- **8a, partitions:** the storage manager, GPT, the partition server and narrowed `block` connections.
-- **8b, FAT32 and the file protocols:** the FAT server, `Dir`, `ReadOnlyDir`, `File`, `ReadOnlyFile` and `FileSet`,
-  informational names, and `std`'s files for SlopOS; the ESP readable from a boot test.
-- **8c, the native filesystem, hosted:** the on-disk format, the container's space map and checkpoints, the B+tree,
-  volume trees, checksums; the crash-state tester, the fuzzer and the image builder.
-- **8d, the native filesystem as services:** the container service and volume servers, atomic replacement,
-  transactions, `Sync`, change cursors.
-- **8e, encryption and snapshots:** sealed volumes, key generations, snapshots and clones, quotas and the reserve
-  that keeps deleting possible on a full disk.
-- **8f, stored links:** links in a recipient's namespace to an object in another volume, listed and revoked by the
-  granter (`design/security.md` §8), for M10's sharing.
-
-Specs: UEFI 2.10 (GPT, the system partition's FAT), Microsoft's FAT32 specification v1.03 with long names,
-RFC 8439 (ChaCha20-Poly1305), NIST SP 800-38D (AES-GCM), BLAKE3.
-Stresses: explicit-endian on-disk structs with layout asserts, bounds proofs over block buffers (E4031), generic
-B+trees, `Result` on every path, hosted tests of code written for SlopOS, cryptography's speed in Hemera.
+Specs: UEFI 2.10 (GPT), Microsoft's FAT32 specification v1.03, RFC 8439, NIST SP 800-38D, BLAKE3.
+Stresses: explicit-endian on-disk structs, bounds proofs over block buffers, generic B+trees, `Result` on every path,
+hosted tests of code written for SlopOS, cryptography's speed in Hemera.
 
 ## M9 — System Services and Software (L4)
 
-Design: `design/software.md`; the events service in `design/observability.md`. Planned 2026-10-27 (`decisions/0092`):
-the five stages below, one bundle store on the system volume, log records as format strings and typed arguments,
-the system configuration serialized into each generation, `AppData` and `Config[T]` entry parameters, a scheduler
-service that splits budgets as configured, and B after M9; Hemera's side, reproducible output, typed linking and typed
-log records, built (its `docs/compilation.md` and `docs/types.md`).
+Design: `design/software.md`; the events service in `design/observability.md`. Done 2026-10-31 (`decisions/0092` to
+`0126`):
+- **9a** the scheduler, clock and events services, and every service the supervisor starts restarted (`0093`).
+- **9b** the bundle store, pager-backed memory objects, and programs outside the boot set loaded from the system volume,
+  their code shared (`0094`).
+- **9c** typed files and names, the config service and `Config[T]`, the system configuration as checked data in the boot
+  set, memory pressure and eviction, the Perf baselines under `-icount`, and R4's storage faults (`0107` to `0112`).
+- **9d** generations on the ESP, degraded boots and the supervisor's report of healthy, the update service (staged,
+  tentative, permanent, rolled back, collected), installations with `AppData` and `Config[T]`, and the recovery
+  generation (`0113` to `0118`).
+- **9e** shared libraries bound by the runtime from grants, `service_kit` as one, and substitution by the config store's
+  policy, checked against interface records (`0119` to `0122`).
+- **9f** follow-ups: boot modules' code shared, the substitution policy in generations, and generations that change only
+  services applied live (`0123` to `0126`).
 
-- **The services every later milestone assumes**: the scheduler service (`0037`), the clock service (the RTC: the
-  MC146818 on x86-64, the PL031 on AArch64 `virt`), the events service for typed logs, which replaces the debug log
-  for everything but the root task, and restarts for the services the supervisor starts other than drivers, which
-  7f's connectors (`0077`) already reach.
-- **The bundle store**: content-addressed programs, libraries and schemas (`0045`), installed by adding a reference
-  and never by running code, collected from roots (generations and installations); the process manager loads from it,
-  mapping programs through pager-backed memory objects.
-- **The config store**: typed configuration values validated by their schemas, defaults from the bundle and
-  overrides kept apart (so an update never has to merge files), versioned, with rollback. The system configuration
-  becomes a value that the root task validates with the same code the build runs today (`0044`).
-- **Generations and updates**: a system generation is the kernel, the boot set and the configuration's version; an
-  update writes a new one beside the old and switches to it at boot; rollback chooses the previous one.
-- **Installations**: an app is installed into a session as an entry naming a bundle; its private data directory and
-  typed configuration belong to the entry, so uninstalling leaves nothing behind (`problems-and-directions.md` §6).
-- **Shared libraries**: separately compiled Hemera libraries linked by the loader by hash and by each function's
-  type (so a mismatch is a load error, never a crash), with security-fix substitution by policy (`0045`).
-
-In five stages: **9a** the scheduler, clock and events services; **9b** the bundle store, pager-backed memory objects
-and loading from storage (the system boots from its disk image: the boot set from the ESP, everything else from the
-system volume); **9c** the config store and the system configuration at run time; **9d** generations, updates and
-installations; **9e** shared libraries and substitution. 9a done 2026-10-29 (`decisions/0093`): the scheduler, clock and
-events services, with every service the supervisor starts restarted. 9b done 2026-10-29 (`decisions/0094`): the bundle store, paged memory, and
-programs outside the boot set booted from the store, their code shared.
-
-9c planned 2026-10-30 (`decisions/0107`), in five parts: **9c1** typed files and names; **9c2** the config store and
-`Config[T]`; **9c3** the system configuration at run time; **9c4** memory pressure; **9c5** the Perf baselines and R4's
-storage faults. 9c1 done 2026-10-30 (`decisions/0108`): typed files through the files protocol and `std`, kept by the
-volume server and refused by the FAT server, and slopfs refusing names that show something other than their bytes. 9c2 done
-2026-10-30 (`decisions/0109`): the config service and `Config[T]`, values declared with their defaults, overrides
-merged field by field by the program, 16 versions kept with rollback and `Next`; transactions over several values and
-the user's override left for later. 9c3 done 2026-10-30 (`decisions/0110`): the system configuration as
-checked data in the boot set, which the root task, the scheduler service and the supervisor read instead of linking
-`system_config`, and overrides of services' tunables in the config store, which the supervisor applies to what it
-starts once the store is up (both decided with the owner). 9c4 done 2026-10-30 (`decisions/0111`): paged memory charged a page at a time,
-a pressure signal on memory budgets at a threshold their holders set, pages given back by their pager through
-`memory_evict`, chosen by a clock over accessed bits (both decided with the owner), and the bundle store giving its
-pages back under pressure. 9c5 done 2026-10-30 (`decisions/0112`): the Perf benchmarks, instruction counts
-under `-icount` held to baselines (decided with the owner; AArch64 only, as QEMU stops x86-64 under `-icount`), and
-R4: failed writes remembered by slopfs and the FAT library, reported to every `Sync` after them and refused to reads,
-and the partition server's faulty block connection swept under `robustness=on`. 9c done.
-
-9d planned 2026-10-30 (`decisions/0113`), in five parts: **9d1** generations on the ESP (records, boot-set files by hash,
-`limine.conf` entries); **9d2** dependency kinds, degraded boots and the supervisor's report of healthy; **9d3** the
-update service (staged updates installed, tentative made permanent, rollback, collection; booting a disk twice);
-**9d4** installations with `AppData` and `Config[T]`; **9d5** the recovery generation. 9d1 done 2026-10-30 (`decisions/0114`):
-generations' records and their objects on the ESP by hash, `limine.conf` written from them, and the root task told
-which it booted. 9d2 done 2026-10-31 (`decisions/0115`): late services and deadlines in the system records, the
-supervisor's assessment of each boot, healthy or degraded, and a degraded boot's record on the system volume. 9d3 done
-2026-10-31 (`decisions/0116`): the update service installing staged generations, checked by hash and against
-the ESP's room, making them permanent once healthy, rolling back degraded ones, and collecting; tested by booting
-the same disk two and three times. 9d4 done 2026-10-31 (`decisions/0117`): system installations with `AppData` and
-`Config[T]`, run from bundles whose entry the supervisor was built with (decided with the owner), updated with their
-data kept, and uninstalled with their data and configuration. 9d5 done 2026-10-31 (`decisions/0118`): the recovery
-generation, written once beside the first, never collected, booting the boot set, the drivers and the console. 9d
-done.
-
-9e planned 2026-10-31 (`decisions/0119`), in three parts: **9e1** libraries on SlopOS (built, bound by the program's
-runtime from grants, text shared); **9e2** `service_kit` as a library every service binds; **9e3** substitution by the
-config store's policy, checked against interface records. 9e1 done 2026-10-31 (`decisions/0120`): libraries built for
-SlopOS, bound by `base`'s runtime from their grants, text mapped from boot-module memory, a changed export refused.
-9e2 done 2026-10-31 (`decisions/0121`): `service_kit` a library every program links, passed on by `os.launch` from
-launcher to launched, the root task's own from the kernel. 9e3 done 2026-10-31 (`decisions/0122`): the config store's
-`system/substitutions`, applied by the supervisor to what it launches after it reads it, each entry checked against the
-interface records. 9e done, and with it M9's stages.
-
-9f, M9's follow-ups, planned 2026-10-31 (`decisions/0123`), in three parts: **9f1** code shared (boot modules' code
-mapped from their memory, a library's `base` sharing the program's process state); **9f2** the substitution policy in
-generations, a change staged by the update service and kept only if it boots healthy (with the owner, from
-`design/lessons.md` §2.1); **9f3** generations that change only services applied live (§2.3). Closed there: the
-process manager loading by bundle hash, as launchers resolve bundles; `Secret[T]`, as Hemera's `#secret` is extended
-in 10b. Then B and Perf's stages, each planned as it starts, before M10. 9f1 done 2026-10-31 (`decisions/0124`): boot
-modules' code mapped from their memory, and a library's `base` sharing the program's process state. 9f2 done 2026-10-31
-(`decisions/0125`): the policy a boot-set file the root task applies, a change asked for in the config store staged by
-the update service as the next generation. 9f3 done 2026-10-31 (`decisions/0126`): a generation differing only in its
-store root applied live, the services whose bundles changed restarted from them. 9f done.
-
-Added by `decisions/0097`: in **9c**, the benchmarks with baselines (*Perf*, below), the memory pressure signal and
-evictable pager pages, and slopfs refusing names with control, bidirectional or invisible characters; in **9d**,
-dependency kinds in `system_config` (required with a deadline, optional, late) with degraded boots instead of hangs,
-the pinned recovery generation, and the ESP budgeted, boot-set files shared by hash.
-
-Specs: ELF-64 dynamic linking, as far as typed linking needs it; the MC146818 and PL031 datasheets.
-Stresses: deterministic, reproducible compiler output (content addressing depends on it); code run both by `#run`
-and at run time (the wiring check); schemas serialized from `TypeInfo`; separately compiled libraries in the compiler.
+Specs: ELF-64 dynamic linking as far as typed linking needs it; the MC146818 and PL031 datasheets.
+Stresses: reproducible compiler output, code run both by `#run` and at run time, schemas serialized from `TypeInfo`,
+separately compiled libraries.
 
 ## Catch-up — What Earlier Decisions Planned and Weren't Built
 
-Planned 2026-10-29, after reading every decision's consequences back (`decisions/0095` did the first two: the storage
-manager restarting its servers, and manifests). In four parts, before 9c, each committed as it passes:
-
-1. **M5 to M8's**: the kernel's own share of memory held back from the root budget (`0054`); test programs for a
-   missing required grant (exit 126) and an ABI version mismatch (125, `0068`); a test of a partition server's
-   dependents killed and served again (`0095`); the supervisor, the events service and the bundle store reconnecting to
-   the system volume when its server is started again (`0095`). Typed files in `Dir` (`0046`) go to 9c, with the
-   config store's typed values. Done 2026-10-30 (`decisions/0098`), with five bugs restarts made reachable, and rings
-   owned by their programs (ABI 9).
-2. **M9's**: `test_budgets` moved from the kernel to a program (`0069`); CPU affinity for IRQs and CPU budgets, with
-   the scheduler service applying it from `system_config` and AArch64's ITS moving an LPI (`0055`, `0073`); every service
-   the supervisor starts logging through `base`'s logger (`0093`). The process manager loading by bundle hash stays with
-   9e (`0094`). Chosen with the owner: a CPU budget's mask comes from `system_config`, which the scheduler service sets
-   (`cpu_budget_set_cpus`), and a driver moves its IRQ to a CPU in its budget's (`irq_set_cpu`). Done 2026-10-30
-   (`decisions/0099`, ABI 10), with two scheduler bugs `test_budgets` found, and a restarted events service adopting
-   the rings of programs still running.
-3. **House-rule checks** (`0007`, `0021`, `0029`), as far as Hemera's reflection reaches: no floating point in the
-   kernel, programs don't import programs, no `rawptr` outside allowed packages, no pointers in system call results,
-   interrupt handlers don't allocate, hardware structs have layout asserts (by a convention to settle); `Result`s
-   discarded in the kernel need the compiler to report them. Chosen with the owner: a `#packed` struct in a hardware
-   package (arch, drivers, iommu, virtio, pci, gpt, fat, slopfs) is hardware, and has a `size_of` assert in its
-   package; Hemera's `FunctionInfo` records where a body discards a `Result` with `_ =`, which the check refuses in the
-   kernel outside an allow-list. Done 2026-10-30 (`decisions/0100`), with four virtio structs given size asserts, and
-   Hemera's `FunctionInfo.discards`.
-4. **Deferred items** placed: done now, FAT timestamps and FSInfo's free count (`0087`), and the entropy service for
-   programs the supervisor starts (`0067`); in M10, the root task's services restarted and logging to the events
-   service (`0093`), and interrupt controllers unregistered when the platform service restarts (`0049`); in M12,
-   debuggers reading pages nothing has touched (`0056`); in P, with the AML service, ACPI's `_CRS` for x86-64's PCI
-   windows (`0074`); in M12, with tracing and profiling, the per-thread page shared with the kernel (`0041`). Done
-   2026-10-30 (`decisions/0101`): FAT times and FSInfo, `hello` given a connection to the entropy service, and the
-   rest written into M10, M12 and P.
+Done 2026-10-30 (`decisions/0095`, `0098` to `0101`), in four parts: M5 to M8's (the kernel's own memory held back,
+tests for missing grants and ABI mismatches, services reconnecting to a restarted system volume); M9's (`test_budgets`
+as a program, CPU affinity for IRQs and budgets, services logging through `base`'s logger); house-rule checks
+(hardware structs' size asserts, discarded `Result`s in the kernel, with Hemera's `FunctionInfo.discards`); and deferred
+items done or placed: in M10, the root task's services restarted and logging to the events service (`0093`), and
+interrupt controllers unregistered when the platform service restarts (`0049`); in M12, debuggers reading untouched
+pages (`0056`) and the per-thread page shared with the kernel (`0041`); in P, ACPI's `_CRS` for x86-64's PCI windows
+(`0074`).
 
 ## R — Robustness Testing (all layers)
 
-Planned 2026-10-29 (`decisions/0096`, from `design/lessons.md` §9.5): running the error paths `0005` asks for, which
-mostly never run. Test machinery is compiled in only by the build setting `robustness=on`, never into other builds. In
-six stages: **R1** fault injection (named failure points in the kernel, `fail=<point>:<n>` swept by `boot_tests.py`, a
-failing allocator in `std` for hosted tests and programs); **R2** counters started near their wrap (the clock,
-generations, PCIDs and ASIDs, IOVAs, ring indices); **R3** lock ranks checked at every acquisition, with a ranked spin
-lock in `std`; **R4** storage faults, with 9c (failed and torn writes, every `Sync` after a failed write told); **R5**
-chaos, after 10a (random services killed, budgets checked); **R6** schedule exploration for lock-free code, when
-Hemera's atomics can be intercepted. R1 to R3 run after the catch-up, before 9c. R1 done 2026-10-30 (`decisions/0104`), R2 (`decisions/0105`), R3 (`decisions/0106`).
+Planned 2026-10-29 (`decisions/0096`): error paths run, by machinery compiled in only under `robustness=on`. Done: **R1**
+fault injection swept by `boot_tests.py` (`0104`), **R2** counters started near their wrap (`0105`), **R3** lock ranks
+(`0106`), **R4** storage faults, with 9c (`0112`). Still to come: **R5** chaos, after 10a (random services killed,
+budgets checked); **R6** schedule exploration for lock-free code, when Hemera's atomics can be intercepted.
 
 Specs: none; prior art in Linux's `failslab`, `INITIAL_JIFFIES` and `lockdep`, `loom` and CHESS.
-Stresses: compile-time settings read by target code, code left out when a setting is off, `Allocator` wrappers,
-per-CPU state checked on every lock.
+Stresses: compile-time settings read by target code, `Allocator` wrappers, per-CPU state checked on every lock.
 
 ## Perf — Numbers Kept, Not Assumed (all layers)
 
-Planned 2026-10-30 (`decisions/0097`, `design/lessons.md` §9.1). Benchmarks as boot tests with recorded baselines,
-failing on a regression beyond a margin: IPC round trip, page fault, thread and process creation, a program's start
-from the bundle store, file create and `Sync`, boot to healthy; instruction counts (`-icount`) beside wall time, since
-QEMU's timing is noisy. They land in 9c. Then, as stages between milestones, each planned when it starts: tickless idle
-(`0050`), large pages for the direct map and large memory objects, and storage bandwidth scheduled by the lent budget
-in the volume and container services (Linux's bug 12309).
-
-Planned 2026-10-31 (`decisions/0127`), before M10, in three stages: **Pa** tickless idle; **Pb** large pages for anonymous
-memory objects of 2 MiB or more (the direct map already has them; with the owner, paged objects stay 4 KiB); **Pc**
-per-connection CPU loans (`0037`'s level 1) in the storage servers, which queue requests by the loan's priority (with
-the owner). Pa done 2026-10-31 (`decisions/0128`): idle CPUs other than the boot CPU stop ticking, counted
-quiescent until an interrupt wakes them. Pb done 2026-10-31 (`decisions/0129`): anonymous memory of 2 MiB or more mapped with 2 MiB pages
-where it lines up, its frames 2 MiB blocks freed a frame at a time. Pc done 2026-10-31 (`decisions/0130`): `thread_use_cpu_budget` (ABI 12), `dir`'s `Lend`, the
-supervisor lending services their budgets, and the volume server serving by the loans' priorities. Perf's stages done.
+Planned 2026-10-30 (`decisions/0097`): benchmarks as boot tests held to baselines, by instruction counts under
+`-icount` (built in 9c, `0112`). Then, before M10 (`0127`), done 2026-10-31: **Pa** tickless idle (`0128`); **Pb** 2 MiB
+pages for anonymous memory of 2 MiB or more (`0129`); **Pc** per-connection CPU loans, the storage servers serving by
+the loans' priorities (`0130`).
 
 Stresses: timing and counting inside boot tests, results compared across builds.
 
 ## B — Boot (L0)
 
-- A Hemera UEFI bootloader, replacing Limine (`0020`), on both architectures: reads the ESP's generations, counts
-  boot attempts (as the Boot Loader Specification's automatic boot assessment does) and falls back to the previous
-  generation when a new one doesn't report healthy. Until it exists, falling back is choosing from Limine's menu.
-- From `decisions/0097`: the recovery generation, reached by a key or after every normal generation's counter runs out;
-  the command line a field of the generation, editable only for development generations, with no `test_*` options in
-  release kernels; a panic record kept across the reset and copied to the ESP; a seed file on the ESP mixed into the
-  boot seed and rewritten before the kernel runs; the bootloader reading nothing but FAT, generation records (checked by
-  generated validators) and ELF, each boot-set file checked against its generation's hash. Sealing the system volume's
-  key to a measured boot set is decided when B is planned (`open-questions.md`, *Lessons*).
-- Hemera's UEFI target: PE32+ output, the UEFI calling convention, `base` for `OS == .UEFI` or a freestanding
-  equivalent.
+Done 2026-10-31 (`decisions/0131` to `0135`): SlopOS's own UEFI bootloader, in Hemera, replacing Limine on both
+architectures. **B1** Hemera's `OS == .UEFI` target, PE32+ EFI applications, and function types with a calling
+convention; **B2** the bootloader booting disks, the kernel given SlopOS's own handoff, every CPU started by it;
+**B3** tries left in the generation record and automatic fallback, the recovery generation by the key r or when nothing
+else is left, the seed file, and the panic record kept across a warm reset; **B4** ISOs through it from an El Torito EFI
+image, and Limine and BIOS boot removed. TPM sealing goes to H.
 
 Specs: UEFI 2.10, PE/COFF.
 Stresses: a third kind of output (PE32+), the Microsoft x64 and AArch64 calling conventions at the firmware boundary.
-Alongside M9; required before automatic rollback.
-
-Planned 2026-10-31 (`decisions/0131`), before M10, in four stages: **B1** Hemera's UEFI target (`OS == .UEFI`, PE32+);
-**B2** the bootloader booting disks, the kernel given SlopOS's `BootInfo`; **B3** boot counting in the generation record,
-automatic fallback, recovery by a key or when every counter's out, the panic record in reserved RAM, the seed file;
-**B4** ISOs through it, and Limine and BIOS boot removed (with the owner). TPM sealing goes to H. B1 done 2026-10-31
-(`decisions/0132`): `OS == .UEFI` in Hemera, PE32+ EFI applications on both architectures, `base`'s runtime on the
-boot services, and function types with a calling convention. B2 done 2026-10-31 (`decisions/0133`): the bootloader boots a disk on both
-architectures, the kernel given SlopOS's own handoff, every CPU started through trampolines of its own. B3 done
-2026-10-31 (`decisions/0134`): tries left in the generation record, counted by the bootloader, the generation before
-booted once a new one runs out and the update service rolling it back; the recovery generation by the key r or when
-nothing else is left; the seed file; the panic record in a page of RAM a warm reset keeps, on the ESP and handed to
-the root task. B4 done 2026-10-31 (`decisions/0135`): ISOs boot through the bootloader from an El Torito EFI
-image holding generation 1, Limine's adapter, `limine.conf` and BIOS boot removed; every boot is UEFI. B is done.
 
 ## M10 — Console, Accounts and Sessions (L4)
 
@@ -470,14 +285,21 @@ Design: `design/console-and-sessions.md`.
   and the user's view of what they've granted, to revoke it. Elevation is the powerbox asking for re-authentication
   on the trusted path and granting one capability, never a `sudo`.
 
-In four stages: **10a** the terminal and input services, the status line and the secure attention key; **10b**
-accounts and first-boot setup; **10c** login and sessions; **10d** the powerbox and sharing. From `decisions/0097`:
-in 10a, the trusted path's services on a reserved budget, the secure attention key's menu listing and ending the
-session's programs, the lifecycle channel (moved from 11a) with `Ping`, and the last boot's panic record shown; in 10c,
-the session manager asking idle installations to save and stop under memory pressure. From the catch-up
-(`decisions/0101`): in 10a, the root task's services (entropy, the process manager, the scheduler, the platform
-service) started again when they end, and logging to the events service (`0093`), and interrupt controllers
-unregistered when the platform service is started again (`0049`).
+Planned 2026-11-01 (`decisions/0136`), with the owner: the typed terminal protocol; Ctrl+Alt+Delete and a serial BREAK
+as the secure attention key; Ctrl-C an `Interrupt` to the terminal's owner; and every item `design/lessons.md` §3
+proposed (a recovery code, new keyboards accepted by a code, NIST's password rules, visible substitutes for
+bidirectional and invisible characters, the layout on the status line, `Locale`). In four stages:
+- **10a** the terminal and input services and the trusted path, in four parts: **10a1** the terminal protocol, the
+  terminal service and the VT adapter, Unicode widths and visible substitutes; **10a2** the input service, keymaps,
+  new keyboards, the secure attention key, the status line and the framebuffer back end; **10a3** the lifecycle channel
+  with `Stop` and `Ping`, the secure attention key's menu, the trusted path's reserved budget, the last panic record
+  shown; **10a4** the root task's services restarted and logging to the events service, interrupt controllers
+  unregistered when the platform service restarts.
+- **10b** accounts: the account service and its volume, Argon2id, wrapped keys, the password rules, `Secret[T]`,
+  first-boot setup and the recovery code.
+- **10c** login and sessions: console login, the session manager, several sessions, ending one, `Locale`, idle
+  installations stopped under memory pressure.
+- **10d** the powerbox and sharing: runtime requests, persistent grants listed and revoked, elevation, shared volumes.
 
 Specs: RFC 9106 (Argon2), RFC 3394 or the AEAD for key wrapping, ECMA-48 (for the VT adapter only), the Unicode
 standard's East Asian Width and UAX #29 for terminal widths.
@@ -631,12 +453,13 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | M5 | done 2026-10-23, in four stages. Stage 1 done (`decisions/0051`): the system call path, kernel objects in type-stable pools, per-process handle tables with generations and rights, quiescent-state reclamation, Process nodes and the ownership tree, threads that exit and are destroyed, address spaces destroyed with their threads; seven calls in the ABI package (`docs/specs/system_calls.md`). Stage 2 done (`decisions/0052`): ports with wake and timer bindings, per-CPU timer heaps with precise deadlines, threads that block on ports and finish their waits when they next run, the monotonic clock as a call. Stage 3 done (`decisions/0053`): channels with shared rings mapped by both ends, doorbells as signals on port bindings (Once and Persistent), handles moved in batches, kernel-copied reads and writes for recorded processes, notify-and-wait with a handoff to the caller's CPU. Stage 4 in four parts: 4a done (`decisions/0054`): memory budgets that every object is charged to, split and closed into their parents, with charges moving when owning handles are taken; anonymous memory objects charged in full and filled lazily through page faults, mapped and shared between spaces, a bad fault destroying the thread. 4b done (`decisions/0055`): the platform capability, which registers interrupt controllers and makes IRQs and device memory; IRQs delivered as port packets and acknowledged; windows onto memory objects, destroyed with them. 4c done (`decisions/0056`): process control over a subtree with the five rights, threads held by suspends and stops and parked where their state is their registers, intercepts that stop threads at calls' entries and exits and at faults (the exception port), with Continue, Skip and Kill, register and memory access, kill, and termination signals. 4d done (`decisions/0057`): the syscall table as a struct of typed function types in the ABI package, from which `#insert` generates the stubs, the call numbers and the kernel's dispatch into typed handlers; the kernel's per-kind code generated from a table of object kinds; the boot tests call through the stubs |
 | M6 | done 2026-10-24, planned 2026-10-23 (`decisions/0058`), in four stages. 6a done (`decisions/0059`): programs build as position-independent executables for `os = .SlopOS` (`src/apps`, `src/services`, `src/drivers`), with Hemera's `base` runtime for SlopOS (a page heap on memory objects, the clock, `process_exit`), the startup block in the ABI package, the shared ELF loader (`src/elf_loader`, unit-tested on the built programs), and the programs carried as boot modules (`docs/specs/programs.md`). 6b done (`decisions/0060`): the kernel loads the root task from the first boot module with the shared loader, at random places, with a labeled grant table (the platform, a debug log, each other module as a read-only memory object over its frames), the boot's random seed and its stack in the startup block; the root task's end stops the kernel; programs write lines through the debug log (`debug_log`). 6c done (`decisions/0067`): the root task splits its budget and starts the services `system_config` lists: the entropy service (a ChaCha20 stream from the boot seed) and the process manager with its own loader (`src/process_builder`), then the supervisor through the manager; the stub supervisor starts `hello` through it. Programs are loaded into processes their requester made, which own their image, stack and startup block, through `thread_create_in`, `process_give_handles` and `memory_size`; a boot test kills the manager and `hello` keeps running. The root task is long-lived; only its end stops the kernel. 6d done (`decisions/0068`): a program's `main` takes its grants as typed parameters, which Hemera's compiler fills from the startup block through base's runtime (`log: DebugLog?`, `manager: os.Channel[ProcessManager]`); `std/os` has `Channel[P]` and `Listener[P]` with protocol tags, the channel helpers, and `launch`, typed by the program's entry; `system_config` names each service's entry and checks the wiring when it's compiled; every startup block has a seed, which `context.random` comes from; the startup code checks the ABI version (1). 6e done (`decisions/0069`): the kernel's user-mode tests are programs in `src/tests`, which the root task runs with `test_program=<name>`, launching copies of themselves where they need other processes; leaks are checked through budgets, and by the kernel, which logs what's left once the root task ends; `test_budgets` stays in the kernel. M6 is done |
 | A (AArch64) | done 2026-10-24 (`decisions/0061`, planned 2026-10-23 in five stages, with M6 paused after 6b meanwhile). A1 done (`decisions/0062`): Hemera generates AArch64 code for Linux, with the carrier register `x28`, the prologue stack check (LLVM patch 0003), `morestack`, fibers, threads, linking C, and Linux in `base` and `std/os`; Hemera's Linux tests all pass as AArch64 programs under user-mode QEMU. A2 done (`decisions/0063`): entry functions through `aarch64.vector_table`, `return_to_user`, system registers by name as compile-time arguments, barriers, TLB and cache maintenance, `rndr` and semihosting in `base/intrinsics/aarch64`; a freestanding test boots in `qemu-system-aarch64`, turns the MMU on and takes exceptions from EL1 and system calls from EL0. A3 done (`decisions/0064`): SlopOS's kernel boots on QEMU `virt` through UEFI and Limine (`--setting=arch=aarch64`, `boot.py --arch aarch64`), with `src/arch/aarch64` for CPU setup, exception entry, `TTBR1`/`TTBR0` paging with ASIDs and the PL011, and stops after memory until A4 (`TAKES_INTERRUPTS`); 8 boot tests on AArch64. A4 done (`decisions/0065`): the GICv3, the generic timer, the other CPUs and TLB shootdown, with the GIC, the timer's interrupt and the PL011 found in the device tree (`src/devicetree`); the kernel boots to its timer ticks on every CPU; 14 boot tests on AArch64. A5 done (`decisions/0066`): user mode on AArch64, with SlopOS's system calls in `x8`, `x0` to `x5` and `x0` to `x2`, eagerly switched FP and SIMD state, and the programs and the root task built and loaded for AArch64; every boot test that applies runs on both architectures (52). A is done; M6 resumes, for both |
-| M7 | planned 2026-10-24 (`decisions/0070`), in six stages. 7a done (`decisions/0071`): protocols are generated from their unions (`os.protocol_code`), with variable-size data as `slop_os.Relative[T]`, handles moved with their messages, validators checking every message before it's read, and protocol tags on channels (`channel_create`'s, read with `channel_tag`, checked for each `Channel[P]` in a message or an entry's parameters); the process manager's, the entropy service's and the supervisor's protocols are generated; `test_protocols` checks them. 7b done (`decisions/0073`): Devices for PCIe functions, their message-signaled IRQs through the local APICs or the GICv3's ITS (`src/kernel/devices.hsc`, `src/arch/aarch64/its.hsc`), DMA domains and pinned, contiguous DMA memory below a limit (`frames.allocate_below`), and the firmware tables copied for the root task's `firmware` grant (`src/kernel/firmware.hsc`); `test_msi_dma` drives QEMU's `edu` through its MSI and DMA on both architectures. 7c done (`decisions/0074`): the platform service (`src/services/platform`) finds the host bridge through `src/pci`, numbers buses and places BARs where firmware didn't, and gives each device once to the supervisor, which starts its driver with the device's bundle (the `platform` protocol); `src/virtio`, the modern virtio-pci transport with MSI-X and split virtqueues in little-endian types; `virtio_rng`, offering itself to the entropy service on the new `rng` protocol, which reseeds from it. 7d done (`decisions/0075`): the `serial` protocol (a Write, and a Read the driver holds until bytes arrive); `virtio_console`, a driver with a listener the supervisor connects its clients through; the console service, showing its clients' lines and echoing what's typed, with hello as its first client; `tools/boot.py` types into a virtio console over a loopback socket. 7e done (`decisions/0076`): the `block` protocol (blocks through a per-connection DMA buffer the client reaches through a window, several tagged requests in flight, `Flush`, `Describe`); `virtio_blk`, with up to 16 requests in flight and descriptor chains freed as the device gives them back; the disk check, which reads a mark boot.py wrote and writes one boot.py finds afterwards. 7f done 2026-10-25 (`decisions/0077`), so M7 is done: the `input` protocol (typed events, keys as HID usages, a held Read); `virtio_input`; the console types from the first keyboard with a US keymap; connectors (`src/protocols/connector`), which the supervisor serves and clients redial; the supervisor restarts a driver that crashes or is killed, up to 3 times a minute, with its device reissued by the platform service; boot.py types on a virtio keyboard through QMP, and `test_restart` kills the console's driver and sees the console dial it again |
-| D | done 2026-10-25, planned the same day (`decisions/0079`), in five stages. Da done (`decisions/0080`): `iommu_interface` (`docs/specs/iommu_interface.md`), checked by the build like the arch interface for each package imported as `iommu_*`, with VT-d (`src/iommu/vtd`) and SMMUv3 (`src/iommu/smmuv3`) identifying their IOMMUs; the kernel's IOMMUs and the requester IDs each covers (`src/kernel/iommus.hsc`), registered with `iommu_register` (ABI 5); a domain bound to its first device's IOMMU, refusing a device behind another; the platform service registering VT-d units from DMAR's device scopes and SMMUv3s from the device tree's `iommu-map`; virtio drivers taking `VIRTIO_F_ACCESS_PLATFORM`; the boot tests run with QEMU's IOMMUs, and one without. Db done (`decisions/0081`): VT-d in legacy mode translates each DMA domain through second-level tables (`src/iommu/vtd`, `src/kernel/translation.hsc`), with the invalidation queue, I/O virtual addresses from 1 MiB per domain, tables charged to the domain, teardown that unmaps before frames go, and faults through an MSI to CPU 0, logged; Hemera's `clflush` and `mfence` for a unit that doesn't snoop. Dc done (`decisions/0082`): VT-d's interrupt remapping, a remapped entry per MSI checked against its device's requester ID, compatibility-format interrupts blocked, and wired lines refused while it's on. Dd done (`decisions/0083`): SMMUv3 with stage 2 only (`src/iommu/smmuv3`): a two-level stream table, the command and event queues, VMIDs per domain, the ITS's doorbell mapped into each domain at its own address (`arch_interface.msi_doorbell`), and faults read from the event queue at CPU 0's ticks, as QEMU's SMMU has only wired interrupts. De done (`decisions/0084`), so D is done: `system_config` trusts SlopOS's own drivers with DMA where no IOMMU confines them, and the platform service makes their domains trusted (`DMA_DOMAIN_TRUSTED`, ABI 6), any other domain getting no DMA memory there (`Untrusted`); a blocked DMA raises `SIGNAL_DMA_FAULT` on its Device, which the supervisor watches, killing the driver, which it then starts again as one that crashed; `edu_dma`, a driver of QEMU's edu device that isn't trusted, DMAs outside its domain and is stopped and started again until it's ended too often, on both architectures, and is refused DMA memory without an IOMMU |
-| M8 | done 2026-10-27, planned 2026-10-25 (`decisions/0085`), in six stages. 8a done (`decisions/0086`): GPT (`src/gpt`, read primary or backup, and written, unit-tested hosted); the storage manager (`src/services/storage_manager`), given connectors to every disk, starting a partition server for each (`src/services/partition_server`), which holds only its disk and serves its partitions and `block` connections narrowed to one, zero-copy through the driver's own buffer, refusing blocks outside it; the `partitions` and `storage` protocols; the disk check opening its partition through the storage manager; boot.py's test disk a GPT disk; 8b done (`decisions/0087`): FAT32 read and write (`src/fat`, unit-tested hosted), served by a FAT server the storage manager starts per FAT partition, holding only that partition; the file protocols `dir`, `read_only_dir`, `file`, `read_only_file` and `file_set` in `std/os/slop_os`, data through a buffer each file connection gives its server; `std`'s files on SlopOS beneath a `working_directory` grant, and `os.Directory` with `_in` path functions on every OS; the disk check reading and writing the ESP boot.py writes; 8c done (`decisions/0088`): slopfs (`src/slopfs`), copy-on-write B+trees sealed with BLAKE3 down from a checkpoint ring, the container's space map, owners and volumes written twice, volumes of objects, keyed name hashes and 64 KiB chunks, checked whole by `verify`; a crash-state tester replaying every prefix, subset between flushes and torn write of a workload's writes; a fuzzer for slopfs (resealing what it damages) and FAT; and the image builder (`src/tools/image_builder`), whose GPT disk SlopOS boots from on both architectures, BIOS and UEFI; 8d done (`decisions/0089`): a container service per container, holding only its partition and checking every block a volume server reads or writes against that volume's extents, and a volume server per volume, serving the file protocols; Replace, transactions logged in client memory and checked for conflicts, change cursors over a volume's history; and every program outside the boot set read from the system volume; 8e done (`decisions/0090`): volumes sealed with ChaCha20-Poly1305 or AES-256-GCM, their keys wrapped by a passphrase through Argon2id and held only by their volume servers, key generations, snapshots and clones by birth times and dead lists, and quotas with a reserve that keeps deleting possible; 8f done (`decisions/0091`): stored links (`src/slopfs/links.hsc`), made from a `grant` a `dir` connection gives and kept by a directory in another volume, followed anywhere in a path through the storage manager's `links` protocol, which the volume they lead into checks against what it issued; listed and revoked by that volume, and never shared on from what a link reached |
-| M9 | planned 2026-10-27 (`decisions/0092`), in five stages: one bundle store on the system volume, log records as format strings and typed arguments, the system configuration serialized per generation, `AppData` and `Config[T]`, B after M9; Hemera's reproducible output, typed linking and typed log records proposed (`hemera-proposals/`). done 2026-10-29 to 2026-10-31 (`decisions/0093` to `0122`); 9f, its follow-ups, done 2026-10-31 (`decisions/0123` to `0126`) |
+| M7 | done 2026-10-25 (`decisions/0070`, `0071`, `0073` to `0077`): generated protocols, the kernel for drivers, the platform service, virtio-rng, -console, -blk and -input, connectors and driver restarts |
+| D | done 2026-10-25 (`decisions/0079` to `0084`): VT-d and SMMUv3 behind `iommu_interface`, DMA and interrupt remapping, drivers out of the TCB |
+| M8 | done 2026-10-27 (`decisions/0085` to `0091`): GPT and partition servers, FAT32 and the file protocols, slopfs hosted and as services, encryption and snapshots, stored links |
+| M9 | done 2026-10-31 (`decisions/0092` to `0126`): the scheduler, clock and events services, the bundle store and paged memory, the config store, generations and updates, installations, shared libraries and substitution, and 9f's follow-ups |
 | Catch-up | done 2026-10-30, in four parts (`decisions/0098` to `0101`): what M5 to M9 planned and hadn't built, the house-rule checks, and deferred items done or placed in M10, M12 and P |
-| Perf | planned 2026-10-30 (`decisions/0097`): benchmarks with baselines in 9c, then stages between milestones. Benchmarks done 2026-10-30 (`decisions/0112`): `tools/perf_tests.py`, instruction counts under `-icount` on AArch64 held to baselines, wall time reported; tickless idle, large pages and storage bandwidth not started |
-| R | planned 2026-10-29 (`decisions/0096`), in six stages, R1 to R3 before 9c. R1 done 2026-10-30 (`decisions/0104`): failure points in the kernel, `fail=` and `boot_tests.py --robustness` on both architectures, std's failing allocator and `unit_tests.py --robustness`; what the sweeps found, fixed (a process ending with its last thread, decided with the owner; slopfs and the services handling running out, with base's `array_try_*`; the bundle store collecting what was still reachable). R2 done 2026-10-30 (`decisions/0105`): monotonic time from 2^63 ns (decided with the owner), generations, tags, DMA addresses and ring indices near their wraps, every boot test on the robustness kernels. R3 done 2026-10-30 (`decisions/0106`): the kernel's lock ranks in one table, checked at every acquisition with std's ranked locks, and every acquisition through them (a house-rule check); R1 to R3 done. R4 done 2026-10-30 (`decisions/0112`): failed writes reported to every `Sync` after them and refused to reads, the faulty block connection swept; R5 and R6 not started |
-| B | done 2026-10-31, planned the same day (`decisions/0131`), in four stages: B1 Hemera's UEFI target (`0132`), B2 the bootloader boots disks (`0133`), B3 boot counting, recovery, the seed and the panic record (`0134`), B4 ISOs through it, Limine and BIOS boot removed (`0135`) |
-| M10–M16, P, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
+| Perf | done 2026-10-31 (`decisions/0097`, `0112`, `0127` to `0130`): benchmarks held to baselines, tickless idle, large pages, CPU loans in the storage servers |
+| R | planned 2026-10-29 (`decisions/0096`): R1 to R4 done 2026-10-30 (`0104` to `0106`, `0112`); R5 and R6 not started |
+| B | done 2026-10-31 (`decisions/0131` to `0135`): Hemera's UEFI target, SlopOS's bootloader, boot counting and recovery, ISOs through it, Limine and BIOS boot removed |
+| M10 | planned 2026-11-01 (`decisions/0136`), in four stages, 10a in four parts; not started |
+| M11–M16, P, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |

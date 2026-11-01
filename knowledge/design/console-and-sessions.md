@@ -1,8 +1,8 @@
 # The Console, Accounts and Sessions
 
-Status: **proposed** 2026-10-24, for roadmap M10. Builds on `../decisions/0016` (users, the administrator, per-user
+Status: **accepted** 2026-11-01 (`../decisions/0136`), for roadmap M10; proposed 2026-10-24. Builds on `../decisions/0016` (users, the administrator, per-user
 encryption), `0018` (the powerbox), `0042` (unlocking, the account database), `0043` (the trusted path) and
-`services.md`. The choices still to make are at the end and in `../open-questions.md`, *Console and sessions*.
+`services.md`. The choices this note left open, and its proposed items, were decided in `../decisions/0136`.
 
 ## 1. What Goes Wrong Elsewhere
 
@@ -87,8 +87,8 @@ As `0043` decided, made concrete:
 
 ## Also Proposed (`lessons.md` §3, 2026-10-30)
 
-Decided when M10 is planned (the trusted path's reserved budgets and the lifecycle channel's `Ping` in 10a are decided,
-`../decisions/0097`):
+All built in M10 (`../decisions/0136`; the trusted path's reserved budgets and the lifecycle channel's `Ping` in 10a,
+`0097`):
 - A recovery key at setup: each volume key wrapped once more under a random code shown once (§3.2).
 - New keyboards read only by the trusted path until accepted by typing a code shown on screen (§3.3).
 - The keyboard layout shown on the status line during login, and switchable there.
@@ -98,8 +98,6 @@ Decided when M10 is planned (the trusted path's reserved budgets and the lifecyc
 
 ## 6. Open Questions
 
-- The secure attention key's combination on each kind of console.
-- Whether the shell or the terminal service owns the decision to send a job `Interrupt` (`shell.md` §6 assumes the
-  terminal sends it to its owner, the shell).
-- How a session ends (logout, a lost remote connection) and what its programs are told: `Stop` over each program's
-  lifecycle channel (`shell.md` §6), then killing the session node after a grace period, as for jobs.
+Answered 2026-11-01 (`../decisions/0136`): the secure attention key is Ctrl+Alt+Delete on a keyboard and a BREAK on a
+serial line; the terminal service sends `Interrupt` to the terminal's owner, the shell, which decides; and a session ends
+by `Stop` over each program's lifecycle channel, then its node killed after a grace period.

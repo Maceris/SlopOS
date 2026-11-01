@@ -83,14 +83,9 @@ generation, `AppData` and `Config[T]`, and Hemera's typed linking and reproducib
 
 ## Console and sessions
 
-Open, from `design/console-and-sessions.md` (2026-10-24):
-
-- **A typed terminal protocol**, with escape sequences only in a VT adapter for byte streams (`console-and-sessions.md`
-  §2), instead of VT100 compatibility in the terminal service. Proposed: typed.
-- **One powerbox per session** (answers `design/services.md`'s open item). Proposed: per session.
-- **Elevation without `sudo`**: re-authentication on the trusted path granting one capability to one program
-  (`console-and-sessions.md` §5).
-- **The secure attention key**'s combination, and the input service as the place it's recognized. The lifecycle channel, also open here, moved to 10a with `Ping` (`decisions/0097`).
+Nothing open. Answered 2026-11-01 (`decisions/0136`): the typed terminal protocol, one powerbox per session, elevation
+by re-authentication on the trusted path, and Ctrl+Alt+Delete or a serial BREAK as the secure attention key, which the
+input service recognizes.
 
 ## Shell
 
