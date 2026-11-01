@@ -1,6 +1,6 @@
 /*
- * SlopOS's bootloader (roadmap B2, decisions/0131, 0133): a UEFI application, BOOTX64.EFI or BOOTAA64.EFI on the ESP,
- * in place of Limine. It reads the ESP's generations (src/generations), boots the newest, each of its files checked
+ * SlopOS's bootloader (roadmap B, decisions/0131, 0133, 0134, 0135): a UEFI application, BOOTX64.EFI or BOOTAA64.EFI on
+ * the ESP of a disk or an ISO's El Torito image. It reads the ESP's generations (src/generations), boots the newest, each of its files checked
  * against its hash, and hands the kernel SlopOS's own boot protocol (src/boot_protocol): the kernel loaded and relocated
  * at a random place, every module in its own pages, a direct map at a random offset, the memory map, the firmware's
  * tables and the framebuffer, then the firmware's boot services left and the kernel entered. Nothing is parsed but the
@@ -281,8 +281,7 @@ read_object :: fn(root: ptr[uefi.File], hash: bundle.Hash, memory_kind: u32) -> 
 }
 
 /*
- * The kernel's command line, as Limine's entry for the generation gives it (generations.limine_conf): the generation's,
- * then its number, recovery for the recovery generation, and the store's root.
+ * The kernel's command line: the generation's, then its number, recovery for the recovery generation, and the store's root.
  */
 write_command_line :: fn(handoff: ptr[mut boot_protocol.Handoff], generation: ptr[generations.Generation]) {
     line : u8[..]
@@ -403,7 +402,8 @@ entropy :: fn(handoff: ptr[mut boot_protocol.Handoff], root: ptr[uefi.File]) {
     mixed[72] = 2
     next :: bundle.hash_of(mixed[0..<mixed.count])
     if !write_file(root, SEED_PATH, next.bytes[0..<next.bytes.count]) {
-        runtime.log_error("bootloader: the next seed can't be written")
+        // As an ISO's can't be
+        runtime.log_info("bootloader: the ESP can't be written, so there's no next seed")
     }
     else if seeded {
         runtime.log_info("bootloader: the seed file mixed in, and replaced")
@@ -459,10 +459,19 @@ random_u64 :: fn(random: ptr[Random]) -> u64 {
         case None => {}
     }
     #if TARGET_ARCH == .x86_64 {
-        return x86_64.rdrand() or_else x86_64.rdtsc()
+        // RDRAND only where CPUID says there is one (leaf 1, ECX bit 30): the bootloader runs on any x86-64, so the
+        // kernel can be the one to refuse a CPU below its baseline
+        if x86_64.cpuid(1).ecx & (1 << 30) != 0 {
+            return x86_64.rdrand() or_else x86_64.rdtsc()
+        }
+        return x86_64.rdtsc()
     }
     #else {
-        return aarch64.rndr() or_else aarch64.read_system_register(.CNTVCT_EL0)
+        // RNDR only where ID_AA64ISAR0_EL1 has FEAT_RNG (bits 63:60), as on x86-64 for RDRAND
+        if aarch64.read_system_register(.ID_AA64ISAR0_EL1) >> 60 != 0 {
+            return aarch64.rndr() or_else aarch64.read_system_register(.CNTVCT_EL0)
+        }
+        return aarch64.read_system_register(.CNTVCT_EL0)
     }
 }
 

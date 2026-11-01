@@ -29,15 +29,24 @@ BOOT = ROOT / "tools" / "boot.py"
 # SlopOS's programs, built once for each architecture, carried as modules by the tests whose arguments have WITH_PROGRAMS
 PROGRAMS = Path()
 PROGRAMS_AARCH64 = Path()
-# The kernel built for SlopOS's own bootloader (boot=slopos), which tests with --bootloader boot (roadmap B2)
-BOOTLOADER_KERNEL = Path()
 # How long each test took, in seconds, by name, for the summary of the slowest
 TIMINGS: dict[str, float] = {}
-BOOTLOADER_KERNEL_AARCH64 = Path()
 WITH_PROGRAMS = "<programs>"
 # The image builder, built once, for the tests whose arguments have WITH_IMAGE_BUILDER (decisions/0088)
 IMAGE_BUILDER = Path()
 WITH_IMAGE_BUILDER = "<image builder>"
+
+
+def boot_arguments(arguments: list, more: list) -> list:
+    """
+    boot.py's arguments for a test: the programs and the image builder built once in place of WITH_PROGRAMS and
+    WITH_IMAGE_BUILDER. Every boot needs both, for the bootloader and the ISO's generation (decisions/0135), so a test
+    without WITH_PROGRAMS boots the kernel alone, with the programs only for the bootloader.
+    """
+    programs = PROGRAMS_AARCH64 if "--arch=aarch64" in more + arguments else PROGRAMS
+    alone = [] if WITH_PROGRAMS in arguments else ["--kernel-alone"]
+    return more + [f"--programs={programs}", f"--image-builder={IMAGE_BUILDER}"] + alone + [
+        argument for argument in arguments if argument not in (WITH_PROGRAMS, WITH_IMAGE_BUILDER)]
 
 
 def program_test(name: str, program: str, line: str, words: str = "", qemu: list = []) -> tuple:
@@ -65,12 +74,17 @@ AARCH64_CLOCK_LINE = "[user] platform: the real-time clock (Pl031) claimed"
 X86_TRANSLATING_LINE = "[info] IOMMU 0: translating, 256 interrupts remapped, its faults to CPU 0's interrupt 48"
 AARCH64_TRANSLATING_LINE = "[info] IOMMU 0: translating, 0 interrupts remapped, its faults read at CPU 0's ticks"
 
+# Lines of a boot disk's that a test killing the storage stack and the config service may not get to
+RACING_RESTARTS = ["--expect-line=[user] fat_server: FSInfo's free count is the FAT's",
+                   "--expect-line=[user] hello: config: declared repeats 1, wrote an override kept, read it back merged, by hello; "
+                   "rolled back kept, repeats 1"]
+
 # What the root task says of a boot every service the system needs came up in (decisions/0115)
 HEALTHY_LINE = "--expect-line=[user] root task: the system is healthy"
 
 # Name, the code expected, and boot.py's arguments
-# What booting from the image builder's disk checks: the disk's five partitions, the FAT server on its EFI system
-# partition, which Limine was read from, and the disk check's lines and writes, as on the test disk
+# What booting from the image builder's disk checks: the disk's four partitions, the FAT server on its EFI system
+# partition, which the bootloader was read from, and the disk check's lines and writes, as on the test disk
 # A boot disk to healthy without the disk check, which the boot's assessment waits for, and most tests of a disk don't need
 BOOT_DISK_BASE = [
     WITH_PROGRAMS,
@@ -80,16 +94,15 @@ BOOT_DISK_BASE = [
     "--command-line=test_exit test_services no_disk_check",
     "--disk=SlopOS disk check: from the host",
     "--expect-line=[user] virtio_blk: serving 206848 blocks",
-    "--expect-line=[user] partition_server: 5 partitions on a disk of 206848 blocks",
+    "--expect-line=[user] partition_server: 4 partitions on a disk of 206848 blocks",
     "--expect-line=[user] storage_manager: disk 0 partition 0: SlopOS check, 2048 blocks from 2048",
-    "--expect-line=[user] storage_manager: disk 0 partition 2: BIOS boot, 2048 blocks from 6144",
-    "--expect-line=[user] storage_manager: disk 0 partition 3: EFI system partition, 131072 blocks from 8192",
-    "--expect-line=[user] storage_manager: disk 0 partition 4: SlopOS system, 65536 blocks from 139264",
-    "--expect-line=[user] storage_manager: started a FAT server for disk 0 partition 3",
+    "--expect-line=[user] storage_manager: disk 0 partition 2: EFI system partition, 131072 blocks from 6144",
+    "--expect-line=[user] storage_manager: disk 0 partition 3: SlopOS system, 65536 blocks from 137216",
+    "--expect-line=[user] storage_manager: started a FAT server for disk 0 partition 2",
     "--expect-line=[user] fat_server: serving a FAT32 volume of 128992 clusters of 512 bytes",
     "--expect-line=[user] fat_server: FSInfo's free count is the FAT's",
     "--expect-line=[user] hello: the entropy service gave 32 random bytes",
-    "--expect-line=[user] storage_manager: started a container service for disk 0 partition 4",
+    "--expect-line=[user] storage_manager: started a container service for disk 0 partition 3",
     "--expect-line=[user] storage_manager: started a volume server for the system volume",
     "--expect-line=[user] volume_server: serving volume 1 (system), from transaction 3",
     "--expect-line=[user] supervisor: console from the bundle store",
@@ -148,7 +161,7 @@ def with_before_qemu(arguments: list[str], more: list[str]) -> list[str]:
 
 
 TESTS = [
-    ("boots and halts (BIOS)", 0, ["--expect-line=[info] boot memory reclaimed"]),
+    ("boots and halts", 0, ["--expect-line=[info] boot memory reclaimed"]),
     # Hemera's UEFI target (roadmap B1, decisions/0132): a program the firmware runs, which turns the machine off
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
@@ -234,11 +247,10 @@ TESTS = [
         "file made in the set",
         "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
-    # Booted from a disk the image builder made rather than the ISO: Limine read from its EFI system partition, its
-    # BIOS boot partition for BIOS, loading only the boot set; the storage stack finding its partitions and its SlopOS
+    # Booted from a disk the image builder made rather than the ISO: the bootloader read from its EFI system partition,
+    # loading only the boot set; the storage stack finding its partitions and its SlopOS
     # container, every other program read from the system volume, and the disk check passing on it as on the test disk
     ("boots from a disk the image builder made", 7, BOOT_DISK_ARGUMENTS),
-    ("boots from a disk the image builder made, through UEFI", 7, ["--uefi"] + BOOT_DISK_ARGUMENTS),
     # Behind a root port, with firmware's bus numbers and BARs taken as unset
     ("numbers buses and places BARs behind a bridge", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services test_reassign", "--expect-line=[user] platform: 1:0.0 (6900 4164) claimed",
@@ -262,7 +274,9 @@ TESTS = [
         "--expect-line=[user] supervisor: test_events: hello's record 0 read back from the system volume: heap working, random numbers working",
         "--expect-line=[user] supervisor: test_events: clock's record 1 read back from the system volume: serving"])),
     ("starts the events service, the clock service and the storage manager again when they're killed", 7, with_before_qemu(
-        [argument.replace("test_services", "test_services test_restart_services test_storage_restart") for argument in BOOT_DISK_BASE], [
+        # Not the FAT server's FSInfo line or hello's config line, which the kills may come before
+        [argument.replace("test_services", "test_services test_restart_services test_storage_restart") for argument in BOOT_DISK_BASE
+         if argument not in RACING_RESTARTS], [
         "--expect-line=[user] storage_manager: the volume server for the system volume ended",
         "--expect-line=[user] supervisor: the system volume's connection closed; opening it again",
         "--expect-line=[user] supervisor: test_restart_services: the system volume, served again after disk 0's partition server was, "
@@ -295,19 +309,14 @@ TESTS = [
         "--expect-line=[user] config: forgot counter's values",
         "--expect-line=[user] supervisor: test_installations: an update to hello's bundle refused, updated to counter_next and run, "
         "uninstalled whole, installed again and run"])),
-    ("boots the recovery generation: the boot set, the drivers and the console", 7, [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk",
-        "--timeout=120", "--command-line=test_exit test_services", "--disk=SlopOS disk check: from the host", "--boot-recovery",
-        "--expect-line=[user] root task: booted the recovery generation",
-        "--expect-line=[user] supervisor: recovery: the boot set, the drivers and the console only",
-        "--expect-line=[user] console: serving", HEALTHY_LINE]),
-    # SlopOS's own bootloader (roadmap B2, decisions/0133), which starts the other CPUs as Limine did
+    # SlopOS's own bootloader (roadmap B2, decisions/0133), which starts the other CPUs
     ("boots a disk through SlopOS's own bootloader, every CPU started", 7, with_before_qemu(BOOT_DISK_BASE, [
-        "--bootloader", "--expect-line=[info] bootloader: booting generation 1",
+        "--expect-line=[info] bootloader: booting generation 1",
         "--expect-line=[boot] SlopOS, booted by SlopOS's bootloader (UEFI)", "--expect-line=[info] 2 of 2 CPUs online"])),
     # Boot counting (roadmap B3): generation 2 boots three times without ever being assessed, then is given up on
     ("falls back to the generation before when a new one never comes up healthy in its tries, and rolls it back", 7,
         with_before_qemu(BOOT_DISK_BASE, [
-        "--bootloader", "--stage-generation=test_exit test_services no_disk_check test_unassessed", "--boots=5",
+        "--stage-generation=test_exit test_services no_disk_check test_unassessed", "--boots=5",
         "--expect-line=[info] bootloader: a seed file written, for the next boot",
         "--expect-line=[user] update: installed generation 2, tentative",
         "--expect-boot-line=2:[info] bootloader: the seed file mixed in, and replaced",
@@ -318,15 +327,16 @@ TESTS = [
         "--expect-boot-line=5:[user] root task: booted generation 1",
         "--expect-boot-line=5:[user] update: generation 2 never came up healthy in its tries, and is rolled back"])),
     # Without the normal boot's lines, which the recovery generation's doesn't have
-    ("boots the recovery generation when its key is held as the machine starts", 7, with_before_qemu(
+    ("boots the recovery generation by its key: the boot set, the drivers and the console", 7, with_before_qemu(
         [argument for argument in BOOT_DISK_BASE if not argument.startswith("--expect-line=") or argument == HEALTHY_LINE], [
-        "--bootloader", "--recovery-key", "--expect-line=[info] bootloader: the recovery generation, as a key asks",
+        "--recovery-key", "--expect-line=[info] bootloader: the recovery generation, as a key asks",
         "--expect-line=[user] root task: booted the recovery generation",
-        "--expect-line=[user] supervisor: recovery: the boot set, the drivers and the console only"])),
+        "--expect-line=[user] supervisor: recovery: the boot set, the drivers and the console only",
+        "--expect-line=[user] console: serving"])),
     # The panic record (decisions/0134): the first boot panics and resets, keeping RAM; the next finds its record
     ("keeps a panic's record across a warm reset, on the ESP and for the root task", 7, with_before_qemu(
         [argument.replace("test_services", "test_services panic_reset test_panic_once") for argument in BOOT_DISK_BASE], [
-        "--bootloader", "--allow-reboot", "--expect-line=[info] test_panic_once: failing an assertion",
+        "--allow-reboot", "--expect-line=[info] test_panic_once: failing an assertion",
         "--expect-line=[info] resetting, the panic record kept",
         "--expect-line=[info] bootloader: the boot before stopped for a fault, its panic record kept as EFI/SlopOS/LAST_PANIC",
         "--expect-disk-text=assertion failed: test_panic_once",
@@ -382,7 +392,6 @@ TESTS = [
         "--expect-line=[user] root task: the supervisor started all 4 of its services"]),
     ("doesn't start the root task with no_root_task", 0, [WITH_PROGRAMS, "--command-line=test_exit no_root_task",
         "--expect-line=[info] boot memory reclaimed"]),
-    ("boots and halts (UEFI)", 0, ["--uefi", "--expect-line=[info] boot memory reclaimed"]),
     ("reports a kernel fault", 1, ["--command-line=test_exit test_fault"]),
     ("reports a failed assertion", 3, ["--command-line=test_exit test_assert"]),
     ("refuses a CPU below x86-64-v3", 2, ["--cpu=qemu64"]),
@@ -461,11 +470,9 @@ MORESTACK_TESTS = [
 
 
 # Every test again on AArch64 (tools/boot.py --arch aarch64, always through UEFI), but those that can't apply there:
-# BIOS, x86-64's baseline, and the NMI, which AArch64 has no counterpart for yet (knowledge/decisions/0065)
-AARCH64_LEFT_OUT = {"boots and halts (BIOS)", "refuses a CPU below x86-64-v3", "resumes after an NMI",
-                    "boots from a disk the image builder made, through UEFI"}
+# x86-64's baseline, and the NMI, which AArch64 has no counterpart for yet (knowledge/decisions/0065)
+AARCH64_LEFT_OUT = {"refuses a CPU below x86-64-v3", "resumes after an NMI"}
 AARCH64_NAMES = {
-    "boots and halts (UEFI)": "boots and halts",
     "routes a device's interrupts through the I/O APIC": "routes a device's interrupts through the GIC",
 }
 
@@ -490,13 +497,13 @@ AARCH64_MORESTACK_TESTS = aarch64_tests(MORESTACK_TESTS)[:-1]
 FAILED_BUILD_LOG = ROOT / "build" / "failed_kernel_build.log"
 
 
-def build_kernel(output: Path, stack_check: str = "trap", architecture: str = "x86_64", boot: str = "limine") -> bool:
+def build_kernel(output: Path, stack_check: str = "trap", architecture: str = "x86_64") -> bool:
     """
     Builds the kernel through the build package, checks and all. If it fails, everything the compiler
     wrote, with its exit code, is printed and kept in FAILED_BUILD_LOG (hemera-feedback.md's build
     failure seen once, which needs its output to be looked into).
     """
-    command = ["hemera", f"--setting=targets=kernel,stack_check={stack_check},kernel_output={output},arch={architecture},boot={boot}",
+    command = ["hemera", f"--setting=targets=kernel,stack_check={stack_check},kernel_output={output},arch={architecture}",
                str(ROOT / "src" / "build")]
     if os.environ.get("HEMERA_INSTALL"):
         command.insert(1, f"--install-path={os.environ['HEMERA_INSTALL']}")
@@ -533,20 +540,12 @@ def build_programs(output: Path, architecture: str = "x86_64", robustness: bool 
 
 
 def main() -> int:
-    global PROGRAMS, PROGRAMS_AARCH64, IMAGE_BUILDER, BOOTLOADER_KERNEL, BOOTLOADER_KERNEL_AARCH64
+    global PROGRAMS, PROGRAMS_AARCH64, IMAGE_BUILDER
     suite_started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="slopos-boot-tests-") as temporary:
         kernel = Path(temporary) / "kernel.elf"
         if not build_kernel(kernel):
             print("FAILED: the kernel doesn't build")
-            return 1
-        BOOTLOADER_KERNEL = Path(temporary) / "kernel_bootloader.elf"
-        if not build_kernel(BOOTLOADER_KERNEL, boot="slopos"):
-            print("FAILED: the kernel doesn't build for SlopOS's bootloader")
-            return 1
-        BOOTLOADER_KERNEL_AARCH64 = Path(temporary) / "kernel_bootloader_aarch64.elf"
-        if not build_kernel(BOOTLOADER_KERNEL_AARCH64, architecture="aarch64", boot="slopos"):
-            print("FAILED: the kernel doesn't build for SlopOS's bootloader on AArch64")
             return 1
         PROGRAMS = Path(temporary) / "programs"
         if not build_programs(PROGRAMS):
@@ -603,8 +602,8 @@ ADDRESS_TESTS = [
 
 def addresses(kernel: Path, arguments: list) -> list | None:
     """Boots kernel, and gives the lines that say where it is, or None if it didn't halt as usual."""
-    result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", "--timeout=60", "--expect=0", *arguments],
-                            capture_output=True, text=True)
+    result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", "--timeout=60", "--expect=0",
+                             *boot_arguments(arguments, [])], capture_output=True, text=True)
     if result.returncode != 0:
         sys.stdout.write(result.stdout)
         sys.stdout.write(result.stderr)
@@ -639,13 +638,9 @@ def run_tests(kernel: Path, tests: list, more: list = []) -> int:
     for name, expected, arguments in tests:
         if only and not any(part in name for part in only):
             continue
-        programs = PROGRAMS_AARCH64 if "--arch=aarch64" in more else PROGRAMS
-        arguments = more + [f"--programs={programs}" if argument == WITH_PROGRAMS else
-                            f"--image-builder={IMAGE_BUILDER}" if argument == WITH_IMAGE_BUILDER else argument for argument in arguments]
-        bootloader_kernel = BOOTLOADER_KERNEL_AARCH64 if "--arch=aarch64" in more else BOOTLOADER_KERNEL
-        booted = bootloader_kernel if "--bootloader" in arguments else kernel
+        arguments = boot_arguments(arguments, more)
         started = time.monotonic()
-        result = subprocess.run([sys.executable, str(BOOT), f"--kernel={booted}", "--timeout=60", f"--expect={expected}",
+        result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", "--timeout=60", f"--expect={expected}",
                                  *arguments], capture_output=True, text=True)
         TIMINGS[name] = time.monotonic() - started
         passed = result.returncode == 0
@@ -689,7 +684,7 @@ FAULTY_BLOCKS = [*[f"write:{n}" for n in [*range(1, 13), 16, 24, 32, 48, 64, 96]
 def sweep_faulty(kernel: Path, more: list = [], label: str = "") -> int:
     """A boot from the image builder's disk for each of FAULTY_BLOCKS: how many runs went wrong."""
     from concurrent.futures import ThreadPoolExecutor
-    disk = [WITH_PROGRAMS, f"--image-builder={IMAGE_BUILDER}", "--boot-disk", "--disk=SlopOS disk check: from the host"]
+    disk = [WITH_PROGRAMS, WITH_IMAGE_BUILDER, "--boot-disk", "--disk=SlopOS disk check: from the host"]
 
     def one(fault: str) -> tuple:
         code, output = boot_once(kernel, f"test_exit test_services faulty_block={fault}", disk, more)
@@ -719,12 +714,9 @@ def sweep_values(passes: int) -> list:
 
 def boot_once(kernel: Path, words: str, arguments: list, more: list) -> tuple:
     """Boots kernel with words on its command line: the code it stopped with, and its serial output."""
-    programs = PROGRAMS_AARCH64 if "--arch=aarch64" in more else PROGRAMS
-    arguments = [f"--programs={programs}" if argument == WITH_PROGRAMS else argument for argument in arguments]
-    # boot.py's own arguments go before the "--" that starts QEMU's
-    split = arguments.index("--") if "--" in arguments else len(arguments)
+    arguments = boot_arguments(arguments, more)
     command = [sys.executable, str(BOOT), f"--kernel={kernel}", f"--timeout={SWEEP_TIMEOUT_SECONDS}", f"--command-line={words}",
-               *more, *arguments[:split], *arguments[split:]]
+               *arguments]
     result = subprocess.run(command, capture_output=True, text=True, errors="replace")
     return result.returncode, result.stdout
 

@@ -211,13 +211,17 @@ check_files :: fn(to: slop_os.DebugLog) -> int {
     }
     entries :: os.list_directory("EFI/SlopOS") or_return 25
     names := 0
+    // The bootloader's own files there, its seed and its last panic record (decisions/0134), aside
+    count := entries.count
     for entry in entries {
         if (strings.equal(entry.name, "hello.txt") && !entry.is_directory) || (strings.equal(entry.name, "made") && entry.is_directory)
             || strings.equal(entry.name, "A long name, from the host.txt") {
             names += 1
         }
+        if strings.equal(entry.name, "SEED") || strings.equal(entry.name, "LAST_PANIC") {
+            count -= 1
+        }
     }
-    count :: entries.count
     os.free_directory_listing(entries)
     if names != 3 || count != 3 {
         return 26

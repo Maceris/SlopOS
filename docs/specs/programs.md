@@ -19,8 +19,8 @@ position-independent ELF executable (`ET_DYN`, `0004`) linked statically, with n
 libraries and no thread-local storage, whose only relocations are `R_X86_64_RELATIVE`. Its entry is the
 compiler's startup code, which calls the package's `main`.
 
-The boot image carries every program as a Limine module under `/boot/modules/`: `root_task.elf` first,
-then the others in the order of their names.
+The boot ISO carries every program as a module of its generation's boot set (`0135`): `root_task.elf` first, then
+the others in the order of their names.
 
 ## Loading
 
@@ -136,11 +136,11 @@ of its own with a memory budget split off its starter's, which owns it:
 
 **Where programs come from** (`0089`): the **boot set**, the services `system_config` marks `boot_set` (the root
 task's four, `virtio_blk`, the storage manager, the partition server, the FAT server, the container service and the
-volume server), are Limine's modules: enough to reach the system volume. The supervisor starts the boot set's drivers
+volume server), are the bootloader's modules, the generation's boot set: enough to reach the system volume. The supervisor starts the boot set's drivers
 and the storage manager first, asks it for the first SlopOS container's system volume, and reads every other program
 from its `modules` folder, each once, straight into a memory object of its own given to the volume server as the
 read's buffer, before starting the other drivers and services. Where there's no system volume, as on the ISO, or a
-program isn't there, Limine's module stands in.
+program isn't there, the boot set's module stands in.
 
 **Wiring**: `system_config` names each service's entry, and checks when it's compiled that every
 `Channel[P]` one takes has a server: a service taking a `Listener[P]`, the root task, which serves the
@@ -312,7 +312,7 @@ still running; and `test_reassign` has the platform service take every virtio de
 numbers as unset, so assigning them is tested where firmware assigns everything. The supervisor's `test_restart`
 kills the first serial line's driver once the console has dialed it, and says it has started everything only once
 the driver's been restarted and dialed again. With `--boot-disk`, `tools/boot.py` boots from a disk the image builder
-made (`0088`) rather than the ISO, Limine read from its EFI system partition. `tools/boot.py` can link a virtio console to a TCP socket on the
+made (`0088`) rather than the ISO, the bootloader read from its EFI system partition. `tools/boot.py` can link a virtio console to a TCP socket on the
 loopback (`--console-input`, `--expect-console-line`), which it types its i-th line into at the console's i-th
 banner, and whose lines it checks; add a virtio keyboard it types on through QEMU's machine protocol
 (`--keyboard-input`); and add a virtio disk, an image it marks (`--disk`) and checks afterwards

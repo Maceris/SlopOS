@@ -78,11 +78,16 @@ test_shootdown :: fn(kernel: ptr[mut Kernel]) {
     runtime.log_info("test_shootdown: every CPU read the new page after the shootdown")
 }
 
-// Ask every other online CPU to read the page, and check they all read value.
+/*
+ * Ask every other online CPU to read the page, and check they all read value. Each CPU's own reading is waited for, not
+ * a count of answers: a CPU another reschedule IPI wakes reads twice, which a count would take for two CPUs.
+ */
 every_cpu_reads :: fn(kernel: ptr[Kernel], test: ptr[mut ShootdownTest], value: u64) -> bool {
+    for index in 0..<SHOOTDOWN_TEST_CPUS {
+        intrinsics.volatile_store_u64(&test.seen[index], 0)
+    }
     intrinsics.atomic_store_u32_release(&test.answered, 0)
     cpus :: kernel.cpus
-    others :: kernel.online_cpus - 1
     for cpu, index in cpus {
         if index > 0 && index < cast[usize](kernel.online_cpus) {
             arch.send_ipi(cpu.hardware_id, .Reschedule)
@@ -92,14 +97,23 @@ every_cpu_reads :: fn(kernel: ptr[Kernel], test: ptr[mut ShootdownTest], value: 
     loop {
         arch.spin_hint()
     }
-    while intrinsics.atomic_load_u32_acquire(&test.answered) < others && arch.counter() < deadline
-    if intrinsics.atomic_load_u32_acquire(&test.answered) < others {
-        runtime.log_error("test_shootdown: only % of % CPUs read the page", test.answered, others)
-        return false
-    }
+    while !all_read(kernel, test, value) && arch.counter() < deadline
     for index in 1..<cast[usize](kernel.online_cpus) {
-        if index < SHOOTDOWN_TEST_CPUS && test.seen[index] != value {
-            runtime.log_error("test_shootdown: CPU % read %{x}, not %{x}", index, test.seen[index], value)
+        if index < SHOOTDOWN_TEST_CPUS {
+            seen :: intrinsics.volatile_load_u64(&test.seen[index])
+            if seen != value {
+                runtime.log_error("test_shootdown: CPU % read %{x}, not %{x}", index, seen, value)
+                return false
+            }
+        }
+    }
+    return true
+}
+
+// Whether every other online CPU has read value.
+all_read :: fn(kernel: ptr[Kernel], test: ptr[ShootdownTest], value: u64) -> bool {
+    for index in 1..<cast[usize](kernel.online_cpus) {
+        if index < SHOOTDOWN_TEST_CPUS && intrinsics.volatile_load_u64(&test.seen[index]) != value {
             return false
         }
     }
@@ -116,7 +130,7 @@ read_for_shootdown_test :: fn() {
     test :: cast[ptr[mut ShootdownTest]](address)
     index :: cast[usize](cpu.index)
     if index < SHOOTDOWN_TEST_CPUS {
-        test.seen[index] = intrinsics.volatile_load_u64(cast[ptr[u64]](test.address))
+        intrinsics.volatile_store_u64(&test.seen[index], intrinsics.volatile_load_u64(cast[ptr[u64]](test.address)))
     }
     intrinsics.interlocked_increment_u32_release(&test.answered)
 }

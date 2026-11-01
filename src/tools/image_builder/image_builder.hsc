@@ -4,10 +4,10 @@
  * SlopOS containers (src/slopfs), each filled from a folder on the host. tools/boot.py runs it.
  *
  *     image_builder <output> <sectors> [--sealed=<name>:<passphrase>] <partition>...
+ *     image_builder --fat <output> <sectors> <folder>
  *
  * The image is sectors 512-byte sectors. Each partition is kind,name,sectors[,folder], placed in order from sector
  * 2048, each starting at a MiB, the folder last, so it may hold commas:
- * - bios: a BIOS boot partition, where `limine bios-install` puts Limine's second stage on a GPT disk
  * - esp: an EFI system partition, FAT32, holding the folder's tree
  * - data: a basic data partition, FAT32, holding the folder's tree
  * - test: SlopOS's test partition type, zeros, which whoever made the image marks
@@ -15,6 +15,9 @@
  * With --sealed, each container also has an encrypted volume of that name, unlocked by that passphrase, holding
  * sealed.txt (SEALED_TEXT), for the boot tests (roadmap 8e). Each partition is printed as "partition <index> <first> <count> <name>". The GUIDs, the container's ID and its
  * volume's name-hash key are random.
+ *
+ * With --fat, the image is a FAT32 volume alone, no partition table, holding the folder's tree: the EFI system
+ * partition's image an ISO boots from by El Torito (roadmap B4, decisions/0135).
  */
 package image_builder
 
@@ -35,7 +38,6 @@ ALIGN_SECTORS : u64 : 2048
 MAX_PARTITIONS :: 16
 
 // Partition types, as their bytes are on the disk
-BIOS_BOOT_TYPE :: u8.[0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6f, 0x6e, 0x74, 0x4e, 0x65, 0x65, 0x64, 0x45, 0x46, 0x49]
 ESP_TYPE :: u8.[0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11, 0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b]
 BASIC_DATA_TYPE :: u8.[0xa2, 0xa0, 0xd0, 0xeb, 0xe5, 0xb9, 0x33, 0x44, 0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99, 0xc7]
 // "SLOPOS TEST PART" and "SLOPOS CONTAINER", in ASCII
@@ -43,7 +45,6 @@ TEST_TYPE :: u8.[0x53, 0x4c, 0x4f, 0x50, 0x4f, 0x53, 0x20, 0x54, 0x45, 0x53, 0x5
 CONTAINER_TYPE :: u8.[0x53, 0x4c, 0x4f, 0x50, 0x4f, 0x53, 0x20, 0x43, 0x4f, 0x4e, 0x54, 0x41, 0x49, 0x4e, 0x45, 0x52]
 
 Kind :: enum {
-    Bios,
     Esp,
     Data,
     Test,
@@ -99,6 +100,9 @@ text_of :: fn(failure: Failure) -> string {
 
 main :: fn() -> int {
     arguments :: os.arguments()
+    if arguments.count == 5 && arguments[1] == "--fat" {
+        return fat_image(arguments[2], number_of(arguments[3]) or_else 0)
+    }
     if arguments.count < 4 {
         io.eprintln("usage: image_builder <output> <sectors> <kind,name,sectors[,folder]>...")
         return 2
@@ -199,13 +203,45 @@ main :: fn() -> int {
     return 0
 }
 
+// A FAT32 volume of sectors, holding the tree of the folder its arguments name, written to output alone.
+fat_image :: fn(output: string, sectors: u64) -> int {
+    // From the arguments, as main's partitions' folders are, which the volume may point at
+    arguments :: os.arguments()
+    folder :: if arguments.count == 5 { arguments[4] } else { "" }
+    if sectors == 0 {
+        io.eprintln("image_builder: --fat needs a number of sectors")
+        return 2
+    }
+    image, error :: runtime.new_array(u8, cast[usize](sectors * SECTOR_BYTES))
+    if error != null || image.count == 0 {
+        io.eprintln("image_builder: no memory for the image")
+        return 3
+    }
+    defer runtime.free_array(image)
+    for i in 0..<image.count {
+        image[i] = 0
+    }
+    volume := Wanted.{kind = .Esp, name = "SLOPOS", first = 0, count = sectors, folder = folder}
+    match fill(image, &volume) {
+        case Some(failure) => {
+            io.eprintf("image_builder: the FAT volume: %\n", text_of(failure))
+            return 5
+        }
+        case None => {}
+    }
+    if os.write_entire_file(output, string_of(&image[0], image.count)) != null {
+        io.eprintf("image_builder: can't write %\n", output)
+        return 6
+    }
+    return 0
+}
+
 align :: fn(sector: u64) -> u64 {
     return (sector + ALIGN_SECTORS - 1) / ALIGN_SECTORS * ALIGN_SECTORS
 }
 
 type_of :: fn(kind: Kind) -> gpt.Guid {
     return match kind {
-        case .Bios => BIOS_BOOT_TYPE
         case .Esp => ESP_TYPE
         case .Data => BASIC_DATA_TYPE
         case .Test => TEST_TYPE
@@ -248,9 +284,8 @@ parse :: fn(text: string) -> Wanted? {
     if count < 3 {
         return null
     }
-    kind := Kind.Bios
+    kind := Kind.Esp
     match fields[0] {
-        case "bios" => kind = .Bios
         case "esp" => kind = .Esp
         case "data" => kind = .Data
         case "test" => kind = .Test
@@ -267,7 +302,6 @@ parse :: fn(text: string) -> Wanted? {
 // A partition's contents written into the image, or what went wrong.
 fill :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
     return match partition.kind {
-        case .Bios => null
         case .Test => null
         case .Esp => fill_fat(image, partition)
         case .Data => fill_fat(image, partition)

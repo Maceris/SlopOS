@@ -395,7 +395,7 @@ unlink_window :: fn(parent: ptr[mut Memory], window: ptr[mut Memory]) {
 }
 
 /*
- * A boot module's memory (root_task.hsc), read-only: the size bytes of frames at physical Limine loaded it into,
+ * A boot module's memory (root_task.hsc), read-only: the size bytes of frames at physical the bootloader loaded it into,
  * owned by owner and charged to budget for its slot. Its frames go to the frame allocator once it's released. It may
  * be mapped to run, never written: a typed library's text is mapped from it, shared (decisions/0120), as a handle with
  * RIGHT_MEMORY_EXECUTE allows.

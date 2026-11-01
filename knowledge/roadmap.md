@@ -450,7 +450,8 @@ architectures, the kernel given SlopOS's own handoff, every CPU started through 
 2026-10-31 (`decisions/0134`): tries left in the generation record, counted by the bootloader, the generation before
 booted once a new one runs out and the update service rolling it back; the recovery generation by the key r or when
 nothing else is left; the seed file; the panic record in a page of RAM a warm reset keeps, on the ESP and handed to
-the root task.
+the root task. B4 done 2026-10-31 (`decisions/0135`): ISOs boot through the bootloader from an El Torito EFI
+image holding generation 1, Limine's adapter, `limine.conf` and BIOS boot removed; every boot is UEFI. B is done.
 
 ## M10 — Console, Accounts and Sessions (L4)
 
@@ -637,4 +638,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | Catch-up | done 2026-10-30, in four parts (`decisions/0098` to `0101`): what M5 to M9 planned and hadn't built, the house-rule checks, and deferred items done or placed in M10, M12 and P |
 | Perf | planned 2026-10-30 (`decisions/0097`): benchmarks with baselines in 9c, then stages between milestones. Benchmarks done 2026-10-30 (`decisions/0112`): `tools/perf_tests.py`, instruction counts under `-icount` on AArch64 held to baselines, wall time reported; tickless idle, large pages and storage bandwidth not started |
 | R | planned 2026-10-29 (`decisions/0096`), in six stages, R1 to R3 before 9c. R1 done 2026-10-30 (`decisions/0104`): failure points in the kernel, `fail=` and `boot_tests.py --robustness` on both architectures, std's failing allocator and `unit_tests.py --robustness`; what the sweeps found, fixed (a process ending with its last thread, decided with the owner; slopfs and the services handling running out, with base's `array_try_*`; the bundle store collecting what was still reachable). R2 done 2026-10-30 (`decisions/0105`): monotonic time from 2^63 ns (decided with the owner), generations, tags, DMA addresses and ring indices near their wraps, every boot test on the robustness kernels. R3 done 2026-10-30 (`decisions/0106`): the kernel's lock ranks in one table, checked at every acquisition with std's ranked locks, and every acquisition through them (a house-rule check); R1 to R3 done. R4 done 2026-10-30 (`decisions/0112`): failed writes reported to every `Sync` after them and refused to reads, the faulty block connection swept; R5 and R6 not started |
-| M10–M16, B, P, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
+| B | done 2026-10-31, planned the same day (`decisions/0131`), in four stages: B1 Hemera's UEFI target (`0132`), B2 the bootloader boots disks (`0133`), B3 boot counting, recovery, the seed and the panic record (`0134`), B4 ISOs through it, Limine and BIOS boot removed (`0135`) |
+| M10–M16, P, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |

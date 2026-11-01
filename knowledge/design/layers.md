@@ -100,12 +100,11 @@ initial modules (the first user-space programs), the kernel's own load address, 
 CPUs and how to start them, and an entropy seed if the bootloader has one.
 
 - The kernel never parses bootloader-specific structures itself; it consumes `BootInfo`.
-  A different bootloader (Limine, our own UEFI loader, U-Boot) means a different L0 package,
+  A different bootloader (Limine once, SlopOS's own UEFI loader now, U-Boot) means a different L0 package,
   not a different kernel.
-- **L0 is per boot protocol, not per architecture.** The Limine protocol is almost the same on
-  x86-64, AArch64 and RISC-V, so one `boot/limine` package serves all three, with `#if
-  TARGET_ARCH` only around the few arch-specific responses (SMP). L1 never sees Limine
-  structures.
+- **L0 is per boot protocol, not per architecture.** SlopOS's boot protocol (`src/boot_protocol`) is the same on
+  x86-64 and AArch64, so one `boot/slopos` package serves both, with `#if TARGET_ARCH` only around
+  the few arch-specific parts. L1 never sees the bootloader's structures.
 - **L0 owns the kernel's entry point.** The kernel is built without Hemera's startup code, so
   the entry function does what Hemera's `docs/compilation.md` (*Freestanding Programs*) says:
   1. Point a carrier block on the boot stack at the end of that stack, and load it with
@@ -303,7 +302,7 @@ Programs as packages exporting typed functions; shell builds CLIs from signature
 
 | Artifact | Per-arch? | Notes |
 |---|---|---|
-| Bootloader | yes | Limine supports x86-64, AArch64, RISC-V, LoongArch |
+| Bootloader | yes | SlopOS's own, a UEFI application built for each architecture (`0131`) |
 | `boot/*` (L0) | no, per boot protocol | Small `#if TARGET_ARCH` sections for arch-specific responses |
 | `arch/*` (L1) | yes | The only per-arch kernel code |
 | Kernel core | no | |
@@ -324,7 +323,7 @@ src/
   build/            build package: kernel, user-space and host-test targets (0028)
   checks/           house-rule checks, registered by the build (0029)
   boot/
-    limine/         L0: Limine protocol → BootInfo, kernel entry point
+    slopos/         L0: SlopOS's boot protocol → BootInfo, kernel entry point
   boot_info/        the BootInfo type, shared by L0 and L2
   arch_interface/   the --- declarations L1 implements
   arch/

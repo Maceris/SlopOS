@@ -1,7 +1,6 @@
 /*
  * SlopOS's own boot protocol (roadmap B2, decisions/0131, 0133): what the Hemera bootloader (src/uefi/bootloader) hands
- * the kernel's boot adapter (src/boot/slopos), which turns it into the kernel's BootInfo as src/boot/limine turns
- * Limine's responses. The bootloader is a program of its own, so this is fixed-size plain data and physical addresses,
+ * the kernel's boot adapter (src/boot/slopos), which turns it into the kernel's BootInfo. The bootloader is a program of its own, so this is fixed-size plain data and physical addresses,
  * read through the direct map, never a Hemera value with pointers in it; the adapter checks the magic and the size
  * first.
  *
@@ -22,7 +21,8 @@ BOOT_STACK_SIZE : u64 : 64 * 1024
 // The most of each the handoff carries
 MAX_REGIONS :: 512
 MAX_SEGMENTS :: 8
-MAX_MODULES :: 32
+// A generation's boot set, as many as an ISO carries, and the bootloader's own, last_panic
+MAX_MODULES :: 72
 MAX_CPUS :: 64
 NAME_BYTES :: 32
 COMMAND_LINE_BYTES :: 1024
@@ -46,7 +46,7 @@ Module :: struct {
  * A CPU: its hardware identifier, the local APIC ID or MPIDR's affinity fields; and, but for the boot CPU, its mailbox.
  * The bootloader starts every other CPU before it enters the kernel and parks it, on its own stack of BOOT_STACK_SIZE
  * bytes, with interrupts off and the bootloader's page tables, until goto_address isn't 0: then it jumps there, with
- * argument as its first argument in the C convention, as Limine's MP protocol does. The kernel writes argument, then
+ * argument as its first argument in the C convention. The kernel writes argument, then
  * goto_address, with release order. Its fields' places are the trampoline's, so they don't move.
  */
 Cpu :: struct {

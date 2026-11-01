@@ -80,8 +80,7 @@ Builds must be **reproducible**: the same sources and options give the same byte
 - **Boot assessment:** a new generation is tentative. The supervisor reports it healthy once every service its
   configuration lists has started and answered on its listener; the update service then makes it permanent. With the
   Hemera bootloader (B), a tentative generation that doesn't report healthy within a few attempts is skipped, as
-  systemd-boot's automatic boot assessment does with counters in entry names. With Limine, choosing the previous
-  generation from the menu is the fallback.
+  systemd-boot's automatic boot assessment does with counters in entry names (built in B3, `../decisions/0134`).
 - **Updating a service without rebooting** is restarting it from a new bundle under the same generation's next
   version, when only services change: `problems-and-directions.md` §13. Live state handoff isn't planned.
 
@@ -133,4 +132,4 @@ The Update Framework with bundles from elsewhere (M13); settings tools with the 
 
 - One bundle store, on the system volume, for every user's apps.
 - The system configuration as a generation's serialized value (§4), validated at boot by the code the build runs.
-- B (the bootloader) after M9: until then, Limine's menu is the way back to the previous generation.
+- B (the bootloader) after M9: done 2026-10-31 (`../decisions/0131`-`0135`).

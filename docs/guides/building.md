@@ -7,9 +7,8 @@ How to build SlopOS, boot it in QEMU, and run its tests. Everything here runs on
 | Tool | Found through | Notes |
 |---|---|---|
 | Hemera's compiler, `hemera` | the `PATH`, or `HEMERA` for the unit tests | Built from the Hemera repository; it finds Hemera's `std` next to itself, or in `HEMERA_INSTALL` |
-| QEMU, `qemu-system-x86_64` | `QEMU` (the program or its folder), then the `PATH`, then `C:\Program Files\qemu` | Its own UEFI firmware is used for `--uefi`, or `OVMF` |
-| Limine's binary release | `LIMINE` (its folder), then the `PATH` | `limine-bios.sys`, `limine-bios-cd.bin`, `limine-uefi-cd.bin`, `BOOTX64.EFI` and the `limine` tool |
-| xorriso | `XORRISO`, then the `PATH` | Makes the boot ISO |
+| QEMU, `qemu-system-x86_64` | `QEMU` (the program or its folder), then the `PATH`, then `C:\Program Files\qemu` | Its own UEFI firmware is used, or `OVMF`; every boot is UEFI |
+| xorriso | `XORRISO`, then the `PATH` | Makes the boot ISO around its EFI image |
 | Python 3 | the `PATH` | Runs the tools in `tools/` |
 
 ## Building
@@ -42,8 +41,9 @@ If a build fails, the boot tests keep everything the compiler wrote in `build/fa
 
 ## Running
 
-`tools/boot.py` builds the kernel (unless given one), puts it in a Limine ISO, and boots it in QEMU with
-the serial port on standard output:
+`tools/boot.py` builds the kernel (unless given one), the programs (unless given them, for SlopOS's bootloader among
+them) and the tools, puts them in an ISO whose El Torito EFI image holds the bootloader and generation 1 (`0135`), and
+boots it in QEMU by UEFI with the serial port on standard output:
 
 ```
 python tools/boot.py --expect 0
@@ -55,7 +55,6 @@ python tools/boot.py --expect 0
 | `--command-line TEXT` | The kernel's command line; `test_exit` by default |
 | `--expect CODE` | Exit 0 if the kernel stops with this code (`src/kernel/stop.hsc`), 1 otherwise |
 | `--expect-line LINE` | With `--expect`: the serial output must also have this exact line; may be repeated |
-| `--uefi` | Boot with UEFI firmware instead of BIOS |
 | `--cpu MODEL` | QEMU's CPU model; `max` by default, since SlopOS needs x86-64-v3 |
 | `--no-kaslr` | The same addresses on every boot: no random image base, direct map or kernel window (`0021`) |
 | `--timeout SECONDS` | Give up after this long; 30 by default |
@@ -65,8 +64,12 @@ python tools/boot.py --expect 0
 | `--expect-console-line LINE` | With `--expect`: the virtio console must show this exact line; may be repeated |
 | `--arch ARCH` | `x86_64` (the default), or `aarch64` on QEMU's virt machine through UEFI |
 | `--disk MARK` | Add a virtio block device: a 38 MiB GPT disk whose `SlopOS check` partition has `MARK` at the start of its block 0 and `block N` at the start of its blocks 2 to 9, and an EFI system partition holding the disk check's files, its FAT32 written by `boot.py` itself |
-| `--boot-disk` | Boot from a disk the image builder makes instead of the ISO: the disk check's partitions, marked with `--disk`'s `MARK`, a BIOS boot partition with Limine's second stage, an EFI system partition with Limine, the kernel and the programs, of which Limine loads only the boot set, and a SlopOS container whose `system` volume holds the programs, the rest read from there |
-| `--image-builder PATH` | With `--boot-disk`: the image builder to run, instead of building one |
+| `--programs FOLDER` | The programs, built, the bootloader (`bootloader.efi`) among them, instead of building them |
+| `--kernel-alone` | The kernel with no modules: its generation's boot set is empty, `--programs` giving only the bootloader |
+| `--boot-disk` | Boot from a disk the image builder makes instead of the ISO: the disk check's partitions, marked with `--disk`'s `MARK`, an EFI system partition with the bootloader, generation 1 and the recovery generation, of only the boot set, and a SlopOS container whose `system` volume holds the programs, the rest read from there |
+| `--image-builder PATH` | The image builder to run, beside the generation builder and the store builder, instead of building them |
+| `--recovery-key` | Hold the bootloader's recovery key, `r`, on the serial console as the machine starts (`0134`) |
+| `--allow-reboot` | Let the first boot reset the machine and boot again in the same QEMU, which keeps RAM (`0134`) |
 | `--expect-disk-block N=TEXT` | With `--expect`: block `N` of the image must start with `TEXT` once the kernel has stopped; may be repeated |
 | `--expect-disk-text TEXT` | With `--expect`: the image must hold `TEXT` somewhere once the kernel has stopped; may be repeated |
 | `-- ARGUMENTS` | Anything after `--` goes to QEMU, like `-smp 4` |
@@ -77,12 +80,13 @@ python tools/boot.py --expect 0
 
 ```
 image_builder <output> <sectors> <kind,name,sectors[,folder]>...
+image_builder --fat <output> <sectors> <folder>
 ```
 
-Each partition starts at a MiB, in order from sector 2048: `bios` (a BIOS boot partition, for `limine bios-install`),
-`esp` and `data` (FAT32, holding the folder's tree), `test` (zeros, SlopOS's test partition type) or `slopfs` (a
+Each partition starts at a MiB, in order from sector 2048: `esp` and `data` (FAT32, holding the folder's tree), `test` (zeros, SlopOS's test partition type) or `slopfs` (a
 SlopOS container with a `system` volume holding the folder's tree, checked whole once it's made). It prints each
-partition as `partition <index> <first> <count> <name>`.
+partition as `partition <index> <first> <count> <name>`. With `--fat`, the image is one FAT32 volume holding the
+folder's tree, with no partition table: an ISO's El Torito EFI image (`0135`).
 
 The kernel stops with a code QEMU's debug-exit device reports when `test_exit` is on its command line:
 

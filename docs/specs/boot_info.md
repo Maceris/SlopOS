@@ -5,8 +5,9 @@ image's location, the CPUs and how to start them, the boot modules, framebuffers
 tables, and a few optional values the bootloader may know. It is the only boot data the kernel
 core reads; no bootloader structure reaches L2 (`../architecture/layers.md`, L0).
 
-Status: **implemented** in `src/boot_info` and `src/boot/limine` (roadmap M1), with starting CPUs (M3)
-and reclaiming boot memory (M2). Choices and alternatives are in
+Status: **implemented** in `src/boot_info` (roadmap M1), with starting CPUs (M3) and reclaiming boot memory (M2);
+its L0 is `src/boot/slopos`, for SlopOS's own bootloader (roadmap B, `0133`), which replaced Limine's adapter in B4
+(`0135`). Choices and alternatives are in
 `../../knowledge/decisions/0031-boot-info.md`. Four-digit numbers like `0020` refer to
 decision records in `../../knowledge/decisions/`.
 
@@ -253,68 +254,6 @@ stops for a fault; with `panic_reset` on the command line it then resets the mac
 boot's bootloader finds the sealed record, keeps its text on the ESP as `EFI/SlopOS/LAST_PANIC`, adds it as the module
 `last_panic`, and empties the page.
 
-## Limine (`boot/limine`)
-
-The `boot/limine` package implements L0 for the Limine boot protocol, base revision 6, on every
-supported architecture (`0020`, `0022`).
-
-### Requests
-
-| Limine request | Required | Used for |
-|---|---|---|
-| Base revision 6 | yes | Every pointer below is virtual, in the direct map |
-| Memory map | yes | `memory_map` |
-| HHDM | yes | `direct_map_offset` |
-| Executable address | yes | `kernel_image` |
-| Executable file | yes | `kernel_image.segments` |
-| MP (x86-64: x2APIC flag set) | yes | `cpus`, `start_cpu` |
-| Module | no: Limine answers it only when there are modules | `modules` |
-| Paging mode: 4-level (Sv48 on RISC-V) | yes | The bootloader's page tables |
-| Stack size: 64 KiB | yes | Boot stacks of every CPU |
-| Bootloader info | no | `bootloader` |
-| Firmware type | no | `firmware` (defaults to `Uefi`) |
-| Executable command line | no | `command_line` |
-| Framebuffer | no | `framebuffers` |
-| RSDP, device tree blob, SMBIOS, EFI system table | no | `firmware_tables` |
-| Entropy (4 values) | no | `bootloader_entropy` |
-| TSC frequency (x86-64) | no | `counter_frequency_hint` |
-| Date at boot | no | `boot_wall_time` |
-
-If the bootloader doesn't acknowledge base revision 6, or a required response is missing, L0
-reports which one through the early logger and halts.
-
-### Conversion
-
-| `BootInfo` | From Limine |
-|---|---|
-| `memory_map` | Memory map entries. `USABLE` → `Usable`; `BOOTLOADER_RECLAIMABLE` → `BootReclaimable`; `EXECUTABLE_AND_MODULES` → `KernelImage` for the range containing the executable's physical base, `BootModule` for the rest; `FRAMEBUFFER` → `Framebuffer`; `ACPI_RECLAIMABLE` → `FirmwareTables`; `ACPI_NVS` → `FirmwareReserved`; `BAD_MEMORY` → `Defective`; `RESERVED`, `RESERVED_MAPPED` and unknown types → `Reserved`. Then the arrays L0 builds are carved out of a `Usable` region and listed as `BootReclaimable`. |
-| `kernel_image` | Executable address response, with the size of the memory map entry at the physical base. `segments` are the `PT_LOAD` program headers of the executable file response's ELF image, offset by the difference between `virtual_base` and the image's link address |
-| `cpus` | MP response, with the boot CPU moved first. `hardware_id` is `lapic_id`, `mpidr` or `hartid`; `boot_handle` points at the CPU's `limine_mp_info` |
-| `start_cpu` | Writes `extra_argument`, then `goto_address` (atomically) in the CPU's `limine_mp_info`, pointing at L0's secondary entry |
-| `modules` | Module response, in the order the boot configuration lists them. `name` is the last component of `path`; `command_line` is `string` |
-| `framebuffers` | Framebuffers with memory model 1 (RGB). Others are left out. `memory` is `address` minus the HHDM offset, with size `pitch × height` |
-| `firmware_tables` | Each response's address minus the HHDM offset. SMBIOS uses `entry_64`, or `entry_32` when that's null |
-| `bootloader_entropy` | The 4 entropy values, as bytes in little-endian order |
-| `firmware` | `X86_BIOS` → `Bios`, `EFI64` → `Uefi`, `EFI32` → `Uefi32`, `SBI` → `Sbi` |
-
-L0 needs no allocator. Strings point into the bootloader's responses. The arrays (memory
-map, segments, CPUs, modules, framebuffers) are sized from the response counts and placed in memory carved
-from the first `Usable` region big enough.
-
-### Request Blocks
-
-Limine finds requests by scanning the kernel image, and writes each response pointer into the
-request before the kernel starts. Each request, and the start and end markers, is a constant
-marked `#externally_initialized`, in its own section (Hemera `docs/directives.md`, *Constants*):
-
-| Constants | Section |
-|---|---|
-| The start marker | `.limine_requests_start` |
-| The base revision tag and every request | `.limine_requests` |
-| The end marker | `.limine_requests_end` |
-
-The kernel's linker script places the three sections in that order, in a loaded segment.
-
 ## SlopOS's Bootloader (`boot/slopos`)
 
 The `boot/slopos` package implements L0 for SlopOS's own bootloader (`src/uefi/bootloader`, `0133`), whose handoff is
@@ -322,8 +261,8 @@ The `boot/slopos` package implements L0 for SlopOS's own bootloader (`src/uefi/b
 never `Usable`, the kernel image and its segments, the modules by name, the CPUs with their mailboxes, the framebuffer,
 the bootloader's entropy and the firmware tables' physical addresses. `BootInfo`'s arrays are filled in the handoff's
 own room and point into it, through the direct map. `start_cpu` writes a parked CPU's mailbox, its argument and then
-its goto address, as Limine's MP protocol does. `panic_record` is the handoff's page for it, when the bootloader kept
-one. The kernel is built for it with the build's setting `boot=slopos`.
+its goto address. `panic_record` is the handoff's page for it, when the bootloader kept one. `firmware` is always
+`Uefi`; `counter_frequency_hint` and `boot_wall_time` are never given.
 
 ## Not Covered
 

@@ -174,7 +174,7 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         scheduler = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     words :: service_kit.text_of(block, command_line) or_return 4
     apply_substitutions(&root)
-    // The generation Limine's entry booted, which it says on the command line (decisions/0113); none from an ISO
+    // The generation the bootloader booted, which it says on the command line (decisions/0113)
     if service_kit.has_word(words, "recovery") {
         log_line.write(debug_log, "root task: booted the recovery generation")
     }

@@ -1,5 +1,5 @@
 """
-Boots a kernel in QEMU through Limine, for end-to-end tests (knowledge/compiler-plan.md, Phase 6).
+Boots a kernel in QEMU through SlopOS's own bootloader, for end-to-end tests (knowledge/compiler-plan.md, Phase 6).
 
     python tools/boot.py --expect 0
     python tools/boot.py --kernel build/kernel.elf
@@ -15,23 +15,24 @@ The kernel's command line is --command-line, test_exit by default, which makes S
 stopped to the debug exit device (src/kernel/stop.hsc, StopReason). QEMU's CPU is --cpu, max by
 default, since SlopOS needs x86-64-v3.
 
-SlopOS's programs, each an ELF in --programs (built with the kernel when there's no --kernel), go in the
-ISO as Limine's modules: root_task.elf first, which the kernel starts as the root task, then the others in
-the order of their names.
+SlopOS's programs, each an ELF in --programs (built when there's none), are the boot set of the ISO's generation:
+root_task.elf first, which the kernel starts as the root task, then the others in the order of their names.
 
-The kernel's ELF goes in a Limine ISO, which QEMU boots (BIOS by default, --uefi for UEFI) with the
-serial port captured. --arch aarch64 builds SlopOS's kernel for AArch64 (the build package's arch setting)
-and boots it on QEMU's virt machine, always through UEFI, ending through semihosting instead of the debug
-exit device, with the same code. Limine randomizes the kernel's base and its direct map (KASLR), unless --no-kaslr. A kernel ends the run by writing a code to QEMU's isa-debug-exit device at
+The ISO boots by UEFI through El Torito (roadmap B4, decisions/0135): its EFI image is a FAT volume holding SlopOS's
+bootloader (bootloader.efi, from --programs) as the firmware's default boot file and generation 1, the kernel and the
+programs as objects with its record, which the generation builder writes and the image builder makes a volume of
+(both built, as SlopOS's tools, unless --image-builder names them). QEMU boots it with the serial port captured.
+--arch aarch64 builds SlopOS's kernel for AArch64 (the build package's arch setting) and boots it on QEMU's virt
+machine, ending through semihosting instead of the debug exit device, with the same code. The bootloader randomizes
+the kernel's base and its direct map (KASLR), unless --no-kaslr. A kernel ends the run by writing a code to QEMU's isa-debug-exit device at
 port 0xf4; QEMU then exits with (code << 1) | 1, which this script turns back into the code. It
 exits with that code, so --expect makes it a test: 0 if the kernel's code matched, 1 otherwise.
 
 Tools are found from the environment, then the PATH:
     QEMU      qemu-system-x86_64, or its folder
     QEMU_AARCH64  qemu-system-aarch64, or its folder, for --arch aarch64 (default: next to qemu-system-x86_64)
-    LIMINE    the folder of Limine's binary release (limine-bios.sys, BOOTX64.EFI, ...)
     XORRISO   xorriso
-    OVMF      UEFI firmware for --uefi, if QEMU's own edk2-x86_64-code.fd isn't next to it
+    OVMF      UEFI firmware, if QEMU's own edk2-x86_64-code.fd isn't next to it
     AAVMF     UEFI firmware for --arch aarch64, if QEMU's own edk2-aarch64-code.fd isn't next to it
 """
 
@@ -64,18 +65,6 @@ KERNEL_FLAGS = [
     "--cpu-features=-mmx,-sse,-sse2,-avx,-avx2,+soft-float",
 ]
 
-# KASLR (knowledge/decisions/0021): Limine loads the kernel at a random base and puts its direct map at a random
-# offset, which this Limine doesn't do unless asked. --no-kaslr turns both off, so every boot has the same addresses.
-LIMINE_CONFIG = """timeout: 0
-
-/SlopOS
-    protocol: limine
-    kaslr: {kaslr}
-    randomise_hhdm_base: {kaslr}
-    path: boot():/boot/kernel
-    cmdline: {command_line}
-{modules}"""
-
 ROOT = Path(__file__).resolve().parent.parent
 BUILD_PACKAGE = ROOT / "src" / "build"
 # SlopOS needs x86-64-v3 (knowledge/decisions/0003), which QEMU's default CPU model lacks
@@ -97,28 +86,6 @@ def find_tool(variable: str, names: list[str], folders: list[Path]) -> Path:
     sys.exit(f"boot.py: can't find {names[0]}; set {variable}")
 
 
-def find_limine() -> Path:
-    """Limine's binary release: from LIMINE, or the folder of limine on the PATH."""
-    configured = os.environ.get("LIMINE")
-    folders = [Path(configured)] if configured else []
-    found = shutil.which("limine")
-    if found:
-        folders += [Path(found).parent, Path(found).parent.parent]
-    for folder in folders:
-        if (folder / "limine-bios-cd.bin").is_file():
-            return folder
-    sys.exit("boot.py: can't find Limine's binary release; set LIMINE to its folder")
-
-
-def limine_tool(limine: Path) -> Path:
-    """Limine's own tool, which installs its BIOS stages into the ISO."""
-    names = ["limine.exe", "limine"]
-    for candidate in [limine / name for name in names] + [limine / "limine-tool-windows-x86" / name for name in names]:
-        if candidate.is_file():
-            return candidate
-    return find_tool("LIMINE_TOOL", names, [])
-
-
 def run_hemera(arguments: list[str], what: str) -> None:
     """Runs Hemera's compiler, stopping if it fails."""
     command = ["hemera", *arguments]
@@ -134,9 +101,9 @@ def build_kernel(package: Path, linker_script: Path, output: Path) -> None:
     run_hemera([*KERNEL_FLAGS, f"--linker-script={linker_script}", f"--output={output}", str(package)], str(package))
 
 
-def build_slopos_kernel(output: Path, architecture: str = "x86_64", boot: str = "limine") -> None:
-    """Builds SlopOS's kernel through its build package, checks and all, for Limine or SlopOS's own bootloader (boot)."""
-    run_hemera([f"--setting=targets=kernel,kernel_output={output},arch={architecture},boot={boot}", str(BUILD_PACKAGE)],
+def build_slopos_kernel(output: Path, architecture: str = "x86_64") -> None:
+    """Builds SlopOS's kernel through its build package, checks and all."""
+    run_hemera([f"--setting=targets=kernel,kernel_output={output},arch={architecture}", str(BUILD_PACKAGE)],
                "SlopOS's kernel")
 
 
@@ -153,48 +120,56 @@ def build_slopos_programs(output: Path, architecture: str = "x86_64") -> None:
                "SlopOS's programs")
 
 
-def make_image(kernel: Path, programs: list[Path], limine: Path, xorriso: Path, folder: Path, command_line: str, kaslr: bool) -> Path:
-    """An ISO that boots kernel through Limine, from BIOS or UEFI, with programs as its modules."""
-    root = folder / "iso_root"
-    (root / "boot" / "limine").mkdir(parents=True)
-    (root / "boot" / "modules").mkdir(parents=True)
-    (root / "EFI" / "BOOT").mkdir(parents=True)
-    shutil.copy(kernel, root / "boot" / "kernel")
-    modules = ""
-    for program in programs:
-        shutil.copy(program, root / "boot" / "modules" / program.name)
-        modules += f"    module_path: boot():/boot/modules/{program.name}\n"
-    config = LIMINE_CONFIG.format(command_line=command_line, kaslr="yes" if kaslr else "no", modules=modules)
-    (root / "boot" / "limine" / "limine.conf").write_text(config, newline="\n")
-    for name in ["limine-bios.sys", "limine-bios-cd.bin", "limine-uefi-cd.bin"]:
-        shutil.copy(limine / name, root / "boot" / "limine" / name)
+# The ISO's EFI image: at least a FAT32 volume's fewest clusters of a sector, and room for what it holds
+ISO_FAT_SECTORS = 69632
+
+
+def make_image(kernel: Path, programs: list[Path], bootloader: Path, image_builder: Path, xorriso: Path, folder: Path,
+               command_line: str, kaslr: bool) -> Path:
+    """
+    An ISO that boots kernel by UEFI through SlopOS's bootloader (decisions/0135): its El Torito EFI image a FAT volume
+    with the bootloader as the default boot file and generation 1, of the kernel and every program, written by the
+    generation builder.
+    """
+    esp = folder / "iso_esp"
+    (esp / "EFI" / "BOOT").mkdir(parents=True)
     for name in ["BOOTX64.EFI", "BOOTAA64.EFI"]:
-        shutil.copy(limine / name, root / "EFI" / "BOOT" / name)
+        shutil.copy(bootloader, esp / "EFI" / "BOOT" / name)
+    # No bundle store: every program is in the boot set
+    store = folder / "iso_store"
+    (store / "objects").mkdir(parents=True)
+    generation_builder = next(image_builder.parent.glob("generation_builder*"))
+    generated = subprocess.run([str(generation_builder), str(esp), str(store), "1", "yes" if kaslr else "no", command_line, str(kernel)]
+                               + [str(program) for program in programs], capture_output=True, text=True)
+    if generated.returncode != 0:
+        sys.exit(f"boot.py: the generation builder failed:\n{generated.stdout}{generated.stderr}")
+    root = folder / "iso_root"
+    root.mkdir()
+    held = sum(path.stat().st_size for path in esp.rglob("*") if path.is_file())
+    built = subprocess.run([str(image_builder), "--fat", str(root / "efi.img"), str(ISO_FAT_SECTORS + held // 512), str(esp)],
+                           capture_output=True, text=True)
+    if built.returncode != 0:
+        sys.exit(f"boot.py: the image builder failed:\n{built.stdout}{built.stderr}")
     image = folder / "image.iso"
     subprocess.run([
-        str(xorriso), "-as", "mkisofs", "-R", "-r", "-J",
-        "-b", "boot/limine/limine-bios-cd.bin", "-no-emul-boot", "-boot-load-size", "4", "-boot-info-table",
-        "-hfsplus", "-apm-block-size", "2048",
-        "--efi-boot", "boot/limine/limine-uefi-cd.bin", "-efi-boot-part", "--efi-boot-image", "--protective-msdos-label",
+        str(xorriso), "-as", "mkisofs", "-R", "-J",
+        "--efi-boot", "efi.img", "-efi-boot-part", "--efi-boot-image", "--protective-msdos-label",
         "iso_root", "-o", "image.iso",
     ], cwd=folder, check=True, capture_output=True)
-    subprocess.run([str(limine_tool(limine)), "bios-install", str(image)], check=True, capture_output=True)
     return image
 
 
-def run(image: Path | None, qemu: Path, serial: Path, timeout: float, uefi: bool, cpu: str, extra: list[str],
+def run(image: Path | None, qemu: Path, serial: Path, timeout: float, cpu: str, extra: list[str],
         keys: "SerialKeys | None" = None, reboot: bool = False) -> int:
-    """Boots the image, or with none the disk in extra, and gives the code the kernel wrote to the debug exit device."""
-    # The CD first: a test disk's protective MBR looks bootable to the BIOS
-    boot = ["-cdrom", str(image), "-boot", "order=d"] if image is not None else []
+    """Boots the image, or with none the disk in extra, by UEFI, and gives the code the kernel wrote to the debug exit device."""
+    boot = ["-cdrom", str(image)] if image is not None else []
     command = [
         str(qemu), "-M", "q35", "-m", "256M", "-cpu", cpu, *boot,
         *serial_arguments(serial, keys), "-display", "none", *([] if reboot else ["-no-reboot"]),
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
     ]
-    if uefi:
-        firmware = find_tool("OVMF", ["edk2-x86_64-code.fd", "OVMF_CODE.fd", "OVMF.fd"], [qemu.parent / "share"])
-        command += ["-drive", f"if=pflash,format=raw,readonly=on,file={firmware}"]
+    firmware = find_tool("OVMF", ["edk2-x86_64-code.fd", "OVMF_CODE.fd", "OVMF.fd"], [qemu.parent / "share"])
+    command += ["-drive", f"if=pflash,format=raw,readonly=on,file={firmware}"]
     if keys is not None:
         keys.thread.start()
     try:
@@ -581,10 +556,10 @@ def fat32_volume(sectors: int, files: list) -> bytes:
 
 
 # The disk the image builder makes to boot from, in 512-byte sectors (decisions/0088): the disk check's two partitions
-# where make_disk has them, a BIOS boot partition for Limine's second stage, the EFI system partition with Limine,
-# the kernel, the modules and the disk check's files, and a SlopOS container whose system volume holds the modules
+# where make_disk has them, the EFI system partition with the bootloader, the generations, the modules and the disk
+# check's files, and a SlopOS container whose system volume holds the modules
 BOOT_DISK_SECTORS = 206848
-# The programs Limine loads from the boot disk, enough to reach the system volume, which holds every program; the rest
+# The programs the bootloader loads from the boot disk, enough to reach the system volume, which holds every program; the rest
 # come from it (src/system_config's boot_set, decisions/0089)
 BOOT_SET = ["root_task", "entropy", "process_manager", "scheduler", "platform", "supervisor", "events_service", "bundle_store_service", "clock", "virtio_blk", "storage_manager", "partition_server",
             "fat_server", "container_service", "volume_server"]
@@ -600,25 +575,23 @@ SEALED_VOLUME = "sealed"
 SEALED_PASSPHRASE = "slopos test passphrase"
 
 
-def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path, image_builder: Path, folder: Path,
-                   command_line: str, kaslr: bool, mark: str, staged: str | None = None, boot_recovery: bool = False,
-                   staged_next: Path | None = None, bootloader: Path | None = None) -> None:
+def make_boot_disk(path: Path, kernel: Path, programs: list[Path], bootloader: Path, image_builder: Path, folder: Path,
+                   command_line: str, kaslr: bool, mark: str, staged: str | None = None, staged_next: Path | None = None) -> None:
     """
-    A disk that boots kernel through Limine, from BIOS or UEFI, made by the image builder: Limine, the kernel and the
-    programs on its EFI system partition, as make_image puts them on the ISO, but only the boot set loaded by Limine,
+    A disk that boots kernel through SlopOS's bootloader, made by the image builder: the bootloader, generation 1 and
+    the programs on its EFI system partition, as make_image puts them on the ISO, but only the boot set in the generation,
     and every program in the system volume of its SlopOS container, where the rest come from, with an encrypted volume
     beside it; the SlopOS check partition marked as make_disk marks it.
     """
     esp = folder / "boot_esp"
-    for part in [esp / "EFI" / "BOOT", esp / "EFI" / "SlopOS", esp / "boot" / "limine", esp / "boot" / "modules"]:
+    for part in [esp / "EFI" / "BOOT", esp / "EFI" / "SlopOS", esp / "boot" / "modules"]:
         part.mkdir(parents=True)
     # Every program, as the disk check finds them there; the boot set boots from the generation's objects
     for program in programs:
         shutil.copy(program, esp / "boot" / "modules" / program.name)
-    shutil.copy(limine / "limine-bios.sys", esp / "boot" / "limine" / "limine-bios.sys")
-    # SlopOS's own bootloader as the firmware's default boot file, with --bootloader (roadmap B2, decisions/0133); Limine's otherwise
+    # SlopOS's own bootloader as the firmware's default boot file (decisions/0133)
     for name in ["BOOTX64.EFI", "BOOTAA64.EFI"]:
-        shutil.copy(bootloader if bootloader is not None else limine / name, esp / "EFI" / "BOOT" / name)
+        shutil.copy(bootloader, esp / "EFI" / "BOOT" / name)
     for name, data in ESP_FILES:
         (esp / "EFI" / "SlopOS" / name).write_bytes(data)
     system = folder / "boot_system"
@@ -632,13 +605,12 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
                             capture_output=True, text=True)
     if stored.returncode != 0:
         sys.exit(f"boot.py: the store builder failed:\n{stored.stdout}{stored.stderr}")
-    # Generation 1 (decisions/0113): the kernel and the boot set as objects named by their hashes, its record, and
-    # limine.conf's entry for it, the root task first
+    # Generation 1 (decisions/0113): the kernel and the boot set as objects named by their hashes, and its record, the
+    # root task first
     boot_set = [program for program in programs if program.stem in BOOT_SET or program.name == SYSTEM_RECORDS or program.suffix == ".library"]
     generation_builder = next(image_builder.parent.glob("generation_builder*"))
-    # The recovery generation beside it, of the same boot set (decisions/0118), its entry the one booted if asked
-    flags = ["--recovery"] + (["--boot-recovery"] if boot_recovery else [])
-    generated = subprocess.run([str(generation_builder), *flags, str(esp), str(system / "store"), "1", "0", "yes" if kaslr else "no",
+    # The recovery generation beside it, of the same boot set (decisions/0118), which the recovery key boots
+    generated = subprocess.run([str(generation_builder), "--recovery", str(esp), str(system / "store"), "1", "yes" if kaslr else "no",
                                 command_line, str(kernel)] + [str(program) for program in boot_set], capture_output=True, text=True)
     if generated.returncode != 0:
         sys.exit(f"boot.py: the generation builder failed:\n{generated.stdout}{generated.stderr}")
@@ -662,7 +634,7 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
             sys.exit(f"boot.py: the generation builder couldn't stage generation 2:\n{staging.stdout}{staging.stderr}")
     built = subprocess.run([str(image_builder), str(path), str(BOOT_DISK_SECTORS), f"--sealed={SEALED_VOLUME}:{SEALED_PASSPHRASE}",
                             f"test,{PARTITIONS[0][0]},{PARTITIONS[0][2]}",
-                            f"test,{PARTITIONS[1][0]},{PARTITIONS[1][2]}", "bios,BIOS boot,2048",
+                            f"test,{PARTITIONS[1][0]},{PARTITIONS[1][2]}",
                             f"esp,EFI system partition,{BOOT_ESP_SECTORS},{esp}", f"slopfs,SlopOS system,{BOOT_SYSTEM_SECTORS},{system}"],
                            capture_output=True, text=True)
     if built.returncode != 0:
@@ -676,7 +648,6 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
         for number in range(2, 10):
             image.seek((CHECKED_FIRST + number) * BLOCK_BYTES)
             image.write(f"block {number}".encode())
-    subprocess.run([str(limine_tool(limine)), "bios-install", str(path)], check=True, capture_output=True)
 
 
 def disk_block_starts(path: Path, expected: str) -> bool:
@@ -688,7 +659,7 @@ def disk_block_starts(path: Path, expected: str) -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Boots a kernel in QEMU through Limine.")
+    parser = argparse.ArgumentParser(description="Boots a kernel in QEMU through SlopOS's own bootloader.")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--kernel", type=Path, help="the kernel's ELF")
     source.add_argument("--package", type=Path, help="a kernel package to build first (default: SlopOS's, through src/build)")
@@ -700,7 +671,6 @@ def main() -> int:
     parser.add_argument("--expect-line", action="append", default=[],
                         help="a line the serial output should contain, with --expect; may be repeated")
     parser.add_argument("--timeout", type=float, default=30, help="seconds before giving up")
-    parser.add_argument("--uefi", action="store_true", help="boot with UEFI firmware instead of BIOS")
     parser.add_argument("--arch", choices=["x86_64", "aarch64"], default="x86_64", help="the architecture to build and boot for")
     parser.add_argument("--no-kaslr", action="store_true", help="the same addresses every boot: no random kernel base or direct map")
     parser.add_argument("--no-iommu", action="store_true",
@@ -717,7 +687,8 @@ def main() -> int:
     parser.add_argument("--boot-disk", action="store_true",
                         help="boot from a disk the image builder makes rather than from the ISO (make_boot_disk), the --disk mark in "
                              "its SlopOS check partition")
-    parser.add_argument("--image-builder", type=Path, help="the image builder, with --boot-disk (default: SlopOS's, built)")
+    parser.add_argument("--image-builder", type=Path,
+                        help="the image builder, beside the generation builder and the store builder (default: SlopOS's, built)")
     parser.add_argument("--expect-disk-text", action="append", default=[],
                         help="TEXT: the --disk image holds TEXT somewhere once the kernel has stopped, with --expect; may be repeated")
     parser.add_argument("--refuse-disk-text", action="append", default=[],
@@ -730,19 +701,16 @@ def main() -> int:
                         help="with --boot-disk: boot the same disk this many times, each after the last stopped, as a reboot would")
     parser.add_argument("--expect-boot-line", action="append", default=[],
                         help="with --boots: <boot>:<line>, a line that boot's serial output must have, from 2")
-    parser.add_argument("--boot-recovery", action="store_true",
-                        help="with --boot-disk: boot the recovery generation, which Limine boots by default otherwise only by its menu")
     parser.add_argument("--stage-generation",
                         help="with --boot-disk: stage generation 2 on the system volume, the same programs with this command line, "
                              "for the update service to install (decisions/0116)")
     parser.add_argument("--stage-next-hello", action="store_true",
                         help="with --stage-generation: generation 2's store root has hello's next build (hello_next.elf) as hello's "
                              "bundle, so it changes only a service, which the supervisor applies live (decisions/0126)")
-    parser.add_argument("--bootloader", action="store_true",
-                        help="with --boot-disk: boot through SlopOS's own bootloader (src/uefi/bootloader) rather than Limine, the "
-                             "kernel built for it (boot=slopos), by UEFI (roadmap B2, decisions/0133)")
+    parser.add_argument("--kernel-alone", action="store_true",
+                        help="boot the kernel with no modules, its generation's boot set empty; --programs still gives the bootloader")
     parser.add_argument("--recovery-key", action="store_true",
-                        help="with --bootloader: hold the bootloader's recovery key, r, on the serial console as the machine starts, "
+                        help="hold the bootloader's recovery key, r, on the serial console as the machine starts, "
                              "the first boot only (roadmap B3)")
     parser.add_argument("--allow-reboot", action="store_true",
                         help="let the first boot reset the machine and boot again in the same QEMU, which keeps RAM, as a warm "
@@ -760,7 +728,6 @@ def main() -> int:
         qemu = find_tool("QEMU_AARCH64", ["qemu-system-aarch64.exe", "qemu-system-aarch64"], [qemu.parent, Path(r"C:\Program Files\qemu")])
     if arguments.efi is not None:
         return run_efi(arguments, qemu, aarch64)
-    limine = find_limine()
     xorriso = find_tool("XORRISO", ["xorriso.exe", "xorriso"], [])
     with tempfile.TemporaryDirectory(prefix="slopos-boot-") as temporary:
         folder = Path(temporary)
@@ -768,30 +735,38 @@ def main() -> int:
         if kernel is None:
             kernel = folder / "kernel.elf"
             if arguments.package is None:
-                build_slopos_kernel(kernel, arguments.arch, "slopos" if arguments.bootloader else "limine")
+                build_slopos_kernel(kernel, arguments.arch)
             elif arguments.linker_script is None:
                 parser.error("--package needs --linker-script")
             else:
                 build_kernel(arguments.package.resolve(), arguments.linker_script.resolve(), kernel)
         programs_folder = arguments.programs
-        if programs_folder is None and arguments.kernel is None and arguments.package is None:
+        # The bootloader is one of the programs, so there are always some
+        if programs_folder is None:
             programs_folder = folder / "programs"
             build_slopos_programs(programs_folder, arguments.arch)
         # hello_next.elf is only ever a staged generation's hello (--stage-next-hello)
         programs = sorted([path for path in programs_folder.glob("*.elf") if path.name != "hello_next.elf"],
-                          key=lambda path: (path.name != "root_task.elf", path.name))             if programs_folder is not None else []
+                          key=lambda path: (path.name != "root_task.elf", path.name))
         # The typed libraries the programs import, modules like them (decisions/0120)
-        if programs_folder is not None:
-            programs += sorted(programs_folder.glob("*.library"))
+        programs += sorted(programs_folder.glob("*.library"))
         # The system configuration as data, which the build writes beside the root task, a module of the boot set (decisions/0110)
-        if programs_folder is not None and (programs_folder / SYSTEM_RECORDS).exists():
+        if (programs_folder / SYSTEM_RECORDS).exists():
             programs.append(programs_folder / SYSTEM_RECORDS)
-        # The kernel's own regions follow its command line; the image and the direct map, Limine's configuration
+        if arguments.kernel_alone:
+            programs = []
+        bootloader = (programs_folder / "bootloader.efi").resolve()
+        image_builder = arguments.image_builder
+        if image_builder is None:
+            build_slopos_tools(folder / "tools")
+            image_builder = next((folder / "tools").glob("image_builder*"))
+        image_builder = image_builder.resolve()
+        # The kernel's own regions follow its command line; the image and the direct map, the generation's kaslr
         command_line = arguments.command_line + (" no_kaslr" if arguments.no_kaslr else "")
         image = None
         if not arguments.boot_disk:
-            image = make_image(kernel.resolve(), [program.resolve() for program in programs], limine, xorriso, folder, command_line,
-                               not arguments.no_kaslr)
+            image = make_image(kernel.resolve(), [program.resolve() for program in programs], bootloader, image_builder, xorriso, folder,
+                               command_line, not arguments.no_kaslr)
         serial = folder / "serial.txt"
         extra = (X86_IOMMU if not aarch64 and not arguments.no_iommu else []) + list(arguments.qemu_arguments)
         console = None
@@ -800,14 +775,9 @@ def main() -> int:
         phases = []
         phase_started = time.monotonic()
         if arguments.boot_disk:
-            image_builder = arguments.image_builder
-            if image_builder is None:
-                build_slopos_tools(folder / "tools")
-                image_builder = next((folder / "tools").glob("image_builder*"))
-            make_boot_disk(disk, kernel.resolve(), [program.resolve() for program in programs], limine, image_builder.resolve(), folder,
-                           command_line, not arguments.no_kaslr, arguments.disk or "", arguments.stage_generation, arguments.boot_recovery,
-                           (programs_folder / "hello_next.elf").resolve() if arguments.stage_next_hello and programs_folder is not None else None,
-                           (programs_folder / "bootloader.efi").resolve() if arguments.bootloader and programs_folder is not None else None)
+            make_boot_disk(disk, kernel.resolve(), [program.resolve() for program in programs], bootloader, image_builder, folder,
+                           command_line, not arguments.no_kaslr, arguments.disk or "", arguments.stage_generation,
+                           (programs_folder / "hello_next.elf").resolve() if arguments.stage_next_hello else None)
             extra += ["-drive", f"file={disk},if=none,id=disk,format=raw",
                       "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on,bootindex=0"]
             phases.append(("making the disk", time.monotonic() - phase_started))
@@ -828,7 +798,7 @@ def main() -> int:
             code = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra, not arguments.no_iommu, keys,
                                arguments.allow_reboot)
         else:
-            code = run(image, qemu, serial, arguments.timeout, arguments.uefi or arguments.bootloader, arguments.cpu, extra, keys,
+            code = run(image, qemu, serial, arguments.timeout, arguments.cpu, extra, keys,
                        arguments.allow_reboot)
         phases.append(("boot 1", time.monotonic() - booting_started))
         if console is not None:
@@ -842,7 +812,7 @@ def main() -> int:
             if aarch64:
                 again = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra, not arguments.no_iommu)
             else:
-                again = run(image, qemu, serial, arguments.timeout, arguments.uefi or arguments.bootloader, arguments.cpu, extra)
+                again = run(image, qemu, serial, arguments.timeout, arguments.cpu, extra)
             phases.append((f"boot {boot}", time.monotonic() - booting_started))
             later.append((boot, again, serial.read_text(errors="replace") if serial.exists() else ""))
         unwritten = [expected for expected in arguments.expect_disk_block if not disk.exists() or not disk_block_starts(disk, expected)]
@@ -918,7 +888,7 @@ def run_efi(arguments: argparse.Namespace, qemu: Path, aarch64: bool) -> int:
                                ["-drive", f"if=none,id=efi,file={fat},format=raw", "-device", "virtio-blk-pci,drive=efi",
                                 *arguments.qemu_arguments], False)
         else:
-            code = run(None, qemu, serial, arguments.timeout, True, arguments.cpu,
+            code = run(None, qemu, serial, arguments.timeout, arguments.cpu,
                        ["-drive", f"file={fat},format=raw", *arguments.qemu_arguments])
         output = TERMINAL_ESCAPES.sub("", serial.read_text(errors="replace") if serial.exists() else "")
     sys.stdout.write(output)

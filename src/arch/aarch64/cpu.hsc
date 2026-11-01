@@ -192,7 +192,7 @@ devicetree_address :: fn(firmware: ptr[boot_info.FirmwareTables], direct_map_off
  * uses none), the memory attributes, 16-bit ASIDs where the CPU has them, with walks through TTBR0 off until an
  * address space is activated, and its GIC redistributor and CPU interface.
  *
- * Limine starts the kernel on SP_EL0 (PSTATE.SP clear), its boot stack, and every exception taken to EL1
+ * A bootloader may start the kernel on SP_EL0 (PSTATE.SP clear), its boot stack, and every exception taken to EL1
  * switches to SP_EL1, so the kernel stack is where every entry runs, as the boot stack and the kernel stack
  * are on x86-64. A CPU already on SP_EL1 keeps taking exceptions on whatever stack it's on.
  */

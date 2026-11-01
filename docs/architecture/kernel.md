@@ -7,7 +7,7 @@ number.
 
 ## Boot
 
-The boot adapter (`src/boot/limine`) turns Limine's responses into `BootInfo` and calls `boot`
+The boot adapter (`src/boot/slopos`) turns SlopOS's bootloader's handoff into `BootInfo` and calls `boot`
 (`src/kernel/kernel.hsc`) on the boot CPU, which:
 1. reads its command line, logs what it booted with, and stops on a CPU below x86-64-v3 (`0003`);
 2. makes the frame allocator from the memory map, and its own state (`Kernel`) in frames from it, with
@@ -35,7 +35,7 @@ the kernel logger, and an assertion handler that stops the kernel.
   - the kernel image, each segment with its own protection; nothing is both writable and executable;
   - the kernel window (`src/kernel/window.hsc`, `0049`): 64 GiB for device registers and other mappings
     of the kernel's own, uncached for devices.
-- **KASLR** (`0021`): Limine loads the image at a random base and puts the direct map at a random
+- **KASLR** (`0021`): the bootloader loads the image at a random base and puts the direct map at a random
   1 GiB-aligned offset; the kernel places its window at a random 1 GiB boundary.
 - **The slab allocator** (`src/kernel/slab`): caches of same-sized objects, with a per-CPU magazine in
   front of each. Threads come from one.

@@ -538,7 +538,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             test_unassessed = service_kit.has_word(text, "test_unassessed")
             no_disk_check = service_kit.has_word(text, "no_disk_check")
             supervisor.recovery = service_kit.has_word(text, "recovery")
-            // The generation booted, and its store root, as its limine.conf entry says (decisions/0114, 0116)
+            // The generation booted, and its store root, as the bootloader says on the command line (decisions/0114, 0116)
             supervisor.generation = service_kit.number_of(service_kit.word_after(text, "generation=") or_else "") or_else 0
             supervisor.boot_root = bundle.from_hex(service_kit.word_after(text, "store_root=") or_else "")
         }
@@ -1709,7 +1709,7 @@ launch_virtio_rng :: fn(supervisor: ptr[mut Supervisor], service: Service, devic
 
 /*
  * A service's program: one outside the boot set from the system volume, read once and kept, once the storage manager
- * has given it; otherwise, or where it isn't there, Limine's module.
+ * has given it; otherwise, or where it isn't there, the bootloader's module.
  */
 /*
  * What launching the service named name does beyond its grants: watch its end, run it on the CPU budget the scheduler

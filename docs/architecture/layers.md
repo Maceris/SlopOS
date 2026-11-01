@@ -5,7 +5,7 @@ applications (L6). Two of the boundaries between them abstract hardware: the **a
 inside the kernel, for the CPU and core platform, and **device-class protocols** above user-space
 drivers, for peripheral devices.
 
-Implementation status: **partly implemented.** L0 (the Limine adapter, `src/boot/limine`) and L1 (x86-64,
+Implementation status: **partly implemented.** L0 (SlopOS's bootloader's adapter, `src/boot/slopos`) and L1 (x86-64,
 `src/arch/x86_64`, all of the arch interface) are built, and so is much of L2: memory, address spaces,
 interrupt routing, threads and dispatch, and the clock (roadmap M1 to M4, `kernel.md`). L3 to L6 have no
 code yet.
@@ -108,7 +108,7 @@ The kernel parses no bootloader structures outside L0.
 
 | Package | Boot protocol | Architectures |
 |---|---|---|
-| `boot/limine` | [Limine](https://github.com/limine-bootloader/limine) (`0020`) | x86-64, AArch64, RISC-V |
+| `boot/slopos` | SlopOS's own bootloader, a UEFI application in Hemera (`src/uefi/bootloader`, `0131`, `0133`) | x86-64, AArch64 |
 
 ## L1 — Arch Layer
 

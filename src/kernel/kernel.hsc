@@ -396,7 +396,12 @@ test_nmi :: fn(kernel: ptr[Kernel], cpu: ptr[mut PerCpu]) {
 // Stops with a message if the CPU lacks part of the baseline (decisions/0003).
 check_baseline :: fn(options: ptr[Options], features: ptr[slop_os.CpuFeatures]) {
     missing :: arch.missing_baseline_feature(features) or_return void
-    runtime.log_fatal("SlopOS needs an x86-64-v3 CPU, and this one lacks %", missing)
+    #if TARGET_ARCH == .x86_64 {
+        runtime.log_fatal("SlopOS needs an x86-64-v3 CPU, and this one lacks %", missing)
+    }
+    #else {
+        runtime.log_fatal("SlopOS needs an ARMv8.2-A CPU with LSE, and this one lacks %", missing)
+    }
     stop_with(options, .CpuUnsupported)
 }
 

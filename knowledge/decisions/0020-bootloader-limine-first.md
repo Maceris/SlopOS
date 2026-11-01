@@ -1,6 +1,6 @@
 # 0020: Limine as the First Bootloader; a Hemera UEFI Loader Is an Optional Extension
 
-Status: accepted
+Status: superseded by 0131 (SlopOS's own bootloader replaced Limine, in B4: 0135)
 Date: 2026-10-04
 
 ## Context

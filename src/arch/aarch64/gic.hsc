@@ -163,7 +163,7 @@ find_redistributor :: fn(system: ptr[ArchSystem], mpidr: u64) -> u64 {
     }
 }
 
-// This CPU's MPIDR, its affinity fields only, as Limine gives each CPU's.
+// This CPU's MPIDR, its affinity fields only, as the bootloader gives each CPU's.
 affinity_of_this_cpu :: fn() -> u64 {
     return aarch64.read_system_register(.MPIDR_EL1) & 0xff00ffffff
 }

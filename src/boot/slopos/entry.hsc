@@ -1,8 +1,7 @@
 /*
  * The boot adapter for SlopOS's own boot protocol (L0, roadmap B2, decisions/0131, 0133, src/boot_protocol): the kernel's
  * entry point when the Hemera bootloader (src/uefi/bootloader) boots it. It sets up a carrier block and the boot context,
- * turns the bootloader's handoff into a BootInfo, and calls the portable kernel entry, as src/boot/limine does for
- * Limine. BootInfo's arrays and strings point into the handoff, which is in boot-reclaimable memory, through the direct
+ * turns the bootloader's handoff into a BootInfo, and calls the portable kernel entry. BootInfo's arrays and strings point into the handoff, which is in boot-reclaimable memory, through the direct
  * map, so it needs no memory of its own.
  */
 package slopos_boot
@@ -21,7 +20,7 @@ import kernel from "../../kernel"
     import arch from "../../arch/aarch64"
 }
 
-// A logger for the boot context, writing straight to the architecture's early console, as Limine's adapter's does.
+// A logger for the boot context, writing straight to the architecture's early console.
 EARLY_LOGGER :: runtime.Logger.{
     data = null,
     trace = early_log,

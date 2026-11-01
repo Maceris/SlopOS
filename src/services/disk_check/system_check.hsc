@@ -11,8 +11,8 @@ import read_only_file from "std/os/slop_os"
 
 /*
  * The system volume (decisions/0089): a SlopOS container's, served by a volume server through a container service.
- * The check reads a module from it and compares it with the copy on the EFI system partition, which Limine loaded it
- * from; writes a file of its own, syncs it, which commits it, and reads it back; and moves it into a directory it makes.
+ * The check reads a module from it and compares it with the copy on the EFI system partition, boot/modules, which the
+ * test disk keeps beside the generation's objects; writes a file of its own, syncs it, which commits it, and reads it back; and moves it into a directory it makes.
  * Checks from 40.
  */
 
@@ -63,7 +63,7 @@ check_system :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], esp: os.Ch
     if !read_whole(system.end, system_port, MODULE_ON_VOLUME, &buffer, &from_volume) || from_volume.count == 0 {
         return 42
     }
-    // The same bytes as the copy Limine loaded it from
+    // The same bytes as the copy on the ESP
     match esp {
         case Some(partition) => {
             esp_port :: os.port_for(budget, partition.end) or_return 43

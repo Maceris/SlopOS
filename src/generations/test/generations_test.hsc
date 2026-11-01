@@ -1,12 +1,10 @@
 /*
  * The generations package's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or
  * the number of the first check that failed. A generation's record is checked, refused when it's broken, read back from
- * its bytes, and written into limine.conf with its kernel and boot set by their objects.
+ * its bytes, and a tentative one's tries left checked.
  */
 package generations_test
 
-import runtime from "base"
-import strings from "std"
 import bundle from "../../bundle"
 import generations from ".."
 
@@ -27,8 +25,14 @@ main :: fn() -> int {
         return 3
     }
     broken = made
-    broken.file_count = 0
+    broken.file_count = generations.MAX_BOOT_FILES + 1
     if generations.check(&broken) is_none {
+        return 4
+    }
+    // A kernel alone, with no boot set, is one (decisions/0135)
+    alone := made
+    alone.file_count = 0
+    if generations.check(&alone) is_some {
         return 4
     }
     broken = made
@@ -62,24 +66,14 @@ main :: fn() -> int {
     if generations.generation_of(view_of(cast[ptr[u8]](&made), 100)) is_some {
         return 9
     }
-    // limine.conf: an entry each, in the order given, the kernel and every module by its object, named for the kernel
-    recovery := generation(generations.RECOVERY_NUMBER, generations.STATE_RECOVERY)
-    text : u8[..]
-    defer runtime.array_free(&text)
-    generations.limine_conf(generations.Generation.[made, recovery], 3, 0, &text)
-    conf :: bit_cast[string](text[0..<text.count])
-    hex_storage : u8[64]
-    kernel_hex :: bundle.hex(made.kernel, &hex_storage)
-    for expected in string.["timeout: 3\n", "/SlopOS generation 7\n", "/SlopOS recovery\n", "cmdline: test_exit generation=7\n",
-        "module_cmdline: root_task.elf\n", "module_cmdline: system.records\n", "kaslr: yes\n"] {
-        if !strings.contains(conf, expected) {
-            runtime.log_error("limine.conf lacks %", expected)
-            return 10
-        }
+    // A tentative generation's tries, up to TRIES (decisions/0134)
+    tentative := generation(8, generations.STATE_TENTATIVE)
+    tentative.tries_left = generations.TRIES
+    if generations.check(&tentative) is_some {
+        return 10
     }
-    newest :: strings.find(conf, "generation 7") or_return 11
-    oldest :: strings.find(conf, "/SlopOS recovery") or_return 11
-    if !strings.contains(conf, kernel_hex) || newest > oldest {
+    tentative.tries_left = generations.TRIES + 1
+    if generations.check(&tentative) is_none {
         return 11
     }
     return 0

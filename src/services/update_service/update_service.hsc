@@ -8,12 +8,12 @@
  *   removed, so the generation before it is the default again;
  * - an update staged in updates/pending (a generation's record, its kernel and boot set in the bundle store) is
  *   installed: each object read from the store and checked by its hash, the ESP's room checked first, the objects
- *   written as boot/objects/<hex>, its record, tentative, then limine.conf with it first, the default. One whose
+ *   written as boot/objects/<hex>, then its record, tentative, which the bootloader boots next, the newest. One whose
  *   kernel, boot set and command line are the booted generation's changes only services, and is answered Live, for the
  *   supervisor to apply now (decisions/0126);
  * - what isn't kept is collected: the records of all but the generation that booted, any newer one, the newest
- *   permanent one before it, and the recovery generation, and every object none of those names. limine.conf is written
- *   again from what's kept.
+ *   permanent one before it, and the recovery generation, and every object none of those names; and a newer tentative
+ *   generation the bootloader gave up on, out of tries (decisions/0134), is rolled back.
  *
  * And when the supervisor passes on the substitution policy the config store asks for (Substitute, decisions/0123,
  * 0125): unless the newest generation has it already, each entry is checked, from a library of the booted generation's
@@ -38,8 +38,6 @@ import substitution from "../../substitution"
 import bundle_store from "../../protocols/bundle_store"
 import update from "../../protocols/update"
 
-// Seconds Limine's menu waits, for choosing another generation
-MENU_TIMEOUT : u64 : 0
 PENDING :: "pending"
 
 Service :: struct {
@@ -284,7 +282,7 @@ install :: fn(service: ptr[mut Service]) -> generations.Generation? {
 }
 
 /*
- * What's kept, and limine.conf written from it: the generation booted (0 if it was rolled back) and any newer, the newest
+ * What's kept: the generation booted (0 if it was rolled back) and any newer, the newest
  * permanent one before it, and the recovery generation; every other record removed, and every object none of those
  * names.
  */
@@ -316,14 +314,6 @@ collect :: fn(service: ptr[mut Service], current: u64) {
             _ = os.delete_file_in(service.esp, generations.record_path(each.number, &path_storage))
             runtime.log_info("generation % collected", each.number)
         }
-    }
-    sort(kept[0..<kept.count])
-    text : u8[..]
-    defer runtime.array_free(&text)
-    generations.limine_conf(kept[0..<kept.count], MENU_TIMEOUT, 0, &text)
-    if os.write_entire_file_in(service.esp, generations.LIMINE_CONF, bit_cast[string](text[0..<text.count])) != null {
-        runtime.log_warn("limine.conf couldn't be written")
-        return void
     }
     // Objects no kept generation names
     used : bundle.Hash[..]
@@ -598,28 +588,6 @@ room_of :: fn(service: ptr[mut Service]) -> files.Room? {
         case Room(room) => room
         case _ => null
     }
-}
-
-// Generations in limine.conf's order: newest first, the recovery generation after every other.
-sort :: fn(items: mut generations.Generation[]) {
-    for i in cast[usize](0)..<items.count {
-        for j in cast[usize](0)..<items.count {
-            if j > i && before(items[j], items[i]) {
-                swapped :: items[i]
-                items[i] = items[j]
-                items[j] = swapped
-            }
-        }
-    }
-}
-
-before :: fn(a: generations.Generation, b: generations.Generation) -> bool {
-    a_recovery :: a.state == generations.STATE_RECOVERY
-    b_recovery :: b.state == generations.STATE_RECOVERY
-    if a_recovery != b_recovery {
-        return b_recovery
-    }
-    return a.number > b.number
 }
 
 has_hash :: fn(hashes: ptr[bundle.Hash[..]], hash: bundle.Hash) -> bool {

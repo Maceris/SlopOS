@@ -186,7 +186,7 @@ io_uring's fixed buffers do.
   (CrashMonkey, Mohan et al., OSDI 2018; Linux's `dm-log-writes`).
 - **Fuzzing:** mutated images through the FAT server's and the container's mount paths, hosted.
 - **A hosted image builder**, a Hemera program run by `tools/`, using the same packages to write the GPT, the ESP
-  (Limine, the kernel, the boot set) and a container with the system volume, so SlopOS boots from a disk image.
+  (the bootloader, the kernel, the boot set) and a container with the system volume, so SlopOS boots from a disk image.
 
 ## 10. Open Questions
 

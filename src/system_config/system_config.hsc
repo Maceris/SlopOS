@@ -128,8 +128,8 @@ Service :: struct {
     // that isn't gets no DMA memory there (decisions/0039, 0084)
     trusted_with_dma : bool,
     /*
-     * Whether it's in the boot set (decisions/0089): what reaches the system volume, loaded from Limine's modules;
-     * everything else is loaded from the volume's modules folder, Limine's modules standing in where there's none.
+     * Whether it's in the boot set (decisions/0089): what reaches the system volume, loaded by the bootloader as
+     * modules; everything else is loaded from the volume's modules folder, the modules standing in where there's none.
      */
     boot_set : bool,
     // Its CPU budget, which the scheduler service splits off the root's; None for the default (DEFAULT_CPU)

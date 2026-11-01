@@ -49,7 +49,7 @@ when relevant.
    Write code the way it *should* look when the language falls short, and mark it.
 5. **Record decisions** as numbered files in `knowledge/decisions/`; never rewrite an accepted
    one's meaning, supersede it. Move answered items out of `knowledge/open-questions.md`.
-6. No external C code linked into SlopOS. Limine (bootloader) is treated like firmware.
+6. No external C code linked into SlopOS; the firmware is outside it.
 7. **House rules are enforced by compile-time checks** (`knowledge/decisions/0007`): `#run`
    code reflecting over packages, kept together in one checks package. This replaces language features
    like `implements` (e.g. the arch interface) and enforces `std` tiers (each Hemera `std`
@@ -73,12 +73,12 @@ when relevant.
   programs export typed functions instead of parsing `argv`.
 - Layers L0 (boot) → L6 (apps), with two hardware boundaries: a compile-time arch interface
   in the kernel, and typed device-class protocols above user-space drivers (`docs/architecture/layers.md`).
-- x86-64 first, kept portable; minimum CPU **x86-64-v3**; QEMU + virtio + Limine for development.
+- x86-64 first, kept portable; minimum CPU **x86-64-v3**; QEMU + virtio + UEFI for development.
 - Position-independent code everywhere (ASLR; kernel as relocatable PIE).
 - Cheap threads: one kernel stack per CPU, small thread objects, no TLS, AVX-512 opt-in
   (`knowledge/decisions/0023`). Threads start in a `std` entry stub that sets up Hemera's
   carrier register; overflow is caught by Hemera's prologue stack check, not guard pages (`0026`).
-- Limine to boot (`0020`); KASLR on by default (`0021`); targets x86-64, then AArch64 and
+- SlopOS's own bootloader, in Hemera, to boot (`0131`, `0133`-`0135`); KASLR on by default (`0021`); targets x86-64, then AArch64 and
   RISC-V, 64-bit only (`0022`); AES instructions detected at boot, never required (`0019`).
 - Performance over determinism: direct shared-memory IPC by default, replay is opt-in
   (`0024`). Raw syscalls are the stable interface; every stable surface lives in one
@@ -195,17 +195,17 @@ line, the tests, and debugging.
 The kernel in `src/` builds and boots (`knowledge/compiler-plan.md`, Phase 6), and new code is
 expected to build too, with the compiler extended where it can't yet (`knowledge/decisions/0047`). `base` is built into the compiler, and it
 finds `std` in the Hemera repo it was built in. `hemera src/build` builds everything through the
-build package (`decisions/0028`): the kernel (`src/boot/limine`, linked with its `x86_64.ld`,
+build package (`decisions/0028`): the kernel (`src/boot/slopos`, linked with its `x86_64.ld`,
 with the freestanding flags) and every test program, each checked by the house rules in
 `src/checks` (`decisions/0029`). `--setting=targets=kernel` (or `programs`, `tests`, `tools`) builds one kind, and
 `kernel_output` and `tests_output` say where they go, as in
 `--setting=targets=kernel,kernel_output=build/kernel.elf`. An architecture lists what it doesn't
 implement of `arch_interface` yet in `NOT_YET_IMPLEMENTED`: take a name off when you implement
 it, or the check fails. `python tools/boot.py --expect 0` builds the kernel that way, boots it
-in QEMU through Limine with `test_exit` on its command line, and checks the code it stopped with
-(`src/kernel/stop.hsc`); `--uefi`, `--cpu`, `--command-line` and `--no-kaslr` vary the run, and
-`python tools/boot_tests.py` runs every boot test. It finds QEMU, Limine and xorriso through
-`QEMU`, `LIMINE` and `XORRISO`, or the PATH; `HEMERA_INSTALL` overrides where `std` is.
+in QEMU from an ISO through SlopOS's bootloader with `test_exit` on its command line, and checks the code it stopped
+with (`src/kernel/stop.hsc`); `--cpu`, `--command-line` and `--no-kaslr` vary the run, and
+`python tools/boot_tests.py` runs every boot test. It finds QEMU and xorriso through
+`QEMU` and `XORRISO`, or the PATH; `HEMERA_INSTALL` overrides where `std` is.
 `python tools/unit_tests.py` builds every `test/` package under `src/` as a hosted program (through
 the build package) and
 runs it (main returns 0, or the number of the failed check); code that doesn't need ring 0, like

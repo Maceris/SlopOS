@@ -21,12 +21,12 @@ for what any later architecture note needs to cover.
 
 ## Boot Path
 
-1. OVMF (UEFI) → Limine.
-2. Limine loads the kernel ELF into the higher half at a randomized base (KASLR,
-   `../decisions/0021`), sets up long mode, a basic page table,
-   and passes the memory map, framebuffer, RSDP, SMP info and modules.
-3. Kernel entry (`boot/limine`, L0) sets up the boot CPU's carrier block and a constant
-   context, converts Limine's structures into the portable `BootInfo`, and calls the portable
+1. OVMF (UEFI) → SlopOS's bootloader (`src/uefi/bootloader`, `../decisions/0131`, `0133`-`0135`).
+2. The bootloader loads the kernel ELF into the higher half at a randomized base (KASLR,
+   `../decisions/0021`), builds page tables with a randomized direct map, starts the other CPUs,
+   and hands over the memory map, framebuffer, firmware tables, CPUs and modules.
+3. Kernel entry (`boot/slopos`, L0) sets up the boot CPU's carrier block and a constant
+   context, converts the bootloader's handoff into the portable `BootInfo`, and calls the portable
    kernel entry point (`layers.md` L0).
 
 ## What `arch/x86_64` Has To Implement
@@ -40,7 +40,7 @@ for what any later architecture note needs to cover.
 | Paging | 4-level page tables, 4 KiB / 2 MiB / 1 GiB pages | NX bit for W^X; PCID for TLB tagging |
 | Syscalls | `SYSCALL`/`SYSRET`, MSRs `STAR`/`LSTAR`/`FMASK` | `SWAPGS` to reach per-CPU data |
 | Per-CPU data | `GS` base → the CPU's carrier block, embedded in its `PerCpu` | Read only at entry from user mode (after `swapgs`), to load `r14` (the carrier register) and push the CPU's prebuilt kernel `Context`. Kernel code then reaches `PerCpu` through the carrier (`kernel.md` §3, `layers.md` L1) |
-| SMP | Limine MP feature now; INIT-SIPI-SIPI later | |
+| SMP | The bootloader's INIT-SIPI-SIPI, CPUs parked on mailboxes (`0133`) | |
 | FPU/SIMD state | `XSAVE`/`XRSTOR`, lazy or eager | Kernel itself should avoid SIMD (see below) |
 | Platform discovery | ACPI: RSDP → XSDT → MADT, MCFG, HPET | Parsed in user space (L3), except the bits the kernel needs to start CPUs |
 
@@ -49,7 +49,7 @@ for what any later architecture note needs to cover.
 - **No red zone** in kernel code (interrupts would clobber it).
 - **No SSE/AVX in the kernel** (or save/restore it on every entry), so the kernel is built
   with SIMD features disabled and no floating point. User space targets full v3.
-- **Position-independent:** the kernel is a PIE that Limine relocates (and can randomize);
+- **Position-independent:** the kernel is a PIE that the bootloader relocates (and randomizes);
   see `../decisions/0004-position-independent-code.md`. Matches the backend's current PIC default.
 - **ELF output + linker script** for section placement and the entry symbol.
 - **Instruction access:** `cpuid`, `rdmsr`/`wrmsr`, `in`/`out`, `mov cr0/cr2/cr3/cr4`,
