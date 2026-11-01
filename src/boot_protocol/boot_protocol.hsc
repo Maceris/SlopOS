@@ -42,8 +42,17 @@ Module :: struct {
     contents : boot_info.PhysicalRange,
 }
 
-// A CPU: its hardware identifier, the local APIC ID or MPIDR's affinity fields.
+/*
+ * A CPU: its hardware identifier, the local APIC ID or MPIDR's affinity fields; and, but for the boot CPU, its mailbox.
+ * The bootloader starts every other CPU before it enters the kernel and parks it, on its own stack of BOOT_STACK_SIZE
+ * bytes, with interrupts off and the bootloader's page tables, until goto_address isn't 0: then it jumps there, with
+ * argument as its first argument in the C convention, as Limine's MP protocol does. The kernel writes argument, then
+ * goto_address, with release order. Its fields' places are the trampoline's, so they don't move.
+ */
 Cpu :: struct {
+    goto_address : u64,
+    stack_top : u64,
+    argument : u64,
     hardware_id : u64,
 }
 
@@ -99,6 +108,8 @@ Handoff :: struct {
     image_segments : boot_info.ImageSegment[MAX_SEGMENTS],
     boot_modules : boot_info.BootModule[MAX_MODULES],
     boot_cpus : boot_info.BootCpu[MAX_CPUS],
+    // What the adapter keeps for each CPU it starts, its own type's, in words
+    starting : u64[MAX_CPUS * 4],
     framebuffers : boot_info.Framebuffer[1],
 }
 

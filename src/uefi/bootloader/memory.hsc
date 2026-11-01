@@ -77,11 +77,13 @@ descriptor_at :: fn(map: ptr[MemoryMap], index: usize) -> ptr[uefi.MemoryDescrip
 }
 
 /*
- * The direct map and the identity map: the first 4 GiB whole, where the firmware's tables and devices' registers are
- * too, and every other range but reserved and defective memory, at offset and where it is.
+ * The direct map and the identity map: on x86-64 the first 4 GiB whole, where the firmware's tables and devices'
+ * registers are too, and every other range but reserved and defective memory, at offset and where it is.
  */
 map_memory :: fn(tables: ptr[PageTables], offset: u64) -> bool {
-    if !map(tables, offset, 0, FOUR_GIGABYTES) || !map(tables, 0, 0, FOUR_GIGABYTES) {
+    // On AArch64 only memory, as normal memory: the kernel maps devices' registers itself
+    whole_low :: TARGET_ARCH == .x86_64
+    if whole_low && (!map(tables, offset, 0, FOUR_GIGABYTES) || !map(tables, 0, 0, FOUR_GIGABYTES)) {
         return false
     }
     memory := memory_map_buffer() or_return false
@@ -93,10 +95,12 @@ map_memory :: fn(tables: ptr[PageTables], offset: u64) -> bool {
         kind :: memory_kind(descriptor.kind)
         start := descriptor.physical_start
         end :: start + descriptor.pages * 4096
-        if kind == .Reserved || kind == .Defective || end <= FOUR_GIGABYTES {
+        if kind == .Reserved || kind == .Defective || (whole_low && end <= FOUR_GIGABYTES) {
             continue
         }
-        start = if start < FOUR_GIGABYTES { FOUR_GIGABYTES } else { start }
+        if whole_low && start < FOUR_GIGABYTES {
+            start = FOUR_GIGABYTES
+        }
         if !map(tables, offset + start, start, end - start) || !map(tables, start, start, end - start) {
             return false
         }

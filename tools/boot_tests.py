@@ -21,6 +21,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -30,6 +31,9 @@ PROGRAMS = Path()
 PROGRAMS_AARCH64 = Path()
 # The kernel built for SlopOS's own bootloader (boot=slopos), which tests with --bootloader boot (roadmap B2)
 BOOTLOADER_KERNEL = Path()
+# How long each test took, in seconds, by name, for the summary of the slowest
+TIMINGS: dict[str, float] = {}
+BOOTLOADER_KERNEL_AARCH64 = Path()
 WITH_PROGRAMS = "<programs>"
 # The image builder, built once, for the tests whose arguments have WITH_IMAGE_BUILDER (decisions/0088)
 IMAGE_BUILDER = Path()
@@ -282,10 +286,10 @@ TESTS = [
         "--expect-line=[user] root task: booted the recovery generation",
         "--expect-line=[user] supervisor: recovery: the boot set, the drivers and the console only",
         "--expect-line=[user] console: serving", HEALTHY_LINE]),
-    # SlopOS's own bootloader (roadmap B2, decisions/0133), on one CPU until it starts the others
-    ("boots a disk through SlopOS's own bootloader, on one CPU", 7, with_before_qemu(one_cpu(BOOT_DISK_ARGUMENTS), [
+    # SlopOS's own bootloader (roadmap B2, decisions/0133), which starts the other CPUs as Limine did
+    ("boots a disk through SlopOS's own bootloader, every CPU started", 7, with_before_qemu(BOOT_DISK_ARGUMENTS, [
         "--bootloader", "--expect-line=[info] bootloader: booting generation 1",
-        "--expect-line=[boot] SlopOS, booted by SlopOS's bootloader (UEFI)"])),
+        "--expect-line=[boot] SlopOS, booted by SlopOS's bootloader (UEFI)", "--expect-line=[info] 2 of 2 CPUs online"])),
     # Its command line another word, so it isn't one that changes only services, which is applied live
     ("installs a staged generation, boots it, and makes it permanent once it's healthy", 7, with_before_qemu(BOOT_DISK_ARGUMENTS, [
         "--stage-generation=test_exit test_services next_boot", "--boots=2",
@@ -418,9 +422,7 @@ MORESTACK_TESTS = [
 # Every test again on AArch64 (tools/boot.py --arch aarch64, always through UEFI), but those that can't apply there:
 # BIOS, x86-64's baseline, and the NMI, which AArch64 has no counterpart for yet (knowledge/decisions/0065)
 AARCH64_LEFT_OUT = {"boots and halts (BIOS)", "refuses a CPU below x86-64-v3", "resumes after an NMI",
-                    "boots from a disk the image builder made, through UEFI",
-                    # Until the bootloader's AArch64 part (B2)
-                    "boots a disk through SlopOS's own bootloader, on one CPU"}
+                    "boots from a disk the image builder made, through UEFI"}
 AARCH64_NAMES = {
     "boots and halts (UEFI)": "boots and halts",
     "routes a device's interrupts through the I/O APIC": "routes a device's interrupts through the GIC",
@@ -490,7 +492,8 @@ def build_programs(output: Path, architecture: str = "x86_64", robustness: bool 
 
 
 def main() -> int:
-    global PROGRAMS, PROGRAMS_AARCH64, IMAGE_BUILDER, BOOTLOADER_KERNEL
+    global PROGRAMS, PROGRAMS_AARCH64, IMAGE_BUILDER, BOOTLOADER_KERNEL, BOOTLOADER_KERNEL_AARCH64
+    suite_started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="slopos-boot-tests-") as temporary:
         kernel = Path(temporary) / "kernel.elf"
         if not build_kernel(kernel):
@@ -499,6 +502,10 @@ def main() -> int:
         BOOTLOADER_KERNEL = Path(temporary) / "kernel_bootloader.elf"
         if not build_kernel(BOOTLOADER_KERNEL, boot="slopos"):
             print("FAILED: the kernel doesn't build for SlopOS's bootloader")
+            return 1
+        BOOTLOADER_KERNEL_AARCH64 = Path(temporary) / "kernel_bootloader_aarch64.elf"
+        if not build_kernel(BOOTLOADER_KERNEL_AARCH64, architecture="aarch64", boot="slopos"):
+            print("FAILED: the kernel doesn't build for SlopOS's bootloader on AArch64")
             return 1
         PROGRAMS = Path(temporary) / "programs"
         if not build_programs(PROGRAMS):
@@ -530,8 +537,17 @@ def main() -> int:
         failed += run_tests(aarch64_morestack_kernel, AARCH64_MORESTACK_TESTS, ["--arch=aarch64"])
         failed += run_address_tests(aarch64_kernel, ["--arch=aarch64"], "AArch64: ")
         count = len(TESTS) + len(MORESTACK_TESTS) + len(AARCH64_TESTS) + len(AARCH64_MORESTACK_TESTS) + 2 * len(ADDRESS_TESTS)
+        print_timings(time.monotonic() - suite_started)
         print(f"{count - failed} of {count} passed")
         return 0 if failed == 0 else 1
+
+
+def print_timings(total: float) -> None:
+    """The whole run's time, the tests' and the builds' before them, and the slowest tests, to see where it goes."""
+    tested = sum(TIMINGS.values())
+    print(f"took {total / 60:.1f} min: {tested / 60:.1f} in {len(TIMINGS)} tests, {(total - tested) / 60:.1f} building and the rest")
+    for name, seconds in sorted(TIMINGS.items(), key=lambda item: item[1], reverse=True)[:12]:
+        print(f"  {seconds:6.1f} s  {name}")
 
 
 # Where the kernel says it is: its image, its direct map and its window (decisions/0021)
@@ -585,11 +601,14 @@ def run_tests(kernel: Path, tests: list, more: list = []) -> int:
         programs = PROGRAMS_AARCH64 if "--arch=aarch64" in more else PROGRAMS
         arguments = more + [f"--programs={programs}" if argument == WITH_PROGRAMS else
                             f"--image-builder={IMAGE_BUILDER}" if argument == WITH_IMAGE_BUILDER else argument for argument in arguments]
-        booted = BOOTLOADER_KERNEL if "--bootloader" in arguments else kernel
+        bootloader_kernel = BOOTLOADER_KERNEL_AARCH64 if "--arch=aarch64" in more else BOOTLOADER_KERNEL
+        booted = bootloader_kernel if "--bootloader" in arguments else kernel
+        started = time.monotonic()
         result = subprocess.run([sys.executable, str(BOOT), f"--kernel={booted}", "--timeout=60", f"--expect={expected}",
                                  *arguments], capture_output=True, text=True)
+        TIMINGS[name] = time.monotonic() - started
         passed = result.returncode == 0
-        print(f"{'passed' if passed else 'FAILED'}: {name}")
+        print(f"{'passed' if passed else 'FAILED'}: {name} ({TIMINGS[name]:.1f} s)")
         if not passed:
             failed += 1
             sys.stdout.write(result.stdout)

@@ -146,7 +146,7 @@ add_kernel :: fn() {
     if compiler.target_setting("arch", default = "x86_64") == "aarch64" {
         kernel.target_options.architecture = .arm64
         kernel.target_options.cpu_features = "-fp-armv8,-neon"
-        kernel.target_options.linker_script = "../boot/limine/aarch64.ld"
+        kernel.target_options.linker_script = if boot == "slopos" { "../boot/slopos/aarch64.ld" } else { "../boot/limine/aarch64.ld" }
     }
     target :: compiler.add_target(kernel)
 }

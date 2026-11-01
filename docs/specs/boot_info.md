@@ -305,6 +305,15 @@ marked `#externally_initialized`, in its own section (Hemera `docs/directives.md
 
 The kernel's linker script places the three sections in that order, in a loaded segment.
 
+## SlopOS's Bootloader (`boot/slopos`)
+
+The `boot/slopos` package implements L0 for SlopOS's own bootloader (`src/uefi/bootloader`, `0133`), whose handoff is
+`src/boot_protocol`'s fixed-size `Handoff`: the command line, the memory map already sorted, merged and with page 0
+never `Usable`, the kernel image and its segments, the modules by name, the CPUs with their mailboxes, the framebuffer,
+the bootloader's entropy and the firmware tables' physical addresses. `BootInfo`'s arrays are filled in the handoff's
+own room and point into it, through the direct map. `start_cpu` writes a parked CPU's mailbox, its argument and then
+its goto address, as Limine's MP protocol does. The kernel is built for it with the build's setting `boot=slopos`.
+
 ## Not Covered
 
 - Starting CPUs without the bootloader's help (INIT-SIPI on x86-64, PSCI on AArch64, SBI HSM on

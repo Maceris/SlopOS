@@ -103,12 +103,21 @@ build_boot_info :: fn(handoff_address: u64, info: ptr[mut boot_info.BootInfo]) {
     if segment_count <= handoff.image_segments.count {
         info.kernel_image.segments = handoff.image_segments[0..<segment_count]
     }
-    // CPUs: the boot CPU only, until the bootloader starts the others
-    if handoff.cpu_count > 0 && handoff.boot_cpus.count > 0 && handoff.cpus.count > 0 {
-        handoff.boot_cpus[0] = boot_info.BootCpu.{hardware_id = handoff.cpus[0].hardware_id, boot_handle = 0}
-        info.cpus = handoff.boot_cpus[0..<1]
+    // CPUs, each other one parked on its mailbox, which its StartingCpu points at
+    starting :: view_of(cast[ptr[mut StartingCpu]](cast[rawptr](&handoff.starting[0])), handoff.starting.count * 8 / size_of(StartingCpu))
+    cpu_count := cast[usize](0)
+    for &cpu, i in handoff.cpus {
+        if cast[u64](i) >= handoff.cpu_count || i >= handoff.boot_cpus.count || i >= starting.count {
+            break
+        }
+        starting[i] = StartingCpu.{mailbox = cast[u64](cast[rawptr](cpu))}
+        handoff.boot_cpus[i] = boot_info.BootCpu.{hardware_id = cpu.hardware_id, boot_handle = cast[uintptr](cast[rawptr](&starting[i]))}
+        cpu_count = i + 1
     }
-    info.start_cpu = null
+    if cpu_count <= handoff.boot_cpus.count {
+        info.cpus = handoff.boot_cpus[0..<cpu_count]
+    }
+    info.start_cpu = if cpu_count > 1 { start_cpu } else { null }
     // Modules, named by their names in the handoff
     module_count := cast[usize](0)
     for &module, i in handoff.modules {
@@ -167,4 +176,48 @@ text_of :: fn(bytes #escaping : u8[]) -> string {
         count += 1
     }
     return if count <= bytes.count { bit_cast[string](bytes[0..<count]) } else { "" }
+}
+
+/*
+ * Starting the other CPUs (docs/specs/boot_info.md, CPUs): the bootloader parked each on its mailbox
+ * (boot_protocol.Cpu), on its own stack. A BootCpu's boot_handle points at its StartingCpu, in the handoff's room.
+ */
+StartingCpu :: struct {
+    // The CPU's mailbox, in the handoff
+    mailbox : u64,
+    // Set by start_cpu, before the CPU reads them
+    carrier : ptr[mut runtime.CarrierBlock],
+    entry : boot_info.CpuEntry,
+}
+
+#assert size_of(StartingCpu) <= 32
+
+// Starts cpu at cpu_entry, which loads carrier and calls entry. Doesn't wait for it.
+start_cpu : boot_info.StartCpu : fn(cpu: ptr[boot_info.BootCpu], carrier #escaping : ptr[mut runtime.CarrierBlock], entry: boot_info.CpuEntry) {
+    starting :: cast[ptr[mut StartingCpu]](cast[rawptr](cpu.boot_handle))
+    starting.carrier = carrier
+    starting.entry = entry
+    mailbox :: cast[ptr[mut boot_protocol.Cpu]](cast[rawptr](starting.mailbox))
+    mailbox.argument = cast[u64](cast[rawptr](starting))
+    // The write that starts it, after everything it reads
+    intrinsics.atomic_store_u64_release(&mailbox.goto_address, cast[u64](cast[rawptr](cpu_entry)))
+}
+
+/*
+ * Where a parked CPU jumps once started, on its boot stack, with interrupts disabled, given its StartingCpu's address.
+ * Like kernel_entry, it has no carrier block or context yet: it sets carrier.stack_limit for its boot stack, loads the
+ * carrier block start_cpu was given, pushes the boot context, and calls the kernel's entry.
+ */
+cpu_entry #calling_convention(.c) #no_context :: fn(argument: u64) #never_returns {
+    starting :: cast[ptr[StartingCpu]](cast[rawptr](argument))
+    carrier :: starting.carrier
+    stack :: cast[u64](intrinsics.stack_pointer())
+    carrier.stack_limit = cast[rawptr](stack - boot_protocol.BOOT_STACK_SIZE + BOOT_STACK_SLACK + runtime.STACK_GUARD)
+    carrier.native_stack_limit = carrier.stack_limit
+    intrinsics.set_carrier(carrier)
+    push_context boot from runtime.MINIMAL_CONTEXT {
+        push_context early (logger = &EARLY_LOGGER, log_level = .INFO) {
+            starting.entry()
+        }
+    }
 }

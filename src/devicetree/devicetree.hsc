@@ -166,6 +166,79 @@ find_node :: fn(tree: ptr[Tree], compatible: string, phandle: u32, even_disabled
     }
 }
 
+/*
+ * Every CPU node's hardware identifier, its reg's address (MPIDR's affinity fields on AArch64), into ids, in the
+ * tree's order: how many there are, at most ids.count. A node is a CPU's when its device_type is "cpu".
+ */
+cpus :: fn(tree: ptr[Tree], ids: mut u64[]) -> usize {
+    address_cells : u32[MAX_DEPTH]
+    depth : usize = 0
+    offset := cast[u64](0)
+    count := cast[usize](0)
+    // The node the walk is in: whether it's a CPU, its reg's value, and the cells its parent gives reg
+    is_cpu := false
+    reg := Property.{}
+    cells := cast[u32](2)
+    loop {
+        if offset + 4 > tree.structure_size {
+            return count
+        }
+        token :: big_endian_u32(tree.structure + offset)
+        offset += 4
+        if token == TOKEN_BEGIN_NODE || token == TOKEN_END_NODE || token == TOKEN_END {
+            // The node before is done
+            if is_cpu && reg.size >= cast[u64](cells) * 4 && count < ids.count {
+                ids[count] = read_cells(reg.address, cells)
+                count += 1
+            }
+            is_cpu = false
+            reg = Property.{}
+        }
+        if token == TOKEN_BEGIN_NODE {
+            if depth + 1 >= MAX_DEPTH {
+                return count
+            }
+            parent :: depth
+            depth += 1
+            if depth < MAX_DEPTH {
+                address_cells[depth] = 2
+            }
+            cells = if parent > 0 && parent < MAX_DEPTH { address_cells[parent] } else { 2 }
+            offset = align4(offset + name_length(tree, offset) + 1)
+        }
+        else if token == TOKEN_END_NODE {
+            if depth == 0 {
+                return count
+            }
+            depth -= 1
+        }
+        else if token == TOKEN_PROPERTY {
+            if offset + 8 > tree.structure_size {
+                return count
+            }
+            length :: cast[u64](big_endian_u32(tree.structure + offset))
+            name :: string_at(tree, cast[u64](big_endian_u32(tree.structure + offset + 4)))
+            value :: Property.{address = tree.structure + offset + 8, size = length}
+            if name == "#address-cells" && length == 4 && depth < MAX_DEPTH {
+                address_cells[depth] = big_endian_u32(value.address)
+            }
+            else if name == "device_type" && lists(value, "cpu") {
+                is_cpu = true
+            }
+            else if name == "reg" {
+                reg = value
+            }
+            offset = align4(offset + 8 + length)
+        }
+        else if token == TOKEN_END {
+            return count
+        }
+        else if token != TOKEN_NOP {
+            return count
+        }
+    }
+}
+
 // A property of node, by name, or null.
 property :: fn(tree: ptr[Tree], node: ptr[Node], name: string) -> Property? {
     offset := node.offset

@@ -445,7 +445,8 @@ Planned 2026-10-31 (`decisions/0131`), before M10, in four stages: **B1** Hemera
 automatic fallback, recovery by a key or when every counter's out, the panic record in reserved RAM, the seed file;
 **B4** ISOs through it, and Limine and BIOS boot removed (with the owner). TPM sealing goes to H. B1 done 2026-10-31
 (`decisions/0132`): `OS == .UEFI` in Hemera, PE32+ EFI applications on both architectures, `base`'s runtime on the
-boot services, and function types with a calling convention.
+boot services, and function types with a calling convention. B2 done 2026-10-31 (`decisions/0133`): the bootloader boots a disk on both
+architectures, the kernel given SlopOS's own handoff, every CPU started through trampolines of its own.
 
 ## M10 — Console, Accounts and Sessions (L4)
 

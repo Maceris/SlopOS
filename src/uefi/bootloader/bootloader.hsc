@@ -19,6 +19,9 @@ import boot_protocol from "../../boot_protocol"
 #if TARGET_ARCH == .x86_64 {
     import x86_64 from "base/intrinsics"
 }
+#else {
+    import aarch64 from "base/intrinsics"
+}
 
 // Memory kinds of the bootloader's, past UEFI's own, so the memory map says what each page holds
 LOADER_DATA : u32 : 2
@@ -69,24 +72,40 @@ main :: fn() -> int {
     firmware_tables(handoff)
     framebuffer(handoff)
     entropy(handoff, &random)
-    handoff.cpu_count = 1
-    handoff.cpus[0] = boot_protocol.Cpu.{hardware_id = boot_cpu_id()}
     stack :: allocate_pages(LOADER_DATA, boot_protocol.BOOT_STACK_SIZE) or_return fail("no memory for the kernel's stack")
     handoff.direct_map_offset = direct_map_offset(&random)
     tables := new_tables() or_return fail("no memory for page tables")
+    starting :: prepare_cpus(handoff, &tables, handoff.direct_map_offset) or_return fail("no room for the other CPUs' trampoline")
     // The memory map now, for the page tables, and again after them, just before the boot services are left
     if !map_memory(&tables, handoff.direct_map_offset) || !map(&tables, image.virtual_base, image.physical, image.size) {
         return fail("no memory for page tables")
     }
     leave_boot_services(handoff) or_return fail("the boot services couldn't be left")
-    // No firmware from here: interrupts off, the kernel's tables and stack, and the kernel
+    // No firmware from here: interrupts off, the other CPUs parked, then the kernel's tables and stack, and the kernel
     #if TARGET_ARCH == .x86_64 {
         x86_64.cli()
+        start_cpus(handoff, starting)
         x86_64.enter(tables.root, handoff.direct_map_offset + stack + boot_protocol.BOOT_STACK_SIZE,
             image.virtual_base + image.entry, handoff.direct_map_offset + handoff_address)
     }
     #else {
-        intrinsics.trap()
+        // The kernel's code, written through the data cache, where instruction fetches see it
+        line := image.physical & ~cast[u64](63)
+        loop {
+            if line >= image.physical + image.size {
+                break
+            }
+            aarch64.dc_cvau(cast[rawptr](line))
+            line += 64
+        }
+        aarch64.dsb(.ISH)
+        aarch64.ic_iallu()
+        aarch64.dsb(.ISH)
+        aarch64.isb()
+        aarch64.daif_set(aarch64.DAIF_IRQ | aarch64.DAIF_FIQ | aarch64.DAIF_SERROR)
+        start_cpus(handoff, starting)
+        aarch64.enter(MAIR_VALUE, tcr_value(), tables.low_root, tables.root, handoff.direct_map_offset + stack + boot_protocol.BOOT_STACK_SIZE,
+            image.virtual_base + image.entry, handoff.direct_map_offset + handoff_address)
     }
 }
 
@@ -222,7 +241,7 @@ boot_cpu_id :: fn() -> u64 {
         return cast[u64](x86_64.cpuid(1).ebx >> 24)
     }
     #else {
-        return 0
+        return aarch64.read_system_register(.MPIDR_EL1) & 0xff00ffffff
     }
 }
 
@@ -255,7 +274,7 @@ random_u64 :: fn(random: ptr[Random]) -> u64 {
         return x86_64.rdrand() or_else x86_64.rdtsc()
     }
     #else {
-        return 0
+        return aarch64.rndr() or_else aarch64.read_system_register(.CNTVCT_EL0)
     }
 }
 
