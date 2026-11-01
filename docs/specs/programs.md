@@ -120,7 +120,8 @@ of its own with a memory budget split off its starter's, which owns it:
 | `process_manager` | the root task, with its own loader | `log`, `entropy: Channel[Entropy]`, `clients: Listener[ProcessManager]` | Loads programs for requesters (below), drawing each one's seed, and the randomness that places its parts, from `entropy` |
 | `platform` | the root task, through the manager | `log`, `platform`, `firmware`, `clients: Listener[Platform]`, `command_line?` | Finds the PCIe host bridge in the firmware tables, numbers its buses and places its BARs where firmware didn't, and gives each device to the supervisor once (below) |
 | `supervisor` | the root task, through the manager | `log`, `manager`, `root: Channel[Supervision]`, `hello_module`, `platform_service: Channel[Platform]?`, `entropy_service: Channel[Entropy]?`, each driver's module, `command_line?` | Starts the services `system_config` gives it with `os.launch`, and a driver for each device it claims from the platform service, owns them, serves the connectors they're reached through, restarts a driver that crashes or is killed (below), and tells the root task as each starts and ends, and once all have |
-| `console` | the supervisor, through the manager, once the drivers have started | `log`, `serial_line: Channel[Connector]?`, `keyboard: Channel[Connector]?`, `clients: Listener[ConsoleLog]` | Shows its clients' lines on the first serial line, and echoes back what's typed into it or on the first keyboard (below); M10's terminal service replaces it |
+| `terminal` | the supervisor, through the manager, once the drivers have started | `log`, `serial_line: Channel[Connector]?`, `keyboard: Channel[Connector]?`, `clients: Listener[Terminal]` | The console's terminal: its clients' output on the first serial line through the VT adapter, and what's typed there or on the first keyboard as typed input for the client that reads first (below, `0136`) |
+| `echo` | the supervisor, through the manager, after the terminal service | `console: Channel[Connector]` | The console's reader until sessions: shows what's typed, and answers each line with `echo: ` and the line (below) |
 | `hello` | the supervisor, through the manager | `log?`, `manager?`, `console: Channel[Connector]?` | Reports that its heap and random numbers work, in its debug log and on the console, and given a connection to the manager, that it's still running once the manager is gone |
 | `virtio_rng` | the supervisor, through the manager, for each modern virtio entropy device | its device's bundle (below), `entropy_service: Channel[Entropy]?` | Offers the device's bytes to the entropy service as a source, on a channel of the `rng` protocol |
 | `virtio_console` | the supervisor, through the manager, for each modern virtio console | its device's bundle, `clients: Listener[Serial]` | Its device's first port as the `serial` protocol |
@@ -153,7 +154,8 @@ driver, which may be restarted, but a connector to it: a channel the supervisor 
 `Dialed` and a new connection to whichever process serves it now, made through that driver's listener with its
 protocol's `Connect`, or `Unavailable` while nothing does. `connector.dial[P]` dials, tries again every 100 ms while
 it's unavailable, up to 50 times, and checks the connection speaks `P`; a client whose connection's other end goes
-dials again. The console is given connectors to the first serial line and keyboard, `hello` one to the console, the
+dials again. The terminal service is given connectors to the first serial line and keyboard, `hello` and `echo` one each to
+the terminal service, the
 storage manager one to each of the first four disks, and the disk check one to the storage manager. The disk check's
 working directory is the first EFI system partition's root, which the supervisor asks the storage manager for
 (`OpenFiles`) on a connection of its own, while its port goes on serving connectors, which the storage manager dials
@@ -230,11 +232,22 @@ to take, held by the driver until at least one byte has arrived, then answered w
 the line's speed (0 for a virtual console); and `Connect`. `virtio_console` serves its device's first port (no
 multiport): four receive buffers always offered to the device, and one buffer to send at a time, waited for.
 
-**The console** (`src/services/console`, `src/protocols/console_log`): its clients send `Line`s, answered with
-nothing, which it shows on the first serial line the supervisor gives it, after a line break and its banner,
-`SlopOS console`; each line typed into it, or on the first keyboard, which it reads as a US layout (shift, Enter,
-Backspace), is written to its debug log (`console: read ...`) and echoed back (`echo: ...`). A serial line or
-keyboard that goes is dialed again, and the banner shown again.
+**The terminal** (`src/services/terminal_service`, `std/os/slop_os`'s `terminal`, `0136`): its clients `Write`
+UTF-8 text in styled runs (colours from a palette or 24-bit, bold, dim, italic, underline, inverse, strikethrough, a
+link's target), which isn't answered; `MoveCursor`, `ShowCursor`, `Clear`, `Scroll`, `Screen` (a screen of the
+program's own, or back to its lines) and `Bell` too. `Describe` is answered with the terminal's `Features` (80 by 24,
+24-bit colour, links, Unicode 17's widths). `Read` is held until there's input, then answered with `Input`: `Key`s
+(a USB HID usage, modifiers and the text typed), a `Paste` as one event, and `Interrupt` for Ctrl-C; the first client
+to read owns the input until it goes. Text is shown a grapheme cluster at a time (`std/unicode`), made safe
+(`src/safe_text`): C0 controls as their Control Pictures, C1, bidirectional and invisible characters written out as
+`⟨U+202E⟩`, bytes that aren't UTF-8 as U+FFFD, a line break as one, a tab as spaces to the next stop of 8. The VT
+adapter (`src/vt`) is the only place escape sequences exist: it turns styles, moves, clears, scrolls and links into
+ECMA-48 for the first serial line, with at most two `Write`s in flight on it, and decodes what's typed there (keys,
+xterm's modifiers, bracketed paste). The first keyboard's keys are typed through a US layout until the input service
+(10a2). The banner, `SlopOS console`, is shown on each serial line dialed; a serial line or keyboard that goes is
+dialed again. **echo** (`src/apps/echo`) reads the console's input: it shows each key's text as typed, takes
+Backspace back a cluster, drops the line at Ctrl-C, and answers each line with `echo: ...`, which it logs
+(`echo: read ...`).
 
 **Input devices** (`src/protocols/input`, `0077`): events in SlopOS's own terms, each a kind (`Key`, `Motion`,
 `Position`, `Button`, `Wheel`), whether it's pressed, a code and x and y: a key by its USB HID usage (page 7), a button

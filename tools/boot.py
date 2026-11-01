@@ -266,7 +266,7 @@ class SerialKeys:
 # On q35, VT-d with interrupt remapping (decisions/0079): before every other PCI device, as QEMU wants it
 X86_IOMMU = ["-device", "intel-iommu,intremap=on"]
 
-# The virtio console's banner, which says it's ready for what's typed into it (src/services/console)
+# The virtio console's banner, which says it's ready for what's typed into it (src/services/terminal_service)
 CONSOLE_BANNER = "SlopOS console"
 
 

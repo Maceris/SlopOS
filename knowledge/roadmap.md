@@ -301,6 +301,10 @@ bidirectional and invisible characters, the layout on the status line, `Locale`)
   installations stopped under memory pressure.
 - **10d** the powerbox and sharing: runtime requests, persistent grants listed and revoked, elevation, shared volumes.
 
+10a1 done 2026-11-01 (`decisions/0137`): the terminal protocol in `std`, Hemera's `std/unicode` (UAX #29 and widths from
+Unicode 17), the terminal service in the console service's place, the VT adapter, visible substitutes, and `echo` as the
+console's reader until sessions.
+
 Specs: RFC 9106 (Argon2), RFC 3394 or the AEAD for key wrapping, ECMA-48 (for the VT adapter only), the Unicode
 standard's East Asian Width and UAX #29 for terminal widths.
 Stresses: Unicode handled without a runtime library, memory-hard hashing inside a budget, many sessions on fibers.
@@ -461,5 +465,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | Perf | done 2026-10-31 (`decisions/0097`, `0112`, `0127` to `0130`): benchmarks held to baselines, tickless idle, large pages, CPU loans in the storage servers |
 | R | planned 2026-10-29 (`decisions/0096`): R1 to R4 done 2026-10-30 (`0104` to `0106`, `0112`); R5 and R6 not started |
 | B | done 2026-10-31 (`decisions/0131` to `0135`): Hemera's UEFI target, SlopOS's bootloader, boot counting and recovery, ISOs through it, Limine and BIOS boot removed |
-| M10 | planned 2026-11-01 (`decisions/0136`), in four stages, 10a in four parts; not started |
+| M10 | planned 2026-11-01 (`decisions/0136`), in four stages, 10a in four parts; 10a1 done (`0137`) |
 | M11–M16, P, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |

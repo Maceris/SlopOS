@@ -7,16 +7,16 @@ import random from "std"
 import text_buffer from "std"
 import time from "std"
 import slop_os from "std/os"
+import terminal from "std/os/slop_os"
 import process_manager from "std/os/slop_os"
 import config from "../../protocols/config"
 import connector from "../../protocols/connector"
-import console_log from "../../protocols/console_log"
 import entropy from "../../protocols/entropy"
 
 /*
  * The first SlopOS program (roadmap M6): it fills memory from its heap, draws random numbers, and says
  * whether both worked through base's logger, to the events service, and on the console, if it's given a connection to the
- * console service, through a connector to it (decisions/0075, 0077). Given a connection to the process manager,
+ * terminal service, through a connector to it (decisions/0075, 0077, 0136). Given a connection to the process manager,
  * it then waits for the manager to be gone and says it's still running, which shows a program outlives the
  * manager that loaded it (decisions/0067). It says the date the wall clock gives too, which it reads from the clock
  * page it's given (decisions/0093). Given a connection to the entropy service, it asks it for random bytes too
@@ -62,9 +62,9 @@ main :: fn(manager: os.Channel[process_manager.ProcessManager]?, console: os.Cha
     match console {
         case Some(dialing) => {
             dial_port :: os.port_for(slop_os.startup_block().budget, dialing.end) or_return 6
-            connection :: connector.dial[console_log.ConsoleLog](dialing.end, dial_port) or_return 6
+            connection :: connector.dial[terminal.Terminal](dialing.end, dial_port) or_return 6
             port :: os.port_for(slop_os.startup_block().budget, connection.end) or_return 6
-            _ = console_log.write(connection.end, port, if code == 0 && random_works { "hello: heap and random numbers working" }
+            _ = terminal.write_line(connection.end, port, if code == 0 && random_works { "hello: heap and random numbers working" }
                 else { "hello: something's broken" })
         }
         case None => {}

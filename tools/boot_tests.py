@@ -105,7 +105,7 @@ BOOT_DISK_BASE = [
     "--expect-line=[user] storage_manager: started a container service for disk 0 partition 3",
     "--expect-line=[user] storage_manager: started a volume server for the system volume",
     "--expect-line=[user] volume_server: serving volume 1 (system), from transaction 3",
-    "--expect-line=[user] supervisor: console from the bundle store",
+    "--expect-line=[user] supervisor: terminal from the bundle store",
     "--expect-line=[user] supervisor: hello from the bundle store",
     "--expect-line=[user] hello: heap working, random numbers working",
     "--expect-line=[user] config: serving",
@@ -208,23 +208,23 @@ TESTS = [
         "--expect-line=[user] edu_dma: no DMA memory, as no IOMMU confines its device and it isn't trusted",
         "--expect-line=[user] root task: the supervisor's edu_dma ended with 0", "--expect-line=[info] root task ended with code 0",
         "--", "-smp", "2", "-device", "edu"]),
-    # A virtio console whose other end boot.py types into: hello's line through the console service, and an echo
+    # A virtio console whose other end boot.py types into: hello's line through the terminal service, and echo's answer
     ("shows lines on a virtio console, and echoes what's typed into it", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services", "--console-input=ping from the host",
-        "--expect-line=[user] virtio_console: serving", "--expect-line=[user] console: read ping from the host",
+        "--expect-line=[user] virtio_console: serving", "--expect-line=[user] echo: read ping from the host",
         "--expect-console-line=SlopOS console", "--expect-console-line=hello: heap and random numbers working",
         "--expect-console-line=echo: ping from the host", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
-    # A virtio keyboard boot.py types on through QEMU's machine protocol: keys as HID usages, typed by the console's keymap
+    # A virtio keyboard boot.py types on through QEMU's machine protocol: keys as HID usages, typed by the terminal service's keymap
     ("types on a virtio keyboard into the console", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services", "--keyboard-input=Hi there, 42!",
-        "--expect-line=[user] virtio_input: serving", "--expect-line=[user] console: read Hi there, 42!",
+        "--expect-line=[user] virtio_input: serving", "--expect-line=[user] echo: read Hi there, 42!",
         "--expect-console-line=echo: Hi there, 42!", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
-    # The console's driver killed once the console has dialed it: restarted with its device reissued, and dialed again
+    # The console's driver killed once the console has dialed it: restarted with its device reissued, and dialed again by the terminal service
     ("restarts a driver that's killed, and its client dials it again", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services test_restart", "--console-input=before the restart",
         "--console-input=after the restart", "--expect-line=[user] supervisor: test_restart: killing virtio_console",
-        "--expect-line=[user] supervisor: restarted virtio_console", "--expect-line=[user] console: its serial line went; dialing again",
-        "--expect-line=[user] console: read after the restart", "--expect-console-line=echo: after the restart",
+        "--expect-line=[user] supervisor: restarted virtio_console", "--expect-line=[user] terminal: its serial line went; dialing again",
+        "--expect-line=[user] echo: read after the restart", "--expect-console-line=echo: after the restart",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # A GPT disk image boot.py marks, whose partitions the storage manager's partition server finds; the disk check reads,
     # writes, flushes and reads back its partition, is refused a block past it, and the image holds what it wrote after;
@@ -332,7 +332,7 @@ TESTS = [
         "--recovery-key", "--expect-line=[info] bootloader: the recovery generation, as a key asks",
         "--expect-line=[user] root task: booted the recovery generation",
         "--expect-line=[user] supervisor: recovery: the boot set, the drivers and the console only",
-        "--expect-line=[user] console: serving"])),
+        "--expect-line=[user] terminal: serving"])),
     # The panic record (decisions/0134): the first boot panics and resets, keeping RAM; the next finds its record
     ("keeps a panic's record across a warm reset, on the ESP and for the root task", 7, with_before_qemu(
         [argument.replace("test_services", "test_services panic_reset test_panic_once") for argument in BOOT_DISK_BASE], [
@@ -381,7 +381,7 @@ TESTS = [
     # On one CPU, where requests wait for the volume server rather than it waiting for them
     ("serves a volume's clients by the priority of the CPU budgets they lend it", 7, with_before_qemu(
         one_cpu([argument.replace("test_services", "test_services test_lending") for argument in BOOT_DISK_BASE]), [
-        "--expect-line=[user] supervisor: test_lending: a request lent the console's budget was answered ahead of the backlogs lent hello's"])),
+        "--expect-line=[user] supervisor: test_lending: a request lent the terminal service's budget was answered ahead of the backlogs lent hello's"])),
     ("starts a disk's partition server again when it's killed, and serves its volumes through the new one", 7, with_before_qemu(
         [argument.replace("test_services", "test_services test_storage_restart") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] storage_manager: test_storage_restart: killing the partition server for disk 0",
