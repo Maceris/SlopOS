@@ -119,13 +119,19 @@ append_clear_screen :: fn(out: ptr[mut text_buffer.TextBuffer]) {
     append_move(out, 0, 0)
 }
 
-// DECSTBM: scrolling only rows first to last, from 0; then SU or SD by lines, up when positive; then the margins reset.
-append_scroll :: fn(out: ptr[mut text_buffer.TextBuffer], first: u16, last: u16, lines: i16) {
+// DECSTBM: the rows that scroll, first to last, from 0. It puts the cursor at the top left.
+append_margins :: fn(out: ptr[mut text_buffer.TextBuffer], first: u16, last: u16) {
     append_csi(out)
     text_buffer.append_unsigned(out, cast[u64](first) + 1)
     text_buffer.append_byte(out, cast[u8](';'))
     text_buffer.append_unsigned(out, cast[u64](last) + 1)
     text_buffer.append_byte(out, cast[u8]('r'))
+}
+
+// Rows first to last, from 0, moved up by lines, or down when negative: their margins set, then SU or SD. The margins
+// stay as set, for the caller to put back.
+append_scroll :: fn(out: ptr[mut text_buffer.TextBuffer], first: u16, last: u16, lines: i16) {
+    append_margins(out, first, last)
     append_csi(out)
     if lines >= 0 {
         text_buffer.append_unsigned(out, cast[u64](lines))
@@ -135,8 +141,17 @@ append_scroll :: fn(out: ptr[mut text_buffer.TextBuffer], first: u16, last: u16,
         text_buffer.append_unsigned(out, cast[u64](-cast[i32](lines)))
         text_buffer.append_byte(out, cast[u8]('T'))
     }
-    append_csi(out)
-    text_buffer.append_byte(out, cast[u8]('r'))
+}
+
+// DECSC and DECRC: the cursor, and its style, saved and put back.
+append_save_cursor :: fn(out: ptr[mut text_buffer.TextBuffer]) {
+    text_buffer.append_byte(out, ESCAPE)
+    text_buffer.append_byte(out, cast[u8]('7'))
+}
+
+append_restore_cursor :: fn(out: ptr[mut text_buffer.TextBuffer]) {
+    text_buffer.append_byte(out, ESCAPE)
+    text_buffer.append_byte(out, cast[u8]('8'))
 }
 
 // DECTCEM: the cursor shown or hidden.

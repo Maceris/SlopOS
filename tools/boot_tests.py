@@ -214,6 +214,13 @@ TESTS = [
         "--expect-line=[user] virtio_console: serving", "--expect-line=[user] echo: read ping from the host",
         "--expect-console-line=SlopOS console", "--expect-console-line=hello: heap and random numbers working",
         "--expect-console-line=echo: ping from the host", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # Ctrl+Alt+Delete as a terminal sends it: the terminal service's own screen, which Enter leaves, the program's lines
+    # drawn again, and what's typed after it the program's
+    ("brings up the secure attention key's screen, and goes back to the program", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_settle=5", "--console-input=\e[3;7~\p\r\pafter attention",
+        "--expect-line=[user] terminal: secure attention", "--expect-line=[user] terminal: secure attention ended",
+        "--expect-console-line=Secure attention", "--expect-console-line=echo: after attention",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # A virtio keyboard boot.py types on through QEMU's machine protocol: keys as HID usages, typed by the terminal service's keymap
     ("types on a virtio keyboard into the console", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services", "--keyboard-input=Hi there, 42!",

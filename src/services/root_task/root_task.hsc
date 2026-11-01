@@ -10,7 +10,7 @@
  * to the scheduler service and the supervisor. It imports system_config only so the build has it to write.
  *
  * Words on the kernel's command line are for boot tests, and end it with 0 if what they test works:
- * - test_services, once the supervisor has started all of its services;
+ * - test_services, once the supervisor has started all of its services, and a second more, or test_settle=<seconds>;
  * - test_outlive_manager, which kills the process manager once the supervisor reports hello started, and
  *   ends once hello has, after it said it's still running;
  * - test_deadline=<seconds>, with test_program: how long the test program has to end before the root task kills it
@@ -211,6 +211,9 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         case None => {}
     }
     test_services :: service_kit.has_word(words, "test_services")
+    // test_settle=<seconds>: longer, for a test that types into the console after its banner
+    settle_seconds :: service_kit.number_of(service_kit.word_after(words, "test_settle=") or_else "") or_else 0
+    settle_nanoseconds :: if settle_seconds > 0 { settle_seconds * 1_000_000_000 } else { SETTLE_NANOSECONDS }
     test_outlive_manager :: service_kit.has_word(words, "test_outlive_manager")
     root.stream = random_stream.make(block.seed)
 
@@ -367,7 +370,7 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
                     log_line.write(root.log, "root task: the supervisor started all % of its services", count)
                     if test_services {
                         // Drivers come up by themselves once they've started
-                        settle :: (slop_os.clock_monotonic() or_else 0) + SETTLE_NANOSECONDS
+                        settle :: (slop_os.clock_monotonic() or_else 0) + settle_nanoseconds
                         loop {
                             waited : slop_os.Packet[1]
                             if (slop_os.port_wait(port, waited, settle) or_else 0) == 0 {

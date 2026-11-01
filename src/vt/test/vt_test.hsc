@@ -70,7 +70,7 @@ main :: fn() -> int {
     text_buffer.clear(&out)
     vt.append_move(&out, 0, 4)
     vt.append_scroll(&out, 1, 23, -2)
-    if !same(&out, "`[1;5H`[2;24r`[2T`[r") {
+    if !same(&out, "`[1;5H`[2;24r`[2T") {
         return 3
     }
     // A link's target keeps only printable ASCII, so it can't end the sequence

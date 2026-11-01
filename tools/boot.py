@@ -399,7 +399,7 @@ class ConsoleLink:
                 self.shown += data.decode(errors="replace")
                 while self.shown.count(CONSOLE_BANNER) > banners:
                     if banners < len(self.typed):
-                        connection.sendall((self.typed[banners] + "\n").encode())
+                        type_into(connection, self.typed[banners])
                     if banners == 0 and self.keyboard is not None and self.keyed:
                         try:
                             if self.keyboard.connect():
@@ -410,7 +410,33 @@ class ConsoleLink:
                     banners += 1
 
     def lines(self) -> list[str]:
-        return [line.rstrip("\r") for line in self.shown.split("\n")]
+        return [line.rstrip("\r") for line in plain_text(self.shown).split("\n")]
+
+
+# The terminal service's status line, drawn between a saved and a restored cursor (ESC 7, ESC 8), and the other sequences
+# the VT adapter sends (src/vt): CSI's, and OSC 8's links
+STATUS_LINE = re.compile("\x1b7.*?\x1b8", re.DOTALL)
+CURSOR_MOVE = re.compile("\x1b\\[[0-9;]*H")
+CSI = re.compile("\x1b\\[[0-9;?<>=]*[ -/]*[@-~]")
+OSC = re.compile("\x1b\\].*?(\x1b\\\\|\x07)", re.DOTALL)
+
+
+def plain_text(shown: str) -> str:
+    """What a terminal shows as lines of text: the status line left out, a cursor move a line break, sequences gone."""
+    return CSI.sub("", CURSOR_MOVE.sub("\n", OSC.sub("", STATUS_LINE.sub("", shown))))
+
+
+def type_into(connection: socket.socket, line: str) -> None:
+    """
+    line typed, then a line break: escapes in it as Python writes them (\\e for ESC), and \\p a second's pause, so a
+    key the terminal service takes for itself arrives apart from what follows it.
+    """
+    parts = line.replace("\\e", "\\x1b").split("\\p")
+    for i, part in enumerate(parts):
+        if i > 0:
+            time.sleep(1)
+        data = part.encode("latin-1", "backslashreplace").decode("unicode_escape")
+        connection.sendall((data + ("\n" if i == len(parts) - 1 else "")).encode())
 
 
 # A disk image's size, and its blocks', as virtio-blk counts them
@@ -677,7 +703,8 @@ def main() -> int:
                         help="no IOMMU: by default q35 has VT-d and virt an SMMUv3, and virtio devices this adds go through it")
     parser.add_argument("--serial", type=Path, help="also keep the serial output in this file")
     parser.add_argument("--console-input", action="append", default=[],
-                        help="a line to type into a virtio console, which this adds, once it shows its banner; may be repeated")
+                        help="a line to type into a virtio console, which this adds, once it shows its banner; may be repeated. "
+                        "Escapes are Python's (\\e is ESC, as \\e[3;7~ is Ctrl+Alt+Delete), and \\p waits a second")
     parser.add_argument("--expect-console-line", action="append", default=[],
                         help="a line the virtio console should show, with --expect; may be repeated")
     parser.add_argument("--keyboard-input", action="append", default=[],

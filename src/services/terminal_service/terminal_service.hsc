@@ -1,11 +1,16 @@
 /*
- * The terminal service (decisions/0136, design/console-and-sessions.md §2), which replaced the console service of
- * decisions/0075 and 0077. It serves the console's terminal over the terminal protocol: what its clients write is shown
- * on the first serial line through the VT adapter, a grapheme cluster at a time, made safe (safe_text) so text can't
- * become a control sequence; and what's typed, on the serial line or the first keyboard, becomes typed input for the
- * client that reads it first. A keyboard's keys are typed through a US layout until the input service owns keyboards
- * (10a2). Both are reached through connectors, dialed again when they go, with the banner shown on each new serial line.
- * Without a serial line it takes output and shows none.
+ * The terminal service (decisions/0136, 0137, 0138, design/console-and-sessions.md §2, §3), which replaced the console
+ * service of decisions/0075 and 0077. It serves the console's terminal over the terminal protocol, keeping what it shows
+ * in a screen model (src/screen): what its clients write goes into the model, a grapheme cluster at a time, made safe
+ * (safe_text) so text can't become a control sequence, and is shown on the first serial line through the VT adapter.
+ * The top row is the status line, which only this service writes; programs have the rows below it.
+ *
+ * What's typed, on the serial line or the first keyboard, becomes typed input for the client that reads it first,
+ * except the secure attention key, Ctrl+Alt+Delete (on the serial line as a terminal sends it, CSI 3;7~): that brings up
+ * this service's own screen, which every key goes to until Esc or Enter leaves it, and the program's screen is drawn
+ * again from the model. A keyboard's keys are typed through a US layout until the input service owns keyboards. Both
+ * are reached through connectors, dialed again when they go, with the banner shown on each new serial line. Without a
+ * serial line it keeps the model and shows nothing.
  */
 package terminal_service
 
@@ -20,6 +25,7 @@ import input from "../../protocols/input"
 import serial from "../../protocols/serial"
 import service_kit from "../../libraries/service_kit"
 import safe_text from "../../safe_text"
+import screen from "../../screen"
 import vt from "../../vt"
 
 // The serial line and the keyboard are bound to the port above the clients
@@ -27,11 +33,14 @@ SERIAL_KEY : u64 : 1000
 KEYBOARD_KEY : u64 : 1001
 BANNER :: "SlopOS console"
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
-
-// The console's size, until the serial line can say its own
-COLUMNS : u16 : 80
-ROWS : u16 : 24
 TAB_STOP : u16 : 8
+COLUMNS : u16 : screen.COLUMNS
+ROWS : u16 : screen.ROWS
+PROGRAM_ROWS : u16 : screen.PROGRAM_ROWS
+
+// What the status line says: no one has logged in until sessions (10c)
+STATUS :: " SlopOS │ console │ no session"
+STATUS_ATTENTION :: " SlopOS │ console │ secure attention"
 
 // Output waiting for the serial line, and how many Writes may be in flight on it, which its ring holds
 OUTPUT_BYTES :: 16384
@@ -44,8 +53,10 @@ USAGE_Z : u16 : 0x1d
 USAGE_1 : u16 : 0x1e
 USAGE_0 : u16 : 0x27
 USAGE_ENTER : u16 : 0x28
+USAGE_ESCAPE : u16 : 0x29
 USAGE_TAB : u16 : 0x2b
 USAGE_SPACE : u16 : 0x2c
+USAGE_DELETE : u16 : 0x4c
 USAGE_LEFT_CONTROL : u16 : 0xe0
 USAGE_LEFT_SHIFT : u16 : 0xe1
 USAGE_LEFT_ALT : u16 : 0xe2
@@ -70,9 +81,10 @@ Service :: struct {
     output_start : usize,
     output_count : usize,
     in_flight : u32,
-    // Where the cursor is on the line being written, and whether a program has the screen to itself
-    column : u16,
-    whole_screen : bool,
+    // What the terminal shows
+    screen : screen.Screen,
+    // Whether the secure attention key's screen is up, which every key goes to
+    attention : bool,
     // Input waiting for the owner: the client that read first, and how many events its Read held asks for
     decoder : vt.Decoder,
     decoded : vt.Decoded,
@@ -91,6 +103,9 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
     service.keyboard_connector = NONE
     service.line_end = NONE
     service.keyboard_end = NONE
+    // Lines are written at the bottom, as a serial line's are, and scroll up
+    service.screen.lines.row = PROGRAM_ROWS - 1
+    screen.set_status(&service.screen, STATUS)
     service.port = slop_os.port_create(startup.budget) or_return 2
     connected := service_kit.Clients.{}
     if !service_kit.add_client(&connected, service.port, clients.end) {
@@ -126,7 +141,10 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
     }
 }
 
-// A serial line through its connector, if there's one: bound to the port, with the banner shown and a Read held.
+/*
+ * A serial line through its connector, if there's one: bound to the port, with the banner shown, the rows below the
+ * status line made the ones that scroll, the status line drawn, and a Read held.
+ */
 dial_serial :: fn(service: ptr[mut Service]) {
     if cast[slop_os.Handle](service.serial_connector) == slop_os.NO_HANDLE {
         return void
@@ -144,13 +162,15 @@ dial_serial :: fn(service: ptr[mut Service]) {
     service.line_end = line.end
     service.in_flight = 0
     // Firmware may have left a line unfinished on the same console
-    storage : u8[64]
+    storage : u8[96]
     shown := text_buffer.make(storage)
     vt.append_line_break(&shown)
     text_buffer.append(&shown, BANNER)
     vt.append_line_break(&shown)
+    vt.append_margins(&shown, 1, ROWS - 1)
+    vt.append_move(&shown, ROWS - 1, 0)
     emit(service, string_bytes(text_buffer.as_string(&shown)))
-    service.column = 0
+    draw_status(service)
     read_more(service)
     pump(service)
 }
@@ -213,7 +233,7 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                 storage : u8[16]
                 out := text_buffer.make(storage)
                 vt.append_cursor_shown(&out, shown)
-                emit(service, string_bytes(text_buffer.as_string(&out)))
+                emit_program(service, &out)
             }
             case Clear(area) => clear(service, area)
             case Scroll(scrolled) => scroll(service, scrolled)
@@ -222,12 +242,12 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                 storage : u8[4]
                 out := text_buffer.make(storage)
                 vt.append_bell(&out)
-                emit(service, string_bytes(text_buffer.as_string(&out)))
+                emit_program(service, &out)
             }
             case Describe => {
                 out := os.Outgoing.{}
                 response :: os.begin[terminal.Response](&out)
-                response^ = .Described(terminal.Features.{columns = COLUMNS, rows = ROWS, colors = .Rgb,
+                response^ = .Described(terminal.Features.{columns = COLUMNS, rows = PROGRAM_ROWS, colors = .Rgb,
                     attributes = terminal.BOLD | terminal.DIM | terminal.ITALIC | terminal.UNDERLINE | terminal.INVERSE | terminal.STRIKETHROUGH,
                     links = true, unicode = 17 * 256})
                 _ = terminal.send_response(end, service.port, &out)
@@ -262,8 +282,9 @@ same_color :: fn(a: terminal.Color, b: terminal.Color) -> bool {
 }
 
 /*
- * A Write: its text a grapheme cluster at a time, each in its run's style, made safe; line breaks as CR LF, tabs as
- * spaces to the next stop. The style and any link are ended with it, so another client's text starts plain.
+ * A Write: its text a grapheme cluster at a time, each in its run's style, made safe, into the screen and onto the
+ * serial line; line breaks as CR LF, tabs as spaces to the next stop. The style and any link are ended with it, so
+ * another client's text starts plain.
  */
 write :: fn(service: ptr[mut Service], into: ptr[os.Incoming], text: terminal.Text) {
     bytes :: os.items(into, text.text)
@@ -295,8 +316,10 @@ write :: fn(service: ptr[mut Service], into: ptr[os.Incoming], text: terminal.Te
         }
         storage : u8[160]
         out := text_buffer.make(storage)
+        style := plain
         if run_index < runs.count {
             run :: runs[run_index]
+            style = run.style
             if !same_style(run.style, current) {
                 vt.append_style(&out, run.style)
                 current = run.style
@@ -317,26 +340,28 @@ write :: fn(service: ptr[mut Service], into: ptr[os.Incoming], text: terminal.Te
         }
         if safe_text.is_line_break(bytes, at, end) {
             vt.append_line_break(&out)
-            service.column = 0
+            screen.line_break(&service.screen)
         }
         else if safe_text.is_tab(bytes, at, end) {
+            grid :: screen.current(&service.screen)
             loop {
                 text_buffer.append_byte(&out, cast[u8](' '))
-                service.column += 1
+                screen.put(&service.screen, string_bytes(" "), 1, style)
             }
-            while service.column % TAB_STOP != 0 && service.column < COLUMNS
+            while grid.column % TAB_STOP != 0 && grid.column < COLUMNS
         }
         else {
             shown := safe_text.Shown.{}
             safe_text.show(bytes, at, end, &shown)
             if shown.count <= shown.bytes.count {
-                text_buffer.append(&out, string_of(&shown.bytes[0], shown.count))
+                cluster :: shown.bytes[0..<shown.count]
+                screen.put(&service.screen, cluster, shown.columns, style)
+                if cluster.count > 0 {
+                    text_buffer.append(&out, string_of(&cluster[0], cluster.count))
+                }
             }
-            // Where the cursor goes, as the console wraps
-            columns :: cast[u16](shown.columns)
-            service.column = if service.column + columns > COLUMNS { columns } else { service.column + columns }
         }
-        emit(service, string_bytes(text_buffer.as_string(&out)))
+        emit_program(service, &out)
         at = end
     }
     storage : u8[32]
@@ -347,22 +372,22 @@ write :: fn(service: ptr[mut Service], into: ptr[os.Incoming], text: terminal.Te
     if !same_style(current, plain) {
         vt.append_style(&out, plain)
     }
-    emit(service, string_bytes(text_buffer.as_string(&out)))
+    emit_program(service, &out)
 }
 
 // The cursor: anywhere on a whole screen; on lines, only along the line being written.
 move_cursor :: fn(service: ptr[mut Service], position: terminal.Position) {
+    screen.move(&service.screen, position.column, position.row)
+    grid :: screen.current(&service.screen)
     storage : u8[32]
     out := text_buffer.make(storage)
-    column :: if position.column < COLUMNS { position.column } else { COLUMNS - 1 }
-    if service.whole_screen {
-        vt.append_move(&out, if position.row < ROWS { position.row } else { ROWS - 1 }, column)
+    if service.screen.using_whole {
+        vt.append_move(&out, grid.row + 1, grid.column)
     }
     else {
-        vt.append_column(&out, column)
+        vt.append_column(&out, grid.column)
     }
-    service.column = column
-    emit(service, string_bytes(text_buffer.as_string(&out)))
+    emit_program(service, &out)
 }
 
 /*
@@ -372,21 +397,23 @@ move_cursor :: fn(service: ptr[mut Service], position: terminal.Position) {
 clear :: fn(service: ptr[mut Service], area: terminal.Area) {
     storage : u8[128]
     out := text_buffer.make(storage)
-    if !service.whole_screen {
+    grid :: screen.current(&service.screen)
+    if !service.screen.using_whole {
+        screen.clear_line_from(grid, 0)
         text_buffer.append_byte(&out, 0x0d)
         vt.append_clear_to_end(&out)
-        service.column = 0
-        emit(service, string_bytes(text_buffer.as_string(&out)))
+        emit_program(service, &out)
         return void
     }
-    if area.column >= COLUMNS || area.row >= ROWS {
+    screen.clear(grid, area)
+    if area.column >= COLUMNS || area.row >= PROGRAM_ROWS {
         return void
     }
     columns :: if area.columns > COLUMNS - area.column { COLUMNS - area.column } else { area.columns }
-    rows :: if area.rows > ROWS - area.row { ROWS - area.row } else { area.rows }
+    rows :: if area.rows > PROGRAM_ROWS - area.row { PROGRAM_ROWS - area.row } else { area.rows }
     for row in area.row..<area.row + rows {
         text_buffer.clear(&out)
-        vt.append_move(&out, row, area.column)
+        vt.append_move(&out, row + 1, area.column)
         if area.column + columns >= COLUMNS {
             vt.append_clear_to_end(&out)
         }
@@ -395,34 +422,149 @@ clear :: fn(service: ptr[mut Service], area: terminal.Area) {
                 text_buffer.append_byte(&out, cast[u8](' '))
             }
         }
-        emit(service, string_bytes(text_buffer.as_string(&out)))
+        emit_program(service, &out)
     }
 }
 
 // An area scrolled, on a whole screen, where it's as wide as the screen, which is what a VT can scroll.
 scroll :: fn(service: ptr[mut Service], scrolled: terminal.ScrollArea) {
     area :: scrolled.area
-    if !service.whole_screen || area.column != 0 || area.columns < COLUMNS || area.row >= ROWS || area.rows == 0 {
+    if !service.screen.using_whole || area.column != 0 || area.columns < COLUMNS || area.row >= PROGRAM_ROWS || area.rows == 0 {
         return void
     }
-    last :: if area.rows > ROWS - area.row { ROWS - 1 } else { area.row + area.rows - 1 }
-    storage : u8[48]
+    screen.scroll(&service.screen.whole, area.row, area.rows, scrolled.lines)
+    last :: if area.rows > PROGRAM_ROWS - area.row { PROGRAM_ROWS - 1 } else { area.row + area.rows - 1 }
+    storage : u8[64]
     out := text_buffer.make(storage)
-    vt.append_scroll(&out, area.row, last, scrolled.lines)
-    emit(service, string_bytes(text_buffer.as_string(&out)))
+    vt.append_scroll(&out, area.row + 1, last + 1, scrolled.lines)
+    vt.append_margins(&out, 1, ROWS - 1)
+    emit_program(service, &out)
 }
 
 // A screen of the program's own, or back to the lines it left.
 use_screen :: fn(service: ptr[mut Service], whole: bool) {
-    if whole == service.whole_screen {
+    if whole == service.screen.using_whole {
         return void
+    }
+    screen.use_whole(&service.screen, whole)
+    storage : u8[64]
+    out := text_buffer.make(storage)
+    vt.append_alternate_screen(&out, whole)
+    if whole {
+        // A new screen is blank, the status line too, so it's drawn again
+        vt.append_move(&out, 1, 0)
+        service.screen.status_dirty = true
+    }
+    emit_program(service, &out)
+    if !service.attention {
+        draw_status(service)
+    }
+}
+
+// The status line, on the top row, inverse, with the cursor put back where it was.
+draw_status :: fn(service: ptr[mut Service]) {
+    storage : u8[384]
+    out := text_buffer.make(storage)
+    vt.append_save_cursor(&out)
+    vt.append_move(&out, 0, 0)
+    vt.append_style(&out, terminal.Style.{attributes = terminal.INVERSE})
+    status :: screen.status_text(&service.screen)
+    if status.count > 0 {
+        text_buffer.append(&out, string_of(&status[0], status.count))
+    }
+    vt.append_clear_to_end(&out)
+    vt.append_style(&out, terminal.Style.{})
+    vt.append_restore_cursor(&out)
+    emit(service, string_bytes(text_buffer.as_string(&out)))
+    service.screen.status_dirty = false
+}
+
+/*
+ * The secure attention key's screen: drawn over the program's rows, with the status line saying so. Nothing a program
+ * writes is shown until it's left, though the screen model keeps it.
+ */
+enter_attention :: fn(service: ptr[mut Service]) {
+    if service.attention {
+        return void
+    }
+    service.attention = true
+    runtime.log_info("secure attention")
+    screen.set_status(&service.screen, STATUS_ATTENTION)
+    draw_status(service)
+    storage : u8[256]
+    out := text_buffer.make(storage)
+    for row in 1..<ROWS {
+        text_buffer.clear(&out)
+        vt.append_move(&out, row, 0)
+        vt.append_clear_to_end(&out)
+        emit(service, string_bytes(text_buffer.as_string(&out)))
+    }
+    lines :: string.["Secure attention", "", "Nothing is waiting for you: no prompt, and no one has logged in yet.", "",
+        "Esc or Enter goes back."]
+    for line, i in lines {
+        text_buffer.clear(&out)
+        vt.append_move(&out, cast[u16](i) + 2, 2)
+        text_buffer.append(&out, line)
+        emit(service, string_bytes(text_buffer.as_string(&out)))
+    }
+}
+
+// Back from the secure attention key's screen: the program's rows drawn again from the screen model.
+leave_attention :: fn(service: ptr[mut Service]) {
+    if !service.attention {
+        return void
+    }
+    service.attention = false
+    runtime.log_info("secure attention ended")
+    screen.set_status(&service.screen, STATUS)
+    draw_status(service)
+    redraw(service)
+}
+
+// Every program row, from the screen model, and the cursor where the program left it.
+redraw :: fn(service: ptr[mut Service]) {
+    grid :: screen.current(&service.screen)
+    plain :: terminal.Style.{}
+    for row in 0..<PROGRAM_ROWS {
+        storage : u8[2048]
+        out := text_buffer.make(storage)
+        vt.append_move(&out, row + 1, 0)
+        current := plain
+        for column in 0..<COLUMNS {
+            cell :: screen.cell(grid, row, column) or_break
+            if cell.width == 0 && cell.count == 0 && column > 0 {
+                // The second column of a wide cluster, or a blank after one; blanks are spaces
+                previous :: screen.cell(grid, row, column - 1) or_break
+                if previous.width == 2 {
+                    continue
+                }
+            }
+            if !same_style(cell.style, current) {
+                vt.append_style(&out, cell.style)
+                current = cell.style
+            }
+            if cell.count == 0 {
+                text_buffer.append_byte(&out, cast[u8](' '))
+            }
+            else if cast[usize](cell.count) <= cell.bytes.count {
+                text_buffer.append(&out, string_of(&cell.bytes[0], cast[usize](cell.count)))
+            }
+        }
+        vt.append_style(&out, plain)
+        vt.append_clear_to_end(&out)
+        emit(service, string_bytes(text_buffer.as_string(&out)))
     }
     storage : u8[32]
     out := text_buffer.make(storage)
-    vt.append_alternate_screen(&out, whole)
-    service.whole_screen = whole
-    service.column = 0
+    vt.append_move(&out, grid.row + 1, grid.column)
     emit(service, string_bytes(text_buffer.as_string(&out)))
+}
+
+// A program's output for the serial line, unless the secure attention key's screen is up.
+emit_program :: fn(service: ptr[mut Service], out: ptr[text_buffer.TextBuffer]) {
+    if !service.attention {
+        emit(service, string_bytes(text_buffer.as_string(out)))
+    }
 }
 
 // bytes, queued for the serial line; what doesn't fit the queue is dropped. Without a serial line nothing is kept.
@@ -514,12 +656,66 @@ take_serial :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 pump(service)
             }
             case Data(given) => {
+                first :: service.decoded.count
                 vt.feed(&service.decoder, os.items(into, given), &service.decoded)
                 vt.finish(&service.decoder, &service.decoded)
+                screen_keys(service, first)
                 read_more(service)
             }
             case _ => {}
         }
+    }
+}
+
+/*
+ * The events decoded from first on, checked before anything reads them: the secure attention key brings up its screen,
+ * and while that's up every key is its own, so none of them reach a program.
+ */
+screen_keys :: fn(service: ptr[mut Service], first: usize) {
+    decoded :: &service.decoded
+    for i in first..<decoded.count {
+        if i >= decoded.events.count {
+            break
+        }
+        event :: decoded.events[i]
+        if event.kind != cast[u8](terminal.EventKind.Key) {
+            continue
+        }
+        if event.code == USAGE_DELETE && event.modifiers & (terminal.CONTROL | terminal.ALT) == terminal.CONTROL | terminal.ALT {
+            enter_attention(service)
+            continue
+        }
+        if service.attention && (event.code == USAGE_ESCAPE || event.code == USAGE_ENTER) {
+            leave_attention(service)
+        }
+    }
+    // What came with the key, or while its screen was up, is the trusted path's, and isn't kept
+    if service.attention || attention_in(decoded, first) {
+        drop_from(service, first)
+    }
+}
+
+// Whether a Ctrl+Alt+Delete is among the events from first on.
+attention_in :: fn(decoded: ptr[vt.Decoded], first: usize) -> bool {
+    for i in first..<decoded.count {
+        if i < decoded.events.count && decoded.events[i].kind == cast[u8](terminal.EventKind.Key) && decoded.events[i].code == USAGE_DELETE
+            && decoded.events[i].modifiers & (terminal.CONTROL | terminal.ALT) == terminal.CONTROL | terminal.ALT {
+            return true
+        }
+    }
+    return false
+}
+
+// The events from first on taken back, with their text, as if they'd never come.
+drop_from :: fn(service: ptr[mut Service], first: usize) {
+    decoded :: &service.decoded
+    if first >= decoded.count {
+        return void
+    }
+    text_from :: if first < decoded.events.count { cast[usize](decoded.events[first].text_start) } else { decoded.text_count }
+    decoded.count = first
+    if text_from <= decoded.text_count {
+        decoded.text_count = text_from
     }
 }
 
@@ -547,11 +743,13 @@ take_keys :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
         }
         match os.message_of[input.Response](into)^ {
             case Events(given) => {
+                first :: service.decoded.count
                 for event in os.items(into, given) {
                     if input.kind_of(event) == .Key {
                         press(service, event.code, input.is_pressed(event))
                     }
                 }
+                screen_keys(service, first)
                 read_keys(service)
             }
             case _ => {}
@@ -612,7 +810,7 @@ character_of :: fn(usage: u16, shifted: bool) -> u8 {
 
 // The input waiting, to the owner, once it holds a Read.
 deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
-    if service.decoded.count == 0 || service.held == 0 {
+    if service.decoded.count == 0 || service.held == 0 || service.attention {
         return void
     }
     owner :: service.owner or_return void
