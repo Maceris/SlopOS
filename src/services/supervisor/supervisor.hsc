@@ -92,6 +92,8 @@ import strings from "std"
 import terminal_service from "../terminal_service"
 import input_service from "../input_service"
 import seat from "../../protocols/seat"
+import session from "../../protocols/session"
+import lifecycle from "std/os/slop_os"
 import echo from "../../apps/echo"
 import disk_check from "../disk_check"
 import storage_manager from "../storage_manager"
@@ -118,6 +120,11 @@ SYSTEM_GENERATIONS : u64 : 1000
 // The timer a lost system volume is opened again on, and how soon after it's tried and fails
 SYSTEM_RETRY_KEY : u64 : 5000
 SYSTEM_RETRY : u64 : 100_000_000
+// The terminal service's session channel (decisions/0139)
+SESSION_KEY : u64 : 6000
+// How long a program has to answer a Ping before it's listed as not responding, and to end once it's asked to stop
+PING_WAIT : u64 : 250_000_000
+STOP_GRACE : u64 : 2_000_000_000
 RESTARTS : u32 : 3
 // How long a restart waits for its service's budget to come back, and what it leaves for the launch itself
 RESTART_BUDGET_WAIT : u64 : 2_000_000_000
@@ -217,6 +224,8 @@ TerminalGrants :: struct {
     input : os.Channel[connector.Connector]?,
     framebuffer : slop_os.Memory?,
     framebuffer_layout : slop_os.Memory?,
+    programs : os.Channel[session.Session]?,
+    last_panic : slop_os.Memory?,
     clients : os.Listener[terminal.Terminal],
 }
 
@@ -341,6 +350,11 @@ Started :: struct {
     done : bool,
     // The code it last ended with
     code : u64,
+    // The supervisor's end of its lifecycle channel, NONE without; whether it's one of the console's programs, which the
+    // trusted path lists and may end; and whether it was ended so, and isn't started again
+    lifecycle : slop_os.Channel,
+    console : bool,
+    ended_on_request : bool,
 }
 
 // The most services a boot's assessment notes missing besides those that ended for good
@@ -377,9 +391,15 @@ Supervisor :: struct {
     clock_page : slop_os.Memory,
     clock_setting : slop_os.Channel,
     clock_setting_port : slop_os.Port,
-    // The budget of the program launched last, and its ring, until its entry takes them
+    // The budget of the program launched last, its ring and its lifecycle channel, until its entry takes them
     launched_budget : slop_os.MemoryBudget,
     launched_ring : slop_os.Memory,
+    launched_lifecycle : slop_os.Channel,
+    // Its end of the terminal service's session channel, NONE without, and the boot before's panic record, for the
+    // terminal service to show
+    session_end : slop_os.Channel,
+    serving_session : bool,
+    last_panic : slop_os.Memory?,
     // Its end of the events service's listener, NONE without
     events_end : slop_os.Channel,
     events_port : slop_os.Port,
@@ -494,7 +514,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     fat_server_module: slop_os.Memory?, container_service_module: slop_os.Memory?, volume_server_module: slop_os.Memory?,
     command_line: slop_os.Memory?, scheduler: os.Channel[scheduler_protocol.Scheduler]?, clock_module: slop_os.Memory?,
     events_module: slop_os.Memory?, bundle_store_module: slop_os.Memory?, config_module: slop_os.Memory?, system: slop_os.Memory,
-    update_module: slop_os.Memory?) -> int {
+    update_module: slop_os.Memory?, last_panic: slop_os.Memory?) -> int {
     startup :: slop_os.startup_block()
     // The system configuration, which the root task checked, checked again
     records :: match service_kit.read_records(startup, system) {
@@ -511,7 +531,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     boot_records^ = records^
     supervisor := Supervisor.{block = startup, records = records, boot_records = boot_records, overrides_end = NONE, substitutions_end = NONE, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, terminal = NOWHERE, input = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
-        events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)}
+        events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE),
+        launched_lifecycle = NONE, session_end = NONE, last_panic = last_panic}
     supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, hello = hello_module, terminal = terminal_module, echo = echo_module, input = input_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
@@ -746,6 +767,7 @@ wait_and_handle_until :: fn(supervisor: ptr[mut Supervisor], deadline: u64) {
     for i in 0..<supervisor.connector_count {
         serve_connector(supervisor, i)
     }
+    serve_session(supervisor)
     // Opened again once the storage manager serves it again, tried again a little later until then
     if supervisor.system_lost && !supervisor.system_opening && is_running(supervisor, supervisor.storage_slot) {
         supervisor.system_lost = false
@@ -773,6 +795,10 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
     }
     retire_ring(supervisor, entry.ring)
     entry.ring = cast[slop_os.Memory](slop_os.NO_HANDLE)
+    if entry.lifecycle != NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](entry.lifecycle))
+        entry.lifecycle = NONE
+    }
     tell_root(supervisor, .Ended(report_of(entry.name, code)))
     if cast[slop_os.Handle](entry.listener) != slop_os.NO_HANDLE {
         _ = slop_os.handle_close(cast[slop_os.Handle](entry.listener))
@@ -792,7 +818,7 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
         }
         case None => {}
     }
-    if code == 0 || not_restarted {
+    if code == 0 || not_restarted || entry.ended_on_request {
         entry.done = true
         return void
     }
@@ -912,8 +938,10 @@ place :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process: s
     entry.process = process
     entry.budget = take_budget(supervisor)
     entry.ring = take_ring(supervisor)
+    entry.lifecycle = take_lifecycle(supervisor)
     entry.running = true
     entry.done = false
+    entry.ended_on_request = false
     tell_root(supervisor, .Started(report_of(name, 0)))
     return again
 }
@@ -1763,6 +1791,18 @@ options_for :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.LaunchOpt
             case Error(error) => {}
         }
     }
+    // A lifecycle channel (decisions/0139), which base's runtime serves in the program, the supervisor keeping its end
+    if supervisor.launched_lifecycle != NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.launched_lifecycle))
+        supervisor.launched_lifecycle = NONE
+    }
+    match lifecycle.make(supervisor.block.budget) {
+        case Some(pair) => {
+            supervisor.launched_lifecycle = pair.a
+            options.lifecycle = pair.b
+        }
+        case None => {}
+    }
     // A ring for its records, which the supervisor keeps, giving the program a handle to it that doesn't own it
     if supervisor.events_end != NONE {
         match events.open(supervisor.events_end, supervisor.events_port, name) {
@@ -1832,6 +1872,13 @@ adopt_rings :: fn(supervisor: ptr[mut Supervisor], events_slot: usize) {
             }
         }
     }
+}
+
+// The lifecycle channel kept for the program launched last, for its entry.
+take_lifecycle :: fn(supervisor: ptr[mut Supervisor]) -> slop_os.Channel {
+    end :: supervisor.launched_lifecycle
+    supervisor.launched_lifecycle = NONE
+    return end
 }
 
 // The ring kept for the program launched last, for its entry.
@@ -2178,11 +2225,11 @@ LENDING_LOW :: 6
 LENDING_BACKLOG :: 4
 
 /*
- * test_lending, on a boot disk: connections to a directory of the system volume, one lent the terminal service's CPU budget, of a
+ * test_lending, on a boot disk: connections to a directory of the system volume, one lent echo's CPU budget (the trusted path's is never lent), of a
  * high priority, and LENDING_LOW lent hello's, of the default's. Through the first of those, a change and a Sync, which
  * keeps the volume server committing; behind it, LENDING_BACKLOG requests through each of them; then two through the
  * high one, sent at the supervisor's priority, no higher than the volume server's, so on one CPU it doesn't take them as
- * they come; then the answers ahead of them waited for and counted on the terminal service's budget, so the server, of a lower
+ * they come; then the answers ahead of them waited for and counted on echo's budget, so the server, of a lower
  * priority, doesn't go on answering before they're counted. Served by priority, both are
  * answered next, ahead of every backlog; taking connections in turn, as the server would without loans, the second
  * would wait for one of each of the others, and serving each queue whole, for all of them.
@@ -2193,7 +2240,7 @@ check_lending :: fn(supervisor: ptr[mut Supervisor]) {
     }
     // The high one first, so taking turns would come to it last
     high :: system_directory(supervisor, "lending") or_return void
-    high_budget :: scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, "terminal") or_return void
+    high_budget :: scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, "echo") or_return void
     if !lend(supervisor, high, high_budget) {
         log_line.write(supervisor.log, "supervisor: test_lending: the volume server took no loan")
         return void
@@ -2210,8 +2257,8 @@ check_lending :: fn(supervisor: ptr[mut Supervisor]) {
         lows[i] = low.end
         low_ports[i] = os.port_for(supervisor.block.budget, low.end) or_return void
     }
-    // For counting, at the terminal service's priority, above the volume server's own
-    mine :: scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, "terminal") or_return void
+    // For counting, at echo's priority, above the volume server's own
+    mine :: scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, "echo") or_return void
     sent : u64[LENDING_LOW]
     for i in 0..<LENDING_LOW {
         count :: if i == 0 { LENDING_BACKLOG + 2 } else { LENDING_BACKLOG }
@@ -2244,7 +2291,7 @@ check_lending :: fn(supervisor: ptr[mut Supervisor]) {
             case _ => continue
         }
     }
-    // The low ones' answered before it, counted still on the terminal service's budget, so the server doesn't answer more meanwhile
+    // The low ones' answered before it, counted still on echo's budget, so the server doesn't answer more meanwhile
     answered : u64[LENDING_LOW]
     ahead := cast[u64](0)
     for i in 0..<LENDING_LOW {
@@ -2275,7 +2322,7 @@ check_lending :: fn(supervisor: ptr[mut Supervisor]) {
     }
     // The change and the Sync, and perhaps one more the server had started on
     if ahead <= 3 && total == LENDING_LOW * LENDING_BACKLOG + 2 {
-        log_line.write(supervisor.log, "supervisor: test_lending: a request lent the terminal service's budget was answered ahead of the backlogs lent hello's")
+        log_line.write(supervisor.log, "supervisor: test_lending: a request lent echo's budget was answered ahead of the backlogs lent hello's")
     }
     else {
         log_line.write(supervisor.log, "supervisor: test_lending: % of % requests lent hello's budget were answered first", ahead, total)
@@ -2921,6 +2968,32 @@ start_terminal :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     pair :: os.channel_for[terminal.Terminal](supervisor.block.budget, 0) or_return void
     grants := TerminalGrants.{log = duplicate_log(supervisor), serial_line = connector_to(supervisor, supervisor.first_serial),
         input = connector_to(supervisor, supervisor.input), clients = os.Listener[terminal.Terminal].{end = pair.a}}
+    // Its session channel, the last one's gone with it, and the boot before's panic record
+    if supervisor.session_end != NONE {
+        _ = slop_os.port_unbind(supervisor.port, SESSION_KEY)
+        _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.session_end))
+        supervisor.session_end = NONE
+    }
+    match os.channel_for[session.Session](supervisor.block.budget, 0) {
+        case Ok(session_pair) => {
+            signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+            if slop_os.port_bind(supervisor.port, cast[slop_os.Handle](session_pair.a), signals, SESSION_KEY, .Persistent) is_ok {
+                supervisor.session_end = session_pair.a
+                grants.programs = os.Channel[session.Session].{end = session_pair.b}
+            }
+        }
+        case Error(error) => {}
+    }
+    match supervisor.last_panic {
+        case Some(record) => {
+            rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+            match slop_os.handle_duplicate(cast[slop_os.Handle](record), rights) {
+                case Ok(copy) => grants.last_panic = cast[slop_os.Memory](copy)
+                case Error(error) => {}
+            }
+        }
+        case None => {}
+    }
     // The framebuffer, claimed again each time, since what it held died with the last terminal service
     match request_framebuffer(supervisor) {
         case Some(framebuffer) => {
@@ -2952,7 +3025,7 @@ start_echo :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     console :: connector_to(supervisor, supervisor.terminal) or_return void
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "echo"), service.budget, echo.main,
         EchoGrants.{console = console}, options_for(supervisor, service.name)) {
-        case Ok(launched) => _ = place(supervisor, "echo", kept(supervisor, launched), again)
+        case Ok(launched) => mark_console(supervisor, place(supervisor, "echo", kept(supervisor, launched), again))
         case Error(error) => failed(supervisor, service.name, error)
     }
 }
@@ -2971,7 +3044,7 @@ start_hello :: fn(supervisor: ptr[mut Supervisor], again: usize) {
             if again == NOWHERE {
                 log_line.write(supervisor.log, "supervisor: perf: program_start %", (slop_os.clock_monotonic() or_else 0) - started)
             }
-            _ = place(supervisor, "hello", kept(supervisor, launched), again)
+            mark_console(supervisor, place(supervisor, "hello", kept(supervisor, launched), again))
         }
         case Error(error) => failed(supervisor, service.name, error)
     }
@@ -3247,6 +3320,156 @@ request_clock :: fn(supervisor: ptr[mut Supervisor]) -> platform.RealTimeClock? 
     }
 }
 
+// What's started at slot is one of the console's programs, which the trusted path lists and may end.
+mark_console :: fn(supervisor: ptr[mut Supervisor], slot: usize) {
+    if slot < supervisor.started.count {
+        supervisor.started[slot].console = true
+    }
+}
+
+/*
+ * The terminal service's session requests (decisions/0139), each answered: List with the console's programs running,
+ * each pinged on its lifecycle channel; End by asking the program to stop, then killing it after a grace period. Not
+ * while a request is being served, since ending one waits on the port, which comes back here.
+ */
+serve_session :: fn(supervisor: ptr[mut Supervisor]) {
+    end :: supervisor.session_end
+    if end == NONE || supervisor.serving_session {
+        return void
+    }
+    supervisor.serving_session = true
+    defer supervisor.serving_session = false
+    into := os.Incoming.{}
+    loop {
+        match session.receive_request(end, supervisor.port, &into, false) {
+            case Received => {}
+            case Empty => return void
+            case Unsupported => {
+                _ = session.answer_unsupported(end, supervisor.port)
+                continue
+            }
+            case Failed(error) => {
+                _ = slop_os.port_unbind(supervisor.port, SESSION_KEY)
+                _ = slop_os.handle_close(cast[slop_os.Handle](end))
+                supervisor.session_end = NONE
+                return void
+            }
+            case _ => continue
+        }
+        out := os.Outgoing.{}
+        response :: os.begin[session.Response](&out)
+        match os.message_of[session.Request](&into)^ {
+            case List => {
+                programs : session.Program[session.MAX_PROGRAMS]
+                count :: list_programs(supervisor, &programs)
+                response^ = .Programs(os.append(&out, programs[0..<count]))
+            }
+            case End(index) => response^ = end_program(supervisor, cast[usize](index))
+            case Connect(connection) => {
+                _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
+                continue
+            }
+        }
+        _ = session.send_response(end, supervisor.port, &out)
+    }
+}
+
+// The console's programs that are running, into programs, each pinged: how many.
+list_programs :: fn(supervisor: ptr[mut Supervisor], programs: ptr[mut session.Program[session.MAX_PROGRAMS]]) -> usize {
+    count : usize = 0
+    for &entry, i in supervisor.started {
+        if i >= supervisor.started_count || count >= programs.count {
+            break
+        }
+        if !entry.console || !entry.running {
+            continue
+        }
+        program := session.Program.{index = cast[u32](i)}
+        name :: string_bytes(entry.name)
+        for byte, at in name {
+            if at < program.name.count {
+                program.name[at] = byte
+                program.name_bytes += 1
+            }
+        }
+        match slop_os.memory_budget_info(entry.budget) {
+            case Ok(info) => {
+                program.memory = info.used
+                program.memory_limit = info.limit
+            }
+            case Error(error) => {}
+        }
+        if entry.lifecycle != NONE {
+            // Answers left from before are dropped, so only this Ping's counts
+            loop {
+                stale :: lifecycle.read(entry.lifecycle) or_break
+            }
+            _ = lifecycle.ping(entry.lifecycle, cast[u32](i))
+        }
+        programs[count] = program
+        count += 1
+    }
+    // Each one's Pong, until all have answered or the wait's over
+    deadline :: (slop_os.clock_monotonic() or_else 0) + PING_WAIT
+    if count > programs.count {
+        return 0
+    }
+    loop {
+        waiting := false
+        for &program in programs[0..<count] {
+            if program.responding != 0 {
+                continue
+            }
+            index :: cast[usize](program.index)
+            if index >= supervisor.started.count {
+                continue
+            }
+            match lifecycle.read(supervisor.started[index].lifecycle) {
+                case Some(answer) => {
+                    if answer.answer == .Pong {
+                        program.responding = 1
+                    }
+                }
+                case None => waiting = true
+            }
+        }
+        if !waiting || (slop_os.clock_monotonic() or_else 0) >= deadline {
+            break
+        }
+        pause(supervisor, 10_000_000)
+    }
+    return count
+}
+
+/*
+ * The console's program at index asked to stop on its lifecycle channel, then killed if it hasn't ended once the grace
+ * period's over; either way not started again.
+ */
+end_program :: fn(supervisor: ptr[mut Supervisor], index: usize) -> session.Response {
+    if index >= supervisor.started_count || index >= supervisor.started.count || !supervisor.started[index].console {
+        return .Refused
+    }
+    if !supervisor.started[index].running {
+        return .Ended
+    }
+    supervisor.started[index].ended_on_request = true
+    name :: supervisor.started[index].name
+    log_line.write(supervisor.log, "supervisor: ending % on the trusted path's request", name)
+    if supervisor.started[index].lifecycle != NONE {
+        _ = lifecycle.stop(supervisor.started[index].lifecycle)
+    }
+    deadline :: (slop_os.clock_monotonic() or_else 0) + STOP_GRACE
+    loop {
+        wait_and_handle_until(supervisor, deadline)
+    }
+    while is_running(supervisor, index) && (slop_os.clock_monotonic() or_else 0) < deadline
+    if is_running(supervisor, index) {
+        log_line.write(supervisor.log, "supervisor: % didn't stop in time, so it's killed", name)
+        _ = slop_os.process_kill(supervisor.started[index].process)
+    }
+    return .Ended
+}
+
 // The first framebuffer, claimed from the platform service, made anew each time; or null if there's none.
 request_framebuffer :: fn(supervisor: ptr[mut Supervisor]) -> platform.Framebuffer? {
     if cast[slop_os.Handle](supervisor.platform_end) == slop_os.NO_HANDLE {
@@ -3320,7 +3543,7 @@ started :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process:
         return MAX_STARTED
     }
     supervisor.started[index] = Started.{name = name, process = process, running = true, listener = NONE, budget = take_budget(supervisor),
-        ring = take_ring(supervisor)}
+        ring = take_ring(supervisor), lifecycle = take_lifecycle(supervisor)}
     supervisor.started_count = index + 1
     return index
 }

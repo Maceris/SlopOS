@@ -3,7 +3,8 @@
  * the terminal's typed input, shows each key's text as it's typed, takes Backspace back a grapheme cluster, and answers
  * each line with "echo: " and the line, which it also logs; Ctrl-C drops the line. That's what the console service did
  * itself before the terminal service left line editing to programs. It reaches the terminal service through a
- * connector, dialed again if the service is started again.
+ * connector, dialed again if the service is started again. Asked to stop on its lifecycle channel (decisions/0139), it
+ * ends with 0.
  */
 package echo
 
@@ -13,9 +14,12 @@ import text_buffer from "std"
 import unicode from "std"
 import slop_os from "std/os"
 import terminal from "std/os/slop_os"
+import lifecycle from "std/os/slop_os"
 import connector from "../../protocols/connector"
 
 LINE_BYTES :: 256
+// The port key a stop's asked for on, above the terminal's binding
+STOP_KEY : u64 : 1
 USAGE_ENTER : u16 : 0x28
 USAGE_BACKSPACE : u16 : 0x2a
 
@@ -31,11 +35,16 @@ main :: fn(console: os.Channel[connector.Connector]) -> int {
     if !dial(&echo, console.end) {
         return 2
     }
+    _ = lifecycle.on_stop(echo.port, STOP_KEY)
     into := os.Incoming.{}
     loop {
         match terminal.receive_response(echo.end, echo.port, &into, false) {
             case Received => {}
             case Empty => {
+                if lifecycle.stop_requested() {
+                    runtime.log_info("stopping, as asked")
+                    return 0
+                }
                 packets : slop_os.Packet[4]
                 _ = slop_os.port_wait(echo.port, packets, slop_os.NO_DEADLINE)
                 continue

@@ -306,6 +306,9 @@ Unicode 17), the terminal service in the console service's place, the VT adapter
 console's reader until sessions.
 10a2 done 2026-11-01 (`decisions/0138`): the screen model and status line, the secure attention key's screen, the input
 service with keymaps and new keyboards accepted by a code, and the console drawn on the framebuffer too.
+10a3 done 2026-11-01 (`decisions/0139`): Hemera's runtime threads on SlopOS, the lifecycle channel served by the runtime
+with `Ping` and `Stop`, the secure attention key's screen listing the console's programs and ending them, the trusted
+path's CPU share, and the boot before's panic shown.
 
 Specs: RFC 9106 (Argon2), RFC 3394 or the AEAD for key wrapping, ECMA-48 (for the VT adapter only), the Unicode
 standard's East Asian Width and UAX #29 for terminal widths.
@@ -467,5 +470,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | Perf | done 2026-10-31 (`decisions/0097`, `0112`, `0127` to `0130`): benchmarks held to baselines, tickless idle, large pages, CPU loans in the storage servers |
 | R | planned 2026-10-29 (`decisions/0096`): R1 to R4 done 2026-10-30 (`0104` to `0106`, `0112`); R5 and R6 not started |
 | B | done 2026-10-31 (`decisions/0131` to `0135`): Hemera's UEFI target, SlopOS's bootloader, boot counting and recovery, ISOs through it, Limine and BIOS boot removed |
-| M10 | planned 2026-11-01 (`decisions/0136`), in four stages, 10a in four parts; 10a1 and 10a2 done (`0137`, `0138`) |
+| M10 | planned 2026-11-01 (`decisions/0136`), in four stages, 10a in four parts; 10a1 to 10a3 done (`0137` to `0139`) |
 | M11–M16, P, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |

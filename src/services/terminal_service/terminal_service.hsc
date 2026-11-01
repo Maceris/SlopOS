@@ -24,6 +24,7 @@ import unicode from "std"
 import terminal from "std/os/slop_os"
 import connector from "../../protocols/connector"
 import seat from "../../protocols/seat"
+import session from "../../protocols/session"
 import serial from "../../protocols/serial"
 import service_kit from "../../libraries/service_kit"
 import safe_text from "../../safe_text"
@@ -50,9 +51,15 @@ OUTPUT_BYTES :: 16384
 MAX_IN_FLIGHT : u32 : 2
 
 USAGE_C : u16 : 0x06
+USAGE_E : u16 : 0x08
 USAGE_ENTER : u16 : 0x28
 USAGE_ESCAPE : u16 : 0x29
 USAGE_DELETE : u16 : 0x4c
+USAGE_DOWN : u16 : 0x51
+USAGE_UP : u16 : 0x52
+// The panel's rows: where the list of programs starts
+PROGRAMS_ROW : u16 : 7
+PANIC_TEXT :: 160
 
 Service :: struct {
     log : slop_os.DebugLog,
@@ -75,6 +82,16 @@ Service :: struct {
     attention : bool,
     // A new keyboard's code, shown on the status line until it's typed, 0 for none
     waiting_code : u32,
+    // The session's programs, from whoever runs them (decisions/0139), and the one chosen on the panel
+    session_end : slop_os.Channel,
+    session_port : slop_os.Port,
+    programs : session.Program[session.MAX_PROGRAMS],
+    program_count : usize,
+    chosen : usize,
+    // The first line of the boot before's panic record, if it stopped for a fault, and whether the panel's shown it
+    panic : u8[PANIC_TEXT],
+    panic_count : usize,
+    panic_seen : bool,
     // Input waiting for the owner: the client that read first, and how many events its Read held asks for
     decoder : vt.Decoder,
     decoded : vt.Decoded,
@@ -83,7 +100,8 @@ Service :: struct {
 }
 
 main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?, input: os.Channel[connector.Connector]?,
-    framebuffer: slop_os.Memory?, framebuffer_layout: slop_os.Memory?, clients: os.Listener[terminal.Terminal]) -> int {
+    framebuffer: slop_os.Memory?, framebuffer_layout: slop_os.Memory?, programs: os.Channel[session.Session]?,
+    last_panic: slop_os.Memory?, clients: os.Listener[terminal.Terminal]) -> int {
     startup :: slop_os.startup_block()
     service := runtime.new(Service)
     service.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
@@ -91,9 +109,19 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
     service.seat_connector = NONE
     service.line_end = NONE
     service.seat_end = NONE
+    service.session_end = NONE
+    match programs {
+        case Some(found) => {
+            service.session_end = found.end
+            service.session_port = os.port_for(startup.budget, found.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+        }
+        case None => {}
+    }
+    keep_panic(service, last_panic)
     // Lines are written at the bottom, as a serial line's are, and scroll up
     service.screen.lines.row = PROGRAM_ROWS - 1
     screen.set_status(&service.screen, STATUS)
+    update_status(service)
     screen.mark_all(&service.screen.lines)
     match canvas_on(framebuffer, framebuffer_layout) {
         case Some(made) => {
@@ -494,6 +522,9 @@ update_status :: fn(service: ptr[mut Service]) {
         text_buffer.append_unsigned(&status, cast[u64](service.waiting_code))
         text_buffer.append(&status, " and Enter on it")
     }
+    else if service.panic_count > 0 && !service.panic_seen {
+        text_buffer.append(&status, " │ the boot before stopped: Ctrl+Alt+Delete")
+    }
     screen.set_status(&service.screen, text_buffer.as_string(&status))
     draw_status(service)
 }
@@ -525,16 +556,143 @@ enter_attention :: fn(service: ptr[mut Service]) {
         return void
     }
     service.attention = true
+    service.panic_seen = true
     runtime.log_info("secure attention")
     update_status(service)
+    list_programs(service)
+    service.chosen = 0
+    draw_panel(service)
+}
+
+/*
+ * The panel: what's waiting (nothing, until the powerbox), the boot before's panic if it stopped for one, and the
+ * console's programs with their memory, those that didn't answer a Ping marked, the chosen one inverse.
+ */
+draw_panel :: fn(service: ptr[mut Service]) {
     screen.show_panel(&service.screen, true)
     panel :: &service.screen.panel
     bold :: terminal.Style.{attributes = terminal.BOLD}
     plain :: terminal.Style.{}
+    chosen_style :: terminal.Style.{attributes = terminal.INVERSE}
     screen.write_at(panel, 1, 2, "Secure attention", bold)
     screen.write_at(panel, 3, 2, "Nothing is waiting for you: no prompt, and no one has logged in yet.", plain)
-    screen.write_at(panel, 5, 2, "Esc or Enter goes back.", plain)
+    if service.panic_count > 0 && service.panic_count <= service.panic.count {
+        screen.write_at(panel, 4, 2, "The boot before stopped for a fault: ", plain)
+        screen.write_at(panel, 5, 4, string_of(&service.panic[0], service.panic_count), plain)
+    }
+    if service.session_end == NONE {
+        screen.write_at(panel, PROGRAMS_ROW, 2, "No programs to show.", plain)
+    }
+    else {
+        screen.write_at(panel, PROGRAMS_ROW, 2, if service.program_count == 0 { "No programs running on the console." }
+            else { "Programs on the console:" }, plain)
+    }
+    for &program, i in service.programs {
+        if i >= service.program_count {
+            break
+        }
+        storage : u8[96]
+        line := text_buffer.make(storage)
+        text_buffer.append(&line, session.name_of(program))
+        loop {
+            text_buffer.append_byte(&line, cast[u8](' '))
+        }
+        while text_buffer.as_string(&line).count < 18
+        text_buffer.append_unsigned(&line, program.memory / 1024)
+        text_buffer.append(&line, " KiB of ")
+        text_buffer.append_unsigned(&line, program.memory_limit / 1024)
+        text_buffer.append(&line, " KiB")
+        if program.responding == 0 {
+            text_buffer.append(&line, "   not responding")
+        }
+        screen.write_at(panel, PROGRAMS_ROW + 1 + cast[u16](i), 4, text_buffer.as_string(&line), if i == service.chosen { chosen_style } else { plain })
+    }
+    help :: PROGRAMS_ROW + 2 + cast[u16](service.program_count)
+    screen.write_at(panel, help, 2, if service.program_count > 0 { "Up and Down choose, E ends the one chosen, Esc or Enter goes back." }
+        else { "Esc or Enter goes back." }, plain)
     redraw(service)
+}
+
+// The session's programs, asked for; none without a session channel, or if it doesn't answer.
+list_programs :: fn(service: ptr[mut Service]) {
+    service.program_count = 0
+    reply :: ask_session(service, .List) or_return void
+    into :: &reply
+    match os.message_of[session.Response](into)^ {
+        case Programs(given) => {
+            for program in os.items(into, given) {
+                if service.program_count < service.programs.count {
+                    service.programs[service.program_count] = program
+                    service.program_count += 1
+                }
+            }
+        }
+        case _ => {}
+    }
+}
+
+// The chosen program ended, and the list asked for again.
+end_chosen :: fn(service: ptr[mut Service]) {
+    if service.chosen >= service.program_count || service.chosen >= service.programs.count {
+        return void
+    }
+    program :: service.programs[service.chosen]
+    runtime.log_info("ending % on the console's request", session.name_of(&program))
+    _ = ask_session(service, .End(program.index))
+    list_programs(service)
+    if service.chosen >= service.program_count && service.chosen > 0 {
+        service.chosen = service.program_count - 1
+    }
+    draw_panel(service)
+}
+
+// request, sent on the session channel, and its answer waited for; null without one.
+ask_session :: fn(service: ptr[mut Service], request: session.Request) -> os.Incoming? {
+    if service.session_end == NONE {
+        return null
+    }
+    out := os.Outgoing.{}
+    os.begin[session.Request](&out)^ = request
+    if session.send_request(service.session_end, service.session_port, &out) != null {
+        return null
+    }
+    into := os.Incoming.{}
+    loop {
+        match session.receive_response(service.session_end, service.session_port, &into, true) {
+            case Received => return into
+            case Failed(error) => return null
+            case _ => continue
+        }
+    }
+}
+
+// The first line of the boot before's panic record, without where in the kernel, as the root task logs it.
+keep_panic :: fn(service: ptr[mut Service], last_panic: slop_os.Memory?) {
+    record :: last_panic or_return void
+    text :: service_kit.text_of(slop_os.startup_block(), record) or_return void
+    first := text
+    for character, i in text {
+        if character == '\n' {
+            first = text[0..<i]
+            break
+        }
+    }
+    for character, i in first {
+        end :: i + 4
+        if character == ' ' && end <= first.count && i < end {
+            if first[i..<end] == " at " {
+                first = first[0..<i]
+                break
+            }
+        }
+    }
+    for byte in string_bytes(first) {
+        if service.panic_count < service.panic.count {
+            service.panic[service.panic_count] = byte
+            service.panic_count += 1
+        }
+    }
+    runtime.log_info("showing the boot before's fault: %", first)
 }
 
 // Back from the secure attention key's screen: the program's rows drawn again from the screen model.
@@ -724,8 +882,22 @@ screen_keys :: fn(service: ptr[mut Service], first: usize) {
             enter_attention(service)
             continue
         }
-        if service.attention && (event.code == USAGE_ESCAPE || event.code == USAGE_ENTER) {
+        if !service.attention {
+            continue
+        }
+        if event.code == USAGE_ESCAPE || event.code == USAGE_ENTER {
             leave_attention(service)
+        }
+        else if event.code == USAGE_UP && service.chosen > 0 {
+            service.chosen -= 1
+            draw_panel(service)
+        }
+        else if event.code == USAGE_DOWN && service.chosen + 1 < service.program_count {
+            service.chosen += 1
+            draw_panel(service)
+        }
+        else if (event.code == USAGE_E || event.code == USAGE_DELETE) && event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 {
+            end_chosen(service)
         }
     }
     // What came with the key, or while its screen was up, is the trusted path's, and isn't kept

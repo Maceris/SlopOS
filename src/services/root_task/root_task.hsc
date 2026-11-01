@@ -85,6 +85,8 @@ SupervisorGrants :: struct {
     config_module : slop_os.Memory?,
     update_module : slop_os.Memory?,
     system : slop_os.Memory,
+    // The boot before's panic record's text, if it stopped for a fault, for the terminal service to show (decisions/0139)
+    last_panic : slop_os.Memory?,
 }
 
 // What the scheduler service is given (scheduler.main).
@@ -293,6 +295,15 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     match slop_os.handle_duplicate(cast[slop_os.Handle](command_line), module_rights) {
         case Ok(copy) => grants.command_line = cast[slop_os.Memory](copy)
         case Error(error) => {}
+    }
+    match find_module(block, boot_info.LAST_PANIC_MODULE) {
+        case Some(module) => {
+            match slop_os.handle_duplicate(cast[slop_os.Handle](module), module_rights) {
+                case Ok(copy) => grants.last_panic = cast[slop_os.Memory](copy)
+                case Error(error) => {}
+            }
+        }
+        case None => {}
     }
     match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, supervisor.main, grants,
         os.LaunchOptions.{cpu_budget = budget_for(&root, service.name), libraries = substitutes(&root)}) {

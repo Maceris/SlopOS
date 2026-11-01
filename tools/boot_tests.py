@@ -166,14 +166,14 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 52 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 54 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
-        "--expect-line=[user] scheduler: 3 budgets and the default split off the root's, 800000 of its 1000000 millionths of a CPU",
+        "--expect-line=[user] scheduler: 5 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
         "--expect-line=[user] process manager: started supervisor", "--expect-line=[user] process manager: started hello",
         "--expect-line=[user] hello: heap working, random numbers working",
         "--expect-line=[user] hello: the entropy service gave 32 random bytes", "--expect-line=[user] root task: the supervisor started hello",
-        "--expect-line=[user] platform: serving", "--expect-line=[user] root task: the supervisor started all 4 of its services",
+        "--expect-line=[user] platform: serving", "--expect-line=[user] root task: the supervisor started all 6 of its services",
         HEALTHY_LINE,
         "--expect-line=[info] root task ended with code 0"]),
     # The IOMMU the platform service found in the firmware tables, which the kernel identified
@@ -221,6 +221,13 @@ TESTS = [
         "--expect-line=[user] terminal: secure attention", "--expect-line=[user] terminal: secure attention ended",
         "--expect-console-line=  Secure attention", "--expect-console-line=echo: after attention",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # The secure attention key's screen lists the console's programs, each pinged on its lifecycle channel; E ends the
+    # one chosen, echo, which stops when its runtime tells it it's asked to, and isn't started again
+    ("ends a program from the secure attention key's screen, which asks it to stop", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_settle=6", "--console-input=\e[3;7~\pe\p\e",
+        "--expect-line=[user] supervisor: ending echo on the trusted path's request", "--expect-line=[user] echo: stopping, as asked",
+        "--expect-line=[user] supervisor: echo ended", "--expect-console-line=  Programs on the console:",
+        "--expect-line=[user] terminal: secure attention ended", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # A virtio keyboard boot.py types on through QEMU's machine protocol: keys as HID usages, typed by the terminal service's keymap
     ("types on a virtio keyboard into the console", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services", "--keyboard-input=Hi there, 42!",
@@ -361,7 +368,8 @@ TESTS = [
         "--expect-line=[info] resetting, the panic record kept",
         "--expect-line=[info] bootloader: the boot before stopped for a fault, its panic record kept as EFI/SlopOS/LAST_PANIC",
         "--expect-disk-text=assertion failed: test_panic_once",
-        "--expect-line=[user] root task: the boot before stopped for a fault: [fatal] assertion failed: test_panic_once"])),
+        "--expect-line=[user] root task: the boot before stopped for a fault: [fatal] assertion failed: test_panic_once",
+        "--expect-line=[user] terminal: showing the boot before's fault: [fatal] assertion failed: test_panic_once"])),
     # Its command line another word, so it isn't one that changes only services, which is applied live
     ("installs a staged generation, boots it, and makes it permanent once it's healthy", 7, with_before_qemu(BOOT_DISK_BASE, [
         "--stage-generation=test_exit test_services next_boot", "--boots=2",
@@ -402,7 +410,7 @@ TESTS = [
     # On one CPU, where requests wait for the volume server rather than it waiting for them
     ("serves a volume's clients by the priority of the CPU budgets they lend it", 7, with_before_qemu(
         one_cpu([argument.replace("test_services", "test_services test_lending") for argument in BOOT_DISK_BASE]), [
-        "--expect-line=[user] supervisor: test_lending: a request lent the terminal service's budget was answered ahead of the backlogs lent hello's"])),
+        "--expect-line=[user] supervisor: test_lending: a request lent echo's budget was answered ahead of the backlogs lent hello's"])),
     ("starts a disk's partition server again when it's killed, and serves its volumes through the new one", 7, with_before_qemu(
         [argument.replace("test_services", "test_services test_storage_restart") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] storage_manager: test_storage_restart: killing the partition server for disk 0",
@@ -410,7 +418,7 @@ TESTS = [
         "--expect-line=[user] storage_manager: restarted the partition server for disk 0"])),
     ("keeps the kernel's share of memory out of the root budget", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services kernel_reserve=24",
         "--expect-line=[info] memory: 24 MiB kept out of the root budget for the kernel's own",
-        "--expect-line=[user] root task: the supervisor started all 4 of its services"]),
+        "--expect-line=[user] root task: the supervisor started all 6 of its services"]),
     ("doesn't start the root task with no_root_task", 0, [WITH_PROGRAMS, "--command-line=test_exit no_root_task",
         "--expect-line=[info] boot memory reclaimed"]),
     ("reports a kernel fault", 1, ["--command-line=test_exit test_fault"]),

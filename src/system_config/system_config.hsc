@@ -43,6 +43,7 @@ import connector from "../protocols/connector"
 import links from "../protocols/links"
 import platform_protocol from "../protocols/platform"
 import supervision from "../protocols/supervision"
+import session from "../protocols/session"
 import test_channels from "../tests/test_channels"
 import test_control from "../tests/test_control"
 import test_devices from "../tests/test_devices"
@@ -110,6 +111,12 @@ DEFAULT_CPU :: CpuShare.{priority = 100, period_ns = 10_000_000, time_ns = 5_000
 
 // What talks to people runs first: a tenth of a CPU each, at a high priority
 INTERACTIVE_CPU :: CpuShare.{priority = 200, period_ns = 10_000_000, time_ns = 1_000_000}
+
+/*
+ * The trusted path, the input and terminal services (decisions/0097, 0139): above everything people run, so the secure
+ * attention key always answers; a tenth of a CPU each of their own, which they lend to no server
+ */
+TRUSTED_PATH_CPU :: CpuShare.{priority = 250, period_ns = 10_000_000, time_ns = 1_000_000}
 
 Service :: struct {
     // Its name, as the supervisor reports it, and the boot module it's started from
@@ -179,9 +186,9 @@ SERVICES :: Service.[
         entry = type_of(clock_service.main)},
     // The seat's keyboards, the console's terminal, and its reader until sessions (decisions/0136)
     Service.{name = "input", module = "input_service.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
-        entry = type_of(input_service.main), cpu = INTERACTIVE_CPU},
+        entry = type_of(input_service.main), cpu = TRUSTED_PATH_CPU},
     Service.{name = "terminal", module = "terminal_service.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
-        entry = type_of(terminal_service.main), cpu = INTERACTIVE_CPU},
+        entry = type_of(terminal_service.main), cpu = TRUSTED_PATH_CPU},
     Service.{name = "echo", module = "echo.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(echo.main), cpu = INTERACTIVE_CPU},
     Service.{name = "hello", module = "hello.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
@@ -229,7 +236,7 @@ SERVICES :: Service.[
         entry = type_of(virtio_input.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1052,
         class = platform_protocol.ANY_CLASS}, trusted_with_dma = true, cpu = INTERACTIVE_CPU},
     // QEMU's edu device, for the test that a driver that DMAs outside its domain is stopped: not trusted
-    Service.{name = "edu_dma", module = "edu_dma.elf", starter = .Supervisor, by_manager = true, budget = 1 * MIB,
+    Service.{name = "edu_dma", module = "edu_dma.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(edu_dma.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1234, device = 0x11e8,
         class = platform_protocol.ANY_CLASS}, trusted_with_dma = false},
 ]
@@ -257,8 +264,9 @@ same_test_entries :: fn() -> bool {
 // What the root task serves itself: the supervisor's reports.
 ROOT_TASK_SERVES :: type.[os.Listener[supervision.Supervision]]
 
-// What the supervisor serves itself: connectors, which dial what it started (decisions/0077).
-SUPERVISOR_SERVES :: type.[os.Listener[connector.Connector]]
+// What the supervisor serves itself: connectors, which dial what it started (decisions/0077), and the session of the
+// console's programs, to the terminal service (decisions/0139).
+SUPERVISOR_SERVES :: type.[os.Listener[connector.Connector], os.Listener[session.Session]]
 
 // What the storage manager serves itself: each volume server's stored links, on a connection it makes for each (roadmap 8f).
 STORAGE_MANAGER_SERVES :: type.[os.Listener[links.Links]]

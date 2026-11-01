@@ -121,7 +121,7 @@ of its own with a memory budget split off its starter's, which owns it:
 | `platform` | the root task, through the manager | `log`, `platform`, `firmware`, `clients: Listener[Platform]`, `command_line?` | Finds the PCIe host bridge in the firmware tables, numbers its buses and places its BARs where firmware didn't, and gives each device to the supervisor once (below) |
 | `supervisor` | the root task, through the manager | `log`, `manager`, `root: Channel[Supervision]`, `hello_module`, `platform_service: Channel[Platform]?`, `entropy_service: Channel[Entropy]?`, each driver's module, `command_line?` | Starts the services `system_config` gives it with `os.launch`, and a driver for each device it claims from the platform service, owns them, serves the connectors they're reached through, restarts a driver that crashes or is killed (below), and tells the root task as each starts and ends, and once all have |
 | `input` | the supervisor, through the manager, once the drivers have started | `log`, `keyboard0` to `keyboard3: Channel[Connector]?`, `clients: Listener[Seat]`, `command_line?` | The seat's keyboards: what they type, through a keymap, for the terminal service, the secure attention key first, and a new keyboard only once its code is typed (below, `0138`) |
-| `terminal` | the supervisor, through the manager, after the input service | `log`, `serial_line: Channel[Connector]?`, `input: Channel[Connector]?`, `framebuffer?`, `framebuffer_layout?`, `clients: Listener[Terminal]` | The console's terminal: its clients' output on the first serial line through the VT adapter and on the framebuffer, and what's typed there or through the input service as typed input for the client that reads first (below, `0136`, `0138`) |
+| `terminal` | the supervisor, through the manager, after the input service | `log`, `serial_line: Channel[Connector]?`, `input: Channel[Connector]?`, `framebuffer?`, `framebuffer_layout?`, `programs: Channel[Session]?`, `last_panic?`, `clients: Listener[Terminal]` | The console's terminal: its clients' output on the first serial line through the VT adapter and on the framebuffer, and what's typed there or through the input service as typed input for the client that reads first (below, `0136`, `0138`) |
 | `echo` | the supervisor, through the manager, after the terminal service | `console: Channel[Connector]` | The console's reader until sessions: shows what's typed, and answers each line with `echo: ` and the line (below) |
 | `hello` | the supervisor, through the manager | `log?`, `manager?`, `console: Channel[Connector]?` | Reports that its heap and random numbers work, in its debug log and on the console, and given a connection to the manager, that it's still running once the manager is gone |
 | `virtio_rng` | the supervisor, through the manager, for each modern virtio entropy device | its device's bundle (below), `entropy_service: Channel[Entropy]?` | Offers the device's bytes to the entropy service as a source, on a channel of the `rng` protocol |
@@ -181,6 +181,13 @@ address space, and sends the manager a `LOAD`, each field's handle labeled with 
 protocol, an optional's `None` left out. The executable goes with `RIGHT_MEMORY_EXECUTE` where the caller's handle has
 it, so its code is mapped from it, shared. The program is given each library its launcher holds, `library:<file>`,
 except those `LaunchOptions.libraries` names, which it's given instead (`0121`).
+
+**The lifecycle channel** (`0139`, `std/os/slop_os`'s `lifecycle`): `LaunchOptions.lifecycle` gives the program its
+end of a channel, as the grant `lifecycle`, the launcher keeping the other. Hemera's runtime serves it on a thread of
+its own, started before `main` on a 16 KiB stack: `Ping` is answered with `Pong` and its sequence whatever `main` is
+doing, and `Stop` with `Stopping`, after which `lifecycle.stop_requested()` is true and a port the program asked with
+`lifecycle.on_stop` gets a `User` packet. Messages are 8 bytes, a kind and a sequence. The supervisor gives every
+program it launches one.
 
 **The process manager's protocol** (`std/os/slop_os/process_manager`), generated (`0071`), on channels with 4 KiB
 rings (`RING_BYTES`):
@@ -250,7 +257,13 @@ keyboard's code while one waits); programs have the 23 rows below it, which on t
 scroll (DECSTBM), the status line drawn between a saved and a restored cursor. The **secure attention key**,
 Ctrl+Alt+Delete (from the input service, or on the serial line as a terminal sends it, CSI 3;7~), brings up its own
 screen over the program's, which every key goes to and none reaches a program, until Esc or Enter leaves it and the
-program's rows are drawn again from the model. With a framebuffer (`0138`), the same console is drawn there too
+program's rows are drawn again from the model. That screen (`0139`) shows the boot before's panic, if it stopped for
+one (the status line says so until it's been seen), and the console's programs from the `session` protocol
+(`src/protocols/session`), which the supervisor serves until sessions: `List` gives each running one's name, memory in
+use and budget, and whether it answered a `Ping` on its lifecycle channel within 250 ms, those that didn't marked "not
+responding"; Up and Down choose one, and E or Delete sends `End`, which asks it to `Stop`, kills it if it hasn't ended
+2 s later, and doesn't start it again. The input and terminal services run on the trusted path's CPU share, priority
+250, which they lend to nothing. With a framebuffer (`0138`), the same console is drawn there too
 (`src/glyph_screen`): each cell's glyph from Spleen's PSF fonts (`src/psf2`: 12×24, or 8×16 where 80 by 24 of those
 don't fit), in its style's colours, the grid centered, only rows that changed drawn again. The banner,
 `SlopOS console`, is shown on each serial line dialed; a serial line or the input service that goes is dialed again. **echo** (`src/apps/echo`) reads the console's input: it shows each key's text as typed, takes
