@@ -129,7 +129,9 @@ write_manifest :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.P
 add_kernel :: fn() {
     kernel := compiler.command_line_options()
     kernel.name = "kernel"
-    kernel.root = "../boot/limine"
+    // Booted by Limine, or by SlopOS's own bootloader (boot=slopos, roadmap B2, decisions/0133)
+    boot :: compiler.target_setting("boot", default = "limine")
+    kernel.root = if boot == "slopos" { "../boot/slopos" } else { "../boot/limine" }
     kernel.entry = "kernel_entry"
     kernel.output_path = compiler.target_setting("kernel_output", default = "kernel.elf")
     kernel.target_options.os = .None
@@ -140,7 +142,7 @@ add_kernel :: fn() {
         kernel.target_options.stack_check_failure = .Morestack
     }
     kernel.target_options.cpu_features = "-mmx,-sse,-sse2,-avx,-avx2,+soft-float"
-    kernel.target_options.linker_script = "../boot/limine/x86_64.ld"
+    kernel.target_options.linker_script = if boot == "slopos" { "../boot/slopos/x86_64.ld" } else { "../boot/limine/x86_64.ld" }
     if compiler.target_setting("arch", default = "x86_64") == "aarch64" {
         kernel.target_options.architecture = .arm64
         kernel.target_options.cpu_features = "-fp-armv8,-neon"

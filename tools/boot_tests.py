@@ -28,6 +28,8 @@ BOOT = ROOT / "tools" / "boot.py"
 # SlopOS's programs, built once for each architecture, carried as modules by the tests whose arguments have WITH_PROGRAMS
 PROGRAMS = Path()
 PROGRAMS_AARCH64 = Path()
+# The kernel built for SlopOS's own bootloader (boot=slopos), which tests with --bootloader boot (roadmap B2)
+BOOTLOADER_KERNEL = Path()
 WITH_PROGRAMS = "<programs>"
 # The image builder, built once, for the tests whose arguments have WITH_IMAGE_BUILDER (decisions/0088)
 IMAGE_BUILDER = Path()
@@ -280,6 +282,10 @@ TESTS = [
         "--expect-line=[user] root task: booted the recovery generation",
         "--expect-line=[user] supervisor: recovery: the boot set, the drivers and the console only",
         "--expect-line=[user] console: serving", HEALTHY_LINE]),
+    # SlopOS's own bootloader (roadmap B2, decisions/0133), on one CPU until it starts the others
+    ("boots a disk through SlopOS's own bootloader, on one CPU", 7, with_before_qemu(one_cpu(BOOT_DISK_ARGUMENTS), [
+        "--bootloader", "--expect-line=[info] bootloader: booting generation 1",
+        "--expect-line=[boot] SlopOS, booted by SlopOS's bootloader (UEFI)"])),
     # Its command line another word, so it isn't one that changes only services, which is applied live
     ("installs a staged generation, boots it, and makes it permanent once it's healthy", 7, with_before_qemu(BOOT_DISK_ARGUMENTS, [
         "--stage-generation=test_exit test_services next_boot", "--boots=2",
@@ -412,7 +418,9 @@ MORESTACK_TESTS = [
 # Every test again on AArch64 (tools/boot.py --arch aarch64, always through UEFI), but those that can't apply there:
 # BIOS, x86-64's baseline, and the NMI, which AArch64 has no counterpart for yet (knowledge/decisions/0065)
 AARCH64_LEFT_OUT = {"boots and halts (BIOS)", "refuses a CPU below x86-64-v3", "resumes after an NMI",
-                    "boots from a disk the image builder made, through UEFI"}
+                    "boots from a disk the image builder made, through UEFI",
+                    # Until the bootloader's AArch64 part (B2)
+                    "boots a disk through SlopOS's own bootloader, on one CPU"}
 AARCH64_NAMES = {
     "boots and halts (UEFI)": "boots and halts",
     "routes a device's interrupts through the I/O APIC": "routes a device's interrupts through the GIC",
@@ -439,13 +447,13 @@ AARCH64_MORESTACK_TESTS = aarch64_tests(MORESTACK_TESTS)[:-1]
 FAILED_BUILD_LOG = ROOT / "build" / "failed_kernel_build.log"
 
 
-def build_kernel(output: Path, stack_check: str = "trap", architecture: str = "x86_64") -> bool:
+def build_kernel(output: Path, stack_check: str = "trap", architecture: str = "x86_64", boot: str = "limine") -> bool:
     """
     Builds the kernel through the build package, checks and all. If it fails, everything the compiler
     wrote, with its exit code, is printed and kept in FAILED_BUILD_LOG (hemera-feedback.md's build
     failure seen once, which needs its output to be looked into).
     """
-    command = ["hemera", f"--setting=targets=kernel,stack_check={stack_check},kernel_output={output},arch={architecture}",
+    command = ["hemera", f"--setting=targets=kernel,stack_check={stack_check},kernel_output={output},arch={architecture},boot={boot}",
                str(ROOT / "src" / "build")]
     if os.environ.get("HEMERA_INSTALL"):
         command.insert(1, f"--install-path={os.environ['HEMERA_INSTALL']}")
@@ -482,11 +490,15 @@ def build_programs(output: Path, architecture: str = "x86_64", robustness: bool 
 
 
 def main() -> int:
-    global PROGRAMS, PROGRAMS_AARCH64, IMAGE_BUILDER
+    global PROGRAMS, PROGRAMS_AARCH64, IMAGE_BUILDER, BOOTLOADER_KERNEL
     with tempfile.TemporaryDirectory(prefix="slopos-boot-tests-") as temporary:
         kernel = Path(temporary) / "kernel.elf"
         if not build_kernel(kernel):
             print("FAILED: the kernel doesn't build")
+            return 1
+        BOOTLOADER_KERNEL = Path(temporary) / "kernel_bootloader.elf"
+        if not build_kernel(BOOTLOADER_KERNEL, boot="slopos"):
+            print("FAILED: the kernel doesn't build for SlopOS's bootloader")
             return 1
         PROGRAMS = Path(temporary) / "programs"
         if not build_programs(PROGRAMS):
@@ -573,7 +585,8 @@ def run_tests(kernel: Path, tests: list, more: list = []) -> int:
         programs = PROGRAMS_AARCH64 if "--arch=aarch64" in more else PROGRAMS
         arguments = more + [f"--programs={programs}" if argument == WITH_PROGRAMS else
                             f"--image-builder={IMAGE_BUILDER}" if argument == WITH_IMAGE_BUILDER else argument for argument in arguments]
-        result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", "--timeout=60", f"--expect={expected}",
+        booted = BOOTLOADER_KERNEL if "--bootloader" in arguments else kernel
+        result = subprocess.run([sys.executable, str(BOOT), f"--kernel={booted}", "--timeout=60", f"--expect={expected}",
                                  *arguments], capture_output=True, text=True)
         passed = result.returncode == 0
         print(f"{'passed' if passed else 'FAILED'}: {name}")

@@ -134,9 +134,10 @@ def build_kernel(package: Path, linker_script: Path, output: Path) -> None:
     run_hemera([*KERNEL_FLAGS, f"--linker-script={linker_script}", f"--output={output}", str(package)], str(package))
 
 
-def build_slopos_kernel(output: Path, architecture: str = "x86_64") -> None:
-    """Builds SlopOS's kernel through its build package, checks and all."""
-    run_hemera([f"--setting=targets=kernel,kernel_output={output},arch={architecture}", str(BUILD_PACKAGE)], "SlopOS's kernel")
+def build_slopos_kernel(output: Path, architecture: str = "x86_64", boot: str = "limine") -> None:
+    """Builds SlopOS's kernel through its build package, checks and all, for Limine or SlopOS's own bootloader (boot)."""
+    run_hemera([f"--setting=targets=kernel,kernel_output={output},arch={architecture},boot={boot}", str(BUILD_PACKAGE)],
+               "SlopOS's kernel")
 
 
 def build_slopos_tools(output: Path) -> None:
@@ -538,7 +539,7 @@ SEALED_PASSPHRASE = "slopos test passphrase"
 
 def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path, image_builder: Path, folder: Path,
                    command_line: str, kaslr: bool, mark: str, staged: str | None = None, boot_recovery: bool = False,
-                   staged_next: Path | None = None) -> None:
+                   staged_next: Path | None = None, bootloader: Path | None = None) -> None:
     """
     A disk that boots kernel through Limine, from BIOS or UEFI, made by the image builder: Limine, the kernel and the
     programs on its EFI system partition, as make_image puts them on the ISO, but only the boot set loaded by Limine,
@@ -552,8 +553,9 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], limine: Path,
     for program in programs:
         shutil.copy(program, esp / "boot" / "modules" / program.name)
     shutil.copy(limine / "limine-bios.sys", esp / "boot" / "limine" / "limine-bios.sys")
+    # SlopOS's own bootloader as the firmware's default boot file, with --bootloader (roadmap B2, decisions/0133); Limine's otherwise
     for name in ["BOOTX64.EFI", "BOOTAA64.EFI"]:
-        shutil.copy(limine / name, esp / "EFI" / "BOOT" / name)
+        shutil.copy(bootloader if bootloader is not None else limine / name, esp / "EFI" / "BOOT" / name)
     for name, data in ESP_FILES:
         (esp / "EFI" / "SlopOS" / name).write_bytes(data)
     system = folder / "boot_system"
@@ -673,6 +675,9 @@ def main() -> int:
     parser.add_argument("--stage-next-hello", action="store_true",
                         help="with --stage-generation: generation 2's store root has hello's next build (hello_next.elf) as hello's "
                              "bundle, so it changes only a service, which the supervisor applies live (decisions/0126)")
+    parser.add_argument("--bootloader", action="store_true",
+                        help="with --boot-disk: boot through SlopOS's own bootloader (src/uefi/bootloader) rather than Limine, the "
+                             "kernel built for it (boot=slopos), by UEFI (roadmap B2, decisions/0133)")
     parser.add_argument("--efi",
                         help="boot a UEFI program of SlopOS's build (src/uefi), NAME.efi, by itself under the firmware, rather than "
                              "the kernel: as EFI/BOOT/BOOTX64.EFI (or BOOTAA64.EFI) on a FAT drive; turning the machine off is "
@@ -694,7 +699,7 @@ def main() -> int:
         if kernel is None:
             kernel = folder / "kernel.elf"
             if arguments.package is None:
-                build_slopos_kernel(kernel, arguments.arch)
+                build_slopos_kernel(kernel, arguments.arch, "slopos" if arguments.bootloader else "limine")
             elif arguments.linker_script is None:
                 parser.error("--package needs --linker-script")
             else:
@@ -729,7 +734,8 @@ def main() -> int:
                 image_builder = next((folder / "tools").glob("image_builder*"))
             make_boot_disk(disk, kernel.resolve(), [program.resolve() for program in programs], limine, image_builder.resolve(), folder,
                            command_line, not arguments.no_kaslr, arguments.disk or "", arguments.stage_generation, arguments.boot_recovery,
-                           (programs_folder / "hello_next.elf").resolve() if arguments.stage_next_hello and programs_folder is not None else None)
+                           (programs_folder / "hello_next.elf").resolve() if arguments.stage_next_hello and programs_folder is not None else None,
+                           (programs_folder / "bootloader.efi").resolve() if arguments.bootloader and programs_folder is not None else None)
             extra += ["-drive", f"file={disk},if=none,id=disk,format=raw",
                       "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on,bootindex=0"]
         elif arguments.disk is not None:
@@ -746,7 +752,7 @@ def main() -> int:
         if aarch64:
             code = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra, not arguments.no_iommu)
         else:
-            code = run(image, qemu, serial, arguments.timeout, arguments.uefi, arguments.cpu, extra)
+            code = run(image, qemu, serial, arguments.timeout, arguments.uefi or arguments.bootloader, arguments.cpu, extra)
         if console is not None:
             console.thread.join(timeout=5)
         output = serial.read_text(errors="replace") if serial.exists() else ""
@@ -757,7 +763,7 @@ def main() -> int:
             if aarch64:
                 again = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra, not arguments.no_iommu)
             else:
-                again = run(image, qemu, serial, arguments.timeout, arguments.uefi, arguments.cpu, extra)
+                again = run(image, qemu, serial, arguments.timeout, arguments.uefi or arguments.bootloader, arguments.cpu, extra)
             later.append((boot, again, serial.read_text(errors="replace") if serial.exists() else ""))
         unwritten = [expected for expected in arguments.expect_disk_block if not disk.exists() or not disk_block_starts(disk, expected)]
         image_bytes = disk.read_bytes() if disk.exists() and (arguments.expect_disk_text or arguments.refuse_disk_text) else b""
