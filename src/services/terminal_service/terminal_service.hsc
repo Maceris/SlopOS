@@ -5,12 +5,13 @@
  * (safe_text) so text can't become a control sequence, and is shown on the first serial line through the VT adapter.
  * The top row is the status line, which only this service writes; programs have the rows below it.
  *
- * What's typed, on the serial line or the first keyboard, becomes typed input for the client that reads it first,
- * except the secure attention key, Ctrl+Alt+Delete (on the serial line as a terminal sends it, CSI 3;7~): that brings up
- * this service's own screen, which every key goes to until Esc or Enter leaves it, and the program's screen is drawn
- * again from the model. A keyboard's keys are typed through a US layout until the input service owns keyboards. Both
- * are reached through connectors, dialed again when they go, with the banner shown on each new serial line. Without a
- * serial line it keeps the model and shows nothing.
+ * What's typed, on the serial line or the seat's keyboards, which the input service types through its keymap, becomes
+ * typed input for the client that reads it first, except the secure attention key, Ctrl+Alt+Delete (on the serial line
+ * as a terminal sends it, CSI 3;7~; from the input service as itself): that brings up this service's own screen, which
+ * every key goes to until Esc or Enter leaves it, and the program's screen is drawn again from the model. A new
+ * keyboard's code, which the input service makes, is shown on the status line until it's typed on it. Both are reached
+ * through connectors, dialed again when they go, with the banner shown on each new serial line. Without a serial line
+ * it keeps the model and shows nothing.
  */
 package terminal_service
 
@@ -21,16 +22,16 @@ import text_buffer from "std"
 import unicode from "std"
 import terminal from "std/os/slop_os"
 import connector from "../../protocols/connector"
-import input from "../../protocols/input"
+import seat from "../../protocols/seat"
 import serial from "../../protocols/serial"
 import service_kit from "../../libraries/service_kit"
 import safe_text from "../../safe_text"
 import screen from "../../screen"
 import vt from "../../vt"
 
-// The serial line and the keyboard are bound to the port above the clients
+// The serial line and the seat are bound to the port above the clients
 SERIAL_KEY : u64 : 1000
-KEYBOARD_KEY : u64 : 1001
+SEAT_KEY : u64 : 1001
 BANNER :: "SlopOS console"
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 TAB_STOP : u16 : 8
@@ -46,36 +47,19 @@ STATUS_ATTENTION :: " SlopOS │ console │ secure attention"
 OUTPUT_BYTES :: 16384
 MAX_IN_FLIGHT : u32 : 2
 
-// USB HID usages a US layout types: the letters, digits, and the rest of the main block
-USAGE_A : u16 : 0x04
 USAGE_C : u16 : 0x06
-USAGE_Z : u16 : 0x1d
-USAGE_1 : u16 : 0x1e
-USAGE_0 : u16 : 0x27
 USAGE_ENTER : u16 : 0x28
 USAGE_ESCAPE : u16 : 0x29
-USAGE_TAB : u16 : 0x2b
-USAGE_SPACE : u16 : 0x2c
 USAGE_DELETE : u16 : 0x4c
-USAGE_LEFT_CONTROL : u16 : 0xe0
-USAGE_LEFT_SHIFT : u16 : 0xe1
-USAGE_LEFT_ALT : u16 : 0xe2
-USAGE_RIGHT_CONTROL : u16 : 0xe4
-USAGE_RIGHT_SHIFT : u16 : 0xe5
-USAGE_RIGHT_ALT : u16 : 0xe6
-// From 0x2d (minus) to 0x38 (slash), unshifted then shifted; 0x32, the non-US hash key, types what an ISO layout's does
-PUNCTUATION :: "-=[]\\#;'`,./"
-PUNCTUATION_SHIFTED :: "_+{}|~:\"~<>?"
-DIGITS_SHIFTED :: "!@#$%^&*()"
 
 Service :: struct {
     log : slop_os.DebugLog,
     port : slop_os.Port,
-    // The connectors to the serial line and the keyboard, and the connections they gave, NONE without
+    // The connectors to the serial line and the input service, and the connections they gave, NONE without
     serial_connector : slop_os.Channel,
-    keyboard_connector : slop_os.Channel,
+    seat_connector : slop_os.Channel,
     line_end : slop_os.Channel,
-    keyboard_end : slop_os.Channel,
+    seat_end : slop_os.Channel,
     // What's waiting to be sent on the serial line: a ring, from output_start
     output : u8[OUTPUT_BYTES],
     output_start : usize,
@@ -85,24 +69,24 @@ Service :: struct {
     screen : screen.Screen,
     // Whether the secure attention key's screen is up, which every key goes to
     attention : bool,
+    // A new keyboard's code, shown on the status line until it's typed, 0 for none
+    waiting_code : u32,
     // Input waiting for the owner: the client that read first, and how many events its Read held asks for
     decoder : vt.Decoder,
     decoded : vt.Decoded,
     owner : usize?,
     held : u32,
-    // The keyboard's modifiers held down
-    modifiers : u8,
 }
 
-main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?, keyboard: os.Channel[connector.Connector]?,
+main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?, input: os.Channel[connector.Connector]?,
     clients: os.Listener[terminal.Terminal]) -> int {
     startup :: slop_os.startup_block()
     service := runtime.new(Service)
     service.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     service.serial_connector = NONE
-    service.keyboard_connector = NONE
+    service.seat_connector = NONE
     service.line_end = NONE
-    service.keyboard_end = NONE
+    service.seat_end = NONE
     // Lines are written at the bottom, as a serial line's are, and scroll up
     service.screen.lines.row = PROGRAM_ROWS - 1
     screen.set_status(&service.screen, STATUS)
@@ -115,11 +99,11 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
         case Some(found) => service.serial_connector = found.end
         case None => {}
     }
-    match keyboard {
-        case Some(found) => service.keyboard_connector = found.end
+    match input {
+        case Some(found) => service.seat_connector = found.end
         case None => {}
     }
-    dial_keyboard(service)
+    dial_seat(service)
     dial_serial(service)
     runtime.log_info("serving")
     into := os.Incoming.{}
@@ -133,7 +117,7 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
         }
         while i < connected.count
         take_serial(service, &into)
-        take_keys(service, &into)
+        take_seat(service, &into)
         deliver(service, &connected)
         pump(service)
         packets : slop_os.Packet[8]
@@ -175,24 +159,23 @@ dial_serial :: fn(service: ptr[mut Service]) {
     pump(service)
 }
 
-// A keyboard through its connector, if there's one: bound to the port, with a Read held.
-dial_keyboard :: fn(service: ptr[mut Service]) {
-    if cast[slop_os.Handle](service.keyboard_connector) == slop_os.NO_HANDLE {
+// The input service through its connector, if there's one: bound to the port, with a Read held.
+dial_seat :: fn(service: ptr[mut Service]) {
+    if cast[slop_os.Handle](service.seat_connector) == slop_os.NO_HANDLE {
         return void
     }
-    port :: os.port_for(slop_os.startup_block().budget, service.keyboard_connector) or_return void
-    keys :: connector.dial[input.Input](service.keyboard_connector, port) or_return void
+    port :: os.port_for(slop_os.startup_block().budget, service.seat_connector) or_return void
+    keys :: connector.dial[seat.Seat](service.seat_connector, port) or_return void
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    match slop_os.port_bind(service.port, cast[slop_os.Handle](keys.end), signals, KEYBOARD_KEY, .Persistent) {
+    match slop_os.port_bind(service.port, cast[slop_os.Handle](keys.end), signals, SEAT_KEY, .Persistent) {
         case Ok => {}
         case Error(error) => {
             _ = slop_os.handle_close(cast[slop_os.Handle](keys.end))
             return void
         }
     }
-    service.keyboard_end = keys.end
-    service.modifiers = 0
-    read_keys(service)
+    service.seat_end = keys.end
+    read_seat(service)
 }
 
 serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], index: usize, into: ptr[mut os.Incoming]) {
@@ -461,6 +444,20 @@ use_screen :: fn(service: ptr[mut Service], whole: bool) {
     }
 }
 
+// The status line's text, for whether the secure attention key's screen is up and any keyboard is waiting, drawn.
+update_status :: fn(service: ptr[mut Service]) {
+    storage : u8[160]
+    status := text_buffer.make(storage)
+    text_buffer.append(&status, if service.attention { STATUS_ATTENTION } else { STATUS })
+    if service.waiting_code != 0 {
+        text_buffer.append(&status, " │ a new keyboard: type ")
+        text_buffer.append_unsigned(&status, cast[u64](service.waiting_code))
+        text_buffer.append(&status, " and Enter on it")
+    }
+    screen.set_status(&service.screen, text_buffer.as_string(&status))
+    draw_status(service)
+}
+
 // The status line, on the top row, inverse, with the cursor put back where it was.
 draw_status :: fn(service: ptr[mut Service]) {
     storage : u8[384]
@@ -489,8 +486,7 @@ enter_attention :: fn(service: ptr[mut Service]) {
     }
     service.attention = true
     runtime.log_info("secure attention")
-    screen.set_status(&service.screen, STATUS_ATTENTION)
-    draw_status(service)
+    update_status(service)
     storage : u8[256]
     out := text_buffer.make(storage)
     for row in 1..<ROWS {
@@ -516,8 +512,7 @@ leave_attention :: fn(service: ptr[mut Service]) {
     }
     service.attention = false
     runtime.log_info("secure attention ended")
-    screen.set_status(&service.screen, STATUS)
-    draw_status(service)
+    update_status(service)
     redraw(service)
 }
 
@@ -621,11 +616,11 @@ read_more :: fn(service: ptr[mut Service]) {
     _ = serial.send_request(service.line_end, service.port, &out)
 }
 
-read_keys :: fn(service: ptr[mut Service]) {
+read_seat :: fn(service: ptr[mut Service]) {
     out := os.Outgoing.{}
-    request :: os.begin[input.Request](&out)
-    request^ = .Read(input.MAX_EVENTS)
-    _ = input.send_request(service.keyboard_end, service.port, &out)
+    request :: os.begin[seat.Request](&out)
+    request^ = .Read(seat.MAX_EVENTS)
+    _ = seat.send_request(service.seat_end, service.port, &out)
 }
 
 // What the serial line answered: Writes taken, and bytes typed, decoded. A line that's gone, dialed again.
@@ -719,93 +714,68 @@ drop_from :: fn(service: ptr[mut Service], first: usize) {
     }
 }
 
-// What the keyboard's pressed, as keys a US layout types. A keyboard that's gone, dialed again.
-take_keys :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
-    if cast[slop_os.Handle](service.keyboard_end) == slop_os.NO_HANDLE {
+/*
+ * What the input service gave: keys, typed into the input; the secure attention key; and a new keyboard's code, shown
+ * on the status line until it's typed. A seat that's gone is dialed again.
+ */
+take_seat :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
+    if cast[slop_os.Handle](service.seat_end) == slop_os.NO_HANDLE {
         return void
     }
     loop {
-        match input.receive_response(service.keyboard_end, service.port, into, false) {
+        match seat.receive_response(service.seat_end, service.port, into, false) {
             case Received => {}
             case Empty => return void
             case Failed(error) => {
-                _ = slop_os.handle_close(cast[slop_os.Handle](service.keyboard_end))
-                service.keyboard_end = NONE
-                runtime.log_info("its keyboard went; dialing again")
-                dial_keyboard(service)
-                // As a serial line dialed again
-                if cast[slop_os.Handle](service.keyboard_end) == slop_os.NO_HANDLE {
+                _ = slop_os.handle_close(cast[slop_os.Handle](service.seat_end))
+                service.seat_end = NONE
+                runtime.log_info("the input service went; dialing again")
+                dial_seat(service)
+                if cast[slop_os.Handle](service.seat_end) == slop_os.NO_HANDLE {
                     return void
                 }
                 continue
             }
             case _ => continue
         }
-        match os.message_of[input.Response](into)^ {
-            case Events(given) => {
+        match os.message_of[seat.Response](into)^ {
+            case Input(given) => {
+                text :: os.items(into, given.text)
                 first :: service.decoded.count
-                for event in os.items(into, given) {
-                    if input.kind_of(event) == .Key {
-                        press(service, event.code, input.is_pressed(event))
-                    }
+                for event in os.items(into, given.events) {
+                    take_seat_event(service, event, text)
                 }
                 screen_keys(service, first)
-                read_keys(service)
+                read_seat(service)
             }
             case _ => {}
         }
     }
 }
 
-// A key, down or up: modifiers remembered, and a key pressed given as an event, with what it types.
-press :: fn(service: ptr[mut Service], usage: u16, pressed: bool) {
-    bit :: if usage == USAGE_LEFT_SHIFT || usage == USAGE_RIGHT_SHIFT { terminal.SHIFT }
-        else if usage == USAGE_LEFT_CONTROL || usage == USAGE_RIGHT_CONTROL { terminal.CONTROL }
-        else if usage == USAGE_LEFT_ALT || usage == USAGE_RIGHT_ALT { terminal.ALT } else { cast[u8](0) }
-    if bit != 0 {
-        service.modifiers = if pressed { service.modifiers | bit } else { service.modifiers & ~bit }
-        return void
-    }
-    if !pressed {
-        return void
-    }
-    if usage == USAGE_C && service.modifiers & terminal.CONTROL != 0 {
-        vt.event(&service.decoded, terminal.event_of(.Interrupt))
-        return void
-    }
-    character :: if service.modifiers & (terminal.CONTROL | terminal.ALT) != 0 { cast[u8](0) }
-        else { character_of(usage, service.modifiers & terminal.SHIFT != 0) }
-    typed : u8[1]
-    typed[0] = character
-    vt.key(&service.decoded, usage, service.modifiers, if character != 0 { typed[0..<1] } else { typed[0..<0] })
-}
-
-// What a key types on a US layout, or 0.
-character_of :: fn(usage: u16, shifted: bool) -> u8 {
-    if usage >= USAGE_A && usage <= USAGE_Z {
-        return (if shifted { cast[u8]('A') } else { cast[u8]('a') }) + cast[u8](usage - USAGE_A)
-    }
-    if usage >= USAGE_1 && usage <= USAGE_0 {
-        index :: cast[usize](usage - USAGE_1)
-        if shifted {
-            return if index < DIGITS_SHIFTED.count { cast[u8](DIGITS_SHIFTED[index]) } else { cast[u8](0) }
+take_seat_event :: fn(service: ptr[mut Service], event: seat.Event, text: u8[]) {
+    kind :: seat.kind_of(event) or_return void
+    match kind {
+        case .SecureAttention => enter_attention(service)
+        case .Waiting => {
+            service.waiting_code = event.waiting_code
+            update_status(service)
         }
-        return if usage == USAGE_0 { cast[u8]('0') } else { cast[u8]('1') + cast[u8](index) }
+        case .Accepted => {
+            service.waiting_code = 0
+            update_status(service)
+        }
+        case .Key => {
+            if event.code == USAGE_C && event.modifiers & terminal.CONTROL != 0 {
+                vt.event(&service.decoded, terminal.event_of(.Interrupt))
+                return void
+            }
+            start :: cast[usize](event.text_start)
+            end :: start + cast[usize](event.text_bytes)
+            typed :: if start <= end && end <= text.count { text[start..<end] } else { text[0..<0] }
+            vt.key(&service.decoded, event.code, event.modifiers, typed)
+        }
     }
-    if usage == USAGE_SPACE {
-        return cast[u8](' ')
-    }
-    if usage == USAGE_ENTER {
-        return 0x0a
-    }
-    if usage == USAGE_TAB {
-        return 0x09
-    }
-    index :: cast[usize](usage) - 0x2d
-    if usage >= 0x2d && index < PUNCTUATION.count {
-        return cast[u8](if shifted { PUNCTUATION_SHIFTED[index] } else { PUNCTUATION[index] })
-    }
-    return 0
 }
 
 // The input waiting, to the owner, once it holds a Read.

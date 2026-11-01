@@ -401,16 +401,38 @@ class ConsoleLink:
                     if banners < len(self.typed):
                         type_into(connection, self.typed[banners])
                     if banners == 0 and self.keyboard is not None and self.keyed:
-                        try:
-                            if self.keyboard.connect():
-                                for line in self.keyed:
-                                    self.keyboard.type_line(line)
-                        except OSError:
-                            pass
+                        threading.Thread(target=self.type_keys, daemon=True).start()
                     banners += 1
+
+    def type_keys(self) -> None:
+        """
+        The keyboard's lines, typed in turn; the line \\code types the code the terminal service's status line shows for a
+        new keyboard (src/services/input_service), once it shows one, and waits a second for it to be taken.
+        """
+        try:
+            if not self.keyboard.connect():
+                return
+            for line in self.keyed:
+                if line != "\\code":
+                    self.keyboard.type_line(line)
+                    continue
+                deadline = time.monotonic() + 30
+                found = None
+                while found is None and time.monotonic() < deadline:
+                    found = KEYBOARD_CODE.search(self.shown)
+                    time.sleep(0.1)
+                if found is not None:
+                    self.keyboard.type_line(found.group(1))
+                    time.sleep(1)
+        except OSError:
+            pass
 
     def lines(self) -> list[str]:
         return [line.rstrip("\r") for line in plain_text(self.shown).split("\n")]
+
+
+# What the status line says while a new keyboard waits for its code
+KEYBOARD_CODE = re.compile("a new keyboard: type ([0-9]+) and Enter")
 
 
 # The terminal service's status line, drawn between a saved and a restored cursor (ESC 7, ESC 8), and the other sequences
@@ -707,6 +729,8 @@ def main() -> int:
                         "Escapes are Python's (\\e is ESC, as \\e[3;7~ is Ctrl+Alt+Delete), and \\p waits a second")
     parser.add_argument("--expect-console-line", action="append", default=[],
                         help="a line the virtio console should show, with --expect; may be repeated")
+    parser.add_argument("--refuse-console-line", action="append", default=[],
+                        help="a line the virtio console mustn't show, with --expect; may be repeated")
     parser.add_argument("--keyboard-input", action="append", default=[],
                         help="a line to type on a virtio keyboard, which this adds with a virtio console, once the console "
                              "shows its banner; may be repeated")
@@ -815,7 +839,7 @@ def main() -> int:
         if arguments.keyboard_input:
             keyboard = Keyboard()
             extra += keyboard.qemu_arguments()
-        if arguments.console_input or arguments.expect_console_line or arguments.keyboard_input:
+        if arguments.console_input or arguments.expect_console_line or arguments.keyboard_input or arguments.refuse_console_line:
             console = ConsoleLink(arguments.console_input, arguments.keyboard_input, keyboard)
             extra += console.qemu_arguments()
             console.thread.start()
@@ -866,8 +890,10 @@ def main() -> int:
             print(f"boot.py: the serial output has no line {line!r}", file=sys.stderr)
         shown = console.lines() if console is not None else []
         missing_shown = [line for line in arguments.expect_console_line if line not in shown]
+        missing_shown += [line for line in arguments.refuse_console_line if line in shown]
         for line in missing_shown:
-            print(f"boot.py: the virtio console showed no line {line!r}", file=sys.stderr)
+            seen = "showed the line" if line in shown else "showed no line"
+            print(f"boot.py: the virtio console {seen} {line!r}", file=sys.stderr)
         for expected in unwritten:
             print(f"boot.py: the disk has no block {expected!r}", file=sys.stderr)
         for text in leaked:

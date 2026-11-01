@@ -226,6 +226,14 @@ TESTS = [
         "--command-line=test_exit test_services", "--keyboard-input=Hi there, 42!",
         "--expect-line=[user] virtio_input: serving", "--expect-line=[user] echo: read Hi there, 42!",
         "--expect-console-line=echo: Hi there, 42!", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # A keyboard that's new: what's typed on it before its code goes nowhere, the code on the status line typed on it
+    # accepts it, and what's typed after reaches the program; Ctrl+Alt+Delete on it is the secure attention key
+    ("accepts a new keyboard once the code on the console is typed on it", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_new_keyboards test_settle=5", "--keyboard-input=before the code",
+        "--keyboard-input=\code", "--keyboard-input=after the code",
+        "--expect-line=[user] input: keyboard 0 is new: its code is on the console", "--expect-line=[user] input: keyboard 0 accepted",
+        "--expect-console-line=echo: after the code", "--refuse-console-line=echo: before the code",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The console's driver killed once the console has dialed it: restarted with its device reissued, and dialed again by the terminal service
     ("restarts a driver that's killed, and its client dials it again", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services test_restart", "--console-input=before the restart",

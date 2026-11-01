@@ -8,9 +8,9 @@
  * driver for it, with what it holds of it (platform.PciDevice). Drivers start first, since services need them. A
  * driver that serves clients is given a listener whose other end the supervisor keeps. Clients don't get connections
  * to a driver: they get connectors (the connector protocol), channels the supervisor serves, each of which dials the
- * listener of whatever serves it now. The terminal service is given connectors to the first serial line and the first
- * keyboard, hello and echo one each to the terminal service, and the disk check, if there's a disk, one to the first
- * disk.
+ * listener of whatever serves it now. The input service is given connectors to the first four input devices, the
+ * terminal service one to the first serial line and one to the input service, hello and echo one each to the terminal
+ * service, and the disk check, if there's a disk, one to the first disk.
  *
  * Whatever it starts that ends other than by exiting with 0, killed or crashed, is started again, up to RESTARTS times
  * in RESTART_WINDOW, unless the system configuration says it's not_restarted (decisions/0093): a driver with its device reissued by
@@ -90,6 +90,8 @@ import counter_app from "../../counter_app"
 import counter from "../../apps/counter"
 import strings from "std"
 import terminal_service from "../terminal_service"
+import input_service from "../input_service"
+import seat from "../../protocols/seat"
 import echo from "../../apps/echo"
 import disk_check from "../disk_check"
 import storage_manager from "../storage_manager"
@@ -137,6 +139,7 @@ Speaks :: enum {
     Block,
     Input,
     Terminal,
+    Seat,
     Storage,
 }
 
@@ -196,11 +199,22 @@ EchoGrants :: struct {
     console : os.Channel[connector.Connector],
 }
 
+// What the input service is given (input_service.main).
+InputGrants :: struct {
+    log : slop_os.DebugLog?,
+    keyboard0 : os.Channel[connector.Connector]?,
+    keyboard1 : os.Channel[connector.Connector]?,
+    keyboard2 : os.Channel[connector.Connector]?,
+    keyboard3 : os.Channel[connector.Connector]?,
+    clients : os.Listener[seat.Seat],
+    command_line : slop_os.Memory?,
+}
+
 // What the terminal service is given (terminal_service.main).
 TerminalGrants :: struct {
     log : slop_os.DebugLog?,
     serial_line : os.Channel[connector.Connector]?,
-    keyboard : os.Channel[connector.Connector]?,
+    input : os.Channel[connector.Connector]?,
     clients : os.Listener[terminal.Terminal],
 }
 
@@ -285,6 +299,7 @@ Modules :: struct {
     hello : slop_os.Memory?,
     terminal : slop_os.Memory?,
     echo : slop_os.Memory?,
+    input : slop_os.Memory?,
     disk_check : slop_os.Memory?,
     virtio_blk : slop_os.Memory?,
     virtio_console : slop_os.Memory?,
@@ -404,6 +419,7 @@ Supervisor :: struct {
     first_disk : usize,
     first_keyboard : usize,
     terminal : usize,
+    input : usize,
     // The system volume's root, once the storage manager has given it, where programs outside the boot set come from
     system : slop_os.Channel,
     system_port : slop_os.Port,
@@ -470,7 +486,7 @@ MAX_LOADED :: 32
 
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager], root: os.Channel[supervision.Supervision],
     hello_module: slop_os.Memory?, platform_service: os.Channel[platform.Platform]?, entropy_service: os.Channel[entropy.Entropy]?,
-    terminal_module: slop_os.Memory?, echo_module: slop_os.Memory?, disk_check_module: slop_os.Memory?, virtio_blk_module: slop_os.Memory?,
+    terminal_module: slop_os.Memory?, echo_module: slop_os.Memory?, input_module: slop_os.Memory?, disk_check_module: slop_os.Memory?, virtio_blk_module: slop_os.Memory?,
     virtio_console_module: slop_os.Memory?, virtio_input_module: slop_os.Memory?, virtio_rng_module: slop_os.Memory?,
     edu_dma_module: slop_os.Memory?, storage_manager_module: slop_os.Memory?, partition_server_module: slop_os.Memory?,
     fat_server_module: slop_os.Memory?, container_service_module: slop_os.Memory?, volume_server_module: slop_os.Memory?,
@@ -492,9 +508,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     }
     boot_records^ = records^
     supervisor := Supervisor.{block = startup, records = records, boot_records = boot_records, overrides_end = NONE, substitutions_end = NONE, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
-        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, terminal = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
+        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, terminal = NOWHERE, input = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
         events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)}
-    supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, hello = hello_module, terminal = terminal_module, echo = echo_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
+    supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, hello = hello_module, terminal = terminal_module, echo = echo_module, input = input_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
         container_service = container_service_module, volume_server = volume_server_module}
@@ -584,6 +600,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     }
     // Then every other driver, and the services that use them, each with connectors to what it uses
     start_drivers(&supervisor, false)
+    start_input(&supervisor, NOWHERE)
     start_terminal(&supervisor, NOWHERE)
     start_echo(&supervisor, NOWHERE)
     // The recovery generation starts nothing more than the boot set, the drivers and the console
@@ -846,6 +863,9 @@ restart_service :: fn(supervisor: ptr[mut Supervisor], index: usize) {
     }
     else if name == "echo" {
         start_echo(supervisor, index)
+    }
+    else if name == "input" {
+        start_input(supervisor, index)
     }
     else if name == "hello" {
         start_hello(supervisor, index)
@@ -2613,7 +2633,7 @@ module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory
     found := if name == "virtio_rng" { modules.virtio_rng } else if name == "virtio_console" { modules.virtio_console }
         else if name == "virtio_blk" { modules.virtio_blk } else if name == "virtio_input" { modules.virtio_input }
         else if name == "edu_dma" { modules.edu_dma } else if name == "storage_manager" { modules.storage_manager }
-        else if name == "terminal" { modules.terminal } else if name == "echo" { modules.echo }
+        else if name == "terminal" { modules.terminal } else if name == "echo" { modules.echo } else if name == "input" { modules.input }
         else if name == "disk_check" { modules.disk_check }
         else if name == "hello" { modules.hello } else if name == "clock" { modules.clock }
         else if name == "events" { modules.events } else if name == "bundle_store" { modules.bundle_store }
@@ -2846,14 +2866,59 @@ start_drivers :: fn(supervisor: ptr[mut Supervisor], boot_set: bool) {
 }
 
 /*
- * The terminal service, with connectors to the first serial line and keyboard, and a listener for its clients; into
+ * The input service, with connectors to the first four input devices and the kernel's command line (for
+ * test_new_keyboards), and a listener for its client, the terminal service; into its entry at again, unless that's
+ * NOWHERE.
+ */
+start_input :: fn(supervisor: ptr[mut Supervisor], again: usize) {
+    service :: service_named(supervisor, "input") or_return void
+    pair :: os.channel_for[seat.Seat](supervisor.block.budget, 0) or_return void
+    keyboards : MaybeConnector[4]
+    found : usize = 0
+    for entry, i in supervisor.started {
+        if i < supervisor.started_count && entry.speaks == .Input && found < keyboards.count {
+            keyboards[found] = connector_to(supervisor, i)
+            found += 1
+        }
+    }
+    grants := InputGrants.{log = duplicate_log(supervisor), keyboard0 = keyboards[0], keyboard1 = keyboards[1],
+        keyboard2 = keyboards[2], keyboard3 = keyboards[3], clients = os.Listener[seat.Seat].{end = pair.a}}
+    match supervisor.command_line {
+        case Some(text) => {
+            text_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+            match slop_os.handle_duplicate(cast[slop_os.Handle](text), text_rights) {
+                case Ok(copy) => grants.command_line = cast[slop_os.Memory](copy)
+                case Error(error) => {}
+            }
+        }
+        case None => {}
+    }
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "input"), service.budget,
+        input_service.main, grants, options_for(supervisor, service.name)) {
+        case Ok(launched) => {
+            slot :: place(supervisor, "input", kept(supervisor, launched), again)
+            if slot < supervisor.started.count {
+                supervisor.started[slot].listener = pair.b
+                supervisor.started[slot].speaks = .Seat
+                supervisor.input = slot
+            }
+        }
+        case Error(error) => {
+            failed(supervisor, service.name, error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        }
+    }
+}
+
+/*
+ * The terminal service, with connectors to the first serial line and the input service, and a listener for its clients; into
  * its entry at again, unless that's NOWHERE.
  */
 start_terminal :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     service :: service_named(supervisor, "terminal") or_return void
     pair :: os.channel_for[terminal.Terminal](supervisor.block.budget, 0) or_return void
     grants := TerminalGrants.{log = duplicate_log(supervisor), serial_line = connector_to(supervisor, supervisor.first_serial),
-        keyboard = connector_to(supervisor, supervisor.first_keyboard), clients = os.Listener[terminal.Terminal].{end = pair.a}}
+        input = connector_to(supervisor, supervisor.input), clients = os.Listener[terminal.Terminal].{end = pair.a}}
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "terminal"), service.budget,
         terminal_service.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => {
@@ -3140,6 +3205,7 @@ dial :: fn(supervisor: ptr[mut Supervisor], target: usize) -> slop_os.Channel? {
         case .Block => (block.connect(entry.listener, port, budget) or_return null).end
         case .Input => (input.connect(entry.listener, port, budget) or_return null).end
         case .Terminal => (terminal.connect(entry.listener, port, budget) or_return null).end
+        case .Seat => (seat.connect(entry.listener, port, budget) or_return null).end
         case .Storage => (storage.connect(entry.listener, port, budget) or_return null).end
         case .Nothing => null
     }

@@ -20,6 +20,7 @@ import config_service from "../services/config_service"
 import update_service from "../services/update_service"
 import terminal_service from "../services/terminal_service"
 import echo from "../apps/echo"
+import input_service from "../services/input_service"
 import disk_check from "../services/disk_check"
 import entropy from "../services/entropy"
 import container_service from "../services/container_service"
@@ -154,8 +155,8 @@ MIB : u64 : 1024 * 1024
 /*
  * In the order they start. The entropy service comes first, since the process manager draws from it, and the
  * supervisor's budget pays for what it starts too. The platform service starts before the supervisor, which claims
- * devices from it for the drivers, and starts them first: the terminal service needs a serial line, and hello and
- * echo the terminal service.
+ * devices from it for the drivers, and starts them first: the input service needs keyboards, the terminal service a
+ * serial line and the input service, and hello and echo the terminal service.
  */
 SERVICES :: Service.[
     Service.{name = "entropy", boot_set = true, module = "entropy.elf", starter = .RootTask, by_manager = false, budget = 2 * MIB,
@@ -176,10 +177,12 @@ SERVICES :: Service.[
     // Its stack, image, heap chunks and events ring come to about 1 MiB, before the page tables its space needs
     Service.{name = "clock", boot_set = true, module = "clock.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(clock_service.main)},
-    // The console's terminal, and its reader until sessions (decisions/0136)
+    // The seat's keyboards, the console's terminal, and its reader until sessions (decisions/0136)
+    Service.{name = "input", module = "input_service.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
+        entry = type_of(input_service.main), cpu = INTERACTIVE_CPU},
     Service.{name = "terminal", module = "terminal_service.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(terminal_service.main), cpu = INTERACTIVE_CPU},
-    Service.{name = "echo", module = "echo.elf", starter = .Supervisor, by_manager = true, budget = 1 * MIB,
+    Service.{name = "echo", module = "echo.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(echo.main), cpu = INTERACTIVE_CPU},
     Service.{name = "hello", module = "hello.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(hello.main)},
