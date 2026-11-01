@@ -183,6 +183,7 @@ create_device_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, phy
     memory.physical = physical
     memory.cache = cache
     memory.allowed = 7
+    give_up_framebuffer(kernel, physical, size)
     match adopt(owner, object) {
         case Ok => {}
         case Error(error) => {
@@ -191,6 +192,24 @@ create_device_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, phy
         }
     }
     return .Ok(memory)
+}
+
+/*
+ * The framebuffer the kernel's console draws on, given up once device memory over it is made for user space: the
+ * terminal service draws there from then on (decisions/0138), and the log stays on the serial console.
+ */
+give_up_framebuffer :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64) {
+    if kernel.framebuffer_size == 0 || physical >= kernel.framebuffer_physical + kernel.framebuffer_size
+        || physical + size <= kernel.framebuffer_physical {
+        return void
+    }
+    lock_at(&kernel.console_lock, .Console)
+    given_up :: kernel.has_framebuffer_console
+    kernel.has_framebuffer_console = false
+    unlock_at(&kernel.console_lock, .Console)
+    if given_up {
+        runtime.log_info("the framebuffer is user space's now: the log stays on the serial console")
+    }
 }
 
 /*

@@ -9,6 +9,7 @@
 package screen
 
 import terminal from "std/os/slop_os"
+import unicode from "std"
 
 COLUMNS :: 80
 ROWS :: 24
@@ -40,15 +41,56 @@ Screen :: struct {
     lines : Grid,
     whole : Grid,
     using_whole : bool,
-    // The status line's text, and whether it changed
+    // The terminal service's own screen, the secure attention key's, shown over the program's while it's up
+    panel : Grid,
+    showing_panel : bool,
+    // The status line's text, its cells, and whether it changed
     status : u8[COLUMNS * 3],
     status_count : usize,
+    status_cells : Cell[COLUMNS],
     status_dirty : bool,
+    // Whether the framebuffer has the status line as it is
+    status_drawn : bool,
 }
 
 // The grid programs write to now.
 current :: fn(screen: ptr[mut Screen]) -> ptr[mut Grid] {
     return if screen.using_whole { &screen.whole } else { &screen.lines }
+}
+
+// The grid that's shown now: the panel while it's up, or the program's.
+shown :: fn(screen: ptr[mut Screen]) -> ptr[mut Grid] {
+    return if screen.showing_panel { &screen.panel } else { current(screen) }
+}
+
+// The panel, blank, shown or not; either way every row of what's shown is drawn again.
+show_panel :: fn(screen: ptr[mut Screen], showing: bool) {
+    if showing {
+        reset(&screen.panel)
+    }
+    screen.showing_panel = showing
+    mark_all(shown(screen))
+}
+
+// text, each grapheme cluster a cell, at row and column of grid, in style, as far as the row goes. text is the
+// terminal service's own, so nothing in it needs making safe.
+write_at :: fn(grid: ptr[mut Grid], row: u16, column: u16, text: string, style: terminal.Style) {
+    bytes :: string_bytes(text)
+    at : usize = 0
+    place := column
+    loop {
+        end :: unicode.grapheme_end(bytes, at)
+        if end <= at || end > bytes.count || place >= COLUMNS {
+            break
+        }
+        width :: cast[u16](unicode.grapheme_width(bytes[at..<end]))
+        target :: cell(grid, row, place) or_break
+        set(target, bytes[at..<end], cast[u8](width), style)
+        place += if width == 0 { cast[u16](1) } else { width }
+        at = end
+    }
+    while at < bytes.count
+    mark(grid, row)
 }
 
 cell :: fn(grid: ptr[mut Grid], row: u16, column: u16) -> ptr[mut Cell]? {
@@ -239,6 +281,28 @@ set_status :: fn(screen: ptr[mut Screen], text: string) {
     }
     screen.status_count = taken
     screen.status_dirty = screen.status_dirty || !same
+    if !same {
+        // Its cells, inverse, the rest of the row blank and inverse too
+        inverse :: terminal.Style.{attributes = terminal.INVERSE}
+        for &each in screen.status_cells {
+            each^ = Cell.{style = inverse}
+        }
+        line :: status_text(screen)
+        at : usize = 0
+        place : usize = 0
+        loop {
+            end :: unicode.grapheme_end(line, at)
+            if end <= at || end > line.count || place >= screen.status_cells.count {
+                break
+            }
+            width :: unicode.grapheme_width(line[at..<end])
+            set(&screen.status_cells[place], line[at..<end], cast[u8](width), inverse)
+            place += if width == 0 { cast[usize](1) } else { width }
+            at = end
+        }
+        while at < line.count
+        screen.status_drawn = false
+    }
 }
 
 status_text :: fn(screen: ptr[Screen]) -> u8[] {

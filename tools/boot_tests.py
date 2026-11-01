@@ -219,7 +219,7 @@ TESTS = [
     ("brings up the secure attention key's screen, and goes back to the program", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services test_settle=5", "--console-input=\e[3;7~\p\r\pafter attention",
         "--expect-line=[user] terminal: secure attention", "--expect-line=[user] terminal: secure attention ended",
-        "--expect-console-line=Secure attention", "--expect-console-line=echo: after attention",
+        "--expect-console-line=  Secure attention", "--expect-console-line=echo: after attention",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # A virtio keyboard boot.py types on through QEMU's machine protocol: keys as HID usages, typed by the terminal service's keymap
     ("types on a virtio keyboard into the console", 7, [WITH_PROGRAMS,
@@ -234,6 +234,12 @@ TESTS = [
         "--expect-line=[user] input: keyboard 0 is new: its code is on the console", "--expect-line=[user] input: keyboard 0 accepted",
         "--expect-console-line=echo: after the code", "--refuse-console-line=echo: before the code",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # The framebuffer: the kernel gives it up once the platform service gives it out, and the terminal service draws the
+    # console there, the status line and what's typed, as on the serial line
+    ("draws the console on the framebuffer too", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_settle=8", "--keyboard-input=on the screen", "--screen-after=echo: on the screen",
+        "--expect-line=[info] the framebuffer is user space's now: the log stays on the serial console",
+        "--expect-console-line=echo: on the screen", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The console's driver killed once the console has dialed it: restarted with its device reissued, and dialed again by the terminal service
     ("restarts a driver that's killed, and its client dials it again", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services test_restart", "--console-input=before the restart",

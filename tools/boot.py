@@ -363,11 +363,16 @@ class ConsoleLink:
     keyboard are typed at the first banner, once the serial lines have been.
     """
 
-    def __init__(self, typed: list[str], keyed: list[str], keyboard: "Keyboard | None"):
+    def __init__(self, typed: list[str], keyed: list[str], keyboard: "Keyboard | None", screen_after: str | None = None,
+                 screenshot: Path | None = None):
         self.port = free_port()
         self.typed = typed
         self.keyed = keyed
         self.keyboard = keyboard
+        # Once the console shows this line, the screen's taken through the machine protocol into screenshot
+        self.screen_after = screen_after
+        self.screenshot = screenshot
+        self.screen_taken = False
         self.shown = ""
         self.thread = threading.Thread(target=self.talk, daemon=True)
 
@@ -400,7 +405,7 @@ class ConsoleLink:
                 while self.shown.count(CONSOLE_BANNER) > banners:
                     if banners < len(self.typed):
                         type_into(connection, self.typed[banners])
-                    if banners == 0 and self.keyboard is not None and self.keyed:
+                    if banners == 0 and self.keyboard is not None and (self.keyed or self.screen_after):
                         threading.Thread(target=self.type_keys, daemon=True).start()
                     banners += 1
 
@@ -424,11 +429,52 @@ class ConsoleLink:
                 if found is not None:
                     self.keyboard.type_line(found.group(1))
                     time.sleep(1)
+            if self.screen_after is not None:
+                deadline = time.monotonic() + 30
+                while self.screen_after not in self.lines() and time.monotonic() < deadline:
+                    time.sleep(0.1)
+                # Time for the terminal service to draw what it showed on the serial line
+                time.sleep(0.5)
+                self.keyboard.command("screendump", {"filename": str(self.screenshot)})
+                self.screen_taken = True
         except OSError:
             pass
 
     def lines(self) -> list[str]:
         return [line.rstrip("\r") for line in plain_text(self.shown).split("\n")]
+
+
+def console_drawn(screenshot: Path) -> str | None:
+    """
+    Whether a screenshot (QEMU's screendump, a PPM) shows the console drawn by the terminal service: a status line, a
+    band a cell tall mostly lit (it's inverse) and as wide as 80 cells (of 12 pixels, or 8 on a framebuffer narrower
+    than 960), with text lit below it. None if it does, or what's wrong.
+    """
+    data = screenshot.read_bytes()
+    # SLOPOS_SCREENSHOT=<path> keeps it, to look at
+    if os.environ.get("SLOPOS_SCREENSHOT"):
+        Path(os.environ["SLOPOS_SCREENSHOT"]).write_bytes(data)
+    parts = data.split(b"\n", 3)
+    if len(parts) < 4 or parts[0] != b"P6":
+        return "the screenshot isn't a PPM"
+    width, height = (int(value) for value in parts[1].split())
+    pixels = parts[3]
+
+    def lit(x: int, y: int) -> bool:
+        at = (y * width + x) * 3
+        return max(pixels[at:at + 3]) >= 0x80
+
+    cell_width, cell_height = (12, 24) if width >= 960 and height >= 576 else (8, 16)
+    # Its letters are dark on it, so most of the band, not all of it
+    wide = 80 * cell_width * 6 // 10
+    lit_rows = [y for y in range(height) if sum(lit(x, y) for x in range(0, width, 4)) * 4 >= wide]
+    if len(lit_rows) < cell_height - 4:
+        return "no status line: no band of lit rows as wide as the console"
+    top = lit_rows[0]
+    below = sum(lit(x, y) for y in range(top + cell_height, min(height, top + cell_height * 24)) for x in range(0, width, 2))
+    if below < 200:
+        return "nothing drawn below the status line"
+    return None
 
 
 # What the status line says while a new keyboard waits for its code
@@ -729,6 +775,9 @@ def main() -> int:
                         "Escapes are Python's (\\e is ESC, as \\e[3;7~ is Ctrl+Alt+Delete), and \\p waits a second")
     parser.add_argument("--expect-console-line", action="append", default=[],
                         help="a line the virtio console should show, with --expect; may be repeated")
+    parser.add_argument("--screen-after",
+                        help="once the virtio console shows this line, take the screen and check the console's drawn on it, "
+                        "with --expect; adds a virtio keyboard for the machine protocol, and on AArch64 a ramfb framebuffer")
     parser.add_argument("--refuse-console-line", action="append", default=[],
                         help="a line the virtio console mustn't show, with --expect; may be repeated")
     parser.add_argument("--keyboard-input", action="append", default=[],
@@ -836,11 +885,16 @@ def main() -> int:
             make_disk(disk, arguments.disk)
             extra += ["-drive", f"file={disk},if=none,id=disk,format=raw", "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on"]
         keyboard = None
-        if arguments.keyboard_input:
+        if arguments.keyboard_input or arguments.screen_after:
             keyboard = Keyboard()
             extra += keyboard.qemu_arguments()
-        if arguments.console_input or arguments.expect_console_line or arguments.keyboard_input or arguments.refuse_console_line:
-            console = ConsoleLink(arguments.console_input, arguments.keyboard_input, keyboard)
+        screenshot = folder / "screen.ppm"
+        if arguments.screen_after and aarch64:
+            # virt has no display of its own; AAVMF gives a framebuffer on QEMU's ramfb
+            extra += ["-device", "ramfb"]
+        if arguments.console_input or arguments.expect_console_line or arguments.keyboard_input or arguments.refuse_console_line \
+                or arguments.screen_after:
+            console = ConsoleLink(arguments.console_input, arguments.keyboard_input, keyboard, arguments.screen_after, screenshot)
             extra += console.qemu_arguments()
             console.thread.start()
         booting_started = time.monotonic()
@@ -852,6 +906,11 @@ def main() -> int:
             code = run(image, qemu, serial, arguments.timeout, arguments.cpu, extra, keys,
                        arguments.allow_reboot)
         phases.append(("boot 1", time.monotonic() - booting_started))
+        # Read while the folder it's in is still there
+        screen_wrong = None
+        if arguments.screen_after:
+            screen_wrong = console_drawn(screenshot) if console is not None and console.screen_taken and screenshot.exists() \
+                else "the screen wasn't taken"
         if console is not None:
             console.thread.join(timeout=5)
         output = serial.read_text(errors="replace") if serial.exists() else ""
@@ -894,6 +953,9 @@ def main() -> int:
         for line in missing_shown:
             seen = "showed the line" if line in shown else "showed no line"
             print(f"boot.py: the virtio console {seen} {line!r}", file=sys.stderr)
+        if screen_wrong is not None:
+            print(f"boot.py: the framebuffer: {screen_wrong}", file=sys.stderr)
+            missing_shown.append(screen_wrong)
         for expected in unwritten:
             print(f"boot.py: the disk has no block {expected!r}", file=sys.stderr)
         for text in leaked:

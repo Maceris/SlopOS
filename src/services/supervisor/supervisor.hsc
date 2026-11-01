@@ -215,6 +215,8 @@ TerminalGrants :: struct {
     log : slop_os.DebugLog?,
     serial_line : os.Channel[connector.Connector]?,
     input : os.Channel[connector.Connector]?,
+    framebuffer : slop_os.Memory?,
+    framebuffer_layout : slop_os.Memory?,
     clients : os.Listener[terminal.Terminal],
 }
 
@@ -2911,7 +2913,7 @@ start_input :: fn(supervisor: ptr[mut Supervisor], again: usize) {
 }
 
 /*
- * The terminal service, with connectors to the first serial line and the input service, and a listener for its clients; into
+ * The terminal service, with connectors to the first serial line and the input service, the framebuffer if there's one, and a listener for its clients; into
  * its entry at again, unless that's NOWHERE.
  */
 start_terminal :: fn(supervisor: ptr[mut Supervisor], again: usize) {
@@ -2919,6 +2921,14 @@ start_terminal :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     pair :: os.channel_for[terminal.Terminal](supervisor.block.budget, 0) or_return void
     grants := TerminalGrants.{log = duplicate_log(supervisor), serial_line = connector_to(supervisor, supervisor.first_serial),
         input = connector_to(supervisor, supervisor.input), clients = os.Listener[terminal.Terminal].{end = pair.a}}
+    // The framebuffer, claimed again each time, since what it held died with the last terminal service
+    match request_framebuffer(supervisor) {
+        case Some(framebuffer) => {
+            grants.framebuffer = framebuffer.pixels
+            grants.framebuffer_layout = framebuffer.layout
+        }
+        case None => {}
+    }
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "terminal"), service.budget,
         terminal_service.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => {
@@ -3233,6 +3243,31 @@ request_clock :: fn(supervisor: ptr[mut Supervisor]) -> platform.RealTimeClock? 
     }
     return match os.message_of[platform.Response](&into)^ {
         case ClaimedClock(clock) => clock
+        case _ => null
+    }
+}
+
+// The first framebuffer, claimed from the platform service, made anew each time; or null if there's none.
+request_framebuffer :: fn(supervisor: ptr[mut Supervisor]) -> platform.Framebuffer? {
+    if cast[slop_os.Handle](supervisor.platform_end) == slop_os.NO_HANDLE {
+        return null
+    }
+    out := os.Outgoing.{}
+    made :: os.begin[platform.Request](&out)
+    made^ = .ClaimFramebuffer
+    if platform.send_request(supervisor.platform_end, supervisor.platform_port, &out) != null {
+        return null
+    }
+    into := os.Incoming.{}
+    loop {
+        match platform.receive_response(supervisor.platform_end, supervisor.platform_port, &into, true) {
+            case Received => break
+            case Failed(error) => return null
+            case _ => continue
+        }
+    }
+    return match os.message_of[platform.Response](&into)^ {
+        case ClaimedFramebuffer(framebuffer) => framebuffer
         case _ => null
     }
 }

@@ -142,6 +142,9 @@ Kernel :: struct {
     // Text on the first framebuffer, if there is one and it could be set up.
     framebuffer_console : console.Console,
     has_framebuffer_console : bool,
+    // Where the framebuffer the console draws on is, which device memory over it takes from the console
+    framebuffer_physical : u64,
+    framebuffer_size : u64,
 }
 
 /*
@@ -272,7 +275,7 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     push_context cpu_context from cpu.context {
         start_timer(kernel, info.counter_frequency_hint)
         // While the bootloader's memory, which may hold them, is still there
-        copy_firmware_tables(kernel, &info.firmware_tables, info.direct_map_offset)
+        copy_firmware_tables(kernel, &info.firmware_tables, info.framebuffers, info.direct_map_offset)
         start_cpus(kernel, info)
         start_msis(kernel)
         leave_boot_stacks(kernel)
@@ -419,6 +422,12 @@ start_framebuffer_console :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.Boo
             // No other CPU runs yet, so nothing writes to the console while it's set up
             kernel.framebuffer_console = made
             kernel.has_framebuffer_console = true
+            for shown, i in info.framebuffers {
+                if i == 0 {
+                    kernel.framebuffer_physical = cast[u64](shown.memory.base)
+                    kernel.framebuffer_size = shown.memory.size
+                }
+            }
             log_framebuffer(&kernel.framebuffer_console)
         }
         case Error(error) => runtime.log_warn("the framebuffer can't show the console")

@@ -69,6 +69,12 @@ RealTimeClock :: struct {
     registers : slop_os.Memory,
 }
 
+// The first framebuffer (decisions/0138): its pixels, and a page holding its slop_os.FramebufferLayout.
+Framebuffer :: struct {
+    pixels : slop_os.Memory,
+    layout : slop_os.Memory,
+}
+
 Request :: union {
     // The next device that matches and nothing has claimed, which nothing else will
     Claim(Wanted),
@@ -78,6 +84,8 @@ Request :: union {
     Reissue(u32),
     // The real-time clock, unless another client has claimed it; given again, made anew, to the client that has
     ClaimClock,
+    // The first framebuffer, as ClaimClock gives the clock
+    ClaimFramebuffer,
 }
 
 Response :: union {
@@ -86,6 +94,7 @@ Response :: union {
     NoDevice,
     Unsupported,
     ClaimedClock(RealTimeClock),
+    ClaimedFramebuffer(Framebuffer),
 }
 
 // A claim sent again would claim another device.
@@ -95,6 +104,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Connect(_) => true
         case Reissue(_) => false
         case ClaimClock => true
+        case ClaimFramebuffer => true
     }
 }
 

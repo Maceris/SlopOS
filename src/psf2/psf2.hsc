@@ -1,12 +1,13 @@
 /*
- * The kernel's framebuffer console: text drawn with a PSF2 font on a linear RGB framebuffer
- * (roadmap M1). It needs no allocator.
+ * PSF fonts (roadmap M1, decisions/0138): glyphs found by code point, for the kernel's framebuffer console and the
+ * terminal service's. PSF2, and PSF1, whose glyphs are 8 pixels wide and whose Unicode table holds 16-bit code points
+ * rather than UTF-8. It needs no allocator.
  */
-package console
+package psf2
 
 import runtime from "base"
 
-//SPEC: PSF2 font format, as documented with the Linux kbd package (psffontformat, "PSF2")
+//SPEC: PSF1 and PSF2 font formats, as documented with the Linux kbd package (psffontformat)
 
 PSF2_MAGIC :: u8.[0x72, 0xb5, 0x4a, 0x86]
 PSF2_HEADER_SIZE :: 32
@@ -15,6 +16,14 @@ PSF2_HAS_UNICODE_TABLE : u32 : 1
 // In the Unicode table: starts a sequence of code points drawn as one glyph, and ends a glyph's entry.
 PSF2_SEQUENCE_START : u8 : 0xfe
 PSF2_GLYPH_END : u8 : 0xff
+PSF1_MAGIC :: u8.[0x36, 0x04]
+PSF1_HEADER_SIZE :: 4
+// PSF1's mode bits: 512 glyphs rather than 256, and a Unicode table (either of two bits says so)
+PSF1_MODE_512 : u8 : 1
+PSF1_MODE_HAS_TABLE : u8 : 6
+// In PSF1's Unicode table, 16-bit entries: a sequence's start and a glyph's end
+PSF1_SEQUENCE_START : u32 : 0xfffe
+PSF1_GLYPH_END : u32 : 0xffff
 // How many code points are looked up in a table built once, instead of searching the Unicode table.
 QUICK_CODE_POINTS :: 256
 
@@ -41,6 +50,15 @@ Font :: struct {
     quick : u16[QUICK_CODE_POINTS],
     // What's drawn for a code point the font doesn't have.
     replacement : u16,
+    // A PSF1 font, whose Unicode table's entries are 16 bits
+    psf1 : bool,
+}
+
+// What's next in a Unicode table: a code point, a sequence's start, or a glyph's end.
+TableEntry :: enum {
+    Point,
+    SequenceStart,
+    GlyphEnd,
 }
 
 NO_GLYPH : u16 : 0xffff
@@ -53,8 +71,11 @@ read_u32 :: fn(bytes: u8[], offset: usize) -> u32 {
         | (cast[u32](bytes[offset + 3]) << 24)
 }
 
-// A font from a PSF2 file's bytes, which it keeps referring to.
+// A font from a PSF1 or PSF2 file's bytes, which it keeps referring to.
 parse_font :: fn(bytes #escaping : u8[]) -> Result[Font, FontError] {
+    if bytes.count >= PSF1_HEADER_SIZE && bytes[0] == PSF1_MAGIC[0] && bytes[1] == PSF1_MAGIC[1] {
+        return parse_psf1(bytes)
+    }
     if bytes.count < PSF2_HEADER_SIZE {
         return .Error(.Truncated)
     }
@@ -96,6 +117,67 @@ parse_font :: fn(bytes #escaping : u8[]) -> Result[Font, FontError] {
     return .Ok(parsed)
 }
 
+// A PSF1 font: 256 or 512 glyphs 8 pixels wide and as tall as its header says, and maybe a Unicode table after them.
+parse_psf1 :: fn(bytes #escaping : u8[]) -> Result[Font, FontError] {
+    if bytes.count < PSF1_HEADER_SIZE {
+        return .Error(.Truncated)
+    }
+    parsed : Font
+    font :: &parsed
+    mode :: bytes[2]
+    font.psf1 = true
+    font.glyph_count = if mode & PSF1_MODE_512 != 0 { cast[u32](512) } else { cast[u32](256) }
+    font.width = 8
+    font.height = cast[u32](bytes[3])
+    font.bytes_per_row = 1
+    font.bytes_per_glyph = font.height
+    if font.height == 0 {
+        return .Error(.BadGlyphSize)
+    }
+    glyphs_end :: PSF1_HEADER_SIZE + cast[usize](font.glyph_count) * cast[usize](font.bytes_per_glyph)
+    if glyphs_end < PSF1_HEADER_SIZE || glyphs_end > bytes.count {
+        return .Error(.Truncated)
+    }
+    font.glyphs = bytes[PSF1_HEADER_SIZE..<glyphs_end]
+    font.unicode_table = bytes[glyphs_end..<glyphs_end]
+    if mode & PSF1_MODE_HAS_TABLE != 0 {
+        font.unicode_table = bytes[glyphs_end..<bytes.count]
+    }
+    fill_quick_table(font)
+    font.replacement = glyph_index(font, cast[u32]('?'))
+    if font.replacement == NO_GLYPH {
+        font.replacement = 0
+    }
+    return .Ok(parsed)
+}
+
+// The Unicode table's next entry at at: what it is, its code point if it's one, and how many bytes it takes.
+table_entry :: fn(font: ptr[Font], at: usize) -> (TableEntry, u32, usize) {
+    table :: font.unicode_table
+    if font.psf1 {
+        next :: at + 1
+        if at >= table.count || next >= table.count {
+            return .GlyphEnd, 0, 2
+        }
+        value :: cast[u32](table[at]) | (cast[u32](table[next]) << 8)
+        if value == PSF1_GLYPH_END {
+            return .GlyphEnd, 0, 2
+        }
+        if value == PSF1_SEQUENCE_START {
+            return .SequenceStart, 0, 2
+        }
+        return .Point, value, 2
+    }
+    if at >= table.count || table[at] == PSF2_GLYPH_END {
+        return .GlyphEnd, 0, 1
+    }
+    if table[at] == PSF2_SEQUENCE_START {
+        return .SequenceStart, 0, 1
+    }
+    code_point, length :: decode_utf8(table, at)
+    return .Point, code_point, length
+}
+
 // The quick table, from the Unicode table, or glyph i for code point i without one.
 fill_quick_table :: fn(font: ptr[mut Font]) {
     for &entry, code_point in font.quick {
@@ -112,23 +194,22 @@ fill_quick_table :: fn(font: ptr[mut Font]) {
         at : usize = 0
     }
     loop {
-        // Single code points come first in a glyph's entry; sequences after 0xfe are skipped
+        // Single code points come first in a glyph's entry; sequences after their start are skipped
         in_sequence := false
         loop {
-            byte :: font.unicode_table[at]
-            if byte == PSF2_SEQUENCE_START {
+            kind, code_point, length :: table_entry(font, at)
+            at += length
+            if kind == .GlyphEnd {
+                break
+            }
+            if kind == .SequenceStart {
                 in_sequence = true
-                at += 1
                 continue
             }
-            code_point, length :: decode_utf8(font.unicode_table, at)
             if !in_sequence && code_point < QUICK_CODE_POINTS && font.quick[code_point] == NO_GLYPH {
                 font.quick[code_point] = cast[u16](glyph)
             }
-            at += length
         }
-        while at < font.unicode_table.count && font.unicode_table[at] != PSF2_GLYPH_END
-        at += 1
         glyph += 1
     }
     while at < font.unicode_table.count && glyph < font.glyph_count
@@ -151,23 +232,20 @@ glyph_index :: fn(font: ptr[Font], code_point: u32) -> u16 {
         in_sequence := false
     }
     loop {
-        byte :: font.unicode_table[at]
-        if byte == PSF2_GLYPH_END {
+        kind, found, length :: table_entry(font, at)
+        at += length
+        if kind == .GlyphEnd {
             glyph += 1
             in_sequence = false
-            at += 1
             continue
         }
-        if byte == PSF2_SEQUENCE_START {
+        if kind == .SequenceStart {
             in_sequence = true
-            at += 1
             continue
         }
-        found, length :: decode_utf8(font.unicode_table, at)
         if !in_sequence && found == code_point {
             return cast[u16](glyph)
         }
-        at += length
     }
     while at < font.unicode_table.count && glyph < font.glyph_count
     return NO_GLYPH

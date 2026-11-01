@@ -99,7 +99,7 @@ loader above, at random places for its image, its 256 KiB stack with its startup
 | `platform` | `Platform` | The authority over the machine's hardware (`0039`) |
 | `debug_log` | `DebugLog` | Lines in the kernel's log (`debug_log`, `system_calls.md`) |
 | `command_line` | `Memory` | The kernel's command line, its bytes then zeros (`0067`) |
-| `firmware` | `Memory` | The firmware tables, which the kernel copied before boot memory was reclaimed, read-only, if the boot has them (`0073`): a `slop_os.FirmwareTables` (its magic, `FIRMWARE_MAGIC`; its kind, `Acpi` or `DeviceTree`; how many tables), then a `FirmwareTable` for each (its signature, size, offset in the copy, and the physical address it was at, which ACPI's tables point at one another by), then the tables. ACPI's are the RSDP, every table the XSDT (or RSDT) lists, and the FADT's DSDT and FACS; the device tree's is its blob, `DTB `. Last is the kernel's own `RAM `, a `slop_os.PhysicalRange` for each range of RAM it owns, at physical address 0 (`0074`) |
+| `firmware` | `Memory` | The firmware tables, which the kernel copied before boot memory was reclaimed, read-only, if the boot has them (`0073`): a `slop_os.FirmwareTables` (its magic, `FIRMWARE_MAGIC`; its kind, `Acpi` or `DeviceTree`; how many tables), then a `FirmwareTable` for each (its signature, size, offset in the copy, and the physical address it was at, which ACPI's tables point at one another by), then the tables. ACPI's are the RSDP, every table the XSDT (or RSDT) lists, and the FADT's DSDT and FACS; the device tree's is its blob, `DTB `. Then the kernel's own `RAM `, a `slop_os.PhysicalRange` for each range of RAM it owns, at physical address 0 (`0074`), and, with a framebuffer, its own `FB  `, the first framebuffer's `slop_os.FramebufferLayout` at the framebuffer's physical address (`0138`) |
 | `test_device` | `Memory` | With `test_device` on the command line: what the firmware tables say of the emulator's test device (`src/test_device`), for `test_devices` (`0069`) |
 | `module:<name>` | `Memory` | Each other boot module: a memory object over the frames it was loaded into, which go back to the kernel when it's destroyed, mappable to read or run but never written |
 | `library:<name>` | `Memory` | A boot module whose name ends in `.library`, a typed library, which the root task's runtime binds as any program's does (`0121`) |
@@ -120,7 +120,8 @@ of its own with a memory budget split off its starter's, which owns it:
 | `process_manager` | the root task, with its own loader | `log`, `entropy: Channel[Entropy]`, `clients: Listener[ProcessManager]` | Loads programs for requesters (below), drawing each one's seed, and the randomness that places its parts, from `entropy` |
 | `platform` | the root task, through the manager | `log`, `platform`, `firmware`, `clients: Listener[Platform]`, `command_line?` | Finds the PCIe host bridge in the firmware tables, numbers its buses and places its BARs where firmware didn't, and gives each device to the supervisor once (below) |
 | `supervisor` | the root task, through the manager | `log`, `manager`, `root: Channel[Supervision]`, `hello_module`, `platform_service: Channel[Platform]?`, `entropy_service: Channel[Entropy]?`, each driver's module, `command_line?` | Starts the services `system_config` gives it with `os.launch`, and a driver for each device it claims from the platform service, owns them, serves the connectors they're reached through, restarts a driver that crashes or is killed (below), and tells the root task as each starts and ends, and once all have |
-| `terminal` | the supervisor, through the manager, once the drivers have started | `log`, `serial_line: Channel[Connector]?`, `keyboard: Channel[Connector]?`, `clients: Listener[Terminal]` | The console's terminal: its clients' output on the first serial line through the VT adapter, and what's typed there or on the first keyboard as typed input for the client that reads first (below, `0136`) |
+| `input` | the supervisor, through the manager, once the drivers have started | `log`, `keyboard0` to `keyboard3: Channel[Connector]?`, `clients: Listener[Seat]`, `command_line?` | The seat's keyboards: what they type, through a keymap, for the terminal service, the secure attention key first, and a new keyboard only once its code is typed (below, `0138`) |
+| `terminal` | the supervisor, through the manager, after the input service | `log`, `serial_line: Channel[Connector]?`, `input: Channel[Connector]?`, `framebuffer?`, `framebuffer_layout?`, `clients: Listener[Terminal]` | The console's terminal: its clients' output on the first serial line through the VT adapter and on the framebuffer, and what's typed there or through the input service as typed input for the client that reads first (below, `0136`, `0138`) |
 | `echo` | the supervisor, through the manager, after the terminal service | `console: Channel[Connector]` | The console's reader until sessions: shows what's typed, and answers each line with `echo: ` and the line (below) |
 | `hello` | the supervisor, through the manager | `log?`, `manager?`, `console: Channel[Connector]?` | Reports that its heap and random numbers work, in its debug log and on the console, and given a connection to the manager, that it's still running once the manager is gone |
 | `virtio_rng` | the supervisor, through the manager, for each modern virtio entropy device | its device's bundle (below), `entropy_service: Channel[Entropy]?` | Offers the device's bytes to the entropy service as a source, on a channel of the `rng` protocol |
@@ -154,8 +155,8 @@ driver, which may be restarted, but a connector to it: a channel the supervisor 
 `Dialed` and a new connection to whichever process serves it now, made through that driver's listener with its
 protocol's `Connect`, or `Unavailable` while nothing does. `connector.dial[P]` dials, tries again every 100 ms while
 it's unavailable, up to 50 times, and checks the connection speaks `P`; a client whose connection's other end goes
-dials again. The terminal service is given connectors to the first serial line and keyboard, `hello` and `echo` one each to
-the terminal service, the
+dials again. The input service is given connectors to the first four input devices, the terminal service one to the
+first serial line and one to the input service, `hello` and `echo` one each to the terminal service, the
 storage manager one to each of the first four disks, and the disk check one to the storage manager. The disk check's
 working directory is the first EFI system partition's root, which the supervisor asks the storage manager for
 (`OpenFiles`) on a connection of its own, while its port goes on serving connectors, which the storage manager dials
@@ -243,11 +244,31 @@ to read owns the input until it goes. Text is shown a grapheme cluster at a time
 `⟨U+202E⟩`, bytes that aren't UTF-8 as U+FFFD, a line break as one, a tab as spaces to the next stop of 8. The VT
 adapter (`src/vt`) is the only place escape sequences exist: it turns styles, moves, clears, scrolls and links into
 ECMA-48 for the first serial line, with at most two `Write`s in flight on it, and decodes what's typed there (keys,
-xterm's modifiers, bracketed paste). The first keyboard's keys are typed through a US layout until the input service
-(10a2). The banner, `SlopOS console`, is shown on each serial line dialed; a serial line or keyboard that goes is
-dialed again. **echo** (`src/apps/echo`) reads the console's input: it shows each key's text as typed, takes
+xterm's modifiers, bracketed paste). The terminal service keeps what it shows in a screen model (`src/screen`), 80 by
+24: the top row is the **status line**, which only it writes (inverse: `SlopOS │ console │ no session`, and a new
+keyboard's code while one waits); programs have the 23 rows below it, which on the serial line are the ones that
+scroll (DECSTBM), the status line drawn between a saved and a restored cursor. The **secure attention key**,
+Ctrl+Alt+Delete (from the input service, or on the serial line as a terminal sends it, CSI 3;7~), brings up its own
+screen over the program's, which every key goes to and none reaches a program, until Esc or Enter leaves it and the
+program's rows are drawn again from the model. With a framebuffer (`0138`), the same console is drawn there too
+(`src/glyph_screen`): each cell's glyph from Spleen's PSF fonts (`src/psf2`: 12×24, or 8×16 where 80 by 24 of those
+don't fit), in its style's colours, the grid centered, only rows that changed drawn again. The banner,
+`SlopOS console`, is shown on each serial line dialed; a serial line or the input service that goes is dialed again. **echo** (`src/apps/echo`) reads the console's input: it shows each key's text as typed, takes
 Backspace back a cluster, drops the line at Ctrl-C, and answers each line with `echo: ...`, which it logs
 (`echo: read ...`).
+
+**The seat** (`src/services/input_service`, `src/protocols/seat`, `0138`): the input service owns up to four
+keyboards, types their keys through a keymap (`src/keymaps`, US), and holds a `Read` from the terminal service until
+it has events: `Key`s (a HID usage, modifiers, the text typed), `SecureAttention` for Ctrl+Alt+Delete from any
+keyboard, which is never a key, and `Waiting` and `Accepted` for a new keyboard. Keyboards there when it starts are
+accepted; one found later, or every one with `test_new_keyboards`, waits: its first key makes a random six-digit
+code, which the terminal service shows on the status line, and nothing it types goes anywhere until that code is typed
+on it and Enter.
+
+**The framebuffer** (`0138`): the platform service gives the first framebuffer, from the `FB  ` table, to the client
+that asks (`ClaimFramebuffer`), as `Framebuffer`: its pixels, write-combining device memory, and a page holding its
+layout. Making the pixels' memory takes the framebuffer from the kernel's console, whose log stays on the serial
+console. The supervisor claims it each time it starts the terminal service.
 
 **Input devices** (`src/protocols/input`, `0077`): events in SlopOS's own terms, each a kind (`Key`, `Motion`,
 `Position`, `Button`, `Wheel`), whether it's pressed, a code and x and y: a key by its USB HID usage (page 7), a button

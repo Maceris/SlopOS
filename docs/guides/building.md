@@ -59,9 +59,11 @@ python tools/boot.py --expect 0
 | `--no-kaslr` | The same addresses on every boot: no random image base, direct map or kernel window (`0021`) |
 | `--timeout SECONDS` | Give up after this long; 30 by default |
 | `--serial PATH` | Also keep the serial output in a file |
-| `--console-input LINE` | Add a virtio console linked to a TCP socket on the loopback, and type this line into it when the terminal service's banner shows; may be repeated, the i-th line typed at the i-th banner, as when the console has dialed its serial line again |
-| `--keyboard-input LINE` | Add a virtio keyboard and the virtio console, and type this line on the keyboard, a key at a time with Enter at the end, through QEMU's machine protocol (QMP) on a loopback socket, once the console's banner shows; may be repeated |
-| `--expect-console-line LINE` | With `--expect`: the virtio console must show this exact line; may be repeated |
+| `--console-input LINE` | Add a virtio console linked to a TCP socket on the loopback, and type this line into it when the terminal service's banner shows; may be repeated, the i-th line typed at the i-th banner, as when the console has dialed its serial line again. Escapes are Python's (`\e` is ESC, so `\e[3;7~` is Ctrl+Alt+Delete), and `\p` waits a second |
+| `--keyboard-input LINE` | Add a virtio keyboard and the virtio console, and type this line on the keyboard, a key at a time with Enter at the end, through QEMU's machine protocol (QMP) on a loopback socket, once the console's banner shows; may be repeated. The line `\code` types the code the status line shows for a new keyboard, once it shows one |
+| `--expect-console-line LINE` | With `--expect`: the virtio console must show this exact line, read as a terminal shows it (the status line left out, a cursor move a line break, other sequences gone); may be repeated |
+| `--refuse-console-line LINE` | With `--expect`: the virtio console mustn't show this line; may be repeated |
+| `--screen-after LINE` | With `--expect`: once the virtio console shows this line, take the screen through QMP and check the console's drawn on the framebuffer, its status line and text below it; adds a virtio keyboard, and on AArch64 QEMU's `ramfb`. `SLOPOS_SCREENSHOT=<path>` keeps the screenshot |
 | `--arch ARCH` | `x86_64` (the default), or `aarch64` on QEMU's virt machine through UEFI |
 | `--disk MARK` | Add a virtio block device: a 38 MiB GPT disk whose `SlopOS check` partition has `MARK` at the start of its block 0 and `block N` at the start of its blocks 2 to 9, and an EFI system partition holding the disk check's files, its FAT32 written by `boot.py` itself |
 | `--programs FOLDER` | The programs, built, the bootloader (`bootloader.efi`) among them, instead of building them |

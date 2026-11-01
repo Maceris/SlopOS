@@ -2,8 +2,9 @@
  * The terminal service (decisions/0136, 0137, 0138, design/console-and-sessions.md §2, §3), which replaced the console
  * service of decisions/0075 and 0077. It serves the console's terminal over the terminal protocol, keeping what it shows
  * in a screen model (src/screen): what its clients write goes into the model, a grapheme cluster at a time, made safe
- * (safe_text) so text can't become a control sequence, and is shown on the first serial line through the VT adapter.
- * The top row is the status line, which only this service writes; programs have the rows below it.
+ * (safe_text) so text can't become a control sequence, and is shown on the first serial line through the VT adapter and,
+ * if there's one, on the framebuffer, drawn from the model (src/glyph_screen): one console, shown on both. The top row
+ * is the status line, which only this service writes; programs have the rows below it.
  *
  * What's typed, on the serial line or the seat's keyboards, which the input service types through its keymap, becomes
  * typed input for the client that reads it first, except the secure attention key, Ctrl+Alt+Delete (on the serial line
@@ -27,6 +28,7 @@ import serial from "../../protocols/serial"
 import service_kit from "../../libraries/service_kit"
 import safe_text from "../../safe_text"
 import screen from "../../screen"
+import glyph_screen from "../../glyph_screen"
 import vt from "../../vt"
 
 // The serial line and the seat are bound to the port above the clients
@@ -65,8 +67,10 @@ Service :: struct {
     output_start : usize,
     output_count : usize,
     in_flight : u32,
-    // What the terminal shows
+    // What the terminal shows, and the framebuffer it's drawn on, if there's one
     screen : screen.Screen,
+    canvas : glyph_screen.Canvas,
+    has_canvas : bool,
     // Whether the secure attention key's screen is up, which every key goes to
     attention : bool,
     // A new keyboard's code, shown on the status line until it's typed, 0 for none
@@ -79,7 +83,7 @@ Service :: struct {
 }
 
 main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?, input: os.Channel[connector.Connector]?,
-    clients: os.Listener[terminal.Terminal]) -> int {
+    framebuffer: slop_os.Memory?, framebuffer_layout: slop_os.Memory?, clients: os.Listener[terminal.Terminal]) -> int {
     startup :: slop_os.startup_block()
     service := runtime.new(Service)
     service.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
@@ -90,6 +94,14 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
     // Lines are written at the bottom, as a serial line's are, and scroll up
     service.screen.lines.row = PROGRAM_ROWS - 1
     screen.set_status(&service.screen, STATUS)
+    screen.mark_all(&service.screen.lines)
+    match canvas_on(framebuffer, framebuffer_layout) {
+        case Some(made) => {
+            service.canvas = made
+            service.has_canvas = true
+        }
+        case None => {}
+    }
     service.port = slop_os.port_create(startup.budget) or_return 2
     connected := service_kit.Clients.{}
     if !service_kit.add_client(&connected, service.port, clients.end) {
@@ -120,8 +132,36 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
         take_seat(service, &into)
         deliver(service, &connected)
         pump(service)
+        draw_framebuffer(service)
         packets : slop_os.Packet[8]
         _ = slop_os.port_wait(service.port, packets, slop_os.NO_DEADLINE)
+    }
+}
+
+// A canvas on the framebuffer, if there's one: its pixels mapped, as its layout says they're laid out.
+canvas_on :: fn(framebuffer: slop_os.Memory?, layout_page: slop_os.Memory?) -> glyph_screen.Canvas? {
+    pixels :: framebuffer or_return null
+    page :: layout_page or_return null
+    block :: slop_os.startup_block()
+    layout_at :: runtime.reserve_addresses(cast[usize](4096)) or_return null
+    slop_os.memory_map(page, block.space, layout_at, 0, 4096, slop_os.PROTECTION_READ) or_return null
+    layout :: cast[ptr[slop_os.FramebufferLayout]](layout_at)^
+    size :: slop_os.memory_size(pixels) or_return null
+    at :: runtime.reserve_addresses(cast[usize](size)) or_return null
+    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
+    slop_os.memory_map(pixels, block.space, at, 0, size, read_write) or_return null
+    if cast[u64](layout.pitch) * cast[u64](layout.height) > size {
+        return null
+    }
+    made :: glyph_screen.make_canvas(at, layout) or_return null
+    runtime.log_info("drawing on the framebuffer, %x%", layout.width, layout.height)
+    return made
+}
+
+// What changed, drawn on the framebuffer, with the cursor where a program's is.
+draw_framebuffer :: fn(service: ptr[mut Service]) {
+    if service.has_canvas {
+        glyph_screen.draw(&service.canvas, &service.screen, !service.attention)
     }
 }
 
@@ -487,22 +527,14 @@ enter_attention :: fn(service: ptr[mut Service]) {
     service.attention = true
     runtime.log_info("secure attention")
     update_status(service)
-    storage : u8[256]
-    out := text_buffer.make(storage)
-    for row in 1..<ROWS {
-        text_buffer.clear(&out)
-        vt.append_move(&out, row, 0)
-        vt.append_clear_to_end(&out)
-        emit(service, string_bytes(text_buffer.as_string(&out)))
-    }
-    lines :: string.["Secure attention", "", "Nothing is waiting for you: no prompt, and no one has logged in yet.", "",
-        "Esc or Enter goes back."]
-    for line, i in lines {
-        text_buffer.clear(&out)
-        vt.append_move(&out, cast[u16](i) + 2, 2)
-        text_buffer.append(&out, line)
-        emit(service, string_bytes(text_buffer.as_string(&out)))
-    }
+    screen.show_panel(&service.screen, true)
+    panel :: &service.screen.panel
+    bold :: terminal.Style.{attributes = terminal.BOLD}
+    plain :: terminal.Style.{}
+    screen.write_at(panel, 1, 2, "Secure attention", bold)
+    screen.write_at(panel, 3, 2, "Nothing is waiting for you: no prompt, and no one has logged in yet.", plain)
+    screen.write_at(panel, 5, 2, "Esc or Enter goes back.", plain)
+    redraw(service)
 }
 
 // Back from the secure attention key's screen: the program's rows drawn again from the screen model.
@@ -513,19 +545,31 @@ leave_attention :: fn(service: ptr[mut Service]) {
     service.attention = false
     runtime.log_info("secure attention ended")
     update_status(service)
+    screen.show_panel(&service.screen, false)
     redraw(service)
 }
 
-// Every program row, from the screen model, and the cursor where the program left it.
+/*
+ * Every row of what's shown, the panel or the program's, from the screen model, each up to its last cell that isn't
+ * blank, then cleared; and the cursor where the program left it.
+ */
 redraw :: fn(service: ptr[mut Service]) {
-    grid :: screen.current(&service.screen)
+    grid :: screen.shown(&service.screen)
     plain :: terminal.Style.{}
     for row in 0..<PROGRAM_ROWS {
         storage : u8[2048]
         out := text_buffer.make(storage)
         vt.append_move(&out, row + 1, 0)
         current := plain
+        // The row's last cell that shows something, or its style does
+        last : u16 = 0
         for column in 0..<COLUMNS {
+            found :: screen.cell(grid, row, column) or_break
+            if found.count > 0 || !same_style(found.style, plain) {
+                last = column + 1
+            }
+        }
+        for column in 0..<last {
             cell :: screen.cell(grid, row, column) or_break
             if cell.width == 0 && cell.count == 0 && column > 0 {
                 // The second column of a wide cluster, or a blank after one; blanks are spaces

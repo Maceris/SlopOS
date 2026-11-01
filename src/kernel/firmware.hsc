@@ -16,7 +16,8 @@ import frames from "frames"
  * and FACS, read through the kernel window, since firmware may keep them in reserved memory the direct map leaves out.
  * On AArch64, the device tree's blob, which the bootloader's memory holds, through the direct map. Last, on both, the
  * kernel's own "RAM " table: the RAM it owns, a slop_os.PhysicalRange each, so the platform service knows what isn't
- * free for devices (decisions/0074).
+ * free for devices (decisions/0074); and, with a framebuffer, its own "FB  " table, the first framebuffer's
+ * slop_os.FramebufferLayout at the framebuffer's physical address, for the terminal service to draw on (decisions/0138).
  */
 //SPEC: ACPI Specification 6.5, §5.2.5 (RSDP), §5.2.6 (system description table header), §5.2.7-8 (RSDT, XSDT), §5.2.9 (FADT), §5.2.10 (FACS)
 //SPEC: Devicetree Specification 0.4, §5.2 (the header)
@@ -41,7 +42,8 @@ FoundTables :: struct {
 }
 
 // Copy the firmware tables, if the boot has any, for the root task: kernel.firmware, a read-only Memory.
-copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.FirmwareTables], direct_map_offset: u64) {
+copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.FirmwareTables], framebuffers: boot_info.Framebuffer[],
+    direct_map_offset: u64) {
     found : FoundTables
     #if TARGET_ARCH == .x86_64 {
         match tables.acpi_rsdp {
@@ -60,7 +62,9 @@ copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.Firmwa
         return void
     }
     ram_bytes :: cast[u64](kernel.ram.count) * cast[u64](size_of(slop_os.PhysicalRange))
-    header_bytes :: cast[u64](size_of(slop_os.FirmwareTables)) + cast[u64](found.count + 1) * cast[u64](size_of(slop_os.FirmwareTable))
+    // The kernel's own tables after the firmware's: RAM, and the framebuffer if there is one
+    own :: if framebuffers.count > 0 { cast[usize](2) } else { cast[usize](1) }
+    header_bytes :: cast[u64](size_of(slop_os.FirmwareTables)) + cast[u64](found.count + own) * cast[u64](size_of(slop_os.FirmwareTable))
     total := header_bytes
     for table, i in found.tables {
         if i < found.count {
@@ -68,6 +72,9 @@ copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.Firmwa
         }
     }
     total = frames.round_up(total, 8) + ram_bytes
+    if own == 2 {
+        total = frames.round_up(total, 8) + cast[u64](size_of(slop_os.FramebufferLayout))
+    }
     if total > MAX_FIRMWARE_BYTES {
         runtime.log_error("the firmware tables are too big to copy: % bytes", total)
         return void
@@ -84,8 +91,8 @@ copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.Firmwa
     header :: cast[ptr[mut slop_os.FirmwareTables]](base)
     header.magic = slop_os.FIRMWARE_MAGIC
     header.kind = found.kind
-    header.count = cast[u32](found.count + 1)
-    entries :: view_of(cast[ptr[mut slop_os.FirmwareTable]](base + cast[u64](size_of(slop_os.FirmwareTables))), found.count + 1)
+    header.count = cast[u32](found.count + own)
+    entries :: view_of(cast[ptr[mut slop_os.FirmwareTable]](base + cast[u64](size_of(slop_os.FirmwareTables))), found.count + own)
     offset := header_bytes
     for &table, i in found.tables {
         if i >= found.count || i >= entries.count {
@@ -112,6 +119,17 @@ copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.Firmwa
         if i < ranges.count {
             ranges[i] = slop_os.PhysicalRange.{base = cast[u64](range.base), size = range.size}
         }
+    }
+    // The first framebuffer, whose pixels the platform service gives the terminal service
+    next :: last + 1
+    if own == 2 && next < entries.count && framebuffers.count > 0 {
+        offset = frames.round_up(offset + ram_bytes, 8)
+        shown :: &framebuffers[0]
+        entries[next] = slop_os.FirmwareTable.{signature = signature_of("FB  "), size = cast[u32](size_of(slop_os.FramebufferLayout)),
+            offset = offset, physical = cast[u64](shown.memory.base)}
+        cast[ptr[mut slop_os.FramebufferLayout]](base + offset)^ = slop_os.FramebufferLayout.{width = shown.width, height = shown.height,
+            pitch = shown.pitch, bits_per_pixel = shown.bits_per_pixel, red_size = shown.red.size, red_shift = shown.red.shift,
+            green_size = shown.green.size, green_shift = shown.green.shift, blue_size = shown.blue.size, blue_shift = shown.blue.shift}
     }
     kernel.firmware = cast[u64](memory)
     runtime.log_info("firmware tables: % copied for the root task, and % RAM ranges, % bytes", found.count, kernel.ram.count, total)

@@ -1,6 +1,7 @@
 package console
 
 import boot_info from "../../boot_info"
+import psf2 from "../../psf2"
 
 /*
  * A text console on a framebuffer: a grid of character cells, written left to right and top to
@@ -16,7 +17,7 @@ Console :: struct {
     bytes_per_pixel : u32,
     foreground : u32,
     background : u32,
-    font : Font,
+    font : psf2.Font,
     columns : u32,
     rows : u32,
     column : u32,
@@ -24,7 +25,7 @@ Console :: struct {
 }
 
 ConsoleError :: union {
-    Font(FontError),
+    Font(psf2.FontError),
     // Pixels that aren't 2, 3 or 4 bytes, or a framebuffer too small for one character.
     UnsupportedFramebuffer,
 }
@@ -41,7 +42,7 @@ FOREGROUND_BLUE : u32 : 0xaa
 make_console :: fn(framebuffer: ptr[boot_info.Framebuffer], direct_map_offset: u64) -> Result[Console, ConsoleError] {
     made : Console
     console :: &made
-    match parse_font(FONT_DATA) {
+    match psf2.parse_font(psf2.FONT_DATA) {
         case Ok(font) => console.font = font
         case Error(error) => return .Error(.Font(error))
     }
@@ -109,9 +110,9 @@ write :: fn(console: ptr[mut Console], text: string) {
     while at < bytes.count
 }
 
-glyph_for :: fn(font: ptr[Font], code_point: u32) -> u16 {
-    glyph :: glyph_index(font, code_point)
-    if glyph == NO_GLYPH {
+glyph_for :: fn(font: ptr[psf2.Font], code_point: u32) -> u16 {
+    glyph :: psf2.glyph_index(font, code_point)
+    if glyph == psf2.NO_GLYPH {
         return font.replacement
     }
     return glyph
@@ -165,7 +166,7 @@ fill_rows :: fn(console: ptr[Console], first, count: u32) {
 }
 
 draw_glyph :: fn(console: ptr[Console], glyph: u16, column, row: u32) {
-    rows :: glyph_rows(&console.font, glyph)
+    rows :: psf2.glyph_rows(&console.font, glyph)
     left :: column * console.font.width
     top :: row * console.font.height
     for y in 0..<console.font.height {
