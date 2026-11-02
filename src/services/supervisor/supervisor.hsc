@@ -85,9 +85,6 @@ import bundle_store_service from "../bundle_store_service"
 import config_service from "../config_service"
 import update_service from "../update_service"
 import update_protocol from "../../protocols/update"
-import installations from "../../installations"
-import counter_app from "../../counter_app"
-import counter from "../../apps/counter"
 import strings from "std"
 import terminal_service from "../terminal_service"
 import account_service from "../account_service"
@@ -183,15 +180,6 @@ ConfigGrants :: struct {
 }
 
 // What the update service is given (update_service.main).
-// What an installation is given (counter_app's entry, which every installation's bundle has, decisions/0117).
-InstallationGrants :: struct {
-    data : installations.AppData,
-    settings : config_protocol.Config[counter_app.CounterSettings]?,
-}
-
-// An installation's memory budget
-INSTALLATION_BUDGET : u64 : 4 * 1024 * 1024
-
 UpdateGrants :: struct {
     esp : os.Channel[dir.Dir],
     updates : os.Channel[dir.Dir],
@@ -250,6 +238,10 @@ SessionGrants :: struct {
     echo_module : slop_os.Memory?,
     events_service : os.Channel[events.Events]?,
     settings : os.Channel[config_protocol.ConfigValue]?,
+    store : os.Channel[bundle_store.BundleStore]?,
+    apps : os.Channel[dir.Dir]?,
+    installation_list : config_protocol.Config[system_records.Installations]?,
+    command_line : slop_os.Memory?,
     clients : os.Listener[session.Session],
 }
 
@@ -601,7 +593,6 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     test_store := false
     test_system_config := false
     test_degraded := false
-    test_installations := false
     test_substitution := false
     test_lending := false
     // A boot that never tells the update service how it went, as one that hangs or resets before it's assessed would
@@ -622,7 +613,6 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
             test_store = service_kit.has_word(text, "test_store")
             test_system_config = service_kit.has_word(text, "test_system_config")
             test_degraded = service_kit.has_word(text, "test_degraded")
-            test_installations = service_kit.has_word(text, "test_installations")
             test_substitution = service_kit.has_word(text, "test_substitution")
             test_lending = service_kit.has_word(text, "test_lending")
             test_unassessed = service_kit.has_word(text, "test_unassessed")
@@ -674,7 +664,6 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     }
     else {
         start_hello(&supervisor, NOWHERE)
-        start_installations(&supervisor)
         if !no_disk_check {
             start_disk_check(&supervisor, storage_slot)
         }
@@ -742,9 +731,6 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     }
     if test_restart_services {
         restart_services(&supervisor, storage_slot)
-    }
-    if test_installations {
-        check_installations(&supervisor)
     }
     if test_degraded {
         // hello, killed until it isn't started again, which leaves the boot degraded
@@ -963,15 +949,6 @@ restart_service :: fn(supervisor: ptr[mut Supervisor], index: usize) {
             open_system(supervisor, index)
         }
     }
-    else {
-        // An installation, as the list has it now
-        list :: read_installations(supervisor)
-        for i in cast[usize](0)..<list.entries.count {
-            if i < cast[usize](list.count) && system_records.text_of(&list.entries[i].name) == name {
-                _ = start_installation(supervisor, list.entries[i])
-            }
-        }
-    }
 }
 
 /*
@@ -1119,20 +1096,14 @@ start_update :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     service :: service_named(supervisor, "update") or_return void
     esp :: files_of_type(supervisor, supervisor.storage_slot, storage_manager.ESP_TYPE) or_return void
     updates :: lent_directory(supervisor, "updates", "update") or_return void
-    // A connection of its own to the store, its one end sent to the store, which takes it without answering
-    store_pair :: os.channel_for[bundle_store.BundleStore](supervisor.block.budget, 0) or_return void
-    connecting := os.Outgoing.{}
-    os.begin[bundle_store.Request](&connecting)^ = .Connect(os.Channel[bundle_store.BundleStore].{end = store_pair.a})
-    if bundle_store.send_request(supervisor.store_end, supervisor.store_port, &connecting) is_some {
-        return void
-    }
+    store :: store_connection(supervisor) or_return void
     if supervisor.update_end != NONE {
         _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.update_end))
         _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.update_port))
         supervisor.update_end = NONE
     }
     pair :: os.channel_for[update_protocol.Update](supervisor.block.budget, update_protocol.RING_BYTES) or_return void
-    grants := UpdateGrants.{esp = esp, updates = updates, store = os.Channel[bundle_store.BundleStore].{end = store_pair.b},
+    grants := UpdateGrants.{esp = esp, updates = updates, store = store,
         clients = os.Listener[update_protocol.Update].{end = pair.a}}
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
         update_service.main, grants, options_for(supervisor, service.name)) {
@@ -1148,37 +1119,49 @@ start_update :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     }
 }
 
-// Installations (decisions/0113, 0117)
+/*
+ * Installations (decisions/0113, 0117): the session manager runs them, in each session (0153); the supervisor keeps the
+ * system's list, written to the config store from the build's the first time.
+ */
 
-// Every installation the system has, started, once there's a bundle store, a config store and the system volume.
-start_installations :: fn(supervisor: ptr[mut Supervisor]) {
-    if supervisor.store_end == NONE || supervisor.config_end == NONE || supervisor.system == NONE {
-        return void
+// The system's list in the config store, the build's written if there's none yet, and a connection of its own to it for
+// the session manager; null without the config store.
+installations_for_sessions :: fn(supervisor: ptr[mut Supervisor]) -> config_protocol.Config[system_records.Installations]? {
+    settings :: installations_connection(supervisor) or_return null
+    value := os.Outgoing.{}
+    stored := system_records.Installations.{}
+    if config_protocol.read(settings, supervisor.installations_port, &value) is_ok {
+        stored = os.typed_value[system_records.Installations](os.value_bytes(&value))^
     }
-    list :: read_installations(supervisor)
-    for i in cast[usize](0)..<list.entries.count {
-        if i < cast[usize](list.count) {
-            _ = start_installation(supervisor, list.entries[i])
-        }
+    if stored.set == 0 {
+        _ = write_installations(supervisor, supervisor.boot_records.installations)
     }
+    return config_for[system_records.Installations](supervisor, "system", "installations")
 }
 
-/*
- * The system's installations: the config store's value "installations" of owner "system", if it's been written, or the
- * build's, as the system records have them.
- */
-read_installations :: fn(supervisor: ptr[mut Supervisor]) -> system_records.Installations {
-    built :: supervisor.boot_records.installations
-    settings :: installations_connection(supervisor) or_return built
-    value := os.Outgoing.{}
-    if config_protocol.read(settings, supervisor.installations_port, &value) is_error {
-        return built
+// A connection of its own to the bundle store, its one end sent to the store, which takes it without answering; null without one.
+store_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[bundle_store.BundleStore]? {
+    if supervisor.store_end == NONE {
+        return null
     }
-    stored :: os.typed_value[system_records.Installations](os.value_bytes(&value))^
-    if stored.set == 0 || (system_records.installations_check(&stored) is_some) {
-        return built
+    pair :: os.channel_for[bundle_store.BundleStore](supervisor.block.budget, 0) or_return null
+    connecting := os.Outgoing.{}
+    os.begin[bundle_store.Request](&connecting)^ = .Connect(os.Channel[bundle_store.BundleStore].{end = pair.a})
+    if bundle_store.send_request(supervisor.store_end, supervisor.store_port, &connecting) is_some {
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        return null
     }
-    return stored
+    return os.Channel[bundle_store.BundleStore].{end = pair.b}
+}
+
+// A read-only copy of the boot's command line, for a service that reads its test words; null without one.
+command_line_copy :: fn(supervisor: ptr[mut Supervisor]) -> slop_os.Memory? {
+    text :: supervisor.command_line or_return null
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+    return match slop_os.handle_duplicate(cast[slop_os.Handle](text), rights) {
+        case Ok(copy) => cast[slop_os.Memory](copy)
+        case Error(error) => null
+    }
 }
 
 // The system's installations written to the config store, marked written: whether it kept them.
@@ -1211,229 +1194,6 @@ installations_connection :: fn(supervisor: ptr[mut Supervisor]) -> config_protoc
     supervisor.installations_end = settings.end
     supervisor.installations_port = port
     return settings
-}
-
-/*
- * An installation started: its bundle's program (the bundle it names, or the one the store's boot root names after its
- * program), if the bundle's manifest is the entry installations are launched with; its data directory, the system
- * volume's apps/<name>, made if it isn't there; and its settings, the config store's values of owner <name>. Into the
- * entry it had, if it was started before. Whether it started.
- */
-start_installation :: fn(supervisor: ptr[mut Supervisor], entry: system_records.InstallationRecord) -> bool {
-    name :: strings.clone(system_records.text_of(&entry.name)) or_return false
-    bundle_hash :: match installation_bundle(supervisor, entry) {
-        case Some(found) => found
-        case None => {
-            log_line.write(supervisor.log, "supervisor: installation %: no bundle for %", name, system_records.text_of(&entry.program))
-            return false
-        }
-    }
-    program :: match installation_program(supervisor, bundle_hash) {
-        case Some(found) => found
-        case None => {
-            log_line.write(supervisor.log, "supervisor: installation %: its bundle isn't one an installation can run", name)
-            return false
-        }
-    }
-    data :: installation_data(supervisor, name) or_return false
-    grants := InstallationGrants.{data = installations.AppData.{end = data.end}}
-    grants.settings = config_for[counter_app.CounterSettings](supervisor, name, "settings")
-    again := NOWHERE
-    for i in cast[usize](0)..<supervisor.started_count {
-        if i < supervisor.started.count && supervisor.started[i].name == name && !supervisor.started[i].running {
-            again = i
-        }
-    }
-    // Into its old entry, watched under its key, as a restart is
-    if again != NOWHERE {
-        _ = slop_os.port_unbind(supervisor.port, cast[u64](again))
-        supervisor.relaunching = again
-    }
-    defer supervisor.relaunching = NOWHERE
-    match os.launch(supervisor.manager, supervisor.manager_port, name, program, INSTALLATION_BUDGET, counter.main, grants,
-        options_for(supervisor, name)) {
-        case Ok(launched) => {
-            _ = place(supervisor, name, kept(supervisor, launched), again)
-            return true
-        }
-        case Error(error) => {
-            failed(supervisor, name, error)
-            return false
-        }
-    }
-}
-
-// The bundle an installation runs: the one it names, or the store's boot root's of its program's name.
-installation_bundle :: fn(supervisor: ptr[mut Supervisor], entry: system_records.InstallationRecord) -> bundle.Hash? {
-    named := bundle.Hash.{bytes = entry.bundle}
-    if !bundle.same(named, bundle.Hash.{}) {
-        return named
-    }
-    return bundle_named(supervisor, system_records.text_of(&entry.program))
-}
-
-// The bundle the store's boot root names name, or null.
-bundle_named :: fn(supervisor: ptr[mut Supervisor], name: string) -> bundle.Hash? {
-    root := bundle.Hash.{}
-    match supervisor.boot_root {
-        case Some(given) => root = given
-        case None => match store_request(supervisor, .Root) {
-            case Rooted(hash) => root = hash
-            case _ => return null
-        }
-    }
-    root_object :: mapped_object(supervisor, root) or_return null
-    defer unmap_object(supervisor, root_object)
-    names : string[..]
-    defer runtime.array_free(&names)
-    bundles : bundle.Hash[..]
-    defer runtime.array_free(&bundles)
-    if !(bundle.root_entries(root_object.bytes, &names, &bundles) or_else false) {
-        return null
-    }
-    for entry_name, i in names {
-        if entry_name == name && i < bundles.count {
-            return bundles[i]
-        }
-    }
-    return null
-}
-
-/*
- * A bundle's program, as paged memory from the store, if its manifest is the entry installations are launched with
- * (counter_app's, the schema of counter.main's type): null for one of another entry, which can't be given what it takes.
- */
-installation_program :: fn(supervisor: ptr[mut Supervisor], bundle_hash: bundle.Hash) -> slop_os.Memory? {
-    record :: mapped_object(supervisor, bundle_hash) or_return null
-    referred : bundle.Hash[..]
-    defer runtime.array_free(&referred)
-    read :: bundle.bundle_refers(record.bytes, &referred) or_else false
-    unmap_object(supervisor, record)
-    if !read || referred.count < 2 {
-        return null
-    }
-    manifest :: referred[1 % referred.count]
-    program :: referred[0]
-    expected :: bundle.Hash.{bytes = schema.hash(type_info_of(type_of(counter.main)))}
-    if !bundle.same(manifest, expected) {
-        return null
-    }
-    return match store_request(supervisor, .Get(program)) {
-        case Got(object) => object.memory
-        case _ => null
-    }
-}
-
-// An installation's data directory, the system volume's apps/<name>, made if it isn't there, or null.
-installation_data :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.Channel[dir.Dir]? {
-    apps :: system_directory(supervisor, "apps") or_return null
-    defer slop_os.handle_close(cast[slop_os.Handle](apps.end))
-    port :: os.port_for(supervisor.block.budget, apps.end) or_return null
-    defer slop_os.handle_close(cast[slop_os.Handle](port))
-    out := os.Outgoing.{}
-    request :: os.begin[dir.Request](&out)
-    request^ = .OpenDirectory(dir.OpenDirectory.{path = bytes_of(&out, name), create = true})
-    into := os.Incoming.{}
-    return match ask_system_dir(apps.end, port, &out, &into) {
-        case OpenedDirectory(opened) => opened
-        case _ => null
-    }
-}
-
-// An installation removed: from the list, its data directory, and its configuration. Whether all of it went.
-uninstall :: fn(supervisor: ptr[mut Supervisor], name: string) -> bool {
-    list := read_installations(supervisor)
-    kept := system_records.Installations.{}
-    for i in cast[usize](0)..<list.entries.count {
-        if i < cast[usize](list.count) && system_records.text_of(&list.entries[i].name) != name {
-            at :: cast[usize](kept.count)
-            if at < kept.entries.count {
-                kept.entries[at] = list.entries[i]
-                kept.count += 1
-            }
-        }
-    }
-    whole := write_installations(supervisor, kept)
-    // Its data: the files in its directory, then the directory
-    apps :: system_directory(supervisor, "apps") or_return false
-    directory, error :: os.directory_on(apps.end)
-    if error == null {
-        match os.list_directory_in(directory, name) {
-            case Ok(listed) => {
-                for each in listed {
-                    storage : u8[256]
-                    path :: joined_path(name, each.name, &storage)
-                    whole = os.delete_file_in(directory, path) == null && whole
-                }
-                os.free_directory_listing(listed)
-                whole = os.remove_directory_in(directory, name) == null && whole
-            }
-            case Error(failure) => {}
-        }
-        os.close_directory(directory)
-    }
-    // Its configuration
-    out := os.Outgoing.{}
-    request :: os.begin[config_protocol.Request](&out)
-    request^ = .Forget(bytes_of(&out, name))
-    into := os.Incoming.{}
-    match config_protocol.ask(supervisor.config_end, supervisor.config_port, &out, &into) {
-        case Done => {}
-        case _ => whole = false
-    }
-    return whole
-}
-
-// a/b, into storage.
-joined_path :: fn(a: string, b: string, storage: ptr[mut u8[256]]) -> string {
-    count := cast[usize](0)
-    for text in string.[a, "/", b] {
-        for character in text {
-            if count < storage.count {
-                storage^[count] = cast[u8](character)
-                count += 1
-            }
-        }
-    }
-    return if count > 0 { string_of(&storage^[0], count) } else { "" }
-}
-
-// Until the installation named name has ended, as one run of the counter does.
-wait_for_installation :: fn(supervisor: ptr[mut Supervisor], name: string) {
-    loop {
-        wait_and_handle(supervisor)
-    }
-    while !ended_for_good(supervisor, name)
-}
-
-/*
- * test_installations: the counter installation, once it's run: refused an update to hello's bundle, whose entry isn't
- * the installations'; updated to counter_next's, which counts on from its data; uninstalled, its data and settings with
- * it; and installed again, counting from 1.
- */
-check_installations :: fn(supervisor: ptr[mut Supervisor]) {
-    wait_for_installation(supervisor, "counter")
-    list := read_installations(supervisor)
-    if list.count == 0 {
-        log_line.write(supervisor.log, "supervisor: test_installations: no installations")
-        return void
-    }
-    // An update to a bundle of another entry is refused before it's written
-    hello_bundle :: bundle_named(supervisor, "hello") or_else bundle.Hash.{}
-    refused :: installation_program(supervisor, hello_bundle) is_none
-    // Updated: the bundle it runs replaced, its data kept
-    next :: bundle_named(supervisor, "counter_next") or_else bundle.Hash.{}
-    list.entries[0].bundle = next.bytes
-    updated :: write_installations(supervisor, list) && start_installation(supervisor, list.entries[0])
-    wait_for_installation(supervisor, "counter")
-    // Uninstalled, and installed again from the build's list
-    removed :: uninstall(supervisor, "counter")
-    reinstalled :: write_installations(supervisor, supervisor.boot_records.installations)
-        && start_installation(supervisor, supervisor.boot_records.installations.entries[0])
-    wait_for_installation(supervisor, "counter")
-    log_line.write(supervisor.log, "supervisor: test_installations: an update to hello's bundle %, updated to counter_next %, uninstalled %, installed again %",
-        if refused { "refused" } else { "taken" }, if updated { "and run" } else { "not run" }, if removed { "whole" } else { "not whole" },
-        if reinstalled { "and run" } else { "not run" })
 }
 
 // The boot's assessment told to the update service, if there's one, and its acting on it waited for: its answer.
@@ -3383,7 +3143,8 @@ start_accounts :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize, again
 
 /*
  * The session manager (decisions/0150), with a connector to the process manager, echo's program, which it starts in each
- * session, and a listener for the terminal service; into its entry at again, unless that's NOWHERE.
+ * session, a listener for the terminal service, and what it runs the system's installations with (0153): the bundle
+ * store, the system volume's apps directory, and the system's list; into its entry at again, unless that's NOWHERE.
  */
 start_sessions :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     service :: service_named(supervisor, "sessions") or_return void
@@ -3396,7 +3157,9 @@ start_sessions :: fn(supervisor: ptr[mut Supervisor], again: usize) {
         case Error(error) => {}
     }
     grants := SessionGrants.{log = duplicate_log(supervisor), manager = manager, echo_module = echo_module,
-        events_service = events_connection(supervisor), clients = os.Listener[session.Session].{end = pair.a}}
+        events_service = events_connection(supervisor), store = store_connection(supervisor), apps = system_directory(supervisor, "apps"),
+        installation_list = installations_for_sessions(supervisor), command_line = command_line_copy(supervisor),
+        clients = os.Listener[session.Session].{end = pair.a}}
     // The config store's connection for users' values, the session manager's from now on
     if supervisor.config_users != NONE {
         grants.settings = os.Channel[config_protocol.ConfigValue].{end = supervisor.config_users}

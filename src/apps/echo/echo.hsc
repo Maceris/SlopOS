@@ -115,7 +115,7 @@ greet :: fn(echo: ptr[mut Echo], root: os.Channel[dir.Dir]) {
     text_buffer.append_unsigned(&line, cast[u64](count))
     text_buffer.append(&line, if count == 1 { " entry." } else { " entries." })
     _ = terminal.write_line(echo.end, echo.port, text_buffer.as_string(&line))
-    runtime.log_info("home has % entries", count)
+    runtime.log_info("home has % %", count, if count == 1 { "entry" } else { "entries" })
 }
 
 // One event: whether to go on, which a hang-up ends.

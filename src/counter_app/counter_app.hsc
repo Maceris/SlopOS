@@ -2,13 +2,15 @@
  * The counter (roadmap 9d4, decisions/0117): an app for testing installations, in two versions, counter and
  * counter_next, with the same entry. Each run counts itself in its data directory's file count, and says which run it is
  * and which version counted it, so an update that keeps the data counts on, and an uninstall starts again from 1. It
- * declares its settings, so its configuration is something an uninstall removes.
+ * declares its settings, so its configuration is something an uninstall removes. Then it keeps running, as an
+ * installation does, until it's asked to stop on its lifecycle channel (decisions/0153).
  */
 package counter_app
 
 import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
+import lifecycle from "std/os/slop_os"
 import config from "../protocols/config"
 import installations from "../installations"
 
@@ -17,7 +19,9 @@ CounterSettings :: struct {
     step : u32 = 1,
 }
 
-// A run: counted in data's file count, and said; 0 if it was, or why not.
+STOP_KEY : u64 : 1
+
+// A run: counted in data's file count, and said, then until it's asked to stop; 0 if it was, or why not.
 run :: fn(data: installations.AppData, settings: config.Config[CounterSettings]?, version: int) -> int {
     step := cast[u64](1)
     match settings {
@@ -47,7 +51,18 @@ run :: fn(data: installations.AppData, settings: config.Config[CounterSettings]?
         return 3
     }
     runtime.log_info("run %, version %", count, version)
-    return 0
+    port :: slop_os.port_create(slop_os.startup_block().budget) or_return 4
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    if !lifecycle.on_stop(port, STOP_KEY) {
+        return 4
+    }
+    loop {
+        if lifecycle.stop_requested() {
+            return 0
+        }
+        packets : slop_os.Packet[1]
+        _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
+    }
 }
 
 number_of :: fn(text: string) -> u64 {

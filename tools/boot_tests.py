@@ -140,7 +140,6 @@ BOOT_DISK_BASE = [
     "--expect-line=[user] hello: heap working, random numbers working",
     "--expect-line=[user] config: serving",
     "--expect-line=[user] root task: booted generation 1",
-    "--expect-line=[user] counter: run 1, version 1",
     HEALTHY_LINE,
     "--expect-line=[user] supervisor: the system configuration's override tunes 0 services",
     "--expect-line=[user] hello: config: declared repeats 1, wrote an override kept, read it back merged, by hello; rolled back kept, repeats 1",
@@ -365,7 +364,7 @@ TESTS = [
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in",
         "--console-input-after=  That name and password don't open an account. Type them again.",
-        "--console-input-after=Your home directory has 0 entries.",
+        "--console-input-after=Your home directory has 1 entry.",
         "--expect-line=[user] terminal: first-boot setup: no accounts yet",
         "--expect-console-line=  A name is 1 to 32 letters, digits, - or _, and starts with a lowercase letter.",
         "--expect-console-line=  That password is one of the most common ones. Choose another.",
@@ -377,7 +376,7 @@ TESTS = [
         "--expect-line=[user] input: typing through the uk layout",
         "--expect-line=[user] terminal: logged in as admin",
         "--expect-line=[user] sessions: a session for admin, in en-GB",
-        "--expect-line=[user] echo: home has 0 entries",
+        "--expect-line=[user] echo: home has 1 entry",
         "--expect-line=[user] echo: its locale is en-GB",
         "--expect-console-line=Numbers here look like 1,234,567.89, and dates like 31/12/2026.",
         "--expect-line=[user] echo: read from the session",
@@ -390,9 +389,9 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=45") for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r\\wfirst line\\r\\w\\e[3;7~\\pn\\wadmin\\rcorrect horse battery staple\\r\\wsecond line\\r\\w\\e[3;7~\\ps\\pthird line\\r\\w\\e[3;7~\\pl\\wcorrect horse battery staple\\r\\wfourth line\\r\\w\\e[3;7~\\po\\p\\pfifth line",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
-        "--console-input-after=  Log in", "--console-input-after=Your home directory has 0 entries.",
+        "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
         "--console-input-after=echo: first line", "--console-input-after=  Log in",
-        "--console-input-after=Your home directory has 0 entries.", "--console-input-after=echo: second line",
+        "--console-input-after=Your home directory has 1 entry.", "--console-input-after=echo: second line",
         "--console-input-after=echo: third line", "--console-input-after=  Locked",
         # The session drawn again once it's unlocked
         "--console-input-after=echo: third line", "--console-input-after=echo: fourth line",
@@ -453,11 +452,19 @@ TESTS = [
         "--expect-line=[user] supervisor: degraded: hello ended for good, 4294967296",
         "--expect-line=[user] root task: the boot is degraded: 1 services the system needs aren't up",
         "--expect-disk-text=hello: ended for good"])),
-    ("runs installations with their data and settings, updates one keeping its data, and uninstalls it", 7, with_before_qemu(
-        [argument.replace("test_services", "test_services test_installations") for argument in BOOT_DISK_BASE], [
+    # Installations run in sessions (decisions/0153): the administrator's, once they've logged in, runs the counter
+    # with its data in their home and its settings theirs, and the session manager updates it, uninstalls it and
+    # installs it again
+    ("runs installations in a session with their data and settings, updates one keeping its data, and uninstalls it", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_installations test_settle=30") for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in",
+        "--expect-line=[user] sessions: started counter in the session",
+        "--expect-line=[user] counter: run 1, version 1",
         "--expect-line=[user] counter: run 2, version 2",
-        "--expect-line=[user] config: forgot counter's values",
-        "--expect-line=[user] supervisor: test_installations: an update to hello's bundle refused, updated to counter_next and run, "
+        "--expect-line=[user] config: forgot user:admin:counter's values",
+        "--expect-line=[user] sessions: test_installations: an update to hello's bundle refused, updated to counter_next and run, "
         "uninstalled whole, installed again and run"])),
     # SlopOS's own bootloader (roadmap B2, decisions/0133), which starts the other CPUs
     ("boots a disk through SlopOS's own bootloader, every CPU started", 7, with_before_qemu(BOOT_DISK_BASE, [

@@ -23,6 +23,8 @@ import config from "../../protocols/config"
 // The most values, at once, that connections reach
 MAX_VALUES :: 32
 MAX_NAME :: 31
+// A user's owner: "user:", an account's name, and an installation's after a ":" (decisions/0153)
+MAX_OWNER :: 72
 NOWHERE : usize : 0xffffffffffffffff
 
 // A version of a value, as its typed file holds it.
@@ -43,9 +45,9 @@ Newest :: struct {
 
 // A value connections reach: its owner and name, and its newest version, 0 before it's declared.
 Value :: struct {
-    owner : u8[MAX_NAME],
+    owner : u8[MAX_OWNER],
     owner_count : usize,
-    name : u8[MAX_NAME],
+    name : u8[MAX_OWNER],
     name_count : usize,
     newest : u64,
 }
@@ -155,7 +157,8 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
                 }
             }
             case Forget(owner) => {
-                if !client.admin {
+                // A user's values only on the session manager's, when an installation of theirs is removed (decisions/0153)
+                if !client.admin && !(client.users && is_users(as_text(os.items(into, owner)))) {
                     refuse(end, service.port, .Refused)
                     continue
                 }
@@ -407,7 +410,7 @@ read_version :: fn(service: ptr[mut Store], value: ptr[Value], version: u64) -> 
  * and its newest version read, first. Null for a name that isn't one, or no room.
  */
 connection_for :: fn(service: ptr[mut Store], owner: string, name: string) -> os.Channel[config.ConfigValue]? {
-    if !valid_name(owner) || !valid_name(name) {
+    if !valid_owner(owner) || !valid_name(name) {
         return null
     }
     value := NOWHERE
@@ -470,7 +473,7 @@ open_value :: fn(service: ptr[mut Store], value: ptr[mut Value]) -> bool {
  * the values known in memory starting again from nothing, as a declaration finds them. Whether it was removed whole.
  */
 forget :: fn(service: ptr[mut Store], owner: string) -> bool {
-    if !valid_name(owner) {
+    if !valid_owner(owner) {
         return false
     }
     for i in cast[usize](0)..<service.values.count {
@@ -520,7 +523,7 @@ use_directory :: fn(service: ptr[mut Store], end: slop_os.Channel) -> bool {
 
 // A path being made.
 Path :: struct {
-    bytes : u8[96],
+    bytes : u8[160],
     count : usize,
 }
 
@@ -583,7 +586,7 @@ name_of :: fn(value: ptr[Value]) -> string {
     return if value.name_count > 0 { string_of(&value.name[0], value.name_count) } else { "" }
 }
 
-copy_name :: fn(into: ptr[mut u8[MAX_NAME]], count: ptr[mut usize], name: string) {
+copy_name :: fn(into: ptr[mut u8[MAX_OWNER]], count: ptr[mut usize], name: string) {
     copied := cast[usize](0)
     for character in name {
         if copied < into.count {
@@ -613,6 +616,38 @@ same_bytes :: fn(a: u8[], b: u8[]) -> bool {
 
 as_text :: fn(bytes: u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
+}
+
+/*
+ * An owner: a name, or a user's, "user:" and an account's name, letters, digits, - and _, or "-" for a session with no
+ * user, and for an installation of theirs ":" and its name after that (decisions/0152, 0153); MAX_OWNER bytes at most.
+ */
+valid_owner :: fn(owner: string) -> bool {
+    if !is_users(owner) {
+        return valid_name(owner)
+    }
+    if owner.count > MAX_OWNER {
+        return false
+    }
+    colons := 0
+    previous := ':'
+    for character, i in owner {
+        if i < 5 {
+            continue
+        }
+        if character == ':' {
+            colons += 1
+            if colons > 1 || previous == ':' {
+                return false
+            }
+        }
+        else if !((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9')
+            || character == '_' || character == '-') {
+            return false
+        }
+        previous = character
+    }
+    return previous != ':'
 }
 
 // Whether owner is a user's: "user:" and a name after it.
