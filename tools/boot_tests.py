@@ -242,7 +242,8 @@ TESTS = [
         "--", "-smp", "2", "-device", "edu"]),
     # A virtio console whose other end boot.py types into: hello's line through the terminal service, and echo's answer
     ("shows lines on a virtio console, and echoes what's typed into it", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services", "--console-input=ping from the host",
+        "--command-line=test_exit test_services test_settle=4", "--console-input=ping from the host",
+        "--console-input-after=hello: heap and random numbers working",
         "--expect-line=[user] virtio_console: serving", "--expect-line=[user] echo: read ping from the host",
         "--expect-console-line=SlopOS console", "--expect-console-line=hello: heap and random numbers working",
         "--expect-console-line=echo: ping from the host", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
@@ -281,7 +282,7 @@ TESTS = [
         "--expect-console-line=echo: on the screen", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The console's driver killed once the console has dialed it: restarted with its device reissued, and dialed again by the terminal service
     ("restarts a driver that's killed, and its client dials it again", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_restart", "--console-input=before the restart",
+        "--command-line=test_exit test_services test_restart test_settle=4", "--console-input=before the restart",
         "--console-input=after the restart", "--expect-line=[user] supervisor: test_restart: killing virtio_console",
         "--expect-line=[user] supervisor: restarted virtio_console", "--expect-line=[user] terminal: its serial line went; dialing again",
         "--expect-line=[user] echo: read after the restart", "--expect-console-line=echo: after the restart",

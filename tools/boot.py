@@ -364,9 +364,11 @@ class ConsoleLink:
     """
 
     def __init__(self, typed: list[str], keyed: list[str], keyboard: "Keyboard | None", screen_after: str | None = None,
-                 screenshot: Path | None = None):
+                 screenshot: Path | None = None, typed_after: str | None = None):
         self.port = free_port()
         self.typed = typed
+        # The first line is typed once the console shows this line too, so what's typed doesn't land in the middle of it
+        self.typed_after = typed_after
         self.keyed = keyed
         self.keyboard = keyboard
         # Once the console shows this line, the screen's taken through the machine protocol into screenshot
@@ -403,11 +405,23 @@ class ConsoleLink:
                     return
                 self.shown += data.decode(errors="replace")
                 while self.shown.count(CONSOLE_BANNER) > banners:
-                    if banners < len(self.typed):
+                    if banners == 0 and self.typed and self.typed_after is not None:
+                        threading.Thread(target=self.type_after, args=(connection,), daemon=True).start()
+                    elif banners < len(self.typed):
                         type_into(connection, self.typed[banners])
                     if banners == 0 and self.keyboard is not None and (self.keyed or self.screen_after):
                         threading.Thread(target=self.type_keys, daemon=True).start()
                     banners += 1
+
+    def type_after(self, connection: socket.socket) -> None:
+        """The first line, typed once the console shows typed_after."""
+        deadline = time.monotonic() + 30
+        while self.typed_after not in self.lines() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        try:
+            type_into(connection, self.typed[0])
+        except OSError:
+            pass
 
     def type_keys(self) -> None:
         """
@@ -773,6 +787,8 @@ def main() -> int:
     parser.add_argument("--console-input", action="append", default=[],
                         help="a line to type into a virtio console, which this adds, once it shows its banner; may be repeated. "
                         "Escapes are Python's (\\e is ESC, as \\e[3;7~ is Ctrl+Alt+Delete), and \\p waits a second")
+    parser.add_argument("--console-input-after",
+                        help="type the first --console-input once the virtio console shows this line too, not only its banner")
     parser.add_argument("--expect-console-line", action="append", default=[],
                         help="a line the virtio console should show, with --expect; may be repeated")
     parser.add_argument("--screen-after",
@@ -894,7 +910,8 @@ def main() -> int:
             extra += ["-device", "ramfb"]
         if arguments.console_input or arguments.expect_console_line or arguments.keyboard_input or arguments.refuse_console_line \
                 or arguments.screen_after:
-            console = ConsoleLink(arguments.console_input, arguments.keyboard_input, keyboard, arguments.screen_after, screenshot)
+            console = ConsoleLink(arguments.console_input, arguments.keyboard_input, keyboard, arguments.screen_after, screenshot,
+                              arguments.console_input_after)
             extra += console.qemu_arguments()
             console.thread.start()
         booting_started = time.monotonic()

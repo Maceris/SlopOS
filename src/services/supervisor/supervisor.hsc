@@ -2323,6 +2323,45 @@ lend :: fn(supervisor: ptr[mut Supervisor], directory: os.Channel[dir.Dir], budg
 // test_lending's connections of the lower priority, and how many requests each queues
 LENDING_LOW :: 6
 LENDING_BACKLOG :: 4
+// How often test_lending looks for the low ones' answers while it waits for the high one's
+LENDING_POLL : u64 : 1_000_000
+LENDING_ATTEMPTS :: 3
+
+// What one of test_lending's attempts found: how many lent hello's budget were answered first, of how many, with how many still waiting.
+LendingOutcome :: struct {
+    ahead : u64,
+    total : u64,
+    waiting : u64,
+}
+
+/*
+ * test_lending's attempts, up to LENDING_ATTEMPTS: which of its answers came first can't be known through separate
+ * connections when the host stalls this CPU for long, so one in which priority showed is enough, as a server taking
+ * connections in turn, or serving each queue whole, would answer six or more first in every one.
+ */
+check_lending :: fn(supervisor: ptr[mut Supervisor]) {
+    if supervisor.scheduler_end == NONE {
+        return void
+    }
+    last := LendingOutcome.{}
+    for attempt in 0..<LENDING_ATTEMPTS {
+        outcome :: lending_attempt(supervisor) or_return void
+        last = outcome
+        // Perhaps one the server had started on, and one more each for the time between the two through the high one
+        if outcome.waiting >= LENDING_LOW && outcome.ahead <= 3 && outcome.total == LENDING_LOW * LENDING_BACKLOG + 2 {
+            log_line.write(supervisor.log, "supervisor: test_lending: a request lent echo's budget was answered ahead of the backlogs lent hello's")
+            return void
+        }
+    }
+    if last.waiting < LENDING_LOW {
+        // Too little left waiting to show what's put ahead of what: the host kept this CPU from sending them in time
+        log_line.write(supervisor.log, "supervisor: test_lending: inconclusive, only % of % requests still waiting when the lent ones came",
+            last.waiting, last.total)
+    }
+    else {
+        log_line.write(supervisor.log, "supervisor: test_lending: % of % requests lent hello's budget were answered first", last.ahead, last.total)
+    }
+}
 
 /*
  * test_lending, on a boot disk: connections to a directory of the system volume, one lent echo's CPU budget (the trusted path's is never lent), of a
@@ -2333,32 +2372,30 @@ LENDING_BACKLOG :: 4
  * priority, doesn't go on answering before they're counted. Served by priority, both are
  * answered next, ahead of every backlog; taking connections in turn, as the server would without loans, the second
  * would wait for one of each of the others, and serving each queue whole, for all of them.
+ * One attempt of it, or null if it couldn't be made.
  */
-check_lending :: fn(supervisor: ptr[mut Supervisor]) {
-    if supervisor.scheduler_end == NONE {
-        return void
-    }
+lending_attempt :: fn(supervisor: ptr[mut Supervisor]) -> LendingOutcome? {
     // The high one first, so taking turns would come to it last
-    high :: system_directory(supervisor, "lending") or_return void
-    high_budget :: scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, "echo") or_return void
+    high :: system_directory(supervisor, "lending") or_return null
+    high_budget :: scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, "echo") or_return null
     if !lend(supervisor, high, high_budget) {
         log_line.write(supervisor.log, "supervisor: test_lending: the volume server took no loan")
-        return void
+        return null
     }
-    high_port :: os.port_for(supervisor.block.budget, high.end) or_return void
+    high_port :: os.port_for(supervisor.block.budget, high.end) or_return null
     lows : slop_os.Channel[LENDING_LOW]
     low_ports : slop_os.Port[LENDING_LOW]
     for i in 0..<LENDING_LOW {
-        low :: system_directory(supervisor, "lending") or_return void
-        low_budget :: scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, "hello") or_return void
+        low :: system_directory(supervisor, "lending") or_return null
+        low_budget :: scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, "hello") or_return null
         if !lend(supervisor, low, low_budget) {
-            return void
+            return null
         }
         lows[i] = low.end
-        low_ports[i] = os.port_for(supervisor.block.budget, low.end) or_return void
+        low_ports[i] = os.port_for(supervisor.block.budget, low.end) or_return null
     }
     // For counting, at echo's priority, above the volume server's own
-    mine :: scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, "echo") or_return void
+    mine :: scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, "echo") or_return null
     sent : u64[LENDING_LOW]
     for i in 0..<LENDING_LOW {
         count :: if i == 0 { LENDING_BACKLOG + 2 } else { LENDING_BACKLOG }
@@ -2372,28 +2409,10 @@ check_lending :: fn(supervisor: ptr[mut Supervisor]) {
             }
         }
     }
-    // Two through the high one: taking turns, the second would wait for one of every other connection's
-    for i in 0..<2 {
-        out := os.Outgoing.{}
-        os.begin[dir.Request](&out)^ = .Info
-        _ = dir.send_request(high.end, high_port, &out)
-    }
-    _ = slop_os.thread_use_cpu_budget(mine)
+    // What the server answered while they were sent, before there was anything to put ahead of them, isn't counted: a
+    // host that stalls this CPU meanwhile leaves the server to go through the backlog alone
     into := os.Incoming.{}
-    high_answers := 0
-    loop {
-        if high_answers == 2 {
-            break
-        }
-        match dir.receive_response(high.end, high_port, &into, true) {
-            case Received => high_answers += 1
-            case Failed(error) => return void
-            case _ => continue
-        }
-    }
-    // The low ones' answered before it, counted still on echo's budget, so the server doesn't answer more meanwhile
     answered : u64[LENDING_LOW]
-    ahead := cast[u64](0)
     for i in 0..<LENDING_LOW {
         loop {
             match dir.receive_response(lows[i], low_ports[i], &into, false) {
@@ -2401,7 +2420,57 @@ check_lending :: fn(supervisor: ptr[mut Supervisor]) {
                 case _ => break
             }
         }
-        ahead += answered[i]
+    }
+    waiting := cast[u64](0)
+    for i in 0..<LENDING_LOW {
+        waiting += sent[i] - answered[i]
+    }
+    // Two through the high one: taking turns, the second would wait for one of every other connection's
+    for i in 0..<2 {
+        out := os.Outgoing.{}
+        os.begin[dir.Request](&out)^ = .Info
+        _ = dir.send_request(high.end, high_port, &out)
+    }
+    _ = slop_os.thread_use_cpu_budget(mine)
+    // What they answered while the two were sent isn't counted either: a host that stalls this CPU between them leaves
+    // only the first waiting, which the server answers, then takes the low ones in turn
+    for i in 0..<LENDING_LOW {
+        loop {
+            match dir.receive_response(lows[i], low_ports[i], &into, false) {
+                case Received => answered[i] += 1
+                case _ => break
+            }
+        }
+    }
+    // The low ones' answered before the high one's two, looked for in turn with them: once both are in, what the low
+    // ones answer after isn't counted, which another CPU's server, or a host that stalls this one, could answer meanwhile
+    high_answers := 0
+    ahead := cast[u64](0)
+    loop {
+        match dir.receive_response(high.end, high_port, &into, false) {
+            case Received => {
+                high_answers += 1
+                continue
+            }
+            case Failed(error) => return null
+            case _ => {}
+        }
+        if high_answers == 2 {
+            break
+        }
+        for i in 0..<LENDING_LOW {
+            loop {
+                match dir.receive_response(lows[i], low_ports[i], &into, false) {
+                    case Received => {
+                        answered[i] += 1
+                        ahead += 1
+                    }
+                    case _ => break
+                }
+            }
+        }
+        packets : slop_os.Packet[2]
+        _ = slop_os.port_wait(high_port, packets, (slop_os.clock_monotonic() or_else 0) + LENDING_POLL)
     }
     _ = slop_os.thread_use_cpu_budget(cast[slop_os.CpuBudget](slop_os.NO_HANDLE))
     _ = slop_os.handle_close(cast[slop_os.Handle](mine))
@@ -2420,13 +2489,14 @@ check_lending :: fn(supervisor: ptr[mut Supervisor]) {
             }
         }
     }
-    // The change and the Sync, and perhaps one more the server had started on
-    if ahead <= 3 && total == LENDING_LOW * LENDING_BACKLOG + 2 {
-        log_line.write(supervisor.log, "supervisor: test_lending: a request lent echo's budget was answered ahead of the backlogs lent hello's")
+    for each in slop_os.Handle.[cast[slop_os.Handle](high.end), cast[slop_os.Handle](high_port)] {
+        _ = slop_os.handle_close(each)
     }
-    else {
-        log_line.write(supervisor.log, "supervisor: test_lending: % of % requests lent hello's budget were answered first", ahead, total)
+    for i in 0..<LENDING_LOW {
+        _ = slop_os.handle_close(cast[slop_os.Handle](lows[i]))
+        _ = slop_os.handle_close(cast[slop_os.Handle](low_ports[i]))
     }
+    return LendingOutcome.{ahead = ahead, total = total, waiting = waiting}
 }
 
 // A directory of the system volume's root, made if it isn't there, or null.

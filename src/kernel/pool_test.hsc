@@ -25,6 +25,10 @@ import concurrency from "std"
  *
  * Every turn also adds one to a counter behind a std/concurrency Mutex that both pools share,
  * yielding while holding it, so fibers park waiting for it and are woken by fibers of either pool.
+ *
+ * The CPUs start their pools together, and a fiber that's taken its turns goes on yielding, without
+ * counting them, until its pool has run on every one of its CPUs and moved a fiber, or COVER_SECONDS
+ * pass: a CPU whose host stalls it would otherwise find its pool's work done before it joined.
  */
 POOL_CPUS : u32 : 6
 POOL_TURNS :: 16
@@ -36,6 +40,8 @@ FIRST_POOL_CPUS : u64 : 0b000110
 SECOND_POOL_CPUS : u64 : 0b111000
 // How long the boot CPU waits for the pools to finish, and the other CPUs wait for the pools
 POOL_TEST_TIMEOUT_SECONDS :: 10
+// How long fibers go on yielding for every CPU of their pool to have run some, and one to have moved
+COVER_SECONDS :: 4
 
 // What one pool's fibers record.
 PoolCounts :: struct {
@@ -55,7 +61,8 @@ PoolTest :: struct {
     second_counts : PoolCounts,
     // Fibers spawned by fibers that ran
     children : u64,
-    // CPUs that have left their pool
+    // CPUs that have come to their pool, and that have left it
+    carriers_ready : u64,
     carriers_done : u64,
     // Every turn adds one to counter with counter_lock held, yielding in between, so fibers park on it
     counter_lock : concurrency.Mutex,
@@ -169,6 +176,12 @@ join_pool_test :: fn(kernel: ptr[Kernel], index: u32) {
      * next, unmasks them.
      */
     arch.mask_interrupts()
+    // Every pool's CPUs start together
+    intrinsics.interlocked_increment_u64(&test.carriers_ready)
+    loop {
+        arch.spin_hint()
+    }
+    while intrinsics.atomic_load_u64_acquire(&test.carriers_ready) < cast[u64](POOL_CPUS - 1) && arch.counter() < deadline
     fiber.run_carrier(pool)
     intrinsics.interlocked_increment_u64(&test.carriers_done)
 }
@@ -228,6 +241,26 @@ take_turns :: fn(counts: ptr[mut PoolCounts], cpus: u64) {
         intrinsics.interlocked_increment_u64(&counts.turns)
         previous = here
         add_one(cast[ptr[mut PoolTest]](context.user_data))
+        runtime.fiber_yield()
+    }
+    // Then until every CPU of the pool has run some of its fibers, and one has moved
+    kernel :: per_cpu().kernel
+    deadline :: arch.counter() + kernel.counter_frequency * COVER_SECONDS
+    loop {
+        if (intrinsics.atomic_load_u64_acquire(&counts.cpus) == cpus && intrinsics.atomic_load_u64_acquire(&counts.moves) > 0)
+            || arch.counter() >= deadline {
+            break
+        }
+        here :: per_cpu().index
+        bit :: cast[u64](1) << cast[u64](here)
+        if bit & cpus == 0 {
+            intrinsics.interlocked_increment_u64(&counts.strays)
+        }
+        if here != previous {
+            intrinsics.interlocked_increment_u64(&counts.moves)
+        }
+        intrinsics.interlocked_or_u64(&counts.cpus, bit)
+        previous = here
         runtime.fiber_yield()
     }
 }
