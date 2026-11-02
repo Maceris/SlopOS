@@ -324,7 +324,8 @@ made and the recovery code shown once. 10b done.
 10c planned 2026-11-02 (`decisions/0149`), in four parts: **10c1** console login and one session, the session manager
 starting echo in it with its home directory; **10c2** several sessions, a screen each in the terminal service, the
 secure attention key's menu (switch, log in another, lock, log out); **10c3** `Locale`; **10c4** idle installations
-stopped under memory pressure.
+stopped under memory pressure. 10c1 done 2026-11-02 (`decisions/0150`): the login screen with the keyboard layout on
+the status line (US and UK, F2), the session manager, and echo started in the session with its home directory.
 
 Specs: RFC 9106 (Argon2), RFC 3394 or the AEAD for key wrapping, ECMA-48 (for the VT adapter only), the Unicode
 standard's East Asian Width and UAX #29 for terminal widths.

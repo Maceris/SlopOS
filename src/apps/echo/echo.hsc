@@ -1,11 +1,12 @@
 /*
- * echo (decisions/0136): the console's first reader, until 10c's sessions start a session's own first program. It reads
+ * echo (decisions/0136, 0150): a session's first program until the shell, which the session manager starts with the
+ * session's terminal connection, and its home volume's root once someone's logged in; it says how many entries the home
+ * directory has. It reads
  * the terminal's typed input, keeps the line being typed as the terminal's input line, below what anything writes
  * (decisions/0147), takes Backspace back a grapheme cluster, and answers each line with the line itself and "echo: "
  * and the line, which it also logs; Ctrl-C drops the line, shown with ^C after it. That's what the console service did
- * itself before the terminal service left line editing to programs. It reaches the terminal service through a
- * connector, dialed again if the service is started again. Asked to stop on its lifecycle channel (decisions/0139), it
- * ends with 0.
+ * itself before the terminal service left line editing to programs. Its session ends with its terminal connection,
+ * and so does it. Asked to stop on its lifecycle channel (decisions/0139), it ends with 0.
  */
 package echo
 
@@ -16,7 +17,7 @@ import unicode from "std"
 import slop_os from "std/os"
 import terminal from "std/os/slop_os"
 import lifecycle from "std/os/slop_os"
-import connector from "../../protocols/connector"
+import dir from "std/os/slop_os"
 
 LINE_BYTES :: 256
 // The port key a stop's asked for on, above the terminal's binding
@@ -31,9 +32,14 @@ Echo :: struct {
     count : usize,
 }
 
-main :: fn(console: os.Channel[connector.Connector]) -> int {
-    echo := Echo.{}
-    if !dial(&echo, console.end) {
+main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?) -> int {
+    echo := Echo.{end = session_terminal.end}
+    echo.port = os.port_for(slop_os.startup_block().budget, echo.end) or_return 2
+    match home {
+        case Some(root) => greet(&echo, root)
+        case None => {}
+    }
+    if !terminal.read(echo.end, echo.port) {
         return 2
     }
     _ = lifecycle.on_stop(echo.port, STOP_KEY)
@@ -51,12 +57,8 @@ main :: fn(console: os.Channel[connector.Connector]) -> int {
                 continue
             }
             case Failed(error) => {
-                // The terminal service was started again: dialed again, the line kept
-                _ = slop_os.handle_close(cast[slop_os.Handle](echo.end))
-                if !dial(&echo, console.end) {
-                    return 3
-                }
-                continue
+                runtime.log_info("its terminal went")
+                return 3
             }
             case _ => continue
         }
@@ -75,13 +77,28 @@ main :: fn(console: os.Channel[connector.Connector]) -> int {
     }
 }
 
-// A connection to the terminal through its connector, bound to a port, with a Read held: whether it worked.
-dial :: fn(echo: ptr[mut Echo], dialing: slop_os.Channel) -> bool {
-    dial_port :: os.port_for(slop_os.startup_block().budget, dialing) or_return false
-    connection :: connector.dial[terminal.Terminal](dialing, dial_port) or_return false
-    echo.end = connection.end
-    echo.port = os.port_for(slop_os.startup_block().budget, connection.end) or_return false
-    return terminal.read(echo.end, echo.port)
+// How many entries the home directory has, said on the terminal and in the log.
+greet :: fn(echo: ptr[mut Echo], root: os.Channel[dir.Dir]) {
+    directory, error :: os.directory_on(root.end)
+    if error != null {
+        return void
+    }
+    defer os.close_directory(directory)
+    count := cast[usize](0)
+    match os.list_directory_in(directory, "") {
+        case Ok(listing) => {
+            count = listing.count
+            os.free_directory_listing(listing)
+        }
+        case Error(failure) => return void
+    }
+    storage : u8[64]
+    line := text_buffer.make(storage)
+    text_buffer.append(&line, "Your home directory has ")
+    text_buffer.append_unsigned(&line, cast[u64](count))
+    text_buffer.append(&line, if count == 1 { " entry." } else { " entries." })
+    _ = terminal.write_line(echo.end, echo.port, text_buffer.as_string(&line))
+    runtime.log_info("home has % entries", count)
 }
 
 // One event: whether to go on, which a hang-up ends.

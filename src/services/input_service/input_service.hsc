@@ -190,6 +190,18 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                     service.held = if most == 0 { cast[u32](1) } else { most }
                 }
             }
+            case SetLayout(name) => {
+                bytes :: os.items(into, name)
+                if bytes.count > 0 {
+                    match keymaps.find(string_of(&bytes[0], bytes.count)) {
+                        case Some(layout) => {
+                            service.keymap = layout
+                            runtime.log_info("typing through the % layout", layout.name)
+                        }
+                        case None => {}
+                    }
+                }
+            }
             case Connect(connection) => {
                 if !service_kit.add_client(connected, service.port, connection.end) {
                     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))

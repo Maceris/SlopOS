@@ -2,12 +2,15 @@ package session
 
 import os from "std"
 import slop_os from "std/os"
+import dir from "std/os/slop_os"
+import terminal from "std/os/slop_os"
 
 /*
- * What the trusted path asks of whoever runs the session's programs (decisions/0136, 0139): the supervisor until 10c's
- * session manager, for the console's programs. List is answered with each program running, its memory, and whether it
- * answered a Ping on its lifecycle channel; End asks one, by the index List gave it, to stop, then ends it after a
- * grace period, and it isn't started again.
+ * What the trusted path asks of the session manager (decisions/0136, 0139, 0150). Start makes a session once someone's
+ * logged in: whose it is, its home volume's root, and a terminal connection for its programs, which its first program
+ * is started with; StartWithoutUser makes the one session of a boot with no accounts. List is answered with the
+ * session's programs running, their memory, and whether each answered a Ping on its lifecycle channel; End asks one, by
+ * the index List gave it, to stop, then ends it after a grace period, and it isn't started again.
  */
 
 Session :: struct {}
@@ -28,7 +31,17 @@ Program :: struct {
     memory_limit : u64,
 }
 
+// A session to make: its user's name, its home volume's root, and the terminal its programs write to.
+SessionStart :: struct {
+    user : slop_os.Relative[u8],
+    home : os.Channel[dir.Dir],
+    terminal : os.Channel[terminal.Terminal],
+}
+
 Request :: union {
+    Start(SessionStart),
+    // The session of a boot with no accounts, with the terminal its programs write to
+    StartWithoutUser(os.Channel[terminal.Terminal]),
     List,
     // The program at this index stopped, or ended
     End(u32),
@@ -37,6 +50,8 @@ Request :: union {
 }
 
 Response :: union {
+    // The session's made, its first program started
+    Started,
     Programs(slop_os.Relative[Program]),
     // It's ended, or was already
     Ended,
@@ -48,6 +63,8 @@ Response :: union {
 // Listing again changes nothing; ending what's ended is answered Ended again.
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
+        case Start(_) => false
+        case StartWithoutUser(_) => false
         case List => true
         case End(_) => true
         case Connect(_) => true
@@ -55,6 +72,22 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 }
 
 #insert os.protocol_code(Request, Response)
+
+// A new connection to the session manager listening on end, or null (as entropy.connect).
+connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Session]? {
+    pair :: os.channel_for[Session](budget, 0) or_return null
+    out := os.Outgoing.{}
+    request :: os.begin[Request](&out)
+    request^ = .Connect(os.Channel[Session].{end = pair.a})
+    match send_request(end, port, &out) {
+        case Some(error) => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+            return null
+        }
+        case None => return os.Channel[Session].{end = pair.b}
+    }
+}
 
 // A program's name, as text.
 name_of :: fn(program: ptr[Program]) -> string {

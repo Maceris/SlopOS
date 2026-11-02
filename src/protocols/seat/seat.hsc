@@ -8,7 +8,9 @@ import slop_os from "std/os"
  * terminal service. Keys come typed through the seat's keymap, with their HID usage, modifiers and text; the secure
  * attention key comes as itself, from any keyboard, before anything else sees it; and a keyboard found after boot comes
  * only as Waiting, with the code to type on it, until that's typed, when it's Accepted and its keys come too. A Read is
- * held until there's an event. Connections arrive on the input service's listener as Connects.
+ * held until there's an event. SetLayout chooses the keymap keys are typed through (decisions/0150), by its name, which
+ * isn't answered; a name that isn't a layout's leaves the one there is. Connections arrive on the input service's
+ * listener as Connects.
  */
 
 Seat :: struct {}
@@ -49,6 +51,8 @@ Events :: struct {
 Request :: union {
     // Up to this many events; held until there's one
     Read(u32),
+    // The keymap keys are typed through from now on, by its name (src/keymaps)
+    SetLayout(slop_os.Relative[u8]),
     // Serve another client, on its end
     Connect(os.Channel[Seat]),
 }
@@ -62,6 +66,7 @@ Response :: union {
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Read(_) => false
+        case SetLayout(_) => true
         case Connect(_) => true
     }
 }

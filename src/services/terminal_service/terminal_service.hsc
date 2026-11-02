@@ -18,7 +18,11 @@
  *
  * First-boot setup (decisions/0148): with no accounts, which it asks the account service, its own screen asks for the
  * administrator's name and password, twice, has the account service make the account, and shows the recovery code
- * once. Every key is its own until then, as the secure attention key's screen's are. Both are reached
+ * once. Every key is its own until then, as the secure attention key's screen's are. Then, and with accounts, its
+ * login screen (decisions/0150) asks for a name and password, with the keyboard layout on the status line, which F2
+ * changes; the account service opens the account's home volume with them, and the session manager makes the session,
+ * with a terminal connection of its own and the home's root. With no account service, a boot with no accounts, the
+ * session manager makes a session with no user at once. Both are reached
  * through connectors, dialed again when they go, with the banner shown on each new serial line. Without a serial line
  * it keeps the model and shows nothing.
  */
@@ -33,6 +37,8 @@ import terminal from "std/os/slop_os"
 import time from "std"
 import account_records from "../../account_records"
 import accounts from "../../protocols/accounts"
+import keymaps from "../../keymaps"
+import dir from "std/os/slop_os"
 import connector from "../../protocols/connector"
 import seat from "../../protocols/seat"
 import session from "../../protocols/session"
@@ -58,12 +64,15 @@ PROGRAM_ROWS : u16 : screen.PROGRAM_ROWS
 STATUS :: " SlopOS │ console │ no session"
 STATUS_ATTENTION :: " SlopOS │ console │ secure attention"
 STATUS_SETUP :: " SlopOS │ console │ first-boot setup"
+STATUS_LOGIN :: " SlopOS │ console │ log in"
+STATUS_NO_ACCOUNTS :: " SlopOS │ console │ no accounts"
 
 // Output waiting for the serial line, and how many Writes may be in flight on it, which its ring holds
 OUTPUT_BYTES :: 16384
 MAX_IN_FLIGHT : u32 : 2
 
 USAGE_BACKSPACE : u16 : 0x2a
+USAGE_F2 : u16 : 0x3b
 USAGE_C : u16 : 0x06
 USAGE_E : u16 : 0x08
 USAGE_ENTER : u16 : 0x28
@@ -89,6 +98,10 @@ SetupStep :: enum {
     Making,
     // The recovery code shown, until Enter
     Code,
+    // Logging in (decisions/0150): the name, the password, and the session being made
+    LoginName,
+    LoginPassword,
+    LoggingIn,
 }
 
 // Setup's first row of fields: the name, the password, it again, then a blank row and its message
@@ -157,6 +170,12 @@ Service :: struct {
     message : u8[MESSAGE_BYTES],
     message_count : usize,
     code : u8[accounts.RECOVERY_TEXT_BYTES],
+    // The clients, the session's who's logged in, and the keyboard layout the login screen chose
+    connected : service_kit.Clients,
+    user : u8[account_records.MAX_NAME_BYTES],
+    user_count : usize,
+    logged_in : bool,
+    layout : string,
 }
 
 main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?, input: os.Channel[connector.Connector]?,
@@ -193,8 +212,9 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
         case None => {}
     }
     service.port = slop_os.port_create(startup.budget) or_return 2
-    connected := service_kit.Clients.{}
-    if !service_kit.add_client(&connected, service.port, clients.end) {
+    service.layout = keymaps.US.name
+    connected :: &service.connected
+    if !service_kit.add_client(connected, service.port, clients.end) {
         return 3
     }
     match serial_line {
@@ -212,6 +232,10 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
     dial_seat(service)
     dial_serial(service)
     dial_accounts(service)
+    // A boot with no accounts has the one session with no user, at once
+    if service.accounts_connector == NONE {
+        start_session(service, null)
+    }
     runtime.log_info("serving")
     into := os.Incoming.{}
     loop {
@@ -219,14 +243,14 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
             i : usize = 0
         }
         loop {
-            serve(service, &connected, i, &into)
+            serve(service, connected, i, &into)
             i += 1
         }
         while i < connected.count
         take_serial(service, &into)
         take_seat(service, &into)
         take_accounts(service, &into)
-        deliver(service, &connected)
+        deliver(service, connected)
         pump(service)
         draw_framebuffer(service)
         packets : slop_os.Packet[8]
@@ -720,7 +744,26 @@ use_screen :: fn(service: ptr[mut Service], whole: bool) {
 update_status :: fn(service: ptr[mut Service]) {
     storage : u8[160]
     status := text_buffer.make(storage)
-    text_buffer.append(&status, if service.attention { STATUS_ATTENTION } else if service.setup != .Off { STATUS_SETUP } else { STATUS })
+    if service.attention {
+        text_buffer.append(&status, STATUS_ATTENTION)
+    }
+    else if service.setup != .Off {
+        text_buffer.append(&status, if is_login(service.setup) { STATUS_LOGIN } else { STATUS_SETUP })
+        layout :: keymaps.find(service.layout) or_else keymaps.US
+        text_buffer.append(&status, " │ keyboard: ")
+        text_buffer.append(&status, layout.title)
+        text_buffer.append(&status, " │ F2: layout")
+    }
+    else if service.logged_in && service.user_count > 0 && service.user_count <= service.user.count {
+        text_buffer.append(&status, " SlopOS │ console │ ")
+        text_buffer.append(&status, string_of(&service.user[0], service.user_count))
+    }
+    else if service.logged_in {
+        text_buffer.append(&status, STATUS_NO_ACCOUNTS)
+    }
+    else {
+        text_buffer.append(&status, STATUS)
+    }
     if service.waiting_code != 0 {
         text_buffer.append(&status, " │ a new keyboard: type ")
         text_buffer.append_unsigned(&status, cast[u64](service.waiting_code))
@@ -1307,9 +1350,28 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
         }
         match os.message_of[accounts.Response](into)^ {
             case Described(status) => {
-                if status.accounts == 0 && service.setup == .Off {
-                    enter_setup(service)
+                if service.setup == .Off && !service.logged_in {
+                    if status.accounts == 0 {
+                        enter_setup(service)
+                    }
+                    else {
+                        enter_login(service)
+                    }
                 }
+            }
+            case OpenedHome(root) => logged_in(service, root)
+            case WrongCredentials => {
+                say(service, "That name and password don't open an account. Type them again.")
+                setup_step(service, .LoginName)
+            }
+            case RateLimited(wait) => {
+                storage : u8[MESSAGE_BYTES]
+                text := text_buffer.make(storage)
+                text_buffer.append(&text, "Too many tries: wait ")
+                text_buffer.append_unsigned(&text, (wait + 999_999_999) / 1_000_000_000)
+                text_buffer.append(&text, " seconds, then type the password again.")
+                say(service, text_buffer.as_string(&text))
+                setup_step(service, .LoginPassword)
             }
             case Created(shown) => {
                 service.code = shown.text
@@ -1328,8 +1390,14 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
             case AlreadyExists => leave_setup(service)
             case Refused => leave_setup(service)
             case _ => {
-                say(service, "The account couldn't be made. Type the password again.")
-                setup_step(service, .Password)
+                if is_login(service.setup) {
+                    say(service, "The session couldn't be opened. Type the password again.")
+                    setup_step(service, .LoginPassword)
+                }
+                else {
+                    say(service, "The account couldn't be made. Type the password again.")
+                    setup_step(service, .Password)
+                }
             }
         }
     }
@@ -1342,30 +1410,125 @@ enter_setup :: fn(service: ptr[mut Service]) {
     draw_setup(service, true)
 }
 
-// Setup done: the recovery code forgotten, and the program's screen drawn again.
+// Setup done: the recovery code forgotten, and the login screen up.
 leave_setup :: fn(service: ptr[mut Service]) {
     wipe(service.code[0..<service.code.count])
+    runtime.log_info("first-boot setup ended")
+    enter_login(service)
+}
+
+// The login screen (decisions/0150).
+enter_login :: fn(service: ptr[mut Service]) {
+    runtime.log_info("login: asking for a name and password")
+    say(service, "")
+    setup_step(service, .LoginName)
+    update_status(service)
+}
+
+// The login screen's name and password opened the account's home: the session made with it, and the screen gone.
+logged_in :: fn(service: ptr[mut Service], root: os.Channel[dir.Dir]) {
+    name :: name_bytes(service)
+    for byte, i in name {
+        if i < service.user.count {
+            service.user[i] = byte
+        }
+    }
+    service.user_count = name.count
+    if !start_session(service, root) {
+        say(service, "The session couldn't be made. Type the password again.")
+        setup_step(service, .LoginPassword)
+        return void
+    }
+    runtime.log_info("logged in as %", string_of(&service.user[0], service.user_count))
     wipe(service.field[0..<service.field.count])
     wipe(service.password[0..<service.password.count])
     service.field_count = 0
     service.password_count = 0
     service.setup = .Off
-    runtime.log_info("first-boot setup ended")
     update_status(service)
     screen.show_panel(&service.screen, false)
     redraw(service)
+}
+
+/*
+ * The session made by the session manager, with a terminal connection of its own, which this serves as any client, and
+ * the home's root: the user's who logged in, or with no home, the one with no user of a boot with no accounts.
+ */
+start_session :: fn(service: ptr[mut Service], home: os.Channel[dir.Dir]?) -> bool {
+    if service.session_end == NONE {
+        return false
+    }
+    budget :: slop_os.startup_block().budget
+    pair :: os.channel_for[terminal.Terminal](budget, 0) or_return false
+    if !service_kit.add_client(&service.connected, service.port, pair.a) {
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        return false
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[session.Request](&out)
+    match home {
+        case Some(root) => {
+            request^ = .Start(session.SessionStart.{user = os.append(&out, service.user[0..<min_count(service.user_count, service.user.count)]),
+                home = root, terminal = os.Channel[terminal.Terminal].{end = pair.b}})
+        }
+        case None => request^ = .StartWithoutUser(os.Channel[terminal.Terminal].{end = pair.b})
+    }
+    if session.send_request(service.session_end, service.session_port, &out) != null {
+        return false
+    }
+    into := os.Incoming.{}
+    loop {
+        match session.receive_response(service.session_end, service.session_port, &into, true) {
+            case Received => break
+            case Failed(error) => return false
+            case _ => continue
+        }
+    }
+    started :: match os.message_of[session.Response](&into)^ {
+        case Started => true
+        case _ => false
+    }
+    service.logged_in = started
+    if started && (home is_none) {
+        runtime.log_info("a session with no user, on a boot with no accounts")
+        update_status(service)
+    }
+    return started
+}
+
+is_login :: fn(step: SetupStep) -> bool {
+    return step == .LoginName || step == .LoginPassword || step == .LoggingIn
+}
+
+// The next keyboard layout, for the input service to type through, and shown on the status line.
+next_layout :: fn(service: ptr[mut Service]) {
+    layout :: keymaps.next(service.layout)
+    service.layout = layout.name
+    if service.seat_end != NONE {
+        out := os.Outgoing.{}
+        request :: os.begin[seat.Request](&out)
+        request^ = .SetLayout(os.append(&out, string_bytes(layout.name)))
+        _ = seat.send_request(service.seat_end, service.port, &out)
+    }
+    runtime.log_info("login: the % keyboard layout", layout.name)
+    update_status(service)
 }
 
 // A step, its field empty, drawn.
 setup_step :: fn(service: ptr[mut Service], step: SetupStep) {
     wipe(service.field[0..<service.field.count])
     service.field_count = 0
-    if step == .Name || step == .Password {
+    if step == .Name || step == .Password || step == .LoginName || step == .LoginPassword {
         wipe(service.password[0..<service.password.count])
         service.password_count = 0
     }
+    if step == .LoginName {
+        wipe(service.name[0..<service.name.count])
+        service.name_count = 0
+    }
     service.setup = step
-    runtime.log_info("first-boot setup: %", step_name(step))
+    runtime.log_info("% %", if is_login(step) { "login:" } else { "first-boot setup:" }, step_name(step))
     draw_setup(service, true)
 }
 
@@ -1377,12 +1540,19 @@ step_name :: fn(step: SetupStep) -> string {
         case .Again => "asking for the password again"
         case .Making => "making the account"
         case .Code => "showing the recovery code"
+        case .LoginName => "asking for the name"
+        case .LoginPassword => "asking for the password"
+        case .LoggingIn => "opening the session"
     }
 }
 
 // One key on setup's screen: text typed into the field, Backspace taking a cluster back, Enter going on.
 setup_key :: fn(service: ptr[mut Service], event: terminal.Event, text: u8[]) {
-    if service.setup == .Making {
+    if service.setup == .Making || service.setup == .LoggingIn {
+        return void
+    }
+    if event.code == USAGE_F2 {
+        next_layout(service)
         return void
     }
     if event.code == USAGE_ENTER {
@@ -1477,8 +1647,47 @@ setup_enter :: fn(service: ptr[mut Service]) {
             make_account(service)
         }
         case .Code => leave_setup(service)
+        case .LoginName => {
+            if typed.count == 0 || typed.count > service.name.count {
+                return void
+            }
+            for byte, i in typed {
+                if i < service.name.count {
+                    service.name[i] = byte
+                }
+            }
+            service.name_count = typed.count
+            say(service, "")
+            setup_step(service, .LoginPassword)
+        }
+        case .LoginPassword => open_home(service, typed)
         case _ => {}
     }
+}
+
+// The account's home asked for with the name and password typed, the password forgotten once it's sent.
+open_home :: fn(service: ptr[mut Service], password: u8[]) {
+    if service.accounts_end == NONE || service.name_count > service.name.count {
+        say(service, "The account service isn't there. Type the password again.")
+        setup_step(service, .LoginPassword)
+        return void
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[accounts.Request](&out)
+    request^ = .OpenHome(accounts.Credentials.{name = os.append(&out, service.name[0..<service.name_count]), password = os.append(&out, password)})
+    sent :: accounts.send_request(service.accounts_end, service.port, &out) == null
+    for i in 0..<out.words.count {
+        out.words[i] = 0
+    }
+    wipe(service.field[0..<service.field.count])
+    service.field_count = 0
+    if !sent {
+        say(service, "The account service couldn't be asked. Type the password again.")
+        setup_step(service, .LoginPassword)
+        return void
+    }
+    say(service, "Opening your session.")
+    setup_step(service, .LoggingIn)
 }
 
 // The account asked for, the password forgotten once it's sent.
@@ -1546,6 +1755,10 @@ draw_setup :: fn(service: ptr[mut Service], whole: bool) {
     }
     bold :: terminal.Style.{attributes = terminal.BOLD}
     plain :: terminal.Style.{}
+    if is_login(service.setup) {
+        draw_login(service, whole)
+        return void
+    }
     screen.write_at(panel, 1, 2, "First-boot setup", bold)
     if service.setup == .Code {
         screen.write_at(panel, 3, 2, "The administrator's account is made. Its recovery code, shown this once:", plain)
@@ -1589,6 +1802,47 @@ draw_setup :: fn(service: ptr[mut Service], whole: bool) {
     shown :: if service.setup == .Name { cast[u16](min_count(service.field_count, 40)) }
         else { cast[u16](min_count(clusters(field_bytes(service)), 40)) }
     panel.column = field_column + shown
+    if whole {
+        redraw(service)
+    }
+    else {
+        redraw_rows(service, SETUP_FIELDS_ROW, SETUP_FIELDS_ROW + 5)
+    }
+}
+
+/*
+ * The login screen: the name, the password as dots, what it last said, and how to change the keyboard layout, which the
+ * status line shows; drawn whole, or only its fields and message.
+ */
+draw_login :: fn(service: ptr[mut Service], whole: bool) {
+    panel :: &service.screen.panel
+    bold :: terminal.Style.{attributes = terminal.BOLD}
+    plain :: terminal.Style.{}
+    name_row :: SETUP_FIELDS_ROW
+    field_column : u16 = 13
+    screen.write_at(panel, 1, 2, "Log in", bold)
+    screen.write_at(panel, 3, 2, "Type your account's name and password.", plain)
+    screen.write_at(panel, name_row, 2, "Name:", plain)
+    screen.write_at(panel, name_row + 1, 2, "Password:", plain)
+    typed :: field_bytes(service)
+    if service.setup == .LoginName {
+        if typed.count > 0 {
+            screen.write_at(panel, name_row, field_column, string_of(&typed[0], typed.count), plain)
+        }
+    }
+    else {
+        name :: name_bytes(service)
+        if name.count > 0 {
+            screen.write_at(panel, name_row, field_column, string_of(&name[0], name.count), plain)
+        }
+        dots(panel, name_row + 1, field_column, if service.setup == .LoggingIn { 8 } else { clusters(typed) })
+    }
+    if service.message_count > 0 && service.message_count <= service.message.count {
+        screen.write_at(panel, name_row + 4, 2, string_of(&service.message[0], service.message_count), plain)
+    }
+    screen.write_at(panel, name_row + 6, 2, "Enter goes on, Backspace takes back what was typed last, F2 changes the layout.", plain)
+    panel.row = if service.setup == .LoginName { name_row } else { name_row + 1 }
+    panel.column = field_column + cast[u16](min_count(if service.setup == .LoginName { typed.count } else { clusters(typed) }, 40))
     if whole {
         redraw(service)
     }

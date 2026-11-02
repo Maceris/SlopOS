@@ -20,6 +20,7 @@ import config_service from "../services/config_service"
 import update_service from "../services/update_service"
 import terminal_service from "../services/terminal_service"
 import echo from "../apps/echo"
+import session_manager from "../services/session_manager"
 import input_service from "../services/input_service"
 import disk_check from "../services/disk_check"
 import account_service from "../services/account_service"
@@ -176,7 +177,7 @@ SERVICES :: Service.[
         entry = type_of(scheduler_service.main)},
     Service.{name = "platform", boot_set = true, module = "platform.elf", starter = .RootTask, by_manager = true, budget = 8 * MIB,
         entry = type_of(platform.main)},
-    Service.{name = "supervisor", boot_set = true, module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 240 * MIB,
+    Service.{name = "supervisor", boot_set = true, module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 272 * MIB,
         entry = type_of(supervisor.main)},
     // Every program's log records but the root task's and what it starts, first, so each is given a ring for them (decisions/0093)
     Service.{name = "events", boot_set = true, module = "events_service.elf", starter = .Supervisor, by_manager = true, budget = 8 * MIB,
@@ -190,6 +191,9 @@ SERVICES :: Service.[
         entry = type_of(input_service.main), cpu = TRUSTED_PATH_CPU},
     Service.{name = "terminal", module = "terminal_service.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(terminal_service.main), cpu = TRUSTED_PATH_CPU},
+    // Each session, made once someone's logged in, and its first program, echo, its budget split off this one's (decisions/0150)
+    Service.{name = "sessions", module = "session_manager.elf", starter = .Supervisor, by_manager = true, budget = 24 * MIB,
+        entry = type_of(session_manager.main)},
     Service.{name = "echo", module = "echo.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(echo.main), cpu = INTERACTIVE_CPU},
     Service.{name = "hello", module = "hello.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
