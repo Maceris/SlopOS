@@ -197,7 +197,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 56 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 57 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 5 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -406,6 +406,37 @@ TESTS = [
         "--expect-line=[user] echo: read fifth line",
         "--expect-console-line=echo: fifth line",
         "--refuse-console-line=correct horse battery staple"])),
+    # The powerbox (decisions/0156): echo asks it for a file to save a line in, the secure attention key opens the
+    # chooser, which offers the name echo suggested as a new file; then for a file to read, narrowed by typing; then for
+    # a directory, the home chosen; and once more, refused
+    ("asks the user for files and directories through the powerbox's chooser on the trusted path", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=90").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wsave hello from the powerbox\\r\\w\\p\\e[3;7~\\w\\r"
+        "\\wopen\\r\\w\\p\\e[3;7~\\wnotes\\r"
+        "\\wlist\\r\\w\\p\\e[3;7~\\w\\r"
+        "\\wopen\\r\\w\\p\\e[3;7~\\w\\e\\p",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
+        "--console-input-after=Asked the powerbox; Ctrl+Alt+Delete shows what it asks.", "--console-input-after=  Choose a file",
+        "--console-input-after=Saved.",
+        "--console-input-after=Asked the powerbox; Ctrl+Alt+Delete shows what it asks.", "--console-input-after=  Choose a file",
+        "--console-input-after=It says: hello from the powerbox",
+        "--console-input-after=Asked the powerbox; Ctrl+Alt+Delete shows what it asks.", "--console-input-after=  Choose a directory",
+        "--console-input-after=It has 2 entries: apps, notes.txt",
+        "--console-input-after=Asked the powerbox; Ctrl+Alt+Delete shows what it asks.", "--console-input-after=  Choose a file",
+        "--expect-line=[user] powerbox: echo asks for a file to write",
+        "--expect-line=[user] terminal: chose notes.txt for echo",
+        "--expect-line=[user] powerbox: gave echo notes.txt",
+        "--expect-line=[user] echo: saved a line in a file the powerbox gave",
+        "--expect-line=[user] powerbox: echo asks for a file to read",
+        "--expect-line=[user] echo: read a file the powerbox gave",
+        "--expect-line=[user] powerbox: echo asks for a directory to read",
+        "--expect-line=[user] echo: listed a directory the powerbox gave",
+        "--expect-line=[user] terminal: refused echo",
+        "--expect-line=[user] echo: the powerbox gave nothing",
+        "--expect-console-line=The powerbox gave nothing."])),
     # Memory pressure (decisions/0153): with two sessions, the session manager's budget charged to its threshold, it asks
     # the idle installation, the counter of the session not shown, to stop, and leaves the shown session's running
     ("stops the idle installations of sessions not shown under memory pressure", 7,

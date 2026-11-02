@@ -44,6 +44,7 @@ KIND_CONFIG : u8 : 3
 SERVED_BY_ROOT_TASK : u8 : 0
 SERVED_BY_SUPERVISOR : u8 : 1
 SERVED_BY_STORAGE_MANAGER : u8 : 2
+SERVED_BY_SESSION_MANAGER : u8 : 3
 
 // A CPU share, as system_config.CpuShare, present if has is 1.
 CpuRecord :: struct {
@@ -198,7 +199,7 @@ check :: fn(records: ptr[SystemRecords]) -> Problem? {
         return Problem.{reason = "has no default CPU share within its period", service = MAX_SERVICES}
     }
     for i in cast[usize](0)..<records.served.count {
-        if i < cast[usize](records.served_count) && i < records.served_by.count && records.served_by[i] > SERVED_BY_STORAGE_MANAGER {
+        if i < cast[usize](records.served_count) && i < records.served_by.count && records.served_by[i] > SERVED_BY_SESSION_MANAGER {
             return Problem.{reason = "has a protocol served by nothing it knows", service = MAX_SERVICES}
         }
     }

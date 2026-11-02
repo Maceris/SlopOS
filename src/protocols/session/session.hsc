@@ -4,6 +4,7 @@ import os from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
 import terminal from "std/os/slop_os"
+import prompt from "../prompt"
 
 /*
  * What the trusted path asks of the session manager (decisions/0136, 0139, 0150). Start makes a session once someone's
@@ -36,14 +37,16 @@ Program :: struct {
 }
 
 /*
- * A session to make: its user's name, its home volume's root, the terminal its programs write to, and the keyboard
- * layout its user logged in with, which chooses its locale until its user's settings say one (decisions/0152).
+ * A session to make: its user's name, its home volume's root, the terminal its programs write to, the keyboard layout
+ * its user logged in with, which chooses its locale until its user's settings say one (decisions/0152), and the trusted
+ * path's prompt connection for its powerbox (decisions/0156).
  */
 SessionStart :: struct {
     user : slop_os.Relative[u8],
     layout : slop_os.Relative[u8],
     home : os.Channel[dir.Dir],
     terminal : os.Channel[terminal.Terminal],
+    prompts : os.Channel[prompt.Prompt],
 }
 
 Request :: union {

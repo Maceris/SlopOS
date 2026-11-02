@@ -46,6 +46,7 @@ import links from "../protocols/links"
 import platform_protocol from "../protocols/platform"
 import supervision from "../protocols/supervision"
 import session from "../protocols/session"
+import powerbox from "../protocols/powerbox"
 import test_channels from "../tests/test_channels"
 import test_control from "../tests/test_control"
 import test_devices from "../tests/test_devices"
@@ -177,7 +178,7 @@ SERVICES :: Service.[
         entry = type_of(scheduler_service.main)},
     Service.{name = "platform", boot_set = true, module = "platform.elf", starter = .RootTask, by_manager = true, budget = 8 * MIB,
         entry = type_of(platform.main)},
-    Service.{name = "supervisor", boot_set = true, module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 304 * MIB,
+    Service.{name = "supervisor", boot_set = true, module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 320 * MIB,
         entry = type_of(supervisor.main)},
     // Every program's log records but the root task's and what it starts, first, so each is given a ring for them (decisions/0093)
     Service.{name = "events", boot_set = true, module = "events_service.elf", starter = .Supervisor, by_manager = true, budget = 8 * MIB,
@@ -191,9 +192,9 @@ SERVICES :: Service.[
         entry = type_of(input_service.main), cpu = TRUSTED_PATH_CPU},
     Service.{name = "terminal", module = "terminal_service.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,
         entry = type_of(terminal_service.main), cpu = TRUSTED_PATH_CPU},
-    // Each session, made once someone's logged in, its first program, echo, and its installations, their budgets split
-    // off this one's (decisions/0150, 0153)
-    Service.{name = "sessions", module = "session_manager.elf", starter = .Supervisor, by_manager = true, budget = 40 * MIB,
+    // Each session, made once someone's logged in, its powerbox, its first program, echo, and its installations, their
+    // budgets split off this one's (decisions/0150, 0153, 0156)
+    Service.{name = "sessions", module = "session_manager.elf", starter = .Supervisor, by_manager = true, budget = 48 * MIB,
         entry = type_of(session_manager.main)},
     Service.{name = "echo", module = "echo.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(echo.main), cpu = INTERACTIVE_CPU},
@@ -282,6 +283,10 @@ SUPERVISOR_SERVES :: type.[os.Listener[connector.Connector], os.Listener[session
 // What the storage manager serves itself: each volume server's stored links, on a connection it makes for each (roadmap 8f).
 STORAGE_MANAGER_SERVES :: type.[os.Listener[links.Links]]
 
+// What the session manager serves, through the powerbox it starts in each session: its programs' connections to it
+// (decisions/0156).
+SESSION_MANAGER_SERVES :: type.[os.Listener[powerbox.Powerbox]]
+
 // The service named name.
 service :: fn(name: string) -> Service? {
     for each in SERVICES {
@@ -312,6 +317,9 @@ make_records :: fn() -> system_records.SystemRecords {
     }
     for offered in STORAGE_MANAGER_SERVES {
         serve(&made, os.end_tag(type_info_of(offered)), system_records.SERVED_BY_STORAGE_MANAGER)
+    }
+    for offered in SESSION_MANAGER_SERVES {
+        serve(&made, os.end_tag(type_info_of(offered)), system_records.SERVED_BY_SESSION_MANAGER)
     }
     for each, i in SERVICES {
         if i >= made.services.count {

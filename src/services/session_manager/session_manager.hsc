@@ -13,7 +13,9 @@
  * owned by "user:", the user's name, ":" and its name. Under memory pressure, its budget at PRESSURE_PERCENT of its
  * limit, it asks the idle installations, those of the sessions the console doesn't show, the least recently shown
  * session's first, to stop, one at a time, until it's back under RELIEVED_PERCENT; a session's first program is never
- * asked.
+ * asked. A session with a user has a powerbox (decisions/0156), started before echo with a connection to the session's
+ * home and the trusted path's prompt connection; each program it starts after is given a connection of its own to it,
+ * served under the program's name.
  */
 package session_manager
 
@@ -26,6 +28,7 @@ import process_manager from "std/os/slop_os"
 import terminal from "std/os/slop_os"
 import schema from "std"
 import echo from "../../apps/echo"
+import powerbox_service from "../powerbox_service"
 import counter from "../../apps/counter"
 import counter_app from "../../counter_app"
 import bundle from "../../bundle"
@@ -35,6 +38,8 @@ import bundle_store from "../../protocols/bundle_store"
 import connector from "../../protocols/connector"
 import config from "../../protocols/config"
 import events from "../../protocols/events"
+import powerbox from "../../protocols/powerbox"
+import prompt from "../../protocols/prompt"
 import session from "../../protocols/session"
 import service_kit from "../../libraries/service_kit"
 
@@ -56,6 +61,7 @@ LOCALE_BYTES :: 16
 // "user:", a user's name, ":" and an installation's name
 OWNER_BYTES :: 80
 INSTALLATION_BUDGET : u64 : 4 * 1024 * 1024
+POWERBOX_BUDGET : u64 : 2 * 1024 * 1024
 // How long test_installations waits for the counter to count
 COUNT_WAIT : u64 : 20_000_000_000
 NOWHERE : usize : ~cast[usize](0)
@@ -71,6 +77,15 @@ EchoGrants :: struct {
     log : slop_os.DebugLog?,
     session_terminal : os.Channel[terminal.Terminal],
     home : os.Channel[dir.Dir]?,
+    powerbox : os.Channel[powerbox.Powerbox]?,
+}
+
+// What the powerbox is given (powerbox_service.main): the session's home, the trusted path's prompt connection, and the
+// session manager's connection, on which it's asked to serve each program.
+PowerboxGrants :: struct {
+    home : os.Channel[dir.Dir]?,
+    prompts : os.Channel[prompt.Prompt],
+    manager : os.Channel[powerbox.Powerbox],
 }
 
 // What an installation is given (counter.main, the entry installations are launched with): its data directory and its
@@ -94,6 +109,9 @@ Session :: struct {
     apps : slop_os.Channel,
     // When it was last shown, by the count of Shown, 0 for never
     shown_at : u64,
+    // Its powerbox's connection for the session manager; NONE for none
+    powerbox_end : slop_os.Channel,
+    powerbox_port : slop_os.Port,
 }
 
 // A program of a session's: its name, its session's number, its process and budget, its lifecycle channel's end, and
@@ -308,8 +326,9 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
         out := os.Outgoing.{}
         response :: os.begin[session.Response](&out)
         match os.message_of[session.Request](into)^ {
-            case Start(given) => response^ = start(sessions, os.items(into, given.user), os.items(into, given.layout), given.terminal, given.home)
-            case StartWithoutUser(given) => response^ = start(sessions, u8.[], u8.[], given, null)
+            case Start(given) => response^ = start(sessions, os.items(into, given.user), os.items(into, given.layout), given.terminal, given.home,
+                given.prompts)
+            case StartWithoutUser(given) => response^ = start(sessions, u8.[], u8.[], given, null, null)
             case List(number) => {
                 programs : session.Program[session.MAX_PROGRAMS]
                 count :: list(sessions, number, &programs)
@@ -336,7 +355,8 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
  * A session made, its first program started with its terminal and home: Started with its number, or Refused when
  * there's no room for another.
  */
-start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?) -> session.Response {
+start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?,
+    prompts: os.Channel[prompt.Prompt]?) -> session.Response {
     number := sessions.sessions.count
     for each, i in sessions.sessions {
         if !each.in_use {
@@ -350,9 +370,14 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
             case Some(root) => _ = slop_os.handle_close(cast[slop_os.Handle](root.end))
             case None => {}
         }
+        match prompts {
+            case Some(given) => _ = slop_os.handle_close(cast[slop_os.Handle](given.end))
+            case None => {}
+        }
         return .Refused
     }
-    made := Session.{in_use = true, user_bytes = user.count, locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE), apps = NONE}
+    made := Session.{in_use = true, user_bytes = user.count, locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE), apps = NONE,
+        powerbox_end = NONE}
     for byte, i in user {
         if i < made.user.count {
             made.user[i] = byte
@@ -374,8 +399,12 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
     else {
         runtime.log_info("a session for %, in %", string_of(&user[0], user.count), locale_of(&sessions.sessions[number]))
     }
-    // Its apps directory, before its home is echo's
+    // Its apps directory and its powerbox, before its home is echo's
     sessions.sessions[number].apps = apps_of(sessions, home)
+    match prompts {
+        case Some(given) => _ = launch_powerbox(sessions, cast[u32](number), home, given)
+        case None => {}
+    }
     if !launch_echo(sessions, cast[u32](number), given_terminal, home) {
         close_session(sessions, cast[u32](number))
         return .Refused
@@ -415,7 +444,11 @@ close_session :: fn(sessions: ptr[mut Manager], number: u32) {
     if made.apps != NONE {
         _ = slop_os.handle_close(cast[slop_os.Handle](made.apps))
     }
-    made^ = Session.{locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE), apps = NONE}
+    if made.powerbox_end != NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](made.powerbox_end))
+        _ = slop_os.handle_close(cast[slop_os.Handle](made.powerbox_port))
+    }
+    made^ = Session.{locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE), apps = NONE, powerbox_end = NONE}
 }
 
 // echo started in the session, its end watched and its lifecycle channel kept; whether it started.
@@ -425,7 +458,82 @@ launch_echo :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.Ch
     copy :: cast[slop_os.Memory](slop_os.handle_duplicate(cast[slop_os.Handle](module), rights) or_return false)
     prepared :: prepare(sessions, number, "echo") or_return false
     return placed(sessions, number, "echo", prepared, os.launch(sessions.manager, sessions.manager_port, "echo", copy, ECHO_BUDGET, echo.main,
-        EchoGrants.{log = duplicate_log(sessions.log), session_terminal = given_terminal, home = home}, prepared.options), false)
+        EchoGrants.{log = duplicate_log(sessions.log), session_terminal = given_terminal, home = home,
+        powerbox = powerbox_for(sessions, number, "echo")}, prepared.options), false)
+}
+
+/*
+ * The session's powerbox, from the bundle store, given another connection to its home and the prompt connection, and
+ * its connection for the session manager kept: whether it started.
+ */
+launch_powerbox :: fn(sessions: ptr[mut Manager], number: u32, home: os.Channel[dir.Dir]?, prompts: os.Channel[prompt.Prompt]) -> bool {
+    if cast[usize](number) >= sessions.sessions.count {
+        _ = slop_os.handle_close(cast[slop_os.Handle](prompts.end))
+        return false
+    }
+    expected :: bundle.Hash.{bytes = schema.hash(type_info_of(type_of(powerbox_service.main)))}
+    program := cast[slop_os.Memory](slop_os.NO_HANDLE)
+    match bundle_named(sessions, "powerbox_service") {
+        case Some(found) => program = program_of(sessions, found, expected) or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
+        case None => {}
+    }
+    if cast[slop_os.Handle](program) == slop_os.NO_HANDLE {
+        runtime.log_info("no powerbox for the session")
+        _ = slop_os.handle_close(cast[slop_os.Handle](prompts.end))
+        return false
+    }
+    pair :: os.channel_for[powerbox.Powerbox](slop_os.startup_block().budget, 0) or_return false
+    grants := PowerboxGrants.{prompts = prompts, manager = os.Channel[powerbox.Powerbox].{end = pair.a}}
+    match home {
+        case Some(root) => match connection_to(root.end) {
+            case Some(another) => grants.home = os.Channel[dir.Dir].{end = another}
+            case None => {}
+        }
+        case None => {}
+    }
+    prepared :: prepare(sessions, number, "powerbox") or_return false
+    if !placed(sessions, number, "powerbox", prepared, os.launch(sessions.manager, sessions.manager_port, "powerbox", program, POWERBOX_BUDGET,
+        powerbox_service.main, grants, prepared.options), false) {
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        return false
+    }
+    sessions.sessions[cast[usize](number)].powerbox_end = pair.b
+    sessions.sessions[cast[usize](number)].powerbox_port = port_of(pair.b)
+    return true
+}
+
+// A connection to session number's powerbox for the program named name, which it serves under that name; null without one.
+powerbox_for :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> os.Channel[powerbox.Powerbox]? {
+    if cast[usize](number) >= sessions.sessions.count || sessions.sessions[cast[usize](number)].powerbox_end == NONE {
+        return null
+    }
+    made :: &sessions.sessions[cast[usize](number)]
+    pair :: os.channel_for[powerbox.Powerbox](slop_os.startup_block().budget, 0) or_return null
+    out := os.Outgoing.{}
+    request :: os.begin[powerbox.Request](&out)
+    request^ = .Serve(powerbox.Served.{name = os.append(&out, string_bytes(name)),
+        end = os.Channel[powerbox.Powerbox].{end = pair.a}})
+    if powerbox.send_request(made.powerbox_end, made.powerbox_port, &out) != null {
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        return null
+    }
+    into := os.Incoming.{}
+    loop {
+        match powerbox.receive_response(made.powerbox_end, made.powerbox_port, &into, true) {
+            case Received => break
+            case _ => {
+                _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+                return null
+            }
+        }
+    }
+    return match os.message_of[powerbox.Response](&into)^ {
+        case Done => os.Channel[powerbox.Powerbox].{end = pair.b}
+        case _ => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+            null
+        }
+    }
 }
 
 /*
@@ -918,6 +1026,11 @@ bundle_named :: fn(sessions: ptr[mut Manager], name: string) -> bundle.Hash? {
  * (counter_app's, the schema of counter.main's type): null for one of another entry, which can't be given what it takes.
  */
 installation_program :: fn(sessions: ptr[mut Manager], bundle_hash: bundle.Hash) -> slop_os.Memory? {
+    return program_of(sessions, bundle_hash, bundle.Hash.{bytes = schema.hash(type_info_of(type_of(counter.main)))})
+}
+
+// A bundle's program, as paged memory from the store, if its manifest is expected, the schema of the entry it's launched with.
+program_of :: fn(sessions: ptr[mut Manager], bundle_hash: bundle.Hash, expected: bundle.Hash) -> slop_os.Memory? {
     record :: mapped_object(sessions, bundle_hash) or_return null
     referred : bundle.Hash[..]
     defer runtime.array_free(&referred)
@@ -928,7 +1041,6 @@ installation_program :: fn(sessions: ptr[mut Manager], bundle_hash: bundle.Hash)
     }
     manifest :: referred[1 % referred.count]
     program :: referred[0]
-    expected :: bundle.Hash.{bytes = schema.hash(type_info_of(type_of(counter.main)))}
     if !bundle.same(manifest, expected) {
         return null
     }

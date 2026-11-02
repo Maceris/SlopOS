@@ -26,7 +26,9 @@
  *
  * Several sessions (decisions/0151): each has a view of its own, which its programs write to, one shown at a time. The
  * secure attention key's screen switches to the next (S), logs in another (N), locks the console until the session's
- * user's password is typed (L), and logs out (O), the session manager ending the session's programs. Both are reached
+ * user's password is typed (L), and logs out (O), the session manager ending the session's programs. A session's
+ * powerbox asks the user through it (chooser.hsc, decisions/0156): the request's on the status line, and the secure
+ * attention key opens the chooser instead of this screen. Both are reached
  * through connectors, dialed again when they go, with the banner shown on each new serial line. Without a serial line
  * it keeps the model and shows nothing.
  */
@@ -46,6 +48,7 @@ import dir from "std/os/slop_os"
 import connector from "../../protocols/connector"
 import seat from "../../protocols/seat"
 import session from "../../protocols/session"
+import prompt from "../../protocols/prompt"
 import serial from "../../protocols/serial"
 import service_kit from "../../libraries/service_kit"
 import safe_text from "../../safe_text"
@@ -181,6 +184,9 @@ Service :: struct {
     // The view a login for another session was started from, to go back to; and whether the login screen is unlocking
     previous : usize,
     unlocking : bool,
+    // Whether the secure attention key brought up the powerbox's chooser, and its state
+    choosing : bool,
+    chooser : Chooser,
 }
 
 /*
@@ -207,6 +213,10 @@ View :: struct {
     user_count : usize,
     logged_in : bool,
     session : u32,
+    // Its powerbox's prompt connection, NONE without one, and the request waiting on it for the user
+    prompt_end : slop_os.Channel,
+    asking : bool,
+    ask : Asked,
 }
 
 main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?, input: os.Channel[connector.Connector]?,
@@ -283,6 +293,7 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
         take_serial(service, &into)
         take_seat(service, &into)
         take_accounts(service, &into)
+        take_prompts(service, &into)
         deliver(service, connected)
         pump(service)
         draw_framebuffer(service)
@@ -813,6 +824,9 @@ update_status :: fn(service: ptr[mut Service]) {
         text_buffer.append_unsigned(&status, cast[u64](service.waiting_code))
         text_buffer.append(&status, " and Enter on it")
     }
+    else if !service.attention && service.setup == .Off && view(service).asking {
+        append_asking(&status, &view(service).ask)
+    }
     else if service.panic_count > 0 && !service.panic_seen {
         text_buffer.append(&status, " │ the boot before stopped: Ctrl+Alt+Delete")
     }
@@ -850,6 +864,11 @@ enter_attention :: fn(service: ptr[mut Service]) {
     service.panic_seen = true
     runtime.log_info("secure attention")
     update_status(service)
+    // What's waiting for the user first: the powerbox's request
+    if view(service).asking {
+        enter_chooser(service)
+        return void
+    }
     list_programs(service)
     service.chosen = 0
     draw_panel(service)
@@ -1007,6 +1026,7 @@ leave_attention :: fn(service: ptr[mut Service]) {
         return void
     }
     service.attention = false
+    service.choosing = false
     runtime.log_info("secure attention ended")
     update_status(service)
     screen.show_panel(&view(service).screen, false)
@@ -1220,6 +1240,18 @@ screen_keys :: fn(service: ptr[mut Service], first: usize) {
         if !service.attention {
             continue
         }
+        if service.choosing {
+            start :: cast[usize](event.text_start)
+            end :: start + cast[usize](event.text_bytes)
+            text :: if start <= end && end <= decoded.text_count && end <= decoded.text.count { decoded.text[start..<end] } else { decoded.text[0..<0] }
+            chooser_key(service, event, text)
+            if !service.attention {
+                // Answered: what came after is the program's again, but for what's in this batch
+                drop_from(service, first)
+                return void
+            }
+            continue
+        }
         if event.code == USAGE_ESCAPE || event.code == USAGE_ENTER {
             leave_attention(service)
         }
@@ -1338,7 +1370,10 @@ take_seat_event :: fn(service: ptr[mut Service], event: seat.Event, text: u8[]) 
     }
 }
 
-// The input waiting, to the owner, once it holds a Read.
+/*
+ * The input waiting, to the owner, once it holds a Read: as many events as it asked for, and as fit its connection's
+ * ring, halved until they do; those after wait for its next Read.
+ */
 deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
     if service.decoded.count == 0 || view(service).held == 0 || service.attention || service.setup != .Off {
         return void
@@ -1348,20 +1383,64 @@ deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
         return void
     }
     end :: connected.ends[owner]
-    count :: if service.decoded.count < cast[usize](view(service).held) { service.decoded.count } else { cast[usize](view(service).held) }
-    if count > service.decoded.events.count || service.decoded.text_count > service.decoded.text.count {
-        return void
-    }
-    out := os.Outgoing.{}
-    response :: os.begin[terminal.Response](&out)
-    response^ = .Input(terminal.Events.{events = os.append(&out, service.decoded.events[0..<count]),
-        text = os.append(&out, service.decoded.text[0..<service.decoded.text_count])})
-    if terminal.send_response(end, service.port, &out) != null {
-        return void
+    decoded :: &service.decoded
+    count := if decoded.count < cast[usize](view(service).held) { decoded.count } else { cast[usize](view(service).held) }
+    loop {
+        if count == 0 || count > decoded.events.count || decoded.text_count > decoded.text.count {
+            return void
+        }
+        // The text up to the next event's
+        text_end :: if count < decoded.count && count < decoded.events.count { cast[usize](decoded.events[count].text_start) } else { decoded.text_count }
+        if text_end > decoded.text_count {
+            return void
+        }
+        out := os.Outgoing.{}
+        response :: os.begin[terminal.Response](&out)
+        response^ = .Input(terminal.Events.{events = os.append(&out, decoded.events[0..<count]), text = os.append(&out, decoded.text[0..<text_end])})
+        match terminal.send_response(end, service.port, &out) {
+            case Some(failure) => {
+                if failure != .TooBig || count == 1 {
+                    return void
+                }
+                count /= 2
+            }
+            case None => break
+        }
     }
     view(service).held = 0
-    // Events past the Read's most are dropped with their text, which the next events' ranges would no longer match
-    vt.reset(&service.decoder, &service.decoded)
+    keep_after(service, count)
+}
+
+// The decoded events after the first count, with their text, kept for the next Read; none left, the decoder reset.
+keep_after :: fn(service: ptr[mut Service], count: usize) {
+    decoded :: &service.decoded
+    if count >= decoded.count || count >= decoded.events.count {
+        vt.reset(&service.decoder, decoded)
+        return void
+    }
+    text_from :: cast[usize](decoded.events[count].text_start)
+    if text_from > decoded.text_count || decoded.text_count > decoded.text.count {
+        vt.reset(&service.decoder, decoded)
+        return void
+    }
+    left :: decoded.count - count
+    for i in 0..<left {
+        from :: i + count
+        if from < decoded.events.count && i < decoded.events.count {
+            moved := decoded.events[from]
+            moved.text_start = if cast[usize](moved.text_start) >= text_from { moved.text_start - cast[u32](text_from) } else { 0 }
+            decoded.events[i] = moved
+        }
+    }
+    text_left :: decoded.text_count - text_from
+    for i in 0..<text_left {
+        from :: i + text_from
+        if from < decoded.text.count && i < decoded.text.count {
+            decoded.text[i] = decoded.text[from]
+        }
+    }
+    decoded.count = left
+    decoded.text_count = text_left
 }
 
 // ---- First-boot setup (decisions/0148)
@@ -1550,12 +1629,17 @@ start_session :: fn(service: ptr[mut Service], home: os.Channel[dir.Dir]?) -> bo
     if client < service.client_view.count {
         service.client_view[client] = service.viewing
     }
+    // Its powerbox asks the user through its view (decisions/0156)
+    prompts := NONE
     out := os.Outgoing.{}
     request :: os.begin[session.Request](&out)
     match home {
         case Some(root) => {
+            prompt_pair :: os.channel_for[prompt.Prompt](budget, 0) or_return false
+            prompts = prompt_pair.a
             request^ = .Start(session.SessionStart.{user = os.append(&out, view(service).user[0..<min_count(view(service).user_count, view(service).user.count)]),
-                layout = os.append(&out, string_bytes(service.layout)), home = root, terminal = os.Channel[terminal.Terminal].{end = pair.b}})
+                layout = os.append(&out, string_bytes(service.layout)), home = root, terminal = os.Channel[terminal.Terminal].{end = pair.b},
+                prompts = os.Channel[prompt.Prompt].{end = prompt_pair.b}})
         }
         case None => request^ = .StartWithoutUser(os.Channel[terminal.Terminal].{end = pair.b})
     }
@@ -1578,6 +1662,15 @@ start_session :: fn(service: ptr[mut Service], home: os.Channel[dir.Dir]?) -> bo
         case _ => false
     }
     view(service).logged_in = started
+    if prompts != NONE {
+        signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+        if started && (slop_os.port_bind(service.port, cast[slop_os.Handle](prompts), signals, PROMPT_KEY + cast[u64](service.viewing), .Persistent) is_ok) {
+            view(service).prompt_end = prompts
+        }
+        else {
+            _ = slop_os.handle_close(cast[slop_os.Handle](prompts))
+        }
+    }
     if started && (home is_none) {
         runtime.log_info("a session with no user, on a boot with no accounts")
         update_status(service)
@@ -2187,6 +2280,11 @@ log_out :: fn(service: ptr[mut Service]) {
     }
     gone :: service.active
     runtime.log_info("logged out")
+    drop_ask(view(service))
+    if view(service).prompt_end != NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](view(service).prompt_end))
+        view(service).prompt_end = NONE
+    }
     view(service).in_use = false
     next :: another_session(service)
     if next != NO_VIEW {

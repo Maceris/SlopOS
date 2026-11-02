@@ -331,6 +331,9 @@ screen switching sessions, logging in another, locking the console and logging o
 (`decisions/0152`): Hemera's `std/locale`, the user's locale in the config store, given to each program of the session.
 10c4 done 2026-11-02 (`decisions/0153` to `0155`): the system's installations run in each session, with their data in
 the user's home, and under memory pressure the session manager stops the installations of the sessions not shown.
+10d planned 2026-11-02 (`decisions/0156`), in four parts: **10d1** the powerbox and its chooser; **10d2** persistent
+grants; **10d3** elevation; **10d4** shared volumes. 10d1 done 2026-11-02 (`decisions/0157`): a powerbox per session,
+`RequestFile` and `RequestDirectory` answered through the chooser the secure attention key opens.
 
 Specs: RFC 9106 (Argon2), RFC 3394 or the AEAD for key wrapping, ECMA-48 (for the VT adapter only), the Unicode
 standard's East Asian Width and UAX #29 for terminal widths.
@@ -492,5 +495,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | Perf | done 2026-10-31 (`decisions/0097`, `0112`, `0127` to `0130`): benchmarks held to baselines, tickless idle, large pages, CPU loans in the storage servers |
 | R | planned 2026-10-29 (`decisions/0096`): R1 to R4 done 2026-10-30 (`0104` to `0106`, `0112`); R5 and R6 not started |
 | B | done 2026-10-31 (`decisions/0131` to `0135`): Hemera's UEFI target, SlopOS's bootloader, boot counting and recovery, ISOs through it, Limine and BIOS boot removed |
-| M10 | planned 2026-11-01 (`decisions/0136`), in four stages, 10a done (`0137` to `0140`), 10b done (`0141` to `0148`); 10c and 10d not started |
+| M10 | planned 2026-11-01 (`decisions/0136`), in four stages, 10a done (`0137` to `0140`), 10b done (`0141` to `0148`), 10c done (`0149` to `0155`); 10d in progress (`0156`, `0157`) |
 | M11–M16, P, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
