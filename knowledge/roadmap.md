@@ -312,6 +312,10 @@ path's CPU share, and the boot before's panic shown.
 10a4 done 2026-11-01 (`decisions/0140`): the root task's services started again, reached through connectors it serves
 on a thread of its own, and registering a platform service's controllers again answered with those already there.
 10a done.
+10b planned 2026-11-01 (`decisions/0141`), in four parts: **10b1** Hemera's `#secret` kept out of `any`s, formatted as
+`<secret>`; **10b2** volumes made at run time, plain by the container service and sealed by a volume server; **10b3** the
+account service, its volume, Argon2id, wrapped keys, the password rules and rate limits; **10b4** first-boot setup on
+the trusted path, with the recovery code. 10b1 done 2026-11-01 (Hemera's `docs/memory.md`, *Secrets*).
 
 Specs: RFC 9106 (Argon2), RFC 3394 or the AEAD for key wrapping, ECMA-48 (for the VT adapter only), the Unicode
 standard's East Asian Width and UAX #29 for terminal widths.
