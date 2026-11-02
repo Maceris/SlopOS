@@ -47,6 +47,19 @@ AddedGeneration :: struct {
     record : slopfs.GenerationRecord,
 }
 
+// A new volume (decisions/0141): its name, its cipher (slopfs.Cipher's value, 0 for none), and when it's made.
+VolumeCreation :: struct {
+    name : slop_os.Relative[u8],
+    cipher : u8,
+    now : u64,
+}
+
+// A new sealed volume's key, wrapped, which its volume server made (decisions/0141): the index'th way, from 0.
+AddedWrap :: struct {
+    index : u64,
+    record : slopfs.WrapRecord,
+}
+
 /*
  * A volume as it was last committed, the transaction its changes go into now, the container it's in, who wrote a
  * clone's older blocks, and whether it's a snapshot, served read only.
@@ -107,6 +120,8 @@ Request :: union {
     GenerationAt(u32),
     // A new key generation's record, kept with the volume, which its record then names; durable with the next commit
     AddGeneration(AddedGeneration),
+    // A new volume's wrapped key, which its volume server made; only while the volume has no root (decisions/0141)
+    AddWrap(AddedWrap),
     // On the listener's connections (8e): a snapshot taken, deleted or found, and a clone made, each durable at once
     TakeSnapshot(SnapshotNamed),
     DeleteSnapshot(SnapshotNamed),
@@ -115,6 +130,11 @@ Request :: union {
     // On the listener's connections (8e): a volume's quota set, durable at once, and how much it has
     SetQuota(QuotaOf),
     Usage(slop_os.Relative[u8]),
+    /*
+     * On the listener's connections (decisions/0141): a new volume, with nothing in it, durable at once, answered with
+     * Created and its ID; the volume server that serves it first gives it its keys and root
+     */
+    CreateVolume(VolumeCreation),
     // Serve another client, on its end
     Connect(os.Channel[Container]),
 }
@@ -131,6 +151,7 @@ Response :: union {
     Generation(slopfs.GenerationRecord),
     Snapshot(SnapshotInfo),
     Used(slopfs.Usage),
+    Created(u64),
     // Past the last wrap record, the newest generation or the last snapshot
     NoMore,
     // A snapshot or volume with that name is there already
@@ -162,12 +183,14 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case WrapAt(_) => true
         case GenerationAt(_) => true
         case AddGeneration(_) => false
+        case AddWrap(_) => true
         case TakeSnapshot(_) => false
         case DeleteSnapshot(_) => false
         case SnapshotAt(_) => true
         case Clone(_) => false
         case SetQuota(_) => true
         case Usage(_) => true
+        case CreateVolume(_) => false
         case Connect(_) => true
     }
 }

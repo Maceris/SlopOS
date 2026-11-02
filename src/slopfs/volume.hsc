@@ -349,6 +349,71 @@ free_volume :: fn(volume: ptr[mut Volume]) {
     runtime.free(volume)
 }
 
+/*
+ * A new volume registered in the container with nothing in it yet (decisions/0141): its record, with no root and no keys,
+ * which the volume server that serves it first fills, making the keys of one with a cipher and writing its root. How
+ * the container service makes a volume, without holding what opens it: its ID.
+ */
+register_volume :: fn(container: ptr[mut Container], name: u8[], hash_key: u8[32], now: u64, cipher: Cipher) -> Result[u64, Error] {
+    if name.count == 0 || name.count > VOLUME_NAME_BYTES {
+        return .Error(.InvalidName)
+    }
+    found :: find_volume(container, string_of(&name[0], name.count))?
+    if found is_some {
+        return .Error(.AlreadyExists)
+    }
+    id :: container.next_volume
+    record := VolumeRecord.{next_object = cast[u64le](ROOT_OBJECT + 1), hash_key = hash_key, created = cast[u64le](now),
+        name_bytes = cast[u16le](cast[u16](name.count)), cipher = cast[u8](cipher)}
+    // A sealed one's first generation, which first_keys starts, is 1
+    if cipher != .None {
+        record.generation = cast[u32le](1)
+    }
+    for byte, i in name {
+        if i < record.name.count {
+            record.name[i] = byte
+        }
+    }
+    put_volume_record(container, id, &record)?
+    container.next_volume += 1
+    return .Ok(id)
+}
+
+// Whether a volume's record is one register_volume made that no volume server has filled yet: it has no root.
+is_unfilled :: fn(record: ptr[VolumeRecord]) -> bool {
+    return cast[u64](record.root.address) == 0 && cast[u64](record.next_object) == ROOT_OBJECT + 1
+}
+
+// A new sealed volume's first keys' records, made apart from its container: its key wrapped by passphrase, and its first generation.
+FirstKeys :: struct {
+    wrap : WrapRecord,
+    generation : GenerationRecord,
+    number : u32,
+}
+
+/*
+ * The keys of a volume register_volume made with a cipher, in its volume server: keys's volume key made, and wrapped
+ * by passphrase through Argon2id with parameters, and its first generation started at transaction; what the container
+ * service is given to keep, which opens nothing without the passphrase.
+ */
+first_keys :: fn(keys: ptr[mut Keys], passphrase: u8[], parameters: crypto.Argon2Parameters, container: u8[16], id: u64,
+    transaction: u64) -> Result[FirstKeys, Error] {
+
+    keys.volume_key = random_key()
+    wrap :: wrap_with_passphrase(&keys.volume_key, passphrase, parameters, container, id) or_return .Error(.WrongKey)
+    generation :: start_generation(keys, transaction, container, id) or_return .Error(.Corrupt)
+    return .Ok(FirstKeys.{wrap = wrap, generation = generation, number = keys.current})
+}
+
+// A volume register_volume made given its root directory, as create_volume gives one, to be written with its next commit.
+fill_volume :: fn(volume: ptr[mut Volume], now: u64) -> Result[void, Error] {
+    root := ObjectRecord.{kind = cast[u32le](cast[u32](ObjectKind.Directory)), parent = cast[u64le](ROOT_OBJECT),
+        created = cast[u64le](now), modified = cast[u64le](now), changed = cast[u64le](volume.nodes.transaction)}
+    put_object(volume, ROOT_OBJECT, &root)?
+    volume.dirty = true
+    return .Ok
+}
+
 put_volume_record :: fn(container: ptr[mut Container], id: u64, record: ptr[VolumeRecord]) -> Result[void, Error] {
     tree_put(&container.nodes, &container.volumes, key_of(id, .VolumeEntry, 0), view_of(cast[ptr[u8]](record), size_of(VolumeRecord)))?
     return .Ok

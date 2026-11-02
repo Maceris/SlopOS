@@ -187,6 +187,15 @@ main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clie
     }
     server.volume = slopfs.attach_volume(&server.nodes, device, described.id, described.record, keys) or_return 7
     server.volume.tree.lineage = described.lineage
+    // A volume made with nothing in it (decisions/0141) given its root directory, its first commit
+    if !described.read_only && slopfs.is_unfilled(&described.record) {
+        // Its root directory made when the volume was
+        slopfs.fill_volume(server.volume, cast[u64](described.record.created)) or_return 8
+        if !commit(server) {
+            return 8
+        }
+        log_line.write(server.log, "volume_server: volume % filled", described.id)
+    }
     if !described.read_only {
         server.volume.history_bytes = slopfs.HISTORY_BYTES
         // Nothing has anything open yet, so every orphan a crash left is given back
@@ -1437,7 +1446,9 @@ wait_for_unlock :: fn(server: ptr[mut Server], end: slop_os.Channel) -> ptr[mut 
         unlocked := false
         match os.message_of[volume_protocol.Request](&into)^ {
             case Unlock(given) => {
-                unlocked = unlock_keys(server, os.items(&into, given), keys)
+                // A volume made with nothing in it yet (decisions/0141) has no keys to unwrap: they're made here
+                unlocked = if slopfs.is_unfilled(&server.described.record) { make_first_keys(server, os.items(&into, given), keys) }
+                    else { unlock_keys(server, os.items(&into, given), keys) }
                 response = if unlocked { .Unlocked } else { .WrongKey }
             }
             case Rotate => response = .Failed
@@ -1461,6 +1472,31 @@ wait_for_unlock :: fn(server: ptr[mut Server], end: slop_os.Channel) -> ptr[mut 
  * The volume's keys, into keys, new: unwrapped with passphrase from the wrap and generation records the container
  * service keeps. False if it isn't the passphrase or they can't be read; keys are for free_keys either way.
  */
+/*
+ * A new sealed volume's keys (decisions/0141): its key made and wrapped by passphrase, and its first generation started,
+ * the records given the container service to keep, which can't open the volume without the passphrase. Whether they
+ * were.
+ */
+make_first_keys :: fn(server: ptr[mut Server], passphrase: u8[], keys: ptr[mut slopfs.Keys]) -> bool {
+    cipher :: server.described.record.cipher
+    keys.cipher = if cipher == cast[u8](slopfs.Cipher.Aes256Gcm) { slopfs.Cipher.Aes256Gcm } else { slopfs.Cipher.ChaCha20Poly1305 }
+    made :: match slopfs.first_keys(keys, passphrase, slopfs.MADE_PASSPHRASE, server.described.container, server.described.id,
+        server.described.transaction) {
+        case Ok(first) => first
+        case Error(error) => return false
+    }
+    match ask(server, .AddWrap(container.AddedWrap.{index = 0, record = made.wrap})) {
+        case Done => {}
+        case _ => return false
+    }
+    match ask(server, .AddGeneration(container.AddedGeneration.{number = made.number, record = made.generation})) {
+        case Done => {}
+        case _ => return false
+    }
+    log_line.write(server.log, "volume_server: volume % given its first keys", server.described.id)
+    return true
+}
+
 unlock_keys :: fn(server: ptr[mut Server], passphrase: u8[], keys: ptr[mut slopfs.Keys]) -> bool {
     wraps : slopfs.WrapRecord[..]
     defer runtime.array_free(&wraps)

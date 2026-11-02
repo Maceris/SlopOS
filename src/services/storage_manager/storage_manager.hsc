@@ -582,6 +582,12 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
                     response = volume_of(state, cast[usize](at.partition), os.items(into, at.name), passphrase, passphrase.count > 0)
                 }
             }
+            case CreateVolume(creation) => {
+                if is_container(state, creation.partition) {
+                    response = create_volume(state, cast[usize](creation.partition), os.items(into, creation.name),
+                        os.items(into, creation.passphrase), creation.cipher, creation.now)
+                }
+            }
             case Rotate(named) => {
                 if cast[usize](named.partition) < state.partition_count {
                     response = rotate(state, cast[usize](named.partition), os.items(into, named.name))
@@ -884,6 +890,27 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
         state.served[slot].unlocked = true
     }
     return root_of(&state.served[slot])
+}
+
+/*
+ * A new volume named name on the container at index (decisions/0141): registered by the container service with nothing
+ * in it, then opened, its volume server making its keys from passphrase if cipher seals it, and its root directory.
+ */
+create_volume :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u8[], cipher: u8, now: u64) -> storage.Response {
+    sealed :: cipher != 0
+    if sealed != (passphrase.count > 0) || name.count == 0 || name.count > VOLUME_NAME_BYTES || is_snapshot(name) {
+        return .Failed
+    }
+    service :: container_of(state, index) or_return .Failed
+    out := os.Outgoing.{}
+    request :: os.begin[container.Request](&out)
+    request^ = .CreateVolume(container.VolumeCreation.{name = os.append(&out, name), cipher = cipher, now = now})
+    match ask_container(service.end, service.port, &out) {
+        case Created(_) => runtime.log_info("made the % volume", string_of(&name[0], name.count))
+        case AlreadyExists => return .AlreadyExists
+        case _ => return .Failed
+    }
+    return volume_of(state, index, name, passphrase, sealed)
 }
 
 // Whether a name is a snapshot's, "volume@snapshot".

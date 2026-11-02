@@ -175,7 +175,7 @@ SERVICES :: Service.[
         entry = type_of(scheduler_service.main)},
     Service.{name = "platform", boot_set = true, module = "platform.elf", starter = .RootTask, by_manager = true, budget = 8 * MIB,
         entry = type_of(platform.main)},
-    Service.{name = "supervisor", boot_set = true, module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 128 * MIB,
+    Service.{name = "supervisor", boot_set = true, module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 160 * MIB,
         entry = type_of(supervisor.main)},
     // Every program's log records but the root task's and what it starts, first, so each is given a ring for them (decisions/0093)
     Service.{name = "events", boot_set = true, module = "events_service.elf", starter = .Supervisor, by_manager = true, budget = 8 * MIB,
@@ -202,8 +202,9 @@ SERVICES :: Service.[
     // What writes generations onto the ESP, told each boot's assessment by the supervisor (decisions/0116)
     Service.{name = "update", module = "update_service.elf", starter = .Supervisor, by_manager = true, budget = 8 * MIB,
         entry = type_of(update_service.main)},
-    // Every disk's, and a partition server for each, which holds only its disk (decisions/0086)
-    Service.{name = "storage_manager", boot_set = true, module = "storage_manager.elf", starter = .Supervisor, by_manager = true, budget = 64 * MIB,
+    // Every disk's, and a partition server for each, which holds only its disk (decisions/0086); room for the volume
+    // servers it starts, three sealed ones among them (decisions/0141)
+    Service.{name = "storage_manager", boot_set = true, module = "storage_manager.elf", starter = .Supervisor, by_manager = true, budget = 96 * MIB,
         entry = type_of(storage_manager.main)},
     Service.{name = "partition_server", boot_set = true, module = "partition_server.elf", starter = .StorageManager, by_manager = true, budget = 2 * MIB,
         entry = type_of(partition_server.main)},

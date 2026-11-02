@@ -43,7 +43,7 @@ check_quotas :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os
         return 106
     }
     runtime.log_info("quotas: its clone's refused a file past it and took a small one, and its usage says so")
-    return 0
+    return check_made(manager, port, container, &buffer)
 }
 
 // A volume's usage, through the storage manager.

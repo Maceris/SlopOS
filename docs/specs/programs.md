@@ -357,6 +357,13 @@ again; another volume's changes wait for its own commit. The **volume server** (
 volume's tree and serves the file protocols as the FAT server does, names compared exactly; it commits when a `Sync`
 asks, answering once that's durable, and a second after a change otherwise.
 
+**Volumes made at run time** (`0141`, `0142`): the storage protocol's `CreateVolume` (a name, a cipher and a
+passphrase, or neither) has the container service register the volume with nothing in it (`CreateVolume` on its
+listener, answered with `Created`), then opens it as `OpenVolume` does. The volume server, finding no root, fills it:
+for a sealed one, the first `Unlock` makes its key from the passphrase, wraps it with Argon2id inside the volume
+server's budget (4 MiB, 3 passes), and hands the container service only the wrapped records (`AddWrap`, refused once
+the volume has a root, and `AddGeneration`); then it writes the root directory and commits.
+
 **Hardware randomness** (`src/protocols/rng`): an RNG's driver makes a channel of the `rng` protocol (`Read` with a
 count, answered with `Bytes`) and offers it to the entropy service with `entropy.AddSource`. The entropy service
 reads 32 bytes from each source when it's added, and again each time 64 KiB more have been handed out, and reseeds

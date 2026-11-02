@@ -16,7 +16,9 @@ import slopfs from "../../slopfs"
  * container's files are its system volume's (decisions/0089). Any of a container's volumes is opened by name, an
  * encrypted one with its passphrase, which its volume server, and nothing else, unwraps its keys with (roadmap 8e).
  * Its snapshots are taken, listed and deleted here, each a clone made from, and opened read only as
- * "volume@snapshot". Connections arrive on its listener as Connects.
+ * "volume@snapshot". A volume is made at run time (decisions/0141): a sealed one by the volume server started for it,
+ * which makes and wraps its key, so the container service is given only the wrapped records. Connections arrive on
+ * its listener as Connects.
  */
 
 Storage :: struct {}
@@ -35,6 +37,16 @@ VolumeAt :: struct {
     partition : u32,
     name : slop_os.Relative[u8],
     passphrase : slop_os.Relative[u8],
+}
+
+// A new volume of the container on a partition, sealed with cipher (slopfs.Cipher) by a passphrase, or neither, and
+// when it's made, as the asker says.
+NewVolume :: struct {
+    partition : u32,
+    name : slop_os.Relative[u8],
+    passphrase : slop_os.Relative[u8],
+    cipher : u8,
+    now : u64,
 }
 
 // A volume of the container on a partition, by name.
@@ -83,6 +95,8 @@ Request :: union {
     OpenFiles(u32),
     // The root of a container's volume, started the first time, unlocked if it's encrypted; after that, checked
     OpenVolume(VolumeAt),
+    // A new volume, with nothing in it but its root directory, opened as OpenVolume opens one (decisions/0141)
+    CreateVolume(NewVolume),
     // A new key generation for an encrypted volume being served, sealing what's written from now on (decisions/0042)
     Rotate(VolumeNamed),
     // A snapshot of what a volume has committed, which a volume being served commits first; deleted; found by its
@@ -145,6 +159,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Open(_) => true
         case OpenFiles(_) => true
         case OpenVolume(_) => true
+        case CreateVolume(_) => false
         case Rotate(_) => false
         case TakeSnapshot(_) => false
         case DeleteSnapshot(_) => false

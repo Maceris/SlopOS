@@ -84,6 +84,11 @@ SEAL_COUNT : usize : 24
 
 // Argon2id's parameters for a passphrase, unless they're given (RFC 9106's second choice, with less memory).
 DEFAULT_PASSPHRASE :: crypto.Argon2Parameters.{memory_kib = 65536, passes = 3, lanes = 1}
+/*
+ * A volume made at run time's (decisions/0141), wrapped by its volume server inside the 8 MiB its budget has for
+ * Argon2id: its passphrase is a random secret the account service keeps, which hashes the password it's kept by itself.
+ */
+MADE_PASSPHRASE :: crypto.Argon2Parameters.{memory_kib = 4096, passes = 3, lanes = 1}
 
 new_keys :: fn(cipher: Cipher) -> Result[ptr[mut Keys], Error] {
     keys :: make(Keys)?

@@ -315,7 +315,9 @@ on a thread of its own, and registering a platform service's controllers again a
 10b planned 2026-11-01 (`decisions/0141`), in four parts: **10b1** Hemera's `#secret` kept out of `any`s, formatted as
 `<secret>`; **10b2** volumes made at run time, plain by the container service and sealed by a volume server; **10b3** the
 account service, its volume, Argon2id, wrapped keys, the password rules and rate limits; **10b4** first-boot setup on
-the trusted path, with the recovery code. 10b1 done 2026-11-01 (Hemera's `docs/memory.md`, *Secrets*).
+the trusted path, with the recovery code. 10b1 done 2026-11-01 (Hemera's `docs/memory.md`, *Secrets*). 10b2 done
+2026-11-01 (`decisions/0142`): `CreateVolume`, a sealed volume's keys made by its volume server, the container service
+given only the wrapped records.
 
 Specs: RFC 9106 (Argon2), RFC 3394 or the AEAD for key wrapping, ECMA-48 (for the VT adapter only), the Unicode
 standard's East Asian Width and UAX #29 for terminal widths.

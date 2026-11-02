@@ -18,6 +18,7 @@
 package container_service
 
 import runtime from "base"
+import random from "std"
 import os from "std"
 import slop_os from "std/os"
 import slopfs from "../../slopfs"
@@ -526,6 +527,7 @@ serve_container :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.In
                     case None => response^ = .NoVolume
                 }
             }
+            case CreateVolume(creation) => response^ = create_volume(server, os.items(into, creation.name), creation.cipher, creation.now)
             case Connect(other) => {
                 _ = add(server, .Unbound, other.end, NONE, 0)
                 continue
@@ -650,6 +652,30 @@ clone :: fn(server: ptr[mut Server], volume: u8[], snapshot: u8[], name: u8[], n
 }
 
 // The container's own changes committed: a snapshot, a deletion or a clone.
+/*
+ * A new volume, named name, with cipher, registered with nothing in it and made durable (decisions/0141): its name hash
+ * key drawn here, and everything that opens it left to the volume server that first serves it.
+ */
+create_volume :: fn(server: ptr[mut Server], name: u8[], cipher: u8, now: u64) -> container.Response {
+    if cipher != cast[u8](slopfs.Cipher.None) && cipher != cast[u8](slopfs.Cipher.ChaCha20Poly1305) && cipher != cast[u8](slopfs.Cipher.Aes256Gcm) {
+        return .Failed
+    }
+    hash_key : u8[32]
+    random.fill(hash_key)
+    id :: match slopfs.register_volume(server.container, name, hash_key, now, cast[slopfs.Cipher](cipher)) {
+        case Ok(made) => made
+        case Error(error) => return if error == .AlreadyExists { .AlreadyExists } else { .Failed }
+    }
+    match commit_own(server) {
+        case Done => {}
+        case _ => return .Failed
+    }
+    if name.count > 0 {
+        log_line.write(server.log, "container_service: made volume % (%)", id, string_of(&name[0], name.count))
+    }
+    return .Created(id)
+}
+
 commit_own :: fn(server: ptr[mut Server]) -> container.Response {
     match slopfs.commit_own(server.container) {
         case Ok => return .Done
@@ -766,6 +792,18 @@ for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Reque
                     generation :: found or_return .NoMore
                     return .Generation(generation)
                 }
+                case Error(error) => return .Failed
+            }
+        }
+        case AddWrap(added) => {
+            // Only a volume no volume server has filled yet takes a wrap this way; another's come with rotating keys
+            current :: slopfs.volume_record(server.container, volume) or_return .Failed
+            if !slopfs.is_unfilled(&current) {
+                return .NotYours
+            }
+            record := added.record
+            match slopfs.put_wrap(server.container, volume, added.index, &record) {
+                case Ok => return .Done
                 case Error(error) => return .Failed
             }
         }
