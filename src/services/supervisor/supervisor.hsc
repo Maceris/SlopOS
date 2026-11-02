@@ -234,6 +234,7 @@ TerminalGrants :: struct {
     framebuffer_layout : slop_os.Memory?,
     programs : os.Channel[session.Session]?,
     last_panic : slop_os.Memory?,
+    accounts_service : os.Channel[connector.Connector]?,
     clients : os.Listener[terminal.Terminal],
 }
 
@@ -462,6 +463,8 @@ Supervisor :: struct {
     first_keyboard : usize,
     terminal : usize,
     input : usize,
+    // The account service's entry, for the terminal service's first-boot setup (decisions/0148)
+    accounts : usize,
     // The system volume's root, once the storage manager has given it, where programs outside the boot set come from
     system : slop_os.Channel,
     system_port : slop_os.Port,
@@ -551,7 +554,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     boot_records^ = records^
     supervisor := Supervisor.{block = startup, records = records, boot_records = boot_records, overrides_end = NONE, substitutions_end = NONE, manager_connector = manager.end, root = root.end, platform_end = NONE,
         platform_connector = NONE, scheduler_connector = NONE, entropy_connector = NONE,
-        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, terminal = NOWHERE, input = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
+        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, terminal = NOWHERE, input = NOWHERE, accounts = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
         events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE),
         launched_lifecycle = NONE, session_end = NONE, last_panic = last_panic}
     supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, hello = hello_module, terminal = terminal_module, echo = echo_module, input = input_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
@@ -647,6 +650,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     }
     // Then every other driver, and the services that use them, each with connectors to what it uses
     start_drivers(&supervisor, false)
+    // The account service before the terminal service, which sets up the first account if there's none (decisions/0148)
+    if !supervisor.recovery {
+        start_accounts(&supervisor, storage_slot, NOWHERE)
+    }
     start_input(&supervisor, NOWHERE)
     start_terminal(&supervisor, NOWHERE)
     start_echo(&supervisor, NOWHERE)
@@ -655,7 +662,6 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
         log_line.write(supervisor.log, "supervisor: recovery: the boot set, the drivers and the console only")
     }
     else {
-        start_accounts(&supervisor, storage_slot, NOWHERE)
         start_hello(&supervisor, NOWHERE)
         start_installations(&supervisor)
         if !no_disk_check {
@@ -3137,7 +3143,8 @@ start_terminal :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     service :: service_named(supervisor, "terminal") or_return void
     pair :: os.channel_for[terminal.Terminal](supervisor.block.budget, 0) or_return void
     grants := TerminalGrants.{log = duplicate_log(supervisor), serial_line = connector_to(supervisor, supervisor.first_serial),
-        input = connector_to(supervisor, supervisor.input), clients = os.Listener[terminal.Terminal].{end = pair.a}}
+        input = connector_to(supervisor, supervisor.input), accounts_service = connector_to(supervisor, supervisor.accounts),
+        clients = os.Listener[terminal.Terminal].{end = pair.a}}
     // Its session channel, the last one's gone with it, and the boot before's panic record
     if supervisor.session_end != NONE {
         _ = slop_os.port_unbind(supervisor.port, SESSION_KEY)
@@ -3365,6 +3372,7 @@ start_accounts :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize, again
             if slot < supervisor.started.count {
                 supervisor.started[slot].listener = pair.b
                 supervisor.started[slot].speaks = .Accounts
+                supervisor.accounts = slot
             }
         }
         case Error(error) => {

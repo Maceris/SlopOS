@@ -319,7 +319,8 @@ the trusted path, with the recovery code. 10b1 done 2026-11-01 (Hemera's `docs/m
 2026-11-01 (`decisions/0142`): `CreateVolume`, a sealed volume's keys made by its volume server, the container service
 given only the wrapped records. 10b3 done 2026-11-01 (`decisions/0143`): the account service, its records with
 Argon2id at 64 MiB, the password rules and the common list, rate limits, and the recovery code; boot tests run with 512
-MiB.
+MiB. 10b4 done 2026-11-02 (`decisions/0148`): first-boot setup on the terminal service's own screen, the administrator
+made and the recovery code shown once. 10b done.
 
 Specs: RFC 9106 (Argon2), RFC 3394 or the AEAD for key wrapping, ECMA-48 (for the VT adapter only), the Unicode
 standard's East Asian Width and UAX #29 for terminal widths.
@@ -481,5 +482,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | Perf | done 2026-10-31 (`decisions/0097`, `0112`, `0127` to `0130`): benchmarks held to baselines, tickless idle, large pages, CPU loans in the storage servers |
 | R | planned 2026-10-29 (`decisions/0096`): R1 to R4 done 2026-10-30 (`0104` to `0106`, `0112`); R5 and R6 not started |
 | B | done 2026-10-31 (`decisions/0131` to `0135`): Hemera's UEFI target, SlopOS's bootloader, boot counting and recovery, ISOs through it, Limine and BIOS boot removed |
-| M10 | planned 2026-11-01 (`decisions/0136`), in four stages, 10a done (`0137` to `0140`); 10b to 10d not started |
+| M10 | planned 2026-11-01 (`decisions/0136`), in four stages, 10a done (`0137` to `0140`), 10b done (`0141` to `0148`); 10c and 10d not started |
 | M11–M16, P, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |

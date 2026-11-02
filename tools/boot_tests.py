@@ -353,6 +353,20 @@ TESTS = [
         "--expect-line=[user] clock: serving",
         "--expect-line=[user] clock: set to 2030-01-02 03:04:05 UTC, and the real-time clock reads it back",
         "--expect-line=[user] hello: the wall clock says it's 2030-01-02", "--expect-line=[info] root task ended with code 0"]),
+    # First-boot setup on the trusted path (decisions/0148): a name that can't be an account's and a common password
+    # refused, the administrator made, and the recovery code shown once, until Enter
+    ("sets up the administrator's account at first boot, on the terminal service's own screen", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=20") for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rpassword\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--expect-line=[user] terminal: first-boot setup: no accounts yet",
+        "--expect-console-line=  A name is 1 to 32 letters, digits, - or _, and starts with a lowercase letter.",
+        "--expect-console-line=  That password is one of the most common ones. Choose another.",
+        "--expect-line=[user] account_service: made the account admin, the administrator",
+        "--expect-line=[user] terminal: first-boot setup: made the administrator's account",
+        "--expect-console-line=  The administrator's account is made. Its recovery code, shown this once:",
+        "--expect-line=[user] terminal: first-boot setup ended",
+        "--refuse-console-line=correct horse battery staple"])),
     ("makes the administrator's account and home volume, limits wrong passwords, and recovers it with its recovery code", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_accounts") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] storage_manager: made the accounts volume",

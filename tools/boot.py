@@ -364,11 +364,13 @@ class ConsoleLink:
     """
 
     def __init__(self, typed: list[str], keyed: list[str], keyboard: "Keyboard | None", screen_after: str | None = None,
-                 screenshot: Path | None = None, typed_after: str | None = None):
+                 screenshot: Path | None = None, typed_after: list[str] | None = None):
         self.port = free_port()
         self.typed = typed
-        # The first line is typed once the console shows this line too, so what's typed doesn't land in the middle of it
-        self.typed_after = typed_after
+        # The first line is typed once the console shows the first of these too, so what's typed doesn't land in the middle
+        # of it; or, with \\w in it, from the banner, each \\w waiting for the next of them
+        self.typed_after = typed_after or []
+        self.waits = 0
         self.keyed = keyed
         self.keyboard = keyboard
         # Once the console shows this line, the screen's taken through the machine protocol into screenshot
@@ -405,7 +407,7 @@ class ConsoleLink:
                     return
                 self.shown += data.decode(errors="replace")
                 while self.shown.count(CONSOLE_BANNER) > banners:
-                    if banners == 0 and self.typed and self.typed_after is not None:
+                    if banners == 0 and self.typed and self.typed_after:
                         # A line that waits partway (\w) starts at the banner; any other, once typed_after shows
                         target = self.type_waiting if "\\w" in self.typed[0] else self.type_after
                         threading.Thread(target=target, args=(connection,), daemon=True).start()
@@ -431,8 +433,13 @@ class ConsoleLink:
             pass
 
     def wait_for_after(self) -> None:
-        deadline = time.monotonic() + 30
-        while self.typed_after not in self.lines() and time.monotonic() < deadline:
+        """Until the console shows the next line to wait for, once more than it showed when the last wait ended."""
+        if self.waits >= len(self.typed_after):
+            return
+        line = self.typed_after[self.waits]
+        self.waits += 1
+        deadline = time.monotonic() + 60
+        while line not in self.lines() and time.monotonic() < deadline:
             time.sleep(0.05)
 
     def type_keys(self) -> None:
@@ -784,6 +791,8 @@ def disk_block_starts(path: Path, expected: str) -> bool:
 
 
 def main() -> int:
+    # What a console shows may have characters the output's encoding hasn't, as Windows' code page lacks some: escaped
+    sys.stdout.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(description="Boots a kernel in QEMU through SlopOS's own bootloader.")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--kernel", type=Path, help="the kernel's ELF")
@@ -805,8 +814,9 @@ def main() -> int:
                         help="a line to type into a virtio console, which this adds, once it shows its banner; may be repeated. "
                         "Escapes are Python's (\\e is ESC, as \\e[3;7~ is Ctrl+Alt+Delete), \\p waits a second, and \\w waits for "
                         "--console-input-after's line, the first line then typed from the banner")
-    parser.add_argument("--console-input-after",
-                        help="type the first --console-input once the virtio console shows this line too, not only its banner")
+    parser.add_argument("--console-input-after", action="append", default=[],
+                        help="type the first --console-input once the virtio console shows this line too, not only its banner; "
+                        "may be repeated, each \\w in the line waiting for the next")
     parser.add_argument("--expect-console-line", action="append", default=[],
                         help="a line the virtio console should show, with --expect; may be repeated")
     parser.add_argument("--screen-after",

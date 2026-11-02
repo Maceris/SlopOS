@@ -14,7 +14,11 @@
  *
  * The input's owner can hand it the line it's editing (InputLine, decisions/0147): kept below everything written in
  * lines, it's taken away before anything else is written, cleared, moved or scrolled, the cursor put back where the
- * output left off, and drawn again after, on the row after the output's if that one has something on it. Both are reached
+ * output left off, and drawn again after, on the row after the output's if that one has something on it.
+ *
+ * First-boot setup (decisions/0148): with no accounts, which it asks the account service, its own screen asks for the
+ * administrator's name and password, twice, has the account service make the account, and shows the recovery code
+ * once. Every key is its own until then, as the secure attention key's screen's are. Both are reached
  * through connectors, dialed again when they go, with the banner shown on each new serial line. Without a serial line
  * it keeps the model and shows nothing.
  */
@@ -26,6 +30,9 @@ import slop_os from "std/os"
 import text_buffer from "std"
 import unicode from "std"
 import terminal from "std/os/slop_os"
+import time from "std"
+import account_records from "../../account_records"
+import accounts from "../../protocols/accounts"
 import connector from "../../protocols/connector"
 import seat from "../../protocols/seat"
 import session from "../../protocols/session"
@@ -39,6 +46,7 @@ import vt from "../../vt"
 // The serial line and the seat are bound to the port above the clients
 SERIAL_KEY : u64 : 1000
 SEAT_KEY : u64 : 1001
+ACCOUNTS_KEY : u64 : 1002
 BANNER :: "SlopOS console"
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 TAB_STOP : u16 : 8
@@ -49,11 +57,13 @@ PROGRAM_ROWS : u16 : screen.PROGRAM_ROWS
 // What the status line says: no one has logged in until sessions (10c)
 STATUS :: " SlopOS │ console │ no session"
 STATUS_ATTENTION :: " SlopOS │ console │ secure attention"
+STATUS_SETUP :: " SlopOS │ console │ first-boot setup"
 
 // Output waiting for the serial line, and how many Writes may be in flight on it, which its ring holds
 OUTPUT_BYTES :: 16384
 MAX_IN_FLIGHT : u32 : 2
 
+USAGE_BACKSPACE : u16 : 0x2a
 USAGE_C : u16 : 0x06
 USAGE_E : u16 : 0x08
 USAGE_ENTER : u16 : 0x28
@@ -64,8 +74,28 @@ USAGE_UP : u16 : 0x52
 // The panel's rows: where the list of programs starts
 PROGRAMS_ROW : u16 : 7
 PANIC_TEXT :: 160
+// Bytes typed on the serial line decoded at a time, fewer than the events held
+FEED_SLICE : usize : 8
 // The most bytes of the line the input's owner is editing
 INPUT_LINE_BYTES :: 512
+
+// First-boot setup's steps (decisions/0148).
+SetupStep :: enum {
+    Off,
+    Name,
+    Password,
+    Again,
+    // The account service making the account, which takes Argon2id's time
+    Making,
+    // The recovery code shown, until Enter
+    Code,
+}
+
+// Setup's first row of fields: the name, the password, it again, then a blank row and its message
+SETUP_FIELDS_ROW : u16 : 6
+// A field's bytes, and a setup message's
+FIELD_BYTES :: 256
+MESSAGE_BYTES :: 160
 
 Service :: struct {
     log : slop_os.DebugLog,
@@ -113,11 +143,25 @@ Service :: struct {
     output_row : u16,
     output_column : u16,
     output_scrolls : u64,
+    // The account service, through its connector, and first-boot setup: its step, the field being typed, the name and
+    // password so far, what it last said, and the recovery code to show
+    accounts_connector : slop_os.Channel,
+    accounts_end : slop_os.Channel,
+    setup : SetupStep,
+    field : u8[FIELD_BYTES],
+    field_count : usize,
+    name : u8[account_records.MAX_NAME_BYTES],
+    name_count : usize,
+    password : u8[FIELD_BYTES],
+    password_count : usize,
+    message : u8[MESSAGE_BYTES],
+    message_count : usize,
+    code : u8[accounts.RECOVERY_TEXT_BYTES],
 }
 
 main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?, input: os.Channel[connector.Connector]?,
     framebuffer: slop_os.Memory?, framebuffer_layout: slop_os.Memory?, programs: os.Channel[session.Session]?,
-    last_panic: slop_os.Memory?, clients: os.Listener[terminal.Terminal]) -> int {
+    last_panic: slop_os.Memory?, accounts_service: os.Channel[connector.Connector]?, clients: os.Listener[terminal.Terminal]) -> int {
     startup :: slop_os.startup_block()
     service := runtime.new(Service)
     service.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
@@ -126,6 +170,8 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
     service.line_end = NONE
     service.seat_end = NONE
     service.session_end = NONE
+    service.accounts_connector = NONE
+    service.accounts_end = NONE
     match programs {
         case Some(found) => {
             service.session_end = found.end
@@ -159,8 +205,13 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
         case Some(found) => service.seat_connector = found.end
         case None => {}
     }
+    match accounts_service {
+        case Some(found) => service.accounts_connector = found.end
+        case None => {}
+    }
     dial_seat(service)
     dial_serial(service)
+    dial_accounts(service)
     runtime.log_info("serving")
     into := os.Incoming.{}
     loop {
@@ -174,6 +225,7 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
         while i < connected.count
         take_serial(service, &into)
         take_seat(service, &into)
+        take_accounts(service, &into)
         deliver(service, &connected)
         pump(service)
         draw_framebuffer(service)
@@ -668,7 +720,7 @@ use_screen :: fn(service: ptr[mut Service], whole: bool) {
 update_status :: fn(service: ptr[mut Service]) {
     storage : u8[160]
     status := text_buffer.make(storage)
-    text_buffer.append(&status, if service.attention { STATUS_ATTENTION } else { STATUS })
+    text_buffer.append(&status, if service.attention { STATUS_ATTENTION } else if service.setup != .Off { STATUS_SETUP } else { STATUS })
     if service.waiting_code != 0 {
         text_buffer.append(&status, " │ a new keyboard: type ")
         text_buffer.append_unsigned(&status, cast[u64](service.waiting_code))
@@ -864,9 +916,14 @@ leave_attention :: fn(service: ptr[mut Service]) {
  * blank, then cleared; and the cursor where the program left it.
  */
 redraw :: fn(service: ptr[mut Service]) {
+    redraw_rows(service, 0, PROGRAM_ROWS)
+}
+
+// Rows first to last, not including last, of what's shown, as redraw draws them; and the cursor where it is.
+redraw_rows :: fn(service: ptr[mut Service], first: u16, last_row: u16) {
     grid :: screen.shown(&service.screen)
     plain :: terminal.Style.{}
-    for row in 0..<PROGRAM_ROWS {
+    for row in first..<(if last_row < PROGRAM_ROWS { last_row } else { PROGRAM_ROWS }) {
         storage : u8[2048]
         out := text_buffer.make(storage)
         vt.append_move(&out, row + 1, 0)
@@ -911,7 +968,7 @@ redraw :: fn(service: ptr[mut Service]) {
 
 // A program's output for the serial line, unless the secure attention key's screen is up.
 emit_program :: fn(service: ptr[mut Service], out: ptr[text_buffer.TextBuffer]) {
-    if !service.attention {
+    if !service.attention && service.setup == .Off {
         emit(service, string_bytes(text_buffer.as_string(out)))
     }
 }
@@ -1005,10 +1062,26 @@ take_serial :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 pump(service)
             }
             case Data(given) => {
-                first :: service.decoded.count
-                vt.feed(&service.decoder, os.items(into, given), &service.decoded)
-                vt.finish(&service.decoder, &service.decoded)
-                screen_keys(service, first)
+                // A slice at a time, each slice's keys looked at before the next: what the trusted path's screens take
+                // is gone once they've taken it, so typing faster than events are held loses none of theirs
+                bytes :: os.items(into, given)
+                at : usize = 0
+                loop {
+                    if at >= bytes.count {
+                        break
+                    }
+                    end :: if bytes.count - at > FEED_SLICE { at + FEED_SLICE } else { bytes.count }
+                    if end > bytes.count || at > end {
+                        break
+                    }
+                    first :: service.decoded.count
+                    vt.feed(&service.decoder, bytes[at..<end], &service.decoded)
+                    if end == bytes.count {
+                        vt.finish(&service.decoder, &service.decoded)
+                    }
+                    screen_keys(service, first)
+                    at = end
+                }
                 read_more(service)
             }
             case _ => {}
@@ -1028,6 +1101,14 @@ screen_keys :: fn(service: ptr[mut Service], first: usize) {
         }
         event :: decoded.events[i]
         if event.kind != cast[u8](terminal.EventKind.Key) {
+            continue
+        }
+        if service.setup != .Off {
+            // Setup is the trusted path's already: the secure attention key brings up nothing over it
+            start :: cast[usize](event.text_start)
+            end :: start + cast[usize](event.text_bytes)
+            text :: if start <= end && end <= decoded.text_count && end <= decoded.text.count { decoded.text[start..<end] } else { decoded.text[0..<0] }
+            setup_key(service, event, text)
             continue
         }
         if event.code == USAGE_DELETE && event.modifiers & (terminal.CONTROL | terminal.ALT) == terminal.CONTROL | terminal.ALT {
@@ -1052,8 +1133,8 @@ screen_keys :: fn(service: ptr[mut Service], first: usize) {
             end_chosen(service)
         }
     }
-    // What came with the key, or while its screen was up, is the trusted path's, and isn't kept
-    if service.attention || attention_in(decoded, first) {
+    // What came with the key, or while its screen or setup's was up, is the trusted path's, and isn't kept
+    if service.attention || service.setup != .Off || attention_in(decoded, first) {
         drop_from(service, first)
     }
 }
@@ -1124,7 +1205,11 @@ take_seat :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
 take_seat_event :: fn(service: ptr[mut Service], event: seat.Event, text: u8[]) {
     kind :: seat.kind_of(event) or_return void
     match kind {
-        case .SecureAttention => enter_attention(service)
+        case .SecureAttention => {
+            if service.setup == .Off {
+                enter_attention(service)
+            }
+        }
         case .Waiting => {
             service.waiting_code = event.waiting_code
             update_status(service)
@@ -1148,7 +1233,7 @@ take_seat_event :: fn(service: ptr[mut Service], event: seat.Event, text: u8[]) 
 
 // The input waiting, to the owner, once it holds a Read.
 deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
-    if service.decoded.count == 0 || service.held == 0 || service.attention {
+    if service.decoded.count == 0 || service.held == 0 || service.attention || service.setup != .Off {
         return void
     }
     owner :: service.owner or_return void
@@ -1170,4 +1255,403 @@ deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
     service.held = 0
     // Events past the Read's most are dropped with their text, which the next events' ranges would no longer match
     vt.reset(&service.decoder, &service.decoded)
+}
+
+// ---- First-boot setup (decisions/0148)
+
+// The account service through its connector, if there's one: bound to the port, and asked how many accounts there are.
+dial_accounts :: fn(service: ptr[mut Service]) {
+    if service.accounts_connector == NONE {
+        return void
+    }
+    port :: os.port_for(slop_os.startup_block().budget, service.accounts_connector) or_return void
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    connection :: connector.dial[accounts.Accounts](service.accounts_connector, port) or_return void
+    signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+    if slop_os.port_bind(service.port, cast[slop_os.Handle](connection.end), signals, ACCOUNTS_KEY, .Persistent) is_error {
+        _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
+        return void
+    }
+    service.accounts_end = connection.end
+    out := os.Outgoing.{}
+    os.begin[accounts.Request](&out)^ = .Describe
+    _ = accounts.send_request(service.accounts_end, service.port, &out)
+}
+
+// What the account service answered: how many accounts there are, and how making the first went. One that's gone,
+// dialed again.
+take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
+    if service.accounts_end == NONE {
+        return void
+    }
+    loop {
+        match accounts.receive_response(service.accounts_end, service.port, into, false) {
+            case Received => {}
+            case Empty => return void
+            case Failed(error) => {
+                _ = slop_os.port_unbind(service.port, ACCOUNTS_KEY)
+                _ = slop_os.handle_close(cast[slop_os.Handle](service.accounts_end))
+                service.accounts_end = NONE
+                runtime.log_info("the account service went; dialing again")
+                if service.setup == .Making {
+                    say(service, "The account service stopped while it made the account. Type the password again.")
+                    setup_step(service, .Password)
+                }
+                dial_accounts(service)
+                if service.accounts_end == NONE {
+                    return void
+                }
+                continue
+            }
+            case _ => continue
+        }
+        match os.message_of[accounts.Response](into)^ {
+            case Described(status) => {
+                if status.accounts == 0 && service.setup == .Off {
+                    enter_setup(service)
+                }
+            }
+            case Created(shown) => {
+                service.code = shown.text
+                runtime.log_info("first-boot setup: made the administrator's account")
+                say(service, "")
+                setup_step(service, .Code)
+            }
+            case PasswordRefused(problem) => {
+                say_problem(service, problem)
+                setup_step(service, .Password)
+            }
+            case NameRefused => {
+                say(service, "That name can't be an account's. Type another.")
+                setup_step(service, .Name)
+            }
+            case AlreadyExists => leave_setup(service)
+            case Refused => leave_setup(service)
+            case _ => {
+                say(service, "The account couldn't be made. Type the password again.")
+                setup_step(service, .Password)
+            }
+        }
+    }
+}
+
+enter_setup :: fn(service: ptr[mut Service]) {
+    runtime.log_info("first-boot setup: no accounts yet")
+    service.setup = .Name
+    update_status(service)
+    draw_setup(service, true)
+}
+
+// Setup done: the recovery code forgotten, and the program's screen drawn again.
+leave_setup :: fn(service: ptr[mut Service]) {
+    wipe(service.code[0..<service.code.count])
+    wipe(service.field[0..<service.field.count])
+    wipe(service.password[0..<service.password.count])
+    service.field_count = 0
+    service.password_count = 0
+    service.setup = .Off
+    runtime.log_info("first-boot setup ended")
+    update_status(service)
+    screen.show_panel(&service.screen, false)
+    redraw(service)
+}
+
+// A step, its field empty, drawn.
+setup_step :: fn(service: ptr[mut Service], step: SetupStep) {
+    wipe(service.field[0..<service.field.count])
+    service.field_count = 0
+    if step == .Name || step == .Password {
+        wipe(service.password[0..<service.password.count])
+        service.password_count = 0
+    }
+    service.setup = step
+    runtime.log_info("first-boot setup: %", step_name(step))
+    draw_setup(service, true)
+}
+
+step_name :: fn(step: SetupStep) -> string {
+    return match step {
+        case .Off => "done"
+        case .Name => "asking for the name"
+        case .Password => "asking for the password"
+        case .Again => "asking for the password again"
+        case .Making => "making the account"
+        case .Code => "showing the recovery code"
+    }
+}
+
+// One key on setup's screen: text typed into the field, Backspace taking a cluster back, Enter going on.
+setup_key :: fn(service: ptr[mut Service], event: terminal.Event, text: u8[]) {
+    if service.setup == .Making {
+        return void
+    }
+    if event.code == USAGE_ENTER {
+        setup_enter(service)
+        return void
+    }
+    if service.setup == .Code {
+        return void
+    }
+    if event.code == USAGE_BACKSPACE {
+        if service.field_count > 0 && service.field_count <= service.field.count {
+            typed :: service.field[0..<service.field_count]
+            last : usize = 0
+            at : usize = 0
+            loop {
+                end :: unicode.grapheme_end(typed, at)
+                if end <= at {
+                    break
+                }
+                last = at
+                at = end
+            }
+            while at < service.field_count
+            if last <= service.field_count && service.field_count <= service.field.count {
+                wipe(service.field[last..<service.field_count])
+            }
+            service.field_count = last
+        }
+        draw_setup(service, false)
+        return void
+    }
+    if event.modifiers & (terminal.CONTROL | terminal.ALT) != 0 {
+        return void
+    }
+    for byte in text {
+        // Only what shows: a line break or a control isn't part of a name or password
+        if byte >= 0x20 && byte != 0x7f && service.field_count < service.field.count {
+            service.field[service.field_count] = byte
+            service.field_count += 1
+        }
+    }
+    draw_setup(service, false)
+}
+
+// Enter: the name checked, the password checked against the rules, the two compared, and the account asked for.
+setup_enter :: fn(service: ptr[mut Service]) {
+    if service.field_count > service.field.count {
+        return void
+    }
+    typed :: service.field[0..<service.field_count]
+    match service.setup {
+        case .Name => {
+            if !account_records.valid_name(typed) {
+                say(service, "A name is 1 to 32 letters, digits, - or _, and starts with a lowercase letter.")
+                setup_step(service, .Name)
+                return void
+            }
+            for byte, i in typed {
+                if i < service.name.count {
+                    service.name[i] = byte
+                }
+            }
+            service.name_count = typed.count
+            say(service, "")
+            setup_step(service, .Password)
+        }
+        case .Password => {
+            name :: name_bytes(service)
+            match account_records.password_problem(name, typed) {
+                case Some(problem) => {
+                    say_problem(service, cast[u8](problem))
+                    setup_step(service, .Password)
+                    return void
+                }
+                case None => {}
+            }
+            for byte, i in typed {
+                if i < service.password.count {
+                    service.password[i] = byte
+                }
+            }
+            service.password_count = typed.count
+            say(service, "")
+            setup_step(service, .Again)
+        }
+        case .Again => {
+            if service.password_count > service.password.count || !same_bytes(typed, service.password[0..<service.password_count]) {
+                say(service, "The two didn't match. Type the password again.")
+                setup_step(service, .Password)
+                return void
+            }
+            make_account(service)
+        }
+        case .Code => leave_setup(service)
+        case _ => {}
+    }
+}
+
+// The account asked for, the password forgotten once it's sent.
+make_account :: fn(service: ptr[mut Service]) {
+    if service.accounts_end == NONE || service.name_count > service.name.count || service.password_count > service.password.count {
+        say(service, "The account service isn't there. Type the password again.")
+        setup_step(service, .Password)
+        return void
+    }
+    now := cast[u64](0)
+    match time.now() {
+        case Ok(instant) => now = cast[u64](instant.seconds) * 1000000000 + cast[u64](instant.nanos)
+        case Error(error) => {}
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[accounts.Request](&out)
+    request^ = .Create(accounts.Creation.{name = os.append(&out, service.name[0..<service.name_count]),
+        password = os.append(&out, service.password[0..<service.password_count]), now = now})
+    sent :: accounts.send_request(service.accounts_end, service.port, &out) == null
+    for i in 0..<out.words.count {
+        out.words[i] = 0
+    }
+    wipe(service.password[0..<service.password.count])
+    service.password_count = 0
+    if !sent {
+        say(service, "The account couldn't be asked for. Type the password again.")
+        setup_step(service, .Password)
+        return void
+    }
+    say(service, "Making the administrator's account. This takes a few seconds.")
+    setup_step(service, .Making)
+}
+
+// Why a password was refused, as account_records.PasswordProblem's value.
+say_problem :: fn(service: ptr[mut Service], problem: u8) {
+    say(service, if problem == 1 { "A password needs at least 8 characters." }
+        else if problem == 2 { "That password is too long: 256 bytes at most." }
+        else if problem == 3 { "That password is one of the most common ones. Choose another." }
+        else if problem == 4 { "A password can't be the account's name." }
+        else { "That password can't be used. Choose another." })
+}
+
+say :: fn(service: ptr[mut Service], text: string) {
+    service.message_count = 0
+    for byte in string_bytes(text) {
+        if service.message_count < service.message.count {
+            service.message[service.message_count] = byte
+            service.message_count += 1
+        }
+    }
+}
+
+/*
+ * Setup's screen: what it's for, the name, the password and it again as dots, what it last said, and once the account's
+ * made, the recovery code; the cursor at the field being typed. All of it drawn, or as keys are typed, only the fields'
+ * rows and the message's, which is all a key changes.
+ */
+draw_setup :: fn(service: ptr[mut Service], whole: bool) {
+    panel :: &service.screen.panel
+    if whole {
+        screen.show_panel(&service.screen, true)
+    }
+    else {
+        screen.clear(panel, terminal.Area.{row = SETUP_FIELDS_ROW, columns = COLUMNS, rows = 5})
+    }
+    bold :: terminal.Style.{attributes = terminal.BOLD}
+    plain :: terminal.Style.{}
+    screen.write_at(panel, 1, 2, "First-boot setup", bold)
+    if service.setup == .Code {
+        screen.write_at(panel, 3, 2, "The administrator's account is made. Its recovery code, shown this once:", plain)
+        screen.write_at(panel, 5, 6, string_of(&service.code[0], service.code.count), bold)
+        screen.write_at(panel, 7, 2, "Write it down, and keep it apart from this computer: it opens the account if", plain)
+        screen.write_at(panel, 8, 2, "the password is lost.", plain)
+        screen.write_at(panel, 10, 2, "Press Enter once you have.", plain)
+        panel.row = 10
+        panel.column = 28
+        redraw(service)
+        return void
+    }
+    name_row :: SETUP_FIELDS_ROW
+    screen.write_at(panel, 3, 2, "No one has an account on this computer yet. Make the administrator's account:", plain)
+    screen.write_at(panel, 4, 2, "the first, and the one that can make others.", plain)
+    screen.write_at(panel, name_row, 2, "Name:", plain)
+    screen.write_at(panel, name_row + 1, 2, "Password:", plain)
+    screen.write_at(panel, name_row + 2, 2, "Again:", plain)
+    field_column : u16 = 13
+    if service.setup == .Name {
+        if service.field_count <= service.field.count && service.field_count > 0 {
+            screen.write_at(panel, name_row, field_column, string_of(&service.field[0], service.field_count), plain)
+        }
+    }
+    else if service.name_count > 0 && service.name_count <= service.name.count {
+        screen.write_at(panel, name_row, field_column, string_of(&service.name[0], service.name_count), plain)
+    }
+    if service.setup == .Again || service.setup == .Making {
+        dots(panel, name_row + 1, field_column, if service.setup == .Making { 8 } else { clusters(password_bytes(service)) })
+    }
+    if service.setup == .Password || service.setup == .Again {
+        dots(panel, if service.setup == .Password { name_row + 1 } else { name_row + 2 }, field_column,
+            clusters(field_bytes(service)))
+    }
+    if service.message_count > 0 && service.message_count <= service.message.count {
+        screen.write_at(panel, name_row + 4, 2, string_of(&service.message[0], service.message_count), plain)
+    }
+    screen.write_at(panel, name_row + 6, 2, "Enter goes on, Backspace takes back what was typed last.", plain)
+    // The cursor at the end of the field being typed
+    panel.row = if service.setup == .Name { name_row } else if service.setup == .Password { name_row + 1 } else { name_row + 2 }
+    shown :: if service.setup == .Name { cast[u16](min_count(service.field_count, 40)) }
+        else { cast[u16](min_count(clusters(field_bytes(service)), 40)) }
+    panel.column = field_column + shown
+    if whole {
+        redraw(service)
+    }
+    else {
+        redraw_rows(service, SETUP_FIELDS_ROW, SETUP_FIELDS_ROW + 5)
+    }
+}
+
+// What's typed in the field, the name and the password so far, as far as they're in their buffers.
+field_bytes :: fn(service: ptr[Service]) -> u8[] {
+    return if service.field_count <= service.field.count { service.field[0..<service.field_count] } else { service.field[0..<0] }
+}
+
+name_bytes :: fn(service: ptr[Service]) -> u8[] {
+    return if service.name_count <= service.name.count { service.name[0..<service.name_count] } else { service.name[0..<0] }
+}
+
+password_bytes :: fn(service: ptr[Service]) -> u8[] {
+    return if service.password_count <= service.password.count { service.password[0..<service.password_count] } else { service.password[0..<0] }
+}
+
+// count dots in a row, for a password's clusters, up to 40.
+dots :: fn(panel: ptr[mut screen.Grid], row: u16, column: u16, count: usize) {
+    for i in 0..<min_count(count, 40) {
+        screen.write_at(panel, row, column + cast[u16](i), "•", terminal.Style.{})
+    }
+}
+
+clusters :: fn(bytes: u8[]) -> usize {
+    count : usize = 0
+    at : usize = 0
+    loop {
+        if at >= bytes.count {
+            break
+        }
+        end :: unicode.grapheme_end(bytes, at)
+        if end <= at {
+            break
+        }
+        at = end
+        count += 1
+    }
+    return count
+}
+
+min_count :: fn(a: usize, b: usize) -> usize {
+    return if a < b { a } else { b }
+}
+
+same_bytes :: fn(a: u8[], b: u8[]) -> bool {
+    if a.count != b.count {
+        return false
+    }
+    for byte, i in a {
+        if i < b.count && byte != b[i] {
+            return false
+        }
+    }
+    return true
+}
+
+wipe :: fn(bytes: mut u8[]) {
+    for i in 0..<bytes.count {
+        bytes[i] = 0
+    }
 }
