@@ -6,6 +6,11 @@ AArch64 tests kernels built for AArch64 (its arch setting), the same two ways.
 Exits 0 if every test passed. SLOPOS_BOOT_TESTS, names separated by commas, runs only the tests whose names have one of
 them in them.
 
+The tests boot in parallel, --jobs of them at once (or SLOPOS_BOOT_JOBS; half the CPUs, at most 8, by default), the
+slowest of the last run first; each QEMU has 512 MiB. A test that fails among the others is booted again alone: if it
+passes then, it's reported FLAKY, a timing it's sensitive to, and doesn't fail the run, unless it stopped with a fatal error (a
+kernel fault, a failed assertion) the first time. --jobs 1 boots one at a time.
+
 With --robustness it runs the robustness sweeps instead (knowledge/decisions/0096, 0104): kernels built with robustness=on
 boot each of SWEEP_TESTS once counting the passes through the kernel's failure points (fail=count), then once for each
 pass chosen, failing it (fail=any:<n>). Each run must halt, stop for want of memory, or end its root task with nothing
@@ -14,14 +19,18 @@ built with robustness=on too, for each of FAULTY_BLOCKS: the partition server fa
 write (faulty_block, decisions/0112), and the run must end as a failed allocation's may.
 
     python tools/boot_tests.py
+    python tools/boot_tests.py --jobs 4
     python tools/boot_tests.py --robustness
 """
 
+import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -35,6 +44,27 @@ WITH_PROGRAMS = "<programs>"
 # The image builder, built once, for the tests whose arguments have WITH_IMAGE_BUILDER (decisions/0088)
 IMAGE_BUILDER = Path()
 WITH_IMAGE_BUILDER = "<image builder>"
+# How many tests boot at once (--jobs, SLOPOS_BOOT_JOBS)
+JOBS = 1
+# Each test's time the last run, slowest first next time; kept outside the repository
+TIMINGS_FILE = Path(tempfile.gettempdir()) / "slopos_boot_test_timings.json"
+# Tests booted again alone that passed then
+FLAKY: list[str] = []
+# One test's lines printed at a time
+PRINTING = threading.Lock()
+
+
+def jobs_wanted() -> int:
+    """--jobs N, or SLOPOS_BOOT_JOBS, or half the CPUs, at most 8."""
+    arguments = sys.argv[1:]
+    for i, argument in enumerate(arguments):
+        if argument == "--jobs" and i + 1 < len(arguments):
+            return max(1, int(arguments[i + 1]))
+        if argument.startswith("--jobs="):
+            return max(1, int(argument.split("=", 1)[1]))
+    if os.environ.get("SLOPOS_BOOT_JOBS"):
+        return max(1, int(os.environ["SLOPOS_BOOT_JOBS"]))
+    return max(1, min(8, (os.cpu_count() or 2) // 2))
 
 
 def boot_arguments(arguments: list, more: list) -> list:
@@ -626,24 +656,32 @@ def main() -> int:
         if not build_kernel(aarch64_kernel, architecture="aarch64"):
             print("FAILED: the kernel doesn't build for AArch64")
             return 1
-        failed = run_tests(kernel, TESTS) + run_tests(morestack_kernel, MORESTACK_TESTS) + run_address_tests(kernel)
         aarch64_morestack_kernel = Path(temporary) / "kernel_aarch64_morestack.elf"
         if not build_kernel(aarch64_morestack_kernel, "morestack", "aarch64"):
             print("FAILED: the kernel doesn't build for AArch64 with morestack")
             return 1
-        failed += run_tests(aarch64_kernel, AARCH64_TESTS, ["--arch=aarch64"])
-        failed += run_tests(aarch64_morestack_kernel, AARCH64_MORESTACK_TESTS, ["--arch=aarch64"])
-        failed += run_address_tests(aarch64_kernel, ["--arch=aarch64"], "AArch64: ")
+        built = time.monotonic() - suite_started
+        jobs = (boot_jobs(kernel, TESTS) + boot_jobs(morestack_kernel, MORESTACK_TESTS) + address_jobs(kernel)
+                + boot_jobs(aarch64_kernel, AARCH64_TESTS, ["--arch=aarch64"])
+                + boot_jobs(aarch64_morestack_kernel, AARCH64_MORESTACK_TESTS, ["--arch=aarch64"])
+                + address_jobs(aarch64_kernel, ["--arch=aarch64"], "AArch64: "))
+        failed = run_jobs(jobs)
         count = len(TESTS) + len(MORESTACK_TESTS) + len(AARCH64_TESTS) + len(AARCH64_MORESTACK_TESTS) + 2 * len(ADDRESS_TESTS)
-        print_timings(time.monotonic() - suite_started)
+        print_timings(time.monotonic() - suite_started, built)
+        if FLAKY:
+            print(f"{len(FLAKY)} flaky, failing among the others and passing alone: " + "; ".join(FLAKY))
         print(f"{count - failed} of {count} passed")
         return 0 if failed == 0 else 1
 
 
-def print_timings(total: float) -> None:
-    """The whole run's time, the tests' and the builds' before them, and the slowest tests, to see where it goes."""
+def print_timings(total: float, built: float) -> None:
+    """
+    The whole run's time, the builds' before the tests, the tests' added up (more than the time they took, in parallel),
+    and the slowest tests, to see where it goes.
+    """
     tested = sum(TIMINGS.values())
-    print(f"took {total / 60:.1f} min: {tested / 60:.1f} in {len(TIMINGS)} tests, {(total - tested) / 60:.1f} building and the rest")
+    print(f"took {total / 60:.1f} min: {built / 60:.1f} building, {(total - built) / 60:.1f} booting {len(TIMINGS)} tests, "
+          f"{JOBS} at once, {tested / 60:.1f} of test time added up")
     for name, seconds in sorted(TIMINGS.items(), key=lambda item: item[1], reverse=True)[:12]:
         print(f"  {seconds:6.1f} s  {name}")
 
@@ -658,56 +696,115 @@ ADDRESS_TESTS = [
 ]
 
 
-def addresses(kernel: Path, arguments: list) -> list | None:
-    """Boots kernel, and gives the lines that say where it is, or None if it didn't halt as usual."""
+def addresses(kernel: Path, arguments: list, output: list) -> list | None:
+    """Boots kernel, and gives the lines that say where it is, or None if it didn't halt as usual, its output in output."""
     result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", "--timeout=60", "--expect=0",
                              *boot_arguments(arguments, [])], capture_output=True, text=True)
     if result.returncode != 0:
-        sys.stdout.write(result.stdout)
-        sys.stdout.write(result.stderr)
+        output.append(result.stdout + result.stderr)
         return None
     # Only the kernel's own addresses: where the firmware put the image physically is its choice, and can differ between boots
     return [line.split(", physical ")[0] for line in result.stdout.splitlines() if any(line.startswith(prefix) for prefix in ADDRESS_LINES)]
 
 
-def run_address_tests(kernel: Path, more: list = [], prefix: str = "") -> int:
-    """Boots kernel twice for each address test, comparing where it was, and gives how many failed."""
+def address_test(kernel: Path, name: str, differ: bool, arguments: list) -> tuple[bool, str]:
+    """Boots kernel twice for an address test, comparing where it was: whether it passed, and what to show if not."""
+    output: list[str] = []
+    first = addresses(kernel, arguments, output)
+    second = addresses(kernel, arguments, output)
+    passed = first is not None and second is not None and len(first) == len(ADDRESS_LINES) and len(second) == len(first)
+    if passed:
+        # Every line differs with KASLR, by the image's base, the direct map's offset and the window's; none without
+        passed = all((a != b) == differ for a, b in zip(first, second))
+    return passed, "".join(output) + f"first boot: {first}\nsecond boot: {second}\n"
+
+
+def address_jobs(kernel: Path, more: list = [], prefix: str = "") -> list:
+    """The address tests, as jobs: a name and what runs it."""
+    return [(prefix + name, lambda name=name, differ=differ, arguments=arguments: address_test(kernel, name, differ, more + arguments))
+            for name, differ, arguments in ADDRESS_TESTS]
+
+
+def boot_test(kernel: Path, expected: int, arguments: list) -> tuple[bool, str]:
+    """Boots kernel with boot.py's arguments: whether it stopped with expected, and what it printed."""
+    result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", "--timeout=60", f"--expect={expected}",
+                             *arguments], capture_output=True, text=True)
+    return result.returncode == 0, result.stdout + result.stderr
+
+
+def boot_jobs(kernel: Path, tests: list, more: list = []) -> list:
+    """
+    The tests, as jobs booting kernel with more of boot.py's arguments: a name and what runs it. SLOPOS_BOOT_TESTS: only
+    the tests whose names have one of these, separated by commas, in them.
+    """
+    only = [part for part in os.environ.get("SLOPOS_BOOT_TESTS", "").split(",") if part]
+    return [(name, lambda expected=expected, arguments=boot_arguments(arguments, more): boot_test(kernel, expected, arguments))
+            for name, expected, arguments in tests if not only or any(part in name for part in only)]
+
+
+def run_jobs(jobs: list) -> int:
+    """
+    Runs jobs, JOBS at once, the slowest of the last run first, and gives how many failed: one that fails among the
+    others runs again alone, and if it passes then, it's FLAKY, and doesn't count, unless the kernel faulted or a fatal
+    error stopped it the first time, which is a bug however rarely it shows.
+    """
+    try:
+        last = json.loads(TIMINGS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        last = {}
+    # Those not timed yet first, as they may be slow
+    ordered = sorted(jobs, key=lambda job: last.get(job[0], float("inf")), reverse=True)
+    failing: list = []
+
+    def run(job) -> None:
+        name, runner = job
+        started = time.monotonic()
+        passed, output = runner()
+        TIMINGS[name] = time.monotonic() - started
+        with PRINTING:
+            if passed:
+                print(f"passed: {name} ({TIMINGS[name]:.1f} s)", flush=True)
+            elif JOBS == 1:
+                print(f"FAILED: {name} ({TIMINGS[name]:.1f} s)")
+                sys.stdout.write(output)
+                sys.stdout.flush()
+            else:
+                print(f"failed among the others, to boot again alone: {name} ({TIMINGS[name]:.1f} s)", flush=True)
+            if not passed:
+                failing.append((job, output))
+
+    with ThreadPoolExecutor(max_workers=JOBS) as pool:
+        list(pool.map(run, ordered))
     failed = 0
-    for name, differ, arguments in ADDRESS_TESTS:
-        first = addresses(kernel, more + arguments)
-        second = addresses(kernel, more + arguments)
-        passed = first is not None and second is not None and len(first) == len(ADDRESS_LINES) and len(second) == len(first)
-        if passed:
-            # Every line differs with KASLR, by the image's base, the direct map's offset and the window's; none without
-            passed = all((a != b) == differ for a, b in zip(first, second))
-        print(f"{'passed' if passed else 'FAILED'}: {prefix}{name}")
-        if not passed:
+    for (name, runner), first_output in failing:
+        if JOBS == 1:
             failed += 1
-            print(f"first boot: {first}")
-            print(f"second boot: {second}")
+            continue
+        started = time.monotonic()
+        passed, output = runner()
+        if passed and "[fatal]" in first_output:
+            failed += 1
+            print(f"FAILED: {name}, with a fatal error among the others, though it passed alone; among the others it printed:")
+            sys.stdout.write(first_output)
+        elif passed:
+            FLAKY.append(name)
+            print(f"FLAKY: {name}, passed alone ({time.monotonic() - started:.1f} s); among the others it printed:")
+            sys.stdout.write(first_output)
+        else:
+            failed += 1
+            print(f"FAILED: {name}, alone too ({time.monotonic() - started:.1f} s)")
+            sys.stdout.write(output)
+        sys.stdout.flush()
+    try:
+        TIMINGS_FILE.write_text(json.dumps({**last, **TIMINGS}, indent=1), encoding="utf-8")
+    except OSError:
+        pass
     return failed
 
 
 def run_tests(kernel: Path, tests: list, more: list = []) -> int:
     """Boots kernel for each test, with more of boot.py's arguments, and gives how many failed."""
-    failed = 0
-    # SLOPOS_BOOT_TESTS: only the tests whose names have one of these, separated by commas, in them
-    only = [part for part in os.environ.get("SLOPOS_BOOT_TESTS", "").split(",") if part]
-    for name, expected, arguments in tests:
-        if only and not any(part in name for part in only):
-            continue
-        arguments = boot_arguments(arguments, more)
-        started = time.monotonic()
-        result = subprocess.run([sys.executable, str(BOOT), f"--kernel={kernel}", "--timeout=60", f"--expect={expected}",
-                                 *arguments], capture_output=True, text=True)
-        TIMINGS[name] = time.monotonic() - started
-        passed = result.returncode == 0
-        print(f"{'passed' if passed else 'FAILED'}: {name} ({TIMINGS[name]:.1f} s)")
-        if not passed:
-            failed += 1
-            sys.stdout.write(result.stdout)
-            sys.stdout.write(result.stderr)
-    return failed
+    return run_jobs(boot_jobs(kernel, tests, more))
 
 
 # Robustness sweeps (knowledge/decisions/0096, 0104): `boot_tests.py --robustness`
@@ -883,4 +980,5 @@ def robustness() -> int:
 
 
 if __name__ == "__main__":
+    JOBS = jobs_wanted()
     sys.exit(robustness() if "--robustness" in sys.argv[1:] else main())

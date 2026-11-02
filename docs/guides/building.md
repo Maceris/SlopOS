@@ -144,7 +144,10 @@ python tools/boot_tests.py --robustness
 - **Boot tests** build the kernel, plus one with `stack_check=morestack`, and boot them in every way
   they're tested: BIOS and UEFI, a CPU below the baseline, 1 to 6 CPUs, each `test_` option above, and
   twice each with and without KASLR to compare addresses. Each test checks the code the kernel stops with,
-  and some, lines of its output.
+  and some, lines of its output. They boot in parallel, `--jobs N` at once (or `SLOPOS_BOOT_JOBS`; half the
+  CPUs, at most 8, by default; each QEMU has 512 MiB), the slowest of the last run first. One that fails among
+  the others boots again alone: passing then, it's reported `FLAKY` and doesn't fail the run, unless it stopped
+  with a fatal error the first time. `--jobs 1` boots one at a time. `SLOPOS_BOOT_TESTS` picks tests by name.
 - **Unit tests** build each `test/` package under `src/` as a hosted program and run it: the frame
   allocator, the slab allocator and x86-64 paging, over buffers standing in for physical memory. A test
   program returns 0, or the number of the check that failed.

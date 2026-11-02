@@ -204,7 +204,8 @@ implement of `arch_interface` yet in `NOT_YET_IMPLEMENTED`: take a name off when
 it, or the check fails. `python tools/boot.py --expect 0` builds the kernel that way, boots it
 in QEMU from an ISO through SlopOS's bootloader with `test_exit` on its command line, and checks the code it stopped
 with (`src/kernel/stop.hsc`); `--cpu`, `--command-line` and `--no-kaslr` vary the run, and
-`python tools/boot_tests.py` runs every boot test. It finds QEMU and xorriso through
+`python tools/boot_tests.py` runs every boot test, `--jobs N` at once (half the CPUs, at most 8, by default; a test
+that fails among the others boots again alone, and passing then is reported FLAKY). It finds QEMU and xorriso through
 `QEMU` and `XORRISO`, or the PATH; `HEMERA_INSTALL` overrides where `std` is.
 `python tools/unit_tests.py` builds every `test/` package under `src/` as a hosted program (through
 the build package) and
