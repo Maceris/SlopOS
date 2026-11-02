@@ -6,7 +6,8 @@
  * so a store stopped between the two has the version before, whole; the one past MAX_VERSIONS is deleted after.
  *
  * Connections to values are made on the supervisor's, which arrives on the admin listener (ValueFor): each reaches only
- * its own value. The store doesn't know a value's type, only its schema hash: the program, which does, checks what it
+ * its own value. The session manager's, on the users listener, makes connections only to users' values, those whose
+ * owner is "user:" and an account's name (decisions/0152). The store doesn't know a value's type, only its schema hash: the program, which does, checks what it
  * reads (config.read), and what it writes, before it sends it.
  */
 package config_service
@@ -52,6 +53,8 @@ Value :: struct {
 // What a connection is: the supervisor's, or one to a value, and the version a Next of its waits to be past.
 Client :: struct {
     admin : bool,
+    // The session manager's: values of users' only
+    users : bool,
     value : usize,
     waiting : bool,
     seen : u64,
@@ -67,7 +70,7 @@ Store :: struct {
     value_count : usize,
 }
 
-main :: fn(store: os.Channel[dir.Dir], admin: os.Listener[config.ConfigValue]) -> int {
+main :: fn(store: os.Channel[dir.Dir], admin: os.Listener[config.ConfigValue], users: os.Listener[config.ConfigValue]?) -> int {
     // Its state; without the memory for it, it ends with 99 (decisions/0104)
     service_made, service_error :: runtime.new_aligned(Store, align_of(Store))
     if service_error != null {
@@ -84,6 +87,15 @@ main :: fn(store: os.Channel[dir.Dir], admin: os.Listener[config.ConfigValue]) -
     index :: service_kit.add_client_index(&service.connected, service.port, admin.end) or_return 3
     if index < service.clients.count {
         service.clients[index] = Client.{admin = true, value = NOWHERE}
+    }
+    match users {
+        case Some(listener) => {
+            added :: service_kit.add_client_index(&service.connected, service.port, listener.end) or_return 3
+            if added < service.clients.count {
+                service.clients[added] = Client.{users = true, value = NOWHERE}
+            }
+        }
+        case None => {}
     }
     runtime.log_info("serving")
     into := os.Incoming.{}
@@ -132,7 +144,7 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
         request :: os.message_of[config.Request](into)^
         match request {
             case ValueFor(wanted) => {
-                if !client.admin {
+                if !client.admin && !(client.users && is_users(as_text(os.items(into, wanted.owner)))) {
                     refuse(end, service.port, .Refused)
                     continue
                 }
@@ -601,4 +613,10 @@ same_bytes :: fn(a: u8[], b: u8[]) -> bool {
 
 as_text :: fn(bytes: u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
+}
+
+// Whether owner is a user's: "user:" and a name after it.
+is_users :: fn(owner: string) -> bool {
+    prefix :: "user:"
+    return owner.count > prefix.count && owner[0..<prefix.count] == prefix
 }

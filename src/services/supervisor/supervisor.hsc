@@ -179,6 +179,7 @@ StoreGrants :: struct {
 ConfigGrants :: struct {
     store : os.Channel[dir.Dir],
     admin : os.Listener[config_protocol.ConfigValue],
+    users : os.Listener[config_protocol.ConfigValue]?,
 }
 
 // What the update service is given (update_service.main).
@@ -248,6 +249,7 @@ SessionGrants :: struct {
     manager : os.Channel[connector.Connector],
     echo_module : slop_os.Memory?,
     events_service : os.Channel[events.Events]?,
+    settings : os.Channel[config_protocol.ConfigValue]?,
     clients : os.Listener[session.Session],
 }
 
@@ -471,6 +473,8 @@ Supervisor :: struct {
     // The account service's entry, for the terminal service's first-boot setup (decisions/0148), and the session manager's
     accounts : usize,
     sessions : usize,
+    // The config store's connection for users' values, kept for the session manager
+    config_users : slop_os.Channel,
     // The system volume's root, once the storage manager has given it, where programs outside the boot set come from
     system : slop_os.Channel,
     system_port : slop_os.Port,
@@ -560,7 +564,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     boot_records^ = records^
     supervisor := Supervisor.{block = startup, records = records, boot_records = boot_records, overrides_end = NONE, substitutions_end = NONE, manager_connector = manager.end, root = root.end, platform_end = NONE,
         platform_connector = NONE, scheduler_connector = NONE, entropy_connector = NONE,
-        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, terminal = NOWHERE, input = NOWHERE, accounts = NOWHERE, sessions = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
+        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, terminal = NOWHERE, input = NOWHERE, accounts = NOWHERE, sessions = NOWHERE, config_users = NONE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
         events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE),
         launched_lifecycle = NONE, last_panic = last_panic}
     supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, hello = hello_module, terminal = terminal_module, echo = echo_module, sessions = sessions_module, input = input_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
@@ -2068,6 +2072,18 @@ start_config :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     }
     pair :: os.channel_for[config_protocol.ConfigValue](supervisor.block.budget, 0) or_return void
     grants := ConfigGrants.{store = directory, admin = os.Listener[config_protocol.ConfigValue].{end = pair.a}}
+    // The session manager's connection, for users' values (decisions/0152), given to it when it's started
+    if supervisor.config_users != NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.config_users))
+        supervisor.config_users = NONE
+    }
+    match os.channel_for[config_protocol.ConfigValue](supervisor.block.budget, 0) {
+        case Ok(users) => {
+            grants.users = os.Listener[config_protocol.ConfigValue].{end = users.a}
+            supervisor.config_users = users.b
+        }
+        case Error(error) => {}
+    }
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
         config_service.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => {
@@ -3381,6 +3397,11 @@ start_sessions :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     }
     grants := SessionGrants.{log = duplicate_log(supervisor), manager = manager, echo_module = echo_module,
         events_service = events_connection(supervisor), clients = os.Listener[session.Session].{end = pair.a}}
+    // The config store's connection for users' values, the session manager's from now on
+    if supervisor.config_users != NONE {
+        grants.settings = os.Channel[config_protocol.ConfigValue].{end = supervisor.config_users}
+        supervisor.config_users = NONE
+    }
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "sessions"), service.budget,
         session_manager.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => {

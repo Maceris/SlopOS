@@ -1555,7 +1555,7 @@ start_session :: fn(service: ptr[mut Service], home: os.Channel[dir.Dir]?) -> bo
     match home {
         case Some(root) => {
             request^ = .Start(session.SessionStart.{user = os.append(&out, view(service).user[0..<min_count(view(service).user_count, view(service).user.count)]),
-                home = root, terminal = os.Channel[terminal.Terminal].{end = pair.b}})
+                layout = os.append(&out, string_bytes(service.layout)), home = root, terminal = os.Channel[terminal.Terminal].{end = pair.b}})
         }
         case None => request^ = .StartWithoutUser(os.Channel[terminal.Terminal].{end = pair.b})
     }

@@ -1,7 +1,7 @@
 /*
  * echo (decisions/0136, 0150): a session's first program until the shell, which the session manager starts with the
  * session's terminal connection, and its home volume's root once someone's logged in; it says how many entries the home
- * directory has. It reads
+ * directory has, then how numbers and dates look in its session's locale (decisions/0152). It reads
  * the terminal's typed input, keeps the line being typed as the terminal's input line, below what anything writes
  * (decisions/0147), takes Backspace back a grapheme cluster, and answers each line with the line itself and "echo: "
  * and the line, which it also logs; Ctrl-C drops the line, shown with ^C after it. That's what the console service did
@@ -14,6 +14,8 @@ import runtime from "base"
 import os from "std"
 import text_buffer from "std"
 import unicode from "std"
+import locale from "std"
+import time from "std"
 import slop_os from "std/os"
 import terminal from "std/os/slop_os"
 import lifecycle from "std/os/slop_os"
@@ -39,6 +41,7 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[terminal.Termina
         case Some(root) => greet(&echo, root)
         case None => {}
     }
+    show_locale(&echo)
     if !terminal.read(echo.end, echo.port) {
         return 2
     }
@@ -75,6 +78,20 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[terminal.Termina
             case _ => {}
         }
     }
+}
+
+// A number and a date as the session's locale writes them, the last day of 2026 for the date.
+show_locale :: fn(echo: ptr[mut Echo]) {
+    storage : u8[96]
+    line := text_buffer.make(storage)
+    text_buffer.append(&line, "Numbers here look like ")
+    locale.append_fixed(&line, 123456789, 2)
+    text_buffer.append(&line, ", and dates like ")
+    locale.append_date(&line, time.DateTime.{year = 2026, month = 12, day = 31})
+    text_buffer.append(&line, ".")
+    _ = terminal.write_line(echo.end, echo.port, text_buffer.as_string(&line))
+    current :: locale.current()
+    runtime.log_info("its locale is %", if current.name.count > 0 { current.name } else { "neutral" })
 }
 
 // How many entries the home directory has, said on the terminal and in the log.

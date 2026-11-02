@@ -33,9 +33,13 @@ Program :: struct {
     memory_limit : u64,
 }
 
-// A session to make: its user's name, its home volume's root, and the terminal its programs write to.
+/*
+ * A session to make: its user's name, its home volume's root, the terminal its programs write to, and the keyboard
+ * layout its user logged in with, which chooses its locale until its user's settings say one (decisions/0152).
+ */
 SessionStart :: struct {
     user : slop_os.Relative[u8],
+    layout : slop_os.Relative[u8],
     home : os.Channel[dir.Dir],
     terminal : os.Channel[terminal.Terminal],
 }

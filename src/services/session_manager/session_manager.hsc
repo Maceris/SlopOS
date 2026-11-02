@@ -5,7 +5,9 @@
  * the session protocol on its listener: Start and StartWithoutUser, List with a session's programs, each pinged on its
  * lifecycle channel, End, a Stop on that channel, then the program killed if it hasn't ended once a grace period's
  * over, and EndSession, every program of a session ended so. There are up to MAX_SESSIONS at once (decisions/0151). A session's programs' budgets are split off its own, the session's node, and their log records go to the
- * events service through rings it opens for them, as the supervisor's programs' do.
+ * events service through rings it opens for them, as the supervisor's programs' do. Each program is given its session's
+ * locale (decisions/0152), from its user's settings in the config store, "session" of owner "user:" and their name, or
+ * the keyboard layout they logged in with, which is kept as their setting then.
  */
 package session_manager
 
@@ -18,6 +20,7 @@ import process_manager from "std/os/slop_os"
 import terminal from "std/os/slop_os"
 import echo from "../../apps/echo"
 import connector from "../../protocols/connector"
+import config from "../../protocols/config"
 import events from "../../protocols/events"
 import session from "../../protocols/session"
 import service_kit from "../../libraries/service_kit"
@@ -32,6 +35,13 @@ ECHO_BUDGET : u64 : 2 * 1024 * 1024
 PING_WAIT : u64 : 200_000_000
 STOP_GRACE : u64 : 2_000_000_000
 USER_BYTES :: 32
+LOCALE_BYTES :: 16
+
+// A user's settings for their sessions, in the config store.
+SessionSettings :: struct {
+    // A std/locale name, as "en-GB"; empty until it's chosen
+    locale : slop_os.Relative[u8],
+}
 
 // What echo is given (echo.main): the session's terminal, and its home volume's root if it has one.
 EchoGrants :: struct {
@@ -45,6 +55,11 @@ Session :: struct {
     in_use : bool,
     user : u8[USER_BYTES],
     user_bytes : usize,
+    // Its locale's name, "" for none, and the page holding it, which its programs are given copies of to read, kept
+    // while it lasts
+    locale : u8[LOCALE_BYTES],
+    locale_bytes : usize,
+    locale_page : slop_os.Memory,
 }
 
 // A program of a session's: its name, its session's number, its process and budget, its lifecycle channel's end, and
@@ -69,6 +84,9 @@ Manager :: struct {
     echo_module : slop_os.Memory?,
     events_end : slop_os.Channel,
     events_port : slop_os.Port,
+    // The config store's connection for users' values
+    settings_end : slop_os.Channel,
+    settings_port : slop_os.Port,
     // The sessions, and every session's programs
     sessions : Session[MAX_SESSIONS],
     programs : Program[MAX_PROGRAMS],
@@ -76,12 +94,20 @@ Manager :: struct {
 }
 
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], echo_module: slop_os.Memory?,
-    events_service: os.Channel[events.Events]?, clients: os.Listener[session.Session]) -> int {
+    events_service: os.Channel[events.Events]?, settings: os.Channel[config.ConfigValue]?, clients: os.Listener[session.Session]) -> int {
     block :: slop_os.startup_block()
     sessions := runtime.new(Manager)
     sessions.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     sessions.echo_module = echo_module
     sessions.events_end = NONE
+    sessions.settings_end = NONE
+    match settings {
+        case Some(found) => {
+            sessions.settings_end = found.end
+            sessions.settings_port = os.port_for(block.budget, found.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+        }
+        case None => {}
+    }
     match events_service {
         case Some(found) => {
             sessions.events_end = found.end
@@ -156,8 +182,8 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
         out := os.Outgoing.{}
         response :: os.begin[session.Response](&out)
         match os.message_of[session.Request](into)^ {
-            case Start(given) => response^ = start(sessions, os.items(into, given.user), given.terminal, given.home)
-            case StartWithoutUser(given) => response^ = start(sessions, u8.[], given, null)
+            case Start(given) => response^ = start(sessions, os.items(into, given.user), os.items(into, given.layout), given.terminal, given.home)
+            case StartWithoutUser(given) => response^ = start(sessions, u8.[], u8.[], given, null)
             case List(number) => {
                 programs : session.Program[session.MAX_PROGRAMS]
                 count :: list(sessions, number, &programs)
@@ -180,7 +206,7 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
  * A session made, its first program started with its terminal and home: Started with its number, or Refused when
  * there's no room for another.
  */
-start :: fn(sessions: ptr[mut Manager], user: u8[], given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?) -> session.Response {
+start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?) -> session.Response {
     number := sessions.sessions.count
     for each, i in sessions.sessions {
         if !each.in_use {
@@ -196,10 +222,19 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], given_terminal: os.Channel[t
         }
         return .Refused
     }
-    made := Session.{in_use = true, user_bytes = user.count}
+    made := Session.{in_use = true, user_bytes = user.count, locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE)}
     for byte, i in user {
         if i < made.user.count {
             made.user[i] = byte
+        }
+    }
+    if user.count > 0 {
+        chosen :: locale_for(sessions, user, layout)
+        for byte, i in string_bytes(chosen) {
+            if i < made.locale.count {
+                made.locale[i] = byte
+                made.locale_bytes = i + 1
+            }
         }
     }
     sessions.sessions[number] = made
@@ -207,7 +242,7 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], given_terminal: os.Channel[t
         runtime.log_info("a session with no user, on a boot with no accounts")
     }
     else {
-        runtime.log_info("a session for %", string_of(&user[0], user.count))
+        runtime.log_info("a session for %, in %", string_of(&user[0], user.count), locale_of(&sessions.sessions[number]))
     }
     if !launch_echo(sessions, cast[u32](number), given_terminal, home) {
         sessions.sessions[number].in_use = false
@@ -227,7 +262,11 @@ end_session :: fn(sessions: ptr[mut Manager], number: u32) -> session.Response {
             _ = end_program(sessions, i)
         }
     }
-    sessions.sessions[cast[usize](number)] = Session.{}
+    page :: sessions.sessions[cast[usize](number)].locale_page
+    if cast[slop_os.Handle](page) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](page))
+    }
+    sessions.sessions[cast[usize](number)] = Session.{locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE)}
     return .Ended
 }
 
@@ -248,6 +287,9 @@ launch_echo :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.Ch
     options := os.LaunchOptions.{watch = os.LaunchWatch.{port = sessions.port, key = PROGRAM_KEY + cast[u64](index)}}
     ends :: lifecycle.make(slop_os.startup_block().budget) or_return false
     options.lifecycle = ends.b
+    if cast[usize](number) < sessions.sessions.count {
+        options.locale = locale_page(&sessions.sessions[cast[usize](number)])
+    }
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     copy :: cast[slop_os.Memory](slop_os.handle_duplicate(cast[slop_os.Handle](module), rights) or_return false)
     // A ring for its log records, the owning handle kept, the program given one that doesn't own it
@@ -377,6 +419,104 @@ end_program :: fn(sessions: ptr[mut Manager], index: usize) -> session.Response 
         _ = slop_os.process_kill(sessions.programs[index].process)
     }
     return .Ended
+}
+
+/*
+ * A user's locale: their settings', or with none, the one the keyboard layout they logged in with suggests, kept as their
+ * setting from then on.
+ */
+locale_for :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[]) -> string {
+    suggested :: if layout.count == 2 && layout[0] == cast[u8]('u') && layout[1] == cast[u8]('k') { "en-GB" } else { "en-US" }
+    if sessions.settings_end == NONE {
+        return suggested
+    }
+    owner : u8[USER_BYTES + 5]
+    count : usize = 0
+    for byte in string_bytes("user:") {
+        if count < owner.count {
+            owner[count] = byte
+            count += 1
+        }
+    }
+    for byte in user {
+        if count < owner.count {
+            owner[count] = byte
+            count += 1
+        }
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[config.Request](&out)
+    request^ = .ValueFor(config.ValueFor.{owner = os.append(&out, owner[0..<count]), name = os.append(&out, string_bytes("session"))})
+    into := os.Incoming.{}
+    connection :: match config.ask(sessions.settings_end, sessions.settings_port, &out, &into) {
+        case Opened(opened) => config.Config[SessionSettings].{end = opened.end}
+        case _ => return suggested
+    }
+    defer slop_os.handle_close(cast[slop_os.Handle](connection.end))
+    port :: os.port_for(slop_os.startup_block().budget, connection.end) or_return suggested
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    if config.declare(connection, port) is_error {
+        return suggested
+    }
+    value := os.Outgoing.{}
+    if config.read(connection, port, &value) is_ok {
+        bytes :: os.value_bytes(&value)
+        kept :: os.items_of(bytes, os.typed_value[SessionSettings](bytes).locale)
+        if kept.count > 0 {
+            match locale_named(kept) {
+                case Some(name) => return name
+                case None => {}
+            }
+        }
+    }
+    // None yet: the suggested one, kept as theirs
+    override := os.Outgoing.{}
+    written :: os.begin[SessionSettings](&override)
+    written.locale = os.append(&override, string_bytes(suggested))
+    _ = config.write(connection, port, os.value_bytes(&override), config.field_bit[SessionSettings]("locale"))
+    return suggested
+}
+
+// The locale named by bytes, if it's one the session manager gives: its name as a constant.
+locale_named :: fn(bytes: u8[]) -> string? {
+    if bytes.count == 0 {
+        return null
+    }
+    for name in string.["en-US", "en-GB"] {
+        if string_of(&bytes[0], bytes.count) == name {
+            return name
+        }
+    }
+    return null
+}
+
+locale_of :: fn(made: ptr[Session]) -> string {
+    return if made.locale_bytes > 0 && made.locale_bytes <= made.locale.count { string_of(&made.locale[0], made.locale_bytes) } else { "no locale" }
+}
+
+/*
+ * A read-only copy of the page holding a session's locale's name, for a program's grant "locale", the page made the
+ * first time and kept by the session, since closing it would take the copies with it; null for a session with none.
+ */
+locale_page :: fn(made: ptr[mut Session]) -> slop_os.Memory? {
+    count :: made.locale_bytes
+    if count == 0 || count > made.locale.count {
+        return null
+    }
+    if cast[slop_os.Handle](made.locale_page) == slop_os.NO_HANDLE {
+        page :: slop_os.memory_create(slop_os.startup_block().budget, 4096) or_return null
+        if slop_os.memory_write(page, 0, made.locale[0..<count]) is_error {
+            _ = slop_os.handle_close(cast[slop_os.Handle](page))
+            return null
+        }
+        made.locale_page = page
+    }
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+    given :: slop_os.handle_duplicate(cast[slop_os.Handle](made.locale_page), rights)
+    return match given {
+        case Ok(copy) => cast[slop_os.Memory](copy)
+        case Error(error) => null
+    }
 }
 
 // An ended program's ring given back to the events service, which reads what's left in it, or closed without one.

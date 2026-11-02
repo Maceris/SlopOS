@@ -246,6 +246,8 @@ TESTS = [
         "--console-input-after=hello: heap and random numbers working",
         "--expect-line=[user] virtio_console: serving", "--expect-line=[user] echo: read ping from the host",
         "--expect-console-line=SlopOS console", "--expect-console-line=hello: heap and random numbers working",
+        "--expect-line=[user] echo: its locale is neutral",
+        "--expect-console-line=Numbers here look like 1234567.89, and dates like 2026-12-31.",
         "--expect-console-line=echo: ping from the host", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # Half a line typed, then hello's lines while it's being typed, which go above it whole (decisions/0147), then the
     # rest: the line's written as typed and answered
@@ -271,7 +273,7 @@ TESTS = [
         "--expect-line=[user] terminal: secure attention ended", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # A virtio keyboard boot.py types on through QEMU's machine protocol: keys as HID usages, typed by the terminal service's keymap
     ("types on a virtio keyboard into the console", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services", "--keyboard-input=Hi there, 42!",
+        "--command-line=test_exit test_services test_settle=4", "--keyboard-input=Hi there, 42!",
         "--expect-line=[user] virtio_input: serving", "--expect-line=[user] echo: read Hi there, 42!",
         "--expect-console-line=echo: Hi there, 42!", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # A keyboard that's new: what's typed on it before its code goes nowhere, the code on the status line typed on it
@@ -374,8 +376,10 @@ TESTS = [
         "--expect-line=[user] terminal: login: the uk keyboard layout",
         "--expect-line=[user] input: typing through the uk layout",
         "--expect-line=[user] terminal: logged in as admin",
-        "--expect-line=[user] sessions: a session for admin",
+        "--expect-line=[user] sessions: a session for admin, in en-GB",
         "--expect-line=[user] echo: home has 0 entries",
+        "--expect-line=[user] echo: its locale is en-GB",
+        "--expect-console-line=Numbers here look like 1,234,567.89, and dates like 31/12/2026.",
         "--expect-line=[user] echo: read from the session",
         "--expect-console-line=echo: from the session",
         "--refuse-console-line=correct horse battery staple", "--refuse-console-line=not the password"])),
@@ -393,6 +397,8 @@ TESTS = [
         # The session drawn again once it's unlocked
         "--console-input-after=echo: third line", "--console-input-after=echo: fourth line",
         "--expect-line=[user] terminal: login: another session",
+        # The first login keeps the locale its layout suggests as the user's setting, which the second reads
+        "--expect-line=[user] sessions: a session for admin, in en-US",
         "--expect-line=[user] terminal: switched to admin's session",
         "--expect-line=[user] terminal: locked", "--expect-line=[user] terminal: unlocked",
         "--expect-line=[user] sessions: ending session 0", "--expect-line=[user] terminal: logged out",
