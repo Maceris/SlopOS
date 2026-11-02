@@ -329,6 +329,8 @@ the status line (US and UK, F2), the session manager, and echo started in the se
 10c2 done 2026-11-02 (`decisions/0151`): a view per session in the terminal service, and the secure attention key's
 screen switching sessions, logging in another, locking the console and logging out. 10c3 done 2026-11-02
 (`decisions/0152`): Hemera's `std/locale`, the user's locale in the config store, given to each program of the session.
+10c4 done 2026-11-02 (`decisions/0153` to `0155`): the system's installations run in each session, with their data in
+the user's home, and under memory pressure the session manager stops the installations of the sessions not shown.
 
 Specs: RFC 9106 (Argon2), RFC 3394 or the AEAD for key wrapping, ECMA-48 (for the VT adapter only), the Unicode
 standard's East Asian Width and UAX #29 for terminal widths.

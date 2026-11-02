@@ -1582,7 +1582,16 @@ start_session :: fn(service: ptr[mut Service], home: os.Channel[dir.Dir]?) -> bo
         runtime.log_info("a session with no user, on a boot with no accounts")
         update_status(service)
     }
+    if started {
+        tell_shown(service)
+    }
     return started
+}
+
+// The session manager told which session is shown, none on a login screen, for its memory pressure policy (decisions/0153).
+tell_shown :: fn(service: ptr[mut Service]) {
+    shown :: &service.views[service.active % service.views.count]
+    _ = ask_session(service, .Shown(if shown.in_use && shown.logged_in { shown.session } else { session.NO_SESSION }))
 }
 
 is_login :: fn(step: SetupStep) -> bool {
@@ -2073,6 +2082,7 @@ switch_to :: fn(service: ptr[mut Service], index: usize) {
     screen.show_panel(&view(service).screen, false)
     update_status(service)
     redraw(service)
+    tell_shown(service)
     if view(service).user_count > 0 && view(service).user_count <= view(service).user.count {
         runtime.log_info("switched to %'s session", string_of(&view(service).user[0], view(service).user_count))
     }
@@ -2109,6 +2119,7 @@ log_in_another :: fn(service: ptr[mut Service]) {
     service.active = free
     service.viewing = free
     runtime.log_info("login: another session")
+    tell_shown(service)
     enter_login(service)
 }
 
@@ -2184,5 +2195,6 @@ log_out :: fn(service: ptr[mut Service]) {
     }
     open_view(service, gone)
     service.viewing = gone
+    tell_shown(service)
     enter_login(service)
 }

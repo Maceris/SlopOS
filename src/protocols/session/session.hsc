@@ -12,7 +12,8 @@ import terminal from "std/os/slop_os"
  * session's number. List, for a session by its number, is answered with its programs running, their memory, and
  * whether each answered a Ping on its lifecycle channel; End asks one, by the index List gave it, to stop, then ends it
  * after a grace period, and it isn't started again; EndSession does that for every program of a session, which ends it
- * (decisions/0151).
+ * (decisions/0151). Shown tells it which session the console shows, NO_SESSION for none, as on the login screen: the
+ * others' installations are the idle ones it asks to stop under memory pressure (decisions/0153).
  */
 
 Session :: struct {}
@@ -21,6 +22,7 @@ PROTOCOL :: slop_os.Protocol.{name = "session", major_version = 1, lending = .Se
 
 MAX_PROGRAMS :: 16
 NAME_BYTES :: 32
+NO_SESSION : u32 : 0xffffffff
 
 // Plain data, as a Relative's elements are: responding is 1 or 0.
 Program :: struct {
@@ -56,6 +58,8 @@ Request :: union {
     End(u32),
     // Serve another client, on its end
     Connect(os.Channel[Session]),
+    // The session the console shows now, by its number, or NO_SESSION
+    Shown(u32),
 }
 
 Response :: union {
@@ -66,6 +70,8 @@ Response :: union {
     Ended,
     // No program at that index that may be ended, or no room for another session
     Refused,
+    // Shown's answer
+    Noted,
     Unsupported,
 }
 
@@ -78,6 +84,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case EndSession(_) => true
         case End(_) => true
         case Connect(_) => true
+        case Shown(_) => true
     }
 }
 

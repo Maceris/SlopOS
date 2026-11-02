@@ -10,7 +10,10 @@
  * the keyboard layout they logged in with, which is kept as their setting then. Each session runs the system's
  * installations (decisions/0153), their programs from the bundle store, each with its data directory in the session's
  * home, apps/<name>, or the system volume's apps for a session with no user, and its settings in the config store,
- * owned by "user:", the user's name, ":" and its name.
+ * owned by "user:", the user's name, ":" and its name. Under memory pressure, its budget at PRESSURE_PERCENT of its
+ * limit, it asks the idle installations, those of the sessions the console doesn't show, the least recently shown
+ * session's first, to stop, one at a time, until it's back under RELIEVED_PERCENT; a session's first program is never
+ * asked.
  */
 package session_manager
 
@@ -38,6 +41,10 @@ import service_kit from "../../libraries/service_kit"
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 // A program's end is watched under this key and its index
 PROGRAM_KEY : u64 : 1000
+// Its budget's pressure is bound to its port under this key
+PRESSURE_KEY : u64 : 900
+PRESSURE_PERCENT : u64 : 80
+RELIEVED_PERCENT : u64 : 70
 MAX_PROGRAMS :: 16
 MAX_SESSIONS :: 4
 ECHO_BUDGET : u64 : 2 * 1024 * 1024
@@ -85,6 +92,8 @@ Session :: struct {
     locale_page : slop_os.Memory,
     // Its apps directory, its installations' data directories' parent; NONE for none
     apps : slop_os.Channel,
+    // When it was last shown, by the count of Shown, 0 for never
+    shown_at : u64,
 }
 
 // A program of a session's: its name, its session's number, its process and budget, its lifecycle channel's end, and
@@ -139,6 +148,13 @@ Manager :: struct {
     // test_installations' session, once there's one with a user, and whether it's still to come
     test_installations : bool,
     checking : usize,
+    // The session the console shows, or session.NO_SESSION, and how many times it's been told
+    shown : u32,
+    showings : u64,
+    // test_pressure: whether it's still to come, and the budget it charges its own with to bring on pressure, until
+    // that's relieved
+    test_pressure : bool,
+    ballast : slop_os.MemoryBudget,
     // The sessions, and every session's programs
     sessions : Session[MAX_SESSIONS],
     programs : Program[MAX_PROGRAMS],
@@ -155,6 +171,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], ech
     sessions.echo_module = echo_module
     sessions.checking = NOWHERE
     sessions.events_end = NONE
+    sessions.shown = session.NO_SESSION
+    sessions.ballast = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)
     sessions.settings_end = NONE
     sessions.store_end = NONE
     sessions.apps_end = NONE
@@ -192,10 +210,20 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], ech
         case None => {}
     }
     match command_line {
-        case Some(memory) => sessions.test_installations = service_kit.has_word(service_kit.text_of(block, memory) or_else "", "test_installations")
+        case Some(memory) => {
+            text :: service_kit.text_of(block, memory) or_else ""
+            sessions.test_installations = service_kit.has_word(text, "test_installations")
+            sessions.test_pressure = service_kit.has_word(text, "test_pressure")
+        }
         case None => {}
     }
     sessions.port = slop_os.port_create(block.budget) or_return 1
+    // Pressure on its budget, which its sessions' programs' budgets are split off, wakes it to stop idle installations
+    slop_os.port_bind(sessions.port, cast[slop_os.Handle](block.budget), slop_os.SIGNAL_PRESSURE, PRESSURE_KEY, .Persistent) or_return 1
+    match slop_os.memory_budget_info(block.budget) {
+        case Ok(info) => _ = slop_os.memory_budget_set_threshold(block.budget, info.limit / 100 * PRESSURE_PERCENT)
+        case Error(error) => {}
+    }
     dial_port :: os.port_for(block.budget, manager.end) or_return 2
     sessions.manager = connector.dial[process_manager.ProcessManager](manager.end, dial_port) or_return 2
     sessions.manager_port = os.port_for(block.budget, sessions.manager.end) or_return 2
@@ -223,6 +251,12 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], ech
         packets : slop_os.Packet[8]
         taken :: slop_os.port_wait(sessions.port, packets, slop_os.NO_DEADLINE) or_else 0
         ended_in(sessions, packets, cast[usize](taken))
+        for packet, i in packets {
+            if i < cast[usize](taken) && packet.key == PRESSURE_KEY {
+                relieve(sessions)
+                break
+            }
+        }
     }
 }
 
@@ -283,6 +317,10 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
             }
             case End(which) => response^ = end_program(sessions, cast[usize](which), "on the trusted path's request")
             case EndSession(number) => response^ = end_session(sessions, number)
+            case Shown(number) => {
+                shown(sessions, number)
+                response^ = .Noted
+            }
             case Connect(connection) => {
                 if !service_kit.add_client(connected, sessions.port, connection.end) {
                     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
@@ -660,6 +698,77 @@ locale_page :: fn(made: ptr[mut Session]) -> slop_os.Memory? {
     return match given {
         case Ok(copy) => cast[slop_os.Memory](copy)
         case Error(error) => null
+    }
+}
+
+// Memory pressure (decisions/0153)
+
+// The session the console shows now, its time shown counted; test_pressure's pressure brought on once two sessions are.
+shown :: fn(sessions: ptr[mut Manager], number: u32) {
+    sessions.shown = number
+    sessions.showings += 1
+    if cast[usize](number) < sessions.sessions.count {
+        sessions.sessions[cast[usize](number)].shown_at = sessions.showings
+    }
+    if !sessions.test_pressure || number == session.NO_SESSION {
+        return void
+    }
+    in_use := 0
+    for each in sessions.sessions {
+        if each.in_use {
+            in_use += 1
+        }
+    }
+    if in_use < 2 {
+        return void
+    }
+    // A budget split off its own, up to its threshold, which raises its pressure
+    sessions.test_pressure = false
+    budget :: slop_os.startup_block().budget
+    info :: slop_os.memory_budget_info(budget) or_return void
+    threshold :: info.limit / 100 * PRESSURE_PERCENT
+    if info.used < threshold {
+        runtime.log_info("test_pressure: charging % bytes more, to its threshold", threshold - info.used)
+        sessions.ballast = slop_os.memory_budget_create(budget, threshold - info.used) or_else cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)
+    }
+}
+
+/*
+ * Pressure relieved: idle installations, those of the sessions not shown, the least recently shown session's first,
+ * each asked to stop and ended, one at a time, until what its budget has charged is under RELIEVED_PERCENT of its
+ * limit, or there are none left. test_pressure's charge given back after.
+ */
+relieve :: fn(sessions: ptr[mut Manager]) {
+    budget :: slop_os.startup_block().budget
+    stopped := 0
+    loop {
+        info :: slop_os.memory_budget_info(budget) or_break
+        if info.used < info.limit / 100 * RELIEVED_PERCENT {
+            break
+        }
+        idle := NOWHERE
+        for &program, i in sessions.programs {
+            if i >= sessions.count || !program.running || !program.installation || program.session == sessions.shown
+                || cast[usize](program.session) >= sessions.sessions.count {
+                continue
+            }
+            if idle == NOWHERE || idle >= sessions.programs.count
+                || sessions.sessions[cast[usize](program.session)].shown_at < sessions.sessions[cast[usize](sessions.programs[idle].session) % sessions.sessions.count].shown_at {
+                idle = i
+            }
+        }
+        if idle == NOWHERE || idle >= sessions.programs.count {
+            runtime.log_info("memory pressure: no idle installation left to stop, % of % bytes in use", info.used, info.limit)
+            break
+        }
+        runtime.log_info("memory pressure: asking % in session % to stop", name_of(&sessions.programs[idle]), sessions.programs[idle].session)
+        _ = end_program(sessions, idle, "under memory pressure")
+        stopped += 1
+    }
+    if cast[slop_os.Handle](sessions.ballast) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](sessions.ballast))
+        sessions.ballast = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)
+        runtime.log_info("test_pressure: idle installations stopped: %; the shown session's left running", stopped)
     }
 }
 

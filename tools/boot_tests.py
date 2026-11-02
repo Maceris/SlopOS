@@ -406,6 +406,18 @@ TESTS = [
         "--expect-line=[user] echo: read fifth line",
         "--expect-console-line=echo: fifth line",
         "--refuse-console-line=correct horse battery staple"])),
+    # Memory pressure (decisions/0153): with two sessions, the session manager's budget charged to its threshold, it asks
+    # the idle installation, the counter of the session not shown, to stop, and leaves the shown session's running
+    ("stops the idle installations of sessions not shown under memory pressure", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_pressure test_settle=45") for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r\\wfirst line\\r\\w\\e[3;7~\\pn\\wadmin\\rcorrect horse battery staple\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
+        "--console-input-after=echo: first line", "--console-input-after=  Log in",
+        "--expect-line=[user] terminal: login: another session",
+        "--expect-line=[user] sessions: memory pressure: asking counter in session 0 to stop",
+        "--expect-line=[user] sessions: ending counter under memory pressure",
+        "--expect-line=[user] sessions: test_pressure: idle installations stopped: 1; the shown session's left running"])),
     ("makes the administrator's account and home volume, limits wrong passwords, and recovers it with its recovery code", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_accounts") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] storage_manager: made the accounts volume",
