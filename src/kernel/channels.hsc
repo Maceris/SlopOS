@@ -404,7 +404,10 @@ set_mapping_state :: fn(core: ptr[mut ChannelCore], mapping: ptr[mut RingMapping
 /*
  * Unmap a side's rings, in Unmapping: unless its space was released first, which let go of it. Page by
  * page, with the space's lock, checking each time it's still on the space's list, so the space's tables
- * are never freed under it; off the list once it's all unmapped.
+ * are never freed under it; off the list once it's all unmapped. A space being destroyed has its tables
+ * released whole, without its lock, once a grace period has passed, which this CPU may already have passed
+ * through, so its tables aren't touched: the ring is only taken off its list, here or by the release,
+ * whichever comes first, and that one lets go of the core (decisions/0145).
  */
 unmap_ring :: fn(kernel: ptr[mut Kernel], core: ptr[mut ChannelCore], side: u32) {
     mapping :: &side_of(core, side).mapping
@@ -417,6 +420,12 @@ unmap_ring :: fn(kernel: ptr[mut Kernel], core: ptr[mut ChannelCore], side: u32)
     loop {
         lock_at(&space.lock, .Space)
         if !mapping.linked {
+            unlock_at(&space.lock, .Space)
+            break
+        }
+        if is_dying(cast[u64](space)) {
+            unlink_ring(space, mapping)
+            dropped = true
             unlock_at(&space.lock, .Space)
             break
         }

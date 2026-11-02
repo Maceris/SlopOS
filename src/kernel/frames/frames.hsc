@@ -38,6 +38,11 @@ ORDER_COUNT :: 19
 // What a frame's state byte says, for the first frame of a block. The order is in the low bits.
 STATE_FREE : u8 : 0x40
 STATE_ALLOCATED : u8 : 0x80
+/*
+ * A single frame in a CPU's FrameCache: neither free nor handed out, so a frame given back twice, to a cache or to the
+ * allocator, fails an assertion where it's given rather than being handed out twice later (decisions/0145).
+ */
+STATE_CACHED : u8 : 0x20
 // Not the first frame of a block: inside one, or memory the allocator doesn't own.
 STATE_NONE : u8 : 0
 
@@ -307,7 +312,10 @@ take_frame :: fn(cache: ptr[mut FrameCache], allocator: ptr[mut FrameAllocator])
         defer concurrency.unlock(&allocator.lock)
         for i in 0..<FRAME_CACHE_BATCH {
             match take_block(allocator, 0) {
-                case Ok(address) => cache.frames[i] = cast[u64](address)
+                case Ok(address) => {
+                    cache.frames[i] = cast[u64](address)
+                    set_state(allocator, cast[u64](address), STATE_CACHED)
+                }
                 case Error(error) => break
             }
             cache.count += 1
@@ -319,15 +327,20 @@ take_frame :: fn(cache: ptr[mut FrameCache], allocator: ptr[mut FrameAllocator])
     count :: cache.count
     runtime.assert(count >= 1 && count <= FRAME_CACHE_SIZE, "a frame cache holds up to FRAME_CACHE_SIZE frames")
     cache.count = count - 1
-    return .Ok(cast[boot_info.PhysicalAddress](cache.frames[count - 1]))
+    taken :: cache.frames[count - 1]
+    runtime.assert(state_of(allocator, taken) == STATE_CACHED, "a frame cache holds only frames it was given")
+    set_state(allocator, taken, STATE_ALLOCATED)
+    return .Ok(cast[boot_info.PhysicalAddress](taken))
 }
 
 // Give a single frame to the calling CPU's cache, emptying half of it into the allocator if it's full.
 give_frame :: fn(cache: ptr[mut FrameCache], allocator: ptr[mut FrameAllocator], address: boot_info.PhysicalAddress) {
+    runtime.assert(state_of(allocator, cast[u64](address)) == STATE_ALLOCATED, "give_frame takes a single frame that's allocated")
     if cache.count == FRAME_CACHE_SIZE {
         concurrency.lock(&allocator.lock)
         defer concurrency.unlock(&allocator.lock)
         for i in FRAME_CACHE_SIZE - FRAME_CACHE_BATCH..<FRAME_CACHE_SIZE {
+            set_state(allocator, cache.frames[i], STATE_ALLOCATED)
             give_block(allocator, cast[boot_info.PhysicalAddress](cache.frames[i]), 0)
         }
         cache.count = FRAME_CACHE_SIZE - FRAME_CACHE_BATCH
@@ -335,6 +348,7 @@ give_frame :: fn(cache: ptr[mut FrameCache], allocator: ptr[mut FrameAllocator],
     count :: cache.count
     runtime.assert(count < FRAME_CACHE_SIZE, "a frame cache that isn't full has room")
     cache.frames[count] = cast[u64](address)
+    set_state(allocator, cast[u64](address), STATE_CACHED)
     cache.count = count + 1
 }
 
@@ -345,9 +359,29 @@ drain_frames :: fn(cache: ptr[mut FrameCache], allocator: ptr[mut FrameAllocator
     count :: cache.count
     runtime.assert(count <= FRAME_CACHE_SIZE, "a frame cache holds up to FRAME_CACHE_SIZE frames")
     for i in 0..<count {
+        set_state(allocator, cache.frames[i], STATE_ALLOCATED)
         give_block(allocator, cast[boot_info.PhysicalAddress](cache.frames[i]), 0)
     }
     cache.count = 0
+}
+
+/*
+ * A single frame's state, and its state set: a cached frame's byte is its CPU's alone, as only a frame given back twice
+ * could be in two places, which the assertions catch.
+ */
+state_of :: fn(allocator: ptr[FrameAllocator], address: u64) -> u8 {
+    frame :: address >> FRAME_SHIFT
+    states :: allocator.states
+    runtime.assert(address % FRAME_SIZE == 0 && frame < cast[u64](states.count), "a frame the allocator owns")
+    return states[frame]
+}
+
+set_state :: fn(allocator: ptr[mut FrameAllocator], address: u64, state: u8) {
+    frame :: address >> FRAME_SHIFT
+    states :: allocator.states
+    if frame < cast[u64](states.count) {
+        states[frame] = state
+    }
 }
 
 // The order of the smallest block that holds size bytes.

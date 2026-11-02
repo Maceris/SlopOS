@@ -47,8 +47,11 @@ pager #calling_convention(.c) #no_context :: fn(shared: ptr[mut Shared]) #never_
         loop {
             match slop_os.memory_page_wanted(shared.paged) {
                 case Ok(offset) => {
-                    if slop_os.memory_supply(shared.paged, offset, shared.source, offset) is_ok {
-                        intrinsics.atomic_store_u64(&shared.supplied, intrinsics.atomic_load_u64(&shared.supplied) + 1)
+                    // Counted first: the supply wakes the program, which may read the count before this thread goes on
+                    counted :: intrinsics.atomic_load_u64(&shared.supplied)
+                    intrinsics.atomic_store_u64(&shared.supplied, counted + 1)
+                    if slop_os.memory_supply(shared.paged, offset, shared.source, offset) is_error {
+                        intrinsics.atomic_store_u64(&shared.supplied, counted)
                     }
                 }
                 case Error(error) => break
