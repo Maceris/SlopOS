@@ -9,8 +9,9 @@
  * and so does it. Asked to stop on its lifecycle channel (decisions/0139), it ends with 0.
  *
  * With its session's powerbox (decisions/0156), three lines ask the user for something on the trusted path: "open" for
- * a file, whose first line it shows; "save" and some text for a file to write the text in, suggesting notes.txt; and
- * "list" for a directory, whose entries it names.
+ * a file, whose first line it shows; "save" and some text for a file to write the text in, suggesting notes.txt, and
+ * asking to keep it as "notes" (decisions/0158); and "list" for a directory, whose entries it names. "reopen" opens what
+ * was kept as "notes" again, without asking, and shows its first line.
  */
 package echo
 
@@ -248,6 +249,9 @@ command :: fn(echo: ptr[mut Echo], line: string) {
     if line == "open" {
         open_chosen(echo)
     }
+    else if line == "reopen" {
+        reopen_kept(echo)
+    }
     else if line.count > 5 && line[0..<5] == "save " {
         save_chosen(echo, line[5..<line.count])
     }
@@ -263,10 +267,27 @@ open_chosen :: fn(echo: ptr[mut Echo]) {
     request^ = .RequestFile(powerbox_protocol.FileRequest.{
         purpose = os.append(&out, string_bytes("to show what's in it")), suggested = os.append(&out, string_bytes("")), write = false})
     into := os.Incoming.{}
-    if !ask_box(echo, &out, &into) {
+    if !ask_box(echo, &out, &into, true) {
         return void
     }
-    match os.message_of[powerbox_protocol.Response](&into)^ {
+    show_first_line(echo, &into)
+}
+
+// What was kept as "notes", opened again without asking, its first line shown.
+reopen_kept :: fn(echo: ptr[mut Echo]) {
+    out := os.Outgoing.{}
+    request :: os.begin[powerbox_protocol.Request](&out)
+    request^ = .Reopen(powerbox_protocol.Reopening.{key = os.append(&out, string_bytes("notes")), kind = .File, write = false})
+    into := os.Incoming.{}
+    if !ask_box(echo, &out, &into, false) {
+        return void
+    }
+    show_first_line(echo, &into)
+}
+
+// The powerbox's answer, a file to read, its first line shown; or that it gave nothing.
+show_first_line :: fn(echo: ptr[mut Echo], into: ptr[mut os.Incoming]) {
+    match os.message_of[powerbox_protocol.Response](into)^ {
         case GrantedReadOnlyFile(given) => {
             file, error :: os.file_on(given.end, false)
             if error != null {
@@ -305,9 +326,10 @@ save_chosen :: fn(echo: ptr[mut Echo], text: string) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
     request^ = .RequestFile(powerbox_protocol.FileRequest.{
-        purpose = os.append(&out, string_bytes("to save a line in it")), suggested = os.append(&out, string_bytes("notes.txt")), write = true})
+        purpose = os.append(&out, string_bytes("to save a line in it")), suggested = os.append(&out, string_bytes("notes.txt")), write = true,
+        keep = os.append(&out, string_bytes("notes"))})
     into := os.Incoming.{}
-    if !ask_box(echo, &out, &into) {
+    if !ask_box(echo, &out, &into, true) {
         return void
     }
     match os.message_of[powerbox_protocol.Response](&into)^ {
@@ -333,7 +355,7 @@ list_chosen :: fn(echo: ptr[mut Echo]) {
     request^ = .RequestDirectory(powerbox_protocol.DirectoryRequest.{
         purpose = os.append(&out, string_bytes("to list what's in it")), write = false})
     into := os.Incoming.{}
-    if !ask_box(echo, &out, &into) {
+    if !ask_box(echo, &out, &into, true) {
         return void
     }
     match os.message_of[powerbox_protocol.Response](&into)^ {
@@ -385,13 +407,15 @@ list_chosen :: fn(echo: ptr[mut Echo]) {
     }
 }
 
-// A request to the powerbox, and its answer, which waits for the user, into into: false without a powerbox.
-ask_box :: fn(echo: ptr[mut Echo], out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> bool {
+// A request to the powerbox, and its answer, which waits for the user if it asks them, into into: false without a powerbox.
+ask_box :: fn(echo: ptr[mut Echo], out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming], asks_user: bool) -> bool {
     if echo.box_end == NONE {
         say(echo, "There's no powerbox to ask.")
         return false
     }
-    say(echo, "Asked the powerbox; Ctrl+Alt+Delete shows what it asks.")
+    if asks_user {
+        say(echo, "Asked the powerbox; Ctrl+Alt+Delete shows what it asks.")
+    }
     if powerbox_protocol.send_request(echo.box_end, echo.box_port, out) != null {
         refused(echo)
         return false

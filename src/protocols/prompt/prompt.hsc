@@ -8,7 +8,8 @@ import read_only_dir from "std/os/slop_os"
  * What a session's powerbox asks the trusted path (decisions/0156): Ask, a request of one of the session's programs, for
  * the user to answer. The terminal service shows it on the status line until the secure attention key opens the chooser,
  * which lists the home given, read only; it's answered once the user has chosen (a path beneath the home, and whether
- * it's a new file to make) or refused. One Ask waits at a time.
+ * it's a new file to make) or refused. One Ask waits at a time. An Ask that may be kept offers "keep for next time",
+ * and the Choice says whether the user ticked it (decisions/0158).
  */
 Prompt :: struct {}
 
@@ -27,13 +28,16 @@ Ask :: struct {
     suggested : slop_os.Relative[u8],
     kind : Kind,
     write : bool,
+    // Whether the program asked to keep it
+    keep : bool,
     home : os.Channel[read_only_dir.ReadOnlyDir],
 }
 
-// What the user chose: a path beneath the home, and whether it's a new file.
+// What the user chose: a path beneath the home, whether it's a new file, and whether to keep it.
 Choice :: struct {
     path : slop_os.Relative[u8],
     new : bool,
+    keep : bool,
 }
 
 Request :: union {

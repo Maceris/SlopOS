@@ -14,7 +14,9 @@
  * Stored links (roadmap 8f): each volume server has a connection of its own here, the links protocol, so what it asks
  * is known to be its volume's. A grant it claimed is issued to its volume by the volume the grant is from, and a link
  * it holds is opened by the volume the link leads into, which checks what it issued; the connection opened goes back
- * to the volume server that asked. A link leads only into a volume being served, unlocked, and not into its own.
+ * to the volume server that asked. A link leads only into a volume being served, unlocked; into its own too, as the
+ * powerbox keeps a grant of a file in the home it's kept in (decisions/0158), which the volume server answers while it
+ * waits, as it does any other.
  */
 package storage_manager
 
@@ -1159,10 +1161,6 @@ issue :: fn(state: ptr[mut Manager], index: usize, claim: grant.Claim) -> links.
         return .Failed(.Unavailable)
     }
     asking :: &state.served[index]
-    // A link within one volume, which its own names already reach
-    if claim.container == asking.container && claim.volume == asking.id {
-        return .Failed(.InvalidPath)
-    }
     target :: linked_volume(state, claim.container, claim.volume) or_return .Failed(.Unavailable)
     out := os.Outgoing.{}
     request :: os.begin[volume_protocol.Request](&out)
@@ -1180,9 +1178,6 @@ resolve :: fn(state: ptr[mut Manager], index: usize, resolving: links.Resolving,
         return .Failed(.Unavailable)
     }
     asking :: &state.served[index]
-    if resolving.container == asking.container && resolving.volume == asking.id {
-        return .Failed(.Unavailable)
-    }
     target :: linked_volume(state, resolving.container, resolving.volume) or_return .Failed(.Unavailable)
     out := os.Outgoing.{}
     request :: os.begin[volume_protocol.Request](&out)

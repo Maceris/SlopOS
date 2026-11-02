@@ -13,7 +13,8 @@ import grant from "std/os/slop_os"
  * the encrypted one through the first link, which the encrypted volume then reads, and both are read through their
  * links; the file's link refuses writing, and lists as a link. A directory opened through a link grants nothing and
  * lists no links: what it reached isn't the holder's to share. The encrypted volume lists what it issued, and revokes
- * the file's link, which then opens nothing; and a grant kept in its own volume is refused. Removing a link removes
+ * the file's link, which then opens nothing; and a grant kept in its own volume is followed as any other (decisions/0158).
+ * Removing a link removes
  * only the link. Checks from 120.
  */
 
@@ -165,14 +166,17 @@ check_links :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.
         return 138
     }
 
-    // A grant kept in its own volume is refused
-    own :: granted(system.end, system_port, "links", false) or_return 139
+    // A grant kept in its own volume, followed as any other
+    own :: granted(system.end, system_port, "modules/hello.elf", false) or_return 139
     match linked(system.end, system_port, "links/itself", own) {
-        case Failed(error) => {
-            if error != .InvalidPath {
-                return 140
-            }
-        }
+        case Done => {}
+        case _ => return 140
+    }
+    out = os.Outgoing.{}
+    following :: os.begin[dir.Request](&out)
+    following^ = .OpenReadOnlyFile(bytes_of(&out, "links/itself"))
+    match ask_dir(system.end, system_port, &out, &into) {
+        case OpenedReadOnlyFile(made) => _ = slop_os.handle_close(cast[slop_os.Handle](made.end))
         case _ => return 140
     }
 
@@ -189,7 +193,7 @@ check_links :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.
     }
     _ = slop_os.handle_close(cast[slop_os.Handle](system_port))
     _ = slop_os.handle_close(cast[slop_os.Handle](sealed_port))
-    runtime.log_info("links: the system volume wrote and read through two from the sealed one; what one reached granted nothing; one revoked opened nothing")
+    runtime.log_info("links: the system volume wrote and read through two from the sealed one; what one reached granted nothing; one revoked opened nothing; one into itself opened")
     return 0
 }
 

@@ -3,8 +3,9 @@
  * the request's shown on the status line, naming the program and what it asks for, until the secure attention key
  * opens the chooser over the session, which lists the directory it's in from the home the powerbox gave, read only.
  * Up and Down move, Enter opens a directory or chooses, typing narrows the list to the names with what's typed in them
- * and, for a file to write, offers a new file of that name; Escape refuses. The answer goes back on the prompt
- * connection, and the session's drawn again.
+ * and, for a file to write, offers a new file of that name; Escape refuses. A request that may be kept offers "keep for
+ * next time", off until Tab ticks it (decisions/0158). The answer goes back on the prompt connection, and the session's
+ * drawn again.
  */
 package terminal_service
 
@@ -38,6 +39,7 @@ Asked :: struct {
     suggested_count : usize,
     kind : prompt.Kind,
     write : bool,
+    keep : bool,
     home : slop_os.Channel,
 }
 
@@ -56,6 +58,8 @@ Chooser :: struct {
     entries : Entry[CHOOSER_ENTRIES],
     entry_count : usize,
     selected : usize,
+    // Whether the user's ticked "keep for next time"
+    keep : bool,
 }
 
 ItemKind :: enum {
@@ -93,7 +97,7 @@ take_prompts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
         }
         match os.message_of[prompt.Request](into)^ {
             case Ask(asked) => {
-                kept := Asked.{kind = asked.kind, write = asked.write, home = asked.home.end}
+                kept := Asked.{kind = asked.kind, write = asked.write, keep = asked.keep, home = asked.home.end}
                 kept.requester_count = copy_bytes(os.items(into, asked.requester), kept.requester[0..<kept.requester.count])
                 kept.purpose_count = copy_bytes(os.items(into, asked.purpose), kept.purpose[0..<kept.purpose.count])
                 kept.suggested_count = copy_bytes(os.items(into, asked.suggested), kept.suggested[0..<kept.suggested.count])
@@ -136,6 +140,13 @@ chooser_key :: fn(service: ptr[mut Service], event: terminal.Event, text: u8[]) 
     chooser :: &service.chooser
     if event.code == USAGE_ESCAPE {
         answer_ask(service, null, false)
+        return void
+    }
+    if event.code == USAGE_TAB {
+        if view(service).ask.keep {
+            chooser.keep = !chooser.keep
+            draw_chooser(service)
+        }
         return void
     }
     if event.code == USAGE_ENTER {
@@ -253,7 +264,7 @@ answer_ask :: fn(service: ptr[mut Service], path: u8[]?, new: bool) {
     response :: os.begin[prompt.Response](&out)
     match path {
         case Some(chosen) => {
-            response^ = .Chosen(prompt.Choice.{path = os.append(&out, chosen), new = new})
+            response^ = .Chosen(prompt.Choice.{path = os.append(&out, chosen), new = new, keep = shown.ask.keep && service.chooser.keep})
             runtime.log_info("chose % for %", if chosen.count > 0 { bytes_text(chosen) } else { "the home" },
                 bytes_text(first_of(shown.ask.requester[0..<shown.ask.requester.count], shown.ask.requester_count)))
         }
@@ -456,6 +467,9 @@ draw_chooser :: fn(service: ptr[mut Service]) {
     text_buffer.append(&line, "Name: ")
     text_buffer.append(&line, bytes_text(first_of(chooser.filter[0..<chooser.filter.count], chooser.filter_count)))
     screen.write_at(panel, 5, 2, text_buffer.as_string(&line), plain)
+    if asked.keep {
+        screen.write_at(panel, 6, 2, if chooser.keep { "[x] Keep for next time (Tab)" } else { "[ ] Keep for next time (Tab)" }, plain)
+    }
     items : Item[CHOOSER_ENTRIES + 3]
     count :: items_of(service, &items)
     // The window of items the chosen one's in

@@ -28,7 +28,8 @@
  * secure attention key's screen switches to the next (S), logs in another (N), locks the console until the session's
  * user's password is typed (L), and logs out (O), the session manager ending the session's programs. A session's
  * powerbox asks the user through it (chooser.hsc, decisions/0156): the request's on the status line, and the secure
- * attention key opens the chooser instead of this screen. Both are reached
+ * attention key opens the chooser instead of this screen, and G there shows what its user has let programs keep
+ * (grants_view.hsc, decisions/0158). Both are reached
  * through connectors, dialed again when they go, with the banner shown on each new serial line. Without a serial line
  * it keeps the model and shows nothing.
  */
@@ -187,6 +188,9 @@ Service :: struct {
     // Whether the secure attention key brought up the powerbox's chooser, and its state
     choosing : bool,
     chooser : Chooser,
+    // Whether its G brought up the grants view, and what it lists
+    granting : bool,
+    grants : GrantsView,
 }
 
 /*
@@ -217,6 +221,8 @@ View :: struct {
     prompt_end : slop_os.Channel,
     asking : bool,
     ask : Asked,
+    // A connection of its own to the session's home, for the grants view; NONE without one
+    home_end : slop_os.Channel,
 }
 
 main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?, input: os.Channel[connector.Connector]?,
@@ -932,6 +938,9 @@ draw_panel :: fn(service: ptr[mut Service]) {
         else { "Esc or Enter goes back." }, plain)
     // The sessions' keys, those that do something here
     if service.accounts_end != NONE && view(service).logged_in && view(service).user_count > 0 {
+        if view(service).home_end != NONE {
+            screen.write_at(panel, help + 2, 2, "G shows what you've let programs keep.", plain)
+        }
         screen.write_at(panel, help + 1, 2, if another_session(service) != NO_VIEW { "S switches session, N logs in another, L locks, O logs out." }
             else { "N logs in another session, L locks, O logs out." }, plain)
     }
@@ -1027,6 +1036,7 @@ leave_attention :: fn(service: ptr[mut Service]) {
     }
     service.attention = false
     service.choosing = false
+    service.granting = false
     runtime.log_info("secure attention ended")
     update_status(service)
     screen.show_panel(&view(service).screen, false)
@@ -1252,6 +1262,10 @@ screen_keys :: fn(service: ptr[mut Service], first: usize) {
             }
             continue
         }
+        if service.granting {
+            grants_key(service, event)
+            continue
+        }
         if event.code == USAGE_ESCAPE || event.code == USAGE_ENTER {
             leave_attention(service)
         }
@@ -1265,6 +1279,9 @@ screen_keys :: fn(service: ptr[mut Service], first: usize) {
         }
         else if (event.code == USAGE_E || event.code == USAGE_DELETE) && event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 {
             end_chosen(service)
+        }
+        else if event.code == USAGE_G && event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 {
+            enter_grants(service)
         }
         else if event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 && session_key(service, event.code) {
             // A session's key: the screen it brought up takes what comes after
@@ -1629,12 +1646,14 @@ start_session :: fn(service: ptr[mut Service], home: os.Channel[dir.Dir]?) -> bo
     if client < service.client_view.count {
         service.client_view[client] = service.viewing
     }
-    // Its powerbox asks the user through its view (decisions/0156)
+    // Its powerbox asks the user through its view (decisions/0156), and the grants view reads its home (0158)
     prompts := NONE
+    home_copy := NONE
     out := os.Outgoing.{}
     request :: os.begin[session.Request](&out)
     match home {
         case Some(root) => {
+            home_copy = another_connection(root.end) or_else NONE
             prompt_pair :: os.channel_for[prompt.Prompt](budget, 0) or_return false
             prompts = prompt_pair.a
             request^ = .Start(session.SessionStart.{user = os.append(&out, view(service).user[0..<min_count(view(service).user_count, view(service).user.count)]),
@@ -1662,6 +1681,14 @@ start_session :: fn(service: ptr[mut Service], home: os.Channel[dir.Dir]?) -> bo
         case _ => false
     }
     view(service).logged_in = started
+    if home_copy != NONE {
+        if started {
+            view(service).home_end = home_copy
+        }
+        else {
+            _ = slop_os.handle_close(cast[slop_os.Handle](home_copy))
+        }
+    }
     if prompts != NONE {
         signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
         if started && (slop_os.port_bind(service.port, cast[slop_os.Handle](prompts), signals, PROMPT_KEY + cast[u64](service.viewing), .Persistent) is_ok) {
@@ -2284,6 +2311,10 @@ log_out :: fn(service: ptr[mut Service]) {
     if view(service).prompt_end != NONE {
         _ = slop_os.handle_close(cast[slop_os.Handle](view(service).prompt_end))
         view(service).prompt_end = NONE
+    }
+    if view(service).home_end != NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](view(service).home_end))
+        view(service).home_end = NONE
     }
     view(service).in_use = false
     next :: another_session(service)

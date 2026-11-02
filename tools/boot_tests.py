@@ -161,7 +161,7 @@ DISK_CHECK_LINES = [
     "--expect-line=[user] volume_server: volume 2 unlocked",
     "--expect-line=[user] volume_server: volume 2 sealing with key generation 2",
     "--expect-line=[user] disk_check: on the sealed volume, was refused locked and with a wrong passphrase, unlocked it, read its file, wrote one, started key generation 2, wrote another and read all three",
-    "--expect-line=[user] disk_check: links: the system volume wrote and read through two from the sealed one; what one reached granted nothing; one revoked opened nothing",
+    "--expect-line=[user] disk_check: links: the system volume wrote and read through two from the sealed one; what one reached granted nothing; one revoked opened nothing; one into itself opened",
     "--expect-line=[user] disk_check: snapshots: read one of the system volume as it was, read only, wrote to its clone, couldn't delete it while cloned, and read one of the sealed volume",
     "--expect-line=[user] disk_check: quotas: its clone's refused a file past it and took a small one, and its usage says so",
     "--expect-line=[user] storage_manager: made the made sealed volume",
@@ -436,6 +436,27 @@ TESTS = [
         "--expect-line=[user] echo: listed a directory the powerbox gave",
         "--expect-line=[user] terminal: refused echo",
         "--expect-line=[user] echo: the powerbox gave nothing",
+        "--expect-console-line=The powerbox gave nothing."])),
+    # Kept grants (decisions/0158): echo's save asks to keep its file, which the user ticks (Tab) in the chooser; reopen
+    # opens it again without asking; the grants view (G on the secure attention key's screen) revokes it, and reopen then
+    # gets nothing
+    ("keeps a grant the user ticks, reopens it, and revokes it from the grants view", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=90").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wsave kept line\\r\\w\\p\\e[3;7~\\w\\t\\r"
+        "\\wreopen\\r"
+        "\\w\\p\\e[3;7~\\w\\pg\\w\\p\\e[3~\\w\\p\\e\\p\\e\\preopen",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
+        "--console-input-after=Asked the powerbox; Ctrl+Alt+Delete shows what it asks.", "--console-input-after=  Choose a file",
+        "--console-input-after=Saved.", "--console-input-after=It says: kept line",
+        "--console-input-after=  Secure attention", "--console-input-after=  What programs may keep",
+        "--console-input-after=  Nothing is kept.",
+        "--expect-line=[user] powerbox: kept notes.txt for echo",
+        "--expect-line=[user] powerbox: reopened notes for echo",
+        "--expect-line=[user] terminal: revoked a kept grant of notes.txt",
+        "--expect-line=[user] powerbox: couldn't reopen notes for echo",
         "--expect-console-line=The powerbox gave nothing."])),
     # Memory pressure (decisions/0153): with two sessions, the session manager's budget charged to its threshold, it asks
     # the idle installation, the counter of the session not shown, to stop, and leaves the shown session's running
