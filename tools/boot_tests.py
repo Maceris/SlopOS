@@ -247,6 +247,14 @@ TESTS = [
         "--expect-line=[user] virtio_console: serving", "--expect-line=[user] echo: read ping from the host",
         "--expect-console-line=SlopOS console", "--expect-console-line=hello: heap and random numbers working",
         "--expect-console-line=echo: ping from the host", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # Half a line typed, then hello's lines while it's being typed, which go above it whole (decisions/0147), then the
+    # rest: the line's written as typed and answered
+    ("keeps the line being typed below what's written meanwhile", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_settle=4", "--console-input=half typed, \\wand finished",
+        "--console-input-after=hello: heap and random numbers working",
+        "--expect-console-line=hello: heap and random numbers working", "--expect-console-line=half typed, and finished",
+        "--expect-console-line=echo: half typed, and finished", "--expect-line=[user] echo: read half typed, and finished",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # Ctrl+Alt+Delete as a terminal sends it: the terminal service's own screen, which Enter leaves, the program's lines
     # drawn again, and what's typed after it the program's
     ("brings up the secure attention key's screen, and goes back to the program", 7, [WITH_PROGRAMS,

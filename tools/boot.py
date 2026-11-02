@@ -406,7 +406,9 @@ class ConsoleLink:
                 self.shown += data.decode(errors="replace")
                 while self.shown.count(CONSOLE_BANNER) > banners:
                     if banners == 0 and self.typed and self.typed_after is not None:
-                        threading.Thread(target=self.type_after, args=(connection,), daemon=True).start()
+                        # A line that waits partway (\w) starts at the banner; any other, once typed_after shows
+                        target = self.type_waiting if "\\w" in self.typed[0] else self.type_after
+                        threading.Thread(target=target, args=(connection,), daemon=True).start()
                     elif banners < len(self.typed):
                         type_into(connection, self.typed[banners])
                     if banners == 0 and self.keyboard is not None and (self.keyed or self.screen_after):
@@ -415,13 +417,23 @@ class ConsoleLink:
 
     def type_after(self, connection: socket.socket) -> None:
         """The first line, typed once the console shows typed_after."""
-        deadline = time.monotonic() + 30
-        while self.typed_after not in self.lines() and time.monotonic() < deadline:
-            time.sleep(0.05)
+        self.wait_for_after()
         try:
             type_into(connection, self.typed[0])
         except OSError:
             pass
+
+    def type_waiting(self, connection: socket.socket) -> None:
+        """The first line, typed now, waiting where it has \\w until the console shows typed_after."""
+        try:
+            type_into(connection, self.typed[0], self.wait_for_after)
+        except OSError:
+            pass
+
+    def wait_for_after(self) -> None:
+        deadline = time.monotonic() + 30
+        while self.typed_after not in self.lines() and time.monotonic() < deadline:
+            time.sleep(0.05)
 
     def type_keys(self) -> None:
         """
@@ -508,15 +520,20 @@ def plain_text(shown: str) -> str:
     return CSI.sub("", CURSOR_MOVE.sub("\n", OSC.sub("", STATUS_LINE.sub("", shown))))
 
 
-def type_into(connection: socket.socket, line: str) -> None:
+def type_into(connection: socket.socket, line: str, wait=None) -> None:
     """
-    line typed, then a line break: escapes in it as Python writes them (\\e for ESC), and \\p a second's pause, so a
-    key the terminal service takes for itself arrives apart from what follows it.
+    line typed, then a line break: escapes in it as Python writes them (\\e for ESC), \\p a second's pause, so a key
+    the terminal service takes for itself arrives apart from what follows it, and \\w, with wait, waits for it.
     """
-    parts = line.replace("\\e", "\\x1b").split("\\p")
+    parts = re.split(r"(\\p|\\w)", line.replace("\\e", "\\x1b"))
     for i, part in enumerate(parts):
-        if i > 0:
+        if part == "\\p":
             time.sleep(1)
+            continue
+        if part == "\\w":
+            if wait is not None:
+                wait()
+            continue
         data = part.encode("latin-1", "backslashreplace").decode("unicode_escape")
         connection.sendall((data + ("\n" if i == len(parts) - 1 else "")).encode())
 
@@ -786,7 +803,8 @@ def main() -> int:
     parser.add_argument("--serial", type=Path, help="also keep the serial output in this file")
     parser.add_argument("--console-input", action="append", default=[],
                         help="a line to type into a virtio console, which this adds, once it shows its banner; may be repeated. "
-                        "Escapes are Python's (\\e is ESC, as \\e[3;7~ is Ctrl+Alt+Delete), and \\p waits a second")
+                        "Escapes are Python's (\\e is ESC, as \\e[3;7~ is Ctrl+Alt+Delete), \\p waits a second, and \\w waits for "
+                        "--console-input-after's line, the first line then typed from the banner")
     parser.add_argument("--console-input-after",
                         help="type the first --console-input once the virtio console shows this line too, not only its banner")
     parser.add_argument("--expect-console-line", action="append", default=[],

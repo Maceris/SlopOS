@@ -1,7 +1,8 @@
 /*
  * echo (decisions/0136): the console's first reader, until 10c's sessions start a session's own first program. It reads
- * the terminal's typed input, shows each key's text as it's typed, takes Backspace back a grapheme cluster, and answers
- * each line with "echo: " and the line, which it also logs; Ctrl-C drops the line. That's what the console service did
+ * the terminal's typed input, keeps the line being typed as the terminal's input line, below what anything writes
+ * (decisions/0147), takes Backspace back a grapheme cluster, and answers each line with the line itself and "echo: "
+ * and the line, which it also logs; Ctrl-C drops the line, shown with ^C after it. That's what the console service did
  * itself before the terminal service left line editing to programs. It reaches the terminal service through a
  * connector, dialed again if the service is started again. Asked to stop on its lifecycle channel (decisions/0139), it
  * ends with 0.
@@ -89,6 +90,10 @@ take :: fn(echo: ptr[mut Echo], event: terminal.Event, text: u8[]) -> bool {
     match kind {
         case .HangUp => return false
         case .Interrupt => {
+            _ = terminal.input_line(echo.end, echo.port, echo.line[0..<0], 0)
+            if echo.count <= echo.line.count {
+                show(echo, echo.line[0..<echo.count])
+            }
             _ = terminal.write_line(echo.end, echo.port, "^C")
             echo.count = 0
         }
@@ -124,10 +129,15 @@ add :: fn(echo: ptr[mut Echo], typed: u8[]) {
         else if echo.count < echo.line.count {
             echo.line[echo.count] = byte
             echo.count += 1
-            shown : u8[1]
-            shown[0] = byte
-            show(echo, shown[0..<1])
         }
+    }
+    show_line(echo)
+}
+
+// The line being typed, as the terminal's input line, the cursor at its end.
+show_line :: fn(echo: ptr[mut Echo]) {
+    if echo.count <= echo.line.count {
+        _ = terminal.input_line(echo.end, echo.port, echo.line[0..<echo.count], echo.count)
     }
 }
 
@@ -148,11 +158,8 @@ erase :: fn(echo: ptr[mut Echo]) {
         at = end
     }
     while at < echo.count
-    _ = terminal.send(echo.end, echo.port, .Clear(terminal.Area.{columns = 0xffff, rows = 1}))
-    if last <= line.count {
-        show(echo, line[0..<last])
-    }
     echo.count = last
+    show_line(echo)
 }
 
 show :: fn(echo: ptr[mut Echo], bytes: u8[]) {
@@ -161,9 +168,15 @@ show :: fn(echo: ptr[mut Echo], bytes: u8[]) {
     }
 }
 
+// The line done: taken off the input line, and written above it, as typed, then answered.
 finish_line :: fn(echo: ptr[mut Echo]) {
+    _ = terminal.input_line(echo.end, echo.port, echo.line[0..<0], 0)
+    if echo.count <= echo.line.count {
+        show(echo, echo.line[0..<echo.count])
+    }
     _ = terminal.write(echo.end, echo.port, "\n")
     if echo.count == 0 || echo.count > echo.line.count {
+        echo.count = 0
         return void
     }
     line :: string_of(&echo.line[0], echo.count)

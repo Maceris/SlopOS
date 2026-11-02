@@ -29,12 +29,13 @@ Cell :: struct {
     style : terminal.Style,
 }
 
-// The cells of one screen, the cursor in it, and which rows changed.
+// The cells of one screen, the cursor in it, which rows changed, and how many times a line break's scrolled it.
 Grid :: struct {
     cells : Cell[COLUMNS * PROGRAM_ROWS],
     column : u16,
     row : u16,
     dirty : bool[PROGRAM_ROWS],
+    scrolls : u64,
 }
 
 Screen :: struct {
@@ -161,6 +162,7 @@ line_break :: fn(screen: ptr[mut Screen]) {
         return void
     }
     scroll(grid, 0, PROGRAM_ROWS, 1)
+    grid.scrolls += 1
 }
 
 // Rows first to first + count of grid moved up by lines, or down when negative, the rows left behind blank.

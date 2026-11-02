@@ -112,6 +112,12 @@ append_clear_to_end :: fn(out: ptr[mut text_buffer.TextBuffer]) {
     text_buffer.append_byte(out, cast[u8]('K'))
 }
 
+// ED: the rest of the screen cleared, from the cursor.
+append_clear_below :: fn(out: ptr[mut text_buffer.TextBuffer]) {
+    append_csi(out)
+    text_buffer.append_byte(out, cast[u8]('J'))
+}
+
 // ED and CUP: the whole screen cleared, the cursor at its top left.
 append_clear_screen :: fn(out: ptr[mut text_buffer.TextBuffer]) {
     append_csi(out)

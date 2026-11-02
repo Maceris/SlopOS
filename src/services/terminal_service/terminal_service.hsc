@@ -10,7 +10,11 @@
  * typed input for the client that reads it first, except the secure attention key, Ctrl+Alt+Delete (on the serial line
  * as a terminal sends it, CSI 3;7~; from the input service as itself): that brings up this service's own screen, which
  * every key goes to until Esc or Enter leaves it, and the program's screen is drawn again from the model. A new
- * keyboard's code, which the input service makes, is shown on the status line until it's typed on it. Both are reached
+ * keyboard's code, which the input service makes, is shown on the status line until it's typed on it.
+ *
+ * The input's owner can hand it the line it's editing (InputLine, decisions/0147): kept below everything written in
+ * lines, it's taken away before anything else is written, cleared, moved or scrolled, the cursor put back where the
+ * output left off, and drawn again after, on the row after the output's if that one has something on it. Both are reached
  * through connectors, dialed again when they go, with the banner shown on each new serial line. Without a serial line
  * it keeps the model and shows nothing.
  */
@@ -60,6 +64,8 @@ USAGE_UP : u16 : 0x52
 // The panel's rows: where the list of programs starts
 PROGRAMS_ROW : u16 : 7
 PANIC_TEXT :: 160
+// The most bytes of the line the input's owner is editing
+INPUT_LINE_BYTES :: 512
 
 Service :: struct {
     log : slop_os.DebugLog,
@@ -97,6 +103,16 @@ Service :: struct {
     decoded : vt.Decoded,
     owner : usize?,
     held : u32,
+    // The line the owner's editing, the cursor in it, and whether it's drawn, from which row
+    input : u8[INPUT_LINE_BYTES],
+    input_count : usize,
+    input_cursor : usize,
+    input_drawn : bool,
+    input_row : u16,
+    // While it's drawn, where the output goes on: its row and column, and the lines' scrolls then
+    output_row : u16,
+    output_column : u16,
+    output_scrolls : u64,
 }
 
 main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?, input: os.Channel[connector.Connector]?,
@@ -267,6 +283,8 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                 match service.owner {
                     case Some(owner) => {
                         if owner == index {
+                            hide_input(service)
+                            service.input_count = 0
                             service.owner = null
                             service.held = 0
                         }
@@ -277,7 +295,20 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
             }
             case _ => continue
         }
-        match os.message_of[terminal.Request](into)^ {
+        request :: os.message_of[terminal.Request](into)
+        // What's written, cleared, moved or scrolled goes above the line being typed
+        moves_output :: match request^ {
+            case Write(_) => true
+            case MoveCursor(_) => true
+            case Clear(_) => true
+            case Scroll(_) => true
+            case Screen(_) => true
+            case _ => false
+        }
+        if moves_output {
+            hide_input(service)
+        }
+        match request^ {
             case Write(text) => write(service, into, text)
             case MoveCursor(position) => move_cursor(service, position)
             case ShowCursor(shown) => {
@@ -314,13 +345,134 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                     service.held = if most == 0 { cast[u32](1) } else { most }
                 }
             }
+            case InputLine(line) => {
+                if is_owner(service, index) {
+                    hide_input(service)
+                    bytes :: os.items(into, line.text)
+                    service.input_count = if bytes.count < service.input.count { bytes.count } else { service.input.count }
+                    for byte, i in bytes {
+                        if i < service.input.count {
+                            service.input[i] = byte
+                        }
+                    }
+                    service.input_cursor = if cast[usize](line.cursor) < service.input_count { cast[usize](line.cursor) } else { service.input_count }
+                    show_input(service)
+                }
+            }
             case Connect(connection) => {
                 if !service_kit.add_client(connected, service.port, connection.end) {
                     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
                 }
             }
         }
+        if moves_output {
+            show_input(service)
+        }
     }
+}
+
+is_owner :: fn(service: ptr[Service], index: usize) -> bool {
+    return match service.owner {
+        case Some(owner) => owner == index
+        case None => false
+    }
+}
+
+/*
+ * The line being typed taken away, if it's drawn: its rows cleared, and the cursor back where the output left off, the
+ * row it was on moved up by the lines' scrolls since, or at the top if it's scrolled away.
+ */
+hide_input :: fn(service: ptr[mut Service]) {
+    if !service.input_drawn {
+        return void
+    }
+    service.input_drawn = false
+    grid :: &service.screen.lines
+    screen.clear(grid, terminal.Area.{row = service.input_row, columns = COLUMNS, rows = PROGRAM_ROWS})
+    scrolled :: grid.scrolls - service.output_scrolls
+    grid.row = if cast[u64](service.output_row) >= scrolled { service.output_row - cast[u16](scrolled) } else { 0 }
+    grid.column = service.output_column
+    storage : u8[32]
+    out := text_buffer.make(storage)
+    vt.append_move(&out, service.input_row + 1, 0)
+    vt.append_clear_below(&out)
+    vt.append_move(&out, grid.row + 1, grid.column)
+    emit_program(service, &out)
+}
+
+/*
+ * The line being typed drawn below the output, in lines, if there's one: from the start of the row after the output's,
+ * if the output's has something on it, made safe a cluster at a time as written text is, with the cursor left where
+ * the owner says.
+ */
+show_input :: fn(service: ptr[mut Service]) {
+    if service.input_drawn || service.input_count == 0 || service.screen.using_whole || service.input_count > service.input.count {
+        return void
+    }
+    grid :: &service.screen.lines
+    service.output_row = grid.row
+    service.output_column = grid.column
+    service.output_scrolls = grid.scrolls
+    storage : u8[64]
+    out := text_buffer.make(storage)
+    if grid.column > 0 {
+        screen.line_break(&service.screen)
+        vt.append_line_break(&out)
+        emit_program(service, &out)
+    }
+    first_scrolls :: grid.scrolls
+    first_row :: grid.row
+    plain :: terminal.Style.{}
+    count :: service.input_count
+    if count > service.input.count {
+        return void
+    }
+    line :: service.input[0..<count]
+    cursor_row := grid.row
+    cursor_column := grid.column
+    cursor_scrolls := grid.scrolls
+    at : usize = 0
+    loop {
+        if at == service.input_cursor {
+            cursor_row = grid.row
+            cursor_column = grid.column
+            cursor_scrolls = grid.scrolls
+        }
+        if at >= line.count {
+            break
+        }
+        end :: unicode.grapheme_end(line, at)
+        if end <= at || end > line.count {
+            break
+        }
+        shown := safe_text.Shown.{}
+        // A line break or tab in it is shown as its substitute, as the line is one line
+        safe_text.show(line, at, end, &shown)
+        if shown.count <= shown.bytes.count {
+            cluster :: shown.bytes[0..<shown.count]
+            wrapped :: grid.column + cast[u16](shown.columns) > COLUMNS
+            screen.put(&service.screen, cluster, shown.columns, plain)
+            text_buffer.clear(&out)
+            if wrapped {
+                vt.append_line_break(&out)
+            }
+            if cluster.count > 0 {
+                text_buffer.append(&out, string_of(&cluster[0], cluster.count))
+            }
+            emit_program(service, &out)
+        }
+        at = end
+    }
+    // Where it starts, and the cursor, moved up by any scrolling the line itself did
+    since_first :: grid.scrolls - first_scrolls
+    service.input_row = if cast[u64](first_row) >= since_first { first_row - cast[u16](since_first) } else { 0 }
+    since_cursor :: grid.scrolls - cursor_scrolls
+    grid.row = if cast[u64](cursor_row) >= since_cursor { cursor_row - cast[u16](since_cursor) } else { 0 }
+    grid.column = cursor_column
+    text_buffer.clear(&out)
+    vt.append_move(&out, grid.row + 1, grid.column)
+    emit_program(service, &out)
+    service.input_drawn = true
 }
 
 // Whether two styles are the same.

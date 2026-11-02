@@ -30,7 +30,9 @@ encryption), `0018` (the powerbox), `0042` (unlocking, the account database), `0
 - **`Features`** says what the terminal can show (colours, styles, widths), in place of terminfo.
 - **Widths** follow Unicode's East Asian Width and UAX #29 grapheme clusters, computed in the terminal service and in
   `std`'s client library from the same tables, so both agree on where the cursor is.
-- **Line editing** is a `std` library in the program (history, completion, the shell's editor), not the service.
+- **Line editing** is a `std` library in the program (history, completion, the shell's editor), not the service. The
+  program hands the service the line it's editing (`InputLine`, with the cursor), which the service keeps below
+  everything written, by any client, so output that comes while a line's typed goes above it (`decisions/0147`).
 - **The VT adapter** turns the protocol into ECMA-48 bytes and back, for a byte-stream device: the serial line, the
   VT console of a remote SSH client (M14). It's the only place escape sequences exist, and it strips them from text.
 - **Back ends:** the framebuffer (a text renderer with a PSF2 font, as the kernel's early console has) with the
