@@ -8,9 +8,11 @@ import terminal from "std/os/slop_os"
 /*
  * What the trusted path asks of the session manager (decisions/0136, 0139, 0150). Start makes a session once someone's
  * logged in: whose it is, its home volume's root, and a terminal connection for its programs, which its first program
- * is started with; StartWithoutUser makes the one session of a boot with no accounts. List is answered with the
- * session's programs running, their memory, and whether each answered a Ping on its lifecycle channel; End asks one, by
- * the index List gave it, to stop, then ends it after a grace period, and it isn't started again.
+ * is started with; StartWithoutUser makes the one session of a boot with no accounts; each is answered with the
+ * session's number. List, for a session by its number, is answered with its programs running, their memory, and
+ * whether each answered a Ping on its lifecycle channel; End asks one, by the index List gave it, to stop, then ends it
+ * after a grace period, and it isn't started again; EndSession does that for every program of a session, which ends it
+ * (decisions/0151).
  */
 
 Session :: struct {}
@@ -42,7 +44,10 @@ Request :: union {
     Start(SessionStart),
     // The session of a boot with no accounts, with the terminal its programs write to
     StartWithoutUser(os.Channel[terminal.Terminal]),
-    List,
+    // A session's programs, by its number
+    List(u32),
+    // Every program of a session, by its number, asked to stop, then ended; and the session with them
+    EndSession(u32),
     // The program at this index stopped, or ended
     End(u32),
     // Serve another client, on its end
@@ -50,12 +55,12 @@ Request :: union {
 }
 
 Response :: union {
-    // The session's made, its first program started
-    Started,
+    // The session's made, its first program started: its number
+    Started(u32),
     Programs(slop_os.Relative[Program]),
     // It's ended, or was already
     Ended,
-    // No program at that index that may be ended
+    // No program at that index that may be ended, or no room for another session
     Refused,
     Unsupported,
 }
@@ -65,7 +70,8 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Start(_) => false
         case StartWithoutUser(_) => false
-        case List => true
+        case List(_) => true
+        case EndSession(_) => true
         case End(_) => true
         case Connect(_) => true
     }

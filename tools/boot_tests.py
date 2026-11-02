@@ -379,6 +379,28 @@ TESTS = [
         "--expect-line=[user] echo: read from the session",
         "--expect-console-line=echo: from the session",
         "--refuse-console-line=correct horse battery staple", "--refuse-console-line=not the password"])),
+    # Several sessions (decisions/0151): the administrator's, then another of theirs logged in from the secure attention
+    # key's screen (N), the first switched back to (S), the console locked (L) and unlocked with the password, and the
+    # first logged out (O), which leaves the second shown
+    ("keeps several sessions, switches between them, locks the console, and logs one out", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=45") for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r\\wfirst line\\r\\w\\e[3;7~\\pn\\wadmin\\rcorrect horse battery staple\\r\\wsecond line\\r\\w\\e[3;7~\\ps\\pthird line\\r\\w\\e[3;7~\\pl\\wcorrect horse battery staple\\r\\wfourth line\\r\\w\\e[3;7~\\po\\p\\pfifth line",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=Your home directory has 0 entries.",
+        "--console-input-after=echo: first line", "--console-input-after=  Log in",
+        "--console-input-after=Your home directory has 0 entries.", "--console-input-after=echo: second line",
+        "--console-input-after=echo: third line", "--console-input-after=  Locked",
+        # The session drawn again once it's unlocked
+        "--console-input-after=echo: third line", "--console-input-after=echo: fourth line",
+        "--expect-line=[user] terminal: login: another session",
+        "--expect-line=[user] terminal: switched to admin's session",
+        "--expect-line=[user] terminal: locked", "--expect-line=[user] terminal: unlocked",
+        "--expect-line=[user] sessions: ending session 0", "--expect-line=[user] terminal: logged out",
+        "--expect-line=[user] echo: read first line", "--expect-line=[user] echo: read second line",
+        "--expect-line=[user] echo: read third line", "--expect-line=[user] echo: read fourth line",
+        "--expect-line=[user] echo: read fifth line",
+        "--expect-console-line=echo: fifth line",
+        "--refuse-console-line=correct horse battery staple"])),
     ("makes the administrator's account and home volume, limits wrong passwords, and recovers it with its recovery code", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_accounts") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] storage_manager: made the accounts volume",

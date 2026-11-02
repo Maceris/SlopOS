@@ -371,6 +371,9 @@ class ConsoleLink:
         # of it; or, with \\w in it, from the banner, each \\w waiting for the next of them
         self.typed_after = typed_after or []
         self.waits = 0
+        # Where in what's shown the last wait ended: the next looks only at what's shown after it, so a line waited for
+        # again waits for its next showing, not one from before
+        self.waited_to = 0
         self.keyed = keyed
         self.keyboard = keyboard
         # Once the console shows this line, the screen's taken through the machine protocol into screenshot
@@ -433,13 +436,17 @@ class ConsoleLink:
             pass
 
     def wait_for_after(self) -> None:
-        """Until the console shows the next line to wait for, once more than it showed when the last wait ended."""
+        """Until the console shows the next line to wait for, after where the last wait ended."""
         if self.waits >= len(self.typed_after):
             return
         line = self.typed_after[self.waits]
         self.waits += 1
         deadline = time.monotonic() + 60
-        while line not in self.lines() and time.monotonic() < deadline:
+        while time.monotonic() < deadline:
+            shown = self.shown
+            if line in [each.rstrip("\r") for each in plain_text(shown[self.waited_to:]).split("\n")]:
+                self.waited_to = len(shown)
+                return
             time.sleep(0.05)
 
     def type_keys(self) -> None:

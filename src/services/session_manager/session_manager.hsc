@@ -2,9 +2,9 @@
  * The session manager (decisions/0149, 0150, design/console-and-sessions.md §5): it makes a session once the trusted
  * path has logged someone in, and starts its first program, echo until the shell, with the session's terminal
  * connection and its home volume's root; on a boot with no accounts, the one session there is, with no user. It serves
- * the session protocol on its listener: Start and StartWithoutUser, List with the session's programs, each pinged on its
- * lifecycle channel, and End, a Stop on that channel, then the program killed if it hasn't ended once a grace period's
- * over. A session's programs' budgets are split off its own, the session's node, and their log records go to the
+ * the session protocol on its listener: Start and StartWithoutUser, List with a session's programs, each pinged on its
+ * lifecycle channel, End, a Stop on that channel, then the program killed if it hasn't ended once a grace period's
+ * over, and EndSession, every program of a session ended so. There are up to MAX_SESSIONS at once (decisions/0151). A session's programs' budgets are split off its own, the session's node, and their log records go to the
  * events service through rings it opens for them, as the supervisor's programs' do.
  */
 package session_manager
@@ -25,7 +25,8 @@ import service_kit from "../../libraries/service_kit"
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 // A program's end is watched under this key and its index
 PROGRAM_KEY : u64 : 1000
-MAX_PROGRAMS :: 8
+MAX_PROGRAMS :: 16
+MAX_SESSIONS :: 4
 ECHO_BUDGET : u64 : 2 * 1024 * 1024
 // How long a program has to answer a Ping, and to stop once asked
 PING_WAIT : u64 : 200_000_000
@@ -39,8 +40,17 @@ EchoGrants :: struct {
     home : os.Channel[dir.Dir]?,
 }
 
-// A program of the session's: its name, its process and budget, its lifecycle channel's end, and whether it's running.
+// A session: whether it's one now, and its user's name, empty for a boot with no accounts.
+Session :: struct {
+    in_use : bool,
+    user : u8[USER_BYTES],
+    user_bytes : usize,
+}
+
+// A program of a session's: its name, its session's number, its process and budget, its lifecycle channel's end, and
+// whether it's running.
 Program :: struct {
+    session : u32,
     name : u8[session.NAME_BYTES],
     name_bytes : u8,
     process : slop_os.Process,
@@ -59,10 +69,8 @@ Manager :: struct {
     echo_module : slop_os.Memory?,
     events_end : slop_os.Channel,
     events_port : slop_os.Port,
-    // The session, if there's one: its user's name, empty for a boot with no accounts, and its programs
-    started : bool,
-    user : u8[USER_BYTES],
-    user_bytes : usize,
+    // The sessions, and every session's programs
+    sessions : Session[MAX_SESSIONS],
     programs : Program[MAX_PROGRAMS],
     count : usize,
 }
@@ -150,12 +158,13 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
         match os.message_of[session.Request](into)^ {
             case Start(given) => response^ = start(sessions, os.items(into, given.user), given.terminal, given.home)
             case StartWithoutUser(given) => response^ = start(sessions, u8.[], given, null)
-            case List => {
+            case List(number) => {
                 programs : session.Program[session.MAX_PROGRAMS]
-                count :: list(sessions, &programs)
+                count :: list(sessions, number, &programs)
                 response^ = .Programs(os.append(&out, programs[0..<count]))
             }
             case End(which) => response^ = end_program(sessions, cast[usize](which))
+            case EndSession(number) => response^ = end_session(sessions, number)
             case Connect(connection) => {
                 if !service_kit.add_client(connected, sessions.port, connection.end) {
                     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
@@ -168,11 +177,18 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
 }
 
 /*
- * The session made, its first program started with its terminal and home: Refused if there's one already, until 10c2's
- * several sessions, or Started.
+ * A session made, its first program started with its terminal and home: Started with its number, or Refused when
+ * there's no room for another.
  */
 start :: fn(sessions: ptr[mut Manager], user: u8[], given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?) -> session.Response {
-    if sessions.started || user.count > sessions.user.count {
+    number := sessions.sessions.count
+    for each, i in sessions.sessions {
+        if !each.in_use {
+            number = i
+            break
+        }
+    }
+    if number >= sessions.sessions.count || user.count > USER_BYTES {
         _ = slop_os.handle_close(cast[slop_os.Handle](given_terminal.end))
         match home {
             case Some(root) => _ = slop_os.handle_close(cast[slop_os.Handle](root.end))
@@ -180,29 +196,52 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], given_terminal: os.Channel[t
         }
         return .Refused
     }
-    sessions.started = true
+    made := Session.{in_use = true, user_bytes = user.count}
     for byte, i in user {
-        if i < sessions.user.count {
-            sessions.user[i] = byte
+        if i < made.user.count {
+            made.user[i] = byte
         }
     }
-    sessions.user_bytes = user.count
+    sessions.sessions[number] = made
     if user.count == 0 {
         runtime.log_info("a session with no user, on a boot with no accounts")
     }
     else {
         runtime.log_info("a session for %", string_of(&user[0], user.count))
     }
-    if !launch_echo(sessions, given_terminal, home) {
+    if !launch_echo(sessions, cast[u32](number), given_terminal, home) {
+        sessions.sessions[number].in_use = false
         return .Refused
     }
-    return .Started
+    return .Started(cast[u32](number))
+}
+
+// Every program of session number asked to stop, then ended, and the session with them.
+end_session :: fn(sessions: ptr[mut Manager], number: u32) -> session.Response {
+    if cast[usize](number) >= sessions.sessions.count || !sessions.sessions[cast[usize](number)].in_use {
+        return .Ended
+    }
+    runtime.log_info("ending session %", number)
+    for i in 0..<sessions.count {
+        if i < sessions.programs.count && sessions.programs[i].session == number && sessions.programs[i].running {
+            _ = end_program(sessions, i)
+        }
+    }
+    sessions.sessions[cast[usize](number)] = Session.{}
+    return .Ended
 }
 
 // echo started in the session, its end watched and its lifecycle channel kept; whether it started.
-launch_echo :: fn(sessions: ptr[mut Manager], given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?) -> bool {
+launch_echo :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?) -> bool {
     module :: sessions.echo_module or_return false
-    index :: sessions.count
+    // A place one that ended left, or the next
+    index := sessions.count
+    for i in 0..<sessions.count {
+        if i < sessions.programs.count && !sessions.programs[i].running {
+            index = i
+            break
+        }
+    }
     if index >= sessions.programs.count {
         return false
     }
@@ -235,7 +274,8 @@ launch_echo :: fn(sessions: ptr[mut Manager], given_terminal: os.Channel[termina
     match os.launch(sessions.manager, sessions.manager_port, "echo", copy, ECHO_BUDGET, echo.main,
         EchoGrants.{log = duplicate_log(sessions.log), session_terminal = given_terminal, home = home}, options) {
         case Ok(launched) => {
-            program := Program.{process = launched.process, budget = launched.budget, lifecycle = ends.a, ring = ring, running = true}
+            program := Program.{session = number, process = launched.process, budget = launched.budget, lifecycle = ends.a, ring = ring,
+                running = true}
             for byte, i in string_bytes("echo") {
                 if i < program.name.count {
                     program.name[i] = byte
@@ -243,7 +283,9 @@ launch_echo :: fn(sessions: ptr[mut Manager], given_terminal: os.Channel[termina
                 }
             }
             sessions.programs[index] = program
-            sessions.count = index + 1
+            if index == sessions.count {
+                sessions.count = index + 1
+            }
             runtime.log_info("started echo in the session")
             return true
         }
@@ -256,14 +298,14 @@ launch_echo :: fn(sessions: ptr[mut Manager], given_terminal: os.Channel[termina
     }
 }
 
-// The session's programs that are running, into programs, each pinged: how many.
-list :: fn(sessions: ptr[mut Manager], programs: ptr[mut session.Program[session.MAX_PROGRAMS]]) -> usize {
+// Session number's programs that are running, into programs, each pinged: how many.
+list :: fn(sessions: ptr[mut Manager], number: u32, programs: ptr[mut session.Program[session.MAX_PROGRAMS]]) -> usize {
     count : usize = 0
     for &program, i in sessions.programs {
         if i >= sessions.count || count >= programs.count {
             break
         }
-        if !program.running {
+        if !program.running || program.session != number {
             continue
         }
         listed := session.Program.{index = cast[u32](i), name = program.name, name_bytes = program.name_bytes}

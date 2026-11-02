@@ -22,7 +22,11 @@
  * login screen (decisions/0150) asks for a name and password, with the keyboard layout on the status line, which F2
  * changes; the account service opens the account's home volume with them, and the session manager makes the session,
  * with a terminal connection of its own and the home's root. With no account service, a boot with no accounts, the
- * session manager makes a session with no user at once. Both are reached
+ * session manager makes a session with no user at once.
+ *
+ * Several sessions (decisions/0151): each has a view of its own, which its programs write to, one shown at a time. The
+ * secure attention key's screen switches to the next (S), logs in another (N), locks the console until the session's
+ * user's password is typed (L), and logs out (O), the session manager ending the session's programs. Both are reached
  * through connectors, dialed again when they go, with the banner shown on each new serial line. Without a serial line
  * it keeps the model and shows nothing.
  */
@@ -66,6 +70,7 @@ STATUS_ATTENTION :: " SlopOS │ console │ secure attention"
 STATUS_SETUP :: " SlopOS │ console │ first-boot setup"
 STATUS_LOGIN :: " SlopOS │ console │ log in"
 STATUS_NO_ACCOUNTS :: " SlopOS │ console │ no accounts"
+STATUS_LOCKED :: " SlopOS │ console │ locked"
 
 // Output waiting for the serial line, and how many Writes may be in flight on it, which its ring holds
 OUTPUT_BYTES :: 16384
@@ -75,6 +80,10 @@ USAGE_BACKSPACE : u16 : 0x2a
 USAGE_F2 : u16 : 0x3b
 USAGE_C : u16 : 0x06
 USAGE_E : u16 : 0x08
+USAGE_L : u16 : 0x0f
+USAGE_N : u16 : 0x11
+USAGE_O : u16 : 0x12
+USAGE_S : u16 : 0x16
 USAGE_ENTER : u16 : 0x28
 USAGE_ESCAPE : u16 : 0x29
 USAGE_DELETE : u16 : 0x4c
@@ -85,6 +94,9 @@ PROGRAMS_ROW : u16 : 7
 PANIC_TEXT :: 160
 // Bytes typed on the serial line decoded at a time, fewer than the events held
 FEED_SLICE : usize : 8
+// The most sessions' views, and a client's with none
+MAX_VIEWS :: 4
+NO_VIEW : usize : 0xffffffff
 // The most bytes of the line the input's owner is editing
 INPUT_LINE_BYTES :: 512
 
@@ -123,8 +135,13 @@ Service :: struct {
     output_start : usize,
     output_count : usize,
     in_flight : u32,
-    // What the terminal shows, and the framebuffer it's drawn on, if there's one
-    screen : screen.Screen,
+    // The sessions' views (decisions/0151), the one in use (view), which is the active one but while another's client
+    // is served, and the active one, shown; each client's view, NO_VIEW for one in none, which writes to the active one's
+    views : View[MAX_VIEWS],
+    viewing : usize,
+    active : usize,
+    client_view : usize[service_kit.MAX_CLIENTS],
+    // The framebuffer it's drawn on, if there's one
     canvas : glyph_screen.Canvas,
     has_canvas : bool,
     // Whether the secure attention key's screen is up, which every key goes to
@@ -141,21 +158,9 @@ Service :: struct {
     panic : u8[PANIC_TEXT],
     panic_count : usize,
     panic_seen : bool,
-    // Input waiting for the owner: the client that read first, and how many events its Read held asks for
+    // Input waiting for the active view's owner: decoded, as the trusted path takes what's its own first
     decoder : vt.Decoder,
     decoded : vt.Decoded,
-    owner : usize?,
-    held : u32,
-    // The line the owner's editing, the cursor in it, and whether it's drawn, from which row
-    input : u8[INPUT_LINE_BYTES],
-    input_count : usize,
-    input_cursor : usize,
-    input_drawn : bool,
-    input_row : u16,
-    // While it's drawn, where the output goes on: its row and column, and the lines' scrolls then
-    output_row : u16,
-    output_column : u16,
-    output_scrolls : u64,
     // The account service, through its connector, and first-boot setup: its step, the field being typed, the name and
     // password so far, what it last said, and the recovery code to show
     accounts_connector : slop_os.Channel,
@@ -170,12 +175,38 @@ Service :: struct {
     message : u8[MESSAGE_BYTES],
     message_count : usize,
     code : u8[accounts.RECOVERY_TEXT_BYTES],
-    // The clients, the session's who's logged in, and the keyboard layout the login screen chose
+    // The clients, and the keyboard layout the login screen chose
     connected : service_kit.Clients,
+    layout : string,
+    // The view a login for another session was started from, to go back to; and whether the login screen is unlocking
+    previous : usize,
+    unlocking : bool,
+}
+
+/*
+ * A session's view (decisions/0151): what it shows, its input's owner and the line that owner's editing, and whose it
+ * is; one is shown at a time, and the others keep what their programs write for when they're switched to.
+ */
+View :: struct {
+    in_use : bool,
+    screen : screen.Screen,
+    owner : usize?,
+    held : u32,
+    // The line the owner's editing, the cursor in it, and whether it's drawn, from which row
+    input : u8[INPUT_LINE_BYTES],
+    input_count : usize,
+    input_cursor : usize,
+    input_drawn : bool,
+    input_row : u16,
+    // While it's drawn, where the output goes on: its row and column, and the lines' scrolls then
+    output_row : u16,
+    output_column : u16,
+    output_scrolls : u64,
+    // Whose session it is, and the session manager's number for it
     user : u8[account_records.MAX_NAME_BYTES],
     user_count : usize,
     logged_in : bool,
-    layout : string,
+    session : u32,
 }
 
 main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?, input: os.Channel[connector.Connector]?,
@@ -199,11 +230,13 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
         case None => {}
     }
     keep_panic(service, last_panic)
-    // Lines are written at the bottom, as a serial line's are, and scroll up
-    service.screen.lines.row = PROGRAM_ROWS - 1
-    screen.set_status(&service.screen, STATUS)
+    for i in 0..<service.client_view.count {
+        service.client_view[i] = NO_VIEW
+    }
+    open_view(service, 0)
+    service.active = 0
+    service.viewing = 0
     update_status(service)
-    screen.mark_all(&service.screen.lines)
     match canvas_on(framebuffer, framebuffer_layout) {
         case Some(made) => {
             service.canvas = made
@@ -281,7 +314,7 @@ canvas_on :: fn(framebuffer: slop_os.Memory?, layout_page: slop_os.Memory?) -> g
 // What changed, drawn on the framebuffer, with the cursor where a program's is.
 draw_framebuffer :: fn(service: ptr[mut Service]) {
     if service.has_canvas {
-        glyph_screen.draw(&service.canvas, &service.screen, !service.attention)
+        glyph_screen.draw(&service.canvas, &view(service).screen, !service.attention)
     }
 }
 
@@ -356,21 +389,29 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
             }
             case Failed(error) => {
                 service_kit.drop_client(connected, index)
-                match service.owner {
+                use_view_of(service, index)
+                match view(service).owner {
                     case Some(owner) => {
                         if owner == index {
                             hide_input(service)
-                            service.input_count = 0
-                            service.owner = null
-                            service.held = 0
+                            view(service).input_count = 0
+                            view(service).owner = null
+                            view(service).held = 0
                         }
                     }
                     case None => {}
+                }
+                use_active(service)
+                if index < service.client_view.count {
+                    service.client_view[index] = NO_VIEW
                 }
                 return void
             }
             case _ => continue
         }
+        // Served in its own session's view, which is shown only if it's the active one
+        use_view_of(service, index)
+        defer use_active(service)
         request :: os.message_of[terminal.Request](into)
         // What's written, cleared, moved or scrolled goes above the line being typed
         moves_output :: match request^ {
@@ -412,26 +453,26 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
             }
             case Read(most) => {
                 // The first client to read owns the input, until it goes (sessions decide this in 10c)
-                owned :: match service.owner {
+                owned :: match view(service).owner {
                     case Some(owner) => owner == index
                     case None => true
                 }
                 if owned {
-                    service.owner = index
-                    service.held = if most == 0 { cast[u32](1) } else { most }
+                    view(service).owner = index
+                    view(service).held = if most == 0 { cast[u32](1) } else { most }
                 }
             }
             case InputLine(line) => {
                 if is_owner(service, index) {
                     hide_input(service)
                     bytes :: os.items(into, line.text)
-                    service.input_count = if bytes.count < service.input.count { bytes.count } else { service.input.count }
+                    view(service).input_count = if bytes.count < view(service).input.count { bytes.count } else { view(service).input.count }
                     for byte, i in bytes {
-                        if i < service.input.count {
-                            service.input[i] = byte
+                        if i < view(service).input.count {
+                            view(service).input[i] = byte
                         }
                     }
-                    service.input_cursor = if cast[usize](line.cursor) < service.input_count { cast[usize](line.cursor) } else { service.input_count }
+                    view(service).input_cursor = if cast[usize](line.cursor) < view(service).input_count { cast[usize](line.cursor) } else { view(service).input_count }
                     show_input(service)
                 }
             }
@@ -447,8 +488,8 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
     }
 }
 
-is_owner :: fn(service: ptr[Service], index: usize) -> bool {
-    return match service.owner {
+is_owner :: fn(service: ptr[mut Service], index: usize) -> bool {
+    return match view(service).owner {
         case Some(owner) => owner == index
         case None => false
     }
@@ -459,18 +500,18 @@ is_owner :: fn(service: ptr[Service], index: usize) -> bool {
  * row it was on moved up by the lines' scrolls since, or at the top if it's scrolled away.
  */
 hide_input :: fn(service: ptr[mut Service]) {
-    if !service.input_drawn {
+    if !view(service).input_drawn {
         return void
     }
-    service.input_drawn = false
-    grid :: &service.screen.lines
-    screen.clear(grid, terminal.Area.{row = service.input_row, columns = COLUMNS, rows = PROGRAM_ROWS})
-    scrolled :: grid.scrolls - service.output_scrolls
-    grid.row = if cast[u64](service.output_row) >= scrolled { service.output_row - cast[u16](scrolled) } else { 0 }
-    grid.column = service.output_column
+    view(service).input_drawn = false
+    grid :: &view(service).screen.lines
+    screen.clear(grid, terminal.Area.{row = view(service).input_row, columns = COLUMNS, rows = PROGRAM_ROWS})
+    scrolled :: grid.scrolls - view(service).output_scrolls
+    grid.row = if cast[u64](view(service).output_row) >= scrolled { view(service).output_row - cast[u16](scrolled) } else { 0 }
+    grid.column = view(service).output_column
     storage : u8[32]
     out := text_buffer.make(storage)
-    vt.append_move(&out, service.input_row + 1, 0)
+    vt.append_move(&out, view(service).input_row + 1, 0)
     vt.append_clear_below(&out)
     vt.append_move(&out, grid.row + 1, grid.column)
     emit_program(service, &out)
@@ -482,34 +523,34 @@ hide_input :: fn(service: ptr[mut Service]) {
  * the owner says.
  */
 show_input :: fn(service: ptr[mut Service]) {
-    if service.input_drawn || service.input_count == 0 || service.screen.using_whole || service.input_count > service.input.count {
+    if view(service).input_drawn || view(service).input_count == 0 || view(service).screen.using_whole || view(service).input_count > view(service).input.count {
         return void
     }
-    grid :: &service.screen.lines
-    service.output_row = grid.row
-    service.output_column = grid.column
-    service.output_scrolls = grid.scrolls
+    grid :: &view(service).screen.lines
+    view(service).output_row = grid.row
+    view(service).output_column = grid.column
+    view(service).output_scrolls = grid.scrolls
     storage : u8[64]
     out := text_buffer.make(storage)
     if grid.column > 0 {
-        screen.line_break(&service.screen)
+        screen.line_break(&view(service).screen)
         vt.append_line_break(&out)
         emit_program(service, &out)
     }
     first_scrolls :: grid.scrolls
     first_row :: grid.row
     plain :: terminal.Style.{}
-    count :: service.input_count
-    if count > service.input.count {
+    count :: view(service).input_count
+    if count > view(service).input.count {
         return void
     }
-    line :: service.input[0..<count]
+    line :: view(service).input[0..<count]
     cursor_row := grid.row
     cursor_column := grid.column
     cursor_scrolls := grid.scrolls
     at : usize = 0
     loop {
-        if at == service.input_cursor {
+        if at == view(service).input_cursor {
             cursor_row = grid.row
             cursor_column = grid.column
             cursor_scrolls = grid.scrolls
@@ -527,7 +568,7 @@ show_input :: fn(service: ptr[mut Service]) {
         if shown.count <= shown.bytes.count {
             cluster :: shown.bytes[0..<shown.count]
             wrapped :: grid.column + cast[u16](shown.columns) > COLUMNS
-            screen.put(&service.screen, cluster, shown.columns, plain)
+            screen.put(&view(service).screen, cluster, shown.columns, plain)
             text_buffer.clear(&out)
             if wrapped {
                 vt.append_line_break(&out)
@@ -541,14 +582,14 @@ show_input :: fn(service: ptr[mut Service]) {
     }
     // Where it starts, and the cursor, moved up by any scrolling the line itself did
     since_first :: grid.scrolls - first_scrolls
-    service.input_row = if cast[u64](first_row) >= since_first { first_row - cast[u16](since_first) } else { 0 }
+    view(service).input_row = if cast[u64](first_row) >= since_first { first_row - cast[u16](since_first) } else { 0 }
     since_cursor :: grid.scrolls - cursor_scrolls
     grid.row = if cast[u64](cursor_row) >= since_cursor { cursor_row - cast[u16](since_cursor) } else { 0 }
     grid.column = cursor_column
     text_buffer.clear(&out)
     vt.append_move(&out, grid.row + 1, grid.column)
     emit_program(service, &out)
-    service.input_drawn = true
+    view(service).input_drawn = true
 }
 
 // Whether two styles are the same.
@@ -619,13 +660,13 @@ write :: fn(service: ptr[mut Service], into: ptr[os.Incoming], text: terminal.Te
         }
         if safe_text.is_line_break(bytes, at, end) {
             vt.append_line_break(&out)
-            screen.line_break(&service.screen)
+            screen.line_break(&view(service).screen)
         }
         else if safe_text.is_tab(bytes, at, end) {
-            grid :: screen.current(&service.screen)
+            grid :: screen.current(&view(service).screen)
             loop {
                 text_buffer.append_byte(&out, cast[u8](' '))
-                screen.put(&service.screen, string_bytes(" "), 1, style)
+                screen.put(&view(service).screen, string_bytes(" "), 1, style)
             }
             while grid.column % TAB_STOP != 0 && grid.column < COLUMNS
         }
@@ -634,7 +675,7 @@ write :: fn(service: ptr[mut Service], into: ptr[os.Incoming], text: terminal.Te
             safe_text.show(bytes, at, end, &shown)
             if shown.count <= shown.bytes.count {
                 cluster :: shown.bytes[0..<shown.count]
-                screen.put(&service.screen, cluster, shown.columns, style)
+                screen.put(&view(service).screen, cluster, shown.columns, style)
                 if cluster.count > 0 {
                     text_buffer.append(&out, string_of(&cluster[0], cluster.count))
                 }
@@ -656,11 +697,11 @@ write :: fn(service: ptr[mut Service], into: ptr[os.Incoming], text: terminal.Te
 
 // The cursor: anywhere on a whole screen; on lines, only along the line being written.
 move_cursor :: fn(service: ptr[mut Service], position: terminal.Position) {
-    screen.move(&service.screen, position.column, position.row)
-    grid :: screen.current(&service.screen)
+    screen.move(&view(service).screen, position.column, position.row)
+    grid :: screen.current(&view(service).screen)
     storage : u8[32]
     out := text_buffer.make(storage)
-    if service.screen.using_whole {
+    if view(service).screen.using_whole {
         vt.append_move(&out, grid.row + 1, grid.column)
     }
     else {
@@ -676,8 +717,8 @@ move_cursor :: fn(service: ptr[mut Service], position: terminal.Position) {
 clear :: fn(service: ptr[mut Service], area: terminal.Area) {
     storage : u8[128]
     out := text_buffer.make(storage)
-    grid :: screen.current(&service.screen)
-    if !service.screen.using_whole {
+    grid :: screen.current(&view(service).screen)
+    if !view(service).screen.using_whole {
         screen.clear_line_from(grid, 0)
         text_buffer.append_byte(&out, 0x0d)
         vt.append_clear_to_end(&out)
@@ -708,10 +749,10 @@ clear :: fn(service: ptr[mut Service], area: terminal.Area) {
 // An area scrolled, on a whole screen, where it's as wide as the screen, which is what a VT can scroll.
 scroll :: fn(service: ptr[mut Service], scrolled: terminal.ScrollArea) {
     area :: scrolled.area
-    if !service.screen.using_whole || area.column != 0 || area.columns < COLUMNS || area.row >= PROGRAM_ROWS || area.rows == 0 {
+    if !view(service).screen.using_whole || area.column != 0 || area.columns < COLUMNS || area.row >= PROGRAM_ROWS || area.rows == 0 {
         return void
     }
-    screen.scroll(&service.screen.whole, area.row, area.rows, scrolled.lines)
+    screen.scroll(&view(service).screen.whole, area.row, area.rows, scrolled.lines)
     last :: if area.rows > PROGRAM_ROWS - area.row { PROGRAM_ROWS - 1 } else { area.row + area.rows - 1 }
     storage : u8[64]
     out := text_buffer.make(storage)
@@ -722,17 +763,17 @@ scroll :: fn(service: ptr[mut Service], scrolled: terminal.ScrollArea) {
 
 // A screen of the program's own, or back to the lines it left.
 use_screen :: fn(service: ptr[mut Service], whole: bool) {
-    if whole == service.screen.using_whole {
+    if whole == view(service).screen.using_whole {
         return void
     }
-    screen.use_whole(&service.screen, whole)
+    screen.use_whole(&view(service).screen, whole)
     storage : u8[64]
     out := text_buffer.make(storage)
     vt.append_alternate_screen(&out, whole)
     if whole {
         // A new screen is blank, the status line too, so it's drawn again
         vt.append_move(&out, 1, 0)
-        service.screen.status_dirty = true
+        view(service).screen.status_dirty = true
     }
     emit_program(service, &out)
     if !service.attention {
@@ -747,6 +788,9 @@ update_status :: fn(service: ptr[mut Service]) {
     if service.attention {
         text_buffer.append(&status, STATUS_ATTENTION)
     }
+    else if service.setup != .Off && service.unlocking {
+        text_buffer.append(&status, STATUS_LOCKED)
+    }
     else if service.setup != .Off {
         text_buffer.append(&status, if is_login(service.setup) { STATUS_LOGIN } else { STATUS_SETUP })
         layout :: keymaps.find(service.layout) or_else keymaps.US
@@ -754,11 +798,11 @@ update_status :: fn(service: ptr[mut Service]) {
         text_buffer.append(&status, layout.title)
         text_buffer.append(&status, " │ F2: layout")
     }
-    else if service.logged_in && service.user_count > 0 && service.user_count <= service.user.count {
+    else if view(service).logged_in && view(service).user_count > 0 && view(service).user_count <= view(service).user.count {
         text_buffer.append(&status, " SlopOS │ console │ ")
-        text_buffer.append(&status, string_of(&service.user[0], service.user_count))
+        text_buffer.append(&status, string_of(&view(service).user[0], view(service).user_count))
     }
-    else if service.logged_in {
+    else if view(service).logged_in {
         text_buffer.append(&status, STATUS_NO_ACCOUNTS)
     }
     else {
@@ -772,7 +816,7 @@ update_status :: fn(service: ptr[mut Service]) {
     else if service.panic_count > 0 && !service.panic_seen {
         text_buffer.append(&status, " │ the boot before stopped: Ctrl+Alt+Delete")
     }
-    screen.set_status(&service.screen, text_buffer.as_string(&status))
+    screen.set_status(&view(service).screen, text_buffer.as_string(&status))
     draw_status(service)
 }
 
@@ -783,7 +827,7 @@ draw_status :: fn(service: ptr[mut Service]) {
     vt.append_save_cursor(&out)
     vt.append_move(&out, 0, 0)
     vt.append_style(&out, terminal.Style.{attributes = terminal.INVERSE})
-    status :: screen.status_text(&service.screen)
+    status :: screen.status_text(&view(service).screen)
     if status.count > 0 {
         text_buffer.append(&out, string_of(&status[0], status.count))
     }
@@ -791,7 +835,7 @@ draw_status :: fn(service: ptr[mut Service]) {
     vt.append_style(&out, terminal.Style.{})
     vt.append_restore_cursor(&out)
     emit(service, string_bytes(text_buffer.as_string(&out)))
-    service.screen.status_dirty = false
+    view(service).screen.status_dirty = false
 }
 
 /*
@@ -816,13 +860,23 @@ enter_attention :: fn(service: ptr[mut Service]) {
  * console's programs with their memory, those that didn't answer a Ping marked, the chosen one inverse.
  */
 draw_panel :: fn(service: ptr[mut Service]) {
-    screen.show_panel(&service.screen, true)
-    panel :: &service.screen.panel
+    screen.show_panel(&view(service).screen, true)
+    panel :: &view(service).screen.panel
     bold :: terminal.Style.{attributes = terminal.BOLD}
     plain :: terminal.Style.{}
     chosen_style :: terminal.Style.{attributes = terminal.INVERSE}
     screen.write_at(panel, 1, 2, "Secure attention", bold)
-    screen.write_at(panel, 3, 2, "Nothing is waiting for you: no prompt, and no one has logged in yet.", plain)
+    if view(service).logged_in && view(service).user_count > 0 && view(service).user_count <= view(service).user.count {
+        storage : u8[96]
+        line := text_buffer.make(storage)
+        text_buffer.append(&line, "Nothing is waiting for you. This is ")
+        text_buffer.append(&line, string_of(&view(service).user[0], view(service).user_count))
+        text_buffer.append(&line, "'s session.")
+        screen.write_at(panel, 3, 2, text_buffer.as_string(&line), plain)
+    }
+    else {
+        screen.write_at(panel, 3, 2, "Nothing is waiting for you: no prompt, and no one has logged in.", plain)
+    }
     if service.panic_count > 0 && service.panic_count <= service.panic.count {
         screen.write_at(panel, 4, 2, "The boot before stopped for a fault: ", plain)
         screen.write_at(panel, 5, 4, string_of(&service.panic[0], service.panic_count), plain)
@@ -857,13 +911,18 @@ draw_panel :: fn(service: ptr[mut Service]) {
     help :: PROGRAMS_ROW + 2 + cast[u16](service.program_count)
     screen.write_at(panel, help, 2, if service.program_count > 0 { "Up and Down choose, E ends the one chosen, Esc or Enter goes back." }
         else { "Esc or Enter goes back." }, plain)
+    // The sessions' keys, those that do something here
+    if service.accounts_end != NONE && view(service).logged_in && view(service).user_count > 0 {
+        screen.write_at(panel, help + 1, 2, if another_session(service) != NO_VIEW { "S switches session, N logs in another, L locks, O logs out." }
+            else { "N logs in another session, L locks, O logs out." }, plain)
+    }
     redraw(service)
 }
 
 // The session's programs, asked for; none without a session channel, or if it doesn't answer.
 list_programs :: fn(service: ptr[mut Service]) {
     service.program_count = 0
-    reply :: ask_session(service, .List) or_return void
+    reply :: ask_session(service, .List(view(service).session)) or_return void
     into :: &reply
     match os.message_of[session.Response](into)^ {
         case Programs(given) => {
@@ -950,7 +1009,7 @@ leave_attention :: fn(service: ptr[mut Service]) {
     service.attention = false
     runtime.log_info("secure attention ended")
     update_status(service)
-    screen.show_panel(&service.screen, false)
+    screen.show_panel(&view(service).screen, false)
     redraw(service)
 }
 
@@ -964,7 +1023,7 @@ redraw :: fn(service: ptr[mut Service]) {
 
 // Rows first to last, not including last, of what's shown, as redraw draws them; and the cursor where it is.
 redraw_rows :: fn(service: ptr[mut Service], first: u16, last_row: u16) {
-    grid :: screen.shown(&service.screen)
+    grid :: screen.shown(&view(service).screen)
     plain :: terminal.Style.{}
     for row in first..<(if last_row < PROGRAM_ROWS { last_row } else { PROGRAM_ROWS }) {
         storage : u8[2048]
@@ -1011,7 +1070,7 @@ redraw_rows :: fn(service: ptr[mut Service], first: u16, last_row: u16) {
 
 // A program's output for the serial line, unless the secure attention key's screen is up.
 emit_program :: fn(service: ptr[mut Service], out: ptr[text_buffer.TextBuffer]) {
-    if !service.attention && service.setup == .Off {
+    if !service.attention && service.setup == .Off && is_shown(service) {
         emit(service, string_bytes(text_buffer.as_string(out)))
     }
 }
@@ -1175,6 +1234,11 @@ screen_keys :: fn(service: ptr[mut Service], first: usize) {
         else if (event.code == USAGE_E || event.code == USAGE_DELETE) && event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 {
             end_chosen(service)
         }
+        else if event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 && session_key(service, event.code) {
+            // A session's key: the screen it brought up takes what comes after
+            drop_from(service, first)
+            return void
+        }
     }
     // What came with the key, or while its screen or setup's was up, is the trusted path's, and isn't kept
     if service.attention || service.setup != .Off || attention_in(decoded, first) {
@@ -1276,15 +1340,15 @@ take_seat_event :: fn(service: ptr[mut Service], event: seat.Event, text: u8[]) 
 
 // The input waiting, to the owner, once it holds a Read.
 deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
-    if service.decoded.count == 0 || service.held == 0 || service.attention || service.setup != .Off {
+    if service.decoded.count == 0 || view(service).held == 0 || service.attention || service.setup != .Off {
         return void
     }
-    owner :: service.owner or_return void
+    owner :: view(service).owner or_return void
     if owner >= connected.ends.count {
         return void
     }
     end :: connected.ends[owner]
-    count :: if service.decoded.count < cast[usize](service.held) { service.decoded.count } else { cast[usize](service.held) }
+    count :: if service.decoded.count < cast[usize](view(service).held) { service.decoded.count } else { cast[usize](view(service).held) }
     if count > service.decoded.events.count || service.decoded.text_count > service.decoded.text.count {
         return void
     }
@@ -1295,7 +1359,7 @@ deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
     if terminal.send_response(end, service.port, &out) != null {
         return void
     }
-    service.held = 0
+    view(service).held = 0
     // Events past the Read's most are dropped with their text, which the next events' ranges would no longer match
     vt.reset(&service.decoder, &service.decoded)
 }
@@ -1350,7 +1414,7 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
         }
         match os.message_of[accounts.Response](into)^ {
             case Described(status) => {
-                if service.setup == .Off && !service.logged_in {
+                if service.setup == .Off && !view(service).logged_in {
                     if status.accounts == 0 {
                         enter_setup(service)
                     }
@@ -1359,10 +1423,24 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                     }
                 }
             }
-            case OpenedHome(root) => logged_in(service, root)
+            case OpenedHome(root) => {
+                if service.unlocking {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](root.end))
+                    unlocked(service)
+                }
+                else {
+                    logged_in(service, root)
+                }
+            }
             case WrongCredentials => {
-                say(service, "That name and password don't open an account. Type them again.")
-                setup_step(service, .LoginName)
+                if service.unlocking {
+                    say(service, "That's not the password. Type it again.")
+                    setup_step(service, .LoginPassword)
+                }
+                else {
+                    say(service, "That name and password don't open an account. Type them again.")
+                    setup_step(service, .LoginName)
+                }
             }
             case RateLimited(wait) => {
                 storage : u8[MESSAGE_BYTES]
@@ -1429,24 +1507,24 @@ enter_login :: fn(service: ptr[mut Service]) {
 logged_in :: fn(service: ptr[mut Service], root: os.Channel[dir.Dir]) {
     name :: name_bytes(service)
     for byte, i in name {
-        if i < service.user.count {
-            service.user[i] = byte
+        if i < view(service).user.count {
+            view(service).user[i] = byte
         }
     }
-    service.user_count = name.count
+    view(service).user_count = name.count
     if !start_session(service, root) {
         say(service, "The session couldn't be made. Type the password again.")
         setup_step(service, .LoginPassword)
         return void
     }
-    runtime.log_info("logged in as %", string_of(&service.user[0], service.user_count))
+    runtime.log_info("logged in as %", string_of(&view(service).user[0], view(service).user_count))
     wipe(service.field[0..<service.field.count])
     wipe(service.password[0..<service.password.count])
     service.field_count = 0
     service.password_count = 0
     service.setup = .Off
     update_status(service)
-    screen.show_panel(&service.screen, false)
+    screen.show_panel(&view(service).screen, false)
     redraw(service)
 }
 
@@ -1460,16 +1538,23 @@ start_session :: fn(service: ptr[mut Service], home: os.Channel[dir.Dir]?) -> bo
     }
     budget :: slop_os.startup_block().budget
     pair :: os.channel_for[terminal.Terminal](budget, 0) or_return false
-    if !service_kit.add_client(&service.connected, service.port, pair.a) {
-        _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
-        _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
-        return false
+    client :: match service_kit.add_client_index(&service.connected, service.port, pair.a) {
+        case Some(added) => added
+        case None => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+            return false
+        }
+    }
+    // The session's programs write to its view
+    if client < service.client_view.count {
+        service.client_view[client] = service.viewing
     }
     out := os.Outgoing.{}
     request :: os.begin[session.Request](&out)
     match home {
         case Some(root) => {
-            request^ = .Start(session.SessionStart.{user = os.append(&out, service.user[0..<min_count(service.user_count, service.user.count)]),
+            request^ = .Start(session.SessionStart.{user = os.append(&out, view(service).user[0..<min_count(view(service).user_count, view(service).user.count)]),
                 home = root, terminal = os.Channel[terminal.Terminal].{end = pair.b}})
         }
         case None => request^ = .StartWithoutUser(os.Channel[terminal.Terminal].{end = pair.b})
@@ -1486,10 +1571,13 @@ start_session :: fn(service: ptr[mut Service], home: os.Channel[dir.Dir]?) -> bo
         }
     }
     started :: match os.message_of[session.Response](&into)^ {
-        case Started => true
+        case Started(number) => {
+            view(service).session = number
+            true
+        }
         case _ => false
     }
-    service.logged_in = started
+    view(service).logged_in = started
     if started && (home is_none) {
         runtime.log_info("a session with no user, on a boot with no accounts")
         update_status(service)
@@ -1528,22 +1616,7 @@ setup_step :: fn(service: ptr[mut Service], step: SetupStep) {
         service.name_count = 0
     }
     service.setup = step
-    runtime.log_info("% %", if is_login(step) { "login:" } else { "first-boot setup:" }, step_name(step))
     draw_setup(service, true)
-}
-
-step_name :: fn(step: SetupStep) -> string {
-    return match step {
-        case .Off => "done"
-        case .Name => "asking for the name"
-        case .Password => "asking for the password"
-        case .Again => "asking for the password again"
-        case .Making => "making the account"
-        case .Code => "showing the recovery code"
-        case .LoginName => "asking for the name"
-        case .LoginPassword => "asking for the password"
-        case .LoggingIn => "opening the session"
-    }
 }
 
 // One key on setup's screen: text typed into the field, Backspace taking a cluster back, Enter going on.
@@ -1553,6 +1626,10 @@ setup_key :: fn(service: ptr[mut Service], event: terminal.Event, text: u8[]) {
     }
     if event.code == USAGE_F2 {
         next_layout(service)
+        return void
+    }
+    if event.code == USAGE_ESCAPE && service.setup == .LoginName && !service.unlocking {
+        abandon_login(service)
         return void
     }
     if event.code == USAGE_ENTER {
@@ -1746,9 +1823,9 @@ say :: fn(service: ptr[mut Service], text: string) {
  * rows and the message's, which is all a key changes.
  */
 draw_setup :: fn(service: ptr[mut Service], whole: bool) {
-    panel :: &service.screen.panel
+    panel :: &view(service).screen.panel
     if whole {
-        screen.show_panel(&service.screen, true)
+        screen.show_panel(&view(service).screen, true)
     }
     else {
         screen.clear(panel, terminal.Area.{row = SETUP_FIELDS_ROW, columns = COLUMNS, rows = 5})
@@ -1815,13 +1892,19 @@ draw_setup :: fn(service: ptr[mut Service], whole: bool) {
  * status line shows; drawn whole, or only its fields and message.
  */
 draw_login :: fn(service: ptr[mut Service], whole: bool) {
-    panel :: &service.screen.panel
+    panel :: &view(service).screen.panel
     bold :: terminal.Style.{attributes = terminal.BOLD}
     plain :: terminal.Style.{}
     name_row :: SETUP_FIELDS_ROW
     field_column : u16 = 13
-    screen.write_at(panel, 1, 2, "Log in", bold)
-    screen.write_at(panel, 3, 2, "Type your account's name and password.", plain)
+    if service.unlocking {
+        screen.write_at(panel, 1, 2, "Locked", bold)
+        screen.write_at(panel, 3, 2, "The console is locked. Type the session's password to unlock it.", plain)
+    }
+    else {
+        screen.write_at(panel, 1, 2, "Log in", bold)
+        screen.write_at(panel, 3, 2, "Type your account's name and password.", plain)
+    }
     screen.write_at(panel, name_row, 2, "Name:", plain)
     screen.write_at(panel, name_row + 1, 2, "Password:", plain)
     typed :: field_bytes(service)
@@ -1841,6 +1924,9 @@ draw_login :: fn(service: ptr[mut Service], whole: bool) {
         screen.write_at(panel, name_row + 4, 2, string_of(&service.message[0], service.message_count), plain)
     }
     screen.write_at(panel, name_row + 6, 2, "Enter goes on, Backspace takes back what was typed last, F2 changes the layout.", plain)
+    if !service.unlocking && another_session(service) != NO_VIEW {
+        screen.write_at(panel, name_row + 7, 2, "Esc goes back to the session you came from.", plain)
+    }
     panel.row = if service.setup == .LoginName { name_row } else { name_row + 1 }
     panel.column = field_column + cast[u16](min_count(if service.setup == .LoginName { typed.count } else { clusters(typed) }, 40))
     if whole {
@@ -1908,4 +1994,195 @@ wipe :: fn(bytes: mut u8[]) {
     for i in 0..<bytes.count {
         bytes[i] = 0
     }
+}
+
+// ---- Sessions' views (decisions/0151)
+
+// A view made ready for a session: blank, its lines written at the bottom, as a serial line's are, and scroll up.
+open_view :: fn(service: ptr[mut Service], index: usize) {
+    if index >= service.views.count {
+        return void
+    }
+    view :: &service.views[index]
+    view^ = View.{in_use = true}
+    view.screen.lines.row = PROGRAM_ROWS - 1
+    screen.set_status(&view.screen, STATUS)
+    screen.mark_all(&view.screen.lines)
+}
+
+// The view in use: the session's whose client is being served, or the active one.
+view :: fn(service: ptr[mut Service]) -> ptr[mut View] {
+    return &service.views[service.viewing % service.views.count]
+}
+
+// The view client index writes to used: its session's, or with none, the active one's.
+use_view_of :: fn(service: ptr[mut Service], index: usize) {
+    which :: if index < service.client_view.count { service.client_view[index] } else { NO_VIEW }
+    service.viewing = if which < service.views.count && service.views[which].in_use { which } else { service.active }
+}
+
+use_active :: fn(service: ptr[mut Service]) {
+    service.viewing = service.active
+}
+
+// Whether the view in use is the one shown.
+is_shown :: fn(service: ptr[Service]) -> bool {
+    return service.viewing == service.active
+}
+
+// One of the session keys on the secure attention key's screen, done: whether it was one.
+session_key :: fn(service: ptr[mut Service], code: u16) -> bool {
+    if code == USAGE_S {
+        switch_next(service)
+    }
+    else if code == USAGE_N {
+        log_in_another(service)
+    }
+    else if code == USAGE_L {
+        lock(service)
+    }
+    else if code == USAGE_O {
+        log_out(service)
+    }
+    else {
+        return false
+    }
+    return true
+}
+
+// A logged-in view other than the active one, the next after it going round, or NO_VIEW.
+another_session :: fn(service: ptr[Service]) -> usize {
+    for step in 1..<service.views.count {
+        index :: (service.active + step) % service.views.count
+        if service.views[index].in_use && service.views[index].logged_in {
+            return index
+        }
+    }
+    return NO_VIEW
+}
+
+// The view at index shown, the secure attention key's screen left.
+switch_to :: fn(service: ptr[mut Service], index: usize) {
+    if index >= service.views.count {
+        return void
+    }
+    service.attention = false
+    screen.show_panel(&view(service).screen, false)
+    service.active = index
+    service.viewing = index
+    screen.show_panel(&view(service).screen, false)
+    update_status(service)
+    redraw(service)
+    if view(service).user_count > 0 && view(service).user_count <= view(service).user.count {
+        runtime.log_info("switched to %'s session", string_of(&view(service).user[0], view(service).user_count))
+    }
+}
+
+// The next session shown, if there's another.
+switch_next :: fn(service: ptr[mut Service]) {
+    next :: another_session(service)
+    if next == NO_VIEW {
+        return void
+    }
+    switch_to(service, next)
+}
+
+// A view of its own for another session, its login screen up; Esc there goes back.
+log_in_another :: fn(service: ptr[mut Service]) {
+    if service.accounts_end == NONE {
+        return void
+    }
+    free := NO_VIEW
+    for each, i in service.views {
+        if !each.in_use {
+            free = i
+            break
+        }
+    }
+    if free == NO_VIEW {
+        return void
+    }
+    service.attention = false
+    screen.show_panel(&view(service).screen, false)
+    service.previous = service.active
+    open_view(service, free)
+    service.active = free
+    service.viewing = free
+    runtime.log_info("login: another session")
+    enter_login(service)
+}
+
+// A login for another session given up: its view let go, and the session it was started from shown again.
+abandon_login :: fn(service: ptr[mut Service]) {
+    back :: if service.previous < service.views.count && service.views[service.previous].logged_in { service.previous } else { another_session(service) }
+    if back == NO_VIEW || view(service).logged_in {
+        return void
+    }
+    wipe(service.field[0..<service.field.count])
+    service.field_count = 0
+    service.setup = .Off
+    view(service).in_use = false
+    switch_to(service, back)
+}
+
+// The console locked: the session's user's password, through the account service, unlocks it.
+lock :: fn(service: ptr[mut Service]) {
+    if !view(service).logged_in || view(service).user_count == 0 || view(service).user_count > service.name.count {
+        return void
+    }
+    service.attention = false
+    screen.show_panel(&view(service).screen, false)
+    for byte, i in view(service).user {
+        if i < view(service).user_count && i < service.name.count {
+            service.name[i] = byte
+        }
+    }
+    service.name_count = view(service).user_count
+    service.unlocking = true
+    runtime.log_info("locked")
+    say(service, "")
+    service.setup = .LoginPassword
+    wipe(service.field[0..<service.field.count])
+    service.field_count = 0
+    update_status(service)
+    draw_setup(service, true)
+}
+
+// The password was right: the session shown again.
+unlocked :: fn(service: ptr[mut Service]) {
+    service.unlocking = false
+    wipe(service.field[0..<service.field.count])
+    service.field_count = 0
+    service.setup = .Off
+    runtime.log_info("unlocked")
+    update_status(service)
+    screen.show_panel(&view(service).screen, false)
+    redraw(service)
+}
+
+// The active session ended: its programs, by the session manager, its connections, and its view; another shown, or the login screen.
+log_out :: fn(service: ptr[mut Service]) {
+    if !view(service).logged_in {
+        return void
+    }
+    service.attention = false
+    screen.show_panel(&view(service).screen, false)
+    _ = ask_session(service, .EndSession(view(service).session))
+    for i in 0..<service.client_view.count {
+        if service.client_view[i] == service.viewing {
+            service_kit.drop_client(&service.connected, i)
+            service.client_view[i] = NO_VIEW
+        }
+    }
+    gone :: service.active
+    runtime.log_info("logged out")
+    view(service).in_use = false
+    next :: another_session(service)
+    if next != NO_VIEW {
+        switch_to(service, next)
+        return void
+    }
+    open_view(service, gone)
+    service.viewing = gone
+    enter_login(service)
 }

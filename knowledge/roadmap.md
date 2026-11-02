@@ -326,6 +326,8 @@ starting echo in it with its home directory; **10c2** several sessions, a screen
 secure attention key's menu (switch, log in another, lock, log out); **10c3** `Locale`; **10c4** idle installations
 stopped under memory pressure. 10c1 done 2026-11-02 (`decisions/0150`): the login screen with the keyboard layout on
 the status line (US and UK, F2), the session manager, and echo started in the session with its home directory.
+10c2 done 2026-11-02 (`decisions/0151`): a view per session in the terminal service, and the secure attention key's
+screen switching sessions, logging in another, locking the console and logging out.
 
 Specs: RFC 9106 (Argon2), RFC 3394 or the AEAD for key wrapping, ECMA-48 (for the VT adapter only), the Unicode
 standard's East Asian Width and UAX #29 for terminal widths.

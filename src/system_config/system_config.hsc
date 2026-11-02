@@ -189,7 +189,7 @@ SERVICES :: Service.[
     // The seat's keyboards, the console's terminal, and its reader until sessions (decisions/0136)
     Service.{name = "input", module = "input_service.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(input_service.main), cpu = TRUSTED_PATH_CPU},
-    Service.{name = "terminal", module = "terminal_service.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
+    Service.{name = "terminal", module = "terminal_service.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,
         entry = type_of(terminal_service.main), cpu = TRUSTED_PATH_CPU},
     // Each session, made once someone's logged in, and its first program, echo, its budget split off this one's (decisions/0150)
     Service.{name = "sessions", module = "session_manager.elf", starter = .Supervisor, by_manager = true, budget = 24 * MIB,
