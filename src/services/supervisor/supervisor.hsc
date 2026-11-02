@@ -324,7 +324,6 @@ Modules :: struct {
     clock : slop_os.Memory?,
     hello : slop_os.Memory?,
     terminal : slop_os.Memory?,
-    accounts : slop_os.Memory?,
     echo : slop_os.Memory?,
     input : slop_os.Memory?,
     disk_check : slop_os.Memory?,
@@ -529,7 +528,7 @@ MAX_LOADED :: 32
 
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], root: os.Channel[supervision.Supervision],
     hello_module: slop_os.Memory?, platform_service: os.Channel[connector.Connector]?, entropy_service: os.Channel[connector.Connector]?,
-    terminal_module: slop_os.Memory?, echo_module: slop_os.Memory?, input_module: slop_os.Memory?, disk_check_module: slop_os.Memory?, accounts_module: slop_os.Memory?, virtio_blk_module: slop_os.Memory?,
+    terminal_module: slop_os.Memory?, echo_module: slop_os.Memory?, input_module: slop_os.Memory?, disk_check_module: slop_os.Memory?, virtio_blk_module: slop_os.Memory?,
     virtio_console_module: slop_os.Memory?, virtio_input_module: slop_os.Memory?, virtio_rng_module: slop_os.Memory?,
     edu_dma_module: slop_os.Memory?, storage_manager_module: slop_os.Memory?, partition_server_module: slop_os.Memory?,
     fat_server_module: slop_os.Memory?, container_service_module: slop_os.Memory?, volume_server_module: slop_os.Memory?,
@@ -555,7 +554,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, terminal = NOWHERE, input = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
         events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE),
         launched_lifecycle = NONE, session_end = NONE, last_panic = last_panic}
-    supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, hello = hello_module, terminal = terminal_module, echo = echo_module, input = input_module, disk_check = disk_check_module, accounts = accounts_module, virtio_blk = virtio_blk_module,
+    supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, hello = hello_module, terminal = terminal_module, echo = echo_module, input = input_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
         container_service = container_service_module, volume_server = volume_server_module}
@@ -2784,7 +2783,7 @@ module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory
         else if name == "virtio_blk" { modules.virtio_blk } else if name == "virtio_input" { modules.virtio_input }
         else if name == "edu_dma" { modules.edu_dma } else if name == "storage_manager" { modules.storage_manager }
         else if name == "terminal" { modules.terminal } else if name == "echo" { modules.echo } else if name == "input" { modules.input }
-        else if name == "disk_check" { modules.disk_check } else if name == "accounts" { modules.accounts }
+        else if name == "disk_check" { modules.disk_check }
         else if name == "hello" { modules.hello } else if name == "clock" { modules.clock }
         else if name == "events" { modules.events } else if name == "bundle_store" { modules.bundle_store }
         else if name == "config" { modules.config } else if name == "update" { modules.update }
@@ -3277,11 +3276,12 @@ ask_storage :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, request
 
 // The disk check, given a connector to the storage manager at storage, when there's a disk.
 /*
- * The account service, with a connector to the storage manager and a listener for its clients, if there's a disk; into
- * its entry at again, unless that's NOWHERE.
+ * The account service, with a connector to the storage manager and a listener for its clients, if there's a system
+ * volume, which its accounts volume is beside and its program comes from; into its entry at again, unless that's
+ * NOWHERE.
  */
 start_accounts :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize, again: usize) {
-    if supervisor.first_disk == NOWHERE || storage_slot == NOWHERE {
+    if supervisor.first_disk == NOWHERE || storage_slot == NOWHERE || supervisor.system == NONE {
         return void
     }
     service :: service_named(supervisor, "accounts") or_return void
