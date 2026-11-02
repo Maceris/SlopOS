@@ -11,7 +11,8 @@
  * With its session's powerbox (decisions/0156), three lines ask the user for something on the trusted path: "open" for
  * a file, whose first line it shows; "save" and some text for a file to write the text in, suggesting notes.txt, and
  * asking to keep it as "notes" (decisions/0158); and "list" for a directory, whose entries it names. "reopen" opens what
- * was kept as "notes" again, without asking, and shows its first line.
+ * was kept as "notes" again, without asking, and shows its first line. "adduser" asks for another account, which the
+ * administrator allows on the trusted path, where its name and password are typed too.
  */
 package echo
 
@@ -252,6 +253,9 @@ command :: fn(echo: ptr[mut Echo], line: string) {
     else if line == "reopen" {
         reopen_kept(echo)
     }
+    else if line == "adduser" {
+        add_user(echo)
+    }
     else if line.count > 5 && line[0..<5] == "save " {
         save_chosen(echo, line[5..<line.count])
     }
@@ -402,6 +406,32 @@ list_chosen :: fn(echo: ptr[mut Echo]) {
             text_buffer.append(&line, text_buffer.as_string(&names))
             say(echo, text_buffer.as_string(&line))
             runtime.log_info("listed a directory the powerbox gave")
+        }
+        case _ => refused(echo)
+    }
+}
+
+// Another account, made once the administrator allows it on the trusted path.
+add_user :: fn(echo: ptr[mut Echo]) {
+    out := os.Outgoing.{}
+    request :: os.begin[powerbox_protocol.Request](&out)
+    request^ = .RequestAccount(powerbox_protocol.AccountRequest.{purpose = os.append(&out, string_bytes("to let someone else use this computer"))})
+    into := os.Incoming.{}
+    if !ask_box(echo, &out, &into, true) {
+        return void
+    }
+    match os.message_of[powerbox_protocol.Response](&into)^ {
+        case AccountMade(made) => {
+            name :: os.items(&into, made)
+            storage : u8[96]
+            line := text_buffer.make(storage)
+            text_buffer.append(&line, "Made the account ")
+            if name.count > 0 {
+                text_buffer.append(&line, string_of(&name[0], name.count))
+            }
+            text_buffer.append(&line, ".")
+            say(echo, text_buffer.as_string(&line))
+            runtime.log_info("the powerbox made an account")
         }
         case _ => refused(echo)
     }

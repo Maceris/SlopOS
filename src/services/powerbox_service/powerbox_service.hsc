@@ -10,6 +10,9 @@
  * Kept grants (decisions/0158): a request that asks to be kept under a key, if the user ticks "keep for next time", is
  * granted again by the home and kept as a stored link, grants/<program>/<key>, in the home; Reopen with the key opens it
  * again without asking the user. Revoking its issued record, from the trusted path's grants view, makes it open nothing.
+ *
+ * Elevation: RequestAccount goes to the trusted path as an Ask for an account, which it answers with the account made,
+ * once the administrator has allowed it there; the program's told its name.
  */
 package powerbox_service
 
@@ -148,6 +151,12 @@ serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
                 }
             }
             case Reopen(reopening) => response^ = reopen(box, index, os.items(into, reopening.key), reopening.kind, reopening.write)
+            case RequestAccount(asked) => {
+                match ask(box, index, .Account, false, os.items(into, asked.purpose), u8.[], u8.[]) {
+                    case Some(answer) => response^ = answer
+                    case None => continue
+                }
+            }
         }
         _ = powerbox.send_response(end, box.port, &out)
     }
@@ -211,7 +220,8 @@ ask :: fn(box: ptr[mut Box], index: usize, kind: prompt.Kind, write: bool, purpo
     box.has_waiting = true
     who :: name_of(box, index)
     runtime.log_info("% asks for a %", if who.count > 0 { string_of(&who[0], who.count) } else { "a program" },
-        if kind == .File { if write { "file to write" } else { "file to read" } } else { if write { "directory to write in" } else { "directory to read" } })
+        if kind == .Account { "new account" } else if kind == .File { if write { "file to write" } else { "file to read" } }
+        else { if write { "directory to write in" } else { "directory to read" } })
     return null
 }
 
@@ -232,6 +242,12 @@ take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
         case _ => return void
     }
     match os.message_of[prompt.Response](into)^ {
+        case AccountMade(made) => {
+            name :: os.items(into, made)
+            who :: name_of(box, box.waiting.client)
+            runtime.log_info("made the account % for %", as_text(name), as_text(who))
+            answer_made(box, name)
+        }
         case Chosen(choice) => {
             path :: os.items(into, choice.path)
             given :: opened(box, path, choice.new, box.waiting.kind, box.waiting.write)
@@ -414,6 +430,19 @@ valid_key :: fn(key: u8[]) -> bool {
         }
     }
     return true
+}
+
+// The waiting request for an account answered with the account's name.
+answer_made :: fn(box: ptr[mut Box], name: u8[]) {
+    box.has_waiting = false
+    index :: box.waiting.client
+    if index >= box.clients.ends.count || cast[slop_os.Handle](box.clients.ends[index]) == slop_os.NO_HANDLE {
+        return void
+    }
+    out := os.Outgoing.{}
+    response :: os.begin[powerbox.Response](&out)
+    response^ = .AccountMade(os.append(&out, name))
+    _ = powerbox.send_response(box.clients.ends[index], box.port, &out)
 }
 
 // The waiting request answered, unless the program that asked has gone, and no longer waiting.

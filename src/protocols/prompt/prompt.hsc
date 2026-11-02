@@ -9,7 +9,8 @@ import read_only_dir from "std/os/slop_os"
  * the user to answer. The terminal service shows it on the status line until the secure attention key opens the chooser,
  * which lists the home given, read only; it's answered once the user has chosen (a path beneath the home, and whether
  * it's a new file to make) or refused. One Ask waits at a time. An Ask that may be kept offers "keep for next time",
- * and the Choice says whether the user ticked it (decisions/0158).
+ * and the Choice says whether the user ticked it (decisions/0158). An Ask for an account is answered on the trusted
+ * path's own screen, which asks for the administrator's password and the new account's, with the account made.
  */
 Prompt :: struct {}
 
@@ -18,6 +19,8 @@ PROTOCOL :: slop_os.Protocol.{name = "prompt", major_version = 1, lending = .Ser
 Kind :: enum #backed_by(u32) {
     File = 1,
     Directory = 2,
+    // Another account, which elevation makes
+    Account = 3,
 }
 
 Ask :: struct {
@@ -46,6 +49,8 @@ Request :: union {
 
 Response :: union {
     Chosen(Choice),
+    // An Ask for an account answered: the account made, by its name
+    AccountMade(slop_os.Relative[u8]),
     Refused,
     Unsupported,
 }

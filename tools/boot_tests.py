@@ -458,6 +458,35 @@ TESTS = [
         "--expect-line=[user] terminal: revoked a kept grant of notes.txt",
         "--expect-line=[user] powerbox: couldn't reopen notes for echo",
         "--expect-console-line=The powerbox gave nothing."])),
+    # Elevation (decisions/0158): echo asks the powerbox for another account; the secure attention key opens the
+    # elevation screen, which refuses a wrong administrator's password, then makes bob's account with the right one, its
+    # recovery code shown once; logged out, bob logs in
+    ("makes another account when the administrator allows it on the trusted path, and its user logs in", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=150").replace("--timeout=120", "--timeout=240")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wadduser\\r\\w\\p\\e[3;7~"
+        "\\wadmin\\rnot the password\\rbob\\ranother good passphrase\\ranother good passphrase\\r"
+        "\\wadmin\\rcorrect horse battery staple\\rbob\\ranother good passphrase\\ranother good passphrase\\r"
+        "\\w\\r"
+        "\\w\\p\\e[3;7~\\po"
+        "\\wbob\\ranother good passphrase",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
+        "--console-input-after=Asked the powerbox; Ctrl+Alt+Delete shows what it asks.", "--console-input-after=  Make an account",
+        "--console-input-after=  That's not the administrator's name and password. Type them again.",
+        "--console-input-after=  Press Enter once you have.", "--console-input-after=Made the account bob.",
+        "--console-input-after=  Log in",
+        "--expect-line=[user] powerbox: echo asks for a new account",
+        "--expect-line=[user] terminal: elevation: echo asks for an account",
+        "--expect-line=[user] account_service: made the account bob, as the administrator allowed",
+        "--expect-line=[user] terminal: elevation: made the account bob",
+        "--expect-line=[user] powerbox: made the account bob for echo",
+        "--expect-line=[user] echo: the powerbox made an account",
+        "--expect-line=[user] terminal: logged in as bob",
+        "--expect-line=[user] sessions: a session for bob, in en-US",
+        "--refuse-console-line=correct horse battery staple", "--refuse-console-line=another good passphrase",
+        "--refuse-console-line=not the password"])),
     # Memory pressure (decisions/0153): with two sessions, the session manager's budget charged to its threshold, it asks
     # the idle installation, the counter of the session not shown, to stop, and leaves the shown session's running
     ("stops the idle installations of sessions not shown under memory pressure", 7,

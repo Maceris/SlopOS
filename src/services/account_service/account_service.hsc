@@ -2,9 +2,9 @@
  * The account service (decisions/0141, roadmap 10b): every account's record, one file each on the accounts volume, a
  * plain volume of the system container it has the storage manager make the first time; and each account's home
  * volume, sealed by a secret only its record holds, wrapped by a key from the password and by one from the recovery
- * code (account_records). It serves the accounts protocol: the first account made is the administrator, and until
- * 10c no other can be; a home volume is opened with its password, through the storage manager, and only its root
- * leaves the service.
+ * code (account_records). It serves the accounts protocol: the first account made is the administrator, who alone can
+ * have others made (CreateBy, decisions/0158); a home volume is opened with its password, through the storage manager,
+ * and only its root leaves the service.
  *
  * Its budget holds Argon2id's 64 MiB for one password at a time, which is how requests are served. A wrong password
  * or recovery code counts against its account and against the client that sent it: from the third in a row for an
@@ -213,6 +213,12 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
         match os.message_of[accounts.Request](into)^ {
             case Describe => response^ = .Described(accounts.Status.{accounts = service.count})
             case Create(creation) => response^ = create(service, os.items(into, creation.name), os.items(into, creation.password), creation.now)
+            case CreateBy(elevated) => {
+                administrator :: os.items(into, elevated.administrator.name)
+                response^ = limited(service, index, administrator) or_else create_by(service, index, administrator,
+                    os.items(into, elevated.administrator.password), os.items(into, elevated.creation.name), os.items(into, elevated.creation.password),
+                    elevated.creation.now)
+            }
             case OpenHome(credentials) => {
                 name :: os.items(into, credentials.name)
                 response^ = limited(service, index, name) or_else open_home(service, index, name, os.items(into, credentials.password), &out)
@@ -250,6 +256,28 @@ create :: fn(service: ptr[mut Service], name: u8[], password: u8[], now: u64) ->
     if service.count > 0 {
         return .Refused
     }
+    return made_account(service, name, password, now, true)
+}
+
+/*
+ * Another account, which the administrator allows: their name and password checked as a login's are, and counted
+ * against them when they're wrong or aren't the administrator's; then the account made as the first is, not an
+ * administrator.
+ */
+create_by :: fn(service: ptr[mut Service], client: usize, administrator: u8[], administrator_password: u8[], name: u8[], password: u8[],
+    now: u64) -> accounts.Response {
+    record := read_record(service, administrator) or_else dummy_record()
+    home := account_records.unlock_home(&record, administrator_password) or_return failed(service, client, administrator)
+    account_records.zero_key(&home)
+    if !account_records.is_administrator(&record) {
+        return failed(service, client, administrator)
+    }
+    succeeded(service, client, administrator)
+    return made_account(service, name, password, now, false)
+}
+
+// An account made with its home volume, the administrator or not; its recovery code, shown once.
+made_account :: fn(service: ptr[mut Service], name: u8[], password: u8[], now: u64, administrator: bool) -> accounts.Response {
     if !account_records.valid_name(name) {
         return .NameRefused
     }
@@ -264,13 +292,13 @@ create :: fn(service: ptr[mut Service], name: u8[], password: u8[], now: u64) ->
     defer account_records.zero_key(&home)
     code := account_records.new_recovery_code()
     defer zero_code(&code)
-    record := account_records.new_record(name, service.count == 0, now, password, account_records.PASSWORD_ARGON2, &home, &code)
+    record := account_records.new_record(name, administrator, now, password, account_records.PASSWORD_ARGON2, &home, &code)
         or_return .Failed
     if !make_home(service, name, &home) || !write_record(service, &record) {
         return .Failed
     }
     service.count += 1
-    log_line.write(service.log, "account_service: made the account %, the administrator", text_of(name))
+    log_line.write(service.log, "account_service: made the account %, %", text_of(name), if administrator { "the administrator" } else { "as the administrator allowed" })
     return .Created(accounts.RecoveryText.{text = account_records.recovery_text(&code)})
 }
 

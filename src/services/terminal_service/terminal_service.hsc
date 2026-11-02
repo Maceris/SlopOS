@@ -29,7 +29,8 @@
  * user's password is typed (L), and logs out (O), the session manager ending the session's programs. A session's
  * powerbox asks the user through it (chooser.hsc, decisions/0156): the request's on the status line, and the secure
  * attention key opens the chooser instead of this screen, and G there shows what its user has let programs keep
- * (grants_view.hsc, decisions/0158). Both are reached
+ * (grants_view.hsc, decisions/0158); a request for another account opens the elevation screen instead (elevation.hsc).
+ * Both are reached
  * through connectors, dialed again when they go, with the banner shown on each new serial line. Without a serial line
  * it keeps the model and shows nothing.
  */
@@ -118,6 +119,9 @@ SetupStep :: enum {
     LoginName,
     LoginPassword,
     LoggingIn,
+    // Elevation (decisions/0158): the administrator's name and password, before the new account's
+    AdminName,
+    AdminPassword,
 }
 
 // Setup's first row of fields: the name, the password, it again, then a blank row and its message
@@ -191,6 +195,12 @@ Service :: struct {
     // Whether its G brought up the grants view, and what it lists
     granting : bool,
     grants : GrantsView,
+    // Whether the setup screen is elevation's, and the administrator's name and password typed there
+    elevating : bool,
+    admin : u8[account_records.MAX_NAME_BYTES],
+    admin_count : usize,
+    admin_password : u8[FIELD_BYTES],
+    admin_password_count : usize,
 }
 
 /*
@@ -808,6 +818,9 @@ update_status :: fn(service: ptr[mut Service]) {
     else if service.setup != .Off && service.unlocking {
         text_buffer.append(&status, STATUS_LOCKED)
     }
+    else if service.setup != .Off && service.elevating {
+        text_buffer.append(&status, STATUS_ELEVATING)
+    }
     else if service.setup != .Off {
         text_buffer.append(&status, if is_login(service.setup) { STATUS_LOGIN } else { STATUS_SETUP })
         layout :: keymaps.find(service.layout) or_else keymaps.US
@@ -872,7 +885,12 @@ enter_attention :: fn(service: ptr[mut Service]) {
     update_status(service)
     // What's waiting for the user first: the powerbox's request
     if view(service).asking {
-        enter_chooser(service)
+        if view(service).ask.kind == .Account {
+            enter_elevation(service)
+        }
+        else {
+            enter_chooser(service)
+        }
         return void
     }
     list_programs(service)
@@ -1498,7 +1516,7 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 runtime.log_info("the account service went; dialing again")
                 if service.setup == .Making {
                     say(service, "The account service stopped while it made the account. Type the password again.")
-                    setup_step(service, .Password)
+                    setup_step(service, if service.elevating { SetupStep.AdminName } else { SetupStep.Password })
                 }
                 dial_accounts(service)
                 if service.accounts_end == NONE {
@@ -1529,7 +1547,11 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 }
             }
             case WrongCredentials => {
-                if service.unlocking {
+                if service.elevating {
+                    say(service, "That's not the administrator's name and password. Type them again.")
+                    setup_step(service, .AdminName)
+                }
+                else if service.unlocking {
                     say(service, "That's not the password. Type it again.")
                     setup_step(service, .LoginPassword)
                 }
@@ -1545,11 +1567,13 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 text_buffer.append_unsigned(&text, (wait + 999_999_999) / 1_000_000_000)
                 text_buffer.append(&text, " seconds, then type the password again.")
                 say(service, text_buffer.as_string(&text))
-                setup_step(service, .LoginPassword)
+                setup_step(service, if service.elevating { SetupStep.AdminName } else { SetupStep.LoginPassword })
             }
             case Created(shown) => {
                 service.code = shown.text
-                runtime.log_info("first-boot setup: made the administrator's account")
+                if !service.elevating {
+                    runtime.log_info("first-boot setup: made the administrator's account")
+                }
                 say(service, "")
                 setup_step(service, .Code)
             }
@@ -1561,10 +1585,29 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 say(service, "That name can't be an account's. Type another.")
                 setup_step(service, .Name)
             }
-            case AlreadyExists => leave_setup(service)
-            case Refused => leave_setup(service)
+            case AlreadyExists => {
+                if service.elevating {
+                    say(service, "There's an account of that name already. Type the administrator's name and password again.")
+                    setup_step(service, .AdminName)
+                }
+                else {
+                    leave_setup(service)
+                }
+            }
+            case Refused => {
+                if service.elevating {
+                    end_elevation(service, false)
+                }
+                else {
+                    leave_setup(service)
+                }
+            }
             case _ => {
-                if is_login(service.setup) {
+                if service.elevating {
+                    say(service, "The account couldn't be made. Type the administrator's name and password again.")
+                    setup_step(service, .AdminName)
+                }
+                else if is_login(service.setup) {
                     say(service, "The session couldn't be opened. Type the password again.")
                     setup_step(service, .LoginPassword)
                 }
@@ -1744,6 +1787,10 @@ setup_step :: fn(service: ptr[mut Service], step: SetupStep) {
         wipe(service.name[0..<service.name.count])
         service.name_count = 0
     }
+    if step == .AdminName {
+        wipe(service.admin_password[0..<service.admin_password.count])
+        service.admin_password_count = 0
+    }
     service.setup = step
     draw_setup(service, true)
 }
@@ -1759,6 +1806,10 @@ setup_key :: fn(service: ptr[mut Service], event: terminal.Event, text: u8[]) {
     }
     if event.code == USAGE_ESCAPE && service.setup == .LoginName && !service.unlocking {
         abandon_login(service)
+        return void
+    }
+    if event.code == USAGE_ESCAPE && service.elevating && service.setup != .Making && service.setup != .Code {
+        end_elevation(service, false)
         return void
     }
     if event.code == USAGE_ENTER {
@@ -1850,9 +1901,47 @@ setup_enter :: fn(service: ptr[mut Service]) {
                 setup_step(service, .Password)
                 return void
             }
-            make_account(service)
+            if service.elevating {
+                make_account_by(service)
+            }
+            else {
+                make_account(service)
+            }
         }
-        case .Code => leave_setup(service)
+        case .Code => {
+            if service.elevating {
+                end_elevation(service, true)
+            }
+            else {
+                leave_setup(service)
+            }
+        }
+        case .AdminName => {
+            if typed.count == 0 || typed.count > service.admin.count {
+                return void
+            }
+            for byte, i in typed {
+                if i < service.admin.count {
+                    service.admin[i] = byte
+                }
+            }
+            service.admin_count = typed.count
+            say(service, "")
+            setup_step(service, .AdminPassword)
+        }
+        case .AdminPassword => {
+            if typed.count > service.admin_password.count {
+                return void
+            }
+            for byte, i in typed {
+                if i < service.admin_password.count {
+                    service.admin_password[i] = byte
+                }
+            }
+            service.admin_password_count = typed.count
+            say(service, "")
+            setup_step(service, .Name)
+        }
         case .LoginName => {
             if typed.count == 0 || typed.count > service.name.count {
                 return void
@@ -1961,6 +2050,10 @@ draw_setup :: fn(service: ptr[mut Service], whole: bool) {
     }
     bold :: terminal.Style.{attributes = terminal.BOLD}
     plain :: terminal.Style.{}
+    if service.elevating {
+        draw_elevation(service, whole)
+        return void
+    }
     if is_login(service.setup) {
         draw_login(service, whole)
         return void

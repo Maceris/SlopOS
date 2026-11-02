@@ -18,6 +18,10 @@ import read_only_file from "std/os/slop_os"
  * A request may ask to be kept under a key of the program's (decisions/0158): if the user ticks "keep for next time",
  * the powerbox keeps the grant as a stored link in the session's home, which Reopen with the key opens again, without
  * asking, until the user revokes it.
+ *
+ * Elevation (decisions/0158): RequestAccount asks for another account to be made, which the administrator allows on
+ * the trusted path, with their password, then the new account's name and password, typed there and never seen by the
+ * program; it's answered with the new account's name.
  */
 Powerbox :: struct {}
 
@@ -58,6 +62,11 @@ Reopening :: struct {
     write : bool,
 }
 
+// Another account asked for, and why.
+AccountRequest :: struct {
+    purpose : slop_os.Relative[u8],
+}
+
 // A program of the session's, to serve on its end under its name.
 Served :: struct {
     name : slop_os.Relative[u8],
@@ -68,6 +77,7 @@ Request :: union {
     RequestFile(FileRequest),
     RequestDirectory(DirectoryRequest),
     Reopen(Reopening),
+    RequestAccount(AccountRequest),
     // The session manager's: another program to serve
     Serve(Served),
 }
@@ -83,6 +93,8 @@ Response :: union {
     Busy,
     // Serve's answer
     Done,
+    // RequestAccount's: the account made, by its name
+    AccountMade(slop_os.Relative[u8]),
     Unsupported,
 }
 
@@ -93,6 +105,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case RequestDirectory(_) => false
         // A kept grant opened again gives another connection to it
         case Reopen(_) => true
+        case RequestAccount(_) => false
         case Serve(_) => false
     }
 }

@@ -10,8 +10,10 @@ import dir from "std/os/slop_os"
  * leaves the account service: OpenHome answers with a connection to the volume's root. A wrong password, or recovery
  * code, makes the next attempt for that account, and from that client, wait longer (RateLimited, with how long).
  *
- * Until 10c gives the administrator's session authority, Create is refused (Refused) once there's an account: the
- * first is made at first boot, on the trusted path, and is the administrator.
+ * Create makes only the first account, at first boot, on the trusted path, which is the administrator; it's refused
+ * (Refused) once there's one. Another is made with CreateBy, which the administrator's name and password allow
+ * (decisions/0158), typed on the trusted path when a program's asked the powerbox for one: wrong ones, or an account
+ * that isn't the administrator's, are WrongCredentials, and count as a login's do.
  */
 
 Accounts :: struct {}
@@ -29,6 +31,12 @@ Creation :: struct {
     name : slop_os.Relative[u8],
     password : slop_os.Relative[u8],
     now : u64,
+}
+
+// Another account, made by the administrator: their name and password, and the new account.
+Elevated :: struct {
+    administrator : Credentials,
+    creation : Creation,
 }
 
 PasswordChange :: struct {
@@ -58,6 +66,7 @@ Status :: struct {
 Request :: union {
     Describe,
     Create(Creation),
+    CreateBy(Elevated),
     OpenHome(Credentials),
     ChangePassword(PasswordChange),
     Recover(Recovery),
@@ -90,6 +99,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Describe => true
         case Create(_) => false
+        case CreateBy(_) => false
         case OpenHome(_) => true
         case ChangePassword(_) => false
         case Recover(_) => false
