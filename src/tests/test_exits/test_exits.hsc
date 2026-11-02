@@ -5,7 +5,8 @@
  *   EXIT_MISSING_GRANT (126), as its real entry requires its debug log;
  * - one built with the process builder directly, its startup block saying an ABI version that isn't the kernel's,
  *   ends with EXIT_WRONG_ABI (125) before its entry runs.
- * What both had comes back to its budget.
+ * What both had comes back to its budget. And a launch refused, its watch's key still the first copy's, gives back what
+ * it made for the copy, so its starter's budget is charged no more than before.
  */
 package test_exits
 
@@ -38,7 +39,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     loader :: manager or_return 101
     manager_port :: os.port_for(block.budget, loader.end) or_return 102
     port :: slop_os.port_create(block.budget) or_return 103
-    results : u64[4]
+    results : u64[6]
 
     // Launched with nothing, though its entry requires its log
     launched :: os.launch(loader, manager_port, "test_exits without grants", executable, COPY_BUDGET, takes_nothing, NoGrants.{},
@@ -47,6 +48,14 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     _ = slop_os.handle_close(cast[slop_os.Handle](launched.process))
     results[1] = if test_kit.wait_for_budget(launched.budget, 0, 1_000_000_000) { cast[u64](1) } else { cast[u64](0) }
     _ = slop_os.handle_close(cast[slop_os.Handle](launched.budget))
+
+    // Refused: the first copy's binding keeps WATCH_KEY after it fired
+    before :: (slop_os.memory_budget_info(block.budget) or_return 111).used
+    refused :: os.launch(loader, manager_port, "test_exits refused", executable, COPY_BUDGET, takes_nothing, NoGrants.{},
+        os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = WATCH_KEY}}) is_error
+    after :: (slop_os.memory_budget_info(block.budget) or_return 111).used
+    results[4] = if refused { cast[u64](1) } else { cast[u64](0) }
+    results[5] = if after < before + COPY_BUDGET { cast[u64](1) } else { cast[u64](0) }
 
     // Built here, its startup block saying another ABI version
     budget :: slop_os.memory_budget_create(block.budget, COPY_BUDGET) or_return 105
@@ -71,10 +80,10 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     results[3] = if test_kit.wait_for_budget(budget, 0, 1_000_000_000) { cast[u64](1) } else { cast[u64](0) }
     _ = slop_os.handle_close(cast[slop_os.Handle](budget))
 
-    expected :: u64.[cast[u64](slop_os.EXIT_MISSING_GRANT), 1, cast[u64](slop_os.EXIT_WRONG_ABI), 1]
+    expected :: u64.[cast[u64](slop_os.EXIT_MISSING_GRANT), 1, cast[u64](slop_os.EXIT_WRONG_ABI), 1, 1, 1]
     failed :: test_kit.check(log, NAME, results, expected)
     if failed == 0 {
-        log_line.write(log, "%: a copy missing a grant it requires ended with 126, one told another ABI version with 125", NAME)
+        log_line.write(log, "%: a copy missing a grant it requires ended with 126, one told another ABI version with 125, and a refused launch gave its budget back", NAME)
     }
     return failed
 }

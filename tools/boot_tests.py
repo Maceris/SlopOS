@@ -590,7 +590,8 @@ TESTS = [
     program_test("reads I/O ports through a range of them", "test_io_ports",
         "the RTC's status read through its ports, and ports outside them refused"),
     program_test("ends a program missing a grant, or told another ABI version, as its starter sees", "test_exits",
-        "a copy missing a grant it requires ended with 126, one told another ABI version with 125"),
+        "a copy missing a grant it requires ended with 126, one told another ABI version with 125, and a refused launch gave its "
+        "budget back"),
     program_test("supplies paged memory's pages from a pager in user mode", "test_pager",
         "2 pages supplied as they were touched, read at two addresses, and writing them refused"),
     program_test("measures the kernel's benchmarks", "test_perf", "measured ipc_round_trip, page_fault, thread_create and process_create"),
