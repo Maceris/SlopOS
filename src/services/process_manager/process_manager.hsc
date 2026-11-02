@@ -3,7 +3,8 @@
  * made, which stay theirs and are paid for by them, and keeps nothing of what it builds, so a program
  * outlives it. Its protocol is std's (std/os/slop_os/process_manager). It serves clients, the listener the
  * root task connects through, and each connection a client sends it in a Connect; each Load gets a Response.
- * The entropy service gives each program its seed, and the randomness that places its parts.
+ * The entropy service gives each program its seed, and the randomness that places its parts; it's reached through a
+ * connector the root task serves, and dialed again if it's started again (decisions/0140).
  */
 package process_manager
 
@@ -14,6 +15,7 @@ import process_manager as protocol from "std/os/slop_os"
 import log_line from "../../log_line"
 import process_builder from "../../process_builder"
 import entropy from "../../protocols/entropy"
+import connector from "../../protocols/connector"
 import random_stream from "../../random_stream"
 import service_kit from "../../libraries/service_kit"
 
@@ -24,13 +26,19 @@ Manager :: struct {
     clients : service_kit.Clients,
     entropy : slop_os.Channel,
     entropy_port : slop_os.Port,
+    // The connector the entropy service is dialed through, and the port its answers wake
+    entropy_connector : slop_os.Channel,
+    connector_port : slop_os.Port,
 }
 
-main :: fn(log: slop_os.DebugLog?, entropy: os.Channel[entropy.Entropy], clients: os.Listener[protocol.ProcessManager]) -> int {
+main :: fn(log: slop_os.DebugLog?, entropy: os.Channel[connector.Connector], clients: os.Listener[protocol.ProcessManager]) -> int {
     block :: slop_os.startup_block()
-    manager := Manager.{block = block, entropy = entropy.end}
+    manager := Manager.{block = block, entropy_connector = entropy.end, entropy = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     manager.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
-    manager.entropy_port = os.port_for(block.budget, manager.entropy) or_return 1
+    manager.connector_port = os.port_for(block.budget, manager.entropy_connector) or_return 1
+    if !dial_entropy(&manager) {
+        return 1
+    }
     manager.port = slop_os.port_create(block.budget) or_return 2
     // The listener is a client like any, whose requests are connections or loads
     if !service_kit.add_client(&manager.clients, manager.port, clients.end) {
@@ -150,8 +158,28 @@ load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.R
     }
 }
 
-// bytes, filled from the entropy service: false if it didn't answer.
+// A connection to the entropy service through its connector, in place of one that's gone: whether there is one.
+dial_entropy :: fn(manager: ptr[mut Manager]) -> bool {
+    if cast[slop_os.Handle](manager.entropy) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](manager.entropy))
+        _ = slop_os.handle_close(cast[slop_os.Handle](manager.entropy_port))
+        manager.entropy = cast[slop_os.Channel](slop_os.NO_HANDLE)
+    }
+    connection :: connector.dial[entropy.Entropy](manager.entropy_connector, manager.connector_port) or_return false
+    manager.entropy = connection.end
+    manager.entropy_port = os.port_for(manager.block.budget, manager.entropy) or_return false
+    return true
+}
+
+// bytes, filled from the entropy service, dialed again once if its connection's gone: false if it didn't answer.
 draw :: fn(manager: ptr[mut Manager], bytes: mut u8[]) -> bool {
+    if draw_once(manager, bytes) {
+        return true
+    }
+    return dial_entropy(manager) && draw_once(manager, bytes)
+}
+
+draw_once :: fn(manager: ptr[mut Manager], bytes: mut u8[]) -> bool {
     out := os.Outgoing.{}
     request :: os.begin[entropy.Request](&out)
     request^ = .Fill(cast[u32](bytes.count))

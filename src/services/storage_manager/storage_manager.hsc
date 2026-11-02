@@ -51,6 +51,8 @@ MAX_VOLUMES :: 8
 VOLUME_NAME_BYTES :: 64
 // The keys volume servers' links connections are bound to the port with, after the clients'
 LINKS_KEY : u64 : 1000
+// Its connection to the process manager, watched for its other end closing, dialed again when it does (decisions/0140)
+MANAGER_KEY : u64 : 900
 // The keys the servers it starts are watched under from their launch: partition servers by disk, FAT servers and
 // container services by partition, volume servers by their place in served
 PARTITION_SERVER_KEY : u64 : 2000
@@ -169,6 +171,9 @@ Manager :: struct {
     served_count : usize,
     manager : os.Channel[process_manager.ProcessManager],
     manager_port : slop_os.Port,
+    // The connector the process manager's dialed through
+    manager_connector : slop_os.Channel,
+    connector_port : slop_os.Port,
     fat_server_module : slop_os.Memory,
     container_service_module : slop_os.Memory,
     volume_server_module : slop_os.Memory,
@@ -182,13 +187,13 @@ Manager :: struct {
     serve_again : bool,
 }
 
-main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager], partition_server_module: slop_os.Memory,
+main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], partition_server_module: slop_os.Memory,
     fat_server_module: slop_os.Memory, container_service_module: slop_os.Memory, volume_server_module: slop_os.Memory,
     disk0: os.Channel[connector.Connector]?, disk1: os.Channel[connector.Connector]?,
     disk2: os.Channel[connector.Connector]?, disk3: os.Channel[connector.Connector]?, clients: os.Listener[storage.Storage],
     command_line: slop_os.Memory?) -> int {
     startup :: slop_os.startup_block()
-    state := Manager.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE), manager = manager, fat_server_module = fat_server_module,
+    state := Manager.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE), manager_connector = manager.end, fat_server_module = fat_server_module,
         container_service_module = container_service_module, volume_server_module = volume_server_module,
         partition_server_module = partition_server_module}
     match command_line {
@@ -199,8 +204,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         case None => {}
     }
     state.port = slop_os.port_create(startup.budget) or_return 1
-    manager_port :: os.port_for(startup.budget, manager.end) or_return 1
-    state.manager_port = manager_port
+    state.connector_port = os.port_for(startup.budget, state.manager_connector) or_return 1
+    if !dial_manager(&state) {
+        return 1
+    }
 
     // A partition server for each disk, and its partitions
     for maybe in DiskConnector.[disk0, disk1, disk2, disk3] {
@@ -250,8 +257,30 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
             if i < cast[usize](taken) && packet.kind == .Signal && packet.key >= PARTITION_SERVER_KEY {
                 ended(&state, packet.key)
             }
+            if i < cast[usize](taken) && packet.kind == .Signal && packet.key == MANAGER_KEY {
+                _ = dial_manager(&state)
+            }
         }
     }
+}
+
+/*
+ * A connection to the process manager through its connector, in place of one that's gone, watched for its other end
+ * closing, as when the root task starts the process manager again: whether there's one.
+ */
+dial_manager :: fn(state: ptr[mut Manager]) -> bool {
+    again :: cast[slop_os.Handle](state.manager.end) != slop_os.NO_HANDLE
+    if again {
+        _ = slop_os.handle_close(cast[slop_os.Handle](state.manager.end))
+        _ = slop_os.handle_close(cast[slop_os.Handle](state.manager_port))
+    }
+    state.manager = connector.dial[process_manager.ProcessManager](state.manager_connector, state.connector_port) or_return false
+    state.manager_port = os.port_for(slop_os.startup_block().budget, state.manager.end) or_return false
+    _ = slop_os.port_bind(state.port, cast[slop_os.Handle](state.manager.end), slop_os.SIGNAL_PEER_CLOSED, MANAGER_KEY, .Once)
+    if again {
+        runtime.log_info("dialed the process manager again")
+    }
+    return true
 }
 
 /*

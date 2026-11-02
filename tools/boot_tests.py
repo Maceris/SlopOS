@@ -290,6 +290,23 @@ TESTS = [
         "--expect-line=[user] root task: process_manager was killed",
         "--expect-line=[user] hello: still running after the process manager ended",
         "--expect-line=[user] root task: the supervisor's hello ended with 0", "--expect-line=[info] root task ended with code 0"]),
+    # The root task's own services killed in turn once everything's started (decisions/0140): each started again, answering
+    # through a connector, and the supervisor and the storage manager dialing their connections again
+    ("starts the root task's services again when they end, and their clients dial them again", 7, with_before_qemu(
+        [argument.replace("test_services", "test_services test_restart_root_services") for argument in BOOT_DISK_BASE], [
+        "--expect-line=[user] root task: test_restart_root_services: killing entropy",
+        "--expect-line=[user] root task: started entropy again",
+        "--expect-line=[user] root task: test_restart_root_services: entropy answers again",
+        "--expect-line=[user] root task: started process_manager again",
+        "--expect-line=[user] supervisor: dialed the process manager again",
+        "--expect-line=[user] storage_manager: dialed the process manager again",
+        "--expect-line=[user] root task: test_restart_root_services: process_manager answers again",
+        "--expect-line=[user] root task: started scheduler again", "--expect-line=[user] supervisor: dialed the scheduler service again",
+        "--expect-line=[user] root task: test_restart_root_services: scheduler answers again",
+        "--expect-line=[user] root task: started platform again", "--expect-line=[user] supervisor: dialed the platform service again",
+        "--expect-line=[user] root task: test_restart_root_services: platform answers again",
+        "--expect-line=[user] root task: test_restart_root_services: all four started again",
+        "--expect-line=[info] root task ended with code 0"])),
     ("keeps the time with the real-time clock, and sets it", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services test_clock", f"--expect-line={X86_CLOCK_LINE}",
         "--expect-line=[user] clock: serving",

@@ -34,6 +34,9 @@ import entropy from "../../protocols/entropy"
 import platform_protocol from "../../protocols/platform"
 import scheduler_protocol from "../../protocols/scheduler"
 import supervision from "../../protocols/supervision"
+import connector from "../../protocols/connector"
+import concurrency from "std"
+import events from "../../protocols/events"
 import random_stream from "../../random_stream"
 import service_kit from "../../libraries/service_kit"
 import bundle from "../../bundle"
@@ -58,11 +61,11 @@ SUPERVISOR_KEY : u64 : 1000
 // What the supervisor is given (supervisor.main).
 SupervisorGrants :: struct {
     log : slop_os.DebugLog?,
-    manager : os.Channel[process_manager.ProcessManager],
+    manager : os.Channel[connector.Connector],
     root : os.Channel[supervision.Supervision],
     hello_module : slop_os.Memory?,
-    platform_service : os.Channel[platform_protocol.Platform]?,
-    entropy_service : os.Channel[entropy.Entropy]?,
+    platform_service : os.Channel[connector.Connector]?,
+    entropy_service : os.Channel[connector.Connector]?,
     terminal_module : slop_os.Memory?,
     echo_module : slop_os.Memory?,
     input_module : slop_os.Memory?,
@@ -78,7 +81,7 @@ SupervisorGrants :: struct {
     container_service_module : slop_os.Memory?,
     volume_server_module : slop_os.Memory?,
     command_line : slop_os.Memory?,
-    scheduler : os.Channel[scheduler_protocol.Scheduler]?,
+    scheduler : os.Channel[connector.Connector]?,
     clock_module : slop_os.Memory?,
     events_module : slop_os.Memory?,
     bundle_store_module : slop_os.Memory?,
@@ -131,7 +134,37 @@ TEST_BUDGET : u64 : 32 * 1024 * 1024
 Started :: struct {
     name : string,
     process : slop_os.Process,
+    // Its memory budget, where the root task made it, closed once it's ended; and its log records' ring, where it has
+    // one, given back to the events service then
+    budget : slop_os.MemoryBudget,
+    ring : slop_os.Memory,
+    // Its restarts since restarts_since, and whether it's ended for good
+    restarts : u32,
+    restarts_since : u64,
+    done : bool,
 }
+
+// The services the root task starts that it serves connectors to (decisions/0140), and starts again when they end.
+RootService :: enum {
+    Entropy,
+    ProcessManager,
+    Scheduler,
+    Platform,
+}
+
+// A connector the root task serves: its end, and what it dials.
+RootConnector :: struct {
+    end : slop_os.Channel,
+    service : RootService,
+}
+
+MAX_CONNECTORS :: 16
+// Connectors are bound to the connectors' port from here on; and the key the connector thread is woken by when one's added
+CONNECTOR_KEY : u64 : 2000
+NEW_CONNECTOR_KEY : u64 : 1999
+// As the supervisor's: up to three times in a minute
+RESTARTS : u32 : 3
+RESTART_WINDOW : u64 : 60_000_000_000
 
 Root :: struct {
     block : ptr[slop_os.StartupBlock],
@@ -151,6 +184,31 @@ Root :: struct {
     // Its end of the scheduler service's listener, and the port its answers wake, or NO_HANDLE without one
     scheduler : slop_os.Channel,
     scheduler_port : slop_os.Port,
+    // Its end of the platform service's listener, and the port its answers wake, or NO_HANDLE without one
+    platform_end : slop_os.Channel,
+    platform_port : slop_os.Port,
+    // What restarting its services needs again: the platform capability, the root CPU budget and the command line
+    platform : slop_os.Platform,
+    cpu_budget : slop_os.CpuBudget,
+    command_line : slop_os.Memory,
+    // The port it watches what it started on, and the one its connectors are served on, by a thread of its own
+    port : slop_os.Port,
+    connector_port : slop_os.Port,
+    connectors : RootConnector[MAX_CONNECTORS],
+    connector_count : usize,
+    // Each held while its service's end of the listener is used or replaced, since that thread uses them too; and the
+    // connectors' while they're added to or read
+    entropy_lock : concurrency.SpinLock,
+    manager_lock : concurrency.SpinLock,
+    scheduler_lock : concurrency.SpinLock,
+    platform_lock : concurrency.SpinLock,
+    connectors_lock : concurrency.SpinLock,
+    // A connection to the events service, once the supervisor gives one, for the services it starts again to log through
+    events_end : slop_os.Channel,
+    events_port : slop_os.Port,
+    // The budget and the ring of the service started last, until its entry takes them
+    launched_budget : slop_os.MemoryBudget,
+    launched_ring : slop_os.Memory,
     started : Started[MAX_STARTED],
     started_count : usize,
     // The generation's substitution policy applied (decisions/0125): each library of its own the policy replaces, by
@@ -174,10 +232,24 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
             return 30
         }
     }
-    root := Root.{block = block, log = debug_log, records = records, records_module = records_module,
-        scheduler = cast[slop_os.Channel](slop_os.NO_HANDLE)}
+    root :: runtime.new(Root)
+    root^ = Root.{block = block, log = debug_log, records = records, records_module = records_module,
+        scheduler = cast[slop_os.Channel](slop_os.NO_HANDLE), platform_end = cast[slop_os.Channel](slop_os.NO_HANDLE), events_end = cast[slop_os.Channel](slop_os.NO_HANDLE), platform = platform,
+        cpu_budget = cpu_budget, command_line = command_line}
+    root.port = slop_os.port_create(block.budget) or_return 11
+    root.connector_port = slop_os.port_create(block.budget) or_return 11
+    slop_os.port_bind_wake(root.connector_port, NEW_CONNECTOR_KEY) or_return 11
+    // Its connectors served on a thread of its own (decisions/0140), so a client dialing one, as the process manager
+    // dials the entropy service while the root task waits on it, is answered whatever the root task is waiting on
+    node := runtime.extension_node(cast[ptr[Root]](root))
+    push_context with_root (extensions = &node) {
+        server :: runtime.thread_create(connector_thread)
+        if !runtime.thread_start(server) {
+            return 17
+        }
+    }
     words :: service_kit.text_of(block, command_line) or_return 4
-    apply_substitutions(&root)
+    apply_substitutions(root)
     // The generation the bootloader booted, which it says on the command line (decisions/0113)
     if service_kit.has_word(words, "recovery") {
         log_line.write(debug_log, "root task: booted the recovery generation")
@@ -220,35 +292,19 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     test_outlive_manager :: service_kit.has_word(words, "test_outlive_manager")
     root.stream = random_stream.make(block.seed)
 
-    // The listeners the root task connects services through, its own connection to the manager among them
-    entropy_pair :: os.channel_for[entropy.Entropy](block.budget, 0) or_return 5
-    root.entropy = entropy_pair.b
-    root.entropy_port = os.port_for(block.budget, root.entropy) or_return 5
-    manager_pair :: os.channel_for[process_manager.ProcessManager](block.budget, process_manager.RING_BYTES) or_return 5
-    root.manager = manager_pair.b
-    root.manager_port = os.port_for(block.budget, root.manager) or_return 5
     supervision_pair :: os.channel_for[supervision.Supervision](block.budget, 0) or_return 5
     root.supervision = supervision_pair.a
 
-    // The entropy service, and the process manager, with a connection of its own to it
-    entropy_grants :: process_builder.Grant.[
-        process_builder.grant("log", cast[slop_os.Handle](duplicate_log(&root) or_return 6)),
-        process_builder.grant("clients", cast[slop_os.Handle](entropy_pair.a)),
-    ]
-    start_itself(&root, "entropy", entropy_grants) or_return 7
-    manager_entropy :: entropy.connect(root.entropy, root.entropy_port, block.budget) or_return 6
-    manager_grants :: process_builder.Grant.[
-        process_builder.grant("log", cast[slop_os.Handle](duplicate_log(&root) or_return 6)),
-        process_builder.grant("entropy", cast[slop_os.Handle](manager_entropy.end)),
-        process_builder.grant("clients", cast[slop_os.Handle](manager_pair.a)),
-    ]
-    start_itself(&root, "process_manager", manager_grants) or_return 7
+    // The entropy service, and the process manager, with a connector to it
+    if !start_entropy(root) || !start_manager(root) {
+        return 7
+    }
 
     match service_kit.word_after(words, "test_program=") {
         case Some(name) => {
             seconds :: service_kit.number_of(service_kit.word_after(words, "test_deadline=") or_else "") or_else 0
             // test_changed_library: each library's changed build given in its place, as a substitution would (decisions/0120)
-            return run_test(&root, name, platform, cpu_budget, seconds, service_kit.has_word(words, "test_changed_library"))
+            return run_test(root, name, platform, cpu_budget, seconds, service_kit.has_word(words, "test_changed_library"))
         }
         case None => {}
     }
@@ -257,40 +313,40 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     // A program's module may be run too, so whoever loads it maps its code from it, shared (decisions/0124)
     program_rights :: cast[slop_os.Rights](cast[u32](module_rights) | cast[u32](slop_os.RIGHT_MEMORY_EXECUTE))
     manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
-    start_scheduler(&root, cpu_budget)
-    platform_connection :: start_platform(&root, platform, command_line, module_rights)
+    start_scheduler(root, cpu_budget)
+    start_platform(root)
 
     // The supervisor, through the manager, with a connection of its own
-    service :: service_of(&root, "supervisor") or_return 8
+    service :: service_of(root, "supervisor") or_return 8
     module :: find_module(block, service.module) or_return 8
     grants := SupervisorGrants.{
-        log = duplicate_log(&root),
-        manager = process_manager.connect(root.manager, root.manager_port, block.budget) or_return 9,
+        log = duplicate_log(root),
+        manager = connector_to(root, .ProcessManager) or_return 9,
         root = os.Channel[supervision.Supervision].{end = supervision_pair.b},
-        hello_module = module_copy(&root, "hello", program_rights),
-        platform_service = platform_connection,
-        entropy_service = entropy.connect(root.entropy, root.entropy_port, block.budget),
-        terminal_module = module_copy(&root, "terminal", program_rights),
-        echo_module = module_copy(&root, "echo", program_rights),
-        input_module = module_copy(&root, "input", program_rights),
-        disk_check_module = module_copy(&root, "disk_check", program_rights),
-        virtio_blk_module = module_copy(&root, "virtio_blk", program_rights),
-        virtio_console_module = module_copy(&root, "virtio_console", program_rights),
-        virtio_input_module = module_copy(&root, "virtio_input", program_rights),
-        virtio_rng_module = module_copy(&root, "virtio_rng", program_rights),
-        edu_dma_module = module_copy(&root, "edu_dma", program_rights),
-        storage_manager_module = module_copy(&root, "storage_manager", program_rights),
-        partition_server_module = module_copy(&root, "partition_server", program_rights),
-        fat_server_module = module_copy(&root, "fat_server", program_rights),
-        container_service_module = module_copy(&root, "container_service", program_rights),
-        volume_server_module = module_copy(&root, "volume_server", program_rights),
-        scheduler = connect_scheduler(&root),
-        clock_module = module_copy(&root, "clock", program_rights),
-        events_module = module_copy(&root, "events", program_rights),
-        bundle_store_module = module_copy(&root, "bundle_store", program_rights),
-        config_module = module_copy(&root, "config", program_rights),
-        update_module = module_copy(&root, "update", program_rights),
-        system = records_copy(&root) or_return 8,
+        hello_module = module_copy(root, "hello", program_rights),
+        platform_service = if root.platform_end != NO_CHANNEL { connector_to(root, .Platform) } else { null },
+        entropy_service = connector_to(root, .Entropy),
+        terminal_module = module_copy(root, "terminal", program_rights),
+        echo_module = module_copy(root, "echo", program_rights),
+        input_module = module_copy(root, "input", program_rights),
+        disk_check_module = module_copy(root, "disk_check", program_rights),
+        virtio_blk_module = module_copy(root, "virtio_blk", program_rights),
+        virtio_console_module = module_copy(root, "virtio_console", program_rights),
+        virtio_input_module = module_copy(root, "virtio_input", program_rights),
+        virtio_rng_module = module_copy(root, "virtio_rng", program_rights),
+        edu_dma_module = module_copy(root, "edu_dma", program_rights),
+        storage_manager_module = module_copy(root, "storage_manager", program_rights),
+        partition_server_module = module_copy(root, "partition_server", program_rights),
+        fat_server_module = module_copy(root, "fat_server", program_rights),
+        container_service_module = module_copy(root, "container_service", program_rights),
+        volume_server_module = module_copy(root, "volume_server", program_rights),
+        scheduler = if root.scheduler != NO_CHANNEL { connector_to(root, .Scheduler) } else { null },
+        clock_module = module_copy(root, "clock", program_rights),
+        events_module = module_copy(root, "events", program_rights),
+        bundle_store_module = module_copy(root, "bundle_store", program_rights),
+        config_module = module_copy(root, "config", program_rights),
+        update_module = module_copy(root, "update", program_rights),
+        system = records_copy(root) or_return 8,
     }
     match slop_os.handle_duplicate(cast[slop_os.Handle](command_line), module_rights) {
         case Ok(copy) => grants.command_line = cast[slop_os.Memory](copy)
@@ -305,10 +361,14 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         }
         case None => {}
     }
-    match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, supervisor.main, grants,
-        os.LaunchOptions.{cpu_budget = budget_for(&root, service.name), libraries = substitutes(&root)}) {
+    supervisor_options :: os.LaunchOptions.{cpu_budget = budget_for(root, service.name), libraries = substitutes(root)}
+    concurrency.lock(&root.manager_lock)
+    supervisor_launch :: os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, supervisor.main,
+        grants, supervisor_options)
+    concurrency.unlock(&root.manager_lock)
+    match supervisor_launch {
         case Ok(launched) => {
-            remember(&root, service.name, launched.process)
+            remember(root, service.name, launched.process)
             log_line.write(root.log, "root task: started %", service.name)
         }
         case Error(error) => {
@@ -318,7 +378,7 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     }
 
     // Then it watches
-    port :: slop_os.port_create(block.budget) or_return 11
+    port :: root.port
     for &started, i in root.started {
         if i >= root.started_count {
             break
@@ -358,7 +418,7 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
                     name :: service_kit.text_of_label(&named.name)
                     log_line.write(root.log, "root task: the supervisor started %", name)
                     if test_outlive_manager && name == "hello" {
-                        kill(&root, "process_manager")
+                        kill(root, "process_manager")
                     }
                 }
                 case Ended(report) => {
@@ -377,10 +437,22 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
                         return 13
                     }
                 }
+                case EventsService(connection) => {
+                    // The services it starts again log through it from now on
+                    if root.events_end != NO_CHANNEL {
+                        _ = slop_os.handle_close(cast[slop_os.Handle](root.events_end))
+                        _ = slop_os.handle_close(cast[slop_os.Handle](root.events_port))
+                    }
+                    root.events_end = connection.end
+                    root.events_port = os.port_for(block.budget, connection.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+                }
                 case Healthy => log_line.write(root.log, "root task: the system is healthy")
                 case Degraded(count) => log_line.write(root.log, "root task: the boot is degraded: % services the system needs aren't up", count)
                 case AllStarted(count) => {
                     log_line.write(root.log, "root task: the supervisor started all % of its services", count)
+                    if service_kit.has_word(words, "test_restart_root_services") && !test_root_restarts(root) {
+                        return 16
+                    }
                     if test_services {
                         // Drivers come up by themselves once they've started
                         settle :: (slop_os.clock_monotonic() or_else 0) + settle_nanoseconds
@@ -411,6 +483,7 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
                 else {
                     log_line.write(root.log, "root task: % ended with %", name, ended)
                 }
+                restart(root, key)
             }
         }
     }
@@ -441,6 +514,7 @@ start_with_loader :: fn(root: ptr[mut Root], name: string, grants: process_build
     block :: root.block
     service :: service_of(root, name) or_return .Error("the system configuration doesn't have it")
     budget :: slop_os.memory_budget_create(block.budget, service.budget) or_return .Error("no budget")
+    root.launched_budget = budget
     process :: slop_os.process_create(budget) or_return .Error("no process")
     space :: slop_os.address_space_create(budget) or_return .Error("no address space")
     module :: find_module(block, service.module) or_return .Error("its module isn't there")
@@ -507,10 +581,12 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform, cp
         case Ok(copy) => grants.program = cast[slop_os.Memory](copy)
         case Error(error) => {}
     }
+    concurrency.lock(&root.manager_lock)
     match process_manager.connect(root.manager, root.manager_port, block.budget) {
         case Some(connection) => grants.manager = connection
         case None => {}
     }
+    concurrency.unlock(&root.manager_lock)
     // Only the tests of CPU budgets are given the root one
     if name == "test_cpu_budgets" || name == "test_budgets" || name == "test_affinity" {
         budget_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER)
@@ -588,8 +664,11 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform, cp
     libraries :: if library_count == 0 { substitutes(root) } else if library_count <= library_storage.count { library_storage[0..<library_count] }
         else { library_storage[0..<0] }
     launched := os.Launched.{}
-    match os.launch(manager, root.manager_port, name, cast[slop_os.Memory](module), TEST_BUDGET, test_syscalls.main, grants,
-        os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = 0}, libraries = libraries}) {
+    concurrency.lock(&root.manager_lock)
+    test_launch :: os.launch(manager, root.manager_port, name, cast[slop_os.Memory](module), TEST_BUDGET, test_syscalls.main, grants,
+        os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = 0}, libraries = libraries})
+    concurrency.unlock(&root.manager_lock)
+    match test_launch {
         case Ok(made) => launched = made
         case Error(error) => {
             log_line.write(root.log, "root task: % didn't start: %", name, error)
@@ -621,36 +700,422 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform, cp
  * The platform service, through the manager, with the hardware and the firmware tables that describe it: a connection
  * to it, for the supervisor, or null without the tables or if it didn't start.
  */
-start_platform :: fn(root: ptr[mut Root], platform_capability: slop_os.Platform, command_line: slop_os.Memory, rights: slop_os.Rights)
-    -> os.Channel[platform_protocol.Platform]? {
+start_platform :: fn(root: ptr[mut Root]) {
     block :: root.block
-    firmware :: slop_os.find_grant(block, "firmware", .Memory) or_return null
-    service :: service_of(root, "platform") or_return null
-    module :: find_module(block, service.module) or_return null
-    pair :: os.channel_for[platform_protocol.Platform](block.budget, 0) or_return null
-    port :: os.port_for(block.budget, pair.b) or_return null
+    platform_capability :: root.platform
+    command_line :: root.command_line
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    firmware :: slop_os.find_grant(block, "firmware", .Memory) or_return void
+    service :: service_of(root, "platform") or_return void
+    module :: find_module(block, service.module) or_return void
+    pair :: os.channel_for[platform_protocol.Platform](block.budget, 0) or_return void
+    port :: os.port_for(block.budget, pair.b) or_return void
     capability_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     grants := PlatformGrants.{
         log = duplicate_log(root),
-        platform = cast[slop_os.Platform](slop_os.handle_duplicate(cast[slop_os.Handle](platform_capability), capability_rights) or_return null),
-        firmware = cast[slop_os.Memory](slop_os.handle_duplicate(firmware, rights) or_return null),
+        platform = cast[slop_os.Platform](slop_os.handle_duplicate(cast[slop_os.Handle](platform_capability), capability_rights) or_return void),
+        firmware = cast[slop_os.Memory](slop_os.handle_duplicate(firmware, rights) or_return void),
         clients = os.Listener[platform_protocol.Platform].{end = pair.a},
     }
     match slop_os.handle_duplicate(cast[slop_os.Handle](command_line), rights) {
         case Ok(copy) => grants.command_line = cast[slop_os.Memory](copy)
         case Error(error) => {}
     }
+    options :: launch_options(root, service.name)
+    concurrency.lock(&root.manager_lock)
     manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
-    match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, platform.main, grants,
-        os.LaunchOptions.{cpu_budget = budget_for(root, service.name), libraries = substitutes(root)}) {
+    launch :: os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, platform.main, grants, options)
+    concurrency.unlock(&root.manager_lock)
+    match launch {
         case Ok(launched) => {
+            root.launched_budget = launched.budget
             remember(root, service.name, launched.process)
             log_line.write(root.log, "root task: started %", service.name)
-            return platform_protocol.connect(pair.b, port, block.budget)
+            concurrency.lock(&root.platform_lock)
+            if root.platform_end != NO_CHANNEL {
+                _ = slop_os.handle_close(cast[slop_os.Handle](root.platform_end))
+                _ = slop_os.handle_close(cast[slop_os.Handle](root.platform_port))
+            }
+            root.platform_end = pair.b
+            root.platform_port = port
+            concurrency.unlock(&root.platform_lock)
+        }
+        case Error(error) => log_line.write(root.log, "root task: % didn't start: %", service.name, error)
+    }
+}
+
+NO_CHANNEL : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
+
+/*
+ * The entropy service, by the root task's own loader, with a listener whose other end the root task keeps, to connect
+ * its clients through: whether it started.
+ */
+start_entropy :: fn(root: ptr[mut Root]) -> bool {
+    block :: root.block
+    pair :: os.channel_for[entropy.Entropy](block.budget, 0) or_return false
+    grants : process_builder.Grant[4]
+    grants[0] = process_builder.grant("log", cast[slop_os.Handle](duplicate_log(root) or_return false))
+    grants[1] = process_builder.grant("clients", cast[slop_os.Handle](pair.a))
+    count :: 2 + events_grants(root, "entropy", grants[2..<4])
+    start_itself(root, "entropy", if count <= grants.count { grants[0..<count] } else { grants[0..<2] }) or_return false
+    port :: os.port_for(block.budget, pair.b) or_return false
+    concurrency.lock(&root.entropy_lock)
+    if root.entropy != NO_CHANNEL {
+        _ = slop_os.handle_close(cast[slop_os.Handle](root.entropy))
+        _ = slop_os.handle_close(cast[slop_os.Handle](root.entropy_port))
+    }
+    root.entropy = pair.b
+    root.entropy_port = port
+    concurrency.unlock(&root.entropy_lock)
+    return true
+}
+
+/*
+ * The process manager, by the root task's own loader, with a connector to the entropy service and a listener whose
+ * other end is the root task's own connection to it: whether it started.
+ */
+start_manager :: fn(root: ptr[mut Root]) -> bool {
+    block :: root.block
+    pair :: os.channel_for[process_manager.ProcessManager](block.budget, process_manager.RING_BYTES) or_return false
+    entropy_connector :: connector_to(root, .Entropy) or_return false
+    grants : process_builder.Grant[5]
+    grants[0] = process_builder.grant("log", cast[slop_os.Handle](duplicate_log(root) or_return false))
+    grants[1] = process_builder.grant("entropy", cast[slop_os.Handle](entropy_connector.end))
+    grants[2] = process_builder.grant("clients", cast[slop_os.Handle](pair.a))
+    count :: 3 + events_grants(root, "process_manager", grants[3..<5])
+    start_itself(root, "process_manager", if count <= grants.count { grants[0..<count] } else { grants[0..<3] }) or_return false
+    port :: os.port_for(block.budget, pair.b) or_return false
+    concurrency.lock(&root.manager_lock)
+    if root.manager != NO_CHANNEL {
+        _ = slop_os.handle_close(cast[slop_os.Handle](root.manager))
+        _ = slop_os.handle_close(cast[slop_os.Handle](root.manager_port))
+    }
+    root.manager = pair.b
+    root.manager_port = port
+    concurrency.unlock(&root.manager_lock)
+    return true
+}
+
+/*
+ * A ring for the log records of the service named name, once the supervisor has given the root task a connection to the
+ * events service: its grants, "events" both, into grants, the root task keeping the ring for the service's entry. How
+ * many.
+ */
+events_grants :: fn(root: ptr[mut Root], name: string, grants: mut process_builder.Grant[]) -> usize {
+    launched :: open_ring(root, name) or_return 0
+    if grants.count < 2 {
+        return 0
+    }
+    grants[0] = process_builder.grant("events", cast[slop_os.Handle](launched.ring))
+    grants[1] = process_builder.grant("events", cast[slop_os.Handle](launched.doorbell))
+    return 2
+}
+
+// A ring from the events service for name, the root task keeping it and giving a copy, or null before it has one.
+open_ring :: fn(root: ptr[mut Root], name: string) -> os.LaunchEvents? {
+    if root.events_end == NO_CHANNEL {
+        return null
+    }
+    opened :: events.open(root.events_end, root.events_port, name) or_return null
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    match slop_os.handle_duplicate(cast[slop_os.Handle](opened.ring), rights) {
+        case Ok(copy) => {
+            retire_ring(root, root.launched_ring)
+            root.launched_ring = opened.ring
+            return os.LaunchEvents.{ring = cast[slop_os.Memory](copy), doorbell = opened.doorbell}
         }
         case Error(error) => {
-            log_line.write(root.log, "root task: % didn't start: %", service.name, error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](opened.ring))
+            _ = slop_os.handle_close(cast[slop_os.Handle](opened.doorbell))
             return null
+        }
+    }
+}
+
+// A ring given back to the events service once its writer's ended, so it reads what's left; closed if it can't be.
+retire_ring :: fn(root: ptr[mut Root], ring: slop_os.Memory) {
+    if cast[slop_os.Handle](ring) == slop_os.NO_HANDLE {
+        return void
+    }
+    if root.events_end != NO_CHANNEL {
+        out := os.Outgoing.{}
+        request :: os.begin[events.Request](&out)
+        request^ = .Retire(ring)
+        into := os.Incoming.{}
+        match events.ask(root.events_end, root.events_port, &out, &into) {
+            case Done => return void
+            case _ => {}
+        }
+    }
+    _ = slop_os.handle_close(cast[slop_os.Handle](ring))
+}
+
+// What a launch through the manager is given besides its grants: its CPU budget, the libraries, a ring for its records.
+launch_options :: fn(root: ptr[mut Root], name: string) -> os.LaunchOptions {
+    options := os.LaunchOptions.{cpu_budget = budget_for(root, name), libraries = substitutes(root)}
+    options.events = open_ring(root, name)
+    return options
+}
+
+/*
+ * A connector to one of the root task's services (decisions/0140), served on its port: the client's end, or null if
+ * there's no room. A client dials through it, and dials again when what it reached is started again.
+ */
+connector_to :: fn(root: ptr[mut Root], service: RootService) -> os.Channel[connector.Connector]? {
+    pair :: os.channel_for[connector.Connector](root.block.budget, 0) or_return null
+    concurrency.lock(&root.connectors_lock)
+    defer concurrency.unlock(&root.connectors_lock)
+    index :: root.connector_count
+    if index >= root.connectors.count {
+        return null
+    }
+    signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+    if slop_os.port_bind(root.connector_port, cast[slop_os.Handle](pair.b), signals, CONNECTOR_KEY + cast[u64](index), .Persistent) is_error {
+        return null
+    }
+    root.connectors[index] = RootConnector.{end = pair.b, service = service}
+    root.connector_count = index + 1
+    // Its first read is the connector thread's, which arms it: a channel wakes its reader only once it's found empty
+    _ = slop_os.port_wake(root.connector_port, NEW_CONNECTOR_KEY, 1)
+    return os.Channel[connector.Connector].{end = pair.a}
+}
+
+// The connector thread: every Dial answered, waiting on the connectors' port between them, for as long as the root task runs.
+connector_thread : runtime.ThreadFunction : fn(data #escaping : any) {
+    found :: runtime.get_extension(Root) or_return void
+    root :: cast[ptr[mut Root]](found)
+    loop {
+        serve_connectors(root)
+        packets : slop_os.Packet[8]
+        _ = slop_os.port_wait(root.connector_port, packets, slop_os.NO_DEADLINE)
+    }
+}
+
+// Every connector's Dials, each answered with a new connection to what it reaches, or Unavailable while it's restarting.
+serve_connectors :: fn(root: ptr[mut Root]) {
+    for i in cast[usize](0)..<MAX_CONNECTORS {
+        concurrency.lock(&root.connectors_lock)
+        record := RootConnector.{end = NO_CHANNEL}
+        if i < root.connector_count && i < root.connectors.count {
+            record = root.connectors[i]
+        }
+        concurrency.unlock(&root.connectors_lock)
+        if record.end == NO_CHANNEL {
+            continue
+        }
+        into := os.Incoming.{}
+        loop {
+            match connector.receive_request(record.end, root.connector_port, &into, false) {
+                case Received => {}
+                case Empty => break
+                case Unsupported => {
+                    _ = connector.answer_unsupported(record.end, root.connector_port)
+                    continue
+                }
+                case Failed(error) => {
+                    _ = slop_os.port_unbind(root.connector_port, CONNECTOR_KEY + cast[u64](i))
+                    _ = slop_os.handle_close(cast[slop_os.Handle](record.end))
+                    concurrency.lock(&root.connectors_lock)
+                    if i < root.connectors.count {
+                        root.connectors[i].end = NO_CHANNEL
+                    }
+                    concurrency.unlock(&root.connectors_lock)
+                    break
+                }
+                case _ => continue
+            }
+            out := os.Outgoing.{}
+            response :: os.begin[connector.Response](&out)
+            match dial_service(root, record.service) {
+                case Some(channel) => response^ = .Dialed(channel)
+                case None => response^ = .Unavailable
+            }
+            _ = connector.send_response(record.end, root.connector_port, &out)
+        }
+    }
+}
+
+// A new connection to one of its services, through its listener, or null while it isn't running.
+dial_service :: fn(root: ptr[mut Root], service: RootService) -> slop_os.Channel? {
+    budget :: root.block.budget
+    name :: name_of(service)
+    for &started, i in root.started {
+        if i < root.started_count && started.name == name && started.done {
+            return null
+        }
+    }
+    lock :: match service {
+        case .Entropy => &root.entropy_lock
+        case .ProcessManager => &root.manager_lock
+        case .Scheduler => &root.scheduler_lock
+        case .Platform => &root.platform_lock
+    }
+    concurrency.lock(lock)
+    defer concurrency.unlock(lock)
+    return match service {
+        case .Entropy => if root.entropy == NO_CHANNEL { cast[slop_os.Channel?](null) }
+            else { (entropy.connect(root.entropy, root.entropy_port, budget) or_return null).end }
+        case .ProcessManager => if root.manager == NO_CHANNEL { cast[slop_os.Channel?](null) }
+            else { (process_manager.connect(root.manager, root.manager_port, budget) or_return null).end }
+        case .Scheduler => if root.scheduler == NO_CHANNEL { cast[slop_os.Channel?](null) }
+            else { (scheduler_protocol.connect(root.scheduler, root.scheduler_port, budget) or_return null).end }
+        case .Platform => if root.platform_end == NO_CHANNEL { cast[slop_os.Channel?](null) }
+            else { (platform_protocol.connect(root.platform_end, root.platform_port, budget) or_return null).end }
+    }
+}
+
+name_of :: fn(service: RootService) -> string {
+    return match service {
+        case .Entropy => "entropy"
+        case .ProcessManager => "process_manager"
+        case .Scheduler => "scheduler"
+        case .Platform => "platform"
+    }
+}
+
+/*
+ * What's started at key ended: its budget closed, so what it had comes back, and its ring given back; and one of the
+ * services the root task serves connectors to started again, as the supervisor starts its own again (decisions/0140), up
+ * to RESTARTS times in RESTART_WINDOW, watched under the same key.
+ */
+restart :: fn(root: ptr[mut Root], key: usize) {
+    if key >= root.started_count || key >= root.started.count {
+        return void
+    }
+    entry :: &root.started[key]
+    entry.done = true
+    if cast[slop_os.Handle](entry.budget) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](entry.budget))
+        entry.budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)
+    }
+    retire_ring(root, entry.ring)
+    entry.ring = cast[slop_os.Memory](slop_os.NO_HANDLE)
+    name :: entry.name
+    restarted :: name == "entropy" || name == "process_manager" || name == "scheduler" || name == "platform"
+    if !restarted {
+        return void
+    }
+    now :: slop_os.clock_monotonic() or_else 0
+    if now - entry.restarts_since > RESTART_WINDOW {
+        entry.restarts = 0
+        entry.restarts_since = now
+    }
+    if entry.restarts >= RESTARTS {
+        log_line.write(root.log, "root task: % ended % times in a minute, and isn't started again", name, RESTARTS + 1)
+        return void
+    }
+    entry.restarts += 1
+    old :: entry.process
+    if name == "entropy" {
+        _ = start_entropy(root)
+    }
+    else if name == "process_manager" {
+        _ = start_manager(root)
+    }
+    else if name == "scheduler" {
+        start_scheduler(root, root.cpu_budget)
+    }
+    else {
+        start_platform(root)
+    }
+    if key >= root.started.count || root.started[key].process == old {
+        log_line.write(root.log, "root task: % couldn't be started again", name)
+        return void
+    }
+    if slop_os.port_bind(root.port, cast[slop_os.Handle](root.started[key].process), slop_os.SIGNAL_TERMINATED, cast[u64](key), .Once) is_error {
+        log_line.write(root.log, "root task: can't watch % again", name)
+    }
+    log_line.write(root.log, "root task: started % again", name)
+}
+
+/*
+ * test_restart_root_services: once the supervisor has started everything, each of the root task's services killed in
+ * turn, the process manager's after the entropy service's and before the two it starts, which are started again
+ * through it; each started again and answering through a connector before the next. Whether all four did.
+ */
+test_root_restarts :: fn(root: ptr[mut Root]) -> bool {
+    for service in RootService.[.Entropy, .ProcessManager, .Scheduler, .Platform] {
+        name :: name_of(service)
+        before := cast[slop_os.Process](slop_os.NO_HANDLE)
+        key := root.started.count
+        for &started, i in root.started {
+            if i < root.started_count && started.name == name {
+                before = started.process
+                key = i
+            }
+        }
+        if key >= root.started.count {
+            log_line.write(root.log, "root task: test_restart_root_services: there's no %", name)
+            return false
+        }
+        log_line.write(root.log, "root task: test_restart_root_services: killing %", name)
+        _ = slop_os.process_kill(before)
+        // Its end, its restart, and the supervisor dialing it again, served meanwhile
+        deadline :: (slop_os.clock_monotonic() or_else 0) + 5_000_000_000
+        loop {
+            watch_until(root, deadline)
+        }
+        while (root.started[key % root.started.count].process == before || root.started[key % root.started.count].done)
+            && (slop_os.clock_monotonic() or_else 0) < deadline
+        // Time for its clients to dial it again
+        watch_until(root, (slop_os.clock_monotonic() or_else 0) + 500_000_000)
+        connection :: dial_service(root, service) or_else NO_CHANNEL
+        if connection == NO_CHANNEL || !answers(root, service, connection) {
+            log_line.write(root.log, "root task: test_restart_root_services: % doesn't answer", name)
+            return false
+        }
+        _ = slop_os.handle_close(cast[slop_os.Handle](connection))
+        log_line.write(root.log, "root task: test_restart_root_services: % answers again", name)
+    }
+    log_line.write(root.log, "root task: test_restart_root_services: all four started again")
+    return true
+}
+
+// Waits on the port until deadline or a packet, restarting what ended and serving connectors.
+watch_until :: fn(root: ptr[mut Root], deadline: u64) {
+    packets : slop_os.Packet[8]
+    taken :: slop_os.port_wait(root.port, packets, deadline) or_else 0
+    for packet, i in packets {
+        if i >= cast[usize](taken) {
+            break
+        }
+        key :: cast[usize](packet.key)
+        if packet.kind == .Signal && key < root.started_count && key < root.started.count {
+            log_line.write(root.log, "root task: % ended", root.started[key].name)
+            restart(root, key)
+        }
+    }
+}
+
+// Whether a new connection to service answers a request: entropy bytes, a budget, a claim's answer, a connection.
+answers :: fn(root: ptr[mut Root], service: RootService, connection: slop_os.Channel) -> bool {
+    port :: os.port_for(root.block.budget, connection) or_return false
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    match service {
+        case .Entropy => {
+            out := os.Outgoing.{}
+            os.begin[entropy.Request](&out)^ = .Fill(16)
+            if entropy.send_request(connection, port, &out) != null {
+                return false
+            }
+            into := os.Incoming.{}
+            return entropy.receive_response(connection, port, &into, true) == .Received
+        }
+        case .ProcessManager => {
+            // It took a connection of its own; the scheduler and the platform service are launched through it next
+            made :: process_manager.connect(connection, port, root.block.budget) or_return false
+            _ = slop_os.handle_close(cast[slop_os.Handle](made.end))
+            return true
+        }
+        case .Scheduler => return scheduler_protocol.budget_for(connection, port, "hello") is_some
+        case .Platform => {
+            out := os.Outgoing.{}
+            os.begin[platform_protocol.Request](&out)^ = .ClaimClock
+            if platform_protocol.send_request(connection, port, &out) != null {
+                return false
+            }
+            into := os.Incoming.{}
+            return platform_protocol.receive_response(connection, port, &into, true) == .Received
         }
     }
 }
@@ -675,14 +1140,26 @@ start_scheduler :: fn(root: ptr[mut Root], cpu_budget: slop_os.CpuBudget) {
         clients = os.Listener[scheduler_protocol.Scheduler].{end = pair.a},
         system = records_copy(root) or_return void,
     }
+    // On the root's budget, which it splits; its own budgets, and what runs on them, go to the root's if it ends
+    options := launch_options(root, service.name)
+    options.cpu_budget = null
+    concurrency.lock(&root.manager_lock)
     manager :: os.Channel[process_manager.ProcessManager].{end = root.manager}
-    match os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, scheduler.main, grants,
-        os.LaunchOptions.{libraries = substitutes(root)}) {
+    launch :: os.launch(manager, root.manager_port, service.name, cast[slop_os.Memory](module), service.budget, scheduler.main, grants, options)
+    concurrency.unlock(&root.manager_lock)
+    match launch {
         case Ok(launched) => {
+            root.launched_budget = launched.budget
             remember(root, service.name, launched.process)
             log_line.write(root.log, "root task: started %", service.name)
+            concurrency.lock(&root.scheduler_lock)
+            if root.scheduler != NO_CHANNEL {
+                _ = slop_os.handle_close(cast[slop_os.Handle](root.scheduler))
+                _ = slop_os.handle_close(cast[slop_os.Handle](root.scheduler_port))
+            }
             root.scheduler = pair.b
             root.scheduler_port = port
+            concurrency.unlock(&root.scheduler_lock)
         }
         case Error(error) => log_line.write(root.log, "root task: % didn't start: %", service.name, error)
     }
@@ -690,6 +1167,8 @@ start_scheduler :: fn(root: ptr[mut Root], cpu_budget: slop_os.CpuBudget) {
 
 // The CPU budget the scheduler service gives the service named name, or null to run it on the root's.
 budget_for :: fn(root: ptr[mut Root], name: string) -> slop_os.CpuBudget? {
+    concurrency.lock(&root.scheduler_lock)
+    defer concurrency.unlock(&root.scheduler_lock)
     if cast[slop_os.Handle](root.scheduler) == slop_os.NO_HANDLE {
         return null
     }
@@ -698,6 +1177,8 @@ budget_for :: fn(root: ptr[mut Root], name: string) -> slop_os.CpuBudget? {
 
 // A connection of its own to the scheduler service, or null without one.
 connect_scheduler :: fn(root: ptr[mut Root]) -> os.Channel[scheduler_protocol.Scheduler]? {
+    concurrency.lock(&root.scheduler_lock)
+    defer concurrency.unlock(&root.scheduler_lock)
     if cast[slop_os.Handle](root.scheduler) == slop_os.NO_HANDLE {
         return null
     }
@@ -713,11 +1194,24 @@ module_copy :: fn(root: ptr[Root], name: string, rights: slop_os.Rights) -> slop
     }
 }
 
-// A service started, by its name, which is a constant's.
+// A service started, by its name, which is a constant's, in its entry if it has one already, as a restart has.
 remember :: fn(root: ptr[mut Root], name #escaping : string, process: slop_os.Process) {
+    for &started, i in root.started {
+        if i < root.started_count && started.name == name {
+            started.process = process
+            started.done = false
+            started.budget = root.launched_budget
+            root.launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)
+            started.ring = root.launched_ring
+            root.launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE)
+            return void
+        }
+    }
     index :: root.started_count
     if index < root.started.count {
-        root.started[index] = Started.{name = name, process = process}
+        root.started[index] = Started.{name = name, process = process, budget = root.launched_budget, ring = root.launched_ring}
+        root.launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)
+        root.launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE)
         root.started_count = index + 1
     }
 }

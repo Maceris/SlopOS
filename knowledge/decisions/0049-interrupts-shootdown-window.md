@@ -1,6 +1,6 @@
 # 0049: Device Interrupts, TLB Shootdown and the Kernel Window
 
-Status: accepted
+Status: accepted; its plan to unregister interrupt controllers when the platform service is started again superseded by 0140
 Date: 2026-10-22
 Related: `0009` (time through a syscall), `0021` (KASLR), `0024` (a mapped clock page only as an
 opt-in), `0031` (no firmware tables in the kernel), `0032` (arch interface), `0039` (platform

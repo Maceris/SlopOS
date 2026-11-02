@@ -122,6 +122,11 @@ SYSTEM_RETRY_KEY : u64 : 5000
 SYSTEM_RETRY : u64 : 100_000_000
 // The terminal service's session channel (decisions/0139)
 SESSION_KEY : u64 : 6000
+// The supervisor's connections to the root task's services, by RootService's order, watched for their other ends closing
+// (decisions/0140): the process manager's, the platform service's, the scheduler service's
+ROOT_SERVICE_KEY : u64 : 7000
+// A connector the supervisor serves to the process manager, which it dials through the root task's
+MANAGER_TARGET :: MAX_STARTED + 1
 // How long a program has to answer a Ping before it's listed as not responding, and to end once it's asked to stop
 PING_WAIT : u64 : 250_000_000
 STOP_GRACE : u64 : 2_000_000_000
@@ -242,7 +247,7 @@ MaybeConnector :: os.Channel[connector.Connector]?
 // What the storage manager is given (storage_manager.main): connectors to up to four disks.
 StorageGrants :: struct {
     log : slop_os.DebugLog?,
-    manager : os.Channel[process_manager.ProcessManager],
+    manager : os.Channel[connector.Connector],
     partition_server_module : slop_os.Memory,
     fat_server_module : slop_os.Memory,
     container_service_module : slop_os.Memory,
@@ -383,7 +388,12 @@ Supervisor :: struct {
     root_port : slop_os.Port,
     platform_end : slop_os.Channel,
     platform_port : slop_os.Port,
-    entropy_service : os.Channel[entropy.Entropy]?,
+    // Connectors to the root task's services (decisions/0140), NONE without, through which the connections are dialed
+    // again when the services are started again
+    manager_connector : slop_os.Channel,
+    platform_connector : slop_os.Channel,
+    scheduler_connector : slop_os.Channel,
+    entropy_connector : slop_os.Channel,
     // Its connection to the scheduler service, and the port its answers wake, or NONE without one
     scheduler_end : slop_os.Channel,
     scheduler_port : slop_os.Port,
@@ -506,13 +516,13 @@ Loaded :: struct {
 
 MAX_LOADED :: 32
 
-main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager], root: os.Channel[supervision.Supervision],
-    hello_module: slop_os.Memory?, platform_service: os.Channel[platform.Platform]?, entropy_service: os.Channel[entropy.Entropy]?,
+main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], root: os.Channel[supervision.Supervision],
+    hello_module: slop_os.Memory?, platform_service: os.Channel[connector.Connector]?, entropy_service: os.Channel[connector.Connector]?,
     terminal_module: slop_os.Memory?, echo_module: slop_os.Memory?, input_module: slop_os.Memory?, disk_check_module: slop_os.Memory?, virtio_blk_module: slop_os.Memory?,
     virtio_console_module: slop_os.Memory?, virtio_input_module: slop_os.Memory?, virtio_rng_module: slop_os.Memory?,
     edu_dma_module: slop_os.Memory?, storage_manager_module: slop_os.Memory?, partition_server_module: slop_os.Memory?,
     fat_server_module: slop_os.Memory?, container_service_module: slop_os.Memory?, volume_server_module: slop_os.Memory?,
-    command_line: slop_os.Memory?, scheduler: os.Channel[scheduler_protocol.Scheduler]?, clock_module: slop_os.Memory?,
+    command_line: slop_os.Memory?, scheduler: os.Channel[connector.Connector]?, clock_module: slop_os.Memory?,
     events_module: slop_os.Memory?, bundle_store_module: slop_os.Memory?, config_module: slop_os.Memory?, system: slop_os.Memory,
     update_module: slop_os.Memory?, last_panic: slop_os.Memory?) -> int {
     startup :: slop_os.startup_block()
@@ -529,7 +539,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         return 99
     }
     boot_records^ = records^
-    supervisor := Supervisor.{block = startup, records = records, boot_records = boot_records, overrides_end = NONE, substitutions_end = NONE, manager = manager, root = root.end, platform_end = NONE, entropy_service = entropy_service,
+    supervisor := Supervisor.{block = startup, records = records, boot_records = boot_records, overrides_end = NONE, substitutions_end = NONE, manager_connector = manager.end, root = root.end, platform_end = NONE,
+        platform_connector = NONE, scheduler_connector = NONE, entropy_connector = NONE,
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, terminal = NOWHERE, input = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
         events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE),
         launched_lifecycle = NONE, session_end = NONE, last_panic = last_panic}
@@ -538,19 +549,27 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
         container_service = container_service_module, volume_server = volume_server_module}
     supervisor.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
-    supervisor.manager_port = os.port_for(startup.budget, manager.end) or_return 1
     supervisor.root_port = os.port_for(startup.budget, root.end) or_return 2
     supervisor.port = slop_os.port_create(startup.budget) or_return 3
-    match scheduler {
-        case Some(connection) => match os.port_for(startup.budget, connection.end) {
-            case Some(port) => {
-                supervisor.scheduler_end = connection.end
-                supervisor.scheduler_port = port
-            }
-            case None => {}
-        }
+    match entropy_service {
+        case Some(found) => supervisor.entropy_connector = found.end
         case None => {}
     }
+    match scheduler {
+        case Some(found) => supervisor.scheduler_connector = found.end
+        case None => {}
+    }
+    match platform_service {
+        case Some(found) => supervisor.platform_connector = found.end
+        case None => {}
+    }
+    // Its connections to the root task's services, dialed through their connectors
+    if !dial_root_service(&supervisor, 0) {
+        return 1
+    }
+    _ = dial_root_service(&supervisor, 1)
+    _ = dial_root_service(&supervisor, 2)
+
     test_restart := false
     test_dma_fault := false
     test_clock := false
@@ -593,13 +612,6 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
     }
 
     // The boot set's drivers, for every device each takes, and the storage manager, which reaches the system volume
-    match platform_service {
-        case Some(platform_end) => {
-            supervisor.platform_end = platform_end.end
-            supervisor.platform_port = os.port_for(startup.budget, platform_end.end) or_return 4
-        }
-        case None => {}
-    }
     // The events service first, so everything after it has a ring for its records; then the clock, so everything after
     // it reads the time from its page
     start_events(&supervisor, NOWHERE)
@@ -758,6 +770,10 @@ wait_and_handle_until :: fn(supervisor: ptr[mut Supervisor], deadline: u64) {
             && packet.key - SYSTEM_KEY == supervisor.system_generation % SYSTEM_GENERATIONS && is_running(supervisor, supervisor.storage_slot) {
             log_line.write(supervisor.log, "supervisor: the system volume's connection closed; opening it again")
             supervisor.system_lost = true
+        }
+        // One of the root task's services was started again: its connection dialed again
+        if packet.kind == .Signal && packet.key >= ROOT_SERVICE_KEY && packet.key < ROOT_SERVICE_KEY + 3 {
+            _ = dial_root_service(supervisor, cast[usize](packet.key - ROOT_SERVICE_KEY))
         }
         faulted :: cast[usize](packet.key - FAULT_KEY)
         if packet.kind == .Signal && packet.key >= FAULT_KEY && faulted < supervisor.started_count && faulted < supervisor.started.count {
@@ -1747,10 +1763,61 @@ launch_device_only :: fn(supervisor: ptr[mut Supervisor], service: Service, devi
  * supervisor's; null without one. The port the Connect is sent with is closed after it, taking its binding with it.
  */
 entropy_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[entropy.Entropy]? {
-    service_end :: supervisor.entropy_service or_return null
-    port :: os.port_for(supervisor.block.budget, service_end.end) or_return null
+    if supervisor.entropy_connector == NONE {
+        return null
+    }
+    channel :: dial_through(supervisor, supervisor.entropy_connector) or_return null
+    if !os.speaks[entropy.Entropy](channel) {
+        _ = slop_os.handle_close(cast[slop_os.Handle](channel))
+        return null
+    }
+    return os.Channel[entropy.Entropy].{end = channel}
+}
+
+// A connection through one of the root task's connectors, its answer waited for on a port of the dial's own.
+dial_through :: fn(supervisor: ptr[mut Supervisor], through: slop_os.Channel) -> slop_os.Channel? {
+    port :: os.port_for(supervisor.block.budget, through) or_return null
     defer slop_os.handle_close(cast[slop_os.Handle](port))
-    return entropy.connect(service_end.end, port, supervisor.block.budget)
+    return connector.dial_raw(through, port)
+}
+
+/*
+ * The supervisor's connection to one of the root task's services, dialed through its connector in place of one that's
+ * gone (decisions/0140), and watched for its other end closing: 0 the process manager, 1 the platform service, 2 the
+ * scheduler service. Whether there's one.
+ */
+dial_root_service :: fn(supervisor: ptr[mut Supervisor], which: usize) -> bool {
+    through :: if which == 0 { supervisor.manager_connector } else if which == 1 { supervisor.platform_connector }
+        else { supervisor.scheduler_connector }
+    if through == NONE {
+        return false
+    }
+    old :: if which == 0 { supervisor.manager.end } else if which == 1 { supervisor.platform_end } else { supervisor.scheduler_end }
+    again :: old != NONE && cast[slop_os.Handle](old) != slop_os.NO_HANDLE
+    if again {
+        _ = slop_os.port_unbind(supervisor.port, ROOT_SERVICE_KEY + cast[u64](which))
+        _ = slop_os.handle_close(cast[slop_os.Handle](old))
+    }
+    channel :: dial_through(supervisor, through) or_return false
+    port :: os.port_for(supervisor.block.budget, channel) or_return false
+    if which == 0 {
+        supervisor.manager = os.Channel[process_manager.ProcessManager].{end = channel}
+        supervisor.manager_port = port
+    }
+    else if which == 1 {
+        supervisor.platform_end = channel
+        supervisor.platform_port = port
+    }
+    else {
+        supervisor.scheduler_end = channel
+        supervisor.scheduler_port = port
+    }
+    _ = slop_os.port_bind(supervisor.port, cast[slop_os.Handle](channel), slop_os.SIGNAL_PEER_CLOSED, ROOT_SERVICE_KEY + cast[u64](which), .Once)
+    if again {
+        names :: string.["the process manager", "the platform service", "the scheduler service"]
+        log_line.write(supervisor.log, "supervisor: dialed % again", names[which % names.count])
+    }
+    return true
 }
 
 // A driver for a virtio entropy device, with a connection of its own to the entropy service: its process, or NO_HANDLE.
@@ -1905,6 +1972,20 @@ start_events :: fn(supervisor: ptr[mut Supervisor], again: usize) {
             _ = place(supervisor, "events", kept(supervisor, launched), again)
             supervisor.events_end = pair.b
             supervisor.events_port = os.port_for(supervisor.block.budget, pair.b) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+            // A connection of the root task's own, for the services it starts again to log through (decisions/0140)
+            match os.channel_for[events.Events](supervisor.block.budget, 0) {
+                case Ok(given) => {
+                    out := os.Outgoing.{}
+                    os.begin[events.Request](&out)^ = .Connect(os.Channel[events.Events].{end = given.a})
+                    if events.send_request(supervisor.events_end, supervisor.events_port, &out) == null {
+                        tell_root(supervisor, .EventsService(os.Channel[events.Events].{end = given.b}))
+                    }
+                    else {
+                        _ = slop_os.handle_close(cast[slop_os.Handle](given.b))
+                    }
+                }
+                case Error(error) => {}
+            }
         }
         case Error(error) => {
             failed(supervisor, service.name, error)
@@ -3070,7 +3151,7 @@ start_storage :: fn(supervisor: ptr[mut Supervisor], again: usize) -> usize {
     volume_module :: supervisor.modules.volume_server or_return NOWHERE
     container_service := cast[slop_os.Memory](slop_os.handle_duplicate(cast[slop_os.Handle](container_module), rights) or_return NOWHERE)
     volume_server := cast[slop_os.Memory](slop_os.handle_duplicate(cast[slop_os.Handle](volume_module), rights) or_return NOWHERE)
-    manager :: process_manager.connect(supervisor.manager.end, supervisor.manager_port, supervisor.block.budget) or_return NOWHERE
+    manager :: connector_to(supervisor, MANAGER_TARGET) or_return NOWHERE
     pair :: os.channel_for[storage.Storage](supervisor.block.budget, 0) or_return NOWHERE
     disks : MaybeConnector[4]
     found : usize = 0
@@ -3271,6 +3352,10 @@ is_running :: fn(supervisor: ptr[Supervisor], index: usize) -> bool {
 
 // A new connection to what's started at target, through its listener with its protocol's Connect, if it's running.
 dial :: fn(supervisor: ptr[mut Supervisor], target: usize) -> slop_os.Channel? {
+    // The process manager, through the root task's connector to it
+    if target == MANAGER_TARGET {
+        return dial_through(supervisor, supervisor.manager_connector)
+    }
     if target >= supervisor.started.count || !supervisor.started[target].running {
         return null
     }

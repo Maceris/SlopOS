@@ -6,8 +6,9 @@ import slop_os from "std/os"
 /*
  * A connector (decisions/0017, 0077): what a client holds in place of a connection to a service that may be restarted.
  * Dial gives a new connection to whichever process serves it now, which the client keeps until its other end goes,
- * then dials again. The supervisor serves every connector, one channel each, so which service a connector reaches is
- * which channel the client was given; dial checks the connection speaks the protocol the client expects.
+ * then dials again. The supervisor serves connectors to what it starts, and the root task to what it does (decisions/0140),
+ * one channel each, so which service a connector reaches is which channel the client was given; dial checks the
+ * connection speaks the protocol the client expects.
  */
 
 Connector :: struct {}
@@ -44,6 +45,19 @@ TRIES :: 50
  * never answers with one, or with one that doesn't speak P.
  */
 dial :: fn[P](end: slop_os.Channel, port: slop_os.Port) -> os.Channel[P]? {
+    channel :: dial_raw(end, port) or_return null
+    if os.speaks[P](channel) {
+        return os.Channel[P].{end = channel}
+    }
+    _ = slop_os.handle_close(cast[slop_os.Handle](channel))
+    return null
+}
+
+/*
+ * A connection through the connector at end, of whatever protocol it's for, for one who passes it on, as a supervisor
+ * serving connectors of its own to what another serves does; trying again while what it reaches is restarting.
+ */
+dial_raw :: fn(end: slop_os.Channel, port: slop_os.Port) -> slop_os.Channel? {
     for try in 0..<TRIES {
         out := os.Outgoing.{}
         request :: os.begin[Request](&out)
@@ -60,13 +74,7 @@ dial :: fn[P](end: slop_os.Channel, port: slop_os.Port) -> os.Channel[P]? {
             }
         }
         match os.message_of[Response](&into)^ {
-            case Dialed(channel) => {
-                if os.speaks[P](channel) {
-                    return os.Channel[P].{end = channel}
-                }
-                _ = slop_os.handle_close(cast[slop_os.Handle](channel))
-                return null
-            }
+            case Dialed(channel) => return channel
             case Unavailable => {
                 deadline :: (slop_os.clock_monotonic() or_else 0) + RETRY_NANOSECONDS
                 packets : slop_os.Packet[1]

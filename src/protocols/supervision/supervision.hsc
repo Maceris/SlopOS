@@ -2,10 +2,13 @@ package supervision
 
 import os from "std"
 import slop_os from "std/os"
+import events from "../events"
 
 /*
  * The supervisor's reports to the root task (decisions/0067, 0071, 0074), one way: as each service or driver starts,
- * ends, or doesn't start, and once it has started all it will. The root task answers none of them.
+ * ends, or doesn't start, and once it has started all it will; and a connection to the events service, once it's up and
+ * each time it's started again, for the services the root task starts again to log through (decisions/0140). The root
+ * task answers none of them.
  */
 
 Supervision :: struct {}
@@ -29,6 +32,7 @@ Request :: union {
     Healthy,
     // Or how many of them aren't: the boot is degraded, and its record says which and why
     Degraded(u32),
+    EventsService(os.Channel[events.Events]),
 }
 
 Response :: union {
@@ -44,6 +48,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case AllStarted(_) => true
         case Healthy => true
         case Degraded(_) => true
+        case EventsService(_) => true
     }
 }
 

@@ -509,16 +509,25 @@ serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
 }
 
 /*
- * A claimed device, by its address, given again to the client that claimed it, made anew; NoDevice for one it didn't
- * claim. Its last Device and the rest died with the driver that held them.
+ * A claimed device, by its address, given again to the client that claimed it, made anew; NoDevice for one another
+ * client claimed. Its last Device and the rest died with the driver that held them. One nothing's claimed from this
+ * platform service was claimed from the one before it, and is the asker's.
  */
 reissue :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], client: usize, address: u32) -> protocol.Response {
     for &function, i in state.functions {
         if i >= state.count {
             break
         }
-        if !function.claimed || function.claimer != client
-            || slop_os.device_address(state.host.segment, function.bus, function.device, function.function) != address {
+        if slop_os.device_address(state.host.segment, function.bus, function.device, function.function) != address {
+            continue
+        }
+        // Unclaimed here, it was claimed from the platform service before this one, which the root task started again
+        // (decisions/0140): the client asking for it again is its claimer
+        if !function.claimed {
+            function.claimed = true
+            function.claimer = client
+        }
+        if function.claimer != client {
             continue
         }
         match bundle_of(platform, state, function) {

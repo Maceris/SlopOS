@@ -66,7 +66,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
         or_return 110
     results[2] = ended_with(port)
     _ = slop_os.memory_unmap(block.space, address)
-    _ = slop_os.handle_close(cast[slop_os.Handle](thread))
+    // thread is the copy's thread's ID in its own process, not a handle of this one's, so there's nothing to close
     _ = slop_os.handle_close(cast[slop_os.Handle](process))
     results[3] = if test_kit.wait_for_budget(budget, 0, 1_000_000_000) { cast[u64](1) } else { cast[u64](0) }
     _ = slop_os.handle_close(cast[slop_os.Handle](budget))
