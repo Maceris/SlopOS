@@ -164,7 +164,7 @@ def run(image: Path | None, qemu: Path, serial: Path, timeout: float, cpu: str, 
     """Boots the image, or with none the disk in extra, by UEFI, and gives the code the kernel wrote to the debug exit device."""
     boot = ["-cdrom", str(image)] if image is not None else []
     command = [
-        str(qemu), "-M", "q35", "-m", "256M", "-cpu", cpu, *boot,
+        str(qemu), "-M", "q35", "-m", "512M", "-cpu", cpu, *boot,
         *serial_arguments(serial, keys), "-display", "none", *([] if reboot else ["-no-reboot"]),
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
     ]
@@ -193,7 +193,7 @@ def run_aarch64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
     machine = "virt,gic-version=3,acpi=off" + (",iommu=smmuv3" if iommu else "")
     command = [
         # GICv3, and the device tree rather than ACPI, which edk2 gives only with ACPI off
-        str(qemu), "-M", machine, "-m", "256M", "-cpu", cpu,
+        str(qemu), "-M", machine, "-m", "512M", "-cpu", cpu,
         *(["-global", "arm-smmuv3.stage=2"] if iommu else []),
         "-drive", f"if=pflash,format=raw,readonly=on,file={firmware}", *cd,
         *serial_arguments(serial, keys), "-display", "none", *([] if reboot else ["-no-reboot"]),

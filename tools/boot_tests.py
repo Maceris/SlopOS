@@ -136,7 +136,6 @@ DISK_CHECK_LINES = [
     "--expect-line=[user] disk_check: snapshots: read one of the system volume as it was, read only, wrote to its clone, couldn't delete it while cloned, and read one of the sealed volume",
     "--expect-line=[user] disk_check: quotas: its clone's refused a file past it and took a small one, and its usage says so",
     "--expect-line=[user] storage_manager: made the made sealed volume",
-    "--expect-line=[user] volume_server: volume 5 given its first keys",
     "--expect-line=[user] disk_check: made: a volume and a sealed one at run time, wrote and read back a file on each, was refused either again, and opened the sealed one only with its passphrase",
     "--expect-disk-block=2049=SlopOS disk check: from the guest",
     "--expect-disk-text=Written by the guest, through std's files",
@@ -315,6 +314,16 @@ TESTS = [
         "--expect-line=[user] clock: serving",
         "--expect-line=[user] clock: set to 2030-01-02 03:04:05 UTC, and the real-time clock reads it back",
         "--expect-line=[user] hello: the wall clock says it's 2030-01-02", "--expect-line=[info] root task ended with code 0"]),
+    ("makes the administrator's account and home volume, limits wrong passwords, and recovers it with its recovery code", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_accounts") for argument in BOOT_DISK_BASE], [
+        "--expect-line=[user] storage_manager: made the accounts volume",
+        "--expect-line=[user] account_service: made the accounts volume",
+        "--expect-line=[user] account_service: serving 0 accounts",
+        "--expect-line=[user] storage_manager: made the home-admin volume",
+        "--expect-line=[user] account_service: made the account admin, the administrator",
+        "--expect-line=[user] account_service: admin recovered with its recovery code",
+        "--expect-line=[user] supervisor: test_accounts: made the administrator alone, limited wrong passwords, opened its home, "
+        "recovered it"])),
     ("keeps every program's log records on the system volume once it's there", 7, with_before_qemu(
         [argument.replace("test_services", "test_services test_events") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] events: serving",

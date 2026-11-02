@@ -22,6 +22,7 @@ import terminal_service from "../services/terminal_service"
 import echo from "../apps/echo"
 import input_service from "../services/input_service"
 import disk_check from "../services/disk_check"
+import account_service from "../services/account_service"
 import entropy from "../services/entropy"
 import container_service from "../services/container_service"
 import fat_server from "../services/fat_server"
@@ -175,7 +176,7 @@ SERVICES :: Service.[
         entry = type_of(scheduler_service.main)},
     Service.{name = "platform", boot_set = true, module = "platform.elf", starter = .RootTask, by_manager = true, budget = 8 * MIB,
         entry = type_of(platform.main)},
-    Service.{name = "supervisor", boot_set = true, module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 160 * MIB,
+    Service.{name = "supervisor", boot_set = true, module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 240 * MIB,
         entry = type_of(supervisor.main)},
     // Every program's log records but the root task's and what it starts, first, so each is given a ring for them (decisions/0093)
     Service.{name = "events", boot_set = true, module = "events_service.elf", starter = .Supervisor, by_manager = true, budget = 8 * MIB,
@@ -216,6 +217,10 @@ SERVICES :: Service.[
         budget = 4 * MIB, entry = type_of(container_service.main)},
     Service.{name = "volume_server", boot_set = true, module = "volume_server.elf", starter = .StorageManager, by_manager = true, budget = 6 * MIB,
         entry = type_of(volume_server.main)},
+    // Every account, on its own volume, and each one's home volume (decisions/0141): Argon2id's 64 MiB for one password at
+    // a time, on top; started only when there's a disk
+    Service.{name = "accounts", module = "account_service.elf", starter = .Supervisor, by_manager = true, budget = 72 * MIB,
+        entry = type_of(account_service.main)},
     // Started only when there's a disk
     // Its checks write to the disks, once a boot
     Service.{name = "disk_check", module = "disk_check.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,

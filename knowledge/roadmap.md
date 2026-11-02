@@ -317,7 +317,9 @@ on a thread of its own, and registering a platform service's controllers again a
 account service, its volume, Argon2id, wrapped keys, the password rules and rate limits; **10b4** first-boot setup on
 the trusted path, with the recovery code. 10b1 done 2026-11-01 (Hemera's `docs/memory.md`, *Secrets*). 10b2 done
 2026-11-01 (`decisions/0142`): `CreateVolume`, a sealed volume's keys made by its volume server, the container service
-given only the wrapped records.
+given only the wrapped records. 10b3 done 2026-11-01 (`decisions/0143`): the account service, its records with
+Argon2id at 64 MiB, the password rules and the common list, rate limits, and the recovery code; boot tests run with 512
+MiB.
 
 Specs: RFC 9106 (Argon2), RFC 3394 or the AEAD for key wrapping, ECMA-48 (for the VT adapter only), the Unicode
 standard's East Asian Width and UAX #29 for terminal widths.

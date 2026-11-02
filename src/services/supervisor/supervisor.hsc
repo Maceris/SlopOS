@@ -90,6 +90,8 @@ import counter_app from "../../counter_app"
 import counter from "../../apps/counter"
 import strings from "std"
 import terminal_service from "../terminal_service"
+import account_service from "../account_service"
+import accounts from "../../protocols/accounts"
 import input_service from "../input_service"
 import seat from "../../protocols/seat"
 import session from "../../protocols/session"
@@ -153,6 +155,7 @@ Speaks :: enum {
     Terminal,
     Seat,
     Storage,
+    Accounts,
 }
 
 // What the clock service is given (clock.main): the real-time clock, its ports or its registers, and the clock page to write.
@@ -232,6 +235,13 @@ TerminalGrants :: struct {
     programs : os.Channel[session.Session]?,
     last_panic : slop_os.Memory?,
     clients : os.Listener[terminal.Terminal],
+}
+
+// What the account service is given (account_service.main).
+AccountGrants :: struct {
+    log : slop_os.DebugLog?,
+    storage_service : os.Channel[connector.Connector]?,
+    clients : os.Listener[accounts.Accounts],
 }
 
 // What the disk check is given (disk_check.main).
@@ -314,6 +324,7 @@ Modules :: struct {
     clock : slop_os.Memory?,
     hello : slop_os.Memory?,
     terminal : slop_os.Memory?,
+    accounts : slop_os.Memory?,
     echo : slop_os.Memory?,
     input : slop_os.Memory?,
     disk_check : slop_os.Memory?,
@@ -518,7 +529,7 @@ MAX_LOADED :: 32
 
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], root: os.Channel[supervision.Supervision],
     hello_module: slop_os.Memory?, platform_service: os.Channel[connector.Connector]?, entropy_service: os.Channel[connector.Connector]?,
-    terminal_module: slop_os.Memory?, echo_module: slop_os.Memory?, input_module: slop_os.Memory?, disk_check_module: slop_os.Memory?, virtio_blk_module: slop_os.Memory?,
+    terminal_module: slop_os.Memory?, echo_module: slop_os.Memory?, input_module: slop_os.Memory?, disk_check_module: slop_os.Memory?, accounts_module: slop_os.Memory?, virtio_blk_module: slop_os.Memory?,
     virtio_console_module: slop_os.Memory?, virtio_input_module: slop_os.Memory?, virtio_rng_module: slop_os.Memory?,
     edu_dma_module: slop_os.Memory?, storage_manager_module: slop_os.Memory?, partition_server_module: slop_os.Memory?,
     fat_server_module: slop_os.Memory?, container_service_module: slop_os.Memory?, volume_server_module: slop_os.Memory?,
@@ -544,7 +555,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, terminal = NOWHERE, input = NOWHERE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
         events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE),
         launched_lifecycle = NONE, session_end = NONE, last_panic = last_panic}
-    supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, hello = hello_module, terminal = terminal_module, echo = echo_module, input = input_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
+    supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, hello = hello_module, terminal = terminal_module, echo = echo_module, input = input_module, disk_check = disk_check_module, accounts = accounts_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
         container_service = container_service_module, volume_server = volume_server_module}
@@ -583,6 +594,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     test_lending := false
     // A boot that never tells the update service how it went, as one that hangs or resets before it's assessed would
     test_unassessed := false
+    test_accounts := false
     // For tests that don't need the disk check, which the boot's assessment otherwise waits for
     no_disk_check := false
     supervisor.started_at = slop_os.clock_monotonic() or_else 0
@@ -602,6 +614,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
             test_substitution = service_kit.has_word(text, "test_substitution")
             test_lending = service_kit.has_word(text, "test_lending")
             test_unassessed = service_kit.has_word(text, "test_unassessed")
+            test_accounts = service_kit.has_word(text, "test_accounts")
             no_disk_check = service_kit.has_word(text, "no_disk_check")
             supervisor.recovery = service_kit.has_word(text, "recovery")
             // The generation booted, and its store root, as the bootloader says on the command line (decisions/0114, 0116)
@@ -643,6 +656,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
         log_line.write(supervisor.log, "supervisor: recovery: the boot set, the drivers and the console only")
     }
     else {
+        start_accounts(&supervisor, storage_slot, NOWHERE)
         start_hello(&supervisor, NOWHERE)
         start_installations(&supervisor)
         if !no_disk_check {
@@ -697,6 +711,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     }
     if test_store {
         check_store(&supervisor)
+    }
+    if test_accounts {
+        check_accounts(&supervisor)
     }
     if test_system_config {
         check_system_config(&supervisor)
@@ -904,6 +921,9 @@ restart_service :: fn(supervisor: ptr[mut Supervisor], index: usize) {
     }
     else if name == "terminal" {
         start_terminal(supervisor, index)
+    }
+    else if name == "accounts" {
+        start_accounts(supervisor, supervisor.storage_slot, index)
     }
     else if name == "echo" {
         start_echo(supervisor, index)
@@ -2764,7 +2784,7 @@ module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory
         else if name == "virtio_blk" { modules.virtio_blk } else if name == "virtio_input" { modules.virtio_input }
         else if name == "edu_dma" { modules.edu_dma } else if name == "storage_manager" { modules.storage_manager }
         else if name == "terminal" { modules.terminal } else if name == "echo" { modules.echo } else if name == "input" { modules.input }
-        else if name == "disk_check" { modules.disk_check }
+        else if name == "disk_check" { modules.disk_check } else if name == "accounts" { modules.accounts }
         else if name == "hello" { modules.hello } else if name == "clock" { modules.clock }
         else if name == "events" { modules.events } else if name == "bundle_store" { modules.bundle_store }
         else if name == "config" { modules.config } else if name == "update" { modules.update }
@@ -3256,6 +3276,34 @@ ask_storage :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, request
 }
 
 // The disk check, given a connector to the storage manager at storage, when there's a disk.
+/*
+ * The account service, with a connector to the storage manager and a listener for its clients, if there's a disk; into
+ * its entry at again, unless that's NOWHERE.
+ */
+start_accounts :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize, again: usize) {
+    if supervisor.first_disk == NOWHERE || storage_slot == NOWHERE {
+        return void
+    }
+    service :: service_named(supervisor, "accounts") or_return void
+    pair :: os.channel_for[accounts.Accounts](supervisor.block.budget, 0) or_return void
+    grants := AccountGrants.{log = duplicate_log(supervisor), storage_service = connector_to(supervisor, storage_slot),
+        clients = os.Listener[accounts.Accounts].{end = pair.a}}
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "accounts"), service.budget,
+        account_service.main, grants, options_for(supervisor, service.name)) {
+        case Ok(launched) => {
+            slot :: place(supervisor, "accounts", kept(supervisor, launched), again)
+            if slot < supervisor.started.count {
+                supervisor.started[slot].listener = pair.b
+                supervisor.started[slot].speaks = .Accounts
+            }
+        }
+        case Error(error) => {
+            failed(supervisor, service.name, error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        }
+    }
+}
+
 start_disk_check :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
     if supervisor.first_disk == NOWHERE || storage_slot == NOWHERE {
         return void
@@ -3375,6 +3423,7 @@ dial :: fn(supervisor: ptr[mut Supervisor], target: usize) -> slop_os.Channel? {
         case .Terminal => (terminal.connect(entry.listener, port, budget) or_return null).end
         case .Seat => (seat.connect(entry.listener, port, budget) or_return null).end
         case .Storage => (storage.connect(entry.listener, port, budget) or_return null).end
+        case .Accounts => (accounts.connect(entry.listener, port, budget) or_return null).end
         case .Nothing => null
     }
 }
