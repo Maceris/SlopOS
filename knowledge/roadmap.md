@@ -321,6 +321,10 @@ given only the wrapped records. 10b3 done 2026-11-01 (`decisions/0143`): the acc
 Argon2id at 64 MiB, the password rules and the common list, rate limits, and the recovery code; boot tests run with 512
 MiB. 10b4 done 2026-11-02 (`decisions/0148`): first-boot setup on the terminal service's own screen, the administrator
 made and the recovery code shown once. 10b done.
+10c planned 2026-11-02 (`decisions/0149`), in four parts: **10c1** console login and one session, the session manager
+starting echo in it with its home directory; **10c2** several sessions, a screen each in the terminal service, the
+secure attention key's menu (switch, log in another, lock, log out); **10c3** `Locale`; **10c4** idle installations
+stopped under memory pressure.
 
 Specs: RFC 9106 (Argon2), RFC 3394 or the AEAD for key wrapping, ECMA-48 (for the VT adapter only), the Unicode
 standard's East Asian Width and UAX #29 for terminal widths.
