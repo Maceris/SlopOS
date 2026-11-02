@@ -549,7 +549,9 @@ drop_end_binding :: fn(kernel: ptr[mut Kernel], slot: ptr[mut EndBinding]) {
  * disarmed after each packet. Binding key again to the same end arms it again, with the new signals.
  * PeerClosed stays raised, so binding to an end whose peer is closed queues a packet at once; and so does
  * binding for Readable to an end with messages waiting, which no read has found empty, so nothing else would
- * raise it (decisions/0099).
+ * raise it (decisions/0099). Binding for Readable to an empty end says its reader waits, as a read finding it
+ * empty does, so the next message raises Readable: a new end bound and not yet read, as a service's client in a
+ * place it has already read past this pass, is woken by its first message (decisions/0144).
  */
 port_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], end: ptr[mut Channel], signals: slop_os.Signals, key: u64,
     mode: slop_os.BindMode) -> slop_os.PortError? {
@@ -600,6 +602,10 @@ port_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], end: ptr[mut Chann
         signal_binding(kernel, port, binding, cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     }
     incoming :: indices_of(kernel, core, 1 - side)
+    if cast[u32](signals) & cast[u32](slop_os.SIGNAL_READABLE) != 0 {
+        intrinsics.atomic_store_u32(&incoming.consumer_waiting, 1)
+        intrinsics.fence_sequentially_consistent()
+    }
     if intrinsics.atomic_load_u32_acquire(&incoming.tail) != intrinsics.atomic_load_u32(&incoming.head) {
         signal_binding(kernel, port, binding, cast[u32](slop_os.SIGNAL_READABLE))
     }
@@ -851,7 +857,15 @@ hold_for_sending :: fn(end: ptr[mut Channel]) -> bool {
     return true
 }
 
+/*
+ * An end held by hold_for_sending let go of, if it's still the end with generation. One destroyed since may have been
+ * released, its core with it, before this call (a copy of it in a batch keeps nothing alive): its generation says so.
+ * One that's still its own can't be released until this CPU passes a quiescent point (objects.hsc), so its core stays.
+ */
 let_go_of_end :: fn(end: ptr[mut Channel], generation: u32) {
+    if intrinsics.atomic_load_u32_acquire(&end.header.generation) != generation {
+        return void
+    }
     core :: core_of(end)
     lock_at(&core.lock, .ChannelCore)
     if end.header.generation == generation && end.sending != 0 {

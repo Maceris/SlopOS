@@ -252,7 +252,80 @@ run_a :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessMa
         log_line.write(log, "%: budgets still charged: B's %, A's %", NAME, test_kit.used(b.budget), test_kit.used(budget))
         return 90
     }
+    stale :: check_stale_end(log)
+    if stale != 0 {
+        return stale
+    }
+    bound :: check_bound_before_read(log)
+    if bound != 0 {
+        return bound
+    }
     log_line.write(log, "%: handles moved, messages went through the kernel and the rings, doorbells and Once bindings woke the right waiters, and closing an end reached the other", NAME)
+    return 0
+}
+
+/*
+ * An end bound for Readable while it's empty, and never read: its first message wakes the port, as one a service
+ * binds for a new client, in a place its pass has gone by, must be (decisions/0144). Checks from 130.
+ */
+check_bound_before_read :: fn(log: slop_os.DebugLog) -> int {
+    budget :: slop_os.startup_block().budget
+    pair :: slop_os.channel_create(budget, 0, 0) or_return 130
+    port :: slop_os.port_create(budget) or_return 131
+    slop_os.port_bind(port, cast[slop_os.Handle](pair.b), slop_os.SIGNAL_READABLE, KEY_ONCE, .Persistent) or_return 132
+    value := CHANNEL_VALUE
+    slop_os.channel_write(pair.a, os.bytes_of(&value), slop_os.NO_BATCH) or_return 133
+    packets : slop_os.Packet[2]
+    taken :: slop_os.port_wait(port, packets, test_kit.clock_now() + 50 * SHORT_WAIT_NANOSECONDS) or_else 0
+    woken := false
+    for packet, i in packets {
+        if i < cast[usize](taken) && packet.key == KEY_ONCE && packet.data[0] & cast[u64](cast[u32](slop_os.SIGNAL_READABLE)) != 0 {
+            woken = true
+        }
+    }
+    for each in slop_os.Handle.[cast[slop_os.Handle](pair.a), cast[slop_os.Handle](pair.b), cast[slop_os.Handle](port)] {
+        _ = slop_os.handle_close(each)
+    }
+    if !woken {
+        log_line.write(log, "%: the first message to an end bound before it was read woke nothing", NAME)
+        return 134
+    }
+    return 0
+}
+
+/*
+ * A batch holding a copy of an end, whose owning handle is closed while it's in flight and whose memory is let go of
+ * after a grace period: taken, it gives NO_HANDLE in the copy's place, rather than the kernel touching the end's core,
+ * which is gone. Checks from 120.
+ */
+check_stale_end :: fn(log: slop_os.DebugLog) -> int {
+    budget :: slop_os.startup_block().budget
+    carrier :: slop_os.channel_create(budget, 0, 0) or_return 120
+    doomed :: slop_os.channel_create(budget, 0, 0) or_return 121
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_TRANSFER) | cast[u32](slop_os.RIGHT_CHANNEL_MAP))
+    copy :: slop_os.handle_duplicate(cast[slop_os.Handle](doomed.a), rights) or_return 122
+    handles : slop_os.Handle[1]
+    handles[0] = copy
+    slop_os.channel_send_handles(carrier.a, handles, 5) or_return 123
+    // The end destroyed, its copy in flight stale, and a grace period passed, which releases its core
+    _ = slop_os.handle_close(cast[slop_os.Handle](doomed.a))
+    _ = slop_os.handle_close(cast[slop_os.Handle](doomed.b))
+    waiter :: slop_os.port_create(budget) or_return 124
+    packets : slop_os.Packet[1]
+    _ = slop_os.port_wait(waiter, packets, test_kit.clock_now() + 5 * SHORT_WAIT_NANOSECONDS)
+    value := CHANNEL_VALUE
+    slop_os.channel_write(carrier.a, os.bytes_of(&value), 5) or_return 125
+    data : u64[8]
+    info :: slop_os.channel_read(carrier.b, os.mut_bytes_of(&data), cast[ptr[mut u32]](0)) or_return 126
+    into : slop_os.Handle[1]
+    taken :: slop_os.channel_take_handles(carrier.b, cast[u32](info.flags_and_batch >> 16), into, cast[ptr[mut u32]](0)) or_return 127
+    if taken != 1 || into[0] != slop_os.NO_HANDLE {
+        log_line.write(log, "%: a stale end's copy came out as %, of %", NAME, cast[u32](into[0]), taken)
+        return 128
+    }
+    for each in slop_os.Handle.[cast[slop_os.Handle](carrier.a), cast[slop_os.Handle](carrier.b), cast[slop_os.Handle](waiter)] {
+        _ = slop_os.handle_close(each)
+    }
     return 0
 }
 

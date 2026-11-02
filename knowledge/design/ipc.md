@@ -141,7 +141,8 @@ matters, a `syscall_batch` can be added later.
 ```
 port_create :: fn(budget: MemoryBudget) -> Result[Port, PortError]
 
-// Readiness: queue one packet when any of 'signals' is set on 'object'.
+// Readiness: queue one packet when any of 'signals' is set on 'object'. Binding a channel end for
+// Readable sets its consumer_waiting, so its next message raises Readable unread (decisions/0144).
 port_bind :: fn(port: Port, object: Handle, signals: Signals, key: u64, mode: BindMode)
     -> Result[void, PortError]
 BindMode :: enum { Once, Persistent }   // Once: disarm after delivery (like EPOLLONESHOT)
