@@ -6,6 +6,12 @@
  * Passwords follow NIST SP 800-63B: at least 8 characters, counted as code points, up to 256 bytes, no composition
  * rules; refused if they're among the most common (common_passwords.hsc, compared lowercased) or are the account's
  * name. The recovery code is 125 random bits, shown as 25 Crockford base32 characters in five groups of five.
+ *
+ * Shared volumes (decisions/0158): each account has an X25519 key pair, its secret key sealed by the home volume's
+ * secret, so whatever opens the home (the password, the recovery code) opens it too. A shared volume's secret is sealed
+ * to each member's public key (seal_share): an ephemeral key's agreement with theirs, through BLAKE3, seals it, and only
+ * their secret key opens it, so a member needn't be logged in to be added. A share's record names the volume, its owner,
+ * and each member with the secret sealed to them, the owner first.
  */
 package account_records
 
@@ -33,7 +39,9 @@ PasswordProblem :: enum #backed_by(u8) {
 }
 
 ADMINISTRATOR : u32 : 1
-RECORD_VERSION : u32 : 1
+RECORD_VERSION : u32 : 2
+// A record from before key pairs: the same, without its last 80 bytes, which its next login adds
+RECORD_V1_BYTES :: 192
 
 /*
  * An account, as the account service keeps it: its name, whether it's the administrator, and its home volume's secret
@@ -54,9 +62,38 @@ AccountRecord :: struct #packed {
     recovery_salt : u8[16],
     recovery_wrapped : u8[32],
     recovery_tag : u8[16],
+    // Its X25519 public key, all zeros before it has one, and its secret key sealed by the home volume's secret
+    public_key : u8[32],
+    private_wrapped : u8[32],
+    private_tag : u8[16],
 }
 
-#assert size_of(AccountRecord) == 192
+#assert size_of(AccountRecord) == 272
+
+// A share's secret, sealed to a member: the ephemeral public key it was agreed with, and the secret, sealed.
+SealedShare :: struct #packed {
+    ephemeral : u8[32],
+    wrapped : u8[32],
+    tag : u8[16],
+}
+
+MAX_MEMBERS :: 8
+SHARE_VERSION : u32 : 1
+
+ShareMember :: struct #packed {
+    name_bytes : u32le,
+    name : u8[MAX_NAME_BYTES],
+    sealed : SealedShare,
+}
+
+// A shared volume: its name, its owner's, and its members, the owner first, each with the volume's secret sealed to them.
+ShareRecord :: struct #packed {
+    version : u32le,
+    name_bytes : u32le,
+    name : u8[MAX_NAME_BYTES],
+    member_count : u32le,
+    members : ShareMember[MAX_MEMBERS],
+}
 
 // The recovery code: 125 random bits, its top 3 bits 0.
 RecoveryCode :: distinct alias u8[16] #secret
@@ -189,10 +226,167 @@ new_record #constant_time :: fn(name: u8[], administrator: bool, created: u64, p
     sealed :: seal_home(&recovery, home, &record, "recovery") or_return null
     record.recovery_wrapped = sealed.wrapped
     record.recovery_tag = sealed.tag
-    if !set_password(&record, home, password, parameters) {
+    if !set_password(&record, home, password, parameters) || !set_keys(&record, home) {
         return null
     }
     return record
+}
+
+// Whether a record has its key pair yet: one made before shared volumes gets it at its next login.
+has_keys :: fn(record: ptr[AccountRecord]) -> bool {
+    for byte in record.public_key {
+        if byte != 0 {
+            return true
+        }
+    }
+    return false
+}
+
+// A new X25519 key pair for record, its secret key sealed by home, the home volume's secret.
+set_keys #constant_time :: fn(record: ptr[mut AccountRecord], home: ptr[crypto.Key256]) -> bool {
+    secret := random_key()
+    defer zero_key(&secret)
+    key : crypto.X25519SecretKey
+    for i in cast[usize](0)..<32 {
+        key[i] = secret[i]
+    }
+    public :: crypto.x25519_public_key(&key)
+    for i in cast[usize](0)..<32 {
+        key[i] = 0
+    }
+    sealed :: seal_home(home, &secret, record, "key pair") or_return false
+    record.private_wrapped = sealed.wrapped
+    record.private_tag = sealed.tag
+    for i in cast[usize](0)..<32 {
+        record.public_key[i] = public[i]
+    }
+    return true
+}
+
+// record's X25519 secret key, unsealed with home, the home volume's secret; None if it has none.
+secret_key #constant_time :: fn(record: ptr[AccountRecord], home: ptr[crypto.Key256]) -> crypto.X25519SecretKey? {
+    opened := open_home(home, record.private_wrapped, record.private_tag, record, "key pair") or_return null
+    defer zero_key(&opened)
+    key : crypto.X25519SecretKey
+    for i in cast[usize](0)..<32 {
+        key[i] = opened[i]
+    }
+    return key
+}
+
+// secret, a shared volume's, sealed to public, a member's X25519 public key, for the share named share; None if their key's no good.
+seal_share #constant_time :: fn(secret: ptr[crypto.Key256], public: u8[32], share: u8[]) -> SealedShare? {
+    random_secret := random_key()
+    defer zero_key(&random_secret)
+    ephemeral : crypto.X25519SecretKey
+    for i in cast[usize](0)..<32 {
+        ephemeral[i] = random_secret[i]
+    }
+    ephemeral_public :: crypto.x25519_public_key(&ephemeral)
+    theirs : crypto.X25519PublicKey
+    for i in cast[usize](0)..<32 {
+        theirs[i] = public[i]
+    }
+    agreed : crypto.SecretByte[32]
+    agreed_ok :: crypto.x25519(&ephemeral, &theirs, &agreed)
+    for i in cast[usize](0)..<32 {
+        ephemeral[i] = 0
+    }
+    if !agreed_ok {
+        return null
+    }
+    made := SealedShare.{}
+    for i in cast[usize](0)..<32 {
+        made.ephemeral[i] = ephemeral_public[i]
+    }
+    key := share_key(&agreed, made.ephemeral, public)
+    defer zero_key(&key)
+    nonce : crypto.Nonce96
+    associated :: share_associated(share)
+    plain : crypto.SecretByte[32]
+    for i in cast[usize](0)..<32 {
+        plain[i] = cast[crypto.SecretByte](secret[i])
+    }
+    tag : crypto.Tag128
+    if !crypto.chacha20_poly1305_seal(&key, &nonce, plain, associated, made.wrapped, &tag) {
+        return null
+    }
+    for i in cast[usize](0)..<16 {
+        made.tag[i] = tag[i]
+    }
+    return compiler.declassify(made)
+}
+
+// A shared volume's secret, unsealed with a member's secret key and their public key; None if it isn't theirs.
+open_share #constant_time :: fn(key: ptr[crypto.X25519SecretKey], public: u8[32], sealed: ptr[SealedShare], share: u8[]) -> crypto.Key256? {
+    theirs : crypto.X25519PublicKey
+    for i in cast[usize](0)..<32 {
+        theirs[i] = sealed.ephemeral[i]
+    }
+    agreed : crypto.SecretByte[32]
+    if !crypto.x25519(key, &theirs, &agreed) {
+        return null
+    }
+    opening := share_key(&agreed, sealed.ephemeral, public)
+    defer zero_key(&opening)
+    nonce : crypto.Nonce96
+    associated :: share_associated(share)
+    tag : crypto.Tag128
+    for i in cast[usize](0)..<16 {
+        tag[i] = sealed.tag[i]
+    }
+    plain : crypto.SecretByte[32]
+    if !crypto.chacha20_poly1305_open(&opening, &nonce, sealed.wrapped, associated, &tag, plain) {
+        return null
+    }
+    secret : crypto.Key256
+    for i in cast[usize](0)..<32 {
+        secret[i] = cast[u8](plain[i])
+    }
+    return secret
+}
+
+// The key an agreement gives, bound to both public keys: BLAKE3, as the agreement's already uniform.
+share_key #constant_time :: fn(agreed: ptr[crypto.SecretByte[32]], ephemeral: u8[32], public: u8[32]) -> crypto.Key256 {
+    hasher := crypto.blake3_start()
+    crypto.blake3_update(&hasher, string_bytes("SlopOS shared volume"))
+    crypto.blake3_update_secret(&hasher, agreed^)
+    crypto.blake3_update(&hasher, ephemeral)
+    crypto.blake3_update(&hasher, public)
+    hash : crypto.SecretByte[32]
+    crypto.blake3_finish_secret(&hasher, hash)
+    key : crypto.Key256
+    for i in cast[usize](0)..<32 {
+        key[i] = cast[u8](hash[i])
+    }
+    return key
+}
+
+// What a share's seal is bound to: that it's a share's, and the share's name.
+share_associated :: fn(share: u8[]) -> u8[48] {
+    associated : u8[48]
+    for character, i in "share" {
+        if i < associated.count {
+            associated[i] = cast[u8](character)
+        }
+    }
+    for byte, i in share {
+        if 16 + i < associated.count {
+            associated[16 + i] = byte
+        }
+    }
+    return associated
+}
+
+// The name a share's record has, and a member's.
+share_name :: fn(record: ptr[ShareRecord]) -> u8[] {
+    count :: cast[usize](cast[u32](record.name_bytes))
+    return if count <= record.name.count { record.name[0..<count] } else { record.name[0..<0] }
+}
+
+member_name :: fn(member: ptr[ShareMember]) -> u8[] {
+    count :: cast[usize](cast[u32](member.name_bytes))
+    return if count <= member.name.count { member.name[0..<count] } else { member.name[0..<0] }
 }
 
 // record's password changed: home sealed again by a key from password, with parameters and a new salt.

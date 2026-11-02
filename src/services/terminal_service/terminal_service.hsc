@@ -29,7 +29,8 @@
  * user's password is typed (L), and logs out (O), the session manager ending the session's programs. A session's
  * powerbox asks the user through it (chooser.hsc, decisions/0156): the request's on the status line, and the secure
  * attention key opens the chooser instead of this screen, and G there shows what its user has let programs keep
- * (grants_view.hsc, decisions/0158); a request for another account opens the elevation screen instead (elevation.hsc).
+ * (grants_view.hsc, decisions/0158); a request for another account opens the elevation screen instead (elevation.hsc),
+ * and H there shares a volume with another user (share_form.hsc).
  * Both are reached
  * through connectors, dialed again when they go, with the banner shown on each new serial line. Without a serial line
  * it keeps the model and shows nothing.
@@ -122,6 +123,10 @@ SetupStep :: enum {
     // Elevation (decisions/0158): the administrator's name and password, before the new account's
     AdminName,
     AdminPassword,
+    // Sharing a volume: its name, the member's, and the account service sharing it
+    ShareName,
+    ShareMember,
+    Sharing,
 }
 
 // Setup's first row of fields: the name, the password, it again, then a blank row and its message
@@ -201,6 +206,11 @@ Service :: struct {
     admin_count : usize,
     admin_password : u8[FIELD_BYTES],
     admin_password_count : usize,
+    // Whether the setup screen is the share form, whether what it asked takes a member out, and the volume's name
+    sharing : bool,
+    unsharing : bool,
+    share_name : u8[account_records.MAX_NAME_BYTES],
+    share_name_count : usize,
 }
 
 /*
@@ -821,6 +831,9 @@ update_status :: fn(service: ptr[mut Service]) {
     else if service.setup != .Off && service.elevating {
         text_buffer.append(&status, STATUS_ELEVATING)
     }
+    else if service.setup != .Off && service.sharing {
+        text_buffer.append(&status, STATUS_SHARING)
+    }
     else if service.setup != .Off {
         text_buffer.append(&status, if is_login(service.setup) { STATUS_LOGIN } else { STATUS_SETUP })
         layout :: keymaps.find(service.layout) or_else keymaps.US
@@ -957,7 +970,7 @@ draw_panel :: fn(service: ptr[mut Service]) {
     // The sessions' keys, those that do something here
     if service.accounts_end != NONE && view(service).logged_in && view(service).user_count > 0 {
         if view(service).home_end != NONE {
-            screen.write_at(panel, help + 2, 2, "G shows what you've let programs keep.", plain)
+            screen.write_at(panel, help + 2, 2, "G shows what you've let programs keep, H shares a volume with another user.", plain)
         }
         screen.write_at(panel, help + 1, 2, if another_session(service) != NO_VIEW { "S switches session, N logs in another, L locks, O logs out." }
             else { "N logs in another session, L locks, O logs out." }, plain)
@@ -1301,6 +1314,9 @@ screen_keys :: fn(service: ptr[mut Service], first: usize) {
         else if event.code == USAGE_G && event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 {
             enter_grants(service)
         }
+        else if event.code == USAGE_H && event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 {
+            enter_share_form(service)
+        }
         else if event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 && session_key(service, event.code) {
             // A session's key: the screen it brought up takes what comes after
             drop_from(service, first)
@@ -1525,6 +1541,33 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 continue
             }
             case _ => continue
+        }
+        // The share form's answers
+        if service.sharing && service.setup == .Sharing {
+            match os.message_of[accounts.Response](into)^ {
+                case Shared(given) => shared(service, given)
+                case NoSuchAccount => {
+                    say(service, "There's no account of that name, or it hasn't logged in since it was made.")
+                    setup_step(service, .ShareMember)
+                }
+                case AlreadyExists => {
+                    say(service, if service.unsharing { "They aren't in it." } else { "That's the owner, or they're in it already." })
+                    setup_step(service, .ShareMember)
+                }
+                case NameRefused => {
+                    say(service, "That can't be a volume's name. Type another.")
+                    setup_step(service, .ShareName)
+                }
+                case Refused => {
+                    say(service, "That volume isn't yours to share, or isn't open. Type another.")
+                    setup_step(service, .ShareName)
+                }
+                case _ => {
+                    say(service, "It couldn't be shared. Type the volume's name again.")
+                    setup_step(service, .ShareName)
+                }
+            }
+            continue
         }
         match os.message_of[accounts.Response](into)^ {
             case Described(status) => {
@@ -1812,6 +1855,23 @@ setup_key :: fn(service: ptr[mut Service], event: terminal.Event, text: u8[]) {
         end_elevation(service, false)
         return void
     }
+    if service.sharing {
+        if service.setup == .Sharing {
+            return void
+        }
+        if event.code == USAGE_ESCAPE {
+            end_share_form(service)
+            return void
+        }
+        if event.code == USAGE_DELETE && service.setup == .ShareMember {
+            send_share(service, true)
+            return void
+        }
+        if event.code == USAGE_ENTER {
+            share_enter(service)
+            return void
+        }
+    }
     if event.code == USAGE_ENTER {
         setup_enter(service)
         return void
@@ -2052,6 +2112,10 @@ draw_setup :: fn(service: ptr[mut Service], whole: bool) {
     plain :: terminal.Style.{}
     if service.elevating {
         draw_elevation(service, whole)
+        return void
+    }
+    if service.sharing {
+        draw_share_form(service, whole)
         return void
     }
     if is_login(service.setup) {

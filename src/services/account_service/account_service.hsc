@@ -6,6 +6,15 @@
  * have others made (CreateBy, decisions/0158); a home volume is opened with its password, through the storage manager,
  * and only its root leaves the service.
  *
+ * Shared volumes (decisions/0158): a share's record, <name>.share beside the accounts', names its volume, shared-<name>,
+ * and its members, the owner first, each with the volume's random secret sealed to their public key. Opening a home
+ * opens what its account shares too: its secret key unsealed with the home's secret, each share's secret with that, the
+ * volume opened, and a link shared/<name> made in the home if the one there doesn't open. A share's secret is kept in
+ * memory once it's opened, as the storage manager keeps volumes unlocked, so the owner can add and remove members.
+ * Removing one revokes every link into the volume and starts its next key generation; the owner's link is made again by
+ * the trusted path, and the other members' at their next login. A record from before key pairs gets them at its
+ * account's next login.
+ *
  * Its budget holds Argon2id's 64 MiB for one password at a time, which is how requests are served. A wrong password
  * or recovery code counts against its account and against the client that sent it: from the third in a row for an
  * account, or the fifth for a client, the next is heard only after a wait that doubles from a second, up to five
@@ -31,7 +40,12 @@ import service_kit from "../../libraries/service_kit"
 
 ACCOUNTS_VOLUME :: "accounts"
 HOME_PREFIX :: "home-"
+SHARED_PREFIX :: "shared-"
+SHARED_DIRECTORY :: "shared"
 RECORD_SUFFIX :: ".account"
+SHARE_SUFFIX :: ".share"
+// The shares whose secrets are kept, once opened
+MAX_OPENED_SHARES :: 16
 // A record's path's room: its name, and the longer suffix
 PATH_BYTES :: account_records.MAX_NAME_BYTES + 8
 // A home volume's name's room: "home-" and the account's name
@@ -72,6 +86,14 @@ Service :: struct {
     count : u32,
     tracked : Tracked[TRACKED],
     clients : Failures[service_kit.MAX_CLIENTS],
+    opened : OpenedShare[MAX_OPENED_SHARES],
+}
+
+// A share's secret, kept once it's opened.
+OpenedShare :: struct {
+    name : u8[account_records.MAX_NAME_BYTES],
+    name_bytes : usize,
+    secret : crypto.Key256,
 }
 
 main :: fn(log: slop_os.DebugLog?, storage_service: os.Channel[connector.Connector]?, clients: os.Listener[accounts.Accounts]) -> int {
@@ -213,6 +235,8 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
         match os.message_of[accounts.Request](into)^ {
             case Describe => response^ = .Described(accounts.Status.{accounts = service.count})
             case Create(creation) => response^ = create(service, os.items(into, creation.name), os.items(into, creation.password), creation.now)
+            case Share(asked) => response^ = share(service, os.items(into, asked.owner), os.items(into, asked.name), os.items(into, asked.member))
+            case Unshare(asked) => response^ = unshare(service, os.items(into, asked.owner), os.items(into, asked.name), os.items(into, asked.member))
             case CreateBy(elevated) => {
                 administrator :: os.items(into, elevated.administrator.name)
                 response^ = limited(service, index, administrator) or_else create_by(service, index, administrator,
@@ -309,8 +333,476 @@ open_home :: fn(service: ptr[mut Service], client: usize, name: u8[], password: 
     defer account_records.zero_key(&home)
     succeeded(service, client, name)
     return match open_volume_with(service, name, &home) {
-        case OpenedFiles(root) => .OpenedHome(root)
+        case OpenedFiles(root) => {
+            join_shares(service, &record, &home, root.end)
+            accounts.Response.OpenedHome(root)
+        }
         case _ => .Failed
+    }
+}
+
+/*
+ * What an account shares, opened as its home is: its key pair made first if its record's from before them; then each
+ * share it's a member of, its secret unsealed and kept, its volume opened, and its link in the home made if the one
+ * there doesn't open.
+ */
+join_shares #constant_time :: fn(service: ptr[mut Service], record: ptr[mut account_records.AccountRecord], home: ptr[crypto.Key256], root: slop_os.Channel) {
+    if !account_records.has_keys(record) {
+        if !account_records.set_keys(record, home) || !write_record(service, record) {
+            return void
+        }
+        log_line.write(service.log, "account_service: % has a key pair now", text_of(account_records.name_of(record)))
+    }
+    key := account_records.secret_key(record, home) or_return void
+    defer zero_x25519(&key)
+    name :: account_records.name_of(record)
+    listed :: os.list_directory_in(service.store, "") or_return void
+    defer os.free_directory_listing(listed)
+    for entry in listed {
+        stem :: share_stem(string_bytes(entry.name)) or_continue
+        share := read_share(service, stem) or_continue
+        for &member, i in share.members {
+            if i >= cast[usize](cast[u32](share.member_count)) {
+                break
+            }
+            if !same(account_records.member_name(member), name) {
+                continue
+            }
+            secret := account_records.open_share(&key, record.public_key, &member.sealed, account_records.share_name(&share)) or_break
+            defer account_records.zero_key(&secret)
+            keep_secret(service, account_records.share_name(&share), &secret)
+            match open_shared(service, account_records.share_name(&share), &secret) {
+                case OpenedFiles(shared) => {
+                    if link_share(root, account_records.share_name(&share), shared.end) {
+                        log_line.write(service.log, "account_service: % joined %", text_of(name), text_of(account_records.share_name(&share)))
+                    }
+                    _ = slop_os.handle_close(cast[slop_os.Handle](shared.end))
+                }
+                case _ => {}
+            }
+        }
+    }
+}
+
+/*
+ * A shared volume shared with member, by its owner: made the first time, sealed by a new random secret, its owner its
+ * first member; then member added, the secret sealed to their public key. A grant of its root, for the owner's link.
+ */
+share :: fn(service: ptr[mut Service], owner: u8[], name: u8[], member: u8[]) -> accounts.Response {
+    if !account_records.valid_name(name) {
+        return .NameRefused
+    }
+    if same(owner, member) {
+        return .AlreadyExists
+    }
+    owner_record := read_record(service, owner) or_return .Refused
+    member_record := read_record(service, member) or_return .NoSuchAccount
+    if !account_records.has_keys(&owner_record) || !account_records.has_keys(&member_record) {
+        return .NoSuchAccount
+    }
+    record := account_records.ShareRecord.{}
+    secret := account_records.random_key()
+    defer account_records.zero_key(&secret)
+    match read_share(service, name) {
+        case Some(found) => {
+            record = found
+            if cast[u32](record.member_count) == 0 || !same(account_records.member_name(&record.members[0]), owner) {
+                return .Refused
+            }
+            for &each, i in record.members {
+                if i < cast[usize](cast[u32](record.member_count)) && same(account_records.member_name(each), member) {
+                    return .AlreadyExists
+                }
+            }
+            if !kept_secret(service, name, &secret) {
+                return .Refused
+            }
+        }
+        case None => {
+            if !make_shared(service, name, &secret) {
+                return .Failed
+            }
+            record = account_records.ShareRecord.{version = cast[u32le](account_records.SHARE_VERSION), name_bytes = cast[u32le](cast[u32](name.count))}
+            for byte, i in name {
+                if i < record.name.count {
+                    record.name[i] = byte
+                }
+            }
+            if !add_member(&record, owner, &owner_record, &secret) {
+                return .Failed
+            }
+            keep_secret(service, name, &secret)
+            log_line.write(service.log, "account_service: made the shared volume %, %'s", text_of(name), text_of(owner))
+        }
+    }
+    if !add_member(&record, member, &member_record, &secret) || !write_share(service, &record) {
+        return .Failed
+    }
+    log_line.write(service.log, "account_service: shared % with %", text_of(name), text_of(member))
+    return root_grant(service, name, &secret)
+}
+
+/*
+ * A member taken out of a shared volume, by its owner: their sealed secret dropped, every link into the volume revoked,
+ * and its next key generation started, sealing what's written from now on. A grant of its root, for the owner's link.
+ */
+unshare :: fn(service: ptr[mut Service], owner: u8[], name: u8[], member: u8[]) -> accounts.Response {
+    record := read_share(service, name) or_return .Refused
+    count :: cast[usize](cast[u32](record.member_count))
+    if count == 0 || !same(account_records.member_name(&record.members[0]), owner) {
+        return .Refused
+    }
+    secret : crypto.Key256
+    defer account_records.zero_key(&secret)
+    if !kept_secret(service, name, &secret) {
+        return .Refused
+    }
+    found := count
+    for &each, i in record.members {
+        if i > 0 && i < count && same(account_records.member_name(each), member) {
+            found = i
+        }
+    }
+    if found >= count || found >= record.members.count {
+        return .NoSuchAccount
+    }
+    for i in found..<(count - 1) {
+        next :: i + 1
+        if i < record.members.count && next < record.members.count {
+            record.members[i] = record.members[next]
+        }
+    }
+    record.member_count = cast[u32le](cast[u32](count - 1))
+    if !write_share(service, &record) {
+        return .Failed
+    }
+    revoked := cast[u64](0)
+    match open_shared(service, name, &secret) {
+        case OpenedFiles(root) => {
+            revoked = revoke_all(root.end)
+            _ = slop_os.handle_close(cast[slop_os.Handle](root.end))
+        }
+        case _ => return .Failed
+    }
+    out := os.Outgoing.{}
+    rotating :: os.begin[storage.Request](&out)
+    rotating^ = .Rotate(storage.VolumeNamed.{partition = service.container, name = shared_name(&out, name)})
+    rotated :: match ask_storage(service, &out) {
+        case Rotated(generation) => true
+        case _ => false
+    }
+    log_line.write(service.log, "account_service: took % out of %, revoked % links into it, and % its next key generation", text_of(member), text_of(name),
+        revoked, if rotated { "started" } else { "couldn't start" })
+    return root_grant(service, name, &secret)
+}
+
+// member added to record, the share's secret sealed to their public key: whether there was room.
+add_member #constant_time :: fn(record: ptr[mut account_records.ShareRecord], member: u8[], member_record: ptr[account_records.AccountRecord],
+    secret: ptr[crypto.Key256]) -> bool {
+    at :: cast[usize](cast[u32](record.member_count))
+    if at >= record.members.count || member.count > account_records.MAX_NAME_BYTES {
+        return false
+    }
+    sealed :: account_records.seal_share(secret, member_record.public_key, account_records.share_name(record)) or_return false
+    made := account_records.ShareMember.{name_bytes = cast[u32le](cast[u32](member.count)), sealed = sealed}
+    for byte, i in member {
+        if i < made.name.count {
+            made.name[i] = byte
+        }
+    }
+    record.members[at] = made
+    record.member_count = cast[u32le](cast[u32](at + 1))
+    return true
+}
+
+// A shared volume's root granted, to write, for its owner's link; Failed if it can't be.
+root_grant #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: ptr[crypto.Key256]) -> accounts.Response {
+    root :: match open_shared(service, name, secret) {
+        case OpenedFiles(opened) => opened.end
+        case _ => return .Failed
+    }
+    defer slop_os.handle_close(cast[slop_os.Handle](root))
+    port :: os.port_for(slop_os.startup_block().budget, root) or_return .Failed
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    out := os.Outgoing.{}
+    os.begin[dir.Request](&out)^ = .Grant(dir.GrantOf.{write = true})
+    return match ask_directory(root, port, &out) {
+        case Granted(given) => .Shared(given)
+        case _ => .Failed
+    }
+}
+
+/*
+ * A link shared/<name> in the home at root to the shared volume at shared, unless the one there opens: whether it made
+ * one.
+ */
+link_share :: fn(root: slop_os.Channel, name: u8[], shared: slop_os.Channel) -> bool {
+    budget :: slop_os.startup_block().budget
+    port :: os.port_for(budget, root) or_return false
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    path_storage : u8[PATH_BYTES + 8]
+    path :: share_path(name, &path_storage)
+    out := os.Outgoing.{}
+    trying :: os.begin[dir.Request](&out)
+    trying^ = .OpenDirectory(dir.OpenDirectory.{path = os.append(&out, path)})
+    match ask_directory(root, port, &out) {
+        case OpenedDirectory(opened) => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](opened.end))
+            return false
+        }
+        case _ => {}
+    }
+    out = os.Outgoing.{}
+    making :: os.begin[dir.Request](&out)
+    making^ = .OpenDirectory(dir.OpenDirectory.{path = os.append(&out, string_bytes(SHARED_DIRECTORY)), create = true})
+    match ask_directory(root, port, &out) {
+        case OpenedDirectory(opened) => _ = slop_os.handle_close(cast[slop_os.Handle](opened.end))
+        case _ => return false
+    }
+    out = os.Outgoing.{}
+    removing :: os.begin[dir.Request](&out)
+    removing^ = .Remove(os.append(&out, path))
+    _ = ask_directory(root, port, &out)
+    shared_port :: os.port_for(budget, shared) or_return false
+    defer slop_os.handle_close(cast[slop_os.Handle](shared_port))
+    out = os.Outgoing.{}
+    os.begin[dir.Request](&out)^ = .Grant(dir.GrantOf.{write = true})
+    given :: match ask_directory(shared, shared_port, &out) {
+        case Granted(made) => made
+        case _ => return false
+    }
+    out = os.Outgoing.{}
+    linking :: os.begin[dir.Request](&out)
+    linking^ = .Link(dir.LinkTo.{path = os.append(&out, path), grant = given})
+    return match ask_directory(root, port, &out) {
+        case Done => true
+        case _ => false
+    }
+}
+
+// Every link the shared volume at root has issued, revoked: how many.
+revoke_all :: fn(root: slop_os.Channel) -> u64 {
+    port :: os.port_for(slop_os.startup_block().budget, root) or_return 0
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    numbers : u64[64]
+    count : usize = 0
+    cursor := cast[u64](0)
+    loop {
+        if count >= numbers.count {
+            break
+        }
+        out := os.Outgoing.{}
+        os.begin[dir.Request](&out)^ = .Links(cursor)
+        match ask_directory(root, port, &out) {
+            case Issued(link) => {
+                numbers[count] = link.number
+                count += 1
+                cursor = link.next
+            }
+            case _ => break
+        }
+    }
+    revoked := cast[u64](0)
+    for number, i in numbers {
+        if i >= count {
+            break
+        }
+        out := os.Outgoing.{}
+        os.begin[dir.Request](&out)^ = .Revoke(number)
+        match ask_directory(root, port, &out) {
+            case Done => revoked += 1
+            case _ => {}
+        }
+    }
+    return revoked
+}
+
+// One request on a directory connection, and its answer, waited for.
+ask_directory :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing]) -> dir.Response {
+    if dir.send_request(end, port, out) is_some {
+        return .Unsupported
+    }
+    into := os.Incoming.{}
+    loop {
+        match dir.receive_response(end, port, &into, true) {
+            case Received => return os.message_of[dir.Response](&into)^
+            case Failed(error) => return .Unsupported
+            case _ => continue
+        }
+    }
+}
+
+// shared/<name>, into storage.
+share_path :: fn(name: u8[], storage: ptr[mut u8[PATH_BYTES + 8]]) -> u8[] {
+    count : usize = 0
+    for byte in string_bytes(SHARED_DIRECTORY) {
+        if count < storage.count {
+            storage^[count] = byte
+            count += 1
+        }
+    }
+    if count < storage.count {
+        storage^[count] = cast[u8]('/')
+        count += 1
+    }
+    for byte in name {
+        if count < storage.count {
+            storage^[count] = byte
+            count += 1
+        }
+    }
+    return if count <= storage.count { storage^[0..<count] } else { storage^[0..<0] }
+}
+
+// A share's secret kept in memory, in place of one kept before for its name.
+keep_secret #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: ptr[crypto.Key256]) {
+    free := service.opened.count
+    for &each, i in service.opened {
+        if each.name_bytes == name.count && each.name_bytes <= each.name.count && same(each.name[0..<each.name_bytes], name) {
+            each.secret = secret^
+            return void
+        }
+        if each.name_bytes == 0 && free == service.opened.count {
+            free = i
+        }
+    }
+    if free >= service.opened.count || name.count > account_records.MAX_NAME_BYTES {
+        return void
+    }
+    made := OpenedShare.{name_bytes = name.count, secret = secret^}
+    for byte, i in name {
+        if i < made.name.count {
+            made.name[i] = byte
+        }
+    }
+    service.opened[free] = made
+}
+
+// A share's secret, if it's been opened, into secret.
+kept_secret #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: ptr[mut crypto.Key256]) -> bool {
+    for &each in service.opened {
+        if each.name_bytes == name.count && each.name_bytes <= each.name.count && same(each.name[0..<each.name_bytes], name) {
+            secret^ = each.secret
+            return true
+        }
+    }
+    return false
+}
+
+// A new shared volume, shared-<name>, sealed by secret.
+make_shared #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: ptr[crypto.Key256]) -> bool {
+    out := os.Outgoing.{}
+    creating :: os.begin[storage.Request](&out)
+    passphrase := compiler.declassify(secret^)
+    creating^ = .CreateVolume(storage.NewVolume.{partition = service.container, name = shared_name(&out, name),
+        passphrase = os.append(&out, passphrase[0..<32]), cipher = cast[u8](slopfs.Cipher.Aes256Gcm), now = now_of()})
+    for i in cast[usize](0)..<32 {
+        passphrase[i] = 0
+    }
+    made :: ask_storage(service, &out)
+    wipe_out(&out)
+    return match made {
+        case OpenedFiles(root) => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](root.end))
+            true
+        }
+        case _ => false
+    }
+}
+
+// A shared volume opened with its secret.
+open_shared #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: ptr[crypto.Key256]) -> storage.Response {
+    out := os.Outgoing.{}
+    opening :: os.begin[storage.Request](&out)
+    passphrase := compiler.declassify(secret^)
+    opening^ = .OpenVolume(storage.VolumeAt.{partition = service.container, name = shared_name(&out, name),
+        passphrase = os.append(&out, passphrase[0..<32])})
+    for i in cast[usize](0)..<32 {
+        passphrase[i] = 0
+    }
+    opened :: ask_storage(service, &out)
+    wipe_out(&out)
+    return opened
+}
+
+// "shared-" and the share's name, appended to out.
+shared_name :: fn(out: ptr[mut os.Outgoing], name: u8[]) -> slop_os.Relative[u8] {
+    bytes : u8[HOME_NAME_BYTES + 2]
+    count : usize = 0
+    for character in SHARED_PREFIX {
+        if count < bytes.count {
+            bytes[count] = cast[u8](character)
+            count += 1
+        }
+    }
+    for byte in name {
+        if count < bytes.count {
+            bytes[count] = byte
+            count += 1
+        }
+    }
+    return os.append(out, if count <= bytes.count { bytes[0..<count] } else { bytes[0..<0] })
+}
+
+// A share's record, from its file, if it has one.
+read_share :: fn(service: ptr[mut Service], name: u8[]) -> account_records.ShareRecord? {
+    if !account_records.valid_name(name) {
+        return null
+    }
+    path : u8[PATH_BYTES]
+    text :: path_of(name, SHARE_SUFFIX, &path)
+    contents :: os.read_entire_file_in(service.store, text) or_return null
+    defer runtime.free_array(bit_cast[u8[]](contents))
+    if contents.count != size_of(account_records.ShareRecord) {
+        return null
+    }
+    record := account_records.ShareRecord.{}
+    view :: view_of(cast[ptr[mut u8]](&record), size_of(account_records.ShareRecord))
+    for byte, i in string_bytes(contents) {
+        if i < view.count {
+            view[i] = byte
+        }
+    }
+    if cast[u32](record.version) != account_records.SHARE_VERSION || !same(account_records.share_name(&record), name)
+        || cast[u32](record.member_count) > cast[u32](account_records.MAX_MEMBERS) {
+        return null
+    }
+    return record
+}
+
+// A share's record written, as an account's is.
+write_share :: fn(service: ptr[mut Service], record: ptr[account_records.ShareRecord]) -> bool {
+    name :: account_records.share_name(record)
+    fresh : u8[PATH_BYTES]
+    kept : u8[PATH_BYTES]
+    fresh_path :: path_of(name, NEW_SUFFIX, &fresh)
+    kept_path :: path_of(name, SHARE_SUFFIX, &kept)
+    contents :: string_of(cast[ptr[u8]](record), size_of(account_records.ShareRecord))
+    if os.write_entire_file_in(service.store, fresh_path, contents) is_some {
+        return false
+    }
+    return os.rename_in(service.store, fresh_path, kept_path) is_none
+}
+
+// A file's name without ".share", if it's a share's record's.
+share_stem :: fn(file: u8[]) -> u8[]? {
+    suffix :: string_bytes(SHARE_SUFFIX)
+    if file.count <= suffix.count {
+        return null
+    }
+    stem :: file.count - suffix.count
+    for byte, i in suffix {
+        at :: stem + i
+        if at >= file.count || file[at] != byte {
+            return null
+        }
+    }
+    return if stem <= file.count { file[0..<stem] } else { null }
+}
+
+zero_x25519 #constant_time :: fn(key: ptr[mut crypto.X25519SecretKey]) {
+    for i in cast[usize](0)..<32 {
+        key[i] = 0
     }
 }
 
@@ -534,7 +1026,8 @@ read_record :: fn(service: ptr[mut Service], name: u8[]) -> account_records.Acco
     text :: path_of(name, RECORD_SUFFIX, &path)
     contents :: os.read_entire_file_in(service.store, text) or_return null
     defer runtime.free_array(bit_cast[u8[]](contents))
-    if contents.count != size_of(account_records.AccountRecord) {
+    // One from before key pairs is the same without them, which its next login adds
+    if contents.count != size_of(account_records.AccountRecord) && contents.count != account_records.RECORD_V1_BYTES {
         return null
     }
     record := account_records.AccountRecord.{}
@@ -545,9 +1038,11 @@ read_record :: fn(service: ptr[mut Service], name: u8[]) -> account_records.Acco
             view[i] = byte
         }
     }
-    if cast[u32](record.version) != account_records.RECORD_VERSION || !same(account_records.name_of(&record), name) {
+    expected :: if contents.count == account_records.RECORD_V1_BYTES { cast[u32](1) } else { account_records.RECORD_VERSION }
+    if cast[u32](record.version) != expected || !same(account_records.name_of(&record), name) {
         return null
     }
+    record.version = cast[u32le](account_records.RECORD_VERSION)
     return record
 }
 

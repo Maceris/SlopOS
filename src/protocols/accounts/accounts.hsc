@@ -3,6 +3,7 @@ package accounts
 import os from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
+import grant from "std/os/slop_os"
 
 /*
  * The account service's protocol (decisions/0141, roadmap 10b): accounts made, their home volumes opened with their
@@ -14,6 +15,11 @@ import dir from "std/os/slop_os"
  * (Refused) once there's one. Another is made with CreateBy, which the administrator's name and password allow
  * (decisions/0158), typed on the trusted path when a program's asked the powerbox for one: wrong ones, or an account
  * that isn't the administrator's, are WrongCredentials, and count as a login's do.
+ *
+ * Shared volumes (decisions/0158), asked for by the trusted path for the session's user, its owner: Share makes the
+ * volume the first time, and adds a member, its secret sealed to their public key; Unshare takes one out, revokes every
+ * link into the volume, and starts its next key generation. Each answers with a grant of the volume's root, for the
+ * owner's link to it; the members' are made, or made again, when they next log in.
  */
 
 Accounts :: struct {}
@@ -37,6 +43,13 @@ Creation :: struct {
 Elevated :: struct {
     administrator : Credentials,
     creation : Creation,
+}
+
+// A shared volume, by its name, and its owner's and a member's names.
+ShareOf :: struct {
+    owner : slop_os.Relative[u8],
+    name : slop_os.Relative[u8],
+    member : slop_os.Relative[u8],
 }
 
 PasswordChange :: struct {
@@ -67,6 +80,8 @@ Request :: union {
     Describe,
     Create(Creation),
     CreateBy(Elevated),
+    Share(ShareOf),
+    Unshare(ShareOf),
     OpenHome(Credentials),
     ChangePassword(PasswordChange),
     Recover(Recovery),
@@ -91,6 +106,10 @@ Response :: union {
     RateLimited(u64),
     // Not allowed: Create once there's an account
     Refused,
+    // Share's or Unshare's: a grant of the shared volume's root, for its owner's link
+    Shared(os.Channel[grant.Grant]),
+    // No account of the member's name, or none with a key pair yet: it's made at the account's next login
+    NoSuchAccount,
     Failed,
     Unsupported,
 }
@@ -100,6 +119,8 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Describe => true
         case Create(_) => false
         case CreateBy(_) => false
+        case Share(_) => false
+        case Unshare(_) => false
         case OpenHome(_) => true
         case ChangePassword(_) => false
         case Recover(_) => false

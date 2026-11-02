@@ -487,6 +487,35 @@ TESTS = [
         "--expect-line=[user] sessions: a session for bob, in en-US",
         "--refuse-console-line=correct horse battery staple", "--refuse-console-line=another good passphrase",
         "--refuse-console-line=not the password"])),
+    # Shared volumes (decisions/0158): the administrator has bob's account made, then shares a volume, team, with bob
+    # from the secure attention key's screen (H), which links shared/team in their home; bob, logged in to another
+    # session, finds it in theirs; back in the administrator's, bob is taken out, every link into team revoked and its
+    # next key generation started
+    ("shares a volume with another user, who finds it at login, and takes them out of it", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=270")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wadduser\\r\\w\\p\\e[3;7~"
+        "\\wadmin\\rcorrect horse battery staple\\rbob\\ranother good passphrase\\ranother good passphrase\\r"
+        "\\w\\r"
+        "\\w\\p\\e[3;7~\\ph"
+        "\\wteam\\rbob\\r\\p\\p\\e[3;7~\\pn"
+        "\\wbob\\ranother good passphrase\\r"
+        "\\w\\p\\e[3;7~\\ps\\p\\e[3;7~\\ph"
+        "\\wteam\\rbob\\e[3~\\p",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
+        "--console-input-after=Asked the powerbox; Ctrl+Alt+Delete shows what it asks.", "--console-input-after=  Make an account",
+        "--console-input-after=  Press Enter once you have.", "--console-input-after=Made the account bob.",
+        "--console-input-after=  Share a volume", "--console-input-after=  Log in",
+        "--console-input-after=Your home directory has 2 entries.", "--console-input-after=  Share a volume",
+        "--expect-line=[user] account_service: made the shared volume team, admin's",
+        "--expect-line=[user] account_service: shared team with bob",
+        "--expect-line=[user] terminal: shared team, linked shared/team in the owner's home",
+        "--expect-line=[user] account_service: bob joined team",
+        "--expect-line=[user] account_service: took bob out of team, revoked 2 links into it, and started its next key generation",
+        "--expect-line=[user] terminal: took a member out of team, linked shared/team in the owner's home",
+        "--refuse-console-line=correct horse battery staple", "--refuse-console-line=another good passphrase"])),
     # Memory pressure (decisions/0153): with two sessions, the session manager's budget charged to its threshold, it asks
     # the idle installation, the counter of the session not shown, to stop, and leaves the shown session's running
     ("stops the idle installations of sessions not shown under memory pressure", 7,
