@@ -28,6 +28,7 @@ import process_manager from "std/os/slop_os"
 import terminal from "std/os/slop_os"
 import schema from "std"
 import echo from "../../apps/echo"
+import shell from "../../apps/shell"
 import powerbox_service from "../powerbox_service"
 import counter from "../../apps/counter"
 import counter_app from "../../counter_app"
@@ -73,6 +74,13 @@ SessionSettings :: struct {
 }
 
 // What echo is given (echo.main): the session's terminal, and its home volume's root if it has one.
+// What the shell is given (shell.main), while it isn't the first program yet but with use_shell (decisions/0169).
+ShellGrants :: struct {
+    log : slop_os.DebugLog?,
+    session_terminal : os.Channel[terminal.Terminal],
+    home : os.Channel[dir.Dir]?,
+}
+
 EchoGrants :: struct {
     log : slop_os.DebugLog?,
     session_terminal : os.Channel[terminal.Terminal],
@@ -172,6 +180,8 @@ Manager :: struct {
     // test_pressure: whether it's still to come, and the budget it charges its own with to bring on pressure, until
     // that's relieved
     test_pressure : bool,
+    // use_shell: the shell as each session's first program, in echo's place, from the bundle store
+    use_shell : bool,
     ballast : slop_os.MemoryBudget,
     // The sessions, and every session's programs
     sessions : Session[MAX_SESSIONS],
@@ -232,6 +242,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], ech
             text :: service_kit.text_of(block, memory) or_else ""
             sessions.test_installations = service_kit.has_word(text, "test_installations")
             sessions.test_pressure = service_kit.has_word(text, "test_pressure")
+            sessions.use_shell = service_kit.has_word(text, "use_shell")
         }
         case None => {}
     }
@@ -453,6 +464,9 @@ close_session :: fn(sessions: ptr[mut Manager], number: u32) {
 
 // echo started in the session, its end watched and its lifecycle channel kept; whether it started.
 launch_echo :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?) -> bool {
+    if sessions.use_shell {
+        return launch_shell(sessions, number, given_terminal, home)
+    }
     module :: sessions.echo_module or_return false
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     copy :: cast[slop_os.Memory](slop_os.handle_duplicate(cast[slop_os.Handle](module), rights) or_return false)
@@ -460,6 +474,23 @@ launch_echo :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.Ch
     return placed(sessions, number, "echo", prepared, os.launch(sessions.manager, sessions.manager_port, "echo", copy, ECHO_BUDGET, echo.main,
         EchoGrants.{log = duplicate_log(sessions.log), session_terminal = given_terminal, home = home,
         powerbox = powerbox_for(sessions, number, "echo")}, prepared.options), false)
+}
+
+// The shell, from the bundle store, in echo's place: whether it started.
+launch_shell :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?) -> bool {
+    expected :: bundle.Hash.{bytes = schema.hash(type_info_of(type_of(shell.main)))}
+    program := cast[slop_os.Memory](slop_os.NO_HANDLE)
+    match bundle_named(sessions, "shell") {
+        case Some(found) => program = program_of(sessions, found, expected) or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
+        case None => {}
+    }
+    if cast[slop_os.Handle](program) == slop_os.NO_HANDLE {
+        runtime.log_info("no shell in the bundle store")
+        return false
+    }
+    prepared :: prepare(sessions, number, "shell") or_return false
+    return placed(sessions, number, "shell", prepared, os.launch(sessions.manager, sessions.manager_port, "shell", program, ECHO_BUDGET,
+        shell.main, ShellGrants.{log = duplicate_log(sessions.log), session_terminal = given_terminal, home = home}, prepared.options), false)
 }
 
 /*

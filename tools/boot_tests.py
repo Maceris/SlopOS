@@ -198,7 +198,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 59 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 60 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 5 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -524,6 +524,20 @@ TESTS = [
         "--expect-line=[user] account_service: took bob out of team, revoked 2 links into it, and started its next key generation",
         "--expect-line=[user] terminal: took a member out of team, linked shared/team in the owner's home",
         "--refuse-console-line=correct horse battery staple", "--refuse-console-line=another good passphrase"])),
+    # The shell's language (decisions/0169), the session's first program with use_shell: let, sizes and their
+    # arithmetic, a string with a variable in it, lists, records, and errors that say where they are
+    ("evaluates the shell language: values, names, lists, records and errors", 7,
+     with_before_qemu([argument.replace("test_services", "test_services use_shell test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wlet x = 4MiB + 512KiB\\r\\p$x\\r\\pprint \"size: $x\"\\r\\p[1, 2, 3][1] * 10\\r\\p{name: \"a\", n: 3}.n\\r\\p"
+        "nope --now\\r\\p1 + \\r\\p250ms * 4 == 1s",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-line=[user] shell: reading commands",
+        "--expect-console-line=4.5 MiB", "--expect-console-line=size: 4.5 MiB", "--expect-console-line=20",
+        "--expect-console-line=3", "--expect-console-line=error: there's no command named nope",
+        "--expect-console-line=error: something's missing at the end", "--expect-console-line=true"])),
     # Memory pressure (decisions/0153): with two sessions, the session manager's budget charged to its threshold, it asks
     # the idle installation, the counter of the session not shown, to stop, and leaves the shown session's running
     ("stops the idle installations of sessions not shown under memory pressure", 7,
