@@ -94,12 +94,9 @@ input service recognizes.
 
 ## Shell
 
-Open, from `design/shell.md` (2026-10-24):
-
-- **The language's syntax and name**: the sketch in `shell.md` §2, or closer to an existing shell for familiarity.
-- **`Stream[T]` as `std`'s typed stream protocol** between programs, with byte streams as `Stream[u8]`, and how a
-  pipeline stage marks its input parameter.
-- **Scripts as programs**: a script's declared parameters as its manifest, run in a process with only its grants.
+Nothing open. Answered 2026-11-02 (`decisions/0162`): `shell.md`'s sketched syntax, named shell; a pipeline's input is
+the `Stream[T]` parameter named `input`; `Stream[T]` as batches in shared memory in `std`; scripts as programs, with
+functions local to them; and entries taking typed values from an `arguments` page.
 
 ## Observability
 
