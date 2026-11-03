@@ -186,6 +186,10 @@ main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, wo
             if failed_system != 0 {
                 return failed_system
             }
+            failed_zones :: check_zones(to, volume)
+            if failed_zones != 0 {
+                return failed_zones
+            }
             // The system volume's container holds an encrypted one, too (sealed_check.hsc)
             return check_sealed(to, manager.end, manager_port, volume)
         }

@@ -711,6 +711,30 @@ BOOT_SYSTEM_SECTORS = 65536
 # The encrypted volume the image builder makes beside the system volume, and its passphrase, which the disk check
 # unlocks it with (src/services/disk_check/sealed_check.hsc)
 SEALED_VOLUME = "sealed"
+
+# The time zones the system volume has in zoneinfo/, as std/time reads them (knowledge/decisions/0164), from Python's
+# tzdata package: the common ones, for now
+ZONES = ["UTC", "Etc/UTC", "Europe/London", "Europe/Dublin", "Europe/Lisbon", "Europe/Paris", "Europe/Berlin",
+         "Europe/Madrid", "Europe/Rome", "Europe/Amsterdam", "Europe/Stockholm", "Europe/Warsaw", "Europe/Athens",
+         "Europe/Helsinki", "Europe/Istanbul", "Europe/Moscow", "America/New_York", "America/Chicago", "America/Denver",
+         "America/Phoenix", "America/Los_Angeles", "America/Anchorage", "America/Toronto", "America/Vancouver",
+         "America/Mexico_City", "America/Sao_Paulo", "America/Argentina/Buenos_Aires", "Pacific/Honolulu",
+         "Asia/Tokyo", "Asia/Seoul", "Asia/Shanghai", "Asia/Hong_Kong", "Asia/Singapore", "Asia/Kolkata", "Asia/Dubai",
+         "Asia/Jakarta", "Australia/Sydney", "Australia/Melbourne", "Australia/Brisbane", "Australia/Adelaide",
+         "Australia/Perth", "Pacific/Auckland", "Africa/Johannesburg", "Africa/Cairo", "Africa/Lagos", "Africa/Nairobi"]
+
+
+def copy_zones(into: Path) -> None:
+    """ZONES' TZif files, from Python's tzdata, into a folder that becomes the system volume's zoneinfo/."""
+    try:
+        import tzdata
+    except ImportError:
+        sys.exit("boot.py: the system volume's time zones come from Python's tzdata package: pip install tzdata")
+    source = Path(tzdata.__file__).parent / "zoneinfo"
+    for zone in ZONES:
+        target = into / zone
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(source / zone, target)
 SEALED_PASSPHRASE = "slopos test passphrase"
 
 
@@ -737,6 +761,7 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], bootloader: P
     (system / "modules").mkdir(parents=True)
     for program in programs:
         shutil.copy(program, system / "modules" / program.name)
+    copy_zones(system / "zoneinfo")
     # The bundle store, with a bundle for every program outside the boot set, which the supervisor loads from it
     store_builder = next(image_builder.parent.glob("store_builder*"))
     stored = subprocess.run([str(store_builder), str(system / "store")] + [str(program) for program in programs
