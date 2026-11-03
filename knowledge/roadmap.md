@@ -367,8 +367,8 @@ programs. Planned 2026-11-02 (`decisions/0162`, `0164`). 11a done 2026-11-02 (`0
 taking typed values, `Stream[T]` and `Sink[T]`, `std/terminal`'s client and line editor, time zones from TZif, and
 linear-time regular expressions. 11b done 2026-11-02 (`0169` to `0171`): the shell's language with typed values,
 calls through manifests with arguments read by type and grants made from types, shell functions, errors handled
-with `or`, `try` and `?`, and `cd`; the shell is the session's first program with `use_shell`. This is the first
-usable system (above).
+with `or`, `try` and `?`, and `cd`; the shell is the session's first program with `use_shell`. 11c done 2026-11-03 (`0172`): pipelines over typed
+streams, records decoded by manifests, the built-in stages, and tables. This is the first usable system (above).
 
 Stresses: an interpreter in Hemera (tagged unions, arenas), reflection-driven parsing and rendering, Unicode and
 regex tables generated at compile time, the typed-entry machinery from the caller's side.

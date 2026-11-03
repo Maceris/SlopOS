@@ -582,6 +582,34 @@ TESTS = [
         "--expect-console-line=error: ../..: that's above your home",
         "--expect-console-line=error: nowhere: there's nothing there",
         "--expect-console-line=error: ..: that's above your home"])),
+    # Pipelines (decisions/0172): a program's records shown as a table, the built-in stages on them, two programs
+    # connected straight, a list written into a program, and the errors found before anything starts
+    ("runs pipelines: programs' records as tables, the built-in stages, and programs connected", 7,
+     with_before_qemu([argument.replace("test_services", "test_services use_shell test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wtest_shell_calls 3 row\\r\\p\\p"
+        "test_shell_calls 4 r | where id > 2 | map name\\r\\p\\p"
+        "test_shell_calls 2 a | test_shell_calls 0 b\\r\\p\\p"
+        "[{id: 7, name: \"seven\", kind: \"Fast\"}] | test_shell_calls 0 x\\r\\p\\p"
+        "test_shell_calls 4 s | sort id --descending | take 1 | map name\\r\\p\\p"
+        "test_shell_calls 4 g | group kind | map kind\\r\\p\\p"
+        "test_shell_calls 1 a | print\\r\\p\\p"
+        "[1, 2] | test_shell_calls 0 x\\r\\p\\p"
+        "where id > 1\\r\\p"
+        "test_shell_calls 2 a | where name",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-console-line=id  name  kind", "--expect-console-line=1   row1  Slow", "--expect-console-line=3   row3  Slow",
+        "--expect-console-line=\"r3\"", "--expect-console-line=\"r4\"",
+        "--expect-console-line=10  a1    Slow", "--expect-console-line=20  a2    Fast",
+        "--expect-console-line=70  seven  Fast",
+        "--expect-console-line=\"s4\"", "--refuse-console-line=\"s3\"",
+        "--expect-console-line=\"Slow\"", "--expect-console-line=\"Fast\"",
+        "--expect-console-line=error: only a program or a stage takes what comes before it in a pipeline",
+        "--expect-console-line=error: item 1 of what's given to test_shell_calls: it takes a record of Row's fields, not an integer",
+        "--expect-console-line=error: where works on what comes before it in a pipeline",
+        "--expect-console-line=error: where needs true or false, not a string"])),
     # Memory pressure (decisions/0153): with two sessions, the session manager's budget charged to its threshold, it asks
     # the idle installation, the counter of the session not shown, to stop, and leaves the shown session's running
     ("stops the idle installations of sessions not shown under memory pressure", 7,

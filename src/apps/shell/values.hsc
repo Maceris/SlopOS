@@ -109,6 +109,9 @@ render :: fn(out: ptr[mut text_buffer.TextBuffer], value: Value, nested: bool = 
                 }
                 text_buffer.append(out, "]")
             }
+            else if is_table(list) {
+                render_table(out, list)
+            }
             else {
                 for item, i in list.items {
                     if i > 0 {
@@ -199,4 +202,97 @@ append_duration :: fn(out: ptr[mut text_buffer.TextBuffer], nanos: i64) {
     }
     text_buffer.append_unsigned(out, magnitude)
     text_buffer.append(out, " ns")
+}
+
+// Whether a list is shown as a table: it has items, and every one's a record.
+is_table :: fn(list: ptr[ValueList]) -> bool {
+    for item in list.items {
+        match item {
+            case Record(_) => {}
+            case _ => return false
+        }
+    }
+    return list.items.count > 0
+}
+
+/*
+ * A list of records as a table: a column for each field, in the order they're first met, headed by its name, each as
+ * wide as its widest cell, two spaces apart; a record without a field leaves its cell blank.
+ */
+render_table :: fn(out: ptr[mut text_buffer.TextBuffer], list: ptr[ValueList]) {
+    columns : string[..]
+    defer runtime.array_free(&columns)
+    widths : usize[..]
+    defer runtime.array_free(&widths)
+    for item in list.items {
+        match item {
+            case Record(record) => {
+                for name in record.names {
+                    known := false
+                    for column in columns {
+                        known = known || column == name
+                    }
+                    if !known {
+                        runtime.array_add(&columns, name)
+                        runtime.array_add(&widths, name.count)
+                    }
+                }
+            }
+            case _ => {}
+        }
+    }
+    for item in list.items {
+        for column, i in columns {
+            cell :: cell_width(item, column)
+            if i < widths.count && cell > widths[i] {
+                widths[i] = cell
+            }
+        }
+    }
+    for column, i in columns {
+        last :: i + 1 == columns.count
+        text_buffer.append(out, column)
+        if !last && i < widths.count {
+            pad(out, widths[i] - column.count + 2)
+        }
+    }
+    for item in list.items {
+        text_buffer.append(out, "\n")
+        for column, i in columns {
+            last :: i + 1 == columns.count
+            start :: out.count
+            render_cell(out, item, column)
+            if !last && i < widths.count {
+                written :: out.count - start
+                pad(out, (if widths[i] > written { widths[i] - written } else { 0 }) + 2)
+            }
+        }
+    }
+}
+
+// A table's cell: a record's field, text as it is, anything else as it's shown inside a list.
+render_cell :: fn(out: ptr[mut text_buffer.TextBuffer], item: Value, column: string) {
+    match item {
+        case Record(record) => {
+            value :: field(record, column) or_return void
+            match value {
+                case Text(text) => text_buffer.append(out, text)
+                case _ => render(out, value, true)
+            }
+        }
+        case _ => {}
+    }
+}
+
+cell_width :: fn(item: Value, column: string) -> usize {
+    storage : u8[256]
+    out := text_buffer.make(storage)
+    render_cell(&out, item, column)
+    return out.count
+}
+
+pad :: fn(out: ptr[mut text_buffer.TextBuffer], count: usize) {
+    for i in 0..<count {
+        text_buffer.append(out, " ")
+    }
 }

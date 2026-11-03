@@ -27,6 +27,8 @@ Shell :: struct {
     returned : Value,
     // Its directory, as a path beneath its home, "" for the home itself
     directory : string,
+    // The ends of programs it's started that it's seen but not waited for yet
+    ended : EndedProgram[..],
     // Its home, which paths are beneath, the process manager it starts programs through, the session manager's
     // connection it finds them on (decisions/0170), each with its port, and its own port, where a program's end is seen
     home : os.Channel[dir.Dir]?,

@@ -376,6 +376,15 @@ parse_element :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
 parse_call :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     made :: node(.Call, parser.at)
     made.text = parse_name(parser)
+    // A pipeline's where and map take an expression, of each item's fields
+    if made.text == "where" || made.text == "map" {
+        skip_spaces(parser)
+        byte :: peek(parser)
+        if parser.at < parser.text.count && byte != 10 && byte != cast[u8]('|') && byte != cast[u8](';') && byte != cast[u8]('}') {
+            add(made, parse_expression(parser))
+        }
+        return made
+    }
     loop {
         skip_spaces(parser)
         byte :: peek(parser)

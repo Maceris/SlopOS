@@ -436,11 +436,6 @@ interpolate :: fn(shell: ptr[mut Shell], text: string) -> string {
     return if made.count > 0 { string_of(&made[0], made.count) } else { "" }
 }
 
-// a | b: in 11c; until then, said so.
-pipeline :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
-    return error_at(tree.at, "pipelines aren't here yet")
-}
-
 /*
  * A call: a name bound by let, alone, is its value; print writes its arguments, exit ends the shell and cd changes its
  * directory; a shell function's name calls it; anything else is a program, through its manifest (decisions/0170).
@@ -473,6 +468,9 @@ call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, E
     }
     if tree.text == "cd" {
         return change_directory(shell, tree)
+    }
+    if is_stage(tree) {
+        return error_at(tree.at, message("% works on what comes before it in a pipeline", tree.text))
     }
     match function_named(shell, tree.text) {
         case Some(function) => return call_function(shell, function, tree)
