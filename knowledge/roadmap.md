@@ -363,7 +363,9 @@ Design: `design/shell.md`.
 
 In five stages: **11a** the `std` port (`Stream[T]`, terminal client, line editor); **11b** the language and calls
 through manifests; **11c** pipelines and rendering; **11d** interactive use; **11e** the tools and scripts as
-programs. This is the first usable system (above).
+programs. Planned 2026-11-02 (`decisions/0162`, `0164`). 11a done 2026-11-02 (`0163`, `0165` to `0168`): entries
+taking typed values, `Stream[T]` and `Sink[T]`, `std/terminal`'s client and line editor, time zones from TZif, and
+linear-time regular expressions. This is the first usable system (above).
 
 Stresses: an interpreter in Hemera (tagged unions, arenas), reflection-driven parsing and rendering, Unicode and
 regex tables generated at compile time, the typed-entry machinery from the caller's side.
