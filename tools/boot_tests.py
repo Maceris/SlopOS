@@ -197,7 +197,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 57 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 58 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 5 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -714,6 +714,8 @@ TESTS = [
     program_test("ends a program missing a grant, or told another ABI version, as its starter sees", "test_exits",
         "a copy missing a grant it requires ended with 126, one told another ABI version with 125, and a refused launch gave its "
         "budget back"),
+    program_test("gives an entry's parameters that aren't handles as values", "test_values",
+        "a copy was given a number, a string, a list, an enum's member and a record, and read each"),
     program_test("supplies paged memory's pages from a pager in user mode", "test_pager",
         "2 pages supplied as they were touched, read at two addresses, and writing them refused"),
     program_test("measures the kernel's benchmarks", "test_perf", "measured ipc_round_trip, page_fault, thread_create and process_create"),
