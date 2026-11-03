@@ -368,7 +368,9 @@ taking typed values, `Stream[T]` and `Sink[T]`, `std/terminal`'s client and line
 linear-time regular expressions. 11b done 2026-11-02 (`0169` to `0171`): the shell's language with typed values,
 calls through manifests with arguments read by type and grants made from types, shell functions, errors handled
 with `or`, `try` and `?`, and `cd`; the shell is the session's first program with `use_shell`. 11c done 2026-11-03 (`0172`): pipelines over typed
-streams, records decoded by manifests, the built-in stages, and tables. This is the first usable system (above).
+streams, records decoded by manifests, the built-in stages, and tables. Before the rest of 11d, a phase of its own (`0174`): Doxygen-style
+documentation comments, kept and checked by Hemera's compiler, both codebases rewritten in them, and programs'
+documentation beside their manifests for `help`. This is the first usable system (above).
 
 Stresses: an interpreter in Hemera (tagged unions, arenas), reflection-driven parsing and rendering, Unicode and
 regex tables generated at compile time, the typed-entry machinery from the caller's side.
