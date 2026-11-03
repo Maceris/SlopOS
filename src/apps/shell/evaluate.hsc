@@ -9,15 +9,24 @@ import text_buffer from "std"
  * §5) unless `or { ... }` handles it. Names are the shell's own, bound by let, never given to programs.
  */
 
+/*
+ * An error, and where in the line it is. One a shell function's body met in a statement without ? is fatal once it
+ * leaves the function: it ends what's running, and nothing handles it (design/shell.md §5); ? marks it passed, the
+ * function's own error, which its caller can handle. A return is carried out of the function's body as one too.
+ */
 EvalError :: struct {
     message : string,
     at : usize,
+    fatal : bool,
+    passed : bool,
+    returning : bool,
 }
 
-// The shell's names and their values.
+// The shell's names and their values: a function's call has its own, in the scope it was called from.
 Scope :: struct {
     names : string[..],
     values : Value[..],
+    parent : ptr[Scope]?,
 }
 
 lookup :: fn(scope: ptr[Scope], name: string) -> Value? {
@@ -26,7 +35,15 @@ lookup :: fn(scope: ptr[Scope], name: string) -> Value? {
             return scope.values[i]
         }
     }
-    return null
+    match scope.parent {
+        case Some(outer) => return lookup(outer, name)
+        case None => return null
+    }
+}
+
+// Whether an error is one or and try/catch handle: not a fatal one, and not a return.
+handles :: fn(error: EvalError) -> bool {
+    return !error.fatal && !error.returning
 }
 
 bind :: fn(scope: ptr[mut Scope], name #escaping : string, value #escaping : Value) {
@@ -49,7 +66,7 @@ message :: fn(format: string, values: any...) -> string {
     return strings.format(format, values) or_else format
 }
 
-evaluate :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
+evaluate :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     match tree.kind {
         case .Statements => {
             last := Value.Null
@@ -60,18 +77,58 @@ evaluate :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalErro
         }
         case .Let => {
             value :: evaluate(shell, first_child(tree) or_return error_at(tree.at, "let needs a value"))?
-            bind(&shell.scope, tree.text, value)
+            bind(shell.scope, tree.text, value)
             return .Ok(.Null)
         }
         case .Pipeline => return pipeline(shell, tree)
-        case .Try => return evaluate(shell, first_child(tree) or_return error_at(tree.at, "? needs something before it"))
+        case .Try => {
+            match evaluate(shell, first_child(tree) or_return error_at(tree.at, "? needs something before it")) {
+                case Ok(value) => return .Ok(value)
+                case Error(error) => {
+                    passed := error
+                    passed.passed = true
+                    return .Error(passed)
+                }
+            }
+        }
         case .Or => {
             handled :: child(tree, 0) or_return error_at(tree.at, "or needs something before it")
             handler :: child(tree, 1) or_return error_at(tree.at, "or needs a block")
             match evaluate(shell, handled) {
                 case Ok(value) => return .Ok(value)
-                case Error(error) => return evaluate(shell, handler)
+                case Error(error) => {
+                    if !handles(error) {
+                        return .Error(error)
+                    }
+                    return evaluate(shell, handler)
+                }
             }
+        }
+        case .TryCatch => {
+            tried :: child(tree, 0) or_return error_at(tree.at, "try needs a block")
+            handler :: child(tree, 1) or_return error_at(tree.at, "try needs catch and a block")
+            match evaluate(shell, tried) {
+                case Ok(value) => return .Ok(value)
+                case Error(error) => {
+                    if !handles(error) {
+                        return .Error(error)
+                    }
+                    if tree.text.count > 0 {
+                        bind(shell.scope, tree.text, error_record(error))
+                    }
+                    return evaluate(shell, handler)
+                }
+            }
+        }
+        case .Function => return define(shell, tree)
+        case .Parameter => return error_at(tree.at, "a parameter is a function's")
+        case .Return => {
+            shell.returned = .Null
+            match first_child(tree) {
+                case Some(value) => shell.returned = evaluate(shell, value)?
+                case None => {}
+            }
+            return .Error(EvalError.{message = "return is a function's", at = tree.at, returning = true})
         }
         case .Call => return call(shell, tree)
         case .Word => return .Ok(.Text(tree.text))
@@ -79,7 +136,7 @@ evaluate :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalErro
         case .Literal => return .Ok(tree.value)
         case .Interpolated => return .Ok(.Text(interpolate(shell, tree.text)))
         case .Variable => {
-            found :: lookup(&shell.scope, tree.text) or_return error_at(tree.at, message("there's no variable named %", tree.text))
+            found :: lookup(shell.scope, tree.text) or_return error_at(tree.at, message("there's no variable named %", tree.text))
             return .Ok(found)
         }
         case .List => {
@@ -330,7 +387,7 @@ joined :: fn(a: string, b: string) -> string {
 }
 
 // A string's $names filled in with their values, as rendered; one that isn't bound left as it was written.
-interpolate :: fn(shell: ptr[Shell], text: string) -> string {
+interpolate :: fn(shell: ptr[mut Shell], text: string) -> string {
     bytes :: string_bytes(text)
     made : u8[..]
     at : usize = 0
@@ -355,7 +412,7 @@ interpolate :: fn(shell: ptr[Shell], text: string) -> string {
                 end += 1
             }
             name :: if start <= end && end <= bytes.count { string_of(&bytes[start % bytes.count], end - start) } else { "" }
-            match lookup(&shell.scope, name) {
+            match lookup(shell.scope, name) {
                 case Some(value) => {
                     storage : u8[1024]
                     out := text_buffer.make(storage)
@@ -385,11 +442,11 @@ pipeline :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalErro
 }
 
 /*
- * A call: a name bound by let, alone, is its value; print writes its arguments; anything else is a program, through
- * its manifest (11b2).
+ * A call: a name bound by let, alone, is its value; print writes its arguments, exit ends the shell and cd changes its
+ * directory; a shell function's name calls it; anything else is a program, through its manifest (decisions/0170).
  */
-call :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
-    match lookup(&shell.scope, tree.text) {
+call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+    match lookup(shell.scope, tree.text) {
         case Some(value) => {
             if tree.children.count > 0 {
                 return error_at(tree.at, message("% is a variable, so it takes no arguments", tree.text))
@@ -413,6 +470,13 @@ call :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
     if tree.text == "exit" {
         shell.exiting = true
         return .Ok(.Null)
+    }
+    if tree.text == "cd" {
+        return change_directory(shell, tree)
+    }
+    match function_named(shell, tree.text) {
+        case Some(function) => return call_function(shell, function, tree)
+        case None => {}
     }
     return run_program(shell, tree)
 }

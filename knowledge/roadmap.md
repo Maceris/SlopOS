@@ -365,7 +365,10 @@ In five stages: **11a** the `std` port (`Stream[T]`, terminal client, line edito
 through manifests; **11c** pipelines and rendering; **11d** interactive use; **11e** the tools and scripts as
 programs. Planned 2026-11-02 (`decisions/0162`, `0164`). 11a done 2026-11-02 (`0163`, `0165` to `0168`): entries
 taking typed values, `Stream[T]` and `Sink[T]`, `std/terminal`'s client and line editor, time zones from TZif, and
-linear-time regular expressions. This is the first usable system (above).
+linear-time regular expressions. 11b done 2026-11-02 (`0169` to `0171`): the shell's language with typed values,
+calls through manifests with arguments read by type and grants made from types, shell functions, errors handled
+with `or`, `try` and `?`, and `cd`; the shell is the session's first program with `use_shell`. This is the first
+usable system (above).
 
 Stresses: an interpreter in Hemera (tagged unions, arenas), reflection-driven parsing and rendering, Unicode and
 regex tables generated at compile time, the typed-entry machinery from the caller's side.

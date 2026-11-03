@@ -709,19 +709,13 @@ grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter
     }
 }
 
-// A path beneath the shell's home opened as giving asks: ~ and . are the home itself, ~/ is where a path starts.
-opened_beneath_home :: fn(shell: ptr[mut Shell], given: string, giving: Giving) -> Result[slop_os.Handle, string] {
+// A path, from the shell's directory or its home (resolve_path), opened as giving asks.
+opened_beneath_home :: fn(shell: ptr[mut Shell], given #escaping : string, giving: Giving) -> Result[slop_os.Handle, string] {
     home :: shell.home or_return .Error("the shell has no home to find it in")
     budget :: slop_os.startup_block().budget
-    path := given
-    if path == "~" || path == "." {
-        path = ""
-    }
-    else if path.count >= 2 && slice(path, 0, 2) == "~/" {
-        path = slice(path, 2, path.count)
-    }
-    if path.count > 0 && slice(path, 0, 1) == "/" {
-        return .Error("paths are beneath your home, written without a / first")
+    path :: match resolve_path(shell, given) {
+        case Ok(resolved) => resolved
+        case Error(problem) => return .Error(problem)
     }
     if path.count == 0 {
         if giving != .Dir {
@@ -756,7 +750,19 @@ opened_beneath_home :: fn(shell: ptr[mut Shell], given: string, giving: Giving) 
         case OpenedDirectory(opened) => .Ok(cast[slop_os.Handle](opened.end))
         case OpenedFile(opened) => .Ok(cast[slop_os.Handle](opened.end))
         case OpenedReadOnlyFile(opened) => .Ok(cast[slop_os.Handle](opened.end))
-        case Failed(failure) => .Error(message("%", failure))
+        case Failed(failure) => .Error(file_problem(failure))
         case _ => .Error("its directory couldn't open it")
+    }
+}
+
+// What a directory's failure means, as a person reads it.
+file_problem :: fn(failure: files.FileError) -> string {
+    return match failure {
+        case .NotFound => "there's nothing there"
+        case .NotADirectory => "that isn't a directory"
+        case .IsADirectory => "that's a directory"
+        case .InvalidPath => "that isn't a path the shell can use"
+        case .ReadOnly => "that can't be changed"
+        case _ => message("%", failure)
     }
 }

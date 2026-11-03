@@ -39,6 +39,14 @@ NodeKind :: enum {
     Index,
     Unary,
     Binary,
+    // fn name(parameters) { body }: its parameters, then its body
+    Function,
+    // A function's parameter: its name, its type's name as Text in its value (Null for any), and its default, if any
+    Parameter,
+    // return, and the value after it, if any
+    Return,
+    // try { ... } catch name { ... }: the tried block, then the handler; text the name the error's bound to
+    TryCatch,
 }
 
 Node :: struct {
@@ -186,6 +194,38 @@ parse_statements :: fn(parser: ptr[mut Parser], in_block: bool) -> ptr[mut Node]
 }
 
 parse_statement :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+    if at_keyword(parser, "fn") {
+        return parse_function(parser)
+    }
+    if at_keyword(parser, "return") {
+        made :: node(.Return, parser.at)
+        parser.at += 6
+        skip_spaces(parser)
+        byte :: peek(parser)
+        if parser.at < parser.text.count && byte != 10 && byte != cast[u8](';') && byte != cast[u8]('}') {
+            add(made, parse_pipeline(parser))
+        }
+        return made
+    }
+    if at_keyword(parser, "try") {
+        made :: node(.TryCatch, parser.at)
+        parser.at += 3
+        skip_spaces(parser)
+        add(made, parse_block(parser))
+        skip_spaces(parser)
+        if !at_keyword(parser, "catch") {
+            fail(parser, "try needs catch after its block")
+            return made
+        }
+        parser.at += 5
+        skip_spaces(parser)
+        if is_letter(peek(parser)) {
+            made.text = parse_name(parser)
+            skip_spaces(parser)
+        }
+        add(made, parse_block(parser))
+        return made
+    }
     if at_keyword(parser, "let") {
         made :: node(.Let, parser.at)
         parser.at += 3
@@ -205,6 +245,66 @@ parse_statement :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
         return made
     }
     return parse_pipeline(parser)
+}
+
+// fn name(a: type = default, ...) { body }
+parse_function :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+    made :: node(.Function, parser.at)
+    parser.at += 2
+    skip_spaces(parser)
+    made.text = parse_name(parser)
+    if made.text.count == 0 {
+        fail(parser, "fn needs a name")
+        return made
+    }
+    skip_spaces(parser)
+    if peek(parser) != cast[u8]('(') {
+        fail(parser, "fn needs ( and its parameters after its name")
+        return made
+    }
+    parser.at += 1
+    loop {
+        skip_spaces(parser)
+        if (parser.error is_some) || peek(parser) == cast[u8](')') {
+            break
+        }
+        parameter :: node(.Parameter, parser.at)
+        parameter.text = parse_name(parser)
+        if parameter.text.count == 0 {
+            fail(parser, "a parameter needs a name")
+            return made
+        }
+        skip_spaces(parser)
+        if peek(parser) == cast[u8](':') {
+            parser.at += 1
+            skip_spaces(parser)
+            type :: parse_name(parser)
+            if type.count == 0 {
+                fail(parser, "a parameter's type needs a name after :")
+                return made
+            }
+            parameter.value = .Text(type)
+            skip_spaces(parser)
+        }
+        if peek(parser) == cast[u8]('=') {
+            parser.at += 1
+            add(parameter, parse_expression(parser))
+            skip_spaces(parser)
+        }
+        add(made, parameter)
+        if peek(parser) == cast[u8](',') {
+            parser.at += 1
+            continue
+        }
+        if peek(parser) != cast[u8](')') {
+            fail(parser, "parameters are separated by , and end with )")
+            return made
+        }
+    }
+    parser.at += 1
+    skip_spaces(parser)
+    add(made, parse_block(parser))
+    return made
 }
 
 // element (| element)*, then ? or `or { ... }`.

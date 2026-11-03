@@ -19,8 +19,14 @@ PROMPT :: "> "
 
 Shell :: struct {
     console : terminal.Terminal,
-    scope : Scope,
+    scope : ptr[mut Scope],
     exiting : bool,
+    // Its functions, by name, their trees kept, the depth of the calls running, and what a return gave
+    functions : ptr[Node][..],
+    depth : usize,
+    returned : Value,
+    // Its directory, as a path beneath its home, "" for the home itself
+    directory : string,
     // Its home, which paths are beneath, the process manager it starts programs through, the session manager's
     // connection it finds them on (decisions/0170), each with its port, and its own port, where a program's end is seen
     home : os.Channel[dir.Dir]?,
@@ -36,6 +42,7 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Termina
     manager: os.Channel[process_manager.ProcessManager]?, programs: os.Channel[finding.Programs]?) -> int {
     block :: slop_os.startup_block()
     shell := runtime.new(Shell)
+    shell.scope = runtime.new(Scope)
     shell.console = terminal.open(session_terminal) or_return 2
     shell.port = slop_os.port_create(block.budget) or_return 2
     shell.home = home
@@ -60,7 +67,7 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Termina
         if shell.exiting {
             return 0
         }
-        match terminal.read_line(&editor, &shell.console, PROMPT) {
+        match terminal.read_line(&editor, &shell.console, prompt_of(shell)) {
             case Line(line) => run_line(shell, line)
             case Interrupted => {}
             case HangUp => {
@@ -98,11 +105,23 @@ run_line :: fn(shell: ptr[mut Shell], line: string) {
                 }
             }
             case Error(error) => {
+                if error.returning {
+                    show_error(shell, line, error.at, "return is a function's, and this isn't in one")
+                    return void
+                }
                 show_error(shell, line, error.at, error.message)
                 return void
             }
         }
     }
+}
+
+// The prompt: > after the shell's directory, when it isn't its home.
+prompt_of :: fn(shell: ptr[Shell]) -> string {
+    if shell.directory.count == 0 {
+        return PROMPT
+    }
+    return message("~/%> ", shell.directory)
 }
 
 // An error, and where in the line it is, under it.

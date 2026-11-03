@@ -561,6 +561,27 @@ TESTS = [
         "--expect-console-line=error: --count: x isn't a number",
         "--expect-console-line=error: --speed: Medium isn't one of Slow or Fast",
         "--expect-console-line=error: test_values needs a log, which the shell can't give"])),
+    # Shell functions, errors and the shell's directory (decisions/0171): a function's parameters matched and read by
+    # their types, try/catch with the error as a record, ? passing a function's error to its caller where one without
+    # is fatal, return, and cd beneath the home
+    ("runs shell functions, handles errors with try, or and ?, and changes directory", 7,
+     with_before_qemu([argument.replace("test_services", "test_services use_shell test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wfn twice(n: int) { $n * 2 }\\r\\ptwice 21\\r\\ptwice --n 5\\r\\ptwice x\\r\\p"
+        "try { nope } catch e { print \"caught:\" $e.message }\\r\\p"
+        "fn strict() { nope }\\r\\pfn lenient() { nope? }\\r\\plenient or { print \"handled\" }\\r\\pstrict or { print \"handled\" }\\r\\p"
+        "fn pick(a, b) { return $b; print \"not here\" }\\r\\ppick 1 \"second\"\\r\\p"
+        "cd apps\\r\\pcd ../..\\r\\pcd nowhere\\r\\pcd ..\\r\\pcd ..",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-console-line=42", "--expect-console-line=10", "--expect-console-line=error: --n: x isn't an integer",
+        "--expect-console-line=caught: there's no command named nope", "--expect-console-line=handled",
+        "--expect-console-line=error: in strict: there's no command named nope", "--expect-console-line=second",
+        "--refuse-console-line=not here",
+        "--expect-console-line=error: ../..: that's above your home",
+        "--expect-console-line=error: nowhere: there's nothing there",
+        "--expect-console-line=error: ..: that's above your home"])),
     # Memory pressure (decisions/0153): with two sessions, the session manager's budget charged to its threshold, it asks
     # the idle installation, the counter of the session not shown, to stop, and leaves the shown session's running
     ("stops the idle installations of sessions not shown under memory pressure", 7,
