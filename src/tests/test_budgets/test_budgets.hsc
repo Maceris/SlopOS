@@ -10,6 +10,11 @@
  * between 20% and 55% allowing for ticks, since budgets are
  * charged at ticks; and the two of it about alike, as one that waited while their budget was spent is moved up when it
  * comes back (scheduler.hsc, relevel), rather than waiting behind the other.
+ *
+ * The counts stand for CPU time only if every counter counts at the same rate, so all three are threads started at
+ * counter, running the same instructions at the same address, and each copy's own thread sleeps (decisions/0173): under
+ * an emulator, how fast a loop runs depends on where it is, and a main thread calling counter could run a copy of it
+ * inlined elsewhere.
  */
 package test_budgets
 
@@ -132,9 +137,18 @@ run_copy :: fn(peer: slop_os.Channel, counts: slop_os.Memory) -> int {
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     slop_os.memory_map(counts, block.space, at, 0, PAGE, read_write) or_return 4
     threads :: slop_os.memory_budget_create(block.budget, 1 << 20) or_return 5
+    // Every counter a thread started at counter, not this one calling it, which could count with a copy inlined elsewhere
     if role == ROLE_PAIR {
+        _ = test_kit.start_thread(threads, cast[u64](counter), at + SLOT_FIRST * 8) or_return 6
         _ = test_kit.start_thread(threads, cast[u64](counter), at + SLOT_SECOND * 8) or_return 6
-        counter(cast[ptr[mut u64]](at + SLOT_FIRST * 8))
     }
-    counter(cast[ptr[mut u64]](at + SLOT_RIVAL * 8))
+    else {
+        _ = test_kit.start_thread(threads, cast[u64](counter), at + SLOT_RIVAL * 8) or_return 6
+    }
+    // Asleep for good, so it takes none of its budget
+    asleep :: slop_os.port_create(block.budget) or_return 7
+    packets : slop_os.Packet[1]
+    loop {
+        _ = slop_os.port_wait(asleep, packets, slop_os.NO_DEADLINE)
+    }
 }
