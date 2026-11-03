@@ -27,7 +27,7 @@ CPU_WAITING : u32 : 0
 CPU_ONLINE : u32 : 1
 CPU_ABANDONED : u32 : 2
 
-// Start every CPU after the boot CPU, on the boot CPU, once its timer runs.
+/** Start every CPU after the boot CPU, on the boot CPU, once its timer runs. */
 start_cpus :: fn(kernel #escaping : ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
     // A copy of the view, which the calls below can't change
     cpus :: kernel.cpus
@@ -60,7 +60,7 @@ start_cpus :: fn(kernel #escaping : ptr[mut Kernel], info: ptr[boot_info.BootInf
     runtime.log_info("% of % CPUs online", kernel.online_cpus, cpus.count)
 }
 
-/*
+/**
  * Where a started CPU enters the kernel, with its PerCpu's carrier block loaded, its stack_limit
  * set for the boot stack until the CPU first enters through the kernel stack.
  */
@@ -86,7 +86,7 @@ cpu_started :: fn() #never_returns {
     }
 }
 
-/*
+/**
  * A CPU's PerCpu and stacks, from the frame allocator, with its context and its carrier block
  * pointing back at the PerCpu. The carrier block's stack_limit is set once the CPU is on the stack
  * it starts on.
@@ -118,7 +118,7 @@ allocate_cpu :: fn(kernel #escaping : ptr[mut Kernel], index: u32) -> Result[ptr
     return .Ok(cpu)
 }
 
-// Stop every other CPU that's online. They halt when the IPI arrives.
+/** Stop every other CPU that's online. They halt when the IPI arrives. */
 stop_other_cpus :: fn(kernel: ptr[Kernel]) {
     self :: per_cpu().index
     for cpu, index in kernel.cpus {

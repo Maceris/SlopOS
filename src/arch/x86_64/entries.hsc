@@ -26,7 +26,7 @@ DOUBLE_FAULT_VECTOR : u64 : 8
 MACHINE_CHECK_VECTOR : u64 : 18
 FIRST_INTERRUPT_VECTOR : u64 : 32
 
-/*
+/**
  * Every vector. Only an NMI returns, to whatever it interrupted, which may be anywhere, even an
  * entry that hasn't loaded the carrier block yet: the generated code restores the interrupted
  * registers, the carrier register among them, and this restores the carrier block's stack_limit.
@@ -62,7 +62,7 @@ kernel_entry_point #calling_convention(.entry) :: fn(frame: ptr[mut x86_64.Regis
     }
 }
 
-// SYSCALL, from user mode, on the kernel stack the generated code switched to.
+/** SYSCALL, from user mode, on the kernel stack the generated code switched to. */
 system_call_entry #calling_convention(.syscall_entry) :: fn(frame: ptr[mut x86_64.RegisterFrame]) #never_returns {
     cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
     cpu.carrier.stack_limit = cpu.kernel_stack_limit
@@ -72,12 +72,12 @@ system_call_entry #calling_convention(.syscall_entry) :: fn(frame: ptr[mut x86_6
     }
 }
 
-// Whether the interrupted code ran in user mode, from the privilege level of its code segment.
+/** Whether the interrupted code ran in user mode, from the privilege level of its code segment. */
 from_user_mode :: fn(frame: ptr[x86_64.RegisterFrame]) -> bool {
     return (frame.cs & 3) == 3
 }
 
-// A fault or an interrupt, decoded for kernel_entry.
+/** A fault or an interrupt, decoded for kernel_entry. */
 dispatch :: fn(frame: ptr[mut x86_64.RegisterFrame]) #never_returns {
     vector :: frame.vector
     if vector < FIRST_INTERRUPT_VECTOR {
@@ -94,7 +94,7 @@ dispatch :: fn(frame: ptr[mut x86_64.RegisterFrame]) #never_returns {
     kernel_entry.interrupt(.Idle, source)
 }
 
-//SPEC: Intel SDM Vol. 3A §7.15 (exception and interrupt reference)
+/** SPEC: Intel SDM Vol. 3A §7.15 (exception and interrupt reference) */
 decode_fault :: fn(vector: u64, error_code: u64) -> arch_interface.Fault {
     return match vector {
         case 0 => .Arithmetic
@@ -113,8 +113,10 @@ decode_fault :: fn(vector: u64, error_code: u64) -> arch_interface.Fault {
     }
 }
 
-// A page fault's error code and address: bit 0 present, bit 1 write, bit 4 instruction fetch.
-//SPEC: Intel SDM Vol. 3A §4.7, Figure 4-12 (page-fault error code)
+/**
+ * A page fault's error code and address: bit 0 present, bit 1 write, bit 4 instruction fetch.
+ * SPEC: Intel SDM Vol. 3A §4.7, Figure 4-12 (page-fault error code)
+ */
 decode_page_fault :: fn(error_code: u64) -> arch_interface.PageFault {
     access : arch_interface.Access = .Read
     if (error_code >> 4) & 1 == 1 {
@@ -130,7 +132,7 @@ decode_page_fault :: fn(error_code: u64) -> arch_interface.PageFault {
     }
 }
 
-/*
+/**
  * An interrupt's source. The timer and IPIs are acknowledged here; spurious interrupts aren't
  * acknowledged at all (Intel SDM Vol. 3A §11.9). Vectors nothing raises count as spurious.
  */
@@ -158,7 +160,7 @@ interrupt_source :: fn(vector: u64) -> kernel_entry.InterruptSource {
     return source
 }
 
-// Point every vector at its entry point, on the IST stack it runs on.
+/** Point every vector at its entry point, on the IST stack it runs on. */
 fill_idt :: fn(system: ptr[mut ArchSystem]) {
     points :: x86_64.entry_points(kernel_entry_point)
     for vector in 0..<256 {

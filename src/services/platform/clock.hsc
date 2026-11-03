@@ -20,10 +20,10 @@ FADT_IAPC_BOOT_ARCH : u64 : 109
 IAPC_NO_CMOS_RTC : u16 : 1 << 5
 PL031_SIZE : u64 : 4096
 
-// Where the real-time clock is.
+/** Where the real-time clock is. */
 Clock :: struct {
     kind : protocol.ClockKind,
-    // A PL031's registers
+    /** A PL031's registers */
     registers : u64,
 }
 
@@ -49,7 +49,7 @@ find_clock :: fn(tables: u64, size: u64) -> Clock? {
     }
 }
 
-/*
+/**
  * The real-time clock for client, made anew each time it's asked, since what it held may have died with its driver;
  * NoDevice if there's none, or another client claimed it.
  */

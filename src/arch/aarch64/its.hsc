@@ -49,7 +49,7 @@ PENDING_ZEROED : u64 : 1 << 62
 FIRST_LPI : u32 : 8192
 LPI_ID_BITS : u64 : 14
 LPI_COUNT :: 8192
-// Each LPI's byte in the property table: its priority, and whether it's enabled
+/** Each LPI's byte in the property table: its priority, and whether it's enabled */
 LPI_ENABLED : u8 : 1
 
 // The memory init_msi is given, in this order, each part aligned to 64 KiB as the pending tables must be
@@ -72,16 +72,16 @@ COMMAND_DISCARD : u64 : 0x0f
 
 MAX_COLLECTIONS :: 128
 MAX_MSI_ROUTES :: 256
-// The ITS waits this many polls for a command at most before the kernel gives up on it.
+/** The ITS waits this many polls for a command at most before the kernel gives up on it. */
 COMMAND_POLLS : u64 : 10000000
 
-// A CPU's redistributor as a collection: whose affinity it has, and how the ITS names it (MAPC's RDbase).
+/** A CPU's redistributor as a collection: whose affinity it has, and how the ITS names it (MAPC's RDbase). */
 Collection :: struct {
     affinity : u64,
     target : u64,
 }
 
-// An event routed: which LPI it raises.
+/** An event routed: which LPI it raises. */
 MsiRoute :: struct {
     used : bool,
     source : u32,
@@ -89,7 +89,7 @@ MsiRoute :: struct {
     lpi : u32,
 }
 
-// What the ITS needs, in ArchSystem.
+/** What the ITS needs, in ArchSystem. */
 ItsState :: struct {
     // Its registers through the direct map, and where they are; 0 without one.
     registers : u64,
@@ -112,7 +112,7 @@ ItsState :: struct {
     routes : MsiRoute[MAX_MSI_ROUTES],
 }
 
-// The ITS's registers, mapped through the direct map, from the device tree's node for it.
+/** The ITS's registers, mapped through the direct map, from the device tree's node for it. */
 map_its :: fn(system: ptr[mut ArchSystem], physical: u64) {
     if physical == 0 || !map_device_range(system, physical, ITS_SIZE) {
         return void
@@ -121,7 +121,7 @@ map_its :: fn(system: ptr[mut ArchSystem], physical: u64) {
     system.its.registers = system.direct_map_offset + physical
 }
 
-// Bytes of memory for the device table this ITS needs, which init_msi's memory has after its first three parts.
+/** Bytes of memory for the device table this ITS needs, which init_msi's memory has after its first three parts. */
 device_table_size :: fn(system: ptr[ArchSystem]) -> u64 {
     base :: system.its.registers
     for n in 0..<8 {
@@ -143,7 +143,7 @@ round_up_64k :: fn(value: u64) -> u64 {
     return (value + 0xffff) & ~cast[u64](0xffff)
 }
 
-// How many redistributors the region has, each a CPU's.
+/** How many redistributors the region has, each a CPU's. */
 redistributor_count :: fn(system: ptr[ArchSystem]) -> u64 {
     count : u64 = 0
     with {
@@ -173,7 +173,7 @@ msi_controller_memory :: fn() -> u64 {
     return COMMAND_QUEUE_SIZE + PROPERTY_TABLE_SIZE + COLLECTION_TABLE_SIZE + tables + redistributor_count(system) * PENDING_TABLE_SIZE
 }
 
-/*
+/**
  * The ITS set up with memory, msi_controller_memory's bytes: its tables and command queue, every redistributor's
  * LPIs on, and each one a collection. Once every CPU has started, so every redistributor is awake.
  */
@@ -266,8 +266,10 @@ init_msi :: fn(memory: arch_interface.PhysicalAddress) {
     runtime.log_info("GIC ITS: MSIs on, % collections, % device ID bits", count, its.device_bits)
 }
 
-// Bytes of a device's interrupt translation table, for MAX_DEVICE_MSIS events; null without an ITS.
-// The page of GITS_TRANSLATER, which a device's MSI is a write to.
+/**
+ * Bytes of a device's interrupt translation table, for MAX_DEVICE_MSIS events; null without an ITS.
+ * The page of GITS_TRANSLATER, which a device's MSI is a write to.
+ */
 msi_doorbell :: fn() -> arch_interface.PhysicalAddress? {
     its :: &current_system().its
     if !its.ready {
@@ -299,7 +301,7 @@ add_msi_device :: fn(source: u32, memory: arch_interface.PhysicalAddress, events
     concurrency.unlock(&its.lock)
 }
 
-// The device unmapped, which drops every event of its; their LPIs free again.
+/** The device unmapped, which drops every event of its; their LPIs free again. */
 remove_msi_device :: fn(source: u32) {
     system :: current_system()
     its :: &system.its
@@ -317,7 +319,7 @@ remove_msi_device :: fn(source: u32) {
     concurrency.unlock(&its.lock)
 }
 
-/*
+/**
  * Source's event as an LPI of its own, on the collection of the CPU with this hardware ID, enabled; the LPI routed
  * to id there. The message: the event's number, to GITS_TRANSLATER.
  */
@@ -374,7 +376,7 @@ route_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interfac
     return message
 }
 
-// Source's event's LPI moved to the collection of the CPU with this hardware ID (MOVI), and routed to id there.
+/** Source's event's LPI moved to the collection of the CPU with this hardware ID (MOVI), and routed to id there. */
 move_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interface.InterruptId) -> arch_interface.MsiMessage {
     system :: current_system()
     its :: &system.its
@@ -420,7 +422,7 @@ unroute_msi :: fn(source: u32, event: u32) {
     }
 }
 
-// An LPI disabled, forgotten by routes, and free. Takes its_lock as held.
+/** An LPI disabled, forgotten by routes, and free. Takes its_lock as held. */
 free_lpi :: fn(system: ptr[mut ArchSystem], lpi: u32) {
     its :: &system.its
     properties :: view_of(cast[ptr[mut u8]](its.properties), LPI_COUNT)
@@ -453,7 +455,7 @@ give_lpi :: fn(its: ptr[mut ItsState], lpi: u32) {
     }
 }
 
-/*
+/**
  * One command, its four doublewords: the first (with its number), the second and the third, the fourth zero. Waits
  * until the ITS has read it. Takes its_lock as held.
  */

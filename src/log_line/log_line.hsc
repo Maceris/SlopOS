@@ -1,4 +1,4 @@
-/*
+/**
  * A line in the kernel's log, formatted, through a debug log handle (decisions/0060): how the first
  * services report before there's a console (M7).
  *

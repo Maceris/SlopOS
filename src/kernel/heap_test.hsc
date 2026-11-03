@@ -2,7 +2,7 @@ package kernel
 
 import runtime from "base"
 
-/*
+/**
  * test_heap: blocks of many sizes from the context's allocator, the kernel heap, small and large,
  * each filled with its own bytes. Every block has to come zeroed and aligned, keep its contents while
  * the others are allocated, and keep them when it grows or shrinks, with what it grows by zeroed.
@@ -71,7 +71,7 @@ test_heap :: fn() {
     runtime.log_info("test_heap: % blocks kept their contents, grown, shrunk and freed", HEAP_TEST_BLOCKS)
 }
 
-// 24 bytes aligned to 32 bytes up to 64 KiB, each from the class or frame block that's aligned enough.
+/** 24 bytes aligned to 32 bytes up to 64 KiB, each from the class or frame block that's aligned enough. */
 over_aligned_blocks :: fn() -> bool {
     with {
         alignment : usize = 32
@@ -89,7 +89,7 @@ over_aligned_blocks :: fn() -> bool {
     return true
 }
 
-// Sizes from 1 byte to a few KiB, and every 25th block bigger, in frames of its own.
+/** Sizes from 1 byte to a few KiB, and every 25th block bigger, in frames of its own. */
 heap_test_size :: fn(i: u64, round: u64) -> u64 {
     if (i + round) % 25 == 0 {
         return 20000 + round * 9000

@@ -1,4 +1,4 @@
-/*
+/**
  * The generations package's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or
  * the number of the first check that failed. A generation's record is checked, refused when it's broken, read back from
  * its bytes, and a tentative one's tries left checked.
@@ -79,7 +79,7 @@ main :: fn() -> int {
     return 0
 }
 
-// A generation numbered number, of the root task and the system records, with test_exit on its command line.
+/** A generation numbered number, of the root task and the system records, with test_exit on its command line. */
 generation :: fn(number: u64, state: u8) -> generations.Generation {
     made := generations.Generation.{magic = generations.MAGIC, number = number, state = state, kaslr = 1, file_count = 2}
     made.kernel = bundle.hash_of(string_bytes("a kernel"))

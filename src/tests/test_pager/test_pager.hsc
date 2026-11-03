@@ -1,4 +1,4 @@
-/*
+/**
  * test_pager (roadmap 9b, decisions/0094): paged memory, whose pages a pager supplies. A thread of the program's own
  * is the pager: woken on its port's wake binding, it asks which pages are wanted and supplies each from memory of its
  * own, which holds a pattern per page. The program maps the paged memory read-only at two addresses, and:
@@ -27,10 +27,12 @@ PAGES : u64 : 4
 PAGER_KEY : u64 : 1
 STOP_KEY : u64 : 2
 PRESSURE_KEY : u64 : 3
-// How long it waits for pressure to be raised
+/** How long it waits for pressure to be raised */
 PRESSURE_WAIT : u64 : 2_000_000_000
 
-// What the program and its pager share: the paged memory, its source, the port, how many pages it supplied, and stop.
+/**
+ * What the program and its pager share: the paged memory, its source, the port, how many pages it supplied, and stop.
+ */
 Shared :: struct {
     paged : slop_os.Memory,
     source : slop_os.Memory,
@@ -39,7 +41,9 @@ Shared :: struct {
     stop : u64,
 }
 
-// The pager: woken for each wanted page, which it supplies from the same page of its source, until it's told to stop.
+/**
+ * The pager: woken for each wanted page, which it supplies from the same page of its source, until it's told to stop.
+ */
 pager #calling_convention(.c) #no_context :: fn(shared: ptr[mut Shared]) #never_returns {
     loop {
         packets : slop_os.Packet[4]

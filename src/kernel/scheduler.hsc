@@ -40,7 +40,7 @@ import concurrency from "std"
 
 LEVELS :: 257
 BACKGROUND_LEVEL : u32 : 0
-// PerCpu.current_level while it has no thread.
+/** PerCpu.current_level while it has no thread. */
 IDLE_LEVEL : u32 : 0xffffffff
 
 RunQueue :: struct {
@@ -52,7 +52,7 @@ RunQueue :: struct {
     count : u32,
 }
 
-// The level thread runs at now: its budget's priority while it has time, the background band otherwise.
+/** The level thread runs at now: its budget's priority while it has time, the background band otherwise. */
 level_of :: fn(thread: ptr[Thread], now: u64) -> u32 {
     if thread.budget == 0 {
         return BACKGROUND_LEVEL
@@ -61,7 +61,7 @@ level_of :: fn(thread: ptr[Thread], now: u64) -> u32 {
     return if has_time(budget, now) { cast[u32](budget.priority) + 1 } else { BACKGROUND_LEVEL }
 }
 
-/*
+/**
  * Put thread on cpu_index's run queue, and if it should run there before what runs there now, tell that
  * CPU at once.
  */
@@ -92,7 +92,7 @@ make_ready :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], asked: u32) {
     }
 }
 
-// Whether thread may run on the CPU with index cpu_index: any, without a budget, or one of its budget's.
+/** Whether thread may run on the CPU with index cpu_index: any, without a budget, or one of its budget's. */
 may_run_on :: fn(thread: ptr[Thread], cpu_index: u32) -> bool {
     if thread.budget == 0 || cpu_index >= 64 {
         return true
@@ -101,7 +101,7 @@ may_run_on :: fn(thread: ptr[Thread], cpu_index: u32) -> bool {
     return (cpus >> cast[u64](cpu_index)) & 1 != 0
 }
 
-// cpu_index if thread may run there, otherwise the next online CPU after it that it may, or cpu_index if none.
+/** cpu_index if thread may run there, otherwise the next online CPU after it that it may, or cpu_index if none. */
 cpu_for :: fn(kernel: ptr[Kernel], thread: ptr[Thread], cpu_index: u32) -> u32 {
     if may_run_on(thread, cpu_index) {
         return cpu_index
@@ -116,7 +116,7 @@ cpu_for :: fn(kernel: ptr[Kernel], thread: ptr[Thread], cpu_index: u32) -> u32 {
     return cpu_index
 }
 
-/*
+/**
  * Run what should run next on the calling CPU, after an entry: at a tick, the next thread of the same
  * level or higher, round robin; at any other entry, a thread of a higher level than the current one,
  * which otherwise goes on. With no thread, a ready one here or on another CPU, or idle. A thread being
@@ -187,7 +187,7 @@ schedule :: fn(tick: bool) #never_returns {
     }
 }
 
-// Charge the time since the current thread started running, or since the last charge.
+/** Charge the time since the current thread started running, or since the last charge. */
 account :: fn(cpu: ptr[mut PerCpu], thread: ptr[mut Thread], now: u64) {
     used :: now - cpu.run_start
     thread.run_time += used
@@ -197,7 +197,7 @@ account :: fn(cpu: ptr[mut PerCpu], thread: ptr[mut Thread], now: u64) {
     cpu.run_start = now
 }
 
-/*
+/**
  * Switch to thread: its address space, its vector state, its registers. Returns only if it turns out to
  * be dying.
  */
@@ -233,7 +233,7 @@ run :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Thread]
     arch.return_to_user(&thread.registers)
 }
 
-/*
+/**
  * Back to the current thread, whose registers, vector state and address space are all still its own.
  * Returns only if it turns out to be dying.
  */
@@ -248,7 +248,7 @@ go_on :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Threa
     arch.return_to_user(&thread.registers)
 }
 
-// Nothing to run: the kernel's own page tables, so no address space stays active here, then idle.
+/** Nothing to run: the kernel's own page tables, so no address space stays active here, then idle. */
 go_idle :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu]) #never_returns {
     cpu.current = 0
     intrinsics.atomic_store_u32_release(&cpu.current_level, IDLE_LEVEL)
@@ -270,7 +270,7 @@ go_idle :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu]) #never_returns {
     arch.idle()
 }
 
-/*
+/**
  * An interrupt woke an idle CPU: one that wasn't ticking records the epoch now, before anything it runs could reach an
  * object, and ticks again from now.
  */
@@ -286,7 +286,9 @@ leave_idle :: fn() {
     program_deadline(cpu)
 }
 
-// An idle CPU that isn't ticking, other than skip, by index, or NO_CPU: which a busy CPU's queue wakes to steal from it.
+/**
+ * An idle CPU that isn't ticking, other than skip, by index, or NO_CPU: which a busy CPU's queue wakes to steal from it.
+ */
 tickless_cpu :: fn(kernel: ptr[Kernel], skip: u32) -> u32 {
     per_cpus :: kernel.per_cpus
     online :: cast[usize](intrinsics.atomic_load_u32_acquire(&kernel.online_cpus))
@@ -303,7 +305,7 @@ tickless_cpu :: fn(kernel: ptr[Kernel], skip: u32) -> u32 {
 
 NO_CPU : u32 : 0xffffffff
 
-// A ready thread that may run on cpu from another online CPU's run queue, the first at its highest level, or 0.
+/** A ready thread that may run on cpu from another online CPU's run queue, the first at its highest level, or 0. */
 steal :: fn(kernel: ptr[Kernel], cpu: ptr[PerCpu]) -> u64 {
     per_cpus :: kernel.per_cpus
     online :: cast[usize](intrinsics.atomic_load_u32_acquire(&kernel.online_cpus))
@@ -326,7 +328,7 @@ steal :: fn(kernel: ptr[Kernel], cpu: ptr[PerCpu]) -> u64 {
     return 0
 }
 
-// The highest level with threads, or IDLE_LEVEL. Takes the lock as held.
+/** The highest level with threads, or IDLE_LEVEL. Takes the lock as held. */
 highest_level :: fn(queue: ptr[RunQueue]) -> u32 {
     for word in 0..<5 #reverse {
         bits :: queue.nonempty[word]
@@ -337,7 +339,7 @@ highest_level :: fn(queue: ptr[RunQueue]) -> u32 {
     return IDLE_LEVEL
 }
 
-// The highest set bit of a value that has one, by halves.
+/** The highest set bit of a value that has one, by halves. */
 highest_bit :: fn(value: u64) -> u32 {
     bits := value
     result : u32 = 0
@@ -350,7 +352,7 @@ highest_bit :: fn(value: u64) -> u32 {
     return result
 }
 
-// Append thread to its level's list. Takes the lock as held.
+/** Append thread to its level's list. Takes the lock as held. */
 enqueue :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread], level: u32) {
     index :: cast[usize](level) % LEVELS
     thread.level = cast[u32](index)
@@ -368,7 +370,7 @@ enqueue :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread], level: u32) {
     intrinsics.atomic_store_u32_release(&queue.count, queue.count + 1)
 }
 
-/*
+/**
  * Every thread in the background band whose budget has time again, moved up to its budget's level, behind what's
  * there. Takes the lock as held.
  */
@@ -388,7 +390,7 @@ relevel :: fn(queue: ptr[mut RunQueue], now: u64) {
     }
 }
 
-/*
+/**
  * The thread to run next instead of current, at current_level, or 0 to go on with it: the first at the highest level,
  * if that's above current's, or the same at a tick. A thread waiting at a level its budget no longer has time for, spent
  * by another of its budget's threads meanwhile, is moved down to where it belongs first, so a budget's threads together
@@ -409,7 +411,7 @@ pick :: fn(queue: ptr[mut RunQueue], now: u64, current: u64, current_level: u32,
     }
 }
 
-// The first thread at the highest level that may run on cpu_index, taken off, or 0. Takes the lock as held.
+/** The first thread at the highest level that may run on cpu_index, taken off, or 0. Takes the lock as held. */
 take_for :: fn(queue: ptr[mut RunQueue], cpu_index: u32) -> u64 {
     for level in 0..<LEVELS #reverse {
         index :: cast[usize](level)
@@ -431,7 +433,7 @@ take_for :: fn(queue: ptr[mut RunQueue], cpu_index: u32) -> u64 {
     return 0
 }
 
-// The first thread at level, taken off. Takes the lock as held.
+/** The first thread at level, taken off. Takes the lock as held. */
 dequeue :: fn(queue: ptr[mut RunQueue], level: u32) -> u64 {
     index :: cast[usize](level) % LEVELS
     first :: queue.first[index]
@@ -440,7 +442,7 @@ dequeue :: fn(queue: ptr[mut RunQueue], level: u32) -> u64 {
     return first
 }
 
-// Take thread off its level's list. Takes the lock as held.
+/** Take thread off its level's list. Takes the lock as held. */
 unlink :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread]) {
     index :: cast[usize](thread.level) % LEVELS
     if thread.previous != 0 {

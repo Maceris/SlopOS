@@ -20,7 +20,7 @@ vector_state_alignment :: fn() -> usize {
     return 16
 }
 
-// The state at reset: every register zero, with FPCR's default rounding and no traps.
+/** The state at reset: every register zero, with FPCR's default rounding and no traps. */
 init_vector_state :: fn(state: ptr[mut VectorState], config: arch_interface.VectorConfig) {
     intrinsics.mem_zero(cast[mut rawptr](state), aarch64.FP_SIMD_STATE_SIZE)
 }

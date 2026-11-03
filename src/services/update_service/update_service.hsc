@@ -1,4 +1,4 @@
-/*
+/**
  * The update service (roadmap 9d3, decisions/0113, 0116): it writes generations onto the EFI system partition, and
  * nothing else writes its boot directory. It's given the ESP's root, the system volume's updates directory, a
  * connection to the bundle store, and a listener the supervisor's connection arrives on.
@@ -130,7 +130,9 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
     }
 }
 
-// A boot's assessment acted on: its generation made permanent or rolled back, a staged update installed, and collection.
+/**
+ * A boot's assessment acted on: its generation made permanent or rolled back, a staged update installed, and collection.
+ */
 booted_as :: fn(service: ptr[mut Service], booted: update.Booted) -> update.Response {
     current := booted.generation
     match read_record(service, booted.generation) {
@@ -175,7 +177,7 @@ booted_as :: fn(service: ptr[mut Service], booted: update.Booted) -> update.Resp
     return .Done
 }
 
-/*
+/**
  * Tentative generations newer than the one booted that have no tries left (generations.tries_left): the bootloader
  * booted an older one as they never came up healthy, so they're rolled back, their records removed.
  */
@@ -193,7 +195,9 @@ give_up_on_spent :: fn(service: ptr[mut Service], booted: u64) {
     }
 }
 
-// Whether two generations have the same kernel, boot set and command line, so they differ only in their store roots.
+/**
+ * Whether two generations have the same kernel, boot set and command line, so they differ only in their store roots.
+ */
 same_but_services :: fn(a: ptr[generations.Generation], b: ptr[generations.Generation]) -> bool {
     if !bundle.same(a.kernel, b.kernel) || a.file_count != b.file_count || a.kaslr != b.kaslr
         || generations.line_of(&a.command_line) != generations.line_of(&b.command_line) {
@@ -208,7 +212,7 @@ same_but_services :: fn(a: ptr[generations.Generation], b: ptr[generations.Gener
     return true
 }
 
-/*
+/**
  * The update staged in updates/pending installed, if there's one, and it's a generation's record whose objects the store
  * has with their hashes, and the ESP has room for them: its objects, then its record, tentative.
  */
@@ -281,7 +285,7 @@ install :: fn(service: ptr[mut Service]) -> generations.Generation? {
     return staged
 }
 
-/*
+/**
  * What's kept: the generation booted (0 if it was rolled back) and any newer, the newest
  * permanent one before it, and the recovery generation; every other record removed, and every object none of those
  * names.
@@ -336,7 +340,7 @@ collect :: fn(service: ptr[mut Service], current: u64) {
     }
 }
 
-/*
+/**
  * The substitution policy asked for: nothing if the newest generation has it, refused if an entry doesn't pass the
  * check, or the booted generation staged again with it.
  */
@@ -420,7 +424,7 @@ substitute :: fn(service: ptr[mut Service], asked: update.SubstituteOf) -> updat
     return .Staged(made.number)
 }
 
-// The policy a generation's boot set has, or none.
+/** The policy a generation's boot set has, or none. */
 policy_in :: fn(service: ptr[mut Service], generation: ptr[generations.Generation]) -> bundle.Substitutions {
     for i in cast[usize](0)..<generation.files.count {
         if i >= cast[usize](generation.file_count) || generations.text_of(&generation.files[i].name) != substitution.POLICY_FILE {
@@ -445,7 +449,7 @@ same_policy :: fn(a: bundle.Substitutions, b: bundle.Substitutions) -> bool {
     return true
 }
 
-// The hash of a library in a generation's boot set whose file has hash, or null.
+/** The hash of a library in a generation's boot set whose file has hash, or null. */
 library_in :: fn(service: ptr[mut Service], generation: ptr[generations.Generation], hash: bundle.Hash) -> bundle.Hash? {
     for i in cast[usize](0)..<generation.files.count {
         if i < cast[usize](generation.file_count) && strings.ends_with(generations.text_of(&generation.files[i].name), ".library")
@@ -456,7 +460,7 @@ library_in :: fn(service: ptr[mut Service], generation: ptr[generations.Generati
     return null
 }
 
-// A file added to a generation's boot set: whether there was room and the name fits.
+/** A file added to a generation's boot set: whether there was room and the name fits. */
 add_file :: fn(generation: ptr[mut generations.Generation], name: string, hash: bundle.Hash) -> bool {
     at :: cast[usize](generation.file_count)
     if at >= generation.files.count || !generations.set_name(&generation.files[at].name, name) {
@@ -467,7 +471,7 @@ add_file :: fn(generation: ptr[mut generations.Generation], name: string, hash: 
     return true
 }
 
-// The newest generation's number but the recovery generation's, 0 if there's none.
+/** The newest generation's number but the recovery generation's, 0 if there's none. */
 newest_number :: fn(service: ptr[mut Service]) -> u64 {
     newest := cast[u64](0)
     listed :: os.list_directory_in(service.esp, generations.RECORDS) or_return 0
@@ -481,7 +485,7 @@ newest_number :: fn(service: ptr[mut Service]) -> u64 {
     return newest
 }
 
-// An object's bytes from the ESP, which the caller frees, or null.
+/** An object's bytes from the ESP, which the caller frees, or null. */
 object_on_esp :: fn(service: ptr[mut Service], hash: bundle.Hash) -> u8[]? {
     path_storage : u8[128]
     text :: os.read_entire_file_in(service.esp, generations.object_path(hash, &path_storage)) or_return null
@@ -497,7 +501,7 @@ write_object :: fn(service: ptr[mut Service], hash: bundle.Hash, bytes: u8[]) ->
     return true
 }
 
-// The kernel's hash, and every boot-set file's.
+/** The kernel's hash, and every boot-set file's. */
 hashes_of :: fn(generation: ptr[generations.Generation]) -> bundle.Hash[..] {
     made : bundle.Hash[..]
     runtime.array_add(&made, generation.kernel)
@@ -509,7 +513,7 @@ hashes_of :: fn(generation: ptr[generations.Generation]) -> bundle.Hash[..] {
     return made
 }
 
-// The generation numbered number's record on the ESP, checked, or null.
+/** The generation numbered number's record on the ESP, checked, or null. */
 read_record :: fn(service: ptr[mut Service], number: u64) -> generations.Generation? {
     if number == 0 {
         return null
@@ -530,13 +534,15 @@ write_record :: fn(service: ptr[mut Service], generation: ptr[generations.Genera
     return true
 }
 
-// Whether the ESP has an object.
+/** Whether the ESP has an object. */
 on_esp :: fn(service: ptr[mut Service], hash: bundle.Hash) -> bool {
     path_storage : u8[128]
     return os.path_kind_in(service.esp, generations.object_path(hash, &path_storage)) == .FILE
 }
 
-// An object's bytes from the bundle store, which the caller frees, if it has the object and its bytes have its hash.
+/**
+ * An object's bytes from the bundle store, which the caller frees, if it has the object and its bytes have its hash.
+ */
 object_of :: fn(service: ptr[mut Service], hash: bundle.Hash) -> u8[]? {
     out := os.Outgoing.{}
     os.begin[bundle_store.Request](&out)^ = .Get(hash)
@@ -569,7 +575,7 @@ object_of :: fn(service: ptr[mut Service], hash: bundle.Hash) -> u8[]? {
     return copy
 }
 
-// The ESP's room, as its file server says, or null if it doesn't.
+/** The ESP's room, as its file server says, or null if it doesn't. */
 room_of :: fn(service: ptr[mut Service]) -> files.Room? {
     out := os.Outgoing.{}
     os.begin[dir.Request](&out)^ = .Room
@@ -599,7 +605,7 @@ has_hash :: fn(hashes: ptr[bundle.Hash[..]], hash: bundle.Hash) -> bool {
     return false
 }
 
-// An object's bytes, read from the store, which free_all frees.
+/** An object's bytes, read from the store, which free_all frees. */
 Object :: struct {
     bytes : u8[],
 }
@@ -611,7 +617,7 @@ free_all :: fn(all: ptr[mut Object[..]]) {
     runtime.array_free(all)
 }
 
-// A decimal number, or null.
+/** A decimal number, or null. */
 number_of :: fn(text: string) -> u64? {
     if text.count == 0 {
         return null

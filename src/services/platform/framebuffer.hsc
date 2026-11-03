@@ -17,7 +17,7 @@ Framebuffer :: struct {
     layout : slop_os.FramebufferLayout,
 }
 
-// The framebuffer the firmware tables' "FB  " table describes, or null.
+/** The framebuffer the firmware tables' "FB  " table describes, or null. */
 find_framebuffer :: fn(tables: u64, size: u64) -> Framebuffer? {
     header :: cast[ptr[slop_os.FirmwareTables]](tables)
     if size < cast[u64](size_of(slop_os.FirmwareTables)) || header.magic != slop_os.FIRMWARE_MAGIC {
@@ -33,7 +33,7 @@ find_framebuffer :: fn(tables: u64, size: u64) -> Framebuffer? {
     return null
 }
 
-/*
+/**
  * The framebuffer for client, made anew each time it's asked, since what it held may have died with the service it gave
  * it to; NoDevice if there's none, or another client claimed it.
  */

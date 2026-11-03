@@ -1,4 +1,4 @@
-/*
+/**
  * The system configuration's records' tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything
  * worked, or the number of the first check that failed. Records of three services stand in for the build's: a server
  * with a listener, a client with a channel to it and an optional Config, and the config store's listener.
@@ -127,7 +127,9 @@ main :: fn() -> int {
     return 0
 }
 
-// Three services: server, with a listener for SERVED_TAG; client, with a channel to it and an optional Config; config.
+/**
+ * Three services: server, with a listener for SERVED_TAG; client, with a channel to it and an optional Config; config.
+ */
 records :: fn() -> system_records.SystemRecords {
     made := system_records.SystemRecords.{magic = system_records.MAGIC, service_count = 3, parameter_count = 4}
     made.default_cpu = system_records.CpuRecord.{has = 1, priority = 100, period_ns = 10000000, time_ns = 5000000}

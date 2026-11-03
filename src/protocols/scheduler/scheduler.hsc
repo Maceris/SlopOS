@@ -14,27 +14,27 @@ Scheduler :: struct {}
 PROTOCOL :: slop_os.Protocol.{name = "scheduler", major_version = 1, lending = .Server}
 
 Request :: union {
-    // The budget of the service with this name, to put it on (RIGHT_CPU_BUDGET_BIND)
+    /** The budget of the service with this name, to put it on (RIGHT_CPU_BUDGET_BIND) */
     BudgetFor(slop_os.Relative[u8]),
-    // Serve another client, on its end
+    /** Serve another client, on its end */
     Connect(os.Channel[Scheduler]),
 }
 
 Response :: union {
     Budget(slop_os.CpuBudget),
-    // It has no budget to give: none could be split off the root's
+    /** It has no budget to give: none could be split off the root's */
     NoBudget,
     Unsupported,
 }
 
-// Asking again gives another handle to the same budget.
+/** Asking again gives another handle to the same budget. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return true
 }
 
 #insert os.protocol_code(Request, Response)
 
-// A new connection to the service listening on end, or null (as entropy.connect).
+/** A new connection to the service listening on end, or null (as entropy.connect). */
 connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Scheduler]? {
     pair :: os.channel_for[Scheduler](budget, 0) or_return null
     out := os.Outgoing.{}
@@ -50,7 +50,7 @@ connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBu
     }
 }
 
-/*
+/**
  * The budget for the service named name, asked through end: a handle to put it on, or null if there's no scheduler
  * service or it has none to give, when the service runs on its starter's budget.
  */

@@ -22,45 +22,47 @@ Container :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "container", major_version = 1, lending = .Server}
 
-// An extent a volume gives back: its first 4 KiB block, its length, and the transaction it was written in.
+/** An extent a volume gives back: its first 4 KiB block, its length, and the transaction it was written in. */
 Released :: struct {
     first : u64,
     blocks : u64,
     birth : u64,
 }
 
-// An extent of so many 4 KiB blocks, for a file's bytes, which its volume's quota and the reserve hold back, or a tree's nodes.
+/**
+ * An extent of so many 4 KiB blocks, for a file's bytes, which its volume's quota and the reserve hold back, or a tree's nodes.
+ */
 Allocation :: struct {
     blocks : u64,
     data : bool,
 }
 
-// A volume's quota, by name: the most blocks it may have, its snapshots' included, 0 for none.
+/** A volume's quota, by name: the most blocks it may have, its snapshots' included, 0 for none. */
 QuotaOf :: struct {
     volume : slop_os.Relative[u8],
     blocks : u64,
 }
 
-// A new key generation's record, and its number, the one after the volume's newest.
+/** A new key generation's record, and its number, the one after the volume's newest. */
 AddedGeneration :: struct {
     number : u32,
     record : slopfs.GenerationRecord,
 }
 
-// A new volume (decisions/0141): its name, its cipher (slopfs.Cipher's value, 0 for none), and when it's made.
+/** A new volume (decisions/0141): its name, its cipher (slopfs.Cipher's value, 0 for none), and when it's made. */
 VolumeCreation :: struct {
     name : slop_os.Relative[u8],
     cipher : u8,
     now : u64,
 }
 
-// A new sealed volume's key, wrapped, which its volume server made (decisions/0141): the index'th way, from 0.
+/** A new sealed volume's key, wrapped, which its volume server made (decisions/0141): the index'th way, from 0. */
 AddedWrap :: struct {
     index : u64,
     record : slopfs.WrapRecord,
 }
 
-/*
+/**
  * A volume as it was last committed, the transaction its changes go into now, the container it's in, who wrote a
  * clone's older blocks, and whether it's a snapshot, served read only.
  */
@@ -73,27 +75,27 @@ Described :: struct {
     read_only : bool,
 }
 
-// A volume's snapshot, both by name, and when it's taken, as its taker says.
+/** A volume's snapshot, both by name, and when it's taken, as its taker says. */
 SnapshotNamed :: struct {
     volume : slop_os.Relative[u8],
     snapshot : slop_os.Relative[u8],
     now : u64,
 }
 
-// A volume's snapshot by its place among them, oldest first, from 0.
+/** A volume's snapshot by its place among them, oldest first, from 0. */
 SnapshotIndex :: struct {
     volume : slop_os.Relative[u8],
     index : u64,
 }
 
-// A snapshot: its name, the transaction it holds, and when it was taken.
+/** A snapshot: its name, the transaction it holds, and when it was taken. */
 SnapshotInfo :: struct {
     name : slop_os.Relative[u8],
     transaction : u64,
     created : u64,
 }
 
-// A new volume named name, cloned from a volume's snapshot.
+/** A new volume named name, cloned from a volume's snapshot. */
 Cloning :: struct {
     volume : slop_os.Relative[u8],
     snapshot : slop_os.Relative[u8],
@@ -102,40 +104,48 @@ Cloning :: struct {
 }
 
 Request :: union {
-    // The volume with a name, on a new connection of its own, for the requests below
+    /** The volume with a name, on a new connection of its own, for the requests below */
     OpenVolume(slop_os.Relative[u8]),
     Describe,
-    // An extent for this volume
+    /** An extent for this volume */
     Allocate(Allocation),
     Release(Released),
-    // A block connection to the container's partition, its reads and writes allowed only in this volume's extents
+    /** A block connection to the container's partition, its reads and writes allowed only in this volume's extents */
     OpenBlocks,
-    // The volume's record, its tree written through block connections whose writes have all finished, made durable
+    /** The volume's record, its tree written through block connections whose writes have all finished, made durable */
     Commit(slopfs.VolumeRecord),
-    // Everything the volume changed since its last commit undone: its allocations free again, what it gave back its own
+    /**
+     * Everything the volume changed since its last commit undone: its allocations free again, what it gave back its own
+     */
     Abandon,
-    // An encrypted volume's key wrapped, the index'th way from 0, and its key generations by number from 1 (8e): sealed,
-    // so the container service never holds what opens them
+    /**
+     * An encrypted volume's key wrapped, the index'th way from 0, and its key generations by number from 1 (8e): sealed,
+     * so the container service never holds what opens them
+     */
     WrapAt(u64),
     GenerationAt(u32),
-    // A new key generation's record, kept with the volume, which its record then names; durable with the next commit
+    /**
+     * A new key generation's record, kept with the volume, which its record then names; durable with the next commit
+     */
     AddGeneration(AddedGeneration),
-    // A new volume's wrapped key, which its volume server made; only while the volume has no root (decisions/0141)
+    /** A new volume's wrapped key, which its volume server made; only while the volume has no root (decisions/0141) */
     AddWrap(AddedWrap),
-    // On the listener's connections (8e): a snapshot taken, deleted or found, and a clone made, each durable at once
+    /**
+     * On the listener's connections (8e): a snapshot taken, deleted or found, and a clone made, each durable at once
+     */
     TakeSnapshot(SnapshotNamed),
     DeleteSnapshot(SnapshotNamed),
     SnapshotAt(SnapshotIndex),
     Clone(Cloning),
-    // On the listener's connections (8e): a volume's quota set, durable at once, and how much it has
+    /** On the listener's connections (8e): a volume's quota set, durable at once, and how much it has */
     SetQuota(QuotaOf),
     Usage(slop_os.Relative[u8]),
-    /*
+    /**
      * On the listener's connections (decisions/0141): a new volume, with nothing in it, durable at once, answered with
      * Created and its ID; the volume server that serves it first gives it its keys and root
      */
     CreateVolume(VolumeCreation),
-    // Serve another client, on its end
+    /** Serve another client, on its end */
     Connect(os.Channel[Container]),
 }
 
@@ -144,7 +154,7 @@ Response :: union {
     Described(Described),
     Allocated(u64),
     Done,
-    // The transaction committed, and the one changes go into next
+    /** The transaction committed, and the one changes go into next */
     Committed(u64),
     Blocks(os.Channel[block.Block]),
     Wrap(slopfs.WrapRecord),
@@ -152,25 +162,25 @@ Response :: union {
     Snapshot(SnapshotInfo),
     Used(slopfs.Usage),
     Created(u64),
-    // Past the last wrap record, the newest generation or the last snapshot
+    /** Past the last wrap record, the newest generation or the last snapshot */
     NoMore,
-    // A snapshot or volume with that name is there already
+    /** A snapshot or volume with that name is there already */
     AlreadyExists,
-    // A snapshot a clone was made from, which stays while it's there
+    /** A snapshot a clone was made from, which stays while it's there */
     InUse,
     NoSnapshot,
     NoVolume,
     NoSpace,
-    // The container couldn't commit: a write failed, or it doesn't hold together, and every later commit fails too
+    /** The container couldn't commit: a write failed, or it doesn't hold together, and every later commit fails too */
     Failed,
-    // Only on a volume's connection
+    /** Only on a volume's connection */
     NotAVolume,
-    // An extent that isn't this volume's, given back, or a root that isn't in its extents, committed
+    /** An extent that isn't this volume's, given back, or a root that isn't in its extents, committed */
     NotYours,
     Unsupported,
 }
 
-// Allocating, giving back and committing change something each time; the rest are as good done again.
+/** Allocating, giving back and committing change something each time; the rest are as good done again. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case OpenVolume(_) => true
@@ -197,7 +207,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #insert os.protocol_code(Request, Response)
 
-// A new connection to the container service listening on end, or null (as entropy.connect).
+/** A new connection to the container service listening on end, or null (as entropy.connect). */
 connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Container]? {
     pair :: os.channel_for[Container](budget, 0) or_return null
     out := os.Outgoing.{}

@@ -1,4 +1,4 @@
-/*
+/**
  * safe_text's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the number of
  * the first check that failed. Printable text is shown as it is; controls, bidirectional controls, invisible characters
  * and bytes that aren't UTF-8 become visible substitutes; an emoji's ZWJ and variation selector stay.
@@ -8,7 +8,7 @@ package safe_text_test
 import unicode from "std"
 import safe_text from ".."
 
-// The first cluster of text, shown, and whether it's expected, in columns too.
+/** The first cluster of text, shown, and whether it's expected, in columns too. */
 shows :: fn(text: u8[], expected: string, columns: usize) -> bool {
     end :: unicode.grapheme_end(text, 0)
     shown := safe_text.Shown.{}

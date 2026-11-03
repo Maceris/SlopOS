@@ -57,7 +57,7 @@ check_made :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, b
     return 0
 }
 
-// A new volume, sealed with AES-256-GCM by passphrase unless it's empty, through the storage manager.
+/** A new volume, sealed with AES-256-GCM by passphrase unless it's empty, through the storage manager. */
 create :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, name: string, passphrase: string) -> storage.Response {
     out := os.Outgoing.{}
     creating :: os.begin[storage.Request](&out)

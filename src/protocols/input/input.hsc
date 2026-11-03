@@ -14,23 +14,23 @@ Input :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "input", major_version = 1, lending = .Server}
 
-// The most events one Events has.
+/** The most events one Events has. */
 MAX_EVENTS :: 32
 
 EventKind :: enum #backed_by(u8) {
-    // code: the key's USB HID usage; pressed
+    /** code: the key's USB HID usage; pressed */
     Key = 1,
-    // x and y: how far a pointer moved
+    /** x and y: how far a pointer moved */
     Motion = 2,
-    // x and y: where a pointer is, from 0 to the device's largest
+    /** x and y: where a pointer is, from 0 to the device's largest */
     Position = 3,
-    // code: which button, from 0 (left); pressed
+    /** code: which button, from 0 (left); pressed */
     Button = 4,
-    // y: how far a wheel turned
+    /** y: how far a wheel turned */
     Wheel = 5,
 }
 
-// Plain data, as a Relative's elements are: kind an EventKind's value, and pressed 1 or 0 (kind_of, is_pressed)
+/** Plain data, as a Relative's elements are: kind an EventKind's value, and pressed 1 or 0 (kind_of, is_pressed) */
 Event :: struct {
     kind : u8,
     pressed : u8,
@@ -39,7 +39,7 @@ Event :: struct {
     y : i32,
 }
 
-// What an event is, or null for a kind this version hasn't.
+/** What an event is, or null for a kind this version hasn't. */
 kind_of :: fn(event: Event) -> EventKind? {
     return match event.kind {
         case 1 => EventKind.Key
@@ -55,15 +55,15 @@ is_pressed :: fn(event: Event) -> bool {
     return event.pressed != 0
 }
 
-// An event of kind.
+/** An event of kind. */
 event_of :: fn(kind: EventKind, pressed: bool, code: u16, x: i32, y: i32) -> Event {
     return Event.{kind = cast[u8](kind), pressed = if pressed { cast[u8](1) } else { cast[u8](0) }, code = code, x = x, y = y}
 }
 
 Request :: union {
-    // Up to most events, answered once there's at least one
+    /** Up to most events, answered once there's at least one */
     Read(u32),
-    // Serve another client, on its end
+    /** Serve another client, on its end */
     Connect(os.Channel[Input]),
 }
 
@@ -72,7 +72,7 @@ Response :: union {
     Unsupported,
 }
 
-// A Read again would take other events.
+/** A Read again would take other events. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Read(_) => false
@@ -82,7 +82,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #insert os.protocol_code(Request, Response)
 
-// A new connection to the driver listening on end, or null (as entropy.connect).
+/** A new connection to the driver listening on end, or null (as entropy.connect). */
 connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Input]? {
     pair :: os.channel_for[Input](budget, 0) or_return null
     out := os.Outgoing.{}

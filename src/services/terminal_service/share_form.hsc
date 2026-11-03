@@ -1,4 +1,4 @@
-/*
+/**
  * Shared volumes (decisions/0158), on the trusted path: H on the secure attention key's screen opens this form, for the
  * session's user, the volume's owner. They type a shared volume's name, made the first time, and another user's: Enter
  * shares it with them, Delete takes them out of it, which revokes every link into it and starts its next key generation.
@@ -21,7 +21,7 @@ import screen from "../../screen"
 STATUS_SHARING :: " SlopOS │ console │ sharing a volume"
 USAGE_H : u16 : 0x0b
 
-// The form, over the active view, for its session's user.
+/** The form, over the active view, for its session's user. */
 enter_share_form :: fn(service: ptr[mut Service]) {
     if service.accounts_end == NONE || view(service).home_end == NONE || !view(service).logged_in || view(service).user_count == 0 {
         return void
@@ -35,7 +35,7 @@ enter_share_form :: fn(service: ptr[mut Service]) {
     update_status(service)
 }
 
-// The form closed, what was typed forgotten, and the session drawn again.
+/** The form closed, what was typed forgotten, and the session drawn again. */
 end_share_form :: fn(service: ptr[mut Service]) {
     service.sharing = false
     service.setup = .Off
@@ -46,7 +46,7 @@ end_share_form :: fn(service: ptr[mut Service]) {
     redraw(service)
 }
 
-// The share asked for: the volume named, shared with the member typed, or them taken out of it for unshare.
+/** The share asked for: the volume named, shared with the member typed, or them taken out of it for unshare. */
 send_share :: fn(service: ptr[mut Service], unshare: bool) {
     member :: field_bytes(service)
     if member.count == 0 || service.share_name_count > service.share_name.count {
@@ -68,7 +68,7 @@ send_share :: fn(service: ptr[mut Service], unshare: bool) {
     setup_step(service, .Sharing)
 }
 
-/*
+/**
  * The account service's answer to a share: the volume's root linked as shared/<name> in the owner's home, in place of
  * the link there, and the form closed.
  */
@@ -112,7 +112,7 @@ shared :: fn(service: ptr[mut Service], given: os.Channel[grant.Grant]) {
     end_share_form(service)
 }
 
-// Enter on the form: the name taken, then the share asked for.
+/** Enter on the form: the name taken, then the share asked for. */
 share_enter :: fn(service: ptr[mut Service]) {
     typed :: field_bytes(service)
     if service.setup == .ShareName {
@@ -130,7 +130,7 @@ share_enter :: fn(service: ptr[mut Service]) {
     }
 }
 
-// The form: the volume's name, the member's, what it last said, and its keys; drawn whole, or only its fields.
+/** The form: the volume's name, the member's, what it last said, and its keys; drawn whole, or only its fields. */
 draw_share_form :: fn(service: ptr[mut Service], whole: bool) {
     panel :: &view(service).screen.panel
     rows : u16 = 7

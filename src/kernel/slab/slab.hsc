@@ -17,8 +17,10 @@
  * In front of each cache, every CPU has a magazine: a stack of free objects it takes from and gives
  * back to without a lock, refilled from the cache or emptied into it half a magazine at a time.
  */
-//SPEC: Bonwick, "The Slab Allocator: An Object-Caching Kernel Memory Allocator" (USENIX 1994);
-//      Bonwick and Adams, "Magazines and Vmem" (USENIX 2001), §3 (the magazine layer)
+/**
+ * SPEC: Bonwick, "The Slab Allocator: An Object-Caching Kernel Memory Allocator" (USENIX 1994);
+ *      Bonwick and Adams, "Magazines and Vmem" (USENIX 2001), §3 (the magazine layer)
+ */
 package slab
 
 import runtime from "base"
@@ -27,7 +29,7 @@ import boot_info from "../../boot_info"
 import frames from "../frames"
 import robustness from "../../robustness"
 
-// Objects are at least this big, and their sizes a multiple of it: room for the free list's link.
+/** Objects are at least this big, and their sizes a multiple of it: room for the free list's link. */
 OBJECT_GRANULE : u64 : 16
 // A slab is big enough for at least this many objects, unless that would take more than MAX_SLAB_ORDER.
 MIN_OBJECTS_PER_SLAB : u64 : 8
@@ -35,23 +37,23 @@ MAX_SLAB_ORDER : u64 : 4
 // Empty slabs a cache keeps rather than freeing.
 MAX_EMPTY_SLABS : u64 : 1
 MAGAZINE_SIZE :: 32
-// What a magazine takes from its cache when empty, and gives back when full.
+/** What a magazine takes from its cache when empty, and gives back when full. */
 MAGAZINE_BATCH :: 16
 
-// Which list a slab is on.
+/** Which list a slab is on. */
 SlabList :: enum #backed_by(u8) {
-    // Full: every object is handed out.
+    /** Full: every object is handed out. */
     None,
     Partial,
     Empty,
 }
 
-// At the end of each slab.
+/** At the end of each slab. */
 SlabHeader :: struct {
     // The other slabs on its list, by base address; 0 for none.
     next : u64,
     previous : u64,
-    // The first free object, 0 for none. Each free object's first 8 bytes hold the next one's address.
+    /** The first free object, 0 for none. Each free object's first 8 bytes hold the next one's address. */
     free : u64,
     // Objects from this index on were never handed out.
     fresh : u32,
@@ -59,7 +61,7 @@ SlabHeader :: struct {
     list : SlabList,
 }
 
-// The first slab on a list, and how many there are.
+/** The first slab on a list, and how many there are. */
 List :: struct {
     first : u64,
     count : u64,
@@ -68,7 +70,7 @@ List :: struct {
 SlabCache :: struct {
     lock : concurrency.SpinLock,
     object_size : u64,
-    // Each slab is 2^slab_order frames.
+    /** Each slab is 2^slab_order frames. */
     slab_order : u64,
     // Objects per slab.
     capacity : u64,
@@ -77,7 +79,7 @@ SlabCache :: struct {
     // Slabs taken from the frame allocator, and objects handed out, from the cache or into magazines.
     slab_count : u64,
     allocated : u64,
-    /*
+    /**
      * Type-stable: empty slabs are kept rather than freed, so memory that held one of its objects only
      * ever holds its objects. What reaches an object by its address then can't reach anything else
      * there, which kernel objects' generational handles depend on (decisions/0008).
@@ -86,17 +88,17 @@ SlabCache :: struct {
     // Written as a u32 at fresh_offset in each object of a new slab, when it's not 0: kernel objects' first generation
     fresh_offset : u64,
     fresh_value : u32,
-    // Objects retired: handed out once and never given back, as a slot whose generation would wrap is
+    /** Objects retired: handed out once and never given back, as a slot whose generation would wrap is */
     retired : u64,
 }
 
-// One CPU's stack of free objects from one cache. Used only by its CPU, so it needs no lock.
+/** One CPU's stack of free objects from one cache. Used only by its CPU, so it needs no lock. */
 Magazine :: struct {
     count : u64,
     objects : u64[MAGAZINE_SIZE],
 }
 
-/*
+/**
  * A cache of objects of object_size bytes, rounded up to a multiple of alignment and of
  * OBJECT_GRANULE, which a slab's base is aligned to. alignment is a power of two up to a frame.
  */
@@ -121,7 +123,7 @@ objects_in :: fn(order: u64, size: u64) -> u64 {
     return ((frames.FRAME_SIZE << order) - cast[u64](size_of(SlabHeader))) / size
 }
 
-// One object from the cache: its address in the direct map. Its contents are whatever was there.
+/** One object from the cache: its address in the direct map. Its contents are whatever was there. */
 allocate :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator]) -> Result[u64, frames.FrameError] {
     if robustness.fails(&allocator.faults, .Slab) {
         return .Error(.OutOfMemory)
@@ -131,7 +133,7 @@ allocate :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocat
     return take_object(cache, allocator)
 }
 
-// An object allocate gave, never given back nor counted any more: its slot is retired.
+/** An object allocate gave, never given back nor counted any more: its slot is retired. */
 retire :: fn(cache: ptr[mut SlabCache], object: u64) {
     concurrency.lock(&cache.lock)
     defer concurrency.unlock(&cache.lock)
@@ -139,14 +141,14 @@ retire :: fn(cache: ptr[mut SlabCache], object: u64) {
     cache.retired += 1
 }
 
-// Give back an object allocate gave.
+/** Give back an object allocate gave. */
 free :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator], object: u64) {
     concurrency.lock(&cache.lock)
     defer concurrency.unlock(&cache.lock)
     give_object(cache, allocator, object)
 }
 
-/*
+/**
  * Objects for out, as many as fit, under one lock: how many. Fewer only when memory ran out, so
  * 0 means none was free.
  */
@@ -162,7 +164,7 @@ allocate_batch :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameA
     return out.count
 }
 
-// Give back objects, under one lock.
+/** Give back objects, under one lock. */
 free_batch :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator], objects: u64[]) {
     concurrency.lock(&cache.lock)
     defer concurrency.unlock(&cache.lock)
@@ -171,7 +173,7 @@ free_batch :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAlloc
     }
 }
 
-// An object from the calling CPU's magazine, refilled from cache if it's empty.
+/** An object from the calling CPU's magazine, refilled from cache if it's empty. */
 take :: fn(magazine: ptr[mut Magazine], cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator]) -> Result[u64, frames.FrameError] {
     if robustness.fails(&allocator.faults, .Slab) {
         return .Error(.OutOfMemory)
@@ -188,7 +190,7 @@ take :: fn(magazine: ptr[mut Magazine], cache: ptr[mut SlabCache], allocator: pt
     return .Ok(magazine.objects[count - 1])
 }
 
-// Give an object to the calling CPU's magazine, emptying half of it into cache if it's full.
+/** Give an object to the calling CPU's magazine, emptying half of it into cache if it's full. */
 give_back :: fn(magazine: ptr[mut Magazine], cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator], object: u64) {
     if magazine.count == MAGAZINE_SIZE {
         free_batch(cache, allocator, magazine.objects[MAGAZINE_SIZE - MAGAZINE_BATCH..<MAGAZINE_SIZE])
@@ -200,7 +202,7 @@ give_back :: fn(magazine: ptr[mut Magazine], cache: ptr[mut SlabCache], allocato
     magazine.count = count + 1
 }
 
-// Give every object in a magazine back to its cache.
+/** Give every object in a magazine back to its cache. */
 drain :: fn(magazine: ptr[mut Magazine], cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator]) {
     count :: magazine.count
     runtime.assert(count <= MAGAZINE_SIZE, "a magazine holds up to MAGAZINE_SIZE objects")
@@ -216,7 +218,7 @@ header_of :: fn(cache: ptr[SlabCache], base: u64) -> ptr[mut SlabHeader] {
     return cast[ptr[mut SlabHeader]](base + slab_bytes(cache) - cast[u64](size_of(SlabHeader)))
 }
 
-// Takes the lock as held.
+/** Takes the lock as held. */
 take_object :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator]) -> Result[u64, frames.FrameError] {
     if cache.partial.count == 0 {
         base := cache.empty.first
@@ -247,7 +249,7 @@ take_object :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllo
     return .Ok(object)
 }
 
-// Takes the lock as held.
+/** Takes the lock as held. */
 give_object :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator], object: u64) {
     // Slabs are aligned physically, to their size
     offset_to_physical :: allocator.direct_map_offset
@@ -275,7 +277,7 @@ give_object :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllo
     cache.slab_count -= 1
 }
 
-// A slab of nothing handed out yet, from the frame allocator: its base.
+/** A slab of nothing handed out yet, from the frame allocator: its base. */
 new_slab :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator]) -> Result[u64, frames.FrameError] {
     base :: frames.virtual_of(allocator, frames.allocate(allocator, cache.slab_order)?)
     header :: header_of(cache, base)

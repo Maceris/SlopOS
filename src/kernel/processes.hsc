@@ -16,7 +16,7 @@ Process :: struct #align(16) {
     header : ObjectHeader,
     table : HandleTable,
     owned : OwnedList,
-    // The intercept of its subtree, if it has one (intercepts.hsc).
+    /** The intercept of its subtree, if it has one (intercepts.hsc). */
     intercept : u64,
     // Bindings watching for it to end (SIGNAL_TERMINATED), under watch_lock.
     watch_lock : concurrency.SpinLock,
@@ -24,7 +24,7 @@ Process :: struct #align(16) {
     // Set by process_exit, with its code; a process destroyed without it was killed.
     exited : bool,
     exit_code : u32,
-    // Its threads started and not yet destroyed; when the last goes, so does it (threads.hsc, end_process_if_last)
+    /** Its threads started and not yet destroyed; when the last goes, so does it (threads.hsc, end_process_if_last) */
     live_threads : u32,
     // The CpuBudget it and its threads run on, and its neighbors among what runs there (cpu_budgets.hsc)
     cpu_budget : u64,
@@ -32,7 +32,7 @@ Process :: struct #align(16) {
     cpu_budget_previous : u64,
 }
 
-/*
+/**
  * A process owned by owner (a Process's address, 0 for the kernel), with an empty handle table, charged
  * to budget, which is its budget: its table's pages are charged there, and what it takes with owning
  * handles moves there (memory_budgets.hsc).
@@ -52,7 +52,7 @@ create_process :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> (made 
     return .Ok(cast[ptr[mut Process]](object))
 }
 
-/*
+/**
  * Destroying a process: its table takes no more handles, and everything it owns is destroyed, which
  * reaches the whole subtree.
  */
@@ -84,17 +84,17 @@ destroy_process :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
     }
 }
 
-// Once no CPU can use it: its table's memory.
+/** Once no CPU can use it: its table's memory. */
 release_process :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
     free_table(kernel, &process.table)
 }
 
-// The process that owns thread.
+/** The process that owns thread. */
 process_of :: fn(thread: ptr[Thread]) -> ptr[mut Process] {
     return cast[ptr[mut Process]](thread.header.owner)
 }
 
-// A handle to object, owning: all rights.
+/** A handle to object, owning: all rights. */
 install_owning :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], object: u64) -> Result[slop_os.Handle, slop_os.HandleError] {
     header :: cast[ptr[ObjectHeader]](object)
     return install(kernel, &process.table, object, header.generation, header.kind, slop_os.RIGHTS_ALL, true)
@@ -183,7 +183,7 @@ give_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], target: ptr
     return null
 }
 
-// The first count of the ends give_handles held, let go of.
+/** The first count of the ends give_handles held, let go of. */
 let_go_of_held :: fn(held: ptr[u64[64]], generations: ptr[u32[64]], count: usize) {
     for i in 0..<count {
         let_go_of_end(cast[ptr[mut Channel]](held[i % 64]), generations[i % 64])

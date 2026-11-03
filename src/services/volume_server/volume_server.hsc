@@ -1,4 +1,4 @@
-/*
+/**
  * A volume server (roadmap 8d, decisions/0089): one per volume in use, started by the storage manager with a
  * connection to its container service for that volume, and nothing else. It holds the volume's tree (src/slopfs), its
  * cache of dirty nodes and its clients, and serves the file protocols as the FAT server does: dir and read_only_dir
@@ -43,12 +43,12 @@ import links from "../../protocols/links"
 import volume_protocol from "../../protocols/volume"
 
 MAX_CONNECTIONS :: 64
-// What the server keeps of a loan, for what's opened through its connection too
+/** What the server keeps of a loan, for what's opened through its connection too */
 LOAN_RIGHTS :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_CPU_BUDGET_BIND) | cast[u32](slop_os.RIGHT_DUPLICATE))
 // The most bytes of a client's buffer mapped here
 MAX_BUFFER_BYTES : u64 : 16 << 20
 SECTORS_PER_BLOCK : u64 : 8
-// How long after a change it's committed without a Sync
+/** How long after a change it's committed without a Sync */
 COMMIT_NANOSECONDS : u64 : 1000000000
 
 Kind :: enum {
@@ -58,21 +58,23 @@ Kind :: enum {
     File,
     ReadOnlyFile,
     FileSet,
-    // A dir connection in a transaction, its changes logged until Commit
+    /** A dir connection in a transaction, its changes logged until Commit */
     Transaction,
-    // A file opened in a transaction, its writes logged too
+    /** A file opened in a transaction, its writes logged too */
     TransactionFile,
-    // A new file from Replace, until it's installed
+    /** A new file from Replace, until it's installed */
     Replacement,
-    // The storage manager's, on the volume protocol
+    /** The storage manager's, on the volume protocol */
     Control,
-    // Stored links (links.hsc): a grant this volume gave, one it's claiming, and its connection to the storage manager
+    /**
+     * Stored links (links.hsc): a grant this volume gave, one it's claiming, and its connection to the storage manager
+     */
     Grant,
     Claim,
     Links,
 }
 
-// A connection: the object it's to, its informational name (a set's pattern), and a file's buffer, mapped here.
+/** A connection: the object it's to, its informational name (a set's pattern), and a file's buffer, mapped here. */
 Connection :: struct {
     kind : Kind,
     end : slop_os.Channel,
@@ -83,13 +85,13 @@ Connection :: struct {
     buffer : u64,
     buffer_bytes : u64,
     buffer_memory : slop_os.Memory,
-    // A transaction's index, for one in a transaction
+    /** A transaction's index, for one in a transaction */
     transaction : usize,
-    // A replacement's directory, where it's installed under its name; a claim's, where its link goes
+    /** A replacement's directory, where it's installed under its name; a claim's, where its link goes */
     target : u64,
-    // Opened through a stored link, or from what was: it grants, links, and lists or revokes links not at all (8f)
+    /** Opened through a stored link, or from what was: it grants, links, and lists or revokes links not at all (8f) */
     linked : bool,
-    // Waiting for what it asked to be answered by the storage manager or a grant, so it isn't read meanwhile
+    /** Waiting for what it asked to be answered by the storage manager or a grant, so it isn't read meanwhile */
     waiting : bool,
     // A grant's ticket, once it's claimed, and whether a link's been issued with it
     ticket : u8[32],
@@ -116,7 +118,7 @@ Server :: struct {
     buffer_bytes : u64,
     nodes : slopfs.Nodes,
     volume : ptr[mut slopfs.Volume],
-    // What the volume server was told of its volume and container
+    /** What the volume server was told of its volume and container */
     described : container.Described,
     // When what's changed is committed, without a Sync, or 0 when nothing has
     commit_at : u64,
@@ -129,14 +131,14 @@ Server :: struct {
     asked : Asked[MAX_CONNECTIONS],
     asked_first : usize,
     asked_count : usize,
-    // Whether connections added now are reached through a link
+    /** Whether connections added now are reached through a link */
     linking : bool,
     // The connection being served, whose loan what it opens has too; whether a request of a client's was served, which
     // is one at a time; and whether the thread runs on a loan now
     serving : usize,
     handled : bool,
     on_loan : bool,
-    // Where the next search for a request starts, among connections of the same priority
+    /** Where the next search for a request starts, among connections of the same priority */
     next_first : usize,
 }
 
@@ -261,7 +263,7 @@ ask :: fn(server: ptr[mut Server], request: container.Request) -> container.Resp
     }
 }
 
-// An extent for the volume's tree or a file's chunk (data), from the container service.
+/** An extent for the volume's tree or a file's chunk (data), from the container service. */
 allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u64? {
     server :: cast[ptr[mut Server]](context)
     return match ask(server, .Allocate(container.Allocation.{blocks = blocks, data = data})) {
@@ -275,7 +277,7 @@ release :: fn(context: rawptr, address: u64, blocks: u64, owner: u64, birth: u64
     _ = ask(server, .Release(container.Released.{first = address, blocks = blocks, birth = birth}))
 }
 
-/*
+/**
  * What's changed made durable: the volume's dirty nodes written, every write done, then its record committed by the
  * container service. Whether it was; a failure is the volume's, and every later commit fails too.
  */
@@ -338,12 +340,12 @@ write_blocks :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool 
     return move(server, first, count, view_of(cast[ptr[mut u8]](from.data), from.count), true)
 }
 
-// The container service flushes when it commits; a volume server never does itself.
+/** The container service flushes when it commits; a volume server never does itself. */
 no_flush :: fn(context: rawptr) -> bool {
     return true
 }
 
-/*
+/**
  * 4 KiB blocks from first moved through the buffer, as much of one extent at a time as it holds: into bytes, or from
  * them. Each is a whole extent's blocks, or part of one, as the container service checks.
  */
@@ -487,7 +489,7 @@ name_of :: fn(connection: ptr[Connection]) -> string {
     return string_of(&connection.name[0], cast[usize](if connection.name_length > files.PATH_BYTES { cast[u32](files.PATH_BYTES) } else { connection.name_length }))
 }
 
-/*
+/**
  * One client's request served, the connections tried by their loans' priorities, highest first, the server's own
  * connections (the storage manager's, its links) drained as they come: whether anything was.
  */
@@ -521,7 +523,9 @@ serve_one :: fn(server: ptr[mut Server], into: ptr[mut os.Incoming]) -> bool {
     }
 }
 
-// A client's request received on a connection: it's served on the connection's loan, if it has one, and it's the one.
+/**
+ * A client's request received on a connection: it's served on the connection's loan, if it has one, and it's the one.
+ */
 received :: fn(server: ptr[mut Server], index: usize) {
     server.handled = true
     if index < server.connections.count && cast[slop_os.Handle](server.connections[index].loan) != slop_os.NO_HANDLE {
@@ -529,7 +533,7 @@ received :: fn(server: ptr[mut Server], index: usize) {
     }
 }
 
-// A loan for a connection's work, in place of the one it had.
+/** A loan for a connection's work, in place of the one it had. */
 lend :: fn(server: ptr[mut Server], index: usize, budget: slop_os.CpuBudget) {
     if index >= server.connections.count {
         _ = slop_os.handle_close(cast[slop_os.Handle](budget))
@@ -615,7 +619,7 @@ file_error :: fn(error: slopfs.Error) -> files.FileError {
 }
 
 // The file at path beneath directory, opened as creation says.
-/*
+/**
  * The file at path beneath directory, opened as creation says; with a schema hash (decisions/0046, 0108), one made is of
  * that type, and one there must be, or it's WrongType. All zeros asks for no type.
  */
@@ -656,13 +660,13 @@ open_file_object :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: str
     }
 }
 
-// A schema hash that asks for no type.
+/** A schema hash that asks for no type. */
 no_schema :: fn() -> u8[32] {
     none : u8[32]
     return none
 }
 
-// Whether a schema hash asks for no type: all zeros.
+/** Whether a schema hash asks for no type: all zeros. */
 untyped :: fn(schema: u8[32]) -> bool {
     for byte in schema {
         if byte != 0 {
@@ -672,7 +676,7 @@ untyped :: fn(schema: u8[32]) -> bool {
     return true
 }
 
-// The directory at path beneath directory, made, with any missing on the way to it, if create.
+/** The directory at path beneath directory, made, with any missing on the way to it, if create. */
 open_directory_object :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: string, create: bool) -> Result[u64, slopfs.Error] {
     current := directory
     start : usize = 0
@@ -700,7 +704,7 @@ open_directory_object :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path
     return .Ok(current)
 }
 
-// A listing's entry at or after cursor, matching pattern unless it's "".
+/** A listing's entry at or after cursor, matching pattern unless it's "". */
 listing_of :: fn(volume: ptr[mut slopfs.Volume], directory: u64, cursor: u64, pattern: string, out: ptr[mut os.Outgoing]) -> Result[files.Listing?, slopfs.Error] {
     name : u8[slopfs.NAME_BYTES]
     at := cursor
@@ -720,7 +724,7 @@ listing_of :: fn(volume: ptr[mut slopfs.Volume], directory: u64, cursor: u64, pa
     }
 }
 
-// Names are compared exactly, as slopfs compares them.
+/** Names are compared exactly, as slopfs compares them. */
 same_byte :: fn(a: u8, b: u8) -> bool {
     return a == b
 }
@@ -733,7 +737,7 @@ features :: fn() -> files.Features {
     return files.Features.{atomic_replace = true, transactions = true, change_cursors = true}
 }
 
-// A Sync's answer: committed, and durable.
+/** A Sync's answer: committed, and durable. */
 synced :: fn(server: ptr[mut Server]) -> bool {
     return commit(server)
 }
@@ -960,7 +964,7 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
     }
 }
 
-// What's at from moved to to, both beneath directory.
+/** What's at from moved to to, both beneath directory. */
 moved :: fn(volume: ptr[mut slopfs.Volume], directory: u64, from: string, to: string) -> slopfs.Error? {
     source := slopfs.Leaf.{}
     match slopfs.leaf_of(volume, directory, from) {
@@ -978,7 +982,7 @@ moved :: fn(volume: ptr[mut slopfs.Volume], directory: u64, from: string, to: st
     }
 }
 
-// A read-only file at path beneath directory, for a dir or a read_only_dir.
+/** A read-only file at path beneath directory, for a dir or a read_only_dir. */
 read_only_open :: fn(server: ptr[mut Server], directory: u64, path: string) -> dir.Response {
     if path.count == 0 {
         return .Failed(.InvalidPath)
@@ -1422,7 +1426,7 @@ serve_read_only_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut 
 
 // Encryption (roadmap 8e)
 
-/*
+/**
  * An encrypted volume's keys, once the storage manager's Unlock gives a passphrase that unwraps them; each that doesn't
  * is answered WrongKey, and the next waited for. Null if the storage manager goes, or the keys can't be read.
  */
@@ -1472,7 +1476,7 @@ wait_for_unlock :: fn(server: ptr[mut Server], end: slop_os.Channel) -> ptr[mut 
  * The volume's keys, into keys, new: unwrapped with passphrase from the wrap and generation records the container
  * service keeps. False if it isn't the passphrase or they can't be read; keys are for free_keys either way.
  */
-/*
+/**
  * A new sealed volume's keys (decisions/0141): its key made and wrapped by passphrase, and its first generation started,
  * the records given the container service to keep, which can't open the volume without the passphrase. Whether they
  * were.
@@ -1537,7 +1541,7 @@ unlock_keys :: fn(server: ptr[mut Server], passphrase: u8[], keys: ptr[mut slopf
     }
 }
 
-// The storage manager's requests on the volume protocol, once the volume is served.
+/** The storage manager's requests on the volume protocol, once the volume is served. */
 serve_control :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
@@ -1596,7 +1600,7 @@ serve_control :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inco
     }
 }
 
-/*
+/**
  * A new key generation: made and wrapped here, its record kept by the container service, and what's written from now
  * on sealed with it. What's changed is committed first, so the generation begins with a transaction of its own.
  */
@@ -1638,7 +1642,7 @@ rotate :: fn(server: ptr[mut Server]) -> volume_protocol.Response {
     }
 }
 
-// Whose key records the volume uses: its own, or a clone's origin's.
+/** Whose key records the volume uses: its own, or a clone's origin's. */
 key_owner :: fn(server: ptr[Server]) -> u64 {
     record := server.described.record
     return slopfs.key_owner_of(server.described.id, &record)

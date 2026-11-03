@@ -17,7 +17,7 @@ import concurrency from "std"
  * faults on user memory, and user-access protection stays on.
  */
 
-/*
+/**
  * Copy size bytes from source to address in space, which has to be mapped for user mode and writable
  * all the way: whether it was. With the space's lock, so nothing is unmapped meanwhile.
  */
@@ -25,7 +25,7 @@ copy_to_user :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address: u
     return copy_user(kernel, space, address, source, size, true)
 }
 
-// Copy size bytes from address in space, which has to be mapped for user mode all the way, to destination.
+/** Copy size bytes from address in space, which has to be mapped for user mode all the way, to destination. */
 copy_from_user :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address: u64, destination: u64, size: u64) -> bool {
     return copy_user(kernel, space, address, destination, size, false)
 }

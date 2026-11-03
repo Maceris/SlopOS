@@ -14,15 +14,15 @@ Entropy :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "entropy", major_version = 1, lending = .Server}
 
-// The most bytes one Filled has.
+/** The most bytes one Filled has. */
 MAX_BYTES :: 256
 
 Request :: union {
-    // count random bytes, up to MAX_BYTES
+    /** count random bytes, up to MAX_BYTES */
     Fill(u32),
-    // Serve another client, on its end
+    /** Serve another client, on its end */
     Connect(os.Channel[Entropy]),
-    // Reseed from a hardware RNG, through its driver; answered with nothing
+    /** Reseed from a hardware RNG, through its driver; answered with nothing */
     AddSource(os.Channel[rng.Rng]),
 }
 
@@ -31,7 +31,7 @@ Response :: union {
     Unsupported,
 }
 
-// Asking again gives other bytes, which is as good.
+/** Asking again gives other bytes, which is as good. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Fill(_) => true
@@ -42,7 +42,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #insert os.protocol_code(Request, Response)
 
-/*
+/**
  * A new connection to the service listening on end: a channel for Entropy, one end sent in a Connect, the other given
  * back, or null.
  */

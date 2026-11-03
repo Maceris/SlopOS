@@ -20,9 +20,9 @@ TEST_PASSWORD :: "correct horse battery staple"
 TEST_NEW_PASSWORD :: "a different long passphrase"
 TEST_FILE :: "welcome.txt"
 TEST_TEXT :: "Written to the administrator's home volume"
-// Past the wait three wrong passwords make, a second
+/** Past the wait three wrong passwords make, a second */
 TEST_WAIT : u64 : 1500000000
-// How often an answer is looked for while the supervisor handles what else arrives
+/** How often an answer is looked for while the supervisor handles what else arrives */
 ANSWER_POLL : u64 : 10000000
 
 check_accounts :: fn(supervisor: ptr[mut Supervisor]) {
@@ -32,7 +32,7 @@ check_accounts :: fn(supervisor: ptr[mut Supervisor]) {
     }
 }
 
-// What of test_accounts failed, if anything.
+/** What of test_accounts failed, if anything. */
 accounts_failure :: fn(supervisor: ptr[mut Supervisor]) -> string? {
     connection :: accounts_connection(supervisor) or_return "connecting"
     port :: os.port_for(supervisor.block.budget, connection.end) or_return "connecting"
@@ -118,7 +118,7 @@ accounts_failure :: fn(supervisor: ptr[mut Supervisor]) -> string? {
     return null
 }
 
-// A connection to the account service, through its listener.
+/** A connection to the account service, through its listener. */
 accounts_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[accounts.Accounts]? {
     for entry, i in supervisor.started {
         if i < supervisor.started_count && entry.name == "accounts" && entry.running && cast[slop_os.Handle](entry.listener) != slop_os.NO_HANDLE {
@@ -152,7 +152,7 @@ ask_accounts :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, port: 
     return send_accounts(supervisor, end, port, &out)
 }
 
-/*
+/**
  * One request, and its answer, waited for while the supervisor goes on with what it does: the account service dials
  * the storage manager through a connector the supervisor serves.
  */
@@ -171,7 +171,7 @@ send_accounts :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, port:
     }
 }
 
-// A file written at the root of a directory connection, through std's files.
+/** A file written at the root of a directory connection, through std's files. */
 write_file :: fn(root: os.Channel[dir.Dir], path: string, text: string) -> bool {
     files :: second_root(root) or_return false
     defer os.close_directory(files)
@@ -191,7 +191,7 @@ holds_file :: fn(root: os.Channel[dir.Dir], path: string, text: string) -> bool 
     }
 }
 
-// A connection of its own to a root, as std's files take one.
+/** A connection of its own to a root, as std's files take one. */
 second_root :: fn(root: os.Channel[dir.Dir]) -> os.Directory? {
     budget :: slop_os.startup_block().budget
     port :: os.port_for(budget, root.end) or_return null

@@ -197,7 +197,7 @@ check_links :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.
     return 0
 }
 
-// A directory at path made, or there already.
+/** A directory at path made, or there already. */
 made_directory :: fn(end: slop_os.Channel, port: slop_os.Port, path: string) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -212,7 +212,7 @@ made_directory :: fn(end: slop_os.Channel, port: slop_os.Port, path: string) -> 
     }
 }
 
-// What's at path granted, to write as well if write.
+/** What's at path granted, to write as well if write. */
 granted :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, write: bool) -> os.Channel[grant.Grant]? {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -224,7 +224,7 @@ granted :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, write: boo
     }
 }
 
-// A grant kept as a link at path.
+/** A grant kept as a link at path. */
 linked :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, given: os.Channel[grant.Grant]) -> dir.Response {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -233,7 +233,7 @@ linked :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, given: os.C
     return ask_dir(end, port, &out, &into)
 }
 
-// Whether a directory's listing has name in it, as a link.
+/** Whether a directory's listing has name in it, as a link. */
 lists_link :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> bool {
     into := os.Incoming.{}
     cursor : u64 = 0

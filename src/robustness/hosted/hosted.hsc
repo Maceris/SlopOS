@@ -1,4 +1,4 @@
-/*
+/**
  * Fault injection for the hosted unit tests (decisions/0096, R1; tools/unit_tests.py --robustness). SLOPOS_FAIL, in
  * the environment, says what to do:
  * - unset: nothing;
@@ -23,7 +23,7 @@ Request :: struct {
     point : u64,
 }
 
-// SLOPOS_FAIL, read.
+/** SLOPOS_FAIL, read. */
 request :: fn() -> Request {
     text :: os.get_environment("SLOPOS_FAIL") or_else ""
     asked :: request_of(text)
@@ -48,7 +48,7 @@ request_of :: fn(text: string) -> Request {
     return Request.{}
 }
 
-/*
+/**
  * body's code, with its allocations through a FailingAllocator that fails what SLOPOS_FAIL asks: then
  * "faults: allocations <n>, live <blocks>", the blocks allocated and not freed by the time it returned.
  */
@@ -71,7 +71,7 @@ run :: fn(body: (fn() -> int)) -> int {
     return code
 }
 
-// What a frame allocator's failure points should do (its faults.spec), from SLOPOS_FAIL.
+/** What a frame allocator's failure points should do (its faults.spec), from SLOPOS_FAIL. */
 point_spec :: fn() -> robustness.FailSpec {
     asked :: request()
     if asked.counting {
@@ -83,7 +83,7 @@ point_spec :: fn() -> robustness.FailSpec {
     return robustness.FailSpec.{}
 }
 
-// "faults: points <n>": the passes through a frame allocator's failure points, when they were counted.
+/** "faults: points <n>": the passes through a frame allocator's failure points, when they were counted. */
 report_points :: fn(faults: ptr[robustness.Faults]) {
     if faults.spec.mode != .Off {
         runtime.log_info("faults: points %", faults.all)

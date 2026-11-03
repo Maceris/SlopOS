@@ -1,4 +1,4 @@
-/*
+/**
  * Elevation (decisions/0158), on the trusted path: a session's program asked its powerbox for another account, and the
  * secure attention key opened this screen for it. It asks for the administrator's name and password, always, even in
  * their own session, then the new account's name and password, twice, as first-boot setup does, and has the account
@@ -21,7 +21,7 @@ import screen from "../../screen"
 STATUS_ELEVATING :: " SlopOS │ console │ making an account"
 ELEVATION_FIELDS :: 5
 
-// The screen opened over the active view, for its request for an account.
+/** The screen opened over the active view, for its request for an account. */
 enter_elevation :: fn(service: ptr[mut Service]) {
     service.attention = false
     service.elevating = true
@@ -32,7 +32,9 @@ enter_elevation :: fn(service: ptr[mut Service]) {
     update_status(service)
 }
 
-// The request answered, the account's name if it was made, or refused; what was typed forgotten, and the session drawn again.
+/**
+ * The request answered, the account's name if it was made, or refused; what was typed forgotten, and the session drawn again.
+ */
 end_elevation :: fn(service: ptr[mut Service], made: bool) {
     shown :: view(service)
     out := os.Outgoing.{}
@@ -68,7 +70,9 @@ end_elevation :: fn(service: ptr[mut Service], made: bool) {
     redraw(service)
 }
 
-// The account asked for: the administrator's name and password, and the new account's, the passwords forgotten once sent.
+/**
+ * The account asked for: the administrator's name and password, and the new account's, the passwords forgotten once sent.
+ */
 make_account_by :: fn(service: ptr[mut Service]) {
     if service.accounts_end == NONE || service.name_count > service.name.count || service.password_count > service.password.count
         || service.admin_count > service.admin.count || service.admin_password_count > service.admin_password.count {
@@ -105,7 +109,9 @@ make_account_by :: fn(service: ptr[mut Service]) {
     setup_step(service, .Making)
 }
 
-// The elevation screen: who asks, the fields so far, what it last said, and how to go on; drawn whole, or only its fields.
+/**
+ * The elevation screen: who asks, the fields so far, what it last said, and how to go on; drawn whole, or only its fields.
+ */
 draw_elevation :: fn(service: ptr[mut Service], whole: bool) {
     panel :: &view(service).screen.panel
     rows :: cast[u16](ELEVATION_FIELDS) + 4

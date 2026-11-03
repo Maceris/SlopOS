@@ -23,14 +23,14 @@ Volume :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "volume", major_version = 1, lending = .Server}
 
-// A grant's ticket, from its Claim, and the volume the link is for, by its container and ID.
+/** A grant's ticket, from its Claim, and the volume the link is for, by its container and ID. */
 IssueTo :: struct {
     ticket : u8[32],
     recipient_container : u8[16],
     recipient : u64,
 }
 
-// What a link issued under number leads to opened, for the volume holding it, and a path beneath it.
+/** What a link issued under number leads to opened, for the volume holding it, and a path beneath it. */
 OpenIssued :: struct {
     number : u64,
     recipient_container : u8[16],
@@ -40,11 +40,13 @@ OpenIssued :: struct {
 }
 
 Request :: union {
-    // The volume's key unwrapped with this passphrase: the first time, to serve it; after that, to check it's the one
+    /**
+     * The volume's key unwrapped with this passphrase: the first time, to serve it; after that, to check it's the one
+     */
     Unlock(slop_os.Relative[u8]),
-    // A new key generation, which seals what's written from now on (decisions/0042)
+    /** A new key generation, which seals what's written from now on (decisions/0042) */
     Rotate,
-    // What's changed committed now, as before a snapshot of it is taken
+    /** What's changed committed now, as before a snapshot of it is taken */
     Commit,
     IssueTo(IssueTo),
     OpenIssued(OpenIssued),
@@ -52,27 +54,27 @@ Request :: union {
 
 Response :: union {
     Unlocked,
-    // The passphrase doesn't unwrap the volume's key
+    /** The passphrase doesn't unwrap the volume's key */
     WrongKey,
-    // The generation now sealing what's written
+    /** The generation now sealing what's written */
     Rotated(u32),
     Committed,
-    // The volume isn't encrypted
+    /** The volume isn't encrypted */
     NotEncrypted,
-    // What it needed couldn't be read, written or committed
+    /** What it needed couldn't be read, written or committed */
     Failed,
     Unsupported,
-    // The number a link is issued under, durable
+    /** The number a link is issued under, durable */
     Issued(u64),
     OpenedFile(os.Channel[file.File]),
     OpenedReadOnlyFile(os.Channel[read_only_file.ReadOnlyFile]),
     OpenedDirectory(os.Channel[dir.Dir]),
     OpenedReadOnlyDirectory(os.Channel[read_only_dir.ReadOnlyDir]),
-    // No such grant, a link revoked or never issued to that volume, or what it leads to can't be opened as asked
+    /** No such grant, a link revoked or never issued to that volume, or what it leads to can't be opened as asked */
     Refused(files.FileError),
 }
 
-// Unlocking again checks the passphrase again; rotating again starts another generation.
+/** Unlocking again checks the passphrase again; rotating again starts another generation. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Unlock(_) => true

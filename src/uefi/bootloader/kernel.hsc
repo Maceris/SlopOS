@@ -28,7 +28,7 @@ RELA_SIZE : u64 : 24
     RELATIVE : u64 : 1027
 }
 
-// The kernel loaded: its pages, where it runs, its entry from there, and its segments.
+/** The kernel loaded: its pages, where it runs, its entry from there, and its segments. */
 LoadedKernel :: struct {
     physical : u64,
     size : u64,
@@ -38,7 +38,7 @@ LoadedKernel :: struct {
     segment_count : usize,
 }
 
-// size bytes, little-endian, at offset in a file in pages, or 0 past its end.
+/** size bytes, little-endian, at offset in a file in pages, or 0 past its end. */
 read_at :: fn(file: Pages, offset: u64, size: u64) -> u64 {
     if offset > file.size || size > file.size - offset {
         return 0
@@ -50,7 +50,7 @@ read_at :: fn(file: Pages, offset: u64, size: u64) -> u64 {
     return value
 }
 
-// The kernel in file, loaded and relocated; null if it isn't an ELF kernel for this machine.
+/** The kernel in file, loaded and relocated; null if it isn't an ELF kernel for this machine. */
 load_kernel :: fn(file: Pages, random: ptr[Random]) -> LoadedKernel? {
     if file.size < ELF_HEADER_SIZE || read_at(file, 0, 4) != 0x464c457f || read_at(file, 4, 1) != 2 || read_at(file, 5, 1) != 1
         || read_at(file, 16, 2) != 3 || read_at(file, 18, 2) != ELF_MACHINE || read_at(file, 54, 2) != PROGRAM_HEADER_SIZE {
@@ -112,7 +112,7 @@ load_kernel :: fn(file: Pages, random: ptr[Random]) -> LoadedKernel? {
     return loaded
 }
 
-/*
+/**
  * The relative relocations the dynamic segment at dynamic names, applied in the loaded image for its slide; false for
  * one of another kind, or outside the image.
  */
@@ -146,7 +146,7 @@ relocate :: fn(loaded: ptr[LoadedKernel], lowest: u64, dynamic: u64, slide: u64)
     return true
 }
 
-// count bytes from one address to another.
+/** count bytes from one address to another. */
 copy :: fn(to: u64, from: u64, count: u64) {
     for i in cast[u64](0)..<count {
         cast[ptr[mut u8]](cast[rawptr](to + i))^ = cast[ptr[u8]](cast[rawptr](from + i))^

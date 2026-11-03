@@ -25,22 +25,26 @@ Storage :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "storage", major_version = 1, lending = .Server}
 
-// A partition, and which disk it's on, from 0, and which of that disk's it is.
+/** A partition, and which disk it's on, from 0, and which of that disk's it is. */
 Partition :: struct {
     disk : u32,
     index : u32,
     info : partitions.PartitionInfo,
 }
 
-// A volume of the container on a partition, by name, and the passphrase that unlocks it, empty for one that isn't encrypted.
+/**
+ * A volume of the container on a partition, by name, and the passphrase that unlocks it, empty for one that isn't encrypted.
+ */
 VolumeAt :: struct {
     partition : u32,
     name : slop_os.Relative[u8],
     passphrase : slop_os.Relative[u8],
 }
 
-// A new volume of the container on a partition, sealed with cipher (slopfs.Cipher) by a passphrase, or neither, and
-// when it's made, as the asker says.
+/**
+ * A new volume of the container on a partition, sealed with cipher (slopfs.Cipher) by a passphrase, or neither, and
+ * when it's made, as the asker says.
+ */
 NewVolume :: struct {
     partition : u32,
     name : slop_os.Relative[u8],
@@ -49,13 +53,13 @@ NewVolume :: struct {
     now : u64,
 }
 
-// A volume of the container on a partition, by name.
+/** A volume of the container on a partition, by name. */
 VolumeNamed :: struct {
     partition : u32,
     name : slop_os.Relative[u8],
 }
 
-// A volume's snapshot, both by name, and when it's taken, as the asker says.
+/** A volume's snapshot, both by name, and when it's taken, as the asker says. */
 SnapshotOf :: struct {
     partition : u32,
     volume : slop_os.Relative[u8],
@@ -63,21 +67,21 @@ SnapshotOf :: struct {
     now : u64,
 }
 
-// A volume's snapshot by its place among them, oldest first, from 0.
+/** A volume's snapshot by its place among them, oldest first, from 0. */
 SnapshotIndexOf :: struct {
     partition : u32,
     volume : slop_os.Relative[u8],
     index : u64,
 }
 
-// A volume's quota: the most blocks it may have, its snapshots' included, 0 for none.
+/** A volume's quota: the most blocks it may have, its snapshots' included, 0 for none. */
 QuotaFor :: struct {
     partition : u32,
     volume : slop_os.Relative[u8],
     blocks : u64,
 }
 
-// A new volume named name, cloned from a volume's snapshot.
+/** A new volume named name, cloned from a volume's snapshot. */
 CloneOf :: struct {
     partition : u32,
     volume : slop_os.Relative[u8],
@@ -87,30 +91,34 @@ CloneOf :: struct {
 }
 
 Request :: union {
-    // The partition at an index, across every disk, from 0
+    /** The partition at an index, across every disk, from 0 */
     Describe(u32),
-    // A new block connection narrowed to the partition at an index
+    /** A new block connection narrowed to the partition at an index */
     Open(u32),
-    // The root of the FAT volume on the partition at an index, or of the system volume of the container there
+    /** The root of the FAT volume on the partition at an index, or of the system volume of the container there */
     OpenFiles(u32),
-    // The root of a container's volume, started the first time, unlocked if it's encrypted; after that, checked
+    /** The root of a container's volume, started the first time, unlocked if it's encrypted; after that, checked */
     OpenVolume(VolumeAt),
-    // A new volume, with nothing in it but its root directory, opened as OpenVolume opens one (decisions/0141)
+    /** A new volume, with nothing in it but its root directory, opened as OpenVolume opens one (decisions/0141) */
     CreateVolume(NewVolume),
-    // A new key generation for an encrypted volume being served, sealing what's written from now on (decisions/0042)
+    /**
+     * A new key generation for an encrypted volume being served, sealing what's written from now on (decisions/0042)
+     */
     Rotate(VolumeNamed),
-    // A snapshot of what a volume has committed, which a volume being served commits first; deleted; found by its
-    // place; and a clone made from one (8e)
+    /**
+     * A snapshot of what a volume has committed, which a volume being served commits first; deleted; found by its
+     * place; and a clone made from one (8e)
+     */
     TakeSnapshot(SnapshotOf),
     DeleteSnapshot(SnapshotOf),
     SnapshotAt(SnapshotIndexOf),
     Clone(CloneOf),
-    // A volume's quota set, and how much it has, its quota, and what its container has free past its reserve (8e)
+    /** A volume's quota set, and how much it has, its quota, and what its container has free past its reserve (8e) */
     SetQuota(QuotaFor),
     Usage(VolumeNamed),
-    // Serve another client, on its end
+    /** Serve another client, on its end */
     Connect(os.Channel[Storage]),
-    /*
+    /**
      * For a test only, refused (Unsupported) unless the storage manager was started with test_storage_restart on the
      * kernel's command line: the partition server of the disk at an index killed, and answered once it's started
      * again (decisions/0098)
@@ -122,33 +130,33 @@ Response :: union {
     Described(Partition),
     Opened(os.Channel[block.Block]),
     OpenedFiles(os.Channel[dir.Dir]),
-    // A snapshot's root, read only (8e)
+    /** A snapshot's root, read only (8e) */
     OpenedReadOnlyFiles(os.Channel[read_only_dir.ReadOnlyDir]),
     NoPartition,
-    // The partition isn't one of a kind that holds files, or its FAT server couldn't be started
+    /** The partition isn't one of a kind that holds files, or its FAT server couldn't be started */
     NoFiles,
-    // No volume of that name, or it isn't being served
+    /** No volume of that name, or it isn't being served */
     NoVolume,
-    // An encrypted volume, asked for without a passphrase
+    /** An encrypted volume, asked for without a passphrase */
     Locked,
-    // The passphrase doesn't unlock the volume
+    /** The passphrase doesn't unlock the volume */
     WrongKey,
-    // The generation now sealing what the volume writes
+    /** The generation now sealing what the volume writes */
     Rotated(u32),
-    // The volume isn't encrypted
+    /** The volume isn't encrypted */
     NotEncrypted,
-    // Its servers couldn't be started, or did something that failed
+    /** Its servers couldn't be started, or did something that failed */
     Failed,
     Done,
-    // A snapshot, its name, transaction and when it was taken
+    /** A snapshot, its name, transaction and when it was taken */
     Snapshot(container.SnapshotInfo),
     Used(slopfs.Usage),
-    // Past the last snapshot
+    /** Past the last snapshot */
     NoMore,
     NoSnapshot,
-    // A snapshot or volume with that name is there already
+    /** A snapshot or volume with that name is there already */
     AlreadyExists,
-    // A snapshot a clone was made from, which stays while it's there
+    /** A snapshot a clone was made from, which stays while it's there */
     InUse,
     Unsupported,
 }
@@ -174,7 +182,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #insert os.protocol_code(Request, Response)
 
-// A new connection to the storage manager listening on end, or null (as entropy.connect).
+/** A new connection to the storage manager listening on end, or null (as entropy.connect). */
 connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Storage]? {
     pair :: os.channel_for[Storage](budget, 0) or_return null
     out := os.Outgoing.{}

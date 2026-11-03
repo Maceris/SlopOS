@@ -21,11 +21,11 @@ import uefi from "std/os"
 
     PageTables :: struct {
         root : u64,
-        // Whether the CPU maps 1 GiB pages
+        /** Whether the CPU maps 1 GiB pages */
         gigabyte_pages : bool,
     }
 
-    // The root below 4 GiB, where the other CPUs' trampoline loads it from real mode (cpus.hsc)
+    /** The root below 4 GiB, where the other CPUs' trampoline loads it from real mode (cpus.hsc) */
     new_tables :: fn() -> PageTables? {
         services :: uefi.boot_services() or_return null
         root : u64 = 0xfffff000
@@ -37,7 +37,9 @@ import uefi from "std/os"
         return PageTables.{root = root, gigabyte_pages = (x86_64.cpuid(0x80000001).edx >> 26) & 1 != 0}
     }
 
-    // The table an entry of table at index points to, made if it points to none; null without memory, or over a large page.
+    /**
+     * The table an entry of table at index points to, made if it points to none; null without memory, or over a large page.
+     */
     next_table :: fn(table: u64, index: u64) -> u64? {
         entry :: cast[ptr[mut u64]](cast[rawptr](table + index * 8))
         if entry^ & PRESENT != 0 {
@@ -51,7 +53,9 @@ import uefi from "std/os"
         return made
     }
 
-    // size bytes at virtual mapped to physical, writable and executable, in the largest pages that fit: whether they were.
+    /**
+     * size bytes at virtual mapped to physical, writable and executable, in the largest pages that fit: whether they were.
+     */
     map :: fn(tables: ptr[PageTables], virtual: u64, physical: u64, size: u64) -> bool {
         done := cast[u64](0)
         loop {
@@ -87,13 +91,13 @@ import uefi from "std/os"
 #else {
     import aarch64 from "base/intrinsics"
 
-    /*
+    /**
      * AArch64's: 4 KiB granules, 48-bit halves, TTBR1's root for the kernel half (the kernel image and the direct map) and
      * TTBR0's for the identity map, every page normal write-back memory (MAIR_EL1's index 0), inner shareable. Devices'
      * registers aren't mapped: the kernel maps those it needs itself, in the gaps (arch/aarch64, map_early_device).
      */
     VALID : u64 : 1
-    // A table descriptor, or a page at level 3
+    /** A table descriptor, or a page at level 3 */
     TABLE : u64 : 2
     // AttrIndx 0, EL1 read and write, inner shareable, accessed
     ATTRIBUTES : u64 : (3 << 8) | (1 << 10)
@@ -101,7 +105,7 @@ import uefi from "std/os"
     GIGABYTE : u64 : 1 << 30
     TWO_MEGABYTES : u64 : 1 << 21
     HIGHER_HALF : u64 : 0xffff800000000000
-    // MAIR_EL1's index 0, normal memory, write-back, as the kernel takes it (arch/aarch64/paging.hsc)
+    /** MAIR_EL1's index 0, normal memory, write-back, as the kernel takes it (arch/aarch64/paging.hsc) */
     MAIR_VALUE : u64 : 0xff
 
     PageTables :: struct {
@@ -158,7 +162,7 @@ import uefi from "std/os"
         return true
     }
 
-    /*
+    /**
      * TCR_EL1: 48-bit halves (T0SZ and T1SZ 16), 4 KiB granules, walks write-back and inner shareable, and the CPU's
      * physical address size, up to 48 bits.
      */

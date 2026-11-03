@@ -23,7 +23,7 @@ REDIRECTION_ACTIVE_LOW : u32 : 1 << 13
 REDIRECTION_LEVEL : u32 : 1 << 15
 REDIRECTION_MASKED : u32 : 1 << 16
 
-// An I/O APIC has at most 240 lines: its maximum redirection entry is 8 bits, and vectors stop at 255.
+/** An I/O APIC has at most 240 lines: its maximum redirection entry is 8 bits, and vectors stop at 255. */
 MAX_IO_APIC_LINES : u32 : 240
 
 // The 8259 PICs' data ports, where writing a mask masks their lines.
@@ -31,7 +31,7 @@ MAX_IO_APIC_LINES : u32 : 240
 PIC_MASTER_DATA : u16 : 0x21
 PIC_SLAVE_DATA : u16 : 0xa1
 
-// One wired interrupt controller (arch_interface.InterruptController).
+/** One wired interrupt controller (arch_interface.InterruptController). */
 InterruptController :: struct {
     // Its registers, mapped by L2 as device memory.
     registers : u64,
@@ -117,7 +117,7 @@ write_io_apic :: fn(controller: ptr[InterruptController], register: u32, value: 
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](controller.registers + IO_APIC_WINDOW), value)
 }
 
-// Mask every line of both 8259 PICs, which the I/O APICs replace.
+/** Mask every line of both 8259 PICs, which the I/O APICs replace. */
 mask_legacy_pics :: fn() {
     x86_64.out_u8(PIC_MASTER_DATA, 0xff)
     x86_64.out_u8(PIC_SLAVE_DATA, 0xff)

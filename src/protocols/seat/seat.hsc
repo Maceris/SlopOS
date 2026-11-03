@@ -22,17 +22,19 @@ MAX_EVENTS :: 32
 MAX_TEXT :: 256
 
 EventKind :: enum #backed_by(u8) {
-    // keyboard; code: the key's HID usage; modifiers (std/os/slop_os's terminal's); text: what it types, if anything
+    /**
+     * keyboard; code: the key's HID usage; modifiers (std/os/slop_os's terminal's); text: what it types, if anything
+     */
     Key = 1,
-    // Ctrl+Alt+Delete, on keyboard
+    /** Ctrl+Alt+Delete, on keyboard */
     SecureAttention = 2,
-    // keyboard is new: nothing reads it until code is typed on it, and Enter
+    /** keyboard is new: nothing reads it until code is typed on it, and Enter */
     Waiting = 3,
-    // keyboard's code was typed: its keys come from now on
+    /** keyboard's code was typed: its keys come from now on */
     Accepted = 4,
 }
 
-// Plain data, as a Relative's elements are: kind an EventKind's value (event_of, kind_of).
+/** Plain data, as a Relative's elements are: kind an EventKind's value (event_of, kind_of). */
 Event :: struct {
     kind : u8,
     keyboard : u8,
@@ -49,11 +51,11 @@ Events :: struct {
 }
 
 Request :: union {
-    // Up to this many events; held until there's one
+    /** Up to this many events; held until there's one */
     Read(u32),
-    // The keymap keys are typed through from now on, by its name (src/keymaps)
+    /** The keymap keys are typed through from now on, by its name (src/keymaps) */
     SetLayout(slop_os.Relative[u8]),
-    // Serve another client, on its end
+    /** Serve another client, on its end */
     Connect(os.Channel[Seat]),
 }
 
@@ -62,7 +64,7 @@ Response :: union {
     Unsupported,
 }
 
-// A Read asked again is another Read.
+/** A Read asked again is another Read. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Read(_) => false
@@ -77,7 +79,7 @@ event_of :: fn(kind: EventKind, keyboard: u8) -> Event {
     return Event.{kind = cast[u8](kind), keyboard = keyboard}
 }
 
-// What an event is, or null for a kind this version hasn't.
+/** What an event is, or null for a kind this version hasn't. */
 kind_of :: fn(event: Event) -> EventKind? {
     return match event.kind {
         case 1 => EventKind.Key
@@ -88,7 +90,7 @@ kind_of :: fn(event: Event) -> EventKind? {
     }
 }
 
-// A new connection to the input service listening on end, or null (as entropy.connect).
+/** A new connection to the input service listening on end, or null (as entropy.connect). */
 connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Seat]? {
     pair :: os.channel_for[Seat](budget, 0) or_return null
     out := os.Outgoing.{}

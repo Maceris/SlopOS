@@ -1,4 +1,4 @@
-/*
+/**
  * account_records' tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the number of
  * the first check that failed. Names and passwords held to their rules; the common list searched; a record's home secret
  * unsealed by its password and its recovery code and by nothing else, and by a new password once it's changed; a
@@ -10,7 +10,7 @@ import compiler from "base"
 import crypto from "std"
 import account_records from ".."
 
-// Argon2id kept cheap for the tests
+/** Argon2id kept cheap for the tests */
 TEST_ARGON2 :: crypto.Argon2Parameters.{memory_kib = 64, passes = 1, lanes = 1}
 
 text :: fn(value: string) -> u8[] {

@@ -20,7 +20,7 @@ name_bytes :: fn(text: string) -> u8[] {
     return string_bytes(text)
 }
 
-// Whether the file at name in a volume's root holds text and only that.
+/** Whether the file at name in a volume's root holds text and only that. */
 file_holds :: fn(volume: ptr[mut slopfs.Volume], name: string, text: u8[]) -> bool {
     file :: match slopfs.lookup(volume, slopfs.ROOT_OBJECT, name) {
         case Ok(found) => found or_return false
@@ -31,7 +31,7 @@ file_holds :: fn(volume: ptr[mut slopfs.Volume], name: string, text: u8[]) -> bo
     return count == text.count && count <= bytes.count && same(bytes[0..<count], text)
 }
 
-// Whether a large file holds the pattern seed makes, size bytes of it.
+/** Whether a large file holds the pattern seed makes, size bytes of it. */
 large_holds :: fn(volume: ptr[mut slopfs.Volume], name: string, seed: u64, size: usize, data: ptr[mut Data], back: ptr[mut Data]) -> bool {
     file :: match slopfs.lookup(volume, slopfs.ROOT_OBJECT, name) {
         case Ok(found) => found or_return false
@@ -240,7 +240,7 @@ check_snapshots_of :: fn(sealed: bool, base: int) -> int {
     return 0
 }
 
-// A volume by ID: as it is, or unlocked with the tests' passphrase.
+/** A volume by ID: as it is, or unlocked with the tests' passphrase. */
 open_test_volume_id :: fn(container #escaping : ptr[mut slopfs.Container], id: u64, sealed: bool) -> Result[ptr[mut slopfs.Volume], slopfs.Error] {
     if sealed {
         return slopfs.open_sealed_volume(container, id, passphrase())
@@ -248,7 +248,7 @@ open_test_volume_id :: fn(container #escaping : ptr[mut slopfs.Container], id: u
     return slopfs.open_volume(container, id)
 }
 
-// An encrypted volume's keys, unlocked with the tests' passphrase, for a snapshot of it.
+/** An encrypted volume's keys, unlocked with the tests' passphrase, for a snapshot of it. */
 unlocked_keys :: fn(container: ptr[mut slopfs.Container], id: u64) -> ptr[mut slopfs.Keys]? {
     record :: slopfs.volume_record(container, id) or_return null
     wraps : slopfs.WrapRecord[..]

@@ -13,7 +13,7 @@ import config from "../../protocols/config"
 import connector from "../../protocols/connector"
 import entropy from "../../protocols/entropy"
 
-/*
+/**
  * The first SlopOS program (roadmap M6): it fills memory from its heap, draws random numbers, and says
  * whether both worked through base's logger, to the events service, and on the console, if it's given a connection to the
  * terminal service, through a connector to it (decisions/0075, 0077, 0136). Given a connection to the process manager,
@@ -82,14 +82,14 @@ main :: fn(manager: os.Channel[process_manager.ProcessManager]?, console: os.Cha
     return code
 }
 
-// hello's settings, in the config store: only what it's been asked to show.
+/** hello's settings, in the config store: only what it's been asked to show. */
 HelloSettings :: struct {
     greeting : slop_os.Relative[u8],
     repeats : u32 = 1,
     loud : bool,
 }
 
-/*
+/**
  * Its settings declared, an override of greeting and repeats written and read back over the default, which loud keeps,
  * Next answered at once for a version already past, and the override rolled back to the declared version's.
  */
@@ -131,7 +131,7 @@ check_settings :: fn(settings: config.Config[HelloSettings]) {
         if wrote { "kept" } else { "refused" }, merged, author, if rolled { "kept" } else { "refused" }, after)
 }
 
-// How many random bytes the entropy service gives, through end, for 32 asked for: 0 if it gives none.
+/** How many random bytes the entropy service gives, through end, for 32 asked for: 0 if it gives none. */
 entropy_bytes :: fn(end: slop_os.Channel) -> usize {
     port :: os.port_for(slop_os.startup_block().budget, end) or_return 0
     out := os.Outgoing.{}
@@ -154,7 +154,7 @@ entropy_bytes :: fn(end: slop_os.Channel) -> usize {
     }
 }
 
-// A field of a date, with a 0 in front of it below 10.
+/** A field of a date, with a 0 in front of it below 10. */
 append_two_digits :: fn(line: ptr[mut text_buffer.TextBuffer], value: int) {
     if value < 10 {
         text_buffer.append_format(line, "0")
@@ -162,7 +162,7 @@ append_two_digits :: fn(line: ptr[mut text_buffer.TextBuffer], value: int) {
     text_buffer.append_format(line, "%", value)
 }
 
-// 0 if memory from the heap holds what's written to it.
+/** 0 if memory from the heap holds what's written to it. */
 fill_heap :: fn() -> int {
     values, error :: runtime.new_array(u64, 1000)
     if error != null {

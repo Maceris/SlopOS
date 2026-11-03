@@ -1,4 +1,4 @@
-/*
+/**
  * The framebuffer back end's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or
  * the number of the first check that failed. Over a buffer standing in for a 1024x640 framebuffer of 32-bit pixels, the
  * grid is centered, the status line drawn inverse, a letter drawn in its colour on the default background, the cursor
@@ -77,7 +77,7 @@ pixel :: fn(pixels: u32[], x: u32, y: u32) -> u32 {
     return if at < pixels.count { pixels[at] } else { cast[u32](0xffffffff) }
 }
 
-// How many pixels of the cell whose top left is at x and y are color.
+/** How many pixels of the cell whose top left is at x and y are color. */
 lit :: fn(pixels: u32[], x: u32, y: u32, color: u32) -> u32 {
     count : u32 = 0
     for row in 0..<cast[u32](24) {

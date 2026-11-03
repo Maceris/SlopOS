@@ -13,30 +13,30 @@ Serial :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "serial", major_version = 1, lending = .Server}
 
-// The most bytes one Write or Data has, so a message fits the default 1 KiB ring.
+/** The most bytes one Write or Data has, so a message fits the default 1 KiB ring. */
 MAX_BYTES :: 256
 
 Request :: union {
-    // Bytes to send, up to MAX_BYTES
+    /** Bytes to send, up to MAX_BYTES */
     Write(slop_os.Relative[u8]),
-    // Up to max bytes that have arrived, answered once there's at least one
+    /** Up to max bytes that have arrived, answered once there's at least one */
     Read(u32),
-    // What the line is
+    /** What the line is */
     Features,
-    // Serve another client, on its end
+    /** Serve another client, on its end */
     Connect(os.Channel[Serial]),
 }
 
 Response :: union {
-    // How many of the bytes were taken
+    /** How many of the bytes were taken */
     Written(u32),
     Data(slop_os.Relative[u8]),
-    // Its speed in bits a second, 0 for a line without one, like a virtual console
+    /** Its speed in bits a second, 0 for a line without one, like a virtual console */
     Line(u32),
     Unsupported,
 }
 
-// Sending the same bytes again sends them twice.
+/** Sending the same bytes again sends them twice. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Write(_) => false
@@ -48,7 +48,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #insert os.protocol_code(Request, Response)
 
-// A new connection to the driver listening on end, or null (as entropy.connect).
+/** A new connection to the driver listening on end, or null (as entropy.connect). */
 connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Serial]? {
     pair :: os.channel_for[Serial](budget, 0) or_return null
     out := os.Outgoing.{}

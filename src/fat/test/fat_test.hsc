@@ -1,4 +1,4 @@
-/*
+/**
  * The FAT package's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the
  * number of the first check that failed. A volume formatted in a buffer standing in for a disk is mounted; files and
  * directories are made with short and long names, written across clusters, read back, resized, renamed and removed;
@@ -12,10 +12,10 @@ import runtime from "base"
 import fat from ".."
 import hosted_faults from "../../robustness/hosted"
 
-// 34 MiB of 512-byte sectors, a sector a cluster: just enough clusters to be FAT32
+/** 34 MiB of 512-byte sectors, a sector a cluster: just enough clusters to be FAT32 */
 SECTORS : u64 : 69632
 
-/*
+/**
  * A disk in memory. Undoing, it keeps each sector's bytes from before it's first written, so the fuzzer puts back
  * what a round changed without copying the whole image.
  */
@@ -24,11 +24,11 @@ Image :: struct {
     undoing : bool,
     undo : Undo[..],
     saved : u8[..],
-    // Writes fail while it's set, writing nothing
+    /** Writes fail while it's set, writing nothing */
     failing : bool,
 }
 
-// A sector's bytes from before a round wrote it, at `at` in saved.
+/** A sector's bytes from before a round wrote it, at `at` in saved. */
 Undo :: struct {
     sector : u64,
     at : usize,
@@ -193,7 +193,7 @@ checks :: fn() -> int {
     return check_fuzz(&image, device)
 }
 
-/*
+/**
  * A write the disk fails (decisions/0112): refused, the volume failed from then on, and what it was to change refused
  * to reads rather than given as it was, while other files read; written whole again, it reads again, the volume still
  * failed. A volume mounted afresh starts whole.
@@ -246,7 +246,7 @@ done :: fn(result: Result[void, fat.FatError]) -> bool {
     }
 }
 
-// The first entry's name in a directory, or "".
+/** The first entry's name in a directory, or "". */
 next_name :: fn(volume: ptr[mut fat.Volume], directory: u32, slot: u32) -> string {
     match fat.next_entry(volume, directory, slot) {
         case Ok(found) => {
@@ -318,7 +318,7 @@ write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool
     return true
 }
 
-// The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness)
+/** The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness) */
 main :: fn() -> int {
     return hosted_faults.run(checks)
 }

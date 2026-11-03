@@ -1,4 +1,4 @@
-/*
+/**
  * The root task (decisions/0012, 0060, 0067, 0068): the one process the kernel starts, given everything. It
  * splits its budget and starts the services the system configuration gives it: the entropy service and the process
  * manager with its own loader (src/process_builder), since the manager needs both, then the supervisor
@@ -51,14 +51,14 @@ import test_kit from "../../test_kit"
 import test_syscalls from "../../tests/test_syscalls"
 
 MAX_STARTED :: 8
-// The most typed libraries a test is given
+/** The most typed libraries a test is given */
 MAX_TEST_LIBRARIES :: 4
-// The most grants a service the root task loads itself is given, its libraries among them
+/** The most grants a service the root task loads itself is given, its libraries among them */
 MAX_SELF_GRANTS :: 24
-// The port's key for the supervisor's reports; a started service's is its index.
+/** The port's key for the supervisor's reports; a started service's is its index. */
 SUPERVISOR_KEY : u64 : 1000
 
-// What the supervisor is given (supervisor.main).
+/** What the supervisor is given (supervisor.main). */
 SupervisorGrants :: struct {
     log : slop_os.DebugLog?,
     manager : os.Channel[connector.Connector],
@@ -89,11 +89,13 @@ SupervisorGrants :: struct {
     config_module : slop_os.Memory?,
     update_module : slop_os.Memory?,
     system : slop_os.Memory,
-    // The boot before's panic record's text, if it stopped for a fault, for the terminal service to show (decisions/0139)
+    /**
+     * The boot before's panic record's text, if it stopped for a fault, for the terminal service to show (decisions/0139)
+     */
     last_panic : slop_os.Memory?,
 }
 
-// What the scheduler service is given (scheduler.main).
+/** What the scheduler service is given (scheduler.main). */
 SchedulerGrants :: struct {
     log : slop_os.DebugLog?,
     cpu_budget : slop_os.CpuBudget,
@@ -101,7 +103,7 @@ SchedulerGrants :: struct {
     system : slop_os.Memory,
 }
 
-// What the platform service is given (platform.main).
+/** What the platform service is given (platform.main). */
 PlatformGrants :: struct {
     log : slop_os.DebugLog?,
     platform : slop_os.Platform,
@@ -110,10 +112,10 @@ PlatformGrants :: struct {
     command_line : slop_os.Memory?,
 }
 
-// How long test_services waits once everything has started, for drivers to come up, in nanoseconds
+/** How long test_services waits once everything has started, for drivers to come up, in nanoseconds */
 SETTLE_NANOSECONDS : u64 : 1_000_000_000
 
-// What a test program is given: every test's entry takes these (src/tests, test_kit).
+/** What a test program is given: every test's entry takes these (src/tests, test_kit). */
 TestGrants :: struct {
     log : slop_os.DebugLog,
     platform : slop_os.Platform?,
@@ -122,16 +124,16 @@ TestGrants :: struct {
     // A connection to the manager, and the program's own module, for a test that launches copies of itself
     manager : os.Channel[process_manager.ProcessManager]?,
     program : slop_os.Memory?,
-    // What a copy is given by the test that launched it; never by the root task
+    /** What a copy is given by the test that launched it; never by the root task */
     peer : slop_os.Channel?,
-    // The root CPU budget, for the test of CPU budgets (decisions/0093)
+    /** The root CPU budget, for the test of CPU budgets (decisions/0093) */
     cpu_budget : slop_os.CpuBudget?,
 }
 
-// A test program's memory budget.
+/** A test program's memory budget. */
 TEST_BUDGET : u64 : 32 * 1024 * 1024
 
-// A service the root task started, and owns.
+/** A service the root task started, and owns. */
 Started :: struct {
     name : string,
     process : slop_os.Process,
@@ -145,7 +147,7 @@ Started :: struct {
     done : bool,
 }
 
-// The services the root task starts that it serves connectors to (decisions/0140), and starts again when they end.
+/** The services the root task starts that it serves connectors to (decisions/0140), and starts again when they end. */
 RootService :: enum {
     Entropy,
     ProcessManager,
@@ -153,7 +155,7 @@ RootService :: enum {
     Platform,
 }
 
-// A connector the root task serves: its end, and what it dials.
+/** A connector the root task serves: its end, and what it dials. */
 RootConnector :: struct {
     end : slop_os.Channel,
     service : RootService,
@@ -180,7 +182,7 @@ Root :: struct {
     entropy_port : slop_os.Port,
     manager : slop_os.Channel,
     manager_port : slop_os.Port,
-    // Its end of the supervisor's reports
+    /** Its end of the supervisor's reports */
     supervision : slop_os.Channel,
     // Its end of the scheduler service's listener, and the port its answers wake, or NO_HANDLE without one
     scheduler : slop_os.Channel,
@@ -216,7 +218,7 @@ Root :: struct {
     // its name, and the substitute's memory, which every launch is given in its place
     substituted : os.LaunchLibrary[bundle.MAX_SUBSTITUTIONS],
     substituted_count : usize,
-    // What a launch is given of them: a copy of each substitute's handle
+    /** What a launch is given of them: a copy of each substitute's handle */
     launch_libraries : os.LaunchLibrary[bundle.MAX_SUBSTITUTIONS],
 }
 
@@ -491,7 +493,7 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     }
 }
 
-/*
+/**
  * A service system_config names, loaded by the root task itself into a process of its own, with a budget
  * split off the root task's, a seed drawn from its stream, and grants: its process, which it remembers, or
  * null after saying why.
@@ -698,7 +700,7 @@ run_test :: fn(root: ptr[mut Root], name: string, platform: slop_os.Platform, cp
     return if code == 0 && emptied { 0 } else if code != 0 { 24 } else { 25 }
 }
 
-/*
+/**
  * The platform service, through the manager, with the hardware and the firmware tables that describe it: a connection
  * to it, for the supervisor, or null without the tables or if it didn't start.
  */
@@ -748,7 +750,7 @@ start_platform :: fn(root: ptr[mut Root]) {
 
 NO_CHANNEL : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 
-/*
+/**
  * The entropy service, by the root task's own loader, with a listener whose other end the root task keeps, to connect
  * its clients through: whether it started.
  */
@@ -772,7 +774,7 @@ start_entropy :: fn(root: ptr[mut Root]) -> bool {
     return true
 }
 
-/*
+/**
  * The process manager, by the root task's own loader, with a connector to the entropy service and a listener whose
  * other end is the root task's own connection to it: whether it started.
  */
@@ -798,7 +800,7 @@ start_manager :: fn(root: ptr[mut Root]) -> bool {
     return true
 }
 
-/*
+/**
  * A ring for the log records of the service named name, once the supervisor has given the root task a connection to the
  * events service: its grants, "events" both, into grants, the root task keeping the ring for the service's entry. How
  * many.
@@ -813,7 +815,7 @@ events_grants :: fn(root: ptr[mut Root], name: string, grants: mut process_build
     return 2
 }
 
-// A ring from the events service for name, the root task keeping it and giving a copy, or null before it has one.
+/** A ring from the events service for name, the root task keeping it and giving a copy, or null before it has one. */
 open_ring :: fn(root: ptr[mut Root], name: string) -> os.LaunchEvents? {
     if root.events_end == NO_CHANNEL {
         return null
@@ -834,7 +836,7 @@ open_ring :: fn(root: ptr[mut Root], name: string) -> os.LaunchEvents? {
     }
 }
 
-// A ring given back to the events service once its writer's ended, so it reads what's left; closed if it can't be.
+/** A ring given back to the events service once its writer's ended, so it reads what's left; closed if it can't be. */
 retire_ring :: fn(root: ptr[mut Root], ring: slop_os.Memory) {
     if cast[slop_os.Handle](ring) == slop_os.NO_HANDLE {
         return void
@@ -852,14 +854,16 @@ retire_ring :: fn(root: ptr[mut Root], ring: slop_os.Memory) {
     _ = slop_os.handle_close(cast[slop_os.Handle](ring))
 }
 
-// What a launch through the manager is given besides its grants: its CPU budget, the libraries, a ring for its records.
+/**
+ * What a launch through the manager is given besides its grants: its CPU budget, the libraries, a ring for its records.
+ */
 launch_options :: fn(root: ptr[mut Root], name: string) -> os.LaunchOptions {
     options := os.LaunchOptions.{cpu_budget = budget_for(root, name), libraries = substitutes(root)}
     options.events = open_ring(root, name)
     return options
 }
 
-/*
+/**
  * A connector to one of the root task's services (decisions/0140), served on its port: the client's end, or null if
  * there's no room. A client dials through it, and dials again when what it reached is started again.
  */
@@ -882,7 +886,9 @@ connector_to :: fn(root: ptr[mut Root], service: RootService) -> os.Channel[conn
     return os.Channel[connector.Connector].{end = pair.a}
 }
 
-// The connector thread: every Dial answered, waiting on the connectors' port between them, for as long as the root task runs.
+/**
+ * The connector thread: every Dial answered, waiting on the connectors' port between them, for as long as the root task runs.
+ */
 connector_thread : runtime.ThreadFunction : fn(data #escaping : any) {
     found :: runtime.get_extension(Root) or_return void
     root :: cast[ptr[mut Root]](found)
@@ -893,7 +899,9 @@ connector_thread : runtime.ThreadFunction : fn(data #escaping : any) {
     }
 }
 
-// Every connector's Dials, each answered with a new connection to what it reaches, or Unavailable while it's restarting.
+/**
+ * Every connector's Dials, each answered with a new connection to what it reaches, or Unavailable while it's restarting.
+ */
 serve_connectors :: fn(root: ptr[mut Root]) {
     for i in cast[usize](0)..<MAX_CONNECTORS {
         concurrency.lock(&root.connectors_lock)
@@ -937,7 +945,7 @@ serve_connectors :: fn(root: ptr[mut Root]) {
     }
 }
 
-// A new connection to one of its services, through its listener, or null while it isn't running.
+/** A new connection to one of its services, through its listener, or null while it isn't running. */
 dial_service :: fn(root: ptr[mut Root], service: RootService) -> slop_os.Channel? {
     budget :: root.block.budget
     name :: name_of(service)
@@ -975,7 +983,7 @@ name_of :: fn(service: RootService) -> string {
     }
 }
 
-/*
+/**
  * What's started at key ended: its budget closed, so what it had comes back, and its ring given back; and one of the
  * services the root task serves connectors to started again, as the supervisor starts its own again (decisions/0140), up
  * to RESTARTS times in RESTART_WINDOW, watched under the same key.
@@ -1030,7 +1038,7 @@ restart :: fn(root: ptr[mut Root], key: usize) {
     log_line.write(root.log, "root task: started % again", name)
 }
 
-/*
+/**
  * test_restart_root_services: once the supervisor has started everything, each of the root task's services killed in
  * turn, the process manager's after the entropy service's and before the two it starts, which are started again
  * through it; each started again and answering through a connector before the next. Whether all four did.
@@ -1073,7 +1081,7 @@ test_root_restarts :: fn(root: ptr[mut Root]) -> bool {
     return true
 }
 
-// Waits on the port until deadline or a packet, restarting what ended and serving connectors.
+/** Waits on the port until deadline or a packet, restarting what ended and serving connectors. */
 watch_until :: fn(root: ptr[mut Root], deadline: u64) {
     packets : slop_os.Packet[8]
     taken :: slop_os.port_wait(root.port, packets, deadline) or_else 0
@@ -1089,7 +1097,7 @@ watch_until :: fn(root: ptr[mut Root], deadline: u64) {
     }
 }
 
-// Whether a new connection to service answers a request: entropy bytes, a budget, a claim's answer, a connection.
+/** Whether a new connection to service answers a request: entropy bytes, a budget, a claim's answer, a connection. */
 answers :: fn(root: ptr[mut Root], service: RootService, connection: slop_os.Channel) -> bool {
     port :: os.port_for(root.block.budget, connection) or_return false
     defer slop_os.handle_close(cast[slop_os.Handle](port))
@@ -1123,7 +1131,7 @@ answers :: fn(root: ptr[mut Root], service: RootService, connection: slop_os.Cha
 }
 
 // A copy of the module a service is started from, for whoever starts it, or null.
-/*
+/**
  * The scheduler service, through the manager, with the root CPU budget to split (decisions/0093): every service the
  * root task starts after it, and every one the supervisor does, runs on a budget it splits. Without it, they run on
  * the root's, as before.
@@ -1167,7 +1175,7 @@ start_scheduler :: fn(root: ptr[mut Root], cpu_budget: slop_os.CpuBudget) {
     }
 }
 
-// The CPU budget the scheduler service gives the service named name, or null to run it on the root's.
+/** The CPU budget the scheduler service gives the service named name, or null to run it on the root's. */
 budget_for :: fn(root: ptr[mut Root], name: string) -> slop_os.CpuBudget? {
     concurrency.lock(&root.scheduler_lock)
     defer concurrency.unlock(&root.scheduler_lock)
@@ -1177,7 +1185,7 @@ budget_for :: fn(root: ptr[mut Root], name: string) -> slop_os.CpuBudget? {
     return scheduler_protocol.budget_for(root.scheduler, root.scheduler_port, name)
 }
 
-// A connection of its own to the scheduler service, or null without one.
+/** A connection of its own to the scheduler service, or null without one. */
 connect_scheduler :: fn(root: ptr[mut Root]) -> os.Channel[scheduler_protocol.Scheduler]? {
     concurrency.lock(&root.scheduler_lock)
     defer concurrency.unlock(&root.scheduler_lock)
@@ -1196,7 +1204,7 @@ module_copy :: fn(root: ptr[Root], name: string, rights: slop_os.Rights) -> slop
     }
 }
 
-// A service started, by its name, which is a constant's, in its entry if it has one already, as a restart has.
+/** A service started, by its name, which is a constant's, in its entry if it has one already, as a restart has. */
 remember :: fn(root: ptr[mut Root], name #escaping : string, process: slop_os.Process) {
     for &started, i in root.started {
         if i < root.started_count && started.name == name {
@@ -1218,23 +1226,23 @@ remember :: fn(root: ptr[mut Root], name #escaping : string, process: slop_os.Pr
     }
 }
 
-// The boot set's module the system configuration is in.
+/** The boot set's module the system configuration is in. */
 RECORDS_MODULE :: "system.records"
 
-// A service of the system configuration's: its name, its module and its memory budget.
+/** A service of the system configuration's: its name, its module and its memory budget. */
 Service :: struct {
     name : string,
     module : string,
     budget : u64,
 }
 
-// The service of the system configuration named name, or null.
+/** The service of the system configuration named name, or null. */
 service_of :: fn(root: ptr[Root], name: string) -> Service? {
     record :: system_records.service_of(root.records, name) or_return null
     return Service.{name = system_records.text_of(&record.name), module = system_records.text_of(&record.module), budget = record.budget}
 }
 
-// A read-only copy of the system configuration's module, to give a service.
+/** A read-only copy of the system configuration's module, to give a service. */
 records_copy :: fn(root: ptr[Root]) -> slop_os.Memory? {
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
     match slop_os.handle_duplicate(cast[slop_os.Handle](root.records_module), rights) {
@@ -1243,7 +1251,7 @@ records_copy :: fn(root: ptr[Root]) -> slop_os.Memory? {
     }
 }
 
-// A copy of the root task's debug log, to give a service.
+/** A copy of the root task's debug log, to give a service. */
 duplicate_log :: fn(root: ptr[mut Root]) -> slop_os.DebugLog? {
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     match slop_os.handle_duplicate(cast[slop_os.Handle](root.log), rights) {
@@ -1252,7 +1260,7 @@ duplicate_log :: fn(root: ptr[mut Root]) -> slop_os.DebugLog? {
     }
 }
 
-// A started service killed, by name.
+/** A started service killed, by name. */
 kill :: fn(root: ptr[mut Root], name: string) {
     for &started, i in root.started {
         if i < root.started_count && started.name == name {
@@ -1262,7 +1270,7 @@ kill :: fn(root: ptr[mut Root], name: string) {
     }
 }
 
-/*
+/**
  * The generation's substitution policy, its boot-set file substitutions.records if it has one (decisions/0123, 0125),
  * applied: each entry whose from is one of the root task's libraries, by its file's hash, and whose to is another that
  * passes the check against it, its substitute from then on. The root task itself keeps what it was bound to.
@@ -1300,7 +1308,7 @@ apply_substitutions :: fn(root: ptr[mut Root]) {
     }
 }
 
-// What a launch is given in place of the root task's own libraries: a copy of each substitute's handle.
+/** What a launch is given in place of the root task's own libraries: a copy of each substitute's handle. */
 substitutes :: fn(root: ptr[mut Root]) -> os.LaunchLibrary[] {
     library_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_EXECUTE)
         | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
@@ -1320,7 +1328,7 @@ substitutes :: fn(root: ptr[mut Root]) -> os.LaunchLibrary[] {
     return if given <= root.launch_libraries.count { root.launch_libraries[0..<given] } else { root.launch_libraries[0..<0] }
 }
 
-// The boot module's grant, "module:<module>".
+/** The boot module's grant, "module:<module>". */
 find_module :: fn(block: ptr[slop_os.StartupBlock], module: string) -> slop_os.Handle? {
     storage : u8[slop_os.GRANT_LABEL_SIZE]
     label := text_buffer.make(storage)

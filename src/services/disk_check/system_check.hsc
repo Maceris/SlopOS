@@ -24,7 +24,7 @@ SYSTEM_TEXT :: "Written to the system volume by the guest, and synced"
 TRANSFER_BYTES : u64 : 65536
 MAX_FILE_BYTES : usize : 1 << 20
 
-// A buffer for file connections: a memory object mapped here, given to each server as a handle of its own.
+/** A buffer for file connections: a memory object mapped here, given to each server as a handle of its own. */
 Buffer :: struct {
     memory : slop_os.Memory,
     address : u64,
@@ -41,7 +41,7 @@ new_buffer :: fn() -> Buffer? {
     }
 }
 
-// A handle to the buffer for a file's server, which maps it.
+/** A handle to the buffer for a file's server, which maps it. */
 handed :: fn(buffer: ptr[Buffer]) -> slop_os.Memory? {
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
     match slop_os.handle_duplicate(cast[slop_os.Handle](buffer.memory), rights) {
@@ -131,14 +131,14 @@ check_system :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], esp: os.Ch
     return check_transactions(to, system, &buffer)
 }
 
-// A typed file's value (decisions/0046, 0108), as the system check writes it and reads it back
+/** A typed file's value (decisions/0046, 0108), as the system check writes it and reads it back */
 CheckedNote :: struct {
     mark : u32,
     kept : bool,
     text : slop_os.Relative[u8],
 }
 
-// Another type, which the note's file isn't
+/** Another type, which the note's file isn't */
 OtherNote :: struct {
     mark : u64,
 }
@@ -146,7 +146,7 @@ OtherNote :: struct {
 TYPED_FILE :: "A typed note"
 TYPED_TEXT :: "kept with its type"
 
-/*
+/**
  * A typed file on the system volume: written as a CheckedNote, read back checked, refused as an OtherNote; and refused
  * on the EFI system partition, whose FAT keeps no types.
  */
@@ -208,7 +208,7 @@ check_typed :: fn(system: os.Channel[dir.Dir], port: slop_os.Port, esp: os.Chann
     return 0
 }
 
-// Another connection to a directory, as an os.Directory, which closes it.
+/** Another connection to a directory, as an os.Directory, which closes it. */
 second_connection :: fn(directory: os.Channel[dir.Dir], port: slop_os.Port) -> os.Directory? {
     budget :: slop_os.startup_block().budget
     pair :: os.channel_for[dir.Dir](budget, 0) or_return null
@@ -227,7 +227,7 @@ second_connection :: fn(directory: os.Channel[dir.Dir], port: slop_os.Port) -> o
     return made
 }
 
-// The file at path beneath a directory, read whole into bytes through a read_only_file connection.
+/** The file at path beneath a directory, read whole into bytes through a read_only_file connection. */
 read_whole :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, buffer: ptr[Buffer], bytes: ptr[mut u8[..]]) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -239,7 +239,7 @@ read_whole :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, buffer:
     }
 }
 
-// The file at path beneath a read-only directory, read whole into bytes.
+/** The file at path beneath a read-only directory, read whole into bytes. */
 read_whole_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, buffer: ptr[Buffer], bytes: ptr[mut u8[..]]) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -251,7 +251,7 @@ read_whole_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, path: strin
     }
 }
 
-// A read_only_file connection's file read whole into bytes, and the connection closed.
+/** A read_only_file connection's file read whole into bytes, and the connection closed. */
 read_file_whole :: fn(opened: os.Channel[read_only_file.ReadOnlyFile], buffer: ptr[Buffer], bytes: ptr[mut u8[..]]) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -293,12 +293,12 @@ read_file_whole :: fn(opened: os.Channel[read_only_file.ReadOnlyFile], buffer: p
     }
 }
 
-// A new file at path beneath a directory holding text, written through a file connection and synced.
+/** A new file at path beneath a directory holding text, written through a file connection and synced. */
 write_new :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, text: string, buffer: ptr[Buffer]) -> bool {
     return write_new_bytes(end, port, path, text, text.count, buffer)
 }
 
-// A new file at path beneath a directory, count bytes of the buffer starting with text, written and synced.
+/** A new file at path beneath a directory, count bytes of the buffer starting with text, written and synced. */
 write_new_bytes :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, text: string, count: usize, buffer: ptr[Buffer]) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}

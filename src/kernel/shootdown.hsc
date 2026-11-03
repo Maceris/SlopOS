@@ -27,11 +27,11 @@ Shootdown :: struct {
     // 0, or 1 while a shootdown runs.
     running : u32,
     batch : arch_interface.TlbBatch,
-    // CPUs that haven't flushed this batch yet.
+    /** CPUs that haven't flushed this batch yet. */
     pending : u32,
 }
 
-/*
+/**
  * Flush batch from every online CPU's TLB, this one's included, and return once they all have.
  * Called with no other lock held.
  */
@@ -74,7 +74,7 @@ start_shootdown :: fn(shootdown: ptr[mut Shootdown]) -> bool {
     return started
 }
 
-/*
+/**
  * Flush this CPU's TLB for the shootdown waiting on it, if there is one: at a TlbFlush IPI, and while
  * waiting to start a shootdown.
  */

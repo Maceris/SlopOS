@@ -27,7 +27,7 @@ import boot_protocol from "../../boot_protocol"
     MAILBOX_LOAD_AT : u64 : 0x52
     ACKNOWLEDGE_STORE_AT : u64 : 0x5d
 
-    /*
+    /**
      * Real mode, 16-bit: the GDT loaded, PAE on, CR3 the page tables, EFER.LME on, then protection and paging at once,
      * and a far jump into the 64-bit code segment. Long mode: the data segments loaded, the mailbox's address and its
      * stack taken, the bootloader told it's there, then a wait for the mailbox's goto_address, and a jump to it with its
@@ -60,7 +60,7 @@ import boot_protocol from "../../boot_protocol"
         0x48, 0x8b, 0x7e, 0x10, 0x6a, 0x00, 0xff, 0xe0,
     ]
 
-    // The trampoline's GDT: null, 64-bit code, data
+    /** The trampoline's GDT: null, 64-bit code, data */
     GDT :: u64.[0, 0x00af9a000000ffff, 0x00cf92000000ffff]
 
     // IA32_APIC_BASE and its x2APIC bit, and x2APIC's ICR
@@ -74,13 +74,13 @@ import boot_protocol from "../../boot_protocol"
     INIT_ASSERT : u32 : 0x4500
     STARTUP : u32 : 0x4600
 
-    // What starting the other CPUs needs, made before the boot services are left.
+    /** What starting the other CPUs needs, made before the boot services are left. */
     Starting :: struct {
         trampoline : u64,
         ticks_per_microsecond : u64,
     }
 
-    /*
+    /**
      * Every CPU the firmware knows of, enabled, into the handoff, the boot CPU first, each other one with a stack; the
      * trampoline's page below 1 MiB; and the TSC's speed, for the waits starting them takes. Null if there's no room
      * for the trampoline; the boot CPU alone if the firmware has no MP services.
@@ -137,7 +137,7 @@ import boot_protocol from "../../boot_protocol"
         return Starting.{trampoline = trampoline, ticks_per_microsecond = if ticks == 0 { cast[u64](1000) } else { ticks }}
     }
 
-    /*
+    /**
      * Every CPU but the boot CPU started, after the boot services are left, one at a time: its mailbox's address in
      * the trampoline, INIT, 10 ms, a SIPI, 200 µs, another, then up to 100 ms for it to say it's in long mode. One that
      * doesn't is left out of the handoff.
@@ -181,7 +181,7 @@ import boot_protocol from "../../boot_protocol"
         return intrinsics.volatile_load_u32(address)
     }
 
-    // An IPI to the CPU with apic_id, through the local APIC, x2APIC's or xAPIC's, as the firmware left it.
+    /** An IPI to the CPU with apic_id, through the local APIC, x2APIC's or xAPIC's, as the firmware left it. */
     send_ipi :: fn(apic_id: u64, command: u32) {
         base :: x86_64.rdmsr(APIC_BASE_MSR)
         if base & X2APIC_ENABLED != 0 {
@@ -212,14 +212,14 @@ import boot_protocol from "../../boot_protocol"
     import aarch64 from "base/intrinsics"
     import devicetree from "../../devicetree"
 
-    /*
+    /**
      * AArch64's: the CPUs from the device tree's cpu nodes, each started by PSCI's CPU_ON, through the conduit its psci
      * node names, at the trampoline, its mailbox's address in x0, at EL1 with its MMU off. The trampoline loads the boot
      * CPU's memory attributes, translation control, tables and system control, turning its MMU on, takes its stack, and
      * waits on its mailbox as x86-64's does. Its words are its instructions, then the registers' values from DATA_AT.
      */
     DATA_AT : u64 : 0x80
-    // CPU_ON, SMC64's
+    /** CPU_ON, SMC64's */
     PSCI_CPU_ON : u64 : 0xc4000003
 
     TRAMPOLINE :: u32.[
@@ -254,7 +254,7 @@ import boot_protocol from "../../boot_protocol"
 
     Starting :: struct {
         trampoline : u64,
-        // PSCI's conduit: SMC, or HVC
+        /** PSCI's conduit: SMC, or HVC */
         smc : bool,
     }
 
@@ -308,7 +308,7 @@ import boot_protocol from "../../boot_protocol"
         return starting
     }
 
-    /*
+    /**
      * Every CPU but the boot CPU started, after the boot services are left: what it reads with its MMU off cleaned to
      * the point of coherency first, then CPU_ON. One PSCI won't start is left out of the handoff.
      */
@@ -336,7 +336,9 @@ import boot_protocol from "../../boot_protocol"
         handoff.cpu_count = started
     }
 
-    // size bytes at address cleaned to the point of coherency, a 64-byte line at a time, for a CPU whose caches are off.
+    /**
+     * size bytes at address cleaned to the point of coherency, a 64-byte line at a time, for a CPU whose caches are off.
+     */
     clean :: fn(address: u64, size: u64) {
         line := address & ~cast[u64](63)
         loop {

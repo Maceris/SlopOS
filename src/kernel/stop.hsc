@@ -12,26 +12,26 @@ import boot_info from "../boot_info"
     import arch from "../arch/aarch64"
 }
 
-/*
+/**
  * Why the kernel stopped. With test_exit on the command line, this is the code the emulator exits
  * with, so a test that boots the kernel can check it (tools/boot.py --expect).
  */
 StopReason :: enum #backed_by(u8) {
-    // Booted, handled BOOT_TICKS timer interrupts, and halted: everything worked.
+    /** Booted, handled BOOT_TICKS timer interrupts, and halted: everything worked. */
     Halted = 0,
     KernelFault = 1,
     CpuUnsupported = 2,
     AssertionFailed = 3,
     CriticalEvent = 4,
-    // The boot adapter couldn't build BootInfo.
+    /** The boot adapter couldn't build BootInfo. */
     BootFailed = 5,
-    // Too little memory to boot.
+    /** Too little memory to boot. */
     OutOfMemory = 6,
-    // The root task ended, which a working system's never does (decisions/0012): it says with what.
+    /** The root task ended, which a working system's never does (decisions/0012): it says with what. */
     RootTaskEnded = 7,
 }
 
-// Stop the kernel for good: every other CPU, then the calling one.
+/** Stop the kernel for good: every other CPU, then the calling one. */
 stop :: fn(reason: StopReason) #never_returns {
     if intrinsics.carrier().program_data == null {
         arch.halt()
@@ -59,7 +59,7 @@ stop_with :: fn(options: ptr[Options], reason: StopReason) #never_returns {
     arch.halt()
 }
 
-/*
+/**
  * For the boot adapter, when it can't build BootInfo: report why, and stop. It has the command line,
  * if the bootloader passed one, but nothing else of the kernel's yet.
  */

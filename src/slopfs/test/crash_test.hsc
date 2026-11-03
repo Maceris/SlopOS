@@ -19,10 +19,10 @@ import slopfs from ".."
 
 CRASH_BLOCKS : u64 : 1024
 STEPS :: 14
-// Random subsets tried for each interval between flushes
+/** Random subsets tried for each interval between flushes */
 SUBSETS :: 6
 
-// The state after an acknowledged commit, and how much of the log it took, through its last flush.
+/** The state after an acknowledged commit, and how much of the log it took, through its last flush. */
 Acknowledged :: struct {
     digest : slopfs.Seal,
     log_end : usize,
@@ -86,7 +86,7 @@ copy_into :: fn(into: mut u8[], from: u8[]) {
     }
 }
 
-// One step of the workload: files made, written, overwritten, renamed, cut and removed.
+/** One step of the workload: files made, written, overwritten, renamed, cut and removed. */
 workload :: fn(volume: ptr[mut slopfs.Volume], step: int) -> int {
     data := runtime.new(Data)
     defer runtime.free(data)
@@ -169,7 +169,7 @@ workload :: fn(volume: ptr[mut slopfs.Volume], step: int) -> int {
     return 0
 }
 
-// What's named name in directory, if it's there and nothing went wrong.
+/** What's named name in directory, if it's there and nothing went wrong. */
 found :: fn(volume: ptr[mut slopfs.Volume], directory: u64, name: string) -> u64? {
     match slopfs.lookup(volume, directory, name) {
         case Ok(object) => return object
@@ -177,7 +177,7 @@ found :: fn(volume: ptr[mut slopfs.Volume], directory: u64, name: string) -> u64
     }
 }
 
-// A volume's whole state, every name, kind and byte, as one BLAKE3 hash.
+/** A volume's whole state, every name, kind and byte, as one BLAKE3 hash. */
 state_digest :: fn(volume: ptr[mut slopfs.Volume]) -> slopfs.Seal? {
     hasher := crypto.blake3_start()
     buffer := runtime.new(Data)
@@ -235,13 +235,13 @@ digest_directory :: fn(volume: ptr[mut slopfs.Volume], hasher: ptr[mut crypto.Bl
     return true
 }
 
-// Replaying: the counts of what was checked, for the log.
+/** Replaying: the counts of what was checked, for the log. */
 Replayed :: struct {
     images : u64,
     newer : u64,
 }
 
-/*
+/**
  * Every image a crash could leave, from base and the log: prefixes as the log goes, and at each flush, the interval
  * before it in random subsets and with each write torn.
  */
@@ -312,7 +312,7 @@ replay :: fn(base: u8[], recorded: ptr[mut Disk], acknowledged: Acknowledged[], 
     return 0
 }
 
-// A recorded write applied to an image: whole, or torn, its first half only.
+/** A recorded write applied to an image: whole, or torn, its first half only. */
 apply :: fn(image: mut u8[], recorded: ptr[mut Disk], entry: Recorded, torn: bool) {
     start :: cast[usize](entry.block * slopfs.BLOCK_BYTES)
     length := cast[usize](entry.count * slopfs.BLOCK_BYTES)
@@ -370,7 +370,7 @@ check_image :: fn(device: ptr[slopfs.Device], acknowledged: Acknowledged[], dura
     return 0
 }
 
-// The data a failed write is tried with: big enough to be written as blocks, not inline in its record
+/** The data a failed write is tried with: big enough to be written as blocks, not inline in its record */
 FAILED_BYTES :: 8192
 
 check_failed_writes :: fn(sealed: bool) -> int {

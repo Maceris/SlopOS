@@ -38,14 +38,14 @@ import frames from "frames"
 PAGE_WANTED : u64 : 1
 PAGE_REPORTED : u64 : 3
 
-// How a fault on a mapping came out: mapped, failed, or the thread blocked, waiting for its pager.
+/** How a fault on a mapping came out: mapped, failed, or the thread blocked, waiting for its pager. */
 FaultOutcome :: enum {
     Mapped,
     Failed,
     Blocked,
 }
 
-/*
+/**
  * Paged memory of size bytes, owned by owner and charged to budget, whose pager raises key's wake binding on port.
  */
 create_paged_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, port: ptr[mut Port], key: u64, size: u64)
@@ -73,7 +73,7 @@ create_paged_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, port
     return .Ok(memory)
 }
 
-// The memory a window's page is of, through its parents, and the page there.
+/** The memory a window's page is of, through its parents, and the page there. */
 paged_root :: fn(memory: ptr[Memory], page: u64) -> (ptr[mut Memory], u64) {
     root := cast[ptr[mut Memory]](memory)
     at := page
@@ -135,7 +135,7 @@ resolve_paged_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], spac
     return .Blocked
 }
 
-/*
+/**
  * Every thread waiting on the memory made ready, to touch its page again. Takes the page lock as held.
  */
 wake_fault_waiters :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
@@ -156,7 +156,7 @@ wake_fault_waiters :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
     }
 }
 
-// A thread being destroyed stops waiting for its page.
+/** A thread being destroyed stops waiting for its page. */
 cancel_fault_wait :: fn(thread: ptr[mut Thread]) {
     address :: thread.fault_memory
     if address == 0 {
@@ -179,7 +179,7 @@ cancel_fault_wait :: fn(thread: ptr[mut Thread]) {
     unlock_at(&memory.page_lock, .MemoryPages)
 }
 
-// The offset of a wanted page not reported yet, reported now.
+/** The offset of a wanted page not reported yet, reported now. */
 page_wanted :: fn(memory: ptr[mut Memory]) -> Result[u64, slop_os.MemoryError] {
     if memory.pager_binding == 0 {
         return .Error(.NotPaged)
@@ -197,7 +197,7 @@ page_wanted :: fn(memory: ptr[mut Memory]) -> Result[u64, slop_os.MemoryError] {
     return .Error(.NothingWanted)
 }
 
-/*
+/**
  * The page at offset of paged memory, a copy of source's page at source_offset, unless it's been supplied already, and
  * every thread waiting on the memory woken.
  */
@@ -245,7 +245,7 @@ supply_page :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64,
     return null
 }
 
-// A space a page of paged memory was unmapped from, to be flushed from every CPU before its frame goes.
+/** A space a page of paged memory was unmapped from, to be flushed from every CPU before its frame goes. */
 Unmapped :: struct {
     space : u64,
     generation : u32,
@@ -254,7 +254,7 @@ Unmapped :: struct {
     freed : arch_interface.FreedTables,
 }
 
-/*
+/**
  * The page at offset of paged memory given back: out of its page array, so the next touch waits for its pager; unmapped
  * from every space that maps it, through its windows too; and once every CPU has forgotten it, freed and uncharged.
  * NotSupplied if it isn't there, and MappedWidely, leaving it, if more spaces map it than MAX_EVICT_SPACES.
@@ -322,7 +322,7 @@ evict_page :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64) 
     return null
 }
 
-/*
+/**
  * The page of memory, frame, unmapped from each mapping of memory that covers it, each space's entry noted in unmapped
  * from count on: the count after. Takes memory's lock as held.
  */
@@ -364,7 +364,7 @@ unmap_page_in :: fn(memory: ptr[mut Memory], page: u64, frame: u64, unmapped: pt
     return made
 }
 
-// How many mappings of memory, and of its windows, cover its page: the spaces evict_page may take it from.
+/** How many mappings of memory, and of its windows, cover its page: the spaces evict_page may take it from. */
 mappings_of_page :: fn(memory: ptr[mut Memory], page: u64) -> u64 {
     count := cast[u64](0)
     lock_at(&memory.lock, .MemoryParent)
@@ -388,7 +388,7 @@ mappings_of_page :: fn(memory: ptr[mut Memory], page: u64) -> u64 {
     return count
 }
 
-// How many of memory's mappings cover its page. Takes memory's lock as held.
+/** How many of memory's mappings cover its page. Takes memory's lock as held. */
 covering :: fn(memory: ptr[Memory], page: u64) -> u64 {
     count := cast[u64](0)
     with {
@@ -408,7 +408,7 @@ covering :: fn(memory: ptr[Memory], page: u64) -> u64 {
     return count
 }
 
-/*
+/**
  * Whether the page at offset of paged memory was touched through any mapping since this last asked, the marks cleared:
  * where the hardware keeps them (arch.take_accessed). Unflushed, so a CPU still holding the page's entry may touch it
  * unmarked, which only makes a page look colder than it is.
@@ -443,7 +443,7 @@ page_accessed :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u6
     return .Ok(if touched { cast[u64](1) } else { cast[u64](0) })
 }
 
-// Whether any of memory's mappings of its page was touched, every one's mark cleared. Takes memory's lock as held.
+/** Whether any of memory's mappings of its page was touched, every one's mark cleared. Takes memory's lock as held. */
 take_accessed_in :: fn(memory: ptr[Memory], page: u64) -> bool {
     touched := false
     with {

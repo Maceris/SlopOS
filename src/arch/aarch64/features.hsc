@@ -3,7 +3,9 @@ package arch_aarch64
 import aarch64 from "base/intrinsics"
 import slop_os from "std/os"
 
-// Where one feature is reported: an ID register, the field's lowest bit, and the lowest value that means it's there.
+/**
+ * Where one feature is reported: an ID register, the field's lowest bit, and the lowest value that means it's there.
+ */
 IdRegister :: enum {
     Pfr0,
     Pfr1,
@@ -24,7 +26,9 @@ FeatureField :: struct {
  * Unsigned 4-bit fields, except FP and AdvSIMD, which are signed: 0xf means absent, and 0 or 1 present
  * (feature_present).
  */
-//SPEC: Arm ARM (DDI 0487) D19.2: ID_AA64PFR0_EL1, ID_AA64PFR1_EL1, ID_AA64ISAR0_EL1, ID_AA64ISAR1_EL1, ID_AA64MMFR0_EL1, ID_AA64MMFR1_EL1
+/**
+ * SPEC: Arm ARM (DDI 0487) D19.2: ID_AA64PFR0_EL1, ID_AA64PFR1_EL1, ID_AA64ISAR0_EL1, ID_AA64ISAR1_EL1, ID_AA64MMFR0_EL1, ID_AA64MMFR1_EL1
+ */
 FEATURE_FIELDS :: FeatureField.[
     .{.Aarch64Fp, .Pfr0, 16, 0},
     .{.Aarch64AdvSimd, .Pfr0, 20, 0},
@@ -51,7 +55,7 @@ FEATURE_FIELDS :: FeatureField.[
     .{.Aarch64Pan, .Mmfr1, 20, 1},
 ]
 
-/*
+/**
  * What SlopOS needs (decisions/0061): ARMv8.2-A with the LSE atomics. Floating point, Advanced SIMD and
  * PAN are architectural from ARMv8.1-A and ARMv8.0-A, and RDM from ARMv8.1-A, so checking those and the
  * atomics finds a CPU below the baseline. In the order they're checked.
@@ -62,7 +66,7 @@ has :: fn(features: ptr[slop_os.CpuFeatures], feature: slop_os.CpuFeature) -> bo
     return slop_os.has_feature(features, feature)
 }
 
-// The CPU's features, from its ID registers. 1 GiB blocks come with 4 KiB pages on every AArch64 CPU.
+/** The CPU's features, from its ID registers. 1 GiB blocks come with 4 KiB pages on every AArch64 CPU. */
 detect_features :: fn() -> slop_os.CpuFeatures {
     features : slop_os.CpuFeatures
     for field in FEATURE_FIELDS {
@@ -93,7 +97,7 @@ id_register :: fn(register: IdRegister) -> u64 {
     }
 }
 
-// The first baseline feature the CPU lacks, or null.
+/** The first baseline feature the CPU lacks, or null. */
 missing_baseline_feature :: fn(features: ptr[slop_os.CpuFeatures]) -> string? {
     for feature in BASELINE {
         if !has(features, feature) {
@@ -103,7 +107,7 @@ missing_baseline_feature :: fn(features: ptr[slop_os.CpuFeatures]) -> string? {
     return null
 }
 
-// Each feature as Arm's manuals name it
+/** Each feature as Arm's manuals name it */
 feature_name :: fn(feature: slop_os.CpuFeature) -> string {
     return match feature {
         case .Aarch64Fp => "floating point"

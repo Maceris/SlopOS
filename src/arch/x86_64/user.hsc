@@ -11,10 +11,10 @@ import arch_interface from "../../arch_interface"
  * rax, rdx and r8.
  */
 
-// Interrupts enabled, and bit 1, which is always set.
+/** Interrupts enabled, and bit 1, which is always set. */
 USER_RFLAGS : u64 : 0x202
 
-/*
+/**
  * A new thread's registers: every one zero but its instruction and stack pointers, its argument in rdi,
  * user-mode segments, and interrupts enabled.
  */
@@ -32,7 +32,7 @@ syscall_number :: fn(registers: ptr[UserRegisters]) -> u64 {
     return registers.frame.rax
 }
 
-// One of the six argument registers, by index; 0 past the sixth.
+/** One of the six argument registers, by index; 0 past the sixth. */
 syscall_argument :: fn(registers: ptr[UserRegisters], index: u32) -> u64 {
     frame :: &registers.frame
     return match index {
@@ -56,19 +56,23 @@ instruction_pointer :: fn(registers: ptr[UserRegisters]) -> arch_interface.Virtu
     return cast[arch_interface.VirtualAddress](registers.frame.rip)
 }
 
-// SYSCALL is two bytes, 0f 05.
-//SPEC: Intel SDM Vol. 2B, SYSCALL
+/**
+ * SYSCALL is two bytes, 0f 05.
+ * SPEC: Intel SDM Vol. 2B, SYSCALL
+ */
 SYSCALL_LENGTH : u64 : 2
 
 restart_syscall :: fn(registers: ptr[mut UserRegisters]) {
     registers.frame.rip -= SYSCALL_LENGTH
 }
 
-// The flags user mode may set: CF, PF, AF, ZF, SF, DF and OF.
-//SPEC: Intel SDM Vol. 1 §3.4.3 (EFLAGS)
+/**
+ * The flags user mode may set: CF, PF, AF, ZF, SF, DF and OF.
+ * SPEC: Intel SDM Vol. 1 §3.4.3 (EFLAGS)
+ */
 USER_CHANGEABLE_FLAGS : u64 : 0xcd5
 
-// rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8 to r15, rip, rflags (slop_os.THREAD_REGISTERS).
+/** rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8 to r15, rip, rflags (slop_os.THREAD_REGISTERS). */
 USER_REGISTER_COUNT :: 18
 
 user_register_count :: fn() -> u32 {
@@ -131,7 +135,7 @@ set_user_register :: fn(registers: ptr[mut UserRegisters], index: u32, value: u6
     return true
 }
 
-// Back to user mode with registers, by sysretq where it can, iretq otherwise.
+/** Back to user mode with registers, by sysretq where it can, iretq otherwise. */
 return_to_user :: fn(registers: ptr[UserRegisters]) #never_returns {
     x86_64.return_to_user(&registers.frame)
 }

@@ -25,7 +25,7 @@ MAX_PROGRAMS :: 16
 NAME_BYTES :: 32
 NO_SESSION : u32 : 0xffffffff
 
-// Plain data, as a Relative's elements are: responding is 1 or 0.
+/** Plain data, as a Relative's elements are: responding is 1 or 0. */
 Program :: struct {
     index : u32,
     name : u8[NAME_BYTES],
@@ -36,7 +36,7 @@ Program :: struct {
     memory_limit : u64,
 }
 
-/*
+/**
  * A session to make: its user's name, its home volume's root, the terminal its programs write to, the keyboard layout
  * its user logged in with, which chooses its locale until its user's settings say one (decisions/0152), and the trusted
  * path's prompt connection for its powerbox (decisions/0156).
@@ -51,34 +51,34 @@ SessionStart :: struct {
 
 Request :: union {
     Start(SessionStart),
-    // The session of a boot with no accounts, with the terminal its programs write to
+    /** The session of a boot with no accounts, with the terminal its programs write to */
     StartWithoutUser(os.Channel[terminal.Terminal]),
-    // A session's programs, by its number
+    /** A session's programs, by its number */
     List(u32),
-    // Every program of a session, by its number, asked to stop, then ended; and the session with them
+    /** Every program of a session, by its number, asked to stop, then ended; and the session with them */
     EndSession(u32),
-    // The program at this index stopped, or ended
+    /** The program at this index stopped, or ended */
     End(u32),
-    // Serve another client, on its end
+    /** Serve another client, on its end */
     Connect(os.Channel[Session]),
-    // The session the console shows now, by its number, or NO_SESSION
+    /** The session the console shows now, by its number, or NO_SESSION */
     Shown(u32),
 }
 
 Response :: union {
-    // The session's made, its first program started: its number
+    /** The session's made, its first program started: its number */
     Started(u32),
     Programs(slop_os.Relative[Program]),
-    // It's ended, or was already
+    /** It's ended, or was already */
     Ended,
-    // No program at that index that may be ended, or no room for another session
+    /** No program at that index that may be ended, or no room for another session */
     Refused,
-    // Shown's answer
+    /** Shown's answer */
     Noted,
     Unsupported,
 }
 
-// Listing again changes nothing; ending what's ended is answered Ended again.
+/** Listing again changes nothing; ending what's ended is answered Ended again. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Start(_) => false
@@ -93,7 +93,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #insert os.protocol_code(Request, Response)
 
-// A new connection to the session manager listening on end, or null (as entropy.connect).
+/** A new connection to the session manager listening on end, or null (as entropy.connect). */
 connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Session]? {
     pair :: os.channel_for[Session](budget, 0) or_return null
     out := os.Outgoing.{}
@@ -109,7 +109,7 @@ connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBu
     }
 }
 
-// A program's name, as text.
+/** A program's name, as text. */
 name_of :: fn(program: ptr[Program]) -> string {
     count :: if cast[usize](program.name_bytes) <= program.name.count { cast[usize](program.name_bytes) } else { program.name.count }
     return if count == 0 { "" } else { string_of(&program.name[0], count) }

@@ -1,4 +1,4 @@
-/*
+/**
  * test_syscalls (decisions/0069, from the kernel's test of 0057): handles and the objects they reach.
  * - its address space's handle, a copy with fewer rights, and a copy asking for more (refused);
  * - closing a handle twice (the second time, it's no handle);

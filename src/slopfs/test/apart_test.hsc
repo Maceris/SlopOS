@@ -11,7 +11,7 @@ import slopfs from ".."
  * and what it freed but hasn't committed is still its own, unused by anyone. Checks from 700.
  */
 
-// A volume's side of its container: what a volume server's requests to the container service carry.
+/** A volume's side of its container: what a volume server's requests to the container service carry. */
 Side :: struct {
     container : ptr[mut slopfs.Container],
     id : u64,
@@ -27,7 +27,7 @@ side_release :: fn(context: rawptr, address: u64, blocks: u64, owner: u64, birth
     slopfs.space_release(cast[rawptr](&side.container.space), address, blocks, side.id, birth)
 }
 
-// A volume taken out of the container's process and opened on nodes of its own.
+/** A volume taken out of the container's process and opened on nodes of its own. */
 Apart :: struct {
     side : Side,
     nodes : slopfs.Nodes,
@@ -51,7 +51,7 @@ apart :: fn(container #escaping : ptr[mut slopfs.Container], id: u64) -> ptr[mut
     return made
 }
 
-// A volume's commit, as a volume server makes one: its tree written, then its record committed by the container.
+/** A volume's commit, as a volume server makes one: its tree written, then its record committed by the container. */
 commit_apart :: fn(made: ptr[mut Apart]) -> bool {
     record :: slopfs.write_volume(made.volume) or_return false
     if slopfs.commit_volume(made.side.container, made.side.id, &record) is_error {
@@ -72,7 +72,7 @@ free_apart :: fn(made: ptr[mut Apart]) {
     runtime.free(made)
 }
 
-// A volume's ID by its name, or 0.
+/** A volume's ID by its name, or 0. */
 volume_id :: fn(container: ptr[mut slopfs.Container], name: string) -> u64 {
     match slopfs.find_volume(container, name) {
         case Ok(found) => return found or_else 0

@@ -14,28 +14,28 @@ ClockSetting :: struct {}
 PROTOCOL :: slop_os.Protocol.{name = "clock_setting", major_version = 1, lending = .Server}
 
 Request :: union {
-    // Set the time to this many nanoseconds since 1970-01-01T00:00:00Z
+    /** Set the time to this many nanoseconds since 1970-01-01T00:00:00Z */
     Set(i64),
-    // Serve another client, on its end
+    /** Serve another client, on its end */
     Connect(os.Channel[ClockSetting]),
 }
 
 Response :: union {
-    // The time is set, the real-time clock's and the clock page's
+    /** The time is set, the real-time clock's and the clock page's */
     Done,
-    // The real-time clock couldn't be set, or doesn't hold a time this far from 2000; nothing changed
+    /** The real-time clock couldn't be set, or doesn't hold a time this far from 2000; nothing changed */
     Refused,
     Unsupported,
 }
 
-// Setting the time again sets it to the same time, which has moved on since.
+/** Setting the time again sets it to the same time, which has moved on since. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return true
 }
 
 #insert os.protocol_code(Request, Response)
 
-/*
+/**
  * The time set to utc, in nanoseconds since 1970-01-01T00:00:00Z, through end: whether the clock service set it. It
  * waits on port for the answer.
  */

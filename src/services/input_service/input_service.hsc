@@ -1,4 +1,4 @@
-/*
+/**
  * The input service (decisions/0136, 0138, design/console-and-sessions.md §3): it owns the seat's keyboards, up to four,
  * reached through connectors and dialed again when they go, and gives the terminal service what they type, through the
  * US layout, as the seat protocol. It sees every key first: Ctrl+Alt+Delete, the secure attention key, goes to the
@@ -108,7 +108,7 @@ main :: fn(log: slop_os.DebugLog?, keyboard0: os.Channel[connector.Connector]?, 
     }
 }
 
-// The keyboard given as index, if there is one, accepted unless every keyboard is new, and dialed.
+/** The keyboard given as index, if there is one, accepted unless every keyboard is new, and dialed. */
 adopt :: fn(service: ptr[mut Service], index: usize, found: os.Channel[connector.Connector]?, all_new: bool) {
     if index >= service.keyboards.count {
         return void
@@ -122,7 +122,7 @@ adopt :: fn(service: ptr[mut Service], index: usize, found: os.Channel[connector
     dial(service, index)
 }
 
-// Keyboard index through its connector: bound to the port, with a Read held.
+/** Keyboard index through its connector: bound to the port, with a Read held. */
 dial :: fn(service: ptr[mut Service], index: usize) {
     if index >= service.keyboards.count {
         return void
@@ -216,7 +216,7 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
     }
 }
 
-// What keyboard index pressed, until there's nothing more. A keyboard that's gone, dialed again.
+/** What keyboard index pressed, until there's nothing more. A keyboard that's gone, dialed again. */
 take_keys :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming]) {
     if index >= service.keyboards.count {
         return void
@@ -255,7 +255,9 @@ take_keys :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incomi
     }
 }
 
-// A key on keyboard index, down or up: modifiers remembered, the secure attention key given as itself, and the rest typed.
+/**
+ * A key on keyboard index, down or up: modifiers remembered, the secure attention key given as itself, and the rest typed.
+ */
 press :: fn(service: ptr[mut Service], index: usize, usage: u16, pressed: bool) {
     keyboard :: &service.keyboards[index % MAX_KEYBOARDS]
     bit :: modifier_of(usage)
@@ -291,7 +293,7 @@ modifier_of :: fn(usage: u16) -> u8 {
         else if usage == USAGE_LEFT_META || usage == USAGE_RIGHT_META { terminal.META } else { cast[u8](0) }
 }
 
-/*
+/**
  * A key on a keyboard that's new: its first makes its code, which the terminal service shows; digits build what's typed
  * of it, Backspace takes one back, and Enter checks it, accepting the keyboard if it's the code. Nothing else it types
  * goes anywhere.
@@ -332,7 +334,7 @@ type_code :: fn(service: ptr[mut Service], index: usize, usage: u16) {
     }
 }
 
-// An event for the reader, with its text; dropped if there's no room.
+/** An event for the reader, with its text; dropped if there's no room. */
 add :: fn(service: ptr[mut Service], made: seat.Event, text: string) {
     bytes :: string_bytes(text)
     if service.count >= service.events.count || bytes.count > service.text.count - service.text_count {
@@ -353,7 +355,7 @@ add :: fn(service: ptr[mut Service], made: seat.Event, text: string) {
     }
 }
 
-/*
+/**
  * The events waiting, to the reader, once it holds a Read: as many as it asked for, at most an Input's, and as many as
  * their text fits one; those after wait for its next Read.
  */
@@ -409,7 +411,7 @@ deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
     service.text_count = text_left
 }
 
-// Where the text of the events after the first count starts: all of it, if there are none after.
+/** Where the text of the events after the first count starts: all of it, if there are none after. */
 text_before :: fn(service: ptr[Service], count: usize) -> usize {
     if count < service.count && count < service.events.count {
         return cast[usize](service.events[count].text_start)

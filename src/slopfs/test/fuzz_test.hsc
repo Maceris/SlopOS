@@ -17,7 +17,7 @@ import slopfs from ".."
 FUZZ_BLOCKS : u64 : 1024
 FUZZ_ROUNDS :: 600
 
-// What the rounds came to, for the log.
+/** What the rounds came to, for the log. */
 Survived :: struct {
     rounds : u64,
     refused : u64,
@@ -110,7 +110,7 @@ number_of :: fn(text: string) -> u64? {
     return value
 }
 
-// A damaged image, mounted and used as far as it goes, every error taken.
+/** A damaged image, mounted and used as far as it goes, every error taken. */
 exercise :: fn(device: ptr[slopfs.Device], survived: ptr[mut Survived], sealed: bool) {
     container := slopfs.Container.{}
     mounted := false
@@ -153,7 +153,7 @@ use_volume :: fn(volume: ptr[mut slopfs.Volume]) {
     _ = slopfs.remove(volume, root, "a.txt")
 }
 
-/*
+/**
  * A node of the newest checkpoint's trees changed, and resealed with every node above it and the checkpoint, so
  * mounting reads it as if it had been written so.
  */
@@ -190,7 +190,7 @@ mutate_sealed :: fn(disk: ptr[mut Disk], random: ptr[mut Random]) {
     }
 }
 
-/*
+/**
  * The node a pointer names, or one beneath it, changed: going down to a random child, or for the volumes tree from a
  * leaf into a volume's tree, or changing this one's bytes; then resealed, both copies written, and the pointer given
  * the new seal.

@@ -1,4 +1,4 @@
-/*
+/**
  * test_affinity (decisions/0099): on 2 CPUs, a copy of the program spinning on a budget of one and a half CPUs at
  * priority 20, kept to CPU 0, where it never runs out of time; and another counting on a budget at priority 10, also
  * kept to CPU 0 (cpu_budget_set_cpus). The counter can't run there under the spinner, and CPU 1, idle, doesn't take it,
@@ -39,7 +39,7 @@ CopyGrants :: struct {
     cpu_budget : slop_os.CpuBudget?,
 }
 
-// Counts in its slot of the page for good.
+/** Counts in its slot of the page for good. */
 counter #calling_convention(.c) #no_context :: fn(slot: ptr[mut u64]) #never_returns {
     loop {
         intrinsics.volatile_store_u64(slot, intrinsics.volatile_load_u64(slot) + 1)
@@ -101,7 +101,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     return 0
 }
 
-// How much the counter counted while the caller slept RUN_NANOSECONDS.
+/** How much the counter counted while the caller slept RUN_NANOSECONDS. */
 counted :: fn(sleeper: slop_os.Port, counts_at: u64) -> u64 {
     before :: slot(counts_at, SLOT_COUNTER)
     pause(sleeper, RUN_NANOSECONDS)
@@ -112,7 +112,7 @@ slot :: fn(counts_at: u64, index: u64) -> u64 {
     return intrinsics.volatile_load_u64(cast[ptr[u64]](counts_at + index * 8))
 }
 
-// Asleep, on the root budget, taking none of the CPU.
+/** Asleep, on the root budget, taking none of the CPU. */
 pause :: fn(sleeper: slop_os.Port, nanoseconds: u64) {
     packets : slop_os.Packet[1]
     _ = slop_os.port_wait(sleeper, packets, (slop_os.clock_monotonic() or_else 0) + nanoseconds)
@@ -141,7 +141,7 @@ launch_copy :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.Pro
     return launched.process
 }
 
-// A copy: counting in the slot of the page given that its first message names.
+/** A copy: counting in the slot of the page given that its first message names. */
 run_copy :: fn(peer: slop_os.Channel, counts: slop_os.Memory) -> int {
     block :: slop_os.startup_block()
     port :: os.port_for(block.budget, peer) or_return 2

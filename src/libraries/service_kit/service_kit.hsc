@@ -1,4 +1,4 @@
-/*
+/**
  * What the first services share (decisions/0067, 0071, 0074): a set of clients, each an end bound to the service's
  * port under its index, grants' labels as text, and the words of the kernel's command line.
  *
@@ -12,29 +12,29 @@ import runtime from "base"
 import slop_os from "std/os"
 import system_records from "../../system_records"
 
-/*
+/**
  * The second build, service_kit_plus.library (decisions/0122): the build's setting service_kit_build=plus, one export
  * more, which substitution's test puts in this build's place.
  */
 PLUS :: #run compiler.target_setting("service_kit_build", default = "") == "plus"
 
 #if PLUS {
-    // Which build this is
+    /** Which build this is */
     build_name #export :: fn() -> string {
         return "plus"
     }
 }
 
-// The most clients one service serves.
+/** The most clients one service serves. */
 MAX_CLIENTS :: 16
 
-// A service's clients: an end each, bound to its port under its index, NO_HANDLE once it's closed.
+/** A service's clients: an end each, bound to its port under its index, NO_HANDLE once it's closed. */
 Clients :: struct {
     ends : slop_os.Channel[MAX_CLIENTS],
     count : usize,
 }
 
-/*
+/**
  * One more client, bound to port, in the place of one that went away if there is one, so a service has room for
  * MAX_CLIENTS at once rather than in its life: false if there's no room, or it can't be bound.
  */
@@ -42,7 +42,7 @@ add_client #export :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slo
     return add_client_index(clients, port, end) is_some
 }
 
-// add_client's, giving where the client went, for state a service keeps per client.
+/** add_client's, giving where the client went, for state a service keeps per client. */
 add_client_index #export :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slop_os.Channel) -> usize? {
     index := clients.count
     for i in cast[usize](0)..<clients.count {
@@ -67,7 +67,7 @@ add_client_index #export :: fn(clients: ptr[mut Clients], port: slop_os.Port, en
     return index
 }
 
-// A client that went away, closed.
+/** A client that went away, closed. */
 drop_client #export :: fn(clients: ptr[mut Clients], index: usize) {
     if index < clients.ends.count {
         _ = slop_os.handle_close(cast[slop_os.Handle](clients.ends[index]))
@@ -75,7 +75,7 @@ drop_client #export :: fn(clients: ptr[mut Clients], index: usize) {
     }
 }
 
-// A label's text, without its padding.
+/** A label's text, without its padding. */
 text_of_label #export :: fn(label: ptr[u8[slop_os.GRANT_LABEL_SIZE]]) -> string {
     count : usize = 0
     for byte in label^ {
@@ -87,7 +87,7 @@ text_of_label #export :: fn(label: ptr[u8[slop_os.GRANT_LABEL_SIZE]]) -> string 
     return string_of(&label^[0], count)
 }
 
-// Text in memory, like the kernel's command line: its bytes up to its first zero, mapped read-only.
+/** Text in memory, like the kernel's command line: its bytes up to its first zero, mapped read-only. */
 text_of #export :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> string? {
     size :: slop_os.memory_size(memory) or_return null
     address :: runtime.reserve_addresses(cast[usize](size)) or_return null
@@ -104,7 +104,7 @@ text_of #export :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) 
     return string_of(cast[ptr[u8]](address), count)
 }
 
-/*
+/**
  * The system configuration in memory, as the build wrote it into the boot set as system.records (decisions/0110):
  * copied out of it, and checked with system_records.check, as the build checked it. The copy, or why not.
  */
@@ -135,7 +135,7 @@ read_records #export :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Mem
     }
 }
 
-// What follows prefix in the word of text that starts with it, or null.
+/** What follows prefix in the word of text that starts with it, or null. */
 word_after #export :: fn(text: string, prefix: string) -> string? {
     start : usize = 0
     for character, i in text {
@@ -150,7 +150,7 @@ word_after #export :: fn(text: string, prefix: string) -> string? {
     return word_from(text, start, text.count, prefix)
 }
 
-// A decimal number, or null if text isn't one or it's too big for a u64.
+/** A decimal number, or null if text isn't one or it's too big for a u64. */
 number_of #export :: fn(text: string) -> u64? {
     if text.count == 0 || text.count > 19 {
         return null
@@ -165,7 +165,7 @@ number_of #export :: fn(text: string) -> u64? {
     return value
 }
 
-// What follows prefix in text's bytes from start to end, if they start with it.
+/** What follows prefix in text's bytes from start to end, if they start with it. */
 word_from :: fn(text: string, start: usize, end: usize, prefix: string) -> string? {
     if end < start || end > text.count {
         return null
@@ -177,7 +177,7 @@ word_from :: fn(text: string, start: usize, end: usize, prefix: string) -> strin
     return word[prefix.count..<word.count]
 }
 
-// Whether word is one of the words of text, which spaces separate.
+/** Whether word is one of the words of text, which spaces separate. */
 has_word #export :: fn(text: string, word: string) -> bool {
     start : usize = 0
     for character, i in text {
@@ -191,7 +191,7 @@ has_word #export :: fn(text: string, word: string) -> bool {
     return is_word_at(text, start, text.count, word)
 }
 
-// Whether text's bytes from start to end are word.
+/** Whether text's bytes from start to end are word. */
 is_word_at :: fn(text: string, start: usize, end: usize, word: string) -> bool {
     if end < start || end > text.count {
         return false

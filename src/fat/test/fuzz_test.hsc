@@ -81,7 +81,7 @@ check_fuzz :: fn(image: ptr[mut Image], device: fat.Device) -> int {
     return 0
 }
 
-// A sector's bytes kept, the first time a round changes it.
+/** A sector's bytes kept, the first time a round changes it. */
 save_sector :: fn(image: ptr[mut Image], sector: u64) {
     for each in image.undo {
         if each.sector == sector {
@@ -98,7 +98,7 @@ save_sector :: fn(image: ptr[mut Image], sector: u64) {
     }
 }
 
-// Every sector a round changed, as it was.
+/** Every sector a round changed, as it was. */
 restore :: fn(image: ptr[mut Image]) {
     for each in image.undo {
         start :: cast[usize](each.sector * fat.SECTOR_BYTES)
@@ -114,7 +114,7 @@ restore :: fn(image: ptr[mut Image]) {
     runtime.array_reset(&image.saved)
 }
 
-// A damaged volume mounted and used as far as it goes; whether it mounted.
+/** A damaged volume mounted and used as far as it goes; whether it mounted. */
 exercise :: fn(device: fat.Device) -> bool {
     volume := fat.Volume.{device = device}
     match fat.mount(device) {
@@ -143,7 +143,7 @@ exercise :: fn(device: fat.Device) -> bool {
     return true
 }
 
-// Every entry of a directory, a few levels down, and every file read.
+/** Every entry of a directory, a few levels down, and every file read. */
 walk :: fn(volume: ptr[mut fat.Volume], directory: u32, depth: int) {
     buffer : u8[4096]
     slot : u32 = 0
@@ -167,7 +167,7 @@ walk :: fn(volume: ptr[mut fat.Volume], directory: u32, depth: int) {
     }
 }
 
-// xorshift64*, as slopfs's tests have it.
+/** xorshift64*, as slopfs's tests have it. */
 Random :: struct {
     state : u64,
 }

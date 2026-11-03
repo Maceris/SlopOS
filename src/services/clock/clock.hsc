@@ -10,8 +10,10 @@
  * protocol's RealTimeClock), each to the second. An MC146818 counts years to 99: its century is read from register
  * 0x32, where PCs keep it, if what's there is a century from 19 to 21, or taken as 20.
  */
-//SPEC: Motorola MC146818A data sheet (registers 0x00 to 0x0b, update-in-progress, SET, DM and 24/12)
-//SPEC: Arm PrimeCell Real Time Clock (PL031) Technical Reference Manual, §3 (RTCDR, RTCLR, RTCCR)
+/**
+ * SPEC: Motorola MC146818A data sheet (registers 0x00 to 0x0b, update-in-progress, SET, DM and 24/12)
+ * SPEC: Arm PrimeCell Real Time Clock (PL031) Technical Reference Manual, §3 (RTCDR, RTCLR, RTCCR)
+ */
 package clock
 
 import intrinsics from "base"
@@ -52,7 +54,7 @@ PL031_START : u32 : 1
 FIRST_YEAR : i64 : 2000
 LAST_YEAR : i64 : 2099
 
-// The real-time clock: its ports, or its registers mapped at registers
+/** The real-time clock: its ports, or its registers mapped at registers */
 Rtc :: struct {
     ports : slop_os.IoPortRange?,
     registers : u64,
@@ -118,7 +120,7 @@ main :: fn(rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, cloc
     }
 }
 
-// Every request client index has sent, until there are none left, or it's gone.
+/** Every request client index has sent, until there are none left, or it's gone. */
 serve :: fn(service: ptr[mut Clock], connected: ptr[mut service_kit.Clients], index: usize, port: slop_os.Port, into: ptr[mut os.Incoming]) {
     if index >= connected.ends.count {
         return void
@@ -158,7 +160,7 @@ serve :: fn(service: ptr[mut Clock], connected: ptr[mut service_kit.Clients], in
     }
 }
 
-/*
+/**
  * The time set to utc, nanoseconds since 1970: the real-time clock to its second, then the page, to the nanosecond, at
  * the monotonic reading it was written at. False, with nothing changed, if the clock can't hold it.
  */
@@ -190,7 +192,7 @@ set :: fn(service: ptr[mut Clock], utc: i64) -> bool {
     return true
 }
 
-// The page's time made utc at the monotonic reading at, under its sequence (runtime.SlopOsClockPage).
+/** The page's time made utc at the monotonic reading at, under its sequence (runtime.SlopOsClockPage). */
 publish :: fn(page: ptr[mut runtime.SlopOsClockPage], utc: i64, at: u64) {
     sequence :: intrinsics.atomic_load_u64_no_fence(&page.sequence)
     // Odd while it's written; from 0 to 1 the first time
@@ -204,7 +206,7 @@ publish :: fn(page: ptr[mut runtime.SlopOsClockPage], utc: i64, at: u64) {
 
 // ---- The real-time clock
 
-// The clock's time, in seconds since 1970, or null if it holds none that can be read.
+/** The clock's time, in seconds since 1970, or null if it holds none that can be read. */
 read_rtc :: fn(rtc: ptr[Rtc]) -> i64? {
     match rtc.ports {
         case Some(ports) => return read_mc146818(ports)
@@ -212,7 +214,7 @@ read_rtc :: fn(rtc: ptr[Rtc]) -> i64? {
     }
 }
 
-// The clock set to seconds since 1970, which it can hold: whether it took them.
+/** The clock set to seconds since 1970, which it can hold: whether it took them. */
 write_rtc :: fn(rtc: ptr[Rtc], seconds: i64) -> bool {
     match rtc.ports {
         case Some(ports) => return write_mc146818(ports, seconds)
@@ -226,7 +228,7 @@ write_rtc :: fn(rtc: ptr[Rtc], seconds: i64) -> bool {
     }
 }
 
-// The MC146818's fields, which hold a date and time.
+/** The MC146818's fields, which hold a date and time. */
 Fields :: struct {
     second : u32,
     minute : u32,
@@ -237,7 +239,7 @@ Fields :: struct {
     century : u32,
 }
 
-/*
+/**
  * Its time, read outside an update, twice, until two reads agree, so no field was read on either side of a second's
  * turn; as stored, BCD or binary, 12 or 24 hours (status register B).
  */
@@ -272,7 +274,7 @@ read_fields :: fn(ports: slop_os.IoPortRange) -> Fields? {
     }
 }
 
-// What the fields hold, stored as status register B says, in seconds since 1970; null if it isn't a date and time.
+/** What the fields hold, stored as status register B says, in seconds since 1970; null if it isn't a date and time. */
 seconds_of :: fn(fields: Fields, status: u32) -> i64? {
     binary :: (status & STATUS_B_BINARY) != 0
     pm :: (status & STATUS_B_24_HOUR) == 0 && (fields.hour & HOURS_PM) != 0
@@ -297,13 +299,13 @@ seconds_of :: fn(fields: Fields, status: u32) -> i64? {
     return time.from_utc(moment).seconds
 }
 
-// The century in register 0x32, if it holds one from 19 to 21, or 20.
+/** The century in register 0x32, if it holds one from 19 to 21, or 20. */
 century_of :: fn(stored: u32, binary: bool) -> u32 {
     century :: decode(stored, binary) or_return 20
     return if century >= 19 && century <= 21 { century } else { cast[u32](20) }
 }
 
-/*
+/**
  * The clock set to seconds since 1970, in the format status register B says, with SET held so it doesn't update
  * while its fields are written; the century register only if it holds a century.
  */
@@ -334,7 +336,7 @@ write_mc146818 :: fn(ports: slop_os.IoPortRange, seconds: i64) -> bool {
     return written
 }
 
-// A field's value, from BCD unless it's binary; null for BCD that isn't.
+/** A field's value, from BCD unless it's binary; null for BCD that isn't. */
 decode :: fn(stored: u32, binary: bool) -> u32? {
     if binary {
         return stored
@@ -369,7 +371,7 @@ write_register :: fn(base: u64, offset: u64, value: u32) {
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](base + offset), value)
 }
 
-// Seconds since 1970 as a UTC date and time, like 2030-01-02 03:04:05 UTC, appended to line.
+/** Seconds since 1970 as a UTC date and time, like 2030-01-02 03:04:05 UTC, appended to line. */
 append_time :: fn(line: ptr[mut text_buffer.TextBuffer], seconds: i64) {
     moment :: time.utc(time.Instant.{seconds = seconds})
     text_buffer.append_format(line, "%-", moment.year)
@@ -385,7 +387,7 @@ append_time :: fn(line: ptr[mut text_buffer.TextBuffer], seconds: i64) {
     text_buffer.append_format(line, " UTC")
 }
 
-// A field of a date or time, with a 0 in front of it below 10.
+/** A field of a date or time, with a 0 in front of it below 10. */
 append_two_digits :: fn(line: ptr[mut text_buffer.TextBuffer], value: int) {
     if value < 10 {
         text_buffer.append_format(line, "0")

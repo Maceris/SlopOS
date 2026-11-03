@@ -16,7 +16,7 @@ import slopfs from "../../slopfs"
 QUOTA_FILE :: "Past the quota.bin"
 SMALL_FILE :: "Within the quota.txt"
 SMALL_TEXT :: "A small file, in the tree"
-// A whole chunk, 16 blocks, more than the quota leaves room for
+/** A whole chunk, 16 blocks, more than the quota leaves room for */
 LARGE_BYTES : usize : 65536
 
 check_quotas :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.Port, clone: os.Channel[dir.Dir], container: u32) -> int {
@@ -46,7 +46,7 @@ check_quotas :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os
     return check_made(manager, port, container, &buffer)
 }
 
-// A volume's usage, through the storage manager.
+/** A volume's usage, through the storage manager. */
 usage_of :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, volume: string) -> slopfs.Usage? {
     out := os.Outgoing.{}
     asking :: os.begin[storage.Request](&out)

@@ -23,10 +23,10 @@ DRHD : u16 : 0
 DRHD_INCLUDE_PCI_ALL : u8 : 1 << 0
 SCOPE_ENDPOINT : u8 : 1
 SCOPE_BRIDGE : u8 : 2
-// An iommu-map entry's cells: requester ID base, the IOMMU's phandle, stream ID base, length
+/** An iommu-map entry's cells: requester ID base, the IOMMU's phandle, stream ID base, length */
 IOMMU_MAP_CELLS : u64 : 4
 
-// Every IOMMU, each registered with the ranges of requester IDs it covers: how many ranges the kernel took.
+/** Every IOMMU, each registered with the ranges of requester IDs it covers: how many ranges the kernel took. */
 register_iommus :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], tables: u64, size: u64) -> u32 {
     match pci.firmware_table(tables, size, "DMAR") {
         case Some(dmar) => return from_dmar(to, platform, state, dmar)
@@ -125,7 +125,7 @@ on_host :: fn(host: ptr[pci.Host], bus: u8) -> bool {
     return bus >= host.first_bus && bus <= host.last_bus
 }
 
-// The SMMUv3s the host bridge's iommu-map refers to, each entry's requester IDs as streams from its base.
+/** The SMMUv3s the host bridge's iommu-map refers to, each entry's requester IDs as streams from its base. */
 from_iommu_map :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], blob: u64) -> u32 {
     tree := devicetree.open(blob) or_return 0
     bridge := devicetree.find_compatible(&tree, "pci-host-ecam-generic") or_return 0

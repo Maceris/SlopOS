@@ -14,9 +14,9 @@ import slopfs from ".."
 
 SEALED_BLOCKS : u64 : 1024
 PASSPHRASE :: "correct horse battery staple"
-// Argon2id kept cheap for the tests: each mount of an encrypted volume derives its key again
+/** Argon2id kept cheap for the tests: each mount of an encrypted volume derives its key again */
 TEST_ARGON2 :: crypto.Argon2Parameters.{memory_kib = 64, passes = 1, lanes = 1}
-// What a file holds, which mustn't be found on the disk
+/** What a file holds, which mustn't be found on the disk */
 MARKER :: "a sealed volume's own words"
 
 text_of :: fn(text: string) -> u8[] {
@@ -27,7 +27,7 @@ passphrase :: fn() -> u8[] {
     return text_of(PASSPHRASE)
 }
 
-// Whether bytes are anywhere on the disk, at any offset.
+/** Whether bytes are anywhere on the disk, at any offset. */
 appears :: fn(disk: ptr[mut Disk], bytes: u8[]) -> bool {
     if bytes.count == 0 || disk.bytes.count < bytes.count {
         return false
@@ -45,7 +45,7 @@ appears :: fn(disk: ptr[mut Disk], bytes: u8[]) -> bool {
     return false
 }
 
-// A file's chunk's record, at index.
+/** A file's chunk's record, at index. */
 chunk_record :: fn(volume: ptr[mut slopfs.Volume], file: u64, index: u64) -> slopfs.ExtentRecord? {
     record := slopfs.ExtentRecord.{}
     match slopfs.tree_get(volume.nodes, &volume.tree, slopfs.key_of(file, .Extent, index * slopfs.CHUNK_BYTES),

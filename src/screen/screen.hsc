@@ -1,4 +1,4 @@
-/*
+/**
  * What the console's terminal shows (decisions/0136, 0138): a grid of cells, each a grapheme cluster already made safe
  * (safe_text) in a style, for the lines programs write and for a screen a program takes for its own, with the cursor in
  * each, and which rows changed since they were last drawn. The terminal service keeps one and draws it on its back
@@ -13,12 +13,12 @@ import unicode from "std"
 
 COLUMNS :: 80
 ROWS :: 24
-// The rows programs have, below the status line
+/** The rows programs have, below the status line */
 PROGRAM_ROWS :: ROWS - 1
-// The most bytes of one cell's cluster: what safe_text shows for a long one is U+FFFD, and a substitute is 12
+/** The most bytes of one cell's cluster: what safe_text shows for a long one is U+FFFD, and a substitute is 12 */
 CELL_BYTES :: 16
 
-/*
+/**
  * One cell: its cluster's bytes and the columns they take. The second column of a wide cluster is a cell of width 0, and
  * an empty cell shows a space.
  */
@@ -29,7 +29,7 @@ Cell :: struct {
     style : terminal.Style,
 }
 
-// The cells of one screen, the cursor in it, which rows changed, and how many times a line break's scrolled it.
+/** The cells of one screen, the cursor in it, which rows changed, and how many times a line break's scrolled it. */
 Grid :: struct {
     cells : Cell[COLUMNS * PROGRAM_ROWS],
     column : u16,
@@ -50,21 +50,21 @@ Screen :: struct {
     status_count : usize,
     status_cells : Cell[COLUMNS],
     status_dirty : bool,
-    // Whether the framebuffer has the status line as it is
+    /** Whether the framebuffer has the status line as it is */
     status_drawn : bool,
 }
 
-// The grid programs write to now.
+/** The grid programs write to now. */
 current :: fn(screen: ptr[mut Screen]) -> ptr[mut Grid] {
     return if screen.using_whole { &screen.whole } else { &screen.lines }
 }
 
-// The grid that's shown now: the panel while it's up, or the program's.
+/** The grid that's shown now: the panel while it's up, or the program's. */
 shown :: fn(screen: ptr[mut Screen]) -> ptr[mut Grid] {
     return if screen.showing_panel { &screen.panel } else { current(screen) }
 }
 
-// The panel, blank, shown or not; either way every row of what's shown is drawn again.
+/** The panel, blank, shown or not; either way every row of what's shown is drawn again. */
 show_panel :: fn(screen: ptr[mut Screen], showing: bool) {
     if showing {
         reset(&screen.panel)
@@ -73,8 +73,10 @@ show_panel :: fn(screen: ptr[mut Screen], showing: bool) {
     mark_all(shown(screen))
 }
 
-// text, each grapheme cluster a cell, at row and column of grid, in style, as far as the row goes. text is the
-// terminal service's own, so nothing in it needs making safe.
+/**
+ * text, each grapheme cluster a cell, at row and column of grid, in style, as far as the row goes. text is the
+ * terminal service's own, so nothing in it needs making safe.
+ */
 write_at :: fn(grid: ptr[mut Grid], row: u16, column: u16, text: string, style: terminal.Style) {
     bytes :: string_bytes(text)
     at : usize = 0
@@ -102,7 +104,7 @@ cell :: fn(grid: ptr[mut Grid], row: u16, column: u16) -> ptr[mut Cell]? {
     return &grid.cells[index]
 }
 
-// A cell's cluster at the cursor, which moves on by its columns, wrapping to the next row first if it doesn't fit.
+/** A cell's cluster at the cursor, which moves on by its columns, wrapping to the next row first if it doesn't fit. */
 put :: fn(screen: ptr[mut Screen], bytes: u8[], columns: usize, style: terminal.Style) {
     grid :: current(screen)
     width :: if columns > 2 { cast[u16](2) } else { cast[u16](columns) }
@@ -126,7 +128,7 @@ put :: fn(screen: ptr[mut Screen], bytes: u8[], columns: usize, style: terminal.
     grid.column += width
 }
 
-// bytes added to the cluster just before the cursor, as a mark is that came after it.
+/** bytes added to the cluster just before the cursor, as a mark is that came after it. */
 attach :: fn(grid: ptr[mut Grid], bytes: u8[]) {
     if grid.column == 0 {
         return void
@@ -153,7 +155,7 @@ set :: fn(target: ptr[mut Cell], bytes: u8[], width: u8, style: terminal.Style) 
     target.style = style
 }
 
-// The cursor to the next row's start, scrolling the grid up a row at its bottom.
+/** The cursor to the next row's start, scrolling the grid up a row at its bottom. */
 line_break :: fn(screen: ptr[mut Screen]) {
     grid :: current(screen)
     grid.column = 0
@@ -165,7 +167,7 @@ line_break :: fn(screen: ptr[mut Screen]) {
     grid.scrolls += 1
 }
 
-// Rows first to first + count of grid moved up by lines, or down when negative, the rows left behind blank.
+/** Rows first to first + count of grid moved up by lines, or down when negative, the rows left behind blank. */
 scroll :: fn(grid: ptr[mut Grid], first: u16, count: u16, lines: i16) {
     if count == 0 || first >= PROGRAM_ROWS || lines == 0 {
         return void
@@ -207,7 +209,7 @@ scroll :: fn(grid: ptr[mut Grid], first: u16, count: u16, lines: i16) {
     }
 }
 
-// An area of the grid made blank.
+/** An area of the grid made blank. */
 clear :: fn(grid: ptr[mut Grid], area: terminal.Area) {
     for row in area.row..<area.row + area.rows {
         if row >= PROGRAM_ROWS {
@@ -224,20 +226,20 @@ clear :: fn(grid: ptr[mut Grid], area: terminal.Area) {
     }
 }
 
-// The row the cursor is on, blank from column on.
+/** The row the cursor is on, blank from column on. */
 clear_line_from :: fn(grid: ptr[mut Grid], column: u16) {
     clear(grid, terminal.Area.{column = column, row = grid.row, columns = COLUMNS, rows = 1})
     grid.column = column
 }
 
-// The whole of a grid made blank, the cursor at its start.
+/** The whole of a grid made blank, the cursor at its start. */
 reset :: fn(grid: ptr[mut Grid]) {
     clear(grid, terminal.Area.{columns = COLUMNS, rows = PROGRAM_ROWS})
     grid.column = 0
     grid.row = 0
 }
 
-// A screen of the program's own, blank, or back to the lines.
+/** A screen of the program's own, blank, or back to the lines. */
 use_whole :: fn(screen: ptr[mut Screen], whole: bool) {
     if whole && !screen.using_whole {
         reset(&screen.whole)
@@ -267,7 +269,7 @@ mark_all :: fn(grid: ptr[mut Grid]) {
     }
 }
 
-// The status line's text, marked to be drawn if it changed.
+/** The status line's text, marked to be drawn if it changed. */
 set_status :: fn(screen: ptr[mut Screen], text: string) {
     bytes :: string_bytes(text)
     taken :: if bytes.count < screen.status.count { bytes.count } else { screen.status.count }

@@ -1,4 +1,4 @@
-/*
+/**
  * test_io_ports (roadmap 9a, decisions/0093): ranges of I/O ports, made with the platform capability.
  * On x86-64:
  * - the RTC's two ports, 0x70 and 0x71, as a range: its status register A read through them says its divider runs

@@ -15,7 +15,7 @@ start_tickless_test :: fn(kernel: ptr[mut Kernel]) {
     kernel.stop_after_ticks = TICKLESS_TICKS
 }
 
-// At each of the boot CPU's ticks, under test_tickless.
+/** At each of the boot CPU's ticks, under test_tickless. */
 tickless_test_tick :: fn(kernel: ptr[mut Kernel], tick: u64) {
     if !kernel.options.test_tickless || (tick != TICKLESS_FROM && tick != TICKLESS_TICKS) {
         return void

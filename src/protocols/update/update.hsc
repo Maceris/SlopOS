@@ -16,16 +16,16 @@ Update :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "update", major_version = 1, lending = .Server}
 
-// A connection's rings, which a Substitute's policy needs more than the default's for
+/** A connection's rings, which a Substitute's policy needs more than the default's for */
 RING_BYTES : u32 : 4096
 
-// A boot's assessment: the generation it booted (0 for none, as from an ISO), and whether it's healthy.
+/** A boot's assessment: the generation it booted (0 for none, as from an ISO), and whether it's healthy. */
 Booted :: struct {
     generation : u64,
     healthy : bool,
 }
 
-// A substitution policy asked for, and the generation booted, which a generation with it is a copy of.
+/** A substitution policy asked for, and the generation booted, which a generation with it is a copy of. */
 SubstituteOf :: struct {
     generation : u64,
     policy : bundle.Substitutions,
@@ -36,7 +36,7 @@ Request :: union {
     Substitute(SubstituteOf),
 }
 
-// A generation installed that changes only services, applied live (decisions/0126): its number and its store root.
+/** A generation installed that changes only services, applied live (decisions/0126): its number and its store root. */
 LiveOf :: struct {
     generation : u64,
     store_root : bundle.Hash,
@@ -44,17 +44,19 @@ LiveOf :: struct {
 
 Response :: union {
     Done,
-    // To Booted: a staged generation installed whose kernel, boot set and command line are the booted one's, for the
-    // supervisor to apply live, restarting the services whose bundles changed, then telling Booted of it
+    /**
+     * To Booted: a staged generation installed whose kernel, boot set and command line are the booted one's, for the
+     * supervisor to apply live, restarting the services whose bundles changed, then telling Booted of it
+     */
     Live(LiveOf),
-    // A generation staged with the policy, by its number: tentative, the default for the next boot
+    /** A generation staged with the policy, by its number: tentative, the default for the next boot */
     Staged(u64),
-    // A policy whose entries don't all pass the check, or a generation that can't be staged
+    /** A policy whose entries don't all pass the check, or a generation that can't be staged */
     Refused,
     Unsupported,
 }
 
-// Told again, it finds nothing more to do.
+/** Told again, it finds nothing more to do. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return true
 }
@@ -63,7 +65,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #assert cast[u32](size_of(Request)) <= slop_os.channel_max_payload(RING_BYTES)
 
-// A request through end, and its answer, waited for on port; Unsupported if the connection's gone.
+/** A request through end, and its answer, waited for on port; Unsupported if the connection's gone. */
 ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> Response {
     if send_request(end, port, out) is_some {
         return .Unsupported

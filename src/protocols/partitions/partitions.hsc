@@ -14,10 +14,10 @@ Partitions :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "partitions", major_version = 1, lending = .Server}
 
-// A partition's GPT name, as UTF-8, at most
+/** A partition's GPT name, as UTF-8, at most */
 NAME_BYTES :: 108
 
-// One partition: its blocks, from first, count of them, of block.BLOCK_BYTES; its GPT type and GUID, and its name.
+/** One partition: its blocks, from first, count of them, of block.BLOCK_BYTES; its GPT type and GUID, and its name. */
 PartitionInfo :: struct {
     first : u64,
     count : u64,
@@ -28,23 +28,23 @@ PartitionInfo :: struct {
 }
 
 Request :: union {
-    // The partition at an index, from 0
+    /** The partition at an index, from 0 */
     Describe(u32),
-    // A new block connection to the partition at an index, narrowed to its blocks: block 0 is its first
+    /** A new block connection to the partition at an index, narrowed to its blocks: block 0 is its first */
     Open(u32),
-    // Serve another client, on its end
+    /** Serve another client, on its end */
     Connect(os.Channel[Partitions]),
 }
 
 Response :: union {
     Described(PartitionInfo),
     Opened(os.Channel[block.Block]),
-    // No partition at that index
+    /** No partition at that index */
     NoPartition,
     Unsupported,
 }
 
-// Opening again gives another connection, which is as good.
+/** Opening again gives another connection, which is as good. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Describe(_) => true
@@ -55,7 +55,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #insert os.protocol_code(Request, Response)
 
-// A partition's name, as text.
+/** A partition's name, as text. */
 name_of :: fn(info: ptr[PartitionInfo]) -> string {
     return string_of(&info.name[0], cast[usize](if info.name_length > NAME_BYTES { cast[u32](NAME_BYTES) } else { info.name_length }))
 }

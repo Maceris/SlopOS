@@ -110,7 +110,7 @@ create_intercept :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, process
     return .Ok(intercept)
 }
 
-/*
+/**
  * Destroying an intercept: its process isn't intercepted any more, every thread it stopped goes on (as
  * with Continue), and its binding goes.
  */
@@ -148,7 +148,7 @@ destroy_intercept :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) 
 release_intercept :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) {
 }
 
-// A process being destroyed lets go of its intercept, if it has one.
+/** A process being destroyed lets go of its intercept, if it has one. */
 forget_intercept :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
     held :: intrinsics.atomic_load_u64_acquire(&process.intercept)
     if held == 0 {
@@ -160,7 +160,7 @@ forget_intercept :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
     }
 }
 
-// The intercept a thread stops for: its nearest intercepted process's, or 0.
+/** The intercept a thread stops for: its nearest intercepted process's, or 0. */
 intercept_of :: fn(kernel: ptr[Kernel], thread: ptr[Thread]) -> u64 {
     if intrinsics.atomic_load_u32_acquire(&kernel.intercepts) == 0 {
         return 0
@@ -179,7 +179,7 @@ intercept_of :: fn(kernel: ptr[Kernel], thread: ptr[Thread]) -> u64 {
     return 0
 }
 
-/*
+/**
  * Stop thread at point if its intercept asks: number is the call's (or a fault's access), address a
  * fault's. current: it's the CPU's current thread, whose vector state is still in the CPU. True if it
  * stopped, when the caller takes it off the CPU.
@@ -233,7 +233,7 @@ wants_call :: fn(intercept: ptr[Intercept], number: u64) -> bool {
     return number < 64 && intercept.calls & (cast[u64](1) << number) != 0
 }
 
-// One more stop counted in the intercept's packet, queued if it isn't. Takes the intercept's lock as held.
+/** One more stop counted in the intercept's packet, queued if it isn't. Takes the intercept's lock as held. */
 report_stop :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) {
     if intercept.binding == 0 {
         return void
@@ -245,7 +245,7 @@ report_stop :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) {
     queue_binding(kernel, port, binding)
 }
 
-// The next stop not yet reported, written at buffer in space.
+/** The next stop not yet reported, written at buffer in space. */
 intercept_next :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], space: ptr[mut AddressSpace], buffer: u64) -> slop_os.ControlError? {
     info := slop_os.StopInfo.{}
     found := false
@@ -277,7 +277,7 @@ intercept_next :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], spa
     return null
 }
 
-// Let a thread the intercept stopped go on as action says.
+/** Let a thread the intercept stopped go on as action says. */
 intercept_resume :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], id: u64, action: slop_os.InterceptAction) -> slop_os.ControlError? {
     lock_at(&intercept.lock, .Intercept)
     found := cast[ptr[mut Thread]](0)
@@ -309,7 +309,7 @@ intercept_resume :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], i
     return null
 }
 
-/*
+/**
  * A stopped thread, off its intercept's list, going on: at an entry, Continue makes the call again from
  * user mode, without its entry stop; Kill destroys it.
  */
@@ -325,7 +325,7 @@ let_go :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], action: slop_os.I
     unhold_thread(kernel, thread, HELD_STOP)
 }
 
-// A thread being destroyed, off the list of the intercept that stopped it, if one did.
+/** A thread being destroyed, off the list of the intercept that stopped it, if one did. */
 forget_stop :: fn(thread: ptr[mut Thread]) {
     address :: thread.stop_intercept
     if address == 0 {
@@ -337,7 +337,7 @@ forget_stop :: fn(thread: ptr[mut Thread]) {
     unlock_at(&intercept.lock, .Intercept)
 }
 
-// Takes the intercept's lock as held.
+/** Takes the intercept's lock as held. */
 link_stopped :: fn(intercept: ptr[mut Intercept], thread: ptr[mut Thread]) {
     thread.stop_next = 0
     thread.stop_previous = intercept.last_stopped

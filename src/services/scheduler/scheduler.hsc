@@ -1,4 +1,4 @@
-/*
+/**
  * The scheduler service (roadmap 9a, decisions/0037, 0093): it holds the root CPU budget, which the root task gives it,
  * and splits a budget off it for each service the system configuration gives a CPU share, and one more, the default,
  * for every service without one. The system configuration is the boot set's, which the root task gives it, and it
@@ -16,10 +16,10 @@ import service_kit from "../../libraries/service_kit"
 import protocol from "../../protocols/scheduler"
 import system_records from "../../system_records"
 
-// The budgets it splits: one per service with a share, and the default
+/** The budgets it splits: one per service with a share, and the default */
 MAX_BUDGETS :: 32
 
-// A budget it split, and the service it's for, or "" for the default.
+/** A budget it split, and the service it's for, or "" for the default. */
 Split :: struct {
     name : string,
     budget : slop_os.CpuBudget,
@@ -101,7 +101,7 @@ main :: fn(log: slop_os.DebugLog?, cpu_budget: slop_os.CpuBudget, clients: os.Li
     }
 }
 
-// Every request client index has sent, until there are none left, or it's gone.
+/** Every request client index has sent, until there are none left, or it's gone. */
 serve :: fn(service: ptr[mut Scheduler], connected: ptr[mut service_kit.Clients], index: usize, into: ptr[mut os.Incoming]) {
     if index >= connected.ends.count {
         return void
@@ -147,7 +147,7 @@ serve :: fn(service: ptr[mut Scheduler], connected: ptr[mut service_kit.Clients]
     }
 }
 
-// The budget split for the service named name, or the default.
+/** The budget split for the service named name, or the default. */
 budget_of :: fn(service: ptr[Scheduler], name: string) -> slop_os.CpuBudget {
     for each, i in service.budgets {
         if i < service.count && each.name == name {
@@ -157,7 +157,7 @@ budget_of :: fn(service: ptr[Scheduler], name: string) -> slop_os.CpuBudget {
     return service.default_budget
 }
 
-// A handle to budget that may only put processes on it, to give away.
+/** A handle to budget that may only put processes on it, to give away. */
 bindable :: fn(budget: slop_os.CpuBudget) -> slop_os.CpuBudget? {
     if cast[slop_os.Handle](budget) == slop_os.NO_HANDLE {
         return null

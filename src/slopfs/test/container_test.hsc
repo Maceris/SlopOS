@@ -3,7 +3,7 @@ package slopfs_test
 import runtime from "base"
 import slopfs from ".."
 
-/*
+/**
  * The container and its volumes: formatted, mounted, a volume made with directories and files of every size, renamed
  * and removed, committed and mounted again; space coming back once what held it is gone; and what's damaged on the
  * disk found, a checkpoint by falling back to the one before, a file's block by its seal. Checks from 100.
@@ -229,7 +229,7 @@ pattern :: fn(into: mut u8[], seed: u64) {
     }
 }
 
-// Whether a commit failed, or what it left doesn't check out whole.
+/** Whether a commit failed, or what it left doesn't check out whole. */
 commit_failed :: fn(container: ptr[mut slopfs.Container]) -> bool {
     match slopfs.commit(container) {
         case Ok => return !verified(container)
@@ -264,7 +264,7 @@ count_entries :: fn(volume: ptr[mut slopfs.Volume], directory: u64) -> u64 {
     return count
 }
 
-// The files as written: the empty one, 100 bytes, 200000 bytes, and 10 bytes after a 300000-byte hole.
+/** The files as written: the empty one, 100 bytes, 200000 bytes, and 10 bytes after a 300000-byte hole. */
 check_files :: fn(volume: ptr[mut slopfs.Volume], data: ptr[mut Data], small: u64, large: u64, holey: u64, base: int) -> int {
     back := runtime.new(Data)
     defer runtime.free(back)
@@ -288,7 +288,7 @@ check_files :: fn(volume: ptr[mut slopfs.Volume], data: ptr[mut Data], small: u6
     return 0
 }
 
-/*
+/**
  * Damage: the newest checkpoint broken, so mounting takes the one before and what it named; a file's block broken,
  * so reading it is Corrupt. Checks from 300.
  */
@@ -346,7 +346,7 @@ flip :: fn(disk: ptr[mut Disk], at: u64) {
     }
 }
 
-// Where bytes first are on the disk, at a block's start.
+/** Where bytes first are on the disk, at a block's start. */
 find :: fn(disk: ptr[mut Disk], bytes: u8[]) -> u64? {
     for block in 0..<BLOCKS {
         start :: cast[usize](block * slopfs.BLOCK_BYTES)
@@ -365,14 +365,14 @@ Models :: struct {
     files : Model[FILES],
 }
 
-// What each file should hold, and how long it is.
+/** What each file should hold, and how long it is. */
 Model :: struct {
     bytes : u8[MODEL_BYTES],
     size : usize,
     object : u64,
 }
 
-/*
+/**
  * Files against a model: hundreds of writes at random places and lengths, sizes set up and down, reads compared,
  * committed every so often and mounted again; then a directory of many entries, listed whole. Checks from 400.
  */
@@ -488,7 +488,7 @@ check_model :: fn(device: ptr[slopfs.Device]) -> int {
     return 0
 }
 
-// "file-" and a number's digits.
+/** "file-" and a number's digits. */
 name_of_number :: fn(text: mut u8[], number: int) -> usize {
     prefix :: "file-"
     for character, i in prefix {
@@ -529,10 +529,10 @@ compare_file :: fn(volume: ptr[mut slopfs.Volume], model: ptr[mut Model], back: 
     return 0
 }
 
-// "naïve": an accent, which a name may have
+/** "naïve": an accent, which a name may have */
 ACCENTED :: u8.[0x6e, 0x61, 0xc3, 0xaf, 0x76, 0x65]
 
-// Whether a name of these bytes is refused as InvalidName.
+/** Whether a name of these bytes is refused as InvalidName. */
 refused :: fn(volume: ptr[mut slopfs.Volume], directory: u64, bytes: u8[]) -> bool {
     if bytes.count == 0 {
         return false

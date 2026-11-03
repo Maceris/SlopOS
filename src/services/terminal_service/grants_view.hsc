@@ -1,4 +1,4 @@
-/*
+/**
  * The grants view (decisions/0158), on the trusted path: from the secure attention key's screen, G lists the links the
  * session's home has issued, the grants its user has let programs keep through the powerbox, each with what it reaches
  * and whether it may write. Delete revokes the one chosen, which then opens nothing; Escape goes back to the screen. It
@@ -19,7 +19,7 @@ USAGE_TAB : u16 : 0x2b
 MAX_GRANTS_SHOWN :: 16
 GRANTS_ROW : u16 : 5
 
-// A grant kept: its issued record's number, what it reaches, and whether it may write.
+/** A grant kept: its issued record's number, what it reaches, and whether it may write. */
 Kept :: struct {
     number : u64,
     path : u8[PATH_BYTES],
@@ -33,7 +33,7 @@ GrantsView :: struct {
     selected : usize,
 }
 
-// The grants view, over the secure attention key's screen, for the active view's session.
+/** The grants view, over the secure attention key's screen, for the active view's session. */
 enter_grants :: fn(service: ptr[mut Service]) {
     if view(service).home_end == NONE {
         return void
@@ -45,7 +45,7 @@ enter_grants :: fn(service: ptr[mut Service]) {
     draw_grants(service)
 }
 
-// A key while the grants view's up.
+/** A key while the grants view's up. */
 grants_key :: fn(service: ptr[mut Service], event: terminal.Event) {
     grants :: &service.grants
     if event.code == USAGE_ESCAPE || event.code == USAGE_ENTER {
@@ -70,7 +70,7 @@ grants_key :: fn(service: ptr[mut Service], event: terminal.Event) {
     }
 }
 
-// The links the home has issued, as many as are shown.
+/** The links the home has issued, as many as are shown. */
 list_grants :: fn(service: ptr[mut Service]) {
     grants :: &service.grants
     grants.count = 0
@@ -99,7 +99,7 @@ list_grants :: fn(service: ptr[mut Service]) {
     }
 }
 
-// A kept grant revoked: its issued record deleted, so its link opens nothing.
+/** A kept grant revoked: its issued record deleted, so its link opens nothing. */
 revoke :: fn(service: ptr[mut Service], kept: Kept) {
     home :: view(service).home_end
     port :: os.port_for(slop_os.startup_block().budget, home) or_return void
@@ -138,7 +138,7 @@ draw_grants :: fn(service: ptr[mut Service]) {
     redraw(service)
 }
 
-// One request on the home's connection, and its answer, waited for.
+/** One request on the home's connection, and its answer, waited for. */
 ask_home :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> dir.Response {
     if dir.send_request(end, port, out) is_some {
         return .Unsupported
@@ -152,7 +152,9 @@ ask_home :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoin
     }
 }
 
-// Another connection to the directory end speaks for, its one end sent to its server, which takes it without answering.
+/**
+ * Another connection to the directory end speaks for, its one end sent to its server, which takes it without answering.
+ */
 another_connection :: fn(end: slop_os.Channel) -> slop_os.Channel? {
     budget :: slop_os.startup_block().budget
     port :: os.port_for(budget, end) or_return null

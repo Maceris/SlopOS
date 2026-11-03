@@ -23,15 +23,15 @@ import slab from "slab"
 SMALLEST_CLASS : u64 : 16
 SIZE_CLASSES :: 8
 LARGEST_SMALL : u64 : SMALLEST_CLASS << (SIZE_CLASSES - 1)
-// The frame allocator's largest block.
+/** The frame allocator's largest block. */
 LARGEST_BLOCK : u64 : frames.FRAME_SIZE << frames.MAX_ORDER
 
-// The slab caches every CPU shares.
+/** The slab caches every CPU shares. */
 Heap :: struct {
     caches : slab.SlabCache[SIZE_CLASSES],
 }
 
-// One CPU's magazines, one per class.
+/** One CPU's magazines, one per class. */
 CpuHeap :: struct {
     magazines : slab.Magazine[SIZE_CLASSES],
 }
@@ -91,7 +91,7 @@ heap_function : runtime.AllocatorFn : fn(
     return result, null
 }
 
-// The size of the block size bytes aligned to alignment get: a size class, or a block of frames.
+/** The size of the block size bytes aligned to alignment get: a size class, or a block of frames. */
 block_bytes :: fn(size: u64, alignment: u64) -> u64 {
     wanted :: if alignment > size { alignment } else { size }
     if wanted > LARGEST_SMALL {
@@ -100,7 +100,7 @@ block_bytes :: fn(size: u64, alignment: u64) -> u64 {
     return SMALLEST_CLASS << class_of(wanted)
 }
 
-// The smallest class that holds size bytes, up to LARGEST_SMALL.
+/** The smallest class that holds size bytes, up to LARGEST_SMALL. */
 class_of :: fn(size: u64) -> u64 {
     class : u64 = 0
     loop {
@@ -110,7 +110,7 @@ class_of :: fn(size: u64) -> u64 {
     return class
 }
 
-// A block of bytes from block_bytes, in the direct map. Its contents are whatever was there.
+/** A block of bytes from block_bytes, in the direct map. Its contents are whatever was there. */
 allocate_block :: fn(kernel: ptr[mut Kernel], size: u64) -> Result[u64, frames.FrameError] {
     if size == frames.FRAME_SIZE {
         address :: frames.take_frame(&per_cpu().frame_cache, &kernel.frames)?

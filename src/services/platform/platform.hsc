@@ -1,4 +1,4 @@
-/*
+/**
  * The platform service (decisions/0039, 0070, 0074): given the platform capability and the firmware tables' copy by
  * the root task, it finds the PCIe host bridge (src/pci), enumerates every function on every bus behind it, and gives
  * each, once, to the supervisor, which starts its driver with what it holds of it (platform.PciDevice). Before it gives
@@ -29,7 +29,7 @@ NO_PARENT : u32 : 0xffffffff
 PAGE : u64 : 4096
 VIRTIO_VENDOR : u16 : 0x1af4
 HEADER_BRIDGE : u8 : 1
-// The class register's top 24 bits for a host bridge, which no driver takes
+/** The class register's top 24 bits for a host bridge, which no driver takes */
 CLASS_HOST_BRIDGE : u32 : 0x060000
 
 Bar :: struct {
@@ -38,7 +38,7 @@ Bar :: struct {
     size : u64,
     wide : bool,
     prefetchable : bool,
-    // Where it is, and overlaps nothing, as found or as placed
+    /** Where it is, and overlaps nothing, as found or as placed */
     valid : bool,
 }
 
@@ -137,7 +137,9 @@ main :: fn(log: slop_os.DebugLog?, platform: slop_os.Platform, firmware: slop_os
     return serve(to, platform, state, clients)
 }
 
-// Every function on bus, and behind its bridges, depth first; a bridge without bus numbers is given the next free ones.
+/**
+ * Every function on bus, and behind its bridges, depth first; a bridge without bus numbers is given the next free ones.
+ */
 scan_bus :: fn(state: ptr[mut Platform], bus: u8, parent: u32) {
     if bus > state.host.last_bus {
         return void
@@ -184,7 +186,7 @@ scan_bus :: fn(state: ptr[mut Platform], bus: u8, parent: u32) {
     }
 }
 
-/*
+/**
  * A function's memory BARs: each one's size, by writing all ones with memory decoding off and reading back, and
  * where it is now. A bridge's two are left as they are.
  */
@@ -235,7 +237,7 @@ size_bars :: fn(state: ptr[mut Platform], index: usize) {
     pci.write_u16(config, pci.COMMAND, command)
 }
 
-/*
+/**
  * A function's BARs where they are, if that's inside a window they can be in and overlaps nothing valid already;
  * the others placed, and written; memory decoding on once all of them are somewhere.
  */
@@ -283,7 +285,7 @@ place_bars :: fn(to: slop_os.DebugLog, state: ptr[mut Platform], index: usize) {
     }
 }
 
-// Whether the function at index is behind the bridge at bridge, at any depth.
+/** Whether the function at index is behind the bridge at bridge, at any depth. */
 is_behind :: fn(state: ptr[Platform], index: usize, bridge: u32) -> bool {
     at := if index < state.functions.count { state.functions[index].parent } else { NO_PARENT }
     for depth in 0..<MAX_FUNCTIONS {
@@ -298,7 +300,7 @@ is_behind :: fn(state: ptr[Platform], index: usize, bridge: u32) -> bool {
     return false
 }
 
-// Whether a BAR at address is inside a window it may be in: its bridge's, or the host's.
+/** Whether a BAR at address is inside a window it may be in: its bridge's, or the host's. */
 fits_window :: fn(state: ptr[Platform], function: ptr[Function], bar: Bar, address: u64) -> bool {
     if function.parent != NO_PARENT {
         low, high :: bridge_window(state, function.parent)
@@ -313,7 +315,7 @@ fits_window :: fn(state: ptr[Platform], function: ptr[Function], bar: Bar, addre
     return false
 }
 
-/*
+/**
  * The non-prefetchable memory window of the bridge at index, as its first address and its last (the first above the
  * last for none).
  */
@@ -327,7 +329,7 @@ bridge_window :: fn(state: ptr[Platform], index: u32) -> (low: u64, high: u64) {
     return base, limit
 }
 
-/*
+/**
  * Whether size bytes at address, for the function at index, overlap no valid BAR, no RAM, not the host's ECAM, and no
  * window of a bridge the function isn't behind, which forwards that range to its own bus.
  */
@@ -368,7 +370,7 @@ overlaps :: fn(a: u64, a_size: u64, b: u64, b_size: u64) -> bool {
     return a < b + b_size && b < a + a_size
 }
 
-/*
+/**
  * The first address aligned to the BAR's size, in a window it may be in, where it overlaps nothing: its bridge's
  * window, or the host's, a 64-bit one in a wide window first.
  */
@@ -406,7 +408,7 @@ first_fit :: fn(state: ptr[Platform], index: usize, bar: Bar, start: u64, size: 
     return null
 }
 
-// The RAM the kernel owns, from the firmware tables' "RAM " table.
+/** The RAM the kernel owns, from the firmware tables' "RAM " table. */
 ram_of :: fn(tables: u64, size: u64) -> slop_os.PhysicalRange[] {
     header :: cast[ptr[slop_os.FirmwareTables]](tables)
     entries :: view_of(cast[ptr[slop_os.FirmwareTable]](tables + cast[u64](size_of(slop_os.FirmwareTables))), cast[usize](header.count))
@@ -418,7 +420,7 @@ ram_of :: fn(tables: u64, size: u64) -> slop_os.PhysicalRange[] {
     return view_of(cast[ptr[slop_os.PhysicalRange]](tables), 0)
 }
 
-// Whether the kernel's command line, if there's one, has word on it.
+/** Whether the kernel's command line, if there's one, has word on it. */
 has_word :: fn(command_line: slop_os.Memory?, word: string) -> bool {
     memory :: command_line or_return false
     text :: service_kit.text_of(slop_os.startup_block(), memory) or_return false
@@ -508,7 +510,7 @@ serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
     }
 }
 
-/*
+/**
  * A claimed device, by its address, given again to the client that claimed it, made anew; NoDevice for one another
  * client claimed. Its last Device and the rest died with the driver that held them. One nothing's claimed from this
  * platform service was claimed from the one before it, and is the asker's.
@@ -541,7 +543,7 @@ reissue :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut P
     return .NoDevice
 }
 
-// The next unclaimed function wanted matches, with what its driver holds of it; or NoDevice.
+/** The next unclaimed function wanted matches, with what its driver holds of it; or NoDevice. */
 claim :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], client: usize, wanted: protocol.Wanted)
     -> protocol.Response {
     for &function, i in state.functions {
@@ -572,7 +574,7 @@ matches :: fn(function: ptr[Function], wanted: protocol.DeviceMatch) -> bool {
         && (wanted.class == protocol.ANY_CLASS || wanted.class == function.class)
 }
 
-/*
+/**
  * A function's driver's share of it, owned by the platform service until it's sent: its Device, its configuration
  * space, each placed BAR as device memory (at its CPU address), and a DMA domain it's attached to. Null, with what was
  * made closed, if any of it can't be made.
@@ -615,7 +617,7 @@ bundle_of :: fn(platform: slop_os.Platform, state: ptr[mut Platform], function: 
     return result
 }
 
-// Where an address in the host's windows is to the CPU.
+/** Where an address in the host's windows is to the CPU. */
 cpu_address :: fn(host: ptr[pci.Host], address: u64) -> u64 {
     for window, i in host.windows {
         if cast[u32](i) < host.window_count && address >= window.pci && address - window.pci < window.size {

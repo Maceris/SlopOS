@@ -3,7 +3,9 @@
  * compatible strings and read their reg and interrupts properties. It reads the blob where it is, through
  * the direct map, and allocates nothing, so the arch layer can use it before there's a heap.
  */
-//SPEC: Devicetree Specification 0.4, chapter 5 (the flattened format), §2.3 (#address-cells, #size-cells, reg, compatible)
+/**
+ * SPEC: Devicetree Specification 0.4, chapter 5 (the flattened format), §2.3 (#address-cells, #size-cells, reg, compatible)
+ */
 package devicetree
 
 
@@ -13,10 +15,10 @@ TOKEN_END_NODE : u32 : 2
 TOKEN_PROPERTY : u32 : 3
 TOKEN_NOP : u32 : 4
 TOKEN_END : u32 : 9
-// How deep nodes nest, at most, for the cells each level gives its children
+/** How deep nodes nest, at most, for the cells each level gives its children */
 MAX_DEPTH :: 16
 
-// A tree in memory: its first byte's address, and where its structure and strings blocks are.
+/** A tree in memory: its first byte's address, and where its structure and strings blocks are. */
 Tree :: struct {
     address : u64,
     size : u64,
@@ -26,26 +28,26 @@ Tree :: struct {
     strings_size : u64,
 }
 
-// A node: where its structure starts, at its name, and the cells its parent gives reg.
+/** A node: where its structure starts, at its name, and the cells its parent gives reg. */
 Node :: struct {
     offset : u64,
     address_cells : u32,
     size_cells : u32,
 }
 
-// An address and a size from a reg property.
+/** An address and a size from a reg property. */
 Region :: struct {
     address : u64,
     size : u64,
 }
 
-// A property's value: where it is, and how many bytes.
+/** A property's value: where it is, and how many bytes. */
 Property :: struct {
     address : u64,
     size : u64,
 }
 
-// The tree at address, a virtual address, or null if the header isn't one.
+/** The tree at address, a virtual address, or null if the header isn't one. */
 open :: fn(address: u64) -> Tree? {
     if address == 0 || big_endian_u32(address) != FDT_MAGIC {
         return null
@@ -65,7 +67,7 @@ open :: fn(address: u64) -> Tree? {
     return tree
 }
 
-/*
+/**
  * The first node, in the tree's order, whose compatible property lists compatible, and which isn't disabled
  * (status "disabled"), or null.
  */
@@ -73,7 +75,7 @@ find_compatible :: fn(tree: ptr[Tree], compatible: string) -> Node? {
     return find_node(tree, compatible, 0)
 }
 
-/*
+/**
  * The first node that lists compatible, disabled or not: a device firmware keeps for itself, and marks disabled, like
  * the real-time clock UEFI's runtime services use, which SlopOS doesn't call.
  */
@@ -81,12 +83,16 @@ find_compatible_even_disabled :: fn(tree: ptr[Tree], compatible: string) -> Node
     return find_node(tree, compatible, 0, true)
 }
 
-// The node whose phandle is phandle, as another node's property refers to it (like iommu-map's), if it isn't disabled.
+/**
+ * The node whose phandle is phandle, as another node's property refers to it (like iommu-map's), if it isn't disabled.
+ */
 find_phandle :: fn(tree: ptr[Tree], phandle: u32) -> Node? {
     return if phandle == 0 { null } else { find_node(tree, "", phandle) }
 }
 
-// The first node that isn't disabled, unless even_disabled, and lists compatible, unless it's "", or has phandle, unless it's 0.
+/**
+ * The first node that isn't disabled, unless even_disabled, and lists compatible, unless it's "", or has phandle, unless it's 0.
+ */
 find_node :: fn(tree: ptr[Tree], compatible: string, phandle: u32, even_disabled: bool = false) -> Node? {
     // The cells each depth gives its children: 2 and 1 by default
     address_cells : u32[MAX_DEPTH]
@@ -166,7 +172,7 @@ find_node :: fn(tree: ptr[Tree], compatible: string, phandle: u32, even_disabled
     }
 }
 
-/*
+/**
  * Every CPU node's hardware identifier, its reg's address (MPIDR's affinity fields on AArch64), into ids, in the
  * tree's order: how many there are, at most ids.count. A node is a CPU's when its device_type is "cpu".
  */
@@ -239,7 +245,7 @@ cpus :: fn(tree: ptr[Tree], ids: mut u64[]) -> usize {
     }
 }
 
-// A property of node, by name, or null.
+/** A property of node, by name, or null. */
 property :: fn(tree: ptr[Tree], node: ptr[Node], name: string) -> Property? {
     offset := node.offset
     offset = align4(offset + name_length(tree, offset) + 1)
@@ -264,7 +270,7 @@ property :: fn(tree: ptr[Tree], node: ptr[Node], name: string) -> Property? {
     }
 }
 
-// The index-th address and size in node's reg, or null if it hasn't that many.
+/** The index-th address and size in node's reg, or null if it hasn't that many. */
 reg :: fn(tree: ptr[Tree], node: ptr[Node], index: u64) -> Region? {
     value :: property(tree, node, "reg") or_return null
     cells :: cast[u64](node.address_cells + node.size_cells)
@@ -275,7 +281,7 @@ reg :: fn(tree: ptr[Tree], node: ptr[Node], index: u64) -> Region? {
     return Region.{address = read_cells(start, node.address_cells), size = read_cells(start + cast[u64](node.address_cells) * 4, node.size_cells)}
 }
 
-// The index-th 32-bit cell of a property, or null.
+/** The index-th 32-bit cell of a property, or null. */
 cell :: fn(value: Property, index: u64) -> u32? {
     if (index + 1) * 4 > value.size {
         return null
@@ -283,7 +289,7 @@ cell :: fn(value: Property, index: u64) -> u32? {
     return big_endian_u32(value.address + index * 4)
 }
 
-// One or two cells, as a number.
+/** One or two cells, as a number. */
 read_cells :: fn(address: u64, count: u32) -> u64 {
     result := cast[u64](0)
     for i in 0..<count {
@@ -292,7 +298,7 @@ read_cells :: fn(address: u64, count: u32) -> u64 {
     return result
 }
 
-// Whether a list of strings, each ending with a NUL, has text in it.
+/** Whether a list of strings, each ending with a NUL, has text in it. */
 lists :: fn(value: Property, text: string) -> bool {
     start := cast[u64](0)
     for i in 0..<value.size {
@@ -306,7 +312,7 @@ lists :: fn(value: Property, text: string) -> bool {
     return false
 }
 
-// The bytes at address are text's.
+/** The bytes at address are text's. */
 matches :: fn(address: u64, text: string) -> bool {
     for character, i in text {
         if byte_at(address + cast[u64](i)) != cast[u8](character) {
@@ -316,7 +322,7 @@ matches :: fn(address: u64, text: string) -> bool {
     return true
 }
 
-// The string at offset in the strings block, or "" outside it.
+/** The string at offset in the strings block, or "" outside it. */
 string_at :: fn(tree: ptr[Tree], offset: u64) -> string {
     if offset >= tree.strings_size {
         return ""
@@ -331,7 +337,7 @@ string_at :: fn(tree: ptr[Tree], offset: u64) -> string {
     return string_of(cast[ptr[u8]](tree.strings + offset), cast[usize](length))
 }
 
-// How long the NUL-terminated node name at offset is, within the structure block.
+/** How long the NUL-terminated node name at offset is, within the structure block. */
 name_length :: fn(tree: ptr[Tree], offset: u64) -> u64 {
     length := cast[u64](0)
     loop {

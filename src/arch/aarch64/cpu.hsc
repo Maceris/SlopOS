@@ -1,4 +1,4 @@
-/*
+/**
  * The AArch64 arch layer (L1): implements arch_interface (docs/specs/arch_interface.md, AArch64) for the
  * kernel core, which imports this package as arch.
  *
@@ -15,7 +15,7 @@ import boot_info from "../../boot_info"
 import devicetree from "../../devicetree"
 import concurrency from "std"
 
-/*
+/**
  * One CPU's architecture state (arch_interface.ArchCpu). TPIDR_EL1 points at it, so entries find their
  * CPU with current_cpu(). Must not move after init_cpu.
  */
@@ -26,32 +26,32 @@ ArchCpu :: struct #align(64) {
     // The kernel stack: its stack_limit, which entries set, and its top, where they start from user mode and idle.
     kernel_stack_limit : rawptr,
     kernel_stack_top : u64,
-    // The early console's registers, through the direct map, or 0 without one (misc.hsc).
+    /** The early console's registers, through the direct map, or 0 without one (misc.hsc). */
     console : u64,
-    // The ArchSystem, as an address: L2 owns it, and it outlives every CPU (current_system).
+    /** The ArchSystem, as an address: L2 owns it, and it outlives every CPU (current_system). */
     system : u64,
     // This CPU's MPIDR affinity, and its GIC redistributor's registers, or 0 if none was found.
     mpidr : u64,
     redistributor : u64,
-    // Still on the bootloader's page tables, until the first activate.
+    /** Still on the bootloader's page tables, until the first activate. */
     bootloader_tables : bool,
 }
 
-/*
+/**
  * Device blocks the kernel maps for L1 itself: the console's and the GIC's. A redistributor region is
  * 128 KiB a CPU, which QEMU virt makes room for 123 of (8 blocks).
  */
 MAX_DEVICE_BLOCKS :: 16
 
-// State shared by every CPU (arch_interface.ArchSystem). Must not move after init_system.
+/** State shared by every CPU (arch_interface.ArchSystem). Must not move after init_system. */
 ArchSystem :: struct {
-    // The vector table every CPU's VBAR_EL1 points at (entries.hsc).
+    /** The vector table every CPU's VBAR_EL1 points at (entries.hsc). */
     vectors : u64,
-    // The early console's registers, through the direct map, or 0.
+    /** The early console's registers, through the direct map, or 0. */
     console : u64,
-    // Whether the CPU has 16-bit ASIDs, which init_cpu turns on.
+    /** Whether the CPU has 16-bit ASIDs, which init_cpu turns on. */
     asid16 : bool,
-    // Whether the hardware sets a page's access flag as it's touched (FEAT_HAFDBS), which init_cpu turns on.
+    /** Whether the hardware sets a page's access flag as it's touched (FEAT_HAFDBS), which init_cpu turns on. */
     hardware_access_flag : bool,
     // The GIC's distributor and redistributor region, through the direct map, from the device tree, or 0.
     distributor : u64,
@@ -68,18 +68,18 @@ ArchSystem :: struct {
     // Lines and LPIs routed to the kernel's device interrupt IDs (gic.hsc), under routes_lock.
     routes : Route[MAX_ROUTES],
     routes_lock : concurrency.SpinLock,
-    // The GIC's ITS, for message-signaled interrupts (its.hsc).
+    /** The GIC's ITS, for message-signaled interrupts (its.hsc). */
     its : ItsState,
-    // test_device_interrupts is on: the timer pends the test line.
+    /** test_device_interrupts is on: the timer pends the test line. */
     test_interrupts : bool,
 }
 
-// User-mode registers saved at kernel entry (arch_interface.UserRegisters): what the entry function saves.
+/** User-mode registers saved at kernel entry (arch_interface.UserRegisters): what the entry function saves. */
 UserRegisters :: struct {
     frame : aarch64.RegisterFrame,
 }
 
-/*
+/**
  * One thread's floating-point and SIMD state (arch_interface.VectorState): v0 to v31, then FPCR and FPSR, as
  * aarch64.save_fp_simd writes them (vector.hsc).
  */
@@ -89,30 +89,32 @@ VectorState :: struct #align(16) {
     fpsr : u64,
 }
 
-// CPACR_EL1.FPEN (bits 20 and 21): floating point and SIMD don't trap at EL0 or EL1, so threads' state is switched eagerly (vector.hsc).
+/**
+ * CPACR_EL1.FPEN (bits 20 and 21): floating point and SIMD don't trap at EL0 or EL1, so threads' state is switched eagerly (vector.hsc).
+ */
 CPACR_FP_ON : u64 : 3 << 20
 
-// SCTLR_EL1's SPAN (bit 23): clear, so taking an exception to EL1 sets PSTATE.PAN.
+/** SCTLR_EL1's SPAN (bit 23): clear, so taking an exception to EL1 sets PSTATE.PAN. */
 SCTLR_SPAN : u64 : 1 << 23
-// PSTATE.PAN, as the PAN register (S3_0_C4_C2_3) holds it, in bit 22.
+/** PSTATE.PAN, as the PAN register (S3_0_C4_C2_3) holds it, in bit 22. */
 PAN_ON : u64 : 1 << 22
 
-// The CPU these functions run on, found through TPIDR_EL1, which init_cpu set.
+/** The CPU these functions run on, found through TPIDR_EL1, which init_cpu set. */
 current_cpu :: fn() -> ptr[mut ArchCpu] {
     return cast[ptr[mut ArchCpu]](aarch64.read_system_register(.TPIDR_EL1))
 }
 
-// The ArchSystem every CPU shares, through the calling CPU's.
+/** The ArchSystem every CPU shares, through the calling CPU's. */
 current_system :: fn() -> ptr[mut ArchSystem] {
     return cast[ptr[mut ArchSystem]](current_cpu().system)
 }
 
-// stack_limit for a stack: STACK_GUARD bytes above its lowest address.
+/** stack_limit for a stack: STACK_GUARD bytes above its lowest address. */
 stack_limit_of :: fn(stack: arch_interface.StackRange) -> rawptr {
     return cast[rawptr](cast[u64](stack.low) + runtime.STACK_GUARD)
 }
 
-/*
+/**
  * What every CPU shares: the vector table, the early console, and the GIC and the timer's interrupt from the
  * device tree, with the GIC's registers mapped through the direct map (paging.hsc) and its distributor on.
  */
@@ -169,7 +171,7 @@ init_system :: fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareT
     }
 }
 
-// The GIC's registers, mapped through the direct map, if every block of them could be.
+/** The GIC's registers, mapped through the direct map, if every block of them could be. */
 map_gic :: fn(system: ptr[mut ArchSystem], distributor: u64, redistributors: u64, redistributors_size: u64) {
     if !map_device_range(system, distributor, DISTRIBUTOR_SIZE) || !map_device_range(system, redistributors, redistributors_size) {
         return void
@@ -180,7 +182,7 @@ map_gic :: fn(system: ptr[mut ArchSystem], distributor: u64, redistributors: u64
     system.redistributors_size = redistributors_size
 }
 
-// The device tree's address through the direct map, or 0 without one.
+/** The device tree's address through the direct map, or 0 without one. */
 devicetree_address :: fn(firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) -> u64 {
     physical :: firmware.devicetree or_return 0
     return direct_map_offset + cast[u64](physical)

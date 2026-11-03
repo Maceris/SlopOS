@@ -1,4 +1,4 @@
-/*
+/**
  * The generation builder (roadmap 9d1, decisions/0113): a hosted program that writes a generation onto an EFI system
  * partition's folder on the host, for the image builder to copy into the ESP, as the update service writes one on the
  * device: the kernel and every boot-set file as objects named by their hashes, and the generation's record, which SlopOS's
@@ -105,7 +105,7 @@ main :: fn() -> int {
     return 0
 }
 
-// A generation staged in the system volume's folder, its objects in the store folder's.
+/** A generation staged in the system volume's folder, its objects in the store folder's. */
 stage :: fn(arguments: string[]) -> int {
     if arguments.count < 9 {
         runtime.log_error("usage: generation_builder --stage <system volume folder> <store folder> <number> <yes|no> <command line> <kernel> <file>...")
@@ -149,7 +149,7 @@ stage :: fn(arguments: string[]) -> int {
     return 0
 }
 
-// A file put in folder + objects, named by its hash in hex: the hash, or null if it couldn't be read or written.
+/** A file put in folder + objects, named by its hash in hex: the hash, or null if it couldn't be read or written. */
 put_in :: fn(folder: string, objects: string, path: string) -> bundle.Hash? {
     contents :: os.read_entire_file(path) or_return null
     hash :: bundle.hash_of(bit_cast[u8[]](contents))
@@ -162,7 +162,7 @@ put_in :: fn(folder: string, objects: string, path: string) -> bundle.Hash? {
     return hash
 }
 
-/*
+/**
  * A library put in the store folder's objects, and pinned there as library_<its name without .library>, as the bundle
  * store keeps pins (pins/<name>, its hash in hex): whether it was.
  */
@@ -181,7 +181,7 @@ pin_library :: fn(store: string, path: string) -> bool {
     return os.write_entire_file(pin, bundle.hex(hash, &hex_storage)) == null
 }
 
-// A file put in the ESP's objects, named by its hash: the hash, or null if it couldn't be read or written.
+/** A file put in the ESP's objects, named by its hash: the hash, or null if it couldn't be read or written. */
 put :: fn(esp: string, path: string) -> bundle.Hash? {
     contents :: match os.read_entire_file(path) {
         case Ok(read) => read
@@ -200,12 +200,12 @@ put :: fn(esp: string, path: string) -> bundle.Hash? {
     return hash
 }
 
-// The argument at index, or "" past the last.
+/** The argument at index, or "" past the last. */
 argument :: fn(arguments: string[], index: usize) -> string {
     return if index < arguments.count { arguments[index] } else { "" }
 }
 
-// A decimal number, or null.
+/** A decimal number, or null. */
 number_of :: fn(text: string) -> u64? {
     if text.count == 0 {
         return null
@@ -220,7 +220,7 @@ number_of :: fn(text: string) -> u64? {
     return value
 }
 
-// A path's last part.
+/** A path's last part. */
 file_name :: fn(path: string) -> string {
     start := cast[usize](0)
     for character, i in path {
@@ -231,7 +231,7 @@ file_name :: fn(path: string) -> string {
     return path[start..<path.count]
 }
 
-// a, b, c and d, one after another, into storage.
+/** a, b, c and d, one after another, into storage. */
 joined :: fn(a: string, b: string, c: string, storage: ptr[mut u8[1024]]) -> string {
     count := cast[usize](0)
     for text in string.[a, b, c] {

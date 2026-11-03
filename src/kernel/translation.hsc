@@ -38,26 +38,26 @@ import robustness from "../robustness"
  * Everything an IOMMU does is under its lock. Lock order: a device's lock, then an IOMMU's lock.
  */
 
-// Domain IDs the kernel gives out on each IOMMU, at most
+/** Domain IDs the kernel gives out on each IOMMU, at most */
 MAX_DOMAIN_IDS :: 256
-// Where a domain's I/O virtual addresses start: never 0, so a device given nothing reaches nothing
+/** Where a domain's I/O virtual addresses start: never 0, so a device given nothing reaches nothing */
 FIRST_DEVICE_ADDRESS : u64 : 1 << 20
-// Ranges of a domain's I/O virtual addresses freed and kept for reuse
+/** Ranges of a domain's I/O virtual addresses freed and kept for reuse */
 MAX_FREE_RANGES :: 16
-// Faults taken in one interrupt, at most
+/** Faults taken in one interrupt, at most */
 MAX_FAULTS_TAKEN :: 16
-// A route's controller for an IOMMU's faults, whose line is the IOMMU's number (interrupts.hsc)
+/** A route's controller for an IOMMU's faults, whose line is the IOMMU's number (interrupts.hsc) */
 IOMMU_CONTROLLER : u32 : 0xfffffffe
-// Remapped interrupts the kernel gives out on each IOMMU, at most
+/** Remapped interrupts the kernel gives out on each IOMMU, at most */
 MAX_REMAPPED_INTERRUPTS :: 256
 
-// A free range of a domain's I/O virtual addresses.
+/** A free range of a domain's I/O virtual addresses. */
 AddressRange :: struct {
     start : u64,
     size : u64,
 }
 
-/*
+/**
  * Translation on, with the memory its implementation asks for, and its faults routed to CPU 0. One that can't is left
  * as it was, its domains' device addresses physical addresses.
  */
@@ -117,7 +117,7 @@ start_translation :: fn(kernel: ptr[mut Kernel], index: u32) {
     }
 }
 
-// At CPU 0's ticks: the faults of each IOMMU that doesn't signal them.
+/** At CPU 0's ticks: the faults of each IOMMU that doesn't signal them. */
 poll_dma_faults :: fn(kernel: ptr[mut Kernel]) {
     if intrinsics.atomic_load_u32_acquire(&kernel.iommus_polled) == 0 {
         return void
@@ -129,7 +129,7 @@ poll_dma_faults :: fn(kernel: ptr[mut Kernel]) {
     }
 }
 
-/*
+/**
  * An IOMMU's faults, at its interrupt or its tick: each logged, with the device's address and what it was refused,
  * and raised on the Device the stream is (SIGNAL_DMA_FAULT), for whoever watches its driver (decisions/0084).
  */
@@ -159,7 +159,7 @@ handle_dma_faults :: fn(kernel: ptr[mut Kernel], index: u32) {
     }
 }
 
-// SIGNAL_DMA_FAULT on the Device translated through the IOMMU as the fault's stream, if there's one.
+/** SIGNAL_DMA_FAULT on the Device translated through the IOMMU as the fault's stream, if there's one. */
 signal_dma_fault :: fn(kernel: ptr[mut Kernel], index: u32, fault: iommu_interface.DmaFault) {
     lock_at(&kernel.devices_lock, .Devices)
     defer unlock_at(&kernel.devices_lock, .Devices)
@@ -179,7 +179,7 @@ signal_dma_fault :: fn(kernel: ptr[mut Kernel], index: u32, fault: iommu_interfa
     }
 }
 
-// The IOMMU a path names (its number plus one), if it translates.
+/** The IOMMU a path names (its number plus one), if it translates. */
 translating_iommu :: fn(kernel: ptr[mut Kernel], iommu: u32) -> ptr[mut RegisteredIommu]? {
     if iommu == 0 || iommu > intrinsics.atomic_load_u32_acquire(&kernel.iommu_count) || cast[usize](iommu) > MAX_IOMMUS {
         return null
@@ -188,7 +188,7 @@ translating_iommu :: fn(kernel: ptr[mut Kernel], iommu: u32) -> ptr[mut Register
     return if registered.translating { registered } else { null }
 }
 
-/*
+/**
  * A device's DMA through domain on its IOMMU, if that translates: the domain made on it first, if it's the first
  * device there, with an ID and a root table charged to its budget. Takes the device's lock as held.
  */
@@ -248,7 +248,7 @@ translate_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device], domain:
     return .Ok
 }
 
-/*
+/**
  * The MSI doorbell mapped into a new domain at its own address, writable device memory, its tables charged to the
  * domain, where MSIs are writes the IOMMU translates; its page is kept out of the domain's other addresses. Takes the
  * IOMMU's lock as held.
@@ -275,7 +275,7 @@ map_doorbell :: fn(kernel: ptr[mut Kernel], registered: ptr[mut RegisteredIommu]
     return null
 }
 
-// A device's DMA blocked again, if it was translated through its domain. Takes the device's lock as held.
+/** A device's DMA blocked again, if it was translated through its domain. Takes the device's lock as held. */
 untranslate_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
     if !device.translated {
         return void
@@ -288,7 +288,7 @@ untranslate_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
     unlock_at(&registered.lock, .Iommu)
 }
 
-/*
+/**
  * DMA memory mapped into its domain, if that translates: at the lowest free I/O virtual addresses below limit (0 for
  * none), each page writable, tables charged to the domain. Nothing is left mapped if it can't all be.
  */
@@ -334,7 +334,7 @@ map_dma_memory :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain], memory
     return .Ok
 }
 
-/*
+/**
  * DMA memory unmapped from its domain, if it was mapped and the domain still translates: the IOMMU reaches none of it
  * once this returns.
  */
@@ -357,7 +357,7 @@ unmap_dma_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
     unlock_at(&registered.lock, .Iommu)
 }
 
-/*
+/**
  * A domain being destroyed: every device attached to it detached, and its translation stopped, so DMA memory of it
  * destroyed later has nothing to unmap.
  */
@@ -397,7 +397,7 @@ stop_domain :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain]) {
     unlock_at(&registered.lock, .Iommu)
 }
 
-// Once nothing can reach them: a stopped domain's tables, its root and its ID.
+/** Once nothing can reach them: a stopped domain's tables, its root and its ID. */
 release_domain_tables :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain]) {
     if !domain.stopped {
         return void
@@ -422,7 +422,7 @@ release_domain_tables :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain])
     unlock_at(&registered.lock, .Iommu)
 }
 
-/*
+/**
  * A message-signaled IRQ of device's, routed to id on the CPU with this hardware ID, remapped by the IOMMU it's
  * behind, if that remaps interrupts: its message, which only device can raise it with. Null if every remapped
  * interrupt there is taken; the arch's own message where its IOMMU doesn't remap.
@@ -456,7 +456,7 @@ remap_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], device: ptr[Device],
     return arch_interface.MsiMessage.{address = remapped.address, data = remapped.data}
 }
 
-// A remapped IRQ's entry pointed at id on the CPU with this hardware ID instead; its message stays as it was.
+/** A remapped IRQ's entry pointed at id on the CPU with this hardware ID instead; its message stays as it was. */
 repoint_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[Irq], device: ptr[Device], hardware_id: u64, id: arch_interface.InterruptId) {
     registered :: translating_iommu(kernel, irq.remap_iommu) or_return void
     path :: iommu_path(kernel, device.address)
@@ -465,7 +465,7 @@ repoint_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[Irq], device: ptr[Device], h
     unlock_at(&registered.lock, .Iommu)
 }
 
-// A remapped IRQ's entry raising nothing again, and free.
+/** A remapped IRQ's entry raising nothing again, and free. */
 unremap_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
     if irq.remap_iommu == 0 {
         return void
@@ -489,7 +489,7 @@ unremap_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
     HIGH_DEVICE_BYTES : u64 : 0
 }
 
-// The lowest free range of size bytes below top: from the ranges freed, or past every one taken.
+/** The lowest free range of size bytes below top: from the ranges freed, or past every one taken. */
 take_device_addresses :: fn(domain: ptr[mut DmaDomain], size: u64, top: u64) -> u64? {
     if fails(.Iova) {
         return null
@@ -524,7 +524,7 @@ take_device_addresses :: fn(domain: ptr[mut DmaDomain], size: u64, top: u64) -> 
     return start
 }
 
-// A range back, for reuse; where there's no room to keep it, its addresses aren't used again.
+/** A range back, for reuse; where there's no room to keep it, its addresses aren't used again. */
 give_device_addresses :: fn(domain: ptr[mut DmaDomain], start: u64, size: u64) {
     if start + size == domain.next_address {
         domain.next_address = start
@@ -553,7 +553,7 @@ give_domain_id :: fn(registered: ptr[mut RegisteredIommu], id: u32) {
     registered.ids[cast[usize](id / 64) % registered.ids.count] &= ~(cast[u64](1) << cast[u64](id % 64))
 }
 
-// Zeroed frames for an IOMMU's tables, each charged to what owner is charged to, unless it's 0: false if none came.
+/** Zeroed frames for an IOMMU's tables, each charged to what owner is charged to, unless it's 0: false if none came. */
 refill_iommu_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[mut iommu_interface.TableFrames], owner: u64) -> bool {
     cache :: &per_cpu().frame_cache
     for i in cast[usize](tables.count)..<tables.frames.count {
@@ -577,7 +577,7 @@ refill_iommu_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[mut iommu_interfa
     return true
 }
 
-// The table frames nothing took, back, with their charge to owner's budget, unless it's 0.
+/** The table frames nothing took, back, with their charge to owner's budget, unless it's 0. */
 give_back_iommu_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[mut iommu_interface.TableFrames], owner: u64) {
     count :: cast[usize](tables.count)
     for i in 0..<count {

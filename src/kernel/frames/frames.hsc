@@ -16,8 +16,10 @@
  * to without the lock, refilled or emptied half a cache at a time under it, like the slab
  * allocator's magazines. Frames in a cache count as allocated.
  */
-//SPEC: Knuth, The Art of Computer Programming Vol. 1, §2.5 (the buddy system)
-//SPEC: Bonwick and Adams, "Magazines and Vmem" (USENIX 2001), §3 (the magazine layer, here for frames)
+/**
+ * SPEC: Knuth, The Art of Computer Programming Vol. 1, §2.5 (the buddy system)
+ * SPEC: Bonwick and Adams, "Magazines and Vmem" (USENIX 2001), §3 (the magazine layer, here for frames)
+ */
 package frames
 
 import intrinsics from "base"
@@ -38,25 +40,25 @@ ORDER_COUNT :: 19
 // What a frame's state byte says, for the first frame of a block. The order is in the low bits.
 STATE_FREE : u8 : 0x40
 STATE_ALLOCATED : u8 : 0x80
-/*
+/**
  * A single frame in a CPU's FrameCache: neither free nor handed out, so a frame given back twice, to a cache or to the
  * allocator, fails an assertion where it's given rather than being handed out twice later (decisions/0145).
  */
 STATE_CACHED : u8 : 0x20
-// Not the first frame of a block: inside one, or memory the allocator doesn't own.
+/** Not the first frame of a block: inside one, or memory the allocator doesn't own. */
 STATE_NONE : u8 : 0
 
 FrameError :: enum {
-    // No free block of that order or larger.
+    /** No free block of that order or larger. */
     OutOfMemory,
 }
 
 MakeError :: enum {
-    // No usable region has room for the state array.
+    /** No usable region has room for the state array. */
     NoRoomForState,
 }
 
-// A free block's first bytes, linking it into its order's list. 0 is no block: frame 0 is never usable.
+/** A free block's first bytes, linking it into its order's list. 0 is no block: frame 0 is never usable. */
 FreeBlock :: struct {
     next : u64,
     previous : u64,
@@ -68,7 +70,7 @@ FreeList :: struct {
     count : u64,
 }
 
-// One CPU's stack of single free frames, by physical address. Used only by its CPU, so it needs no lock.
+/** One CPU's stack of single free frames, by physical address. Used only by its CPU, so it needs no lock. */
 FrameCache :: struct {
     count : u64,
     frames : u64[FRAME_CACHE_SIZE],
@@ -80,19 +82,19 @@ FrameAllocator :: struct {
     // One byte per frame, for frames 0 to frame_count, in the direct map.
     states : mut u8[],
     frame_count : u64,
-    // Where physical address 0 is in the direct map.
+    /** Where physical address 0 is in the direct map. */
     direct_map_offset : u64,
     // Frames given to the allocator, and those free now.
     total_frames : u64,
     free_frames : u64,
-    /*
+    /**
      * Fault injection's state, with robustness=on (decisions/0096): here because everything in the kernel that can run
      * out reaches the frame allocator, so one place counts the passes through every failure point.
      */
     faults : robustness.Faults,
 }
 
-/*
+/**
  * An allocator for the Usable regions of memory_map, reached through the direct map at
  * direct_map_offset. The state array is carved from the first usable region with room; the rest
  * is free. Regions of other kinds can be added later with add_range, like boot memory once it's
@@ -138,12 +140,14 @@ make :: fn(memory_map: boot_info.MemoryRegion[], direct_map_offset: u64) -> Resu
     return .Ok(allocator)
 }
 
-// Whether memory of this kind is RAM the frame allocator may own, now or once it's reclaimed or given back, like a boot module's.
+/**
+ * Whether memory of this kind is RAM the frame allocator may own, now or once it's reclaimed or given back, like a boot module's.
+ */
 is_reclaimable_ram :: fn(kind: boot_info.MemoryKind) -> bool {
     return kind == .Usable || kind == .BootReclaimable || kind == .FirmwareTables || kind == .BootModule
 }
 
-/*
+/**
  * Give the allocator the frames from start to end, physical addresses on frame boundaries, which
  * must be below its frame_count and not given to it before. They join whatever free blocks next
  * to them they can.
@@ -171,7 +175,7 @@ add_range :: fn(allocator: ptr[mut FrameAllocator], start: u64, end: u64) {
     while frame < end >> FRAME_SHIFT
 }
 
-/*
+/**
  * A block of 2^order frames, aligned to its size: the physical address of its first frame. Its
  * contents are whatever was there before.
  */
@@ -184,7 +188,7 @@ allocate :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[boot_in
     return take_block(allocator, order)
 }
 
-// allocate, with the lock held.
+/** allocate, with the lock held. */
 take_block :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[boot_info.PhysicalAddress, FrameError] {
     runtime.assert(order <= MAX_ORDER, "allocate takes an order up to MAX_ORDER")
     // The smallest free block at least that big, split down to size
@@ -199,7 +203,7 @@ take_block :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[boot_
     return .Ok(split_down(allocator, take_first(allocator, found), found, order))
 }
 
-/*
+/**
  * Like allocate, a block that ends at or below limit, a physical address, for a device that reaches only
  * that far (0 for no limit). A split keeps the lower half, so any free block that starts low enough will do.
  */
@@ -231,7 +235,7 @@ allocate_below :: fn(allocator: ptr[mut FrameAllocator], order: u64, limit: u64)
     return .Error(.OutOfMemory)
 }
 
-/*
+/**
  * A free block of order found, taken off its list, split down to order, its upper halves back on their
  * lists: the physical address of what's left, allocated. Takes the lock as held.
  */
@@ -252,7 +256,7 @@ split_down :: fn(allocator: ptr[mut FrameAllocator], block: u64, found: u64, ord
     return cast[boot_info.PhysicalAddress](block << FRAME_SHIFT)
 }
 
-/*
+/**
  * A block of 2^order frames, each allocated on its own, as take_frame's are, so each is freed alone (give_frame) and
  * the block merges again once they all are: memory mapped with a large page, whose frames are given back one at a
  * time (decisions/0127, 0129).
@@ -274,14 +278,14 @@ allocate_frames :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[
     return .Ok(block)
 }
 
-// Like allocate, with the block's bytes zeroed.
+/** Like allocate, with the block's bytes zeroed. */
 allocate_zeroed :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> Result[boot_info.PhysicalAddress, FrameError] {
     address :: allocate(allocator, order)?
     intrinsics.mem_zero(cast[mut rawptr](virtual_of(allocator, address)), cast[usize](FRAME_SIZE << order))
     return .Ok(address)
 }
 
-/*
+/**
  * Free a block that allocate gave, with the same order. Freeing anything else is a bug in the
  * kernel, which stops it.
  */
@@ -291,7 +295,7 @@ free :: fn(allocator: ptr[mut FrameAllocator], address: boot_info.PhysicalAddres
     give_block(allocator, address, order)
 }
 
-// free, with the lock held.
+/** free, with the lock held. */
 give_block :: fn(allocator: ptr[mut FrameAllocator], address: boot_info.PhysicalAddress, order: u64) {
     frame :: cast[u64](address) >> FRAME_SHIFT
     // One state per frame: states.count is frame_count
@@ -302,7 +306,7 @@ give_block :: fn(allocator: ptr[mut FrameAllocator], address: boot_info.Physical
     release(allocator, frame, order)
 }
 
-// A single frame from the calling CPU's cache, refilled from the allocator if it's empty.
+/** A single frame from the calling CPU's cache, refilled from the allocator if it's empty. */
 take_frame :: fn(cache: ptr[mut FrameCache], allocator: ptr[mut FrameAllocator]) -> Result[boot_info.PhysicalAddress, FrameError] {
     if robustness.fails(&allocator.faults, .Frame) {
         return .Error(.OutOfMemory)
@@ -333,7 +337,7 @@ take_frame :: fn(cache: ptr[mut FrameCache], allocator: ptr[mut FrameAllocator])
     return .Ok(cast[boot_info.PhysicalAddress](taken))
 }
 
-// Give a single frame to the calling CPU's cache, emptying half of it into the allocator if it's full.
+/** Give a single frame to the calling CPU's cache, emptying half of it into the allocator if it's full. */
 give_frame :: fn(cache: ptr[mut FrameCache], allocator: ptr[mut FrameAllocator], address: boot_info.PhysicalAddress) {
     runtime.assert(state_of(allocator, cast[u64](address)) == STATE_ALLOCATED, "give_frame takes a single frame that's allocated")
     if cache.count == FRAME_CACHE_SIZE {
@@ -352,7 +356,7 @@ give_frame :: fn(cache: ptr[mut FrameCache], allocator: ptr[mut FrameAllocator],
     cache.count = count + 1
 }
 
-// Give every frame in a cache back to the allocator.
+/** Give every frame in a cache back to the allocator. */
 drain_frames :: fn(cache: ptr[mut FrameCache], allocator: ptr[mut FrameAllocator]) {
     concurrency.lock(&allocator.lock)
     defer concurrency.unlock(&allocator.lock)
@@ -365,7 +369,7 @@ drain_frames :: fn(cache: ptr[mut FrameCache], allocator: ptr[mut FrameAllocator
     cache.count = 0
 }
 
-/*
+/**
  * A single frame's state, and its state set: a cached frame's byte is its CPU's alone, as only a frame given back twice
  * could be in two places, which the assertions catch.
  */
@@ -384,7 +388,7 @@ set_state :: fn(allocator: ptr[mut FrameAllocator], address: u64, state: u8) {
     }
 }
 
-// The order of the smallest block that holds size bytes.
+/** The order of the smallest block that holds size bytes. */
 order_for :: fn(size: u64) -> u64 {
     order : u64 = 0
     loop {
@@ -394,12 +398,12 @@ order_for :: fn(size: u64) -> u64 {
     return order
 }
 
-// Where a frame's memory is in the direct map.
+/** Where a frame's memory is in the direct map. */
 virtual_of :: fn(allocator: ptr[FrameAllocator], address: boot_info.PhysicalAddress) -> u64 {
     return allocator.direct_map_offset + cast[u64](address)
 }
 
-/*
+/**
  * Put a block on its free list, merged with its buddy and its buddy's buddy and so on while they're
  * free. Takes the lock as held.
  */
@@ -433,7 +437,7 @@ block_of :: fn(allocator: ptr[FrameAllocator], frame: u64) -> ptr[mut FreeBlock]
     return cast[ptr[mut FreeBlock]](allocator.direct_map_offset + (frame << FRAME_SHIFT))
 }
 
-// Put a free block first on its order's list.
+/** Put a free block first on its order's list. */
 push :: fn(allocator: ptr[mut FrameAllocator], frame: u64, order: u64) {
     states :: allocator.states
     runtime.assert(order <= MAX_ORDER && frame < cast[u64](states.count), "push takes a frame the allocator owns, and an order")
@@ -449,7 +453,7 @@ push :: fn(allocator: ptr[mut FrameAllocator], frame: u64, order: u64) {
     states[frame] = STATE_FREE | cast[u8](order)
 }
 
-// Take a free block off its order's list.
+/** Take a free block off its order's list. */
 unlink :: fn(allocator: ptr[mut FrameAllocator], frame: u64, order: u64) {
     states :: allocator.states
     runtime.assert(order <= MAX_ORDER && frame < cast[u64](states.count), "unlink takes a frame the allocator owns, and an order")
@@ -468,7 +472,7 @@ unlink :: fn(allocator: ptr[mut FrameAllocator], frame: u64, order: u64) {
     states[frame] = STATE_NONE
 }
 
-// The first block on a non-empty list, taken off it: its frame.
+/** The first block on a non-empty list, taken off it: its frame. */
 take_first :: fn(allocator: ptr[mut FrameAllocator], order: u64) -> u64 {
     runtime.assert(order <= MAX_ORDER, "take_first takes an order up to MAX_ORDER")
     frame :: allocator.lists[order].first >> FRAME_SHIFT

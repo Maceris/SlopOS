@@ -9,7 +9,7 @@ import text_buffer from "std"
  * §5) unless `or { ... }` handles it. Names are the shell's own, bound by let, never given to programs.
  */
 
-/*
+/**
  * An error, and where in the line it is. One a shell function's body met in a statement without ? is fatal once it
  * leaves the function: it ends what's running, and nothing handles it (design/shell.md §5); ? marks it passed, the
  * function's own error, which its caller can handle. A return is carried out of the function's body as one too.
@@ -22,7 +22,7 @@ EvalError :: struct {
     returning : bool,
 }
 
-// The shell's names and their values: a function's call has its own, in the scope it was called from.
+/** The shell's names and their values: a function's call has its own, in the scope it was called from. */
 Scope :: struct {
     names : string[..],
     values : Value[..],
@@ -41,7 +41,7 @@ lookup :: fn(scope: ptr[Scope], name: string) -> Value? {
     }
 }
 
-// Whether an error is one or and try/catch handle: not a fatal one, and not a return.
+/** Whether an error is one or and try/catch handle: not a fatal one, and not a return. */
 handles :: fn(error: EvalError) -> bool {
     return !error.fatal && !error.returning
 }
@@ -61,7 +61,7 @@ error_at :: fn(at: usize, message: string) -> Result[Value, EvalError] {
     return .Error(EvalError.{message = message, at = at})
 }
 
-// A message with values put in for each %, as the shell's errors say what they found.
+/** A message with values put in for each %, as the shell's errors say what they found. */
 message :: fn(format: string, values: any...) -> string {
     return strings.format(format, values) or_else format
 }
@@ -258,7 +258,7 @@ binary_value :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, Eval
     return arithmetic(tree.at, operator, left, right)
 }
 
-// Two values' order: below 0, 0 or above; null if they aren't of a kind with one.
+/** Two values' order: below 0, 0 or above; null if they aren't of a kind with one. */
 compare :: fn(left: Value, right: Value) -> int? {
     match left {
         case Int(a) => match right {
@@ -308,7 +308,7 @@ text_order :: fn(a: string, b: string) -> int {
     return if left.count < right.count { -1 } else { 0 }
 }
 
-// + - * /: integers, sizes and durations of one kind, either scaled by an integer, and strings joined by +.
+/** + - * /: integers, sizes and durations of one kind, either scaled by an integer, and strings joined by +. */
 arithmetic :: fn(at: usize, operator: string, left: Value, right: Value) -> Result[Value, EvalError] {
     match left {
         case Int(a) => match right {
@@ -386,7 +386,7 @@ joined :: fn(a: string, b: string) -> string {
     return if made.count > 0 { string_of(&made[0], made.count) } else { "" }
 }
 
-// A string's $names filled in with their values, as rendered; one that isn't bound left as it was written.
+/** A string's $names filled in with their values, as rendered; one that isn't bound left as it was written. */
 interpolate :: fn(shell: ptr[mut Shell], text: string) -> string {
     bytes :: string_bytes(text)
     made : u8[..]
@@ -436,7 +436,7 @@ interpolate :: fn(shell: ptr[mut Shell], text: string) -> string {
     return if made.count > 0 { string_of(&made[0], made.count) } else { "" }
 }
 
-/*
+/**
  * A call: a name bound by let, alone, is its value; print writes its arguments, exit ends the shell and cd changes its
  * directory; a shell function's name calls it; anything else is a program, through its manifest (decisions/0170).
  */

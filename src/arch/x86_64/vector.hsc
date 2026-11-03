@@ -15,7 +15,7 @@ import arch_interface from "../../arch_interface"
 //SPEC: Intel SDM Vol. 1 §13 (XSAVE): §13.4 (the XSAVE area), §13.8 (XRSTOR), §13.9 (XSAVEOPT); CPUID leaf 0DH
 
 XCR0_BASE : u64 : XCR0_X87 | XCR0_SSE | XCR0_AVX
-// AVX-512: the opmask registers, the upper halves of ZMM0 to ZMM15, and ZMM16 to ZMM31
+/** AVX-512: the opmask registers, the upper halves of ZMM0 to ZMM15, and ZMM16 to ZMM31 */
 XCR0_AVX512 : u64 : (1 << 5) | (1 << 6) | (1 << 7)
 // The legacy region and the XSAVE header
 XSAVE_LEGACY_AND_HEADER : u64 : 576
@@ -26,7 +26,7 @@ MXCSR_OFFSET : u64 : 24
 FCW_INITIAL : u16 : 0x037f
 MXCSR_INITIAL : u32 : 0x1f80
 
-// A thread's vector state (arch_interface.VectorState): this header, then its XSAVE area.
+/** A thread's vector state (arch_interface.VectorState): this header, then its XSAVE area. */
 VectorState :: struct #align(64) {
     // The state components the area holds, and XCR0 while the thread runs.
     components : u64,
@@ -35,7 +35,7 @@ VectorState :: struct #align(64) {
 
 #assert size_of(VectorState) == 64
 
-// The components a thread with config gets: the extended ones only where the CPU has them.
+/** The components a thread with config gets: the extended ones only where the CPU has them. */
 components_for :: fn(config: arch_interface.VectorConfig) -> u64 {
     if !config.extended {
         return XCR0_BASE
@@ -45,7 +45,7 @@ components_for :: fn(config: arch_interface.VectorConfig) -> u64 {
     return if supported & XCR0_AVX512 == XCR0_AVX512 { XCR0_BASE | XCR0_AVX512 } else { XCR0_BASE }
 }
 
-// Bytes for the header and an XSAVE area of components, in the standard format.
+/** Bytes for the header and an XSAVE area of components, in the standard format. */
 area_end :: fn(components: u64) -> u64 {
     size := XSAVE_LEGACY_AND_HEADER
     for component in 2..<64 {
@@ -69,7 +69,7 @@ vector_state_alignment :: fn() -> usize {
     return 64
 }
 
-/*
+/**
  * The state at reset: every component in its initial state, which XRSTOR loads for components the
  * header marks absent, and the x87 control word and MXCSR, which come from the legacy region.
  */

@@ -12,21 +12,21 @@ Rng :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "rng", major_version = 1, lending = .Server}
 
-// The most bytes one Bytes has.
+/** The most bytes one Bytes has. */
 MAX_BYTES :: 256
 
 Request :: union {
-    // count bytes from the device, up to MAX_BYTES
+    /** count bytes from the device, up to MAX_BYTES */
     Read(u32),
 }
 
 Response :: union {
-    // As many as the device gave, which may be fewer
+    /** As many as the device gave, which may be fewer */
     Bytes(slop_os.Relative[u8]),
     Unsupported,
 }
 
-// Reading again reads other bytes, which is as good.
+/** Reading again reads other bytes, which is as good. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Read(_) => true

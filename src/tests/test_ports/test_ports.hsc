@@ -1,4 +1,4 @@
-/*
+/**
  * test_ports (decisions/0069, from the kernel's test of 0052): a port, used by the program's first thread, A,
  * and a helper, B:
  * - A binds a wake key, twice (KeyInUse the second time), wakes a key with no binding (NoSuchKey), wakes
@@ -32,7 +32,7 @@ TIMER_KEY : u64 : 9
 TIMER_NANOSECONDS : u64 : 20_000_000
 DEADLINE_NANOSECONDS : u64 : 15_000_000
 
-// B: wakes A, waits for A to have it, then waits on the port until it's closed.
+/** B: wakes A, waits for A to have it, then waits on the port until it's closed. */
 helper #calling_convention(.c) #no_context :: fn(shared: ptr[mut u64[8]]) #never_returns {
     port :: test_kit.handle_at[slop_os.Port](intrinsics.volatile_load_u64(&shared^[SHARED_PORT]))
     _ = slop_os.port_wake(port, PORT_KEY, 0x100)

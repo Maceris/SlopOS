@@ -28,9 +28,9 @@ import slop_os from "std/os"
  */
 
 MAX_IOMMUS :: 8
-// The ranges of requester IDs every IOMMU covers, together
+/** The ranges of requester IDs every IOMMU covers, together */
 MAX_IOMMU_SCOPES :: 32
-// The most bytes of registers an IOMMU may have: SMMUv3's are 128 KiB
+/** The most bytes of registers an IOMMU may have: SMMUv3's are 128 KiB */
 MAX_IOMMU_REGISTERS : u64 : 1 << 20
 
 RegisteredIommu :: struct {
@@ -54,7 +54,9 @@ RegisteredIommu :: struct {
     interrupt_limit : u32,
 }
 
-// count requester IDs from first (slop_os.device_address), behind the IOMMU with number iommu, as streams from stream.
+/**
+ * count requester IDs from first (slop_os.device_address), behind the IOMMU with number iommu, as streams from stream.
+ */
 IommuScope :: struct {
     iommu : u32,
     first : u32,
@@ -62,7 +64,7 @@ IommuScope :: struct {
     stream : u32,
 }
 
-// Which IOMMU a device is behind: its number plus one, 0 for none, and the stream it's there.
+/** Which IOMMU a device is behind: its number plus one, 0 for none, and the stream it's there. */
 IommuPath :: struct {
     iommu : u32,
     stream : u32,
@@ -103,7 +105,7 @@ register_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, p
     return .Ok(index)
 }
 
-// The number of the IOMMU of kind at physical, if it's registered.
+/** The number of the IOMMU of kind at physical, if it's registered. */
 find_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, physical: u64) -> u32? {
     for index in 0..<cast[usize](intrinsics.atomic_load_u32_acquire(&kernel.iommu_count)) {
         if index < MAX_IOMMUS && kernel.iommus[index].physical == physical && kernel.iommus[index].kind == kind {
@@ -113,7 +115,7 @@ find_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, physi
     return null
 }
 
-// A new IOMMU: its registers mapped, and identified by its implementation.
+/** A new IOMMU: its registers mapped, and identified by its implementation. */
 add_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, physical: u64, size: u64) -> Result[u32, slop_os.DeviceError] {
     mapped := cast[u64](0)
     match map_device(kernel, cast[boot_info.PhysicalAddress](physical), size) {
@@ -159,7 +161,7 @@ kind_name :: fn(kind: iommu_interface.IommuKind) -> string {
     return if kind == .Smmuv3 { "SMMUv3" } else { "RISC-V IOMMU" }
 }
 
-// The interface's kind for the system ABI's, if it's one.
+/** The interface's kind for the system ABI's, if it's one. */
 iommu_kind :: fn(kind: u32) -> iommu_interface.IommuKind? {
     if kind == cast[u32](slop_os.IommuKind.VtD) {
         return iommu_interface.IommuKind.VtD
@@ -176,7 +178,7 @@ iommu_kind :: fn(kind: u32) -> iommu_interface.IommuKind? {
     return null
 }
 
-// The IOMMU a device at address (slop_os.device_address) is behind: the one that covers it most narrowly.
+/** The IOMMU a device at address (slop_os.device_address) is behind: the one that covers it most narrowly. */
 iommu_path :: fn(kernel: ptr[mut Kernel], address: u32) -> IommuPath {
     path := IommuPath.{}
     narrowest := cast[u32](0)

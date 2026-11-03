@@ -1,4 +1,4 @@
-/*
+/**
  * Text as a terminal shows it (decisions/0136, design/console-and-sessions.md §2): a grapheme cluster at a time, with
  * whatever wouldn't show, or would change how the text around it shows, replaced by a visible substitute. C0 controls
  * become their Control Pictures (U+2400 on), DEL U+2421; bytes that aren't UTF-8 become U+FFFD; C1 controls,
@@ -10,17 +10,17 @@ package safe_text
 
 import unicode from "std"
 
-// The most bytes one cluster may have: longer ones (a base and dozens of marks) show as U+FFFD.
+/** The most bytes one cluster may have: longer ones (a base and dozens of marks) show as U+FFFD. */
 MAX_CLUSTER_BYTES :: 32
 
-// A cluster made safe: the bytes to show, and the columns they take.
+/** A cluster made safe: the bytes to show, and the columns they take. */
 Shown :: struct {
     bytes : u8[MAX_CLUSTER_BYTES + 16],
     count : usize,
     columns : usize,
 }
 
-// Whether the cluster at at is a line break: LF, CR LF, or a lone CR.
+/** Whether the cluster at at is a line break: LF, CR LF, or a lone CR. */
 is_line_break :: fn(text: u8[], at: usize, end: usize) -> bool {
     return at < text.count && (text[at] == 0x0a || text[at] == 0x0d) && end - at <= 2
 }
@@ -29,7 +29,7 @@ is_tab :: fn(text: u8[], at: usize, end: usize) -> bool {
     return at < text.count && text[at] == 0x09 && end == at + 1
 }
 
-/*
+/**
  * The cluster text[at..<end] made safe to show, into shown. Each code point that wouldn't show becomes its substitute,
  * and the columns are counted from what's shown.
  */
@@ -84,7 +84,7 @@ show :: fn(text: u8[], at: usize, end: usize, shown: ptr[mut Shown]) {
     }
 }
 
-// Whether a default ignorable, after something shown in its cluster, is part of how the cluster shows.
+/** Whether a default ignorable, after something shown in its cluster, is part of how the cluster shows. */
 kept_in_cluster :: fn(point: u32, pictographic: bool, more_after: bool) -> bool {
     // Variation selectors, standard and supplementary
     if (point >= 0xfe00 && point <= 0xfe0f) || (point >= 0xe0100 && point <= 0xe01ef) {
@@ -116,7 +116,7 @@ append_point :: fn(shown: ptr[mut Shown], point: u32) {
 
 HEX_DIGITS :: "0123456789ABCDEF"
 
-// ⟨U+XXXX⟩, with at least four uppercase digits
+/** ⟨U+XXXX⟩, with at least four uppercase digits */
 append_written_out :: fn(shown: ptr[mut Shown], point: u32) {
     append_point(shown, 0x27e8)
     append_byte(shown, cast[u8]('U'))

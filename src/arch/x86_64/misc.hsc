@@ -18,19 +18,19 @@ UART_MODEM_CONTROL : u16 : 4
 UART_LINE_STATUS : u16 : 5
 
 LINE_CONTROL_DLAB : u8 : 0x80
-// 8 data bits, no parity, 1 stop bit
+/** 8 data bits, no parity, 1 stop bit */
 LINE_CONTROL_8N1 : u8 : 0x03
-// Enable and clear both FIFOs, interrupt at 14 bytes
+/** Enable and clear both FIFOs, interrupt at 14 bytes */
 FIFO_ENABLE_AND_CLEAR : u8 : 0xc7
 // DTR and RTS
 MODEM_READY : u8 : 0x03
 LINE_STATUS_TRANSMITTER_EMPTY : u8 : 0x20
-// 115200 baud from the 1.8432 MHz clock
+/** 115200 baud from the 1.8432 MHz clock */
 BAUD_DIVISOR : u16 : 1
 
-// QEMU's isa-debug-exit device, which the test harness adds (tools/boot.py)
+/** QEMU's isa-debug-exit device, which the test harness adds (tools/boot.py) */
 DEBUG_EXIT_PORT : u16 : 0xf4
-// The chipset's reset control register
+/** The chipset's reset control register */
 RESET_CONTROL_PORT : u16 : 0xcf9
 
 /*
@@ -44,10 +44,10 @@ PIT_CHANNEL_0 : u16 : 0x40
 // Channel 0, low then high byte, binary: mode 2 (a rate generator), or mode 0 (once, at the end of its count)
 PIT_CHANNEL_0_RATE : u8 : 0x34
 PIT_CHANNEL_0_ONCE : u8 : 0x30
-// 1193182 Hz / 1193: about a thousand interrupts a second
+/** 1193182 Hz / 1193: about a thousand interrupts a second */
 PIT_TEST_DIVISOR : u16 : 1193
 
-// Set the early console up: 115200 baud, 8N1, FIFOs on, no interrupts. It's in I/O ports, so nothing is mapped.
+/** Set the early console up: 115200 baud, 8N1, FIFOs on, no interrupts. It's in I/O ports, so nothing is mapped. */
 early_console_init :: fn(direct_map_offset: u64, firmware: ptr[boot_info.FirmwareTables]) {
     x86_64.out_u8(COM1 + UART_INTERRUPT_ENABLE, 0)
     x86_64.out_u8(COM1 + UART_LINE_CONTROL, LINE_CONTROL_DLAB)
@@ -80,12 +80,12 @@ test_exit :: fn(code: u32) {
     x86_64.out_u32(DEBUG_EXIT_PORT, code)
 }
 
-// How the machine resets: always by the reset control register, which needs nothing from the firmware.
+/** How the machine resets: always by the reset control register, which needs nothing from the firmware. */
 reset_method :: fn(firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) -> u8 {
     return 1
 }
 
-// The machine reset, warm, by the chipset's reset control register (0xcf9): RAM is kept.
+/** The machine reset, warm, by the chipset's reset control register (0xcf9): RAM is kept. */
 reset :: fn(method: u8) {
     x86_64.out_u8(RESET_CONTROL_PORT, 0x02)
     x86_64.out_u8(RESET_CONTROL_PORT, 0x06)
@@ -101,7 +101,7 @@ test_device :: fn() -> arch_interface.TestDevice {
     }
 }
 
-/*
+/**
  * The PIT's channel 0 as a rate generator, or stopped: counting once from its largest count, so at
  * most one more edge comes, which a masked line ignores.
  */
@@ -112,12 +112,12 @@ test_device_interrupts :: fn(on: bool) {
     x86_64.out_u8(PIT_CHANNEL_0, cast[u8](divisor >> 8))
 }
 
-// Whether the calling CPU takes interrupts now: RFLAGS.IF.
+/** Whether the calling CPU takes interrupts now: RFLAGS.IF. */
 interrupts_enabled :: fn() -> bool {
     return x86_64.read_rflags() & 0x200 != 0
 }
 
-// Stop the calling CPU for good, with interrupts disabled. NMIs still wake it, so it halts again.
+/** Stop the calling CPU for good, with interrupts disabled. NMIs still wake it, so it halts again. */
 halt :: fn() #never_returns {
     loop {
         x86_64.cli()
@@ -125,7 +125,7 @@ halt :: fn() #never_returns {
     }
 }
 
-/*
+/**
  * Wait for an interrupt with interrupts enabled. sti takes effect after the next instruction, so
  * no interrupt can slip in between it and hlt. The interrupt enters the kernel on the kernel
  * stack, which holds nothing while idle, so this never returns.
@@ -149,7 +149,7 @@ unmask_interrupts :: fn() {
     x86_64.sti()
 }
 
-// A value from RDSEED, or null if the CPU has none or it had nothing ready.
+/** A value from RDSEED, or null if the CPU has none or it had nothing ready. */
 hardware_entropy :: fn() -> u64? {
     features :: detect_features()
     if !has(&features, .X86Rdseed) {
@@ -158,7 +158,7 @@ hardware_entropy :: fn() -> u64? {
     return x86_64.rdseed()
 }
 
-// I/O ports (decisions/0093), which x86-64 has.
+/** I/O ports (decisions/0093), which x86-64 has. */
 has_io_ports :: fn() -> bool {
     return true
 }

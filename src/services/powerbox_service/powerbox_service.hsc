@@ -1,4 +1,4 @@
-/*
+/**
  * The powerbox (decisions/0018, 0156, design/console-and-sessions.md §5): one per session, which the session manager
  * starts with the session's home, the trusted path's prompt connection for the session, and a connection of its own, on
  * which it has the powerbox serve each of the session's programs, under the program's name. A program's RequestFile or
@@ -31,7 +31,7 @@ NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 PROMPT_KEY : u64 : 1000
 STOP_KEY : u64 : 1001
 PATH_BYTES :: 160
-// The session manager's connection is the first client
+/** The session manager's connection is the first client */
 MANAGER : usize : 0
 
 Name :: struct {
@@ -39,7 +39,7 @@ Name :: struct {
     count : usize,
 }
 
-// The request waiting for the user: whose, what it asked for, and the key to keep it under, if it asked.
+/** The request waiting for the user: whose, what it asked for, and the key to keep it under, if it asked. */
 Waiting :: struct {
     client : usize,
     kind : prompt.Kind,
@@ -101,7 +101,7 @@ main :: fn(home: os.Channel[dir.Dir]?, prompts: os.Channel[prompt.Prompt], manag
     }
 }
 
-// Every request client index has sent, until there are none left, or it's gone.
+/** Every request client index has sent, until there are none left, or it's gone. */
 serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
     if index >= box.clients.ends.count {
         return void
@@ -162,7 +162,7 @@ serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
     }
 }
 
-// A program of the session's served on end, under name: whether there was room.
+/** A program of the session's served on end, under name: whether there was room. */
 serve_program :: fn(box: ptr[mut Box], name: u8[], end: os.Channel[powerbox.Powerbox]) -> bool {
     index :: service_kit.add_client_index(&box.clients, box.port, end.end) or_return false
     if index < box.names.count {
@@ -185,7 +185,7 @@ name_of :: fn(box: ptr[Box], index: usize) -> u8[] {
     return if name.count <= name.bytes.count { name.bytes[0..<name.count] } else { name.bytes[0..<0] }
 }
 
-/*
+/**
  * A request sent to the trusted path, with the home, read only, for the chooser: null once it's waiting there, or the
  * answer at once, Busy with one waiting already, Refused without a home or the trusted path.
  */
@@ -225,7 +225,9 @@ ask :: fn(box: ptr[mut Box], index: usize, kind: prompt.Kind, write: bool, purpo
     return null
 }
 
-// The trusted path's answer, if it's come: what the user chose opened and given to the program that asked, or refused.
+/**
+ * The trusted path's answer, if it's come: what the user chose opened and given to the program that asked, or refused.
+ */
 take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
     if !box.has_waiting || box.prompt_end == NONE {
         return void
@@ -268,8 +270,10 @@ take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
     }
 }
 
-// What's at path, opened on the home as asked: a file, read only unless it would write, made if it's new; or a directory,
-// read only unless it would write. Null if it can't be.
+/**
+ * What's at path, opened on the home as asked: a file, read only unless it would write, made if it's new; or a directory,
+ * read only unless it would write. Null if it can't be.
+ */
 opened :: fn(box: ptr[mut Box], path: u8[], new: bool, kind: prompt.Kind, write: bool) -> powerbox.Response? {
     out := os.Outgoing.{}
     if kind == .File {
@@ -320,7 +324,7 @@ opened :: fn(box: ptr[mut Box], path: u8[], new: bool, kind: prompt.Kind, write:
     }
 }
 
-/*
+/**
  * What the user chose kept for the program at index, under key: granted by the home again, read only unless it was
  * asked for to write, and the grant kept as a stored link at grants/<program>/<key>, in place of one there before.
  */
@@ -358,7 +362,9 @@ keep :: fn(box: ptr[mut Box], index: usize, key: u8[], path: u8[], write: bool) 
     }
 }
 
-// A grant the program at index kept under key, opened again through its link, as asked; Refused if it's gone or revoked.
+/**
+ * A grant the program at index kept under key, opened again through its link, as asked; Refused if it's gone or revoked.
+ */
 reopen :: fn(box: ptr[mut Box], index: usize, key: u8[], kind: powerbox.Kind, write: bool) -> powerbox.Response {
     who :: name_of(box, index)
     if box.home_end == NONE || who.count == 0 || !valid_key(key) {
@@ -378,7 +384,7 @@ reopen :: fn(box: ptr[mut Box], index: usize, key: u8[], kind: powerbox.Kind, wr
     }
 }
 
-// The directory at path beneath the home, made if it isn't there: whether it is.
+/** The directory at path beneath the home, made if it isn't there: whether it is. */
 made_directory :: fn(box: ptr[mut Box], path: u8[]) -> bool {
     out := os.Outgoing.{}
     making :: os.begin[dir.Request](&out)
@@ -392,7 +398,7 @@ made_directory :: fn(box: ptr[mut Box], path: u8[]) -> bool {
     }
 }
 
-// grants/<program>, and /<key> after it if there's one, into storage.
+/** grants/<program>, and /<key> after it if there's one, into storage. */
 kept_path :: fn(who: u8[], key: u8[], storage: ptr[mut u8[PATH_BYTES]]) -> u8[] {
     count : usize = 0
     append_bytes(storage, &count, string_bytes("grants/"))
@@ -418,7 +424,7 @@ as_text :: fn(bytes: u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }
 
-// A key: letters, digits, - and _, at most KEY_BYTES of them.
+/** A key: letters, digits, - and _, at most KEY_BYTES of them. */
 valid_key :: fn(key: u8[]) -> bool {
     if key.count == 0 || key.count > powerbox.KEY_BYTES {
         return false
@@ -432,7 +438,7 @@ valid_key :: fn(key: u8[]) -> bool {
     return true
 }
 
-// The waiting request for an account answered with the account's name.
+/** The waiting request for an account answered with the account's name. */
 answer_made :: fn(box: ptr[mut Box], name: u8[]) {
     box.has_waiting = false
     index :: box.waiting.client
@@ -445,7 +451,7 @@ answer_made :: fn(box: ptr[mut Box], name: u8[]) {
     _ = powerbox.send_response(box.clients.ends[index], box.port, &out)
 }
 
-// The waiting request answered, unless the program that asked has gone, and no longer waiting.
+/** The waiting request answered, unless the program that asked has gone, and no longer waiting. */
 answer :: fn(box: ptr[mut Box], given: powerbox.Response) {
     box.has_waiting = false
     index :: box.waiting.client
@@ -463,7 +469,7 @@ ask_dir :: fn(box: ptr[mut Box], end: slop_os.Channel, port: slop_os.Port, reque
     return ask_dir_with(box, end, port, &out)
 }
 
-// One request on a dir connection, and its answer, waited for.
+/** One request on a dir connection, and its answer, waited for. */
 ask_dir_with :: fn(box: ptr[mut Box], end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing]) -> dir.Response {
     if dir.send_request(end, port, out) is_some {
         return .Unsupported
@@ -478,7 +484,9 @@ ask_dir_with :: fn(box: ptr[mut Box], end: slop_os.Channel, port: slop_os.Port, 
     }
 }
 
-// Another connection to the directory end speaks for, its one end sent to its server, which takes it without answering.
+/**
+ * Another connection to the directory end speaks for, its one end sent to its server, which takes it without answering.
+ */
 connection_to :: fn(end: slop_os.Channel, port: slop_os.Port) -> slop_os.Channel? {
     pair :: os.channel_for[dir.Dir](slop_os.startup_block().budget, 0) or_return null
     out := os.Outgoing.{}

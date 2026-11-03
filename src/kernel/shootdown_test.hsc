@@ -27,7 +27,7 @@ SHOOTDOWN_TEST_TIMEOUT_MS :: 1000
 TEST_PAGE_MAPPING :: arch_interface.Mapping.{protection = .ReadWrite, cache = .WriteBack, user = false, global = true}
 
 ShootdownTest :: struct {
-    // The page in the kernel window.
+    /** The page in the kernel window. */
     address : u64,
     // What each CPU read, by index, and how many have.
     seen : u64[SHOOTDOWN_TEST_CPUS],
@@ -78,7 +78,7 @@ test_shootdown :: fn(kernel: ptr[mut Kernel]) {
     runtime.log_info("test_shootdown: every CPU read the new page after the shootdown")
 }
 
-/*
+/**
  * Ask every other online CPU to read the page, and check they all read value. Each CPU's own reading is waited for, not
  * a count of answers: a CPU another reschedule IPI wakes reads twice, which a count would take for two CPUs.
  */
@@ -110,7 +110,7 @@ every_cpu_reads :: fn(kernel: ptr[Kernel], test: ptr[mut ShootdownTest], value: 
     return true
 }
 
-// Whether every other online CPU has read value.
+/** Whether every other online CPU has read value. */
 all_read :: fn(kernel: ptr[Kernel], test: ptr[ShootdownTest], value: u64) -> bool {
     for index in 1..<cast[usize](kernel.online_cpus) {
         if index < SHOOTDOWN_TEST_CPUS && intrinsics.volatile_load_u64(&test.seen[index]) != value {
@@ -120,7 +120,7 @@ all_read :: fn(kernel: ptr[Kernel], test: ptr[ShootdownTest], value: u64) -> boo
     return true
 }
 
-// On a reschedule IPI: read test_shootdown's page, if it's running.
+/** On a reschedule IPI: read test_shootdown's page, if it's running. */
 read_for_shootdown_test :: fn() {
     cpu :: per_cpu()
     address :: intrinsics.atomic_load_u64_acquire(&cpu.kernel.shootdown_test)

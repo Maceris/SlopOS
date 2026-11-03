@@ -23,11 +23,11 @@ UART_FRACTIONAL_BAUD : u64 : 0x28
 UART_LINE_CONTROL : u64 : 0x2c
 UART_CONTROL : u64 : 0x30
 UART_INTERRUPT_MASK : u64 : 0x38
-// The transmit FIFO is full
+/** The transmit FIFO is full */
 FLAGS_TRANSMIT_FULL : u32 : 1 << 5
-// 8 data bits, FIFOs on
+/** 8 data bits, FIFOs on */
 LINE_CONTROL_8N1_FIFO : u32 : 0x70
-// The UART and its transmitter on
+/** The UART and its transmitter on */
 CONTROL_ENABLE_TRANSMIT : u32 : 0x101
 // 115200 baud from QEMU's 24 MHz reference clock: 13 and 1/64ths of 1
 BAUD_INTEGER : u32 : 13
@@ -37,7 +37,7 @@ BAUD_FRACTION : u32 : 1
 SEMIHOSTING_EXIT : u64 : 0x18
 APPLICATION_EXIT : u64 : 0x20026
 
-/*
+/**
  * Find the UART in the device tree, map it and set it up: 115200 baud, 8N1, FIFOs on, no interrupts. Without
  * a direct map, a device tree with one, or room for the mapping in the bootloader's tables, there's no early
  * console, and writes go nowhere.
@@ -76,7 +76,7 @@ early_console_write :: fn(text: string) {
     }
 }
 
-// Where the console's registers are, from TPIDR_EL1, or 0 without one.
+/** Where the console's registers are, from TPIDR_EL1, or 0 without one. */
 console_address :: fn() -> u64 {
     value :: aarch64.read_system_register(.TPIDR_EL1)
     if value & 1 != 0 {
@@ -104,7 +104,7 @@ write_register :: fn(base: u64, offset: u64, value: u32) {
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](base + offset), value)
 }
 
-/*
+/**
  * QEMU's semihosting, which tools/boot.py turns on: SYS_EXIT ends QEMU with (code << 1) | 1, as x86-64's debug
  * exit device does, so an even code is still QEMU's own.
  */
@@ -113,10 +113,12 @@ test_exit :: fn(code: u32) {
     aarch64.semihosting(SEMIHOSTING_EXIT, cast[rawptr](&block))
 }
 
-// PSCI's SYSTEM_RESET
+/** PSCI's SYSTEM_RESET */
 PSCI_SYSTEM_RESET : u64 : 0x84000009
 
-// How the machine resets: by PSCI, through the conduit the device tree's psci node names, 1 for HVC and 2 for SMC; 0 for none.
+/**
+ * How the machine resets: by PSCI, through the conduit the device tree's psci node names, 1 for HVC and 2 for SMC; 0 for none.
+ */
 reset_method :: fn(firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) -> u8 {
     if direct_map_offset == 0 {
         return 0
@@ -131,7 +133,7 @@ reset_method :: fn(firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u
     return if devicetree.lists(method, "smc") { 2 } else { 1 }
 }
 
-// The machine reset by PSCI's SYSTEM_RESET, which keeps RAM on QEMU; nothing without a conduit.
+/** The machine reset by PSCI's SYSTEM_RESET, which keeps RAM on QEMU; nothing without a conduit. */
 reset :: fn(method: u8) {
     if method == 1 {
         _ = aarch64.hvc(PSCI_SYSTEM_RESET)
@@ -141,12 +143,12 @@ reset :: fn(method: u8) {
     }
 }
 
-// Whether the calling CPU takes interrupts now: DAIF's I bit clear.
+/** Whether the calling CPU takes interrupts now: DAIF's I bit clear. */
 interrupts_enabled :: fn() -> bool {
     return aarch64.read_system_register(.DAIF) & 0x80 == 0
 }
 
-// Stop the calling CPU for good, with interrupts masked.
+/** Stop the calling CPU for good, with interrupts masked. */
 halt :: fn() #never_returns {
     loop {
         aarch64.daif_set(aarch64.DAIF_IRQ | aarch64.DAIF_FIQ | aarch64.DAIF_SERROR)
@@ -166,7 +168,9 @@ unmask_interrupts :: fn() {
     aarch64.daif_clear(aarch64.DAIF_IRQ | aarch64.DAIF_FIQ)
 }
 
-// A value from RNDRRS, which reseeds from the CPU's entropy source first, or null if it has none or had nothing ready.
+/**
+ * A value from RNDRRS, which reseeds from the CPU's entropy source first, or null if it has none or had nothing ready.
+ */
 hardware_entropy :: fn() -> u64? {
     features :: detect_features()
     if !has(&features, .Aarch64Rng) {
@@ -175,7 +179,7 @@ hardware_entropy :: fn() -> u64? {
     return aarch64.rndrrs()
 }
 
-/*
+/**
  * Wait for an interrupt with interrupts unmasked, on the kernel stack's top: an eret to idle_wait at EL1 with
  * SP_EL1 there, so the interrupt enters on a kernel stack holding nothing, and this never returns.
  */
@@ -191,14 +195,14 @@ idle :: fn() #never_returns {
 SPSR_EL1H : u64 : 0b0101
 SPSR_PAN : u64 : 1 << 22
 
-// Where idle waits: no stack, no carrier block, no context, just wfi with interrupts unmasked.
+/** Where idle waits: no stack, no carrier block, no context, just wfi with interrupts unmasked. */
 idle_wait #calling_convention(.c) #no_context :: fn() #never_returns {
     loop {
         aarch64.wfi()
     }
 }
 
-// AArch64 has no I/O ports: its devices are all memory (decisions/0093).
+/** AArch64 has no I/O ports: its devices are all memory (decisions/0093). */
 has_io_ports :: fn() -> bool {
     return false
 }

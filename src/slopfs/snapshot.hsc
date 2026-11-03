@@ -17,25 +17,25 @@ import runtime from "base"
  * records, which new generations are added to whichever of them starts one.
  */
 
-// A snapshot's record, and its number among its volume's, from 1.
+/** A snapshot's record, and its number among its volume's, from 1. */
 NumberedSnapshot :: struct {
     number : u64,
     record : SnapshotRecord,
 }
 
-// An extent on a volume's dead list.
+/** An extent on a volume's dead list. */
 DeadExtent :: struct {
     start : u64,
     value : DeadValue,
 }
 
-// Whose key records a volume uses: its own, or for a clone, its origin's.
+/** Whose key records a volume uses: its own, or for a clone, its origin's. */
 key_owner_of :: fn(id: u64, record: ptr[VolumeRecord]) -> u64 {
     owner :: cast[u64](record.key_owner)
     return if owner != 0 { owner } else { id }
 }
 
-// A volume's snapshots, oldest first, added to found, which is the caller's to free.
+/** A volume's snapshots, oldest first, added to found, which is the caller's to free. */
 snapshot_records :: fn(container: ptr[mut Container], id: u64, found: ptr[mut NumberedSnapshot[..]]) -> Result[void, Error] {
     record := SnapshotRecord.{}
     at := key_of(id, .Snapshot, 0)
@@ -63,7 +63,7 @@ name_of_snapshot :: fn(record: ptr[SnapshotRecord]) -> u8[] {
     return record.name[0..<length]
 }
 
-// A volume's snapshot named name, or null.
+/** A volume's snapshot named name, or null. */
 find_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[]) -> Result[NumberedSnapshot?, Error] {
     snapshots : NumberedSnapshot[..]
     defer runtime.array_free(&snapshots)
@@ -77,7 +77,7 @@ find_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[]) -> Resul
     return .Ok(null)
 }
 
-// Whether name is a volume's or snapshot's name: not empty, not too long, without '/', '@' or NUL.
+/** Whether name is a volume's or snapshot's name: not empty, not too long, without '/', '@' or NUL. */
 volume_name_holds :: fn(name: u8[]) -> bool {
     if name.count == 0 || name.count > VOLUME_NAME_BYTES {
         return false
@@ -90,7 +90,7 @@ volume_name_holds :: fn(name: u8[]) -> bool {
     return true
 }
 
-/*
+/**
  * A snapshot of the volume id named name: its root and next object as its last commit left them, durable with the
  * next commit. Its number. From now on, what the volume gives back that the snapshot holds goes on its dead list.
  */
@@ -129,7 +129,7 @@ take_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], now: u64
     return .Ok(number)
 }
 
-// A volume's dead list, added to found, which is the caller's to free.
+/** A volume's dead list, added to found, which is the caller's to free. */
 dead_extents :: fn(container: ptr[mut Container], id: u64, found: ptr[mut DeadExtent[..]]) -> Result[void, Error] {
     value := DeadValue.{}
     at := key_of(id, .Dead, 0)
@@ -149,7 +149,7 @@ dead_extents :: fn(container: ptr[mut Container], id: u64, found: ptr[mut DeadEx
     return .Ok
 }
 
-// Whether any of snapshots holds a block born in birth and given back in freed.
+/** Whether any of snapshots holds a block born in birth and given back in freed. */
 held_by :: fn(snapshots: NumberedSnapshot[], birth: u64, freed: u64) -> bool {
     for each in snapshots {
         taken :: cast[u64](each.record.transaction)
@@ -160,7 +160,7 @@ held_by :: fn(snapshots: NumberedSnapshot[], birth: u64, freed: u64) -> bool {
     return false
 }
 
-/*
+/**
  * The volume id's snapshot named name deleted, and what only it held freed: durable with the next commit, and added
  * to freed, if it's given, for whoever keeps who owns what. InUse while a clone was made from it.
  */
@@ -233,7 +233,7 @@ delete_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], freed:
     return .Ok
 }
 
-/*
+/**
  * Who wrote the older blocks of the volume whose record is given: its origin up to its snapshot's transaction, the
  * origin's origin before that, and so on. TooLarge past MAX_LINEAGE.
  */
@@ -260,7 +260,7 @@ lineage_of :: fn(container: ptr[mut Container], record: ptr[VolumeRecord]) -> Re
     }
 }
 
-/*
+/**
  * A new volume named name, cloned from the volume id's snapshot named snapshot: its tree starts as the snapshot's, its
  * names hash as the origin's do, and an encrypted one uses the origin's keys. Its ID; it's on the disk once it's
  * committed.
@@ -298,7 +298,7 @@ clone_snapshot :: fn(container: ptr[mut Container], id: u64, snapshot: u8[], nam
     return .Ok(made)
 }
 
-/*
+/**
  * Every volume's floors, from their records and snapshots, when a container is mounted: a clone's origin's transaction,
  * and each volume's newest snapshot's; and their accounts, every block each owns, and their quotas.
  */
@@ -347,7 +347,7 @@ load_floors :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     }
 }
 
-/*
+/**
  * The record a volume server serves a snapshot as: the volume's, with the snapshot's root and next object, read only
  * (its server commits nothing).
  */
@@ -358,7 +358,7 @@ snapshot_volume_record :: fn(volume: ptr[VolumeRecord], snapshot: ptr[SnapshotRe
     return record
 }
 
-/*
+/**
  * The volume id's snapshot named name, opened read only in the container's own process with keys, if it's encrypted,
  * which it then owns: not among the open volumes, so nothing commits it. For free_volume.
  */
@@ -401,7 +401,7 @@ equal_bytes :: fn(a: u8[], b: u8[]) -> bool {
     return true
 }
 
-// The volume named name in the container, its name as bytes: its ID, or null.
+/** The volume named name in the container, its name as bytes: its ID, or null. */
 find_volume_named :: fn(container: ptr[mut Container], name: u8[]) -> Result[u64?, Error] {
     at : u64 = 0
     loop {
@@ -420,7 +420,7 @@ find_volume_named :: fn(container: ptr[mut Container], name: u8[]) -> Result[u64
 
 // Quotas (space.hsc)
 
-/*
+/**
  * The volume id's quota set: the most blocks it may have, its snapshots' included, 0 for none. It's durable with the
  * next commit; a file's bytes past it are refused from now on.
  */
@@ -440,7 +440,7 @@ set_quota :: fn(container: ptr[mut Container], id: u64, blocks: u64) -> Result[v
     return .Ok
 }
 
-// A volume's blocks, its quota, and what's free in its container, past the reserve.
+/** A volume's blocks, its quota, and what's free in its container, past the reserve. */
 Usage :: struct {
     used : u64,
     quota : u64,

@@ -1,4 +1,4 @@
-/*
+/**
  * greeting, changed (roadmap 9e1, decisions/0120): greeting's exports with add's type not the same, which the root
  * task gives test_libraries in greeting's place with test_changed_library, so its runtime refuses to bind it.
  */
@@ -6,7 +6,7 @@ package greeting_changed
 
 import runtime from "base"
 
-// A sum of other types than greeting's
+/** A sum of other types than greeting's */
 add #export :: fn(a: i32, b: i32) -> i32 {
     return a + b
 }

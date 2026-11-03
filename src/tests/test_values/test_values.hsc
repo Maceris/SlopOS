@@ -1,4 +1,4 @@
-/*
+/**
  * test_values (decisions/0162): an entry's parameters that aren't handles are values, written by whoever launches the
  * program in its grant "arguments" and read by its runtime before main. Launched by the root task with none, it
  * launches a copy of itself with a number, a string, a list of strings, an enum's member and a record, as std/os's
@@ -27,7 +27,7 @@ Limits :: struct {
     name : string,
 }
 
-// What the copy is given: its log, and the values.
+/** What the copy is given: its log, and the values. */
 CopyGrants :: struct {
     log : slop_os.DebugLog,
     manager : os.Channel[process_manager.ProcessManager]?,
@@ -68,7 +68,7 @@ main :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessMan
     return failed
 }
 
-// In the copy: each value checked, 0 if all are what the test gave, or which wasn't.
+/** In the copy: each value checked, 0 if all are what the test gave, or which wasn't. */
 check_copy :: fn(count: u64, label: string?, tags: string[]?, speed: Speed?, limits: Limits?) -> int {
     if count != 3 {
         return 1
@@ -90,7 +90,7 @@ check_copy :: fn(count: u64, label: string?, tags: string[]?, speed: Speed?, lim
     return 0
 }
 
-// How the process watched on port ended: its code, once it has.
+/** How the process watched on port ended: its code, once it has. */
 ended_with :: fn(port: slop_os.Port) -> u64 {
     packets : slop_os.Packet[1]
     taken :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_else 0

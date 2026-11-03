@@ -15,26 +15,26 @@ Block :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "block", major_version = 1, lending = .PerConnection}
 
-// The blocks Read and Write count, in bytes.
+/** The blocks Read and Write count, in bytes. */
 BLOCK_BYTES : u64 : 512
 
-// Which blocks, and where in the connection's buffer, with the client's tag for its answer.
+/** Which blocks, and where in the connection's buffer, with the client's tag for its answer. */
 Transfer :: struct {
     tag : u64,
     first : u64,
     count : u32,
-    // In bytes, from the buffer's start
+    /** In bytes, from the buffer's start */
     offset : u32,
 }
 
 Status :: enum #backed_by(u32) {
     Done = 0,
-    // Past the disk's last block, or the buffer's end
+    /** Past the disk's last block, or the buffer's end */
     OutOfRange = 1,
     ReadOnly = 2,
-    // The device said it failed
+    /** The device said it failed */
     DeviceError = 3,
-    // Every slot for a request in flight is taken: send it again once one's answered
+    /** Every slot for a request in flight is taken: send it again once one's answered */
     Busy = 4,
 }
 
@@ -43,27 +43,27 @@ Completion :: struct {
     status : Status,
 }
 
-// What the disk is.
+/** What the disk is. */
 Info :: struct {
     block_count : u64,
     // Its connection's buffer, in bytes
     buffer_bytes : u64,
     read_only : bool,
-    // Whether Flush does anything; without it, writes are durable when they're done
+    /** Whether Flush does anything; without it, writes are durable when they're done */
     flushes : bool,
 }
 
 Request :: union {
-    // Blocks into the buffer
+    /** Blocks into the buffer */
     Read(Transfer),
-    // Blocks from the buffer
+    /** Blocks from the buffer */
     Write(Transfer),
-    // Everything written and done before it, durable; its tag
+    /** Everything written and done before it, durable; its tag */
     Flush(u64),
     Describe,
-    // A window onto the connection's buffer, read-write
+    /** A window onto the connection's buffer, read-write */
     GetBuffer,
-    // Serve another client, on its end
+    /** Serve another client, on its end */
     Connect(os.Channel[Block]),
 }
 
@@ -74,7 +74,7 @@ Response :: union {
     Unsupported,
 }
 
-// A block written twice holds the same; a flush again flushes nothing new.
+/** A block written twice holds the same; a flush again flushes nothing new. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Read(_) => true
@@ -88,7 +88,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #insert os.protocol_code(Request, Response)
 
-// A new connection to the driver listening on end, or null (as entropy.connect).
+/** A new connection to the driver listening on end, or null (as entropy.connect). */
 connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Block]? {
     pair :: os.channel_for[Block](budget, 0) or_return null
     out := os.Outgoing.{}

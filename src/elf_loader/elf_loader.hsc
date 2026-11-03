@@ -1,4 +1,4 @@
-/*
+/**
  * Loading SlopOS programs (decisions/0004, 0058): position-independent ELF executables for the architecture
  * this is built for, x86-64's or AArch64's, whose only relocations are relative ones (R_X86_64_RELATIVE,
  * R_AARCH64_RELATIVE). The kernel uses it for the root task, and the root task and the
@@ -19,12 +19,12 @@ import intrinsics from "base"
 import slop_os from "std/os"
 
 PAGE_SIZE : u64 : 4096
-// The most loadable segments an executable may have.
+/** The most loadable segments an executable may have. */
 MAX_SEGMENTS :: 8
-// The largest image, 1 GiB, as large as one memory object can be.
+/** The largest image, 1 GiB, as large as one memory object can be. */
 MAX_IMAGE_SIZE : u64 : 1 << 30
 
-// One loadable segment, from the image's base.
+/** One loadable segment, from the image's base. */
 Segment :: struct {
     // Where it starts, and how many bytes it takes there: the first file_size of them from offset in the file, then zeros
     address : u64,
@@ -34,9 +34,9 @@ Segment :: struct {
     protection : slop_os.Protection,
 }
 
-// What loading an executable needs to know, from its file.
+/** What loading an executable needs to know, from its file. */
 Executable :: struct {
-    // Where it starts, from the image's base
+    /** Where it starts, from the image's base */
     entry : u64,
     // The whole image, a whole number of pages: from its base to the end of its last segment
     size : u64,
@@ -51,31 +51,31 @@ Executable :: struct {
 }
 
 LoadError :: enum {
-    // Not an ELF file, or one cut short
+    /** Not an ELF file, or one cut short */
     NotElf,
-    // ELF, but not 64-bit little-endian for this architecture, or not a version this reads
+    /** ELF, but not 64-bit little-endian for this architecture, or not a version this reads */
     Unsupported,
-    // Not position-independent (ET_DYN), so it can't go at a random base
+    /** Not position-independent (ET_DYN), so it can't go at a random base */
     NotPositionIndependent,
-    // Headers that don't fit together: sizes, offsets, alignment
+    /** Headers that don't fit together: sizes, offsets, alignment */
     BadHeaders,
     TooManySegments,
     SegmentOutsideFile,
-    // Segments out of order, or sharing a page, which can't then have their own protection
+    /** Segments out of order, or sharing a page, which can't then have their own protection */
     SegmentsOverlap,
     WritableAndExecutable,
     EntryNotExecutable,
-    // An interpreter, or shared libraries to load first
+    /** An interpreter, or shared libraries to load first */
     NeedsInterpreter,
     ThreadLocalStorage,
     UnsupportedRelocation,
     RelocationOutsideImage,
     ImageTooLarge,
-    // The image given to load or relocate is smaller than the executable's
+    /** The image given to load or relocate is smaller than the executable's */
     ImageTooSmall,
 }
 
-// ELF's constants that this reads.
+/** ELF's constants that this reads. */
 ET_DYN : u64 : 3
 // The machine programs are for, and their relative relocation: this architecture's
 #if TARGET_ARCH == .arm64 {
@@ -108,7 +108,7 @@ PROGRAM_HEADER_SIZE : u64 : 56
 DYNAMIC_ENTRY_SIZE : u64 : 16
 RELA_SIZE : u64 : 24
 
-// The little-endian integer of size bytes at offset in bytes, or null past the end.
+/** The little-endian integer of size bytes at offset in bytes, or null past the end. */
 read_le :: fn(bytes: u8[], offset: u64, size: u64) -> u64? {
     count :: cast[u64](bytes.count)
     if offset > count || size > count - offset || size > 8 {
@@ -125,7 +125,7 @@ read_le :: fn(bytes: u8[], offset: u64, size: u64) -> u64? {
     return value
 }
 
-// value rounded up to a whole number of pages, or null if that overflows.
+/** value rounded up to a whole number of pages, or null if that overflows. */
 page_up :: fn(value: u64) -> u64? {
     if value > ~cast[u64](0) - (PAGE_SIZE - 1) {
         return null
@@ -133,7 +133,7 @@ page_up :: fn(value: u64) -> u64? {
     return (value + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1)
 }
 
-// What a program header's flags give, refusing writable and executable.
+/** What a program header's flags give, refusing writable and executable. */
 protection_of :: fn(flags: u64) -> Result[slop_os.Protection, LoadError] {
     if flags & PF_W != 0 && flags & PF_X != 0 {
         return .Error(.WritableAndExecutable)
@@ -151,7 +151,7 @@ protection_of :: fn(flags: u64) -> Result[slop_os.Protection, LoadError] {
     return .Ok(cast[slop_os.Protection](bits))
 }
 
-// The segment of executable that address is in, its first count bytes, or null.
+/** The segment of executable that address is in, its first count bytes, or null. */
 segment_at :: fn(executable: ptr[Executable], address: u64, count: u64) -> Segment? {
     for i in 0..<executable.segment_count {
         if i < executable.segments.count {
@@ -164,7 +164,7 @@ segment_at :: fn(executable: ptr[Executable], address: u64, count: u64) -> Segme
     return null
 }
 
-// Where address, in the image, is in the file, for count bytes the file holds there, or null.
+/** Where address, in the image, is in the file, for count bytes the file holds there, or null. */
 file_offset_of :: fn(executable: ptr[Executable], address: u64, count: u64) -> u64? {
     segment :: segment_at(executable, address, count) or_return null
     within :: address - segment.address
@@ -174,7 +174,7 @@ file_offset_of :: fn(executable: ptr[Executable], address: u64, count: u64) -> u
     return segment.offset + within
 }
 
-// file's executable, checked, or why it can't be loaded.
+/** file's executable, checked, or why it can't be loaded. */
 read :: fn(file: u8[]) -> Result[Executable, LoadError] {
     // ELF
     if cast[u64](file.count) < HEADER_SIZE || file[0] != 0x7f || file[1] != 0x45 || file[2] != 0x4c || file[3] != 0x46 {
@@ -276,7 +276,7 @@ read :: fn(file: u8[]) -> Result[Executable, LoadError] {
     return .Ok(executable)
 }
 
-// The dynamic section's relocations, checked: each RELATIVE_RELOCATION, into a writable segment.
+/** The dynamic section's relocations, checked: each RELATIVE_RELOCATION, into a writable segment. */
 read_dynamic :: fn(executable: ptr[mut Executable], file: u8[], address: u64, size: u64) -> Result[void, LoadError] {
     dynamic :: file_offset_of(executable, address, size) or_return .Error(.BadHeaders)
     relocations : u64 = 0
@@ -328,7 +328,7 @@ read_dynamic :: fn(executable: ptr[mut Executable], file: u8[], address: u64, si
     return .Ok
 }
 
-// executable's segments copied from file into image, which is zeroed and at least executable.size bytes.
+/** executable's segments copied from file into image, which is zeroed and at least executable.size bytes. */
 load :: fn(executable: ptr[Executable], file: u8[], image: mut u8[]) -> Result[void, LoadError] {
     if cast[u64](image.count) < executable.size {
         return .Error(.ImageTooSmall)
@@ -352,7 +352,7 @@ load :: fn(executable: ptr[Executable], file: u8[], image: mut u8[]) -> Result[v
     return .Ok
 }
 
-// executable's relocations applied to image, loaded from file, for it to run at base.
+/** executable's relocations applied to image, loaded from file, for it to run at base. */
 relocate :: fn(executable: ptr[Executable], file: u8[], image: mut u8[], base: u64) -> Result[void, LoadError] {
     if cast[u64](image.count) < executable.size {
         return .Error(.ImageTooSmall)

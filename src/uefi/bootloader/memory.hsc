@@ -11,7 +11,7 @@ import boot_protocol from "../../boot_protocol"
 
 FOUR_GIGABYTES : u64 : 1 << 32
 
-// What a UEFI memory kind is to the kernel; the bootloader's own kinds say what's the kernel's and the modules'.
+/** What a UEFI memory kind is to the kernel; the bootloader's own kinds say what's the kernel's and the modules'. */
 memory_kind :: fn(kind: u32) -> boot_info.MemoryKind {
     if kind == KERNEL_MEMORY {
         return .KernelImage
@@ -45,7 +45,9 @@ memory_kind :: fn(kind: u32) -> boot_info.MemoryKind {
     return .Reserved
 }
 
-// The firmware's memory map, into buffer: its descriptors' count and size, and the key ExitBootServices needs; or null.
+/**
+ * The firmware's memory map, into buffer: its descriptors' count and size, and the key ExitBootServices needs; or null.
+ */
 MemoryMap :: struct {
     buffer : u64,
     capacity : usize,
@@ -54,7 +56,7 @@ MemoryMap :: struct {
     descriptor_size : usize,
 }
 
-// Room for the memory map, with some to spare for what allocating it, and anything after, adds; or null.
+/** Room for the memory map, with some to spare for what allocating it, and anything after, adds; or null. */
 memory_map_buffer :: fn() -> MemoryMap? {
     services :: uefi.boot_services() or_return null
     size := cast[usize](0)
@@ -67,7 +69,7 @@ memory_map_buffer :: fn() -> MemoryMap? {
     return MemoryMap.{buffer = buffer, capacity = capacity}
 }
 
-// The map read into its buffer now: whether it was.
+/** The map read into its buffer now: whether it was. */
 read_memory_map :: fn(map: ptr[mut MemoryMap]) -> bool {
     services :: uefi.boot_services() or_return false
     map.size = map.capacity
@@ -80,7 +82,7 @@ descriptor_at :: fn(map: ptr[MemoryMap], index: usize) -> ptr[uefi.MemoryDescrip
     return cast[ptr[uefi.MemoryDescriptor]](cast[rawptr](map.buffer + cast[u64](index * map.descriptor_size)))
 }
 
-/*
+/**
  * The direct map and the identity map: on x86-64 the first 4 GiB whole, where the firmware's tables and devices'
  * registers are too, and every other range but reserved and defective memory, at offset and where it is.
  */
@@ -112,7 +114,7 @@ map_memory :: fn(tables: ptr[PageTables], offset: u64) -> bool {
     return true
 }
 
-/*
+/**
  * The boot services left, with the memory map at that moment in the handoff: read, converted and ExitBootServices
  * called with its key, again if the map changed meanwhile. Whether they were left; nothing of the firmware's is
  * called after.
@@ -132,7 +134,7 @@ leave_boot_services :: fn(handoff: ptr[mut boot_protocol.Handoff]) -> bool? {
     return null
 }
 
-// A region put among the count before it, in order by base: how many there are now.
+/** A region put among the count before it, in order by base: how many there are now. */
 insert_region :: fn(handoff: ptr[mut boot_protocol.Handoff], count: usize, region: boot_info.MemoryRegion) -> usize {
     if count >= handoff.regions.count {
         return count
@@ -153,7 +155,7 @@ insert_region :: fn(handoff: ptr[mut boot_protocol.Handoff], count: usize, regio
     return count + 1
 }
 
-// The firmware's map as BootInfo's: sorted by base, adjacent regions of a kind merged, and page 0 never usable.
+/** The firmware's map as BootInfo's: sorted by base, adjacent regions of a kind merged, and page 0 never usable. */
 convert_memory_map :: fn(map: ptr[MemoryMap], handoff: ptr[mut boot_protocol.Handoff]) {
     count := cast[usize](0)
     for i in cast[usize](0)..<map.size / map.descriptor_size {

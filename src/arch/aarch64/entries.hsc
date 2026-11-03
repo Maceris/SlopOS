@@ -30,10 +30,10 @@ ESR_CLASS_SOFTWARE_STEP : u64 : 0x33
 // An abort's fault status code (ISS bits 0 to 5): permission faults at levels 0 to 3, and alignment
 FAULT_STATUS_PERMISSION : u64 : 0b001100
 FAULT_STATUS_ALIGNMENT : u64 : 0b100001
-// In a data abort's ISS: the access was a write
+/** In a data abort's ISS: the access was a write */
 DATA_ABORT_WRITE : u64 : 1 << 6
 
-/*
+/**
  * Every exception. None returns: faults in the kernel stop it, and the rest come from user mode or idle,
  * which L2 never goes back to directly. Interrupts are acknowledged as interrupt_source says (gic.hsc).
  */
@@ -46,12 +46,12 @@ exception_entry #calling_convention(.entry) :: fn(frame: ptr[mut aarch64.Registe
     }
 }
 
-// Whether the exception came from EL0, through the vector table's lower-EL entries.
+/** Whether the exception came from EL0, through the vector table's lower-EL entries. */
 from_user_mode :: fn(frame: ptr[aarch64.RegisterFrame]) -> bool {
     return frame.vector & ~cast[u64](3) == aarch64.VECTOR_LOWER_AARCH64
 }
 
-// A fault or an interrupt, decoded for kernel_entry.
+/** A fault or an interrupt, decoded for kernel_entry. */
 dispatch :: fn(frame: ptr[mut aarch64.RegisterFrame]) #never_returns {
     kind :: frame.vector & 3
     source :: frame.vector & ~cast[u64](3)
@@ -83,7 +83,7 @@ dispatch :: fn(frame: ptr[mut aarch64.RegisterFrame]) #never_returns {
     kernel_entry.kernel_fault(fault, instruction)
 }
 
-//SPEC: Arm ARM (DDI 0487) D19.2.40 ESR_EL1 (exception classes, and the ISS of instruction and data aborts)
+/** SPEC: Arm ARM (DDI 0487) D19.2.40 ESR_EL1 (exception classes, and the ISS of instruction and data aborts) */
 decode_fault :: fn(class: u64, syndrome: u64, address: u64) -> arch_interface.Fault {
     status :: syndrome & 0x3f
     if class == aarch64.ESR_CLASS_INSTRUCTION_ABORT || class == aarch64.ESR_CLASS_INSTRUCTION_ABORT_LOWER

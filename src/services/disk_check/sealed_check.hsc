@@ -25,7 +25,7 @@ BEFORE_FILE :: "before.txt"
 BEFORE_TEXT :: "Written to the sealed volume with its first key generation"
 AFTER_FILE :: "after.txt"
 AFTER_TEXT :: "Written to the sealed volume with its second key generation"
-// A SlopOS container's partition type, "SLOPOS CONTAINER" in ASCII
+/** A SlopOS container's partition type, "SLOPOS CONTAINER" in ASCII */
 CONTAINER_TYPE :: u8.[0x53, 0x4c, 0x4f, 0x50, 0x4f, 0x53, 0x20, 0x43, 0x4f, 0x4e, 0x54, 0x41, 0x49, 0x4e, 0x45, 0x52]
 
 check_sealed :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.Port, system: os.Channel[dir.Dir]) -> int {
@@ -111,7 +111,7 @@ check_sealed :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os
     return check_snapshots(to, manager, port, system, container)
 }
 
-// text in capitals, in into.
+/** text in capitals, in into. */
 capitals :: fn(text: string, into: mut u8[]) -> string {
     count : usize = 0
     for character, i in text {
@@ -127,7 +127,7 @@ capitals :: fn(text: string, into: mut u8[]) -> string {
     return string_of(&into[0], count)
 }
 
-// The sealed volume, opened with a passphrase, or without one, if it's empty.
+/** The sealed volume, opened with a passphrase, or without one, if it's empty. */
 open_volume :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, passphrase: string) -> storage.Response {
     out := os.Outgoing.{}
     opening :: os.begin[storage.Request](&out)
@@ -136,7 +136,7 @@ open_volume :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, 
     return ask_storage(manager, port, &out)
 }
 
-// One request to the storage manager, sent from out, and its answer, waited for.
+/** One request to the storage manager, sent from out, and its answer, waited for. */
 ask_storage :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing]) -> storage.Response {
     if storage.send_request(end, port, out) is_some {
         return .Unsupported

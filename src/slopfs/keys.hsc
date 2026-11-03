@@ -20,20 +20,20 @@ import random from "std"
  */
 
 Cipher :: enum #backed_by(u8) {
-    // Sealed with BLAKE3 alone, as the system volume is
+    /** Sealed with BLAKE3 alone, as the system volume is */
     None = 0,
     ChaCha20Poly1305 = 1,
-    // Fast where the CPU has AES instructions, and readable anywhere (decisions/0019)
+    /** Fast where the CPU has AES instructions, and readable anywhere (decisions/0019) */
     Aes256Gcm = 2,
 }
 
-// One key generation's key.
+/** One key generation's key. */
 GenerationKey :: struct {
     number : u32,
     key : crypto.Key256,
 }
 
-/*
+/**
  * An unlocked volume's keys: its cipher, its volume key (for wrapping new generations), every generation's key, the
  * newest's number, and the transaction sealing now, with its salt, how many blocks it has sealed and its key.
  */
@@ -48,12 +48,12 @@ Keys :: struct {
     block_key : crypto.Key256,
 }
 
-// What the volume key is wrapped by.
+/** What the volume key is wrapped by. */
 WrapKind :: enum #backed_by(u32) {
     Passphrase = 1,
 }
 
-/*
+/**
  * The volume key wrapped, keyed (volume, KeyWrap, index) in the container's volumes tree: for a passphrase, Argon2id's
  * parameters and salt, and the key sealed with what it derives.
  */
@@ -69,7 +69,7 @@ WrapRecord :: struct #packed {
 
 #assert size_of(WrapRecord) == 80
 
-// A generation's key wrapped by the volume key, keyed (volume, KeyGeneration, number): the transaction it began in.
+/** A generation's key wrapped by the volume key, keyed (volume, KeyGeneration, number): the transaction it began in. */
 GenerationRecord :: struct #packed {
     began : u64le,
     wrapped : u8[32],
@@ -82,9 +82,9 @@ GenerationRecord :: struct #packed {
 SEAL_SALT : usize : 16
 SEAL_COUNT : usize : 24
 
-// Argon2id's parameters for a passphrase, unless they're given (RFC 9106's second choice, with less memory).
+/** Argon2id's parameters for a passphrase, unless they're given (RFC 9106's second choice, with less memory). */
 DEFAULT_PASSPHRASE :: crypto.Argon2Parameters.{memory_kib = 65536, passes = 3, lanes = 1}
-/*
+/**
  * A volume made at run time's (decisions/0141), wrapped by its volume server inside the 8 MiB its budget has for
  * Argon2id: its passphrase is a random secret the account service keeps, which hashes the password it's kept by itself.
  */
@@ -102,7 +102,7 @@ zero_key #constant_time :: fn(key: ptr[mut crypto.Key256]) {
     }
 }
 
-// Keys' memory given back, the keys in it zeroed first.
+/** Keys' memory given back, the keys in it zeroed first. */
 free_keys :: fn(keys: ptr[mut Keys]) {
     zero_key(&keys.volume_key)
     zero_key(&keys.block_key)
@@ -166,7 +166,7 @@ get_u32 :: fn(from: u8[], at: usize) -> u32 {
 
 BLOCK_KEY_CONTEXT :: "slopfs block key"
 
-// The key a transaction's blocks are sealed with: its generation's key, keyed BLAKE3 of the transaction and salt.
+/** The key a transaction's blocks are sealed with: its generation's key, keyed BLAKE3 of the transaction and salt. */
 derive_block_key #constant_time :: fn(generation: ptr[crypto.Key256], transaction: u64, salt: u8[]) -> crypto.Key256 {
     key_bytes : crypto.SecretByte[32]
     for i in cast[usize](0)..<32 {
@@ -193,7 +193,7 @@ derive_block_key #constant_time :: fn(generation: ptr[crypto.Key256], transactio
     return derived
 }
 
-// A block's associated data: where it is, when it was written and whose it is.
+/** A block's associated data: where it is, when it was written and whose it is. */
 associated_of :: fn(pointer: ptr[BlockPointer], owner: u64) -> u8[24] {
     associated : u8[24]
     put_u64(associated, 0, cast[u64](pointer.address))
@@ -229,7 +229,7 @@ aead_open #constant_time :: fn(cipher: Cipher, key: ptr[crypto.Key256], nonce: p
     return crypto.chacha20_poly1305_open(key, nonce, sealed, associated, tag, plain)
 }
 
-/*
+/**
  * plain sealed into sealed, of the same count, for the block pointer names, which owner's tree holds: its generation
  * and seal set. pointer's address and birth are where and when it's written.
  */
@@ -264,7 +264,7 @@ seal_block #constant_time :: fn(keys: ptr[mut Keys], owner: u64, pointer: ptr[mu
     return true
 }
 
-// sealed opened into plain, of the same count, if pointer's seal holds for it, where it says and whose it is.
+/** sealed opened into plain, of the same count, if pointer's seal holds for it, where it says and whose it is. */
 open_block #constant_time :: fn(keys: ptr[Keys], owner: u64, pointer: ptr[BlockPointer], sealed: u8[], plain: mut u8[]) -> bool {
     generation :: generation_key(keys, cast[u32](pointer.generation)) or_return false
     seal :: pointer.seal
@@ -281,7 +281,7 @@ open_block #constant_time :: fn(keys: ptr[Keys], owner: u64, pointer: ptr[BlockP
     return aead_open(keys.cipher, &key, &nonce, sealed, associated, &tag, opened)
 }
 
-// Wrapping: the volume key's and each generation's associated data, naming the container and volume they're for.
+/** Wrapping: the volume key's and each generation's associated data, naming the container and volume they're for. */
 wrap_associated :: fn(what: string, container: u8[16], volume: u64) -> u8[48] {
     associated : u8[48]
     for character, i in what {
@@ -296,7 +296,7 @@ wrap_associated :: fn(what: string, container: u8[16], volume: u64) -> u8[48] {
     return associated
 }
 
-/*
+/**
  * The key Argon2id derives from a passphrase with a wrap record's parameters and salt: None if it couldn't. Its
  * memory, which held what the passphrase made, is zeroed before it's given back.
  */
@@ -357,7 +357,7 @@ wrap_with_passphrase #constant_time :: fn(volume_key: ptr[crypto.Key256], passph
     return compiler.declassify(record)
 }
 
-// The volume key a passphrase unwraps from record: None if it's the wrong passphrase.
+/** The volume key a passphrase unwraps from record: None if it's the wrong passphrase. */
 unwrap_with_passphrase #constant_time :: fn(record: ptr[WrapRecord], passphrase: u8[], container: u8[16], volume: u64) -> crypto.Key256? {
     if cast[u32](record.kind) != cast[u32](WrapKind.Passphrase) {
         return null
@@ -423,7 +423,7 @@ unwrap_generation #constant_time :: fn(volume_key: ptr[crypto.Key256], number: u
     return generation
 }
 
-/*
+/**
  * A new generation for keys, numbered after its newest, which seals what's written from now on: its key, and the
  * record of it wrapped, to keep where the volume's keys are kept.
  */
@@ -440,7 +440,7 @@ start_generation #constant_time :: fn(keys: ptr[mut Keys], began: u64, container
     return record
 }
 
-// The newest generation forgotten, previous sealing again: one start_generation made that couldn't be kept.
+/** The newest generation forgotten, previous sealing again: one start_generation made that couldn't be kept. */
 drop_generation :: fn(keys: ptr[mut Keys], previous: u32) {
     last :: keys.generations.count
     if last > 0 && last - 1 < keys.generations.count && keys.generations[last - 1].number == keys.current {

@@ -1,4 +1,4 @@
-/*
+/**
  * Robustness testing's machinery (decisions/0096, roadmap R), compiled in only by the build setting robustness=on:
  * without it ON is false, and every #if ON below leaves its code out, so a release kernel can't be told to fail
  * anything, whatever its command line says.
@@ -16,48 +16,48 @@ import runtime from "base"
 
 ON :: #run compiler.target_setting("robustness", default = "off") == "on"
 
-// The failure points (decisions/0096, R1), each named on the command line as NAMES gives it.
+/** The failure points (decisions/0096, R1), each named on the command line as NAMES gives it. */
 Point :: enum #backed_by(u8) {
-    // frames.allocate, allocate_below and take_frame: a block of frames, or a frame from a CPU's cache
+    /** frames.allocate, allocate_below and take_frame: a block of frames, or a frame from a CPU's cache */
     Frame = 0,
-    // An object from a slab cache, for the kernel's object pools and the heap's small sizes
+    /** An object from a slab cache, for the kernel's object pools and the heap's small sizes */
     Slab = 1,
-    // A block from the kernel heap
+    /** A block from the kernel heap */
     Heap = 2,
-    // A memory budget's charge_new or charge_more
+    /** A memory budget's charge_new or charge_more */
     Budget = 3,
-    // A frame for a handle table's growth
+    /** A frame for a handle table's growth */
     Handles = 4,
-    // A timer heap's growth
+    /** A timer heap's growth */
     Timers = 5,
-    // Device addresses from a DMA domain
+    /** Device addresses from a DMA domain */
     Iova = 6,
 }
 
 POINT_COUNT :: 7
 NAMES :: string.["frame", "slab", "heap", "budget", "handles", "timers", "iova"]
 
-// What fail= asks for.
+/** What fail= asks for. */
 FailMode :: enum #backed_by(u8) {
-    // No fail= word: nothing counted or failed
+    /** No fail= word: nothing counted or failed */
     Off = 0,
-    // fail=count
+    /** fail=count */
     Count = 1,
-    // fail=<point>:<n>
+    /** fail=<point>:<n> */
     Point = 2,
-    // fail=any:<n>
+    /** fail=any:<n> */
     Any = 3,
 }
 
-// A fail= word, parsed (fail_of).
+/** A fail= word, parsed (fail_of). */
 FailSpec :: struct {
     mode : FailMode,
     point : Point,
-    // The pass that fails, from 1
+    /** The pass that fails, from 1 */
     pass : u64,
 }
 
-// The kernel's injection state: what fails, and the passes so far.
+/** The kernel's injection state: what fails, and the passes so far. */
 Faults :: struct {
     spec : FailSpec,
     // Passes through each point, and through any
@@ -67,11 +67,11 @@ Faults :: struct {
     failed : bool,
     failed_point : Point,
     failed_pass : u64,
-    // Called when a pass fails, after saying so, by whoever made this: the kernel logs where it failed from
+    /** Called when a pass fails, after saying so, by whoever made this: the kernel logs where it failed from */
     on_fail : fn()?,
 }
 
-/*
+/**
  * The fail= word's value, after "fail=": count, any:<n> or <point>:<n>. Null if it isn't one of those, or n isn't a
  * number from 1.
  */
@@ -100,7 +100,7 @@ fail_of :: fn(text: string) -> FailSpec? {
     return null
 }
 
-// A decimal number, or null if text isn't one.
+/** A decimal number, or null if text isn't one. */
 number_of :: fn(text: string) -> u64? {
     if text.count == 0 || text.count > 19 {
         return null
@@ -115,7 +115,7 @@ number_of :: fn(text: string) -> u64? {
     return value
 }
 
-/*
+/**
  * Whether this pass through point fails. Always false without robustness=on, which leaves the rest out. Any CPU may
  * pass at once, so the counts are atomic; with more than one CPU, which pass is the nth can vary between runs.
  */
@@ -149,7 +149,7 @@ fails :: fn(faults: ptr[mut Faults], point: Point) -> bool {
     return false
 }
 
-/*
+/**
  * The passes, and the pass that failed, as log lines, for boot_tests.py --robustness to read: "faults: passes ..."
  * and "faults: failed <point> pass <n>". Nothing without fail=.
  */

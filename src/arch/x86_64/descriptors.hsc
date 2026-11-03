@@ -25,7 +25,7 @@ EFER_NO_EXECUTE_ENABLE : u64 : 1 << 11
 //SPEC: Intel SDM Vol. 3A §5.8.8 (fast system calls in 64-bit mode)
 STAR_SYSCALL_SELECTORS : u64 : cast[u64](KERNEL_CODE_SELECTOR) << 32
 STAR_SYSRET_SELECTORS : u64 : cast[u64](USER_DATA_SELECTOR - 8) << 48
-// Flags SYSCALL clears: trap, interrupts, direction and alignment check
+/** Flags SYSCALL clears: trap, interrupts, direction and alignment check */
 SYSCALL_FLAGS_MASK : u64 : (1 << 8) | (1 << 9) | (1 << 10) | (1 << 18)
 
 CR0_MONITOR_COPROCESSOR : u64 : 1 << 1
@@ -55,7 +55,7 @@ USER_CODE_DESCRIPTOR : u64 : 0x00affa000000ffff
  * The two GDT entries of a 64-bit TSS descriptor for a TSS at base: present, DPL 0, type 9
  * (available 64-bit TSS).
  */
-//SPEC: Intel SDM Vol. 3A §8.2.3, Figure 8-4 (TSS descriptor in 64-bit mode)
+/** SPEC: Intel SDM Vol. 3A §8.2.3, Figure 8-4 (TSS descriptor in 64-bit mode) */
 tss_descriptor :: fn(base: u64) -> (u64, u64) {
     limit :: cast[u64](size_of(TaskStateSegment) - 1)
     low := limit & 0xffff
@@ -66,7 +66,7 @@ tss_descriptor :: fn(base: u64) -> (u64, u64) {
     return low, base >> 32
 }
 
-// An interrupt gate to handler, on interrupt stack table slot ist (0 for none).
+/** An interrupt gate to handler, on interrupt stack table slot ist (0 for none). */
 gate :: fn(handler: u64, ist: u8) -> IdtEntry {
     return IdtEntry.{
         offset_low = cast[u16](handler & 0xffff),
@@ -79,7 +79,7 @@ gate :: fn(handler: u64, ist: u8) -> IdtEntry {
     }
 }
 
-// Set up the IDT. Called once, on the boot CPU, before init_cpu.
+/** Set up the IDT. Called once, on the boot CPU, before init_cpu. */
 init_system :: fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) {
     for &entry in system.idt {
         entry^ = IdtEntry.{}
@@ -115,7 +115,7 @@ init_cpu :: fn(
     enable_local_apic()
 }
 
-/*
+/**
  * Every entry runs on the kernel stack, through the interrupt stack table, including entries from
  * idle: the kernel stack holds nothing then, so each entry starts again at its top. The critical
  * events get stacks of their own, since they can arrive while the kernel stack is in use.
@@ -154,7 +154,7 @@ load_descriptor_tables :: fn(system: ptr[ArchSystem], cpu: ptr[mut ArchCpu]) {
     x86_64.lidt(&idt_pointer)
 }
 
-/*
+/**
  * No-execute, user-access protection and address-space tags where the CPU has them, and the
  * x87, SSE and AVX state for user threads. The kernel itself never uses vector registers.
  */
@@ -184,7 +184,7 @@ enable_cpu_features :: fn() {
     x86_64.xsetbv(0, XCR0_BASE)
 }
 
-// SYSCALL enters at system_call_entry, with interrupts disabled.
+/** SYSCALL enters at system_call_entry, with interrupts disabled. */
 enable_system_calls :: fn() {
     x86_64.wrmsr(IA32_STAR, STAR_SYSCALL_SELECTORS | STAR_SYSRET_SELECTORS)
     x86_64.wrmsr(IA32_LSTAR, cast[u64](system_call_entry))

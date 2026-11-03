@@ -1,4 +1,4 @@
-/*
+/**
  * The entropy service (decisions/0012, 0058, 0067, 0071, 0074): random bytes for the services that need more than their
  * own seed, from a ChaCha20 stream seeded with the seed in its startup block, which the root task draws from the
  * boot's. Connections arrive on clients, its listener, and each Fill gets as many bytes as it asks for, up to
@@ -30,7 +30,7 @@ Entropy :: struct {
     port : slop_os.Port,
     sources : slop_os.Channel[MAX_SOURCES],
     source_count : usize,
-    // Bytes handed out since the sources were last read
+    /** Bytes handed out since the sources were last read */
     handed_out : u64,
 }
 
@@ -72,7 +72,7 @@ main :: fn(log: slop_os.DebugLog?, clients: os.Listener[protocol.Entropy]) -> in
     }
 }
 
-// Every request client index has sent, until there are none left, or it's gone.
+/** Every request client index has sent, until there are none left, or it's gone. */
 serve :: fn(service: ptr[mut Entropy], connected: ptr[mut service_kit.Clients], index: usize, into: ptr[mut os.Incoming]) {
     if index >= connected.ends.count {
         return void
@@ -123,7 +123,7 @@ serve :: fn(service: ptr[mut Entropy], connected: ptr[mut service_kit.Clients], 
     }
 }
 
-// A hardware RNG's driver's channel, bound to the port, read at once.
+/** A hardware RNG's driver's channel, bound to the port, read at once. */
 add_source :: fn(service: ptr[mut Entropy], end: slop_os.Channel) {
     index :: service.source_count
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
@@ -143,7 +143,7 @@ add_source :: fn(service: ptr[mut Entropy], end: slop_os.Channel) {
     ask(service, index)
 }
 
-// A Read of SEED_BYTES from a source, answered later.
+/** A Read of SEED_BYTES from a source, answered later. */
 ask :: fn(service: ptr[mut Entropy], index: usize) {
     if index >= service.sources.count || cast[slop_os.Handle](service.sources[index]) == slop_os.NO_HANDLE {
         return void
@@ -154,7 +154,7 @@ ask :: fn(service: ptr[mut Entropy], index: usize) {
     _ = rng.send_request(service.sources[index], service.port, &out)
 }
 
-// What a source has answered, mixed into the stream; a source that's gone, closed.
+/** What a source has answered, mixed into the stream; a source that's gone, closed. */
 take_bytes :: fn(service: ptr[mut Entropy], index: usize, into: ptr[mut os.Incoming]) {
     if index >= service.sources.count {
         return void

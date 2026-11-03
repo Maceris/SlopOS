@@ -1,4 +1,4 @@
-/*
+/**
  * A container service (roadmap 8d, decisions/0089): one per SlopOS container partition, started by the storage manager
  * with a block connection narrowed to the partition, and nothing else. It mounts the container (src/slopfs), owns its
  * space map, its owners and its checkpoints, and serves the container protocol: a connection for each volume, on which
@@ -30,21 +30,21 @@ MAX_CONNECTIONS :: 32
 // A connection's client is bound to the port under its index, and a block connection's driver from DRIVER_KEY
 DRIVER_KEY : u64 : 1000
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
-// 512-byte sectors in a 4 KiB block
+/** 512-byte sectors in a 4 KiB block */
 SECTORS_PER_BLOCK : u64 : 8
-// The most blocks one Allocate asks for: a node's or a chunk's, with room
+/** The most blocks one Allocate asks for: a node's or a chunk's, with room */
 MAX_ALLOCATE : u64 : 256
 
 Kind :: enum {
     Free,
-    // The listener, or another connection not yet for a volume
+    /** The listener, or another connection not yet for a volume */
     Unbound,
     Volume,
-    // A block connection narrowed to a volume's extents
+    /** A block connection narrowed to a volume's extents */
     Blocks,
 }
 
-/*
+/**
  * A connection: a volume's, or a block connection for one, with who wrote a clone's older blocks, and for a snapshot's,
  * the transaction it holds, 0 for the live volume's.
  */
@@ -59,7 +59,7 @@ Connection :: struct {
     snapshot : u64,
 }
 
-/*
+/**
  * An extent a volume has: when it was allocated, whether since its volume's last commit, and whether a snapshot holds
  * it after the volume gave it back.
  */
@@ -195,7 +195,7 @@ flush :: fn(context: rawptr) -> bool {
     return done(call(server.disk, server.disk_port, .Flush(1)))
 }
 
-// Sectors from first moved through the buffer, as much at a time as it holds: into bytes, or from them.
+/** Sectors from first moved through the buffer, as much at a time as it holds: into bytes, or from them. */
 move :: fn(server: ptr[mut Server], first: u64, count: u64, bytes: mut u8[], writing: bool) -> bool {
     per :: server.buffer_bytes / block.BLOCK_BYTES
     if per == 0 || count * block.BLOCK_BYTES > cast[u64](bytes.count) {
@@ -235,7 +235,7 @@ move :: fn(server: ptr[mut Server], first: u64, count: u64, bytes: mut u8[], wri
 
 // Who owns what
 
-/*
+/**
  * Every extent the owners tree says a volume has. The container's own aren't kept here: they change at every commit,
  * and no volume may reach them, so they're never what a check finds.
  */
@@ -282,7 +282,7 @@ load_owned :: fn(server: ptr[mut Server]) -> bool {
     return true
 }
 
-// Where an extent starting at start is, or would go, in the owned list.
+/** Where an extent starting at start is, or would go, in the owned list. */
 owned_index :: fn(server: ptr[Server], start: u64) -> usize {
     low : usize = 0
     high := server.owned.count
@@ -299,7 +299,7 @@ owned_index :: fn(server: ptr[Server], start: u64) -> usize {
     return low
 }
 
-// Whether it could be kept: false, and nothing changed, without the memory (decisions/0104).
+/** Whether it could be kept: false, and nothing changed, without the memory (decisions/0104). */
 own :: fn(server: ptr[mut Server], start: u64, blocks: u64, owner: u64, birth: u64, fresh: bool) -> bool {
     index :: owned_index(server, start)
     if runtime.array_try_add(&server.owned, Owned.{}) != null {
@@ -322,7 +322,7 @@ own :: fn(server: ptr[mut Server], start: u64, blocks: u64, owner: u64, birth: u
     return true
 }
 
-// The extent holding blocks from first, count of them, whoever's it is, if one does.
+/** The extent holding blocks from first, count of them, whoever's it is, if one does. */
 holding :: fn(server: ptr[Server], first: u64, count: u64) -> Owned? {
     index :: owned_index(server, first + 1)
     if index == 0 || index - 1 >= server.owned.count {
@@ -335,13 +335,13 @@ holding :: fn(server: ptr[Server], first: u64, count: u64) -> Owned? {
     return extent
 }
 
-// Whether owner has blocks from first, count of them, all in one live extent of its own.
+/** Whether owner has blocks from first, count of them, all in one live extent of its own. */
 owns :: fn(server: ptr[Server], owner: u64, first: u64, count: u64) -> bool {
     extent :: holding(server, first, count) or_return false
     return extent.owner == owner && !extent.dead
 }
 
-/*
+/**
  * Whether a connection may read blocks from first, count of them: its volume's own live extents, or for a snapshot's,
  * what the volume had by the snapshot's transaction, dead or not; and for a clone, its origins' up to what their
  * snapshots hold.
@@ -359,13 +359,15 @@ may_read :: fn(server: ptr[Server], connection: ptr[Connection], first: u64, cou
     return false
 }
 
-// Whether a connection may write blocks from first, count of them: only what its live volume allocated since its last commit.
+/**
+ * Whether a connection may write blocks from first, count of them: only what its live volume allocated since its last commit.
+ */
 may_write :: fn(server: ptr[Server], connection: ptr[Connection], first: u64, count: u64) -> bool {
     extent :: holding(server, first, count) or_return false
     return connection.snapshot == 0 && extent.owner == connection.volume && extent.fresh && !extent.dead
 }
 
-// Every extent of a volume's allocated since its last commit, committed now.
+/** Every extent of a volume's allocated since its last commit, committed now. */
 settle_fresh :: fn(server: ptr[mut Server], volume: u64) {
     for &extent in server.owned {
         if extent.owner == volume {
@@ -374,7 +376,7 @@ settle_fresh :: fn(server: ptr[mut Server], volume: u64) {
     }
 }
 
-// An extent a volume gave back marked dead, or live again, as a snapshot holds it or no longer does.
+/** An extent a volume gave back marked dead, or live again, as a snapshot holds it or no longer does. */
 mark_dead :: fn(server: ptr[mut Server], start: u64, dead: bool) {
     index :: owned_index(server, start)
     if index < server.owned.count && server.owned[index].start == start {
@@ -382,7 +384,7 @@ mark_dead :: fn(server: ptr[mut Server], start: u64, dead: bool) {
     }
 }
 
-// An extent no one has any more, whoever had it.
+/** An extent no one has any more, whoever had it. */
 forget :: fn(server: ptr[mut Server], start: u64) {
     index :: owned_index(server, start)
     if index < server.owned.count && server.owned[index].start == start {
@@ -390,7 +392,7 @@ forget :: fn(server: ptr[mut Server], start: u64) {
     }
 }
 
-// An extent owner had exactly, given back: whether it was owner's.
+/** An extent owner had exactly, given back: whether it was owner's. */
 disown :: fn(server: ptr[mut Server], owner: u64, start: u64, blocks: u64) -> bool {
     index :: owned_index(server, start)
     if index >= server.owned.count {
@@ -473,7 +475,7 @@ serve :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     }
 }
 
-// A container connection's requests, until it has none.
+/** A container connection's requests, until it has none. */
 serve_container :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
@@ -545,7 +547,7 @@ serve_container :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.In
     }
 }
 
-// Where '@' is in a name, which splits a volume's from its snapshot's, or its count if it isn't there.
+/** Where '@' is in a name, which splits a volume's from its snapshot's, or its count if it isn't there. */
 at_of :: fn(name: u8[]) -> usize {
     for byte, i in name {
         if byte == cast[u8]('@') {
@@ -555,7 +557,7 @@ at_of :: fn(name: u8[]) -> usize {
     return name.count
 }
 
-// The volume named name: its ID, or null.
+/** The volume named name: its ID, or null. */
 volume_named :: fn(server: ptr[mut Server], name: u8[]) -> u64? {
     match slopfs.find_volume_named(server.container, name) {
         case Ok(found) => return found
@@ -563,7 +565,7 @@ volume_named :: fn(server: ptr[mut Server], name: u8[]) -> u64? {
     }
 }
 
-/*
+/**
  * A connection for the volume named name, or for "volume@snapshot", its snapshot's, read only. Each knows who wrote
  * a clone's older blocks, for its reads.
  */
@@ -596,7 +598,7 @@ open_volume :: fn(server: ptr[mut Server], name: u8[]) -> container.Response {
     return .OpenedVolume(os.Channel[container.Container].{end = pair.b})
 }
 
-// A volume's snapshot taken, of what its last commit left, durable at once.
+/** A volume's snapshot taken, of what its last commit left, durable at once. */
 take_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[], now: u64) -> container.Response {
     id :: volume_named(server, volume) or_return .NoVolume
     match slopfs.take_snapshot(server.container, id, name, now) {
@@ -606,7 +608,7 @@ take_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[], now: u64)
     return commit_own(server)
 }
 
-// A volume's snapshot deleted, and what only it held freed, durable at once.
+/** A volume's snapshot deleted, and what only it held freed, durable at once. */
 delete_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[]) -> container.Response {
     id :: volume_named(server, volume) or_return .NoVolume
     freed : slopfs.Extent[..]
@@ -623,7 +625,7 @@ delete_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[]) -> cont
     return commit_own(server)
 }
 
-// A volume's snapshot by its place among them, its name in out.
+/** A volume's snapshot by its place among them, its name in out. */
 snapshot_at :: fn(server: ptr[mut Server], volume: u8[], index: u64, out: ptr[mut os.Outgoing]) -> container.Response {
     id :: volume_named(server, volume) or_return .NoVolume
     snapshots : slopfs.NumberedSnapshot[..]
@@ -639,7 +641,7 @@ snapshot_at :: fn(server: ptr[mut Server], volume: u8[], index: u64, out: ptr[mu
         created = cast[u64](found.created)})
 }
 
-// A new volume cloned from a volume's snapshot, durable at once.
+/** A new volume cloned from a volume's snapshot, durable at once. */
 clone :: fn(server: ptr[mut Server], volume: u8[], snapshot: u8[], name: u8[], now: u64) -> container.Response {
     id :: volume_named(server, volume) or_return .NoVolume
     match slopfs.clone_snapshot(server.container, id, snapshot, name, now) {
@@ -652,7 +654,7 @@ clone :: fn(server: ptr[mut Server], volume: u8[], snapshot: u8[], name: u8[], n
 }
 
 // The container's own changes committed: a snapshot, a deletion or a clone.
-/*
+/**
  * A new volume, named name, with cipher, registered with nothing in it and made durable (decisions/0141): its name hash
  * key drawn here, and everything that opens it left to the volume server that first serves it.
  */
@@ -686,7 +688,7 @@ commit_own :: fn(server: ptr[mut Server]) -> container.Response {
     }
 }
 
-// A request on a volume's connection, or a snapshot's, at index.
+/** A request on a volume's connection, or a snapshot's, at index. */
 for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Request) -> container.Response {
     if index >= server.connections.count {
         return .NotAVolume
@@ -847,7 +849,7 @@ for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Reque
  * A connection of its own to the driver, through the container's partition, for a volume's server: its reads and
  * writes checked against the volume's extents, the driver's buffer its own, so data moves with no copies here.
  */
-// A block connection for the volume connection at index, reading and writing what it may.
+/** A block connection for the volume connection at index, reading and writing what it may. */
 open_blocks :: fn(server: ptr[mut Server], index: usize) -> container.Response {
     if index >= server.connections.count {
         return .NotAVolume
@@ -883,7 +885,9 @@ open_blocks :: fn(server: ptr[mut Server], index: usize) -> container.Response {
     return .Blocks(os.Channel[block.Block].{end = pair.b})
 }
 
-// A block connection's requests: reads and writes inside the volume's extents passed to the driver, the rest answered.
+/**
+ * A block connection's requests: reads and writes inside the volume's extents passed to the driver, the rest answered.
+ */
 serve_blocks :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
@@ -939,7 +943,7 @@ serve_blocks :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incom
     }
 }
 
-// Whether a transfer's sectors are all in one extent the connection may read, or write.
+/** Whether a transfer's sectors are all in one extent the connection may read, or write. */
 in_volume :: fn(server: ptr[Server], connection: ptr[Connection], transfer: block.Transfer, writing: bool) -> bool {
     if transfer.first % SECTORS_PER_BLOCK != 0 || cast[u64](transfer.count) % SECTORS_PER_BLOCK != 0 || transfer.count == 0 {
         return false
@@ -949,7 +953,7 @@ in_volume :: fn(server: ptr[Server], connection: ptr[Connection], transfer: bloc
     return if writing { may_write(server, connection, first, count) } else { may_read(server, connection, first, count) }
 }
 
-// What the driver answered a block connection's requests, back to its client.
+/** What the driver answered a block connection's requests, back to its client. */
 pass_back :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void

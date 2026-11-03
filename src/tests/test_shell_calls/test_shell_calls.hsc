@@ -1,4 +1,4 @@
-/*
+/**
  * test_shell_calls (decisions/0170, 0172): a program the shell calls through its manifest, taking a connection to the
  * shell's terminal, values of several types, some optional, and a directory beneath the shell's home. It writes what it
  * was given on one line, and ends with 0, or, given the label "fail", with its count. In a pipeline: given an output, it
@@ -76,7 +76,7 @@ main :: fn(session_terminal: os.Channel[protocol.Terminal], count: u64, label: s
     return 0
 }
 
-// Rows written: each one read, its id times ten, or count of them made, named after label.
+/** Rows written: each one read, its id times ten, or count of them made, named after label. */
 write_rows :: fn(sink: os.Sink[Row], input: os.Stream[Row]?, count: u64, label: string) -> int {
     writer := stream.writer_on(sink) or_return 4
     match input {

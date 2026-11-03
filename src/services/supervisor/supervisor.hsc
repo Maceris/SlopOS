@@ -1,4 +1,4 @@
-/*
+/**
  * The supervisor (decisions/0017, 0058, 0067, 0068, 0074, 0075, 0076, 0077): it starts the services the system configuration gives
  * it through the process manager, with std/os's launch, each in a process of its own that it owns and pays for from
  * its budget, and tells the root task as each starts and ends, and once all have. Each runs on the CPU budget the
@@ -104,11 +104,11 @@ import virtio_rng from "../../drivers/virtio_rng"
 
 MAX_STARTED :: 24
 MAX_CONNECTORS :: 16
-// Connectors are bound to the port from here on, what it started below
+/** Connectors are bound to the port from here on, what it started below */
 CONNECTOR_KEY : u64 : 1000
-// Drivers' devices are bound from here on, for their DMA faults, each by its index in what it started
+/** Drivers' devices are bound from here on, for their DMA faults, each by its index in what it started */
 FAULT_KEY : u64 : 2000
-// The key of a connection of its own to the storage manager, while it waits on one
+/** The key of a connection of its own to the storage manager, while it waits on one */
 STORAGE_KEY : u64 : 3000
 /*
  * The system volume's connection is watched for its other end closing under this key plus its generation, a number of
@@ -119,13 +119,15 @@ SYSTEM_GENERATIONS : u64 : 1000
 // The timer a lost system volume is opened again on, and how soon after it's tried and fails
 SYSTEM_RETRY_KEY : u64 : 5000
 SYSTEM_RETRY : u64 : 100_000_000
-// The terminal service's session channel (decisions/0139)
-// The supervisor's connections to the root task's services, by RootService's order, watched for their other ends closing
-// (decisions/0140): the process manager's, the platform service's, the scheduler service's
+/**
+ * The terminal service's session channel (decisions/0139)
+ * The supervisor's connections to the root task's services, by RootService's order, watched for their other ends closing
+ * (decisions/0140): the process manager's, the platform service's, the scheduler service's
+ */
 ROOT_SERVICE_KEY : u64 : 7000
-// A connector the supervisor serves to the process manager, which it dials through the root task's
+/** A connector the supervisor serves to the process manager, which it dials through the root task's */
 MANAGER_TARGET :: MAX_STARTED + 1
-// How long a program has to answer a Ping before it's listed as not responding, and to end once it's asked to stop
+/** How long a program has to answer a Ping before it's listed as not responding, and to end once it's asked to stop */
 RESTARTS : u32 : 3
 // How long a restart waits for its service's budget to come back, and what it leaves for the launch itself
 RESTART_BUDGET_WAIT : u64 : 2_000_000_000
@@ -134,13 +136,15 @@ RESTART_WINDOW : u64 : 60_000_000_000
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 NOWHERE : usize : 0xffffffffffffffff
 PAGE : u64 : 4096
-// What test_clock sets the time to: 2030-01-02T03:04:05Z, in nanoseconds since 1970
+/** What test_clock sets the time to: 2030-01-02T03:04:05Z, in nanoseconds since 1970 */
 TEST_CLOCK_TIME : i64 : 1_893_553_445_000_000_000
-// How long test_restart waits once the console has dialed its serial line, for its banner to be shown, before it kills
-// the line's driver, and once it's dialed it again, before it says everything has started
+/**
+ * How long test_restart waits once the console has dialed its serial line, for its banner to be shown, before it kills
+ * the line's driver, and once it's dialed it again, before it says everything has started
+ */
 TEST_RESTART_PAUSE : u64 : 500_000_000
 
-// Which protocol a listener speaks, so a connector dials it with that protocol's Connect.
+/** Which protocol a listener speaks, so a connector dials it with that protocol's Connect. */
 Speaks :: enum {
     Nothing,
     Serial,
@@ -152,7 +156,9 @@ Speaks :: enum {
     Accounts,
 }
 
-// What the clock service is given (clock.main): the real-time clock, its ports or its registers, and the clock page to write.
+/**
+ * What the clock service is given (clock.main): the real-time clock, its ports or its registers, and the clock page to write.
+ */
 ClockGrants :: struct {
     rtc_ports : slop_os.IoPortRange?,
     rtc_registers : slop_os.Memory?,
@@ -160,26 +166,26 @@ ClockGrants :: struct {
     clients : os.Listener[clock_setting.ClockSetting],
 }
 
-// What the events service is given (events_service.main).
+/** What the events service is given (events_service.main). */
 EventsGrants :: struct {
     log : slop_os.DebugLog?,
     clients : os.Listener[events.Events],
 }
 
-// What the bundle store is given (bundle_store_service.main).
+/** What the bundle store is given (bundle_store_service.main). */
 StoreGrants :: struct {
     store : os.Channel[dir.Dir],
     clients : os.Listener[bundle_store.BundleStore],
 }
 
-// What the config store is given (config_service.main).
+/** What the config store is given (config_service.main). */
 ConfigGrants :: struct {
     store : os.Channel[dir.Dir],
     admin : os.Listener[config_protocol.ConfigValue],
     users : os.Listener[config_protocol.ConfigValue]?,
 }
 
-// What the update service is given (update_service.main).
+/** What the update service is given (update_service.main). */
 UpdateGrants :: struct {
     esp : os.Channel[dir.Dir],
     updates : os.Channel[dir.Dir],
@@ -187,7 +193,7 @@ UpdateGrants :: struct {
     clients : os.Listener[update_protocol.Update],
 }
 
-// What hello is given (hello.main).
+/** What hello is given (hello.main). */
 HelloGrants :: struct {
     manager : os.Channel[process_manager.ProcessManager]?,
     console : os.Channel[connector.Connector]?,
@@ -195,12 +201,12 @@ HelloGrants :: struct {
     settings : config_protocol.Config[hello.HelloSettings]?,
 }
 
-// What echo is given (echo.main).
+/** What echo is given (echo.main). */
 EchoGrants :: struct {
     console : os.Channel[connector.Connector],
 }
 
-// What the input service is given (input_service.main).
+/** What the input service is given (input_service.main). */
 InputGrants :: struct {
     log : slop_os.DebugLog?,
     keyboard0 : os.Channel[connector.Connector]?,
@@ -211,7 +217,7 @@ InputGrants :: struct {
     command_line : slop_os.Memory?,
 }
 
-// What the terminal service is given (terminal_service.main).
+/** What the terminal service is given (terminal_service.main). */
 TerminalGrants :: struct {
     log : slop_os.DebugLog?,
     serial_line : os.Channel[connector.Connector]?,
@@ -224,14 +230,14 @@ TerminalGrants :: struct {
     clients : os.Listener[terminal.Terminal],
 }
 
-// What the account service is given (account_service.main).
+/** What the account service is given (account_service.main). */
 AccountGrants :: struct {
     log : slop_os.DebugLog?,
     storage_service : os.Channel[connector.Connector]?,
     clients : os.Listener[accounts.Accounts],
 }
 
-// What the session manager is given (session_manager.main).
+/** What the session manager is given (session_manager.main). */
 SessionGrants :: struct {
     log : slop_os.DebugLog?,
     manager : os.Channel[connector.Connector],
@@ -245,7 +251,7 @@ SessionGrants :: struct {
     clients : os.Listener[session.Session],
 }
 
-// What the disk check is given (disk_check.main).
+/** What the disk check is given (disk_check.main). */
 DiskCheckGrants :: struct {
     log : slop_os.DebugLog?,
     storage : os.Channel[connector.Connector]?,
@@ -255,7 +261,7 @@ DiskCheckGrants :: struct {
 
 MaybeConnector :: os.Channel[connector.Connector]?
 
-// What the storage manager is given (storage_manager.main): connectors to up to four disks.
+/** What the storage manager is given (storage_manager.main): connectors to up to four disks. */
 StorageGrants :: struct {
     log : slop_os.DebugLog?,
     manager : os.Channel[connector.Connector],
@@ -271,7 +277,7 @@ StorageGrants :: struct {
     command_line : slop_os.Memory?,
 }
 
-// What a virtio-rng driver is given (virtio_rng.main): its device, and a connection to the entropy service.
+/** What a virtio-rng driver is given (virtio_rng.main): its device, and a connection to the entropy service. */
 VirtioRngGrants :: struct {
     log : slop_os.DebugLog?,
     device : slop_os.Device,
@@ -286,7 +292,7 @@ VirtioRngGrants :: struct {
     entropy_service : os.Channel[entropy.Entropy]?,
 }
 
-// What a driver that's given only its device is given (edu_dma.main).
+/** What a driver that's given only its device is given (edu_dma.main). */
 DeviceGrants :: struct {
     log : slop_os.DebugLog?,
     device : slop_os.Device,
@@ -300,8 +306,10 @@ DeviceGrants :: struct {
     domain : slop_os.DmaDomain,
 }
 
-// What a driver that serves clients is given (virtio_console.main, virtio_blk.main, virtio_input.main): its device, and a
-// listener for them.
+/**
+ * What a driver that serves clients is given (virtio_console.main, virtio_blk.main, virtio_input.main): its device, and a
+ * listener for them.
+ */
 ServingGrants :: struct[P] {
     log : slop_os.DebugLog?,
     device : slop_os.Device,
@@ -316,7 +324,7 @@ ServingGrants :: struct[P] {
     clients : os.Listener[P],
 }
 
-// The modules of what the supervisor starts.
+/** The modules of what the supervisor starts. */
 Modules :: struct {
     events : slop_os.Memory?,
     bundle_store : slop_os.Memory?,
@@ -341,7 +349,7 @@ Modules :: struct {
     volume_server : slop_os.Memory?,
 }
 
-// Something it started.
+/** Something it started. */
 Started :: struct {
     name : string,
     process : slop_os.Process,
@@ -355,17 +363,17 @@ Started :: struct {
     address : u32,
     restarts : u32,
     restarts_since : u64,
-    // A driver's: a handle to its Device, which the port watches for its DMA faults; NO_HANDLE without
+    /** A driver's: a handle to its Device, which the port watches for its DMA faults; NO_HANDLE without */
     watch : slop_os.Handle,
-    // The clock service, a driver whose device is the real-time clock
+    /** The clock service, a driver whose device is the real-time clock */
     clock : bool,
     // Its program's budget, closed once it's ended, so what it had comes back; and its ring for its log records, which
     // the supervisor owns, given back to the events service once it's ended
     budget : slop_os.MemoryBudget,
     ring : slop_os.Memory,
-    // Ended, and not to be started again
+    /** Ended, and not to be started again */
     done : bool,
-    // The code it last ended with
+    /** The code it last ended with */
     code : u64,
     // The supervisor's end of its lifecycle channel, NONE without; whether it's one of the console's programs, which the
     // trusted path lists and may end; and whether it was ended so, and isn't started again
@@ -374,17 +382,17 @@ Started :: struct {
     ended_on_request : bool,
 }
 
-// The most services a boot's assessment notes missing besides those that ended for good
+/** The most services a boot's assessment notes missing besides those that ended for good */
 MAX_MISSING :: 16
 
-// A service the system needs that isn't up (decisions/0115): which, why, and the code that says more, or 0.
+/** A service the system needs that isn't up (decisions/0115): which, why, and the code that says more, or 0. */
 Missing :: struct {
     name : string,
     reason : string,
     code : u64,
 }
 
-// A connector the supervisor serves: its end, what it dials, by index in started, and how many times it has.
+/** A connector the supervisor serves: its end, what it dials, by index in started, and how many times it has. */
 Connector :: struct {
     end : slop_os.Channel,
     target : usize,
@@ -417,8 +425,10 @@ Supervisor :: struct {
     launched_budget : slop_os.MemoryBudget,
     launched_ring : slop_os.Memory,
     launched_lifecycle : slop_os.Channel,
-    // Its end of the terminal service's session channel, NONE without, and the boot before's panic record, for the
-    // terminal service to show
+    /**
+     * Its end of the terminal service's session channel, NONE without, and the boot before's panic record, for the
+     * terminal service to show
+     */
     last_panic : slop_os.Memory?,
     // Its end of the events service's listener, NONE without
     events_end : slop_os.Channel,
@@ -429,12 +439,12 @@ Supervisor :: struct {
     // Its connection closed, and it's to be opened again; and whether it's being opened, which waits on the port meanwhile
     system_lost : bool,
     system_opening : bool,
-    // The kernel's command line, to give on to the storage manager, which reads its test words
+    /** The kernel's command line, to give on to the storage manager, which reads its test words */
     command_line : slop_os.Memory?,
     // Its end of the bundle store's listener, NONE without
     store_end : slop_os.Channel,
     store_port : slop_os.Port,
-    // The config store's admin connection
+    /** The config store's admin connection */
     config_end : slop_os.Channel,
     // The update service's connection, NONE without one; the generation booted, 0 for none, and the store's root it boots with
     // Its connection to the system's installations in the config store, NONE until it's made
@@ -465,22 +475,24 @@ Supervisor :: struct {
     // The account service's entry, for the terminal service's first-boot setup (decisions/0148), and the session manager's
     accounts : usize,
     sessions : usize,
-    // The config store's connection for users' values, kept for the session manager
+    /** The config store's connection for users' values, kept for the session manager */
     config_users : slop_os.Channel,
     // The system volume's root, once the storage manager has given it, where programs outside the boot set come from
     system : slop_os.Channel,
     system_port : slop_os.Port,
-    // Programs read from the system volume, by their services' places in the system configuration
+    /** Programs read from the system volume, by their services' places in the system configuration */
     loaded : Loaded[MAX_LOADED],
-    // The system configuration: the boot set's, which the root task gives it, with the config store's override once
-    // it's read (decisions/0110)
+    /**
+     * The system configuration: the boot set's, which the root task gives it, with the config store's override once
+     * it's read (decisions/0110)
+     */
     records : ptr[mut system_records.SystemRecords],
-    // The boot set's, as the root task gave it, which an override is applied to
+    /** The boot set's, as the root task gave it, which an override is applied to */
     boot_records : ptr[system_records.SystemRecords],
     // What a boot's assessment finds missing besides what ended for good: what didn't start, was skipped, or was late
     missing : Missing[MAX_MISSING],
     missing_count : usize,
-    // When it started, from which each service's deadline counts
+    /** When it started, from which each service's deadline counts */
     started_at : u64,
     // Its connection to the system configuration's override in the config store, once it's had one
     overrides_end : slop_os.Channel,
@@ -490,7 +502,7 @@ Supervisor :: struct {
     substitutions_port : slop_os.Port,
 }
 
-// A service of the system configuration's, as the supervisor starts it.
+/** A service of the system configuration's, as the supervisor starts it. */
 Service :: struct {
     name : string,
     module : string,
@@ -502,7 +514,7 @@ Service :: struct {
     not_restarted : bool,
 }
 
-// The system configuration's service at index, or null.
+/** The system configuration's service at index, or null. */
 service_at :: fn(supervisor: ptr[Supervisor], index: usize) -> Service? {
     records :: supervisor.records
     if index >= cast[usize](records.service_count) || index >= records.services.count {
@@ -514,17 +526,17 @@ service_at :: fn(supervisor: ptr[Supervisor], index: usize) -> Service? {
         trusted_with_dma = record.trusted_with_dma == 1, boot_set = record.boot_set == 1, not_restarted = record.not_restarted == 1}
 }
 
-// The system configuration's service named name, or null.
+/** The system configuration's service named name, or null. */
 service_named :: fn(supervisor: ptr[Supervisor], name: string) -> Service? {
     return service_at(supervisor, system_records.index_of(supervisor.records, name))
 }
 
-// Whether a service is a driver, with devices it takes.
+/** Whether a service is a driver, with devices it takes. */
 is_driver :: fn(service: Service) -> bool {
     return service.devices.vendor != 0 || service.devices.device != 0 || service.devices.class != 0
 }
 
-// A program read from the system volume, if it's been read.
+/** A program read from the system volume, if it's been read. */
 Loaded :: struct {
     module : slop_os.Memory?,
 }
@@ -764,7 +776,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     }
 }
 
-/*
+/**
  * What arrives on the port: something it started ending, and connectors' Dials. Every connector is read until it's
  * empty, as each is once it's made, since only a read that finds nothing has a channel's next message wake the port.
  */
@@ -772,7 +784,7 @@ wait_and_handle :: fn(supervisor: ptr[mut Supervisor]) {
     wait_and_handle_until(supervisor, slop_os.NO_DEADLINE)
 }
 
-// wait_and_handle's, waiting no later than deadline.
+/** wait_and_handle's, waiting no later than deadline. */
 wait_and_handle_until :: fn(supervisor: ptr[mut Supervisor], deadline: u64) {
     packets : slop_os.Packet[8]
     taken :: slop_os.port_wait(supervisor.port, packets, deadline) or_else 0
@@ -814,7 +826,7 @@ wait_and_handle_until :: fn(supervisor: ptr[mut Supervisor], deadline: u64) {
     }
 }
 
-// Something it started has ended with code: a driver that crashed or was killed, started again while it may be.
+/** Something it started has ended with code: a driver that crashed or was killed, started again while it may be. */
 ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
     if index >= supervisor.started.count {
         return void
@@ -893,7 +905,7 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
     }
 }
 
-/*
+/**
  * Until the supervisor's budget has bytes to split off, or RESTART_BUDGET_WAIT has passed: what the last process had
  * comes back once its subtree is gone and a grace period has passed, and a big service's budget can't be split off
  * twice.
@@ -912,7 +924,7 @@ wait_for_budget :: fn(supervisor: ptr[mut Supervisor], bytes: u64) {
     }
 }
 
-// A service that isn't a driver, started again into its entry at index, as it was started.
+/** A service that isn't a driver, started again into its entry at index, as it was started. */
 restart_service :: fn(supervisor: ptr[mut Supervisor], index: usize) {
     name :: supervisor.started[index % supervisor.started.count].name
     if name == "events" {
@@ -951,7 +963,7 @@ restart_service :: fn(supervisor: ptr[mut Supervisor], index: usize) {
     }
 }
 
-/*
+/**
  * What's started under name, into its entry at again if that isn't NOWHERE, a restart, or a new one: its index, or
  * MAX_STARTED if there's no room for it.
  */
@@ -974,7 +986,7 @@ place :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process: s
     return again
 }
 
-/*
+/**
  * The storage manager at storage_slot's SlopOS container's system volume, where programs outside the boot set come
  * from, given to the events service to keep records in, and to the bundle store, started the first time. Its
  * connection is watched, and opened again when it closes, as when the volume's server is started again (decisions/0098).
@@ -1035,7 +1047,7 @@ open_system :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
     }
 }
 
-/*
+/**
  * The boot's assessment (decisions/0115), once everything has started: every service the system needs, any that isn't
  * late, is up, but those that ended for good with a code that isn't 0, and those noted missing: it's healthy, or
  * degraded. A degraded boot is logged, said to the root task, and its record written to the system volume as
@@ -1084,7 +1096,7 @@ assess :: fn(supervisor: ptr[mut Supervisor]) -> bool {
     return false
 }
 
-/*
+/**
  * The update service, when there's an ESP and the bundle store: given the ESP's root, the system volume's updates
  * directory, a connection to the store, and a listener whose other end the supervisor keeps; into its entry at again,
  * unless that's NOWHERE.
@@ -1124,8 +1136,10 @@ start_update :: fn(supervisor: ptr[mut Supervisor], again: usize) {
  * system's list, written to the config store from the build's the first time.
  */
 
-// The system's list in the config store, the build's written if there's none yet, and a connection of its own to it for
-// the session manager; null without the config store.
+/**
+ * The system's list in the config store, the build's written if there's none yet, and a connection of its own to it for
+ * the session manager; null without the config store.
+ */
 installations_for_sessions :: fn(supervisor: ptr[mut Supervisor]) -> config_protocol.Config[system_records.Installations]? {
     settings :: installations_connection(supervisor) or_return null
     value := os.Outgoing.{}
@@ -1139,7 +1153,9 @@ installations_for_sessions :: fn(supervisor: ptr[mut Supervisor]) -> config_prot
     return config_for[system_records.Installations](supervisor, "system", "installations")
 }
 
-// A connection of its own to the bundle store, its one end sent to the store, which takes it without answering; null without one.
+/**
+ * A connection of its own to the bundle store, its one end sent to the store, which takes it without answering; null without one.
+ */
 store_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[bundle_store.BundleStore]? {
     if supervisor.store_end == NONE {
         return null
@@ -1154,7 +1170,7 @@ store_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[bundle_sto
     return os.Channel[bundle_store.BundleStore].{end = pair.b}
 }
 
-// A read-only copy of the boot's command line, for a service that reads its test words; null without one.
+/** A read-only copy of the boot's command line, for a service that reads its test words; null without one. */
 command_line_copy :: fn(supervisor: ptr[mut Supervisor]) -> slop_os.Memory? {
     text :: supervisor.command_line or_return null
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
@@ -1164,7 +1180,7 @@ command_line_copy :: fn(supervisor: ptr[mut Supervisor]) -> slop_os.Memory? {
     }
 }
 
-// The system's installations written to the config store, marked written: whether it kept them.
+/** The system's installations written to the config store, marked written: whether it kept them. */
 write_installations :: fn(supervisor: ptr[mut Supervisor], list: system_records.Installations) -> bool {
     settings :: installations_connection(supervisor) or_return false
     written := list
@@ -1179,7 +1195,7 @@ write_installations :: fn(supervisor: ptr[mut Supervisor], list: system_records.
     return config_protocol.write(settings, supervisor.installations_port, os.value_bytes(&value), fields) is_ok
 }
 
-// The supervisor's connection to the system's installations, declared, made the first time: null without one.
+/** The supervisor's connection to the system's installations, declared, made the first time: null without one. */
 installations_connection :: fn(supervisor: ptr[mut Supervisor]) -> config_protocol.Config[system_records.Installations]? {
     if supervisor.installations_end != NONE {
         return config_protocol.Config[system_records.Installations].{end = supervisor.installations_end}
@@ -1196,7 +1212,7 @@ installations_connection :: fn(supervisor: ptr[mut Supervisor]) -> config_protoc
     return settings
 }
 
-// The boot's assessment told to the update service, if there's one, and its acting on it waited for: its answer.
+/** The boot's assessment told to the update service, if there's one, and its acting on it waited for: its answer. */
 tell_update :: fn(supervisor: ptr[mut Supervisor], healthy: bool) -> update_protocol.Response {
     if supervisor.update_end == NONE {
         return .Unsupported
@@ -1207,7 +1223,7 @@ tell_update :: fn(supervisor: ptr[mut Supervisor], healthy: bool) -> update_prot
     return update_protocol.ask(supervisor.update_end, supervisor.update_port, &out, &into)
 }
 
-/*
+/**
  * A generation that changes only services applied live (decisions/0123, 0126): its store root the supervisor's from
  * now on, and each running service from the store whose bundle's program changed started again from it, between its
  * clients' requests, which redial through their connectors. Then the update service is told it as booted, healthy if
@@ -1252,7 +1268,7 @@ apply_live :: fn(supervisor: ptr[mut Supervisor], live: update_protocol.LiveOf) 
     _ = tell_update(supervisor, healthy)
 }
 
-// A module's name without its extension, as the store's boot root names its bundle.
+/** A module's name without its extension, as the store's boot root names its bundle. */
 program_name :: fn(module: string) -> string {
     for character, i in module {
         if character == '.' {
@@ -1262,7 +1278,7 @@ program_name :: fn(module: string) -> string {
     return module
 }
 
-// A service the system needs noted missing, unless it's late, or noted already, or there's no room left to note it.
+/** A service the system needs noted missing, unless it's late, or noted already, or there's no room left to note it. */
 note_missing :: fn(supervisor: ptr[mut Supervisor], name: string, reason #escaping : string, code: u64) {
     // Its name as the system records keep it, which outlives the caller's
     service :: system_records.service_of(supervisor.records, name) or_return void
@@ -1282,13 +1298,13 @@ note_missing :: fn(supervisor: ptr[mut Supervisor], name: string, reason #escapi
     }
 }
 
-// When the service named name has to be up by, from when the supervisor started.
+/** When the service named name has to be up by, from when the supervisor started. */
 deadline_of :: fn(supervisor: ptr[Supervisor], name: string) -> u64 {
     service :: system_records.service_of(supervisor.records, name) or_return slop_os.NO_DEADLINE
     return supervisor.started_at + system_records.deadline_of(supervisor.records, service)
 }
 
-/*
+/**
  * test_restart_services: the events service, the clock service and the storage manager, if it was started, each killed
  * and checked once it's back: the events service by a record of the clock service's, started again after it, the clock
  * service by setting the time, and the storage manager by giving the system volume again.
@@ -1360,7 +1376,7 @@ restart_services :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
     }
 }
 
-// What's started under name killed, and waited for until it's been started again: whether it has.
+/** What's started under name killed, and waited for until it's been started again: whether it has. */
 kill_and_wait :: fn(supervisor: ptr[mut Supervisor], name: string, test: string) -> bool {
     index := NOWHERE
     for entry, i in supervisor.started {
@@ -1383,7 +1399,9 @@ kill_and_wait :: fn(supervisor: ptr[mut Supervisor], name: string, test: string)
     return supervisor.started[index].running
 }
 
-// A driver whose device's DMA an IOMMU blocked, at address: killed, if it's running, and so started again as one that crashed.
+/**
+ * A driver whose device's DMA an IOMMU blocked, at address: killed, if it's running, and so started again as one that crashed.
+ */
 dma_fault :: fn(supervisor: ptr[mut Supervisor], index: usize, address: u64) {
     entry :: &supervisor.started[index % supervisor.started.count]
     if !entry.running {
@@ -1395,7 +1413,7 @@ dma_fault :: fn(supervisor: ptr[mut Supervisor], index: usize, address: u64) {
     entry.running = false
 }
 
-// Whether what's named name was started and has ended for good, or wasn't started.
+/** Whether what's named name was started and has ended for good, or wasn't started. */
 ended_for_good :: fn(supervisor: ptr[Supervisor], name: string) -> bool {
     for entry, i in supervisor.started {
         if i < supervisor.started_count && entry.name == name {
@@ -1405,7 +1423,7 @@ ended_for_good :: fn(supervisor: ptr[Supervisor], name: string) -> bool {
     return true
 }
 
-/*
+/**
  * A driver for a device, the service at index in SERVICES, with what it holds of the device; into the started entry
  * again, a restart, unless again is NOWHERE. The device's handles go to it, or are closed.
  */
@@ -1506,7 +1524,7 @@ start_driver :: fn(supervisor: ptr[mut Supervisor], index: usize, device: platfo
     }
 }
 
-// A channel for a driver's listener, or null with the device closed.
+/** A channel for a driver's listener, or null with the device closed. */
 listener_for :: fn[P](supervisor: ptr[mut Supervisor], device: ptr[platform.PciDevice]) -> slop_os.ChannelPair? {
     match os.channel_for[P](supervisor.block.budget, 0) {
         case Ok(made) => return made
@@ -1553,7 +1571,7 @@ launch_device_only :: fn(supervisor: ptr[mut Supervisor], service: Service, devi
     }
 }
 
-/*
+/**
  * A connection of its own to the entropy service, for a program the supervisor starts (decisions/0101), through the
  * supervisor's; null without one. The port the Connect is sent with is closed after it, taking its binding with it.
  */
@@ -1569,14 +1587,14 @@ entropy_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[entropy.
     return os.Channel[entropy.Entropy].{end = channel}
 }
 
-// A connection through one of the root task's connectors, its answer waited for on a port of the dial's own.
+/** A connection through one of the root task's connectors, its answer waited for on a port of the dial's own. */
 dial_through :: fn(supervisor: ptr[mut Supervisor], through: slop_os.Channel) -> slop_os.Channel? {
     port :: os.port_for(supervisor.block.budget, through) or_return null
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     return connector.dial_raw(through, port)
 }
 
-/*
+/**
  * The supervisor's connection to one of the root task's services, dialed through its connector in place of one that's
  * gone (decisions/0140), and watched for its other end closing: 0 the process manager, 1 the platform service, 2 the
  * scheduler service. Whether there's one.
@@ -1615,7 +1633,9 @@ dial_root_service :: fn(supervisor: ptr[mut Supervisor], which: usize) -> bool {
     return true
 }
 
-// A driver for a virtio entropy device, with a connection of its own to the entropy service: its process, or NO_HANDLE.
+/**
+ * A driver for a virtio entropy device, with a connection of its own to the entropy service: its process, or NO_HANDLE.
+ */
 launch_virtio_rng :: fn(supervisor: ptr[mut Supervisor], service: Service, device: platform.PciDevice) -> slop_os.Process {
     grants := VirtioRngGrants.{log = duplicate_log(supervisor), device = device.device, config = device.config, domain = device.domain,
         bar0 = optional(device.bar0), bar1 = optional(device.bar1), bar2 = optional(device.bar2), bar3 = optional(device.bar3),
@@ -1635,7 +1655,7 @@ launch_virtio_rng :: fn(supervisor: ptr[mut Supervisor], service: Service, devic
  * A service's program: one outside the boot set from the system volume, read once and kept, once the storage manager
  * has given it; otherwise, or where it isn't there, the bootloader's module.
  */
-/*
+/**
  * What launching the service named name does beyond its grants: watch its end, run it on the CPU budget the scheduler
  * service gives it, and give it the clock page, read-only, and a ring for its log records.
  */
@@ -1689,7 +1709,7 @@ options_for :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.LaunchOpt
     return options
 }
 
-/*
+/**
  * A ring a program that's ended had, given back to the events service, which reads its last records and closes it; or
  * closed, without one.
  */
@@ -1711,7 +1731,7 @@ retire_ring :: fn(supervisor: ptr[mut Supervisor], ring: slop_os.Memory) {
     _ = slop_os.handle_close(cast[slop_os.Handle](ring))
 }
 
-/*
+/**
  * The rings of what's still running given to an events service started again into its entry at events_slot, as the
  * last one's went with it, so it reads their records from where that one stopped.
  */
@@ -1736,21 +1756,23 @@ adopt_rings :: fn(supervisor: ptr[mut Supervisor], events_slot: usize) {
     }
 }
 
-// The lifecycle channel kept for the program launched last, for its entry.
+/** The lifecycle channel kept for the program launched last, for its entry. */
 take_lifecycle :: fn(supervisor: ptr[mut Supervisor]) -> slop_os.Channel {
     end :: supervisor.launched_lifecycle
     supervisor.launched_lifecycle = NONE
     return end
 }
 
-// The ring kept for the program launched last, for its entry.
+/** The ring kept for the program launched last, for its entry. */
 take_ring :: fn(supervisor: ptr[mut Supervisor]) -> slop_os.Memory {
     ring :: supervisor.launched_ring
     supervisor.launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE)
     return ring
 }
 
-// The events service, with a listener whose other end the supervisor keeps; into its entry at again, unless that's NOWHERE.
+/**
+ * The events service, with a listener whose other end the supervisor keeps; into its entry at again, unless that's NOWHERE.
+ */
 start_events :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     service :: service_named(supervisor, "events") or_return void
     // The last one's end, which went with it
@@ -1789,7 +1811,7 @@ start_events :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     }
 }
 
-/*
+/**
  * The bundle store, with the system volume's "store" directory, made if it isn't there, and a listener whose other end
  * the supervisor keeps; into its entry at again, unless that's NOWHERE.
  */
@@ -1817,7 +1839,7 @@ start_store :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     }
 }
 
-/*
+/**
  * The config store, with the system volume's "config" directory, made if it isn't there, and a listener whose other
  * end the supervisor keeps, which it asks for programs' connections to their values on; into its entry at again,
  * unless that's NOWHERE.
@@ -1866,7 +1888,7 @@ config_request :: fn(supervisor: ptr[mut Supervisor], request: config_protocol.R
     return config_protocol.ask(supervisor.config_end, supervisor.config_port, &out, &into)
 }
 
-// A connection to owner's value name in the config store, for its program: null without a config store.
+/** A connection to owner's value name in the config store, for its program: null without a config store. */
 config_for :: fn[T](supervisor: ptr[mut Supervisor], owner: string, name: string) -> config_protocol.Config[T]? {
     if supervisor.config_end == NONE {
         return null
@@ -1881,7 +1903,7 @@ config_for :: fn[T](supervisor: ptr[mut Supervisor], owner: string, name: string
     }
 }
 
-/*
+/**
  * The system configuration's override, the config store's value "services" of owner "system" (decisions/0110), read
  * and applied to the boot set's: what the supervisor starts from then on is started as the override says, if
  * system_records.apply takes it; the boot set's as it is if it doesn't. Read once the config store has started, as
@@ -1910,7 +1932,9 @@ read_overrides :: fn(supervisor: ptr[mut Supervisor]) {
     log_line.write(supervisor.log, "supervisor: the system configuration's override tunes % services", overrides.count)
 }
 
-// The supervisor's connection to the system configuration's override, declared, made the first time: null without one.
+/**
+ * The supervisor's connection to the system configuration's override, declared, made the first time: null without one.
+ */
 overrides_connection :: fn(supervisor: ptr[mut Supervisor]) -> config_protocol.Config[system_records.SystemOverrides]? {
     if supervisor.overrides_end != NONE {
         return config_protocol.Config[system_records.SystemOverrides].{end = supervisor.overrides_end}
@@ -1931,7 +1955,7 @@ overrides_connection :: fn(supervisor: ptr[mut Supervisor]) -> config_protocol.C
     return settings
 }
 
-/*
+/**
  * An override of the system configuration written, if system_records.apply takes it over the boot set's: whether it
  * did, and the store kept it.
  */
@@ -1947,7 +1971,7 @@ write_overrides :: fn(supervisor: ptr[mut Supervisor], overrides: system_records
     return config_protocol.write(settings, supervisor.overrides_port, os.value_bytes(&value), fields) is_ok
 }
 
-/*
+/**
  * The substitution policy the config store asks for, its value "substitutions" of owner "system" (decisions/0123,
  * 0125), read: what the update service is told after a healthy boot, and stages a generation with if it's new. Nothing
  * applies it live; the root task applies a generation's policy at boot. An empty policy without one.
@@ -1965,7 +1989,7 @@ read_substitutions :: fn(supervisor: ptr[mut Supervisor]) -> bundle.Substitution
     return os.typed_value[bundle.Substitutions](os.value_bytes(&value))^
 }
 
-// The substitution policy passed on to the update service, for the generation booted: its answer.
+/** The substitution policy passed on to the update service, for the generation booted: its answer. */
 ask_substitute :: fn(supervisor: ptr[mut Supervisor], policy: bundle.Substitutions) -> update_protocol.Response {
     if supervisor.update_end == NONE || supervisor.generation == 0 {
         return .Unsupported
@@ -1976,7 +2000,7 @@ ask_substitute :: fn(supervisor: ptr[mut Supervisor], policy: bundle.Substitutio
     return update_protocol.ask(supervisor.update_end, supervisor.update_port, &out, &into)
 }
 
-// The supervisor's connection to the substitution policy, declared, made the first time: null without one.
+/** The supervisor's connection to the substitution policy, declared, made the first time: null without one. */
 substitutions_connection :: fn(supervisor: ptr[mut Supervisor]) -> config_protocol.Config[bundle.Substitutions]? {
     if supervisor.substitutions_end != NONE {
         return config_protocol.Config[bundle.Substitutions].{end = supervisor.substitutions_end}
@@ -1997,7 +2021,7 @@ substitutions_connection :: fn(supervisor: ptr[mut Supervisor]) -> config_protoc
     return settings
 }
 
-// The substitution policy written, unchecked: the update service checks it. Whether the store kept it.
+/** The substitution policy written, unchecked: the update service checks it. Whether the store kept it. */
 write_substitutions :: fn(supervisor: ptr[mut Supervisor], policy: bundle.Substitutions) -> bool {
     settings :: substitutions_connection(supervisor) or_return false
     value := os.Outgoing.{}
@@ -2006,7 +2030,7 @@ write_substitutions :: fn(supervisor: ptr[mut Supervisor], policy: bundle.Substi
     return config_protocol.write(settings, supervisor.substitutions_port, os.value_bytes(&value), fields) is_ok
 }
 
-// The hash of the supervisor's own library named name, or null.
+/** The hash of the supervisor's own library named name, or null. */
 own_hash :: fn(supervisor: ptr[mut Supervisor], name: string) -> bundle.Hash? {
     storage : u8[slop_os.GRANT_LABEL_SIZE]
     label := text_buffer.make(storage)
@@ -2016,7 +2040,7 @@ own_hash :: fn(supervisor: ptr[mut Supervisor], name: string) -> bundle.Hash? {
     return substitution.library_hash(supervisor.block, memory)
 }
 
-/*
+/**
  * test_substitution, over two boots of a disk. The first: a policy putting greeting in service_kit's place, refused by
  * the update service, as it doesn't export what service_kit does; then service_kit_plus, service_kit's second build
  * with one export more, staged as the next generation. The second, that generation: the supervisor's own service_kit
@@ -2049,7 +2073,7 @@ check_substitution :: fn(supervisor: ptr[mut Supervisor]) {
         if refused && written { "refused" } else { "taken" }, staged)
 }
 
-/*
+/**
  * test_system_config, once everything has started: an override of hello's memory budget written and one of a budget of
  * 0 refused; the override read again, as at a boot, and hello killed, and started again on its new budget.
  */
@@ -2069,7 +2093,7 @@ check_system_config :: fn(supervisor: ptr[mut Supervisor]) {
         budget / (1024 * 1024))
 }
 
-/*
+/**
  * A directory of the system volume's root for a service, lent the service's CPU budget (Perf's Pc, decisions/0037,
  * 0130): the volume server runs the service's work in it, and what it opens there, on the service's budget, and serves
  * it by its priority. Without a scheduler service, or a budget for it, it's not lent anything.
@@ -2085,7 +2109,7 @@ lent_directory :: fn(supervisor: ptr[mut Supervisor], name: string, service: str
     return directory
 }
 
-// A CPU budget lent to a dir connection, which takes it: whether the server took it.
+/** A CPU budget lent to a dir connection, which takes it: whether the server took it. */
 lend :: fn(supervisor: ptr[mut Supervisor], directory: os.Channel[dir.Dir], budget: slop_os.CpuBudget) -> bool {
     port :: os.port_for(supervisor.block.budget, directory.end) or_return false
     defer _ = slop_os.handle_close(cast[slop_os.Handle](port))
@@ -2115,14 +2139,16 @@ LENDING_BACKLOG :: 4
 LENDING_POLL : u64 : 1_000_000
 LENDING_ATTEMPTS :: 3
 
-// What one of test_lending's attempts found: how many lent hello's budget were answered first, of how many, with how many still waiting.
+/**
+ * What one of test_lending's attempts found: how many lent hello's budget were answered first, of how many, with how many still waiting.
+ */
 LendingOutcome :: struct {
     ahead : u64,
     total : u64,
     waiting : u64,
 }
 
-/*
+/**
  * test_lending's attempts, up to LENDING_ATTEMPTS: which of its answers came first can't be known through separate
  * connections when the host stalls this CPU for long, so one in which priority showed is enough, as a server taking
  * connections in turn, or serving each queue whole, would answer six or more first in every one.
@@ -2151,7 +2177,7 @@ check_lending :: fn(supervisor: ptr[mut Supervisor]) {
     }
 }
 
-/*
+/**
  * test_lending, on a boot disk: connections to a directory of the system volume, one lent echo's CPU budget (the trusted path's is never lent), of a
  * high priority, and LENDING_LOW lent hello's, of the default's. Through the first of those, a change and a Sync, which
  * keeps the volume server committing; behind it, LENDING_BACKLOG requests through each of them; then two through the
@@ -2287,7 +2313,7 @@ lending_attempt :: fn(supervisor: ptr[mut Supervisor]) -> LendingOutcome? {
     return LendingOutcome.{ahead = ahead, total = total, waiting = waiting}
 }
 
-// A directory of the system volume's root, made if it isn't there, or null.
+/** A directory of the system volume's root, made if it isn't there, or null. */
 system_directory :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.Channel[dir.Dir]? {
     if supervisor.system == NONE {
         return null
@@ -2312,7 +2338,7 @@ system_directory :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.Chan
     }
 }
 
-/*
+/**
  * test_store, once everything has started: hello's program put in the bundle store and read back as paged memory,
  * whole; one whose bytes don't have the hash given refused; and the program kept while it's pinned, and collected once
  * it isn't.
@@ -2378,10 +2404,10 @@ check_store :: fn(supervisor: ptr[mut Supervisor]) {
     log_line.write(supervisor.log, "supervisor: test_store: hello's bundle's manifest % its entry's schema", if matches { "is" } else { "isn't" })
 }
 
-// The pages of objects the bundle store keeps, in test_store's second reading
+/** The pages of objects the bundle store keeps, in test_store's second reading */
 CACHE_TEST_BYTES : u64 : 64 * 1024
 
-// The object with hash, from the bundle store, read whole as paged memory: whether it's program, byte for byte.
+/** The object with hash, from the bundle store, read whole as paged memory: whether it's program, byte for byte. */
 read_whole :: fn(supervisor: ptr[mut Supervisor], hash: bundle.Hash, program: u8[]) -> bool {
     read_back := false
     match store_request(supervisor, .Get(hash)) {
@@ -2406,7 +2432,7 @@ read_whole :: fn(supervisor: ptr[mut Supervisor], hash: bundle.Hash, program: u8
     return read_back
 }
 
-// What the bundle store's Collect removed, or 99 if it didn't answer.
+/** What the bundle store's Collect removed, or 99 if it didn't answer. */
 collected :: fn(supervisor: ptr[mut Supervisor]) -> u64 {
     return match store_request(supervisor, .Collect) {
         case Collected(count) => count
@@ -2414,7 +2440,7 @@ collected :: fn(supervisor: ptr[mut Supervisor]) -> u64 {
     }
 }
 
-// Memory mapped in the supervisor's space, size bytes of it: where, or 0.
+/** Memory mapped in the supervisor's space, size bytes of it: where, or 0. */
 map_in :: fn(supervisor: ptr[mut Supervisor], memory: slop_os.Memory, size: u64, protection: slop_os.Protection) -> u64 {
     if size == 0 {
         return 0
@@ -2426,7 +2452,7 @@ map_in :: fn(supervisor: ptr[mut Supervisor], memory: slop_os.Memory, size: u64,
     return address
 }
 
-// An object put in the bundle store from a copy of bytes: whether it took it.
+/** An object put in the bundle store from a copy of bytes: whether it took it. */
 put_object :: fn(supervisor: ptr[mut Supervisor], hash: bundle.Hash, bytes: u8[]) -> bool {
     size :: (cast[u64](bytes.count) + 4095) & ~cast[u64](4095)
     data :: slop_os.memory_create(supervisor.block.budget, if size == 0 { cast[u64](4096) } else { size }) or_return false
@@ -2454,7 +2480,7 @@ store_request :: fn(supervisor: ptr[mut Supervisor], request: bundle_store.Reque
     return bundle_store.ask(supervisor.store_end, supervisor.store_port, &out, &into)
 }
 
-// The system volume's "events" directory, made if it isn't there, given to the events service to keep records in.
+/** The system volume's "events" directory, made if it isn't there, given to the events service to keep records in. */
 store_events :: fn(supervisor: ptr[mut Supervisor]) {
     if supervisor.events_end == NONE || supervisor.system == NONE {
         return void
@@ -2487,13 +2513,15 @@ store_events :: fn(supervisor: ptr[mut Supervisor]) {
     _ = events.ask(supervisor.events_end, supervisor.events_port, &storing, &answer)
 }
 
-// A connection of the supervisor's own to the events service, and the port its answers wake, NONE without one.
+/** A connection of the supervisor's own to the events service, and the port its answers wake, NONE without one. */
 Waiting :: struct {
     end : slop_os.Channel,
     port : slop_os.Port,
 }
 
-// test_events: a connection of the supervisor's own to the events service, on which a query for hello's first record waits.
+/**
+ * test_events: a connection of the supervisor's own to the events service, on which a query for hello's first record waits.
+ */
 wait_for_hello :: fn(supervisor: ptr[mut Supervisor]) -> Waiting {
     if supervisor.events_end == NONE {
         return Waiting.{end = NONE}
@@ -2515,7 +2543,7 @@ wait_for_hello :: fn(supervisor: ptr[mut Supervisor]) -> Waiting {
     return Waiting.{end = pair.b, port = port}
 }
 
-/*
+/**
  * test_events, once everything has started: the held query's answer, and hello's first record and the clock service's
  * second, read back from where the events service stores them.
  */
@@ -2557,12 +2585,12 @@ text_of_items :: fn(bytes: u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }
 
-// The entry in started the program launched next is to have: the one a restart is launching into, or the next.
+/** The entry in started the program launched next is to have: the one a restart is launching into, or the next. */
 next_slot :: fn(supervisor: ptr[Supervisor]) -> usize {
     return if supervisor.relaunching != NOWHERE { supervisor.relaunching } else { supervisor.started_count }
 }
 
-/*
+/**
  * The clock service, with the real-time clock the platform service gives, the clock page to write, and a listener whose
  * other end sets the time; into the started entry again, a restart, unless again is NOWHERE.
  */
@@ -2650,7 +2678,7 @@ module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory
     return found or_else none
 }
 
-/*
+/**
  * The program a service's module names: from the bundle store, the program of the bundle its boot root names after the
  * service, as paged memory, which processes running it share; or, without one, read from the system volume's modules
  * folder. Got already, or now.
@@ -2674,7 +2702,7 @@ loaded_module :: fn(supervisor: ptr[mut Supervisor], service: Service) -> slop_o
     return module
 }
 
-/*
+/**
  * The program the bundle store's boot root names after a module, without its extension, as the store gives it: paged
  * memory, read and execute only. Null without a store, a root, or a bundle of that name.
  */
@@ -2693,7 +2721,7 @@ stored_program :: fn(supervisor: ptr[mut Supervisor], module: string) -> slop_os
     }
 }
 
-/*
+/**
  * What the bundle the store's boot root names name refers to, by its place: 0 its program, 1 its manifest. Null without
  * a store, a root, or a bundle of that name.
  */
@@ -2740,7 +2768,7 @@ stored_hash :: fn(supervisor: ptr[mut Supervisor], name: string, which: usize) -
     return if have { found } else { null }
 }
 
-// An object of the bundle store's, mapped to read: its memory, where, and its bytes.
+/** An object of the bundle store's, mapped to read: its memory, where, and its bytes. */
 MappedObject :: struct {
     memory : slop_os.Memory,
     address : u64,
@@ -2765,7 +2793,7 @@ unmap_object :: fn(supervisor: ptr[mut Supervisor], object: MappedObject) {
     _ = slop_os.handle_close(cast[slop_os.Handle](object.memory))
 }
 
-/*
+/**
  * modules/<module> on the system volume, read whole into a memory object of its own: given to the volume server as the
  * read's buffer, so the file comes straight into it.
  */
@@ -2825,10 +2853,10 @@ read_module :: fn(supervisor: ptr[mut Supervisor], module: string) -> slop_os.Me
     return memory
 }
 
-// The most bytes a program read from the system volume may be.
+/** The most bytes a program read from the system volume may be. */
 MAX_MODULE_BYTES : u64 : 8 << 20
 
-// One request to the system volume's server on its dir connection, and its answer, waited for.
+/** One request to the system volume's server on its dir connection, and its answer, waited for. */
 ask_system_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> dir.Response {
     if dir.send_request(end, port, out) is_some {
         return .Unsupported
@@ -2842,7 +2870,7 @@ ask_system_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.O
     }
 }
 
-// One request on a program's file connection, and its answer, waited for.
+/** One request on a program's file connection, and its answer, waited for. */
 ask_system_file :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> read_only_file.Response {
     if read_only_file.send_request(end, port, out) is_some {
         return .Unsupported
@@ -2856,7 +2884,7 @@ ask_system_file :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.
     }
 }
 
-// Every driver the supervisor starts, in the boot set or out of it, for every device it takes.
+/** Every driver the supervisor starts, in the boot set or out of it, for every device it takes. */
 start_drivers :: fn(supervisor: ptr[mut Supervisor], boot_set: bool) {
     if cast[slop_os.Handle](supervisor.platform_end) == slop_os.NO_HANDLE {
         return void
@@ -2873,7 +2901,7 @@ start_drivers :: fn(supervisor: ptr[mut Supervisor], boot_set: bool) {
     }
 }
 
-/*
+/**
  * The input service, with connectors to the first four input devices and the kernel's command line (for
  * test_new_keyboards), and a listener for its client, the terminal service; into its entry at again, unless that's
  * NOWHERE.
@@ -2918,7 +2946,7 @@ start_input :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     }
 }
 
-/*
+/**
  * The terminal service, with connectors to the first serial line and the input service, the framebuffer if there's one, and a listener for its clients; into
  * its entry at again, unless that's NOWHERE.
  */
@@ -2966,7 +2994,9 @@ start_terminal :: fn(supervisor: ptr[mut Supervisor], again: usize) {
 }
 
 
-// hello, with a connector to the terminal service and a connection to the process manager; into its entry at again, unless that's NOWHERE.
+/**
+ * hello, with a connector to the terminal service and a connection to the process manager; into its entry at again, unless that's NOWHERE.
+ */
 start_hello :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     service :: service_named(supervisor, "hello") or_return void
     grants := HelloGrants.{console = connector_to(supervisor, supervisor.terminal)}
@@ -2987,7 +3017,7 @@ start_hello :: fn(supervisor: ptr[mut Supervisor], again: usize) {
 }
 
 // The disk check, with a connector to the first disk, if there is one.
-/*
+/**
  * The storage manager, when there's a disk, with a connector to each of the first four disks' drivers, a connection
  * to the process manager and the partition server's module: its index in what's started, or NOWHERE; into its entry at
  * again, unless that's NOWHERE.
@@ -3048,7 +3078,7 @@ start_storage :: fn(supervisor: ptr[mut Supervisor], again: usize) -> usize {
     }
 }
 
-/*
+/**
  * The files of the first partition of a type the storage manager at storage_slot has, through a connection of the
  * supervisor's own: an EFI system partition's root, or a SlopOS container's system volume's. It's waited for on the
  * supervisor's port, which goes on handling what arrives, connectors' Dials among it, as the storage manager dials its
@@ -3079,7 +3109,7 @@ files_of_type :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize, kind: 
     return null
 }
 
-// One request to the storage manager on a connection of its own, and its answer, handling the rest meanwhile.
+/** One request to the storage manager on a connection of its own, and its answer, handling the rest meanwhile. */
 ask_storage_once :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize, request: storage.Request) -> storage.Response {
     end :: dial(supervisor, storage_slot) or_return .Unsupported
     defer slop_os.handle_close(cast[slop_os.Handle](end))
@@ -3091,7 +3121,9 @@ ask_storage_once :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize, req
     return ask_storage(supervisor, end, request)
 }
 
-// One request to the storage manager on end, bound to the supervisor's port, and its answer, handling the rest meanwhile.
+/**
+ * One request to the storage manager on end, bound to the supervisor's port, and its answer, handling the rest meanwhile.
+ */
 ask_storage :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, request: storage.Request) -> storage.Response {
     out := os.Outgoing.{}
     made :: os.begin[storage.Request](&out)
@@ -3111,7 +3143,7 @@ ask_storage :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, request
 }
 
 // The disk check, given a connector to the storage manager at storage, when there's a disk.
-/*
+/**
  * The account service, with a connector to the storage manager and a listener for its clients, if there's a system
  * volume, which its accounts volume is beside and its program comes from; into its entry at again, unless that's
  * NOWHERE.
@@ -3141,7 +3173,7 @@ start_accounts :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize, again
     }
 }
 
-/*
+/**
  * The session manager (decisions/0150), with a connector to the process manager, echo's program, which it starts in each
  * session, a listener for the terminal service, and what it runs the system's installations with (0153): the bundle
  * store, the system volume's apps directory, and the system's list; into its entry at again, unless that's NOWHERE.
@@ -3181,7 +3213,9 @@ start_sessions :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     }
 }
 
-// A connection of its own to the events service, for a service that opens rings for the programs it starts; null without one.
+/**
+ * A connection of its own to the events service, for a service that opens rings for the programs it starts; null without one.
+ */
 events_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[events.Events]? {
     if supervisor.events_end == NONE {
         return null
@@ -3197,7 +3231,7 @@ events_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[events.Ev
     return os.Channel[events.Events].{end = pair.b}
 }
 
-// A connection to the session manager, through its listener, for the terminal service; null without one.
+/** A connection to the session manager, through its listener, for the terminal service; null without one. */
 session_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[session.Session]? {
     if supervisor.sessions >= supervisor.started.count || !supervisor.started[supervisor.sessions].running {
         return null
@@ -3226,7 +3260,7 @@ start_disk_check :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
     }
 }
 
-// A connector to what's started at target, which the supervisor serves; null if target is NOWHERE.
+/** A connector to what's started at target, which the supervisor serves; null if target is NOWHERE. */
 connector_to :: fn(supervisor: ptr[mut Supervisor], target: usize) -> os.Channel[connector.Connector]? {
     index :: supervisor.connector_count
     if target == NOWHERE || index >= supervisor.connectors.count {
@@ -3243,7 +3277,7 @@ connector_to :: fn(supervisor: ptr[mut Supervisor], target: usize) -> os.Channel
     return os.Channel[connector.Connector].{end = pair.a}
 }
 
-// Every Dial on a connector: a connection to its target's listener, if it's running.
+/** Every Dial on a connector: a connection to its target's listener, if it's running. */
 serve_connector :: fn(supervisor: ptr[mut Supervisor], index: usize) {
     if index >= supervisor.connectors.count {
         return void
@@ -3281,7 +3315,7 @@ serve_connector :: fn(supervisor: ptr[mut Supervisor], index: usize) {
     }
 }
 
-// test_restart's waits, for the console to show what it's sent, in nanoseconds.
+/** test_restart's waits, for the console to show what it's sent, in nanoseconds. */
 pause :: fn(supervisor: ptr[mut Supervisor], nanoseconds: u64) {
     waiter :: slop_os.port_create(supervisor.block.budget) or_return void
     packets : slop_os.Packet[1]
@@ -3289,7 +3323,7 @@ pause :: fn(supervisor: ptr[mut Supervisor], nanoseconds: u64) {
     _ = slop_os.handle_close(cast[slop_os.Handle](waiter))
 }
 
-// How many times connectors to what's started at target have dialed it.
+/** How many times connectors to what's started at target have dialed it. */
 dials_of :: fn(supervisor: ptr[Supervisor], target: usize) -> u32 {
     dials : u32 = 0
     for each, i in supervisor.connectors {
@@ -3300,12 +3334,12 @@ dials_of :: fn(supervisor: ptr[Supervisor], target: usize) -> u32 {
     return dials
 }
 
-// Whether what's started at index is running now.
+/** Whether what's started at index is running now. */
 is_running :: fn(supervisor: ptr[Supervisor], index: usize) -> bool {
     return index < supervisor.started.count && supervisor.started[index].running
 }
 
-// A new connection to what's started at target, through its listener with its protocol's Connect, if it's running.
+/** A new connection to what's started at target, through its listener with its protocol's Connect, if it's running. */
 dial :: fn(supervisor: ptr[mut Supervisor], target: usize) -> slop_os.Channel? {
     // The process manager, through the root task's connector to it
     if target == MANAGER_TARGET {
@@ -3335,8 +3369,10 @@ dial :: fn(supervisor: ptr[mut Supervisor], target: usize) -> slop_os.Channel? {
     }
 }
 
-// A device from the platform service, claimed or reissued, or null.
-// The real-time clock, claimed from the platform service, made anew each time; or null if there's none.
+/**
+ * A device from the platform service, claimed or reissued, or null.
+ * The real-time clock, claimed from the platform service, made anew each time; or null if there's none.
+ */
 request_clock :: fn(supervisor: ptr[mut Supervisor]) -> platform.RealTimeClock? {
     if cast[slop_os.Handle](supervisor.platform_end) == slop_os.NO_HANDLE {
         return null
@@ -3361,7 +3397,7 @@ request_clock :: fn(supervisor: ptr[mut Supervisor]) -> platform.RealTimeClock? 
     }
 }
 
-// What's started at slot is one of the console's programs, which the trusted path lists and may end.
+/** What's started at slot is one of the console's programs, which the trusted path lists and may end. */
 mark_console :: fn(supervisor: ptr[mut Supervisor], slot: usize) {
     if slot < supervisor.started.count {
         supervisor.started[slot].console = true
@@ -3369,7 +3405,7 @@ mark_console :: fn(supervisor: ptr[mut Supervisor], slot: usize) {
 }
 
 
-// The first framebuffer, claimed from the platform service, made anew each time; or null if there's none.
+/** The first framebuffer, claimed from the platform service, made anew each time; or null if there's none. */
 request_framebuffer :: fn(supervisor: ptr[mut Supervisor]) -> platform.Framebuffer? {
     if cast[slop_os.Handle](supervisor.platform_end) == slop_os.NO_HANDLE {
         return null
@@ -3422,7 +3458,7 @@ optional :: fn(memory: slop_os.Memory) -> slop_os.Memory? {
     return if cast[slop_os.Handle](memory) == slop_os.NO_HANDLE { null } else { memory }
 }
 
-// A device no driver takes, given back by closing what it held.
+/** A device no driver takes, given back by closing what it held. */
 close_device :: fn(device: ptr[platform.PciDevice]) {
     for handle in slop_os.Handle.[cast[slop_os.Handle](device.device), cast[slop_os.Handle](device.config),
         cast[slop_os.Handle](device.domain), cast[slop_os.Handle](device.bar0), cast[slop_os.Handle](device.bar1),
@@ -3434,7 +3470,7 @@ close_device :: fn(device: ptr[platform.PciDevice]) {
     }
 }
 
-// Something started: watched until it ends, and reported; its index, or MAX_STARTED if there's no room for it.
+/** Something started: watched until it ends, and reported; its index, or MAX_STARTED if there's no room for it. */
 started :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process: slop_os.Process) -> usize {
     index :: supervisor.started_count
     tell_root(supervisor, .Started(report_of(name, 0)))
@@ -3455,7 +3491,7 @@ failed :: fn(supervisor: ptr[mut Supervisor], name: string, error: os.LaunchErro
     tell_root(supervisor, .Failed(report_of(name, cast[u64](error) + 1)))
 }
 
-/*
+/**
  * A launched program's process, its budget's handle kept for the entry it's placed in (take_budget): the budget lasts
  * as long as a handle to it, and goes back to the supervisor's once the entry's is closed as the program ends.
  */
@@ -3464,14 +3500,14 @@ kept :: fn(supervisor: ptr[mut Supervisor], launched: os.Launched) -> slop_os.Pr
     return launched.process
 }
 
-// The budget kept for the program launched last, for its entry.
+/** The budget kept for the program launched last, for its entry. */
 take_budget :: fn(supervisor: ptr[mut Supervisor]) -> slop_os.MemoryBudget {
     budget :: supervisor.launched_budget
     supervisor.launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)
     return budget
 }
 
-// A copy of the supervisor's debug log, to give a service.
+/** A copy of the supervisor's debug log, to give a service. */
 duplicate_log :: fn(supervisor: ptr[mut Supervisor]) -> slop_os.DebugLog? {
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     match slop_os.handle_duplicate(cast[slop_os.Handle](supervisor.log), rights) {
@@ -3480,7 +3516,7 @@ duplicate_log :: fn(supervisor: ptr[mut Supervisor]) -> slop_os.DebugLog? {
     }
 }
 
-// A report to the root task.
+/** A report to the root task. */
 tell_root :: fn(supervisor: ptr[mut Supervisor], report: supervision.Request) {
     out := os.Outgoing.{}
     request :: os.begin[supervision.Request](&out)

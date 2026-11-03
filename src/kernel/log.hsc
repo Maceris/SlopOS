@@ -14,7 +14,7 @@ import boot_info from "../boot_info"
     import arch from "../arch/aarch64"
 }
 
-/*
+/**
  * The kernel's logger: one line per message on the architecture's early console, prefixed with
  * its level, and with the source location for warnings and worse. Lines from different CPUs don't
  * mix, since writing a line holds the kernel's console lock.
@@ -77,7 +77,7 @@ write_log_line :: fn(level: string, location: runtime.SourceCodeLocation?, forma
     }
 }
 
-// A fatal line, kept in the panic record too, once there's a kernel with one.
+/** A fatal line, kept in the panic record too, once there's a kernel with one. */
 keep_in_panic_record :: fn(text: string) {
     if intrinsics.carrier().program_data == null {
         return void
@@ -97,7 +97,7 @@ append_location :: fn(line: ptr[mut text_buffer.TextBuffer], location: runtime.S
     text_buffer.append_unsigned(line, cast[u64](location.line))
 }
 
-/*
+/**
  * Write text to the early console and the framebuffer console, holding the console lock once the
  * CPU has a PerCpu. Before that, only the boot CPU runs.
  */
@@ -115,7 +115,7 @@ write_console :: fn(text: string) {
     unlock_at(&kernel.console_lock, .Console)
 }
 
-/*
+/**
  * A failed assertion stops the kernel: it reports where, with a stack trace, and stops every CPU.
  */
 kernel_assertion_handler : runtime.AssertionHandler : fn(location: runtime.SourceCodeLocation, message: string) #never_returns {

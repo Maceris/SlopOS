@@ -1,4 +1,4 @@
-/*
+/**
  * What the arch layer's entry stubs call (docs/specs/arch_interface.md, kernel_entry): the kernel's
  * side of every entry. Each one runs with the CPU's carrier block loaded and its context pushed.
  *
@@ -32,7 +32,7 @@ InterruptSource :: union {
     Spurious,
 }
 
-// A system call from user mode, by the CPU's current thread.
+/** A system call from user mode, by the CPU's current thread. */
 syscall #never_returns :: fn(registers: ptr[mut arch.UserRegisters]) {
     kernel.left_boot_stack()
     kernel.handle_syscall(registers)
@@ -45,7 +45,7 @@ user_fault #never_returns :: fn(registers: ptr[mut arch.UserRegisters], fault: a
     kernel.handle_user_fault(registers, fault)
 }
 
-/*
+/**
  * An interrupt from user mode or idle. What it interrupted in user mode is kept in the CPU's current
  * thread; then the scheduler picks what runs next: at a tick, the next thread round robin, otherwise a
  * thread that should run before the current one, or the current one again.
@@ -76,7 +76,7 @@ interrupt #never_returns :: fn(from: Interrupted, source: InterruptSource) {
     kernel.schedule(false)
 }
 
-// A fault in kernel code, which is a bug. The kernel stops, with a stack trace.
+/** A fault in kernel code, which is a bug. The kernel stops, with a stack trace. */
 kernel_fault #never_returns :: fn(fault: arch_interface.Fault, instruction_pointer: arch_interface.VirtualAddress) {
     storage : u8[160]
     line := text_buffer.make(storage)
@@ -116,14 +116,14 @@ access_name :: fn(access: arch_interface.Access) -> string {
     }
 }
 
-// An NMI, at any time. Returns to the interrupted code.
+/** An NMI, at any time. Returns to the interrupted code. */
 nmi :: fn() {
     cpu :: kernel.per_cpu()
     intrinsics.atomic_store_u32_release(&cpu.nmi_count, cpu.nmi_count + 1)
     runtime.log_warn("NMI")
 }
 
-// A machine check or double fault, at any time. The kernel stops.
+/** A machine check or double fault, at any time. The kernel stops. */
 fatal_critical #never_returns :: fn(event: arch_interface.CriticalEvent) {
     runtime.log_fatal(match event {
         case .Nmi => "NMI"

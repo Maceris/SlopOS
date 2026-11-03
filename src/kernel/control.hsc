@@ -31,10 +31,10 @@ import slop_os from "std/os"
 HELD_SUSPEND : u32 : 1 << 0
 HELD_STOP : u32 : 1 << 1
 
-// How far up an ownership chain a walk goes, so one through slots reused meanwhile always ends.
+/** How far up an ownership chain a walk goes, so one through slots reused meanwhile always ends. */
 MAX_OWNER_DEPTH :: 4096
 
-// Hold thread for bit: parked at once if it's on a run queue; told, if it runs on another CPU.
+/** Hold thread for bit: parked at once if it's on a run queue; told, if it runs on another CPU. */
 hold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) {
     lock_at(&thread.control, .ThreadControl)
     defer unlock_at(&thread.control, .ThreadControl)
@@ -69,7 +69,7 @@ hold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) {
     }
 }
 
-// Let go of thread for bit: made ready if it's parked and nothing else holds it.
+/** Let go of thread for bit: made ready if it's parked and nothing else holds it. */
 unhold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) {
     lock_at(&thread.control, .ThreadControl)
     defer unlock_at(&thread.control, .ThreadControl)
@@ -80,7 +80,7 @@ unhold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) 
     }
 }
 
-/*
+/**
  * Park thread if something holds it, saving its vector state if it's the CPU's current thread (saved):
  * whether it did. The caller takes it off the CPU.
  */
@@ -101,7 +101,7 @@ park_if_held :: fn(thread: ptr[mut Thread], saved: bool) -> bool {
     return true
 }
 
-// Whether a thread is held and parked, so its registers are its own to read and write.
+/** Whether a thread is held and parked, so its registers are its own to read and write. */
 is_parked :: fn(thread: ptr[mut Thread]) -> bool {
     lock_at(&thread.control, .ThreadControl)
     defer unlock_at(&thread.control, .ThreadControl)
@@ -180,7 +180,7 @@ raise_watchers :: fn(kernel: ptr[mut Kernel], watchers: ptr[mut EndBinding[2]], 
     }
 }
 
-// Whether object is owned within process's subtree.
+/** Whether object is owned within process's subtree. */
 in_subtree :: fn(object: u64, process: u64) -> bool {
     owner := cast[ptr[ObjectHeader]](object).owner
     for depth in 0..<MAX_OWNER_DEPTH {
@@ -195,7 +195,7 @@ in_subtree :: fn(object: u64, process: u64) -> bool {
     return false
 }
 
-// Every thread, on the kernel's list, for finding one by its ID.
+/** Every thread, on the kernel's list, for finding one by its ID. */
 link_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     lock_at(&kernel.threads_lock, .Threads)
     thread.all_previous = 0
@@ -226,7 +226,7 @@ unlink_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     thread.on_list = false
 }
 
-// The live thread with id in process's subtree, or null.
+/** The live thread with id in process's subtree, or null. */
 thread_in :: fn(kernel: ptr[mut Kernel], process: u64, id: u64) -> ptr[mut Thread]? {
     lock_at(&kernel.threads_lock, .Threads)
     defer unlock_at(&kernel.threads_lock, .Threads)
@@ -246,7 +246,7 @@ thread_in :: fn(kernel: ptr[mut Kernel], process: u64, id: u64) -> ptr[mut Threa
     return null
 }
 
-// How many threads process's subtree has; the first capacity's IDs, written at ids.
+/** How many threads process's subtree has; the first capacity's IDs, written at ids. */
 threads_of :: fn(kernel: ptr[mut Kernel], process: u64, ids: ptr[mut u64[64]], capacity: u32) -> u32 {
     lock_at(&kernel.threads_lock, .Threads)
     defer unlock_at(&kernel.threads_lock, .Threads)
@@ -292,10 +292,10 @@ copy_between :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], addres
     return true
 }
 
-// The most registers a debugger sees on any architecture: x86-64's 18, AArch64's 34.
+/** The most registers a debugger sees on any architecture: x86-64's 18, AArch64's 34. */
 MAX_USER_REGISTERS :: 64
 
-// A thread's registers, as a debugger sees them (slop_os.THREAD_REGISTERS), written at buffer in space.
+/** A thread's registers, as a debugger sees them (slop_os.THREAD_REGISTERS), written at buffer in space. */
 read_registers :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], space: ptr[mut AddressSpace], buffer: u64) -> bool {
     values : u64[MAX_USER_REGISTERS]
     count :: arch.user_register_count()
@@ -306,7 +306,7 @@ read_registers :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], space: pt
     return copy_to_user(kernel, space, buffer, cast[u64](&values[0]), cast[u64](count) * 8)
 }
 
-// A parked thread's registers, set from buffer in space: why not, if they couldn't be.
+/** A parked thread's registers, set from buffer in space: why not, if they couldn't be. */
 write_registers :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], space: ptr[mut AddressSpace], buffer: u64) -> slop_os.ControlError? {
     values : u64[MAX_USER_REGISTERS]
     count :: arch.user_register_count()

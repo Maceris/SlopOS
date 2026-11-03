@@ -1,4 +1,4 @@
-/*
+/**
  * The bundle store (roadmap 9b, decisions/0094, design/software.md §2): objects by their BLAKE3-256 hashes, in the
  * directory it's given on the system volume: objects/<hex>, each written as objects/<hex>.part and renamed once whole;
  * root, the boot root's hash in hex; pins/<name>, a pin's.
@@ -30,16 +30,16 @@ import bundle from "../../bundle"
 import bundle_store from "../../protocols/bundle_store"
 
 MAX_OBJECTS :: 64
-// The keys open objects' pager bindings are bound to the port with, after the clients'
+/** The keys open objects' pager bindings are bound to the port with, after the clients' */
 PAGER_KEY : u64 : 1000
-// The key its budget's pressure is bound to the port with, between the clients' and the objects'
+/** The key its budget's pressure is bound to the port with, between the clients' and the objects' */
 PRESSURE_KEY : u64 : 900
 // What it gives pages back down to, under pressure: this many sixteenths of the threshold, past what its pages don't pay for
 LOW_WATER_SIXTEENTHS : u64 : 12
 PAGE : u64 : 4096
 NOWHERE : usize : 0xffffffffffffffff
 
-// An object given out: its paged memory, which it supplies, its file's connection, and the page that's read into.
+/** An object given out: its paged memory, which it supplies, its file's connection, and the page that's read into. */
 Open :: struct {
     used : bool,
     hash : bundle.Hash,
@@ -60,12 +60,12 @@ Store :: struct {
     raw_port : slop_os.Port,
     directory : os.Directory,
     objects : Open[MAX_OBJECTS],
-    // Pages wanted that couldn't be read, kept until there's a directory to read them through again
+    /** Pages wanted that couldn't be read, kept until there's a directory to read them through again */
     unread : Unread[..],
     // The pages supplied, in the order the clock's hand goes round them, and where it is
     resident : Unread[..],
     hand : usize,
-    // Pages given back since it started
+    /** Pages given back since it started */
     evicted : u64,
     // What its budget has charged that isn't pages, when its threshold was last set from a cache limit; and the limit
     cache_base : u64,
@@ -127,7 +127,7 @@ main :: fn(store: os.Channel[dir.Dir], clients: os.Listener[bundle_store.BundleS
     }
 }
 
-// Every request client index has sent, until there are none left, or it's gone.
+/** Every request client index has sent, until there are none left, or it's gone. */
 serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
     if index >= service.connected.ends.count {
         return void
@@ -199,7 +199,7 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
     }
 }
 
-/*
+/**
  * An object as paged memory, read-only, which this store supplies: the same memory each time it's asked for, once
  * it's open. Null if there's no such object, or no room to open another.
  */
@@ -237,7 +237,7 @@ get :: fn(service: ptr[mut Store], hash: bundle.Hash) -> bundle_store.Object? {
     return hand_out(service, slot)
 }
 
-/*
+/**
  * An open object's size, the page its file reads into, and its paged memory, bound to the port under PAGER_KEY plus
  * slot: false if any of it couldn't be made.
  */
@@ -283,7 +283,7 @@ set_up :: fn(service: ptr[mut Store], open: ptr[mut Open], slot: usize) -> bool 
     return true
 }
 
-// A handle to an open object's memory, to read and execute.
+/** A handle to an open object's memory, to read and execute. */
 hand_out :: fn(service: ptr[Store], slot: usize) -> bundle_store.Object? {
     open :: service.objects[slot % MAX_OBJECTS]
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_EXECUTE) | cast[u32](slop_os.RIGHT_DUPLICATE)
@@ -303,7 +303,7 @@ close_open :: fn(service: ptr[Store], open: ptr[mut Open]) {
     }
 }
 
-/*
+/**
  * The store's directory from now on: the same directory served again, as when the system volume's server was started
  * again. Open objects' files are opened again as their pages are next wanted.
  */
@@ -340,7 +340,7 @@ use_directory :: fn(service: ptr[mut Store], end: slop_os.Channel) -> bool {
     return true
 }
 
-/*
+/**
  * An open object's file opened again, through the store's directory, after its connection went with the server it was
  * on: whether it was.
  */
@@ -373,7 +373,7 @@ reopen :: fn(service: ptr[mut Store], open: ptr[mut Open]) -> bool {
     }
 }
 
-// Each page of the open object at slot that's wanted, read from its file and supplied.
+/** Each page of the open object at slot that's wanted, read from its file and supplied. */
 supply_wanted :: fn(service: ptr[mut Store], slot: usize) {
     if slot >= MAX_OBJECTS || !service.objects[slot].used {
         return void
@@ -389,7 +389,7 @@ supply_wanted :: fn(service: ptr[mut Store], slot: usize) {
     }
 }
 
-/*
+/**
  * The page at offset of the open object at slot, read from its file, its file opened again if its connection went with
  * the server it was on, and supplied: false, with nothing supplied, if it couldn't be read.
  */
@@ -443,7 +443,7 @@ supply_page :: fn(service: ptr[mut Store], slot: usize, offset: u64) -> bool {
     return true
 }
 
-/*
+/**
  * Its budget's threshold, for a cache of at most limit bytes of pages, past what its budget has charged for everything
  * else; or for 0, three quarters of its budget's limit.
  */
@@ -456,7 +456,7 @@ set_cache_limit :: fn(service: ptr[mut Store], limit: u64) {
     _ = slop_os.memory_budget_set_threshold(service.block.budget, threshold)
 }
 
-// Pages given back until its budget is below its low water, as pressure on it asks.
+/** Pages given back until its budget is below its low water, as pressure on it asks. */
 relieve :: fn(service: ptr[mut Store]) {
     info :: slop_os.memory_budget_info(service.block.budget) or_return void
     threshold :: if service.cache_limit == 0 { info.limit / 4 * 3 } else { service.cache_base + service.cache_limit }
@@ -468,7 +468,7 @@ relieve :: fn(service: ptr[mut Store]) {
     evict(service, (info.used - low + PAGE - 1) / PAGE)
 }
 
-/*
+/**
  * Up to count pages given back, by the clock: going round the pages supplied from the hand, one touched since the hand
  * last passed it is passed, its mark cleared, and one that wasn't is given back. Twice round at most, so a cache of only
  * touched pages still gives some back.
@@ -515,14 +515,14 @@ evict :: fn(service: ptr[mut Store], count: u64) {
     }
 }
 
-// The page at index of the pages supplied, taken off them, the hand staying on the one after it.
+/** The page at index of the pages supplied, taken off them, the hand staying on the one after it. */
 forget :: fn(service: ptr[mut Store], index: usize) {
     if index < service.resident.count {
         runtime.array_remove(&service.resident, index)
     }
 }
 
-// An object put: its bytes, the first size of the memory given, kept if they have its hash; whether they're kept.
+/** An object put: its bytes, the first size of the memory given, kept if they have its hash; whether they're kept. */
 store_object :: fn(service: ptr[mut Store], put: bundle_store.PutOf) -> bool {
     defer slop_os.handle_close(cast[slop_os.Handle](put.data))
     available :: slop_os.memory_size(put.data) or_return false
@@ -559,7 +559,7 @@ has_object :: fn(service: ptr[Store], hash: bundle.Hash) -> bool {
     return os.path_kind_in(service.directory, path_in("objects/", bundle.hex(hash, &hex_storage), &path_storage)) == .FILE
 }
 
-// A hash written in hex to folder/name, through a .part file renamed over it.
+/** A hash written in hex to folder/name, through a .part file renamed over it. */
 write_hash :: fn(service: ptr[mut Store], folder: string, name: string, hash: bundle.Hash) -> bool {
     hex_storage : u8[64]
     hex :: bundle.hex(hash, &hex_storage)
@@ -575,14 +575,14 @@ write_hash :: fn(service: ptr[mut Store], folder: string, name: string, hash: bu
     return os.rename_in(service.directory, part, final) == null
 }
 
-// The hash in hex in the file at path, or null.
+/** The hash in hex in the file at path, or null. */
 read_hash :: fn(service: ptr[Store], path: string) -> bundle.Hash? {
     text :: os.read_entire_file_in(service.directory, path) or_return null
     defer runtime.free_array(bit_cast[u8[]](text))
     return bundle.from_hex(text)
 }
 
-/*
+/**
  * Every object no root reaches removed, but those open: marked from the boot root and every pin, through what each
  * refers to. How many were removed.
  */
@@ -646,7 +646,7 @@ collect :: fn(service: ptr[mut Store]) -> u64 {
     return removed
 }
 
-/*
+/**
  * hash marked, and what it refers to, if it's a root or a bundle; no deeper than a root's bundles' objects. False if it
  * couldn't be read through, for want of memory or a failed read: then what it refers to isn't known, and nothing may be
  * collected (decisions/0104). A hash with no object behind it is marked, and nothing more.
@@ -716,7 +716,7 @@ is_open :: fn(service: ptr[Store], hash: bundle.Hash) -> bool {
     return false
 }
 
-// 1 to 32 letters, digits and underscores.
+/** 1 to 32 letters, digits and underscores. */
 valid_name :: fn(name: string) -> bool {
     if name.count == 0 || name.count > 32 {
         return false
@@ -757,7 +757,7 @@ ask_file :: fn(open: ptr[Open], out: ptr[mut os.Outgoing], into: ptr[mut os.Inco
     return os.message_of[read_only_file.Response](into)^
 }
 
-// prefix then name, in storage.
+/** prefix then name, in storage. */
 path_in :: fn(prefix: string, name: string, storage: ptr[mut u8[80]]) -> string {
     count : usize = 0
     for text in string.[prefix, name] {

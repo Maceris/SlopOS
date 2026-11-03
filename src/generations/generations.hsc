@@ -1,4 +1,4 @@
-/*
+/**
  * System generations (roadmap 9d1, decisions/0113, design/software.md §5): what boots, as a record on the EFI system
  * partition. A generation is numbered, and names its kernel, its boot set (each file by the name the kernel gives its
  * module and by its BLAKE3-256 hash), the bundle store's root it boots with, and its kernel's command line; it's
@@ -22,20 +22,20 @@ MAX_BOOT_FILES :: 64
 NAME_BYTES :: 32
 COMMAND_LINE_BYTES :: 512
 
-// The boots a tentative generation is given to come up healthy in (tries_left)
+/** The boots a tentative generation is given to come up healthy in (tries_left) */
 TRIES : u8 : 3
 
 // What a generation is: booted only as a trial until it's reported healthy, kept for good, or the recovery generation
 STATE_TENTATIVE : u8 : 0
 STATE_PERMANENT : u8 : 1
 STATE_RECOVERY : u8 : 2
-/*
+/**
  * The recovery generation's number, and only its (roadmap 9d5, decisions/0118): written once, beside the first, pinned,
  * never collected, and booting the boot set and the console only.
  */
 RECOVERY_NUMBER : u64 : 0xffffffff
 
-// A boot-set file: the name the kernel gives its module, and its hash, which names its object.
+/** A boot-set file: the name the kernel gives its module, and its hash, which names its object. */
 BootFile :: struct {
     name : u8[NAME_BYTES],
     hash : bundle.Hash,
@@ -45,7 +45,7 @@ Generation :: struct {
     magic : u64,
     number : u64,
     state : u8,
-    // Whether the bootloader lays the kernel and the direct map out at random (decisions/0021)
+    /** Whether the bootloader lays the kernel and the direct map out at random (decisions/0021) */
     kaslr : u8,
     /*
      * A tentative generation's boots left before it's given up on (roadmap B3, decisions/0131): the update service
@@ -59,7 +59,7 @@ Generation :: struct {
     file_count : u32,
     padding_after : u32,
     files : BootFile[MAX_BOOT_FILES],
-    // Its kernel's command line, to which the bootloader adds generation=<number> (bootloader.write_command_line)
+    /** Its kernel's command line, to which the bootloader adds generation=<number> (bootloader.write_command_line) */
     command_line : u8[COMMAND_LINE_BYTES],
 }
 
@@ -67,7 +67,7 @@ Generation :: struct {
 OBJECTS :: "boot/objects"
 RECORDS :: "boot/generations"
 
-/*
+/**
  * Whether a generation's record is one: its magic, a state it can have, flags that are flags, its files within its
  * array and named, the first the root task's, and its command line ended within its bytes. A kernel alone, with no
  * boot set, is one, as tests of the kernel boot it (decisions/0135).
@@ -105,7 +105,7 @@ check :: fn(generation: ptr[Generation]) -> string? {
     return null
 }
 
-// A record's bytes as a generation, checked: null if they aren't one.
+/** A record's bytes as a generation, checked: null if they aren't one. */
 generation_of :: fn(bytes: u8[]) -> Generation? {
     if bytes.count != size_of(Generation) {
         return null
@@ -118,24 +118,24 @@ generation_of :: fn(bytes: u8[]) -> Generation? {
     return made
 }
 
-// A generation's bytes, as its record holds them.
+/** A generation's bytes, as its record holds them. */
 bytes_of :: fn(generation: ptr[Generation]) -> u8[] {
     return view_of(cast[ptr[u8]](generation), size_of(Generation))
 }
 
-// boot/objects/<hex>, into storage.
+/** boot/objects/<hex>, into storage. */
 object_path :: fn(hash: bundle.Hash, storage: ptr[mut u8[128]]) -> string {
     hex_storage : u8[64]
     return joined(OBJECTS, "/", bundle.hex(hash, &hex_storage), storage)
 }
 
-// boot/generations/<number>, into storage.
+/** boot/generations/<number>, into storage. */
 record_path :: fn(number: u64, storage: ptr[mut u8[128]]) -> string {
     digits : u8[20]
     return joined(RECORDS, "/", decimal(number, &digits), storage)
 }
 
-// A name's text: its bytes up to the first zero.
+/** A name's text: its bytes up to the first zero. */
 text_of :: fn(name: ptr[u8[NAME_BYTES]]) -> string {
     count := cast[usize](0)
     for byte in name^ {
@@ -147,7 +147,7 @@ text_of :: fn(name: ptr[u8[NAME_BYTES]]) -> string {
     return if count > 0 { string_of(&name^[0], count) } else { "" }
 }
 
-// A command line's text: its bytes up to the first zero.
+/** A command line's text: its bytes up to the first zero. */
 line_of :: fn(line: ptr[u8[COMMAND_LINE_BYTES]]) -> string {
     count := cast[usize](0)
     for byte in line^ {
@@ -159,7 +159,7 @@ line_of :: fn(line: ptr[u8[COMMAND_LINE_BYTES]]) -> string {
     return if count > 0 { string_of(&line^[0], count) } else { "" }
 }
 
-// A name's bytes from text, zeros after it: false if it doesn't fit, with room for its zero.
+/** A name's bytes from text, zeros after it: false if it doesn't fit, with room for its zero. */
 set_name :: fn(name: ptr[mut u8[NAME_BYTES]], text: string) -> bool {
     for i in cast[usize](0)..<name.count {
         name^[i] = 0
@@ -175,7 +175,7 @@ set_name :: fn(name: ptr[mut u8[NAME_BYTES]], text: string) -> bool {
     return true
 }
 
-// A command line's bytes from text, zeros after it: false if it doesn't fit, with room for its zero.
+/** A command line's bytes from text, zeros after it: false if it doesn't fit, with room for its zero. */
 set_line :: fn(line: ptr[mut u8[COMMAND_LINE_BYTES]], text: string) -> bool {
     for i in cast[usize](0)..<line.count {
         line^[i] = 0
@@ -217,7 +217,7 @@ copy_into :: fn(into: mut u8[], from: u8[]) {
     }
 }
 
-// A number in decimal, into digits.
+/** A number in decimal, into digits. */
 decimal :: fn(value: u64, digits: ptr[mut u8[20]]) -> string {
     reversed : u8[20]
     count := cast[usize](0)
@@ -239,7 +239,7 @@ decimal :: fn(value: u64, digits: ptr[mut u8[20]]) -> string {
     return string_of(&digits^[0], count)
 }
 
-// a, b and c, one after another, into storage.
+/** a, b and c, one after another, into storage. */
 joined :: fn(a: string, b: string, c: string, storage: ptr[mut u8[128]]) -> string {
     count := cast[usize](0)
     for text in string.[a, b, c] {

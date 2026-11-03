@@ -1,4 +1,4 @@
-/*
+/**
  * x86-64 paging's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything
  * worked, or the number of the first check that failed.
  *
@@ -29,7 +29,7 @@ FRAMEBUFFER :: arch_interface.Mapping.{protection = .ReadWrite, cache = .WriteCo
 DEVICE :: arch_interface.Mapping.{protection = .ReadWrite, cache = .Device, user = false, global = false}
 USER_DATA :: arch_interface.Mapping.{protection = .ReadWrite, cache = .WriteBack, user = true, global = false}
 
-// The memory standing in for physical memory, handed out a frame at a time.
+/** The memory standing in for physical memory, handed out a frame at a time. */
 Memory :: struct {
     direct_map_offset : u64,
     next_frame : u64,

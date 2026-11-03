@@ -3,7 +3,7 @@ package arch_x86_64
 import x86_64 from "base/intrinsics"
 import slop_os from "std/os"
 
-// Where one feature is reported: a CPUID leaf, subleaf, register and bit.
+/** Where one feature is reported: a CPUID leaf, subleaf, register and bit. */
 CpuidRegister :: enum {
     Eax,
     Ebx,
@@ -19,7 +19,7 @@ FeatureBit :: struct {
     bit : u32,
 }
 
-//SPEC: Intel SDM Vol. 2A, CPUID (Tables 3-10, 3-11, leaf 07H, leaf 0DH, leaves 80000001H and 80000007H)
+/** SPEC: Intel SDM Vol. 2A, CPUID (Tables 3-10, 3-11, leaf 07H, leaf 0DH, leaves 80000001H and 80000007H) */
 FEATURE_BITS :: FeatureBit.[
     .{.X86Sse3, 1, 0, .Ecx, 0},
     .{.X86Pclmulqdq, 1, 0, .Ecx, 1},
@@ -67,7 +67,7 @@ FEATURE_BITS :: FeatureBit.[
     .{.X86InvariantTsc, 0x80000007, 0, .Edx, 8},
 ]
 
-/*
+/**
  * What SlopOS needs (decisions/0003, design/arch-x86-64.md): x86-64-v3, which includes v2, plus
  * no-execute for W^X, SYSCALL, and a local APIC. In the order they're checked.
  */
@@ -81,7 +81,7 @@ has :: fn(features: ptr[slop_os.CpuFeatures], feature: slop_os.CpuFeature) -> bo
     return slop_os.has_feature(features, feature)
 }
 
-// The CPU's features, from CPUID. Leaves the CPU doesn't have report nothing.
+/** The CPU's features, from CPUID. Leaves the CPU doesn't have report nothing. */
 detect_features :: fn() -> slop_os.CpuFeatures {
     features : slop_os.CpuFeatures
     highest_basic :: x86_64.cpuid(0).eax
@@ -107,7 +107,7 @@ register_of :: fn(result: x86_64.CpuidResult, register: CpuidRegister) -> u32 {
     }
 }
 
-// The first baseline feature the CPU lacks, or null.
+/** The first baseline feature the CPU lacks, or null. */
 missing_baseline_feature :: fn(features: ptr[slop_os.CpuFeatures]) -> string? {
     for feature in BASELINE {
         if !has(features, feature) {
@@ -117,7 +117,7 @@ missing_baseline_feature :: fn(features: ptr[slop_os.CpuFeatures]) -> string? {
     return null
 }
 
-// Each feature as the CPU manuals name it, which reads better than its enum member's name
+/** Each feature as the CPU manuals name it, which reads better than its enum member's name */
 feature_name :: fn(feature: slop_os.CpuFeature) -> string {
     return match feature {
         case .X86Cx16 => "CMPXCHG16B"

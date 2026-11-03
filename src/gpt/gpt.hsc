@@ -6,7 +6,7 @@
  *
  * It's a portable package: the partition server reads a disk with it, and its tests run hosted over a buffer.
  */
-//SPEC: UEFI Specification 2.10, §5.2.3 (protective MBR), §5.3 (GPT disk layout, header, partition entries)
+/** SPEC: UEFI Specification 2.10, §5.2.3 (protective MBR), §5.3 (GPT disk layout, header, partition entries) */
 package gpt
 
 BLOCK_BYTES : u64 : 512
@@ -17,7 +17,7 @@ ENTRY_BYTES : u32 : 128
 // Entries are kept in this many blocks: 128 entries of 128 bytes, as every table has at least
 ENTRY_COUNT : u32 : 128
 ENTRY_BLOCKS : u64 : 32
-// The partitions a table is read with, at most: the first so many entries in use
+/** The partitions a table is read with, at most: the first so many entries in use */
 MAX_PARTITIONS :: 16
 // A name's UTF-16 code units, and the most bytes it takes as UTF-8
 NAME_UNITS :: 36
@@ -25,7 +25,7 @@ NAME_BYTES :: 108
 
 Guid :: u8[16]
 
-// A table's header, as it is in its block.
+/** A table's header, as it is in its block. */
 Header :: struct #packed {
     signature : u8[8],
     revision : u32le,
@@ -45,7 +45,7 @@ Header :: struct #packed {
 
 #assert size_of(Header) == 92
 
-// A partition entry, as it is in the entries' blocks.
+/** A partition entry, as it is in the entries' blocks. */
 Entry :: struct #packed {
     type_guid : Guid,
     unique_guid : Guid,
@@ -57,7 +57,7 @@ Entry :: struct #packed {
 
 #assert size_of(Entry) == 128
 
-// A partition: its blocks, from first, count of them; its type and its own GUID, and its name as UTF-8.
+/** A partition: its blocks, from first, count of them; its type and its own GUID, and its name as UTF-8. */
 Partition :: struct {
     first : u64,
     count : u64,
@@ -68,18 +68,18 @@ Partition :: struct {
     name_length : u32,
 }
 
-// A table, as read.
+/** A table, as read. */
 Table :: struct {
     disk_guid : Guid,
     first_usable : u64,
     last_usable : u64,
     partitions : Partition[MAX_PARTITIONS],
     count : u32,
-    // Whether the primary header was bad, so the backup was read
+    /** Whether the primary header was bad, so the backup was read */
     from_backup : bool,
 }
 
-// A disk to read: block_count blocks, read through read, count blocks from first into into, true if it could.
+/** A disk to read: block_count blocks, read through read, count blocks from first into into, true if it could. */
 Disk :: struct #scoped {
     context : rawptr,
     block_count : u64,
@@ -87,15 +87,15 @@ Disk :: struct #scoped {
 }
 
 ReadError :: enum {
-    // Neither header checks out
+    /** Neither header checks out */
     NoTable,
-    // A header checks out, but its entries don't
+    /** A header checks out, but its entries don't */
     BadEntries,
-    // The disk couldn't be read
+    /** The disk couldn't be read */
     Unreadable,
 }
 
-/*
+/**
  * The disk's table: its primary header and entries, or, where either doesn't check out, its backup's. buffer holds
  * the entries as they're read, at least ENTRY_BLOCKS blocks.
  */
@@ -118,7 +118,7 @@ read_table :: fn(disk: ptr[Disk], buffer: mut u8[]) -> Result[Table, ReadError] 
     }
 }
 
-// The table whose header is at block at, if it and its entries check out.
+/** The table whose header is at block at, if it and its entries check out. */
 read_at :: fn(disk: ptr[Disk], at: u64, buffer: mut u8[]) -> Result[Table, ReadError] {
     header_block : u8[512]
     if !disk.read(disk.context, at, 1, header_block) {
@@ -165,7 +165,7 @@ read_at :: fn(disk: ptr[Disk], at: u64, buffer: mut u8[]) -> Result[Table, ReadE
     return .Ok(table)
 }
 
-/*
+/**
  * Whether a header read at block at, of a disk of block_count blocks, is one: its signature, revision and size, its
  * CRC32 over its size with its own field zero, where it says it is, and its usable blocks and entries on the disk.
  */
@@ -200,7 +200,7 @@ header_checks_out :: fn(header: ptr[Header], block: u8[], at: u64, block_count: 
     return first <= last && last < block_count && entries < block_count && entries + ENTRY_BLOCKS <= block_count
 }
 
-// A GPT name's UTF-16LE code units as UTF-8, up to its first zero: its length. Unpaired surrogates become '?'.
+/** A GPT name's UTF-16LE code units as UTF-8, up to its first zero: its length. Unpaired surrogates become '?'. */
 utf8_of_name :: fn(name: ptr[u16le[NAME_UNITS]], into: ptr[mut u8[NAME_BYTES]]) -> u32 {
     length : usize = 0
     i : usize = 0
@@ -232,7 +232,7 @@ utf8_of_name :: fn(name: ptr[u16le[NAME_UNITS]], into: ptr[mut u8[NAME_BYTES]]) 
     return cast[u32](length)
 }
 
-// code as UTF-8 at at in into, if it fits: where the next goes.
+/** code as UTF-8 at at in into, if it fits: where the next goes. */
 put_utf8 :: fn(into: ptr[mut u8[NAME_BYTES]], at: usize, code: u32) -> usize {
     bytes : u8[4]
     count : usize = 0
@@ -270,7 +270,7 @@ put_utf8 :: fn(into: ptr[mut u8[NAME_BYTES]], at: usize, code: u32) -> usize {
     return at + count
 }
 
-// A partition's name, as text.
+/** A partition's name, as text. */
 name_of :: fn(partition: ptr[Partition]) -> string {
     return string_of(&partition.name[0], cast[usize](partition.name_length))
 }
@@ -284,7 +284,7 @@ is_zero :: fn(guid: Guid) -> bool {
     return true
 }
 
-// CRC-32 as Ethernet, zlib and GPT have it: reflected, polynomial 0xedb88320, starting and ending inverted.
+/** CRC-32 as Ethernet, zlib and GPT have it: reflected, polynomial 0xedb88320, starting and ending inverted. */
 crc32 :: fn(bytes: u8[]) -> u32 {
     crc := cast[u32](0xffffffff)
     for byte in bytes {
@@ -298,7 +298,7 @@ crc32 :: fn(bytes: u8[]) -> u32 {
 
 // Writing a table
 
-// A partition to write: its blocks, its type, its GUID and its name, ASCII.
+/** A partition to write: its blocks, its type, its GUID and its name, ASCII. */
 NewPartition :: struct {
     first : u64,
     count : u64,
@@ -307,7 +307,7 @@ NewPartition :: struct {
     name : string,
 }
 
-/*
+/**
  * A table for a disk of block_count blocks, written into image, the disk's bytes: the protective MBR, the primary
  * header and entries, and the backup entries and header at the end. The partitions must be in the usable blocks,
  * from ENTRY_BLOCKS + 2 to block_count - ENTRY_BLOCKS - 2; false if one isn't, or there are too many.
@@ -379,7 +379,7 @@ put_header :: fn(image: mut u8[], at: u64, alternate: u64, entries_block: u64, f
     }
 }
 
-// A byte, little-endian u32, into image, where it fits.
+/** A byte, little-endian u32, into image, where it fits. */
 put_u8 :: fn(image: mut u8[], at: usize, value: u8) {
     if at < image.count {
         image[at] = value

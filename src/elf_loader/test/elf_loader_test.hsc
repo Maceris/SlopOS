@@ -1,4 +1,4 @@
-/*
+/**
  * The ELF loader's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked,
  * or the number of the first check that failed. Its argument is the folder the build put SlopOS's programs
  * in, and it loads hello.elf from there into a buffer, relocates it, then refuses copies of it made wrong.
@@ -56,7 +56,7 @@ checks :: fn() -> int {
     return refusals(file, executable)
 }
 
-// Whether a result is Ok.
+/** Whether a result is Ok. */
 done :: fn(result: Result[void, elf_loader.LoadError]) -> bool {
     return match result {
         case Ok => true
@@ -64,7 +64,7 @@ done :: fn(result: Result[void, elf_loader.LoadError]) -> bool {
     }
 }
 
-// Whether file reads as an executable.
+/** Whether file reads as an executable. */
 read_works :: fn(file: u8[]) -> bool {
     return match elf_loader.read(file) {
         case Ok => true
@@ -72,7 +72,7 @@ read_works :: fn(file: u8[]) -> bool {
     }
 }
 
-// What a result refused with, or NotElf for one that wasn't refused, which no check here expects.
+/** What a result refused with, or NotElf for one that wasn't refused, which no check here expects. */
 refused :: fn(result: Result[void, elf_loader.LoadError]) -> elf_loader.LoadError {
     return match result {
         case Error(error) => error
@@ -80,7 +80,7 @@ refused :: fn(result: Result[void, elf_loader.LoadError]) -> elf_loader.LoadErro
     }
 }
 
-// read's error for a copy of file, changed at offset to value, of size bytes.
+/** read's error for a copy of file, changed at offset to value, of size bytes. */
 changed :: fn(file: u8[], offset: u64, size: u64, value: u64) -> elf_loader.LoadError? {
     copy, error :: runtime.new_array(u8, file.count)
     if error != null {
@@ -104,7 +104,7 @@ changed :: fn(file: u8[], offset: u64, size: u64, value: u64) -> elf_loader.Load
     }
 }
 
-// Copies of file made wrong, each refused for what's wrong with it.
+/** Copies of file made wrong, each refused for what's wrong with it. */
 refusals :: fn(file: u8[], executable: elf_loader.Executable) -> int {
     if changed(file, 0, 1, 0) != .NotElf {
         return 20
@@ -151,7 +151,7 @@ refusals :: fn(file: u8[], executable: elf_loader.Executable) -> int {
     return 0
 }
 
-// The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness)
+/** The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness) */
 main :: fn() -> int {
     return hosted_faults.run(checks)
 }

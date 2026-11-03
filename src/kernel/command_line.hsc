@@ -2,72 +2,76 @@ package kernel
 
 import robustness from "../robustness"
 
-/*
+/**
  * The kernel's command line: words separated by spaces. Unknown words are ignored, so a command
  * line written for a newer kernel still boots an older one.
  */
 Options :: struct {
-    /*
+    /**
      * test_exit: when the kernel stops, ask the emulator to exit with the reason's code
      * (arch_interface.test_exit). For tests that boot the kernel; never on real hardware.
      */
     test_exit : bool,
-    /*
+    /**
      * test_fault: once booted, run an invalid instruction instead of going idle, so a test can
      * check that kernel faults are reported and stop the kernel.
      */
     test_fault : bool,
-    // test_assert: once booted, fail an assertion, so a test can check that assertions stop the kernel.
+    /** test_assert: once booted, fail an assertion, so a test can check that assertions stop the kernel. */
     test_assert : bool,
-    // test_nmi: once booted, raise an NMI, so a test can check that the kernel resumes after one.
+    /** test_nmi: once booted, raise an NMI, so a test can check that the kernel resumes after one. */
     test_nmi : bool,
-    // test_fibers: once booted, run two fibers taking turns, to check fibers suspend and resume.
+    /** test_fibers: once booted, run two fibers taking turns, to check fibers suspend and resume. */
     test_fibers : bool,
-    // test_segments: once booted, run a fiber that grows onto more stack segments (a morestack kernel).
+    /** test_segments: once booted, run a fiber that grows onto more stack segments (a morestack kernel). */
     test_segments : bool,
-    // test_pool: once booted, run two fiber pools on CPUs 1 to 5 (needs 6 CPUs).
+    /** test_pool: once booted, run two fiber pools on CPUs 1 to 5 (needs 6 CPUs). */
     test_pool : bool,
-    /*
+    /**
      * test_write_code: once booted, write to the kernel's own code, so a test can check that its
      * page tables keep code read-only (W^X).
      */
     test_write_code : bool,
-    // test_heap: once booted, allocate, resize and free blocks of many sizes from the kernel heap.
+    /** test_heap: once booted, allocate, resize and free blocks of many sizes from the kernel heap. */
     test_heap : bool,
-    /*
+    /**
      * no_kaslr: lay out the kernel's own regions, like the kernel window, at the same addresses on
      * every boot (decisions/0021). The bootloader's configuration does the same for the image and the
      * direct map.
      */
     no_kaslr : bool,
-    // test_clock: once booted, check the monotonic clock keeps time with the counter.
+    /** test_clock: once booted, check the monotonic clock keeps time with the counter. */
     test_clock : bool,
-    // test_shootdown: once booted, change a mapping every CPU has used, and check they all see the change.
+    /** test_shootdown: once booted, change a mapping every CPU has used, and check they all see the change. */
     test_shootdown : bool,
-    // test_tickless: once booted, count the timer interrupts of the CPUs other than the boot CPU, idle (decisions/0128).
+    /**
+     * test_tickless: once booted, count the timer interrupts of the CPUs other than the boot CPU, idle (decisions/0128).
+     */
     test_tickless : bool,
-    // test_ioapic: once booted, route the emulator's test device through its interrupt controller.
+    /** test_ioapic: once booted, route the emulator's test device through its interrupt controller. */
     test_ioapic : bool,
-    /*
+    /**
      * test_device: grant the root task what the firmware tables say of the emulator's test device, and run the
      * device while an IRQ for its line exists, for the test_devices program (decisions/0069).
      */
     test_device : bool,
-    /*
+    /**
      * panic_reset: when the kernel stops for a fault, reset the machine rather than halt, so the boot after keeps its
      * panic record (boot_info.PanicRecord, decisions/0134); before test_exit.
      */
     panic_reset : bool,
-    // test_panic_once: once booted, fail an assertion, unless the bootloader handed over the record of the last one.
+    /**
+     * test_panic_once: once booted, fail an assertion, unless the bootloader handed over the record of the last one.
+     */
     test_panic_once : bool,
-    // no_root_task: don't start the root task from the first boot module (root_task.hsc).
+    /** no_root_task: don't start the root task from the first boot module (root_task.hsc). */
     no_root_task : bool,
-    /*
+    /**
      * kernel_reserve=<MiB>: how much of the memory free at boot the kernel keeps out of the root budget, for its own
      * allocations (decisions/0098); 0, or no such word, for the default, a sixteenth of it and at least 8 MiB.
      */
     kernel_reserve_mib : u64,
-    /*
+    /**
      * fail=<point>:<n>, fail=any:<n> or fail=count: fault injection (robustness.hsc, decisions/0096), in a kernel built
      * with robustness=on only. Any other kernel ignores the word.
      */
@@ -164,7 +168,7 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
 }
 
-// A decimal number's value, or 0 if it isn't one.
+/** A decimal number's value, or 0 if it isn't one. */
 number_of :: fn(text: string) -> u64 {
     value : u64 = 0
     for character in text {

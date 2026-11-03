@@ -41,7 +41,7 @@ import slab from "slab"
  * Lock order: a memory's lock, then a space's.
  */
 
-// A leaf of a memory object's page array holds this many frames' addresses.
+/** A leaf of a memory object's page array holds this many frames' addresses. */
 PAGES_PER_LEAF :: 512
 
 Memory :: struct #align(16) {
@@ -58,7 +58,7 @@ Memory :: struct #align(16) {
     // Device memory's: where it starts, 0 for other memory.
     physical : u64,
     cache : arch_interface.CacheMode,
-    // How it can be mapped (slop_os.PROTECTION_*): everything, or for a window, what its parent's handle allowed.
+    /** How it can be mapped (slop_os.PROTECTION_*): everything, or for a window, what its parent's handle allowed. */
     allowed : u32,
     // A window's: its parent, and the page of the parent it starts at; its neighbors among the parent's
     // windows, under the parent's lock, and whether it's linked there.
@@ -67,11 +67,13 @@ Memory :: struct #align(16) {
     window_next : u64,
     window_previous : u64,
     in_parent : bool,
-    // Its own windows, under lock.
+    /** Its own windows, under lock. */
     first_window : u64,
-    // A boot module's: its frames, at physical, go to the frame allocator once it's released.
+    /** A boot module's: its frames, at physical, go to the frame allocator once it's released. */
     boot_module : bool,
-    // Contiguous memory's (create_contiguous_memory): the order of the block at physical, plus one; 0 for other memory.
+    /**
+     * Contiguous memory's (create_contiguous_memory): the order of the block at physical, plus one; 0 for other memory.
+     */
     block_order : u64,
     // DMA memory's: its DmaDomain, and that domain's generation then (devices.hsc); where its domain mapped it, 0 for
     // nowhere (translation.hsc).
@@ -86,12 +88,12 @@ Memory :: struct #align(16) {
     fault_waiters : u64,
 }
 
-// A range of a memory object, mapped in an address space.
+/** A range of a memory object, mapped in an address space. */
 MemoryMapping :: struct {
     // The slab allocator's, while the slot is free.
     free_link : u64,
     space : u64,
-    // The space's generation when it was charged for this.
+    /** The space's generation when it was charged for this. */
     space_generation : u32,
     // 1 once someone is taking it down.
     claimed : u32,
@@ -107,14 +109,14 @@ MemoryMapping :: struct {
     memory_previous : u64,
 }
 
-// The frames a memory object of size bytes keeps its frames' addresses in: the directory, and its leaves.
+/** The frames a memory object of size bytes keeps its frames' addresses in: the directory, and its leaves. */
 page_array_bytes :: fn(size: u64) -> u64 {
     pages :: size / frames.FRAME_SIZE
     leaves :: (pages + PAGES_PER_LEAF - 1) / PAGES_PER_LEAF
     return (1 + leaves) * frames.FRAME_SIZE
 }
 
-/*
+/**
  * A memory object of size bytes, owned by owner (a Process's address, 0 for the kernel), charged to
  * budget for all of it, with its page array.
  */
@@ -122,7 +124,9 @@ create_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, size: u64)
     return create_memory_charging(kernel, owner, budget, size, size)
 }
 
-// create_memory's, charging charged bytes for its pages: its size, or for paged memory, none until each is supplied.
+/**
+ * create_memory's, charging charged bytes for its pages: its size, or for paged memory, none until each is supplied.
+ */
 create_memory_charging :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, size: u64, charged: u64)
     -> Result[ptr[mut Memory], slop_os.MemoryError] {
     if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || size > slop_os.MAX_MEMORY_SIZE {
@@ -161,7 +165,7 @@ create_memory_charging :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, s
     return .Ok(memory)
 }
 
-/*
+/**
  * Device memory of size bytes at physical, which isn't RAM the kernel owns, owned by owner and charged
  * to budget for its slot.
  */
@@ -194,7 +198,7 @@ create_device_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, phy
     return .Ok(memory)
 }
 
-/*
+/**
  * The framebuffer the kernel's console draws on, given up once device memory over it is made for user space: the
  * terminal service draws there from then on (decisions/0138), and the log stays on the serial console.
  */
@@ -212,7 +216,7 @@ give_up_framebuffer :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64) {
     }
 }
 
-/*
+/**
  * A window onto size bytes of parent from offset, owned by owner and charged to budget for its slot,
  * mappable only as allowed (slop_os.PROTECTION_*).
  */
@@ -260,13 +264,13 @@ create_window :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, parent: pt
     return .Ok(window)
 }
 
-// Where page's frame's address is kept.
+/** Where page's frame's address is kept. */
 page_slot :: fn(memory: ptr[Memory], page: u64) -> ptr[mut u64] {
     leaf :: cast[ptr[u64]](memory.directory + (page / PAGES_PER_LEAF % PAGES_PER_LEAF) * 8)^
     return cast[ptr[mut u64]](leaf + page % PAGES_PER_LEAF * 8)
 }
 
-/*
+/**
  * page's frame, a zeroed one if it had none yet: its physical address, 0 if there are no frames. Device
  * memory's is its address; a window's, its parent's.
  */
@@ -332,7 +336,7 @@ copy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], offset: u64, spa
     return null
 }
 
-/*
+/**
  * Destroying a memory object takes down every mapping of it, and destroys its windows; a window leaves
  * its parent's list.
  */
@@ -377,7 +381,7 @@ destroy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
     }
 }
 
-/*
+/**
  * Destroy memory's windows, each once the destroy running on this CPU is done (destroy_later), off its
  * list first, so none is reached twice.
  */
@@ -396,7 +400,7 @@ destroy_windows :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
     }
 }
 
-// Take window off parent's list, if it's on it. Takes the parent's lock as held.
+/** Take window off parent's list, if it's on it. Takes the parent's lock as held. */
 unlink_window :: fn(parent: ptr[mut Memory], window: ptr[mut Memory]) {
     if !window.in_parent {
         return void
@@ -413,7 +417,7 @@ unlink_window :: fn(parent: ptr[mut Memory], window: ptr[mut Memory]) {
     window.in_parent = false
 }
 
-/*
+/**
  * A boot module's memory (root_task.hsc), read-only: the size bytes of frames at physical the bootloader loaded it into,
  * owned by owner and charged to budget for its slot. Its frames go to the frame allocator once it's released. It may
  * be mapped to run, never written: a typed library's text is mapped from it, shared (decisions/0120), as a handle with
@@ -437,7 +441,7 @@ create_module_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, phy
     return .Ok(memory)
 }
 
-/*
+/**
  * Memory in one block of frames, pinned, zeroed, ending at or below limit (0 for none), owned by owner and charged to
  * budget for the whole block: for DMA (devices.hsc) and the firmware tables' copy. allowed is how it can be mapped
  * (slop_os.PROTECTION_*).
@@ -478,7 +482,7 @@ create_contiguous_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64,
     return .Ok(memory)
 }
 
-// Once no CPU can use it: its frames, and its page array; device memory and windows have neither.
+/** Once no CPU can use it: its frames, and its page array; device memory and windows have neither. */
 release_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
     if memory.block_order != 0 {
         frames.free(&kernel.frames, cast[boot_info.PhysicalAddress](memory.physical), memory.block_order - 1)
@@ -571,7 +575,7 @@ memory_map :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], space: ptr[mu
     return null
 }
 
-// Unmap the mapping that starts at address in space.
+/** Unmap the mapping that starts at address in space. */
 memory_unmap :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64) -> slop_os.MemoryError? {
     lock_at(&space.lock, .Space)
     found := cast[u64](0)
@@ -600,7 +604,7 @@ memory_unmap :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], addres
     return null
 }
 
-// Destroying a space takes down the memory mapped in it, so no memory object reaches it once it's released.
+/** Destroying a space takes down the memory mapped in it, so no memory object reaches it once it's released. */
 take_down_space_mappings :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace]) {
     loop {
         lock_at(&space.lock, .Space)
@@ -626,13 +630,13 @@ take_down_space_mappings :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSp
     }
 }
 
-// Whether this caller is the one to take mapping down.
+/** Whether this caller is the one to take mapping down. */
 claim :: fn(mapping: ptr[mut MemoryMapping]) -> bool {
     _, first :: intrinsics.interlocked_compare_exchange_u32(&mapping.claimed, 1, 0)
     return first
 }
 
-/*
+/**
  * Take down a mapping this caller claimed: off its space's list, so no fault maps more of it, its range
  * unmapped, off its memory's list, then freed.
  */
@@ -651,7 +655,7 @@ take_down :: fn(kernel: ptr[mut Kernel], mapping: ptr[mut MemoryMapping]) {
     uncharge(cast[u64](space), generation, kernel.pools.mappings.object_size)
 }
 
-/*
+/**
  * A page fault in user mode: if it's in memory mapped in the thread's space, and the access is one the
  * mapping allows, the page is mapped, with a frame filled with zeros if it hadn't been touched, or for paged memory,
  * the one its pager supplied, the thread waiting for it if it hasn't yet (paging.hsc). Failed if it isn't, and the
@@ -722,7 +726,7 @@ resolve_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arc
 LARGE_PAGE : u64 : 2 * 1024 * 1024
 LARGE_ORDER : u64 : 9
 
-/*
+/**
  * Large pages for anonymous memory (decisions/0127, 0129): the frame of the 2 MiB of memory around page, if a large
  * page can map it at address: anonymous memory, not paged, a window or device memory, of 2 MiB or more, whose 2 MiB
  * around page is whole, the mapping holds all of it at a 2 MiB-aligned address, and its leaf holds a 2 MiB block,
@@ -771,7 +775,7 @@ large_frame :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], mapping: ptr[Mem
     return held
 }
 
-// How a mapping with protection, of memory with cache, is mapped.
+/** How a mapping with protection, of memory with cache, is mapped. */
 mapping_for :: fn(protection: u32, cache: arch_interface.CacheMode) -> arch_interface.Mapping {
     kind := arch_interface.Protection.Read
     if protection & cast[u32](slop_os.PROTECTION_WRITE) != 0 {
@@ -783,7 +787,7 @@ mapping_for :: fn(protection: u32, cache: arch_interface.CacheMode) -> arch_inte
     return arch_interface.Mapping.{protection = kind, cache = cache, user = true, global = false}
 }
 
-/*
+/**
  * Whether nothing is mapped in size bytes at address in space: no memory mapping, and no channel's
  * rings. Takes the space's lock as held.
  */
@@ -822,7 +826,7 @@ overlaps :: fn(address: u64, size: u64, other: u64, other_size: u64) -> bool {
     return address < other + other_size && other < address + size
 }
 
-// Takes the space's lock as held.
+/** Takes the space's lock as held. */
 link_to_space :: fn(space: ptr[mut AddressSpace], mapping: ptr[mut MemoryMapping]) {
     mapping.space_previous = 0
     mapping.space_next = space.first_mapping
@@ -844,7 +848,7 @@ unlink_from_space :: fn(space: ptr[mut AddressSpace], mapping: ptr[mut MemoryMap
     }
 }
 
-// Takes the memory's lock as held.
+/** Takes the memory's lock as held. */
 link_to_memory :: fn(memory: ptr[mut Memory], mapping: ptr[mut MemoryMapping]) {
     mapping.memory_previous = 0
     mapping.memory_next = memory.first_mapping

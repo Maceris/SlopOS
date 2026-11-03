@@ -1,4 +1,4 @@
-/*
+/**
  * The store builder (roadmap 9b, decisions/0094): a hosted program that writes a bundle store's directory on the host,
  * for the image builder to copy into the system volume, as the bundle store keeps it: each program given an object,
  * named by its BLAKE3-256 hash in hex under objects/, with a bundle naming it, and a boot root naming each bundle by the
@@ -68,7 +68,7 @@ main :: fn() -> int {
     return 0
 }
 
-// bytes written as an object in objects, named by their hash: the hash, or null if they couldn't be.
+/** bytes written as an object in objects, named by their hash: the hash, or null if they couldn't be. */
 put :: fn(objects: string, bytes: u8[]) -> bundle.Hash? {
     hash :: bundle.hash_of(bytes)
     hex_storage : u8[64]
@@ -84,7 +84,7 @@ put :: fn(objects: string, bytes: u8[]) -> bundle.Hash? {
     return hash
 }
 
-// A path without its extension.
+/** A path without its extension. */
 without_extension :: fn(path: string) -> string {
     kept :: path.count - extension_bytes(path)
     if kept > path.count {
@@ -93,7 +93,7 @@ without_extension :: fn(path: string) -> string {
     return path[0..<kept]
 }
 
-// How many bytes of a path its extension takes, its dot's among them; 0 without one.
+/** How many bytes of a path its extension takes, its dot's among them; 0 without one. */
 extension_bytes :: fn(path: string) -> usize {
     count : usize = 0
     for character, i in path {
@@ -107,7 +107,7 @@ extension_bytes :: fn(path: string) -> usize {
     return count
 }
 
-// A path's last part, without its extension.
+/** A path's last part, without its extension. */
 stem :: fn(path: string) -> string {
     start : usize = 0
     end := path.count

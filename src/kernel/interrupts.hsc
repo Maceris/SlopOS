@@ -25,25 +25,25 @@ import concurrency from "std"
  */
 
 MAX_CONTROLLERS :: 8
-// Device interrupt IDs a CPU keeps routes for: at least as many as any architecture has.
+/** Device interrupt IDs a CPU keeps routes for: at least as many as any architecture has. */
 MAX_DEVICE_INTERRUPTS :: 256
-// Bytes of registers mapped for each controller: a GICv3 distributor's, which an I/O APIC's 4 KiB fit in.
+/** Bytes of registers mapped for each controller: a GICv3 distributor's, which an I/O APIC's 4 KiB fit in. */
 CONTROLLER_REGISTERS_SIZE : u64 : 64 * 1024
 
 InterruptError :: enum {
-    // This architecture doesn't have that kind of controller.
+    /** This architecture doesn't have that kind of controller. */
     UnsupportedKind,
-    // The registers aren't a controller of that kind.
+    /** The registers aren't a controller of that kind. */
     NotFound,
     TooManyControllers,
-    // No room for the registers in the kernel window, or memory for its page tables.
+    /** No room for the registers in the kernel window, or memory for its page tables. */
     NoMapping,
     NoSuchController,
     NoSuchLine,
     NoSuchCpu,
-    // Every device interrupt ID on that CPU is taken.
+    /** Every device interrupt ID on that CPU is taken. */
     NoFreeInterrupt,
-    // An IRQ has the line already.
+    /** An IRQ has the line already. */
     LineInUse,
 }
 
@@ -58,19 +58,19 @@ WiredController :: struct {
     lines : u32,
 }
 
-// Where one of a CPU's device interrupt IDs comes from.
+/** Where one of a CPU's device interrupt IDs comes from. */
 DeviceRoute :: struct {
     used : bool,
     controller : u32,
     line : u32,
     trigger : arch_interface.Trigger,
-    // Interrupts that arrived.
+    /** Interrupts that arrived. */
     count : u64,
-    // The Irq object it's for (irqs.hsc), 0 for one the kernel routed for itself.
+    /** The Irq object it's for (irqs.hsc), 0 for one the kernel routed for itself. */
     irq : u64,
 }
 
-/*
+/**
  * Map a controller's registers and set it up with every line masked: its index, for routing its
  * lines. kind and registers come from the firmware tables, through the platform service.
  */
@@ -161,10 +161,10 @@ route_line :: fn(
     return .Ok(id)
 }
 
-// A route's controller for a message-signaled interrupt, which comes from no controller's line (devices.hsc).
+/** A route's controller for a message-signaled interrupt, which comes from no controller's line (devices.hsc). */
 MSI_CONTROLLER : u32 : 0xffffffff
 
-/*
+/**
  * A free device interrupt ID on the CPU with index cpu_index for irq, a message-signaled IRQ, whose line is its
  * event: the ID. The kernel routes one for itself as controller's line, irq 0, as an IOMMU's faults are.
  */
@@ -211,7 +211,7 @@ unmask_line :: fn(kernel: ptr[mut Kernel], controller_index: u32, line: u32) {
     unlock_at(&wired.lock, .Wired)
 }
 
-// Whether an IRQ has controller_index's line, on any CPU. Takes interrupts_lock as held.
+/** Whether an IRQ has controller_index's line, on any CPU. Takes interrupts_lock as held. */
 line_has_irq :: fn(kernel: ptr[Kernel], controller_index: u32, line: u32) -> bool {
     for address in kernel.per_cpus {
         if address != 0 {
@@ -226,7 +226,7 @@ line_has_irq :: fn(kernel: ptr[Kernel], controller_index: u32, line: u32) -> boo
     return false
 }
 
-// Forget the route at slot on the CPU with index cpu_index, an IRQ's being destroyed.
+/** Forget the route at slot on the CPU with index cpu_index, an IRQ's being destroyed. */
 unroute :: fn(kernel: ptr[mut Kernel], cpu_index: u32, slot: u32) {
     per_cpus :: kernel.per_cpus
     if cast[usize](cpu_index) >= per_cpus.count || per_cpus[cpu_index] == 0 || cast[usize](slot) >= MAX_DEVICE_INTERRUPTS {
@@ -245,7 +245,7 @@ controller_at :: fn(kernel: ptr[mut Kernel], index: u32) -> ptr[mut WiredControl
     return &kernel.controllers[index]
 }
 
-/*
+/**
  * A device interrupt on this CPU, from idle or user mode. A level-triggered line stays masked until
  * it's acknowledged; the interrupt is acknowledged to the local controller either way.
  */

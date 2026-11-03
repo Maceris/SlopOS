@@ -1,4 +1,4 @@
-/*
+/**
  * The virtio-rng driver (decisions/0074): a virtio entropy device's one queue, through the virtio-pci transport
  * (src/virtio), its interrupts through one MSI-X vector. It offers itself to the entropy service as a source
  * (entropy.AddSource), on a channel of the rng protocol, and answers each Read with what the device gives: a buffer
@@ -18,7 +18,7 @@ import virtio from "../../virtio"
 PAGE : u64 : 4096
 IRQ_KEY : u64 : 1
 REQUESTS_KEY : u64 : 2
-// The longest the device may take to fill a buffer before a Read is answered with what there is
+/** The longest the device may take to fill a buffer before a Read is answered with what there is */
 FILL_NANOSECONDS : u64 : 1_000_000_000
 
 Driver :: struct {
@@ -85,7 +85,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     return 0
 }
 
-// Every Read on end, until its other end is gone.
+/** Every Read on end, until its other end is gone. */
 serve :: fn(driver: ptr[mut Driver], end: slop_os.Channel) {
     into := os.Incoming.{}
     loop {
@@ -116,7 +116,7 @@ serve :: fn(driver: ptr[mut Driver], end: slop_os.Channel) {
     }
 }
 
-// count bytes from the device into the buffer: how many it wrote, waiting for its MSI.
+/** count bytes from the device into the buffer: how many it wrote, waiting for its MSI. */
 fill :: fn(driver: ptr[mut Driver], count: u32) -> u32 {
     _ = virtio.offer(&driver.queue, driver.buffer_device, count, true)
     deadline :: (slop_os.clock_monotonic() or_else 0) + FILL_NANOSECONDS

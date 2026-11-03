@@ -4,7 +4,7 @@ import os from "std"
 import slop_os from "std/os"
 import read_only_dir from "std/os/slop_os"
 
-/*
+/**
  * What a session's powerbox asks the trusted path (decisions/0156): Ask, a request of one of the session's programs, for
  * the user to answer. The terminal service shows it on the status line until the secure attention key opens the chooser,
  * which lists the home given, read only; it's answered once the user has chosen (a path beneath the home, and whether
@@ -19,7 +19,7 @@ PROTOCOL :: slop_os.Protocol.{name = "prompt", major_version = 1, lending = .Ser
 Kind :: enum #backed_by(u32) {
     File = 1,
     Directory = 2,
-    // Another account, which elevation makes
+    /** Another account, which elevation makes */
     Account = 3,
 }
 
@@ -36,7 +36,7 @@ Ask :: struct {
     home : os.Channel[read_only_dir.ReadOnlyDir],
 }
 
-// What the user chose: a path beneath the home, whether it's a new file, and whether to keep it.
+/** What the user chose: a path beneath the home, whether it's a new file, and whether to keep it. */
 Choice :: struct {
     path : slop_os.Relative[u8],
     new : bool,
@@ -49,7 +49,7 @@ Request :: union {
 
 Response :: union {
     Chosen(Choice),
-    // An Ask for an account answered: the account made, by its name
+    /** An Ask for an account answered: the account made, by its name */
     AccountMade(slop_os.Relative[u8]),
     Refused,
     Unsupported,

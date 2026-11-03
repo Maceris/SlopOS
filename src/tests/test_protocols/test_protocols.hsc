@@ -1,4 +1,4 @@
-/*
+/**
  * test_protocols (decisions/0071): the code os.protocol_code generates, for a protocol of the test's own, Probe,
  * over a channel the test holds both ends of:
  * - a message with a bool, an enum, a handle, a Relative of bytes and a typed channel goes through: the handle and
@@ -49,7 +49,7 @@ Response :: union {
     Unsupported,
 }
 
-// A ping is answered the same again; a carry moves handles, which only happens once.
+/** A ping is answered the same again; a carry moves handles, which only happens once. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Ping(_) => true
@@ -141,7 +141,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     return failed
 }
 
-// What a receive gave, as a number.
+/** What a receive gave, as a number. */
 arrival_code :: fn(arrival: os.Arrival) -> u64 {
     return match arrival {
         case Received => cast[u64](0)
@@ -160,7 +160,7 @@ Field :: enum {
     Data,
 }
 
-// Where a field of Carry's Everything is in a message.
+/** Where a field of Carry's Everything is in a message. */
 offset_of_field :: fn(field: Field) -> usize {
     payload :: payload_offset()
     if field == .Flag {
@@ -175,7 +175,7 @@ offset_of_field :: fn(field: Field) -> usize {
     return payload + offset_of(Everything, data)
 }
 
-// Where Carry's Everything starts: after the tag, aligned for it.
+/** Where Carry's Everything starts: after the tag, aligned for it. */
 payload_offset :: fn() -> usize {
     alignment :: align_of(Everything)
     return (1 + alignment - 1) & ~(alignment - 1)
@@ -235,7 +235,7 @@ refused_relative :: fn(end: slop_os.Channel, sender_port: slop_os.Port, reader: 
     return arrival_code(receive_request(reader, port, into, true))
 }
 
-// value at bytes[at], if there's room.
+/** value at bytes[at], if there's room. */
 put :: fn(bytes: mut u8[], at: usize, value: u8) {
     if at < bytes.count {
         bytes[at] = value

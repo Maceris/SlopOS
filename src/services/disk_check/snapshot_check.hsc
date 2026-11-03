@@ -145,7 +145,9 @@ volume_request :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u3
     return ask_storage(manager, port, &out)
 }
 
-// A container's volume, or "volume@snapshot", opened, with a passphrase if it's encrypted, or without one, if it's empty.
+/**
+ * A container's volume, or "volume@snapshot", opened, with a passphrase if it's encrypted, or without one, if it's empty.
+ */
 open_named :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, name: string, passphrase: string) -> storage.Response {
     out := os.Outgoing.{}
     opening :: os.begin[storage.Request](&out)

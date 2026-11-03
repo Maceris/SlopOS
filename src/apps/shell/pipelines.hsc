@@ -15,7 +15,7 @@ import stream from "std/os/slop_os"
  * a value as the first stage, work on those values in the shell, a list, so a filter needs no process.
  */
 
-// The built-in stages.
+/** The built-in stages. */
 STAGES :: string.["where", "map", "sort", "take", "group"]
 
 is_stage :: fn(tree: ptr[Node]) -> bool {
@@ -30,7 +30,9 @@ is_stage :: fn(tree: ptr[Node]) -> bool {
     return false
 }
 
-// Whether a pipeline's element is a program's call: a call that isn't a variable, a built-in, a stage or a function.
+/**
+ * Whether a pipeline's element is a program's call: a call that isn't a variable, a built-in, a stage or a function.
+ */
 is_program :: fn(shell: ptr[Shell], tree: ptr[Node]) -> bool {
     if tree.kind != .Call || is_stage(tree) || tree.text == "print" || tree.text == "exit" || tree.text == "cd" {
         return false
@@ -38,7 +40,7 @@ is_program :: fn(shell: ptr[Shell], tree: ptr[Node]) -> bool {
     return (lookup(shell.scope, tree.text) is_none) && (function_named(shell, tree.text) is_none)
 }
 
-// A pipeline's value: what its last stage gives.
+/** A pipeline's value: what its last stage gives. */
 pipeline :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     current : Value? = null
     at : usize = 0
@@ -76,7 +78,7 @@ pipeline :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Valu
 
 // ---- Programs
 
-/*
+/**
  * Programs run together, each one's output to the next one's input, given what comes before the first, if anything:
  * what the last one writes, a list, or nothing if it has no output. The first to fail is the error.
  */
@@ -192,7 +194,9 @@ run_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping : 
 
 NO_END :: cast[slop_os.Channel](slop_os.NO_HANDLE)
 
-// Programs running together, on the heap: their calls, and the shell's ends of the streams into the first and from the last.
+/**
+ * Programs running together, on the heap: their calls, and the shell's ends of the streams into the first and from the last.
+ */
 Running :: struct {
     calls : ptr[mut Call][..],
     into : slop_os.Channel,
@@ -200,7 +204,7 @@ Running :: struct {
     writer : stream.Writer[stream.Untyped]?,
 }
 
-// What programs running together held, given back, each waited for first if it started.
+/** What programs running together held, given back, each waited for first if it started. */
 end_running :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) {
     match running.writer {
         case Some(writer) => {
@@ -240,7 +244,7 @@ same_hash :: fn(a: u8[32], b: u8[32]) -> bool {
     return true
 }
 
-/*
+/**
  * What comes before the first program, written for it: each item of a list, or the value alone, as a record of its
  * input's type, into a ring big enough for all of them, so writing never waits for the program to read.
  */
@@ -292,7 +296,7 @@ write_given :: fn(running: ptr[mut Running], call: ptr[mut Call], given #escapin
     return .Ok(.Null)
 }
 
-// What the last program writes, read: a list of its records as values, by its manifest.
+/** What the last program writes, read: a list of its records as values, by its manifest. */
 read_output :: fn(running: ptr[mut Running], call: ptr[mut Call]) -> Result[Value, EvalError] {
     writes :: parameter_giving(call, .Output) or_return error_at(call.tree.at, "it has no output")
     end :: running.from
@@ -320,7 +324,7 @@ read_output :: fn(running: ptr[mut Running], call: ptr[mut Call]) -> Result[Valu
 
 // ---- Records as values
 
-/*
+/**
  * A value of the type at place, at `at` in a record's bytes (as std/schema's write_value writes one), as the shell's:
  * integers, bools, text, an enum's member's name, a duration, a record of a struct's fields, an optional's value or
  * null, and a list of an array's items. Text is copied: the record's bytes are the stream's.
@@ -435,7 +439,7 @@ decode :: fn(manifest: ptr[schema.Schema], place: usize, bytes: u8[], at: usize,
     return .Null
 }
 
-// count bytes at `at`, little-endian; 0 if they aren't all there.
+/** count bytes at `at`, little-endian; 0 if they aren't all there. */
 number_in :: fn(bytes: u8[], at: usize, count: usize) -> u64 {
     if count > 8 || at > bytes.count || count > bytes.count - at {
         return 0
@@ -447,7 +451,7 @@ number_in :: fn(bytes: u8[], at: usize, count: usize) -> u64 {
     return result
 }
 
-// count bytes at `at`, as text of the shell's own; "" if they aren't all there.
+/** count bytes at `at`, as text of the shell's own; "" if they aren't all there. */
 text_in :: fn(bytes: u8[], at: usize, count: usize) -> string {
     if count == 0 || at >= bytes.count || count > bytes.count - at {
         return ""
@@ -457,7 +461,7 @@ text_in :: fn(bytes: u8[], at: usize, count: usize) -> string {
 
 // ---- The built-in stages
 
-// A built-in stage's value, from what came before it.
+/** A built-in stage's value, from what came before it. */
 run_stage :: fn(shell: ptr[mut Shell], stage #escaping : ptr[Node], given #escaping : Value) -> Result[Value, EvalError] {
     items :: items_of(given).items
     made :: new_list()
@@ -493,7 +497,7 @@ run_stage :: fn(shell: ptr[mut Shell], stage #escaping : ptr[Node], given #escap
     return grouped(shell, stage, items)
 }
 
-// What a stage works on: a list's items, nothing for null, or a value alone.
+/** What a stage works on: a list's items, nothing for null, or a value alone. */
 items_of :: fn(given #escaping : Value) -> ptr[mut ValueList] {
     match given {
         case List(list) => return list
@@ -506,7 +510,7 @@ items_of :: fn(given #escaping : Value) -> ptr[mut ValueList] {
     }
 }
 
-// An expression's value for one item: its fields bound as names, and the item itself as it.
+/** An expression's value for one item: its fields bound as names, and the item itself as it. */
 of_item :: fn(shell: ptr[mut Shell], item #escaping : Value, expression #escaping : ptr[Node]) -> Result[Value, EvalError] {
     scope := runtime.new(Scope)
     scope.parent = shell.scope
@@ -528,7 +532,7 @@ of_item :: fn(shell: ptr[mut Shell], item #escaping : Value, expression #escapin
     return result
 }
 
-// take's count: its one argument, a whole number.
+/** take's count: its one argument, a whole number. */
 stage_number :: fn(shell: ptr[mut Shell], stage: ptr[Node]) -> Result[i64, EvalError] {
     argument :: first_child(stage) or_return .Error(EvalError.{message = "take needs how many", at = stage.at})
     value :: if argument.kind == .Word { word_as("int", argument.text) or_else Value.Null } else { evaluate(shell, argument)? }
@@ -538,7 +542,7 @@ stage_number :: fn(shell: ptr[mut Shell], stage: ptr[Node]) -> Result[i64, EvalE
     }
 }
 
-// The field a stage's first word names, and whether --descending follows: "" for the items themselves.
+/** The field a stage's first word names, and whether --descending follows: "" for the items themselves. */
 stage_field :: fn(stage: ptr[Node]) -> (field : string, descending : bool) {
     field := ""
     descending := false
@@ -553,7 +557,7 @@ stage_field :: fn(stage: ptr[Node]) -> (field : string, descending : bool) {
     return field, descending
 }
 
-// An item's field by name, or the item for "".
+/** An item's field by name, or the item for "". */
 key_of :: fn(item: Value, name: string) -> Value {
     if name.count == 0 {
         return item
@@ -564,7 +568,9 @@ key_of :: fn(item: Value, name: string) -> Value {
     }
 }
 
-// sort [field] [--descending]: the items in order, by the field, or by themselves; those that don't compare stay put.
+/**
+ * sort [field] [--descending]: the items in order, by the field, or by themselves; those that don't compare stay put.
+ */
 sorted :: fn(shell: ptr[mut Shell], stage: ptr[Node], items #escaping : Value[]) -> Result[Value, EvalError] {
     field, descending :: stage_field(stage)
     made :: new_list()
@@ -595,7 +601,9 @@ sorted :: fn(shell: ptr[mut Shell], stage: ptr[Node], items #escaping : Value[])
     return .Ok(.List(made))
 }
 
-// group field: a record for each of the field's values, in the order they first come: the value, how many, and the items.
+/**
+ * group field: a record for each of the field's values, in the order they first come: the value, how many, and the items.
+ */
 grouped :: fn(shell: ptr[mut Shell], stage: ptr[Node], items #escaping : Value[]) -> Result[Value, EvalError] {
     name, descending :: stage_field(stage)
     if name.count == 0 {

@@ -1,4 +1,4 @@
-/*
+/**
  * test_exits (decisions/0068, 0098): how a program ends when it can't start, seen by whoever started it. Two copies of
  * the program, each watched until it ends:
  * - one launched through the process manager as if its entry took nothing, given no grants, ends with
@@ -22,10 +22,10 @@ import random_stream from "../../random_stream"
 NAME :: "test_exits"
 COPY_BUDGET : u64 : 4 << 20
 WATCH_KEY : u64 : 1
-// The second copy's: a binding keeps its key after it fires
+/** The second copy's: a binding keeps its key after it fires */
 BUILT_KEY : u64 : 2
 
-// An entry that takes nothing, which the copy's isn't.
+/** An entry that takes nothing, which the copy's isn't. */
 takes_nothing :: fn() -> int {
     return 0
 }
@@ -88,7 +88,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     return failed
 }
 
-// How the process watched on port ended: its code, once it has.
+/** How the process watched on port ended: its code, once it has. */
 ended_with :: fn(port: slop_os.Port) -> u64 {
     packets : slop_os.Packet[1]
     taken :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_else 0

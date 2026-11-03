@@ -8,13 +8,13 @@ import uefi from "std/os"
  * into pages, and a folder's names listed. FAT is the firmware's to read, so the bootloader parses none of it.
  */
 
-// A file's bytes, in pages of a memory kind the bootloader chose, which stay where they are.
+/** A file's bytes, in pages of a memory kind the bootloader chose, which stay where they are. */
 Pages :: struct {
     address : u64,
     size : u64,
 }
 
-// The ESP's root folder, or null.
+/** The ESP's root folder, or null. */
 esp_root :: fn() -> ptr[uefi.File]? {
     loaded :: uefi.protocol_of[uefi.LoadedImage](uefi.image(), uefi.LOADED_IMAGE_GUID) or_return null
     file_system :: uefi.protocol_of[uefi.SimpleFileSystem](loaded.device, uefi.SIMPLE_FILE_SYSTEM_GUID) or_return null
@@ -25,7 +25,7 @@ esp_root :: fn() -> ptr[uefi.File]? {
     return cast[ptr[uefi.File]](root)
 }
 
-// A path in UTF-16 as the firmware takes it, folders separated by backslashes, ending in a zero: into storage.
+/** A path in UTF-16 as the firmware takes it, folders separated by backslashes, ending in a zero: into storage. */
 path16 :: fn(text: string, storage: ptr[mut u16[256]]) -> bool {
     if text.count + 1 > storage^.count {
         return false
@@ -41,7 +41,7 @@ path16 :: fn(text: string, storage: ptr[mut u16[256]]) -> bool {
     return true
 }
 
-// The file at path, opened to read, or null.
+/** The file at path, opened to read, or null. */
 open_file :: fn(root: ptr[uefi.File], path: string) -> ptr[uefi.File]? {
     name : u16[256]
     if !path16(path, &name) {
@@ -54,7 +54,7 @@ open_file :: fn(root: ptr[uefi.File], path: string) -> ptr[uefi.File]? {
     return cast[ptr[uefi.File]](opened)
 }
 
-// The size of a file, from its information, or null.
+/** The size of a file, from its information, or null. */
 file_size :: fn(file: ptr[uefi.File]) -> u64? {
     // The information, then its name, which a file's on the ESP keeps short
     buffer : u64[64]
@@ -66,7 +66,7 @@ file_size :: fn(file: ptr[uefi.File]) -> u64? {
     return cast[ptr[uefi.FileInfo]](cast[rawptr](&buffer[0])).file_size
 }
 
-/*
+/**
  * The whole file at path, in pages of memory_kind, and its size; null if it isn't there or can't be read whole. Pages
  * are zeroed past its end.
  */
@@ -89,7 +89,7 @@ read_file :: fn(root: ptr[uefi.File], path: string, memory_kind: u32) -> Pages? 
     return Pages.{address = address, size = size}
 }
 
-/*
+/**
  * bytes written over the start of the file at path, made if it isn't there, and flushed: whether they all were. What's
  * written here, a generation's record or the seed, is always the same size, so nothing's left past it.
  */
@@ -114,7 +114,7 @@ write_file :: fn(root: ptr[uefi.File], path: string, bytes: u8[]) -> bool {
     return file.flush(file) == uefi.SUCCESS
 }
 
-// The names in the folder at path, as text, which the caller frees, or null.
+/** The names in the folder at path, as text, which the caller frees, or null. */
 folder_names :: fn(root: ptr[uefi.File], path: string) -> string[..]? {
     folder :: open_file(root, path) or_return null
     defer _ = folder.close(folder)
@@ -140,7 +140,7 @@ folder_names :: fn(root: ptr[uefi.File], path: string) -> string[..]? {
     return names
 }
 
-// count bytes' worth of pages of memory_kind, zeroed, or null.
+/** count bytes' worth of pages of memory_kind, zeroed, or null. */
 allocate_pages :: fn(memory_kind: u32, count: u64) -> u64? {
     services :: uefi.boot_services() or_return null
     pages :: (count + 4095) / 4096
@@ -152,7 +152,7 @@ allocate_pages :: fn(memory_kind: u32, count: u64) -> u64? {
     return address
 }
 
-// size bytes at address zeroed.
+/** size bytes at address zeroed. */
 zero :: fn(address: u64, size: u64) {
     for i in cast[u64](0)..<size / 8 {
         cast[ptr[mut u64]](cast[rawptr](address + i * 8))^ = 0

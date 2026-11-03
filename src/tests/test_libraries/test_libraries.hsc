@@ -1,4 +1,4 @@
-/*
+/**
  * test_libraries (roadmap 9e1, decisions/0119, 0120): a program bound to a typed library before its main, greeting, by
  * the grant library:greeting.library: its exports called, a sum, text made with this program's context, and a string
  * from the library's own data. Given a library whose export's type changed in its place, the program never starts: its

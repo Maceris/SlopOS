@@ -22,29 +22,33 @@ import programs from "../../protocols/programs"
  * in a pipeline (decisions/0172).
  */
 
-// What a program the shell runs is given to run on, split off the shell's budget.
+/** What a program the shell runs is given to run on, split off the shell's budget. */
 PROGRAM_BUDGET : u64 : 4 * 1024 * 1024
-// The key the first program of a call or a pipeline has its end watched under, on the shell's port, the next ones after it
+/**
+ * The key the first program of a call or a pipeline has its end watched under, on the shell's port, the next ones after it
+ */
 CALL_KEY : u64 : 1
 
-// What a parameter is given: a value written for it, or a grant of one of the kinds the shell can make.
+/** What a parameter is given: a value written for it, or a grant of one of the kinds the shell can make. */
 Giving :: enum {
     Value,
-    // A connection to the shell's terminal, without an argument
+    /** A connection to the shell's terminal, without an argument */
     Terminal,
-    // A directory, a file to write, or one only to read, beneath the shell's home, from a path
+    /** A directory, a file to write, or one only to read, beneath the shell's home, from a path */
     Dir,
     File,
     ReadOnlyFile,
-    // A pipeline's records: the Stream[T] named input reads what comes before it, and the Sink[T] named output writes
-    // for what comes after it, or for the shell
+    /**
+     * A pipeline's records: the Stream[T] named input reads what comes before it, and the Sink[T] named output writes
+     * for what comes after it, or for the shell
+     */
     Input,
     Output,
-    // A grant the shell doesn't make: a parameter that's optional goes without it
+    /** A grant the shell doesn't make: a parameter that's optional goes without it */
     Other,
 }
 
-// One of a program's parameters, as its manifest has it, and what it's given.
+/** One of a program's parameters, as its manifest has it, and what it's given. */
 Parameter :: struct {
     name : string,
     // Its type's place in the manifest, and the type it holds if it's optional, or its type again
@@ -54,14 +58,14 @@ Parameter :: struct {
     // Whether it's a bool, whose --name alone is true
     is_bool : bool,
     giving : Giving,
-    // An input's or output's records' type's place
+    /** An input's or output's records' type's place */
     records : usize,
     // The argument given for it, and for a bool's --name alone, true
     argument : ptr[Node]?,
     flag : bool,
 }
 
-// A call of a program, alone: a pipeline of one.
+/** A call of a program, alone: a pipeline of one. */
 run_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     trees : ptr[Node][..]
     defer runtime.array_free(&trees)
@@ -69,7 +73,7 @@ run_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[V
     return run_programs(shell, trees, null)
 }
 
-/*
+/**
  * A call made ready to start, on the heap: its program found, its manifest read, its arguments matched, and its values
  * and grants made, but its input's and output's, which its pipeline makes.
  */
@@ -127,7 +131,7 @@ prepare_call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[
     return .Ok(call)
 }
 
-// A call being made, on the heap: its program's manifest, its parameters, and the grants and values made for them.
+/** A call being made, on the heap: its program's manifest, its parameters, and the grants and values made for them. */
 Call :: struct {
     tree : ptr[Node],
     executable : slop_os.Memory,
@@ -145,7 +149,7 @@ Call :: struct {
     lifecycle : slop_os.Channel,
 }
 
-// A call's parameter that's given giving, if it has one.
+/** A call's parameter that's given giving, if it has one. */
 parameter_giving :: fn(call: ptr[Call], giving: Giving) -> ptr[Parameter]? {
     for &parameter in call.parameters {
         if parameter.giving == giving {
@@ -155,7 +159,7 @@ parameter_giving :: fn(call: ptr[Call], giving: Giving) -> ptr[Parameter]? {
     return null
 }
 
-// A call's memory and handles given back, and its grants, if its program didn't start.
+/** A call's memory and handles given back, and its grants, if its program didn't start. */
 end_call :: fn(call: ptr[mut Call]) {
     if !call.started {
         for grant in call.grants {
@@ -180,7 +184,7 @@ end_call :: fn(call: ptr[mut Call]) {
     runtime.free(call)
 }
 
-// A call's program launched, its end watched under key: why it didn't start, or null.
+/** A call's program launched, its end watched under key: why it didn't start, or null. */
 start_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], key: u64) -> EvalError? {
     tree :: call.tree
     manager :: shell.manager or_return EvalError.{message = "the shell can't start programs: it has no process manager", at = tree.at}
@@ -204,7 +208,7 @@ start_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], key: u64) -> EvalEr
     }
 }
 
-// A started call's program waited for: its error, if it didn't end with 0.
+/** A started call's program waited for: its error, if it didn't end with 0. */
 wait_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call]) -> EvalError? {
     if !call.started || call.waited {
         return null
@@ -222,13 +226,13 @@ wait_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call]) -> EvalError? {
     return EvalError.{message = message("% ended with %", tree.text, ended), at = tree.at}
 }
 
-// A program's end seen on the shell's port, by the key it's watched under, and its code.
+/** A program's end seen on the shell's port, by the key it's watched under, and its code. */
 EndedProgram :: struct {
     key : u64,
     code : u64,
 }
 
-// How the program watched under key ended, once it has; the ends of others seen meanwhile kept for their turn.
+/** How the program watched under key ended, once it has; the ends of others seen meanwhile kept for their turn. */
 wait_for :: fn(shell: ptr[mut Shell], key: u64) -> u64 {
     loop {
         for each, i in shell.ended {
@@ -248,7 +252,7 @@ wait_for :: fn(shell: ptr[mut Shell], key: u64) -> u64 {
     }
 }
 
-// A copy of one of the shell's own grants, labeled label, for a program it runs: the clock page, its locale's.
+/** A copy of one of the shell's own grants, labeled label, for a program it runs: the clock page, its locale's. */
 copy_of_grant :: fn(label: string) -> slop_os.Memory? {
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
     for &grant in slop_os.grants_of(slop_os.startup_block()) {
@@ -262,7 +266,7 @@ copy_of_grant :: fn(label: string) -> slop_os.Memory? {
     return null
 }
 
-// A program by its name, from the session manager: its executable and manifest, or null.
+/** A program by its name, from the session manager: its executable and manifest, or null. */
 find_program :: fn(shell: ptr[mut Shell], name: string) -> programs.Program? {
     connection :: shell.programs or_return null
     if name.count == 0 || name.count > programs.MAX_NAME {
@@ -288,7 +292,7 @@ find_program :: fn(shell: ptr[mut Shell], name: string) -> programs.Program? {
     }
 }
 
-// A program's manifest, read from its memory: null if it isn't a schema.
+/** A program's manifest, read from its memory: null if it isn't a schema. */
 read_manifest :: fn(found: programs.Program) -> schema.Schema? {
     size :: (found.manifest_size + 4095) & ~cast[u64](4095)
     if found.manifest_size == 0 {
@@ -304,7 +308,7 @@ read_manifest :: fn(found: programs.Program) -> schema.Schema? {
     return schema.parse(view_of(cast[ptr[u8]](address), cast[usize](found.manifest_size)))
 }
 
-// A parameter, as its manifest has it: what it's given, by its type.
+/** A parameter, as its manifest has it: what it's given, by its type. */
 parameter_of :: fn(manifest: ptr[schema.Schema], input: schema.Input) -> Parameter {
     made := Parameter.{name = input.name, type = input.type, held = input.type}
     match some_of(manifest, input.type) {
@@ -329,7 +333,7 @@ parameter_of :: fn(manifest: ptr[schema.Schema], input: schema.Input) -> Paramet
     return made
 }
 
-// An optional's Some type, if the type at place is an optional: a union of None and Some(T), not a pointer's.
+/** An optional's Some type, if the type at place is an optional: a union of None and Some(T), not a pointer's. */
 some_of :: fn(manifest: ptr[schema.Schema], place: usize) -> usize? {
     type :: schema.type_in(manifest, place) or_return null
     if type.kind != .Union || type.null_is_none || type.variants.count != 2 {
@@ -345,7 +349,7 @@ some_of :: fn(manifest: ptr[schema.Schema], place: usize) -> usize? {
     return null
 }
 
-// What a parameter of the type at place is given: a grant if it's a handle's type, by its name, or a value.
+/** What a parameter of the type at place is given: a grant if it's a handle's type, by its name, or a value. */
 giving_of :: fn(manifest: ptr[schema.Schema], place: usize) -> Giving {
     type :: schema.type_in(manifest, place) or_return Giving.Other
     if type.size != 4 || (type.kind != .Struct && type.kind != .Alias) {
@@ -392,7 +396,7 @@ giving_of :: fn(manifest: ptr[schema.Schema], place: usize) -> Giving {
     return .Other
 }
 
-// The place of the type of the records a Stream[T] or Sink[T] reads or writes: its records member's elements'.
+/** The place of the type of the records a Stream[T] or Sink[T] reads or writes: its records member's elements'. */
 records_of :: fn(manifest: ptr[schema.Schema], place: usize) -> usize {
     type :: schema.type_in(manifest, place) or_return schema.NOWHERE
     for member in type.members {
@@ -406,7 +410,7 @@ records_of :: fn(manifest: ptr[schema.Schema], place: usize) -> usize {
     return schema.NOWHERE
 }
 
-/*
+/**
  * Each argument matched to a parameter: --name to the parameter of that name, the argument after it its value but for a
  * bool's, which is true alone; the rest in order to the parameters left that take arguments, the terminal not among them.
  */
@@ -454,7 +458,7 @@ named_parameter :: fn(parameters: ptr[mut Parameter[..]], name: string) -> ptr[m
     return null
 }
 
-// The first parameter left that takes an argument by position.
+/** The first parameter left that takes an argument by position. */
 next_positional :: fn(parameters: ptr[mut Parameter[..]]) -> ptr[mut Parameter]? {
     for &parameter in parameters^ {
         if (parameter.argument is_none) && !parameter.flag && (parameter.giving == .Value || parameter.giving == .Dir || parameter.giving == .File
@@ -472,7 +476,7 @@ is_bool_word :: fn(node: ptr[mut Node]?) -> bool {
 
 // ---- Values
 
-/*
+/**
  * A parameter's value, written as its entry reads it: null for an optional one given nothing, a bool given nothing
  * false, and an error for one that's needed and missing or can't be read as its type.
  */
@@ -519,7 +523,7 @@ value_for :: fn(shell: ptr[mut Shell], manifest: ptr[schema.Schema], tree: ptr[N
     }
 }
 
-/*
+/**
  * A value written at offset in out as a value of the type at place is laid out, with what it points to added after
  * everything (std/schema's write_value: a string's bytes, a list's items, at their distance from the start): why it
  * can't be, or null. A bare word is read by the type: a number, a member's name, a duration, or text.
@@ -672,7 +676,7 @@ encode :: fn(manifest: ptr[schema.Schema], place: usize, given: Value, bare: boo
     return message("the shell can't give a %", type_text(manifest, place))
 }
 
-// A number written at offset, its low count bytes, little-endian.
+/** A number written at offset, its low count bytes, little-endian. */
 put :: fn(out: ptr[mut u8[..]], offset: usize, value: u64, count: usize) {
     target : mut u8[] = out^
     for i in cast[usize](0)..<count {
@@ -683,7 +687,7 @@ put :: fn(out: ptr[mut u8[..]], offset: usize, value: u64, count: usize) {
     }
 }
 
-// Bytes added after everything, at 8 bytes' alignment: where they start.
+/** Bytes added after everything, at 8 bytes' alignment: where they start. */
 tail :: fn(out: ptr[mut u8[..]], bytes: u8[]) -> usize {
     align(out)
     start :: out.count
@@ -709,7 +713,7 @@ align :: fn(out: ptr[mut u8[..]]) {
     }
 }
 
-// A word read as a whole number, in decimal, with a sign if it has one.
+/** A word read as a whole number, in decimal, with a sign if it has one. */
 integer_of :: fn(text: string) -> i64? {
     if text.count == 0 {
         return null
@@ -729,7 +733,7 @@ integer_of :: fn(text: string) -> i64? {
     return if negative { 0 - result } else { result }
 }
 
-// A word read as a duration, a number then its unit (5s, 250ms): nanoseconds.
+/** A word read as a duration, a number then its unit (5s, 250ms): nanoseconds. */
 duration_of :: fn(text: string) -> i64? {
     for character, i in text {
         if character < '0' || character > '9' {
@@ -744,7 +748,7 @@ duration_of :: fn(text: string) -> i64? {
     return null
 }
 
-// A type as a person reads it: its name, or its kind.
+/** A type as a person reads it: its name, or its kind. */
 type_text :: fn(manifest: ptr[schema.Schema], place: usize) -> string {
     type :: schema.type_in(manifest, place) or_return "value"
     if type.name.count > 0 {
@@ -760,7 +764,7 @@ type_text :: fn(manifest: ptr[schema.Schema], place: usize) -> string {
     }
 }
 
-// An enum's members, as a list to read: a, b or c.
+/** An enum's members, as a list to read: a, b or c. */
 members_text :: fn(type: ptr[schema.Type]) -> string {
     storage : u8[256]
     out := text_buffer.make(storage)
@@ -775,7 +779,7 @@ members_text :: fn(type: ptr[schema.Type]) -> string {
 
 // ---- Grants
 
-/*
+/**
  * A parameter's grant, made: a connection to the shell's terminal, or a directory or file beneath its home from a path
  * given; null for an optional one given nothing; an error for one that's needed and missing, or can't be made.
  */
@@ -817,7 +821,7 @@ grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter
     }
 }
 
-// A path, from the shell's directory or its home (resolve_path), opened as giving asks.
+/** A path, from the shell's directory or its home (resolve_path), opened as giving asks. */
 opened_beneath_home :: fn(shell: ptr[mut Shell], given #escaping : string, giving: Giving) -> Result[slop_os.Handle, string] {
     home :: shell.home or_return .Error("the shell has no home to find it in")
     budget :: slop_os.startup_block().budget
@@ -863,7 +867,7 @@ opened_beneath_home :: fn(shell: ptr[mut Shell], given #escaping : string, givin
     }
 }
 
-// What a directory's failure means, as a person reads it.
+/** What a directory's failure means, as a person reads it. */
 file_problem :: fn(failure: files.FileError) -> string {
     return match failure {
         case .NotFound => "there's nothing there"

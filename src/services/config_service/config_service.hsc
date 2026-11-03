@@ -1,4 +1,4 @@
-/*
+/**
  * The config store (roadmap 9c2, decisions/0107, 0109, design/software.md §4): each owner's values, in the directory
  * it's given on the system volume, a directory each, <owner>/<name>/: a typed file per kept version, named by its
  * number, each a Stored, holding the value's type, its default, its override and which fields that sets, its author and
@@ -27,7 +27,7 @@ MAX_NAME :: 31
 MAX_OWNER :: 72
 NOWHERE : usize : 0xffffffffffffffff
 
-// A version of a value, as its typed file holds it.
+/** A version of a value, as its typed file holds it. */
 Stored :: struct {
     version : u64,
     written : i64,
@@ -38,12 +38,12 @@ Stored :: struct {
     override : slop_os.Relative[u8],
 }
 
-// The newest version's number, as the value's typed file newest holds it.
+/** The newest version's number, as the value's typed file newest holds it. */
 Newest :: struct {
     version : u64,
 }
 
-// A value connections reach: its owner and name, and its newest version, 0 before it's declared.
+/** A value connections reach: its owner and name, and its newest version, 0 before it's declared. */
 Value :: struct {
     owner : u8[MAX_OWNER],
     owner_count : usize,
@@ -52,7 +52,7 @@ Value :: struct {
     newest : u64,
 }
 
-// What a connection is: the supervisor's, or one to a value, and the version a Next of its waits to be past.
+/** What a connection is: the supervisor's, or one to a value, and the version a Next of its waits to be past. */
 Client :: struct {
     admin : bool,
     // The session manager's: values of users' only
@@ -116,7 +116,7 @@ main :: fn(store: os.Channel[dir.Dir], admin: os.Listener[config.ConfigValue], u
     }
 }
 
-// Every request client index has sent, until there are none left, or it's gone.
+/** Every request client index has sent, until there are none left, or it's gone. */
 serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
     if index >= service.connected.ends.count || index >= service.clients.count {
         return void
@@ -239,7 +239,7 @@ failed :: fn(out: ptr[mut os.Outgoing], error: config.ConfigError) {
     os.begin[config.Response](out)^ = .Failed(error)
 }
 
-// A version written, or why not, as the answer into out, and every connection waiting on the value answered.
+/** A version written, or why not, as the answer into out, and every connection waiting on the value answered. */
 wrote :: fn(service: ptr[mut Store], value: usize, out: ptr[mut os.Outgoing], made: Result[u64, config.ConfigError]) {
     match made {
         case Ok(version) => {
@@ -250,7 +250,7 @@ wrote :: fn(service: ptr[mut Store], value: usize, out: ptr[mut os.Outgoing], ma
     }
 }
 
-// Every connection whose Next waits on value, given its current version.
+/** Every connection whose Next waits on value, given its current version. */
 wake :: fn(service: ptr[mut Store], value: usize) {
     if value >= service.values.count {
         return void
@@ -269,7 +269,7 @@ wake :: fn(service: ptr[mut Store], value: usize) {
     }
 }
 
-// The value's newest version, as a Current into out, or NotDeclared.
+/** The value's newest version, as a Current into out, or NotDeclared. */
 current :: fn(service: ptr[mut Store], value: ptr[Value], out: ptr[mut os.Outgoing]) {
     match read_version(service, value, value.newest) {
         case Some(stored) => {
@@ -284,7 +284,7 @@ current :: fn(service: ptr[mut Store], value: ptr[Value], out: ptr[mut os.Outgoi
     }
 }
 
-// The kept version back versions from the newest, as Kept into out, or NoMore.
+/** The kept version back versions from the newest, as Kept into out, or NoMore. */
 kept :: fn(service: ptr[mut Store], value: ptr[Value], back: u64, out: ptr[mut os.Outgoing]) {
     os.begin[config.Response](out)^ = .NoMore
     if back >= config.MAX_VERSIONS || back >= value.newest {
@@ -302,7 +302,7 @@ kept :: fn(service: ptr[mut Store], value: ptr[Value], back: u64, out: ptr[mut o
     }
 }
 
-/*
+/**
  * The value's type and default declared: the first time, its first version, with no override; again with the same
  * type and default, nothing; with the same type and another default, a version with it, the override kept; and with
  * another type, a version without the override, which the new type can't read.
@@ -323,7 +323,7 @@ declare :: fn(service: ptr[mut Store], value: ptr[mut Value], schema: u8[32], de
     return write_stored(service, value, schema, default, held.fields, os.items_of(stored, held.override))
 }
 
-// A new version, the newest's with fields and override, of type schema if checked: its number, or why not.
+/** A new version, the newest's with fields and override, of type schema if checked: its number, or why not. */
 write_version :: fn(service: ptr[mut Store], value: ptr[mut Value], fields: u64, override: u8[], checked: bool, schema: u8[32])
     -> Result[u64, config.ConfigError] {
     stored :: read_version(service, value, value.newest) or_return .Error(.NotDeclared)
@@ -338,7 +338,7 @@ write_version :: fn(service: ptr[mut Store], value: ptr[mut Value], fields: u64,
     }
 }
 
-// A new version with the override the kept version had, if it's of the newest's type.
+/** A new version with the override the kept version had, if it's of the newest's type. */
 roll_back :: fn(service: ptr[mut Store], value: ptr[mut Value], version: u64) -> Result[u64, config.ConfigError] {
     if version == 0 || version > value.newest || value.newest - version >= config.MAX_VERSIONS {
         return .Error(.NotFound)
@@ -349,7 +349,7 @@ roll_back :: fn(service: ptr[mut Store], value: ptr[mut Value], version: u64) ->
     return write_version(service, value, held.fields, os.items_of(stored, held.override), true, held.schema)
 }
 
-/*
+/**
  * The value's next version written, with schema, default, fields and override, then named newest, and the one
  * MAX_VERSIONS before it deleted: why not, if it wasn't.
  */
@@ -393,7 +393,7 @@ write_stored :: fn(service: ptr[mut Store], value: ptr[mut Value], schema: u8[32
     return null
 }
 
-// A version's typed file's bytes, checked to hold a Stored, which the caller frees; null without one.
+/** A version's typed file's bytes, checked to hold a Stored, which the caller frees; null without one. */
 read_version :: fn(service: ptr[mut Store], value: ptr[Value], version: u64) -> u8[]? {
     if version == 0 {
         return null
@@ -405,7 +405,7 @@ read_version :: fn(service: ptr[mut Store], value: ptr[Value], version: u64) -> 
     }
 }
 
-/*
+/**
  * A connection to owner's value name, for the supervisor to give its program: the value found, or its directory made
  * and its newest version read, first. Null for a name that isn't one, or no room.
  */
@@ -446,7 +446,7 @@ connection_for :: fn(service: ptr[mut Store], owner: string, name: string) -> os
     return null
 }
 
-// A value's directory, made if it isn't there, and its newest version read: whether it could be.
+/** A value's directory, made if it isn't there, and its newest version read: whether it could be. */
 open_value :: fn(service: ptr[mut Store], value: ptr[mut Value]) -> bool {
     owner :: owner_of(value)
     if os.path_kind_in(service.directory, owner) != .DIRECTORY && os.make_directory_in(service.directory, owner) != null {
@@ -468,7 +468,7 @@ open_value :: fn(service: ptr[mut Store], value: ptr[mut Value]) -> bool {
     return true
 }
 
-/*
+/**
  * Every value of owner's removed: its directory, each value's versions and newest, and each value's own directory, and
  * the values known in memory starting again from nothing, as a declaration finds them. Whether it was removed whole.
  */
@@ -509,7 +509,7 @@ forget :: fn(service: ptr[mut Store], owner: string) -> bool {
     return whole
 }
 
-// The store's directory from now on, as when its volume server was started again: whether it took it.
+/** The store's directory from now on, as when its volume server was started again: whether it took it. */
 use_directory :: fn(service: ptr[mut Store], end: slop_os.Channel) -> bool {
     directory, error :: os.directory_on(end)
     if error != null {
@@ -521,13 +521,13 @@ use_directory :: fn(service: ptr[mut Store], end: slop_os.Channel) -> bool {
     return true
 }
 
-// A path being made.
+/** A path being made. */
 Path :: struct {
     bytes : u8[160],
     count : usize,
 }
 
-// <owner>/<name>/<file>, or <owner>/<name> for no file, in path.
+/** <owner>/<name>/<file>, or <owner>/<name> for no file, in path. */
 value_path :: fn(path: ptr[mut Path], value: ptr[Value], file: string) -> string {
     path.count = 0
     add(path, owner_of(value))
@@ -540,7 +540,7 @@ value_path :: fn(path: ptr[mut Path], value: ptr[Value], file: string) -> string
     return text_of_path(path)
 }
 
-// <owner>/<name>/<version>, in path.
+/** <owner>/<name>/<version>, in path. */
 version_path :: fn(path: ptr[mut Path], value: ptr[Value], version: u64) -> string {
     _ = value_path(path, value, "")
     add(path, "/")
@@ -597,7 +597,7 @@ copy_name :: fn(into: ptr[mut u8[MAX_OWNER]], count: ptr[mut usize], name: strin
     count^ = copied
 }
 
-// Letters, digits and underscores, MAX_NAME of them at most, and some.
+/** Letters, digits and underscores, MAX_NAME of them at most, and some. */
 valid_name :: fn(name: string) -> bool {
     if name.count == 0 || name.count > MAX_NAME {
         return false
@@ -618,7 +618,7 @@ as_text :: fn(bytes: u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }
 
-/*
+/**
  * An owner: a name, or a user's, "user:" and an account's name, letters, digits, - and _, or "-" for a session with no
  * user, and for an installation of theirs ":" and its name after that (decisions/0152, 0153); MAX_OWNER bytes at most.
  */
@@ -650,7 +650,7 @@ valid_owner :: fn(owner: string) -> bool {
     return previous != ':'
 }
 
-// Whether owner is a user's: "user:" and a name after it.
+/** Whether owner is a user's: "user:" and a name after it. */
 is_users :: fn(owner: string) -> bool {
     prefix :: "user:"
     return owner.count > prefix.count && owner[0..<prefix.count] == prefix

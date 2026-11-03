@@ -1,4 +1,4 @@
-/*
+/**
  * edu_dma (decisions/0084): a driver for QEMU's edu device that isn't trusted, and DMAs outside its domain on purpose,
  * for the test that it's stopped. It makes a page of DMA memory, which no IOMMU confining its device refuses, as it
  * isn't trusted (it says so, and ends with 0); then it has edu copy its buffer to 64 MiB past that page, where nothing
@@ -14,7 +14,7 @@ import driver_kit from "../../driver_kit"
 import pci from "../../pci"
 
 PAGE : u64 : 4096
-// Where it writes: this far past its page, which nothing of its domain reaches
+/** Where it writes: this far past its page, which nothing of its domain reaches */
 OUTSIDE : u64 : 64 << 20
 // edu's DMA engine (QEMU's docs/specs/edu.rst): source, destination, count and command, and its own buffer
 DMA_SOURCE : u64 : 0x80
@@ -24,10 +24,10 @@ DMA_COMMAND : u64 : 0x98
 EDU_BUFFER : u64 : 0x40000
 DMA_START : u64 : 1 << 0
 DMA_TO_RAM : u64 : 1 << 1
-// How long it waits to be stopped, before it says it wasn't
+/** How long it waits to be stopped, before it says it wasn't */
 WAIT_NANOSECONDS : u64 : 10_000_000_000
 
-// The edu device's DMA reach: 28 bits of address
+/** The edu device's DMA reach: 28 bits of address */
 EDU_DMA_LIMIT : u64 : 1 << 28
 
 main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memory, bar0: slop_os.Memory?, bar1: slop_os.Memory?,

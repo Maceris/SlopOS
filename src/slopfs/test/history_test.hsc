@@ -3,7 +3,7 @@ package slopfs_test
 import runtime from "base"
 import slopfs from ".."
 
-/*
+/**
  * What a volume server keeps beyond the volume (history.hsc), on a volume apart: its change history, read beneath a
  * directory and trimmed to its budget; files replaced whole through orphans, the old contents readable until they're
  * given back; and everything since a commit forgotten and undone, leaving nothing behind. Checks from 800.

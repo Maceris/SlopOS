@@ -1,4 +1,4 @@
-/*
+/**
  * test_channels (decisions/0069, from the kernel's test of 0053): processes A, the program, and B, a copy of
  * it A launches, start with the ends of one channel, c0, between them, and:
  * - A makes a channel, maps one end, x, and sends the other, y, to B in a batch, with a message through
@@ -37,7 +37,7 @@ KEY_ONCE : u64 : 8
 SHORT_WAIT_NANOSECONDS : u64 : 20_000_000
 B_RESULTS :: 13
 
-// What B is given: its log, and its end of c0.
+/** What B is given: its log, and its end of c0. */
 BGrants :: struct {
     log : slop_os.DebugLog,
     platform : slop_os.Platform?,
@@ -49,7 +49,7 @@ BGrants :: struct {
     cpu_budget : slop_os.CpuBudget?,
 }
 
-/*
+/**
  * Write one 8-byte message into the ring side writes, at memory: whether the reader waits, so the
  * writer rings the doorbell. The test's messages are few, so there's always room.
  */
@@ -65,7 +65,7 @@ ring_send :: fn(memory: u64, side: u64, value: u64) -> bool {
     return intrinsics.atomic_load_u32(cast[ptr[u32]](indices + 68)) != 0
 }
 
-/*
+/**
  * The next 8-byte message in the ring side writes, at memory, waiting on port for it if there's none:
  * says it waits, looks once more, then waits. Packets for KEY_ONCE it takes meanwhile are counted at once.
  */
@@ -264,7 +264,7 @@ run_a :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessMa
     return 0
 }
 
-/*
+/**
  * An end bound for Readable while it's empty, and never read: its first message wakes the port, as one a service
  * binds for a new client, in a place its pass has gone by, must be (decisions/0144). Checks from 130.
  */
@@ -293,7 +293,7 @@ check_bound_before_read :: fn(log: slop_os.DebugLog) -> int {
     return 0
 }
 
-/*
+/**
  * A batch holding a copy of an end, whose owning handle is closed while it's in flight and whose memory is let go of
  * after a grace period: taken, it gives NO_HANDLE in the copy's place, rather than the kernel touching the end's core,
  * which is gone. Checks from 120.
@@ -329,7 +329,7 @@ check_stale_end :: fn(log: slop_os.DebugLog) -> int {
     return 0
 }
 
-// B, with its end of c0: what it finds goes back to A through it.
+/** B, with its end of c0: what it finds goes back to A through it. */
 run_b :: fn(c0: slop_os.Channel) -> int {
     block :: slop_os.startup_block()
     space :: block.space

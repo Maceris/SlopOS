@@ -38,7 +38,7 @@ EVENT_QUEUE_BASE : u64 : 0xa0
 // In page 1
 EVENT_PRODUCER : u64 : 0x100a8
 EVENT_CONSUMER : u64 : 0x100ac
-// Page 0's registers and page 1's, 64 KiB each, which every SMMUv3 has
+/** Page 0's registers and page 1's, 64 KiB each, which every SMMUv3 has */
 REGISTER_BYTES : u64 : 0x20000
 
 IDR0_S2P : u32 : 1 << 0
@@ -53,15 +53,15 @@ IDR5_GRAN4K : u32 : 1 << 4
 CR0_SMMU : u32 : 1 << 0
 CR0_EVENT_QUEUE : u32 : 1 << 2
 CR0_COMMAND_QUEUE : u32 : 1 << 3
-// Tables and queues inner shareable, inner and outer write-back
+/** Tables and queues inner shareable, inner and outer write-back */
 CR1_ATTRIBUTES : u32 : 0xd75
-// A queue base's read- or write-allocate hint
+/** A queue base's read- or write-allocate hint */
 ALLOCATE : u64 : 1 << 62
 // A two-level stream table, each second-level table 2^6 entries
 STREAM_TABLE_TWO_LEVEL : u64 : 1 << 16
 SPLIT : u64 : 6
 STREAMS_PER_TABLE : u64 : 64
-// At most 16 stream ID bits: 1024 first-level descriptors of 8 bytes
+/** At most 16 stream ID bits: 1024 first-level descriptors of 8 bytes */
 MAX_STREAM_BITS : u64 : 16
 // A first-level descriptor's second-level table, 64-byte aligned
 LEVEL_2_MASK : u64 : 0x000fffffffffffc0
@@ -96,12 +96,12 @@ ACCESSED : u64 : 1 << 10
 ADDRESS_MASK : u64 : 0x0000fffffffff000
 ENTRIES : u64 : 512
 PAGE : u64 : 4096
-// How long a command may take, in spins
+/** How long a command may take, in spins */
 SPINS : u64 : 1_000_000
 
-// One SMMU (iommu_interface.Iommu).
+/** One SMMU (iommu_interface.Iommu). */
 Iommu :: struct {
-    // Its registers, mapped by L2 as device memory.
+    /** Its registers, mapped by L2 as device memory. */
     registers : u64,
     // Its domains' width, at most 48 bits, and their tables' levels, 3 or 4; its output address size's encoding; its
     // stream IDs' bits.
@@ -118,16 +118,16 @@ Iommu :: struct {
     event_consumer : u32,
 }
 
-// One domain on an SMMU (iommu_interface.Domain).
+/** One domain on an SMMU (iommu_interface.Domain). */
 Domain :: struct {
     root : u64,
     id : u32,
 }
 
-// OAS, the output address sizes, by its value
+/** OAS, the output address sizes, by its value */
 OUTPUT_BITS :: u32.[32, 36, 40, 42, 44, 48, 52]
 
-/*
+/**
  * An SMMUv3 at registers: its AIDR says it's version 3, it has both pages of registers, and it does stage 2, with
  * AArch64's tables and 4 KiB pages, two-level stream tables and coherent access.
  */
@@ -166,13 +166,13 @@ identify :: fn(iommu: ptr[mut Iommu], kind: iommu_interface.IommuKind, registers
         domain_ids = if features & IDR0_VMID16 != 0 { 0xffff } else { 0xff }, interrupts = 0, fault_messages = false})
 }
 
-// The first-level stream table's bytes, whole pages: 8 for each table of 64 streams.
+/** The first-level stream table's bytes, whole pages: 8 for each table of 64 streams. */
 first_level_bytes :: fn(iommu: ptr[Iommu]) -> u64 {
     bytes :: (cast[u64](1) << (iommu.stream_bits - SPLIT)) * 8
     return (bytes + PAGE - 1) & ~(PAGE - 1)
 }
 
-/*
+/**
  * memory: the first-level stream table, the command queue, then the event queue. The SMMU off first, if firmware
  * left it on; then the tables and queues, the command queue on, every cached configuration and TLB entry invalidated,
  * the event queue on, and the SMMU, every stream aborting until it's attached.
@@ -210,7 +210,7 @@ enable :: fn(iommu: ptr[mut Iommu], memory: iommu_interface.PhysicalAddress, dir
     return .Ok
 }
 
-// Its faults go to its event queue, which L2 reads (info.fault_messages is false), so there's nothing to route.
+/** Its faults go to its event queue, which L2 reads (info.fault_messages is false), so there's nothing to route. */
 route_faults :: fn(iommu: ptr[mut Iommu], message: iommu_interface.MsiMessage) {
 }
 
@@ -219,7 +219,7 @@ init_domain :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], id: u32, root: iom
     domain.id = id
 }
 
-/*
+/**
  * stream's entry: its second-level table made where it has none, the entry made to abort and invalidated first if it
  * was in use, then written with its first word last, and invalidated again.
  */
@@ -249,7 +249,7 @@ attach :: fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32, frames: pt
     return .Ok
 }
 
-// stream's entry made to abort, and invalidated with the domain's TLB entries.
+/** stream's entry made to abort, and invalidated with the domain's TLB entries. */
 detach :: fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32) {
     if cast[u64](stream) >> iommu.stream_bits != 0 {
         return void
@@ -263,7 +263,7 @@ detach :: fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32) {
     invalidate_stream(iommu, stream, domain.id)
 }
 
-// Where stream's entry is: its second-level table, from frames where there's none yet, or null if frames has none.
+/** Where stream's entry is: its second-level table, from frames where there's none yet, or null if frames has none. */
 stream_entry :: fn(iommu: ptr[mut Iommu], stream: u32, frames: ptr[mut iommu_interface.TableFrames]) -> u64? {
     at :: iommu.streams + (cast[u64](stream) >> SPLIT) * 8
     if load(iommu, at) & LEVEL_2_MASK == 0 {
@@ -327,7 +327,9 @@ unmap :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64) {
     store(iommu, table + index_of(address, 1) * 8, 0)
 }
 
-// The domain's TLB entries, by its VMID, after unmapping; nothing is cached of what isn't mapped, so mapping needs none.
+/**
+ * The domain's TLB entries, by its VMID, after unmapping; nothing is cached of what isn't mapped, so mapping needs none.
+ */
 invalidate :: fn(iommu: ptr[mut Iommu], domain: ptr[Domain], mapped: bool) {
     aarch64.dsb(.SY)
     if mapped {
@@ -348,7 +350,7 @@ release_domain :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], freed: ptr[mut 
     }
 }
 
-// As VT-d's: one table below table, at level, let go of, the first whose entries are pages or that has none left.
+/** As VT-d's: one table below table, at level, let go of, the first whose entries are pages or that has none left. */
 free_one :: fn(iommu: ptr[Iommu], table: u64, level: u32, freed: ptr[mut iommu_interface.FreedFrames]) -> bool {
     if level <= 1 {
         return false
@@ -374,7 +376,7 @@ free_one :: fn(iommu: ptr[Iommu], table: u64, level: u32, freed: ptr[mut iommu_i
     return false
 }
 
-/*
+/**
  * The next record in the event queue, taken from it: a translation, address size, access flag or permission fault
  * with the address the device used, or any other event with none.
  */
@@ -397,7 +399,7 @@ next_fault :: fn(iommu: ptr[mut Iommu]) -> iommu_interface.DmaFault? {
         write = translation && (second >> 35) & 1 == 0, interrupt = false, reason = reason}
 }
 
-// It remaps none (info.interrupts is 0), so L2 never asks.
+/** It remaps none (info.interrupts is 0), so L2 never asks. */
 remap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32) -> iommu_interface.MsiMessage {
     return iommu_interface.MsiMessage.{}
 }
@@ -405,7 +407,7 @@ remap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardwa
 unmap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32) {
 }
 
-// Which entry of a table at level (1 for the tables of pages) address is in.
+/** Which entry of a table at level (1 for the tables of pages) address is in. */
 index_of :: fn(address: u64, level: u32) -> u64 {
     return (address >> (12 + 9 * cast[u64](level - 1))) & (ENTRIES - 1)
 }
@@ -418,14 +420,14 @@ take_frame :: fn(frames: ptr[mut iommu_interface.TableFrames]) -> u64? {
     return cast[u64](frames.frames[cast[usize](frames.count)])
 }
 
-// A stream's configuration and its domain's TLB entries invalidated, waited for.
+/** A stream's configuration and its domain's TLB entries invalidated, waited for. */
 invalidate_stream :: fn(iommu: ptr[mut Iommu], stream: u32, vmid: u32) {
     submit(iommu, CFGI_STE | cast[u64](stream) << 32, 1)
     submit(iommu, TLBI_S12_VMALL | cast[u64](vmid & 0xffff) << 32, 0)
     _ = sync(iommu)
 }
 
-// A command at the queue's producer, which then moves past it, waiting while the queue is full.
+/** A command at the queue's producer, which then moves past it, waiting while the queue is full. */
 submit :: fn(iommu: ptr[mut Iommu], first: u64, second: u64) {
     size :: cast[u32](1) << cast[u32](QUEUE_LOG)
     for spin in 0..<SPINS {
@@ -444,7 +446,7 @@ submit :: fn(iommu: ptr[mut Iommu], first: u64, second: u64) {
     write_u32(iommu, COMMAND_PRODUCER, iommu.command_producer)
 }
 
-// Everything submitted done: a CMD_SYNC, then the consumer at the producer, unless it stopped at an error.
+/** Everything submitted done: a CMD_SYNC, then the consumer at the producer, unless it stopped at an error. */
 sync :: fn(iommu: ptr[mut Iommu]) -> bool {
     submit(iommu, SYNC, 0)
     mask :: (cast[u32](1) << cast[u32](QUEUE_LOG + 1)) - 1
@@ -461,7 +463,7 @@ sync :: fn(iommu: ptr[mut Iommu]) -> bool {
     return false
 }
 
-// CR0's enables set to these, until CR0ACK says so.
+/** CR0's enables set to these, until CR0ACK says so. */
 set_enables :: fn(iommu: ptr[mut Iommu], enables: u32) -> bool {
     write_u32(iommu, CR0, enables)
     for spin in 0..<SPINS {
@@ -473,7 +475,7 @@ set_enables :: fn(iommu: ptr[mut Iommu], enables: u32) -> bool {
     return false
 }
 
-// A table entry or queue entry, by its physical address, through the direct map.
+/** A table entry or queue entry, by its physical address, through the direct map. */
 load :: fn(iommu: ptr[Iommu], at: u64) -> u64 {
     return intrinsics.volatile_load_u64(cast[ptr[u64]](at + iommu.direct_map_offset))
 }

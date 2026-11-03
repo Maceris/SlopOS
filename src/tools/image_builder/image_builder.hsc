@@ -1,4 +1,4 @@
-/*
+/**
  * The image builder (roadmap 8c, design/storage.md §9, decisions/0088): a hosted program that makes the disk image
  * SlopOS boots from, with the same packages SlopOS reads it with: a GPT (src/gpt), FAT32 partitions (src/fat) and
  * SlopOS containers (src/slopfs), each filled from a folder on the host. tools/boot.py runs it.
@@ -51,7 +51,7 @@ Kind :: enum {
     Slopfs,
 }
 
-// A partition asked for, and for a container, the encrypted volume asked for in it, if one was.
+/** A partition asked for, and for a container, the encrypted volume asked for in it, if one was. */
 Wanted :: struct {
     kind : Kind,
     name : string,
@@ -62,14 +62,16 @@ Wanted :: struct {
     sealed_passphrase : string,
 }
 
-// What an encrypted volume the image builder makes holds, in sealed.txt: in capitals, which the disk check, on the
-// disk in the clear, holds only in small letters (sealed_check.hsc)
+/**
+ * What an encrypted volume the image builder makes holds, in sealed.txt: in capitals, which the disk check, on the
+ * disk in the clear, holds only in small letters (sealed_check.hsc)
+ */
 SEALED_TEXT :: "ONLY ITS PASSPHRASE OPENS THIS"
 // Argon2id for its passphrase, kept within what a volume server is given room for (storage_manager.hsc)
 SEALED_ARGON2 :: crypto.Argon2Parameters.{memory_kib = 1024, passes = 2, lanes = 1}
 SEALED_OPTION :: "--sealed="
 
-// What can go wrong filling a partition.
+/** What can go wrong filling a partition. */
 Failure :: enum {
     TooSmallForFat,
     NotMounted,
@@ -203,7 +205,7 @@ main :: fn() -> int {
     return 0
 }
 
-// A FAT32 volume of sectors, holding the tree of the folder its arguments name, written to output alone.
+/** A FAT32 volume of sectors, holding the tree of the folder its arguments name, written to output alone. */
 fat_image :: fn(output: string, sectors: u64) -> int {
     // From the arguments, as main's partitions' folders are, which the volume may point at
     arguments :: os.arguments()
@@ -263,7 +265,7 @@ number_of :: fn(text: string) -> u64? {
     return value
 }
 
-// kind,name,sectors[,folder]
+/** kind,name,sectors[,folder] */
 parse :: fn(text: string) -> Wanted? {
     fields : string[4]
     count : usize = 0
@@ -299,7 +301,7 @@ parse :: fn(text: string) -> Wanted? {
     return Wanted.{kind = kind, name = fields[1], count = sectors, folder = if count >= 4 { fields[3] } else { "" }}
 }
 
-// A partition's contents written into the image, or what went wrong.
+/** A partition's contents written into the image, or what went wrong. */
 fill :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
     return match partition.kind {
         case .Test => null
@@ -309,7 +311,7 @@ fill :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
     }
 }
 
-// A partition's sectors in the image, as a device.
+/** A partition's sectors in the image, as a device. */
 Region :: struct {
     image : mut u8[],
     first : u64,
@@ -368,7 +370,7 @@ flushed :: fn(context: rawptr) -> bool {
     return true
 }
 
-// A FAT32 volume on the partition, with the folder's tree in it.
+/** A FAT32 volume on the partition, with the folder's tree in it. */
 fill_fat :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
     region := runtime.new(Region)
     defer runtime.free(region)
@@ -395,7 +397,7 @@ fill_fat :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
     return null
 }
 
-// path/name, in a buffer.
+/** path/name, in a buffer. */
 joined :: fn(buffer: ptr[mut text_buffer.TextBuffer], path: string, name: string) -> string {
     text_buffer.clear(buffer)
     text_buffer.append(buffer, path)
@@ -433,7 +435,7 @@ copy_to_fat :: fn(volume: ptr[mut fat.Volume], directory: u32, folder: string, d
     return null
 }
 
-// A SlopOS container on the partition, with a volume named "system" holding the folder's tree, checked whole.
+/** A SlopOS container on the partition, with a volume named "system" holding the folder's tree, checked whole. */
 fill_slopfs :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
     if partition.first % 8 != 0 || partition.count % 8 != 0 {
         return .NotWholeBlocks

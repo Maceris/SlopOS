@@ -1,4 +1,4 @@
-/*
+/**
  * test_cpu_budgets (roadmap 9a, decisions/0093): CPU budgets as objects, from the root budget the root task gives it.
  * - the root budget is every CPU's whole time at the top priority, with nothing split off it yet;
  * - a child splits its share off the root's; one past the root's share, one above its parent's priority and one with a

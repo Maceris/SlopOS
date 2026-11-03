@@ -15,8 +15,10 @@ Supervision :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "supervision", major_version = 1, lending = .Server}
 
-// A service, and for an end, the code its SIGNAL_TERMINATED gave (slop_os.EXIT_KILLED if it was killed); for a
-// failure, its os.LaunchError, plus one.
+/**
+ * A service, and for an end, the code its SIGNAL_TERMINATED gave (slop_os.EXIT_KILLED if it was killed); for a
+ * failure, its os.LaunchError, plus one.
+ */
 Report :: struct {
     name : u8[slop_os.GRANT_LABEL_SIZE],
     code : u64,
@@ -26,11 +28,11 @@ Request :: union {
     Started(Report),
     Ended(Report),
     Failed(Report),
-    // Everything it starts at boot has started or failed: how many started
+    /** Everything it starts at boot has started or failed: how many started */
     AllStarted(u32),
-    // The boot's assessment (decisions/0115), just before AllStarted: every service the system needs is up
+    /** The boot's assessment (decisions/0115), just before AllStarted: every service the system needs is up */
     Healthy,
-    // Or how many of them aren't: the boot is degraded, and its record says which and why
+    /** Or how many of them aren't: the boot is degraded, and its record says which and why */
     Degraded(u32),
     EventsService(os.Channel[events.Events]),
 }
@@ -39,7 +41,7 @@ Response :: union {
     Unsupported,
 }
 
-// A report says what happened, so again is the same.
+/** A report says what happened, so again is the same. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Started(_) => true

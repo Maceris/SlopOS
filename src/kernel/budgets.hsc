@@ -16,7 +16,7 @@ import concurrency from "std"
 //      as seL4 MCS keeps it (Lyons et al., "Scheduling-context capabilities", EuroSys 2018)
 //TODO(claude): Throttle
 
-// Refills a budget keeps track of; past that, a new one is merged into the last.
+/** Refills a budget keeps track of; past that, a new one is merged into the last. */
 MAX_REFILLS :: 8
 
 Refill :: struct {
@@ -37,13 +37,13 @@ CpuTime :: struct {
     refills : Refill[MAX_REFILLS],
     first : usize,
     count : usize,
-    // Every CPU's whole time, like the root CPU budget's (cpu_budgets.hsc): what can't be overspent isn't counted
+    /** Every CPU's whole time, like the root CPU budget's (cpu_budgets.hsc): what can't be overspent isn't counted */
     unlimited : bool,
-    // The CPUs its threads may run on, a bit per CPU's index; a CPU past 63 is always one (decisions/0099)
+    /** The CPUs its threads may run on, a bit per CPU's index; a CPU past 63 is always one (decisions/0099) */
     cpus : u64,
 }
 
-/*
+/**
  * A budget of budget_ns every period_ns at priority, full to start with. The counter's frequency is
  * known by then.
  */
@@ -62,7 +62,7 @@ ticks_of :: fn(kernel: ptr[Kernel], nanoseconds: u64) -> u64 {
     return nanoseconds / runtime.NANOSECONDS_PER_SECOND * frequency + nanoseconds % runtime.NANOSECONDS_PER_SECOND * frequency / runtime.NANOSECONDS_PER_SECOND
 }
 
-// Whether there's time left at now.
+/** Whether there's time left at now. */
 has_time :: fn(budget: ptr[mut CpuTime], now: u64) -> bool {
     if budget.unlimited {
         return true
@@ -73,7 +73,7 @@ has_time :: fn(budget: ptr[mut CpuTime], now: u64) -> bool {
     return budget.available > 0
 }
 
-/*
+/**
  * Charge used ticks, from start on, to the budget: they come back one period after start. Running past
  * what's left, by at most a tick, is accepted (knowledge/design/scheduling.md §2).
  */
@@ -106,7 +106,7 @@ charge :: fn(budget: ptr[mut CpuTime], start: u64, used: u64, now: u64) {
     budget.count = count + 1
 }
 
-// Takes the lock as held.
+/** Takes the lock as held. */
 replenish :: fn(budget: ptr[mut CpuTime], now: u64) {
     loop {
         refill :: budget.refills[budget.first % MAX_REFILLS]

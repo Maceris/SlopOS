@@ -20,32 +20,32 @@ Events :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "events", major_version = 1, lending = .Server}
 
-// A program's ring for its records (base's runtime.SlopOsEventsRing), and the doorbell base's logger rings.
+/** A program's ring for its records (base's runtime.SlopOsEventsRing), and the doorbell base's logger rings. */
 Source :: struct {
     ring : slop_os.Memory,
     doorbell : slop_os.Channel,
 }
 
 QueryOf :: struct {
-    // The source's name, as Open was given it
+    /** The source's name, as Open was given it */
     source : slop_os.Relative[u8],
-    // The number of the first record to give, among the source's this boot, from 0
+    /** The number of the first record to give, among the source's this boot, from 0 */
     from : u64,
-    // The lowest level given: a LogLevel
+    /** The lowest level given: a LogLevel */
     level : u8,
-    // Whether to wait for a record at or after from, if there isn't one yet, rather than answering End
+    /** Whether to wait for a record at or after from, if there isn't one yet, rather than answering End */
     wait : bool,
 }
 
 AdoptOf :: struct {
-    // The source its records are, as Open was given it
+    /** The source its records are, as Open was given it */
     source : slop_os.Relative[u8],
-    // A handle to it that doesn't own it
+    /** A handle to it that doesn't own it */
     ring : slop_os.Memory,
 }
 
 Found :: struct {
-    // Its number among the source's
+    /** Its number among the source's */
     number : u64,
     // The monotonic clock's nanoseconds when it was written, and its level, a LogLevel
     time : u64,
@@ -56,19 +56,19 @@ Found :: struct {
 }
 
 Request :: union {
-    // A ring for a program the caller starts, whose records are the source named this
+    /** A ring for a program the caller starts, whose records are the source named this */
     Open(slop_os.Relative[u8]),
-    // Records kept in this directory from now on, those in memory with them
+    /** Records kept in this directory from now on, those in memory with them */
     Store(os.Channel[dir.Dir]),
     Query(QueryOf),
-    // Serve another client, on its end
+    /** Serve another client, on its end */
     Connect(os.Channel[Events]),
-    /*
+    /**
      * A ring whose program has ended, its owning handle given back by whoever launched it: its records read, every
      * ring's, then closed (decisions/0098)
      */
     Retire(slop_os.Memory),
-    // A ring a service before this one opened, its program still running, read from here on
+    /** A ring a service before this one opened, its program still running, read from here on */
     Adopt(AdoptOf),
 }
 
@@ -76,14 +76,14 @@ Response :: union {
     Opened(Source),
     Done,
     Found(Found),
-    // No record at or after the query's from, or no such source
+    /** No record at or after the query's from, or no such source */
     End,
-    // Out of room for another source, or a name that's empty or too long
+    /** Out of room for another source, or a name that's empty or too long */
     Refused,
     Unsupported,
 }
 
-// Opening again opens another ring, and storing again changes nothing; a query only reads.
+/** Opening again opens another ring, and storing again changes nothing; a query only reads. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Open(_) => false
@@ -97,7 +97,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #insert os.protocol_code(Request, Response)
 
-// A request sent through end, and its answer, waited for on port; Unsupported if the connection's gone.
+/** A request sent through end, and its answer, waited for on port; Unsupported if the connection's gone. */
 ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> Response {
     if send_request(end, port, out) is_some {
         return .Unsupported
@@ -112,7 +112,7 @@ ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], i
     return os.message_of[Response](into)^
 }
 
-// A ring for a program named name, through end: what to give it as os.LaunchEvents, or null.
+/** A ring for a program named name, through end: what to give it as os.LaunchEvents, or null. */
 open :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> os.LaunchEvents? {
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)

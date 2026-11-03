@@ -1,4 +1,4 @@
-/*
+/**
  * slopfs's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the number of
  * the first check that failed. Over a buffer standing in for a disk: the B+tree against a model, through splits,
  * merges and commits; and the container and its volumes (container_test.hsc).
@@ -10,10 +10,10 @@ import maps from "std"
 import slopfs from ".."
 import hosted_faults from "../../robustness/hosted"
 
-// 32 MiB of 4 KiB blocks
+/** 32 MiB of 4 KiB blocks */
 BLOCKS : u64 : 8192
 
-/*
+/**
  * A disk in memory. Recording, it keeps every write's blocks and bytes, and every flush, in order, for the crash-state
  * tester; read-only, it refuses writes.
  */
@@ -27,7 +27,7 @@ Disk :: struct {
     logged : u8[..],
 }
 
-// A write the disk recorded, its bytes at `at` in its log, or a flush.
+/** A write the disk recorded, its bytes at `at` in its log, or a flush. */
 Recorded :: struct {
     flush : bool,
     block : u64,
@@ -85,7 +85,7 @@ flush_blocks :: fn(context: rawptr) -> bool {
     return true
 }
 
-// A bump allocator for the tree's own test, giving back nothing.
+/** A bump allocator for the tree's own test, giving back nothing. */
 Bump :: struct {
     next : u64,
     released : u64,
@@ -106,7 +106,7 @@ bump_release :: fn(space: rawptr, address: u64, blocks: u64, owner: u64, birth: 
     bump.released += blocks
 }
 
-// xorshift64*, for keys that look random and come out the same every run.
+/** xorshift64*, for keys that look random and come out the same every run. */
 Random :: struct {
     state : u64,
 }
@@ -175,7 +175,7 @@ checks :: fn() -> int {
     return 0
 }
 
-// The test volume, 1: as it is, or unlocked with the tests' passphrase.
+/** The test volume, 1: as it is, or unlocked with the tests' passphrase. */
 open_test_volume :: fn(container #escaping : ptr[mut slopfs.Container], sealed: bool) -> Result[ptr[mut slopfs.Volume], slopfs.Error] {
     if sealed {
         return slopfs.open_sealed_volume(container, 1, passphrase())
@@ -183,7 +183,7 @@ open_test_volume :: fn(container #escaping : ptr[mut slopfs.Container], sealed: 
     return slopfs.open_volume(container, 1)
 }
 
-// A new test volume: as it is, or encrypted with the tests' passphrase.
+/** A new test volume: as it is, or encrypted with the tests' passphrase. */
 create_test_volume :: fn(container #escaping : ptr[mut slopfs.Container], name: string, sealed: bool) -> Result[ptr[mut slopfs.Volume], slopfs.Error] {
     if sealed {
         return slopfs.create_sealed_volume(container, name, key_of_volume(), 1, .ChaCha20Poly1305, passphrase(), TEST_ARGON2)
@@ -191,7 +191,9 @@ create_test_volume :: fn(container #escaping : ptr[mut slopfs.Container], name: 
     return slopfs.create_volume(container, name, key_of_volume(), 1)
 }
 
-// A disk of BLOCKS zeroed blocks in memory, as a device; nothing of it is on the stack, so what holds it can be pointed to.
+/**
+ * A disk of BLOCKS zeroed blocks in memory, as a device; nothing of it is on the stack, so what holds it can be pointed to.
+ */
 new_device :: fn() -> slopfs.Device? {
     return new_device_of(BLOCKS)
 }
@@ -218,7 +220,7 @@ free_device :: fn(device: slopfs.Device) {
     runtime.free(disk)
 }
 
-/*
+/**
  * The tree against a model: a map from each key's object to the value written for it. Thousands of puts, replacing
  * and deleting at random, with values of many lengths, committed every so often, then every key read back, and the
  * records walked in order both ways.
@@ -357,7 +359,7 @@ check_tree :: fn() -> int {
     return 0
 }
 
-// Whether a found key is before the one searched from, which tree_next never gives.
+/** Whether a found key is before the one searched from, which tree_next never gives. */
 compare_after :: fn(found: slopfs.Key, from: slopfs.Key) -> bool {
     return slopfs.compare_keys(found, from) < 0
 }
@@ -382,7 +384,7 @@ same :: fn(a: u8[], b: u8[]) -> bool {
     return true
 }
 
-// The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness)
+/** The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness) */
 main :: fn() -> int {
     return hosted_faults.run(checks)
 }

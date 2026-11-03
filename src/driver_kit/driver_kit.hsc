@@ -1,4 +1,4 @@
-/*
+/**
  * What drivers share (decisions/0074, 0075): mapping what they're given of their device, its configuration space and
  * its BARs, into their own address space.
  */
@@ -7,7 +7,7 @@ package driver_kit
 import runtime from "base"
 import slop_os from "std/os"
 
-// Device memory mapped read/write, as it is: where, or null.
+/** Device memory mapped read/write, as it is: where, or null. */
 map_device :: fn(memory: slop_os.Memory) -> u64? {
     block :: slop_os.startup_block()
     size :: slop_os.memory_size(memory) or_return null

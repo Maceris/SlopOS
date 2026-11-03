@@ -12,7 +12,7 @@ import maps from "std"
  * than let a later one name what wasn't written.
  */
 
-// The most times a commit goes round bringing the space map and owners up to date with what changing them changed.
+/** The most times a commit goes round bringing the space map and owners up to date with what changing them changed. */
 MAX_ROUNDS :: 64
 
 Container :: struct {
@@ -25,16 +25,16 @@ Container :: struct {
     volumes : Tree,
     next_volume : u64,
     failed : bool,
-    // Volumes open on it, which commit writes
+    /** Volumes open on it, which commit writes */
     open : ptr[mut Volume][..],
 }
 
-// The last block, where the second superblock is.
+/** The last block, where the second superblock is. */
 last_block :: fn(device: Device) -> u64 {
     return device.block_count - 1
 }
 
-// A container in memory, before anything is read or written: no trees, and the transaction after `transaction`.
+/** A container in memory, before anything is read or written: no trees, and the transaction after `transaction`. */
 new_container :: fn(device #escaping : Device, transaction: u64) -> Result[ptr[mut Container], Error] {
     container :: make(Container)?
     container^ = Container.{device = device}
@@ -48,7 +48,7 @@ new_container :: fn(device #escaping : Device, transaction: u64) -> Result[ptr[m
     return .Ok(container)
 }
 
-/*
+/**
  * A new container on the whole device, named id: its superblocks, and a first checkpoint whose space map frees
  * everything but itself.
  */
@@ -77,7 +77,7 @@ format :: fn(device #escaping : Device, id: u8[16]) -> Result[void, Error] {
 
 BLOCK_SIZE :: 4096
 
-// A block's bytes, in memory of their own.
+/** A block's bytes, in memory of their own. */
 BlockBuffer :: struct {
     bytes : u8[BLOCK_SIZE],
 }
@@ -99,12 +99,12 @@ has_text :: fn(bytes: u8[], text: string) -> bool {
     return true
 }
 
-// A checkpoint's bytes, for those who write one into a block themselves, as the fuzzer does.
+/** A checkpoint's bytes, for those who write one into a block themselves, as the fuzzer does. */
 size_of_checkpoint :: fn() -> usize {
     return size_of(Checkpoint)
 }
 
-// A record's seal: BLAKE3-256 of its bytes before the seal, which is its last 32.
+/** A record's seal: BLAKE3-256 of its bytes before the seal, which is its last 32. */
 seal_record :: fn(record: u8[], seal: ptr[mut Seal]) {
     if record.count < 32 {
         return void
@@ -118,7 +118,7 @@ record_sealed :: fn(record: u8[], seal: ptr[Seal]) -> bool {
     return found == seal^
 }
 
-/*
+/**
  * The container on device: its superblock, the first's or else the last's, and the newest checkpoint in its ring
  * that checks out. NotSlopfs if there's neither.
  */
@@ -186,7 +186,7 @@ mount :: fn(device #escaping : Device) -> Result[ptr[mut Container], Error] {
     return .Ok(container)
 }
 
-/*
+/**
  * The free list from the space map: its free extents, and those its checkpoint freed, which are free now it's durable.
  */
 load_free :: fn(container: ptr[mut Container]) -> Result[void, Error] {
@@ -205,7 +205,7 @@ load_free :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     }
 }
 
-// A container's memory given back, its open volumes with it. What wasn't committed is lost.
+/** A container's memory given back, its open volumes with it. What wasn't committed is lost. */
 unmount :: fn(container: ptr[mut Container]) {
     for volume in container.open {
         free_volume(volume)
@@ -229,7 +229,7 @@ space_map_put_free :: fn(container: ptr[mut Container], start: u64, blocks: u64)
     return .Ok
 }
 
-// A free extent in the space map, joined to the free ones it touches.
+/** A free extent in the space map, joined to the free ones it touches. */
 space_map_free :: fn(container: ptr[mut Container], start: u64, blocks: u64) -> Result[void, Error] {
     value : u8[16]
     first := start
@@ -259,7 +259,7 @@ space_map_free :: fn(container: ptr[mut Container], start: u64, blocks: u64) -> 
     return space_map_put_free(container, first, count)
 }
 
-// An allocated extent taken out of the free extent in the space map that holds it.
+/** An allocated extent taken out of the free extent in the space map that holds it. */
 space_map_take :: fn(container: ptr[mut Container], start: u64, blocks: u64) -> Result[void, Error] {
     value : u8[16]
     found :: tree_previous(&container.nodes, &container.space_map, key_of(start, .Free, 0), value)? or_return .Error(.Corrupt)
@@ -282,7 +282,7 @@ space_map_take :: fn(container: ptr[mut Container], start: u64, blocks: u64) -> 
     return .Ok
 }
 
-// The pending extents of the last commit, durable now, made free in the space map.
+/** The pending extents of the last commit, durable now, made free in the space map. */
 space_map_settle :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     pending : Extent[..]
     defer runtime.array_free(&pending)
@@ -306,7 +306,7 @@ space_map_settle :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     return .Ok
 }
 
-// One change to the space, taken by the space map and the owners.
+/** One change to the space, taken by the space map and the owners. */
 apply_change :: fn(container: ptr[mut Container], change: Change) -> Result[void, Error] {
     match change.change {
         case .Allocated => {
@@ -335,7 +335,7 @@ apply_change :: fn(container: ptr[mut Container], change: Change) -> Result[void
     return .Ok
 }
 
-/*
+/**
  * Everything changed since the last commit made durable (design/storage.md §3, §4): each open volume's tree written
  * and its record updated; the space map and owners brought up to date with every allocation and free, including
  * their own, until changing them changes nothing more; their nodes written; a flush; the checkpoint; a flush.
@@ -353,7 +353,7 @@ commit :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     return failing(container, commit_all(container))
 }
 
-/*
+/**
  * The container's own changes made durable, every volume's left waiting for its own commit: a snapshot taken or
  * deleted, or a clone made, at once (snapshot.hsc).
  */
@@ -364,7 +364,7 @@ commit_own :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     return failing(container, commit_changes(container, 0))
 }
 
-// A commit's result, a device error stopping every later one.
+/** A commit's result, a device error stopping every later one. */
 failing :: fn(container: ptr[mut Container], result: Result[void, Error]) -> Result[void, Error] {
     match result {
         case Ok => return .Ok
@@ -387,7 +387,7 @@ commit_all :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     return commit_changes(container, ALL_OWNERS)
 }
 
-/*
+/**
  * A volume server's commit (decisions/0089): its tree already written, through block connections whose writes have all
  * finished; its record put in the volumes tree, and its changes and the container's own made durable, other volumes'
  * left waiting for their own commits. The transaction committed.
@@ -405,7 +405,9 @@ commit_volume :: fn(container: ptr[mut Container], id: u64, record: ptr[VolumeRe
     return .Ok(committed)
 }
 
-// The space map and owners brought up to date with only's changes and the container's own, and the checkpoint written.
+/**
+ * The space map and owners brought up to date with only's changes and the container's own, and the checkpoint written.
+ */
 commit_changes :: fn(container: ptr[mut Container], only: u64) -> Result[void, Error] {
     space_map_settle(container)?
     // Each round takes the changes so far that this commit takes, and taking them may make more
@@ -456,7 +458,7 @@ commit_changes :: fn(container: ptr[mut Container], only: u64) -> Result[void, E
     return .Ok
 }
 
-/*
+/**
  * A volume's waiting changes undone, as if it had made none since its last commit (forget, on its side): its
  * allocations free again, and the extents it gave back still its own. What was undone, for whoever keeps who owns what.
  */
@@ -496,7 +498,7 @@ abandon_volume :: fn(container: ptr[mut Container], id: u64, undone: ptr[mut Cha
     return true
 }
 
-// Whether changes this commit takes are still waiting.
+/** Whether changes this commit takes are still waiting. */
 changes_taken :: fn(container: ptr[Container], only: u64) -> bool {
     for change in container.space.changes {
         if takes(only, change.owner) {
@@ -525,12 +527,12 @@ write_checkpoint :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     return .Ok
 }
 
-// The transaction the container's last commit made durable.
+/** The transaction the container's last commit made durable. */
 durable_transaction :: fn(container: ptr[Container]) -> u64 {
     return container.nodes.transaction - 1
 }
 
-// The blocks free now, and those that will be once this transaction is committed.
+/** The blocks free now, and those that will be once this transaction is committed. */
 free_blocks :: fn(container: ptr[Container]) -> u64 {
     return container.space.free_blocks
 }

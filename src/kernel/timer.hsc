@@ -11,9 +11,11 @@ import robustness from "../robustness"
     import arch from "../arch/aarch64"
 }
 
-// How often every CPU's timer interrupts: the scheduler's tick.
+/** How often every CPU's timer interrupts: the scheduler's tick. */
 TICKS_PER_SECOND :: 100
-// For now the kernel halts after this many of the boot CPU's ticks, or a test's own number (Kernel.stop_after_ticks).
+/**
+ * For now the kernel halts after this many of the boot CPU's ticks, or a test's own number (Kernel.stop_after_ticks).
+ */
 BOOT_TICKS : u64 : 3
 
 start_timer :: fn(kernel: ptr[mut Kernel], hint: u64?) {
@@ -23,14 +25,14 @@ start_timer :: fn(kernel: ptr[mut Kernel], hint: u64?) {
     set_next_tick(kernel)
 }
 
-// The calling CPU's next tick, a tick from now.
+/** The calling CPU's next tick, a tick from now. */
 set_next_tick :: fn(kernel: ptr[Kernel]) {
     cpu :: per_cpu()
     cpu.next_tick = arch.counter() + kernel.counter_frequency / TICKS_PER_SECOND
     program_deadline(cpu)
 }
 
-/*
+/**
  * A timer interrupt, from idle or user mode, on any CPU: the deadlines that came due fire, and if it's
  * time for one, a tick, which is whether the scheduler should round-robin. The boot CPU counts ticks for
  * when the kernel stops.
@@ -71,10 +73,10 @@ handle_timer :: fn() -> bool {
     return true
 }
 
-// Ticks between the root task's end and the kernel's: the grace period for what it owned to be freed.
+/** Ticks between the root task's end and the kernel's: the grace period for what it owned to be freed. */
 ROOT_END_TICKS : u64 : 20
 
-/*
+/**
  * At each of the boot CPU's ticks: once the root task has ended, and ROOT_END_TICKS have passed, the objects
  * left, which should be only the kernel's own, then the stop (decisions/0069).
  */

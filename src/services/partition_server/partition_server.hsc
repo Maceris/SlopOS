@@ -1,4 +1,4 @@
-/*
+/**
  * A partition server (roadmap 8a, decisions/0086): one per disk, started by the storage manager with a block
  * connection to the disk and nothing else, so a disk from outside is parsed by a process that can reach nothing but
  * it. It reads the disk's GPT (src/gpt), primary or backup, and serves the partitions protocol: each partition
@@ -33,7 +33,9 @@ CLIENT_KEY : u64 : 100
 DRIVER_KEY : u64 : 200
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 
-// A connection narrowed to a partition: the client's end, the driver's, and the partition's blocks and what the driver says.
+/**
+ * A connection narrowed to a partition: the client's end, the driver's, and the partition's blocks and what the driver says.
+ */
 Narrowed :: struct {
     client : slop_os.Channel,
     driver : slop_os.Channel,
@@ -45,7 +47,7 @@ Narrowed :: struct {
     torn_tag : u64,
 }
 
-// What faulty_block asks for (robustness=on only): which request fails, and how, and the reads and writes so far.
+/** What faulty_block asks for (robustness=on only): which request fails, and how, and the reads and writes so far. */
 FaultyBlock :: struct {
     kind : FaultKind,
     nth : u64,
@@ -150,7 +152,7 @@ main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Li
     }
 }
 
-// count blocks from first into into, through the disk's buffer, BLOCK_BYTES at a time as the buffer has room.
+/** count blocks from first into into, through the disk's buffer, BLOCK_BYTES at a time as the buffer has room. */
 read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
     server :: cast[ptr[mut Server]](context)
     per_read :: server.buffer_bytes / block.BLOCK_BYTES
@@ -184,7 +186,7 @@ read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bo
     return true
 }
 
-// A client's requests, until it has none: its partitions described, and connections to them made.
+/** A client's requests, until it has none: its partitions described, and connections to them made. */
 serve_client :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.clients.ends.count {
         return void
@@ -249,7 +251,7 @@ info_of :: fn(partition: ptr[gpt.Partition]) -> partitions.PartitionInfo {
     return info
 }
 
-/*
+/**
  * A connection to the blocks from first, count of them: a connection of its own to the driver, made through the
  * partition server's, and described; on client, the end a client gave, or, with NONE, a new channel, whose other end
  * is the client's, given back. Null if it can't be made.
@@ -311,7 +313,7 @@ open :: fn(server: ptr[mut Server], first: u64, count: u64, client: slop_os.Chan
     return theirs
 }
 
-// A narrowed connection's requests, until it has none: checked and moved to the partition's blocks, or answered.
+/** A narrowed connection's requests, until it has none: checked and moved to the partition's blocks, or answered. */
 serve_narrowed :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.narrowed.count {
         return void
@@ -393,7 +395,7 @@ serve_narrowed :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inc
     }
 }
 
-// What the driver answered a narrowed connection's requests, back to its client as it is.
+/** What the driver answered a narrowed connection's requests, back to its client as it is. */
 pass_back :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.narrowed.count {
         return void
@@ -424,7 +426,7 @@ pass_back :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
     }
 }
 
-// faulty_block's value: read:<n>, write:<n> or tear:<n>, n from 1; nothing fails for anything else.
+/** faulty_block's value: read:<n>, write:<n> or tear:<n>, n from 1; nothing fails for anything else. */
 faulty_of :: fn(text: string) -> FaultyBlock {
     for kind in FaultKind.[.Read, .Write, .Tear] {
         prefix :: prefix_of(kind)
@@ -440,7 +442,7 @@ prefix_of :: fn(kind: FaultKind) -> string {
     return if kind == .Read { "read:" } else if kind == .Write { "write:" } else { "tear:" }
 }
 
-// Whether this read is the one faulty_block fails.
+/** Whether this read is the one faulty_block fails. */
 faulty_read :: fn(server: ptr[mut Server]) -> bool {
     #if robustness.ON {
         server.faulty.reads += 1
@@ -452,7 +454,7 @@ faulty_read :: fn(server: ptr[mut Server]) -> bool {
     return false
 }
 
-// How this write fails, if it's the one faulty_block fails: Write, Tear, or None.
+/** How this write fails, if it's the one faulty_block fails: Write, Tear, or None. */
 faulty_write :: fn(server: ptr[mut Server]) -> FaultKind {
     #if robustness.ON {
         server.faulty.writes += 1
@@ -465,7 +467,7 @@ faulty_write :: fn(server: ptr[mut Server]) -> FaultKind {
     return .None
 }
 
-// Whether a transfer's blocks are all the partition's.
+/** Whether a transfer's blocks are all the partition's. */
 inside :: fn(narrowed: ptr[Narrowed], transfer: block.Transfer) -> bool {
     return transfer.first < narrowed.count && cast[u64](transfer.count) <= narrowed.count - transfer.first
 }
@@ -487,7 +489,7 @@ answer :: fn(end: slop_os.Channel, port: slop_os.Port, response: block.Response)
     _ = block.send_response(end, port, &out)
 }
 
-// One request on a block connection, and its answer, waited for; Unsupported if the connection's gone.
+/** One request on a block connection, and its answer, waited for; Unsupported if the connection's gone. */
 call :: fn(end: slop_os.Channel, port: slop_os.Port, request: block.Request) -> block.Response {
     out := os.Outgoing.{}
     made :: os.begin[block.Request](&out)

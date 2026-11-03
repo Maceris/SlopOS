@@ -26,26 +26,26 @@ Accounts :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "accounts", major_version = 1, lending = .Server}
 
-// An account's name and its password.
+/** An account's name and its password. */
 Credentials :: struct {
     name : slop_os.Relative[u8],
     password : slop_os.Relative[u8],
 }
 
-// A new account, and when it's made, as the asker says.
+/** A new account, and when it's made, as the asker says. */
 Creation :: struct {
     name : slop_os.Relative[u8],
     password : slop_os.Relative[u8],
     now : u64,
 }
 
-// Another account, made by the administrator: their name and password, and the new account.
+/** Another account, made by the administrator: their name and password, and the new account. */
 Elevated :: struct {
     administrator : Credentials,
     creation : Creation,
 }
 
-// A shared volume, by its name, and its owner's and a member's names.
+/** A shared volume, by its name, and its owner's and a member's names. */
 ShareOf :: struct {
     owner : slop_os.Relative[u8],
     name : slop_os.Relative[u8],
@@ -58,14 +58,14 @@ PasswordChange :: struct {
     new_password : slop_os.Relative[u8],
 }
 
-// A lost password replaced: the account's recovery code, as its owner types it, and the new password.
+/** A lost password replaced: the account's recovery code, as its owner types it, and the new password. */
 Recovery :: struct {
     name : slop_os.Relative[u8],
     code : slop_os.Relative[u8],
     new_password : slop_os.Relative[u8],
 }
 
-// The recovery code, XXXXX-XXXXX-XXXXX-XXXXX-XXXXX, shown once.
+/** The recovery code, XXXXX-XXXXX-XXXXX-XXXXX-XXXXX, shown once. */
 RECOVERY_TEXT_BYTES :: 29
 
 RecoveryText :: struct {
@@ -85,30 +85,30 @@ Request :: union {
     OpenHome(Credentials),
     ChangePassword(PasswordChange),
     Recover(Recovery),
-    // Serve another client, on its end
+    /** Serve another client, on its end */
     Connect(os.Channel[Accounts]),
 }
 
 Response :: union {
     Described(Status),
-    // The account's made, the administrator if it's the first: its recovery code, shown once
+    /** The account's made, the administrator if it's the first: its recovery code, shown once */
     Created(RecoveryText),
     OpenedHome(os.Channel[dir.Dir]),
     Done,
-    // Why the password's refused, as account_records.PasswordProblem: 1 too short, 2 too long, 3 common, 4 the name
+    /** Why the password's refused, as account_records.PasswordProblem: 1 too short, 2 too long, 3 common, 4 the name */
     PasswordRefused(u8),
-    // Not a name an account may have: 1 to 32 bytes, a lowercase letter, then letters, digits, - or _
+    /** Not a name an account may have: 1 to 32 bytes, a lowercase letter, then letters, digits, - or _ */
     NameRefused,
     AlreadyExists,
-    // No such account, or the wrong password or recovery code: which isn't said
+    /** No such account, or the wrong password or recovery code: which isn't said */
     WrongCredentials,
-    // Too many wrong attempts: the nanoseconds until the next is heard
+    /** Too many wrong attempts: the nanoseconds until the next is heard */
     RateLimited(u64),
-    // Not allowed: Create once there's an account
+    /** Not allowed: Create once there's an account */
     Refused,
-    // Share's or Unshare's: a grant of the shared volume's root, for its owner's link
+    /** Share's or Unshare's: a grant of the shared volume's root, for its owner's link */
     Shared(os.Channel[grant.Grant]),
-    // No account of the member's name, or none with a key pair yet: it's made at the account's next login
+    /** No account of the member's name, or none with a key pair yet: it's made at the account's next login */
     NoSuchAccount,
     Failed,
     Unsupported,
@@ -130,7 +130,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #insert os.protocol_code(Request, Response)
 
-// A new connection to the account service listening on end, or null (as entropy.connect).
+/** A new connection to the account service listening on end, or null (as entropy.connect). */
 connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Accounts]? {
     pair :: os.channel_for[Accounts](budget, 0) or_return null
     out := os.Outgoing.{}

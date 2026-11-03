@@ -1,4 +1,4 @@
-/*
+/**
  * SlopOS's own boot protocol (roadmap B2, decisions/0131, 0133): what the Hemera bootloader (src/uefi/bootloader) hands
  * the kernel's boot adapter (src/boot/slopos), which turns it into the kernel's BootInfo. The bootloader is a program of its own, so this is fixed-size plain data and physical addresses,
  * read through the direct map, never a Hemera value with pointers in it; the adapter checks the magic and the size
@@ -14,9 +14,9 @@ package boot_protocol
 
 import boot_info from "../boot_info"
 
-// "SLOPBOOT", little-endian
+/** "SLOPBOOT", little-endian */
 MAGIC : u64 : 0x544f4f42504f4c53
-// The boot CPU's stack, and each other CPU's, when they're started (B2)
+/** The boot CPU's stack, and each other CPU's, when they're started (B2) */
 BOOT_STACK_SIZE : u64 : 64 * 1024
 // The most of each the handoff carries
 MAX_REGIONS :: 512
@@ -27,7 +27,7 @@ MAX_CPUS :: 64
 NAME_BYTES :: 32
 COMMAND_LINE_BYTES :: 1024
 
-// A loadable segment of the kernel, where it's mapped, already relocated.
+/** A loadable segment of the kernel, where it's mapped, already relocated. */
 Segment :: struct {
     virtual_base : u64,
     size : u64,
@@ -36,13 +36,13 @@ Segment :: struct {
     padding : u8[6],
 }
 
-// A boot module: its file's name, as the generation names it, and where its bytes are.
+/** A boot module: its file's name, as the generation names it, and where its bytes are. */
 Module :: struct {
     name : u8[NAME_BYTES],
     contents : boot_info.PhysicalRange,
 }
 
-/*
+/**
  * A CPU: its hardware identifier, the local APIC ID or MPIDR's affinity fields; and, but for the boot CPU, its mailbox.
  * The bootloader starts every other CPU before it enters the kernel and parks it, on its own stack of BOOT_STACK_SIZE
  * bytes, with interrupts off and the bootloader's page tables, until goto_address isn't 0: then it jumps there, with
@@ -56,7 +56,9 @@ Cpu :: struct {
     hardware_id : u64,
 }
 
-// The framebuffer the firmware set up, if it has one: linear, 32 bits a pixel, its channels by their masks' positions.
+/**
+ * The framebuffer the firmware set up, if it has one: linear, 32 bits a pixel, its channels by their masks' positions.
+ */
 Framebuffer :: struct {
     base : u64,
     size : u64,
@@ -75,7 +77,7 @@ Framebuffer :: struct {
 Handoff :: struct {
     magic : u64,
     size : u64,
-    // The kernel's command line, its bytes then zeros
+    /** The kernel's command line, its bytes then zeros */
     command_line : u8[COMMAND_LINE_BYTES],
     // Sorted, not overlapping, page-aligned and merged, as BootInfo's rules say (docs/specs/boot_info.md)
     regions : boot_info.MemoryRegion[MAX_REGIONS],
@@ -101,7 +103,7 @@ Handoff :: struct {
     devicetree : u64,
     smbios : u64,
     efi_system_table : u64,
-    // The panic record's page (boot_info.PanicRecord), 0 for none
+    /** The panic record's page (boot_info.PanicRecord), 0 for none */
     panic_record : u64,
     /*
      * Room the kernel's boot adapter fills with BootInfo's arrays, which point at the handoff's own fields, so it
@@ -115,7 +117,7 @@ Handoff :: struct {
     framebuffers : boot_info.Framebuffer[1],
 }
 
-// Whether bytes, at least a handoff's size, are one: its magic and size.
+/** Whether bytes, at least a handoff's size, are one: its magic and size. */
 is_handoff :: fn(handoff: ptr[Handoff]) -> bool {
     return handoff.magic == MAGIC && handoff.size == cast[u64](size_of(Handoff))
 }

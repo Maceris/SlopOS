@@ -1,4 +1,4 @@
-/*
+/**
  * The kernel core (L2): portable, using only the arch layer, BootInfo and std's freestanding and
  * allocating tiers (docs/architecture/layers.md, L2).
  *
@@ -25,44 +25,44 @@ import concurrency from "std"
     import arch from "../arch/aarch64"
 }
 
-// Each CPU's kernel stack, where every entry runs (decisions/0023)
+/** Each CPU's kernel stack, where every entry runs (decisions/0023) */
 KERNEL_STACK_SIZE :: 16 * 1024
-// Each CPU's stacks for NMIs, double faults and machine checks
+/** Each CPU's stacks for NMIs, double faults and machine checks */
 CRITICAL_STACK_SIZE :: 4 * 1024
 
-// State shared by every CPU, allocated once at boot and synchronized internally.
+/** State shared by every CPU, allocated once at boot and synchronized internally. */
 Kernel :: struct {
     arch : arch.ArchSystem,
     features : slop_os.CpuFeatures,
-    // Of arch.counter(), in Hz.
+    /** Of arch.counter(), in Hz. */
     counter_frequency : u64,
-    // Where the kernel image is, for stack traces relative to it.
+    /** Where the kernel image is, for stack traces relative to it. */
     image_base : u64,
     // Every CPU, the boot CPU first. The first online_cpus of them are running.
     cpus : boot_info.BootCpu[],
     online_cpus : u32,
     options : Options,
-    // Every frame of RAM the kernel owns.
+    /** Every frame of RAM the kernel owns. */
     frames : frames.FrameAllocator,
-    // The slab caches behind the kernel heap (heap.hsc).
+    /** The slab caches behind the kernel heap (heap.hsc). */
     heap : Heap,
-    // The kernel's own address space, which every address space shares as its kernel half (address_space.hsc).
+    /** The kernel's own address space, which every address space shares as its kernel half (address_space.hsc). */
     page_table : arch.PageTable,
-    // Held while changing page_table.
+    /** Held while changing page_table. */
     page_table_lock : concurrency.SpinLock,
-    // The bootloader's memory, reclaimed once every CPU is done with it.
+    /** The bootloader's memory, reclaimed once every CPU is done with it. */
     boot_memory : boot_info.PhysicalRange[],
-    // The RAM the kernel owns, from the memory map (address_space.hsc, keep_boot_info).
+    /** The RAM the kernel owns, from the memory map (address_space.hsc, keep_boot_info). */
     ram : boot_info.PhysicalRange[],
-    // How many CPUs must leave their boot stacks before boot memory is reclaimed, 0 until it's known.
+    /** How many CPUs must leave their boot stacks before boot memory is reclaimed, 0 until it's known. */
     cpus_leaving_boot_stacks : u32,
-    // How many have.
+    /** How many have. */
     cpus_off_boot_stacks : u32,
-    // Each CPU's PerCpu, by index, as an address: 0 until it's allocated.
+    /** Each CPU's PerCpu, by index, as an address: 0 until it's allocated. */
     per_cpus : mut u64[],
-    // The TLB shootdown in progress, if any (shootdown.hsc).
+    /** The TLB shootdown in progress, if any (shootdown.hsc). */
     shootdown : Shootdown,
-    // Kernel addresses for device registers and other mappings of the kernel's own (window.hsc).
+    /** Kernel addresses for device registers and other mappings of the kernel's own (window.hsc). */
     window : Window,
     // Every CPU's context.clock (clock.hsc), and when and how fast it counts.
     clock : runtime.Clock,
@@ -79,17 +79,17 @@ Kernel :: struct {
     iommu_scopes : IommuScope[MAX_IOMMU_SCOPES],
     iommu_scope_count : u32,
     iommus_lock : concurrency.SpinLock,
-    // Set once an IOMMU remaps interrupts, which blocks every wired line's, not remapped yet (translation.hsc).
+    /** Set once an IOMMU remaps interrupts, which blocks every wired line's, not remapped yet (translation.hsc). */
     wired_lines_blocked : u32,
-    // Set once an IOMMU that doesn't signal its faults translates, so CPU 0 reads them at its ticks.
+    /** Set once an IOMMU that doesn't signal its faults translates, so CPU 0 reads them at its ticks. */
     iommus_polled : u32,
-    // test_shootdown's state, as an address, while CPUs are asked to read its page (shootdown_test.hsc)
+    /** test_shootdown's state, as an address, while CPUs are asked to read its page (shootdown_test.hsc) */
     shootdown_test : u64,
-    // test_ioapic's interrupts so far (device_test.hsc)
+    /** test_ioapic's interrupts so far (device_test.hsc) */
     test_device_count : u64,
-    // test_ioapic's controller (device_test.hsc)
+    /** test_ioapic's controller (device_test.hsc) */
     test_controller : u32,
-    // Where the kernel image's frames start, for mapping its code elsewhere.
+    /** Where the kernel image's frames start, for mapping its code elsewhere. */
     image_physical : u64,
     // The kernel objects' pools, and the epoch objects are destroyed in (objects.hsc).
     pools : ObjectPools,
@@ -100,14 +100,14 @@ Kernel :: struct {
     // The CPU budget every other is split from, and the lock for the shape of their tree (cpu_budgets.hsc).
     root_cpu_budget : u64,
     cpu_budgets_lock : concurrency.SpinLock,
-    // The platform capability, for the root task (irqs.hsc); and the last CPU an IRQ was routed to.
+    /** The platform capability, for the root task (irqs.hsc); and the last CPU an IRQ was routed to. */
     platform : u64,
     // The boot modules, the root task's first, their names kept past boot; the boot's random seed (keep_boot_info).
     modules : boot_info.BootModule[],
     boot_seed : u8[32],
-    // The kernel's command line, kept past boot, for the root task.
+    /** The kernel's command line, kept past boot, for the root task. */
     command_line : string,
-    // The root task's process, as an address, once it's started, whose end stops the kernel (root_task.hsc).
+    /** The root task's process, as an address, once it's started, whose end stops the kernel (root_task.hsc). */
     root_task : u64,
     // 1 once the root task has ended, 2 once the boot CPU has noted when to stop for it, at root_stop_tick.
     root_ended : u32,
@@ -116,11 +116,13 @@ Kernel :: struct {
     // Every Device, for refusing a second at the same address (devices.hsc).
     devices_lock : concurrency.SpinLock,
     first_device : u64,
-    // The firmware tables' copy, a Memory's address, for the root task's "firmware" grant, 0 without (firmware.hsc).
+    /**
+     * The firmware tables' copy, a Memory's address, for the root task's "firmware" grant, 0 without (firmware.hsc).
+     */
     firmware : u64,
-    // The panic record's page in the direct map, 0 without one (boot_info.PanicRecord, stop.hsc)
+    /** The panic record's page in the direct map, 0 without one (boot_info.PanicRecord, stop.hsc) */
     panic_record : u64,
-    // How the machine is reset, as arch.reset_method says, for panic_reset
+    /** How the machine is reset, as arch.reset_method says, for panic_reset */
     reset_method : u8,
     // Every thread, for finding one by ID, and how many intercepts there are (control.hsc, intercepts.hsc).
     threads_lock : concurrency.SpinLock,
@@ -129,15 +131,15 @@ Kernel :: struct {
     // Threads (threads.hsc): the last ID, and the last CPU one was started on.
     next_thread_id : u64,
     next_start_cpu : u32,
-    // The address-space tags in use (spaces.hsc).
+    /** The address-space tags in use (spaces.hsc). */
     tags : TagSet,
-    // The boot CPU's tick the kernel stops at (timer.hsc).
+    /** The boot CPU's tick the kernel stops at (timer.hsc). */
     stop_after_ticks : u64,
-    // test_tickless's count of the other CPUs' timer interrupts at its start (tickless_test.hsc)
+    /** test_tickless's count of the other CPUs' timer interrupts at its start (tickless_test.hsc) */
     tickless_baseline : u64,
-    // Held while writing a line to the console, so lines from different CPUs don't mix.
+    /** Held while writing a line to the console, so lines from different CPUs don't mix. */
     console_lock : concurrency.SpinLock,
-    // test_pool's state, as an address, once the boot CPU has set it up for the other CPUs (pool_test.hsc)
+    /** test_pool's state, as an address, once the boot CPU has set it up for the other CPUs (pool_test.hsc) */
     pool_test : u64,
     // Text on the first framebuffer, if there is one and it could be set up.
     framebuffer_console : console.Console,
@@ -147,7 +149,7 @@ Kernel :: struct {
     framebuffer_size : u64,
 }
 
-/*
+/**
  * One CPU's state. Its carrier block's program_data points back here, so kernel code reaches it
  * with per_cpu() (docs/architecture/layers.md, L1).
  */
@@ -163,28 +165,28 @@ PerCpu :: struct #align(64) {
     arch : arch.ArchCpu,
     stacks : arch_interface.CpuStacks,
     timer_ticks : u64,
-    // NMIs this CPU has handled.
+    /** NMIs this CPU has handled. */
     nmi_count : u32,
-    // CPU_WAITING while the boot CPU starts this one, then CPU_ONLINE or CPU_ABANDONED (cpus.hsc).
+    /** CPU_WAITING while the boot CPU starts this one, then CPU_ONLINE or CPU_ABANDONED (cpus.hsc). */
     start_state : u32,
-    // Whether an interrupt has taken this CPU to its kernel stack, off its boot stack for good.
+    /** Whether an interrupt has taken this CPU to its kernel stack, off its boot stack for good. */
     left_boot_stack : bool,
-    // This CPU's magazines in front of the kernel heap's caches.
+    /** This CPU's magazines in front of the kernel heap's caches. */
     heap : CpuHeap,
-    // This CPU's single frames in front of the frame allocator.
+    /** This CPU's single frames in front of the frame allocator. */
     frame_cache : frames.FrameCache,
-    // 1 while a TLB shootdown waits for this CPU to flush.
+    /** 1 while a TLB shootdown waits for this CPU to flush. */
     flush_requested : u32,
-    // Where each of this CPU's device interrupt IDs comes from (interrupts.hsc).
+    /** Where each of this CPU's device interrupt IDs comes from (interrupts.hsc). */
     device_routes : DeviceRoute[MAX_DEVICE_INTERRUPTS],
-    // Its ready threads (scheduler.hsc).
+    /** Its ready threads (scheduler.hsc). */
     run_queue : RunQueue,
     // The thread it runs, as an address, 0 when idle; that thread's level, IDLE_LEVEL when idle.
     current : u64,
     current_level : u32,
-    // The address space active on it, as an address, 0 for the kernel's own.
+    /** The address space active on it, as an address, 0 for the kernel's own. */
     space : u64,
-    // When the current thread last started running, or was last charged.
+    /** When the current thread last started running, or was last charged. */
     run_start : u64,
     // Objects this CPU destroyed, waiting for a grace period; and the epoch it last passed a quiescent point in (objects.hsc).
     limbo : u64,
@@ -195,7 +197,7 @@ PerCpu :: struct #align(64) {
     // 1 while it's idle without ticking, which only an interrupt ends (decisions/0128); and its timer interrupts
     tickless : u32,
     timer_interrupts : u64,
-    // While ChannelNotifyAndWait notifies: threads it wakes are made ready here (ports.hsc, wake_waiter).
+    /** While ChannelNotifyAndWait notifies: threads it wakes are made ready here (ports.hsc, wake_waiter). */
     handoff : bool,
     // Destroys running on this CPU, nested; whether the outermost is finishing those left for later, and
     // those (objects.hsc, destroy_later).
@@ -204,7 +206,7 @@ PerCpu :: struct #align(64) {
     doomed : u64,
 }
 
-// The memory for one CPU's stacks.
+/** The memory for one CPU's stacks. */
 CpuStackMemory :: struct #align(64) {
     kernel : u8[KERNEL_STACK_SIZE],
     nmi : u8[CRITICAL_STACK_SIZE],
@@ -212,12 +214,12 @@ CpuStackMemory :: struct #align(64) {
     machine_check : u8[CRITICAL_STACK_SIZE],
 }
 
-// The calling CPU's PerCpu.
+/** The calling CPU's PerCpu. */
 per_cpu :: fn() -> ptr[mut PerCpu] {
     return cast[ptr[mut PerCpu]](intrinsics.carrier().program_data)
 }
 
-/*
+/**
  * The portable kernel entry, called by the boot adapter (L0) on the boot CPU with interrupts
  * disabled, the boot context pushed, and the bootloader's page tables
  * (docs/specs/boot_info.md, Handoff).
@@ -327,7 +329,7 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     }
 }
 
-// The tests that need only memory: a fault, the heap, the kernel's read-only code and a failed assertion.
+/** The tests that need only memory: a fault, the heap, the kernel's read-only code and a failed assertion. */
 memory_tests :: fn(kernel: ptr[mut Kernel]) {
     if kernel.options.test_fault {
         runtime.log_info("test_fault: running an invalid instruction")
@@ -347,7 +349,7 @@ memory_tests :: fn(kernel: ptr[mut Kernel]) {
     }
 }
 
-// An assertion failed, unless the bootloader handed over the last panic's record (decisions/0134).
+/** An assertion failed, unless the bootloader handed over the last panic's record (decisions/0134). */
 test_panic_once :: fn(info: ptr[boot_info.BootInfo]) {
     for module in info.modules {
         if module.name == boot_info.LAST_PANIC_MODULE {
@@ -358,7 +360,7 @@ test_panic_once :: fn(info: ptr[boot_info.BootInfo]) {
     runtime.assert(false, "test_panic_once")
 }
 
-/*
+/**
  * A T in frames of its own, zeroed: the kernel's state that lives as long as it does. T's
  * alignment is at most a frame's.
  */
@@ -380,7 +382,7 @@ out_of_memory :: fn(options: ptr[Options], message: string) #never_returns {
     stop_with(options, .OutOfMemory)
 }
 
-// Raise an NMI, and wait up to a second for this CPU to handle it and come back.
+/** Raise an NMI, and wait up to a second for this CPU to handle it and come back. */
 test_nmi :: fn(kernel: ptr[Kernel], cpu: ptr[mut PerCpu]) {
     runtime.log_info("test_nmi: raising an NMI")
     arch.test_nmi()
@@ -396,7 +398,7 @@ test_nmi :: fn(kernel: ptr[Kernel], cpu: ptr[mut PerCpu]) {
     runtime.log_info("test_nmi: back from the NMI")
 }
 
-// Stops with a message if the CPU lacks part of the baseline (decisions/0003).
+/** Stops with a message if the CPU lacks part of the baseline (decisions/0003). */
 check_baseline :: fn(options: ptr[Options], features: ptr[slop_os.CpuFeatures]) {
     missing :: arch.missing_baseline_feature(features) or_return void
     #if TARGET_ARCH == .x86_64 {
@@ -408,7 +410,7 @@ check_baseline :: fn(options: ptr[Options], features: ptr[slop_os.CpuFeatures]) 
     stop_with(options, .CpuUnsupported)
 }
 
-/*
+/**
  * Show the log on the first framebuffer too. Without one, or if it can't be used, the log stays on
  * the early console.
  */

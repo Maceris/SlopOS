@@ -1,4 +1,4 @@
-/*
+/**
  * The powerbox's chooser (decisions/0156), on the trusted path. A session's powerbox asks on its prompt connection (Ask):
  * the request's shown on the status line, naming the program and what it asks for, until the secure attention key
  * opens the chooser over the session, which lists the directory it's in from the home the powerbox gave, read only.
@@ -29,7 +29,9 @@ ASK_BYTES :: 96
 ITEMS_ROW : u16 : 7
 ITEMS_SHOWN :: 13
 
-// A request a session's powerbox is waiting on the user for: whose, why, what it suggests, and the home to choose in.
+/**
+ * A request a session's powerbox is waiting on the user for: whose, why, what it suggests, and the home to choose in.
+ */
 Asked :: struct {
     requester : u8[ASK_BYTES],
     requester_count : usize,
@@ -49,7 +51,9 @@ Entry :: struct {
     directory : bool,
 }
 
-// The chooser's state: the directory it's in beneath the home, what's typed, what the directory has, and the item chosen.
+/**
+ * The chooser's state: the directory it's in beneath the home, what's typed, what the directory has, and the item chosen.
+ */
 Chooser :: struct {
     path : u8[PATH_BYTES],
     path_count : usize,
@@ -58,16 +62,16 @@ Chooser :: struct {
     entries : Entry[CHOOSER_ENTRIES],
     entry_count : usize,
     selected : usize,
-    // Whether the user's ticked "keep for next time"
+    /** Whether the user's ticked "keep for next time" */
     keep : bool,
 }
 
 ItemKind :: enum {
-    // The directory it's in, for a directory asked for
+    /** The directory it's in, for a directory asked for */
     Here,
     Up,
     Entry,
-    // A new file of the name typed
+    /** A new file of the name typed */
     New,
 }
 
@@ -76,7 +80,7 @@ Item :: struct {
     entry : usize,
 }
 
-// Asks waiting on the views' prompt connections, kept for the user; a connection that's gone, closed.
+/** Asks waiting on the views' prompt connections, kept for the user; a connection that's gone, closed. */
 take_prompts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
     for &each, i in service.views {
         if !each.in_use || each.prompt_end == NONE || each.asking {
@@ -114,7 +118,7 @@ take_prompts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
     }
 }
 
-// What's waiting, for the status line: who asks for what, and the key that opens the chooser.
+/** What's waiting, for the status line: who asks for what, and the key that opens the chooser. */
 append_asking :: fn(status: ptr[mut text_buffer.TextBuffer], asked: ptr[Asked]) {
     text_buffer.append(status, " │ ")
     text_buffer.append(status, bytes_text(first_of(asked.requester[0..<asked.requester.count], asked.requester_count)))
@@ -123,7 +127,7 @@ append_asking :: fn(status: ptr[mut text_buffer.TextBuffer], asked: ptr[Asked]) 
     text_buffer.append(status, ": Ctrl+Alt+Delete")
 }
 
-// The chooser opened over the active view, for its request, in the home, what was suggested typed already.
+/** The chooser opened over the active view, for its request, in the home, what was suggested typed already. */
 enter_chooser :: fn(service: ptr[mut Service]) {
     asked :: &view(service).ask
     service.choosing = true
@@ -136,7 +140,7 @@ enter_chooser :: fn(service: ptr[mut Service]) {
     draw_chooser(service)
 }
 
-// A key while the chooser's up.
+/** A key while the chooser's up. */
 chooser_key :: fn(service: ptr[mut Service], event: terminal.Event, text: u8[]) {
     chooser :: &service.chooser
     if event.code == USAGE_ESCAPE {
@@ -198,7 +202,7 @@ chooser_key :: fn(service: ptr[mut Service], event: terminal.Event, text: u8[]) 
     draw_chooser(service)
 }
 
-// Enter on the item chosen: a directory opened, the one it's in or an entry chosen, or a new file named.
+/** Enter on the item chosen: a directory opened, the one it's in or an entry chosen, or a new file named. */
 activate :: fn(service: ptr[mut Service]) {
     chooser :: &service.chooser
     items : Item[CHOOSER_ENTRIES + 3]
@@ -247,7 +251,7 @@ activate :: fn(service: ptr[mut Service]) {
     }
 }
 
-// The directory the chooser's in now, listed, with nothing typed.
+/** The directory the chooser's in now, listed, with nothing typed. */
 opened_directory :: fn(service: ptr[mut Service]) {
     service.chooser.filter_count = 0
     list_chooser(service)
@@ -255,7 +259,7 @@ opened_directory :: fn(service: ptr[mut Service]) {
     draw_chooser(service)
 }
 
-/*
+/**
  * The request answered with path and whether it's new, or refused for null, on the active view's prompt connection; the
  * chooser closed, the home given back, and the session drawn again.
  */
@@ -282,7 +286,7 @@ answer_ask :: fn(service: ptr[mut Service], path: u8[]?, new: bool) {
     leave_attention(service)
 }
 
-// A view's waiting request let go, its home closed.
+/** A view's waiting request let go, its home closed. */
 drop_ask :: fn(each: ptr[mut View]) {
     if each.asking && each.ask.home != NONE {
         _ = slop_os.handle_close(cast[slop_os.Handle](each.ask.home))
@@ -291,7 +295,7 @@ drop_ask :: fn(each: ptr[mut View]) {
     each.ask = Asked.{}
 }
 
-// The chooser's directory's entries, from the home: up to CHOOSER_ENTRIES of them, as the volume lists them.
+/** The chooser's directory's entries, from the home: up to CHOOSER_ENTRIES of them, as the volume lists them. */
 list_chooser :: fn(service: ptr[mut Service]) {
     chooser :: &service.chooser
     chooser.entry_count = 0
@@ -353,7 +357,7 @@ list_chooser :: fn(service: ptr[mut Service]) {
     }
 }
 
-// One request on a read-only directory's connection, and its answer, waited for.
+/** One request on a read-only directory's connection, and its answer, waited for. */
 ask_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> read_only_dir.Response {
     if read_only_dir.send_request(end, port, out) is_some {
         return .Unsupported
@@ -367,7 +371,7 @@ ask_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Ou
     }
 }
 
-/*
+/**
  * The chooser's items, into items unless it's null: the directory it's in, for a directory; the one above, below the
  * home; the entries with what's typed in their names, only directories for a directory; and a new file of the name
  * typed, for a file to write, if no entry has that name. How many.
@@ -410,7 +414,9 @@ items_of :: fn(service: ptr[mut Service], items: ptr[mut Item[CHOOSER_ENTRIES + 
     return count
 }
 
-// The item to start on: the entry named what's typed, or a new file of that name, or the first entry, or the first item.
+/**
+ * The item to start on: the entry named what's typed, or a new file of that name, or the first entry, or the first item.
+ */
 select_best :: fn(service: ptr[mut Service]) {
     chooser :: &service.chooser
     items : Item[CHOOSER_ENTRIES + 3]
@@ -442,7 +448,7 @@ select_best :: fn(service: ptr[mut Service]) {
 
 NO_ITEM : usize : 0xffffffff
 
-// The chooser, drawn on the panel: what's asked, by whom, the directory it's in, what's typed, and its items.
+/** The chooser, drawn on the panel: what's asked, by whom, the directory it's in, what's typed, and its items. */
 draw_chooser :: fn(service: ptr[mut Service]) {
     screen.show_panel(&view(service).screen, true)
     panel :: &view(service).screen.panel
@@ -510,7 +516,7 @@ draw_chooser :: fn(service: ptr[mut Service]) {
     redraw(service)
 }
 
-// The chooser's path with name added: name alone in the home.
+/** The chooser's path with name added: name alone in the home. */
 join :: fn(chooser: ptr[mut Chooser], name: u8[]) {
     storage : u8[PATH_BYTES]
     path :: joined(chooser, name, &storage)
@@ -538,7 +544,7 @@ add_part :: fn(storage: ptr[mut u8[PATH_BYTES]], count: ptr[mut usize], part: u8
     }
 }
 
-// from copied into into, as much as fits: how much did.
+/** from copied into into, as much as fits: how much did. */
 copy_bytes :: fn(from: u8[], into: mut u8[]) -> usize {
     count : usize = 0
     for byte in from {
@@ -566,7 +572,7 @@ contains :: fn(name: u8[], part: u8[]) -> bool {
     return false
 }
 
-// The first count of bytes, or all of them.
+/** The first count of bytes, or all of them. */
 first_of :: fn(bytes: u8[], count: usize) -> u8[] {
     return if count <= bytes.count { bytes[0..<count] } else { bytes }
 }

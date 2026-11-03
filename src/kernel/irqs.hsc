@@ -30,7 +30,7 @@ import slop_os from "std/os"
  * Lock order: an IRQ's lock, then a port's.
  */
 
-// The platform capability: an object with nothing in it but its kind.
+/** The platform capability: an object with nothing in it but its kind. */
 Platform :: struct #align(16) {
     header : ObjectHeader,
 }
@@ -118,7 +118,7 @@ create_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, controller: u
     return .Ok(irq)
 }
 
-// The platform capability holds nothing.
+/** The platform capability holds nothing. */
 destroy_platform :: fn(kernel: ptr[mut Kernel], platform: ptr[mut Platform]) {
 }
 
@@ -128,7 +128,7 @@ release_platform :: fn(kernel: ptr[mut Kernel], platform: ptr[mut Platform]) {
 release_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
 }
 
-// Destroying an IRQ: its line masked, or its event no longer delivered; its route forgotten, its binding dropped.
+/** Destroying an IRQ: its line masked, or its event no longer delivered; its route forgotten, its binding dropped. */
 destroy_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
     if irq.msi {
         destroy_msi_irq(kernel, irq)
@@ -150,14 +150,14 @@ destroy_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
     }
 }
 
-// A level-triggered line, unmasked once its driver has dealt with the interrupt.
+/** A level-triggered line, unmasked once its driver has dealt with the interrupt. */
 irq_ack :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
     if irq.trigger == .Level {
         unmask_line(kernel, irq.controller, irq.line)
     }
 }
 
-// An interrupt for irq: its binding's count goes up, and its packet is queued if it wasn't.
+/** An interrupt for irq: its binding's count goes up, and its packet is queued if it wasn't. */
 deliver_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
     lock_at(&irq.lock, .Irq)
     defer unlock_at(&irq.lock, .Irq)
@@ -178,7 +178,7 @@ deliver_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
     queue_binding(kernel, port, binding)
 }
 
-/*
+/**
  * Bind irq to port under key: an Irq packet for each interrupt. One binding per IRQ; binding it to the
  * same key again arms it again (BindMode.Once).
  */
@@ -219,7 +219,7 @@ irq_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], irq: ptr[mut Irq], 
     return null
 }
 
-// Drop a binding from its port, if it's still the one with generation.
+/** Drop a binding from its port, if it's still the one with generation. */
 drop_binding :: fn(kernel: ptr[mut Kernel], address: u64, generation: u32) {
     binding :: cast[ptr[mut Binding]](address)
     port :: lock_bound_port(binding, generation) or_return void
@@ -228,7 +228,7 @@ drop_binding :: fn(kernel: ptr[mut Kernel], address: u64, generation: u32) {
     unlock_at(&port.lock, .Port)
 }
 
-// The controller kind a call names, if the kernel has one by that kind.
+/** The controller kind a call names, if the kernel has one by that kind. */
 controller_kind :: fn(kind: u32) -> arch_interface.ControllerKind? {
     if kind == cast[u32](slop_os.ControllerKind.IoApic) {
         return arch_interface.ControllerKind.IoApic
@@ -242,7 +242,7 @@ controller_kind :: fn(kind: u32) -> arch_interface.ControllerKind? {
     return null
 }
 
-// Whether size bytes at physical touch RAM the kernel owns.
+/** Whether size bytes at physical touch RAM the kernel owns. */
 overlaps_kernel_ram :: fn(kernel: ptr[Kernel], physical: u64, size: u64) -> bool {
     for range in kernel.ram {
         if overlaps(physical, size, cast[u64](range.base), range.size) {

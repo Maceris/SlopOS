@@ -1,4 +1,4 @@
-/*
+/**
  * SlopOS's build (decisions/0028): `hemera src/build` builds every target, each checked by the house
  * rules (decisions/0029). The kernel is named here; programs and tests are found: every folder in
  * src/apps, src/services, src/drivers and src/tests is a SlopOS program (decisions/0033, 0058, 0069), every test
@@ -53,7 +53,7 @@ build :: fn() {
     compiler.add_check(write_system_records)
 }
 
-/*
+/**
  * The system configuration as data (decisions/0110): system_config's RECORDS, as the root task's program has them,
  * which system_config checked with system_records.check as it was compiled, written beside the root task as
  * system.records, a module of the boot set, which the root task checks again at boot.
@@ -91,7 +91,7 @@ write_system_records :: fn(target: ptr[compiler.BuildOptions], program: ptr[comp
     return false
 }
 
-/*
+/**
  * A SlopOS program's manifest (decisions/0044): the schema of its main's type (std's schema.write), written beside
  * the program as <name>.manifest. Other targets have none.
  */
@@ -121,7 +121,7 @@ write_manifest :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.P
     return true
 }
 
-/*
+/**
  * The kernel, booted by SlopOS's own bootloader (decisions/0133): freestanding, entered at kernel_entry with its own carrier block, no red
  * zone and no SIMD (design/arch-x86-64.md), and stack checks that trap. On AArch64 that's no floating
  * point or Advanced SIMD, which trap at EL1 too until CPACR_EL1 allows them.
@@ -149,7 +149,7 @@ add_kernel :: fn() {
     target :: compiler.add_target(kernel)
 }
 
-/*
+/**
  * Every folder in folder, as a SlopOS program named after it: a position-independent executable for
  * x86-64-v3 (decisions/0003, 0004), or AArch64's ARMv8.2-A with LSE (0061), which its loader relocates and
  * starts with its startup block.
@@ -205,7 +205,7 @@ add_programs :: fn(folder: string) {
     }
 }
 
-// A program that calls a library other than service_kit, which all do (decisions/0120, 0121), by their names
+/** A program that calls a library other than service_kit, which all do (decisions/0120, 0121), by their names */
 ProgramLibrary :: struct {
     program : string,
     library : string,
@@ -213,7 +213,7 @@ ProgramLibrary :: struct {
 
 PROGRAM_LIBRARIES :: ProgramLibrary.[ProgramLibrary.{program = "test_libraries", library = "greeting"}]
 
-/*
+/**
  * Every folder in folder, as a SlopOS typed library named after it (decisions/0119, 0120), <name>.library beside the
  * programs: its #export functions its interface, position-independent, for the programs' architecture, which a
  * program's runtime binds from the grant it's given (library:<name>.library).
@@ -258,7 +258,7 @@ add_libraries :: fn(folder: string) {
     }
 }
 
-/*
+/**
  * Every folder in folder, as a UEFI application named after it (roadmap B, decisions/0131), <name>.efi beside the
  * programs, for the programs' architecture, which the firmware runs: the bootloader, and the tests of Hemera's UEFI
  * target.
@@ -288,7 +288,7 @@ add_uefi_programs :: fn(folder: string) {
     }
 }
 
-// Every folder in folder, as a hosted program named after it, for this machine.
+/** Every folder in folder, as a hosted program named after it, for this machine. */
 add_tools :: fn(folder: string) {
     for subfolder in compiler.subfolders(folder) {
         name :: last_part(subfolder)
@@ -305,7 +305,7 @@ add_tools :: fn(folder: string) {
     }
 }
 
-// Every test folder under folder, as a hosted program named after the package it tests.
+/** Every test folder under folder, as a hosted program named after the package it tests. */
 add_tests :: fn(folder: string) {
     for subfolder in compiler.subfolders(folder) {
         name :: last_part(subfolder)
@@ -330,14 +330,14 @@ add_tests :: fn(folder: string) {
     }
 }
 
-// The last part of a path, after its last separator.
+/** The last part of a path, after its last separator. */
 last_part :: fn(path: string) -> string {
     after :: separator_after(path)
     runtime.assert(after <= path.count, "separator_after is inside the path")
     return path[after..<path.count]
 }
 
-// A path without its last part.
+/** A path without its last part. */
 parent_of :: fn(path: string) -> string {
     after :: separator_after(path)
     runtime.assert(after <= path.count, "separator_after is inside the path")
@@ -347,7 +347,7 @@ parent_of :: fn(path: string) -> string {
     return path[0..<after - 1]
 }
 
-// Where the last part of a path starts: just after its last / or \, or 0.
+/** Where the last part of a path starts: just after its last / or \, or 0. */
 separator_after :: fn(path: string) -> usize {
     start : usize = 0
     for character, index in path {

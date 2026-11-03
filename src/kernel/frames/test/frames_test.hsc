@@ -1,4 +1,4 @@
-/*
+/**
  * The frame allocator's tests, as a hosted program (tools/unit_tests.py): main returns 0 if
  * everything worked, or the number of the first check that failed.
  *
@@ -16,10 +16,10 @@ import hosted_faults from "../../../robustness/hosted"
 MEMORY_BASE : u64 : 0x40000
 MEMORY_SIZE : u64 : 0x40000
 FREE_FRAMES :: 63
-// What a failed allocation gives in these tests: frame 0 is never free.
+/** What a failed allocation gives in these tests: frame 0 is never free. */
 NO_FRAME :: cast[boot_info.PhysicalAddress](0)
 
-// A constant, not on the stack, so the allocator made from it isn't held to main's stack frame
+/** A constant, not on the stack, so the allocator made from it isn't held to main's stack frame */
 REGIONS :: boot_info.MemoryRegion.[
     .{range = .{base = cast[boot_info.PhysicalAddress](0), size = MEMORY_BASE}, kind = .Reserved},
     .{range = .{base = cast[boot_info.PhysicalAddress](MEMORY_BASE), size = MEMORY_SIZE}, kind = .Usable},
@@ -150,12 +150,12 @@ checks :: fn() -> int {
     return 0
 }
 
-// Whether a result is Ok.
+/** Whether a result is Ok. */
 succeeded :: fn[T, E](result: Result[T, E]) -> bool {
     return result is_ok
 }
 
-// The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness)
+/** The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness) */
 main :: fn() -> int {
     return hosted_faults.run(checks)
 }

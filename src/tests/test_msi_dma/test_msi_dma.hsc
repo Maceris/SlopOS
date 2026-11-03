@@ -1,4 +1,4 @@
-/*
+/**
  * test_msi_dma (decisions/0073): a driver for QEMU's edu device, a PCIe function with a DMA engine and an MSI, given
  * the platform capability and the firmware tables' copy as the root task would give the platform service:
  * - the copy is read-only, starts with its header, and has the tables this machine's firmware gives: ACPI's RSDP,
@@ -44,7 +44,7 @@ EDU_BUFFER : u64 : 0x40000
 DMA_START : u64 : 1
 DMA_TO_RAM : u64 : 2
 DMA_INTERRUPT : u64 : 4
-// The interrupt status a finished DMA raises
+/** The interrupt status a finished DMA raises */
 DMA_DONE_STATUS : u32 : 0x100
 // Configuration space: the command register's memory space and bus master bits, the capability list, MSI's ID
 CONFIG_COMMAND : u64 : 0x04
@@ -58,7 +58,7 @@ CAPABILITY_MSI : u8 : 0x05
 MSI_ENABLE : u16 : 1
 MSI_64_BIT : u16 : 1 << 7
 IRQ_KEY : u64 : 3
-// DMA below 4 GiB: where both machines' RAM is
+/** DMA below 4 GiB: where both machines' RAM is */
 DMA_LIMIT : u64 : 1 << 32
 
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
@@ -242,7 +242,9 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     return 0
 }
 
-// Whether the firmware tables' copy has what this machine's firmware gives: ACPI's RSDP, FADT, DSDT and MCFG, or a device tree.
+/**
+ * Whether the firmware tables' copy has what this machine's firmware gives: ACPI's RSDP, FADT, DSDT and MCFG, or a device tree.
+ */
 tables_right :: fn(tables: u64) -> bool {
     header :: cast[ptr[slop_os.FirmwareTables]](tables)
     entries :: view_of(cast[ptr[slop_os.FirmwareTable]](tables + cast[u64](size_of(slop_os.FirmwareTables))), cast[usize](header.count))
@@ -260,7 +262,7 @@ tables_right :: fn(tables: u64) -> bool {
     }
 }
 
-// The message into the function's MSI capability, one vector, enabled: whether it has one.
+/** The message into the function's MSI capability, one vector, enabled: whether it has one. */
 program_msi :: fn(config: u64, message: slop_os.MsiMessage) -> bool {
     capability :: find_msi(config) or_return false
     control :: cast[ptr[mut u16]](config + capability + 2)
@@ -284,7 +286,7 @@ stop_msi :: fn(config: u64) {
     intrinsics.volatile_store_u16(control, intrinsics.volatile_load_u16(control) & ~MSI_ENABLE)
 }
 
-// Where the function's MSI capability is in its configuration space, if it has one.
+/** Where the function's MSI capability is in its configuration space, if it has one. */
 find_msi :: fn(config: u64) -> u64? {
     if intrinsics.volatile_load_u16(cast[ptr[u16]](config + CONFIG_STATUS)) & STATUS_CAPABILITIES == 0 {
         return null
@@ -302,14 +304,14 @@ find_msi :: fn(config: u64) -> u64? {
     return null
 }
 
-// Whether an Irq packet for the key arrives within a second.
+/** Whether an Irq packet for the key arrives within a second. */
 wait_for_interrupt :: fn(port: slop_os.Port) -> bool {
     packets : slop_os.Packet[1]
     waited :: slop_os.port_wait(port, packets, test_kit.clock_now() + 1_000_000_000) or_else 0
     return waited == 1 && packets[0].key == IRQ_KEY && packets[0].kind == .Irq && packets[0].data[0] >= 1
 }
 
-// Whether edu's DMA is done within a second.
+/** Whether edu's DMA is done within a second. */
 wait_for_dma :: fn(edu: u64) -> bool {
     started :: test_kit.clock_now()
     loop {

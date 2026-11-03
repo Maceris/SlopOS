@@ -20,14 +20,14 @@ Request :: union {
 }
 
 Response :: union {
-    // A connection, of the protocol the connector is for
+    /** A connection, of the protocol the connector is for */
     Dialed(slop_os.Channel),
-    // Nothing serves it now, as while it's restarting: dial again later
+    /** Nothing serves it now, as while it's restarting: dial again later */
     Unavailable,
     Unsupported,
 }
 
-// Dialing again gives another connection, which is as good.
+/** Dialing again gives another connection, which is as good. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Dial => true
@@ -40,7 +40,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 RETRY_NANOSECONDS : u64 : 100_000_000
 TRIES :: 50
 
-/*
+/**
  * A connection of protocol P through the connector at end, trying again while what it reaches is restarting; null if it
  * never answers with one, or with one that doesn't speak P.
  */
@@ -53,7 +53,7 @@ dial :: fn[P](end: slop_os.Channel, port: slop_os.Port) -> os.Channel[P]? {
     return null
 }
 
-/*
+/**
  * A connection through the connector at end, of whatever protocol it's for, for one who passes it on, as a supervisor
  * serving connectors of its own to what another serves does; trying again while what it reaches is restarting.
  */

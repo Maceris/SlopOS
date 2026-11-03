@@ -1,4 +1,4 @@
-/*
+/**
  * test_threads (decisions/0069, from the kernel's test of 0036): THREADS threads of the program's own count,
  * more than the CPUs it's booted with, so each is preempted. Each keeps a vector, its own pattern plus its
  * count, which it checks against its count as it goes: a mix-up of threads' vector states would change it.

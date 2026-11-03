@@ -8,8 +8,10 @@
  * to the I/O APIC's and local APIC's addresses at 0xFEC00000, and from above everything else up 64 GiB. On AArch64
  * they're the device tree's host bridge: its reg, bus-range, ranges and msi-map.
  */
-//SPEC: PCI Firmware Specification 3.3, §4.1.2 (the MCFG); PCI Express Base Specification 5.0, §7.2.2 (ECAM), §7.5.1 (configuration headers)
-//SPEC: Devicetree Specification 0.4; PCI Bus Binding to Open Firmware (ranges' three cells); Linux's pci-host-generic and pci-msi bindings (msi-map)
+/**
+ * SPEC: PCI Firmware Specification 3.3, §4.1.2 (the MCFG); PCI Express Base Specification 5.0, §7.2.2 (ECAM), §7.5.1 (configuration headers)
+ * SPEC: Devicetree Specification 0.4; PCI Bus Binding to Open Firmware (ranges' three cells); Linux's pci-host-generic and pci-msi bindings (msi-map)
+ */
 package pci
 
 import intrinsics from "base"
@@ -20,9 +22,9 @@ MAX_WINDOWS :: 4
 // Each bus's configuration space, through ECAM: 32 devices of 8 functions, 4 KiB each
 BUS_BYTES : u64 : 1 << 20
 FUNCTION_BYTES : u64 : 4096
-// Where the local APIC's and I/O APIC's registers start on x86-64, which no BAR may reach
+/** Where the local APIC's and I/O APIC's registers start on x86-64, which no BAR may reach */
 X86_DEVICE_TOP : u64 : 0xfec00000
-// The 64-bit window on x86-64: this much, from above RAM, the ECAM and 4 GiB
+/** The 64-bit window on x86-64: this much, from above RAM, the ECAM and 4 GiB */
 X86_WIDE_WINDOW : u64 : 64 << 30
 
 // Configuration space registers (a type 0 header, and a type 1's bus numbers and windows)
@@ -44,7 +46,7 @@ COMMAND_BUS_MASTER : u16 : 1 << 2
 STATUS_CAPABILITIES : u16 : 1 << 4
 NO_VENDOR : u16 : 0xffff
 
-// A range of address space a host bridge forwards to PCIe: at cpu for the CPU, at pci for its devices.
+/** A range of address space a host bridge forwards to PCIe: at cpu for the CPU, at pci for its devices. */
 Window :: struct {
     cpu : u64,
     pci : u64,
@@ -54,7 +56,7 @@ Window :: struct {
     prefetchable : bool,
 }
 
-// A host bridge: its configuration space, at ecam for first_bus to last_bus, its windows, and its msi-map.
+/** A host bridge: its configuration space, at ecam for first_bus to last_bus, its windows, and its msi-map. */
 Host :: struct {
     ecam : u64,
     segment : u16,
@@ -68,18 +70,18 @@ Host :: struct {
     msi_count : u32,
 }
 
-// The bytes of ECAM for the host's buses.
+/** The bytes of ECAM for the host's buses. */
 ecam_size :: fn(host: ptr[Host]) -> u64 {
     return (cast[u64](host.last_bus) - cast[u64](host.first_bus) + 1) * BUS_BYTES
 }
 
-// Where a function's configuration space is, from the start of the host's ECAM.
+/** Where a function's configuration space is, from the start of the host's ECAM. */
 function_offset :: fn(host: ptr[Host], bus: u8, device: u8, function: u8) -> u64 {
     return (cast[u64](bus) - cast[u64](host.first_bus)) * BUS_BYTES + cast[u64](device & 0x1f) * 8 * FUNCTION_BYTES
         + cast[u64](function & 7) * FUNCTION_BYTES
 }
 
-// The MSI source a function's interrupts come from (slop_os.device_create).
+/** The MSI source a function's interrupts come from (slop_os.device_create). */
 msi_source :: fn(host: ptr[Host], address: u32) -> u32 {
     rid :: address & 0xffff
     if host.msi_count != 0 && rid >= host.rid_base && rid - host.rid_base < host.msi_count {
@@ -88,7 +90,7 @@ msi_source :: fn(host: ptr[Host], address: u32) -> u32 {
     return rid
 }
 
-// The first host bridge the firmware tables' copy at tables, size bytes of it, describes.
+/** The first host bridge the firmware tables' copy at tables, size bytes of it, describes. */
 find_host :: fn(tables: u64, size: u64) -> Host? {
     header :: cast[ptr[slop_os.FirmwareTables]](tables)
     if size < cast[u64](size_of(slop_os.FirmwareTables)) || header.magic != slop_os.FIRMWARE_MAGIC {
@@ -116,7 +118,7 @@ find_host :: fn(tables: u64, size: u64) -> Host? {
     return null
 }
 
-/*
+/**
  * Where the first table with signature is in the firmware tables' copy at tables, size bytes of it, as an address in
  * it, and how many bytes it has; null if there's none.
  */
@@ -138,7 +140,7 @@ signature_of :: fn(entry: ptr[slop_os.FirmwareTable]) -> string {
     return string_of(&entry.signature[0], 4)
 }
 
-// The MCFG's first allocation: base, segment, first bus and last, after its header and 8 reserved bytes.
+/** The MCFG's first allocation: base, segment, first bus and last, after its header and 8 reserved bytes. */
 from_mcfg :: fn(mcfg: u64, ram: slop_os.PhysicalRange[]) -> Host {
     host : Host
     base :: read_u64(mcfg + 44)
@@ -179,7 +181,7 @@ from_mcfg :: fn(mcfg: u64, ram: slop_os.PhysicalRange[]) -> Host {
     return host
 }
 
-/*
+/**
  * The device tree's host bridge, pci-host-ecam-generic: its reg is the ECAM, bus-range its buses, each ranges entry a
  * window (three cells of PCI address, its space in the first, the CPU's address in the parent's cells, two of size),
  * and msi-map how its requester IDs become MSI sources. Null without one.
@@ -239,7 +241,7 @@ round_up :: fn(value: u64, alignment: u64) -> u64 {
     return (value + alignment - 1) & ~(alignment - 1)
 }
 
-// Configuration space, through a mapping of a function's 4 KiB at config.
+/** Configuration space, through a mapping of a function's 4 KiB at config. */
 read_u8 :: fn(config: u64, offset: u64) -> u8 #no_context {
     return intrinsics.volatile_load_u8(cast[ptr[u8]](config + offset))
 }
@@ -270,7 +272,7 @@ write_u32 :: fn(config: u64, offset: u64, value: u32) #no_context {
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](config + offset), value)
 }
 
-/*
+/**
  * A capability's offset in configuration space, the first with id from the list's start, or after a previous one;
  * null if there isn't one.
  */

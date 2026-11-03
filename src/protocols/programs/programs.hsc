@@ -13,10 +13,12 @@ Programs :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "programs", major_version = 1, lending = .Server}
 
-// The longest name Find takes.
+/** The longest name Find takes. */
 MAX_NAME :: 64
 
-// A program found: its executable and its manifest as read-only memory, and how many of the manifest's bytes are its.
+/**
+ * A program found: its executable and its manifest as read-only memory, and how many of the manifest's bytes are its.
+ */
 Program :: struct {
     executable : slop_os.Memory,
     manifest : slop_os.Memory,
@@ -29,12 +31,12 @@ Request :: union {
 
 Response :: union {
     Found(Program),
-    // No program by that name
+    /** No program by that name */
     Missing,
     Unsupported,
 }
 
-// Finding again changes nothing.
+/** Finding again changes nothing. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return true
 }

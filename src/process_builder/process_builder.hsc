@@ -1,4 +1,4 @@
-/*
+/**
  * Building a process from an executable (decisions/0058, 0067), as the kernel builds the root task, through
  * system calls: the root task builds its first services with it, and the process manager every program
  * after them. The process, its address space and its budget are the requester's, made before:
@@ -31,28 +31,28 @@ FREE_SIZE : u64 : 1 << 40
 // User addresses, on both architectures (src/arch/*/paging.hsc).
 USER_LOW : u64 : 0x10000
 USER_HIGH : u64 : 0x00007ffffffff000
-// The most grants a process starts with, from this.
+/** The most grants a process starts with, from this. */
 MAX_GRANTS :: 48
-// Handles that go to the process besides its grants: its space, itself, its budget, its image, stack and block.
+/** Handles that go to the process besides its grants: its space, itself, its budget, its image, stack and block. */
 OWN_HANDLES :: 6
 
-// What to build into: the requester's.
+/** What to build into: the requester's. */
 Target :: struct {
-    // RIGHT_PROCESS_THREADS, RIGHT_DUPLICATE and RIGHT_TRANSFER
+    /** RIGHT_PROCESS_THREADS, RIGHT_DUPLICATE and RIGHT_TRANSFER */
     process : slop_os.Process,
-    // Owning: it goes to the process
+    /** Owning: it goes to the process */
     space : slop_os.AddressSpace,
-    // RIGHT_BUDGET_CHARGE, RIGHT_DUPLICATE and RIGHT_TRANSFER: everything is charged to it
+    /** RIGHT_BUDGET_CHARGE, RIGHT_DUPLICATE and RIGHT_TRANSFER: everything is charged to it */
     budget : slop_os.MemoryBudget,
 }
 
-// A handle the process starts with, which goes to it, and its label, padded with zeros.
+/** A handle the process starts with, which goes to it, and its label, padded with zeros. */
 Grant :: struct {
     label : u8[slop_os.GRANT_LABEL_SIZE],
     handle : slop_os.Handle,
 }
 
-// A grant labeled label.
+/** A grant labeled label. */
 grant :: fn(label: string, handle: slop_os.Handle) -> Grant {
     made := Grant.{handle = handle}
     for byte, i in label {
@@ -66,15 +66,15 @@ grant :: fn(label: string, handle: slop_os.Handle) -> Grant {
 BuildError :: enum {
     NotAProgram,
     TooManyGrants,
-    // No room in the builder's free range for its own mappings
+    /** No room in the builder's free range for its own mappings */
     NoAddresses,
-    // The target's budget couldn't pay, or there was no memory
+    /** The target's budget couldn't pay, or there was no memory */
     NoMemory,
-    // A call on the target's handles failed: missing rights, or objects gone
+    /** A call on the target's handles failed: missing rights, or objects gone */
     Failed,
 }
 
-// Where its parts go in its address space.
+/** Where its parts go in its address space. */
 Layout :: struct {
     image : u64,
     stack : u64,
@@ -181,7 +181,7 @@ build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: p
     return .Ok(thread)
 }
 
-// Handles build made, closed if it fails before they go to the process.
+/** Handles build made, closed if it fails before they go to the process. */
 Made :: struct {
     handles : slop_os.Handle[8],
     count : usize,
@@ -204,7 +204,7 @@ close_all :: fn(made: ptr[mut Made]) {
     made.count = 0
 }
 
-// A memory object of size bytes, charged to budget, remembered in made.
+/** A memory object of size bytes, charged to budget, remembered in made. */
 memory :: fn(made: ptr[mut Made], budget: slop_os.MemoryBudget, size: u64) -> Result[slop_os.Memory, BuildError] {
     created :: slop_os.memory_create(budget, size) or_return .Error(.NoMemory)
     remember(made, cast[slop_os.Handle](created))
@@ -254,7 +254,7 @@ map_segments :: fn(executable: ptr[elf_loader.Executable], image: slop_os.Memory
     return .Ok
 }
 
-// The image's pages from start to end, mapped at base + start with protection, if there are any.
+/** The image's pages from start to end, mapped at base + start with protection, if there are any. */
 map_part :: fn(image: slop_os.Memory, space: slop_os.AddressSpace, base: u64, start: u64, end: u64, protection: slop_os.Protection)
     -> Result[void, BuildError] {
     if end <= start {
@@ -264,7 +264,7 @@ map_part :: fn(image: slop_os.Memory, space: slop_os.AddressSpace, base: u64, st
     return .Ok
 }
 
-/*
+/**
  * Where the image, the stack and the startup block, and the free range go: each at a random page in a
  * quarter of user addresses of its own (the free range in the upper half), as the kernel places the root
  * task's.
@@ -281,7 +281,7 @@ choose_layout :: fn(random: ptr[mut random_stream.Stream], image_size: u64, bloc
     }
 }
 
-// A random page-aligned place for size bytes in the room bytes from start.
+/** A random page-aligned place for size bytes in the room bytes from start. */
 random_place :: fn(random: ptr[mut random_stream.Stream], start: u64, room: u64, size: u64) -> u64 {
     if size >= room {
         return start

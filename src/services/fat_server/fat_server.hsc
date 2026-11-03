@@ -1,4 +1,4 @@
-/*
+/**
  * A FAT server (roadmap 8b, decisions/0085, 0087): one per FAT32 partition, started by the storage manager with a
  * block connection narrowed to it and nothing else, so a crafted volume reaches only this process. It mounts the
  * volume (src/fat) and serves the file protocols: dir and read_only_dir connections for directories, file and
@@ -27,7 +27,7 @@ import log_line from "../../log_line"
 import block from "../../protocols/block"
 
 MAX_CONNECTIONS :: 64
-// The most bytes of a client's buffer mapped here
+/** The most bytes of a client's buffer mapped here */
 MAX_BUFFER_BYTES : u64 : 16 << 20
 
 Kind :: enum {
@@ -39,7 +39,7 @@ Kind :: enum {
     FileSet,
 }
 
-/*
+/**
  * A connection: what it's to (a directory's first cluster, or a file's place), its informational name (a set's
  * pattern), and a file's buffer, mapped here.
  */
@@ -66,7 +66,7 @@ Server :: struct {
     read_only : bool,
     connections : Connection[MAX_CONNECTIONS],
     count : usize,
-    // Whether a connection was added during this pass, which may have taken a free slot it's already past
+    /** Whether a connection was added during this pass, which may have taken a free slot it's already past */
     added : bool,
 }
 
@@ -154,7 +154,7 @@ main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: 
     }
 }
 
-// The wall clock's time as FAT holds it, or the epoch without a wall clock.
+/** The wall clock's time as FAT holds it, or the epoch without a wall clock. */
 stamp_now :: fn() -> u32 {
     match time.now() {
         case Ok(now) => {
@@ -247,7 +247,7 @@ write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool
 
 // Connections
 
-/*
+/**
  * A connection on end, bound to the port under its index, and read until it's empty: its index, or null with end
  * closed if there's no room.
  */
@@ -287,7 +287,7 @@ add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, directory: 
     return slot
 }
 
-// A new connection of kind P's protocol: the other end, for the client, or null.
+/** A new connection of kind P's protocol: the other end, for the client, or null. */
 open_connection :: fn[P](server: ptr[mut Server], kind: Kind, directory: u32, place: fat.Place, read_only: bool, name: string) -> os.Channel[P]? {
     startup :: slop_os.startup_block()
     pair :: os.channel_for[P](startup.budget, 0) or_return null
@@ -298,7 +298,7 @@ open_connection :: fn[P](server: ptr[mut Server], kind: Kind, directory: u32, pl
     return os.Channel[P].{end = pair.b}
 }
 
-// A connection whose client went: its end closed, its buffer unmapped.
+/** A connection whose client went: its end closed, its buffer unmapped. */
 drop :: fn(server: ptr[mut Server], index: usize) {
     if index >= server.connections.count {
         return void
@@ -348,7 +348,7 @@ serve :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usize, 
 
 // Paths
 
-// A path's text from a message, if it's no longer than a path may be.
+/** A path's text from a message, if it's no longer than a path may be. */
 path_of :: fn(into: ptr[os.Incoming], path: slop_os.Relative[u8]) -> string? {
     bytes :: os.items(into, path)
     if bytes.count == 0 || bytes.count > files.PATH_BYTES {
@@ -357,7 +357,7 @@ path_of :: fn(into: ptr[os.Incoming], path: slop_os.Relative[u8]) -> string? {
     return string_of(&bytes[0], bytes.count)
 }
 
-// Where a path's last component goes: the directory that holds it, and its name.
+/** Where a path's last component goes: the directory that holds it, and its name. */
 Leaf :: struct {
     directory : u32,
     name : string,
@@ -396,7 +396,7 @@ file_error :: fn(error: fat.FatError) -> files.FileError {
     }
 }
 
-// The file at path beneath directory, opened as creation says.
+/** The file at path beneath directory, opened as creation says. */
 open_file_entry :: fn(volume: ptr[mut fat.Volume], directory: u32, path: string, creation: files.Creation) -> Result[fat.Entry, fat.FatError] {
     leaf :: leaf_of(volume, directory, path)?
     existing := fat.Entry.{}
@@ -430,7 +430,7 @@ open_file_entry :: fn(volume: ptr[mut fat.Volume], directory: u32, path: string,
     return fat.create(volume, leaf.directory, leaf.name, false)
 }
 
-// The directory at path beneath directory, made, with any missing on the way to it, if create.
+/** The directory at path beneath directory, made, with any missing on the way to it, if create. */
 open_directory_entry :: fn(volume: ptr[mut fat.Volume], directory: u32, path: string, create: bool) -> Result[u32, fat.FatError] {
     if !create {
         found :: fat.resolve(volume, directory, path)?
@@ -470,7 +470,7 @@ open_directory_entry :: fn(volume: ptr[mut fat.Volume], directory: u32, path: st
     return .Ok(current)
 }
 
-// A listing's entry at or after cursor, matching pattern unless it's "".
+/** A listing's entry at or after cursor, matching pattern unless it's "". */
 listing_of :: fn(volume: ptr[mut fat.Volume], directory: u32, cursor: u64, pattern: string, out: ptr[mut os.Outgoing]) -> Result[files.Listing?, fat.FatError] {
     slot := cast[u32](cursor)
     loop {
@@ -490,7 +490,7 @@ same_byte :: fn(a: u8, b: u8) -> bool {
     return fat.upper(a) == fat.upper(b)
 }
 
-// Whether a schema hash asks for no type: all zeros.
+/** Whether a schema hash asks for no type: all zeros. */
 untyped :: fn(schema: u8[32]) -> bool {
     for byte in schema {
         if byte != 0 {
@@ -641,7 +641,7 @@ serve_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usi
     }
 }
 
-// What's at from moved to to, both beneath directory.
+/** What's at from moved to to, both beneath directory. */
 moved :: fn(volume: ptr[mut fat.Volume], directory: u32, from: string, to: string) -> fat.FatError? {
     entry := fat.Entry.{}
     match fat.resolve(volume, directory, from) {
@@ -659,7 +659,7 @@ moved :: fn(volume: ptr[mut fat.Volume], directory: u32, from: string, to: strin
     }
 }
 
-// A read-only file at path beneath directory, for a dir or a read_only_dir.
+/** A read-only file at path beneath directory, for a dir or a read_only_dir. */
 read_only_open :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], directory: u32, path: string, out: ptr[mut os.Outgoing]) -> dir.Response {
     if path.count == 0 {
         return .Failed(.InvalidPath)
@@ -832,7 +832,7 @@ serve_file_set :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index
     }
 }
 
-// Whether a name is one of a set's: one component, matching its pattern.
+/** Whether a name is one of a set's: one component, matching its pattern. */
 in_set :: fn(pattern: string, name: string) -> bool {
     for character in name {
         if character == '/' {
@@ -844,7 +844,7 @@ in_set :: fn(pattern: string, name: string) -> bool {
 
 // Files
 
-// A file connection's buffer: its client's memory, mapped here.
+/** A file connection's buffer: its client's memory, mapped here. */
 use_buffer :: fn(connection: ptr[mut Connection], memory: slop_os.Memory) -> files.FileError? {
     release_buffer(connection)
     size :: slop_os.memory_size(memory) or_else 0
@@ -867,17 +867,17 @@ use_buffer :: fn(connection: ptr[mut Connection], memory: slop_os.Memory) -> fil
     return null
 }
 
-// Whether a transfer's bytes are all in a connection's buffer.
+/** Whether a transfer's bytes are all in a connection's buffer. */
 fits :: fn(connection: ptr[Connection], transfer: files.Transfer) -> bool {
     return connection.buffer != 0 && cast[u64](transfer.buffer_offset) + cast[u64](transfer.count) <= connection.buffer_bytes
 }
 
-// Where a transfer's bytes are in a connection's buffer, which they fit in.
+/** Where a transfer's bytes are in a connection's buffer, which they fit in. */
 buffer_of :: fn(connection: ptr[Connection], transfer: files.Transfer) -> mut u8[] {
     return view_of(cast[ptr[mut u8]](connection.buffer + cast[u64](transfer.buffer_offset)), cast[usize](transfer.count))
 }
 
-// A file's read, from its entry as it is now.
+/** A file's read, from its entry as it is now. */
 read_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], connection: ptr[Connection], transfer: files.Transfer) -> Result[u32, files.FileError] {
     if !fits(connection, transfer) {
         return .Error(.NoBuffer)

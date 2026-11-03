@@ -35,7 +35,7 @@ ENTRY_NOT_GLOBAL : u64 : 1 << 11
 ENTRY_PRIVILEGED_EXECUTE_NEVER : u64 : 1 << 53
 ENTRY_USER_EXECUTE_NEVER : u64 : 1 << 54
 ENTRY_ATTRIBUTE : u64 : 7 << 2
-// Where a table's or a page's address is in an entry. Blocks' addresses are aligned further.
+/** Where a table's or a page's address is in an entry. Blocks' addresses are aligned further. */
 ENTRY_ADDRESS : u64 : 0x0000fffffffff000
 // The count of the next table's valid entries, in a table entry's bits 11:2.
 COUNT_SHIFT : u64 : 2
@@ -58,9 +58,9 @@ TCR_ASID_FROM_TTBR1 : u64 : 1 << 22
 TCR_HARDWARE_ACCESS : u64 : 1 << 39
 TTBR_ASID_SHIFT : u64 : 48
 
-// Physical addresses go up to 48 bits.
+/** Physical addresses go up to 48 bits. */
 PHYSICAL_LIMIT : u64 : 1 << 48
-// The kernel half: every address TTBR1 translates, with 48-bit addresses.
+/** The kernel half: every address TTBR1 translates, with 48-bit addresses. */
 KERNEL_HALF_START : u64 : 0xffff000000000000
 // As on x86-64: 64 KiB up to the last page below the lower half's end.
 USER_LOW : u64 : 0x10000
@@ -71,20 +71,20 @@ TABLES_PER_DEVICE_BLOCK : u32 : 2
 BLOCK_2M : u64 : 1 << 21
 BLOCK_1G : u64 : 1 << 30
 
-// One page-table level's 512 entries.
+/** One page-table level's 512 entries. */
 Table :: struct {
     entries : u64[ENTRIES],
 }
 
 #assert size_of(Table) == 4096
 
-// One address space's page tables (arch_interface.PageTable).
+/** One address space's page tables (arch_interface.PageTable). */
 PageTable :: struct {
     root : arch_interface.PhysicalAddress,
     tag : arch_interface.AddressSpaceTag,
-    // The kernel's own table, TTBR1's, which maps the kernel half and nothing else.
+    /** The kernel's own table, TTBR1's, which maps the kernel half and nothing else. */
     kernel : bool,
-    // Where physical address 0 is in the direct map, through which the tables are reached.
+    /** Where physical address 0 is in the direct map, through which the tables are reached. */
     direct_map_offset : u64,
 }
 
@@ -92,17 +92,17 @@ user_address_range :: fn() -> (low, high: arch_interface.VirtualAddress) {
     return cast[arch_interface.VirtualAddress](USER_LOW), cast[arch_interface.VirtualAddress](USER_HIGH)
 }
 
-// ASIDs: 16 bits where the CPU has them, which init_cpu turns on, otherwise 8.
+/** ASIDs: 16 bits where the CPU has them, which init_cpu turns on, otherwise 8. */
 address_space_tag_count :: fn() -> u32 {
     return if aarch64.read_system_register(.TCR_EL1) & TCR_ASID_16 != 0 { 65536 } else { 256 }
 }
 
-// 4 KiB pages, and 2 MiB and 1 GiB blocks, which every CPU with 4 KiB pages has.
+/** 4 KiB pages, and 2 MiB and 1 GiB blocks, which every CPU with 4 KiB pages has. */
 supports_page_size :: fn(size: arch_interface.PageSize) -> bool {
     return true
 }
 
-// The kernel half has TTBR1's root to itself; these are for the device blocks L1 maps for itself.
+/** The kernel half has TTBR1's root to itself; these are for the device blocks L1 maps for itself. */
 kernel_half_frames :: fn() -> u32 {
     return TABLES_PER_DEVICE_BLOCK * current_system().device_block_count
 }
@@ -139,10 +139,10 @@ init_kernel_page_table :: fn(
     }
 }
 
-// Kernel device registers: readable and writable, uncached, global.
+/** Kernel device registers: readable and writable, uncached, global. */
 DEVICE_MAPPING :: arch_interface.Mapping.{protection = .ReadWrite, cache = .Device, user = false, global = true}
 
-// Keep a 2 MiB block of device registers, by physical address, for the kernel's own table.
+/** Keep a 2 MiB block of device registers, by physical address, for the kernel's own table. */
 add_device_block :: fn(system: ptr[mut ArchSystem], physical: u64) {
     block :: physical & ~(BLOCK_2M - 1)
     count :: cast[usize](system.device_block_count)
@@ -158,7 +158,7 @@ add_device_block :: fn(system: ptr[mut ArchSystem], physical: u64) {
     }
 }
 
-/*
+/**
  * Map device registers from physical, size bytes of them, through the direct map: in the bootloader's tables
  * now, and in the kernel's own once it's made. False if some block of them couldn't be.
  */
@@ -345,7 +345,7 @@ translate :: fn(table: ptr[PageTable], virtual_address: arch_interface.VirtualAd
     return null
 }
 
-/*
+/**
  * An address space's tables, freed into freed, as many as it has room for: true once none are left but
  * the root. What they mapped isn't touched. Each call frees tables with none below them, so it can stop
  * anywhere and go on.
@@ -373,7 +373,7 @@ release_user_tables :: fn(table: ptr[mut PageTable], freed: ptr[mut arch_interfa
     return false
 }
 
-/*
+/**
  * In current, a table at level, the entry of a table under it with no tables under it in turn, or 0 if
  * current points at no tables.
  */
@@ -391,7 +391,7 @@ lowest_table_slot :: fn(table: ptr[PageTable], current: ptr[mut Table], level: u
     return 0
 }
 
-/*
+/**
  * Switch the calling CPU to table: the kernel's goes in TTBR1, with TTBR0's walks off, and an address
  * space's in TTBR0 with its ASID. ASIDs keep each address space's entries apart, so nothing is flushed; the
  * first switch from the bootloader's tables flushes everything.
@@ -414,7 +414,7 @@ activate :: fn(table: ptr[PageTable]) {
     }
 }
 
-/*
+/**
  * Flush batch from the calling CPU's TLB, by address and ASID, whichever address space is active. The
  * kernel's entries are global, so they're flushed for every ASID.
  */
@@ -448,7 +448,7 @@ flush_tlb :: fn(batch: ptr[arch_interface.TlbBatch]) {
     aarch64.isb()
 }
 
-// Flush every entry for tag, before the tag is reused.
+/** Flush every entry for tag, before the tag is reused. */
 flush_tlb_tag :: fn(tag: arch_interface.AddressSpaceTag) {
     aarch64.dsb(.ISHST)
     aarch64.tlbi_aside1(cast[u64](tag) << TTBR_ASID_SHIFT)
@@ -456,7 +456,7 @@ flush_tlb_tag :: fn(tag: arch_interface.AddressSpaceTag) {
     aarch64.isb()
 }
 
-// Every TLB entry of the calling CPU's.
+/** Every TLB entry of the calling CPU's. */
 flush_everything :: fn() {
     aarch64.dsb(.ISHST)
     aarch64.tlbi_vmalle1()
@@ -464,7 +464,7 @@ flush_everything :: fn() {
     aarch64.isb()
 }
 
-// One page's entries on every CPU, for break-before-make, before its new entry is written.
+/** One page's entries on every CPU, for break-before-make, before its new entry is written. */
 invalidate_everywhere :: fn(table: ptr[PageTable], address: u64) {
     page :: (address >> 12) & 0x0000_0fff_ffff_ffff
     if table.kernel {
@@ -477,7 +477,7 @@ invalidate_everywhere :: fn(table: ptr[PageTable], address: u64) {
     aarch64.isb()
 }
 
-/*
+/**
  * The paging state init_cpu sets: the memory attributes, 16-bit ASIDs where the CPU has them, taken from TTBR0, and
  * the access flag kept by the hardware where it can, with TTBR0's walks off until an address space is activated. The
  * bootloader's TCR_EL1 is kept otherwise: 48-bit halves, 4 KiB granules, walks cached and inner shareable, and the
@@ -498,7 +498,7 @@ init_paging :: fn(system: ptr[ArchSystem]) {
     flush_everything()
 }
 
-/*
+/**
  * Map device registers in the bootloader's tables, at direct_map_offset plus physical, as a Device block in
  * the first gap the walk down to it finds: 1 GiB, 2 MiB or a page. True if they're mapped so already; false if
  * it can't, with no table where one is needed, or something else mapped there.
@@ -536,20 +536,20 @@ map_early_device :: fn(direct_map_offset: u64, physical: u64) -> bool {
     return false
 }
 
-// A Device block or page for the kernel, global, never executed.
+/** A Device block or page for the kernel, global, never executed. */
 device_block :: fn(physical: u64) -> u64 {
     return physical | ENTRY_VALID | (ATTRIBUTE_DEVICE << ATTRIBUTE_SHIFT) | ENTRY_ACCESSED
         | ENTRY_PRIVILEGED_EXECUTE_NEVER | ENTRY_USER_EXECUTE_NEVER
 }
 
-// Which entries walk passed through, by level, as addresses in the direct map.
+/** Which entries walk passed through, by level, as addresses in the direct map. */
 Path :: struct {
     slots : u64[4],
-    // slots[leaf], the leaf's entry.
+    /** slots[leaf], the leaf's entry. */
     leaf_slot : u64,
 }
 
-// The entries from the root down to a page of the leaf level's size mapped at address.
+/** The entries from the root down to a page of the leaf level's size mapped at address. */
 walk :: fn(table: ptr[PageTable], address: u64, leaf: u64) -> Result[Path, arch_interface.UnmapError] {
     path : Path
     current := table_at(table, cast[u64](table.root))
@@ -577,7 +577,7 @@ walk :: fn(table: ptr[PageTable], address: u64, leaf: u64) -> Result[Path, arch_
     return .Ok(path)
 }
 
-/*
+/**
  * Whether the 4 KiB page at virtual_address was touched since its access flag was last cleared, the flag cleared: where
  * the hardware sets it (TCR_EL1.HA), and false everywhere else, since every page is mapped with the flag set, which
  * clearing would turn into faults.
@@ -594,12 +594,12 @@ take_accessed :: fn(table: ptr[mut PageTable], virtual_address: arch_interface.V
     return old & ENTRY_ACCESSED != 0
 }
 
-// Whether a valid entry at level maps a block rather than pointing at a table. Level 0's are pages.
+/** Whether a valid entry at level maps a block rather than pointing at a table. Level 0's are pages. */
 is_block :: fn(entry: u64, level: u64) -> bool {
     return level > 0 && entry & ENTRY_TABLE == 0
 }
 
-// Whether table may map bytes at address: user addresses in an address space, kernel ones in the kernel's.
+/** Whether table may map bytes at address: user addresses in an address space, kernel ones in the kernel's. */
 may_map :: fn(table: ptr[PageTable], address: u64, bytes: u64, user: bool) -> bool {
     if user {
         return !table.kernel && address >= USER_LOW && address < USER_HIGH && bytes <= USER_HIGH - address
@@ -607,7 +607,7 @@ may_map :: fn(table: ptr[PageTable], address: u64, bytes: u64, user: bool) -> bo
     return table.kernel && address >= KERNEL_HALF_START
 }
 
-/*
+/**
  * A page or block: user ones only reachable from EL0 and never executed by the kernel, kernel ones never
  * executed by user mode, and only kernel ones global.
  */
@@ -660,7 +660,7 @@ mapping_of :: fn(entry: u64) -> arch_interface.Mapping {
     return mapping
 }
 
-// The physical address a leaf entry at level maps.
+/** The physical address a leaf entry at level maps. */
 page_address :: fn(entry: u64, level: u64) -> u64 {
     return entry & ENTRY_ADDRESS & ~((cast[u64](1) << (12 + 9 * level)) - 1)
 }
@@ -669,7 +669,7 @@ page_bytes :: fn(size: arch_interface.PageSize) -> u64 {
     return cast[u64](1) << (12 + 9 * leaf_level(size))
 }
 
-// The level whose entries map pages of size.
+/** The level whose entries map pages of size. */
 leaf_level :: fn(size: arch_interface.PageSize) -> u64 {
     return match size {
         case .Size4K => cast[u64](0)
@@ -678,7 +678,7 @@ leaf_level :: fn(size: arch_interface.PageSize) -> u64 {
     }
 }
 
-// The entry for address in current, a table at level.
+/** The entry for address in current, a table at level. */
 slot_at :: fn(current: ptr[mut Table], address: u64, level: u64) -> ptr[mut u64] {
     return &current.entries[(address >> (12 + 9 * level)) % ENTRIES]
 }
@@ -691,7 +691,7 @@ count_of :: fn(entry: u64) -> u64 {
     return (entry & COUNT_MASK) >> COUNT_SHIFT
 }
 
-// Change the count in the entry at slot by change, unless slot is 0, the root's place.
+/** Change the count in the entry at slot by change, unless slot is 0, the root's place. */
 add_to_count :: fn(slot: u64, change: u64) {
     if slot == 0 {
         return void
@@ -705,7 +705,7 @@ load_entry :: fn(slot: u64) -> u64 {
     return cast[ptr[u64]](slot)^
 }
 
-/*
+/**
  * Entries are written whole and in order, so another CPU walking the tables sees a new table only after
  * its zeroed contents.
  */
@@ -713,7 +713,7 @@ store_entry :: fn(slot: ptr[mut u64], entry: u64) {
     intrinsics.atomic_store_u64_release(slot, entry)
 }
 
-// The last of tables' frames, taken off it.
+/** The last of tables' frames, taken off it. */
 take_table :: fn(tables: ptr[mut arch_interface.TableFrames]) -> u64 {
     count :: cast[usize](tables.count)
     runtime.assert(count >= 1 && count <= 4, "map takes a frame only when one is left")

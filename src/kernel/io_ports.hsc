@@ -26,7 +26,7 @@ IoPortError :: enum {
     InvalidArgument,
 }
 
-// The ports first to first + count - 1, owned by owner and charged to budget.
+/** The ports first to first + count - 1, owned by owner and charged to budget. */
 create_io_ports :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, first: u32, count: u32) -> Result[ptr[mut IoPortRange], IoPortError] {
     if !arch.has_io_ports() || count == 0 || cast[u64](first) + cast[u64](count) > 0x10000 {
         return .Error(.InvalidArgument)
@@ -49,7 +49,7 @@ create_io_ports :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, first: u
     return .Ok(ports)
 }
 
-// The port at offset in the range, if it and the width's bytes after it are in it.
+/** The port at offset in the range, if it and the width's bytes after it are in it. */
 port_at :: fn(ports: ptr[IoPortRange], offset: u32, width: u32) -> u16? {
     if (width != 1 && width != 2 && width != 4) || cast[u64](offset) + cast[u64](width) > cast[u64](ports.count) {
         return null

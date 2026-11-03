@@ -174,7 +174,7 @@ check_transactions :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], buff
     return 0
 }
 
-// A file at path opened as creation says, through a dir connection, written whole and synced.
+/** A file at path opened as creation says, through a dir connection, written whole and synced. */
 write_file :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, creation: files.Creation, text: string, buffer: ptr[Buffer]) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -189,7 +189,7 @@ write_file :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, creatio
     return write_through(opened.end, text, buffer, false)
 }
 
-// A file connection given the buffer, text written, its size cut to it, and synced, or installed.
+/** A file connection given the buffer, text written, its size cut to it, and synced, or installed. */
 write_through :: fn(end: slop_os.Channel, text: string, buffer: ptr[Buffer], install: bool) -> bool {
     budget :: slop_os.startup_block().budget
     port :: os.port_for(budget, end) or_return false
@@ -222,7 +222,7 @@ write_through :: fn(end: slop_os.Channel, text: string, buffer: ptr[Buffer], ins
     return true
 }
 
-// A read-only file at path, opened, its buffer given.
+/** A read-only file at path, opened, its buffer given. */
 open_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, buffer: ptr[Buffer]) -> os.Channel[read_only_file.ReadOnlyFile]? {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -234,14 +234,14 @@ open_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, buf
     }
 }
 
-// Whether the file at path holds text, read through a connection of its own.
+/** Whether the file at path holds text, read through a connection of its own. */
 holds :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, text: string, buffer: ptr[Buffer]) -> bool {
     bytes : u8[..]
     defer runtime.array_free(&bytes)
     return read_whole(end, port, path, buffer, &bytes) && same_text(bytes, text)
 }
 
-// Whether a read-only file connection, open from before, holds text.
+/** Whether a read-only file connection, open from before, holds text. */
 connection_holds :: fn(end: slop_os.Channel, port: slop_os.Port, text: string, buffer: ptr[Buffer]) -> bool {
     memory :: handed(buffer) or_return false
     into := os.Incoming.{}
@@ -276,7 +276,7 @@ same_text :: fn(bytes: u8[], text: string) -> bool {
     return true
 }
 
-// A transaction's commit: whether it was made.
+/** A transaction's commit: whether it was made. */
 committed :: fn(end: slop_os.Channel, port: slop_os.Port) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}

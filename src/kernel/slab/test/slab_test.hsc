@@ -1,4 +1,4 @@
-/*
+/**
  * The slab allocator's tests, as a hosted program (tools/unit_tests.py): main returns 0 if
  * everything worked, or the number of the first check that failed.
  *
@@ -125,7 +125,7 @@ succeeded :: fn(result: Result[u64, frames.FrameError]) -> bool {
     return result is_ok
 }
 
-// The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness)
+/** The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness) */
 main :: fn() -> int {
     return hosted_faults.run(checks)
 }

@@ -21,16 +21,16 @@ ConfigValue :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "config", major_version = 1, lending = .Server}
 
-// A program's connection to its value of type T, as its entry takes it: one end, speaking ConfigValue.
+/** A program's connection to its value of type T, as its entry takes it: one end, speaking ConfigValue. */
 Config :: struct[T] {
     end : slop_os.Channel,
 }
 
-// The largest value the store keeps, default or override, so either fits in a message with the other
+/** The largest value the store keeps, default or override, so either fits in a message with the other */
 MAX_VALUE_BYTES :: 1792
-// The versions a value keeps; a write past them drops the oldest
+/** The versions a value keeps; a write past them drops the oldest */
 MAX_VERSIONS :: 16
-// The rings a connection to a value has, so the largest message, a default and an override, fits one
+/** The rings a connection to a value has, so the largest message, a default and an override, fits one */
 RING_BYTES : u32 : 8192
 
 ValueFor :: struct {
@@ -67,36 +67,38 @@ Version :: struct {
 }
 
 ConfigError :: enum #backed_by(u32) {
-    // Nothing declared yet: a program declares its value before anything else
+    /** Nothing declared yet: a program declares its value before anything else */
     NotDeclared = 1,
-    // A write, or a rollback, that isn't of the value's type
+    /** A write, or a rollback, that isn't of the value's type */
     WrongType = 2,
     TooLarge = 3,
-    // No such version kept
+    /** No such version kept */
     NotFound = 4,
-    // The store couldn't keep it: its volume refused the write, or it hadn't the memory
+    /** The store couldn't keep it: its volume refused the write, or it hadn't the memory */
     NotKept = 5,
-    // Only the supervisor's connection asks for others
+    /** Only the supervisor's connection asks for others */
     Refused = 6,
 }
 
 Request :: union {
-    // On the supervisor's connection: a connection to an owner's value, to give its program
+    /** On the supervisor's connection: a connection to an owner's value, to give its program */
     ValueFor(ValueFor),
     Declare(Declare),
-    // The value's current version
+    /** The value's current version */
     Read,
-    // A new version, with the override given: its version
+    /** A new version, with the override given: its version */
     Write(Write),
-    // Answered once the value's version is past this one
+    /** Answered once the value's version is past this one */
     Next(u64),
-    // The kept version this many back from the newest (0 for the newest), or NoMore
+    /** The kept version this many back from the newest (0 for the newest), or NoMore */
     History(u64),
-    // A new version with the override a kept one had, if it was of the same type
+    /** A new version with the override a kept one had, if it was of the same type */
     Rollback(u64),
-    // On the supervisor's connection: the store's directory from now on, as when its volume server was started again
+    /**
+     * On the supervisor's connection: the store's directory from now on, as when its volume server was started again
+     */
     UseDirectory(os.Channel[dir.Dir]),
-    // On the supervisor's connection: every value of an owner's removed, every version, as when it's uninstalled
+    /** On the supervisor's connection: every value of an owner's removed, every version, as when it's uninstalled */
     Forget(slop_os.Relative[u8]),
 }
 
@@ -111,7 +113,7 @@ Response :: union {
     Unsupported,
 }
 
-// A write or a rollback makes a version each time.
+/** A write or a rollback makes a version each time. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Write(_) => false
@@ -123,7 +125,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #insert os.protocol_code(Request, Response)
 
-// A request through end, and its answer, waited for on port; Unsupported if the connection's gone.
+/** A request through end, and its answer, waited for on port; Unsupported if the connection's gone. */
 ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> Response {
     if send_request(end, port, out) is_some {
         return .Unsupported
@@ -140,7 +142,7 @@ ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], i
 
 // ---- A program's side, where T is known
 
-// T's default, T.{}, declared as the value's type and default: the value's version, or why not.
+/** T's default, T.{}, declared as the value's type and default: the value's version, or why not. */
 declare :: fn[T](config: Config[T], port: slop_os.Port) -> Result[u64, ConfigError] {
     value := os.Outgoing.{}
     os.begin[T](&value)^ = T.{}
@@ -155,7 +157,7 @@ declare :: fn[T](config: Config[T], port: slop_os.Port) -> Result[u64, ConfigErr
     }
 }
 
-/*
+/**
  * The value as the program sees it, into value: its default with its override's fields over it, checked to be a T
  * (os.holds_value). Its version, or why not. value is read with os.typed_value[T](os.value_bytes(value)).
  */
@@ -166,7 +168,7 @@ read :: fn[T](config: Config[T], port: slop_os.Port, value: ptr[mut os.Outgoing]
     return answer_of[T](ask(config.end, port, &out, &into), &into, value)
 }
 
-// The value once its version is past seen, as read gives it: its version, or why not.
+/** The value once its version is past seen, as read gives it: its version, or why not. */
 next :: fn[T](config: Config[T], port: slop_os.Port, seen: u64, value: ptr[mut os.Outgoing]) -> Result[u64, ConfigError] {
     out := os.Outgoing.{}
     os.begin[Request](&out)^ = .Next(seen)
@@ -189,7 +191,7 @@ answer_of :: fn[T](response: Response, into: ptr[os.Incoming], value: ptr[mut os
     }
 }
 
-/*
+/**
  * A new version, whose override is value's bytes for the fields given (field_bit): checked to be a T first. Its version,
  * or why not.
  */
@@ -211,7 +213,7 @@ write :: fn[T](config: Config[T], port: slop_os.Port, value: u8[], fields: u64) 
     }
 }
 
-// A new version with the override the kept version had: its version, or why not.
+/** A new version with the override the kept version had: its version, or why not. */
 roll_back :: fn[T](config: Config[T], port: slop_os.Port, version: u64) -> Result[u64, ConfigError] {
     out := os.Outgoing.{}
     os.begin[Request](&out)^ = .Rollback(version)
@@ -223,7 +225,7 @@ roll_back :: fn[T](config: Config[T], port: slop_os.Port, version: u64) -> Resul
     }
 }
 
-// The kept version back versions from the newest, its author into author: null past the oldest kept.
+/** The kept version back versions from the newest, its author into author: null past the oldest kept. */
 history :: fn[T](config: Config[T], port: slop_os.Port, back: u64, author: ptr[mut u8[..]]) -> Version? {
     out := os.Outgoing.{}
     os.begin[Request](&out)^ = .History(back)
@@ -239,7 +241,7 @@ history :: fn[T](config: Config[T], port: slop_os.Port, back: u64, author: ptr[m
     }
 }
 
-// The bit a write sets for T's field named name, a field T declares at its top level; 0 for none.
+/** The bit a write sets for T's field named name, a field T declares at its top level; 0 for none. */
 field_bit :: fn[T](name: string) -> u64 {
     info :: type_info_of(T)
     if info.variant != .STRUCT {
@@ -253,7 +255,7 @@ field_bit :: fn[T](name: string) -> u64 {
     return 0
 }
 
-/*
+/**
  * default with override's fields over it, field by field at T's top level, into value: each field's bytes from the
  * one it comes from, and what its Relatives hold copied after them. Whether both were Ts and it fit.
  */
@@ -273,7 +275,9 @@ merge :: fn[T](default: u8[], override: u8[], fields: u64, value: ptr[mut os.Out
     return true
 }
 
-// The Relatives of type, at offset in a value copied from source into value, given their items after what value holds.
+/**
+ * The Relatives of type, at offset in a value copied from source into value, given their items after what value holds.
+ */
 relocate :: fn(type: ptr[compiler.TypeInfo], offset: usize, source: u8[], value: ptr[mut os.Outgoing]) -> bool {
     if type.variant == .ALIAS {
         return relocate(cast[ptr[compiler.TypeInfoAlias]](type).base_type, offset, source, value)
@@ -331,7 +335,7 @@ relocate :: fn(type: ptr[compiler.TypeInfo], offset: usize, source: u8[], value:
     return true
 }
 
-// count bytes of source from source_at into value at at, within both.
+/** count bytes of source from source_at into value at at, within both. */
 copy :: fn(value: ptr[mut os.Outgoing], at: usize, source: u8[], source_at: usize, count: usize) {
     words :: view_of(cast[ptr[mut u8]](&value.words[0]), os.MESSAGE_BYTES)
     for i in 0..<count {

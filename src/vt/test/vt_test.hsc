@@ -1,4 +1,4 @@
-/*
+/**
  * The VT adapter's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the number
  * of the first check that failed. Styles, moves, scrolling and links become the sequences xterm reads; typed bytes
  * become keys with their modifiers, a bracketed paste one Paste, Ctrl-C an Interrupt, and a sequence cut between two
@@ -11,7 +11,7 @@ import text_buffer from "std"
 import terminal from "std/os/slop_os"
 import vt from ".."
 
-// A string's bytes with ` as ESC and ^X as Ctrl-X.
+/** A string's bytes with ` as ESC and ^X as Ctrl-X. */
 Bytes :: struct {
     bytes : u8[256],
     count : usize,
@@ -45,7 +45,7 @@ view :: fn(made: ptr[Bytes]) -> u8[] {
     return if made.count <= made.bytes.count { made.bytes[0..<made.count] } else { made.bytes[0..<0] }
 }
 
-// Whether out holds what text, written as bytes_of reads it, is.
+/** Whether out holds what text, written as bytes_of reads it, is. */
 same :: fn(out: ptr[text_buffer.TextBuffer], text: string) -> bool {
     expected := bytes_of(text)
     return text_buffer.as_string(out) == string_of(&expected.bytes[0], expected.count)
@@ -139,7 +139,7 @@ is_key :: fn(decoded: ptr[vt.Decoded], index: usize, code: u16, modifiers: u8, t
     return found.kind == cast[u8](terminal.EventKind.Key) && found.code == code && found.modifiers == modifiers && text_of(decoded, index) == text
 }
 
-// The first three bytes of an event's text at most, which is all the checks need.
+/** The first three bytes of an event's text at most, which is all the checks need. */
 text_of :: fn(decoded: ptr[vt.Decoded], index: usize) -> string {
     if index >= decoded.events.count {
         return ""

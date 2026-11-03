@@ -1,4 +1,4 @@
-/*
+/**
  * library_interface's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the
  * number of the first check that failed. Libraries are made here, the least ELF that has a record: its header, one
  * loadable segment of the whole file at address 0, and the record at its entry, its pointers written in place.
@@ -14,7 +14,7 @@ EXPORTS : u64 : 256
 NAMES : u64 : 1024
 SIZE : u64 : 2048
 
-// An export of a made library: its name, and the byte its type's hash is made of.
+/** An export of a made library: its name, and the byte its type's hash is made of. */
 Made :: struct {
     name : string,
     type : u8,
@@ -58,7 +58,7 @@ main :: fn() -> int {
     return 0
 }
 
-// A library made in bytes: its header, its segment, its record of convention, and exports.
+/** A library made in bytes: its header, its segment, its record of convention, and exports. */
 make :: fn(bytes: ptr[mut u8[SIZE]], convention: u64, exports: Made[]) {
     for i in 0..<bytes.count {
         bytes^[i] = 0
@@ -94,7 +94,7 @@ make :: fn(bytes: ptr[mut u8[SIZE]], convention: u64, exports: Made[]) {
     }
 }
 
-// size bytes of value, little-endian, at offset.
+/** size bytes of value, little-endian, at offset. */
 put :: fn(bytes: ptr[mut u8[SIZE]], offset: u64, size: u64, value: u64) {
     for i in cast[u64](0)..<size {
         at :: cast[usize](offset + i)

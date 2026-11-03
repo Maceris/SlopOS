@@ -9,11 +9,11 @@ package boot_info
 
 PANIC_RECORD_MAGIC : u64 : 0x434e4150504f4c53
 PANIC_TEXT_BYTES :: 4064
-// The module the bootloader hands the boot after a panic its record's text in
+/** The module the bootloader hands the boot after a panic its record's text in */
 LAST_PANIC_MODULE :: "last_panic"
 
 PanicRecord :: struct {
-    // PANIC_RECORD_MAGIC once sealed; anything else is a record still being written, or RAM the reset didn't keep
+    /** PANIC_RECORD_MAGIC once sealed; anything else is a record still being written, or RAM the reset didn't keep */
     magic : u64,
     // The kernel's StopReason
     reason : u64,
@@ -25,7 +25,7 @@ PanicRecord :: struct {
 
 #assert size_of(PanicRecord) == 4096
 
-// text added to an unsealed record, as much as there's room for.
+/** text added to an unsealed record, as much as there's room for. */
 panic_record_add :: fn(record: ptr[mut PanicRecord], text: string) {
     if record.length > cast[u64](PANIC_TEXT_BYTES) {
         record.length = 0
@@ -40,7 +40,7 @@ panic_record_add :: fn(record: ptr[mut PanicRecord], text: string) {
     }
 }
 
-// The record sealed, with why the kernel stopped.
+/** The record sealed, with why the kernel stopped. */
 panic_record_seal :: fn(record: ptr[mut PanicRecord], reason: u64) {
     record.reason = reason
     if record.length > cast[u64](PANIC_TEXT_BYTES) {
@@ -50,7 +50,7 @@ panic_record_seal :: fn(record: ptr[mut PanicRecord], reason: u64) {
     record.magic = PANIC_RECORD_MAGIC
 }
 
-// A sealed record's text, or null if the record isn't one.
+/** A sealed record's text, or null if the record isn't one. */
 panic_record_text :: fn(record #escaping : ptr[PanicRecord]) -> string? {
     if record.magic != PANIC_RECORD_MAGIC || record.length > cast[u64](PANIC_TEXT_BYTES) || record.check != check_of(record) {
         return null
@@ -62,7 +62,7 @@ panic_record_text :: fn(record #escaping : ptr[PanicRecord]) -> string? {
     return bit_cast[string](record.text[0..<count])
 }
 
-// FNV-1a over the reason, the length and the text.
+/** FNV-1a over the reason, the length and the text. */
 check_of :: fn(record: ptr[PanicRecord]) -> u64 {
     hash := cast[u64](0xcbf29ce484222325)
     for i in cast[u64](0)..<8 {

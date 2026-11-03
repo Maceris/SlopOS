@@ -18,21 +18,23 @@ PROTOCOL :: slop_os.Protocol.{name = "platform", major_version = 3, lending = .S
 ANY_ID : u16 : 0xffff
 ANY_CLASS : u32 : 0xffffffff
 
-// Which devices a driver takes: a vendor's device, or a class (its base class, subclass and programming interface,
-// as the class register's top 24 bits), each ANY for any.
+/**
+ * Which devices a driver takes: a vendor's device, or a class (its base class, subclass and programming interface,
+ * as the class register's top 24 bits), each ANY for any.
+ */
 DeviceMatch :: struct {
     vendor : u16,
     device : u16,
     class : u32,
 }
 
-// What a Claim wants: devices that match, for a driver trusted with DMA no IOMMU confines, or not (decisions/0084).
+/** What a Claim wants: devices that match, for a driver trusted with DMA no IOMMU confines, or not (decisions/0084). */
 Wanted :: struct {
     devices : DeviceMatch,
     trusted : bool,
 }
 
-/*
+/**
  * A device, and what its driver holds of it: its Device (slop_os.device_create), a window onto its 4 KiB of
  * configuration space, each BAR it has as device memory (NO_HANDLE for one it hasn't, or the upper half of a 64-bit
  * one), and a DMA domain it's attached to: trusted with DMA memory where no IOMMU confines it only if the claim was.
@@ -54,50 +56,50 @@ PciDevice :: struct {
     domain : slop_os.DmaDomain,
 }
 
-// Which real-time clock a ClaimedClock is.
+/** Which real-time clock a ClaimedClock is. */
 ClockKind :: enum #backed_by(u32) {
-    // x86's MC146818, at I/O ports 0x70 and 0x71: its index register, then its data register
+    /** x86's MC146818, at I/O ports 0x70 and 0x71: its index register, then its data register */
     Mc146818 = 1,
-    // Arm's PL031, its registers' 4 KiB, from the device tree's arm,pl031
+    /** Arm's PL031, its registers' 4 KiB, from the device tree's arm,pl031 */
     Pl031 = 2,
 }
 
-// The real-time clock, and what its driver holds of it: its ports, or its registers, NO_HANDLE for the other.
+/** The real-time clock, and what its driver holds of it: its ports, or its registers, NO_HANDLE for the other. */
 RealTimeClock :: struct {
     kind : ClockKind,
     ports : slop_os.IoPortRange,
     registers : slop_os.Memory,
 }
 
-// The first framebuffer (decisions/0138): its pixels, and a page holding its slop_os.FramebufferLayout.
+/** The first framebuffer (decisions/0138): its pixels, and a page holding its slop_os.FramebufferLayout. */
 Framebuffer :: struct {
     pixels : slop_os.Memory,
     layout : slop_os.Memory,
 }
 
 Request :: union {
-    // The next device that matches and nothing has claimed, which nothing else will
+    /** The next device that matches and nothing has claimed, which nothing else will */
     Claim(Wanted),
-    // Serve another client, on its end
+    /** Serve another client, on its end */
     Connect(os.Channel[Platform]),
-    // A device this client claimed, at its address, given again, made anew: the last bundle died with its driver
+    /** A device this client claimed, at its address, given again, made anew: the last bundle died with its driver */
     Reissue(u32),
-    // The real-time clock, unless another client has claimed it; given again, made anew, to the client that has
+    /** The real-time clock, unless another client has claimed it; given again, made anew, to the client that has */
     ClaimClock,
-    // The first framebuffer, as ClaimClock gives the clock
+    /** The first framebuffer, as ClaimClock gives the clock */
     ClaimFramebuffer,
 }
 
 Response :: union {
     Claimed(PciDevice),
-    // No device left that matches
+    /** No device left that matches */
     NoDevice,
     Unsupported,
     ClaimedClock(RealTimeClock),
     ClaimedFramebuffer(Framebuffer),
 }
 
-// A claim sent again would claim another device.
+/** A claim sent again would claim another device. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Claim(_) => false
@@ -110,7 +112,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #insert os.protocol_code(Request, Response)
 
-// A new connection to the service listening on end, or null (as entropy.connect).
+/** A new connection to the service listening on end, or null (as entropy.connect). */
 connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Platform]? {
     pair :: os.channel_for[Platform](budget, 0) or_return null
     out := os.Outgoing.{}

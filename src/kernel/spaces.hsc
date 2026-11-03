@@ -29,7 +29,7 @@ import robustness from "../robustness"
  * memory that's been freed.
  */
 
-// Tags: 0 is the kernel's own table's (address_space.hsc).
+/** Tags: 0 is the kernel's own table's (address_space.hsc). */
 MAX_TAGS :: 4096
 
 AddressSpace :: struct #align(16) {
@@ -40,32 +40,32 @@ AddressSpace :: struct #align(16) {
     // The threads that run in it, and the lock for that list.
     threads_lock : concurrency.SpinLock,
     first_thread : u64,
-    // The channel rings mapped in it (RingMapping), under lock.
+    /** The channel rings mapped in it (RingMapping), under lock. */
     first_ring : u64,
-    // The memory objects mapped in it (MemoryMapping), by address, under lock (memory.hsc).
+    /** The memory objects mapped in it (MemoryMapping), by address, under lock (memory.hsc). */
     first_mapping : u64,
 }
 
 SpaceError :: enum {
     OutOfMemory,
-    // Every address-space tag is in use.
+    /** Every address-space tag is in use. */
     OutOfTags,
-    // Not user addresses, or not aligned.
+    /** Not user addresses, or not aligned. */
     InvalidAddress,
     AlreadyMapped,
-    // Its owner is being destroyed.
+    /** Its owner is being destroyed. */
     OwnerGone,
-    // Its budget can't pay for it, or for the page tables a mapping needs.
+    /** Its budget can't pay for it, or for the page tables a mapping needs. */
     BudgetExceeded,
 }
 
-// The tags in use, one bit each.
+/** The tags in use, one bit each. */
 TagSet :: struct {
     lock : concurrency.SpinLock,
     used : u64[MAX_TAGS / 64],
 }
 
-/*
+/**
  * An empty address space, owned by owner (a Process's address, 0 for the kernel), charged to budget with
  * its root table, and with the tables its mappings need as they're made.
  */
@@ -105,7 +105,7 @@ create_address_space :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> 
     return .Ok(space)
 }
 
-// Destroying an address space destroys the threads that run in it, and takes down the memory mapped in it.
+/** Destroying an address space destroys the threads that run in it, and takes down the memory mapped in it. */
 destroy_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace]) {
     take_down_space_mappings(kernel, space)
     loop {
@@ -122,7 +122,7 @@ destroy_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace
     }
 }
 
-// Once no CPU can use it: the rings mapped in it, its tables, its root, and its tag, flushed from every CPU first.
+/** Once no CPU can use it: the rings mapped in it, its tables, its root, and its tag, flushed from every CPU first. */
 release_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace]) {
     if cast[u64](space.table.root) == 0 {
         return void
@@ -155,7 +155,7 @@ release_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace
     space.table.root = cast[arch_interface.PhysicalAddress](0)
 }
 
-// Add a thread to the ones that run in space, unless space is being destroyed.
+/** Add a thread to the ones that run in space, unless space is being destroyed. */
 join_space :: fn(space: ptr[mut AddressSpace], thread: ptr[mut Thread]) -> bool {
     lock_at(&space.threads_lock, .SpaceThreads)
     defer unlock_at(&space.threads_lock, .SpaceThreads)
@@ -202,7 +202,7 @@ leave_space :: fn(thread: ptr[mut Thread]) {
     TAG_SEARCH_FROM : usize : 0
 }
 
-/*
+/**
  * A free tag, or with only one tag (no PCIDs), that one: every switch flushes the TLB then anyway.
  */
 allocate_tag :: fn(kernel: ptr[mut Kernel]) -> arch_interface.AddressSpaceTag? {
@@ -310,7 +310,7 @@ map_large_locked :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], ad
     }
 }
 
-/*
+/**
  * Unmap size bytes at address in a user address space, what of it is mapped, then shoot down the TLB
  * entries, and only then free the tables it emptied. The space must not be released meanwhile.
  */
@@ -372,7 +372,7 @@ unmap_some :: fn(table: ptr[mut arch.PageTable], address: u64, first: u64, pages
     return page
 }
 
-/*
+/**
  * Zeroed frames for new tables from this CPU's frame cache, each charged to space: why not, if it
  * couldn't. The ones no mapping takes are given back with give_back_user_tables.
  */
@@ -397,7 +397,7 @@ refill_user_tables :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], 
     return null
 }
 
-// The table frames no mapping took, back to this CPU's frame cache, and their charge back to space.
+/** The table frames no mapping took, back to this CPU's frame cache, and their charge back to space. */
 give_back_user_tables :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], tables: ptr[mut arch_interface.TableFrames]) {
     uncharge(cast[u64](space), space.header.generation, cast[u64](tables.count) * frames.FRAME_SIZE)
     give_back_tables(kernel, tables)

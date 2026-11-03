@@ -2,10 +2,10 @@ package kernel
 
 import intrinsics from "base"
 
-// How many frames a stack trace shows.
+/** How many frames a stack trace shows. */
 STACK_TRACE_FRAMES :: 32
 
-/*
+/**
  * Log the current call stack, innermost first, starting with the caller of the function that calls
  * this (and skip more). Addresses are relative to the kernel image's base, so traces from different
  * boots compare, whatever KASLR chose (decisions/0021); match them with the ELF's symbols.

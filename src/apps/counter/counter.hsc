@@ -1,4 +1,4 @@
-/*
+/**
  * The counter, version 1 (roadmap 9d4, decisions/0117): counter_app's run, for testing installations.
  */
 package counter

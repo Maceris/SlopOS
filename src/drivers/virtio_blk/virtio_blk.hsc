@@ -1,4 +1,4 @@
-/*
+/**
  * The virtio-blk driver (decisions/0076): a virtio block device's one queue, through the virtio-pci transport
  * (src/virtio), as the block protocol for its clients, who arrive on its listener. Each connection's buffer is DMA
  * memory of its own, made at its first GetBuffer, which the client reaches through a window and the device reads and
@@ -20,7 +20,7 @@ import virtio from "../../virtio"
 PAGE : u64 : 4096
 BUFFER_BYTES : u64 : 64 * 1024
 SLOTS :: 16
-// Clients are bound to the port under their indexes, the IRQ above them
+/** Clients are bound to the port under their indexes, the IRQ above them */
 IRQ_KEY : u64 : 1000
 // The device's features, and its configuration's capacity, in 512-byte sectors
 FEATURE_READ_ONLY : u64 : 1 << 5
@@ -42,7 +42,7 @@ RequestHeader :: struct #packed {
 
 #assert size_of(RequestHeader) == 16
 
-// A request in flight: whose, its tag, and the chain the device has.
+/** A request in flight: whose, its tag, and the chain the device has. */
 Slot :: struct {
     used : bool,
     client : usize,
@@ -53,7 +53,7 @@ Slot :: struct {
     memory : slop_os.Memory,
 }
 
-// A connection's buffer, once it has one: the memory, and where it is to the device.
+/** A connection's buffer, once it has one: the memory, and where it is to the device. */
 Buffer :: struct {
     memory : slop_os.Memory,
     device : u64,
@@ -188,7 +188,7 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
     }
 }
 
-// An answer, if there is one now: a request in flight is answered when the device finishes it.
+/** An answer, if there is one now: a request in flight is answered when the device finishes it. */
 answer :: fn(driver: ptr[mut Driver], end: slop_os.Channel, response: block.Response?) {
     given :: response or_return void
     out := os.Outgoing.{}
@@ -201,7 +201,7 @@ finished :: fn(tag: u64, status: block.Status) -> block.Response? {
     return block.Response.Finished(block.Completion.{tag = tag, status = status})
 }
 
-/*
+/**
  * A Read or a Write sent to the device, answered later; or answered now if it's out of range, onto a read-only disk,
  * from a client without a buffer, or with every slot or descriptor taken.
  */
@@ -227,7 +227,9 @@ start :: fn(driver: ptr[mut Driver], client: usize, transfer: block.Transfer, wr
     return send_slot(driver, slot, client, transfer.tag, parts)
 }
 
-// A flush sent to the device, answered later; or answered at once by a device without one, whose writes are durable.
+/**
+ * A flush sent to the device, answered later; or answered at once by a device without one, whose writes are durable.
+ */
 start_flush :: fn(driver: ptr[mut Driver], client: usize, tag: u64) -> block.Response? {
     if !driver.flushes {
         return finished(tag, .Done)
@@ -241,7 +243,7 @@ start_flush :: fn(driver: ptr[mut Driver], client: usize, tag: u64) -> block.Res
     return send_slot(driver, slot, client, tag, parts)
 }
 
-// A slot's chain offered to the device: nothing to answer yet, or Busy if the queue has no room for it.
+/** A slot's chain offered to the device: nothing to answer yet, or Busy if the queue has no room for it. */
 send_slot :: fn(driver: ptr[mut Driver], slot: usize, client: usize, tag: u64, parts: virtio.Part[]) -> block.Response? {
     head :: virtio.offer_chain(&driver.queue, parts)
     if head == virtio.NO_DESCRIPTOR || slot >= driver.slots.count {
@@ -253,7 +255,7 @@ send_slot :: fn(driver: ptr[mut Driver], slot: usize, client: usize, tag: u64, p
     return null
 }
 
-// A buffer its client left, closed, unless the device still has requests with it, the last of which closes it.
+/** A buffer its client left, closed, unless the device still has requests with it, the last of which closes it. */
 release_buffer :: fn(driver: ptr[Driver], memory: slop_os.Memory) {
     if cast[slop_os.Handle](memory) == slop_os.NO_HANDLE {
         return void
@@ -275,7 +277,7 @@ free_slot :: fn(driver: ptr[Driver]) -> usize? {
     return null
 }
 
-// A slot's header, for kind at sector: where it is to the device.
+/** A slot's header, for kind at sector: where it is to the device. */
 write_header :: fn(driver: ptr[mut Driver], slot: usize, kind: u32, sector: u64) -> u64 {
     header :: cast[ptr[mut RequestHeader]](driver.requests + cast[u64](slot) * HEADER_BYTES)
     header.kind = cast[u32le](kind)
@@ -294,7 +296,7 @@ set_status :: fn(driver: ptr[mut Driver], slot: usize, value: u8) {
     intrinsics.volatile_store_u8(cast[ptr[mut u8]](driver.requests + STATUS_AT + cast[u64](slot)), value)
 }
 
-// Every request the device has finished, answered to its client with its tag and how it went.
+/** Every request the device has finished, answered to its client with its tag and how it went. */
 finish :: fn(driver: ptr[mut Driver]) {
     loop {
         used :: virtio.take_used(&driver.queue) or_break
@@ -320,7 +322,7 @@ finish :: fn(driver: ptr[mut Driver]) {
     }
 }
 
-// A window onto the client's buffer, made at its first ask.
+/** A window onto the client's buffer, made at its first ask. */
 buffer_for :: fn(driver: ptr[mut Driver], client: usize) -> block.Response? {
     block_of_startup :: slop_os.startup_block()
     if client >= driver.buffers.count {

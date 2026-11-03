@@ -1,4 +1,4 @@
-/*
+/**
  * test_devices (decisions/0069, from the kernel's test of 0055): a driver, given the platform capability as
  * the root task would give the platform service, and what the firmware tables say of the emulator's test
  * device (test_device.TestDeviceInfo), which the kernel runs while its line has an IRQ:

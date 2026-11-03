@@ -1,4 +1,4 @@
-/*
+/**
  * The shell (roadmap M11, design/shell.md, decisions/0162, 0169): the session's first program, reading lines with
  * std/terminal's line editor and evaluating each in the shell language, showing a statement's value when it has one and
  * an error with where in the line it was. Its names are its own (let), never given to the programs it runs.
@@ -25,9 +25,9 @@ Shell :: struct {
     functions : ptr[Node][..],
     depth : usize,
     returned : Value,
-    // Its directory, as a path beneath its home, "" for the home itself
+    /** Its directory, as a path beneath its home, "" for the home itself */
     directory : string,
-    // The ends of programs it's started that it's seen but not waited for yet
+    /** The ends of programs it's started that it's seen but not waited for yet */
     ended : EndedProgram[..],
     // Its home, which paths are beneath, the process manager it starts programs through, the session manager's
     // connection it finds them on (decisions/0170), each with its port, and its own port, where a program's end is seen
@@ -84,7 +84,9 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Termina
     }
 }
 
-// A line run: parsed, each statement evaluated in turn and its value shown, the first error shown and the rest left.
+/**
+ * A line run: parsed, each statement evaluated in turn and its value shown, the first error shown and the rest left.
+ */
 run_line :: fn(shell: ptr[mut Shell], line: string) {
     tree :: match parse(line) {
         case Ok(made) => made
@@ -118,7 +120,7 @@ run_line :: fn(shell: ptr[mut Shell], line: string) {
     }
 }
 
-// The prompt: > after the shell's directory, when it isn't its home.
+/** The prompt: > after the shell's directory, when it isn't its home. */
 prompt_of :: fn(shell: ptr[Shell]) -> string {
     if shell.directory.count == 0 {
         return PROMPT
@@ -126,7 +128,7 @@ prompt_of :: fn(shell: ptr[Shell]) -> string {
     return message("~/%> ", shell.directory)
 }
 
-// An error, and where in the line it is, under it.
+/** An error, and where in the line it is, under it. */
 show_error :: fn(shell: ptr[mut Shell], line: string, at: usize, message: string) {
     storage : u8[512]
     out := text_buffer.make(storage)

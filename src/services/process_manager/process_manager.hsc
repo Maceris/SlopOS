@@ -1,4 +1,4 @@
-/*
+/**
  * The process manager (decisions/0012, 0058, 0067, 0071): loads programs into processes their requesters
  * made, which stay theirs and are paid for by them, and keeps nothing of what it builds, so a program
  * outlives it. Its protocol is std's (std/os/slop_os/process_manager). It serves clients, the listener the
@@ -61,7 +61,7 @@ main :: fn(log: slop_os.DebugLog?, entropy: os.Channel[connector.Connector], cli
     }
 }
 
-// Every request client index has sent, until there are none left, or it's gone.
+/** Every request client index has sent, until there are none left, or it's gone. */
 serve :: fn(manager: ptr[mut Manager], index: usize, into: ptr[mut os.Incoming]) {
     if index >= manager.clients.ends.count {
         return void
@@ -102,7 +102,7 @@ serve :: fn(manager: ptr[mut Manager], index: usize, into: ptr[mut os.Incoming])
     }
 }
 
-/*
+/**
  * One Load's answer: the program built into the requester's process, and its first thread's ID. Whatever happens,
  * the request's handles leave this process: to the program, or closed.
  */
@@ -158,7 +158,7 @@ load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.R
     }
 }
 
-// A connection to the entropy service through its connector, in place of one that's gone: whether there is one.
+/** A connection to the entropy service through its connector, in place of one that's gone: whether there is one. */
 dial_entropy :: fn(manager: ptr[mut Manager]) -> bool {
     if cast[slop_os.Handle](manager.entropy) != slop_os.NO_HANDLE {
         _ = slop_os.handle_close(cast[slop_os.Handle](manager.entropy))
@@ -171,7 +171,7 @@ dial_entropy :: fn(manager: ptr[mut Manager]) -> bool {
     return true
 }
 
-// bytes, filled from the entropy service, dialed again once if its connection's gone: false if it didn't answer.
+/** bytes, filled from the entropy service, dialed again once if its connection's gone: false if it didn't answer. */
 draw :: fn(manager: ptr[mut Manager], bytes: mut u8[]) -> bool {
     if draw_once(manager, bytes) {
         return true
@@ -208,7 +208,7 @@ draw_once :: fn(manager: ptr[mut Manager], bytes: mut u8[]) -> bool {
     }
 }
 
-// The request's handles still in this process's table, closed: one that went to a program is gone already.
+/** The request's handles still in this process's table, closed: one that went to a program is gone already. */
 close_all :: fn(request: ptr[protocol.Load]) {
     _ = slop_os.handle_close(cast[slop_os.Handle](request.process))
     _ = slop_os.handle_close(cast[slop_os.Handle](request.space))

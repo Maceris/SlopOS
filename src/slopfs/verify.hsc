@@ -13,32 +13,32 @@ import maps from "std"
  */
 
 Problem :: enum {
-    // A node or a record couldn't be read, or didn't check out
+    /** A node or a record couldn't be read, or didn't check out */
     Unreadable,
-    // Two extents in use overlap, or one in use is also free
+    /** Two extents in use overlap, or one in use is also free */
     Overlap,
-    // Blocks neither in use nor free
+    /** Blocks neither in use nor free */
     Leak,
-    // An extent in use outside the data blocks
+    /** An extent in use outside the data blocks */
     OutOfRange,
-    // The owners tree doesn't say what's in use, or by whom
+    /** The owners tree doesn't say what's in use, or by whom */
     Owners,
-    // No memory to keep what the walk found (decisions/0104), so nothing's known either way
+    /** No memory to keep what the walk found (decisions/0104), so nothing's known either way */
     OutOfMemory,
 }
 
-// What a check found.
+/** What a check found. */
 Report :: struct {
     nodes : u64,
     chunks : u64,
     used_blocks : u64,
     free_blocks : u64,
     volumes : u64,
-    // Encrypted volumes that weren't open, whose trees weren't read
+    /** Encrypted volumes that weren't open, whose trees weren't read */
     locked : u64,
 }
 
-// An extent in use, and its owner.
+/** An extent in use, and its owner. */
 Used :: struct {
     start : u64,
     blocks : u64,
@@ -48,18 +48,18 @@ Used :: struct {
 Walk :: struct {
     used : Used[..],
     report : Report,
-    // Every node and chunk found so far, by its first block, since snapshots and clones share them
+    /** Every node and chunk found so far, by its first block, since snapshots and clones share them */
     seen : maps.HashMap[u64, bool, maps.hash_integer[u64]],
-    // Out of memory: the walk stopped short, and what it found says nothing
+    /** Out of memory: the walk stopped short, and what it found says nothing */
     short : bool,
 }
 
-// Why a walk stopped: what it couldn't read, or the memory it hadn't.
+/** Why a walk stopped: what it couldn't read, or the memory it hadn't. */
 stopped :: fn(walk: ptr[Walk]) -> Problem {
     return if walk.short { Problem.OutOfMemory } else { Problem.Unreadable }
 }
 
-// A used extent kept, or false, the walk stopped short, without the memory for it.
+/** A used extent kept, or false, the walk stopped short, without the memory for it. */
 add_used :: fn(walk: ptr[mut Walk], used: Used) -> bool {
     if runtime.array_try_add(&walk.used, used) != null {
         walk.short = true
@@ -208,7 +208,7 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
     return .Ok(walk.report)
 }
 
-// The extents the owners tree says are owner's, as in use.
+/** The extents the owners tree says are owner's, as in use. */
 add_owned :: fn(container: ptr[mut Container], walk: ptr[mut Walk], owner: u64) -> bool {
     value := OwnerValue.{}
     at := Key.{}
@@ -228,7 +228,7 @@ add_owned :: fn(container: ptr[mut Container], walk: ptr[mut Walk], owner: u64) 
     return true
 }
 
-// Every node of a tree, and every chunk a volume's leaves name.
+/** Every node of a tree, and every chunk a volume's leaves name. */
 walk_tree :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tree]) -> bool {
     if cast[u64](tree.root.address) == 0 {
         return true
@@ -236,7 +236,7 @@ walk_tree :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tr
     return walk_node(container, walk, tree, &tree.root, NO_PARENT)
 }
 
-// Whether the extent starting at start is found for the first time, which it then has been.
+/** Whether the extent starting at start is found for the first time, which it then has been. */
 first_time :: fn(walk: ptr[mut Walk], start: u64) -> bool {
     if maps.map_get(&walk.seen, start) is_some {
         return false
@@ -296,7 +296,7 @@ walk_node :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tr
     return true
 }
 
-// Extents in use by their start: a shell sort, as there are a few thousand at most in a test.
+/** Extents in use by their start: a shell sort, as there are a few thousand at most in a test. */
 sort_used :: fn(used: mut Used[]) {
     gap := used.count / 2
     loop {

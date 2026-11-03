@@ -1,4 +1,4 @@
-/*
+/**
  * The virtio-input driver (decisions/0077): a virtio input device's event queue, through the virtio-pci transport
  * (src/virtio), as the input protocol for its clients, who arrive on its listener. The device's events are Linux's
  * evdev (type, code, value) triples; each becomes one of the protocol's: a key by its USB HID usage, a button, a
@@ -37,8 +37,10 @@ ABS_Y : u16 : 1
 BTN_LEFT : u16 : 0x110
 BTN_LAST : u16 : 0x117
 
-// evdev's key codes from 0 to 127, as USB HID usages (page 7), 0 for one that has none here
-//SPEC: Linux's input-event-codes.h; USB HID Usage Tables 1.4, §10 (Keyboard/Keypad Page)
+/**
+ * evdev's key codes from 0 to 127, as USB HID usages (page 7), 0 for one that has none here
+ * SPEC: Linux's input-event-codes.h; USB HID Usage Tables 1.4, §10 (Keyboard/Keypad Page)
+ */
 HID_OF_KEY :: u8.[
     0x00, 0x29, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2d, 0x2e, 0x2a, 0x2b,
     0x14, 0x1a, 0x08, 0x15, 0x17, 0x1c, 0x18, 0x0c, 0x12, 0x13, 0x2f, 0x30, 0x28, 0xe0, 0x04, 0x16,
@@ -192,7 +194,7 @@ offer_buffer :: fn(driver: ptr[mut Driver], buffer: u8) {
     }
 }
 
-// The device's events, as the protocol's, added to what's waiting; each buffer offered again.
+/** The device's events, as the protocol's, added to what's waiting; each buffer offered again. */
 take_events :: fn(driver: ptr[mut Driver]) {
     loop {
         used :: virtio.take_used(&driver.queue) or_break
@@ -212,7 +214,7 @@ take_events :: fn(driver: ptr[mut Driver]) {
     }
 }
 
-// An evdev event as the protocol's, or null for one it has nothing for, like a SYN.
+/** An evdev event as the protocol's, or null for one it has nothing for, like a SYN. */
 translate :: fn(driver: ptr[mut Driver], kind: u16, code: u16, value: u32) -> input.Event? {
     signed :: bit_cast[i32](value)
     if kind == EV_KEY && code >= BTN_LEFT && code <= BTN_LAST {
@@ -244,7 +246,7 @@ translate :: fn(driver: ptr[mut Driver], kind: u16, code: u16, value: u32) -> in
     return null
 }
 
-// Each held Read answered with the events its client hasn't had, oldest first, while there are any.
+/** Each held Read answered with the events its client hasn't had, oldest first, while there are any. */
 answer_held :: fn(driver: ptr[mut Driver]) {
     for &most, index in driver.held {
         if most^ == 0 || index >= driver.clients.ends.count || index >= driver.next_of.count {

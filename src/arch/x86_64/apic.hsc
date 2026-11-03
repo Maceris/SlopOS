@@ -40,7 +40,7 @@ LVT_MASKED : u64 : 1 << 16
 ICR_DELIVERY_NMI : u64 : 4 << 8
 LVT_TIMER_ONE_SHOT : u64 : 0 << 17
 LVT_TIMER_TSC_DEADLINE : u64 : 2 << 17
-// Divide configuration 1011b: divide by 1
+/** Divide configuration 1011b: divide by 1 */
 TIMER_DIVIDE_BY_1 : u64 : 0xb
 
 // PIT channel 2, for measuring the TSC when nothing else gives its frequency
@@ -49,9 +49,9 @@ PIT_FREQUENCY : u64 : 1193182
 PIT_CHANNEL_2 : u16 : 0x42
 PIT_COMMAND : u16 : 0x43
 PIT_GATE_PORT : u16 : 0x61
-// Channel 2, low then high byte, mode 0 (interrupt on terminal count), binary
+/** Channel 2, low then high byte, mode 0 (interrupt on terminal count), binary */
 PIT_CHANNEL_2_MODE_0 : u8 : 0xb0
-// How long calibration measures, in parts of a second: 10 ms
+/** How long calibration measures, in parts of a second: 10 ms */
 CALIBRATION_DIVISOR : u64 : 100
 
 /*
@@ -65,7 +65,7 @@ enable_local_apic :: fn() {
     x86_64.wrmsr(X2APIC_SPURIOUS, SPURIOUS_APIC_ENABLE | cast[u64](SPURIOUS_VECTOR))
 }
 
-// Acknowledge the interrupt being handled. The local APIC knows which one it is.
+/** Acknowledge the interrupt being handled. The local APIC knows which one it is. */
 end_of_interrupt :: fn(id: arch_interface.InterruptId) {
     x86_64.wrmsr(X2APIC_EOI, 0)
 }
@@ -84,13 +84,13 @@ send_ipi :: fn(cpu_hardware_id: u64, kind: arch_interface.IpiKind) {
     x86_64.wrmsr(X2APIC_ICR, (cpu_hardware_id << 32) | cast[u64](vector))
 }
 
-// An NMI to this CPU, by its own ID: the self shorthand only takes fixed delivery.
+/** An NMI to this CPU, by its own ID: the self shorthand only takes fixed delivery. */
 test_nmi :: fn() {
     self :: x86_64.rdmsr(X2APIC_ID)
     x86_64.wrmsr(X2APIC_ICR, (self << 32) | ICR_DELIVERY_NMI)
 }
 
-// Whether an interrupt is waiting in the local APIC's in-request registers.
+/** Whether an interrupt is waiting in the local APIC's in-request registers. */
 interrupt_pending :: fn() -> bool {
     for i in 0..<8 {
         if x86_64.rdmsr(X2APIC_IRR_0 + cast[u32](i)) != 0 {
@@ -100,7 +100,7 @@ interrupt_pending :: fn() -> bool {
     return false
 }
 
-// MSIs go straight to the local APICs, which keep nothing per device.
+/** MSIs go straight to the local APICs, which keep nothing per device. */
 msi_device_memory :: fn() -> u64? {
     return 0
 }
@@ -131,23 +131,23 @@ route_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interfac
     }
 }
 
-// A new message: the device's driver programs it.
+/** A new message: the device's driver programs it. */
 move_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interface.InterruptId) -> arch_interface.MsiMessage {
     return route_msi(source, event, cpu_hardware_id, id)
 }
 
-// Nothing to undo: the device stops sending it once its driver stops asking for it.
+/** Nothing to undo: the device stops sending it once its driver stops asking for it. */
 unroute_msi :: fn(source: u32, event: u32) {
 }
 
-// MSIs are writes to the interrupt range, which VT-d takes as interrupts, not DMA it translates.
+/** MSIs are writes to the interrupt range, which VT-d takes as interrupts, not DMA it translates. */
 msi_doorbell :: fn() -> arch_interface.PhysicalAddress? {
     return null
 }
 
 // Timer
 
-/*
+/**
  * The counter is the TSC. Its frequency is hint if the bootloader measured it, otherwise from
  * CPUID leaf 0x15, otherwise measured against the PIT. Deadlines use TSC-deadline mode where the
  * CPU has it, otherwise the local APIC timer counting down, measured against the TSC.
@@ -174,7 +174,7 @@ counter :: fn() -> u64 {
     return x86_64.rdtsc()
 }
 
-// Raise a timer interrupt once counter() reaches value.
+/** Raise a timer interrupt once counter() reaches value. */
 set_deadline :: fn(value: u64) {
     timer :: &current_cpu().timer
     if timer.tsc_deadline {
@@ -204,7 +204,7 @@ cancel_deadline :: fn() {
     x86_64.wrmsr(X2APIC_TIMER_INITIAL_COUNT, 0)
 }
 
-// value × numerator / denominator, without overflowing in between for frequencies below 2^32.
+/** value × numerator / denominator, without overflowing in between for frequencies below 2^32. */
 scale :: fn(value, numerator, denominator: u64) -> u64 {
     return value / denominator * numerator + value % denominator * numerator / denominator
 }
@@ -213,7 +213,7 @@ scale :: fn(value, numerator, denominator: u64) -> u64 {
  * The TSC's frequency from CPUID leaf 0x15: the crystal clock's frequency times the ratio of the
  * TSC to it. Null when the CPU doesn't report the crystal's frequency.
  */
-//SPEC: Intel SDM Vol. 2A, CPUID leaf 15H
+/** SPEC: Intel SDM Vol. 2A, CPUID leaf 15H */
 tsc_frequency_from_cpuid :: fn() -> u64? {
     if x86_64.cpuid(0).eax < 0x15 {
         return null
@@ -225,13 +225,13 @@ tsc_frequency_from_cpuid :: fn() -> u64? {
     return cast[u64](leaf.ecx) * cast[u64](leaf.ebx) / cast[u64](leaf.eax)
 }
 
-// The TSC's frequency, by counting its ticks while the PIT counts down 10 ms.
+/** The TSC's frequency, by counting its ticks while the PIT counts down 10 ms. */
 measure_tsc_frequency :: fn() -> u64 {
     start, end :: time_pit_interval()
     return (end - start) * CALIBRATION_DIVISOR
 }
 
-/*
+/**
  * TSC values when PIT channel 2 starts counting down 10 ms, and when it reaches zero.
  * The gate is turned off and on again to start the count, with the speaker kept off.
  */
@@ -251,7 +251,7 @@ time_pit_interval :: fn() -> (u64, u64) {
     return start, x86_64.rdtsc()
 }
 
-// The local APIC timer's frequency, by letting it count down for 10 ms of TSC time.
+/** The local APIC timer's frequency, by letting it count down for 10 ms of TSC time. */
 measure_apic_timer_frequency :: fn(tsc_frequency: u64) -> u64 {
     x86_64.wrmsr(X2APIC_LVT_TIMER, LVT_MASKED | cast[u64](TIMER_VECTOR))
     x86_64.wrmsr(X2APIC_TIMER_INITIAL_COUNT, 0xffffffff)

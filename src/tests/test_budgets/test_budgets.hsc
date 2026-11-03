@@ -1,4 +1,4 @@
-/*
+/**
  * test_budgets (decisions/0099, from the kernel's test of 0050): on 1 CPU, a pair of threads sharing a CPU budget of
  * 30 ms every 100 ms at priority 10, against a thread on a budget of 60 ms every 100 ms at priority 5, each counting as fast
  * as it can. The program launches two copies of itself for them, since a budget is a process's: P, whose two threads
@@ -50,7 +50,7 @@ CopyGrants :: struct {
     cpu_budget : slop_os.CpuBudget?,
 }
 
-// Counts in its slot of the page for good.
+/** Counts in its slot of the page for good. */
 counter #calling_convention(.c) #no_context :: fn(slot: ptr[mut u64]) #never_returns {
     loop {
         intrinsics.volatile_store_u64(slot, intrinsics.volatile_load_u64(slot) + 1)
@@ -126,7 +126,7 @@ launch_copy :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.Pro
     return launched.process
 }
 
-// P or Q, as told in its first message: the pair's two threads, or the rival's one, counting in the page given.
+/** P or Q, as told in its first message: the pair's two threads, or the rival's one, counting in the page given. */
 run_copy :: fn(peer: slop_os.Channel, counts: slop_os.Memory) -> int {
     block :: slop_os.startup_block()
     port :: os.port_for(block.budget, peer) or_return 2

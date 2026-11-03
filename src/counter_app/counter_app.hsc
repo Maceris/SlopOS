@@ -1,4 +1,4 @@
-/*
+/**
  * The counter (roadmap 9d4, decisions/0117): an app for testing installations, in two versions, counter and
  * counter_next, with the same entry. Each run counts itself in its data directory's file count, and says which run it is
  * and which version counted it, so an update that keeps the data counts on, and an uninstall starts again from 1. It
@@ -14,14 +14,14 @@ import lifecycle from "std/os/slop_os"
 import config from "../protocols/config"
 import installations from "../installations"
 
-// What it's configured with: how much a run counts.
+/** What it's configured with: how much a run counts. */
 CounterSettings :: struct {
     step : u32 = 1,
 }
 
 STOP_KEY : u64 : 1
 
-// A run: counted in data's file count, and said, then until it's asked to stop; 0 if it was, or why not.
+/** A run: counted in data's file count, and said, then until it's asked to stop; 0 if it was, or why not. */
 run :: fn(data: installations.AppData, settings: config.Config[CounterSettings]?, version: int) -> int {
     step := cast[u64](1)
     match settings {

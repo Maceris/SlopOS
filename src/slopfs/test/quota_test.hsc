@@ -13,7 +13,7 @@ import slopfs from ".."
 QUOTA_BLOCKS : u64 : 2048
 CHUNK : usize : 65536
 
-// The blocks the owners tree says a volume has.
+/** The blocks the owners tree says a volume has. */
 owned_blocks :: fn(container: ptr[mut slopfs.Container], id: u64) -> u64 {
     value := slopfs.OwnerValue.{}
     at := slopfs.Key.{}
@@ -31,12 +31,12 @@ owned_blocks :: fn(container: ptr[mut slopfs.Container], id: u64) -> u64 {
     return total
 }
 
-// Whether the volume's count of its blocks is what the owners tree says, once committed.
+/** Whether the volume's count of its blocks is what the owners tree says, once committed. */
 counted :: fn(container: ptr[mut slopfs.Container], id: u64) -> bool {
     return slopfs.usage_of(container, id).used == owned_blocks(container, id)
 }
 
-// A new file of a chunk's bytes in the root, named by number: whether it was written.
+/** A new file of a chunk's bytes in the root, named by number: whether it was written. */
 write_file :: fn(volume: ptr[mut slopfs.Volume], number: int, data: ptr[mut Data]) -> bool {
     name : u8[16]
     length :: name_of_number(name, number)
@@ -150,7 +150,7 @@ check_quotas :: fn() -> int {
     return check_reserve()
 }
 
-// A container filled to its reserve, with no quota: deleting and committing still work.
+/** A container filled to its reserve, with no quota: deleting and committing still work. */
 check_reserve :: fn() -> int {
     blocks : u64 = 512
     device :: new_device_of(blocks) or_return 1130

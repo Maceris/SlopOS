@@ -13,9 +13,9 @@ Value :: union {
     Null,
     Bool(bool),
     Int(i64),
-    // Bytes
+    /** Bytes */
     Size(u64),
-    // Nanoseconds
+    /** Nanoseconds */
     Duration(i64),
     Text(string),
     Path(string),
@@ -40,7 +40,7 @@ new_record :: fn() -> ptr[mut RecordValue] {
     return runtime.new(RecordValue)
 }
 
-// A record's field by name, or null.
+/** A record's field by name, or null. */
 field :: fn(record: ptr[RecordValue], name: string) -> Value? {
     for each, i in record.names {
         if each == name && i < record.values.count {
@@ -61,7 +61,7 @@ set_field :: fn(record: ptr[mut RecordValue], name #escaping : string, value #es
     runtime.array_add(&record.values, value)
 }
 
-// What a value is, by name, as errors say.
+/** What a value is, by name, as errors say. */
 type_name :: fn(value: Value) -> string {
     return match value {
         case Null => "null"
@@ -76,7 +76,7 @@ type_name :: fn(value: Value) -> string {
     }
 }
 
-/*
+/**
  * A value as a person reads it, appended to out: text as it is at the top, quoted inside a list or record; a size in the
  * largest unit it's a whole number of, or with one decimal; a list one item a line, a record one field a line.
  */
@@ -204,7 +204,7 @@ append_duration :: fn(out: ptr[mut text_buffer.TextBuffer], nanos: i64) {
     text_buffer.append(out, " ns")
 }
 
-// Whether a list is shown as a table: it has items, and every one's a record.
+/** Whether a list is shown as a table: it has items, and every one's a record. */
 is_table :: fn(list: ptr[ValueList]) -> bool {
     for item in list.items {
         match item {
@@ -215,7 +215,7 @@ is_table :: fn(list: ptr[ValueList]) -> bool {
     return list.items.count > 0
 }
 
-/*
+/**
  * A list of records as a table: a column for each field, in the order they're first met, headed by its name, each as
  * wide as its widest cell, two spaces apart; a record without a field leaves its cell blank.
  */
@@ -270,7 +270,7 @@ render_table :: fn(out: ptr[mut text_buffer.TextBuffer], list: ptr[ValueList]) {
     }
 }
 
-// A table's cell: a record's field, text as it is, anything else as it's shown inside a list.
+/** A table's cell: a record's field, text as it is, anything else as it's shown inside a list. */
 render_cell :: fn(out: ptr[mut text_buffer.TextBuffer], item: Value, column: string) {
     match item {
         case Record(record) => {

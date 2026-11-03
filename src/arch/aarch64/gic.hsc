@@ -33,7 +33,7 @@ GICD_IROUTER : u64 : 0x6000
 // Affinity routing (ARE), and group 1 on (with security, EnableGrp1NS; without, EnableGrp1, besides Grp0)
 GICD_CTLR_ENABLE : u32 : (1 << 4) | (1 << 1) | 1
 GICD_CTLR_WRITE_PENDING : u32 : 1 << 31
-// The distributor's registers are 64 KiB
+/** The distributor's registers are 64 KiB */
 DISTRIBUTOR_SIZE : u64 : 0x10000
 
 // Redistributor registers: the RD frame, then the SGI frame 64 KiB on
@@ -51,7 +51,7 @@ TYPER_LAST : u64 : 1 << 4
 TYPER_VIRTUAL_LPIS : u64 : 1 << 1
 REDISTRIBUTOR_STRIDE : u64 : 0x20000
 
-// ICC_SRE_EL1: the system register interface, with FIQ and IRQ bypass off
+/** ICC_SRE_EL1: the system register interface, with FIQ and IRQ bypass off */
 SRE_ENABLE : u64 : 0x7
 // Every interrupt one priority, which the mask lets through
 INTERRUPT_PRIORITY : u8 : 0xa0
@@ -68,7 +68,7 @@ SGI_STOP : u32 : 3
 // The virtual and the physical timer's PPIs where the device tree doesn't say
 DEFAULT_TIMER_INTERRUPT : u32 : 27
 DEFAULT_TEST_TIMER_INTERRUPT : u32 : 30
-// The test device's rate: about a thousand interrupts a second
+/** The test device's rate: about a thousand interrupts a second */
 TEST_DEVICE_HZ : u64 : 1000
 
 // The kernel's device interrupt IDs, on each CPU
@@ -77,10 +77,10 @@ DEVICE_ID_COUNT : u32 : 224
 MAX_ROUTES :: 256
 NO_ROUTE : u32 : 0xffffffff
 
-// The test device (arch_interface.test_device): an SPI no device on QEMU virt uses, pended in software
+/** The test device (arch_interface.test_device): an SPI no device on QEMU virt uses, pended in software */
 TEST_LINE : u32 : 100
 
-// One line routed to one of the kernel's device interrupt IDs, on the CPU with an MPIDR's affinity.
+/** One line routed to one of the kernel's device interrupt IDs, on the CPU with an MPIDR's affinity. */
 Route :: struct {
     used : bool,
     cpu : u64,
@@ -88,13 +88,13 @@ Route :: struct {
     interrupt : u32,
 }
 
-// A GICv3 distributor L2 registered (arch_interface.InterruptController), through L2's mapping.
+/** A GICv3 distributor L2 registered (arch_interface.InterruptController), through L2's mapping. */
 InterruptController :: struct {
     registers : u64,
     lines : u32,
 }
 
-// The distributor through L1's own mapping, for what every CPU shares: affinity routing and group 1 on.
+/** The distributor through L1's own mapping, for what every CPU shares: affinity routing and group 1 on. */
 init_distributor :: fn(system: ptr[mut ArchSystem]) {
     base :: system.distributor
     write_u32(base, GICD_CTLR, 0)
@@ -110,7 +110,7 @@ wait_for_distributor :: fn(base: u64) {
     while read_u32(base, GICD_CTLR) & GICD_CTLR_WRITE_PENDING != 0
 }
 
-/*
+/**
  * The calling CPU's redistributor, awake, with its SGIs and the timer's PPI in group 1, enabled; then its CPU
  * interface on, letting every interrupt's priority through.
  */
@@ -140,7 +140,7 @@ init_cpu_interface :: fn(system: ptr[ArchSystem], cpu: ptr[mut ArchCpu]) {
     aarch64.isb()
 }
 
-// The redistributor whose affinity is mpidr's, from the region the device tree gave, or 0.
+/** The redistributor whose affinity is mpidr's, from the region the device tree gave, or 0. */
 find_redistributor :: fn(system: ptr[ArchSystem], mpidr: u64) -> u64 {
     if system.redistributors == 0 {
         return 0
@@ -163,12 +163,12 @@ find_redistributor :: fn(system: ptr[ArchSystem], mpidr: u64) -> u64 {
     }
 }
 
-// This CPU's MPIDR, its affinity fields only, as the bootloader gives each CPU's.
+/** This CPU's MPIDR, its affinity fields only, as the bootloader gives each CPU's. */
 affinity_of_this_cpu :: fn() -> u64 {
     return aarch64.read_system_register(.MPIDR_EL1) & 0xff00ffffff
 }
 
-/*
+/**
  * An IRQ's source. The timer and IPIs are acknowledged here; a device interrupt is the kernel's to
  * acknowledge (end_of_interrupt), and a spurious one isn't acknowledged at all.
  */
@@ -217,7 +217,7 @@ acknowledge :: fn(interrupt: u32) {
     aarch64.isb()
 }
 
-// The kernel's ID for an interrupt on a CPU, or NO_ROUTE.
+/** The kernel's ID for an interrupt on a CPU, or NO_ROUTE. */
 device_id_for :: fn(system: ptr[ArchSystem], cpu: u64, interrupt: u32) -> u32 {
     for route in system.routes {
         if route.used && route.cpu == cpu && route.interrupt == interrupt {
@@ -227,12 +227,12 @@ device_id_for :: fn(system: ptr[ArchSystem], cpu: u64, interrupt: u32) -> u32 {
     return NO_ROUTE
 }
 
-// The kernel's own IDs: it picks one per line and CPU, and routes translates.
+/** The kernel's own IDs: it picks one per line and CPU, and routes translates. */
 device_interrupt_range :: fn() -> (first: arch_interface.InterruptId, count: u32) {
     return cast[arch_interface.InterruptId](FIRST_DEVICE_ID), DEVICE_ID_COUNT
 }
 
-// The line routed to id on this CPU, acknowledged.
+/** The line routed to id on this CPU, acknowledged. */
 end_of_interrupt :: fn(id: arch_interface.InterruptId) {
     cpu :: current_cpu()
     for route in current_system().routes {
@@ -243,7 +243,7 @@ end_of_interrupt :: fn(id: arch_interface.InterruptId) {
     }
 }
 
-/*
+/**
  * An SGI to the CPU with an MPIDR's affinity, through ICC_SGI1R_EL1: its Aff3, Aff2 and Aff1, and Aff0 as a
  * bit in a target list of 16, which RS picks.
  */
@@ -266,7 +266,7 @@ send_ipi :: fn(cpu_hardware_id: u64, kind: arch_interface.IpiKind) {
     aarch64.isb()
 }
 
-// Whether an IRQ or FIQ is waiting, which ISR_EL1 says even while they're masked.
+/** Whether an IRQ or FIQ is waiting, which ISR_EL1 says even while they're masked. */
 interrupt_pending :: fn() -> bool {
     return aarch64.read_system_register(.ISR_EL1) & 0xc0 != 0
 }
@@ -327,7 +327,7 @@ route_wired :: fn(
     record_route(current_system(), cpu_hardware_id, cast[u32](id), interrupt)
 }
 
-// Keep a route, replacing any for the same interrupt or for the same ID on the same CPU.
+/** Keep a route, replacing any for the same interrupt or for the same ID on the same CPU. */
 record_route :: fn(system: ptr[mut ArchSystem], cpu: u64, id: u32, interrupt: u32) {
     concurrency.lock(&system.routes_lock)
     defer concurrency.unlock(&system.routes_lock)
@@ -344,7 +344,7 @@ record_route :: fn(system: ptr[mut ArchSystem], cpu: u64, id: u32, interrupt: u3
     system.routes[free] = Route.{used = true, cpu = cpu, id = id, interrupt = interrupt}
 }
 
-// Forget the route from an interrupt, an LPI no longer raised (its.hsc).
+/** Forget the route from an interrupt, an LPI no longer raised (its.hsc). */
 forget_route :: fn(system: ptr[mut ArchSystem], interrupt: u32) {
     concurrency.lock(&system.routes_lock)
     defer concurrency.unlock(&system.routes_lock)
@@ -375,7 +375,7 @@ test_device :: fn() -> arch_interface.TestDevice {
     }
 }
 
-/*
+/**
  * Start or stop the test device: while it's on, its line is pended through the distributor about a thousand
  * times a second, by the generic timer's physical timer on the CPU that started it, which the kernel doesn't
  * use otherwise (its own is the virtual timer).

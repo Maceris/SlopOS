@@ -41,11 +41,11 @@ Device :: struct #align(16) {
     lock : concurrency.SpinLock,
     address : u32,
     msi_source : u32,
-    // Its configuration space, mapped in the kernel's window, for turning its DMA off when it's destroyed
+    /** Its configuration space, mapped in the kernel's window, for turning its DMA off when it's destroyed */
     config : u64,
-    // Its events in use, a bit each.
+    /** Its events in use, a bit each. */
     events : u32,
-    // Its IRQs, under lock.
+    /** Its IRQs, under lock. */
     first_irq : u64,
     // The domain it's attached to, and that domain's generation then; 0 for none.
     domain : u64,
@@ -67,7 +67,7 @@ Device :: struct #align(16) {
 
 DmaDomain :: struct #align(16) {
     header : ObjectHeader,
-    // Whether it may have DMA memory where no IOMMU translates it, for a trusted driver (decisions/0084).
+    /** Whether it may have DMA memory where no IOMMU translates it, for a trusted driver (decisions/0084). */
     trusted : bool,
     // Under the kernel's iommus_lock: whether a device was attached or memory made, binding it to that device's IOMMU,
     // the IOMMU's number plus one, or 0 for none.
@@ -82,7 +82,9 @@ DmaDomain :: struct #align(16) {
     root : u64,
     next_address : u64,
     address_limit : u64,
-    // Where the high range starts, which is handed out from its free range, 0 for none (translation.hsc, HIGH_DEVICE_BYTES)
+    /**
+     * Where the high range starts, which is handed out from its free range, 0 for none (translation.hsc, HIGH_DEVICE_BYTES)
+     */
     high_start : u64,
     // The MSI doorbell's page, mapped at its own address, 0 for none.
     reserved : u64,
@@ -90,7 +92,7 @@ DmaDomain :: struct #align(16) {
     free_count : u32,
 }
 
-/*
+/**
  * A device at address, its MSIs from msi_source, owned by owner and charged to budget, for its slot and what the
  * interrupt controller keeps for it. No other device may have its address, nor, where the controller uses sources,
  * its source.
@@ -176,7 +178,7 @@ CONFIG_BYTES : u64 : 4096
 PCI_COMMAND : u64 : 0x04
 PCI_COMMAND_BUS_MASTER : u16 : 1 << 2
 
-// The device's DMA in domain, from now on, if it's behind the IOMMU domain's other devices are.
+/** The device's DMA in domain, from now on, if it's behind the IOMMU domain's other devices are. */
 attach_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device], domain: ptr[mut DmaDomain]) -> Result[void, slop_os.DeviceError] {
     path :: iommu_path(kernel, device.address)
     lock_at(&device.lock, .Device)
@@ -208,7 +210,7 @@ attach_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device], domain: pt
     return .Ok
 }
 
-/*
+/**
  * Destroying a device destroys its IRQs, each once the destroy running on this CPU is done, off its list first;
  * then the interrupt controller forgets it, and it leaves the kernel's devices.
  */
@@ -257,7 +259,7 @@ destroy_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
     unlock_at(&kernel.devices_lock, .Devices)
 }
 
-// Once no CPU can use it: what the interrupt controller kept for it.
+/** Once no CPU can use it: what the interrupt controller kept for it. */
 release_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
     if device.config != 0 {
         unmap_device(kernel, device.config, CONFIG_BYTES)
@@ -270,7 +272,7 @@ release_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
     }
 }
 
-// Take irq off device's list, if it's on it, its event free again. Takes the device's lock as held.
+/** Take irq off device's list, if it's on it, its event free again. Takes the device's lock as held. */
 unlink_irq :: fn(device: ptr[mut Device], irq: ptr[mut Irq]) {
     if !irq.in_device {
         return void
@@ -288,7 +290,7 @@ unlink_irq :: fn(device: ptr[mut Device], irq: ptr[mut Irq]) {
     device.events &= ~(cast[u32](1) << irq.line)
 }
 
-/*
+/**
  * A message-signaled IRQ for one of device's events, owned by owner and charged to budget: routed to the next CPU in
  * turn that owner's CPU budget has, its message what the device's driver programs into it.
  */
@@ -373,7 +375,7 @@ create_msi_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, device: p
     return .Ok(irq)
 }
 
-/*
+/**
  * A message-signaled IRQ routed to the CPU with index cpu_index instead (decisions/0099): a route there first, then its
  * IOMMU's entry for it pointed there, or its event moved (the ITS's MOVI), or a new message for its driver to program,
  * and its old route forgotten. Where the message changes (x86-64 without interrupt remapping), what the device raises
@@ -414,7 +416,7 @@ move_msi_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], cpu_index: u32) -
     return .Ok
 }
 
-/*
+/**
  * Destroying a message-signaled IRQ: its event no longer delivered, and free on its device, unless the device is
  * being destroyed, which forgets every event at once; then its route.
  */
@@ -432,7 +434,7 @@ destroy_msi_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
     }
 }
 
-// A domain, trusted with DMA memory no IOMMU confines if trusted.
+/** A domain, trusted with DMA memory no IOMMU confines if trusted. */
 create_dma_domain :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, trusted: bool) -> Result[ptr[mut DmaDomain], slop_os.DeviceError] {
     object := cast[u64](0)
     match new_object(kernel, .DmaDomain, budget, 0) {
@@ -450,7 +452,7 @@ create_dma_domain :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, truste
     return .Ok(cast[ptr[mut DmaDomain]](object))
 }
 
-// Its devices detached, and its translation stopped; its tables go once no CPU can be using them.
+/** Its devices detached, and its translation stopped; its tables go once no CPU can be using them. */
 destroy_dma_domain :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain]) {
     stop_domain(kernel, domain)
 }
@@ -459,7 +461,7 @@ release_dma_domain :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain]) {
     release_domain_tables(kernel, domain)
 }
 
-/*
+/**
  * DMA memory in domain, size bytes, its device addresses ending at or below limit (0 for none), owned by owner and
  * charged to budget: in one block of frames, pinned for as long as it lives. A domain that translates maps it, and
  * its frames may be anywhere; otherwise they're below limit, and only a trusted domain has any (decisions/0084). A
@@ -493,7 +495,9 @@ create_dma_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, domain
     return .Ok(memory)
 }
 
-// Where DMA memory is to its domain's devices: the address its domain mapped it at, or without an IOMMU, its physical address.
+/**
+ * Where DMA memory is to its domain's devices: the address its domain mapped it at, or without an IOMMU, its physical address.
+ */
 device_address_of :: fn(memory: ptr[Memory]) -> Result[u64, slop_os.DeviceError] {
     if memory.domain == 0 || !is_live(memory.domain, memory.domain_generation) {
         return .Error(.NotDmaMemory)
@@ -501,7 +505,7 @@ device_address_of :: fn(memory: ptr[Memory]) -> Result[u64, slop_os.DeviceError]
     return .Ok(if memory.device_address != 0 { memory.device_address } else { memory.physical })
 }
 
-// The interrupt controller's MSIs, set up once every CPU has started, with the memory it asks for, which it keeps.
+/** The interrupt controller's MSIs, set up once every CPU has started, with the memory it asks for, which it keeps. */
 start_msis :: fn(kernel: ptr[mut Kernel]) {
     size :: arch.msi_controller_memory()
     if size == 0 {

@@ -1,4 +1,4 @@
-/*
+/**
  * test_control (decisions/0069, from the kernel's test of 0056): a debugger, D, the program, controls a target,
  * T, and a process that ends itself, E, both copies of it D launches, so both are in D's subtree and D has their
  * handles with every right. Each tells D, through its peer channel, its address space and where its things are;
@@ -62,7 +62,7 @@ SLOT_RESULTS :: 8
     REGISTER_FIRST :: 1
 }
 
-// What T tells D, with its address space's handle in the message's batch: where its things are.
+/** What T tells D, with its address space's handle in the message's batch: where its things are. */
 TargetReport :: struct {
     page : u64,
     fault_at : u64,
@@ -70,7 +70,7 @@ TargetReport :: struct {
     stack_top : u64,
 }
 
-// What a copy is given (main): its log, and its peer channel to D.
+/** What a copy is given (main): its log, and its peer channel to D. */
 CopyGrants :: struct {
     log : slop_os.DebugLog,
     platform : slop_os.Platform?,
@@ -82,7 +82,7 @@ CopyGrants :: struct {
     cpu_budget : slop_os.CpuBudget?,
 }
 
-// T2, and the thread D starts in T: counts in its page for good.
+/** T2, and the thread D starts in T: counts in its page for good. */
 counter #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[16]]) #never_returns {
     loop {
         intrinsics.volatile_store_u64(&page^[SLOT_COUNTER], intrinsics.volatile_load_u64(&page^[SLOT_COUNTER]) + 1)
@@ -100,7 +100,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     return run_debugger(log, connection, executable)
 }
 
-// T or E, as D says in its first message.
+/** T or E, as D says in its first message. */
 run_copy :: fn(peer: slop_os.Channel) -> int {
     block :: slop_os.startup_block()
     port :: os.port_for(block.budget, peer) or_return 1
@@ -149,7 +149,7 @@ run_copy :: fn(peer: slop_os.Channel) -> int {
     }
 }
 
-// A copy launched with a peer channel, told its role: its process, the end D keeps, and the end's port.
+/** A copy launched with a peer channel, told its role: its process, the end D keeps, and the end's port. */
 Copy :: struct {
     launched : os.Launched,
     end : slop_os.Channel,
@@ -173,7 +173,7 @@ launch_copy :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.Pro
     }
 }
 
-// The next stop's StopInfo, once the intercept's packet says there is one.
+/** The next stop's StopInfo, once the intercept's packet says there is one. */
 next_stop :: fn(port: slop_os.Port, intercept: slop_os.Intercept, stop: ptr[mut slop_os.StopInfo]) {
     loop {
         if test_kit.tag_of(slop_os.intercept_next(intercept, stop)) == 0 {
@@ -184,7 +184,7 @@ next_stop :: fn(port: slop_os.Port, intercept: slop_os.Intercept, stop: ptr[mut 
     }
 }
 
-// A u64 of T's page, read through D's handle to it.
+/** A u64 of T's page, read through D's handle to it. */
 read_target :: fn(target: slop_os.Process, space: slop_os.AddressSpace, page: u64, slot: u64) -> u64 {
     value : u64 = 0
     _ = slop_os.process_read_memory(target, space, page + slot * 8, os.mut_bytes_of(&value))

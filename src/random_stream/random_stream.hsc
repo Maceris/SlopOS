@@ -1,4 +1,4 @@
-/*
+/**
  * Random bytes from a 32-byte seed (decisions/0012, 0067): ChaCha20's keystream, rekeyed as it goes, so
  * what it gave can't be worked out from its state later ("fast key erasure"). Each block's first 32 bytes
  * become the next key and the rest are given out. The entropy service draws its bytes from one seeded
@@ -14,7 +14,7 @@ package random_stream
 import compiler from "base"
 import crypto from "std"
 
-// The bytes a block gives out, after its first 32 become the key.
+/** The bytes a block gives out, after its first 32 become the key. */
 BLOCK_OUTPUT : usize : 32
 
 Stream :: struct {
@@ -24,7 +24,7 @@ Stream :: struct {
     used : usize,
 }
 
-// A stream from seed.
+/** A stream from seed. */
 make :: fn(seed: u8[32]) -> Stream {
     stream := Stream.{used = BLOCK_OUTPUT}
     for byte, i in seed {
@@ -33,7 +33,7 @@ make :: fn(seed: u8[32]) -> Stream {
     return stream
 }
 
-// bytes, filled from the stream.
+/** bytes, filled from the stream. */
 fill :: fn(stream: ptr[mut Stream], bytes: mut u8[]) {
     for &byte in bytes {
         if stream.used >= BLOCK_OUTPUT {
@@ -53,7 +53,7 @@ next_u64 :: fn(stream: ptr[mut Stream]) -> u64 {
     return bit_cast[u64](bytes)
 }
 
-// A number from 0 up to limit, not including it, each as likely as the others; 0 for a limit of 0.
+/** A number from 0 up to limit, not including it, each as likely as the others; 0 for a limit of 0. */
 below :: fn(stream: ptr[mut Stream], limit: u64) -> u64 {
     if limit == 0 {
         return 0
@@ -68,7 +68,7 @@ below :: fn(stream: ptr[mut Stream], limit: u64) -> u64 {
     }
 }
 
-// One block: its first half the next key, its second what's given out.
+/** One block: its first half the next key, its second what's given out. */
 refill :: fn(stream: ptr[mut Stream]) {
     nonce : crypto.Nonce96
     block :: crypto.chacha20_block(&stream.key, 0, &nonce)

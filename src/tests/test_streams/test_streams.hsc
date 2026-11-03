@@ -1,4 +1,4 @@
-/*
+/**
  * test_streams (decisions/0164): typed streams between programs. Launched by the root task, it launches a copy of
  * itself with the writing ends of two streams, a Sink[Item] and a Sink[u8], and reads them: the copy writes COUNT
  * records, more than the ring holds at once, so the ring wraps and the writer waits for the reader to make room, and
@@ -99,7 +99,7 @@ main :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessMan
     return failed
 }
 
-// In the copy: the records and the bytes written, and both streams ended with 0.
+/** In the copy: the records and the bytes written, and both streams ended with 0. */
 write_copy :: fn(sink: os.Sink[Item], bytes: os.Sink[u8]?) -> int {
     writer := match stream.writer_on(sink) {
         case Ok(made) => made
@@ -127,7 +127,7 @@ write_copy :: fn(sink: os.Sink[Item], bytes: os.Sink[u8]?) -> int {
     return 0
 }
 
-// How the process watched on port ended: its code, once it has.
+/** How the process watched on port ended: its code, once it has. */
 ended_with :: fn(port: slop_os.Port) -> u64 {
     packets : slop_os.Packet[1]
     taken :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_else 0

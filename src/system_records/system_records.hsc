@@ -1,4 +1,4 @@
-/*
+/**
  * The system configuration as data (roadmap 9c3, decisions/0107, 0110): system_config's services, serialized by the
  * build into the boot set as system.records, which the root task checks at boot with check, the code the build checks
  * them with, and gives the supervisor and the scheduler service, which read their services from it rather than linking
@@ -23,9 +23,9 @@ MAX_SERVICES :: 32
 MAX_PARAMETERS :: 256
 MAX_SERVED :: 8
 NAME_BYTES :: 32
-// The most an override tunes at once, so it fits the config store's values
+/** The most an override tunes at once, so it fits the config store's values */
 MAX_TUNED :: 16
-// The largest memory budget a service is given
+/** The largest memory budget a service is given */
 MAX_BUDGET : u64 : 1024 * 1024 * 1024
 
 // Who starts a service, as system_config.Starter
@@ -37,7 +37,7 @@ STARTER_STORAGE_MANAGER : u8 : 2
 KIND_OTHER : u8 : 0
 KIND_CHANNEL : u8 : 1
 KIND_LISTENER : u8 : 2
-// A Config[T], a channel to the config store's values
+/** A Config[T], a channel to the config store's values */
 KIND_CONFIG : u8 : 3
 
 // What serves a protocol without taking a listener for it in its entry
@@ -46,7 +46,7 @@ SERVED_BY_SUPERVISOR : u8 : 1
 SERVED_BY_STORAGE_MANAGER : u8 : 2
 SERVED_BY_SESSION_MANAGER : u8 : 3
 
-// A CPU share, as system_config.CpuShare, present if has is 1.
+/** A CPU share, as system_config.CpuShare, present if has is 1. */
 CpuRecord :: struct {
     has : u32,
     priority : u32,
@@ -55,7 +55,9 @@ CpuRecord :: struct {
     cpus : u64,
 }
 
-// A service, as system_config.Service, its entry as parameters[first_parameter..<first_parameter + parameter_count].
+/**
+ * A service, as system_config.Service, its entry as parameters[first_parameter..<first_parameter + parameter_count].
+ */
 ServiceRecord :: struct {
     name : u8[NAME_BYTES],
     module : u8[NAME_BYTES],
@@ -92,16 +94,18 @@ SystemRecords :: struct {
     service_count : u32,
     parameter_count : u32,
     served_count : u32,
-    // A service's deadline to be up by, in milliseconds, unless it has its own
+    /** A service's deadline to be up by, in milliseconds, unless it has its own */
     default_deadline_ms : u32,
-    // The CPU share of every service without one of its own, as system_config.DEFAULT_CPU
+    /** The CPU share of every service without one of its own, as system_config.DEFAULT_CPU */
     default_cpu : CpuRecord,
     // Protocols served by the root task, the supervisor or the storage manager themselves: their tags, and by which
     served : u64[MAX_SERVED],
     served_by : u8[MAX_SERVED],
     services : ServiceRecord[MAX_SERVICES],
     parameters : ParameterRecord[MAX_PARAMETERS],
-    // The system's installations as the build made them (decisions/0117), which the config store's override replaces
+    /**
+     * The system's installations as the build made them (decisions/0117), which the config store's override replaces
+     */
     installations : Installations,
 }
 
@@ -111,7 +115,7 @@ TUNE_CPU : u32 : 2
 TUNE_RESTART : u32 : 4
 TUNE_DMA : u32 : 8
 
-// A service's tunables an override sets: those set names, the rest are the service's own.
+/** A service's tunables an override sets: those set names, the rest are the service's own. */
 Tunables :: struct {
     name : u8[NAME_BYTES],
     set : u32,
@@ -122,10 +126,10 @@ Tunables :: struct {
     cpu : CpuRecord,
 }
 
-// The most installations the system has
+/** The most installations the system has */
 MAX_INSTALLATIONS :: 8
 
-/*
+/**
  * An installation (roadmap 9d4, decisions/0113, 0117): its name, which names its data directory and its configuration's
  * owner; the program it runs, a bundle the bundle store's boot root names; and the bundle it runs instead, by hash, all
  * zeros to run the one the root names.
@@ -136,7 +140,9 @@ InstallationRecord :: struct {
     bundle : u8[32],
 }
 
-// The system's installations: the build's, in the records, and as the config store's value "installations" of owner "system".
+/**
+ * The system's installations: the build's, in the records, and as the config store's value "installations" of owner "system".
+ */
 Installations :: struct {
     count : u32,
     // 1 once it's been written: the config store's default, all zeros, is no list at all, and the build's stands
@@ -144,7 +150,7 @@ Installations :: struct {
     entries : InstallationRecord[MAX_INSTALLATIONS],
 }
 
-// Whether installations are well formed: within their array, named and with programs, no two of one name.
+/** Whether installations are well formed: within their array, named and with programs, no two of one name. */
 installations_check :: fn(installations: ptr[Installations]) -> string? {
     if installations.count > MAX_INSTALLATIONS {
         return "has more installations than there's room for"
@@ -166,19 +172,19 @@ installations_check :: fn(installations: ptr[Installations]) -> string? {
     return null
 }
 
-// The system configuration's override, the config store's value "services" of owner "system".
+/** The system configuration's override, the config store's value "services" of owner "system". */
 SystemOverrides :: struct {
     count : u32,
     tuned : Tunables[MAX_TUNED],
 }
 
-// Why records, or an override, were refused: what, and the service it's about, or MAX_SERVICES for none.
+/** Why records, or an override, were refused: what, and the service it's about, or MAX_SERVICES for none. */
 Problem :: struct {
     reason : string,
     service : u32,
 }
 
-/*
+/**
  * Whether records are a system configuration: counts within their arrays, every service named and with a module, a
  * starter, a budget within MAX_BUDGET and a CPU share within its period, its parameters within the parameters and
  * well formed, no two services of one name, a driver started by the supervisor; and every channel, and every Config,
@@ -258,7 +264,7 @@ check :: fn(records: ptr[SystemRecords]) -> Problem? {
     return null
 }
 
-// Whether a CPU share is one: none, or time within a period that isn't 0, on CPUs of a 64-bit mask.
+/** Whether a CPU share is one: none, or time within a period that isn't 0, on CPUs of a 64-bit mask. */
 cpu_holds :: fn(cpu: CpuRecord) -> bool {
     if cpu.has > 1 {
         return false
@@ -266,7 +272,7 @@ cpu_holds :: fn(cpu: CpuRecord) -> bool {
     return cpu.has == 0 || (cpu.period_ns != 0 && cpu.time_ns != 0 && cpu.time_ns <= cpu.period_ns)
 }
 
-// Whether some service takes a listener for tag, or the root task, the supervisor or the storage manager serves it.
+/** Whether some service takes a listener for tag, or the root task, the supervisor or the storage manager serves it. */
 served :: fn(records: ptr[SystemRecords], tag: u64) -> bool {
     for i in cast[usize](0)..<records.served.count {
         if i < cast[usize](records.served_count) && records.served[i] == tag {
@@ -281,7 +287,9 @@ served :: fn(records: ptr[SystemRecords], tag: u64) -> bool {
     return false
 }
 
-// Whether only late services serve tag: no service that isn't late takes a listener for it, nor anything else serves it.
+/**
+ * Whether only late services serve tag: no service that isn't late takes a listener for it, nor anything else serves it.
+ */
 served_only_late :: fn(records: ptr[SystemRecords], tag: u64) -> bool {
     for i in cast[usize](0)..<records.served.count {
         if i < cast[usize](records.served_count) && records.served[i] == tag {
@@ -306,13 +314,13 @@ served_only_late :: fn(records: ptr[SystemRecords], tag: u64) -> bool {
     return late_server
 }
 
-// A service's deadline to be up by, in nanoseconds: its own, or the configuration's default.
+/** A service's deadline to be up by, in nanoseconds: its own, or the configuration's default. */
 deadline_of :: fn(records: ptr[SystemRecords], service: ptr[ServiceRecord]) -> u64 {
     milliseconds :: if service.deadline_ms != 0 { service.deadline_ms } else { records.default_deadline_ms }
     return cast[u64](milliseconds) * 1_000_000
 }
 
-/*
+/**
  * records with an override's tunables applied, checked as check checks records: why not, if the override names a
  * service records don't have, sets something it can't, or leaves them something check refuses. records are changed
  * only if it's taken.
@@ -356,7 +364,7 @@ apply :: fn(records: ptr[mut SystemRecords], overrides: ptr[SystemOverrides]) ->
     return null
 }
 
-// The index of the service named name, or MAX_SERVICES.
+/** The index of the service named name, or MAX_SERVICES. */
 index_of :: fn(records: ptr[SystemRecords], name: string) -> usize {
     for i in cast[usize](0)..<records.services.count {
         if i < cast[usize](records.service_count) && text_of(&records.services[i].name) == name {
@@ -366,7 +374,7 @@ index_of :: fn(records: ptr[SystemRecords], name: string) -> usize {
     return MAX_SERVICES
 }
 
-// The service named name, or null.
+/** The service named name, or null. */
 service_of :: fn(records: ptr[SystemRecords], name: string) -> ptr[ServiceRecord]? {
     at :: index_of(records, name)
     if at >= records.services.count {
@@ -375,7 +383,7 @@ service_of :: fn(records: ptr[SystemRecords], name: string) -> ptr[ServiceRecord
     return &records.services[at]
 }
 
-// A service's parameters, its entry's, in records that check took.
+/** A service's parameters, its entry's, in records that check took. */
 parameters_of :: fn(records: ptr[SystemRecords], service: ptr[ServiceRecord]) -> ParameterRecord[] {
     first :: cast[usize](service.first_parameter)
     count :: cast[usize](service.parameter_count)
@@ -385,12 +393,12 @@ parameters_of :: fn(records: ptr[SystemRecords], service: ptr[ServiceRecord]) ->
     return view_of(&records.parameters[first], count)
 }
 
-// Whether a service is a driver, with devices it takes.
+/** Whether a service is a driver, with devices it takes. */
 is_driver :: fn(service: ptr[ServiceRecord]) -> bool {
     return service.vendor != 0 || service.device != 0 || service.class != 0
 }
 
-// A name's text: its bytes up to the first zero.
+/** A name's text: its bytes up to the first zero. */
 text_of :: fn(name: ptr[u8[NAME_BYTES]]) -> string {
     count := cast[usize](0)
     for byte in name^ {
@@ -402,7 +410,7 @@ text_of :: fn(name: ptr[u8[NAME_BYTES]]) -> string {
     return string_of(&name^[0], count)
 }
 
-// A name's bytes from text, zeros after it: false if it doesn't fit, with room for its zero.
+/** A name's bytes from text, zeros after it: false if it doesn't fit, with room for its zero. */
 set_name :: fn(name: ptr[mut u8[NAME_BYTES]], text: string) -> bool {
     for i in cast[usize](0)..<name.count {
         name^[i] = 0
@@ -420,7 +428,7 @@ set_name :: fn(name: ptr[mut u8[NAME_BYTES]], text: string) -> bool {
     return true
 }
 
-// Whether a name is letters, digits and underscores, and dots in a module's, ended by a zero, and some.
+/** Whether a name is letters, digits and underscores, and dots in a module's, ended by a zero, and some. */
 valid_name :: fn(name: ptr[u8[NAME_BYTES]], module: bool) -> bool {
     ended := false
     count := cast[usize](0)
@@ -444,7 +452,7 @@ valid_name :: fn(name: ptr[u8[NAME_BYTES]], module: bool) -> bool {
     return ended && count != 0
 }
 
-// A protocol's tag, from its own name, as std/os's end_tag works it out: FNV-1a, 64-bit.
+/** A protocol's tag, from its own name, as std/os's end_tag works it out: FNV-1a, 64-bit. */
 tag_of :: fn(protocol: string) -> u64 {
     hash : u64 = 0xcbf29ce484222325
     for character in protocol {

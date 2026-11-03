@@ -14,7 +14,7 @@ import crypto from "std"
  * first held in its record while the file is at most 2 KiB. Chunks that were never written read as zeros.
  */
 
-/*
+/**
  * A volume open: the nodes its tree changes in and the device it's on, the container's own in this process or, in a
  * volume server, its own (decisions/0089), and what its record holds.
  */
@@ -28,11 +28,11 @@ Volume :: struct {
     created : u64,
     name : u8[VOLUME_NAME_BYTES],
     name_bytes : u16,
-    // Whether its tree or its record changed since the last commit
+    /** Whether its tree or its record changed since the last commit */
     dirty : bool,
-    // The time it is, as its user says, for the records it writes
+    /** The time it is, as its user says, for the records it writes */
     now : u64,
-    // A data write failed, so its commits are refused, every one after it (decisions/0112)
+    /** A data write failed, so its commits are refused, every one after it (decisions/0112) */
     failed : bool,
     /*
      * The chunks failed writes were for, each a file and the chunk's index, which reads are refused, since what's there
@@ -40,13 +40,13 @@ Volume :: struct {
      */
     failed_chunks : FailedChunk[MAX_FAILED_CHUNKS],
     failed_count : u32,
-    // The bytes of change history it keeps (history.hsc), or 0 for none
+    /** The bytes of change history it keeps (history.hsc), or 0 for none */
     history_bytes : u64,
-    // Its record as it was opened, for what the volume doesn't change: a clone's origin, whose keys it uses
+    /** Its record as it was opened, for what the volume doesn't change: a clone's origin, whose keys it uses */
     opened : VolumeRecord,
 }
 
-// The most failed writes a volume remembers by their chunks
+/** The most failed writes a volume remembers by their chunks */
 MAX_FAILED_CHUNKS :: 32
 
 FailedChunk :: struct {
@@ -54,7 +54,9 @@ FailedChunk :: struct {
     index : u64,
 }
 
-// Whether a failed write was for a file's chunk, so it can't be read (decisions/0112): every one, past MAX_FAILED_CHUNKS.
+/**
+ * Whether a failed write was for a file's chunk, so it can't be read (decisions/0112): every one, past MAX_FAILED_CHUNKS.
+ */
 chunk_failed :: fn(volume: ptr[Volume], file: u64, index: u64) -> bool {
     if volume.failed_count > MAX_FAILED_CHUNKS {
         return true
@@ -67,7 +69,7 @@ chunk_failed :: fn(volume: ptr[Volume], file: u64, index: u64) -> bool {
     return false
 }
 
-// A file's chunk a write failed for, or, written since, one that's whole again.
+/** A file's chunk a write failed for, or, written since, one that's whole again. */
 note_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, failed: bool) {
     if volume.failed_count > MAX_FAILED_CHUNKS {
         return void
@@ -94,7 +96,7 @@ note_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, failed: bool) {
     volume.failed_count += 1
 }
 
-// What an object is.
+/** What an object is. */
 Info :: struct {
     object : u64,
     kind : ObjectKind,
@@ -103,11 +105,11 @@ Info :: struct {
     created : u64,
     modified : u64,
     changed : u64,
-    // A typed file's schema hash, all zeros for bytes alone (decisions/0046, 0108)
+    /** A typed file's schema hash, all zeros for bytes alone (decisions/0046, 0108) */
     schema : u8[32],
 }
 
-// An entry List gives: its name's bytes in the caller's buffer, what it names, and the cursor after it.
+/** An entry List gives: its name's bytes in the caller's buffer, what it names, and the cursor after it. */
 Listed :: struct {
     name_bytes : usize,
     object : u64,
@@ -119,7 +121,7 @@ VolumeId :: struct {
     id : u64,
 }
 
-/*
+/**
  * A new volume named name, with its root directory, open; hash_key, random, is what its names hash with. It's on the
  * disk once it's committed.
  */
@@ -206,7 +208,7 @@ create_keyed_volume :: fn(container #escaping : ptr[mut Container], name: string
     return .Ok(volume)
 }
 
-// The volume id, open: already, or from its record.
+/** The volume id, open: already, or from its record. */
 open_volume :: fn(container #escaping : ptr[mut Container], id: u64) -> Result[ptr[mut Volume], Error] {
     for volume in container.open {
         if volume.id == id {
@@ -232,7 +234,7 @@ open_volume :: fn(container #escaping : ptr[mut Container], id: u64) -> Result[p
     return .Ok(volume)
 }
 
-// The encrypted volume id, open: already, or from its record, unlocked with passphrase.
+/** The encrypted volume id, open: already, or from its record, unlocked with passphrase. */
 open_sealed_volume :: fn(container #escaping : ptr[mut Container], id: u64, passphrase: u8[]) -> Result[ptr[mut Volume], Error] {
     for volume in container.open {
         if volume.id == id {
@@ -290,7 +292,9 @@ attach_volume :: fn(nodes #escaping : ptr[mut Nodes], device #escaping : Device,
     return .Ok(volume)
 }
 
-// What a volume's record says now: its root as it was last written, its cipher and newest key generation, and the rest.
+/**
+ * What a volume's record says now: its root as it was last written, its cipher and newest key generation, and the rest.
+ */
 record_of :: fn(volume: ptr[Volume]) -> VolumeRecord {
     record := volume.opened
     record.root = volume.tree.root
@@ -309,7 +313,7 @@ record_of :: fn(volume: ptr[Volume]) -> VolumeRecord {
     return record
 }
 
-/*
+/**
  * A volume's dirty nodes written, children first, and its record as it then is: what a volume server gives the
  * container service to commit (decisions/0089), once the writes have finished.
  */
@@ -322,14 +326,14 @@ write_volume :: fn(volume: ptr[mut Volume]) -> Result[VolumeRecord, Error] {
     return .Ok(record_of(volume))
 }
 
-// The volumes in the container, by ID, from at: the next one's ID, or null.
+/** The volumes in the container, by ID, from at: the next one's ID, or null. */
 next_volume_id :: fn(container: ptr[mut Container], at: u64) -> Result[u64?, Error] {
     value : u8[1]
     found :: tree_next(&container.nodes, &container.volumes, key_of(at, .VolumeEntry, 0), value)? or_return .Ok(null)
     return .Ok(found.key.object)
 }
 
-// A volume open in the container's own process closed, what it changed since its last commit lost.
+/** A volume open in the container's own process closed, what it changed since its last commit lost. */
 close_volume :: fn(container: ptr[mut Container], id: u64) {
     for volume, i in container.open {
         if volume.id == id {
@@ -340,7 +344,7 @@ close_volume :: fn(container: ptr[mut Container], id: u64) {
     }
 }
 
-// A volume's memory given back, its keys with it.
+/** A volume's memory given back, its keys with it. */
 free_volume :: fn(volume: ptr[mut Volume]) {
     match volume.tree.keys {
         case Some(keys) => free_keys(keys)
@@ -349,7 +353,7 @@ free_volume :: fn(volume: ptr[mut Volume]) {
     runtime.free(volume)
 }
 
-/*
+/**
  * A new volume registered in the container with nothing in it yet (decisions/0141): its record, with no root and no keys,
  * which the volume server that serves it first fills, making the keys of one with a cipher and writing its root. How
  * the container service makes a volume, without holding what opens it: its ID.
@@ -379,12 +383,14 @@ register_volume :: fn(container: ptr[mut Container], name: u8[], hash_key: u8[32
     return .Ok(id)
 }
 
-// Whether a volume's record is one register_volume made that no volume server has filled yet: it has no root.
+/** Whether a volume's record is one register_volume made that no volume server has filled yet: it has no root. */
 is_unfilled :: fn(record: ptr[VolumeRecord]) -> bool {
     return cast[u64](record.root.address) == 0 && cast[u64](record.next_object) == ROOT_OBJECT + 1
 }
 
-// A new sealed volume's first keys' records, made apart from its container: its key wrapped by passphrase, and its first generation.
+/**
+ * A new sealed volume's first keys' records, made apart from its container: its key wrapped by passphrase, and its first generation.
+ */
 FirstKeys :: struct {
     wrap : WrapRecord,
     generation : GenerationRecord,
@@ -405,7 +411,9 @@ first_keys :: fn(keys: ptr[mut Keys], passphrase: u8[], parameters: crypto.Argon
     return .Ok(FirstKeys.{wrap = wrap, generation = generation, number = keys.current})
 }
 
-// A volume register_volume made given its root directory, as create_volume gives one, to be written with its next commit.
+/**
+ * A volume register_volume made given its root directory, as create_volume gives one, to be written with its next commit.
+ */
 fill_volume :: fn(volume: ptr[mut Volume], now: u64) -> Result[void, Error] {
     root := ObjectRecord.{kind = cast[u32le](cast[u32](ObjectKind.Directory)), parent = cast[u64le](ROOT_OBJECT),
         created = cast[u64le](now), modified = cast[u64le](now), changed = cast[u64le](volume.nodes.transaction)}
@@ -419,7 +427,7 @@ put_volume_record :: fn(container: ptr[mut Container], id: u64, record: ptr[Volu
     return .Ok
 }
 
-// A volume's record, from the container's volumes tree.
+/** A volume's record, from the container's volumes tree. */
 volume_record :: fn(container: ptr[mut Container], id: u64) -> Result[VolumeRecord, Error] {
     record := VolumeRecord.{}
     bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .VolumeEntry, 0),
@@ -430,7 +438,7 @@ volume_record :: fn(container: ptr[mut Container], id: u64) -> Result[VolumeReco
     return .Ok(record)
 }
 
-// The volume named name in the container: its ID, or null.
+/** The volume named name in the container: its ID, or null. */
 find_volume :: fn(container: ptr[mut Container], name: string) -> Result[u64?, Error] {
     at : u64 = 0
     loop {
@@ -483,7 +491,7 @@ info :: fn(volume: ptr[mut Volume], object: u64) -> Result[Info, Error] {
         schema = record.schema})
 }
 
-// A file made typed (decisions/0046, 0108): its schema hash, kept in its record, which only a new file's is given.
+/** A file made typed (decisions/0046, 0108): its schema hash, kept in its record, which only a new file's is given. */
 set_schema :: fn(volume: ptr[mut Volume], object: u64, schema: u8[32]) -> Result[void, Error] {
     record := get_object(volume, object)?
     record.schema = schema
@@ -491,7 +499,7 @@ set_schema :: fn(volume: ptr[mut Volume], object: u64, schema: u8[32]) -> Result
     return .Ok
 }
 
-// The record of an object that's a directory, or NotADirectory, or IsALink for a link.
+/** The record of an object that's a directory, or NotADirectory, or IsALink for a link. */
 directory_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, Error] {
     record :: get_object(volume, object)?
     kind :: kind_of_record(&record)
@@ -512,7 +520,7 @@ touch :: fn(volume: ptr[mut Volume], object: u64, record: ptr[mut ObjectRecord])
 
 // Names.
 
-/*
+/**
  * Whether name can name something: not empty, not too long, not "." or "..", no '/', and UTF-8 with nothing that can't
  * be seen (decisions/0097, 0108): no C0 or C1 controls, no bidirectional controls, and none of Unicode's default
  * ignorable code points, which UTS #39 counts as invisible. Names are compared byte for byte (0046), so these are what
@@ -537,7 +545,7 @@ name_holds :: fn(name: string) -> bool {
     return true
 }
 
-// The code point at at in bytes, and its length; length 0 for bytes that aren't UTF-8, overlong or a surrogate.
+/** The code point at at in bytes, and its length; length 0 for bytes that aren't UTF-8, overlong or a surrogate. */
 decode_utf8 :: fn(bytes: u8[], at: usize) -> (point: u32, length: usize) {
     if at >= bytes.count {
         return 0, 0
@@ -586,7 +594,9 @@ decode_utf8 :: fn(bytes: u8[], at: usize) -> (point: u32, length: usize) {
     return point, length
 }
 
-// Whether a code point shows: not a control, a bidirectional control, or a default ignorable (DerivedCoreProperties).
+/**
+ * Whether a code point shows: not a control, a bidirectional control, or a default ignorable (DerivedCoreProperties).
+ */
 visible :: fn(point: u32) -> bool {
     if point < 0x20 || (point >= 0x7f && point <= 0x9f) {
         return false
@@ -600,7 +610,7 @@ visible :: fn(point: u32) -> bool {
     return true
 }
 
-// Unicode's Default_Ignorable_Code_Point ranges (Unicode 15.1), the bidirectional controls among them: low, high
+/** Unicode's Default_Ignorable_Code_Point ranges (Unicode 15.1), the bidirectional controls among them: low, high */
 INVISIBLE :: u32.[
     0x00ad, 0x00ad, 0x034f, 0x034f, 0x061c, 0x061c, 0x115f, 0x1160, 0x17b4, 0x17b5, 0x180b, 0x180f, 0x200b, 0x200f,
     0x202a, 0x202e, 0x2060, 0x206f, 0x3164, 0x3164, 0xfe00, 0xfe0f, 0xfeff, 0xfeff, 0xffa0, 0xffa0, 0xfff0, 0xfff8,
@@ -609,7 +619,7 @@ INVISIBLE :: u32.[
 
 HASH_MASK : u64 : 0x00ffffffffffffff
 
-// A name's hash, keyed by the volume's key: 56 bits, so a List cursor holds it and a place among those alike.
+/** A name's hash, keyed by the volume's key: 56 bits, so a List cursor holds it and a place among those alike. */
 hash_name :: fn(volume: ptr[Volume], name: string) -> u64 {
     hasher := crypto.blake3_start_keyed(crypto.as_secret(volume.hash_key)) or_return 0
     crypto.blake3_update(&hasher, string_bytes(name))
@@ -624,7 +634,7 @@ hash_name :: fn(volume: ptr[Volume], name: string) -> u64 {
     return hash
 }
 
-/*
+/**
  * A directory's entries whose names hash alike, as stored: one after another, each a head and its name. The record's
  * value is copied into a buffer of MAX_VALUE_BYTES.
  */
@@ -633,7 +643,7 @@ EntryList :: struct {
     count : usize,
 }
 
-// The entry named name in a list: where it starts, and its head.
+/** The entry named name in a list: where it starts, and its head. */
 EntryAt :: struct {
     at : usize,
     head : EntryHead,
@@ -646,7 +656,7 @@ entry_head :: fn(list: ptr[EntryList], at: usize) -> EntryHead? {
     return cast[ptr[EntryHead]](&list.bytes[at])^
 }
 
-// Where each entry in a list starts, stepping from at; null at its end, or where it doesn't hold together.
+/** Where each entry in a list starts, stepping from at; null at its end, or where it doesn't hold together. */
 next_entry_at :: fn(list: ptr[EntryList], at: usize) -> usize? {
     head :: entry_head(list, at) or_return null
     next :: at + size_of(EntryHead) + cast[usize](cast[u16](head.name_bytes))
@@ -706,7 +716,7 @@ put_entries :: fn(volume: ptr[mut Volume], directory: u64, hash: u64, list: ptr[
     return .Ok
 }
 
-// The object named name in directory, or null.
+/** The object named name in directory, or null. */
 lookup :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[u64?, Error] {
     directory_record(volume, directory)?
     if !name_holds(name) {
@@ -719,7 +729,7 @@ lookup :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[u6
     return .Ok(cast[u64](found.head.object))
 }
 
-// A new entry in directory, naming object of kind.
+/** A new entry in directory, naming object of kind. */
 add_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string, object: u64, kind: ObjectKind) -> Result[void, Error] {
     hash :: hash_name(volume, name)
     list :: make(EntryList)?
@@ -759,7 +769,7 @@ remove_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Res
 
 // Paths: components with '/' between them, each a name, resolved beneath a directory, so nothing leads above it.
 
-// The object at path beneath directory, each component looked up in the one before.
+/** The object at path beneath directory, each component looked up in the one before. */
 resolve :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[u64, Error] {
     at := directory
     start : usize = 0
@@ -777,7 +787,7 @@ resolve :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[u
     return .Ok(at)
 }
 
-// Where a path's last component goes: the directory holding it, and its name.
+/** Where a path's last component goes: the directory holding it, and its name. */
 Leaf :: struct {
     directory : u64,
     name : string,
@@ -801,7 +811,7 @@ leaf_of :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[L
     return .Ok(Leaf.{directory = parent, name = path[last + 1..<path.count]})
 }
 
-/*
+/**
  * A new file or directory named name in directory: AlreadyExists if the name's taken.
  */
 create :: fn(volume: ptr[mut Volume], directory: u64, name: string, kind: ObjectKind) -> Result[u64, Error] {
@@ -820,14 +830,14 @@ create :: fn(volume: ptr[mut Volume], directory: u64, name: string, kind: Object
     return .Ok(object)
 }
 
-// Whether a directory has nothing in it.
+/** Whether a directory has nothing in it. */
 is_empty :: fn(volume: ptr[mut Volume], directory: u64) -> Result[bool, Error] {
     value : u8[1]
     found :: tree_next(volume.nodes, &volume.tree, key_of(directory, .Entry, 0), value)? or_return .Ok(true)
     return .Ok(found.key.object != directory || found.key.kind != cast[u8](RecordKind.Entry))
 }
 
-// The file or empty directory named name in directory, removed, with everything it held.
+/** The file or empty directory named name in directory, removed, with everything it held. */
 remove :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[void, Error] {
     parent := directory_record(volume, directory)?
     object :: lookup(volume, directory, name)? or_return .Error(.NotFound)
@@ -842,7 +852,7 @@ remove :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[vo
     return .Ok
 }
 
-// An object's chunks and record gone, its blocks given back, and a link's record.
+/** An object's chunks and record gone, its blocks given back, and a link's record. */
 destroy :: fn(volume: ptr[mut Volume], object: u64) -> Result[void, Error] {
     _ = tree_delete(volume.nodes, &volume.tree, key_of(object, .Link, 0))?
     loop {
@@ -859,7 +869,7 @@ destroy :: fn(volume: ptr[mut Volume], object: u64) -> Result[void, Error] {
     return .Ok
 }
 
-/*
+/**
  * A chunk's record taken out, and its blocks given back if it had any. One a search found but deleting doesn't is a
  * damaged tree's, and Corrupt, so the loops that drop chunks one by one always end.
  */
@@ -880,10 +890,10 @@ release_extent :: fn(volume: ptr[mut Volume], extent: ptr[ExtentRecord]) {
     }
 }
 
-// The most directories deep a volume goes, so walking up from one ends even where a damaged volume loops.
+/** The most directories deep a volume goes, so walking up from one ends even where a damaged volume loops. */
 MAX_DEPTH : u64 : 4096
 
-// Whether directory is ancestor, or beneath it.
+/** Whether directory is ancestor, or beneath it. */
 is_beneath :: fn(volume: ptr[mut Volume], directory: u64, ancestor: u64) -> Result[bool, Error] {
     at := directory
     for step in 0..<MAX_DEPTH {
@@ -899,7 +909,7 @@ is_beneath :: fn(volume: ptr[mut Volume], directory: u64, ancestor: u64) -> Resu
     return .Error(.Corrupt)
 }
 
-/*
+/**
  * What's named from_name in from moved to to_name in to, replacing a file there; a directory can't be moved beneath
  * itself (InvalidName), and a directory isn't replaced (AlreadyExists).
  */
@@ -949,7 +959,7 @@ rename :: fn(volume: ptr[mut Volume], from: u64, from_name: string, to: u64, to_
     return .Ok
 }
 
-/*
+/**
  * The entry at or after a cursor in directory, its name copied into name, or null after the last. A cursor is a
  * name's hash and its place among those alike, so it stays good while the directory changes.
  */
@@ -994,7 +1004,7 @@ list :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: mut u8[])
 
 // Files' bytes.
 
-// bytes from start up to end, or nothing where that's not inside them.
+/** bytes from start up to end, or nothing where that's not inside them. */
 part :: fn(bytes: u8[], start: usize, end: usize) -> u8[] {
     if start <= end && end <= bytes.count {
         return bytes[start..<end]
@@ -1009,7 +1019,7 @@ mut_part :: fn(bytes: mut u8[], start: usize, end: usize) -> mut u8[] {
     return bytes[0..<0]
 }
 
-// A record's value, and a chunk, in memory of their own.
+/** A record's value, and a chunk, in memory of their own. */
 ValueBuffer :: struct {
     bytes : u8[4096],
 }
@@ -1018,7 +1028,7 @@ ChunkBuffer :: struct {
     bytes : u8[65536],
 }
 
-// A chunk's bytes, into a buffer of CHUNK_BYTES: how many were written, the rest of the buffer zeros.
+/** A chunk's bytes, into a buffer of CHUNK_BYTES: how many were written, the rest of the buffer zeros. */
 read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[]) -> Result[usize, Error] {
     // What a failed write should have changed isn't given as if it hadn't (decisions/0112)
     if chunk_failed(volume, file, index) {
@@ -1083,7 +1093,7 @@ read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[
     return .Ok(used)
 }
 
-/*
+/**
  * A chunk's first used bytes of buffer, written anew: in its record, or in new blocks, sealed, and the blocks it had
  * given back. buffer is zeros past used.
  */
@@ -1155,7 +1165,7 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
     return .Ok
 }
 
-// The file record of an object that's a file, or IsADirectory, or IsALink.
+/** The file record of an object that's a file, or IsADirectory, or IsALink. */
 file_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, Error] {
     record :: get_object(volume, object)?
     kind :: kind_of_record(&record)
@@ -1168,7 +1178,7 @@ file_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, 
     return .Ok(record)
 }
 
-// Bytes of a file from offset into into: how many, fewer at its end.
+/** Bytes of a file from offset into into: how many, fewer at its end. */
 read :: fn(volume: ptr[mut Volume], file: u64, offset: u64, into: mut u8[]) -> Result[usize, Error] {
     record :: file_record(volume, file)?
     size :: cast[u64](record.size)
@@ -1191,7 +1201,7 @@ read :: fn(volume: ptr[mut Volume], file: u64, offset: u64, into: mut u8[]) -> R
     return .Ok(cast[usize](end - offset))
 }
 
-// from written into a file at offset, which grows it if it ends past its size.
+/** from written into a file at offset, which grows it if it ends past its size. */
 write :: fn(volume: ptr[mut Volume], file: u64, offset: u64, from: u8[]) -> Result[void, Error] {
     record := file_record(volume, file)?
     end :: offset + cast[u64](from.count)
@@ -1226,7 +1236,7 @@ write :: fn(volume: ptr[mut Volume], file: u64, offset: u64, from: u8[]) -> Resu
     return .Ok
 }
 
-// A file's first chunk, if it's in its record, moved to blocks.
+/** A file's first chunk, if it's in its record, moved to blocks. */
 move_inline :: fn(volume: ptr[mut Volume], file: u64, chunk: mut u8[]) -> Result[void, Error] {
     head := ExtentRecord.{}
     had :: tree_get(volume.nodes, &volume.tree, key_of(file, .Extent, 0), view_of(cast[ptr[mut u8]](&head), size_of(ExtentRecord)))?
@@ -1237,7 +1247,7 @@ move_inline :: fn(volume: ptr[mut Volume], file: u64, chunk: mut u8[]) -> Result
     return write_chunk(volume, file, 0, chunk, used, false)
 }
 
-/*
+/**
  * A file made size bytes long: shorter, the chunks past it dropped and the last one cut, so what's past the end reads
  * as zeros if it grows again; longer, zeros after its end, without writing them.
  */
@@ -1295,13 +1305,13 @@ put_generation :: fn(container: ptr[mut Container], id: u64, number: u32, record
     return .Ok
 }
 
-// A generation's record and its number.
+/** A generation's record and its number. */
 NumberedGeneration :: struct {
     number : u32,
     record : GenerationRecord,
 }
 
-// The volume's key wrapped, each way it is, added to found, which is the caller's to free.
+/** The volume's key wrapped, each way it is, added to found, which is the caller's to free. */
 volume_wraps :: fn(container: ptr[mut Container], id: u64, found: ptr[mut WrapRecord[..]]) -> Result[void, Error] {
     record := WrapRecord.{}
     at := key_of(id, .KeyWrap, 0)
@@ -1321,7 +1331,7 @@ volume_wraps :: fn(container: ptr[mut Container], id: u64, found: ptr[mut WrapRe
     return .Ok
 }
 
-// The volume's key generations, oldest first, added to found, which is the caller's to free.
+/** The volume's key generations, oldest first, added to found, which is the caller's to free. */
 volume_generations :: fn(container: ptr[mut Container], id: u64, found: ptr[mut NumberedGeneration[..]]) -> Result[void, Error] {
     record := GenerationRecord.{}
     at := key_of(id, .KeyGeneration, 0)
@@ -1382,7 +1392,7 @@ unlock :: fn(container: u8[16], id: u64, record: VolumeRecord, wraps: WrapRecord
     return .Ok
 }
 
-/*
+/**
  * A new key generation for an encrypted volume open in the container's own process, sealing what's written from now
  * on; what was written before keeps its own (decisions/0042). Its number.
  */
@@ -1398,7 +1408,7 @@ rotate :: fn(container: ptr[mut Container], volume: ptr[mut Volume]) -> Result[u
     return .Ok(keys.current)
 }
 
-// The newest generation in a volume's key records.
+/** The newest generation in a volume's key records. */
 newest_generation :: fn(container: ptr[mut Container], key_owner: u64) -> Result[u32, Error] {
     generations : NumberedGeneration[..]
     defer runtime.array_free(&generations)
@@ -1412,7 +1422,7 @@ newest_generation :: fn(container: ptr[mut Container], key_owner: u64) -> Result
     return .Ok(newest)
 }
 
-// One of the volume's key wrap records, by index from 0, or null past the last.
+/** One of the volume's key wrap records, by index from 0, or null past the last. */
 volume_wrap :: fn(container: ptr[mut Container], id: u64, index: u64) -> Result[WrapRecord?, Error] {
     record := WrapRecord.{}
     bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .KeyWrap, index),
@@ -1423,7 +1433,7 @@ volume_wrap :: fn(container: ptr[mut Container], id: u64, index: u64) -> Result[
     return .Ok(record)
 }
 
-// One of the volume's key generations' records, by number from 1, or null past the newest.
+/** One of the volume's key generations' records, by number from 1, or null past the newest. */
 volume_generation :: fn(container: ptr[mut Container], id: u64, number: u32) -> Result[GenerationRecord?, Error] {
     record := GenerationRecord.{}
     bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .KeyGeneration, cast[u64](number)),
@@ -1434,7 +1444,7 @@ volume_generation :: fn(container: ptr[mut Container], id: u64, number: u32) -> 
     return .Ok(record)
 }
 
-/*
+/**
  * A new key generation's record, made by the volume's server, kept for an encrypted volume with its key records (a
  * clone's origin's, for a clone): numbered after their newest, and named in the volume's record. Both are durable with
  * the next commit. NotFound for a volume that isn't encrypted or a number that isn't the next.

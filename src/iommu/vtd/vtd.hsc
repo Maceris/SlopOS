@@ -39,7 +39,7 @@ QUEUE_HEAD : u64 : 0x080
 QUEUE_TAIL : u64 : 0x088
 QUEUE_ADDRESS : u64 : 0x090
 REMAPPING_TABLE : u64 : 0x0b8
-// The bytes of registers every unit has, from its version register to its last fixed one
+/** The bytes of registers every unit has, from its version register to its last fixed one */
 FIXED_REGISTERS : u64 : 0x100
 
 // SAGAW's widths: 3-level tables for 39-bit addresses, 4-level for 48
@@ -59,7 +59,7 @@ COMMAND_WRITE_BUFFER_FLUSH : u32 : 1 << 27
 COMMAND_QUEUED_INVALIDATION : u32 : 1 << 26
 COMMAND_INTERRUPT_REMAPPING : u32 : 1 << 25
 COMMAND_REMAPPING_TABLE : u32 : 1 << 24
-// The status bits that are on or off, as the command register's are written back: the one-shot ones left out
+/** The status bits that are on or off, as the command register's are written back: the one-shot ones left out */
 STATUS_PERSISTENT : u32 : 0x96ffffff
 
 FAULT_STATUS_OVERFLOW : u32 : 1 << 0
@@ -89,7 +89,7 @@ GLOBAL : u64 : 1 << 4
 DOMAIN : u64 : 2 << 4
 WAIT_STATUS_WRITE : u64 : 1 << 5
 WAIT_FENCE : u64 : 1 << 6
-// 256 descriptors of 16 bytes, one page of queue
+/** 256 descriptors of 16 bytes, one page of queue */
 QUEUE_ENTRIES : u32 : 256
 // The remapping table: 256 entries of 16 bytes, one page; its size field is entries' log 2, less 1
 INTERRUPT_ENTRIES : u32 : 256
@@ -103,12 +103,12 @@ ENTRY_VERIFY_SOURCE : u64 : 1 << 18
 // A remappable message's address: the interrupt range, the remappable format bit, and the handle's bits 14:0 and 15
 MESSAGE_BASE : u64 : 0xfee00000
 MESSAGE_REMAPPABLE : u64 : 1 << 4
-// How long a command or a wait may take, in spins
+/** How long a command or a wait may take, in spins */
 SPINS : u64 : 1_000_000
 
-// One VT-d unit (iommu_interface.Iommu).
+/** One VT-d unit (iommu_interface.Iommu). */
 Iommu :: struct {
-    // Its registers, mapped by L2 as device memory.
+    /** Its registers, mapped by L2 as device memory. */
     registers : u64,
     // Its domains: their width, 39 or 48 bits, and their tables' levels, 3 or 4.
     address_bits : u32,
@@ -117,7 +117,7 @@ Iommu :: struct {
     iotlb : u64,
     faults : u64,
     fault_count : u32,
-    // The fault record to look at first.
+    /** The fault record to look at first. */
     next_fault : u32,
     // Table writes are flushed from the cache; mapping is invalidated too (caching mode); writes are flushed (RWBF).
     flushes : bool,
@@ -137,13 +137,13 @@ Iommu :: struct {
     waits : u32,
 }
 
-// One domain on a unit (iommu_interface.Domain).
+/** One domain on a unit (iommu_interface.Domain). */
 Domain :: struct {
     root : u64,
     id : u32,
 }
 
-/*
+/**
  * A VT-d unit at registers: its version register is 1.0 or later, and its registers, as far as its capability
  * registers place the IOTLB's and the fault recording registers, fit in size. It has queued invalidation.
  */
@@ -194,7 +194,7 @@ identify :: fn(iommu: ptr[mut Iommu], kind: iommu_interface.IommuKind, registers
         interrupts = if iommu.remaps { INTERRUPT_ENTRIES } else { 0 }, fault_messages = true})
 }
 
-/*
+/**
  * memory's four pages: the root table, the invalidation queue, the status word invalidation waits write, and the
  * interrupt remapping table. The queue goes on first, then the root table, both caches are invalidated, and
  * translation goes on; then, where the unit remaps interrupts, the remapping table, its cache invalidated, and
@@ -240,7 +240,7 @@ enable :: fn(iommu: ptr[mut Iommu], memory: iommu_interface.PhysicalAddress, dir
     return .Ok
 }
 
-/*
+/**
  * Entry index: fixed delivery, edge-triggered, physical destination mode, to the CPU's APIC ID, from stream only. Its
  * upper half first and its present bit last, then its cached copy invalidated.
  */
@@ -263,13 +263,13 @@ unmap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32) {
     invalidate_interrupt(iommu, index)
 }
 
-// One entry's cached copy, by its index, waited for.
+/** One entry's cached copy, by its index, waited for. */
 invalidate_interrupt :: fn(iommu: ptr[mut Iommu], index: u32) {
     submit(iommu, DESCRIPTOR_INTERRUPT_ENTRY | INTERRUPT_ENTRY_ONE | cast[u64](index) << 32, 0)
     _ = wait(iommu)
 }
 
-// Faults signalled by message: the fault event registers, then unmasked.
+/** Faults signalled by message: the fault event registers, then unmasked. */
 route_faults :: fn(iommu: ptr[mut Iommu], message: iommu_interface.MsiMessage) {
     write_u32(iommu, FAULT_DATA, message.data)
     write_u32(iommu, FAULT_ADDRESS, cast[u32](message.address))
@@ -282,7 +282,7 @@ init_domain :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], id: u32, root: iom
     domain.id = id
 }
 
-/*
+/**
  * The context entry for stream, its bus and its device and function: its bus's context table made where it has
  * none, and a present entry made not present and invalidated first, as an entry in use can't be changed in place.
  */
@@ -369,7 +369,9 @@ unmap :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64) {
     store(iommu, table + index_of(address, 1) * 8, 0)
 }
 
-// The domain's IOTLB entries and cached tables, by its ID; after mapping, only in caching mode, or a write buffer flush.
+/**
+ * The domain's IOTLB entries and cached tables, by its ID; after mapping, only in caching mode, or a write buffer flush.
+ */
 invalidate :: fn(iommu: ptr[mut Iommu], domain: ptr[Domain], mapped: bool) {
     if mapped && !iommu.caching_mode {
         if iommu.write_buffer {
@@ -392,7 +394,7 @@ release_domain :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], freed: ptr[mut 
     }
 }
 
-/*
+/**
  * One table below table, at level, let go of: the first whose own entries are pages, or that has none left. False if
  * table has no tables below it.
  */
@@ -421,7 +423,7 @@ free_one :: fn(iommu: ptr[Iommu], table: u64, level: u32, freed: ptr[mut iommu_i
     return false
 }
 
-// The next fault record with its fault bit set, from where the last one was, cleared once it's read.
+/** The next fault record with its fault bit set, from where the last one was, cleared once it's read. */
 next_fault :: fn(iommu: ptr[mut Iommu]) -> iommu_interface.DmaFault? {
     for i in 0..<iommu.fault_count {
         index :: (iommu.next_fault + i) % iommu.fault_count
@@ -444,7 +446,7 @@ next_fault :: fn(iommu: ptr[mut Iommu]) -> iommu_interface.DmaFault? {
     return null
 }
 
-// Which entry of a table at level (1 for the tables of pages) address is in.
+/** Which entry of a table at level (1 for the tables of pages) address is in. */
 index_of :: fn(address: u64, level: u32) -> u64 {
     return (address >> (12 + 9 * cast[u64](level - 1))) & (ENTRIES - 1)
 }
@@ -457,7 +459,7 @@ take_frame :: fn(frames: ptr[mut iommu_interface.TableFrames]) -> u64? {
     return cast[u64](frames.frames[cast[usize](frames.count)])
 }
 
-// A table entry, by its physical address, through the direct map; stored, and flushed where the unit doesn't snoop.
+/** A table entry, by its physical address, through the direct map; stored, and flushed where the unit doesn't snoop. */
 load :: fn(iommu: ptr[Iommu], at: u64) -> u64 {
     return intrinsics.volatile_load_u64(cast[ptr[u64]](at + iommu.direct_map_offset))
 }
@@ -482,14 +484,14 @@ flush_range :: fn(iommu: ptr[Iommu], at: u64, size: u64) {
     x86_64.mfence()
 }
 
-// A context-cache invalidation, everything's, and the domain's IOTLB entries, waited for.
+/** A context-cache invalidation, everything's, and the domain's IOTLB entries, waited for. */
 invalidate_context :: fn(iommu: ptr[mut Iommu], id: u32) {
     submit(iommu, DESCRIPTOR_CONTEXT | GLOBAL, 0)
     submit(iommu, DESCRIPTOR_IOTLB | DOMAIN | cast[u64](id) << 16, 0)
     _ = wait(iommu)
 }
 
-// A descriptor at the queue's tail, which then moves past it, so the unit takes it.
+/** A descriptor at the queue's tail, which then moves past it, so the unit takes it. */
 submit :: fn(iommu: ptr[mut Iommu], lower: u64, upper: u64) {
     at :: iommu.queue + cast[u64](iommu.tail) * 16
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](at + iommu.direct_map_offset), lower)
@@ -499,7 +501,7 @@ submit :: fn(iommu: ptr[mut Iommu], lower: u64, upper: u64) {
     write_u64(iommu, QUEUE_TAIL, cast[u64](iommu.tail) << 4)
 }
 
-// Everything submitted done: a wait descriptor that writes the next status, fenced after what's before it.
+/** Everything submitted done: a wait descriptor that writes the next status, fenced after what's before it. */
 wait :: fn(iommu: ptr[mut Iommu]) -> bool {
     iommu.waits += 1
     expected :: iommu.waits
@@ -517,7 +519,7 @@ wait :: fn(iommu: ptr[mut Iommu]) -> bool {
     return false
 }
 
-// A persistent command on or off, with the others as they are, until its status says so.
+/** A persistent command on or off, with the others as they are, until its status says so. */
 command :: fn(iommu: ptr[mut Iommu], bit: u32, on: bool) -> bool {
     status :: read_u32(iommu, GLOBAL_STATUS) & STATUS_PERSISTENT
     write_u32(iommu, GLOBAL_COMMAND, if on { status | bit } else { status & ~bit })
@@ -530,7 +532,7 @@ command :: fn(iommu: ptr[mut Iommu], bit: u32, on: bool) -> bool {
     return false
 }
 
-// A one-shot command, until its status says it's done: set for a table's pointer, clear for a write buffer flush.
+/** A one-shot command, until its status says it's done: set for a table's pointer, clear for a write buffer flush. */
 one_shot :: fn(iommu: ptr[mut Iommu], bit: u32) -> bool {
     status :: read_u32(iommu, GLOBAL_STATUS) & STATUS_PERSISTENT
     write_u32(iommu, GLOBAL_COMMAND, status | bit)

@@ -25,7 +25,7 @@ history_state :: fn(volume: ptr[mut Volume]) -> Result[ChangeState, Error] {
     return .Ok(state)
 }
 
-// A change, in the history if the volume keeps one, the oldest dropped while it's over its budget.
+/** A change, in the history if the volume keeps one, the oldest dropped while it's over its budget. */
 note_change :: fn(volume: ptr[mut Volume], kind: ChangeKind, object: u64, parent: u64, name: string) -> Result[void, Error] {
     if volume.history_bytes == 0 {
         return .Ok
@@ -72,15 +72,15 @@ note_change :: fn(volume: ptr[mut Volume], kind: ChangeKind, object: u64, parent
 }
 
 ChangesAre :: enum {
-    // A change beneath the directory
+    /** A change beneath the directory */
     Found,
-    // None since the cursor: next is where to ask from
+    /** None since the cursor: next is where to ask from */
     UpToDate,
-    // The cursor is older than the history keeps: list again, and ask from next
+    /** The cursor is older than the history keeps: list again, and ask from next */
     Resync,
 }
 
-// What a cursor finds: a change's kind, its object and name in the caller's buffer, and the cursor after it.
+/** What a cursor finds: a change's kind, its object and name in the caller's buffer, and the cursor after it. */
 ChangesFound :: struct {
     are : ChangesAre,
     kind : ChangeKind,
@@ -90,7 +90,7 @@ ChangesFound :: struct {
     next : u64,
 }
 
-/*
+/**
  * The first change at or after a cursor whose name is beneath directory, as it now is, its name copied into name;
  * changes beneath a directory that's gone since aren't found.
  */
@@ -142,7 +142,7 @@ is_orphan :: fn(volume: ptr[mut Volume], object: u64) -> Result[bool, Error] {
     return tree_has(volume.nodes, &volume.tree, orphan_key(object))
 }
 
-/*
+/**
  * A new file no name leads to yet, to become directory's once it's installed (Replace): kept as an orphan meanwhile, so
  * a crash leaves nothing behind once it's swept.
  */
@@ -158,7 +158,7 @@ create_orphan :: fn(volume: ptr[mut Volume], directory: u64) -> Result[u64, Erro
     return .Ok(object)
 }
 
-/*
+/**
  * A file named name in directory swapped for an orphan, whole, in one change: the orphan named so, and the file it
  * replaces (if any, a file) orphaned in turn, which comes back for whoever has it to give back with release_orphan.
  */
@@ -193,7 +193,7 @@ install :: fn(volume: ptr[mut Volume], directory: u64, name: string, replacement
     return .Ok(replaced)
 }
 
-// What's named name in directory, a file or an empty directory, taken out of it and orphaned; its ID.
+/** What's named name in directory, a file or an empty directory, taken out of it and orphaned; its ID. */
 unlink :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[u64, Error] {
     parent := directory_record(volume, directory)?
     object :: lookup(volume, directory, name)? or_return .Error(.NotFound)
@@ -209,7 +209,7 @@ unlink :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[u6
     return .Ok(object)
 }
 
-// An orphan nothing has open any more, destroyed.
+/** An orphan nothing has open any more, destroyed. */
 release_orphan :: fn(volume: ptr[mut Volume], object: u64) -> Result[void, Error] {
     if !(tree_delete(volume.nodes, &volume.tree, orphan_key(object))?) {
         return .Ok
@@ -217,7 +217,7 @@ release_orphan :: fn(volume: ptr[mut Volume], object: u64) -> Result[void, Error
     return destroy(volume, object)
 }
 
-// Every orphan destroyed, as when a volume server starts and nothing has anything open.
+/** Every orphan destroyed, as when a volume server starts and nothing has anything open. */
 sweep_orphans :: fn(volume: ptr[mut Volume]) -> Result[u64, Error] {
     swept : u64 = 0
     value : u8[1]
@@ -234,7 +234,7 @@ sweep_orphans :: fn(volume: ptr[mut Volume]) -> Result[u64, Error] {
 
 // Forgetting
 
-/*
+/**
  * Everything changed in a volume since its last commit forgotten, its tree and next object as record has them: its
  * dirty nodes dropped without giving their blocks back, which the container reverts (abandon_volume) instead.
  */

@@ -31,20 +31,20 @@ import volume_protocol from "../../protocols/volume"
  * an issued record, after which its link opens nothing.
  */
 
-// What's asked of the storage manager, in order: for the connection waiting on it, and a claim's, for an Issue.
+/** What's asked of the storage manager, in order: for the connection waiting on it, and a claim's, for an Issue. */
 Asked :: struct {
     client : usize,
     claim : usize?,
 }
 
-// Where a request's path leads: within this volume, or through a link, which has been asked about.
+/** Where a request's path leads: within this volume, or through a link, which has been asked about. */
 Followed :: union {
     Local,
     Asked,
     Failed(files.FileError),
 }
 
-/*
+/**
  * A path from a client's connection followed: through a link, what it leads to asked for, as opening says, and the
  * connection left waiting for the answer; Local if the path stays in this volume or doesn't lead anywhere, for the
  * request's own code, which reports that. A linked connection follows no links.
@@ -76,7 +76,7 @@ follow :: fn(server: ptr[mut Server], index: usize, directory: u64, path: string
     return .Asked
 }
 
-// A request to the storage manager sent, and what it's for queued: false if it can't be.
+/** A request to the storage manager sent, and what it's for queued: false if it can't be. */
 ask_links :: fn(server: ptr[mut Server], out: ptr[mut os.Outgoing], asked: Asked) -> bool {
     if server.asked_count >= server.asked.count || cast[slop_os.Handle](server.links) == slop_os.NO_HANDLE {
         return false
@@ -93,7 +93,7 @@ ask_links :: fn(server: ptr[mut Server], out: ptr[mut os.Outgoing], asked: Asked
     return true
 }
 
-// The storage manager's answers, each to what's first in the queue.
+/** The storage manager's answers, each to what's first in the queue. */
 serve_links :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     loop {
         match links.receive_response(server.links, server.port, into, false) {
@@ -130,7 +130,7 @@ take_asked :: fn(server: ptr[mut Server]) -> Asked {
     return asked
 }
 
-// An answer given to the connection that waited for it: a link made with an Issue's, or a Resolve's relayed.
+/** An answer given to the connection that waited for it: a link made with an Issue's, or a Resolve's relayed. */
 finish :: fn(server: ptr[mut Server], asked: Asked, answer: links.Response) {
     match asked.claim {
         case Some(claim) => {
@@ -146,7 +146,7 @@ finish :: fn(server: ptr[mut Server], asked: Asked, answer: links.Response) {
     }
 }
 
-// The link a claim was for, made now it's issued under number.
+/** The link a claim was for, made now it's issued under number. */
 made_link :: fn(server: ptr[mut Server], claim: usize, number: u64) -> files.FileError? {
     if claim >= server.connections.count {
         return files.FileError.Unavailable
@@ -160,7 +160,7 @@ made_link :: fn(server: ptr[mut Server], claim: usize, number: u64) -> files.Fil
     }
 }
 
-// What a link opened, relayed to the client that asked, as its own protocol has it.
+/** What a link opened, relayed to the client that asked, as its own protocol has it. */
 answer_opened :: fn(server: ptr[mut Server], client: usize, answer: links.Response) {
     if client >= server.connections.count || !server.connections[client].waiting {
         close_opened(answer)
@@ -198,7 +198,7 @@ answer_opened :: fn(server: ptr[mut Server], client: usize, answer: links.Respon
     }
 }
 
-// The connection an answer brought, if it brought one, closed.
+/** The connection an answer brought, if it brought one, closed. */
 close_opened :: fn(answer: links.Response) {
     handle :: match answer {
         case OpenedFile(made) => cast[slop_os.Handle](made.end)
@@ -214,7 +214,7 @@ close_opened :: fn(answer: links.Response) {
 
 // Making a link (Link)
 
-/*
+/**
  * A grant kept as a link at path beneath directory: claimed from its server, on a connection of the grant's own, and
  * the client's left waiting until the link is made or refused. An error now if it can't be begun.
  */
@@ -257,7 +257,7 @@ begin_link :: fn(server: ptr[mut Server], index: usize, directory: u64, path: st
     return null
 }
 
-// A grant's answer to its Claim: what it says taken to the storage manager to be issued, or the link refused.
+/** A grant's answer to its Claim: what it says taken to the storage manager to be issued, or the link refused. */
 serve_claim :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count || server.connections[index].claimed {
         return void
@@ -291,7 +291,7 @@ serve_claim :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomi
     }
 }
 
-// A claim done with: its client answered, Done or with error, and the grant's connection closed.
+/** A claim done with: its client answered, Done or with error, and the grant's connection closed. */
 end_claim :: fn(server: ptr[mut Server], claim: usize, error: files.FileError?) {
     if claim >= server.connections.count {
         return void
@@ -316,7 +316,7 @@ end_claim :: fn(server: ptr[mut Server], claim: usize, error: files.FileError?) 
 
 // Issuing them (Grant, and the storage manager's IssueTo and OpenIssued)
 
-// A grant of what's at path beneath directory ("" for directory itself), to write as well if write.
+/** A grant of what's at path beneath directory ("" for directory itself), to write as well if write. */
 grant_of :: fn(server: ptr[mut Server], index: usize, directory: u64, path: string, write: bool) -> dir.Response {
     if index >= server.connections.count || server.connections[index].linked {
         return .Failed(.ReadOnly)
@@ -340,7 +340,7 @@ grant_of :: fn(server: ptr[mut Server], index: usize, directory: u64, path: stri
     return .Granted(made)
 }
 
-// A grant's one Claim: a ticket for the storage manager to bring back, made here at random.
+/** A grant's one Claim: a ticket for the storage manager to bring back, made here at random. */
 serve_grant :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
@@ -377,7 +377,7 @@ serve_grant :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomi
     }
 }
 
-// Whether two tickets are the same, looking at every byte whatever they hold.
+/** Whether two tickets are the same, looking at every byte whatever they hold. */
 same_ticket :: fn(a: u8[32], b: u8[32]) -> bool {
     differ : u8 = 0
     for byte, i in a {
@@ -386,7 +386,7 @@ same_ticket :: fn(a: u8[32], b: u8[32]) -> bool {
     return differ == 0
 }
 
-// The grant whose claim gave ticket issued to the volume the storage manager says, durable before it's answered.
+/** The grant whose claim gave ticket issued to the volume the storage manager says, durable before it's answered. */
 issue_to :: fn(server: ptr[mut Server], to: volume_protocol.IssueTo) -> volume_protocol.Response {
     for &connection, i in server.connections {
         if i >= server.count || connection.kind != .Grant || !connection.claimed || connection.issued || !same_ticket(connection.ticket, to.ticket) {
@@ -407,7 +407,7 @@ issue_to :: fn(server: ptr[mut Server], to: volume_protocol.IssueTo) -> volume_p
     return .Refused(.NotFound)
 }
 
-/*
+/**
  * What a link issued from here leads to, and path beneath it, opened as opening says for the volume the storage manager
  * says holds the link: Revoked if it wasn't issued to that volume, or isn't any more; ReadOnly to change what was
  * issued only to read. The connection is linked.
@@ -482,7 +482,7 @@ open_issued :: fn(server: ptr[mut Server], asked: volume_protocol.OpenIssued, pa
     return .OpenedReadOnlyDirectory(made)
 }
 
-// The file at path beneath directory, to read: IsADirectory or IsALink if it's neither.
+/** The file at path beneath directory, to read: IsADirectory or IsALink if it's neither. */
 readable_file :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: string) -> Result[u64, slopfs.Error] {
     object :: slopfs.resolve(volume, directory, path)?
     slopfs.file_record(volume, object)?
@@ -491,7 +491,7 @@ readable_file :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: string
 
 // Listing and revoking them (Links, Revoke)
 
-// The first link issued at or after cursor for what's beneath directory, with the path to it from there.
+/** The first link issued at or after cursor for what's beneath directory, with the path to it from there. */
 issued_link :: fn(server: ptr[mut Server], index: usize, directory: u64, cursor: u64, out: ptr[mut os.Outgoing]) -> dir.Response {
     if index >= server.connections.count || server.connections[index].linked {
         return .Failed(.ReadOnly)
@@ -520,7 +520,7 @@ issued_link :: fn(server: ptr[mut Server], index: usize, directory: u64, cursor:
     }
 }
 
-// A link issued for what's beneath directory revoked by its number.
+/** A link issued for what's beneath directory revoked by its number. */
 revoked :: fn(server: ptr[mut Server], index: usize, directory: u64, number: u64) -> dir.Response {
     if index >= server.connections.count || server.connections[index].linked {
         return .Failed(.ReadOnly)

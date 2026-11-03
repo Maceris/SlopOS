@@ -1,4 +1,4 @@
-/*
+/**
  * The boot adapter for SlopOS's own boot protocol (L0, roadmap B2, decisions/0131, 0133, src/boot_protocol): the kernel's
  * entry point when the Hemera bootloader (src/uefi/bootloader) boots it. It sets up a carrier block and the boot context,
  * turns the bootloader's handoff into a BootInfo, and calls the portable kernel entry. BootInfo's arrays and strings point into the handoff, which is in boot-reclaimable memory, through the direct
@@ -20,7 +20,7 @@ import kernel from "../../kernel"
     import arch from "../../arch/aarch64"
 }
 
-// A logger for the boot context, writing straight to the architecture's early console.
+/** A logger for the boot context, writing straight to the architecture's early console. */
 EARLY_LOGGER :: runtime.Logger.{
     data = null,
     trace = early_log,
@@ -44,10 +44,12 @@ early_log : runtime.LogFunction : fn(format_string: string, params: any..., loca
     arch.early_console_write(text_buffer.as_string(&line))
 }
 
-// The stack the bootloader gave the boot CPU is boot_protocol.BOOT_STACK_SIZE bytes, and this runs at most this far below its top
+/**
+ * The stack the bootloader gave the boot CPU is boot_protocol.BOOT_STACK_SIZE bytes, and this runs at most this far below its top
+ */
 BOOT_STACK_SLACK :: 4096
 
-/*
+/**
  * Where the bootloader enters the kernel, on the boot CPU's boot stack, with interrupts disabled, given the handoff's
  * address in the direct map, with the C convention, and without a carrier block or a context.
  */
@@ -72,7 +74,7 @@ kernel_entry #calling_convention(.c) #no_context :: fn(handoff_address: u64) #ne
     }
 }
 
-/*
+/**
  * BootInfo from the handoff at handoff_address, in the direct map, its arrays in the handoff's room for them
  * (boot_protocol.Handoff): by its address, so what points into it points into the direct map, never this stack.
  */
@@ -152,7 +154,7 @@ build_boot_info :: fn(handoff_address: u64, info: ptr[mut boot_info.BootInfo]) {
     else { null }
 }
 
-// The firmware tables the handoff names, by their physical addresses.
+/** The firmware tables the handoff names, by their physical addresses. */
 firmware_tables :: fn(handoff: ptr[boot_protocol.Handoff]) -> boot_info.FirmwareTables {
     tables : boot_info.FirmwareTables
     tables.acpi_rsdp = address_or_none(handoff.acpi_rsdp)
@@ -169,7 +171,7 @@ address_or_none :: fn(address: u64) -> boot_info.PhysicalAddress? {
     return cast[boot_info.PhysicalAddress](address)
 }
 
-// The text of bytes up to their first zero, in the handoff, where it stays.
+/** The text of bytes up to their first zero, in the handoff, where it stays. */
 text_of :: fn(bytes #escaping : u8[]) -> string {
     count := cast[usize](0)
     for byte in bytes {
@@ -181,12 +183,12 @@ text_of :: fn(bytes #escaping : u8[]) -> string {
     return if count <= bytes.count { bit_cast[string](bytes[0..<count]) } else { "" }
 }
 
-/*
+/**
  * Starting the other CPUs (docs/specs/boot_info.md, CPUs): the bootloader parked each on its mailbox
  * (boot_protocol.Cpu), on its own stack. A BootCpu's boot_handle points at its StartingCpu, in the handoff's room.
  */
 StartingCpu :: struct {
-    // The CPU's mailbox, in the handoff
+    /** The CPU's mailbox, in the handoff */
     mailbox : u64,
     // Set by start_cpu, before the CPU reads them
     carrier : ptr[mut runtime.CarrierBlock],
@@ -195,7 +197,7 @@ StartingCpu :: struct {
 
 #assert size_of(StartingCpu) <= 32
 
-// Starts cpu at cpu_entry, which loads carrier and calls entry. Doesn't wait for it.
+/** Starts cpu at cpu_entry, which loads carrier and calls entry. Doesn't wait for it. */
 start_cpu : boot_info.StartCpu : fn(cpu: ptr[boot_info.BootCpu], carrier #escaping : ptr[mut runtime.CarrierBlock], entry: boot_info.CpuEntry) {
     starting :: cast[ptr[mut StartingCpu]](cast[rawptr](cpu.boot_handle))
     starting.carrier = carrier
@@ -206,7 +208,7 @@ start_cpu : boot_info.StartCpu : fn(cpu: ptr[boot_info.BootCpu], carrier #escapi
     intrinsics.atomic_store_u64_release(&mailbox.goto_address, cast[u64](cast[rawptr](cpu_entry)))
 }
 
-/*
+/**
  * Where a parked CPU jumps once started, on its boot stack, with interrupts disabled, given its StartingCpu's address.
  * Like kernel_entry, it has no carrier block or context yet: it sets carrier.stack_limit for its boot stack, loads the
  * carrier block start_cpu was given, pushes the boot context, and calls the kernel's entry.

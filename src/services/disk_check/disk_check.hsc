@@ -1,4 +1,4 @@
-/*
+/**
  * The disk check (decisions/0076, 0077, 0086): given a connector to the storage manager, it dials it, finds the
  * partition named CHECKED among every disk's, opens a block connection narrowed to it, describes it, takes its buffer,
  * reads the mark tools/boot.py wrote in the partition's block 0, writes its own into block 1, flushes, reads it back,
@@ -200,7 +200,7 @@ main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, wo
     }
 }
 
-// The EFI system partition, its working directory, through std's files.
+/** The EFI system partition, its working directory, through std's files. */
 check_files :: fn(to: slop_os.DebugLog) -> int {
     host :: os.read_entire_file(HOST_FILE) or_return 20
     long :: os.read_entire_file(LONG_FILE) or_return 21
@@ -250,7 +250,7 @@ check_files :: fn(to: slop_os.DebugLog) -> int {
     return 0
 }
 
-// One request to the storage manager, and its answer, waited for.
+/** One request to the storage manager, and its answer, waited for. */
 ask :: fn(end: slop_os.Channel, port: slop_os.Port, request: storage.Request) -> storage.Response {
     out := os.Outgoing.{}
     made :: os.begin[storage.Request](&out)
@@ -275,7 +275,7 @@ send :: fn(disk: ptr[Disk], request: block.Request) {
     _ = block.send_request(disk.end, disk.port, &out)
 }
 
-// The next answer, waited for; Unsupported if the connection's gone.
+/** The next answer, waited for; Unsupported if the connection's gone. */
 receive :: fn(disk: ptr[Disk]) -> block.Response {
     into := os.Incoming.{}
     loop {
@@ -287,7 +287,7 @@ receive :: fn(disk: ptr[Disk]) -> block.Response {
     }
 }
 
-// One request, and how it finished.
+/** One request, and how it finished. */
 run :: fn(disk: ptr[Disk], request: block.Request) -> block.Status {
     send(disk, request)
     return match receive(disk) {
@@ -313,7 +313,7 @@ starts_with :: fn(disk: ptr[Disk], offset: u32, text: string) -> bool {
     return true
 }
 
-/*
+/**
  * Beneath std's files, through the protocols: EFI/SlopOS opened, narrowed to read only, a set of its files selected
  * by a pattern, which FAT matches ignoring case, and a file made through that set refused.
  */
@@ -385,12 +385,12 @@ check_protocols :: fn(to: slop_os.DebugLog, working_directory: os.Channel[dir.Di
     return 0
 }
 
-// A path's bytes appended to out, as a Relative.
+/** A path's bytes appended to out, as a Relative. */
 bytes_of :: fn(out: ptr[mut os.Outgoing], text: string) -> slop_os.Relative[u8] {
     return os.append(out, string_bytes(text))
 }
 
-// One request on a dir connection, and its answer, waited for.
+/** One request on a dir connection, and its answer, waited for. */
 ask_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> dir.Response {
     if dir.send_request(end, port, out) is_some {
         return .Unsupported
@@ -404,7 +404,7 @@ ask_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing
     }
 }
 
-// One request on a read_only_dir connection, and its answer, waited for.
+/** One request on a read_only_dir connection, and its answer, waited for. */
 ask_read_only_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> read_only_dir.Response {
     if read_only_dir.send_request(end, port, out) is_some {
         return .Unsupported
@@ -418,7 +418,7 @@ ask_read_only_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut o
     }
 }
 
-// One request on a file_set connection, and its answer, waited for.
+/** One request on a file_set connection, and its answer, waited for. */
 ask_file_set :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> file_set.Response {
     if file_set.send_request(end, port, out) is_some {
         return .Unsupported

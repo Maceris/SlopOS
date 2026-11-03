@@ -43,7 +43,7 @@ test_io_apic :: fn(kernel: ptr[mut Kernel]) {
     arch.test_device_interrupts(true)
 }
 
-// After each of the test device's interrupts.
+/** After each of the test device's interrupts. */
 test_device_interrupt :: fn(kernel: ptr[mut Kernel], route: ptr[DeviceRoute]) {
     kernel.test_device_count = route.count
     if route.count != DEVICE_TEST_INTERRUPTS {
@@ -55,7 +55,7 @@ test_device_interrupt :: fn(kernel: ptr[mut Kernel], route: ptr[DeviceRoute]) {
     stop(.Halted)
 }
 
-// At the boot CPU's last tick while test_ioapic runs: how many came, if not all of them.
+/** At the boot CPU's last tick while test_ioapic runs: how many came, if not all of them. */
 device_test_tick :: fn(kernel: ptr[mut Kernel], tick: u64) {
     if !kernel.options.test_ioapic || tick != kernel.stop_after_ticks || kernel.test_device_count >= DEVICE_TEST_INTERRUPTS {
         return void

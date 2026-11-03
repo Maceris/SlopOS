@@ -33,9 +33,9 @@ MemoryBudget :: struct #align(16) {
     // What it may have charged, and what it has: its objects' charges and its child budgets' limits.
     limit : u64,
     used : u64,
-    // The objects charged to it, linked through their headers' charged_next and charged_previous.
+    /** The objects charged to it, linked through their headers' charged_next and charged_previous. */
     first_charged : u64,
-    // Once it's destroyed: what it had went to its parent, and nothing more is charged to it.
+    /** Once it's destroyed: what it had went to its parent, and nothing more is charged to it. */
     closed : bool,
     // Its pressure threshold, 0 for none, and whether SIGNAL_PRESSURE was raised since it last fell below it
     threshold : u64,
@@ -46,10 +46,10 @@ MemoryBudget :: struct #align(16) {
 }
 
 MIB : u64 : 1024 * 1024
-// The least the kernel keeps out of the root budget for its own allocations (kernel_reserve)
+/** The least the kernel keeps out of the root budget for its own allocations (kernel_reserve) */
 MIN_KERNEL_RESERVE : u64 : 8 * MIB
 
-/*
+/**
  * The root budget, of the frames free once the kernel is up, but the kernel's own share (kernel_reserve), which the
  * kernel keeps: the budgets processes are given are split from it.
  */
@@ -69,7 +69,7 @@ make_root_budget :: fn(kernel: ptr[mut Kernel]) -> u64 {
     return object
 }
 
-/*
+/**
  * What the kernel keeps out of the root budget, of free bytes (decisions/0098): its heap, the objects it makes for
  * itself and objects' page arrays come from the same frames as everything charged to budgets, so a fully charged root
  * budget would leave it none. mib asks for that many MiB; otherwise a sixteenth, and at least MIN_KERNEL_RESERVE. Never
@@ -80,7 +80,7 @@ kernel_reserve :: fn(free: u64, mib: u64) -> u64 {
     return min_u64(asked, free / 2)
 }
 
-// Lock the budget object is charged to, following it if it moves meanwhile: null for the kernel's own.
+/** Lock the budget object is charged to, following it if it moves meanwhile: null for the kernel's own. */
 lock_budget_of :: fn(object: u64) -> ptr[mut MemoryBudget]? {
     header :: cast[ptr[mut ObjectHeader]](object)
     loop {
@@ -97,7 +97,7 @@ lock_budget_of :: fn(object: u64) -> ptr[mut MemoryBudget]? {
     }
 }
 
-/*
+/**
  * Charge a new object, not yet anyone's, to budget (0 for the kernel's own): bytes, linked onto its list.
  * False if the budget is closed or can't take them.
  */
@@ -129,7 +129,7 @@ charge_new :: fn(budget_address: u64, object: u64, bytes: u64) -> bool {
     return true
 }
 
-// Charge bytes more to what object is charged to, for what it grows: false if that can't take them.
+/** Charge bytes more to what object is charged to, for what it grows: false if that can't take them. */
 charge_more :: fn(object: u64, bytes: u64) -> bool {
     header :: cast[ptr[mut ObjectHeader]](object)
     budget :: lock_budget_of(object) or_return true
@@ -147,7 +147,7 @@ charge_more :: fn(object: u64, bytes: u64) -> bool {
     return true
 }
 
-/*
+/**
  * Give back bytes object was charged, if it's still the object with generation: once it's destroyed,
  * its release gives back its whole charge, what it held included.
  */
@@ -163,7 +163,7 @@ uncharge :: fn(object: u64, generation: u32, bytes: u64) {
     ease(budget)
 }
 
-// A released object's whole charge, back to its budget.
+/** A released object's whole charge, back to its budget. */
 return_charge :: fn(object: u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
     budget :: lock_budget_of(object) or_return void
@@ -175,7 +175,7 @@ return_charge :: fn(object: u64) {
     intrinsics.atomic_store_u64_release(&header.budget, 0)
 }
 
-/*
+/**
  * A child budget of limit bytes, charged to parent with its slot, owned by owner (a Process's address,
  * 0 for the kernel).
  */
@@ -193,7 +193,7 @@ create_budget :: fn(kernel: ptr[mut Kernel], owner: u64, parent: u64, limit: u64
     return .Ok(budget)
 }
 
-/*
+/**
  * Closing a budget: its charges move to its parent, which takes back its limit, so the parent gains
  * what the child didn't use. Its own slot stays charged to the parent until it's released.
  */
@@ -230,7 +230,7 @@ destroy_memory_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut MemoryBudge
 release_memory_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut MemoryBudget]) {
 }
 
-/*
+/**
  * Move the charges of objects, whose owning handles a process takes, to budget (0 for the kernel): all
  * of them, or, if budget can't take them all, none (decisions/0011). With budgets_lock held, the
  * budgets they're charged to can't close meanwhile; what's moved back on failure goes back even if one
@@ -276,7 +276,7 @@ move_charges :: fn(kernel: ptr[mut Kernel], objects: ptr[u64[64]], count: u32, t
     return true
 }
 
-// Move object's charge between two budgets whose locks are held, checking the receiver's limit if checked.
+/** Move object's charge between two budgets whose locks are held, checking the receiver's limit if checked. */
 move_locked :: fn(object: u64, from_address: u64, to_address: u64, checked: bool) -> bool {
     header :: cast[ptr[mut ObjectHeader]](object)
     charge :: header.charge
@@ -298,7 +298,9 @@ move_locked :: fn(object: u64, from_address: u64, to_address: u64, checked: bool
     return true
 }
 
-// Two budgets' locks, the lower address's first (locks.hsc, lock_after); one, if they're the same budget or either is 0.
+/**
+ * Two budgets' locks, the lower address's first (locks.hsc, lock_after); one, if they're the same budget or either is 0.
+ */
 lock_budgets :: fn(first: u64, second: u64) {
     low :: if first < second { first } else { second }
     high :: if first < second { second } else { first }
@@ -322,7 +324,7 @@ unlock_budget :: fn(address: u64) {
     }
 }
 
-/*
+/**
  * Whether budget has just reached its threshold, so SIGNAL_PRESSURE is to be raised once its lock is let go: it's
  * marked raised, so it isn't again until it falls below. Takes the budget's lock as held.
  */
@@ -334,20 +336,24 @@ pressing :: fn(budget: ptr[mut MemoryBudget]) -> bool {
     return true
 }
 
-// A budget that has fallen below its threshold, raised again when it next reaches it. Takes the budget's lock as held.
+/**
+ * A budget that has fallen below its threshold, raised again when it next reaches it. Takes the budget's lock as held.
+ */
 ease :: fn(budget: ptr[mut MemoryBudget]) {
     if budget.used < budget.threshold {
         budget.pressured = false
     }
 }
 
-// SIGNAL_PRESSURE raised for the bindings watching budget, with what it has charged. Called with no budget's lock held.
+/**
+ * SIGNAL_PRESSURE raised for the bindings watching budget, with what it has charged. Called with no budget's lock held.
+ */
 raise_pressure :: fn(budget: ptr[mut MemoryBudget]) {
     raise_watchers(per_cpu().kernel, &budget.watchers, &budget.watch_lock, .Watchers, cast[u32](slop_os.SIGNAL_PRESSURE),
         intrinsics.atomic_load_u64(&budget.used))
 }
 
-// The budget's threshold set, 0 for none, and SIGNAL_PRESSURE raised at once if it's reached already.
+/** The budget's threshold set, 0 for none, and SIGNAL_PRESSURE raised at once if it's reached already. */
 set_threshold :: fn(budget: ptr[mut MemoryBudget], threshold: u64) {
     lock_at(&budget.lock, .MemoryBudget)
     budget.threshold = threshold
@@ -359,14 +365,14 @@ set_threshold :: fn(budget: ptr[mut MemoryBudget], threshold: u64) {
     }
 }
 
-// What it may charge, and what it has charged.
+/** What it may charge, and what it has charged. */
 budget_info :: fn(budget: ptr[mut MemoryBudget]) -> (limit: u64, used: u64) {
     lock_at(&budget.lock, .MemoryBudget)
     defer unlock_at(&budget.lock, .MemoryBudget)
     return budget.limit, budget.used
 }
 
-// Link object onto what budget is charged with. Takes the budget's lock as held.
+/** Link object onto what budget is charged with. Takes the budget's lock as held. */
 link_charged :: fn(budget: ptr[mut MemoryBudget], object: u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
     header.charged_previous = 0

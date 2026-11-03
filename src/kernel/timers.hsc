@@ -26,14 +26,14 @@ import concurrency from "std"
 NOT_QUEUED : u32 : 0xffffffff
 
 TimerKind :: enum #backed_by(u8) {
-    // A port's timer binding: its packet is queued.
+    /** A port's timer binding: its packet is queued. */
     PortTimer,
-    // A thread waiting on a port with a deadline: it's woken.
+    /** A thread waiting on a port with a deadline: it's woken. */
     WaitTimeout,
 }
 
 TimerEntry :: struct {
-    // In counter ticks.
+    /** In counter ticks. */
     deadline : u64,
     // Where it is in its CPU's heap, NOT_QUEUED if it isn't, and that CPU.
     index : u32,
@@ -42,11 +42,11 @@ TimerEntry :: struct {
     // What it's for, and that's generation when it was armed: a Binding, or a Thread.
     owner : u64,
     owner_generation : u64,
-    // The port it's for.
+    /** The port it's for. */
     port : u64,
 }
 
-// One CPU's armed timers, earliest first.
+/** One CPU's armed timers, earliest first. */
 TimerHeap :: struct {
     lock : concurrency.SpinLock,
     // Entries' addresses, from the heap allocator.
@@ -54,14 +54,14 @@ TimerHeap :: struct {
     count : usize,
 }
 
-// An entry that isn't armed.
+/** An entry that isn't armed. */
 make_timer :: fn() -> TimerEntry {
     result : TimerEntry
     result.index = NOT_QUEUED
     return result
 }
 
-/*
+/**
  * Arm entry on the calling CPU, at deadline, reprogramming its timer if this comes first. False without
  * memory for the heap to grow.
  */
@@ -87,7 +87,7 @@ arm_timer :: fn(entry: ptr[mut TimerEntry], deadline: u64) -> bool {
     return true
 }
 
-// Disarm entry, wherever it's armed: whether it was.
+/** Disarm entry, wherever it's armed: whether it was. */
 cancel_timer :: fn(kernel: ptr[Kernel], entry: ptr[mut TimerEntry]) -> bool {
     per_cpus :: kernel.per_cpus
     cpu_index :: cast[usize](entry.cpu)
@@ -105,7 +105,7 @@ cancel_timer :: fn(kernel: ptr[Kernel], entry: ptr[mut TimerEntry]) -> bool {
     return true
 }
 
-/*
+/**
  * Take every entry due by now off the calling CPU's heap and fire it: what each was for, copied while it
  * was still armed.
  */
@@ -134,7 +134,9 @@ fire_timers :: fn(kernel: ptr[mut Kernel], now: u64) {
     }
 }
 
-// The calling CPU's timer, for its next tick or its earliest deadline; only the latter while it's idle without ticking.
+/**
+ * The calling CPU's timer, for its next tick or its earliest deadline; only the latter while it's idle without ticking.
+ */
 program_deadline :: fn(cpu: ptr[mut PerCpu]) {
     deadline := if intrinsics.atomic_load_u32_acquire(&cpu.tickless) == 1 { ~cast[u64](0) } else { cpu.next_tick }
     heap :: &cpu.timers
@@ -148,7 +150,7 @@ program_deadline :: fn(cpu: ptr[mut PerCpu]) {
     arch.set_deadline(deadline)
 }
 
-// Room for one more entry. Takes the lock as held.
+/** Room for one more entry. Takes the lock as held. */
 grow_heap :: fn(heap: ptr[mut TimerHeap]) -> bool {
     if heap.count < heap.entries.count {
         return true
@@ -172,7 +174,7 @@ grow_heap :: fn(heap: ptr[mut TimerHeap]) -> bool {
     return true
 }
 
-// Take the entry at index out, keeping the heap's order. Takes the lock as held.
+/** Take the entry at index out, keeping the heap's order. Takes the lock as held. */
 remove_at :: fn(heap: ptr[mut TimerHeap], index: usize) {
     entries :: heap.entries
     count :: heap.count

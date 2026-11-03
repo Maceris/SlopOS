@@ -7,7 +7,7 @@ import file from "std/os/slop_os"
 import read_only_dir from "std/os/slop_os"
 import read_only_file from "std/os/slop_os"
 
-/*
+/**
  * What a session's programs ask of its powerbox (decisions/0018, 0156, design/console-and-sessions.md §5). Each program
  * has a connection of its own, which the session manager has the powerbox serve under the program's name (Serve, on its
  * own connection only), so the user's told which program asks. RequestFile and RequestDirectory say why, in the
@@ -37,7 +37,7 @@ Kind :: enum #backed_by(u32) {
     Directory = 2,
 }
 
-/*
+/**
  * A file asked for: why, the name it suggests for a new one, which the chooser starts with, whether it would write, and
  * the key to keep it under if the user lets it, empty to not ask.
  */
@@ -48,26 +48,26 @@ FileRequest :: struct {
     keep : slop_os.Relative[u8],
 }
 
-// A directory asked for: why, whether it would write in it, and the key to keep it under, empty to not ask.
+/** A directory asked for: why, whether it would write in it, and the key to keep it under, empty to not ask. */
 DirectoryRequest :: struct {
     purpose : slop_os.Relative[u8],
     write : bool,
     keep : slop_os.Relative[u8],
 }
 
-// A kept grant asked for again: its key, and what it's opened as.
+/** A kept grant asked for again: its key, and what it's opened as. */
 Reopening :: struct {
     key : slop_os.Relative[u8],
     kind : Kind,
     write : bool,
 }
 
-// Another account asked for, and why.
+/** Another account asked for, and why. */
 AccountRequest :: struct {
     purpose : slop_os.Relative[u8],
 }
 
-// A program of the session's, to serve on its end under its name.
+/** A program of the session's, to serve on its end under its name. */
 Served :: struct {
     name : slop_os.Relative[u8],
     end : os.Channel[Powerbox],
@@ -78,7 +78,7 @@ Request :: union {
     RequestDirectory(DirectoryRequest),
     Reopen(Reopening),
     RequestAccount(AccountRequest),
-    // The session manager's: another program to serve
+    /** The session manager's: another program to serve */
     Serve(Served),
 }
 
@@ -87,18 +87,18 @@ Response :: union {
     GrantedReadOnlyFile(os.Channel[read_only_file.ReadOnlyFile]),
     GrantedDirectory(os.Channel[dir.Dir]),
     GrantedReadOnlyDirectory(os.Channel[read_only_dir.ReadOnlyDir]),
-    // The user refused, or what they chose couldn't be opened
+    /** The user refused, or what they chose couldn't be opened */
     Refused,
-    // This program's request before is still waiting
+    /** This program's request before is still waiting */
     Busy,
-    // Serve's answer
+    /** Serve's answer */
     Done,
-    // RequestAccount's: the account made, by its name
+    /** RequestAccount's: the account made, by its name */
     AccountMade(slop_os.Relative[u8]),
     Unsupported,
 }
 
-// Asking again would ask the user again.
+/** Asking again would ask the user again. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case RequestFile(_) => false

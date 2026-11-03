@@ -1,4 +1,4 @@
-/*
+/**
  * test_memory (decisions/0069, from the kernel's test of 0054): memory budgets and memory objects, used by
  * the program's first thread, A, and a writer, B:
  * - A splits a child budget off its test budget, which can't pay for memory bigger than its limit, nor make
@@ -31,14 +31,14 @@ CHILD_LIMIT : u64 : 65536
 // Large pages (decisions/0129): memory of two of them, mapped on a 2 MiB boundary, then a page off it
 LARGE : u64 : 2 * 1024 * 1024
 LARGE_MEMORY : u64 : 2 * LARGE
-// How long A gives B to be stopped.
+/** How long A gives B to be stopped. */
 STOP_NANOSECONDS : u64 : 20_000_000
 // What A and B share, by its slots, and where B writes.
 SHARED_B_STARTED :: 0
 SHARED_B_AFTER :: 1
 SHARED_TARGET :: 2
 
-// B: writes where it may only read, which stops it.
+/** B: writes where it may only read, which stops it. */
 writer #calling_convention(.c) #no_context :: fn(shared: ptr[mut u64[4]]) #never_returns {
     intrinsics.volatile_store_u64(&shared^[SHARED_B_STARTED], 1)
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](intrinsics.volatile_load_u64(&shared^[SHARED_TARGET])), 7)
@@ -157,7 +157,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
  * 2 MiB boundary, the other a page past one. Both are made and mapped first, and closed after, so nothing else is
  * charged or given back meanwhile. Null if they can't be made or mapped.
  */
-// What touching 4 MiB cost in page tables, mapped on a 2 MiB boundary and a page past one.
+/** What touching 4 MiB cost in page tables, mapped on a 2 MiB boundary and a page past one. */
 TableCosts :: struct {
     aligned : u64,
     unaligned : u64,

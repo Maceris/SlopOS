@@ -28,12 +28,12 @@ import robustness from "../robustness"
     MONOTONIC_START : u64 : 0
 }
 
-// What context.clock points at, in Kernel: its data is the Kernel.
+/** What context.clock points at, in Kernel: its data is the Kernel. */
 init_clock :: fn(kernel #escaping : ptr[mut Kernel]) {
     kernel.clock = runtime.Clock.{data = cast[mut rawptr](kernel), monotonic = kernel_monotonic, wall = kernel_wall}
 }
 
-/*
+/**
  * Once the counter's frequency is known: time starts now. Until then, monotonic time is 0. Called on
  * the boot CPU before the other CPUs start.
  */

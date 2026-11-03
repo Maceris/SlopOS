@@ -38,19 +38,19 @@ CHILD_FIBERS :: 300
 // The CPUs each pool runs on, a bit per CPU index: 1 and 2, and 3 to 5
 FIRST_POOL_CPUS : u64 : 0b000110
 SECOND_POOL_CPUS : u64 : 0b111000
-// How long the boot CPU waits for the pools to finish, and the other CPUs wait for the pools
+/** How long the boot CPU waits for the pools to finish, and the other CPUs wait for the pools */
 POOL_TEST_TIMEOUT_SECONDS :: 10
-// How long fibers go on yielding for every CPU of their pool to have run some, and one to have moved
+/** How long fibers go on yielding for every CPU of their pool to have run some, and one to have moved */
 COVER_SECONDS :: 4
 
-// What one pool's fibers record.
+/** What one pool's fibers record. */
 PoolCounts :: struct {
     turns : u64,
-    // A bit per CPU index
+    /** A bit per CPU index */
     cpus : u64,
-    // Turns on a different CPU than the fiber's previous turn
+    /** Turns on a different CPU than the fiber's previous turn */
     moves : u64,
-    // Turns on a CPU outside the pool
+    /** Turns on a CPU outside the pool */
     strays : u64,
 }
 
@@ -59,7 +59,7 @@ PoolTest :: struct {
     second : ptr[mut fiber.FiberPool],
     first_counts : PoolCounts,
     second_counts : PoolCounts,
-    // Fibers spawned by fibers that ran
+    /** Fibers spawned by fibers that ran */
     children : u64,
     // CPUs that have come to their pool, and that have left it
     carriers_ready : u64,
@@ -148,7 +148,7 @@ pool_counts_ok :: fn(name: string, counts: ptr[PoolCounts], fibers: u64, cpus: u
     return true
 }
 
-/*
+/**
  * On each CPU after the boot CPU, once online: wait for the boot CPU's pools, run the one for this
  * CPU until it's done, then go idle.
  */
@@ -196,14 +196,14 @@ second_worker : runtime.ThreadFunction : fn(data #escaping : any) {
     take_turns(&test.second_counts, SECOND_POOL_CPUS)
 }
 
-// A fiber of the first pool that spawns another into it first, onto its own CPU's queue.
+/** A fiber of the first pool that spawns another into it first, onto its own CPU's queue. */
 parent_worker : runtime.ThreadFunction : fn(data #escaping : any) {
     test :: cast[ptr[mut PoolTest]](context.user_data)
     fiber.spawn(test.first, child_worker)
     take_turns(&test.first_counts, FIRST_POOL_CPUS)
 }
 
-// A fiber of the second pool that spawns CHILD_FIBERS into it, onto its own CPU's queue, which overflows.
+/** A fiber of the second pool that spawns CHILD_FIBERS into it, onto its own CPU's queue, which overflows. */
 spawner_worker : runtime.ThreadFunction : fn(data #escaping : any) {
     test :: cast[ptr[mut PoolTest]](context.user_data)
     for i in 0..<CHILD_FIBERS {
@@ -217,7 +217,7 @@ child_worker : runtime.ThreadFunction : fn(data #escaping : any) {
     intrinsics.interlocked_increment_u64(&test.children)
 }
 
-// One more on the counter: read, yield, write, all with the lock held, so others wanting it park.
+/** One more on the counter: read, yield, write, all with the lock held, so others wanting it park. */
 add_one :: fn(test: ptr[mut PoolTest]) {
     concurrency.mutex_lock(&test.counter_lock)
     defer concurrency.mutex_unlock(&test.counter_lock)

@@ -14,7 +14,7 @@ DebugLog :: struct #align(16) {
     header : ObjectHeader,
 }
 
-// A debug log owned by process, charged to the root budget: an owning handle to it.
+/** A debug log owned by process, charged to the root budget: an owning handle to it. */
 create_debug_log :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> slop_os.Handle? {
     object :: new_object(kernel, .DebugLog, kernel.root_budget, 0) or_return null
     match adopt(cast[u64](process), object) {
@@ -33,7 +33,7 @@ destroy_debug_log :: fn(kernel: ptr[mut Kernel], log: ptr[mut DebugLog]) {
 release_debug_log :: fn(kernel: ptr[mut Kernel], log: ptr[mut DebugLog]) {
 }
 
-/*
+/**
  * A line in the kernel's log, its first DEBUG_LOG_LINE bytes, after "[user] ": anything that isn't
  * printable ASCII written as '?', so a program can't write past its line or move the cursor.
  */

@@ -1,4 +1,4 @@
-/*
+/**
  * The events service (roadmap 9a, decisions/0093, design/observability.md §2): the log records of every program the
  * supervisor starts. Whoever starts a program asks for a ring for it (the events protocol's Open), named for its
  * source, and gives it to the program as its grants "events" (std's os.LaunchEvents); base's logger writes the
@@ -40,14 +40,16 @@ NAME_BYTES :: 32
 // The keys rings' doorbells are bound to the port with, after the clients'
 DOORBELL_KEY : u64 : 1000
 RING_BYTES : u64 : runtime.SLOP_OS_EVENTS_RING_BYTES
-// The most memory keeps of a source's records before there's a directory to store them in; records past it are dropped
+/**
+ * The most memory keeps of a source's records before there's a directory to store them in; records past it are dropped
+ */
 PENDING_BYTES :: 32768
-// The most a source's file holds before it's moved to its .old file
+/** The most a source's file holds before it's moved to its .old file */
 FILE_BYTES : u64 : 256 * 1024
 // The most of a record's text a query gives
 TEXT_LIMIT :: 1024
 NOWHERE : usize : 0xffffffffffffffff
-// How often adopted rings, without doorbells, are read
+/** How often adopted rings, without doorbells, are read */
 ADOPTED_POLL : u64 : 20_000_000
 
 // What's stored beside the ring's entries: where a boot's records start, numbering them, and which ring they're from
@@ -56,9 +58,9 @@ STORED_INSTANCE : u16 : 17
 
 StoredStart :: struct {
     entry : runtime.SlopOsEventsEntry,
-    // This boot's, a random number
+    /** This boot's, a random number */
     boot : u64,
-    // The number of the first record after it
+    /** The number of the first record after it */
     first : u64,
 }
 
@@ -68,7 +70,7 @@ StoredInstance :: struct {
     reserved : u32,
 }
 
-// A format string's text, of one of a source's rings, by its offset in that program's image: count bytes at `at`.
+/** A format string's text, of one of a source's rings, by its offset in that program's image: count bytes at `at`. */
 FormatText :: struct {
     instance : u32,
     offset : u64,
@@ -76,7 +78,7 @@ FormatText :: struct {
     count : usize,
 }
 
-// A type's schema, by its hash: count bytes at `at` in the service's schema_bytes.
+/** A type's schema, by its hash: count bytes at `at` in the service's schema_bytes. */
 KnownSchema :: struct {
     hash : u8[32],
     at : usize,
@@ -90,7 +92,7 @@ SchemaHash :: struct {
 Source :: struct {
     name : u8[NAME_BYTES],
     name_count : usize,
-    // Rings opened for it so far: each is an instance, from 1
+    /** Rings opened for it so far: each is an instance, from 1 */
     instances : u32,
     // Its records so far, which numbers the next, and those dropped
     count : u64,
@@ -98,16 +100,16 @@ Source :: struct {
     // Its rings' format strings, their text in texts
     formats : FormatText[..],
     texts : u8[..],
-    // The schemas its records have used, which a new file is given first
+    /** The schemas its records have used, which a new file is given first */
     used : SchemaHash[..],
-    // What's to be stored and isn't yet, from a StoredStart
+    /** What's to be stored and isn't yet, from a StoredStart */
     pending : u8[..],
     // How much its file holds, and whether one's started this boot, or the next write starts one
     file_bytes : u64,
     filed : bool,
 }
 
-/*
+/**
  * A ring a program writes to; its source NOWHERE when it's free. Its launcher owns it, and the service reads and writes
  * it through the kernel (memory_read, memory_write) with a handle that doesn't own it, never mapping it: so the service
  * ending leaves its programs' rings to them, and a ring retired (Retire) is ObjectGone to it once its last records are
@@ -117,11 +119,11 @@ Ring :: struct {
     source : usize,
     instance : u32,
     memory : slop_os.Memory,
-    // NO_HANDLE for an adopted ring
+    /** NO_HANDLE for an adopted ring */
     doorbell : slop_os.Channel,
 }
 
-// A query waiting for a record: its client NOWHERE when it's free.
+/** A query waiting for a record: its client NOWHERE when it's free. */
 Waiting :: struct {
     client : usize,
     name : u8[NAME_BYTES],
@@ -147,7 +149,7 @@ Service :: struct {
     connected : service_kit.Clients,
 }
 
-// A record found by a query: where its entry is in bytes, its number, and the format strings found before it.
+/** A record found by a query: where its entry is in bytes, its number, and the format strings found before it. */
 Scan :: struct {
     boot_matches : bool,
     number : u64,
@@ -221,7 +223,7 @@ main :: fn(log: slop_os.DebugLog?, clients: os.Listener[events.Events]) -> int {
     }
 }
 
-// Every request client index has sent, until there are none left, or it's gone.
+/** Every request client index has sent, until there are none left, or it's gone. */
 serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming]) {
     if index >= service.connected.ends.count {
         return void
@@ -304,7 +306,7 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
     }
 }
 
-/*
+/**
  * A ring for a program whose records are the source named name, made a source if it isn't one: what to give the
  * program, or null if there's no room, or the name isn't one (1 to NAME_BYTES letters, digits and underscores).
  */
@@ -370,7 +372,7 @@ open :: fn(service: ptr[mut Service], name: u8[]) -> events.Source? {
     return events.Source.{ring = cast[slop_os.Memory](given), doorbell = pair.b}
 }
 
-// A ring another service opened, read from here on as the source named name's: whether it's taken, or closed.
+/** A ring another service opened, read from here on as the source named name's: whether it's taken, or closed. */
 adopt :: fn(service: ptr[mut Service], name: u8[], memory: slop_os.Memory) -> bool {
     index :: source_named(service, name)
     slot := NOWHERE
@@ -396,7 +398,7 @@ adopt :: fn(service: ptr[mut Service], name: u8[], memory: slop_os.Memory) -> bo
     return true
 }
 
-/*
+/**
  * The source named name, made one if it isn't: its index, or NOWHERE if there's no room, or the name isn't one (1 to
  * NAME_BYTES letters, digits and underscores).
  */
@@ -452,7 +454,7 @@ name_of :: fn(source: ptr[Source]) -> string {
     return string_of(&source.name[0], count)
 }
 
-// A source's pending entries begun again, as a file is, for records from first on.
+/** A source's pending entries begun again, as a file is, for records from first on. */
 start_pending :: fn(service: ptr[Service], source: ptr[mut Source], first: u64) {
     runtime.array_reset(&source.pending)
     file_header(service, source, first, &source.pending)
@@ -476,7 +478,7 @@ add_bytes :: fn(into: ptr[mut u8[..]], bytes: u8[]) {
     }
 }
 
-// A ring's header, read through the kernel; null once its program, which owns it, has ended.
+/** A ring's header, read through the kernel; null once its program, which owns it, has ended. */
 read_header :: fn(memory: slop_os.Memory) -> runtime.SlopOsEventsRing? {
     header := runtime.SlopOsEventsRing.{}
     if slop_os.memory_read(memory, 0, view_of(cast[ptr[mut u8]](&header), size_of(runtime.SlopOsEventsRing))) is_error {
@@ -485,7 +487,7 @@ read_header :: fn(memory: slop_os.Memory) -> runtime.SlopOsEventsRing? {
     return header
 }
 
-// What a ring's doorbell says: messages read until there are none, and the ring let go once its writer's gone.
+/** What a ring's doorbell says: messages read until there are none, and the ring let go once its writer's gone. */
 ring_doorbell :: fn(service: ptr[mut Service], slot: usize) {
     if slot >= MAX_RINGS || service.rings[slot].source == NOWHERE {
         return void
@@ -516,7 +518,7 @@ release :: fn(service: ptr[mut Service], slot: usize) {
     ring.source = NOWHERE
 }
 
-/*
+/**
  * What a ring's writer has published, read: each format string and schema learned, each record numbered and shown on
  * the debug log, and all of it kept, after a StoredInstance. A ring that doesn't hold entries is read no further.
  */
@@ -617,7 +619,7 @@ drain :: fn(service: ptr[mut Service], slot: usize) {
     keep(service, source, fresh, first)
 }
 
-// Each record in entries shown on the debug log, after its source's name, and its level if it isn't info.
+/** Each record in entries shown on the debug log, after its source's name, and its level if it isn't info. */
 show :: fn(service: ptr[mut Service], source: ptr[Source], entries #escaping : u8[]) {
     instance : u32 = 0
     at : usize = 0
@@ -652,7 +654,7 @@ level_name :: fn(level: u8) -> string {
         else if level < 50 { "error" } else { "fatal" }
 }
 
-/*
+/**
  * Entries of a source kept: in its file, if there's a directory to store them in, after what memory still has, or in
  * memory, while there's room; records that don't fit are dropped. first is the number of their first record.
  */
@@ -690,7 +692,7 @@ keep :: fn(service: ptr[mut Service], source: ptr[mut Source], entries: u8[], fi
     add_pending(source, entries, first)
 }
 
-/*
+/**
  * Room in what draining a ring of size bytes may grow, copied and fresh among them: false, and nothing read, without
  * the memory. Each list gets as much as entries that size could add to it, and the pending bytes all they may hold.
  */
@@ -707,7 +709,7 @@ room_to_drain :: fn(service: ptr[mut Service], source: ptr[mut Source], size: us
         && runtime.array_try_reserve(&source.pending, PENDING_BYTES + header_bound(service, source) + size) == null
 }
 
-// The most bytes file_header writes for source, with what draining size more bytes of entries could add to it.
+/** The most bytes file_header writes for source, with what draining size more bytes of entries could add to it. */
 header_bound :: fn(service: ptr[Service], source: ptr[Source]) -> usize {
     return size_of(StoredStart) + cast[usize](source.instances + 2) * (size_of(StoredInstance) + 8)
         + source.formats.capacity * (size_of(runtime.SlopOsEventsFormat) + 8) + source.texts.capacity
@@ -724,7 +726,7 @@ add_pending :: fn(source: ptr[mut Source], entries: u8[], first: u64) {
     }
 }
 
-// A new file's start: a StoredStart, then each of the source's rings' format strings, then each schema it's used.
+/** A new file's start: a StoredStart, then each of the source's rings' format strings, then each schema it's used. */
 file_header :: fn(service: ptr[Service], source: ptr[Source], first: u64, into: ptr[mut u8[..]]) {
     add_start(service, into, first)
     last :: source.instances + 1
@@ -772,7 +774,7 @@ pad :: fn(into: ptr[mut u8[..]]) {
     }
 }
 
-/*
+/**
  * bytes added to the end of a source's file, which they start if it isn't started yet; once it holds FILE_BYTES, it's
  * moved to its .old file, and the next write starts another. False if the directory couldn't take them.
  */
@@ -800,7 +802,7 @@ write_file :: fn(service: ptr[mut Service], source: ptr[mut Source], bytes: u8[]
     return true
 }
 
-// A source's file's name, with its extension, in storage.
+/** A source's file's name, with its extension, in storage. */
 path_of :: fn(source: ptr[Source], extension: string, storage: ptr[mut u8[64]]) -> string {
     count : usize = 0
     for byte in source.name {
@@ -818,7 +820,7 @@ path_of :: fn(source: ptr[Source], extension: string, storage: ptr[mut u8[64]]) 
     return text_of(part(storage^, 0, count))
 }
 
-// count bytes of bytes from at, or none if they aren't all there.
+/** count bytes of bytes from at, or none if they aren't all there. */
 part :: fn(bytes: u8[], at: usize, count: usize) -> u8[] {
     none : u8[]
     if count == 0 || at >= bytes.count || count > bytes.count - at {
@@ -836,7 +838,7 @@ text_of :: fn(bytes: u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }
 
-// Records kept in directory end from now on: what each source has in memory written there first.
+/** Records kept in directory end from now on: what each source has in memory written there first. */
 store :: fn(service: ptr[mut Service], end: slop_os.Channel) {
     directory, error :: os.directory_on(end)
     if error != null {
@@ -969,7 +971,7 @@ word_of :: fn(bytes: u8[], at: usize) -> u64 {
     return result
 }
 
-// The size of the entry at `at` in entries, or 0 if there isn't a whole one there.
+/** The size of the entry at `at` in entries, or 0 if there isn't a whole one there. */
 entry_size_at :: fn(entries: u8[], at: usize) -> usize {
     if at + size_of(runtime.SlopOsEventsEntry) > entries.count {
         return 0
@@ -989,7 +991,7 @@ address_in :: fn(entries: u8[], at: usize) -> uintptr {
     return cast[uintptr](entries.data) + cast[uintptr](at)
 }
 
-/*
+/**
  * The first record of the source named name at or after from, at level or above, sent through end: from its .old
  * file, its file, then memory. False if there's none yet.
  */
@@ -1022,7 +1024,7 @@ answer :: fn(service: ptr[mut Service], end: slop_os.Channel, name: u8[], from: 
     return false
 }
 
-// A query held until there's a record for it: false if there's no room to hold another.
+/** A query held until there's a record for it: false if there's no room to hold another. */
 hold :: fn(service: ptr[mut Service], client: usize, name: u8[], from: u64, level: u8) -> bool {
     if name.count > NAME_BYTES {
         return false
@@ -1043,7 +1045,7 @@ hold :: fn(service: ptr[mut Service], client: usize, name: u8[], from: u64, leve
     return false
 }
 
-// Each held query answered, if there's a record for it now.
+/** Each held query answered, if there's a record for it now. */
 answer_waiting :: fn(service: ptr[mut Service]) {
     for i in cast[usize](0)..<MAX_WAITING {
         waiting :: service.waiting[i]
@@ -1058,7 +1060,9 @@ answer_waiting :: fn(service: ptr[mut Service]) {
     }
 }
 
-// Where the first record of this boot at or after from, at level or above, is in bytes, read after what scan has; or NOWHERE.
+/**
+ * Where the first record of this boot at or after from, at level or above, is in bytes, read after what scan has; or NOWHERE.
+ */
 find :: fn(service: ptr[mut Service], bytes: u8[], scan: ptr[mut Scan], from: u64, level: u8) -> usize {
     at : usize = 0
     loop {
@@ -1102,7 +1106,7 @@ find :: fn(service: ptr[mut Service], bytes: u8[], scan: ptr[mut Scan], from: u6
     }
 }
 
-// A found record, rendered, sent through end.
+/** A found record, rendered, sent through end. */
 send_found :: fn(service: ptr[mut Service], end: slop_os.Channel, bytes #escaping : u8[], at: usize, scan: ptr[mut Scan], stored: bool) {
     text : u8[..]
     defer runtime.array_free(&text)
@@ -1117,7 +1121,7 @@ send_found :: fn(service: ptr[mut Service], end: slop_os.Channel, bytes #escapin
     _ = events.send_response(end, service.port, &out)
 }
 
-// A source's file with this extension read whole into into: false if it isn't there.
+/** A source's file with this extension read whole into into: false if it isn't there. */
 read_file :: fn(service: ptr[mut Service], source: ptr[Source], extension: string, into: ptr[mut u8[..]]) -> bool {
     path_storage : u8[64]
     file :: match os.open_in(service.store, path_of(source, extension, &path_storage), .READ) {

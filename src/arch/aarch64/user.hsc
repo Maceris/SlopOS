@@ -9,10 +9,10 @@ import arch_interface from "../../arch_interface"
  * decisions/0066): svc #0 with the number in x8, arguments in x0 to x5, and results in x0, x1 and x2.
  */
 
-// SPSR_EL1 for user mode: EL0 (EL0t), with no interrupt masked.
+/** SPSR_EL1 for user mode: EL0 (EL0t), with no interrupt masked. */
 USER_SPSR : u64 : 0
 
-/*
+/**
  * A new thread's registers: every one zero but its instruction and stack pointers and its argument in x0, at
  * EL0 with interrupts unmasked.
  */
@@ -28,7 +28,7 @@ syscall_number :: fn(registers: ptr[UserRegisters]) -> u64 {
     return registers.frame.x[8]
 }
 
-// One of the six argument registers, x0 to x5, by index; 0 past the sixth.
+/** One of the six argument registers, x0 to x5, by index; 0 past the sixth. */
 syscall_argument :: fn(registers: ptr[UserRegisters], index: u32) -> u64 {
     if index >= 6 {
         return 0
@@ -46,13 +46,15 @@ instruction_pointer :: fn(registers: ptr[UserRegisters]) -> arch_interface.Virtu
     return cast[arch_interface.VirtualAddress](registers.frame.elr)
 }
 
-// ELR_EL1 is just past the svc, which is 4 bytes, as every instruction is.
+/** ELR_EL1 is just past the svc, which is 4 bytes, as every instruction is. */
 restart_syscall :: fn(registers: ptr[mut UserRegisters]) {
     registers.frame.elr -= 4
 }
 
-// The PSTATE bits user mode may set: its condition flags, NZCV.
-//SPEC: Arm ARM (DDI 0487) C5.2.18 (SPSR_EL1)
+/**
+ * The PSTATE bits user mode may set: its condition flags, NZCV.
+ * SPEC: Arm ARM (DDI 0487) C5.2.18 (SPSR_EL1)
+ */
 USER_CHANGEABLE_FLAGS : u64 : 0xf0000000
 
 // x0 to x30, sp, pc, pstate (slop_os.THREAD_REGISTERS).
@@ -104,7 +106,7 @@ set_user_register :: fn(registers: ptr[mut UserRegisters], index: u32, value: u6
     return true
 }
 
-/*
+/**
  * Back to user mode with registers, by eret, with SP_EL1 at the kernel stack's top, so the next entry from
  * user mode starts there.
  */

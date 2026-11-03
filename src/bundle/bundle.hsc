@@ -1,4 +1,4 @@
-/*
+/**
  * Bundles and roots (roadmap 9b, decisions/0094, design/software.md §2): the records the bundle store keeps beside
  * programs, libraries and schemas, each an object named by its BLAKE3-256 hash. A record is its type's schema hash
  * (std's schema.hash), then its value as schema.write_value writes it, what it points to after it at distances from
@@ -34,7 +34,7 @@ Root :: struct {
     entries : RootEntry[],
 }
 
-/*
+/**
  * The substitution policy (roadmap 9e3, decisions/0119, 0122), the config store's value "substitutions" of owner
  * "system": each library by its hash, from, replaced by another, to, where to's interface record passes the check
  * against from's. The supervisor applies it to what it launches after it reads it.
@@ -54,7 +54,7 @@ Substitutions :: struct {
 BUNDLE_SCHEMA :: #run schema.hash(type_info_of(Bundle))
 ROOT_SCHEMA :: #run schema.hash(type_info_of(Root))
 
-// The hash that names bytes.
+/** The hash that names bytes. */
 hash_of :: fn(bytes: u8[]) -> Hash {
     made := Hash.{}
     crypto.blake3(bytes, made.bytes)
@@ -70,7 +70,7 @@ same :: fn(a: Hash, b: Hash) -> bool {
     return true
 }
 
-// A record of value written to the end of into: its type's schema hash, then the value.
+/** A record of value written to the end of into: its type's schema hash, then the value. */
 write :: fn[T](value: T, into: ptr[mut u8[..]]) {
     for byte in schema.hash(type_info_of(T)) {
         runtime.array_add(into, byte)
@@ -78,7 +78,7 @@ write :: fn[T](value: T, into: ptr[mut u8[..]]) {
     schema.write_value(value, into)
 }
 
-// Hex text of a hash, 64 characters, into storage.
+/** Hex text of a hash, 64 characters, into storage. */
 hex :: fn(hash: Hash, storage: ptr[mut u8[64]]) -> string {
     digits :: "0123456789abcdef"
     for byte, i in hash.bytes {
@@ -88,7 +88,7 @@ hex :: fn(hash: Hash, storage: ptr[mut u8[64]]) -> string {
     return string_of(&storage^[0], 64)
 }
 
-// A hash from 64 hex characters, or null.
+/** A hash from 64 hex characters, or null. */
 from_hex :: fn(text: string) -> Hash? {
     if text.count < 64 {
         return null
@@ -112,7 +112,7 @@ digit :: fn(character: char) -> u8? {
     return null
 }
 
-// A record's value, if its schema hash is expected.
+/** A record's value, if its schema hash is expected. */
 value_of :: fn(record: u8[], expected: u8[32]) -> u8[]? {
     if record.count < 32 {
         return null
@@ -125,7 +125,7 @@ value_of :: fn(record: u8[], expected: u8[32]) -> u8[]? {
     return record[32..<record.count]
 }
 
-/*
+/**
  * Each hash a bundle refers to: its program's, its manifest's, its libraries' and its resources'; false if the bytes
  * aren't a bundle, and the allocator's error, apart from that, without the memory to list them (decisions/0104).
  */
@@ -154,7 +154,9 @@ bundle_refers :: fn(record: u8[], each: ptr[mut Hash[..]]) -> Result[bool, runti
     return .Ok(true)
 }
 
-// A root's entries, each name and bundle; false if the bytes aren't a root, and the allocator's error without the memory.
+/**
+ * A root's entries, each name and bundle; false if the bytes aren't a root, and the allocator's error without the memory.
+ */
 root_entries :: fn(record #escaping : u8[], names: ptr[mut string[..]], bundles: ptr[mut Hash[..]]) -> Result[bool, runtime.AllocatorError] {
     value :: value_of(record, ROOT_SCHEMA) or_return .Ok(false)
     if value.count < size_of(Root) {

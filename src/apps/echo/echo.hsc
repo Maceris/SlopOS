@@ -1,4 +1,4 @@
-/*
+/**
  * echo (decisions/0136, 0150): a session's first program until the shell, which the session manager starts with the
  * session's terminal connection, and its home volume's root once someone's logged in; it says how many entries the home
  * directory has, then how numbers and dates look in its session's locale (decisions/0152). It reads lines with
@@ -74,7 +74,7 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Termina
     }
 }
 
-// A number and a date as the session's locale writes them, the last day of 2026 for the date.
+/** A number and a date as the session's locale writes them, the last day of 2026 for the date. */
 show_locale :: fn(echo: ptr[mut Echo]) {
     storage : u8[96]
     line := text_buffer.make(storage)
@@ -88,7 +88,7 @@ show_locale :: fn(echo: ptr[mut Echo]) {
     runtime.log_info("its locale is %", if current.name.count > 0 { current.name } else { "neutral" })
 }
 
-// How many entries the home directory has, said on the terminal and in the log.
+/** How many entries the home directory has, said on the terminal and in the log. */
 greet :: fn(echo: ptr[mut Echo], root: os.Channel[dir.Dir]) {
     directory, error :: os.directory_on(root.end)
     if error != null {
@@ -112,7 +112,7 @@ greet :: fn(echo: ptr[mut Echo], root: os.Channel[dir.Dir]) {
     runtime.log_info("home has % %", count, if count == 1 { "entry" } else { "entries" })
 }
 
-// A line answered: "echo: " and the line, written and logged, then done if it's a command.
+/** A line answered: "echo: " and the line, written and logged, then done if it's a command. */
 answer :: fn(echo: ptr[mut Echo], line: string) {
     if line.count == 0 {
         return void
@@ -126,7 +126,7 @@ answer :: fn(echo: ptr[mut Echo], line: string) {
     command(echo, line)
 }
 
-// A line that asks the powerbox for something: open, save and its text, or list.
+/** A line that asks the powerbox for something: open, save and its text, or list. */
 command :: fn(echo: ptr[mut Echo], line: string) {
     if line == "open" {
         open_chosen(echo)
@@ -145,7 +145,7 @@ command :: fn(echo: ptr[mut Echo], line: string) {
     }
 }
 
-// A file the user chooses, its first line shown.
+/** A file the user chooses, its first line shown. */
 open_chosen :: fn(echo: ptr[mut Echo]) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
@@ -158,7 +158,7 @@ open_chosen :: fn(echo: ptr[mut Echo]) {
     show_first_line(echo, &into)
 }
 
-// What was kept as "notes", opened again without asking, its first line shown.
+/** What was kept as "notes", opened again without asking, its first line shown. */
 reopen_kept :: fn(echo: ptr[mut Echo]) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
@@ -170,7 +170,7 @@ reopen_kept :: fn(echo: ptr[mut Echo]) {
     show_first_line(echo, &into)
 }
 
-// The powerbox's answer, a file to read, its first line shown; or that it gave nothing.
+/** The powerbox's answer, a file to read, its first line shown; or that it gave nothing. */
 show_first_line :: fn(echo: ptr[mut Echo], into: ptr[mut os.Incoming]) {
     match os.message_of[powerbox_protocol.Response](into)^ {
         case GrantedReadOnlyFile(given) => {
@@ -206,7 +206,7 @@ show_first_line :: fn(echo: ptr[mut Echo], into: ptr[mut os.Incoming]) {
     }
 }
 
-// A file the user chooses, notes.txt suggested, text written in it.
+/** A file the user chooses, notes.txt suggested, text written in it. */
 save_chosen :: fn(echo: ptr[mut Echo], text: string) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
@@ -233,7 +233,7 @@ save_chosen :: fn(echo: ptr[mut Echo], text: string) {
     }
 }
 
-// A directory the user chooses, its entries named.
+/** A directory the user chooses, its entries named. */
 list_chosen :: fn(echo: ptr[mut Echo]) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
@@ -292,7 +292,7 @@ list_chosen :: fn(echo: ptr[mut Echo]) {
     }
 }
 
-// Another account, made once the administrator allows it on the trusted path.
+/** Another account, made once the administrator allows it on the trusted path. */
 add_user :: fn(echo: ptr[mut Echo]) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
@@ -318,7 +318,9 @@ add_user :: fn(echo: ptr[mut Echo]) {
     }
 }
 
-// A request to the powerbox, and its answer, which waits for the user if it asks them, into into: false without a powerbox.
+/**
+ * A request to the powerbox, and its answer, which waits for the user if it asks them, into into: false without a powerbox.
+ */
 ask_box :: fn(echo: ptr[mut Echo], out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming], asks_user: bool) -> bool {
     if echo.box_end == NONE {
         say(echo, "There's no powerbox to ask.")

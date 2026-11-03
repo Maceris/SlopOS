@@ -1,4 +1,4 @@
-/*
+/**
  * The virtio-console driver (decisions/0075): a virtio console device's first port, without multiport, through the
  * virtio-pci transport (src/virtio), as the serial protocol for its clients, who arrive on its listener. Its receive
  * queue always has RECEIVE_BUFFERS buffers offered, whose bytes go into its input until a Read takes them; a Read
@@ -22,9 +22,9 @@ TRANSMIT_QUEUE : u16 : 1
 RECEIVE_BUFFERS :: 4
 BUFFER_BYTES : u64 : 256
 INPUT_BYTES :: 1024
-// Clients are bound to the port under their indexes, the IRQ above them
+/** Clients are bound to the port under their indexes, the IRQ above them */
 IRQ_KEY : u64 : 1000
-// The longest the device may take to send a buffer
+/** The longest the device may take to send a buffer */
 SEND_NANOSECONDS : u64 : 1_000_000_000
 
 Driver :: struct {
@@ -107,7 +107,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     }
 }
 
-// Every request a client has sent, until there are none left, or it's gone.
+/** Every request a client has sent, until there are none left, or it's gone. */
 serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
     if index >= driver.clients.ends.count {
         return void
@@ -161,7 +161,7 @@ answer :: fn(driver: ptr[mut Driver], end: slop_os.Channel, response: serial.Res
     _ = serial.send_response(end, driver.port, &out)
 }
 
-// bytes, through the transmit queue a buffer at a time, each waited for: how many went.
+/** bytes, through the transmit queue a buffer at a time, each waited for: how many went. */
 send :: fn(driver: ptr[mut Driver], bytes: u8[]) -> u32 {
     buffer :: driver.buffers + cast[u64](RECEIVE_BUFFERS) * BUFFER_BYTES
     sent : usize = 0
@@ -185,7 +185,7 @@ send :: fn(driver: ptr[mut Driver], bytes: u8[]) -> u32 {
     return cast[u32](sent)
 }
 
-// Whether the device took the buffer it was given to send, waiting for its MSI.
+/** Whether the device took the buffer it was given to send, waiting for its MSI. */
 wait_sent :: fn(driver: ptr[mut Driver]) -> bool {
     deadline :: (slop_os.clock_monotonic() or_else 0) + SEND_NANOSECONDS
     loop {
@@ -199,7 +199,7 @@ wait_sent :: fn(driver: ptr[mut Driver]) -> bool {
     }
 }
 
-// A receive buffer offered to the device to write into.
+/** A receive buffer offered to the device to write into. */
 offer_receive :: fn(driver: ptr[mut Driver], buffer: u8) {
     id :: virtio.offer(&driver.receive, driver.buffers_device + cast[u64](buffer) * BUFFER_BYTES, cast[u32](BUFFER_BYTES), true)
     if cast[usize](id) < driver.buffer_of.count {
@@ -207,7 +207,7 @@ offer_receive :: fn(driver: ptr[mut Driver], buffer: u8) {
     }
 }
 
-// What the device has written into receive buffers, added to the input, and each buffer offered again.
+/** What the device has written into receive buffers, added to the input, and each buffer offered again. */
 take_input :: fn(driver: ptr[mut Driver]) {
     loop {
         used :: virtio.take_used(&driver.receive) or_break
@@ -224,7 +224,7 @@ take_input :: fn(driver: ptr[mut Driver]) {
     }
 }
 
-// Held Reads answered from the input, in order, while there's any.
+/** Held Reads answered from the input, in order, while there's any. */
 answer_held :: fn(driver: ptr[mut Driver]) {
     for &most, index in driver.held {
         if driver.input_count == 0 {

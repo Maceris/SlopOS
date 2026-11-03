@@ -24,7 +24,7 @@ Links :: struct {}
 
 PROTOCOL :: slop_os.Protocol.{name = "links", major_version = 1, lending = .Server}
 
-// What a path through a link is opened as: what the request that reached the link asked for.
+/** What a path through a link is opened as: what the request that reached the link asked for. */
 OpenKind :: enum #backed_by(u32) {
     File = 1,
     ReadOnlyFile = 2,
@@ -32,14 +32,14 @@ OpenKind :: enum #backed_by(u32) {
     ReadOnlyDirectory = 4,
 }
 
-// How it's opened: a file's creation, and whether a directory is made.
+/** How it's opened: a file's creation, and whether a directory is made. */
 Opening :: struct {
     kind : OpenKind,
     creation : files.Creation,
     create : bool,
 }
 
-// A link, by the volume it leads into and its number there, and the path to open beneath what it leads to.
+/** A link, by the volume it leads into and its number there, and the path to open beneath what it leads to. */
 Resolving :: struct {
     container : u8[16],
     volume : u64,
@@ -54,7 +54,7 @@ Request :: union {
 }
 
 Response :: union {
-    // The number the link is issued under, in the volume it leads into
+    /** The number the link is issued under, in the volume it leads into */
     Issued(u64),
     OpenedFile(os.Channel[file.File]),
     OpenedReadOnlyFile(os.Channel[read_only_file.ReadOnlyFile]),
@@ -64,7 +64,7 @@ Response :: union {
     Unsupported,
 }
 
-// Issuing makes a link each time; opening again opens again.
+/** Issuing makes a link each time; opening again opens again. */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Issue(_) => false

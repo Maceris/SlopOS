@@ -33,22 +33,22 @@ ENTRY_WRITABLE : u64 : 1 << 1
 ENTRY_USER : u64 : 1 << 2
 ENTRY_WRITE_THROUGH : u64 : 1 << 3
 ENTRY_CACHE_DISABLE : u64 : 1 << 4
-// In a level 1 or 2 entry: maps a 2 MiB or 1 GiB page rather than pointing to a table.
+/** In a level 1 or 2 entry: maps a 2 MiB or 1 GiB page rather than pointing to a table. */
 ENTRY_LARGE : u64 : 1 << 7
 // The PAT bit is bit 7 in a 4 KiB page's entry, and bit 12 in a large page's.
 ENTRY_PAT_SMALL : u64 : 1 << 7
 ENTRY_PAT_LARGE : u64 : 1 << 12
 ENTRY_GLOBAL : u64 : 1 << 8
 ENTRY_NO_EXECUTE : u64 : 1 << 63
-// Where a table's or a 4 KiB page's address is in an entry. Large pages' addresses are aligned further.
+/** Where a table's or a 4 KiB page's address is in an entry. Large pages' addresses are aligned further. */
 ENTRY_ADDRESS : u64 : 0x000ffffffffff000
 // The count of the next table's present entries, in a non-leaf entry's bits 61:52, which the CPU ignores.
 COUNT_SHIFT : u64 : 52
 COUNT_MASK : u64 : 0x3ff << 52
 
-// Physical addresses go up to 52 bits.
+/** Physical addresses go up to 52 bits. */
 PHYSICAL_LIMIT : u64 : 1 << 52
-// The kernel half starts at the lowest canonical address with bit 47 set.
+/** The kernel half starts at the lowest canonical address with bit 47 set. */
 KERNEL_HALF_START : u64 : 0xffff800000000000
 /*
  * User mode gets 64 KiB up to the last page below the canonical boundary: nothing at null or near it,
@@ -71,22 +71,22 @@ CR3_PCID : u64 : 0xfff
 PCID_COUNT : u32 : 4096
 CR4_PAGE_GLOBAL : u64 : 1 << 7
 
-// One page-table level's 512 entries.
+/** One page-table level's 512 entries. */
 Table :: struct {
     entries : u64[ENTRIES],
 }
 
 #assert size_of(Table) == 4096
 
-// One address space's page tables (arch_interface.PageTable).
+/** One address space's page tables (arch_interface.PageTable). */
 PageTable :: struct {
     root : arch_interface.PhysicalAddress,
     tag : arch_interface.AddressSpaceTag,
-    // The kernel's own table, which maps the kernel half and nothing else.
+    /** The kernel's own table, which maps the kernel half and nothing else. */
     kernel : bool,
-    // Whether the CPU maps 1 GiB pages, read once.
+    /** Whether the CPU maps 1 GiB pages, read once. */
     pages_1g : bool,
-    // Where physical address 0 is in the direct map, through which the tables are reached.
+    /** Where physical address 0 is in the direct map, through which the tables are reached. */
     direct_map_offset : u64,
 }
 
@@ -94,7 +94,7 @@ user_address_range :: fn() -> (low, high: arch_interface.VirtualAddress) {
     return cast[arch_interface.VirtualAddress](USER_LOW), cast[arch_interface.VirtualAddress](USER_HIGH)
 }
 
-// PCIDs, where the CPU has them and init_cpu turned them on.
+/** PCIDs, where the CPU has them and init_cpu turned them on. */
 address_space_tag_count :: fn() -> u32 {
     return if (x86_64.read_cr4() & CR4_PCID) != 0 { PCID_COUNT } else { 1 }
 }
@@ -107,7 +107,7 @@ supports_page_size :: fn(size: arch_interface.PageSize) -> bool {
     return has(&features, .X86Pages1G)
 }
 
-// One table for each root entry of the kernel half.
+/** One table for each root entry of the kernel half. */
 kernel_half_frames :: fn() -> u32 {
     return KERNEL_HALF_COUNT
 }
@@ -301,7 +301,7 @@ translate :: fn(table: ptr[PageTable], virtual_address: arch_interface.VirtualAd
     return null
 }
 
-/*
+/**
  * An address space's tables, freed into freed, as many as it has room for: true once none are left
  * but the root. What they mapped isn't touched. Each call frees tables with none below them, so it can
  * stop anywhere and go on.
@@ -329,7 +329,7 @@ release_user_tables :: fn(table: ptr[mut PageTable], freed: ptr[mut arch_interfa
     return false
 }
 
-/*
+/**
  * In current, a table at level, the entry of a table under it with no tables under it in turn, or 0 if
  * current points at no tables.
  */
@@ -347,7 +347,7 @@ lowest_table_slot :: fn(table: ptr[PageTable], current: ptr[mut Table], level: u
     return 0
 }
 
-/*
+/**
  * Switch the calling CPU to table. With PCIDs, its tag's entries stay in the TLB unless something
  * since marked them stale; the first switch from the bootloader's tables flushes everything.
  */
@@ -368,7 +368,7 @@ activate :: fn(table: ptr[PageTable]) {
     }
 }
 
-/*
+/**
  * Flush batch from the calling CPU's TLB. INVLPG flushes an address for the current PCID and its
  * global entries; another PCID's entries are flushed whole, when it's next activated.
  */
@@ -389,7 +389,7 @@ flush_tlb :: fn(batch: ptr[arch_interface.TlbBatch]) {
     }
 }
 
-// Flush every non-global entry for tag, before the tag is reused.
+/** Flush every non-global entry for tag, before the tag is reused. */
 flush_tlb_tag :: fn(tag: arch_interface.AddressSpaceTag) {
     cpu :: current_cpu()
     if !cpu.pcid {
@@ -406,7 +406,7 @@ flush_tlb_tag :: fn(tag: arch_interface.AddressSpaceTag) {
     }
 }
 
-// Every TLB entry, global ones and every PCID's: turning global pages off and on again flushes them all.
+/** Every TLB entry, global ones and every PCID's: turning global pages off and on again flushes them all. */
 flush_everything :: fn() {
     cr4 :: x86_64.read_cr4()
     x86_64.write_cr4(cr4 & ~CR4_PAGE_GLOBAL)
@@ -418,7 +418,7 @@ mark_stale :: fn(cpu: ptr[mut ArchCpu], tag: u64) {
     cpu.stale_tags[word] |= cast[u64](1) << (tag % 64)
 }
 
-// Whether tag was stale, which it no longer is.
+/** Whether tag was stale, which it no longer is. */
 take_stale :: fn(cpu: ptr[mut ArchCpu], tag: u64) -> bool {
     word :: (tag >> 6) % 64
     bit :: cast[u64](1) << (tag % 64)
@@ -427,7 +427,7 @@ take_stale :: fn(cpu: ptr[mut ArchCpu], tag: u64) -> bool {
     return stale
 }
 
-// The paging state init_cpu sets: the PAT, global pages, and every tag stale until first activated.
+/** The paging state init_cpu sets: the PAT, global pages, and every tag stale until first activated. */
 init_paging :: fn(cpu: ptr[mut ArchCpu]) {
     x86_64.wrmsr(IA32_PAT, PAT_VALUE)
     x86_64.write_cr4(x86_64.read_cr4() | CR4_PAGE_GLOBAL)
@@ -438,8 +438,10 @@ init_paging :: fn(cpu: ptr[mut ArchCpu]) {
     }
 }
 
-// Which entries walk passed through, by level, as addresses in the direct map.
-// Whether the 4 KiB page at virtual_address was touched since its accessed bit was last cleared, the bit cleared.
+/**
+ * Which entries walk passed through, by level, as addresses in the direct map.
+ * Whether the 4 KiB page at virtual_address was touched since its accessed bit was last cleared, the bit cleared.
+ */
 take_accessed :: fn(table: ptr[mut PageTable], virtual_address: arch_interface.VirtualAddress) -> bool {
     path :: match walk(table, cast[u64](virtual_address), 0) {
         case Ok(found) => found
@@ -451,11 +453,11 @@ take_accessed :: fn(table: ptr[mut PageTable], virtual_address: arch_interface.V
 
 Path :: struct {
     slots : u64[4],
-    // slots[leaf], the leaf's entry.
+    /** slots[leaf], the leaf's entry. */
     leaf_slot : u64,
 }
 
-// The entries from the root down to a page of the leaf level's size mapped at address.
+/** The entries from the root down to a page of the leaf level's size mapped at address. */
 walk :: fn(table: ptr[PageTable], address: u64, leaf: u64) -> Result[Path, arch_interface.UnmapError] {
     path : Path
     current := table_at(table, cast[u64](table.root))
@@ -483,7 +485,7 @@ walk :: fn(table: ptr[PageTable], address: u64, leaf: u64) -> Result[Path, arch_
     return .Ok(path)
 }
 
-// Whether table may map bytes at address: user addresses in an address space, kernel ones in the kernel's.
+/** Whether table may map bytes at address: user addresses in an address space, kernel ones in the kernel's. */
 may_map :: fn(table: ptr[PageTable], address: u64, bytes: u64, user: bool) -> bool {
     if user {
         return !table.kernel && address >= USER_LOW && address < USER_HIGH && bytes <= USER_HIGH - address
@@ -513,7 +515,7 @@ protection_bits :: fn(protection: arch_interface.Protection) -> u64 {
     }
 }
 
-// The PAT, cache-disable and write-through bits that pick cache's PAT entry.
+/** The PAT, cache-disable and write-through bits that pick cache's PAT entry. */
 cache_bits :: fn(cache: arch_interface.CacheMode, large: bool) -> u64 {
     pat :: if large { ENTRY_PAT_LARGE } else { ENTRY_PAT_SMALL }
     return match cache {
@@ -541,7 +543,7 @@ mapping_of :: fn(entry: u64, large: bool) -> arch_interface.Mapping {
     return mapping
 }
 
-// The physical address a leaf entry at level maps.
+/** The physical address a leaf entry at level maps. */
 page_address :: fn(entry: u64, level: u64) -> u64 {
     return entry & ENTRY_ADDRESS & ~((cast[u64](1) << (12 + 9 * level)) - 1)
 }
@@ -550,7 +552,7 @@ page_bytes :: fn(size: arch_interface.PageSize) -> u64 {
     return cast[u64](1) << (12 + 9 * leaf_level(size))
 }
 
-// The level whose entries map pages of size.
+/** The level whose entries map pages of size. */
 leaf_level :: fn(size: arch_interface.PageSize) -> u64 {
     return match size {
         case .Size4K => cast[u64](0)
@@ -559,7 +561,7 @@ leaf_level :: fn(size: arch_interface.PageSize) -> u64 {
     }
 }
 
-// The entry for address in current, a table at level.
+/** The entry for address in current, a table at level. */
 slot_at :: fn(current: ptr[mut Table], address: u64, level: u64) -> ptr[mut u64] {
     return &current.entries[(address >> (12 + 9 * level)) % ENTRIES]
 }
@@ -572,7 +574,7 @@ count_of :: fn(entry: u64) -> u64 {
     return (entry & COUNT_MASK) >> COUNT_SHIFT
 }
 
-// Change the count in the entry at slot by change, unless slot is 0, the root's place.
+/** Change the count in the entry at slot by change, unless slot is 0, the root's place. */
 add_to_count :: fn(slot: u64, change: u64) {
     if slot == 0 {
         return void
@@ -586,7 +588,7 @@ load_entry :: fn(slot: u64) -> u64 {
     return cast[ptr[u64]](slot)^
 }
 
-/*
+/**
  * Entries are written whole and in order, so another CPU walking the tables (the kernel half is
  * shared) sees a new table only after its zeroed contents.
  */
@@ -594,7 +596,7 @@ store_entry :: fn(slot: ptr[mut u64], entry: u64) {
     intrinsics.atomic_store_u64_release(slot, entry)
 }
 
-// The last of tables' frames, taken off it.
+/** The last of tables' frames, taken off it. */
 take_table :: fn(tables: ptr[mut arch_interface.TableFrames]) -> u64 {
     count :: cast[usize](tables.count)
     runtime.assert(count >= 1 && count <= 4, "map takes a frame only when one is left")

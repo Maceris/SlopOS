@@ -3,7 +3,7 @@ package console
 import boot_info from "../../boot_info"
 import psf2 from "../../psf2"
 
-/*
+/**
  * A text console on a framebuffer: a grid of character cells, written left to right and top to
  * bottom, scrolling up a line when the bottom is full. Not synchronized: the kernel writes to it
  * holding its console lock.
@@ -26,7 +26,7 @@ Console :: struct {
 
 ConsoleError :: union {
     Font(psf2.FontError),
-    // Pixels that aren't 2, 3 or 4 bytes, or a framebuffer too small for one character.
+    /** Pixels that aren't 2, 3 or 4 bytes, or a framebuffer too small for one character. */
     UnsupportedFramebuffer,
 }
 
@@ -35,7 +35,7 @@ FOREGROUND_RED : u32 : 0xaa
 FOREGROUND_GREEN : u32 : 0xaa
 FOREGROUND_BLUE : u32 : 0xaa
 
-/*
+/**
  * A console on framebuffer, which is mapped at direct_map_offset plus its physical address,
  * cleared to black.
  */
@@ -66,7 +66,7 @@ make_console :: fn(framebuffer: ptr[boot_info.Framebuffer], direct_map_offset: u
     return .Ok(made)
 }
 
-/*
+/**
  * The pixel value of a color given as 8-bit channels, in the framebuffer's layout: each channel
  * keeps its highest bits, shifted to its place.
  */
@@ -84,7 +84,7 @@ channel :: fn(where: boot_info.ColorChannel, value: u32) -> u32 {
     return (value >> (8 - cast[u32](where.size))) << cast[u32](where.shift)
 }
 
-// Write UTF-8 text: a line feed starts a new line, a carriage return goes back to the line's start.
+/** Write UTF-8 text: a line feed starts a new line, a carriage return goes back to the line's start. */
 write :: fn(console: ptr[mut Console], text: string) {
     bytes :: bit_cast[u8[]](text)
     with {
@@ -118,7 +118,7 @@ glyph_for :: fn(font: ptr[psf2.Font], code_point: u32) -> u16 {
     return glyph
 }
 
-// Move to the next line's start, scrolling up a line from the bottom.
+/** Move to the next line's start, scrolling up a line from the bottom. */
 new_line :: fn(console: ptr[mut Console]) {
     console.column = 0
     if console.row + 1 < console.rows {
@@ -140,7 +140,7 @@ scroll :: fn(console: ptr[mut Console]) {
     fill_rows(console, (console.rows - 1) * console.font.height, console.font.height)
 }
 
-// Copy count bytes from source down to target, which is below it, 8 bytes at a time where they line up.
+/** Copy count bytes from source down to target, which is below it, 8 bytes at a time where they line up. */
 copy_bytes :: fn(target, source, count: u64) {
     done : u64 = 0
     loop {
@@ -155,7 +155,7 @@ copy_bytes :: fn(target, source, count: u64) {
     while done < count
 }
 
-// Fill count pixel rows from first with the background.
+/** Fill count pixel rows from first with the background. */
 fill_rows :: fn(console: ptr[Console], first, count: u32) {
     for y in first..<first + count {
         row :: console.pixels + cast[u64](y) * cast[u64](console.pitch)
@@ -185,7 +185,7 @@ draw_glyph :: fn(console: ptr[Console], glyph: u16, column, row: u32) {
     }
 }
 
-// Write a pixel's bytes, lowest first.
+/** Write a pixel's bytes, lowest first. */
 put_pixel :: fn(console: ptr[Console], address: u64, value: u32) {
     if console.bytes_per_pixel == 4 {
         cast[ptr[mut u32]](address)^ = value

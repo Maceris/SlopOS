@@ -7,8 +7,10 @@
  * Every field the device shares is little-endian, so the rings are laid out with u16le, u32le and u64le, and the
  * registers are reached with volatile loads and stores, swapped through those types, so it's right on any target.
  */
-//SPEC: Virtual I/O Device (VIRTIO) Version 1.2, §2.7 (split virtqueues), §4.1 (virtio over PCI), §3.1 (initialization)
-//SPEC: PCI Express Base Specification 5.0, §7.7.2 (MSI-X)
+/**
+ * SPEC: Virtual I/O Device (VIRTIO) Version 1.2, §2.7 (split virtqueues), §4.1 (virtio over PCI), §3.1 (initialization)
+ * SPEC: PCI Express Base Specification 5.0, §7.7.2 (MSI-X)
+ */
 package virtio
 
 import intrinsics from "base"
@@ -79,7 +81,7 @@ UsedElement :: struct #packed {
 
 #assert size_of(UsedElement) == 8
 
-// A device's registers, through its BARs as its driver mapped them.
+/** A device's registers, through its BARs as its driver mapped them. */
 Transport :: struct {
     config : u64,
     common : u64,
@@ -91,7 +93,7 @@ Transport :: struct {
     msix_entries : u32,
 }
 
-// A split virtqueue: its page, where it is to the device and to the driver, and how far each ring has got.
+/** A split virtqueue: its page, where it is to the device and to the driver, and how far each ring has got. */
 Queue :: struct {
     index : u16,
     size : u16,
@@ -99,18 +101,18 @@ Queue :: struct {
     notify : u64,
     next_available : u16,
     last_used : u16,
-    // The descriptors not in a chain the device has, a bit each
+    /** The descriptors not in a chain the device has, a bit each */
     free : u64,
 }
 
-// One buffer of a chain: where it is to the device, how long, and whether the device writes it (or reads it).
+/** One buffer of a chain: where it is to the device, how long, and whether the device writes it (or reads it). */
 Part :: struct {
     address : u64,
     length : u32,
     device_writes : bool,
 }
 
-/*
+/**
  * The transport of a device whose configuration space is mapped at config, and each BAR at bars' address for it (0 for
  * one that isn't mapped), from its capabilities; null if it lacks one it needs.
  */
@@ -157,7 +159,7 @@ open :: fn(config: u64, bars: u64[6]) -> Transport? {
     return transport
 }
 
-/*
+/**
  * The device reset and told a driver has it, its features read and wanted's taken (always with VERSION_1, and with
  * ACCESS_PLATFORM where it's offered, since memory_device_address gives what the device's DMA reaches it at), and those
  * accepted: the features, or null if the device refused them or isn't modern.
@@ -192,7 +194,7 @@ start :: fn(transport: ptr[Transport], wanted: u64) -> u64? {
     return taken
 }
 
-// MSI-X on, with entry's message, unmasked; the device's configuration changes report to no vector.
+/** MSI-X on, with entry's message, unmasked; the device's configuration changes report to no vector. */
 set_vector :: fn(transport: ptr[Transport], entry: u32, address: u64, data: u32) -> bool {
     if entry >= transport.msix_entries {
         return false
@@ -210,7 +212,7 @@ set_vector :: fn(transport: ptr[Transport], entry: u32, address: u64, data: u32)
     return true
 }
 
-/*
+/**
  * Queue index, set up in page, a zeroed page of DMA memory at page through the driver's mapping and device_page to the
  * device, its interrupts to MSI-X entry vector: the queue, or null if the device has no such queue or won't take the
  * vector.
@@ -241,17 +243,17 @@ setup_queue :: fn(transport: ptr[Transport], index: u16, page: u64, device_page:
         free = free}
 }
 
-// The device told the driver is ready.
+/** The device told the driver is ready. */
 ready :: fn(transport: ptr[Transport]) {
     write_u8(transport.common, DEVICE_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK)
 }
 
-// One buffer offered to the device, a chain of one descriptor (offer_chain).
+/** One buffer offered to the device, a chain of one descriptor (offer_chain). */
 offer :: fn(queue: ptr[mut Queue], device_address: u64, length: u32, device_writes: bool) -> u16 {
     return offer_chain(queue, Part.[Part.{address = device_address, length = length, device_writes = device_writes}])
 }
 
-/*
+/**
  * Buffers offered to the device as one chain, in order, each on a free descriptor; then the device told. The first
  * descriptor's index, which the device's used ring gives back; or NO_DESCRIPTOR if not enough are free.
  */
@@ -305,13 +307,13 @@ offer_chain :: fn(queue: ptr[mut Queue], parts: Part[]) -> u16 {
     return id
 }
 
-// A buffer the device has finished with: its descriptor's index, and how many bytes it wrote.
+/** A buffer the device has finished with: its descriptor's index, and how many bytes it wrote. */
 Used :: struct {
     id : u16,
     length : u32,
 }
 
-// The lowest free descriptor, or null.
+/** The lowest free descriptor, or null. */
 first_free :: fn(queue: ptr[Queue]) -> u16? {
     for bit in 0..<cast[u64](queue.size) {
         if queue.free & (cast[u64](1) << bit) != 0 {
@@ -321,7 +323,7 @@ first_free :: fn(queue: ptr[Queue]) -> u16? {
     return null
 }
 
-// The next chain the device has finished with, if there's one, its descriptors free again.
+/** The next chain the device has finished with, if there's one, its descriptors free again. */
 take_used :: fn(queue: ptr[mut Queue]) -> Used? {
     used_index : u16 = bit_cast[u16le](intrinsics.volatile_load_u16(cast[ptr[u16]](queue.page + DEVICE_RING_AT + 2)))
     if used_index == queue.last_used {
@@ -351,12 +353,12 @@ take_used :: fn(queue: ptr[mut Queue]) -> Used? {
     return Used.{id = cast[u16](id), length = length}
 }
 
-// The interrupt status, which reading clears.
+/** The interrupt status, which reading clears. */
 interrupt_status :: fn(transport: ptr[Transport]) -> u8 {
     return if transport.isr == 0 { cast[u8](0) } else { intrinsics.volatile_load_u8(cast[ptr[u8]](transport.isr)) }
 }
 
-// The device's registers, little-endian whatever the target.
+/** The device's registers, little-endian whatever the target. */
 read_u8 :: fn(base: u64, offset: u64) -> u8 {
     return intrinsics.volatile_load_u8(cast[ptr[u8]](base + offset))
 }
@@ -381,7 +383,7 @@ write_u32 :: fn(base: u64, offset: u64, value: u32) {
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](base + offset), bit_cast[u32](cast[u32le](value)))
 }
 
-// A 64-bit register as two 32-bit halves, low first, as the transport allows
+/** A 64-bit register as two 32-bit halves, low first, as the transport allows */
 write_u64 :: fn(base: u64, offset: u64, value: u64) {
     write_u32(base, offset, cast[u32](value))
     write_u32(base, offset + 4, cast[u32](value >> 32))

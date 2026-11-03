@@ -24,15 +24,17 @@ Extent :: struct {
 
 SpaceChange :: enum {
     Allocated,
-    // Freed, born in this transaction
+    /** Freed, born in this transaction */
     FreedNow,
-    // Freed, born before it: pending until its checkpoint is durable
+    /** Freed, born before it: pending until its checkpoint is durable */
     FreedLater,
-    // Given back, but a snapshot of its owner's holds it: on the owner's dead list, still the owner's
+    /** Given back, but a snapshot of its owner's holds it: on the owner's dead list, still the owner's */
     Dead,
 }
 
-// A change the space map and the owners still have to take, in the order they happened, and when what it's of was born.
+/**
+ * A change the space map and the owners still have to take, in the order they happened, and when what it's of was born.
+ */
 Change :: struct {
     change : SpaceChange,
     start : u64,
@@ -41,7 +43,7 @@ Change :: struct {
     birth : u64,
 }
 
-/*
+/**
  * What holds an owner's older blocks: the transaction its newest snapshot holds, and for a clone, the one its origin's
  * snapshot holds, 0 for none. A block born at or before the first is kept on the dead list when it's given back; one
  * born at or before the second is the origin's.
@@ -52,7 +54,7 @@ Floor :: struct {
     origin : u64,
 }
 
-// A volume's blocks, every one it owns, and the most it may have, 0 for no limit.
+/** A volume's blocks, every one it owns, and the most it may have, 0 for no limit. */
 Account :: struct {
     owner : u64,
     used : u64,
@@ -68,14 +70,16 @@ reserve_of :: fn(block_count: u64) -> u64 {
     return if part > RESERVE_FLOOR { part } else { RESERVE_FLOOR }
 }
 
-// An extent freed, born before this transaction, by its owner: free once a commit that takes its owner's changes is durable.
+/**
+ * An extent freed, born before this transaction, by its owner: free once a commit that takes its owner's changes is durable.
+ */
 Later :: struct {
     start : u64,
     blocks : u64,
     owner : u64,
 }
 
-/*
+/**
  * Every owner's changes wait in one list: the container's own (owner 0) go into every commit, and a volume's into the
  * commit that takes its changes, so a volume server's are made durable only with its own tree (decisions/0089).
  */
@@ -90,7 +94,7 @@ Space :: struct {
     free_blocks : u64,
     floors : Floor[..],
     accounts : Account[..],
-    // What a file's bytes may not take (reserve_of)
+    /** What a file's bytes may not take (reserve_of) */
     reserve : u64,
 }
 
@@ -103,7 +107,7 @@ account_of :: fn(space: ptr[Space], owner: u64) -> Account {
     return Account.{owner = owner}
 }
 
-/*
+/**
  * Room in the space's lists for that many more entries in each, so recording a change can't fail halfway for want of
  * memory (decisions/0104): reserved before anything changes, and false, with nothing changed, without it. What the
  * functions below add to a list fits in the room their callers made for it.
@@ -116,7 +120,7 @@ space_room :: fn(space: ptr[mut Space], changes: usize, later: usize, free: usiz
         && runtime.array_try_reserve(&space.floors, space.floors.count + owners) == null
 }
 
-// An owner's blocks counted up or down by blocks.
+/** An owner's blocks counted up or down by blocks. */
 charge :: fn(space: ptr[mut Space], owner: u64, blocks: u64, adding: bool) {
     if owner == 0 {
         return void
@@ -132,7 +136,7 @@ charge :: fn(space: ptr[mut Space], owner: u64, blocks: u64, adding: bool) {
     }
 }
 
-// An owner's quota set, 0 for none.
+/** An owner's quota set, 0 for none. */
 set_quota_of :: fn(space: ptr[mut Space], owner: u64, quota: u64) {
     for &account in space.accounts {
         if account.owner == owner {
@@ -152,7 +156,7 @@ floor_of :: fn(space: ptr[Space], owner: u64) -> Floor {
     return Floor.{owner = owner}
 }
 
-// An owner's floor set: its newest snapshot's transaction, or its origin's, whichever is given, the other kept.
+/** An owner's floor set: its newest snapshot's transaction, or its origin's, whichever is given, the other kept. */
 set_floor :: fn(space: ptr[mut Space], owner: u64, snapshot: u64?, origin: u64?) {
     for &floor in space.floors {
         if floor.owner == owner {
@@ -164,7 +168,7 @@ set_floor :: fn(space: ptr[mut Space], owner: u64, snapshot: u64?, origin: u64?)
     runtime.array_add(&space.floors, Floor.{owner = owner, snapshot = snapshot or_else 0, origin = origin or_else 0})
 }
 
-// Where an extent starting at start is, or would go, in a sorted list.
+/** Where an extent starting at start is, or would go, in a sorted list. */
 extent_index :: fn(extents: Extent[], start: u64) -> usize {
     low : usize = 0
     high := extents.count
@@ -181,7 +185,7 @@ extent_index :: fn(extents: Extent[], start: u64) -> usize {
     return low
 }
 
-// The extent at index, or an empty one past the end.
+/** The extent at index, or an empty one past the end. */
 extent_at :: fn(extents: Extent[], index: usize) -> Extent {
     return if index < extents.count { extents[index] } else { Extent.{} }
 }
@@ -192,7 +196,7 @@ set_extent :: fn(extents: mut Extent[], index: usize, extent: Extent) {
     }
 }
 
-// An extent put in the free list, joined to those it touches.
+/** An extent put in the free list, joined to those it touches. */
 add_free :: fn(space: ptr[mut Space], start: u64, blocks: u64) {
     space.free_blocks += blocks
     index :: extent_index(space.free, start)
@@ -228,7 +232,7 @@ insert_extent :: fn(extents: ptr[mut Extent[..]], index: usize, extent: Extent) 
     set_extent(extents^, index, extent)
 }
 
-/*
+/**
  * count blocks in one extent for owner: the first free extent big enough from the rotor on, then from the start.
  * The change is kept for the trees. For a file's bytes (data), none past the owner's quota, nor into the reserve.
  */
@@ -282,7 +286,7 @@ pass_inside :: fn(extent: Extent, at: u64, blocks: u64) -> bool {
     return at > extent.start && at + blocks <= extent.start + extent.blocks
 }
 
-// blocks from start taken out of the free extent at index, which holds them.
+/** blocks from start taken out of the free extent at index, which holds them. */
 take_free :: fn(space: ptr[mut Space], index: usize, start: u64, blocks: u64) {
     if index >= space.free.count {
         return void
@@ -306,7 +310,7 @@ take_free :: fn(space: ptr[mut Space], index: usize, start: u64, blocks: u64) {
     }
 }
 
-/*
+/**
  * An extent given back: one whose allocation no commit has taken yet is simply free again, nothing ever naming it;
  * one this commit's own rounds made is free at once in the space map too; and one a durable checkpoint may name is
  * free once a commit taking its owner's changes is durable.
@@ -349,15 +353,15 @@ space_release :: fn(context: rawptr, start: u64, blocks: u64, owner: u64, birth:
     }
 }
 
-// Every owner's changes, for a commit of the whole container in one process.
+/** Every owner's changes, for a commit of the whole container in one process. */
 ALL_OWNERS : u64 : 0xffffffffffffffff
 
-// Whether a commit taking only's changes (or ALL_OWNERS's) takes owner's: the container's own are in every one.
+/** Whether a commit taking only's changes (or ALL_OWNERS's) takes owner's: the container's own are in every one. */
 takes :: fn(only: u64, owner: u64) -> bool {
     return only == ALL_OWNERS || owner == 0 || owner == only
 }
 
-// A commit that took only's changes is durable: what they freed is free, and the next transaction starts.
+/** A commit that took only's changes is durable: what they freed is free, and the next transaction starts. */
 space_committed :: fn(space: ptr[mut Space], only: u64) {
     kept : Later[..]
     // Without the memory to sort them, every extent waits for a later commit, still not free
@@ -378,7 +382,7 @@ space_committed :: fn(space: ptr[mut Space], only: u64) {
     space.transaction += 1
 }
 
-/*
+/**
  * An extent a snapshot held, given back once none does: free once this commit is durable, whoever commits it, and no
  * longer charged to owner.
  */

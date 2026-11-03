@@ -9,7 +9,7 @@ package slopfs
  * knows which volume asks; slopfs only keeps the records.
  */
 
-// A link's record, keyed (link, Link, 0): the volume it leads into and the number it was issued under there.
+/** A link's record, keyed (link, Link, 0): the volume it leads into and the number it was issued under there. */
 LinkRecord :: struct #packed {
     container : u8[16],
     volume : u64le,
@@ -21,7 +21,7 @@ LinkRecord :: struct #packed {
 
 #assert size_of(LinkRecord) == 40
 
-/*
+/**
  * A link a volume issued, keyed (0, Issued, number from 1): the object it leads to, whether it may be written, when it
  * was issued, as the issuer says, and the volume holding it. The issuing volume's ID is in it too, so a clone's copy of
  * its origin's records, which no link names, issues nothing.
@@ -38,27 +38,27 @@ IssuedRecord :: struct #packed {
 
 #assert size_of(IssuedRecord) == 56
 
-// The issued records' state, at number 0: the number the next is issued under.
+/** The issued records' state, at number 0: the number the next is issued under. */
 IssuedState :: struct #packed {
     next : u64le,
 }
 
 #assert size_of(IssuedState) == 8
 
-// What a volume issued, with its number.
+/** What a volume issued, with its number. */
 Issued :: struct {
     number : u64,
     record : IssuedRecord,
 }
 
-// A new link named name in directory, leading where record says.
+/** A new link named name in directory, leading where record says. */
 create_link :: fn(volume: ptr[mut Volume], directory: u64, name: string, record: ptr[LinkRecord]) -> Result[u64, Error] {
     object :: create(volume, directory, name, .Link)?
     tree_put(volume.nodes, &volume.tree, key_of(object, .Link, 0), view_of(cast[ptr[u8]](record), size_of(LinkRecord)))?
     return .Ok(object)
 }
 
-// Where a link leads, or NotFound if it isn't one.
+/** Where a link leads, or NotFound if it isn't one. */
 link_of :: fn(volume: ptr[mut Volume], object: u64) -> Result[LinkRecord, Error] {
     record :: get_object(volume, object)?
     if kind_of_record(&record) != .Link {
@@ -73,7 +73,7 @@ link_of :: fn(volume: ptr[mut Volume], object: u64) -> Result[LinkRecord, Error]
     return .Ok(link)
 }
 
-/*
+/**
  * Where a path beneath directory leads, as far as this volume goes: the object at its end, or the first link on the way
  * and the rest of the path after it, "" if the link is its last component.
  */
@@ -105,7 +105,7 @@ walk :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[Walk
     return .Ok(Walked.{object = at, link = false, rest = path[path.count..<path.count]})
 }
 
-/*
+/**
  * A link issued for object, to the volume recipient in the container recipient_container, writable if write: its
  * number, which that volume's link names.
  */
@@ -126,7 +126,7 @@ issue :: fn(volume: ptr[mut Volume], object: u64, write: bool, recipient_contain
     return .Ok(number)
 }
 
-// What this volume issued under a number, or null if it's revoked, or never was.
+/** What this volume issued under a number, or null if it's revoked, or never was. */
 issued :: fn(volume: ptr[mut Volume], number: u64) -> Result[IssuedRecord?, Error] {
     if number == 0 {
         return .Ok(null)
@@ -143,7 +143,7 @@ issued :: fn(volume: ptr[mut Volume], number: u64) -> Result[IssuedRecord?, Erro
     return .Ok(record)
 }
 
-// What this volume issued under the first number at or after at, or null after the last.
+/** What this volume issued under the first number at or after at, or null after the last. */
 next_issued :: fn(volume: ptr[mut Volume], at: u64) -> Result[Issued?, Error] {
     number := if at == 0 { cast[u64](1) } else { at }
     loop {
@@ -163,7 +163,7 @@ next_issued :: fn(volume: ptr[mut Volume], at: u64) -> Result[Issued?, Error] {
     }
 }
 
-// What was issued under a number revoked: whether there was one.
+/** What was issued under a number revoked: whether there was one. */
 revoke :: fn(volume: ptr[mut Volume], number: u64) -> Result[bool, Error] {
     if (issued(volume, number)?) is_none {
         return .Ok(false)

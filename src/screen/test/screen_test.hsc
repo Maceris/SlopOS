@@ -1,4 +1,4 @@
-/*
+/**
  * The screen model's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the
  * number of the first check that failed. Clusters go where the cursor is and wrap at the edge, a wide one takes two
  * columns, a mark joins the cluster before it, lines scroll at the bottom, areas clear and scroll, a program's own

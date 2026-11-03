@@ -1,4 +1,4 @@
-/*
+/**
  * The terminal service's framebuffer back end (decisions/0138): a screen model's rows drawn on a linear framebuffer
  * with the consoles' PSF2 font (12x24, or 8x16 where 80 by 24 of those don't fit), each cell's first code point's glyph in its style's colours, the status line on the top
  * row and the program's rows below it, the 80 by 24 grid centered where the framebuffer has room. It reaches the pixels
@@ -16,7 +16,7 @@ import screen from "../screen"
 DEFAULT_FOREGROUND : u32 : 0xaaaaaa
 DEFAULT_BACKGROUND : u32 : 0x000000
 
-// The 16 colours, as a VGA console has them: the 8, then their bright ones
+/** The 16 colours, as a VGA console has them: the 8, then their bright ones */
 PALETTE :: u32.[0x000000, 0xaa0000, 0x00aa00, 0xaa5500, 0x0000aa, 0xaa00aa, 0x00aaaa, 0xaaaaaa,
     0x555555, 0xff5555, 0x55ff55, 0xffff55, 0x5555ff, 0xff55ff, 0x55ffff, 0xffffff]
 
@@ -33,7 +33,7 @@ Canvas :: struct {
     rows : u32,
 }
 
-// A canvas on the pixels at address, laid out as layout, cleared; null for a layout it can't draw on.
+/** A canvas on the pixels at address, laid out as layout, cleared; null for a layout it can't draw on. */
 make_canvas :: fn(address: u64, layout: slop_os.FramebufferLayout) -> Canvas? {
     large :: match psf2.parse_font(psf2.FONT_DATA) {
         case Ok(parsed) => parsed
@@ -61,7 +61,7 @@ make_canvas :: fn(address: u64, layout: slop_os.FramebufferLayout) -> Canvas? {
     return made
 }
 
-// Every pixel the default background.
+/** Every pixel the default background. */
 clear :: fn(canvas: ptr[Canvas]) {
     color :: pixel_of(canvas, DEFAULT_BACKGROUND)
     for y in 0..<canvas.layout.height {
@@ -72,7 +72,7 @@ clear :: fn(canvas: ptr[Canvas]) {
     }
 }
 
-/*
+/**
  * The rows of model that changed, and the status line if it did, drawn; the cursor, at cursor_row and cursor_column
  * of the program's rows, drawn inverse where it's shown.
  */
@@ -97,7 +97,7 @@ draw :: fn(canvas: ptr[Canvas], model: ptr[mut screen.Screen], cursor_shown: boo
     }
 }
 
-// One row of cells, at row of the grid, the cell at cursor inverse.
+/** One row of cells, at row of the grid, the cell at cursor inverse. */
 draw_cells :: fn(canvas: ptr[Canvas], row: u32, cells: screen.Cell[], cursor: u16?) {
     if row >= canvas.rows {
         return void
@@ -129,7 +129,7 @@ draw_cells :: fn(canvas: ptr[Canvas], row: u32, cells: screen.Cell[], cursor: u1
     }
 }
 
-// A style's colours, as 0xRRGGBB: inverse swaps them, and bold makes the 8 colours their bright ones.
+/** A style's colours, as 0xRRGGBB: inverse swaps them, and bold makes the 8 colours their bright ones. */
 colors_of :: fn(style: terminal.Style) -> (foreground: u32, background: u32) {
     foreground := rgb_of(style.foreground, DEFAULT_FOREGROUND, style.attributes & terminal.BOLD != 0)
     background := rgb_of(style.background, DEFAULT_BACKGROUND, false)
@@ -185,7 +185,7 @@ draw_glyph :: fn(canvas: ptr[Canvas], glyph: u16, column: u32, row: u32, foregro
     }
 }
 
-// 0xRRGGBB as the framebuffer's pixel.
+/** 0xRRGGBB as the framebuffer's pixel. */
 pixel_of :: fn(canvas: ptr[Canvas], rgb: u32) -> u32 {
     layout :: &canvas.layout
     return channel((rgb >> 16) & 0xff, layout.red_size, layout.red_shift) | channel((rgb >> 8) & 0xff, layout.green_size, layout.green_shift)
@@ -202,7 +202,7 @@ channel :: fn(value: u32, size: u8, shift: u8) -> u32 {
     return (value >> (8 - cast[u32](size))) << cast[u32](shift)
 }
 
-// A pixel's bytes, lowest first.
+/** A pixel's bytes, lowest first. */
 put_pixel :: fn(canvas: ptr[Canvas], address: u64, value: u32) {
     if canvas.bytes_per_pixel == 4 {
         cast[ptr[mut u32]](address)^ = value

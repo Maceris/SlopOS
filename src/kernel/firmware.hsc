@@ -135,7 +135,7 @@ copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.Firmwa
     runtime.log_info("firmware tables: % copied for the root task, and % RAM ranges, % bytes", found.count, kernel.ram.count, total)
 }
 
-// The tables an RSDP leads to, and the RSDP.
+/** The tables an RSDP leads to, and the RSDP. */
 find_acpi_tables :: fn(kernel: ptr[mut Kernel], rsdp: u64, found: ptr[mut FoundTables]) {
     found.kind = .Acpi
     bytes : u8[36]
@@ -178,7 +178,7 @@ find_acpi_tables :: fn(kernel: ptr[mut Kernel], rsdp: u64, found: ptr[mut FoundT
     }
 }
 
-// The table at physical, by its header's signature and length, unless it's there already or too long: its length.
+/** The table at physical, by its header's signature and length, unless it's there already or too long: its length. */
 add_sdt :: fn(kernel: ptr[mut Kernel], found: ptr[mut FoundTables], physical: u64) -> u64 {
     header : u8[8]
     read_physical(kernel, physical, 8, cast[u64](&header))
@@ -208,7 +208,7 @@ add_table :: fn(found: ptr[mut FoundTables], signature: u8[4], physical: u64, si
     found.count += 1
 }
 
-// A signature of four characters, as its bytes.
+/** A signature of four characters, as its bytes. */
 signature_of :: fn(text: string) -> u8[4] {
     signature : u8[4]
     for byte, i in text {
@@ -219,7 +219,7 @@ signature_of :: fn(text: string) -> u8[4] {
     return signature
 }
 
-// The device tree's blob, at address through the direct map and at physical.
+/** The device tree's blob, at address through the direct map and at physical. */
 find_device_tree :: fn(address: u64, physical: u64, found: ptr[mut FoundTables]) {
     found.kind = .DeviceTree
     if big_endian_u32(address) != DEVICE_TREE_MAGIC {
@@ -234,7 +234,7 @@ find_device_tree :: fn(address: u64, physical: u64, found: ptr[mut FoundTables])
     add_table(found, signature_of("DTB "), physical, size)
 }
 
-// size bytes from physical, through the kernel window, copied to into; zeros if they can't be mapped.
+/** size bytes from physical, through the kernel window, copied to into; zeros if they can't be mapped. */
 read_physical :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64, into: u64) {
     match map_device(kernel, cast[boot_info.PhysicalAddress](physical), size) {
         case Ok(address) => {
@@ -257,7 +257,7 @@ u64_at :: fn(base: u64, offset: u64) -> u64 {
     return value
 }
 
-// Whether the bytes at address are text's.
+/** Whether the bytes at address are text's. */
 bytes_are :: fn(address: u64, text: string) -> bool {
     bytes :: view_of(cast[ptr[u8]](address), text.count)
     for byte, i in text {

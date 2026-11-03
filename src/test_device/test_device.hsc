@@ -1,4 +1,4 @@
-/*
+/**
  * What the kernel tells the root task of the emulator's test device, with test_device on its command line
  * (decisions/0069): a page, granted as "test_device", which the root task passes to test_devices. It's what
  * the firmware tables would say until the platform service reads them (M7), and an address of RAM the kernel

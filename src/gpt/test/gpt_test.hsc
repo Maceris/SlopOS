@@ -1,4 +1,4 @@
-/*
+/**
  * The GPT package's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the
  * number of the first check that failed. A table written into a buffer standing in for a disk reads back as written;
  * with its primary header broken it's read from its backup; with both sets of entries broken it isn't read at all.
@@ -76,14 +76,14 @@ checks :: fn() -> int {
     return 0
 }
 
-// One byte of the image changed, where it's there.
+/** One byte of the image changed, where it's there. */
 flip :: fn(bytes: mut u8[], at: usize) {
     if at < bytes.count {
         bytes[at] ~= 0xff
     }
 }
 
-// A GUID of one repeated byte.
+/** A GUID of one repeated byte. */
 guid :: fn(byte: u8) -> gpt.Guid {
     made : gpt.Guid
     for &each in made {
@@ -108,7 +108,7 @@ read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bo
     return true
 }
 
-// The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness)
+/** The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness) */
 main :: fn() -> int {
     return hosted_faults.run(checks)
 }

@@ -51,20 +51,20 @@ HandleEntry :: struct #align(32) {
 
 HandleTable :: struct {
     lock : concurrency.SpinLock,
-    // A frame of TABLE_PAGES page addresses, 0 until the first handle.
+    /** A frame of TABLE_PAGES page addresses, 0 until the first handle. */
     directory : u64,
     // Free entries, by index, 0 for none; and the first index never used. Index 0 is never a handle.
     first_free : u32,
     next_unused : u32,
     count : u32,
-    // Set when its process is destroyed: no more handles go in.
+    /** Set when its process is destroyed: no more handles go in. */
     closed : bool,
     // The object its pages are charged to, its process, and whether the last page couldn't be paid for.
     account : u64,
     short_of_budget : bool,
 }
 
-// What a handle refers to, as a lookup found it.
+/** What a handle refers to, as a lookup found it. */
 Resolved :: struct {
     object : u64,
     generation : u32,
@@ -114,7 +114,7 @@ install :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], object: u64,
     return .Ok(cast[slop_os.Handle](cast[u32](index) | cast[u32](entry_generation << 16)))
 }
 
-/*
+/**
  * What handle refers to: InvalidHandle if it isn't one of the table's, ObjectGone if its object was
  * destroyed. Without the lock.
  */
@@ -148,7 +148,7 @@ lookup :: fn(table: ptr[HandleTable], handle: slop_os.Handle) -> Result[Resolved
     }
 }
 
-/*
+/**
  * Close handle: what it referred to, for the caller to destroy if it was the owning one. Whether the object
  * is still live doesn't matter.
  */
@@ -183,7 +183,7 @@ remove :: fn(table: ptr[mut HandleTable], handle: slop_os.Handle) -> Result[Reso
     return .Ok(removed)
 }
 
-// The entry at index, if its page is there.
+/** The entry at index, if its page is there. */
 entry_at :: fn(table: ptr[HandleTable], index: u32) -> ptr[mut HandleEntry]? {
     directory :: intrinsics.atomic_load_u64_acquire(&table.directory)
     page_index :: cast[usize](index) / ENTRIES_PER_PAGE % TABLE_PAGES
@@ -197,7 +197,7 @@ entry_at :: fn(table: ptr[HandleTable], index: u32) -> ptr[mut HandleEntry]? {
     return cast[ptr[mut HandleEntry]](page + cast[u64](cast[usize](index) % ENTRIES_PER_PAGE) * cast[u64](size_of(HandleEntry)))
 }
 
-/*
+/**
  * The entry at index, a new one at the end, making its page, and the directory, if they aren't there
  * yet, each charged to the table's process: null if there's no memory, or the budget is short.
  */
@@ -216,7 +216,7 @@ make_entry :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], index: u3
     return entry_at(table, index)
 }
 
-// A zeroed frame for table, charged to its process; its whole charge comes back once the process is released.
+/** A zeroed frame for table, charged to its process; its whole charge comes back once the process is released. */
 charged_frame :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) -> u64? {
     if fails(.Handles) {
         return null
@@ -232,7 +232,7 @@ charged_frame :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) -> u64
     return if frame != 0 { frame } else { null }
 }
 
-// A zeroed frame from this CPU's cache, as an address in the direct map.
+/** A zeroed frame from this CPU's cache, as an address in the direct map. */
 zeroed_frame :: fn(kernel: ptr[mut Kernel]) -> u64? {
     frame :: frames.take_frame(&per_cpu().frame_cache, &kernel.frames) or_return null
     address :: frames.virtual_of(&kernel.frames, frame)
@@ -240,14 +240,14 @@ zeroed_frame :: fn(kernel: ptr[mut Kernel]) -> u64? {
     return address
 }
 
-// No more handles go in; the entries stay readable until the table is freed.
+/** No more handles go in; the entries stay readable until the table is freed. */
 close_table :: fn(table: ptr[mut HandleTable]) {
     lock_at(&table.lock, .HandleTable)
     table.closed = true
     unlock_at(&table.lock, .HandleTable)
 }
 
-// Free a closed table's pages and directory, once no CPU can be reading them.
+/** Free a closed table's pages and directory, once no CPU can be reading them. */
 free_table :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) {
     if table.directory == 0 {
         return void
@@ -262,7 +262,7 @@ free_table :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) {
     table.directory = 0
 }
 
-// Give back a frame by its address in the direct map.
+/** Give back a frame by its address in the direct map. */
 give_frame_at :: fn(kernel: ptr[mut Kernel], address: u64) {
     frames.give_frame(&per_cpu().frame_cache, &kernel.frames, cast[boot_info.PhysicalAddress](address - kernel.frames.direct_map_offset))
 }

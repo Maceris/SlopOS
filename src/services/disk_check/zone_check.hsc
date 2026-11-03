@@ -48,7 +48,7 @@ check_zones :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir]) -> int {
     return 0
 }
 
-// Whether the zone's offset and abbreviation are these at noon UTC on the 15th of the month.
+/** Whether the zone's offset and abbreviation are these at noon UTC on the 15th of the month. */
 zone_is :: fn(zone: ptr[time.Zone], year: i64, month: int, offset: i32, abbreviation: string) -> bool {
     found, dst, name :: time.offset_of(zone, time.from_utc(time.DateTime.{year = year, month = month, day = 15, hour = 12}))
     return found == offset && name == abbreviation

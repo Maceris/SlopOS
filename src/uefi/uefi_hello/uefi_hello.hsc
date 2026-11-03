@@ -1,4 +1,4 @@
-/*
+/**
  * A UEFI program (roadmap B1, decisions/0131, 0132): the test of Hemera's UEFI target, which boot.py --efi runs under
  * QEMU's UEFI firmware. It adds up numbers in memory from the boot services' pool, says so through base's logger on
  * the firmware's console, and turns the machine off.

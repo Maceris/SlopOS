@@ -30,19 +30,19 @@ WINDOW_ALIGNMENT : u64 : 1 << 30
 // The kernel half on 4-level paging: its lowest address, and the top 2 GiB, where kernels are loaded.
 KERNEL_HALF_LOW : u64 : 0xffff800000000000
 KERNEL_IMAGE_REGION : u64 : 0xffffffff80000000
-// Free extents the window keeps track of: more fragmentation than that is a bug.
+/** Free extents the window keeps track of: more fragmentation than that is a bug. */
 MAX_WINDOW_EXTENTS :: 64
 
 DEVICE_MAPPING :: arch_interface.Mapping.{protection = .ReadWrite, cache = .Device, user = false, global = true}
 
 WindowError :: enum {
-    // No free range of the window is that big.
+    /** No free range of the window is that big. */
     OutOfAddresses,
-    // No frames for its page tables.
+    /** No frames for its page tables. */
     OutOfMemory,
 }
 
-// A free range of the window, in bytes.
+/** A free range of the window, in bytes. */
 Extent :: struct {
     start : u64,
     size : u64,
@@ -55,7 +55,7 @@ Window :: struct {
     free : Extent[MAX_WINDOW_EXTENTS],
 }
 
-/*
+/**
  * Place the window, once the direct map's size is known: a random 1 GiB boundary in the kernel half,
  * below or above the direct map, and below the region kernels are loaded in. Every such boundary is
  * as likely; with no_kaslr it's the lowest.
@@ -74,7 +74,7 @@ start_window :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo], direc
     runtime.log_info("kernel window at %{#018x}", base)
 }
 
-/*
+/**
  * 64 random bits for laying out the kernel's own regions: the CPU's random source, mixed with the
  * bootloader's, if either has any. 0 without either.
  */
@@ -103,7 +103,7 @@ random_seed :: fn(info: ptr[boot_info.BootInfo]) -> u64 {
     return seed
 }
 
-/*
+/**
  * Map size bytes of device registers from physical on, uncached: where they are. physical needn't be
  * page aligned; what's around it in its pages is mapped too.
  */
@@ -114,13 +114,13 @@ map_device :: fn(kernel: ptr[mut Kernel], physical: boot_info.PhysicalAddress, s
     return .Ok(address + (cast[u64](physical) - start))
 }
 
-// Unmap what map_device mapped: its address and size, as map_device was given and gave.
+/** Unmap what map_device mapped: its address and size, as map_device was given and gave. */
 unmap_device :: fn(kernel: ptr[mut Kernel], address: u64, size: u64) {
     start :: address & ~(frames.FRAME_SIZE - 1)
     unmap_from_window(kernel, start, frames.round_up(address + size, frames.FRAME_SIZE) - start)
 }
 
-// Map size bytes, a multiple of a page, from physical on, with mapping: where.
+/** Map size bytes, a multiple of a page, from physical on, with mapping: where. */
 map_in_window :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64, mapping: arch_interface.Mapping) -> Result[u64, WindowError] {
     address :: take_addresses(&kernel.window, size) or_return .Error(.OutOfAddresses)
     mapper : Mapper
@@ -133,7 +133,7 @@ map_in_window :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64, mapping: 
     return .Ok(address)
 }
 
-/*
+/**
  * Unmap size bytes at address, a multiple of a page, then shoot down the TLB entries, and only then
  * free the tables it emptied and the addresses.
  */
@@ -177,7 +177,7 @@ free_tables :: fn(kernel: ptr[mut Kernel], freed: ptr[mut arch_interface.FreedTa
     freed.count = 0
 }
 
-// The table frames no mapping took, back to this CPU's frame cache.
+/** The table frames no mapping took, back to this CPU's frame cache. */
 give_back_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[mut arch_interface.TableFrames]) {
     count :: cast[usize](tables.count)
     runtime.assert(count <= 4, "TableFrames holds 4 frames")
@@ -187,7 +187,7 @@ give_back_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[mut arch_interface.T
     tables.count = 0
 }
 
-// size bytes of the window's addresses, the first free range that's big enough: their start.
+/** size bytes of the window's addresses, the first free range that's big enough: their start. */
 take_addresses :: fn(window: ptr[mut Window], size: u64) -> u64? {
     lock_at(&window.lock, .Window)
     defer unlock_at(&window.lock, .Window)
@@ -208,7 +208,7 @@ take_addresses :: fn(window: ptr[mut Window], size: u64) -> u64? {
     return null
 }
 
-// Give back addresses take_addresses gave, merged with the free ranges on either side.
+/** Give back addresses take_addresses gave, merged with the free ranges on either side. */
 give_addresses :: fn(window: ptr[mut Window], start: u64, size: u64) {
     lock_at(&window.lock, .Window)
     defer unlock_at(&window.lock, .Window)
@@ -246,7 +246,7 @@ give_addresses :: fn(window: ptr[mut Window], start: u64, size: u64) {
     window.count = count + 1
 }
 
-// Where a free range ends.
+/** Where a free range ends. */
 extent_end :: fn(window: ptr[Window], index: usize) -> u64 {
     runtime.assert(index < MAX_WINDOW_EXTENTS, "extent_end takes one of the free ranges")
     return window.free[index].start + window.free[index].size

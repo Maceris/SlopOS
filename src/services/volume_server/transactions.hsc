@@ -32,7 +32,9 @@ Op :: enum #backed_by(u32) {
     Rename = 5,
 }
 
-// A logged change: what, a number (a write's offset, a size, a file's creation), its data's bytes, and its paths' bytes.
+/**
+ * A logged change: what, a number (a write's offset, a size, a file's creation), its data's bytes, and its paths' bytes.
+ */
 LogHead :: struct #packed {
     op : u32le,
     creation : u32le,
@@ -59,11 +61,11 @@ Transaction :: struct {
     used : u64,
     versions : Version[MAX_VERSIONS],
     version_count : usize,
-    // Too many versions to check, so its commit is refused as a conflict
+    /** Too many versions to check, so its commit is refused as a conflict */
     overflowed : bool,
 }
 
-// A transaction begun beneath directory, its log in memory, mapped here: its index, or null.
+/** A transaction begun beneath directory, its log in memory, mapped here: its index, or null. */
 begin :: fn(server: ptr[mut Server], directory: u64, memory: slop_os.Memory) -> usize? {
     for transaction, i in server.transactions {
         if transaction.active {
@@ -86,7 +88,7 @@ begin :: fn(server: ptr[mut Server], directory: u64, memory: slop_os.Memory) -> 
     return null
 }
 
-// A transaction ended, its log given back.
+/** A transaction ended, its log given back. */
 end_transaction :: fn(server: ptr[mut Server], index: usize) {
     if index >= server.transactions.count || !server.transactions[index].active {
         return void
@@ -98,7 +100,7 @@ end_transaction :: fn(server: ptr[mut Server], index: usize) {
     server.transactions[index] = Transaction.{}
 }
 
-// A transaction's log emptied, to begin again after a commit or an abort.
+/** A transaction's log emptied, to begin again after a commit or an abort. */
 reset :: fn(server: ptr[mut Server], index: usize) {
     if index < server.transactions.count {
         server.transactions[index].used = 0
@@ -107,7 +109,7 @@ reset :: fn(server: ptr[mut Server], index: usize) {
     }
 }
 
-// A change logged: false if the log is full.
+/** A change logged: false if the log is full. */
 log_op :: fn(server: ptr[mut Server], index: usize, op: Op, creation: u32, number: u64, path: string, to: string, data: u8[]) -> bool {
     if index >= server.transactions.count {
         return false
@@ -129,7 +131,7 @@ log_op :: fn(server: ptr[mut Server], index: usize, op: Op, creation: u32, numbe
     return true
 }
 
-// bytes put in log at at, as far as they fit: where the next go.
+/** bytes put in log at at, as far as they fit: where the next go. */
 put_bytes :: fn(log: mut u8[], at: usize, bytes: u8[]) -> usize {
     for byte, i in bytes {
         j :: at + i
@@ -140,13 +142,13 @@ put_bytes :: fn(log: mut u8[], at: usize, bytes: u8[]) -> usize {
     return at + bytes.count
 }
 
-// No bytes, for a logged change with no data.
+/** No bytes, for a logged change with no data. */
 nothing :: fn() -> u8[] {
     empty :: ""
     return view_of(cast[ptr[u8]](empty.data), 0)
 }
 
-/*
+/**
  * The version of what's at path beneath a transaction's directory recorded, and of the directory it's in: committed
  * first if either has changes not yet committed, so a later change is a newer version. False if the volume can't
  * commit.
@@ -200,7 +202,7 @@ note_versions :: fn(server: ptr[mut Server], index: usize, path: string) -> bool
     return true
 }
 
-// A logged change, read back from the log, which its client could have changed, so it's checked as it's read.
+/** A logged change, read back from the log, which its client could have changed, so it's checked as it's read. */
 Logged :: struct {
     op : u32,
     creation : u32,
@@ -235,7 +237,7 @@ creation_of :: fn(number: u32) -> files.Creation {
     return if number == 2 { .New } else if number == 3 { .Either } else if number == 4 { .Truncate } else { .Existing }
 }
 
-/*
+/**
  * A transaction committed: checked, applied whole and made durable, or Failed with why. Its log is emptied either way,
  * to begin again.
  */
@@ -296,7 +298,7 @@ commit_transaction :: fn(server: ptr[mut Server], index: usize) -> dir.Response 
     return .Done
 }
 
-// One logged change applied beneath directory: what went wrong, or null.
+/** One logged change applied beneath directory: what went wrong, or null. */
 apply :: fn(server: ptr[mut Server], directory: u64, logged: ptr[Logged]) -> files.FileError? {
     volume :: server.volume
     if logged.op == cast[u32](Op.OpenFile) {
@@ -330,7 +332,9 @@ apply :: fn(server: ptr[mut Server], directory: u64, logged: ptr[Logged]) -> fil
     return files.FileError.InvalidPath
 }
 
-// The volume back at its last commit, record: its dirty nodes forgotten, and the container service's changes for it undone.
+/**
+ * The volume back at its last commit, record: its dirty nodes forgotten, and the container service's changes for it undone.
+ */
 undo :: fn(server: ptr[mut Server], committed: slopfs.VolumeRecord) {
     _ = ask(server, .Abandon)
     slopfs.forget(server.volume, committed)
@@ -339,7 +343,7 @@ undo :: fn(server: ptr[mut Server], committed: slopfs.VolumeRecord) {
 
 // Replace and orphans
 
-// Whether a connection other than skip has object open.
+/** Whether a connection other than skip has object open. */
 has_open :: fn(server: ptr[Server], object: u64, skip: usize) -> bool {
     for connection, i in server.connections {
         if i < server.count && i != skip && connection.object == object
@@ -350,7 +354,7 @@ has_open :: fn(server: ptr[Server], object: u64, skip: usize) -> bool {
     return false
 }
 
-// An orphan given back once nothing has it open.
+/** An orphan given back once nothing has it open. */
 release_if_unused :: fn(server: ptr[mut Server], object: u64, skip: usize) {
     if object == 0 || has_open(server, object, skip) {
         return void
@@ -365,7 +369,7 @@ release_if_unused :: fn(server: ptr[mut Server], object: u64, skip: usize) {
     }
 }
 
-/*
+/**
  * What's at path beneath directory removed: a file someone has open is orphaned, so they go on reading it, and given
  * back when the last of them is done.
  */
@@ -385,7 +389,7 @@ removed :: fn(server: ptr[mut Server], directory: u64, path: string) -> files.Fi
     }
 }
 
-// A Replace: a new orphan to be the file at path beneath directory once it's installed.
+/** A Replace: a new orphan to be the file at path beneath directory once it's installed. */
 replacement_of :: fn(server: ptr[mut Server], directory: u64, path: string) -> dir.Response {
     volume :: server.volume
     leaf := slopfs.Leaf.{}
@@ -415,7 +419,7 @@ replacement_of :: fn(server: ptr[mut Server], directory: u64, path: string) -> d
     }
 }
 
-// A replacement installed at its name, the file it replaced given back once nothing has it, and made durable.
+/** A replacement installed at its name, the file it replaced given back once nothing has it, and made durable. */
 installed :: fn(server: ptr[mut Server], index: usize) -> files.FileError? {
     if index >= server.connections.count {
         return files.FileError.InvalidPath
@@ -433,7 +437,7 @@ installed :: fn(server: ptr[mut Server], index: usize) -> files.FileError? {
 
 // Change cursors
 
-/*
+/**
  * A Changes answer for a directory: the first change beneath it at or after cursor, its name the path from the
  * directory as it now is (as far as each directory on the way can still be found), or UpToDate, or Resync.
  */
@@ -467,7 +471,7 @@ changes_of :: fn(server: ptr[mut Server], directory: u64, cursor: u64, out: ptr[
     return .Changed(files.Change.{kind = kind, name = os.append(out, path[0..<shown]), next = found.next})
 }
 
-/*
+/**
  * The path from directory to object, through each object's parent, into path: its length, or 0 if object isn't
  * beneath it any more or a name on the way can't be found.
  */
@@ -523,7 +527,7 @@ path_to :: fn(server: ptr[mut Server], directory: u64, object: u64, path: mut u8
     return length
 }
 
-// The name object has in directory, found by listing it: its length in name.
+/** The name object has in directory, found by listing it: its length in name. */
 name_in :: fn(volume: ptr[mut slopfs.Volume], directory: u64, object: u64, name: mut u8[]) -> usize? {
     cursor : u64 = 0
     loop {
@@ -536,7 +540,7 @@ name_in :: fn(volume: ptr[mut slopfs.Volume], directory: u64, object: u64, name:
     }
 }
 
-// A Begin: a transaction beneath directory, its log in memory, on a connection of its own.
+/** A Begin: a transaction beneath directory, its log in memory, on a connection of its own. */
 transaction_connection :: fn(server: ptr[mut Server], directory: u64, memory: slop_os.Memory, name: string) -> dir.Response {
     began := begin(server, directory, memory) or_else MAX_TRANSACTIONS
     if began >= MAX_TRANSACTIONS {
@@ -560,7 +564,7 @@ transaction_connection :: fn(server: ptr[mut Server], directory: u64, memory: sl
     }
 }
 
-/*
+/**
  * A file opened in a transaction: the open logged, as creation says, and a connection whose writes are logged too and
  * whose reads see the file as it is, if it's there yet.
  */

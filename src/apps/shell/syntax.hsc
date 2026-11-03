@@ -21,16 +21,16 @@ NodeKind :: enum {
     Statements,
     Let,
     Pipeline,
-    // A pipeline's ? after it, and `or` with its block
+    /** A pipeline's ? after it, and `or` with its block */
     Try,
     Or,
     Call,
-    // A call's --name, the argument after it its value unless the parameter's a bool
+    /** A call's --name, the argument after it its value unless the parameter's a bool */
     Named,
-    // A bare word in a call
+    /** A bare word in a call */
     Word,
     Literal,
-    // A string with $name in it, filled in when it's evaluated
+    /** A string with $name in it, filled in when it's evaluated */
     Interpolated,
     Variable,
     List,
@@ -39,19 +39,21 @@ NodeKind :: enum {
     Index,
     Unary,
     Binary,
-    // fn name(parameters) { body }: its parameters, then its body
+    /** fn name(parameters) { body }: its parameters, then its body */
     Function,
-    // A function's parameter: its name, its type's name as Text in its value (Null for any), and its default, if any
+    /**
+     * A function's parameter: its name, its type's name as Text in its value (Null for any), and its default, if any
+     */
     Parameter,
-    // return, and the value after it, if any
+    /** return, and the value after it, if any */
     Return,
-    // try { ... } catch name { ... }: the tried block, then the handler; text the name the error's bound to
+    /** try { ... } catch name { ... }: the tried block, then the handler; text the name the error's bound to */
     TryCatch,
 }
 
 Node :: struct {
     kind : NodeKind,
-    // Where it starts in the line
+    /** Where it starts in the line */
     at : usize,
     // A name, a word, an operator, or a string's text
     text : string,
@@ -70,7 +72,7 @@ Parser :: struct {
     error : SyntaxError?,
 }
 
-// A line parsed: its statements, or why it isn't one.
+/** A line parsed: its statements, or why it isn't one. */
 parse :: fn(line: string) -> Result[ptr[mut Node], SyntaxError] {
     // A copy of its own, which the tree's words and names are parts of
     text :: strings.clone(line) or_return .Error(SyntaxError.{message = "there's no memory for it", at = 0})
@@ -110,7 +112,7 @@ peek :: fn(parser: ptr[Parser]) -> u8 {
     return char_at(parser, parser.at)
 }
 
-// Spaces and tabs skipped, and a comment, to the line's end.
+/** Spaces and tabs skipped, and a comment, to the line's end. */
 skip_spaces :: fn(parser: ptr[mut Parser]) {
     loop {
         byte :: peek(parser)
@@ -139,7 +141,7 @@ is_digit :: fn(byte: u8) -> bool {
     return byte >= cast[u8]('0') && byte <= cast[u8]('9')
 }
 
-// A name: a letter or _, then letters, digits, _ and -, as manifests' names are.
+/** A name: a letter or _, then letters, digits, _ and -, as manifests' names are. */
 parse_name :: fn(parser: ptr[mut Parser]) -> string {
     start :: parser.at
     if !is_letter(peek(parser)) {
@@ -159,7 +161,7 @@ slice :: fn(text: string, start: usize, end: usize) -> string {
     return if start <= end && end <= text.count { text[start..<end] } else { "" }
 }
 
-// Whether the word at the parser is keyword, followed by something that ends it.
+/** Whether the word at the parser is keyword, followed by something that ends it. */
 at_keyword :: fn(parser: ptr[Parser], keyword: string) -> bool {
     end :: parser.at + keyword.count
     if slice(parser.text, parser.at, end) != keyword {
@@ -169,7 +171,7 @@ at_keyword :: fn(parser: ptr[Parser], keyword: string) -> bool {
     return !is_letter(after) && !is_digit(after) && after != cast[u8]('-')
 }
 
-// Statements, up to the end, or a } for a block's.
+/** Statements, up to the end, or a } for a block's. */
 parse_statements :: fn(parser: ptr[mut Parser], in_block: bool) -> ptr[mut Node] {
     made :: node(.Statements, parser.at)
     loop {
@@ -247,7 +249,7 @@ parse_statement :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return parse_pipeline(parser)
 }
 
-// fn name(a: type = default, ...) { body }
+/** fn name(a: type = default, ...) { body } */
 parse_function :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     made :: node(.Function, parser.at)
     parser.at += 2
@@ -307,7 +309,7 @@ parse_function :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return made
 }
 
-// element (| element)*, then ? or `or { ... }`.
+/** element (| element)*, then ? or `or { ... }`. */
 parse_pipeline :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     skip_spaces(parser)
     start :: parser.at
@@ -346,7 +348,7 @@ parse_pipeline :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return made
 }
 
-// { statements }
+/** { statements } */
 parse_block :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     if peek(parser) != cast[u8]('{') {
         fail(parser, "a block starts with {")
@@ -362,7 +364,7 @@ parse_block :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return made
 }
 
-// A call, for a bare word in command position; an expression otherwise.
+/** A call, for a bare word in command position; an expression otherwise. */
 parse_element :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     skip_spaces(parser)
     if is_letter(peek(parser)) && !at_keyword(parser, "true") && !at_keyword(parser, "false") && !at_keyword(parser, "null")
@@ -372,7 +374,7 @@ parse_element :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return parse_expression(parser)
 }
 
-// A call: its name, then arguments up to | ; ) } or ? or `or`, or the line's end.
+/** A call: its name, then arguments up to | ; ) } or ? or `or`, or the line's end. */
 parse_call :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     made :: node(.Call, parser.at)
     made.text = parse_name(parser)
@@ -397,7 +399,7 @@ parse_call :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return made
 }
 
-// One argument: --name, $name, "text", (expression), [list], or a bare word.
+/** One argument: --name, $name, "text", (expression), [list], or a bare word. */
 parse_argument :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     start :: parser.at
     byte :: peek(parser)
@@ -463,7 +465,7 @@ parse_binary :: fn(parser: ptr[mut Parser], level: usize) -> ptr[mut Node] {
     return left
 }
 
-// Which of operators is at the parser: a word one only as a whole word.
+/** Which of operators is at the parser: a word one only as a whole word. */
 operator_at :: fn(parser: ptr[Parser], operators: string[]) -> string? {
     for operator in operators {
         if is_letter(cast[u8](operator[0 % operator.count])) {
@@ -498,7 +500,7 @@ parse_unary :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return parse_postfix(parser, parse_primary(parser))
 }
 
-// .field and [index] after a value.
+/** .field and [index] after a value. */
 parse_postfix :: fn(parser: ptr[mut Parser], base #escaping : ptr[mut Node]) -> ptr[mut Node] {
     made := base
     loop {
@@ -596,7 +598,7 @@ parse_primary :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return node(.Literal, start)
 }
 
-// A list's items, or a record's name: value pairs, separated by commas, up to close.
+/** A list's items, or a record's name: value pairs, separated by commas, up to close. */
 parse_items :: fn(parser: ptr[mut Parser], made: ptr[mut Node], close: u8, named: bool) {
     loop {
         skip_spaces(parser)
@@ -638,7 +640,7 @@ parse_items :: fn(parser: ptr[mut Parser], made: ptr[mut Node], close: u8, named
     }
 }
 
-// "text", with \n \t \" \\ \$ escapes; $name in it is filled in when it's evaluated.
+/** "text", with \n \t \" \\ \$ escapes; $name in it is filled in when it's evaluated. */
 parse_quoted :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     start :: parser.at
     parser.at += 1
@@ -678,7 +680,7 @@ parse_quoted :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return made
 }
 
-// A number, with a size's or a duration's unit after it if it has one.
+/** A number, with a size's or a duration's unit after it if it has one. */
 parse_number :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     start :: parser.at
     value := cast[u64](0)

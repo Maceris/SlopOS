@@ -1,4 +1,4 @@
-/*
+/**
  * The keymaps' tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the number of
  * the first check that failed. The US layout types letters, digits and punctuation with and without shift, Enter and
  * Tab their characters, and Escape and Backspace nothing; the UK layout its own shifted keys, £ among them; and the

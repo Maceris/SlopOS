@@ -13,13 +13,13 @@ import dir from "std/os/slop_os"
  * body meets is fatal unless the statement has ?, which makes it the function's own, for its caller to handle.
  */
 
-// How deep calls of shell functions go before the shell says so.
+/** How deep calls of shell functions go before the shell says so. */
 MAX_DEPTH :: 64
 
-// The types a function's parameters can have.
+/** The types a function's parameters can have. */
 TYPE_NAMES :: string.["int", "size", "duration", "bool", "string", "path", "list", "record"]
 
-// A function defined, replacing one of the same name; the built-ins' names are theirs.
+/** A function defined, replacing one of the same name; the built-ins' names are theirs. */
 define :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     if tree.text == "print" || tree.text == "exit" || tree.text == "cd" {
         return error_at(tree.at, message("% is built in", tree.text))
@@ -60,7 +60,9 @@ function_named :: fn(shell: ptr[Shell], name: string) -> ptr[Node]? {
     return null
 }
 
-// A function's call: its arguments matched to its parameters and bound in a scope of its own, and its body run there.
+/**
+ * A function's call: its arguments matched to its parameters and bound in a scope of its own, and its body run there.
+ */
 call_function :: fn(shell: ptr[mut Shell], function #escaping : ptr[Node], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     if shell.depth >= MAX_DEPTH {
         return error_at(tree.at, message("% calls functions more than % deep", tree.text, MAX_DEPTH))
@@ -192,13 +194,13 @@ call_function :: fn(shell: ptr[mut Shell], function #escaping : ptr[Node], tree 
     }
 }
 
-// What a parameter's given: its argument, or for a bool's --name alone, true.
+/** What a parameter's given: its argument, or for a bool's --name alone, true. */
 Matched :: struct {
     node : ptr[Node]?,
     flag : bool,
 }
 
-// A parameter's type's name, "" for any.
+/** A parameter's type's name, "" for any. */
 type_of_parameter :: fn(parameter: ptr[Node]) -> string {
     return match parameter.value {
         case Text(type) => type
@@ -206,7 +208,7 @@ type_of_parameter :: fn(parameter: ptr[Node]) -> string {
     }
 }
 
-// A bare word read as a type: a number, a size or a duration as they're written in expressions, a bool, or text.
+/** A bare word read as a type: a number, a size or a duration as they're written in expressions, a bool, or text. */
 word_as :: fn(type: string, word: string) -> Value? {
     if type == "" || type == "string" || type == "list" || type == "record" {
         return .Text(word)
@@ -230,7 +232,7 @@ word_as :: fn(type: string, word: string) -> Value? {
     }
 }
 
-// Whether a value is of a parameter's type: text is a path, and anything is of no type.
+/** Whether a value is of a parameter's type: text is a path, and anything is of no type. */
 of_type :: fn(type: string, value: Value) -> bool {
     return match value {
         case Null => type == ""
@@ -258,7 +260,7 @@ type_article :: fn(type: string) -> string {
         else if type == "record" { "a record" } else { "text" }
 }
 
-// An error as a value, for catch: a record of its message and where in the line it was.
+/** An error as a value, for catch: a record of its message and where in the line it was. */
 error_record :: fn(error #escaping : EvalError) -> Value {
     made :: new_record()
     set_field(made, "message", .Text(error.message))
@@ -268,7 +270,7 @@ error_record :: fn(error #escaping : EvalError) -> Value {
 
 // ---- The shell's directory
 
-/*
+/**
  * cd: the shell's directory, a path beneath its home, from where it is; alone, its home. It has to be a directory
  * there.
  */
@@ -312,7 +314,7 @@ change_directory :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, 
     return .Ok(.Null)
 }
 
-/*
+/**
  * A path as the shell resolves it, beneath its home: ~ is the home, ~/ starts from it, anything else starts from the
  * shell's directory; . is where it is and .. the directory above, never above the home. The path from the home, ""
  * for the home itself, or why it isn't one.
@@ -341,7 +343,7 @@ resolve_path :: fn(shell: ptr[Shell], given #escaping : string) -> Result[string
     return .Ok(if joined.count > 0 { string_of(&joined[0], joined.count) } else { "" })
 }
 
-// A path's parts added to parts: . skipped, .. taking the last away; an error past the home.
+/** A path's parts added to parts: . skipped, .. taking the last away; an error past the home. */
 add_parts :: fn(parts: ptr[mut string[..]], path #escaping : string) -> Result[string, string] {
     start : usize = 0
     for i in 0..<path.count + 1 {

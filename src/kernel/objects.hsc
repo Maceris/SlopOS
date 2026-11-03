@@ -21,16 +21,16 @@ import robustness from "../robustness"
 //SPEC: McKenney and Slingwine, "Read-Copy Update: Using Execution History to Solve Concurrency Problems"
 //      (PDCS 1998), quiescent-state-based reclamation
 
-// At the start of every kernel object.
+/** At the start of every kernel object. */
 ObjectHeader :: struct {
-    // The slab allocator's, while the slot is free (slab.hsc), so it never touches what follows.
+    /** The slab allocator's, while the slot is free (slab.hsc), so it never touches what follows. */
     free_link : u64,
     // Changed when the object is destroyed, so every handle to it goes stale.
     generation : u32,
     kind : slop_os.ObjectKind,
-    // 1 once its destruction starts: lookups fail from then on, and it's destroyed only once.
+    /** 1 once its destruction starts: lookups fail from then on, and it's destroyed only once. */
     dying : u32,
-    // The Process that owns it, as an address, 0 for one owned by the kernel itself.
+    /** The Process that owns it, as an address, 0 for one owned by the kernel itself. */
     owner : u64,
     // Its neighbors among what its owner owns, and whether it's linked there.
     owned_next : u64,
@@ -39,7 +39,7 @@ ObjectHeader :: struct {
     // On its CPU's limbo list once destroyed, with the epoch it was destroyed in.
     limbo_next : u64,
     limbo_epoch : u64,
-    // On its CPU's list of objects to destroy once what it's destroying now is done (destroy_later).
+    /** On its CPU's list of objects to destroy once what it's destroying now is done (destroy_later). */
     doomed_next : u64,
     // The MemoryBudget it's charged to, 0 for the kernel's own, and how much, with what it holds
     // (memory_budgets.hsc); its neighbors on that budget's list, under the budget's lock.
@@ -49,7 +49,7 @@ ObjectHeader :: struct {
     charged_previous : u64,
 }
 
-// What an owner keeps of what it owns.
+/** What an owner keeps of what it owns. */
 OwnedList :: struct {
     lock : concurrency.SpinLock,
     first : u64,
@@ -57,13 +57,13 @@ OwnedList :: struct {
 
 ObjectError :: enum {
     OutOfMemory,
-    // The owner it would belong to is being destroyed.
+    /** The owner it would belong to is being destroyed. */
     OwnerGone,
-    // The budget paying for it can't (memory_budgets.hsc).
+    /** The budget paying for it can't (memory_budgets.hsc). */
     BudgetExceeded,
 }
 
-/*
+/**
  * The kernel's objects, one field per kind (decisions/0034, 0057): its type is the object, named as its
  * kind is in slop_os.ObjectKind, and its name names the kind's destroy_ and release_ functions. The code
  * for each kind, its pool and its destruction, is generated from this table.
@@ -86,17 +86,17 @@ KernelObjects :: struct {
     io_port_range : IoPortRange,
 }
 
-// Pools for kinds by their slop_os.ObjectKind value, which is below this.
+/** Pools for kinds by their slop_os.ObjectKind value, which is below this. */
 OBJECT_KIND_SLOTS :: 16
 
-// The pools, type-stable (slab.hsc): one per kind of object, and the other things objects hold.
+/** The pools, type-stable (slab.hsc): one per kind of object, and the other things objects hold. */
 ObjectPools :: struct {
     objects : slab.SlabCache[OBJECT_KIND_SLOTS],
-    // Port bindings, which aren't objects but are reached the same way (ports.hsc).
+    /** Port bindings, which aren't objects but are reached the same way (ports.hsc). */
     bindings : slab.SlabCache,
-    // What a channel's ends share (channels.hsc).
+    /** What a channel's ends share (channels.hsc). */
     channel_cores : slab.SlabCache,
-    // Where memory objects are mapped (memory.hsc).
+    /** Where memory objects are mapped (memory.hsc). */
     mappings : slab.SlabCache,
 }
 
@@ -107,7 +107,7 @@ init_pools :: fn(kernel: ptr[mut Kernel]) {
     kernel.pools.mappings = slab.make_cache(cast[u64](size_of(MemoryMapping)), cast[u64](align_of(MemoryMapping)))
 }
 
-// Each kind's pool, made for its object: statements for init_pools.
+/** Each kind's pool, made for its object: statements for init_pools. */
 object_pools :: fn() -> compiler.Code {
     made : compiler.Code[..]
     for field in object_table().members {
@@ -120,7 +120,7 @@ object_pools :: fn() -> compiler.Code {
     return compiler.list(made)
 }
 
-/*
+/**
  * For each kind, a call of its function named prefix and the field's name, like destroy_process, with
  * kernel and object as that kind: statements for where kind, kernel and object are.
  */
@@ -143,7 +143,7 @@ object_table :: fn() -> ptr[compiler.TypeInfoStruct] {
     return cast[ptr[compiler.TypeInfoStruct]](type_info_of(KernelObjects))
 }
 
-// The kind a table field is: the ObjectKind member named as its type is.
+/** The kind a table field is: the ObjectKind member named as its type is. */
 kind_of :: fn(field: compiler.StructMember) -> slop_os.ObjectKind {
     name :: cast[ptr[compiler.TypeInfoStruct]](field.member_type).name
     kinds :: cast[ptr[compiler.TypeInfoEnum]](type_info_of(slop_os.ObjectKind))
@@ -175,12 +175,12 @@ object_cache :: fn(size: u64, alignment: u64) -> slab.SlabCache {
     return cache
 }
 
-// The pool for objects of kind.
+/** The pool for objects of kind. */
 pool_of :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind) -> ptr[mut slab.SlabCache] {
     return &kernel.pools.objects[cast[usize](cast[u8](kind)) % OBJECT_KIND_SLOTS]
 }
 
-/*
+/**
  * What's left in the pools, once everything but the kernel's own objects should be gone, as when the root task
  * has ended: the kernel keeps the root budget, the root CPU budget and the platform capability, and nothing else.
  */
@@ -210,7 +210,7 @@ log_objects_left :: fn(kernel: ptr[mut Kernel]) {
     }
 }
 
-/*
+/**
  * A zeroed object of kind from its pool: its address. It keeps the generation its slot had, so handles
  * to whatever was there before stay stale. It's charged to budget (a MemoryBudget's address, 0 for the
  * kernel's own): its slot, and extra bytes for what it holds.
@@ -230,7 +230,7 @@ new_object :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind, budget: u64,
     return .Ok(address)
 }
 
-/*
+/**
  * Give object to owner, a Process (0 for the kernel): unless owner is being destroyed, when object would
  * outlive it.
  */
@@ -258,7 +258,7 @@ adopt :: fn(owner: u64, object: u64) -> Result[void, ObjectError] {
     return .Ok
 }
 
-// Take object off its owner's list, if it's on it.
+/** Take object off its owner's list, if it's on it. */
 disown :: fn(object: u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
     if header.owner == 0 {
@@ -283,7 +283,7 @@ disown :: fn(object: u64) {
     header.owned = false
 }
 
-// The first object list's owner owns, taken off it, or 0.
+/** The first object list's owner owns, taken off it, or 0. */
 take_owned :: fn(list: ptr[mut OwnedList]) -> u64 {
     lock_at(&list.lock, .ObjectList)
     defer unlock_at(&list.lock, .ObjectList)
@@ -300,13 +300,13 @@ take_owned :: fn(list: ptr[mut OwnedList]) -> u64 {
     return first
 }
 
-// Whether object is the live object with generation: a handle's check.
+/** Whether object is the live object with generation: a handle's check. */
 is_live :: fn(object: u64, generation: u32) -> bool {
     header :: cast[ptr[ObjectHeader]](object)
     return intrinsics.atomic_load_u32_acquire(&header.generation) == generation && intrinsics.atomic_load_u32_acquire(&header.dying) == 0
 }
 
-/*
+/**
  * Destroy an object, once: every handle to it goes stale, what it owns or holds is destroyed or let go
  * (each kind's destroy), and its memory goes back to its pool after a grace period. False if it was
  * already being destroyed.
@@ -342,7 +342,7 @@ destroy_object :: fn(kernel: ptr[mut Kernel], object: u64) -> bool {
     return true
 }
 
-/*
+/**
  * Destroy object, if it's still the one with generation: at once, or, during another destroy on this
  * CPU, once that's done. So objects that hold one another, a channel end in a batch on another
  * channel, and so on, are destroyed one after another, never nested deeper than one.
@@ -361,7 +361,7 @@ destroy_later :: fn(kernel: ptr[mut Kernel], object: u64, generation: u32) {
     cpu.doomed = object
 }
 
-/*
+/**
  * Put a destroyed object on this CPU's limbo list, in the epoch it was destroyed in, which advances, so
  * it's freed once every CPU has passed a quiescent point in a later one.
  */
@@ -373,7 +373,7 @@ retire :: fn(kernel: ptr[mut Kernel], object: u64) {
     cpu.limbo = object
 }
 
-/*
+/**
  * A quiescent point on this CPU: it holds no object pointer from before now. Frees what's been in its
  * limbo long enough. Called with the epoch read before the caller's last check of what it resumes.
  */
@@ -403,13 +403,13 @@ pass_quiescent :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], epoch: u64) 
     cpu.limbo = kept
 }
 
-/*
+/**
  * The quiescent epoch of a CPU idle without ticking (decisions/0128): it holds nothing, so it's past every quiescent
  * point until an interrupt wakes it, which records the epoch then before anything runs (leave_idle).
  */
 IDLE_EPOCH : u64 : 0xffffffffffffffff
 
-// The earliest epoch an online CPU last passed a quiescent point in.
+/** The earliest epoch an online CPU last passed a quiescent point in. */
 oldest_quiescent :: fn(kernel: ptr[Kernel]) -> u64 {
     per_cpus :: kernel.per_cpus
     online :: cast[usize](intrinsics.atomic_load_u32_acquire(&kernel.online_cpus))
@@ -424,7 +424,7 @@ oldest_quiescent :: fn(kernel: ptr[Kernel]) -> u64 {
     return oldest
 }
 
-// Free a destroyed object's memory, and what it held that no CPU could still use.
+/** Free a destroyed object's memory, and what it held that no CPU could still use. */
 release_object :: fn(kernel: ptr[mut Kernel], object: u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
     kind :: header.kind

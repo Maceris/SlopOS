@@ -1,4 +1,4 @@
-/*
+/**
  * Accounts (decisions/0141, roadmap 10b): the rules a name and a password are held to, and an account's record, which
  * keeps its home volume's secret wrapped twice: by a key Argon2id derives from the password, and by one derived from
  * the recovery code. A wrong password is found by its wrap not opening, so nothing else of it is kept.
@@ -25,25 +25,25 @@ MIN_PASSWORD_CHARACTERS : usize : 8
 MAX_PASSWORD_BYTES : usize : 256
 MAX_NAME_BYTES : usize : 32
 
-// Argon2id's parameters for a password: RFC 9106's second recommendation, 64 MiB, 3 passes, 4 lanes.
+/** Argon2id's parameters for a password: RFC 9106's second recommendation, 64 MiB, 3 passes, 4 lanes. */
 PASSWORD_ARGON2 :: crypto.Argon2Parameters.{memory_kib = 65536, passes = 3, lanes = 4}
 
-// Why a password is refused.
+/** Why a password is refused. */
 PasswordProblem :: enum #backed_by(u8) {
     TooShort = 1,
     TooLong = 2,
-    // Among the most common passwords
+    /** Among the most common passwords */
     Common = 3,
-    // The account's name, ignoring ASCII case
+    /** The account's name, ignoring ASCII case */
     IsName = 4,
 }
 
 ADMINISTRATOR : u32 : 1
 RECORD_VERSION : u32 : 2
-// A record from before key pairs: the same, without its last 80 bytes, which its next login adds
+/** A record from before key pairs: the same, without its last 80 bytes, which its next login adds */
 RECORD_V1_BYTES :: 192
 
-/*
+/**
  * An account, as the account service keeps it: its name, whether it's the administrator, and its home volume's secret
  * sealed by a key from the password (Argon2id's parameters and salt beside it) and by one from the recovery code.
  */
@@ -70,7 +70,7 @@ AccountRecord :: struct #packed {
 
 #assert size_of(AccountRecord) == 272
 
-// A share's secret, sealed to a member: the ephemeral public key it was agreed with, and the secret, sealed.
+/** A share's secret, sealed to a member: the ephemeral public key it was agreed with, and the secret, sealed. */
 SealedShare :: struct #packed {
     ephemeral : u8[32],
     wrapped : u8[32],
@@ -86,7 +86,9 @@ ShareMember :: struct #packed {
     sealed : SealedShare,
 }
 
-// A shared volume: its name, its owner's, and its members, the owner first, each with the volume's secret sealed to them.
+/**
+ * A shared volume: its name, its owner's, and its members, the owner first, each with the volume's secret sealed to them.
+ */
 ShareRecord :: struct #packed {
     version : u32le,
     name_bytes : u32le,
@@ -95,7 +97,7 @@ ShareRecord :: struct #packed {
     members : ShareMember[MAX_MEMBERS],
 }
 
-// The recovery code: 125 random bits, its top 3 bits 0.
+/** The recovery code: 125 random bits, its top 3 bits 0. */
 RecoveryCode :: distinct alias u8[16] #secret
 
 RECOVERY_SYMBOLS : usize : 25
@@ -103,7 +105,7 @@ RECOVERY_SYMBOLS : usize : 25
 RECOVERY_TEXT_BYTES : usize : 29
 CROCKFORD :: "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
-// Whether a name is one an account may have: 1 to 32 bytes, a lowercase ASCII letter, then letters, digits, - or _.
+/** Whether a name is one an account may have: 1 to 32 bytes, a lowercase ASCII letter, then letters, digits, - or _. */
 valid_name :: fn(name: u8[]) -> bool {
     if name.count == 0 || name.count > MAX_NAME_BYTES {
         return false
@@ -118,7 +120,7 @@ valid_name :: fn(name: u8[]) -> bool {
     return true
 }
 
-// What's wrong with a password for the account named name, if anything.
+/** What's wrong with a password for the account named name, if anything. */
 password_problem :: fn(name: u8[], password: u8[]) -> PasswordProblem? {
     if password.count > MAX_PASSWORD_BYTES {
         return .TooLong
@@ -164,7 +166,7 @@ ascii_lower :: fn(byte: u8) -> u8 {
     return if byte >= cast[u8]('A') && byte <= cast[u8]('Z') { byte + 32 } else { byte }
 }
 
-// Whether a lowercased password is among the most common, by binary search.
+/** Whether a lowercased password is among the most common, by binary search. */
 is_common :: fn(lowered: u8[]) -> bool {
     low : usize = 0
     high : usize = COMMON_PASSWORDS.count
@@ -190,7 +192,7 @@ is_common :: fn(lowered: u8[]) -> bool {
     return false
 }
 
-// a's order against b's, bytewise: below 0, 0 or above.
+/** a's order against b's, bytewise: below 0, 0 or above. */
 compare :: fn(a: u8[], b: u8[]) -> int {
     for byte, i in a {
         if i >= b.count {
@@ -232,7 +234,7 @@ new_record #constant_time :: fn(name: u8[], administrator: bool, created: u64, p
     return record
 }
 
-// Whether a record has its key pair yet: one made before shared volumes gets it at its next login.
+/** Whether a record has its key pair yet: one made before shared volumes gets it at its next login. */
 has_keys :: fn(record: ptr[AccountRecord]) -> bool {
     for byte in record.public_key {
         if byte != 0 {
@@ -242,7 +244,7 @@ has_keys :: fn(record: ptr[AccountRecord]) -> bool {
     return false
 }
 
-// A new X25519 key pair for record, its secret key sealed by home, the home volume's secret.
+/** A new X25519 key pair for record, its secret key sealed by home, the home volume's secret. */
 set_keys #constant_time :: fn(record: ptr[mut AccountRecord], home: ptr[crypto.Key256]) -> bool {
     secret := random_key()
     defer zero_key(&secret)
@@ -263,7 +265,7 @@ set_keys #constant_time :: fn(record: ptr[mut AccountRecord], home: ptr[crypto.K
     return true
 }
 
-// record's X25519 secret key, unsealed with home, the home volume's secret; None if it has none.
+/** record's X25519 secret key, unsealed with home, the home volume's secret; None if it has none. */
 secret_key #constant_time :: fn(record: ptr[AccountRecord], home: ptr[crypto.Key256]) -> crypto.X25519SecretKey? {
     opened := open_home(home, record.private_wrapped, record.private_tag, record, "key pair") or_return null
     defer zero_key(&opened)
@@ -274,7 +276,9 @@ secret_key #constant_time :: fn(record: ptr[AccountRecord], home: ptr[crypto.Key
     return key
 }
 
-// secret, a shared volume's, sealed to public, a member's X25519 public key, for the share named share; None if their key's no good.
+/**
+ * secret, a shared volume's, sealed to public, a member's X25519 public key, for the share named share; None if their key's no good.
+ */
 seal_share #constant_time :: fn(secret: ptr[crypto.Key256], public: u8[32], share: u8[]) -> SealedShare? {
     random_secret := random_key()
     defer zero_key(&random_secret)
@@ -317,7 +321,7 @@ seal_share #constant_time :: fn(secret: ptr[crypto.Key256], public: u8[32], shar
     return compiler.declassify(made)
 }
 
-// A shared volume's secret, unsealed with a member's secret key and their public key; None if it isn't theirs.
+/** A shared volume's secret, unsealed with a member's secret key and their public key; None if it isn't theirs. */
 open_share #constant_time :: fn(key: ptr[crypto.X25519SecretKey], public: u8[32], sealed: ptr[SealedShare], share: u8[]) -> crypto.Key256? {
     theirs : crypto.X25519PublicKey
     for i in cast[usize](0)..<32 {
@@ -346,7 +350,7 @@ open_share #constant_time :: fn(key: ptr[crypto.X25519SecretKey], public: u8[32]
     return secret
 }
 
-// The key an agreement gives, bound to both public keys: BLAKE3, as the agreement's already uniform.
+/** The key an agreement gives, bound to both public keys: BLAKE3, as the agreement's already uniform. */
 share_key #constant_time :: fn(agreed: ptr[crypto.SecretByte[32]], ephemeral: u8[32], public: u8[32]) -> crypto.Key256 {
     hasher := crypto.blake3_start()
     crypto.blake3_update(&hasher, string_bytes("SlopOS shared volume"))
@@ -362,7 +366,7 @@ share_key #constant_time :: fn(agreed: ptr[crypto.SecretByte[32]], ephemeral: u8
     return key
 }
 
-// What a share's seal is bound to: that it's a share's, and the share's name.
+/** What a share's seal is bound to: that it's a share's, and the share's name. */
 share_associated :: fn(share: u8[]) -> u8[48] {
     associated : u8[48]
     for character, i in "share" {
@@ -378,7 +382,7 @@ share_associated :: fn(share: u8[]) -> u8[48] {
     return associated
 }
 
-// The name a share's record has, and a member's.
+/** The name a share's record has, and a member's. */
 share_name :: fn(record: ptr[ShareRecord]) -> u8[] {
     count :: cast[usize](cast[u32](record.name_bytes))
     return if count <= record.name.count { record.name[0..<count] } else { record.name[0..<0] }
@@ -389,7 +393,7 @@ member_name :: fn(member: ptr[ShareMember]) -> u8[] {
     return if count <= member.name.count { member.name[0..<count] } else { member.name[0..<0] }
 }
 
-// record's password changed: home sealed again by a key from password, with parameters and a new salt.
+/** record's password changed: home sealed again by a key from password, with parameters and a new salt. */
 set_password #constant_time :: fn(record: ptr[mut AccountRecord], home: ptr[crypto.Key256], password: u8[], parameters: crypto.Argon2Parameters) -> bool {
     record.memory_kib = cast[u32le](parameters.memory_kib)
     record.passes = cast[u32le](parameters.passes)
@@ -403,21 +407,23 @@ set_password #constant_time :: fn(record: ptr[mut AccountRecord], home: ptr[cryp
     return true
 }
 
-// The home volume's secret, unsealed with the password: None if it's the wrong one, or Argon2id couldn't have its memory.
+/**
+ * The home volume's secret, unsealed with the password: None if it's the wrong one, or Argon2id couldn't have its memory.
+ */
 unlock_home #constant_time :: fn(record: ptr[AccountRecord], password: u8[]) -> crypto.Key256? {
     key := password_key(password, record) or_return null
     defer zero_key(&key)
     return open_home(&key, record.home_wrapped, record.home_tag, record, "password")
 }
 
-// The home volume's secret, unsealed with the recovery code: None if it's the wrong one.
+/** The home volume's secret, unsealed with the recovery code: None if it's the wrong one. */
 recover_home #constant_time :: fn(record: ptr[AccountRecord], code: ptr[RecoveryCode]) -> crypto.Key256? {
     key := recovery_key(code, record) or_return null
     defer zero_key(&key)
     return open_home(&key, record.recovery_wrapped, record.recovery_tag, record, "recovery")
 }
 
-// The name a record has.
+/** The name a record has. */
 name_of :: fn(record: ptr[AccountRecord]) -> u8[] {
     count :: cast[usize](cast[u32](record.name_bytes))
     return if count <= record.name.count { record.name[0..<count] } else { record.name[0..<0] }
@@ -432,7 +438,7 @@ Sealed :: struct {
     tag : u8[16],
 }
 
-// What a wrap is bound to: what it's for and the account's name.
+/** What a wrap is bound to: what it's for and the account's name. */
 associated_of :: fn(what: string, record: ptr[AccountRecord]) -> u8[48] {
     associated : u8[48]
     for character, i in what {
@@ -446,7 +452,7 @@ associated_of :: fn(what: string, record: ptr[AccountRecord]) -> u8[48] {
     return associated
 }
 
-// home sealed by key, a key used once, since each is new with its salt.
+/** home sealed by key, a key used once, since each is new with its salt. */
 seal_home #constant_time :: fn(key: ptr[crypto.Key256], home: ptr[crypto.Key256], record: ptr[AccountRecord], what: string) -> Sealed? {
     nonce : crypto.Nonce96
     associated :: associated_of(what, record)
@@ -484,7 +490,7 @@ open_home #constant_time :: fn(key: ptr[crypto.Key256], wrapped: u8[32], stored_
     return home
 }
 
-/*
+/**
  * The key Argon2id derives from a password with a record's parameters and salt: None if it couldn't have its memory,
  * which is zeroed before it's given back.
  */
@@ -512,7 +518,7 @@ password_key #constant_time :: fn(password: u8[], record: ptr[AccountRecord]) ->
     return key
 }
 
-// The key a recovery code gives, with a record's recovery salt: BLAKE3, since the code is random already.
+/** The key a recovery code gives, with a record's recovery salt: BLAKE3, since the code is random already. */
 recovery_key #constant_time :: fn(code: ptr[RecoveryCode], record: ptr[AccountRecord]) -> crypto.Key256? {
     hasher := crypto.blake3_start()
     crypto.blake3_update(&hasher, string_bytes("SlopOS account recovery"))
@@ -545,7 +551,7 @@ zero_argon2 #constant_time :: fn(blocks: mut crypto.Argon2Block[]) {
     }
 }
 
-// A new random key, for a home volume's secret.
+/** A new random key, for a home volume's secret. */
 random_key #constant_time :: fn() -> crypto.Key256 {
     bytes : u8[32]
     random.fill(bytes)
@@ -557,7 +563,7 @@ random_key #constant_time :: fn() -> crypto.Key256 {
     return key
 }
 
-// A new recovery code.
+/** A new recovery code. */
 new_recovery_code #constant_time :: fn() -> RecoveryCode {
     bytes : u8[16]
     random.fill(bytes)
@@ -570,7 +576,7 @@ new_recovery_code #constant_time :: fn() -> RecoveryCode {
     return code
 }
 
-// A recovery code as it's shown, once, for its owner to write down: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX.
+/** A recovery code as it's shown, once, for its owner to write down: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX. */
 recovery_text #constant_time :: fn(code: ptr[RecoveryCode]) -> u8[RECOVERY_TEXT_BYTES] {
     // Shown to its owner, which is what it's for
     shown :: compiler.declassify(code^)
@@ -598,7 +604,9 @@ recovery_text #constant_time :: fn(code: ptr[RecoveryCode]) -> u8[RECOVERY_TEXT_
     return text
 }
 
-// A recovery code as its owner types it: 25 symbols, any case, hyphens and spaces ignored, I and L read as 1, O as 0.
+/**
+ * A recovery code as its owner types it: 25 symbols, any case, hyphens and spaces ignored, I and L read as 1, O as 0.
+ */
 parse_recovery :: fn(text: u8[]) -> RecoveryCode? {
     code : RecoveryCode
     symbols : usize = 0
