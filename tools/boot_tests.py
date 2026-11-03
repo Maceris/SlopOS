@@ -248,6 +248,13 @@ TESTS = [
         "--expect-line=[user] echo: its locale is neutral",
         "--expect-console-line=Numbers here look like 1234567.89, and dates like 2026-12-31.",
         "--expect-console-line=echo: ping from the host", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # Hemera's std/terminal line editor (decisions/0164), in echo: "abd", Left, "c" and Enter is abcd; then Up recalls it,
+    # Home and "z" make zabcd
+    ("edits a line with the cursor, and recalls a line from history", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_settle=5", "--console-input=abd\\e[Dc\\r\\p\\e[A\\e[Hz",
+        "--console-input-after=hello: heap and random numbers working",
+        "--expect-console-line=echo: abcd", "--expect-console-line=echo: zabcd", "--expect-line=[user] echo: read zabcd",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # Half a line typed, then hello's lines while it's being typed, which go above it whole (decisions/0147), then the
     # rest: the line's written as typed and answered
     ("keeps the line being typed below what's written meanwhile", 7, [WITH_PROGRAMS,
