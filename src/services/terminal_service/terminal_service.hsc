@@ -142,7 +142,16 @@ Service :: struct {
     serial_connector : slop_os.Channel,
     seat_connector : slop_os.Channel,
     line_end : slop_os.Channel,
+    // Whether a Read to the serial line is waiting for its answer
+    line_reading : bool,
     seat_end : slop_os.Channel,
+    // Whether a Read to the input service is waiting for its answer, and the keys it's given that wait for room
+    // among the decoded input, in order, with their text
+    seat_reading : bool,
+    typed : seat.Event[TYPED_KEYS],
+    typed_count : usize,
+    typed_text : u8[TYPED_TEXT],
+    typed_text_count : usize,
     // What's waiting to be sent on the serial line: a ring, from output_start
     output : u8[OUTPUT_BYTES],
     output_start : usize,
@@ -321,6 +330,9 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
         take_accounts(service, &into)
         take_prompts(service, &into)
         deliver(service, connected)
+        // Keys that waited for room, decoded now that a delivery's made some, and the serial line read again if it waited
+        take_typed(service)
+        read_more(service)
         pump(service)
         draw_framebuffer(service)
         packets : slop_os.Packet[8]
@@ -374,6 +386,7 @@ dial_serial :: fn(service: ptr[mut Service]) {
         }
     }
     service.line_end = line.end
+    service.line_reading = false
     service.in_flight = 0
     // Firmware may have left a line unfinished on the same console
     storage : u8[96]
@@ -405,6 +418,7 @@ dial_seat :: fn(service: ptr[mut Service]) {
         }
     }
     service.seat_end = keys.end
+    service.seat_reading = false
     read_seat(service)
 }
 
@@ -1182,19 +1196,31 @@ pump :: fn(service: ptr[mut Service]) {
     }
 }
 
-// Another Read, held by the driver until something's typed.
+/*
+ * Another Read, held by the driver until something's typed, unless one's waiting: for as many bytes as the decoded
+ * input has room for events, each byte at most one, so typing faster than a client reads waits in the driver rather than
+ * being dropped here; with too little room, it's asked once a delivery makes some.
+ */
 read_more :: fn(service: ptr[mut Service]) {
+    if service.line_end == NONE || service.line_reading || service.decoded.count + FEED_SLICE > service.decoded.events.count {
+        return void
+    }
+    room :: service.decoded.events.count - service.decoded.count
     out := os.Outgoing.{}
     request :: os.begin[serial.Request](&out)
-    request^ = .Read(serial.MAX_BYTES)
-    _ = serial.send_request(service.line_end, service.port, &out)
+    request^ = .Read(cast[u32](if room < cast[usize](serial.MAX_BYTES) { room } else { cast[usize](serial.MAX_BYTES) }))
+    service.line_reading = serial.send_request(service.line_end, service.port, &out) is_none
 }
 
+// A Read to the input service, unless one's waiting.
 read_seat :: fn(service: ptr[mut Service]) {
+    if service.seat_end == NONE || service.seat_reading {
+        return void
+    }
     out := os.Outgoing.{}
     request :: os.begin[seat.Request](&out)
     request^ = .Read(seat.MAX_EVENTS)
-    _ = seat.send_request(service.seat_end, service.port, &out)
+    service.seat_reading = seat.send_request(service.seat_end, service.port, &out) is_none
 }
 
 // What the serial line answered: Writes taken, and bytes typed, decoded. A line that's gone, dialed again.
@@ -1209,6 +1235,7 @@ take_serial :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
             case Failed(error) => {
                 _ = slop_os.handle_close(cast[slop_os.Handle](service.line_end))
                 service.line_end = NONE
+                service.line_reading = false
                 runtime.log_info("its serial line went; dialing again")
                 dial_serial(service)
                 // Read the new one until it's empty, since only a read that finds nothing has its next answer wake the port
@@ -1225,6 +1252,7 @@ take_serial :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 pump(service)
             }
             case Data(given) => {
+                service.line_reading = false
                 // A slice at a time, each slice's keys looked at before the next: what the trusted path's screens take
                 // is gone once they've taken it, so typing faster than events are held loses none of theirs
                 bytes :: os.items(into, given)
@@ -1368,6 +1396,7 @@ take_seat :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
             case Failed(error) => {
                 _ = slop_os.handle_close(cast[slop_os.Handle](service.seat_end))
                 service.seat_end = NONE
+                service.seat_reading = false
                 runtime.log_info("the input service went; dialing again")
                 dial_seat(service)
                 if cast[slop_os.Handle](service.seat_end) == slop_os.NO_HANDLE {
@@ -1379,12 +1408,12 @@ take_seat :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
         }
         match os.message_of[seat.Response](into)^ {
             case Input(given) => {
+                service.seat_reading = false
                 text :: os.items(into, given.text)
-                first :: service.decoded.count
                 for event in os.items(into, given.events) {
                     take_seat_event(service, event, text)
                 }
-                screen_keys(service, first)
+                take_typed(service)
                 read_seat(service)
             }
             case _ => {}
@@ -1392,11 +1421,19 @@ take_seat :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
     }
 }
 
+// The most keys kept waiting for room among the decoded input, and their text's bytes; and the most text one key has.
+TYPED_KEYS :: 256
+TYPED_TEXT :: 1024
+KEY_TEXT :: 8
+
 take_seat_event :: fn(service: ptr[mut Service], event: seat.Event, text: u8[]) {
     kind :: seat.kind_of(event) or_return void
     match kind {
         case .SecureAttention => {
             if service.setup == .Off {
+                // Keys typed before it are for what was shown, not the trusted path
+                service.typed_count = 0
+                service.typed_text_count = 0
                 enter_attention(service)
             }
         }
@@ -1409,16 +1446,78 @@ take_seat_event :: fn(service: ptr[mut Service], event: seat.Event, text: u8[]) 
             update_status(service)
         }
         case .Key => {
-            if event.code == USAGE_C && event.modifiers & terminal.CONTROL != 0 {
-                vt.event(&service.decoded, terminal.event_of(.Interrupt))
-                return void
-            }
+            // Kept in order behind any waiting, its text with it; past what's kept, dropped
             start :: cast[usize](event.text_start)
             end :: start + cast[usize](event.text_bytes)
             typed :: if start <= end && end <= text.count { text[start..<end] } else { text[0..<0] }
-            vt.key(&service.decoded, event.code, event.modifiers, typed)
+            if service.typed_count >= service.typed.count || typed.count > service.typed_text.count - service.typed_text_count {
+                return void
+            }
+            kept := event
+            kept.text_start = cast[u32](service.typed_text_count)
+            for byte in typed {
+                if service.typed_text_count < service.typed_text.count {
+                    service.typed_text[service.typed_text_count] = byte
+                    service.typed_text_count += 1
+                }
+            }
+            if service.typed_count < service.typed.count {
+                service.typed[service.typed_count] = kept
+                service.typed_count += 1
+            }
         }
     }
+}
+
+/*
+ * The keys waiting decoded, in order, as many as the decoded input has room for: the rest wait for a delivery to make
+ * some, so a burst of typing longer than one delivery isn't lost. The screens the trusted path shows take theirs.
+ */
+take_typed :: fn(service: ptr[mut Service]) {
+    decoded :: &service.decoded
+    first :: decoded.count
+    taken : usize = 0
+    for event in service.typed {
+        // Room for the event, and for its text, at most a key's
+        if taken >= service.typed_count || decoded.count >= decoded.events.count || decoded.text_count + KEY_TEXT > decoded.text.count {
+            break
+        }
+        taken += 1
+        if event.code == USAGE_C && event.modifiers & terminal.CONTROL != 0 {
+            vt.event(decoded, terminal.event_of(.Interrupt))
+            continue
+        }
+        start :: cast[usize](event.text_start)
+        end :: start + cast[usize](event.text_bytes)
+        typed :: if start <= end && end <= service.typed_text_count && end <= service.typed_text.count { service.typed_text[start..<end] }
+            else { service.typed_text[0..<0] }
+        vt.key(decoded, event.code, event.modifiers, typed)
+    }
+    if taken == 0 {
+        return void
+    }
+    // Those left moved to the front, their text with them
+    text_from :: if taken < service.typed_count && taken < service.typed.count { cast[usize](service.typed[taken].text_start) }
+        else { service.typed_text_count }
+    left :: service.typed_count - taken
+    for i in 0..<left {
+        from :: i + taken
+        if from < service.typed.count && i < service.typed.count {
+            moved := service.typed[from]
+            moved.text_start = if cast[usize](moved.text_start) >= text_from { moved.text_start - cast[u32](text_from) } else { 0 }
+            service.typed[i] = moved
+        }
+    }
+    text_left :: if text_from <= service.typed_text_count { service.typed_text_count - text_from } else { cast[usize](0) }
+    for i in 0..<text_left {
+        from :: i + text_from
+        if from < service.typed_text.count && i < service.typed_text.count {
+            service.typed_text[i] = service.typed_text[from]
+        }
+    }
+    service.typed_count = left
+    service.typed_text_count = text_left
+    screen_keys(service, first)
 }
 
 /*

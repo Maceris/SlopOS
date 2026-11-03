@@ -50,14 +50,19 @@ Keyboard :: struct {
     typed : u32,
 }
 
+// The most events kept for the reader, and their text's bytes.
+QUEUED_EVENTS :: 256
+QUEUED_TEXT :: 2048
+
 Service :: struct {
     port : slop_os.Port,
     keymap : keymaps.Keymap,
     keyboards : Keyboard[MAX_KEYBOARDS],
-    // Events waiting for the reader: the client that read first, and how many its Read held asks for
-    events : seat.Event[seat.MAX_EVENTS],
+    // Events waiting for the reader, more than one Input holds, so a burst of typing waits rather than being dropped:
+    // the client that read first, and how many its Read held asks for
+    events : seat.Event[QUEUED_EVENTS],
     count : usize,
-    text : u8[seat.MAX_TEXT],
+    text : u8[QUEUED_TEXT],
     text_count : usize,
     reader : usize?,
     held : u32,
@@ -348,7 +353,10 @@ add :: fn(service: ptr[mut Service], made: seat.Event, text: string) {
     }
 }
 
-// The events waiting, to the reader, once it holds a Read.
+/*
+ * The events waiting, to the reader, once it holds a Read: as many as it asked for, at most an Input's, and as many as
+ * their text fits one; those after wait for its next Read.
+ */
 deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
     if service.count == 0 || service.held == 0 {
         return void
@@ -358,18 +366,54 @@ deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
         return void
     }
     end :: connected.ends[reader]
-    count :: if service.count < cast[usize](service.held) { service.count } else { cast[usize](service.held) }
-    if count > service.events.count || service.text_count > service.text.count {
+    count := if service.count < cast[usize](service.held) { service.count } else { cast[usize](service.held) }
+    if count > seat.MAX_EVENTS {
+        count = seat.MAX_EVENTS
+    }
+    text_end := text_before(service, count)
+    loop {
+        if text_end <= seat.MAX_TEXT || count <= 1 {
+            break
+        }
+        count -= 1
+        text_end = text_before(service, count)
+    }
+    if count > service.events.count || text_end > service.text.count || text_end > service.text_count {
         return void
     }
     out := os.Outgoing.{}
     response :: os.begin[seat.Response](&out)
-    response^ = .Input(seat.Events.{events = os.append(&out, service.events[0..<count]), text = os.append(&out, service.text[0..<service.text_count])})
+    response^ = .Input(seat.Events.{events = os.append(&out, service.events[0..<count]), text = os.append(&out, service.text[0..<text_end])})
     if seat.send_response(end, service.port, &out) != null {
         return void
     }
     service.held = 0
-    service.count = 0
-    service.text_count = 0
+    // Those after moved to the front, their text with them
+    left :: service.count - count
+    for i in 0..<left {
+        from :: i + count
+        if from < service.events.count && i < service.events.count {
+            moved := service.events[from]
+            moved.text_start = if cast[usize](moved.text_start) >= text_end { moved.text_start - cast[u32](text_end) } else { 0 }
+            service.events[i] = moved
+        }
+    }
+    text_left :: service.text_count - text_end
+    for i in 0..<text_left {
+        from :: i + text_end
+        if from < service.text.count && i < service.text.count {
+            service.text[i] = service.text[from]
+        }
+    }
+    service.count = left
+    service.text_count = text_left
+}
+
+// Where the text of the events after the first count starts: all of it, if there are none after.
+text_before :: fn(service: ptr[Service], count: usize) -> usize {
+    if count < service.count && count < service.events.count {
+        return cast[usize](service.events[count].text_start)
+    }
+    return service.text_count
 }
 

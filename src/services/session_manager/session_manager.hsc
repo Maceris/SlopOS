@@ -29,6 +29,7 @@ import terminal from "std/os/slop_os"
 import schema from "std"
 import echo from "../../apps/echo"
 import shell from "../../apps/shell"
+import programs from "../../protocols/programs"
 import powerbox_service from "../powerbox_service"
 import counter from "../../apps/counter"
 import counter_app from "../../counter_app"
@@ -49,11 +50,15 @@ NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 PROGRAM_KEY : u64 : 1000
 // Its budget's pressure is bound to its port under this key
 PRESSURE_KEY : u64 : 900
+// A session's shell's programs connection, bound under this plus the session's number
+PROGRAMS_KEY : u64 : 800
 PRESSURE_PERCENT : u64 : 80
 RELIEVED_PERCENT : u64 : 70
 MAX_PROGRAMS :: 16
 MAX_SESSIONS :: 4
 ECHO_BUDGET : u64 : 2 * 1024 * 1024
+// The shell's, which the programs it runs have theirs split off
+SHELL_BUDGET : u64 : 16 * 1024 * 1024
 // How long a program has to answer a Ping, and to stop once asked
 PING_WAIT : u64 : 200_000_000
 STOP_GRACE : u64 : 2_000_000_000
@@ -79,6 +84,8 @@ ShellGrants :: struct {
     log : slop_os.DebugLog?,
     session_terminal : os.Channel[terminal.Terminal],
     home : os.Channel[dir.Dir]?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    programs : os.Channel[programs.Programs]?,
 }
 
 EchoGrants :: struct {
@@ -120,6 +127,8 @@ Session :: struct {
     // Its powerbox's connection for the session manager; NONE for none
     powerbox_end : slop_os.Channel,
     powerbox_port : slop_os.Port,
+    // Its shell's programs connection (decisions/0170), bound to the session manager's port; NONE for none
+    programs_end : slop_os.Channel,
 }
 
 // A program of a session's: its name, its session's number, its process and budget, its lifecycle channel's end, and
@@ -271,6 +280,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], ech
             i += 1
         }
         while i < connected.count
+        serve_programs(sessions, &into)
         // test_installations, once the session it's for has been answered for
         if sessions.checking != NOWHERE {
             check_installations(sessions, cast[u32](sessions.checking))
@@ -388,7 +398,7 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
         return .Refused
     }
     made := Session.{in_use = true, user_bytes = user.count, locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE), apps = NONE,
-        powerbox_end = NONE}
+        powerbox_end = NONE, programs_end = NONE}
     for byte, i in user {
         if i < made.user.count {
             made.user[i] = byte
@@ -459,7 +469,11 @@ close_session :: fn(sessions: ptr[mut Manager], number: u32) {
         _ = slop_os.handle_close(cast[slop_os.Handle](made.powerbox_end))
         _ = slop_os.handle_close(cast[slop_os.Handle](made.powerbox_port))
     }
-    made^ = Session.{locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE), apps = NONE, powerbox_end = NONE}
+    if made.programs_end != NONE {
+        _ = slop_os.port_unbind(sessions.port, PROGRAMS_KEY + cast[u64](number))
+        _ = slop_os.handle_close(cast[slop_os.Handle](made.programs_end))
+    }
+    made^ = Session.{locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE), apps = NONE, powerbox_end = NONE, programs_end = NONE}
 }
 
 // echo started in the session, its end watched and its lifecycle channel kept; whether it started.
@@ -489,8 +503,93 @@ launch_shell :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.C
         return false
     }
     prepared :: prepare(sessions, number, "shell") or_return false
-    return placed(sessions, number, "shell", prepared, os.launch(sessions.manager, sessions.manager_port, "shell", program, ECHO_BUDGET,
-        shell.main, ShellGrants.{log = duplicate_log(sessions.log), session_terminal = given_terminal, home = home}, prepared.options), false)
+    grants := ShellGrants.{log = duplicate_log(sessions.log), session_terminal = given_terminal, home = home}
+    // Its own connection to the process manager, to launch what it calls, and its programs connection
+    grants.manager = process_manager.connect(sessions.manager.end, sessions.manager_port, slop_os.startup_block().budget)
+    grants.programs = programs_connection(sessions, number)
+    return placed(sessions, number, "shell", prepared, os.launch(sessions.manager, sessions.manager_port, "shell", program, SHELL_BUDGET,
+        shell.main, grants, prepared.options), false)
+}
+
+// A programs connection for session number's shell, the session manager's end kept and bound: the shell's end, or null.
+programs_connection :: fn(sessions: ptr[mut Manager], number: u32) -> os.Channel[programs.Programs]? {
+    if cast[usize](number) >= sessions.sessions.count {
+        return null
+    }
+    made :: &sessions.sessions[cast[usize](number)]
+    if made.programs_end != NONE {
+        _ = slop_os.port_unbind(sessions.port, PROGRAMS_KEY + cast[u64](number))
+        _ = slop_os.handle_close(cast[slop_os.Handle](made.programs_end))
+        made.programs_end = NONE
+    }
+    pair :: os.channel_for[programs.Programs](slop_os.startup_block().budget, 0) or_return null
+    signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+    if slop_os.port_bind(sessions.port, cast[slop_os.Handle](pair.a), signals, PROGRAMS_KEY + cast[u64](number), .Persistent) is_error {
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        return null
+    }
+    made.programs_end = pair.a
+    return os.Channel[programs.Programs].{end = pair.b}
+}
+
+// What each session's shell has asked for programs, answered, until it's asked nothing more; a connection gone, closed.
+serve_programs :: fn(sessions: ptr[mut Manager], into: ptr[mut os.Incoming]) {
+    for &made, number in sessions.sessions {
+        if !made.in_use || made.programs_end == NONE {
+            continue
+        }
+        loop {
+            match programs.receive_request(made.programs_end, sessions.port, into, false) {
+                case Received => {}
+                case Empty => break
+                case Unsupported => {
+                    _ = programs.answer_unsupported(made.programs_end, sessions.port)
+                    continue
+                }
+                case Failed(error) => {
+                    _ = slop_os.port_unbind(sessions.port, PROGRAMS_KEY + cast[u64](number))
+                    _ = slop_os.handle_close(cast[slop_os.Handle](made.programs_end))
+                    made.programs_end = NONE
+                    break
+                }
+                case _ => continue
+            }
+            out := os.Outgoing.{}
+            response :: os.begin[programs.Response](&out)
+            match os.message_of[programs.Request](into)^ {
+                case Find(name) => response^ = find_program(sessions, os.items(into, name))
+            }
+            _ = programs.send_response(made.programs_end, sessions.port, &out)
+        }
+    }
+}
+
+// A program of the store's boot root, by name: its executable and its manifest, or Missing.
+find_program :: fn(sessions: ptr[mut Manager], name: u8[]) -> programs.Response {
+    if name.count == 0 || name.count > programs.MAX_NAME {
+        return .Missing
+    }
+    found :: bundle_named(sessions, string_of(&name[0], name.count)) or_return .Missing
+    record :: mapped_object(sessions, found) or_return .Missing
+    referred : bundle.Hash[..]
+    defer runtime.array_free(&referred)
+    read :: bundle.bundle_refers(record.bytes, &referred) or_else false
+    unmap_object(record)
+    if !read || referred.count < 2 {
+        return .Missing
+    }
+    manifest :: match store_request(sessions, .Get(referred[1 % referred.count])) {
+        case Got(object) => object
+        case _ => return .Missing
+    }
+    match store_request(sessions, .Get(referred[0])) {
+        case Got(object) => return .Found(programs.Program.{executable = object.memory, manifest = manifest.memory, manifest_size = manifest.size})
+        case _ => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](manifest.memory))
+            return .Missing
+        }
+    }
 }
 
 /*

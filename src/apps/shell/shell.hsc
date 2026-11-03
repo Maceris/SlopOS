@@ -12,6 +12,8 @@ import terminal from "std"
 import slop_os from "std/os"
 import terminal as protocol from "std/os/slop_os"
 import dir from "std/os/slop_os"
+import process_manager from "std/os/slop_os"
+import programs as finding from "../../protocols/programs"
 
 PROMPT :: "> "
 
@@ -19,11 +21,38 @@ Shell :: struct {
     console : terminal.Terminal,
     scope : Scope,
     exiting : bool,
+    // Its home, which paths are beneath, the process manager it starts programs through, the session manager's
+    // connection it finds them on (decisions/0170), each with its port, and its own port, where a program's end is seen
+    home : os.Channel[dir.Dir]?,
+    home_port : slop_os.Port,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    manager_port : slop_os.Port,
+    programs : os.Channel[finding.Programs]?,
+    programs_port : slop_os.Port,
+    port : slop_os.Port,
 }
 
-main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Terminal], home: os.Channel[dir.Dir]?) -> int {
+main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Terminal], home: os.Channel[dir.Dir]?,
+    manager: os.Channel[process_manager.ProcessManager]?, programs: os.Channel[finding.Programs]?) -> int {
+    block :: slop_os.startup_block()
     shell := runtime.new(Shell)
     shell.console = terminal.open(session_terminal) or_return 2
+    shell.port = slop_os.port_create(block.budget) or_return 2
+    shell.home = home
+    match home {
+        case Some(given) => shell.home_port = os.port_for(block.budget, given.end) or_return 2
+        case None => {}
+    }
+    shell.manager = manager
+    match manager {
+        case Some(given) => shell.manager_port = os.port_for(block.budget, given.end) or_return 2
+        case None => {}
+    }
+    shell.programs = programs
+    match programs {
+        case Some(given) => shell.programs_port = os.port_for(block.budget, given.end) or_return 2
+        case None => {}
+    }
     say(shell, "SlopOS shell")
     runtime.log_info("reading commands")
     editor := terminal.LineEditor.{}
@@ -99,9 +128,4 @@ show_error :: fn(shell: ptr[mut Shell], line: string, at: usize, message: string
 
 say :: fn(shell: ptr[mut Shell], text: string) {
     _ = terminal.write_line(&shell.console, text)
-}
-
-// A program called: through its manifest, in 11b2.
-run_program :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
-    return error_at(tree.at, message("there's no command named %", tree.text))
 }

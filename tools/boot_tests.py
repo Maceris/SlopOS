@@ -198,7 +198,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 60 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 61 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 5 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -538,6 +538,29 @@ TESTS = [
         "--expect-console-line=4.5 MiB", "--expect-console-line=size: 4.5 MiB", "--expect-console-line=20",
         "--expect-console-line=3", "--expect-console-line=error: there's no command named nope",
         "--expect-console-line=error: something's missing at the end", "--expect-console-line=true"])),
+    # Calls through manifests (decisions/0170): test_shell_calls given values by position and by --name, a bool alone, an
+    # enum's member, a duration, a list, a directory beneath the home and the terminal unasked; then its exit code as an
+    # error, and errors found before anything starts: a value missing, a word that isn't a number, a member that isn't
+    # one, and a grant the shell can't make
+    ("calls programs through their manifests: arguments, values, grants and errors", 7,
+     with_before_qemu([argument.replace("test_services", "test_services use_shell test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wtest_shell_calls 3 hello --loud --speed Fast --wait 250ms\\r\\p\\p"
+        "test_shell_calls --label \"two words\" --count 7 --tags [\"a\", \"b\"] --place ~\\r\\p\\p"
+        "test_shell_calls 5 fail\\r\\p\\p"
+        "test_shell_calls 3\\r\\ptest_shell_calls x y\\r\\ptest_shell_calls 1 a --speed Medium\\r\\ptest_values",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-line=[user] shell: reading commands",
+        "--expect-console-line=called with hello, 3, loud true, speed Fast, wait 250ms, tags none, place none",
+        "--expect-console-line=called with two words, 7, loud false, speed none, wait none, tags a+b, place a directory",
+        "--expect-console-line=called with fail, 5, loud false, speed none, wait none, tags none, place none",
+        "--expect-console-line=error: test_shell_calls ended with 5",
+        "--expect-console-line=error: test_shell_calls needs its label (string)",
+        "--expect-console-line=error: --count: x isn't a number",
+        "--expect-console-line=error: --speed: Medium isn't one of Slow or Fast",
+        "--expect-console-line=error: test_values needs a log, which the shell can't give"])),
     # Memory pressure (decisions/0153): with two sessions, the session manager's budget charged to its threshold, it asks
     # the idle installation, the counter of the session not shown, to stop, and leaves the shown session's running
     ("stops the idle installations of sessions not shown under memory pressure", 7,
