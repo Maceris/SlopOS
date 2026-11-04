@@ -107,7 +107,7 @@ Key :: struct {
  * Make a key.
  *
  * @param object The object or extent the record is of.
- * @param kind The record's kind.
+ * @param kind What sort of record it is; stored as its byte, it orders keys after object and before offset.
  * @param offset Which of the object's records of the kind.
  * @return The key, its fields as given.
  */
@@ -345,7 +345,7 @@ entry_at :: fn(node: ptr[mut Node], index: usize) -> ptr[mut BranchEntry] {
  * Get a leaf's item's key.
  *
  * @param node The leaf, in memory; its count bounds its items.
- * @param index The item's index.
+ * @param index Which item, from 0; not checked against the count, and past the node's end it reads the first item.
  * @return The item's key, in memory form.
  */
 item_key :: fn(node: ptr[mut Node], index: usize) -> Key {
@@ -356,7 +356,7 @@ item_key :: fn(node: ptr[mut Node], index: usize) -> Key {
  * Get a branch's entry's key.
  *
  * @param node The branch, in memory; its count bounds its entries.
- * @param index The entry's index.
+ * @param index Which entry, from 0; not checked against the count, and past the node's end it reads the first entry.
  * @return The key; the first entry's isn't used.
  */
 entry_key :: fn(node: ptr[mut Node], index: usize) -> Key {
@@ -367,7 +367,7 @@ entry_key :: fn(node: ptr[mut Node], index: usize) -> Key {
  * Get a leaf's item's value.
  *
  * @param node The leaf, in memory; its count bounds its items.
- * @param index The item's index.
+ * @param index Which item, from 0; not checked against the count, and past the node's end it reads the first item.
  * @return The value's bytes, a view into the node, good until the node changes or is freed; empty if the item says
  *     it's outside the node.
  */
@@ -494,9 +494,11 @@ structure_holds :: fn(node: ptr[mut Node]) -> bool {
  * Get the node a pointer names: dirty, if this transaction has it; otherwise read, from its first copy or its second,
  * each checked by its seal, its header and its structure.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes, only read: a node born in this transaction is taken from its dirty set,
+ *     any other read from its device into new memory.
  * @param tree The tree it's in, which its header has to name, with its owner.
- * @param pointer Its pointer.
+ * @param pointer Where the node is: its address and second copy (0 for none) to read from, and its birth, seal and
+ *     address, which what's read has to match.
  * @return The node: a dirty one, the transaction's, or one read, the caller's; either way given back with done.
  * @error OutOfMemory No memory to read it into.
  * @error Corrupt Neither copy could be read and checks out: its seal, its header (magic, tree, owner, address,
@@ -531,7 +533,7 @@ load :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointer]) -
 /**
  * Read a node from a place: as it is, or opened with its tree's keys, which checks its seal.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes, whose device it's read from; nothing in them changes.
  * @param tree The tree it's in.
  * @param pointer Its pointer, its seal and birth.
  * @param place The block to read it from: its address or its copy's.
@@ -559,7 +561,8 @@ read_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointe
  *
  * @param node The node, as read.
  * @param tree The tree it's in.
- * @param pointer Its pointer.
+ * @param pointer The pointer it was reached by: for an unencrypted tree its seal has to be the node's BLAKE3, and
+ *     the header has to name its address, its birth as the transaction and the owner that birth gives.
  * @return True if it checks out; false if anything doesn't, as for a damaged or misdirected write.
  */
 node_checks_out :: fn(node: ptr[mut Node], tree: ptr[Tree], pointer: ptr[BlockPointer]) -> bool {
@@ -594,7 +597,8 @@ done :: fn(node: ptr[mut Node]) {
 /**
  * Allocate blocks for a node of a tree, and a second place for a tree written twice.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes: the blocks are allocated from their space, born in their transaction; the
+ *     dirty set isn't changed.
  * @param tree The tree, whose owner they're charged to.
  * @return Its pointer: its address, its copy's or 0, its birth this transaction and NODE_BLOCKS; no seal yet.
  * @error NoSpace No free extent for it, or for its copy, the first given back then.
@@ -616,7 +620,8 @@ place_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree]) -> Result[BlockPointer,
 /**
  * Give back a placed node's blocks, unused: what place_node gave, when what it was for couldn't be made.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes: the blocks are released to their space as born in their transaction; the
+ *     dirty set isn't changed.
  * @param tree The tree it was for.
  * @param pointer What place_node gave.
  */
@@ -671,7 +676,8 @@ new_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], level: u16) -> Result[Pla
  * Make the node a pointer names writable in this transaction: dirty already, or copied to a new place, the old one
  * given back as of the transaction it was born in, and the pointer changed to the copy.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes: the copy's blocks are allocated from their space and the copy added to
+ *     their dirty set, and the old node's blocks released.
  * @param tree The tree it's in; the copy is its owner's, even a clone's copy of its origin's node.
  * @param pointer Its pointer, in its parent or the tree's root, changed to the copy's (its seal is set when it's
  *     written).
@@ -730,7 +736,8 @@ writable :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockPoi
 /**
  * Take a node out of the tree: forgotten if it's dirty, and its blocks given back as of when it was born.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes: a node born in this transaction is taken out of their dirty set and freed,
+ *     and its blocks are released to their space either way.
  * @param tree The tree it was in.
  * @param pointer Its pointer, which may not be loaded again.
  */
@@ -970,7 +977,7 @@ Split :: struct {
  * Split a leaf too full for a key and value: its items and the new one, in order, the first half of their bytes left
  * in it and the rest in a new leaf.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes, whose space the new leaf's blocks come from and whose dirty set keeps it.
  * @param tree The tree the leaf is in, whose owner the new leaf is charged to.
  * @param node The leaf, dirty; it keeps its address.
  * @param index Where the new item goes among the leaf's.
@@ -1017,7 +1024,8 @@ split_leaf :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], node: ptr[mut Node], in
 /**
  * Split a full branch for a new entry: half its entries, with the new one where it goes, moved to a new branch.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes, whose space the new branch's blocks come from and whose dirty set keeps
+ *     it.
  * @param tree The tree the branch is in, whose owner the new branch is charged to.
  * @param node The branch, dirty and full.
  * @param index Where the new entry goes among the branch's.
@@ -1051,7 +1059,8 @@ split_branch :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], node: ptr[mut Node], 
  * The nodes on the way are made writable, copied in this transaction; nothing is written to the device until
  * tree_write. A split that fails for want of memory or space leaves the key's old value taken out.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes: those on the key's path are made dirty, copied into their dirty set, with
+ *     blocks from their space and the old ones released.
  * @param tree The tree; its root changes when it's copied, made or split.
  * @param key The record's key; a record already there is replaced.
  * @param value The value, at most MAX_VALUE_BYTES, copied.
@@ -1086,11 +1095,12 @@ tree_put :: fn(nodes: ptr[mut Nodes], tree: ptr[mut Tree], key: Key, value: u8[]
 /**
  * Put a key's value beneath a node, splitting what's too full on the way back up.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes: those on the key's path are made dirty, copied into their dirty set, with
+ *     blocks from their space and the old ones released.
  * @param tree The tree the node is in.
  * @param pointer The node's pointer, changed if it's copied.
  * @param above Its parent's level, or NO_PARENT for the root.
- * @param key The record's key.
+ * @param key The key the value goes under, followed down through the branches; a record already there is replaced.
  * @param value The record's value, at most MAX_VALUE_BYTES, copied.
  * @return The node's right half, if it was split, for its parent to take; null if it wasn't.
  * @error OutOfMemory No memory for a node.
@@ -1133,7 +1143,8 @@ put_into :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockPoi
  * Nodes left empty are dropped, a node left less than a quarter full is merged into its neighbour where both fit,
  * and a branch root left with one child gives way to it.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes: those on the key's path are made dirty, copied into their dirty set, and
+ *     nodes dropped or merged away are taken out of it, their blocks released to their space.
  * @param tree The tree; its root changes when it's copied or replaced.
  * @param key The record's key; one that isn't there changes nothing.
  * @return True if it was there and is taken out; false if it wasn't, nothing changed.
@@ -1167,7 +1178,8 @@ tree_delete :: fn(nodes: ptr[mut Nodes], tree: ptr[mut Tree], key: Key) -> Resul
 /**
  * Take a key out from beneath a node, dropping children left empty and merging those left less than a quarter full.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes: those on the key's path are made dirty, copied into their dirty set, and
+ *     nodes dropped or merged away are taken out of it, their blocks released to their space.
  * @param tree The tree the node is in.
  * @param pointer The node's pointer, changed if it's copied.
  * @param above Its parent's level, or NO_PARENT for the root.
@@ -1216,7 +1228,8 @@ node_used :: fn(node: ptr[mut Node]) -> usize {
 /**
  * Merge two neighbouring children of a branch into the left one, where both fit in one node; otherwise leave them.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes: both children are made dirty, copied into their dirty set, even when they
+ *     don't fit together; a right child merged away is taken out of it and its blocks released to their space.
  * @param tree The tree the children are in.
  * @param parent The branch, dirty.
  * @param left The left child's index; the right is the one after it, and nothing's done if there's none.
@@ -1262,9 +1275,10 @@ merge :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], parent: ptr[mut Node], left:
 /**
  * Tell whether a key is in a tree.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes, only read: this transaction's dirty nodes are seen, others read from the
+ *     device.
  * @param tree The tree, its root as this transaction has it.
- * @param key The record's key.
+ * @param key The key looked for, matched exactly: object, kind and offset.
  * @return True if it is.
  * @error OutOfMemory No memory to read a node.
  * @error Corrupt A node couldn't be read, didn't check out, or is at the wrong level.
@@ -1277,9 +1291,10 @@ tree_has :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], key: Key) -> Result[bool,
 /**
  * Get a key's value from a tree. Reading walks down from the root a node at a time, and changes nothing.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes, only read: this transaction's dirty nodes are seen, others read from the
+ *     device.
  * @param tree The tree, its root as this transaction has it.
- * @param key The record's key.
+ * @param key The key looked for, matched exactly: object, kind and offset.
  * @param into Where the value is copied, as much as fits; the rest of it is left as it was.
  * @return The value's whole length in bytes, which may be more than into holds; null if the key isn't there.
  * @error OutOfMemory No memory to read a node.
@@ -1326,7 +1341,8 @@ Found :: struct {
 /**
  * Find the first record in a tree whose key is at least a key.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes, only read: this transaction's dirty nodes are seen, others read from the
+ *     device.
  * @param tree The tree, its root as this transaction has it.
  * @param key The least key the record may have.
  * @param into Where its value is copied, as much as fits.
@@ -1344,9 +1360,10 @@ tree_next :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], key: Key, into: mut u8[]
 /**
  * Find the first record beneath a node whose key is at least a key.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes, only read: this transaction's dirty nodes are seen, others read from the
+ *     device.
  * @param tree The tree the node is in.
- * @param pointer The node's pointer.
+ * @param pointer Where the node is, as its parent or the tree's root has it; only read, never changed.
  * @param above Its parent's level, or NO_PARENT for the root.
  * @param key The least key the record may have.
  * @param into Where its value is copied, as much as fits.
@@ -1383,7 +1400,8 @@ next_in :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointer]
 /**
  * Find the last record in a tree whose key is at most a key.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes, only read: this transaction's dirty nodes are seen, others read from the
+ *     device.
  * @param tree The tree, its root as this transaction has it.
  * @param key The greatest key the record may have.
  * @param into Where its value is copied, as much as fits.
@@ -1401,9 +1419,10 @@ tree_previous :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], key: Key, into: mut 
 /**
  * Find the last record beneath a node whose key is at most a key.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes, only read: this transaction's dirty nodes are seen, others read from the
+ *     device.
  * @param tree The tree the node is in.
- * @param pointer The node's pointer.
+ * @param pointer Where the node is, as its parent or the tree's root has it; only read, never changed.
  * @param above Its parent's level, or NO_PARENT for the root.
  * @param key The greatest key the record may have.
  * @param into Where its value is copied, as much as fits.
@@ -1454,7 +1473,8 @@ previous_in :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPoin
  * flushed: what's written isn't durable until the commit's flush. Nodes written are freed, so a failure partway
  * leaves the rest dirty.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes: the tree's dirty ones are written to their device and taken out of their
+ *     dirty set and freed; a root not born in this transaction means nothing to write.
  * @param tree The tree; its root's seal is set.
  * @error DeviceError A node couldn't be written.
  * @error OutOfMemory No memory to seal an encrypted node in.
@@ -1470,7 +1490,8 @@ tree_write :: fn(nodes: ptr[mut Nodes], tree: ptr[mut Tree]) -> Result[void, Err
 /**
  * Write a dirty node and its dirty children, children first, and free it.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes: the node and its children born in this transaction are written to their
+ *     device, then taken out of their dirty set and freed.
  * @param tree The tree the node is in, whose keys, if any, seal it.
  * @param pointer The node's pointer, which takes its seal (and on an encrypted tree, its generation); a node that
  *     isn't dirty is left alone.
@@ -1512,7 +1533,7 @@ write_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockP
 /**
  * Write a node's bytes to its place, and to its second place unless that's 0.
  *
- * @param nodes The transaction's nodes.
+ * @param nodes The transaction's nodes, used only for their device; nothing is flushed.
  * @param address Its first block.
  * @param copy Its second copy's first block, or 0.
  * @param bytes Its bytes as they go on the device, NODE_SIZE of them.

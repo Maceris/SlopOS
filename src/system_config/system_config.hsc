@@ -454,7 +454,7 @@ make_records :: fn() -> system_records.SystemRecords {
 /**
  * Tell whether a service is one the system is healthy without.
  *
- * @param name The service's name.
+ * @param name The service's name as it's declared, compared exactly with each LATE name.
  * @return True if LATE has it.
  */
 is_late :: fn(name: string) -> bool {
@@ -526,7 +526,8 @@ held_type :: fn(type: ptr[compiler.TypeInfo]) -> ptr[compiler.TypeInfo] {
 /**
  * Tell whether a type is a struct whose name starts with a prefix, like an instance of Channel.
  *
- * @param type The type's descriptor.
+ * @param type The descriptor of any type, as held_type gives it for a parameter; one that isn't a struct, an alias
+ *     included, is never named.
  * @param prefix What its name starts with, as "Channel[".
  * @return True for a struct whose name does.
  */

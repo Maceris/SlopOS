@@ -1340,7 +1340,8 @@ address_in :: fn(entries: u8[], at: usize) -> uintptr {
  *
  * @param service The events service's state.
  * @param end The asking client's end, which Found is sent through.
- * @param name The source's name.
+ * @param name The source's name, compared byte for byte with each known source's; read only. None by that name sends
+ *     nothing and gives false.
  * @param from The number of the first record wanted, among the source's this boot.
  * @param level The lowest level wanted, a LogLevel.
  * @return True if a record was found and sent; false if there's none yet, or no source of that name, with nothing sent.

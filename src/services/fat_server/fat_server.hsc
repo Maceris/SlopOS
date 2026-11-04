@@ -341,7 +341,8 @@ write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool
  * Add a connection, in the first free slot, bound to the port under its slot; it's read in the main loop's next pass.
  *
  * @param server The server, whose added is set.
- * @param kind What it is.
+ * @param kind The protocol the connection speaks, kept in its slot: Dir or ReadOnlyDir, File or ReadOnlyFile, or
+ *     FileSet; never Free.
  * @param end The client's end, which the server takes over: closed here if it can't be added.
  * @param directory A directory's or a set's first cluster; 0 for a file.
  * @param place A file's place; empty for another kind.
@@ -567,7 +568,8 @@ file_error :: fn(error: fat.FatError) -> files.FileError {
  * @param path The file's path beneath directory, components separated by '/'; not empty, as path_of gives it.
  * @param creation New makes it, refusing one there; Existing finds it, refusing none; Truncate finds or makes it, cut
  *     to nothing, written to the disk at once; and any other finds or makes it as it is.
- * @return The file's entry.
+ * @return The file's entry, a copy: one found, cut to size 0 if creation is Truncate, or one just made, empty and
+ *     with no cluster.
  * @error AlreadyExists It's there, and creation is New.
  * @error NotFound It isn't there, and creation is Existing; or a directory on the way isn't.
  * @error IsADirectory What's at path is a directory.
@@ -736,7 +738,8 @@ info_of :: fn(out: ptr[mut os.Outgoing], kind: files.Kind, size: u64, name: stri
 /**
  * Say what FAT's file system does: it ignores case.
  *
- * @return Its features.
+ * @return Always ignores_case true, and the rest false: no atomic Replace, transactions, snapshots or change
+ *     cursors.
  */
 features :: fn() -> files.Features {
     return files.Features.{ignores_case = true}

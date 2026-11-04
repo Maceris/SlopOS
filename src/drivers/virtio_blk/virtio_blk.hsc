@@ -264,7 +264,8 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
  * Send a client an answer, if there is one now; one that can't be sent is dropped.
  *
  * @param driver The driver, whose port is waited on while end's ring is full.
- * @param end The client's end.
+ * @param end The channel end of the client whose request is answered, one the driver's clients keep; not checked or
+ *     closed here.
  * @param response The answer; null for a request in flight, answered when the device finishes it.
  */
 answer :: fn(driver: ptr[mut Driver], end: slop_os.Channel, response: block.Response?) {
@@ -278,7 +279,7 @@ answer :: fn(driver: ptr[mut Driver], end: slop_os.Channel, response: block.Resp
 /**
  * Make a Finished answer.
  *
- * @param tag The request's tag.
+ * @param tag The tag the client gave the request, given back as it is, any value.
  * @param status How it went.
  * @return Finished with tag and status; never null, the optional only for start's and the rest's results.
  */
@@ -325,7 +326,7 @@ start :: fn(driver: ptr[mut Driver], client: usize, transfer: block.Transfer, wr
  *
  * @param driver The driver; a device without a cache needs nothing of it.
  * @param client The asking client, by its index.
- * @param tag The Flush's tag.
+ * @param tag The tag the client gave the Flush, any value; kept in the slot and given back in its Finished.
  * @return Null when it's sent, answered when the device finishes it; Finished now with Done for a device without a
  *     cache, whose writes are durable, or Busy with every slot or descriptor taken.
  */
@@ -348,7 +349,8 @@ start_flush :: fn(driver: ptr[mut Driver], client: usize, tag: u64) -> block.Res
  * @param driver The driver, its queue offered the chain.
  * @param slot The slot, free, its header and status byte written.
  * @param client The asking client, by its index, whose generation and buffer the slot keeps.
- * @param tag The request's tag.
+ * @param tag The tag the client gave the request, any value; kept in the slot to answer with, or given back now with
+ *     Busy.
  * @param parts The chain's buffers, at most virtio.MAX_CHAIN.
  * @return Null once it's offered; Finished with Busy if the queue hasn't the descriptors for it.
  */

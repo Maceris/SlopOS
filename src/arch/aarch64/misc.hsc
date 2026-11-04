@@ -136,7 +136,8 @@ write_byte :: fn(base: u64, byte: u8) {
  *
  * @param base The UART's registers' virtual address.
  * @param offset The register's offset in bytes.
- * @return The register's value.
+ * @return The 32 bits the register reads as now (such as UART_FLAGS' busy and full bits); each call loads afresh, so a
+ *     polling loop sees changes.
  */
 read_register :: fn(base: u64, offset: u64) -> u32 {
     return intrinsics.volatile_load_u32(cast[ptr[u32]](base + offset))

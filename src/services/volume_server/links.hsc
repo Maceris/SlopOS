@@ -618,8 +618,8 @@ open_issued :: fn(server: ptr[mut Server], asked: volume_protocol.OpenIssued, pa
  *
  * @param volume The volume, read only.
  * @param directory The directory object the path is beneath.
- * @param path The file's path.
- * @return The file's object.
+ * @param path The path from directory: names separated by single '/', none empty; links on the way aren't followed.
+ * @return The object number of the file at path, checked to be a file; nothing is opened.
  * @error NotFound Nothing is at path.
  * @error IsADirectory It's a directory.
  * @error IsALink It's a link.
@@ -682,7 +682,8 @@ issued_link :: fn(server: ptr[mut Server], index: usize, directory: u64, cursor:
  * @param server The server, whose volume's issued record is deleted, durable with its next commit.
  * @param index The client's connection's slot; a linked one revokes nothing (ReadOnly).
  * @param directory The directory object; one issued for what's gone may be revoked beneath the root.
- * @param number The link's number.
+ * @param number The number the link was issued with, as a listing of links gives it; one with no issued record, or
+ *     not for what's beneath directory, is NotFound.
  * @return Done once it's revoked, durable with the volume's next commit; Failed with NotFound for no such link, or one
  *     not beneath the directory, or why it couldn't be revoked.
  */

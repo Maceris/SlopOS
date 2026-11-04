@@ -290,7 +290,7 @@ verified :: fn(container: ptr[mut slopfs.Container]) -> bool {
  * Count a directory's entries by listing them.
  *
  * @param volume The volume under test, open.
- * @param directory The directory's ID.
+ * @param directory The directory to list, in the volume; anything that isn't one fails the listing.
  * @return How many there are, up to 100000; 9999 if listing failed.
  */
 count_entries :: fn(volume: ptr[mut slopfs.Volume], directory: u64) -> u64 {
@@ -611,7 +611,8 @@ name_of_number :: fn(text: mut u8[], number: int) -> usize {
  * Compare a file with its model: its size and every byte.
  *
  * @param volume The volume under test, open.
- * @param model The file's model.
+ * @param model What the file should hold: its object is the file read, its size and first size bytes what it should
+ *     have; only read.
  * @param back A buffer to read it into, overwritten.
  * @param base The number of the first check, the rest numbered after it.
  * @return 0 if it matches, or the number of the first check that failed, base to base + 3.

@@ -520,7 +520,7 @@ commit_own :: fn(container: ptr[mut Container]) -> Result[void, Error] {
  * Pass a commit's result on, a device error marking the container failed so every later commit is refused.
  *
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
- * @param result The commit's result.
+ * @param result What a commit returned; a DeviceError marks the container failed, any other is only passed on.
  * @return The result as it was given, unchanged.
  */
 failing :: fn(container: ptr[mut Container], result: Result[void, Error]) -> Result[void, Error] {
@@ -558,7 +558,8 @@ commit_all :: fn(container: ptr[mut Container]) -> Result[void, Error] {
  * and the container's own made durable, other volumes' left waiting for their own commits.
  *
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
- * @param id The volume's ID.
+ * @param id The ID of the volume committed, whose record is put under it and whose space changes are taken; not
+ *     checked to be one the container has.
  * @param record The volume's record, its tree already written, through block connections whose writes have all
  *     finished.
  * @return The transaction committed, durable once this returns.
@@ -649,7 +650,7 @@ commit_changes :: fn(container: ptr[mut Container], only: u64) -> Result[void, E
  * its allocations free again, and the extents it gave back still its own.
  *
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
- * @param id The volume's ID.
+ * @param id The ID of the volume whose waiting changes are undone; others' are kept. One with none undoes nothing.
  * @param undone Where the changes undone are added, for whoever keeps who owns what; the caller's to free.
  * @return True if they were undone; false, with nothing changed, if there wasn't the memory to.
  */

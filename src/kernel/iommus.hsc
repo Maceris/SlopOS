@@ -145,7 +145,7 @@ register_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, p
  * Find a registered IOMMU by its kind and registers.
  *
  * @param kernel The kernel, whose iommus are read up to iommu_count, loaded with acquire; no lock is taken.
- * @param kind The IOMMU's kind.
+ * @param kind The kind to match; one registered at the same physical address with another kind isn't found.
  * @param physical The physical address of its registers.
  * @return Its number, its index in kernel.iommus, or null if none of that kind is registered there.
  */

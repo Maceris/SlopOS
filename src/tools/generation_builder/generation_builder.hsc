@@ -175,7 +175,7 @@ stage :: fn(arguments: string[]) -> int {
  *
  * @param folder The folder, as the store folder.
  * @param objects The objects folder's path in it, separators at both ends, as "/objects/".
- * @param path The file's path.
+ * @param path The host path of the file, read whole; its bytes are hashed and written unchanged as the object.
  * @return Its hash; null if it couldn't be read or written, which isn't logged.
  */
 put_in :: fn(folder: string, objects: string, path: string) -> bundle.Hash? {
@@ -217,7 +217,7 @@ pin_library :: fn(store: string, path: string) -> bool {
  * Put a file as an object in the ESP's objects, at generations.object_path for its hash.
  *
  * @param esp The ESP folder, whose objects folder has to be there.
- * @param path The file's path.
+ * @param path The host path of the file, read whole; its bytes are hashed and written unchanged as the object.
  * @return Its hash; null, logged, if it couldn't be read or written.
  */
 put :: fn(esp: string, path: string) -> bundle.Hash? {

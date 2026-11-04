@@ -496,7 +496,8 @@ overlaps :: fn(a: u64, a_size: u64, b: u64, b_size: u64) -> bool {
  *
  * @param state The platform service's state.
  * @param index The BAR's function, by its index in the functions.
- * @param function The BAR's function.
+ * @param function The function at index in the functions, only read: its parent picks the windows looked in, its
+ *     bridge's if it has one, or the host's.
  * @param bar The BAR, for its size and whether it's 64-bit; its size is a power of two, not 0.
  * @return The PCI address to place it at, or null if there's no room in any window it may be in.
  */

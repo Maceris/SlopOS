@@ -346,8 +346,9 @@ round_up :: fn(value: u64, alignment: u64) -> u64 {
  * Read a byte of a function's configuration space, with one volatile load.
  *
  * @param config Where the function's 4 KiB of configuration space is mapped, or a firmware table, readable.
- * @param offset The byte's offset.
- * @return Its value.
+ * @param offset The byte's offset from config, any alignment; not checked against the 4 KiB, so the caller keeps it
+ *     inside.
+ * @return The byte as the device or table gives it at the load; never cached, nor merged with other volatile accesses.
  */
 read_u8 :: fn(config: u64, offset: u64) -> u8 #no_context {
     return intrinsics.volatile_load_u8(cast[ptr[u8]](config + offset))
@@ -359,7 +360,7 @@ read_u8 :: fn(config: u64, offset: u64) -> u8 #no_context {
  *
  * @param config Where the function's 4 KiB of configuration space is mapped, or a firmware table, readable.
  * @param offset The register's offset, 2-byte aligned.
- * @return Its value.
+ * @return The register's value as the device or table gives it at the load, in the CPU's byte order; never cached.
  */
 read_u16 :: fn(config: u64, offset: u64) -> u16 #no_context {
     return intrinsics.volatile_load_u16(cast[ptr[u16]](config + offset))
@@ -370,7 +371,7 @@ read_u16 :: fn(config: u64, offset: u64) -> u16 #no_context {
  *
  * @param config Where the function's 4 KiB of configuration space is mapped, readable.
  * @param offset The register's offset, 4-byte aligned.
- * @return Its value.
+ * @return The register's value as the device gives it at the load, in the CPU's byte order; never cached.
  */
 read_u32 :: fn(config: u64, offset: u64) -> u32 #no_context {
     return intrinsics.volatile_load_u32(cast[ptr[u32]](config + offset))
@@ -392,7 +393,8 @@ read_u64 :: fn(at: u64) -> u64 #no_context {
  * Write a byte of a function's configuration space, with one volatile store.
  *
  * @param config Where the function's 4 KiB of configuration space is mapped, writable.
- * @param offset The byte's offset.
+ * @param offset The byte's offset from config, any alignment; not checked against the 4 KiB, so the caller keeps it
+ *     inside.
  * @param value What's written.
  */
 write_u8 :: fn(config: u64, offset: u64, value: u8) #no_context {

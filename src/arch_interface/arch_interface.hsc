@@ -288,7 +288,8 @@ init_page_table : fn(
  * @param table The address space: user pages only in a user one, kernel pages only in the kernel's own.
  * @param virtual_address Where the page goes, aligned to size.
  * @param physical_address The physical memory it maps, aligned to size.
- * @param size The page's size.
+ * @param size The page's size, which both addresses have to be aligned to; one the CPU doesn't support
+ *     (supports_page_size) fails with UnsupportedPageSize.
  * @param mapping How it's mapped.
  * @param tables Zeroed frames for page-table levels the walk lacks, taken from its end.
  * @error NeedTableFrames tables has too few frames; refill it and call again.
@@ -312,7 +313,7 @@ map : fn(
  *
  * @param table A user address space or the kernel's own table; the page's entry is cleared, and the tables it
  *     empties are taken out of it.
- * @param virtual_address The page's address.
+ * @param virtual_address The page's address, aligned to size, in table's half; it's what's added to flush.
  * @param size The size it was mapped with.
  * @param freed Where the page-table frames the call empties go; L2 frees them once no CPU can still use them.
  * @param flush Where the page's address is added, for L2 to flush.
@@ -333,7 +334,8 @@ unmap : fn(
  * Change how a mapped page is mapped, keeping what it maps.
  *
  * @param table A user address space or the kernel's own table, whichever holds the page; only its entry changes.
- * @param virtual_address The page's address.
+ * @param virtual_address The page's address, aligned to size; one outside the half mapping's user names fails with
+ *     NotMapped, changing nothing.
  * @param size The size it was mapped with.
  * @param mapping How it's to be mapped now; its user has to match the table's half.
  * @param flush Where the page's address is added, for L2 to flush.
@@ -493,7 +495,8 @@ route_msi : fn(source: u32, event: u32, cpu_hardware_id: u64, id: InterruptId) -
 /**
  * Deliver an event route_msi routed to another CPU, or as another interrupt, instead.
  *
- * @param source The device's source.
+ * @param source The device's source, as add_msi_device and route_msi took it; with event, it names the routed event to
+ *     move.
  * @param event The event, already routed.
  * @param cpu_hardware_id The hardware ID of the CPU it goes to now.
  * @param id The interrupt it arrives as now.
@@ -504,7 +507,8 @@ move_msi : fn(source: u32, event: u32, cpu_hardware_id: u64, id: InterruptId) ->
 /**
  * Stop delivering a device's event.
  *
- * @param source The device's source.
+ * @param source The device's source, as add_msi_device and route_msi took it; with event, it names the event to stop,
+ *     and one that isn't routed is ignored.
  * @param event The event, routed by route_msi.
  */
 unroute_msi : fn(source: u32, event: u32) : ---
@@ -712,14 +716,16 @@ syscall_argument : fn(registers: ptr[UserRegisters], index: u32) -> u64 : ---
 /**
  * Set a system call's result, for when the thread returns to user mode.
  *
- * @param registers The thread's registers.
+ * @param registers The calling thread's registers, saved at its system call's entry; only the system ABI's result
+ *     registers change.
  * @param result The result, written to the system ABI's result registers.
  */
 set_syscall_result : fn(registers: ptr[mut UserRegisters], result: ptr[SyscallResult]) : ---
 /**
  * Read where a thread is in user mode.
  *
- * @param registers The thread's registers.
+ * @param registers The thread's registers, as its last entry to the kernel (a system call or a fault) saved them; only
+ *     read.
  * @return The user-mode instruction pointer it returns to.
  */
 instruction_pointer : fn(registers: ptr[UserRegisters]) -> VirtualAddress : ---
@@ -747,9 +753,9 @@ user_register_count : fn() -> u32 : ---
 /**
  * Read one of a thread's registers, as a debugger sees it.
  *
- * @param registers The thread's registers.
+ * @param registers The thread's registers, as its last entry to the kernel saved them; only read.
  * @param index The register's index in slop_os.THREAD_REGISTERS' order, below user_register_count().
- * @return The register's value.
+ * @return The register's value as user mode sees it; 0 for an index at user_register_count() or past it.
  */
 get_user_register : fn(registers: ptr[UserRegisters], index: u32) -> u64 : ---
 /**
@@ -757,7 +763,8 @@ get_user_register : fn(registers: ptr[UserRegisters], index: u32) -> u64 : ---
  *
  * Flags user mode can't change are kept as they were.
  *
- * @param registers The thread's registers.
+ * @param registers The thread's saved registers, which it returns to user mode with; only the indexed one changes, and
+ *     only when this returns true.
  * @param index The register's index in slop_os.THREAD_REGISTERS' order, below user_register_count().
  * @param value The register's new value, taken whole for most. An instruction or stack pointer has to be a user
  *     address; for the flags (rflags, pstate) only the bits user mode can change are taken, the rest kept.

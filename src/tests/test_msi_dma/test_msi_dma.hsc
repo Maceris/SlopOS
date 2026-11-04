@@ -411,7 +411,7 @@ wait_for_dma :: fn(edu: u64) -> bool {
  *
  * @param edu Where edu's registers are mapped.
  * @param offset The register's offset, an EDU_* constant.
- * @return The register's value.
+ * @return The 32 bits read, by one volatile load at edu plus offset, as edu gives them; nothing is checked.
  */
 read_edu :: fn(edu: u64, offset: u64) -> u32 {
     return intrinsics.volatile_load_u32(cast[ptr[u32]](edu + offset))

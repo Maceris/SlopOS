@@ -167,8 +167,10 @@ accounts_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[account
  * @param supervisor The supervisor, which handles what else arrives meanwhile.
  * @param end A connection to the account service.
  * @param port The port its answers wake.
- * @param name The account's name.
- * @param password Its password.
+ * @param name The name to create, copied into the request; the service refuses one that isn't valid_name's, or
+ *     that's an account's already.
+ * @param password The new account's password, copied into the request; the service refuses one with a
+ *     PasswordProblem, such as a common one.
  * @return The answer: Created with the recovery code, or PasswordRefused, NameRefused, AlreadyExists or Refused;
  *     Failed if it couldn't be asked, or the service failed.
  */
@@ -185,7 +187,8 @@ create :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, port: slop_o
  * @param supervisor The supervisor, which handles what else arrives meanwhile.
  * @param end A connection to the account service.
  * @param port The port its answers wake.
- * @param name The account's name.
+ * @param name The account to open, copied into the request; one that isn't an account's answers
+ *     WrongCredentials, as a wrong password does.
  * @param password The password to try.
  * @return The answer: OpenedHome with the volume's root, which moves to the caller, WrongCredentials or RateLimited;
  *     Failed if it couldn't be asked, or the service failed.

@@ -621,7 +621,7 @@ take_lpi :: fn(its: ptr[mut ItsState]) -> u32? {
 /**
  * Mark an LPI free in lpis_used. The caller holds its_lock.
  *
- * @param its The ITS's state.
+ * @param its The ITS's state, whose lpis_used loses the LPI's bit; nothing else in it changes.
  * @param lpi The LPI's interrupt ID, from take_lpi; one out of range is ignored.
  */
 give_lpi :: fn(its: ptr[mut ItsState], lpi: u32) {

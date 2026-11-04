@@ -161,7 +161,8 @@ reset :: fn(server: ptr[mut Server], index: usize) {
  *
  * @param server The server, whose transaction's log, in its client's memory, is written at its end and its used counted
  *     up.
- * @param index The transaction's index.
+ * @param index The transaction's slot in server's transactions, as begin gave it; one past them logs nothing. An
+ *     inactive slot has no log, so it has no room.
  * @param op What change it is, written as its value.
  * @param creation An OpenFile's files.Creation's value; 0 otherwise.
  * @param number A write's offset or a size, in bytes; 0 otherwise.
@@ -227,7 +228,8 @@ nothing :: fn() -> u8[] {
  *
  * @param server The server, whose volume is committed if an object recorded has changes not yet committed, and whose
  *     transaction's versions are added to.
- * @param index The transaction's index.
+ * @param index The transaction's slot in server's transactions, as begin gave it; one past them gives false. Whether
+ *     it's active isn't checked.
  * @param path The path, relative to the transaction's directory.
  * @return Whether they were recorded; false if there's no such transaction or the volume couldn't commit.
  */
@@ -346,7 +348,8 @@ creation_of :: fn(number: u32) -> files.Creation {
  *
  * @param server The server, whose volume is committed before and after the log is applied, or put back at its last
  *     commit if applying fails.
- * @param index The transaction's index.
+ * @param index The transaction's slot in server's transactions, as begin gave it; one past them gives InvalidPath.
+ *     Its log and versions are reset afterwards whatever happens.
  * @return Done once it's durable; Failed with Conflict if a version changed, an object's gone or it overflowed,
  *     DeviceError if a commit failed, InvalidPath for a log that can't be read or no such transaction, or why a change
  *     couldn't be applied.
@@ -756,7 +759,8 @@ transaction_connection :: fn(server: ptr[mut Server], directory: u64, memory: sl
  *
  * @param server The server, whose volume may be committed, as note_versions does; the open is logged, and a
  *     TransactionFile connection added.
- * @param index The transaction's index.
+ * @param index The transaction's slot in server's transactions, as begin gave it, which the new connection keeps; one
+ *     past them gives InvalidPath.
  * @param path The file's path, relative to the transaction's directory.
  * @param creation How it's opened when the transaction commits.
  * @return OpenedFile with the connection, which the caller sends; Failed with InvalidPath for an empty path or no such

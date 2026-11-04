@@ -174,7 +174,9 @@ main :: fn(store: os.Channel[dir.Dir], clients: os.Listener[bundle_store.BundleS
  * no room, with no answer. One the protocol doesn't know is answered with Unsupported; one that can't be read is
  * skipped. A client whose end fails is dropped, its end closed.
  *
- * @param service The store's state.
+ * @param service The store's state: requests are read from, and answered on, service.connected's ends through its port,
+ *     and acted on through its directory, objects and cache; a client whose end fails is dropped from connected, and a
+ *     Connect adds one.
  * @param index The client's index in service.connected; one past them, or one already dropped, is left alone.
  * @param into Where each request is read into, reused from one to the next.
  */
@@ -256,8 +258,10 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
  * The first time, the object's file is opened read-only through the store's directory, and its memory made, paged by
  * the store; no page is read until it's wanted. It stays open while the store runs.
  *
- * @param service The store's state.
- * @param hash The object's hash.
+ * @param service The store's state: a used slot of its objects that holds hash is handed out again; otherwise the
+ *     object's file is opened through raw and set up in the first free slot, which stays used while the store runs.
+ * @param hash The object's BLAKE3-256 hash, any: it names the file objects/<hex>, and isn't checked against the file's
+ *     bytes, which Put checked before it kept them. A hash with no such file gives null.
  * @return The object: a new handle to its memory, to read and execute, which the caller owns and passes on, and its
  *     size in bytes. Null if there's no such object, its file couldn't be opened or set up, MAX_OBJECTS are open
  *     already, or the handle couldn't be duplicated.
@@ -300,7 +304,8 @@ get :: fn(service: ptr[mut Store], hash: bundle.Hash) -> bundle_store.Object? {
  * Set up an object being opened: ask its file for its size, make and map the page its file reads into and give the
  * file server that page, and make its paged memory, its wanted pages waking the port under PAGER_KEY plus slot.
  *
- * @param service The store's state.
+ * @param service The store's state: its budget pays for the page and the paged memory, its address space maps the page,
+ *     and its port gets the pager's binding.
  * @param open The object being opened, with its file and file_port; what's made is put in it, for close_open to let
  *     go of when it fails.
  * @param slot The slot it's going in, which the binding's key is made from.
@@ -352,7 +357,8 @@ set_up :: fn(service: ptr[mut Store], open: ptr[mut Open], slot: usize) -> bool 
 /**
  * Give out a new handle to an open object's memory.
  *
- * @param service The store's state.
+ * @param service The store's state, only read: the slot's memory is duplicated, and nothing in the store changes. The
+ *     slot isn't checked to be used; callers give one that is.
  * @param slot The object's slot, taken modulo MAX_OBJECTS.
  * @return The object: a handle to its memory with the rights to read, execute, duplicate and transfer it, which the
  *     caller owns, and its size in bytes; null if the handle couldn't be duplicated.
@@ -369,7 +375,7 @@ hand_out :: fn(service: ptr[Store], slot: usize) -> bundle_store.Object? {
  * Let go of what an object that couldn't be opened holds: unmap its page, and close the page, its file and the file's
  * port, those that were made.
  *
- * @param service The store's state.
+ * @param service The store's state, only read: open's page is unmapped from its address space.
  * @param open The object, not yet in a slot; its fields aren't cleared.
  */
 close_open :: fn(service: ptr[Store], open: ptr[mut Open]) {
@@ -391,7 +397,8 @@ close_open :: fn(service: ptr[Store], open: ptr[mut Open]) {
  * pages wanted meanwhile, kept in unread, are read and supplied now; those that still can't be read are kept for the
  * next time, as all are when there isn't the memory to go through them.
  *
- * @param service The store's state.
+ * @param service The store's state: once end is used, its raw, raw_port and directory are closed and replaced, and its
+ *     unread pages are read and supplied, or kept in unread again.
  * @param end The directory's end, which the store takes over when it's used.
  * @return Whether it's used; false if a port for it or a second connection to it couldn't be made, the connections
  *     before kept.
@@ -433,7 +440,7 @@ use_directory :: fn(service: ptr[mut Store], end: slop_os.Channel) -> bool {
  * Open an open object's file again, through the store's directory, after its connection went with the server it was
  * on, and give the file server its page to read into again.
  *
- * @param service The store's state.
+ * @param service The store's state, only read: the file is opened through raw, and its budget pays for the new port.
  * @param open The object, whose file and file_port are closed and replaced.
  * @return Whether it was opened and given its page; false if the directory didn't open it, as while it's gone, or a
  *     port or the page's handle couldn't be had.
@@ -473,7 +480,8 @@ reopen :: fn(service: ptr[mut Store], open: ptr[mut Open]) -> bool {
  * A page that can't be read, as while the directory's gone, is kept in unread for use_directory; if it can't be kept,
  * it's asked for again by the next fault on it.
  *
- * @param service The store's state.
+ * @param service The store's state: the slot's wanted pages are read and supplied, those supplied added to resident and
+ *     those that can't be read to unread.
  * @param slot The object's slot; one past them, or one not open, is left alone.
  */
 supply_wanted :: fn(service: ptr[mut Store], slot: usize) {
@@ -499,8 +507,10 @@ supply_wanted :: fn(service: ptr[mut Store], slot: usize) {
  * supplied again. A page supplied is added to resident, for the clock; one the kernel still refuses isn't supplied,
  * and is asked for again by the next fault on it.
  *
- * @param service The store's state.
- * @param slot The object's slot.
+ * @param service The store's state: the slot's file may be opened again, the page is added to resident once supplied,
+ *     and a page is evicted first when its budget refuses the supply.
+ * @param slot The object's slot in service.objects; one past MAX_OBJECTS, or one not used, supplies nothing and gives
+ *     true.
  * @param offset The page's offset in the object's memory, in bytes, a multiple of PAGE.
  * @return False, with nothing supplied, if it couldn't be read; true otherwise, and for a slot that isn't open,
  *     where there's nothing to supply.
@@ -575,7 +585,8 @@ set_cache_limit :: fn(service: ptr[mut Store], limit: u64) {
  * Give pages back until its budget's use is at its low water, LOW_WATER_SIXTEENTHS of the way from what isn't pages
  * to the threshold, as pressure on it asks; nothing if it's below already, or the budget's info can't be read.
  *
- * @param service The store's state.
+ * @param service The store's state: its budget's info, cache_limit and cache_base set the low water, and pages are
+ *     evicted from resident, counted in evicted.
  */
 relieve :: fn(service: ptr[mut Store]) {
     info :: slop_os.memory_budget_info(service.block.budget) or_return void
@@ -644,7 +655,7 @@ evict :: fn(service: ptr[mut Store], count: u64) {
 /**
  * Take a page off the pages supplied, the hand staying on the one after it.
  *
- * @param service The store's state.
+ * @param service The store's state, whose resident loses the page; hand isn't moved, so it's left on the page after.
  * @param index The page's index in resident; one past them is ignored.
  */
 forget :: fn(service: ptr[mut Store], index: usize) {
@@ -659,7 +670,8 @@ forget :: fn(service: ptr[mut Store], index: usize) {
  * Its bytes are written to objects/<hex>.part and renamed to objects/<hex> once whole, so a crash leaves no object
  * file that's partly written, only a .part file, which Collect removes.
  *
- * @param service The store's state.
+ * @param service The store's state: the object's file is written in its directory, and its address space maps put's
+ *     memory while the bytes are hashed and written.
  * @param put The object: its hash, and the memory holding its bytes, the first size bytes of it, which is closed
  *     here whatever happens.
  * @return Whether it's kept, or was already; false if size is past the memory's, the bytes don't have the hash, the
@@ -698,8 +710,8 @@ store_object :: fn(service: ptr[mut Store], put: bundle_store.PutOf) -> bool {
 /**
  * Tell whether an object is kept.
  *
- * @param service The store's state.
- * @param hash The object's hash.
+ * @param service The store's state, only read: the file is looked for through its directory.
+ * @param hash The hash looked for, as the file objects/<hex>; the file's bytes aren't read or checked against it.
  * @return Whether objects/<hex> is a file.
  */
 has_object :: fn(service: ptr[Store], hash: bundle.Hash) -> bool {
@@ -737,7 +749,7 @@ write_hash :: fn(service: ptr[mut Store], folder: string, name: string, hash: bu
 /**
  * Read a hash in hex from a file: a pin or the boot root.
  *
- * @param service The store's state.
+ * @param service The store's state, only read: path is read through its directory.
  * @param path The file's path in the store's directory.
  * @return The hash; null if the file isn't there, can't be read, or doesn't hold a hash in hex.
  */
@@ -756,7 +768,8 @@ read_hash :: fn(service: ptr[Store], path: string) -> bundle.Hash? {
  * Every file in objects/ whose name isn't a marked or open object's hash is removed, .part files left by a crash
  * among them.
  *
- * @param service The store's state.
+ * @param service The store's state: the boot root, pins/ and objects are read, and objects/ files removed, through its
+ *     directory; its objects' used slots are kept.
  * @return How many files were removed from objects/; 0 when the collection stopped.
  */
 collect :: fn(service: ptr[mut Store]) -> u64 {
@@ -824,8 +837,9 @@ collect :: fn(service: ptr[mut Store]) -> u64 {
  *
  * A hash with no object behind it is marked, and nothing more.
  *
- * @param service The store's state.
- * @param hash The object's hash.
+ * @param service The store's state, only read: objects are read from objects/ through its directory.
+ * @param hash The hash to mark, added to marked unless it's there already; its object, if kept, is read for what it
+ *     refers to. The object's bytes aren't checked against it.
  * @param marked The hashes marked so far, which grows, from the context's allocator.
  * @param depth How deep hash is: 0 for a root or a pin, 1 for a root's entry; past 2 nothing's marked.
  * @return False if it couldn't be read through, for want of memory or a failed read: then what it refers to isn't
@@ -897,8 +911,8 @@ is_marked :: fn(marked: ptr[bundle.Hash[..]], hash: bundle.Hash) -> bool {
 /**
  * Tell whether an object is open, given out by Get, and so kept by Collect.
  *
- * @param service The store's state.
- * @param hash The object's hash.
+ * @param service The store's state, only read: its objects' used slots are searched.
+ * @param hash The hash looked for, compared whole with each used slot's.
  * @return Whether a used slot holds it.
  */
 is_open :: fn(service: ptr[Store], hash: bundle.Hash) -> bool {
@@ -931,7 +945,8 @@ valid_name :: fn(name: string) -> bool {
 /**
  * Send a request on the store's own connection to its directory, and wait for the answer.
  *
- * @param service The store's state.
+ * @param service The store's state, only read: the request goes on raw, and the answer is waited for on raw_port, until
+ *     it comes or the connection fails.
  * @param out The request; its handles are moved out when it's sent.
  * @param into Where the answer is read into.
  * @return The answer, a view into into; Unsupported if it couldn't be sent or the connection failed, as when the

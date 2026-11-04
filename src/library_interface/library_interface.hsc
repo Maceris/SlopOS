@@ -181,7 +181,8 @@ record_of :: fn(image: ptr[Image]) -> Record? {
 /**
  * Read a string from the library as it was linked: its byte count, then a pointer to its bytes.
  *
- * @param image The library's image.
+ * @param image The library's image, as image_of made it; only read, its loadable segments and relocations used to find
+ *     the count and bytes.
  * @param address The string's address, as the library was linked.
  * @return The string, a view of the image's file, good as long as the file is; empty for a count of 0, or null if
  *     its count is more than MAX_NAME or its pointer or bytes can't be read (bytes_at).
@@ -223,7 +224,7 @@ same_bytes :: fn(image_a: ptr[Image], a: u64, image_b: ptr[Image], b: u64, count
 /**
  * Read a pointer from the library as it will be once it's relocated at base 0.
  *
- * @param image The library's image.
+ * @param image The library's image, as image_of made it; only read, its relocations searched for one at address.
  * @param address The pointer's address, as the library was linked.
  * @return The addend of the relative relocation at address, if there's one, since the file holds such a pointer as
  *     zeros; otherwise the 8 bytes at address; null if there's no relocation there and the bytes can't be read.
@@ -242,7 +243,8 @@ pointer :: fn(image: ptr[Image], address: u64) -> u64? {
 /**
  * Read a little-endian u64 from the library as it was linked.
  *
- * @param image The library's image.
+ * @param image The library's image, as image_of made it; only read, its loadable segments used to find address in the
+ *     file.
  * @param address The u64's address, as the library was linked.
  * @return The u64, or null if address isn't in a loadable segment's file bytes or the 8 bytes run past the file's
  *     end. The bytes may run past the segment's own file bytes, into what follows it in the file.
@@ -261,7 +263,7 @@ word :: fn(image: ptr[Image], address: u64) -> u64? {
  * Only the first and last bytes are looked up: they have to be in loadable segments' file bytes, count - 1 bytes
  * apart in the file as in memory, which holds when the range is in one segment.
  *
- * @param image The library's image.
+ * @param image The library's image, as image_of made it; only read. The view returned borrows its file.
  * @param address The bytes' address, as the library was linked.
  * @param count How many bytes; at least 1.
  * @return The bytes, a view of the image's file, good as long as the file is; null for a count of 0, if the first
@@ -283,8 +285,10 @@ bytes_at :: fn(image: ptr[Image], address: u64, count: u64) -> u8[]? {
 /**
  * Find where in the file the byte at an address, as the library was linked, is.
  *
- * @param image The library's image.
- * @param address The byte's address.
+ * @param image The library's image, whose program headers are read; image_of calls this before the relocations are
+ *     found, which it doesn't use.
+ * @param address The byte's virtual address, as the library was linked; it's found in a PT_LOAD segment's file bytes,
+ *     from its p_vaddr for p_filesz bytes, never in the zero-filled rest of its memory.
  * @return Its offset in the file, from the first loadable segment whose file bytes hold it, or null if none does;
  *     the offset isn't checked against the file's size.
  */

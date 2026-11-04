@@ -176,7 +176,7 @@ check_links :: fn() -> int {
 /**
  * Tell whether two strings are the same.
  *
- * @param a One.
+ * @param a A string, of any length, compared byte for byte.
  * @param b The other string, of any length.
  * @return True if they're the same length and byte for byte alike.
  */
@@ -195,7 +195,7 @@ same_text :: fn(a: string, b: string) -> bool {
 /**
  * Tell whether an operation was refused with a particular error.
  *
- * @param result Its result.
+ * @param result What the operation gave back: the ID it made, or the error it was refused with.
  * @param expected The error it should have.
  * @return True if it's that error; false if it succeeded or failed otherwise.
  */

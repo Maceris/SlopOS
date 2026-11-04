@@ -81,7 +81,7 @@ check_made :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, b
  * @param manager The connection to the storage manager.
  * @param port A port bound to manager.
  * @param container The container's index among the storage manager's partitions.
- * @param name The volume's name.
+ * @param name The new volume's name in the container; one a volume already has is refused with AlreadyExists.
  * @param passphrase The passphrase it's sealed with, with AES-256-GCM; "" for a plain volume.
  * @return The storage manager's answer: OpenedFiles with the volume's root, which the caller owns, AlreadyExists for a
  *     name taken, or another refusal; Unsupported if it couldn't be asked.

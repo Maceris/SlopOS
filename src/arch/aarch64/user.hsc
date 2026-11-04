@@ -66,7 +66,7 @@ set_syscall_result :: fn(registers: ptr[mut UserRegisters], result: ptr[arch_int
 /**
  * Read where the thread runs next (arch_interface.instruction_pointer).
  *
- * @param registers The thread's registers.
+ * @param registers The thread's registers, as its last entry to the kernel saved them; only read.
  * @return ELR_EL1 as saved: after an svc, the instruction after it; after a fault, the faulting instruction.
  */
 instruction_pointer :: fn(registers: ptr[UserRegisters]) -> arch_interface.VirtualAddress {
@@ -112,7 +112,7 @@ user_register_count :: fn() -> u32 {
 /**
  * Read one of a thread's registers as a debugger sees them (arch_interface.get_user_register).
  *
- * @param registers The thread's registers.
+ * @param registers The thread's registers, as its last entry to the kernel saved them; only read.
  * @param index 0 to 30 for x0 to x30, then SP_INDEX, PC_INDEX and PSTATE_INDEX.
  * @return The register's value; 0 for an index past PSTATE_INDEX.
  */
@@ -132,7 +132,8 @@ get_user_register :: fn(registers: ptr[UserRegisters], index: u32) -> u64 {
 /**
  * Set one of a thread's registers as a debugger sees them (arch_interface.set_user_register).
  *
- * @param registers The thread's registers.
+ * @param registers The thread's saved registers, which it returns to user mode with; only the indexed one changes, and
+ *     only when this returns true.
  * @param index 0 to 30 for x0 to x30, then SP_INDEX, PC_INDEX and PSTATE_INDEX.
  * @param value The new value. For pstate, only the bits in USER_CHANGEABLE_FLAGS are taken; the rest are kept.
  * @return False, with nothing changed, for an index past PSTATE_INDEX, or an sp or pc outside user addresses

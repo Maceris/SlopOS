@@ -239,7 +239,8 @@ add_sdt :: fn(kernel: ptr[mut Kernel], found: ptr[mut FoundTables], physical: u6
  * out.
  *
  * @param found Where it's added.
- * @param signature Its signature.
+ * @param signature The table's four-byte signature as its header holds it, or a made-up one ("RSDP", "DTB ") for those
+ *     without; kept as is, not checked.
  * @param physical Its physical address.
  * @param size Its size in bytes.
  */

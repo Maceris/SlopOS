@@ -264,7 +264,8 @@ check_failed_writes :: fn(image: ptr[mut Image], device: fat.Device) -> int {
 /**
  * Tell whether an operation succeeded.
  *
- * @param result Its result.
+ * @param result What a fat operation with no value gave back, such as set_size's or remove's; its error, if any, is
+ *     dropped, not reported.
  * @return True if it's Ok.
  */
 done :: fn(result: Result[void, fat.FatError]) -> bool {
@@ -309,7 +310,7 @@ written :: fn(volume: ptr[mut fat.Volume], entry: ptr[mut fat.Entry], offset: u6
  * Read a file's first 64 bytes as text.
  *
  * @param volume The volume under test, mounted on the stand-in disk.
- * @param entry The file's entry.
+ * @param entry A file's entry, as lookup gives it, read from offset 0 up to its size; a directory's reads as "".
  * @return Up to 64 bytes read from its start, in a buffer from runtime.new_array that's never freed (it's a test);
  *     "" if it's empty, couldn't be read, or the buffer couldn't be had.
  */

@@ -345,7 +345,7 @@ map_fails :: fn(
  *
  * @param table The kernel's table or a user address space, its tables in the buffer standing in for physical
  *     memory; changed if the page is unmapped.
- * @param virtual_address The page's address.
+ * @param virtual_address The page's address, kernel or user, as a plain number; it's passed to arch.unmap unchecked.
  * @param size The size the page was mapped with; a page of another size there makes the unmap fail.
  * @param freed Where emptied tables go.
  * @param flush The TLB batch the page is added to.
@@ -369,7 +369,8 @@ unmapped :: fn(
  *
  * @param table The kernel's table or a user address space, its tables in the buffer standing in for physical
  *     memory; left as it was if the unmap fails, changed if it wrongly succeeds.
- * @param virtual_address The page's address.
+ * @param virtual_address The address to unmap at, as a plain number, passed to arch.unmap unchecked: aligned or not, in
+ *     table's half or not, as the case being tested needs.
  * @param size The size the page was mapped with; a page of another size there makes the unmap fail.
  * @param freed Where emptied tables would go.
  * @param flush The TLB batch the page would be added to.

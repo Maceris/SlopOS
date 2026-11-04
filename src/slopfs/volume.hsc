@@ -76,7 +76,8 @@ FailedChunk :: struct {
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
  * @param file The file's object ID.
- * @param index The chunk's index.
+ * @param index The chunk's index in the file, its byte offset / CHUNK_BYTES; matched exactly against those noted,
+ *     not checked against the file's size.
  * @return True if a failed write was for it, not written since, or more than MAX_FAILED_CHUNKS failed writes were.
  */
 chunk_failed :: fn(volume: ptr[Volume], file: u64, index: u64) -> bool {
@@ -96,7 +97,8 @@ chunk_failed :: fn(volume: ptr[Volume], file: u64, index: u64) -> bool {
  *
  * @param volume The volume; once more than MAX_FAILED_CHUNKS have failed, nothing more is noted.
  * @param file The file's object ID.
- * @param index The chunk's index.
+ * @param index The chunk's index in the file, its byte offset / CHUNK_BYTES, noted or forgotten as given; not
+ *     checked against the file's size.
  * @param failed True if the write failed, so the chunk is remembered; false if it succeeded, so it's forgotten.
  */
 note_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, failed: bool) {
@@ -226,7 +228,8 @@ create_sealed_volume :: fn(container #escaping : ptr[mut Container], name: strin
  * Put an encrypted volume's first wrap and generation records in the container's volumes tree.
  *
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
- * @param id The volume's ID.
+ * @param id The ID the volume is about to get, the container's next_volume: the key records are put under it and
+ *     the wrap and generation are bound to it, so the volume has to be made with it. Not checked.
  * @param keys Its keys, its volume key made; the first generation is started in them.
  * @param passphrase The passphrase the volume key is wrapped by.
  * @param parameters Argon2id's parameters.
@@ -309,7 +312,8 @@ create_keyed_volume :: fn(container #escaping : ptr[mut Container], name: string
  * Open a volume that isn't encrypted in the container's own process: the one open already, or one from its record.
  *
  * @param container The container, which keeps the volume among its open ones.
- * @param id The volume's ID.
+ * @param id The ID of the volume in the container; an open one with it is returned as it is, and one with no record
+ *     in the volumes tree is NotFound.
  * @return The volume, the container's, freed by close_volume or unmount.
  * @error NotFound The volume, or an origin of a clone's, isn't there.
  * @error Locked The volume is encrypted.
@@ -347,7 +351,8 @@ open_volume :: fn(container #escaping : ptr[mut Container], id: u64) -> Result[p
  * with a passphrase. A volume that isn't encrypted is opened as open_volume opens it, the passphrase unused.
  *
  * @param container The container, which keeps the volume among its open ones.
- * @param id The volume's ID.
+ * @param id The ID of the volume in the container; an open one with it is returned as it is, and one with no record
+ *     in the volumes tree is NotFound.
  * @param passphrase The passphrase, secret; not checked for a volume open already.
  * @return The volume, the container's, freed by close_volume or unmount.
  * @error NotFound The volume, or an origin of a clone's, isn't there.
@@ -406,7 +411,8 @@ open_sealed_volume :: fn(container #escaping : ptr[mut Container], id: u64, pass
  *
  * @param nodes The transaction's nodes its tree changes in, which have to outlive the volume.
  * @param device The device its chunks are on, whose context has to outlive the volume.
- * @param id The volume's ID.
+ * @param id The volume's ID in its container, which it and its tree's nodes are owned by; not checked against
+ *     record, which doesn't hold it.
  * @param record Its record, as it is now.
  * @param keys Its keys, which it then owns, freed with it; null for a volume that isn't encrypted. On an error, they
  *     aren't freed here.
@@ -595,8 +601,10 @@ FirstKeys :: struct {
  * @param keys The volume's keys, from new_keys with its cipher; its volume key is made and its first generation added.
  * @param passphrase The passphrase, secret.
  * @param parameters Argon2id's parameters: MADE_PASSPHRASE, as a rule.
- * @param container The container's ID.
- * @param id The volume's ID.
+ * @param container The ID of the container the volume is in, from its superblock; bound into the wrap and the
+ *     generation, so unlocking has to give the same.
+ * @param id The ID register_volume gave the volume; bound into the wrap and the generation, so they open only for
+ *     it (or a clone of it). Not checked.
  * @param transaction The transaction the first generation begins in.
  * @return The records to keep.
  * @error WrongKey The volume key couldn't be wrapped: Argon2id couldn't run with the parameters.
@@ -632,7 +640,8 @@ fill_volume :: fn(volume: ptr[mut Volume], now: u64) -> Result[void, Error] {
  * Put a volume's record in the container's volumes tree, durable with the container's next commit.
  *
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
- * @param id The volume's ID.
+ * @param id The volume's ID, the key the record goes under, replacing any there; not checked, so a new one makes
+ *     a volume of it.
  * @param record The record, copied.
  * @error OutOfMemory No memory for a node.
  * @error NoSpace No free extent for a node.
@@ -647,7 +656,7 @@ put_volume_record :: fn(container: ptr[mut Container], id: u64, record: ptr[Volu
  * Read a volume's record from the container's volumes tree, as this transaction has it.
  *
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
- * @param id The volume's ID.
+ * @param id The volume's ID, the key its record is under; one with none is NotFound.
  * @return The record, a copy.
  * @error NotFound No volume has the ID.
  * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
@@ -695,7 +704,7 @@ find_volume :: fn(container: ptr[mut Container], name: string) -> Result[u64?, E
  * Read an object's record.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param object The object's ID.
+ * @param object The ID of an object in the volume; one with no record is NotFound.
  * @return The record, a copy.
  * @error NotFound No object has the ID.
  * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
@@ -715,7 +724,8 @@ get_object :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, E
  * Put an object's record, durable with the volume's next commit.
  *
  * @param volume The volume, marked dirty.
- * @param object The object's ID.
+ * @param object The ID of the object whose record it is, replacing any there; not checked, so a new ID makes a new
+ *     object, which the caller has to have taken from next_object.
  * @param record The record, copied.
  * @error OutOfMemory No memory for a node.
  * @error NoSpace No free extent for a node.
@@ -740,7 +750,7 @@ kind_of_record :: fn(record: ptr[ObjectRecord]) -> ObjectKind {
 /**
  * Get the ObjectKind a kind field holds.
  *
- * @param kind The field's value.
+ * @param kind A kind field's value, from an object's record or an entry's head, as stored; any value is taken.
  * @return Directory or Link for theirs; File for any other value, 1 included.
  */
 kind_of :: fn(kind: u32) -> ObjectKind {
@@ -754,7 +764,7 @@ kind_of :: fn(kind: u32) -> ObjectKind {
  * Get what an object is.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param object The object's ID.
+ * @param object The ID of an object in the volume; one with no record is NotFound.
  * @return What its record says.
  * @error NotFound No object has the ID.
  * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
@@ -773,7 +783,7 @@ info :: fn(volume: ptr[mut Volume], object: u64) -> Result[Info, Error] {
  * Only a new file's is given one; this doesn't check that it's new, or a file, and changes no time.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param object The file's ID.
+ * @param object The ID of the file, as a rule new; one with no record is NotFound, and its kind isn't checked.
  * @param schema The schema hash; all zeros makes it plain bytes again.
  * @error NotFound No object has the ID.
  * @error OutOfMemory No memory for a node.
@@ -791,8 +801,8 @@ set_schema :: fn(volume: ptr[mut Volume], object: u64, schema: u8[32]) -> Result
  * Read the record of an object that has to be a directory.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param object The object's ID.
- * @return Its record.
+ * @param object The ID of the object, which has to be a directory; one with no record is NotFound.
+ * @return The directory's record, a copy.
  * @error NotFound No object has the ID.
  * @error NotADirectory It's a file.
  * @error IsALink It's a stored link.
@@ -816,7 +826,7 @@ directory_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRec
  * put.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param object The object's ID.
+ * @param object The ID record is put under, the object's own; not checked, nor read, so record has to be its.
  * @param record Its record, as the caller has it, updated and put.
  * @error OutOfMemory No memory for a node.
  * @error NoSpace No free extent for a node.
@@ -1020,7 +1030,7 @@ next_entry_at :: fn(list: ptr[EntryList], at: usize) -> usize? {
  *
  * @param list The list, as get_entries filled it.
  * @param at The entry's byte offset.
- * @param head Its head.
+ * @param head The entry's head, as entry_head read it at at; its name_bytes says how many bytes the name has.
  * @return The name's bytes, a view into the list, good until it changes; empty if they don't fit in the list.
  */
 entry_name :: fn(list: ptr[EntryList], at: usize, head: ptr[EntryHead]) -> u8[] {
@@ -1075,7 +1085,7 @@ find_in_list :: fn(list: ptr[EntryList], name: string) -> EntryAt? {
  * Read a directory's entries whose names have a hash.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param directory The directory's ID.
+ * @param directory The ID of the directory; not checked to be one or to be there, so none read means no entries.
  * @param hash The names' hash.
  * @param list Where they go; its count is 0 if there are none.
  * @error OutOfMemory No memory to read a node.
@@ -1090,7 +1100,7 @@ get_entries :: fn(volume: ptr[mut Volume], directory: u64, hash: u64, list: ptr[
  * Put a directory's entries whose names have a hash, or take their record out when there are none.
  *
  * @param volume The volume, marked dirty.
- * @param directory The directory's ID.
+ * @param directory The ID of the directory whose entries they are; not checked to be one or to be there.
  * @param hash The names' hash.
  * @param list The entries, all of them for the hash, their count what's used.
  * @error TooLarge The list's count is past its buffer.
@@ -1116,7 +1126,8 @@ put_entries :: fn(volume: ptr[mut Volume], directory: u64, hash: u64, list: ptr[
  * Look up the object a name names in a directory.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param directory The directory's ID.
+ * @param directory The ID of the directory looked in; it's read first, so one that isn't there, or isn't a
+ *     directory, is an error.
  * @param name The name, compared byte for byte.
  * @return The object's ID; null if nothing has the name.
  * @error NotFound The directory isn't there.
@@ -1145,7 +1156,7 @@ lookup :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[u6
  * @param directory The directory's ID, not checked to be one.
  * @param name The name, which the caller has checked holds.
  * @param object The object it names.
- * @param kind The object's kind.
+ * @param kind The object's kind, kept in the entry so listing needn't read its record; not checked against it.
  * @error AlreadyExists The directory has an entry of the name.
  * @error TooLarge The entries whose names hash alike with it have no room for it in one record.
  * @error OutOfMemory No memory for the list or a node.
@@ -1175,7 +1186,7 @@ add_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string, object: u
  * Take an entry out of a directory. The object it named is left as it is.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param directory The directory's ID.
+ * @param directory The ID of the directory; not checked to be one or to be there, so its name isn't found.
  * @param name The name, compared byte for byte.
  * @error NotFound The directory has no entry of the name.
  * @error OutOfMemory No memory for the list or a node.
@@ -1281,7 +1292,8 @@ leaf_of :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[L
  * volume's next commit.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param directory The directory's ID.
+ * @param directory The ID of the directory the object is named in; it's read first, so one that isn't there, or
+ *     isn't a directory, is an error. It becomes the object's parent.
  * @param name The name, which name_holds and the directory doesn't have.
  * @param kind What it is; a Link's record is create_link's to put.
  * @return The new object's ID.
@@ -1315,7 +1327,7 @@ create :: fn(volume: ptr[mut Volume], directory: u64, name: string, kind: Object
  * Tell whether a directory has nothing in it.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param directory The directory's ID.
+ * @param directory The ID of the directory; not checked to be one or to be there, either of which reads as empty.
  * @return True if it has no entries.
  * @error OutOfMemory No memory to read a node.
  * @error Corrupt A node couldn't be read or didn't check out.
@@ -1333,7 +1345,8 @@ is_empty :: fn(volume: ptr[mut Volume], directory: u64) -> Result[bool, Error] {
  * touched and a Removed change noted.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param directory The directory's ID.
+ * @param directory The ID of the directory the name is in; it's read first, so one that isn't there, or isn't a
+ *     directory, is an error.
  * @param name The name, compared byte for byte.
  * @error NotFound The directory, or anything of the name in it, isn't there.
  * @error NotADirectory The directory is a file.
@@ -1364,7 +1377,8 @@ remove :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[vo
  * Its name, if it has one, is the caller's to take out.
  *
  * @param volume The volume, marked dirty.
- * @param object The object's ID.
+ * @param object The ID of the object; not checked, and its kind not read: whatever link and chunk records it has
+ *     go, and its own record, if there.
  * @error OutOfMemory No memory for a node.
  * @error NoSpace No free extent for a node's copy.
  * @error Corrupt A chunk found can't be taken out, or a node couldn't be read or didn't check out.
@@ -1393,7 +1407,8 @@ destroy :: fn(volume: ptr[mut Volume], object: u64) -> Result[void, Error] {
  *
  * @param volume The volume, marked dirty.
  * @param key The chunk's key, as a search found it.
- * @param extent Its record.
+ * @param extent The chunk's record, as the search that found key read it; its blocks, if it has any, are given back
+ *     once the record is taken out.
  * @error Corrupt The record wasn't there to take out, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for a node.
  * @error NoSpace No free extent for a node's copy.
@@ -1411,7 +1426,8 @@ drop_chunk :: fn(volume: ptr[mut Volume], key: Key, extent: ptr[ExtentRecord]) -
  * Give back a chunk's blocks, if it's in blocks; an inline chunk has none.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param extent The chunk's record.
+ * @param extent The chunk's record; only a Blocks one's pointer is read, its blocks released under the volume's ID
+ *     with their birth transaction.
  */
 release_extent :: fn(volume: ptr[mut Volume], extent: ptr[ExtentRecord]) {
     if cast[u32](extent.kind) == cast[u32](ExtentKind.Blocks) {
@@ -1526,7 +1542,8 @@ rename :: fn(volume: ptr[mut Volume], from: u64, from_name: string, to: u64, to_
  * added or removed elsewhere don't make it skip or repeat others, though ones that hash alike with it may.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param directory The directory's ID.
+ * @param directory The ID of the directory listed; it's read first, so one that isn't there, or isn't a directory,
+ *     is an error.
  * @param cursor Where to list from: 0 for the first entry, or a Listed's next.
  * @param name Where the entry's name is copied, as much as fits.
  * @return The entry and the cursor after it; null after the last.
@@ -1625,7 +1642,7 @@ ChunkBuffer :: struct {
  * Nothing is changed. A chunk in blocks is checked by its seal, or opened with the volume's keys.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param file The file's ID.
+ * @param file The ID of the file; not checked to be one or to be there, so a chunk of none reads as not there.
  * @param index The chunk's index, its byte offset / CHUNK_BYTES.
  * @param buffer Where it goes, CHUNK_BYTES of it: its bytes that were written, then zeros.
  * @return How many of its bytes were written, 0 to CHUNK_BYTES; 0 for a chunk that isn't there.
@@ -1706,8 +1723,9 @@ read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[
  * record.
  *
  * @param volume The volume, marked dirty.
- * @param file The file's ID.
- * @param index The chunk's index.
+ * @param file The ID of the file; not checked to be one or to be there. Its size isn't changed: that's the
+ *     caller's.
+ * @param index The chunk's index in the file, its byte offset / CHUNK_BYTES; one held inline has to be 0.
  * @param buffer The chunk's bytes, at least used rounded up to whole blocks, zeros past used.
  * @param used How many of its bytes were written, 0 to CHUNK_BYTES (at most INLINE_BYTES inline).
  * @param inline True to hold it in its record, as a small file's first chunk is; false for blocks.
@@ -1788,8 +1806,8 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
  * Read the record of an object that has to be a file.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param object The object's ID.
- * @return Its record.
+ * @param object The ID of the object, which has to be a file; one with no record is NotFound.
+ * @return The file's record, a copy.
  * @error NotFound No object has the ID.
  * @error IsADirectory It's a directory.
  * @error IsALink It's a stored link.
@@ -1812,7 +1830,8 @@ file_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, 
  * Read bytes of a file. Nothing is changed.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param file The file's ID.
+ * @param file The ID of the file; its record is read first, so one that isn't there, or isn't a file, is
+ *     an error.
  * @param offset The byte offset to read from; at or past the file's size, nothing is read.
  * @param into Where the bytes go; at most its count are read.
  * @return How many were read: fewer than into holds only at the file's end, 0 at or past it. Bytes never written
@@ -1855,7 +1874,8 @@ read :: fn(volume: ptr[mut Volume], file: u64, offset: u64, into: mut u8[]) -> R
  * as that commit had it.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param file The file's ID.
+ * @param file The ID of the file; its record is read first, so one that isn't there, or isn't a file, is
+ *     an error.
  * @param offset The byte offset to write at; past the file's end, the gap reads as zeros.
  * @param from The bytes, copied; none writes nothing but the time and the change.
  * @error NotFound No object has the ID.
@@ -1905,7 +1925,8 @@ write :: fn(volume: ptr[mut Volume], file: u64, offset: u64, from: u8[]) -> Resu
  * Move a file's first chunk to blocks, if it's in its record.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param file The file's ID.
+ * @param file The ID of the file; not checked to be one or to be there, so one with no inline first chunk is left
+ *     as it is.
  * @param chunk A buffer of CHUNK_BYTES to read it into, overwritten.
  * @error NoSpace No free extent, or a quota or the reserve refuses one.
  * @error DeviceError The chunk couldn't be read or written.
@@ -1929,7 +1950,8 @@ move_inline :: fn(volume: ptr[mut Volume], file: u64, chunk: mut u8[]) -> Result
  * The file is touched and a Written change noted. It's durable with the volume's next commit.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param file The file's ID.
+ * @param file The ID of the file; its record is read first, so one that isn't there, or isn't a file, is
+ *     an error.
  * @param size The new size in bytes.
  * @error NotFound No object has the ID.
  * @error IsADirectory It's a directory.
@@ -1978,7 +2000,7 @@ set_size :: fn(volume: ptr[mut Volume], file: u64, size: u64) -> Result[void, Er
  * Tell whether a file's first chunk is held in its record.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
- * @param file The file's ID.
+ * @param file The ID of the file; not checked to be one or to be there, either of which is false.
  * @return True if its first chunk's record is inline.
  * @error OutOfMemory No memory to read a node.
  * @error Corrupt A node couldn't be read or didn't check out.
@@ -2093,7 +2115,8 @@ volume_generations :: fn(container: ptr[mut Container], id: u64, found: ptr[mut 
  * Unlock an encrypted volume's keys into new keys: its volume key unwrapped with a passphrase from its wrap records,
  * and each generation's with that.
  *
- * @param container The container's ID.
+ * @param container The ID of the container the volume is in, from its superblock, as the wraps and generations
+ *     were bound to; any other opens none of them.
  * @param id The volume whose key records they are, its own or a clone's origin's.
  * @param record The volume's record: its cipher and newest generation.
  * @param wraps Its wrap records; the first the passphrase opens is used.
@@ -2236,7 +2259,8 @@ volume_generation :: fn(container: ptr[mut Container], id: u64, number: u32) -> 
  * origin's, for a clone), and name it in the volume's record. Both are durable with the next commit.
  *
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
- * @param id The volume's ID.
+ * @param id The ID of the volume, whose record names the generation; it's read, so one that isn't there is
+ *     NotFound, and the generation is kept with its key owner's records.
  * @param number The generation's number, which has to be one after the newest in its key records.
  * @param generation The generation's record, copied.
  * @error NotFound The volume isn't there, isn't encrypted, or the number isn't the next.

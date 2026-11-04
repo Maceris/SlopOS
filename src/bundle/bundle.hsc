@@ -77,7 +77,8 @@ ROOT_SCHEMA :: #run schema.hash(type_info_of(Root))
 /**
  * Hash bytes, as the store names an object.
  *
- * @param bytes The object's bytes.
+ * @param bytes The whole object, as it's stored: a record with its schema hash first, or a file's bytes; empty is
+ *     allowed, and only read.
  * @return Their BLAKE3-256 hash.
  */
 hash_of :: fn(bytes: u8[]) -> Hash {

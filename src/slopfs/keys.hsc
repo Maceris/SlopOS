@@ -182,7 +182,8 @@ random_key #constant_time :: fn() -> crypto.Key256 {
  * Find a generation's key.
  *
  * @param keys The keys, unlocked or being filled in.
- * @param number The generation's number.
+ * @param number Which generation, from 1, as a block pointer's generation or keys.current names it; any number may
+ *     be asked for.
  * @return The key, inside keys, good until keys' generations change; null if it has no generation of the number.
  */
 generation_key :: fn(keys: ptr[Keys], number: u32) -> ptr[crypto.Key256]? {
@@ -251,7 +252,7 @@ BLOCK_KEY_CONTEXT :: "slopfs block key"
  * Derive the key a transaction's blocks are sealed with: BLAKE3, keyed with the generation's key, of
  * BLOCK_KEY_CONTEXT, the transaction (little-endian) and the salt.
  *
- * @param generation The generation's key.
+ * @param generation The key of the generation sealing the blocks, secret, used as BLAKE3's key; not changed.
  * @param transaction The transaction the blocks are written in.
  * @param salt The transaction's salt, 8 random bytes.
  * @return The block key, secret; the caller zeroes it when done.
@@ -363,7 +364,7 @@ aead_open #constant_time :: fn(cipher: Cipher, key: ptr[crypto.Key256], nonce: p
  * @param keys The volume's keys; their block key, salt and count advance.
  * @param owner The volume whose tree holds the block.
  * @param pointer The block's pointer, its address and birth set; its generation and seal are set here.
- * @param plain The block's bytes.
+ * @param plain The bytes to seal, as they are in memory; any length the AEAD takes, as many as sealed has room for.
  * @param sealed Where the sealed bytes go, as many as plain.
  * @return True if it was sealed; false if the keys have no current generation or the AEAD refused.
  */
@@ -401,9 +402,10 @@ seal_block #constant_time :: fn(keys: ptr[mut Keys], owner: u64, pointer: ptr[mu
 /**
  * Open a block's sealed bytes, if its pointer's seal holds for them, where it says and whose it is.
  *
- * @param keys The volume's keys.
+ * @param keys The volume's keys, only read: the cipher, and the key of the generation the pointer names.
  * @param owner The volume whose tree holds the block, who wrote it.
- * @param pointer The block's pointer.
+ * @param pointer The pointer the block was reached by: its generation, birth and seal (tag, salt and count) open it,
+ *     and its address and birth are associated data.
  * @param sealed The block's bytes as read.
  * @param plain Where the opened bytes go, as many as sealed.
  * @return True if they were opened; false if the keys have no key for the pointer's generation, or the seal doesn't
@@ -429,7 +431,8 @@ open_block #constant_time :: fn(keys: ptr[Keys], owner: u64, pointer: ptr[BlockP
  * Make the associated data a wrapped key is sealed with, naming what it is and the container and volume it's for.
  *
  * @param what What's wrapped: "slopfs volume key" or "slopfs generation"; up to 24 bytes kept.
- * @param container The container's ID.
+ * @param container The container's 16-byte ID, from its superblock, so a record copied to another container doesn't
+ *     open.
  * @param volume The volume's ID, whose key records they are.
  * @return The data: what, zero-padded to 24 bytes, the container's ID and the volume's, little-endian.
  */
@@ -482,7 +485,7 @@ passphrase_key #constant_time :: fn(passphrase: u8[], record: ptr[WrapRecord]) -
 /**
  * Zero Argon2id's memory, in constant time.
  *
- * @param blocks Its blocks.
+ * @param blocks Argon2id's working memory, each block's every word set to 0.
  */
 zero_argon2 #constant_time :: fn(blocks: mut crypto.Argon2Block[]) {
     for i in 0..<blocks.count {
@@ -498,7 +501,7 @@ zero_argon2 #constant_time :: fn(blocks: mut crypto.Argon2Block[]) {
  * @param volume_key The volume key to wrap, secret; it isn't changed.
  * @param passphrase The passphrase, secret.
  * @param parameters Argon2id's parameters: DEFAULT_PASSPHRASE, MADE_PASSPHRASE or the caller's.
- * @param container The container's ID.
+ * @param container The 16-byte ID of the container the record goes in, from its superblock; it's associated data.
  * @param volume The volume's ID, whose key records it goes in.
  * @return The wrap record, public; null if Argon2id couldn't run or the seal failed.
  */
@@ -567,7 +570,7 @@ unwrap_with_passphrase #constant_time :: fn(record: ptr[WrapRecord], passphrase:
  * @param volume_key The volume key that wraps it, secret.
  * @param generation The generation, its number and key; the number is the nonce, so each is wrapped once.
  * @param began The transaction it begins in.
- * @param container The container's ID.
+ * @param container The 16-byte ID of the container the record goes in, from its superblock; it's associated data.
  * @param volume The ID of the volume whose key records it goes in.
  * @return The generation's record, public; null if the seal failed.
  */
@@ -596,7 +599,7 @@ wrap_generation #constant_time :: fn(volume_key: ptr[crypto.Key256], generation:
  *
  * @param volume_key The volume key it was wrapped with, secret.
  * @param number The generation's number, its record's key's offset.
- * @param record Its record.
+ * @param record The generation's record, as read from the volumes tree: its wrapped key and tag; only read.
  * @param container The container's ID, as it was wrapped for.
  * @param volume The ID of the volume whose key records it's in, as it was wrapped for.
  * @return The generation's key, secret; null if it doesn't open, as with the wrong volume key or a damaged record.
@@ -628,7 +631,7 @@ unwrap_generation #constant_time :: fn(volume_key: ptr[crypto.Key256], number: u
  *
  * @param keys The volume's keys, its volume key unwrapped; the new generation's key is added and made current.
  * @param began The transaction it begins in.
- * @param container The container's ID.
+ * @param container The 16-byte ID of the container the record goes in, from its superblock; it's associated data.
  * @param volume The ID of the volume whose key records it goes in.
  * @return The generation's record, to keep where the volume's keys are kept; null, with keys unchanged, if it
  *     couldn't be wrapped or there wasn't the memory to keep it.

@@ -272,7 +272,7 @@ adopted :: fn(owner: u64, object: u64) -> bool {
 /**
  * Find what the core keeps for one end.
  *
- * @param core The channel's core.
+ * @param core The core both ends share; only the side's address in it is taken, so no lock is needed here.
  * @param side The end: 0 for A, 1 for B; others are taken modulo 2.
  * @return The side, inside the core; its fields are under the core's lock.
  */
@@ -294,7 +294,8 @@ core_of :: fn(end: ptr[Channel]) -> ptr[mut ChannelCore] {
  * Find the ring memory in the direct map.
  *
  * @param kernel The kernel, whose direct map it's in.
- * @param core The channel's core.
+ * @param core A live core; only its memory is read, which is set when the core is made and never changes, so no lock is
+ *     needed.
  * @return The kernel virtual address of the memory's start: both directions' RingIndices, then the rings.
  */
 memory_of :: fn(kernel: ptr[Kernel], core: ptr[ChannelCore]) -> u64 {
@@ -320,7 +321,7 @@ memory_of :: fn(kernel: ptr[Kernel], core: ptr[ChannelCore]) -> u64 {
  * Both ends' holders can write them through a mapping, so what's read from them is untrusted.
  *
  * @param kernel The kernel, whose direct map the memory is in.
- * @param core The channel's core.
+ * @param core A live core; only its memory is read, which never changes once it's made, so no lock is needed.
  * @param side The writing end: 0 for A, 1 for B.
  * @return The indices' kernel virtual address.
  */
@@ -332,7 +333,8 @@ indices_of :: fn(kernel: ptr[Kernel], core: ptr[ChannelCore], side: u32) -> ptr[
  * Find the ring an end writes.
  *
  * @param kernel The kernel, whose direct map the memory is in.
- * @param core The channel's core.
+ * @param core A live core; only its memory and ring_bytes are read, which never change once it's made, so no lock is
+ *     needed.
  * @param side The writing end: 0 for A, 1 for B.
  * @return The ring's kernel virtual address; it's core.ring_bytes long.
  */
@@ -697,7 +699,7 @@ channel_notify :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel], signals: sl
  * Takes the core's lock as held, and each bound port's in turn. A binding its port dropped is skipped.
  *
  * @param kernel The kernel, whose timer heaps and run queues waking a port's waiter goes through.
- * @param core The channel's core.
+ * @param core The core the end is in, whose lock the caller holds; side's binding slots are read, not changed.
  * @param side The end the signals are raised on, 0 or 1.
  * @param signals The slop_os.SIGNAL_ bits raised; 0 raises nothing.
  */
@@ -729,7 +731,8 @@ raise_signals :: fn(kernel: ptr[mut Kernel], core: ptr[mut ChannelCore], side: u
  * Takes the port's lock as held.
  *
  * @param kernel The kernel, whose timer heaps and run queues waking a port's waiter goes through.
- * @param port The binding's port.
+ * @param port The port binding is on, whose lock the caller holds; the binding's packet may be queued on it, waking its
+ *     waiter.
  * @param binding A signal binding on port; its signals, armed and once fields say what it does.
  * @param signals The slop_os.SIGNAL_ bits raised; only those it sees count.
  */

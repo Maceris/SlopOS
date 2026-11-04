@@ -278,7 +278,8 @@ max_u64 :: fn(a, b: u64) -> u64 {
  * @param process The process that owns the image's memory, charged to the root budget.
  * @param space The process's address space, where it's mapped.
  * @param executable The executable, as elf_loader.read found it.
- * @param file The executable's bytes.
+ * @param file The whole executable file, as elf_loader.read read executable from; only read, its segments copied into
+ *     the buffer, and not kept.
  * @param base Where the image goes, a page-aligned user virtual address.
  * @return Null once it's loaded and mapped; otherwise what failed, a constant string.
  */
@@ -520,7 +521,7 @@ test_device_page :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> sl
  * @param kernel The kernel, whose frames pay for a new page of the table, if one is needed.
  * @param process The process whose table it goes in; it takes the table's lock, at rank HandleTable.
  * @param object The object, as an address, live; its current generation goes in the handle.
- * @param kind The object's kind.
+ * @param kind The object's kind, which has to be what object is: it's stored in the handle, not checked.
  * @param owning Whether it's the owning handle: the caller sees the process owns the object.
  * @return The handle, or null if it couldn't be made, as the table is full or there's no memory.
  */
@@ -561,7 +562,7 @@ add_grant :: fn(grants: mut slop_os.Grant[], count: usize, label: string, kind: 
 /**
  * Tell whether a boot module is a typed library, by its name's ending: .library.
  *
- * @param name The module's name.
+ * @param name A boot module's name, any string; compared byte by byte, so the case of the ending matters.
  * @return True if it ends with ".library", which may be all of it.
  */
 is_library :: fn(name: string) -> bool {

@@ -30,7 +30,8 @@ LARGE_BYTES : usize : 65536
  * @param to The debug log; unused, as what's found is logged through runtime.
  * @param manager The connection to the storage manager.
  * @param port A port bound to manager.
- * @param clone The clone's root.
+ * @param clone A connection to the root of the clone named CLONE, writable, borrowed and not closed here: a file
+ *     past its quota is tried in it, and a small one written and read back.
  * @param container The container's index among the storage manager's partitions.
  * @return 0 if all of it held; 100 if the buffer or a port couldn't be made, 101 if the clone's usage couldn't be
  *     had, 102 if the quota couldn't be set, 103 if the large file was written, 104 if the small one wasn't, or didn't
@@ -70,7 +71,7 @@ check_quotas :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os
  * @param manager The connection to the storage manager.
  * @param port A port bound to manager.
  * @param container The container's index among the storage manager's partitions.
- * @param volume The volume's name.
+ * @param volume The volume's name in the container; one no volume has is refused, giving null.
  * @return Its usage, in blocks, with its quota; null if it was refused or couldn't be asked.
  */
 usage_of :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, volume: string) -> slopfs.Usage? {

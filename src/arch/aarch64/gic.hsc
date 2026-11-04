@@ -582,7 +582,8 @@ pend_test_line :: fn(system: ptr[ArchSystem]) {
  *
  * @param base The register block's virtual address.
  * @param offset The register's offset in bytes, 4-aligned.
- * @return The register's value.
+ * @return The 32 bits the register reads as now; each call loads afresh, never merged or skipped, so a polling loop
+ *     sees changes.
  */
 read_u32 :: fn(base: u64, offset: u64) -> u32 {
     return intrinsics.volatile_load_u32(cast[ptr[u32]](base + offset))
@@ -593,7 +594,7 @@ read_u32 :: fn(base: u64, offset: u64) -> u32 {
  *
  * @param base The register block's virtual address.
  * @param offset The register's offset in bytes, 8-aligned.
- * @return The register's value.
+ * @return The 64 bits the register reads as now, in one load; each call loads afresh, never merged or skipped.
  */
 read_u64 :: fn(base: u64, offset: u64) -> u64 {
     return intrinsics.volatile_load_u64(cast[ptr[u64]](base + offset))

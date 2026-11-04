@@ -292,7 +292,7 @@ child_worker : runtime.ThreadFunction : fn(data #escaping : any) {
 /**
  * Add one to the test's counter: read, yield, write, all with the lock held, so others wanting it park.
  *
- * @param test The test's state.
+ * @param test The test's state, whose counter goes up by one under its counter_lock, held across a yield.
  */
 add_one :: fn(test: ptr[mut PoolTest]) {
     concurrency.mutex_lock(&test.counter_lock)

@@ -148,7 +148,7 @@ CROCKFORD :: "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 /**
  * Tell whether a name is one an account, or a share, may have.
  *
- * @param name The name's bytes.
+ * @param name The name to check, as bytes, not assumed to be UTF-8; only read.
  * @return True for 1 to 32 bytes, a lowercase ASCII letter, then lowercase letters, digits, - or _; false otherwise.
  */
 valid_name :: fn(name: u8[]) -> bool {
@@ -571,7 +571,8 @@ set_password #constant_time :: fn(record: ptr[mut AccountRecord], home: ptr[cryp
  * This is how a password is checked: nothing else of it is kept. It takes Argon2id's time and memory, by the
  * record's parameters, each time.
  *
- * @param record The account's record.
+ * @param record The account's record, only read: its salt and Argon2id parameters make the key from the password, which
+ *     unseals its home_wrapped and home_tag, with its name bound in as associated data.
  * @param password The password typed, read only.
  * @return The home volume's secret, which the caller wipes once it's done with it; null if it's the wrong password,
  *     or Argon2id couldn't have its memory.
@@ -585,7 +586,8 @@ unlock_home #constant_time :: fn(record: ptr[AccountRecord], password: u8[]) -> 
 /**
  * Unseal the home volume's secret with the recovery code.
  *
- * @param record The account's record.
+ * @param record The account's record, only read: its recovery_salt makes the key from the code, which unseals its
+ *     recovery_wrapped and recovery_tag, with its name bound in as associated data.
  * @param code The recovery code, as parse_recovery read it, read only.
  * @return The home volume's secret, which the caller wipes once it's done with it; null if it's the wrong code.
  */

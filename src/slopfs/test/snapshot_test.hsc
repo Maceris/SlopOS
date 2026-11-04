@@ -33,7 +33,7 @@ name_bytes :: fn(text: string) -> u8[] {
  * Tell whether the file of a name in a volume's root holds text and only that.
  *
  * @param volume The volume under test, open.
- * @param name The file's name.
+ * @param name The name looked up in the volume's root; nothing of the name makes the answer false.
  * @param text The text, at most 256 bytes.
  * @return True if the file is there and its bytes are text's; false otherwise, or on any error.
  */
@@ -51,8 +51,8 @@ file_holds :: fn(volume: ptr[mut slopfs.Volume], name: string, text: u8[]) -> bo
  * Tell whether a large file in a volume's root holds the pattern a seed makes, and nothing past it.
  *
  * @param volume The volume under test, open.
- * @param name The file's name.
- * @param seed The pattern's seed.
+ * @param name The name looked up in the volume's root; nothing of the name makes the answer false.
+ * @param seed What pattern made the file's bytes from, any u64; the same seed makes the same bytes.
  * @param size The bytes it should hold, at most a Data's.
  * @param data Where the pattern is made, overwritten.
  * @param back Where the file is read to, overwritten.
@@ -75,7 +75,7 @@ large_holds :: fn(volume: ptr[mut slopfs.Volume], name: string, seed: u64, size:
  * Count the extents on a volume's dead list.
  *
  * @param container The container under test, mounted.
- * @param id The volume's ID.
+ * @param id The volume whose dead list is read; one that isn't there has none, giving 0.
  * @return How many there are; 0xffffffff if the list couldn't be read.
  */
 dead_count :: fn(container: ptr[mut slopfs.Container], id: u64) -> u64 {
@@ -294,7 +294,7 @@ check_snapshots_of :: fn(sealed: bool, base: int) -> int {
  * Open a volume by its ID: as it is, or unlocked with the tests' passphrase.
  *
  * @param container The container, which keeps the volume among its open ones.
- * @param id The volume's ID.
+ * @param id The volume to open, which has to be in the container; one open already is given back as it is.
  * @param sealed Whether the volume is encrypted.
  * @return The volume, or why it couldn't be opened, as open_volume or open_sealed_volume says.
  */

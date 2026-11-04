@@ -213,7 +213,8 @@ pause :: fn() {
 /**
  * Write a letter in the test's marks, unless they're full.
  *
- * @param test The test's state.
+ * @param test The test's state, whose marks gets letter at count, which goes up by one; a letter past the 16th is
+ *     dropped.
  * @param letter The letter, ASCII.
  */
 mark :: fn(test: ptr[mut FiberTest], letter: char) {

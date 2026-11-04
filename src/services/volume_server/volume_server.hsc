@@ -431,7 +431,8 @@ call :: fn(server: ptr[mut Server], request: block.Request) -> block.Response {
 /**
  * Tell whether a block request finished as it should.
  *
- * @param response Its answer.
+ * @param response The block driver's answer to a Read or Write, as call gives it; Unsupported, for a request that
+ *     couldn't be sent or answered, is false like any other.
  * @return Whether it's Finished with Done.
  */
 done :: fn(response: block.Response) -> bool {
@@ -542,7 +543,8 @@ move :: fn(server: ptr[mut Server], first: u64, count: u64, bytes: mut u8[], wri
  * served, if that has one, at its priority.
  *
  * @param server The server, whose added is set.
- * @param kind What it is.
+ * @param kind The protocol and role the connection has, kept in its slot and choosing the serve function that reads
+ *     it; never Free.
  * @param end The client's end, which the server takes over: closed here if it can't be added.
  * @param object The object it's to.
  * @param read_only Whether it may change nothing.
@@ -729,7 +731,7 @@ serve_one :: fn(server: ptr[mut Server], into: ptr[mut os.Incoming]) -> bool {
  * one, while it's served.
  *
  * @param server The server, whose handled, and on_loan if the loan could be used, are set.
- * @param index The connection's slot.
+ * @param index The connection's slot, whose loan, if it has one, the thread runs on; one past them sets only handled.
  */
 received :: fn(server: ptr[mut Server], index: usize) {
     server.handled = true
@@ -857,12 +859,12 @@ file_error :: fn(error: slopfs.Error) -> files.FileError {
  *
  * @param volume The volume, changed when a file is made, typed or cut; that's durable only with its next commit.
  * @param directory The directory object the path is beneath.
- * @param path The file's path.
+ * @param path The path from directory: names separated by single '/', none empty; links on the way aren't followed.
  * @param creation New makes it, refusing one there; Existing finds it, refusing none; Truncate finds or makes it, cut
  *     to nothing; Either finds or makes it.
  * @param schema A schema hash (decisions/0046, 0108): one made is of that type, and one there must be, or it's
  *     WrongType. All zeros asks for no type.
- * @return The file's object.
+ * @return The object number of the file found or made; nothing is opened.
  * @error AlreadyExists It's there, and creation is New.
  * @error NotFound It isn't there, and creation is Existing; or a directory on the way isn't.
  * @error IsADirectory What's at path is a directory.
@@ -943,7 +945,7 @@ untyped :: fn(schema: u8[32]) -> bool {
  * @param directory The directory object the path is beneath.
  * @param path The directory's path; "" is directory itself.
  * @param create Whether it, and each directory missing on the way, is made.
- * @return Its object.
+ * @return The object number of the directory at path, directory itself for ""; nothing is opened.
  * @error NotFound It isn't there, and create is false.
  * @error NotADirectory What's at path, or on the way to it, isn't a directory.
  * @error InvalidName A component can't be a name, as an empty one.
@@ -1027,8 +1029,9 @@ same_byte :: fn(a: u8, b: u8) -> bool {
  * @param out The answer being built, which the name is appended to.
  * @param kind Directory or File.
  * @param size A file's size in bytes; 0 for a directory.
- * @param name The connection's name.
- * @return The description, without a type.
+ * @param name The connection's name, as name_of gives it, or a set's pattern; appended to out as bytes.
+ * @return The description, without a type: kind and size as given, and name as the bytes appended to out, so it's
+ *     good in out's answer only.
  */
 info_of :: fn(out: ptr[mut os.Outgoing], kind: files.Kind, size: u64, name: string) -> files.Info {
     return files.Info.{kind = kind, size = size, name = os.append(out, string_bytes(name))}
@@ -1037,7 +1040,7 @@ info_of :: fn(out: ptr[mut os.Outgoing], kind: files.Kind, size: u64, name: stri
 /**
  * Say what slopfs does that FAT doesn't: atomic replace, transactions and change cursors.
  *
- * @return Its features.
+ * @return Always atomic_replace, transactions and change_cursors true; ignores_case and snapshots false.
  */
 features :: fn() -> files.Features {
     return files.Features.{atomic_replace = true, transactions = true, change_cursors = true}
@@ -1067,7 +1070,8 @@ synced :: fn(server: ptr[mut Server]) -> bool {
  *
  * @param server The server, whose volume changes with what's asked; once its handled is set, no further request is
  *     read.
- * @param index The connection's slot.
+ * @param index The connection's slot, a Dir or a Transaction; one past them is left alone. Its loan, if it has one,
+ *     runs the thread while a request is served.
  * @param into Where each request is read into, reused.
  */
 serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
@@ -1357,7 +1361,8 @@ read_only_open :: fn(server: ptr[mut Server], directory: u64, path: string) -> d
  * is dropped.
  *
  * @param server The server, whose volume nothing here changes; once its handled is set, no further request is read.
- * @param index The connection's slot.
+ * @param index The connection's slot, a ReadOnlyDir; one past them is left alone. Its loan, if it has one, runs the
+ *     thread while a request is served.
  * @param into Where each request is read into, reused.
  */
 serve_read_only_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
@@ -1468,7 +1473,8 @@ serve_read_only_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut o
  *
  * @param server The server; a writable set's OpenFile can make or cut a file in its volume, durable with its next
  *     commit.
- * @param index The connection's slot.
+ * @param index The connection's slot, a FileSet, whose name is its pattern; one past them is left alone. Its loan, if
+ *     it has one, runs the thread while a request is served.
  * @param into Where each request is read into, reused.
  */
 serve_file_set :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
@@ -1560,7 +1566,8 @@ serve_file_set :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inc
 /**
  * Tell whether a name is one of a set's.
  *
- * @param pattern The set's pattern.
+ * @param pattern The set's pattern, as it was opened: '*' matches any run of bytes, '?' any one byte, and any other
+ *     byte only itself, case and all.
  * @param name A name a client gave, any bytes; one with a '/' is never in a set.
  * @return Whether it's one component, not empty, matching the pattern exactly.
  */
@@ -1632,7 +1639,8 @@ buffer_of :: fn(connection: ptr[Connection], transfer: files.Transfer) -> mut u8
  * Read a file into its connection's buffer.
  *
  * @param server The server, whose volume is read; nothing's changed.
- * @param connection The file's connection.
+ * @param connection The file's connection, read only: its object is read into its buffer, which must hold the
+ *     transfer, or it's NoBuffer.
  * @param transfer Where to read from in the file and to in the buffer, and how many bytes.
  * @return How many bytes were read: fewer than asked only at the file's end, 0 past it.
  * @error NoBuffer The connection has no buffer, or the transfer doesn't fit in it.
@@ -1654,7 +1662,7 @@ read_file :: fn(server: ptr[mut Server], connection: ptr[Connection], transfer: 
  * Describe a file connection's file, with its type.
  *
  * @param server The server, whose volume is read; nothing's changed.
- * @param connection The file's connection.
+ * @param connection The file's connection, read only: its object is described under its name.
  * @param out The answer being built, which the name is appended to.
  * @return Its kind, size in bytes, name and schema hash, all zeros for none.
  * @error NotFound The file is gone.
@@ -1681,7 +1689,8 @@ file_info :: fn(server: ptr[mut Server], connection: ptr[Connection], out: ptr[m
  *
  * @param server The server, whose volume a file's writes and sizes change, and a replacement's Install; once its
  *     handled is set, no further request is read.
- * @param index The connection's slot.
+ * @param index The connection's slot, a File, a TransactionFile or a Replacement; one past them is left alone. Its
+ *     loan, if it has one, runs the thread while a request is served.
  * @param into Where each request is read into, reused.
  */
 serve_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
@@ -1802,7 +1811,8 @@ serve_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomin
  * answer. A connection whose end fails is dropped.
  *
  * @param server The server, whose volume nothing here changes; once its handled is set, no further request is read.
- * @param index The connection's slot.
+ * @param index The connection's slot, a ReadOnlyFile; one past them is left alone. Its loan, if it has one, runs the
+ *     thread while a request is served.
  * @param into Where each request is read into, reused.
  */
 serve_read_only_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {

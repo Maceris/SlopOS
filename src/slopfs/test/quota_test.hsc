@@ -20,7 +20,7 @@ CHUNK : usize : 65536
  * far) left them.
  *
  * @param container The container under test, mounted.
- * @param id The volume's ID.
+ * @param id The volume whose owners records are summed; any ID, one with none giving 0.
  * @return The blocks; all ones if the owners tree couldn't be read.
  */
 owned_blocks :: fn(container: ptr[mut slopfs.Container], id: u64) -> u64 {
@@ -44,7 +44,7 @@ owned_blocks :: fn(container: ptr[mut slopfs.Container], id: u64) -> u64 {
  * Tell whether a volume's count of its blocks is what the owners tree says; it should be once committed.
  *
  * @param container The container under test, mounted.
- * @param id The volume's ID.
+ * @param id The volume to compare; any ID, one with no account and no owners records counting as 0 both ways.
  * @return True if usage_of's used is owned_blocks'.
  */
 counted :: fn(container: ptr[mut slopfs.Container], id: u64) -> bool {

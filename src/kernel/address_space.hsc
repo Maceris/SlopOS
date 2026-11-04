@@ -287,7 +287,7 @@ page_bytes :: fn(size: arch_interface.PageSize) -> u64 {
  * @param kernel The kernel, whose page table is mapped into.
  * @param virtual_address The page's kernel virtual address, aligned to its size.
  * @param physical The physical address it maps to, aligned to its size.
- * @param size The page's size.
+ * @param size The page's size, which both addresses are aligned to and the CPU supports; anything else asserts.
  * @param mapping How it's mapped.
  * @param mapper The mapping state, whose table frames are used and refilled from this CPU's frame cache.
  */

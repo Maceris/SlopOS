@@ -515,7 +515,8 @@ made_directory :: fn(box: ptr[mut Box], path: u8[]) -> bool {
 /**
  * Write the path of a program's kept grants: grants/<program>, and /<key> after it if there's one.
  *
- * @param who The program's name.
+ * @param who The program's name, as its client was named (name_of), written after "grants/" as it is; callers
+ *     pass a non-empty one.
  * @param key The key, or empty for the program's folder.
  * @param storage Where the path is written; what's past PATH_BYTES is cut.
  * @return The path, a view of storage, good as long as it is.
@@ -534,7 +535,7 @@ kept_path :: fn(who: u8[], key: u8[], storage: ptr[mut u8[PATH_BYTES]]) -> u8[] 
 /**
  * Append bytes to a path being written, as many as fit.
  *
- * @param storage The path's storage.
+ * @param storage The path being written, from count on; bytes before count aren't touched.
  * @param count How many of its bytes are in use, moved on by those appended.
  * @param bytes The bytes; those past PATH_BYTES are dropped.
  */

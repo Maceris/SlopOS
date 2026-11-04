@@ -304,7 +304,8 @@ align :: fn(sector: u64) -> u64 {
 /**
  * Give a partition's GPT type.
  *
- * @param kind What it is.
+ * @param kind The partition's kind, any of them: Esp gives the EFI system partition's type, Data basic data's, Test and
+ *     Slopfs SlopOS's own.
  * @return Its type GUID, as its bytes are on the disk.
  */
 type_of :: fn(kind: Kind) -> gpt.Guid {
@@ -557,8 +558,9 @@ fill_fat :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
  * Join a folder's path and an entry's name, path/name, in a buffer.
  *
  * @param buffer The buffer, cleared first; what's past its storage is cut off as text_buffer does.
- * @param path The folder's path.
- * @param name The entry's name.
+ * @param path The folder's path on the host, as listed; a "/" is always put after it, so one that ends in a separator
+ *     gives two.
+ * @param name The name of an entry in the folder, as listing it gave it, put after the separator as it is.
  * @return The joined path, a view into the buffer's storage, good until it's next changed.
  */
 joined :: fn(buffer: ptr[mut text_buffer.TextBuffer], path: string, name: string) -> string {

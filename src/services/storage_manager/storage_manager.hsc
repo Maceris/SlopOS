@@ -388,7 +388,8 @@ dial_manager :: fn(state: ptr[mut Manager]) -> bool {
  * be. Other packets that arrive meanwhile are dropped; clients are read again after.
  *
  * @param state The storage manager's state.
- * @param index The disk's index.
+ * @param index Which disk, counted from 0 in the order disks were found; one at MAX_DISKS or past is refused before
+ *     anything's killed. It isn't checked against disk_count; callers pass a disk that was found.
  * @return Whether it was started again; false for a disk past MAX_DISKS, or one that's ended RESTARTS times.
  */
 kill_and_restart :: fn(state: ptr[mut Manager], index: usize) -> bool {
@@ -418,7 +419,8 @@ kill_and_restart :: fn(state: ptr[mut Manager], index: usize) -> bool {
  * launch under PARTITION_SERVER_KEY plus the disk's index.
  *
  * @param state The storage manager's state, whose disks, disk_running and partition_server_starts are set.
- * @param index The disk's index.
+ * @param index Which disk, counted from 0, whose connector in connectors is dialed and whose disks and disk_running
+ *     slots are set; one at MAX_DISKS or past gives false with nothing done.
  * @return Whether it started; false if the driver couldn't be dialed, a channel made, or the launch failed. If the
  *     launch worked but a port for its listener couldn't be made, it's false with the server running unreached.
  */
@@ -851,7 +853,8 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
  * with a connection narrowed to the partition and nothing else; or a container's system volume's.
  *
  * @param state The storage manager's state.
- * @param index The partition's index.
+ * @param index The partition's place in the storage manager's list of partitions, from every disk; one past it, or
+ *     past files, gives null.
  * @return The connection, which the caller owns and passes on; null for a partition of another kind, an encrypted
  *     system volume, or if the server can't be started or connected to.
  */
@@ -1209,7 +1212,8 @@ ask_volume :: fn(served: ptr[Served], out: ptr[mut os.Outgoing]) -> volume_proto
  *
  * @param state The storage manager's state.
  * @param index The container's partition's index.
- * @param name The volume's name.
+ * @param name The volume's name in the container; matched byte for byte against the volumes being served, so
+ *     one that's not served now gives NoVolume.
  * @return Rotated with the new generation's number; NoVolume if it isn't served, NotEncrypted, Locked if it hasn't
  *     been unlocked, or Failed.
  */
@@ -1259,7 +1263,7 @@ ask_container :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Ou
  * Send one request to a disk's partition server, and wait for its answer.
  *
  * @param state The storage manager's state.
- * @param disk The disk's index.
+ * @param disk Which disk's server to ask, counted from 0; one at disk_count or past gives Unsupported, unsent.
  * @param request The request, sent as it is: Describe or Open, of a partition by its index on the disk.
  * @return The answer, a copy, whose handles the caller owns; Unsupported for a disk with no partition server, or if it
  *     couldn't be asked.
@@ -1324,7 +1328,8 @@ command_line_copy :: fn(state: ptr[Manager]) -> slop_os.Memory? {
  * Tell whether a partition holds a SlopOS container.
  *
  * @param state The storage manager's state.
- * @param partition The partition's index.
+ * @param partition The partition's place in the list of partitions, from every disk, as a client gives it; any value
+ *     is safe, and one past the list gives false.
  * @return Whether it's listed and its type is CONTAINER_TYPE.
  */
 is_container :: fn(state: ptr[Manager], partition: u32) -> bool {
@@ -1338,8 +1343,9 @@ is_container :: fn(state: ptr[Manager], partition: u32) -> bool {
  *
  * @param state The storage manager's state.
  * @param index The container's partition's index.
- * @param volume The volume's name.
- * @param snapshot The snapshot's name.
+ * @param volume The volume's name in the container; if a served volume has it, that server commits first. The
+ *     container service looks it up, and answers NoVolume if no volume has it.
+ * @param snapshot The new snapshot's name, passed on as it is; one the volume already has is answered AlreadyExists.
  * @param now When it's taken, as the client says.
  * @return Done once it's durable; Failed if the volume server didn't commit, or the container's answer, as
  *     to_container gives it.

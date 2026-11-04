@@ -64,7 +64,8 @@ LoadedKernel :: struct {
 /**
  * Read a little-endian number from a file in pages.
  *
- * @param file The file's pages.
+ * @param file The file, read whole into pages identity-mapped while boot services run; only read, and only within its
+ *     size.
  * @param offset Where the number starts, in bytes from the file's start.
  * @param size How many bytes it is, 1 to 8.
  * @return The number; 0 if any of it is past the file's end.

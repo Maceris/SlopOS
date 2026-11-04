@@ -173,7 +173,10 @@ main :: fn(store: os.Channel[dir.Dir], admin: os.Listener[config.ConfigValue], u
  * the connection isn't allowed is answered with Failed(Refused), and one the protocol doesn't know with Unsupported;
  * one that can't be read is skipped. A connection whose end fails is dropped, its end closed.
  *
- * @param service The service's state.
+ * @param service The service's state: requests are read from, and answered on, service.connected's ends through its
+ *     port. The connection's entry in clients says what it may ask, records a Next that waits, and is reset when the
+ *     connection is dropped. ValueFor adds connections and values, and Forget and UseDirectory change the values and
+ *     the directory.
  * @param index The connection's index in service.connected; one past them, or one already dropped, is left alone.
  * @param into Where each request is read into, reused from one to the next.
  */
@@ -256,7 +259,8 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
  * written wakes every connection whose Next waits on the value. A default or an override larger than
  * config.MAX_VALUE_BYTES is answered with Failed(TooLarge), and any other request with Failed(Refused).
  *
- * @param service The service's state.
+ * @param service The service's state: versions are read and written through its directory, and a version written
+ *     answers the connections waiting on the value, through connected and clients.
  * @param client The connection the request came on, to client's value; its Next is recorded on it when it waits.
  * @param value The value the connection reaches.
  * @param request The request, as read.
@@ -331,7 +335,8 @@ failed :: fn(out: ptr[mut os.Outgoing], error: config.ConfigError) {
  * Put the answer to a write or a rollback in out: Written with its version, or Failed with why not; and, for a version
  * written, answer every connection whose Next waits on the value.
  *
- * @param service The service's state.
+ * @param service The service's state, whose connections waiting on the value are answered (wake) when a version was
+ *     written; it's untouched otherwise.
  * @param value The value's index in service.values.
  * @param out The answer, which the caller sends.
  * @param made What writing the version gave: its number, or why it wasn't written.
@@ -350,7 +355,9 @@ wrote :: fn(service: ptr[mut Store], value: usize, out: ptr[mut os.Outgoing], ma
  * Answer every connection whose Next waits on a value and whose version is now past the one it saw, with the value's
  * current version, sent at once.
  *
- * @param service The service's state.
+ * @param service The service's state: each of clients waiting on value whose version is now past the one it saw is
+ *     answered on its end in connected, through its port, and its waiting cleared; the version is read through its
+ *     directory.
  * @param value The value's index in service.values; one past them wakes no one.
  */
 wake :: fn(service: ptr[mut Store], value: usize) {
@@ -375,7 +382,7 @@ wake :: fn(service: ptr[mut Store], value: usize) {
  * Put a value's newest version in an answer: Current, with its number, default, fields and override, read from its
  * typed file on the volume.
  *
- * @param service The service's state.
+ * @param service The service's state, only read: the version's file is read through its directory.
  * @param value The value; one not declared, or whose newest version can't be read, is answered with
  *     Failed(NotDeclared).
  * @param out The answer, which the caller sends.
@@ -430,7 +437,7 @@ kept :: fn(service: ptr[mut Store], value: ptr[Value], back: u64, out: ptr[mut o
  * and with another type, a version without the override, which the new type can't read. The versions before it are
  * kept, but can't be rolled back to, being of another type.
  *
- * @param service The service's state.
+ * @param service The service's state, through whose directory the newest version is read and a new one written.
  * @param value The value, whose newest is moved to the version written.
  * @param schema The type's schema hash.
  * @param default The type's default, T.{}'s bytes, at most config.MAX_VALUE_BYTES of them (the caller checks).
@@ -456,7 +463,7 @@ declare :: fn(service: ptr[mut Store], value: ptr[mut Value], schema: u8[32], de
 /**
  * Write a new version of a value: the newest's type and default, with another override.
  *
- * @param service The service's state.
+ * @param service The service's state, through whose directory the newest version is read and the new one written.
  * @param value The value, whose newest is moved to the version written.
  * @param fields Which of the type's fields override sets, a bit each.
  * @param override The override's bytes, at most config.MAX_VALUE_BYTES of them (the caller checks).
@@ -484,7 +491,8 @@ write_version :: fn(service: ptr[mut Store], value: ptr[mut Value], fields: u64,
 /**
  * Roll a value back: write a new version with the override, and its fields, a kept version had.
  *
- * @param service The service's state.
+ * @param service The service's state, through whose directory the kept version and the newest are read and the new one
+ *     written.
  * @param value The value, whose newest is moved to the version written.
  * @param version The kept version's number: from 1 to the newest, and one of the newest config.MAX_VERSIONS.
  * @return The new version's number.
@@ -511,7 +519,8 @@ roll_back :: fn(service: ptr[mut Store], value: ptr[mut Value], version: u64) ->
  * whole; a version written but not named is written over by the next. A failed delete of the oldest version is
  * ignored.
  *
- * @param service The service's state.
+ * @param service The service's state, in whose directory the owner's and the value's directories are made again if
+ *     gone, the version and newest written, and the oldest version deleted.
  * @param value The value, whose newest is moved to the version written once newest names it.
  * @param schema The type's schema hash.
  * @param default The type's default's bytes.
@@ -586,7 +595,9 @@ read_version :: fn(service: ptr[mut Store], value: ptr[Value], version: u64) -> 
  * The value is found among those reached already, or, the first time, its directories are made and its newest version
  * read from the volume. A channel is made, paid for from the service's budget, and its end kept as a new client.
  *
- * @param service The service's state.
+ * @param service The service's state: the value is looked for in values, and added there the first time, value_count
+ *     growing; the channel is paid for from its block's budget, and its end added to connected with an entry in clients
+ *     that reaches the value.
  * @param owner The value's owner, checked by valid_owner.
  * @param name The value's name, its program's entry's parameter's, checked by valid_name.
  * @return The other end of the connection, which the caller owns and passes on; null for an owner or a name that isn't
@@ -633,7 +644,7 @@ connection_for :: fn(service: ptr[mut Store], owner: string, name: string) -> os
  * Open a value the first time it's reached: make its owner's directory and its own if they aren't there, and read its
  * newest version.
  *
- * @param service The service's state.
+ * @param service The service's state, in whose directory the value's directories are made and its newest read.
  * @param value The value, whose newest is set: what newest on the volume says, or 0 if it can't be read, as for a
  *     value never declared.
  * @return Whether both directories are there; false if either couldn't be made.
@@ -666,7 +677,8 @@ open_value :: fn(service: ptr[mut Store], value: ptr[mut Value]) -> bool {
  * The owner's values reached already start again from nothing, newest 0, so the next declaration writes a first
  * version; connections to them stay open. What couldn't be removed is left, and the rest still removed.
  *
- * @param service The service's state.
+ * @param service The service's state: every value of owner's in values has its newest set to 0, and the owner's files
+ *     and directories are removed from its directory.
  * @param owner The owner, checked by valid_owner.
  * @return Whether everything was removed, or there was nothing; false for an owner that isn't valid, a directory that
  *     couldn't be listed, or anything left.
@@ -712,7 +724,8 @@ forget :: fn(service: ptr[mut Store], owner: string) -> bool {
  * Use another directory for the values from now on, as when the system volume's server was started again, closing
  * the one before.
  *
- * @param service The service's state.
+ * @param service The service's state, whose directory is closed and replaced once end opens as one; it's left as it was
+ *     otherwise.
  * @param end The new directory's end, which the service takes over, even when it fails.
  * @return Whether it's used; false if a port for it couldn't be made, the directory before kept.
  */

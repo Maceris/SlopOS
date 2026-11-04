@@ -359,7 +359,8 @@ untranslate_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
  * Nothing is left mapped if it can't all be. Takes the IOMMU's lock.
  *
  * @param kernel The kernel, whose frame cache gives the tables, charged to the domain.
- * @param domain The memory's domain.
+ * @param domain The DMA domain memory belongs to; its free I/O addresses and page tables change under the IOMMU's lock.
+ *     One that doesn't translate leaves memory unmapped.
  * @param memory Contiguous DMA memory; its device_address is set once it's mapped.
  * @param limit The I/O virtual address the memory has to end at or below, for devices that reach only so far; 0, or
  *     one past the domain's addresses, for the domain's limit.

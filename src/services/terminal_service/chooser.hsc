@@ -679,7 +679,8 @@ joined :: fn(chooser: ptr[Chooser], name: u8[], storage: ptr[mut u8[PATH_BYTES]]
 /**
  * Append part to a path being made, as much of it as fits.
  *
- * @param storage The path's bytes.
+ * @param storage The path being made, written from count on; bytes past PATH_BYTES are dropped, and those before
+ *     count aren't touched.
  * @param count How many bytes of storage are used, moved on by as many as are appended, to PATH_BYTES at most.
  * @param part The bytes to append; read only during the call.
  */

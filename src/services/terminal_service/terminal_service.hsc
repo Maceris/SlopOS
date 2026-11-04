@@ -728,7 +728,8 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
  * Tell whether a client owns the input of the view in use.
  *
  * @param service The service's state, whose view in use's input owner is compared; only read.
- * @param index The client's index.
+ * @param index The client, by its index among the service's clients, compared with the owner's; any index can be
+ *     given, and one that isn't the owner's gives false.
  * @return True if it's the owner; false for any other, or when there's none.
  */
 is_owner :: fn(service: ptr[mut Service], index: usize) -> bool {
@@ -3015,7 +3016,8 @@ view :: fn(service: ptr[mut Service]) -> ptr[mut View] {
  * the active one.
  *
  * @param service The service's state, whose viewing is set; nothing's drawn.
- * @param index The client's index.
+ * @param index The client, by its index among the service's clients, whose entry in client_view picks the view; one
+ *     past client_view uses the active view.
  */
 use_view_of :: fn(service: ptr[mut Service], index: usize) {
     which :: if index < service.client_view.count { service.client_view[index] } else { NO_VIEW }

@@ -390,7 +390,8 @@ disown :: fn(object: u64) {
  *
  * Takes the list's lock, at rank ObjectList.
  *
- * @param list The owner's list.
+ * @param list The list of objects an owner owns (a process's owned); its first object is unlinked under its lock, the
+ *     rest left.
  * @return The object, as an address, no longer on the list but still naming its owner; 0 if the list was empty.
  */
 take_owned :: fn(list: ptr[mut OwnedList]) -> u64 {

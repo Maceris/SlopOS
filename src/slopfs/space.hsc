@@ -276,7 +276,7 @@ extent_index :: fn(extents: Extent[], start: u64) -> usize {
  * Get an extent in a list.
  *
  * @param extents The list, as a rule the free list.
- * @param index Its index.
+ * @param index The extent's index in the list; past the end gives an empty extent, not an error.
  * @return The extent; an empty one, at block 0, if index is past the end.
  */
 extent_at :: fn(extents: Extent[], index: usize) -> Extent {
@@ -410,7 +410,7 @@ space_allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u6
  *
  * @param extent The free extent being allocated from.
  * @param at The block, as the rotor has it.
- * @param blocks The allocation's length.
+ * @param blocks How many blocks are being allocated, at least 1.
  * @return True if at is after the extent's start and the blocks from it fit in the extent.
  */
 pass_inside :: fn(extent: Extent, at: u64, blocks: u64) -> bool {

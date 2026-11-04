@@ -1106,7 +1106,8 @@ resolve :: fn(volume: ptr[mut Volume], directory: u32, path: string) -> Result[E
  * Get the first cluster of a directory entry's directory.
  *
  * @param volume The volume, as mount made it; only its layout is used, nothing is read.
- * @param entry The directory's entry.
+ * @param entry An entry with DIRECTORY in its attributes, as lookup or next_entry gives it; that isn't checked, so an
+ *     empty file's entry, cluster 0, would give the root's.
  * @return Its first cluster; the root's for an entry whose cluster is 0 ("..", to the root).
  */
 directory_cluster :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> u32 {
@@ -2481,7 +2482,7 @@ format :: fn(device: Device, sector_count: u64, sectors_per_cluster: u64, label:
  * Get a byte from a buffer.
  *
  * @param bytes The bytes read from, as a rule a sector's or a slot's.
- * @param at The byte's offset.
+ * @param at The byte's offset from the buffer's start; any value, as one past the end reads 0.
  * @return The byte; 0 if at is past the buffer's end.
  */
 get_u8 :: fn(bytes: u8[], at: usize) -> u8 {

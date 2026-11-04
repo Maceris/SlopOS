@@ -614,7 +614,8 @@ init_paging :: fn(cpu: ptr[mut ArchCpu]) {
  *
  * @param table The address space whose leaf entry loses the bit, a user one where the kernel calls it; any table
  *     works, and nothing else in it changes.
- * @param virtual_address The page's address.
+ * @param virtual_address Any address in the page, aligned or not; it isn't checked against table's half, and one where
+ *     no 4 KiB page is mapped gives false.
  * @return Whether the bit was set; false where no 4 KiB page is mapped there, a larger page included.
  */
 take_accessed :: fn(table: ptr[mut PageTable], virtual_address: arch_interface.VirtualAddress) -> bool {

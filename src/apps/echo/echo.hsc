@@ -154,7 +154,8 @@ greet :: fn(echo: ptr[mut Echo], root: os.Channel[dir.Dir]) {
 /**
  * Answer a line: "echo: " and the line written, the line logged, then the command it names, if any, done.
  *
- * @param echo The program's state.
+ * @param echo The program's state: the answer's written on its terminal, and a command's asked of its powerbox,
+ *     as command does.
  * @param line The line typed, which stays the caller's; an empty line isn't answered. Only as much of it as fits
  *     LINE_BYTES is in the answer.
  */
@@ -174,7 +175,8 @@ answer :: fn(echo: ptr[mut Echo], line: string) {
 /**
  * Do what a line asks of the powerbox, if it's one of its commands: open, reopen, adduser, save and its text, or list.
  *
- * @param echo The program's state.
+ * @param echo The program's state, whose powerbox is asked, waiting for its answer, and whose terminal shows the
+ *     outcome; without a powerbox, a command only says there's none.
  * @param line The line typed; one that's none of the commands, or "save " without text, does nothing.
  */
 command :: fn(echo: ptr[mut Echo], line: string) {

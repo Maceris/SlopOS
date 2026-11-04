@@ -289,7 +289,8 @@ start :: fn(transport: ptr[Transport], wanted: u64) -> u64? {
  * Set an MSI-X table entry's message, unmasked, and turn MSI-X on for the function; configuration changes are then
  * reported to no vector.
  *
- * @param transport The device's transport.
+ * @param transport The device's transport, as open made it: the entry is written in its MSI-X table, and MSI-X turned
+ *     on in its configuration space.
  * @param entry The table entry, from 0, which a queue is then set up to interrupt through.
  * @param address The message's address, as slop_os.irq_message gives it.
  * @param data The message's data, as slop_os.irq_message gives it.
@@ -317,7 +318,8 @@ set_vector :: fn(transport: ptr[Transport], entry: u32, address: u64, data: u32)
  *
  * It's sized to the device's largest, or MAX_QUEUE_SIZE if that's smaller. Done after start and before ready.
  *
- * @param transport The device's transport.
+ * @param transport The device's transport, as open made it, after start; its common configuration selects the queue and
+ *     is written, and its notification area gives the queue's notify address.
  * @param index The queue's index on the device, from 0.
  * @param page Where the page is mapped in the driver's address space, readable and writable; QUEUE_PAGE bytes, zeroed.
  * @param device_page Where the same page is to the device, as slop_os.memory_device_address gives it.
@@ -353,7 +355,8 @@ setup_queue :: fn(transport: ptr[Transport], index: u16, page: u64, device_page:
 /**
  * Tell the device the driver is ready (DRIVER_OK), once its queues are set up; it may use them from then on.
  *
- * @param transport The device's transport.
+ * @param transport The device's transport, as open made it, after start and setup_queue; its device status is written,
+ *     not read back.
  */
 ready :: fn(transport: ptr[Transport]) {
     write_u8(transport.common, DEVICE_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK)
@@ -497,7 +500,7 @@ take_used :: fn(queue: ptr[mut Queue]) -> Used? {
 /**
  * Read the ISR status byte, which reading clears: bit 0 for a queue's interrupt, bit 1 for a configuration change.
  *
- * @param transport The device's transport.
+ * @param transport The device's transport, as open made it; its ISR status byte is read, which clears it.
  * @return The status; 0 if the device has no ISR status.
  */
 interrupt_status :: fn(transport: ptr[Transport]) -> u8 {
@@ -509,7 +512,8 @@ interrupt_status :: fn(transport: ptr[Transport]) -> u8 {
  *
  * @param base Where the register block is mapped.
  * @param offset The register's offset in bytes.
- * @return Its value.
+ * @return The register's value as the device gives it at the load; never cached, nor merged with other volatile
+ *     accesses.
  */
 read_u8 :: fn(base: u64, offset: u64) -> u8 {
     return intrinsics.volatile_load_u8(cast[ptr[u8]](base + offset))
@@ -520,7 +524,7 @@ read_u8 :: fn(base: u64, offset: u64) -> u8 {
  *
  * @param base Where the register block is mapped.
  * @param offset The register's offset in bytes, 2-byte aligned.
- * @return Its value.
+ * @return The register's value, read as little-endian and given in the CPU's order.
  */
 read_u16 :: fn(base: u64, offset: u64) -> u16 {
     return bit_cast[u16le](intrinsics.volatile_load_u16(cast[ptr[u16]](base + offset)))
@@ -531,7 +535,7 @@ read_u16 :: fn(base: u64, offset: u64) -> u16 {
  *
  * @param base Where the register block is mapped.
  * @param offset The register's offset in bytes, 4-byte aligned.
- * @return Its value.
+ * @return The register's value, read as little-endian and given in the CPU's order.
  */
 read_u32 :: fn(base: u64, offset: u64) -> u32 {
     return bit_cast[u32le](intrinsics.volatile_load_u32(cast[ptr[u32]](base + offset)))

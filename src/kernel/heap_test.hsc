@@ -114,7 +114,7 @@ heap_test_size :: fn(i: u64, round: u64) -> u64 {
 /**
  * Choose the byte a test block holds at an offset, so blocks differ and a shifted copy shows.
  *
- * @param block The block's index.
+ * @param block The block's index, any value; it only shifts the pattern, as (block * 7 + offset) % 251.
  * @param offset The byte's offset in the block.
  * @return The byte, 0 to 250.
  */
@@ -127,7 +127,7 @@ heap_test_byte :: fn(block: u64, offset: u64) -> u8 {
  *
  * @param address The block's address, writable for size bytes.
  * @param size How many bytes to fill.
- * @param block The block's index.
+ * @param block The block's index, which picks its pattern; holds has to be given the same one.
  */
 fill :: fn(address: u64, size: u64, block: u64) {
     for offset in 0..<size {
@@ -140,7 +140,7 @@ fill :: fn(address: u64, size: u64, block: u64) {
  *
  * @param address The block's address, readable for size bytes.
  * @param size How many bytes to check, from the start.
- * @param block The block's index.
+ * @param block The block's index, the same one fill was given for it.
  * @return True if every byte is as heap_test_byte gives it.
  */
 holds :: fn(address: u64, size: u64, block: u64) -> bool {
@@ -155,7 +155,7 @@ holds :: fn(address: u64, size: u64, block: u64) -> bool {
 /**
  * Tell whether part of a block is all zeroes.
  *
- * @param address The block's address.
+ * @param address The block's address, readable from start to end; only read.
  * @param start The offset of the first byte to check.
  * @param end The offset just past the last byte to check; at or below start, nothing is checked.
  * @return True if every byte from start to end is 0.

@@ -167,7 +167,8 @@ charge_new :: fn(budget_address: u64, object: u64, bytes: u64) -> bool {
  * Takes the budget's lock, at LockRank MemoryBudget, and raises SIGNAL_PRESSURE after letting it go if the charge
  * reached the budget's threshold.
  *
- * @param object The object's address.
+ * @param object A live kernel object, by its ObjectHeader's address, which the caller keeps from being freed meanwhile;
+ *     its charge grows by bytes when they're charged.
  * @param bytes The bytes more, added to the object's charge.
  * @return True if they're charged, or the object is charged to no budget; false if its budget is closed or has less
  *     than bytes left, or fault injection failed the Budget point, with nothing charged.

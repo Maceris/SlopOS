@@ -210,7 +210,8 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
  * Send a response to a client; one that can't be sent is dropped.
  *
  * @param driver The driver, whose port is waited on while end's ring is full.
- * @param end The client's end.
+ * @param end The channel end of the client whose request is answered, one the driver's clients keep; not checked or
+ *     closed here.
  * @param response The response, which has no variable-size data.
  */
 answer :: fn(driver: ptr[mut Driver], end: slop_os.Channel, response: serial.Response) {

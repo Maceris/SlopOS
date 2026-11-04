@@ -283,7 +283,7 @@ linked :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, given: os.C
  *
  * @param end The directory, speaking dir.
  * @param port A port bound to end.
- * @param name The entry's name.
+ * @param name The name looked for, compared byte for byte with each listed entry's.
  * @return Whether it's among the first 64 entries listed, and is a link; false if the listing fails first.
  */
 lists_link :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> bool {

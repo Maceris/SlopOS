@@ -109,7 +109,7 @@ Resolved :: struct {
  * @param table The table it goes in.
  * @param object The object, as an address: a live one, which the caller keeps from going away meanwhile.
  * @param generation The object's generation, which the handle checks it against from now on.
- * @param kind The object's kind.
+ * @param kind The object's kind, which has to be what object is: it's stored in the entry's tag, not checked.
  * @param rights What the handle allows.
  * @param owning Whether it's the owning handle, whose closing destroys the object; the caller sees there's one.
  * @return The handle: the entry's index in the low 16 bits, never 0, and the entry's generation in the high 16.

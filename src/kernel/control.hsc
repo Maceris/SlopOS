@@ -304,7 +304,8 @@ unlink_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
  *
  * @param kernel The kernel, whose list of threads is walked under threads_lock.
  * @param process The Process, as its address.
- * @param id The thread's ID.
+ * @param id A thread ID as user mode gave it, unchecked: any value is safe, matched against each thread's, which are
+ *     unique for as long as the kernel runs.
  * @return The thread, or null if none has the ID, or it's dying, or it isn't in the subtree. It may be destroyed
  *     at any time after, but its memory isn't freed before this CPU's next quiescent point.
  */

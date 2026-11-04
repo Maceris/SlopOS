@@ -400,8 +400,10 @@ create_by :: fn(service: ptr[mut Service], client: usize, administrator: u8[], a
  * The home's secret and the recovery code are wiped before it returns; the code's text goes in the answer.
  *
  * @param service The service, whose count grows by one.
- * @param name The account's name.
- * @param password Its password.
+ * @param name The new account's name, checked with valid_name and that no account has it; it names the record
+ *     and the home volume.
+ * @param password The new account's password, read only, checked with password_problem against the name; only
+ *     the key it makes is kept, sealing the home's secret.
  * @param now When it's made, kept in the record.
  * @param administrator Whether it's the administrator.
  * @return Created with its recovery code's text, shown once; NameRefused for a name that isn't valid_name's;
@@ -710,7 +712,8 @@ root_grant #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: p
  * A link there that doesn't open, as after a member's removal revoked it, is removed and made again.
  *
  * @param root The home volume's root, which stays the caller's.
- * @param name The share's name.
+ * @param name The share's name, as its record has it, which names the link, shared/<name>; it isn't checked here,
+ *     and what of the path doesn't fit is cut (share_path).
  * @param shared The shared volume's root, which stays the caller's; the link grants it to write.
  * @return True if it made a link; false if the one there opens, or a link couldn't be made.
  */
@@ -828,7 +831,7 @@ ask_directory :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Ou
 /**
  * Write a share's link's path in a home: shared/<name>.
  *
- * @param name The share's name.
+ * @param name The share's name, written after "shared/" as it is; not checked to be valid_name's.
  * @param storage Where the path is written; what doesn't fit is cut.
  * @return The path, a view of storage, good as long as it is.
  */
@@ -1042,7 +1045,7 @@ write_share :: fn(service: ptr[mut Service], record: ptr[account_records.ShareRe
 /**
  * Find a share's name from its record's file name.
  *
- * @param file The file's name.
+ * @param file A file's name in the service's store, as its listing gives it; only read.
  * @return The name without ".share", a view of file; null if it isn't a share's record's.
  */
 share_stem :: fn(file: u8[]) -> u8[]? {

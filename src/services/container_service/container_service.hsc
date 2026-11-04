@@ -418,7 +418,8 @@ owned_index :: fn(server: ptr[Server], start: u64) -> usize {
  *     context's allocator.
  * @param start Its first 4 KiB block in the container.
  * @param blocks How many 4 KiB blocks it is.
- * @param owner The volume's ID.
+ * @param owner The ID of the volume it's kept as, as the container's records number volumes (a connection's volume);
+ *     not checked here.
  * @param birth The transaction it was allocated in.
  * @param fresh Whether it was allocated since the volume's last commit.
  * @return Whether it could be kept: false, and nothing changed, without the memory (decisions/0104).
@@ -469,7 +470,8 @@ holding :: fn(server: ptr[Server], first: u64, count: u64) -> Owned? {
  * Tell whether a volume has blocks, all in one live extent of its own.
  *
  * @param server The container service's state, whose owned list is searched and not changed.
- * @param owner The volume's ID.
+ * @param owner The ID of the volume that must own the extent, as a connection's volume has it; an ID no extent has
+ *     gives false.
  * @param first The first 4 KiB block in the container.
  * @param count How many 4 KiB blocks, from first.
  * @return Whether one extent of owner's holds them all, and it isn't dead.
@@ -562,7 +564,7 @@ forget :: fn(server: ptr[mut Server], start: u64) {
  * Take an extent a volume gave back off the owned list.
  *
  * @param server The container service's state, whose owned list loses the extent if it matches.
- * @param owner The volume's ID.
+ * @param owner The ID of the volume giving the extent back, which must be the extent's owner, or nothing's taken.
  * @param start The extent's first 4 KiB block in the container.
  * @param blocks Its length in blocks, which must be the extent's whole length.
  * @return Whether it was owner's, exactly that extent, and was taken off; false, and nothing changed, otherwise.
@@ -586,7 +588,8 @@ disown :: fn(server: ptr[mut Server], owner: u64, start: u64, blocks: u64) -> bo
  * Add a connection, in the first free slot, binding its end, and its driver if it has one, to the port.
  *
  * @param server The server, whose added is set.
- * @param kind What it is.
+ * @param kind The connection's kind, kept in its slot: Unbound for the listener or a client not yet for a volume,
+ *     Volume for a volume's or snapshot's, Blocks for a block connection; never Free.
  * @param end The client's end, which the server takes over: closed here if it can't be added.
  * @param driver A block connection's own connection to the driver, taken over too and closed if binding it fails;
  *     NONE for another kind. If there's no free slot, it isn't closed.

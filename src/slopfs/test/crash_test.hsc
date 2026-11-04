@@ -197,7 +197,7 @@ workload :: fn(volume: ptr[mut slopfs.Volume], step: int) -> int {
  * Look up what a name names in a directory.
  *
  * @param volume The volume under test, open.
- * @param directory The directory's ID.
+ * @param directory The directory to look in, in the volume; anything that isn't one fails the lookup, giving null.
  * @param name The name to look up.
  * @return The object's ID; null if nothing has the name, or the lookup failed.
  */
@@ -232,7 +232,8 @@ state_digest :: fn(volume: ptr[mut slopfs.Volume]) -> slopfs.Seal? {
  *
  * @param volume The volume under test, open.
  * @param hasher The hash, updated.
- * @param directory The directory's ID.
+ * @param directory The directory whose entries are hashed, in the volume; anything that isn't one fails the
+ *     listing.
  * @param buffer Where files are read to, overwritten; a file bigger than it fails.
  * @param depth How deep the directory is, from 0 for the root; past 8 fails.
  * @return True if it was all hashed; false if anything couldn't be listed or read.
@@ -371,7 +372,8 @@ replay :: fn(base: u8[], recorded: ptr[mut Disk], acknowledged: Acknowledged[], 
 /**
  * Apply a recorded write to an image: whole, or torn, its first half only.
  *
- * @param image The image's bytes.
+ * @param image The disk image the write lands in, changed in place; bytes the write would put past its end are
+ *     skipped.
  * @param recorded The disk that recorded the write, its logged bytes.
  * @param entry The write; a flush applies nothing.
  * @param torn Whether only its first half is applied.

@@ -161,7 +161,8 @@ records :: fn() -> system_records.SystemRecords {
  *
  * @param records The records being made.
  * @param index Which service, below MAX_SERVICES; one past them is ignored.
- * @param name The service's name.
+ * @param name The service's name, set with set_name; one of NAME_BYTES or more leaves the name all zeros, which isn't
+ *     reported.
  * @param first Its first parameter's index in the records' parameters.
  * @param count How many parameters it has.
  */
@@ -184,7 +185,8 @@ service :: fn(records: ptr[mut system_records.SystemRecords], index: usize, name
  *
  * @param records The records being made.
  * @param index Which parameter, below MAX_PARAMETERS; one past them is ignored.
- * @param name The parameter's name.
+ * @param name The parameter's name, the grant it's given, set with set_name; one of NAME_BYTES or more leaves the name
+ *     all zeros, which isn't reported.
  * @param kind What it is, a KIND_ value.
  * @param tag Its protocol's tag.
  * @param optional 1 if it's optional, 0 if it's required.

@@ -783,7 +783,8 @@ walk :: fn(table: ptr[PageTable], address: u64, leaf: u64) -> Result[Path, arch_
  * which clearing would turn into faults.
  *
  * @param table The address space, or the kernel's own table.
- * @param virtual_address The page's address.
+ * @param virtual_address Any address in the page, aligned or not; only bits 12 to 47 index the tables, so it isn't
+ *     checked against the half table maps.
  * @return True if the flag was set; false if it wasn't, if the hardware doesn't keep it, or if no 4 KiB page is
  *     mapped there (a block counts as none).
  */

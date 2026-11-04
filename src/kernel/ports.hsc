@@ -470,7 +470,7 @@ take_packets :: fn(port: ptr[mut Port], packets: ptr[mut slop_os.Packet[slop_os.
  * Takes the port's lock as held. A binding already queued is left where it is, and no waiter is woken.
  *
  * @param kernel The kernel, whose timer heaps and run queues waking a port's waiter goes through.
- * @param port The binding's port.
+ * @param port The port binding belongs to, whose lock the caller holds; its ready list gains binding at the end.
  * @param binding The binding, whose data the caller has already updated.
  */
 queue_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], binding: ptr[mut Binding]) {
@@ -495,7 +495,7 @@ queue_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], binding: ptr[m
  *
  * Takes the port's lock as held. The binding's data is left as it is.
  *
- * @param port The binding's port.
+ * @param port The port binding belongs to, whose lock the caller holds; its ready list loses binding, if it's on it.
  * @param binding The binding, queued or not.
  */
 unqueue :: fn(port: ptr[mut Port], binding: ptr[mut Binding]) {
@@ -777,7 +777,8 @@ new_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, kind: 
  * Takes the port's lock as held, and takes the timer heap's.
  *
  * @param kernel The kernel, whose binding pool the slot goes back to.
- * @param port The binding's port.
+ * @param port The port binding belonged to, whose lock the caller holds: binding leaves its ready list, and its budget
+ *     gets the binding's charge back.
  * @param binding The binding, already removed from the port's map.
  */
 free_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], binding: ptr[mut Binding]) {

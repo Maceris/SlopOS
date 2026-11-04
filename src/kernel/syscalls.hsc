@@ -576,7 +576,8 @@ sys_port_wake :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64, bits:
  *
  * @param thread The calling thread; the timer is armed on its CPU.
  * @param port The port, which needs RIGHT_PORT_BIND.
- * @param key The timer's key.
+ * @param key Any value the caller picks: the Timer packet carries it, and it names the binding for later calls such as
+ *     port_unbind.
  * @param deadline When, in monotonic nanoseconds; one that has passed fires at once.
  * @error InvalidHandle Not a handle in the caller's table.
  * @error ObjectGone The port was destroyed, or is being.
@@ -597,7 +598,7 @@ sys_port_set_timer :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64, 
  * @param thread The calling thread, the CPU's current one, which doesn't block here: its process's handle table is
  *     where the handles are looked up.
  * @param port The port, which needs RIGHT_PORT_BIND.
- * @param key The binding's key.
+ * @param key The key the binding was made with; any value, and one no binding has gives NoSuchKey.
  * @error InvalidHandle Not a handle in the caller's table.
  * @error ObjectGone The port was destroyed, or is being.
  * @error WrongKind Not a port's handle.

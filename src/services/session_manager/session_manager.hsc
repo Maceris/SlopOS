@@ -1458,7 +1458,8 @@ start_installation :: fn(sessions: ptr[mut Manager], number: u32, entry: system_
  * @tparam T The settings' type.
  * @param sessions The session manager, whose config store is asked for the value, waiting for its answer.
  * @param number The session's number, whose user owns the installation's values.
- * @param name The installation's name.
+ * @param name The installation's name, put after the user's in the owner (owner_of); not checked to be
+ *     installed.
  * @return The connection, the caller's to give; null without the config store, for a number past MAX_SESSIONS, or if
  *     the store didn't open it.
  */
@@ -1590,7 +1591,7 @@ store_request :: fn(sessions: ptr[mut Manager], request: bundle_store.Request) -
  *
  * @param sessions The session manager, whose bundle store gives the object; it's mapped into the session
  *     manager's own address space.
- * @param hash The object's hash.
+ * @param hash The hash of the object wanted, sent to the store in a Get; a hash it doesn't have gives null.
  * @return The object, mapped, for the caller to give to unmap_object; null if the store didn't give it, or it couldn't
  *     be mapped.
  */
@@ -1713,7 +1714,8 @@ connection_to :: fn(end: slop_os.Channel) -> slop_os.Channel? {
  *
  * @param sessions The session manager, whose running installation of that name in the session is ended, waiting
  *     on its port up to STOP_GRACE.
- * @param number The session's number.
+ * @param number The session's number, compared with each running program's; not checked against MAX_SESSIONS,
+ *     so one with no programs does nothing.
  * @param name The installation's name, compared with each program's; none running by it does nothing.
  */
 stop_installation :: fn(sessions: ptr[mut Manager], number: u32, name: string) {
@@ -1734,7 +1736,8 @@ stop_installation :: fn(sessions: ptr[mut Manager], number: u32, name: string) {
  * @param sessions The session manager: the installation is stopped, its list rewritten in the config store, its
  *     data deleted and its settings forgotten, waiting for each.
  * @param number The session's number, whose apps directory and user's settings it's removed from.
- * @param name The installation's name.
+ * @param name The installation's name: the list's entry of that name is dropped, and it names the data
+ *     directory and the settings' owner; one that isn't installed still has its data and settings removed.
  * @return Whether all of it went; false if any part didn't, or the session has no apps directory or there's no config
  *     store, though what could go has.
  */
@@ -1860,7 +1863,7 @@ check_installations :: fn(sessions: ptr[mut Manager], number: u32) {
  * Wait for a counter in a session to count to a number, in its data directory's file count.
  *
  * @param sessions The session manager, whose session's apps directory is read; it waits on a port of its own.
- * @param number The session's number.
+ * @param number The session's number, whose apps directory is read; one past MAX_SESSIONS gives false.
  * @param name The counter installation's name, its data directory's.
  * @param count The number waited for.
  * @return True once the file holds it; false if it doesn't within COUNT_WAIT, or the session has no apps directory.

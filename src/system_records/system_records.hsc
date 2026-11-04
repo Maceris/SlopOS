@@ -527,7 +527,7 @@ parameters_of :: fn(records: ptr[SystemRecords], service: ptr[ServiceRecord]) ->
 /**
  * Tell whether a service is a driver, with devices it takes.
  *
- * @param service The service's record.
+ * @param service A service's record, only read; just its vendor, device and class are looked at.
  * @return True if any of its vendor, device and class isn't 0.
  */
 is_driver :: fn(service: ptr[ServiceRecord]) -> bool {
@@ -537,7 +537,7 @@ is_driver :: fn(service: ptr[ServiceRecord]) -> bool {
 /**
  * Give a name's text.
  *
- * @param name The name's place.
+ * @param name A name field, as a record holds it; only read, and not checked to be well formed (valid_name does that).
  * @return Its bytes up to the first zero, all of them without one: a view into name, good while it is.
  */
 text_of :: fn(name: ptr[u8[NAME_BYTES]]) -> string {
@@ -579,7 +579,7 @@ set_name :: fn(name: ptr[mut u8[NAME_BYTES]], text: string) -> bool {
  * Tell whether a name is well formed: 1 or more ASCII letters, digits and underscores, and dots in a module's, ended
  * by a zero, every byte after it a zero.
  *
- * @param name The name's place.
+ * @param name A name field, as a record holds it; only read, every one of its NAME_BYTES.
  * @param module Whether it's a module's name, which may have dots.
  * @return True if it's well formed.
  */

@@ -293,8 +293,9 @@ unmask_line :: fn(kernel: ptr[mut Kernel], controller_index: u32, line: u32) {
  * Tell whether an IRQ has a controller's line, on any CPU.
  *
  * @param kernel The kernel, whose interrupts_lock the caller holds.
- * @param controller_index The controller's index.
- * @param line The controller's line.
+ * @param controller_index Which wired interrupt controller, by its index among the kernel's; only compared with the
+ *     routes', so one out of range gives false.
+ * @param line The line on that controller, compared with the routes' the same way, unchecked.
  * @return True if a route for an IRQ (not one the kernel keeps for itself) has the line.
  */
 line_has_irq :: fn(kernel: ptr[Kernel], controller_index: u32, line: u32) -> bool {

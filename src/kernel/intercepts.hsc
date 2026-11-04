@@ -296,7 +296,8 @@ stop_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], point: slop_
  * Tell whether an intercept stops at a system call.
  *
  * @param intercept The intercept, whose calls are read without its lock; they never change once it's made.
- * @param number The call's number.
+ * @param number The system call's number, from the stopping thread's registers; any value, and one of 64 or more never
+ *     stops.
  * @return True if number is below 64 and its bit is in the intercept's calls.
  */
 wants_call :: fn(intercept: ptr[Intercept], number: u64) -> bool {
@@ -368,7 +369,8 @@ intercept_next :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], spa
  *
  * @param kernel The kernel: a thread let go joins a run queue, and one killed is destroyed.
  * @param intercept The intercept; its lock is taken, so the caller holds none of rank Intercept or above.
- * @param id The thread's ID.
+ * @param id A thread ID as user mode gave it, unchecked: it's looked for only among the threads this intercept stopped,
+ *     and any other gives NoSuchThread.
  * @param action Continue, Skip (only at a call's entry) or Kill.
  * @return Null once it's let go; NoSuchThread if the intercept stopped no thread with that ID; NotStopped for Skip
  *     at a point other than a call's entry, when the thread stays stopped.

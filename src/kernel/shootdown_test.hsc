@@ -140,7 +140,7 @@ every_cpu_reads :: fn(kernel: ptr[Kernel], test: ptr[mut ShootdownTest], value: 
  * Tell whether every other online CPU has read a value from the test's page.
  *
  * @param kernel The kernel, whose online_cpus says which CPUs count.
- * @param test The test's state.
+ * @param test The test's state, whose seen slots the other CPUs write; only read here, each with a volatile load.
  * @param value The value each should have read.
  * @return True if each online CPU but the boot CPU, up to SHOOTDOWN_TEST_CPUS, has value in seen.
  */

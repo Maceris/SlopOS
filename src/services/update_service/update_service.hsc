@@ -130,7 +130,9 @@ main :: fn(esp: os.Channel[dir.Dir], updates: os.Channel[dir.Dir], store: os.Cha
  * Each request is acted on and answered before the next is read. One the protocol doesn't know is answered with
  * Unsupported; one that can't be read is skipped. A client whose end fails is dropped, its end closed.
  *
- * @param service The service's state.
+ * @param service The service's state: requests are read from, and answered on, service.connected's ends through its
+ *     port, and Booted and Substitute act on the ESP, updates and the store; a client whose end fails is dropped from
+ *     connected.
  * @param index The client's index in service.connected; one past them, or one already dropped, is left alone.
  * @param into Where each request is read into, reused from one to the next.
  */
@@ -176,7 +178,8 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
  * booted degraded has its record removed, so the generation before it is the default again. A generation that isn't
  * tentative, or has no record, is left as it is.
  *
- * @param service The service's state.
+ * @param service The service's state: records and objects on the ESP are read, written and removed through esp, pending
+ *     is read and removed in updates, objects are read from store, and the ESP's room is asked on esp_raw.
  * @param booted The generation booted, 0 for none, as from an ISO, and whether it came up healthy.
  * @return Live, with the generation installed and its store root, when the update installed has the healthy booted
  *     generation's kernel, boot set and command line, so it changes only services and the supervisor applies it now
@@ -230,7 +233,7 @@ booted_as :: fn(service: ptr[mut Service], booted: update.Booted) -> update.Resp
  * Roll back the tentative generations newer than the one booted that have no tries left (generations.tries_left),
  * removing their records: the bootloader booted an older one as they never came up healthy (decisions/0134).
  *
- * @param service The service's state.
+ * @param service The service's state, through whose esp the records are listed, read and removed.
  * @param booted The generation booted's number; 0 makes every spent tentative generation newer than none.
  */
 give_up_on_spent :: fn(service: ptr[mut Service], booted: u64) {
@@ -281,7 +284,8 @@ same_but_services :: fn(a: ptr[generations.Generation], b: ptr[generations.Gener
  * Pending is removed once installed, and when it's a recovery generation or one installed already; it's kept when it
  * isn't a generation's record, the store lacks an object, the ESP hasn't the room, or a write fails, each logged.
  *
- * @param service The service's state.
+ * @param service The service's state: pending is read and removed through updates, objects are read from store, the
+ *     room is asked on esp_raw, and the objects and the record are written through esp.
  * @return The generation installed, as its record was written; null if nothing was.
  */
 install :: fn(service: ptr[mut Service]) -> generations.Generation? {
@@ -359,7 +363,7 @@ install :: fn(service: ptr[mut Service]) -> generations.Generation? {
  *
  * Failures to list or remove are passed over: what's left is collected another time.
  *
- * @param service The service's state.
+ * @param service The service's state, through whose esp records and objects are listed, read and removed.
  * @param current The generation booted's number; 0 if it was rolled back, or none was booted, when only the newest
  *     permanent generation and the recovery generation are kept, and no newer one.
  */
@@ -423,7 +427,8 @@ collect :: fn(service: ptr[mut Service], current: u64) {
  * written, tentative with generations.TRIES tries, the default for the next boot, so a bad one is rolled back. Then
  * what isn't kept is collected.
  *
- * @param service The service's state.
+ * @param service The service's state: records and objects are read and written through esp, a substitute the ESP lacks
+ *     is read from store, and what isn't kept is collected.
  * @param asked The policy, and the generation booted, which the new one is a copy of.
  * @return Done if the newest generation has the policy already; Staged with the new generation's number; or Refused
  *     if the booted generation has no record, an entry's library isn't in its boot set or on the ESP, its substitute
@@ -587,7 +592,7 @@ add_file :: fn(generation: ptr[mut generations.Generation], name: string, hash: 
 /**
  * Find the newest generation on the ESP, by its record's number.
  *
- * @param service The service's state.
+ * @param service The service's state, only read: the records are listed through esp.
  * @return The highest number among the records but the recovery generation's; 0 if there's none, or the records
  *     can't be listed.
  */
@@ -607,8 +612,8 @@ newest_number :: fn(service: ptr[mut Service]) -> u64 {
 /**
  * Read an object from the ESP, as boot/objects/<hex>, without checking its hash.
  *
- * @param service The service's state.
- * @param hash The object's hash.
+ * @param service The service's state, only read: the object's file is read through esp.
+ * @param hash The hash naming boot/objects/<hex>; the bytes read aren't checked against it.
  * @return Its bytes, from the context's allocator, which the caller frees; null if it isn't there or can't be read.
  */
 object_on_esp :: fn(service: ptr[mut Service], hash: bundle.Hash) -> u8[]? {
@@ -620,9 +625,9 @@ object_on_esp :: fn(service: ptr[mut Service], hash: bundle.Hash) -> u8[]? {
 /**
  * Write an object to the ESP, as boot/objects/<hex>, in place, so a crash while writing can leave it partial.
  *
- * @param service The service's state.
+ * @param service The service's state, through whose esp the file is written.
  * @param hash The object's hash, which bytes are trusted to have.
- * @param bytes The object's bytes.
+ * @param bytes The bytes written, all of them, in place of any file there; only read, and not checked against hash.
  * @return Whether it was written; a failure is logged.
  */
 write_object :: fn(service: ptr[mut Service], hash: bundle.Hash, bytes: u8[]) -> bool {
@@ -655,7 +660,7 @@ hashes_of :: fn(generation: ptr[generations.Generation]) -> bundle.Hash[..] {
 /**
  * Read a generation's record from the ESP, checked by generations.generation_of.
  *
- * @param service The service's state.
+ * @param service The service's state, only read: the record is read through esp.
  * @param number The generation's number; 0, no generation, gives null.
  * @return The generation; null if its record isn't there, can't be read, or isn't a valid record.
  */
@@ -675,7 +680,7 @@ read_record :: fn(service: ptr[mut Service], number: u64) -> generations.Generat
  * The record is written in place, not renamed into it, so a crash while writing can leave it partial, which
  * read_record then refuses.
  *
- * @param service The service's state.
+ * @param service The service's state, through whose esp the record is written.
  * @param generation The generation, whose number names the record.
  * @return Whether it was written; a failure is logged.
  */
@@ -692,8 +697,8 @@ write_record :: fn(service: ptr[mut Service], generation: ptr[generations.Genera
 /**
  * Tell whether the ESP has an object, by its file's being there; its bytes aren't checked.
  *
- * @param service The service's state.
- * @param hash The object's hash.
+ * @param service The service's state, only read: the file is looked for through esp.
+ * @param hash The hash naming boot/objects/<hex>, looked for as a file; nothing's read.
  * @return Whether boot/objects/<hex> is a file.
  */
 on_esp :: fn(service: ptr[mut Service], hash: bundle.Hash) -> bool {
@@ -706,8 +711,10 @@ on_esp :: fn(service: ptr[mut Service], hash: bundle.Hash) -> bool {
  *
  * The store's memory is mapped read-only, copied, and let go of.
  *
- * @param service The service's state.
- * @param hash The object's hash.
+ * @param service The service's state: Get is sent on store and its answer waited for on store_port, and the memory got
+ *     is mapped read-only in its block's address space, then unmapped and closed.
+ * @param hash The object's hash, asked for with Get and checked against the bytes got; bytes that don't have it give
+ *     null.
  * @return Its bytes, from the context's allocator, which the caller frees; null if the store hasn't it, it's empty,
  *     it couldn't be mapped or copied, or its bytes don't have its hash.
  */
@@ -746,7 +753,8 @@ object_of :: fn(service: ptr[mut Service], hash: bundle.Hash) -> u8[]? {
 /**
  * Ask the ESP's file server for its room.
  *
- * @param service The service's state.
+ * @param service The service's state: Room is sent on esp_raw and its answer waited for on esp_port, until it comes or
+ *     the connection fails.
  * @return Its size and what's free, in bytes; null if it couldn't be asked, or didn't answer with its room.
  */
 room_of :: fn(service: ptr[mut Service]) -> files.Room? {

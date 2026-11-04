@@ -61,7 +61,7 @@ Apart :: struct {
  * Take a volume out of the container's process and open it on nodes of its own, as a volume server does.
  *
  * @param container The container, which has to outlive what's made; the volume is closed in it first.
- * @param id The volume's ID.
+ * @param id The volume to take out, whose record has to be there; it's closed in the container if it's open.
  * @return What's made, the caller's to free with free_apart; null if the volume's record or memory for it couldn't
  *     be had.
  */
@@ -118,7 +118,7 @@ free_apart :: fn(made: ptr[mut Apart]) {
  * Find a volume's ID by its name.
  *
  * @param container The container under test, mounted.
- * @param name The volume's name.
+ * @param name The name looked for, compared byte for byte with each volume's.
  * @return Its ID; 0 if no volume has the name, or it couldn't be looked up.
  */
 volume_id :: fn(container: ptr[mut slopfs.Container], name: string) -> u64 {

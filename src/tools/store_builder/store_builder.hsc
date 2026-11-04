@@ -82,7 +82,7 @@ main :: fn() -> int {
  * Write bytes as an object, named by their hash in hex.
  *
  * @param objects The objects folder, without a trailing separator.
- * @param bytes The object's bytes.
+ * @param bytes The whole object, hashed and written as it is; empty writes an empty file.
  * @return Their hash; null, logged, if the file couldn't be written.
  */
 put :: fn(objects: string, bytes: u8[]) -> bundle.Hash? {

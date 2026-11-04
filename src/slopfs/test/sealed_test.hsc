@@ -68,8 +68,8 @@ appears :: fn(disk: ptr[mut Disk], bytes: u8[]) -> bool {
  * Read a file's chunk's record.
  *
  * @param volume The volume under test, open.
- * @param file The file's ID.
- * @param index The chunk's index.
+ * @param file The file whose Extent record is read; not checked to be a file, so anything else has no chunks.
+ * @param index Which chunk, from 0; its record's key offset is index * CHUNK_BYTES.
  * @return The record; null if the chunk has none, or it couldn't be read.
  */
 chunk_record :: fn(volume: ptr[mut slopfs.Volume], file: u64, index: u64) -> slopfs.ExtentRecord? {

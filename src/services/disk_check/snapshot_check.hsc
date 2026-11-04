@@ -165,8 +165,9 @@ SnapshotAction :: enum {
  * @param manager The connection to the storage manager.
  * @param port A port bound to manager.
  * @param container The container's index among the storage manager's partitions.
- * @param volume The volume's name.
- * @param snapshot The snapshot's name.
+ * @param volume The volume's name in the container; one no volume has is answered NoVolume.
+ * @param snapshot The name of the snapshot to take, or to delete: taking one the volume has already is answered
+ *     AlreadyExists, and deleting one it hasn't, NoSnapshot.
  * @param action Whether it's taken or deleted.
  * @return The storage manager's answer: Done, InUse for a snapshot a clone keeps, or another refusal; Unsupported if
  *     it couldn't be asked.

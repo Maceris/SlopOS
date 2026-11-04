@@ -27,7 +27,8 @@ THREAD_STACK : u64 : 64 * 1024
  * @tparam T What the call gives on success, which is dropped.
  * @tparam E The call's error type, an enum backed by a u32 whose tags start at 1, as slop_os's errors are, so a tag
  *     can't be confused with success.
- * @param result The call's result.
+ * @param result The result of the call checked, Ok or an Error; only its variant and error are read, and an Ok's
+ *     value is dropped.
  * @return 0 if result is Ok, or the error's u32 tag, widened, if it's an Error.
  */
 tag_of :: fn[T, E](result: Result[T, E]) -> u64 #no_context {

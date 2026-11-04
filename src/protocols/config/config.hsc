@@ -302,7 +302,8 @@ next :: fn[T](config: Config[T], port: slop_os.Port, seen: u64, value: ptr[mut o
  * Take read's or next's answer: a Current merged into value, or why not.
  *
  * @tparam T The value's type, as declared.
- * @param response The store's answer.
+ * @param response The store's answer to a Read or a Next, as ask gives it: a Current, whose default and override are in
+ *     into; a Failed, whose error is returned; anything else, Unsupported for a lost connection included, is NotKept.
  * @param into The message the answer came in, which holds a Current's default and override.
  * @param value Where the merged value is built.
  * @return A Current's version's number.
@@ -466,7 +467,8 @@ merge :: fn[T](default: u8[], override: u8[], fields: u64, value: ptr[mut os.Out
  * Arrays and structs are gone into, aliases followed; each Relative found has its items appended after what value
  * holds, aligned for them.
  *
- * @param type The part's type.
+ * @param type The descriptor of the part's type: an alias is followed, an array's elements and a struct's members gone
+ *     into, a Relative[...] struct's items copied; any other type holds no Relative and is left.
  * @param offset Where the part is, in bytes, in both source and value.
  * @param source The value copied from, whose Relatives' offsets are into it.
  * @param value The value being built, whose used grows by each Relative's items.

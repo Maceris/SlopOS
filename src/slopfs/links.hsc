@@ -73,7 +73,7 @@ Issued :: struct {
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
  * @param directory The directory it goes in.
- * @param name Its name.
+ * @param name The link's name in the directory, which has to hold (name_holds) and not be there already.
  * @param record Where it leads, copied.
  * @return The link's object ID.
  * @error NotFound The directory isn't there.
@@ -96,7 +96,7 @@ create_link :: fn(volume: ptr[mut Volume], directory: u64, name: string, record:
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
  * @param object The link's object ID.
- * @return Its record.
+ * @return The link's record, a copy: where it leads, not checked against the volume it names.
  * @error NotFound The object isn't there, or isn't a link.
  * @error Corrupt The link has no LinkRecord, or one of the wrong size, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for a node.

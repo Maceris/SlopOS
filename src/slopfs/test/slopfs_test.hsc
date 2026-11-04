@@ -264,7 +264,7 @@ open_test_volume :: fn(container #escaping : ptr[mut slopfs.Container], sealed: 
  * Make a new test volume: as it is, or encrypted with ChaCha20-Poly1305 and the tests' passphrase.
  *
  * @param container The container, which keeps the volume among its open ones.
- * @param name Its name.
+ * @param name The new volume's name, 1 to VOLUME_NAME_BYTES bytes, as create_volume needs.
  * @param sealed Whether to encrypt it, with TEST_ARGON2's quick parameters.
  * @return The volume, or why it couldn't be made, as create_volume or create_sealed_volume says.
  */
@@ -489,7 +489,7 @@ fill :: fn(into: mut u8[], seed: u64, length: usize) {
 /**
  * Tell whether two byte strings are the same.
  *
- * @param a One.
+ * @param a A byte string, of any length.
  * @param b The other byte string, of any length.
  * @return True if they're the same length and byte for byte alike.
  */

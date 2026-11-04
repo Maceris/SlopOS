@@ -510,7 +510,8 @@ write_table :: fn(image: mut u8[], block_count: u64, disk_guid: Guid, partitions
  * @param entries_block The first block of this copy's entries.
  * @param first_usable The first block a partition may use.
  * @param last_usable The last block a partition may use, inclusive.
- * @param disk_guid The disk's GUID.
+ * @param disk_guid The GUID that identifies the disk, as its bytes are on disk; written as given, not checked, and the
+ *     same in both copies of the header.
  * @param entries_crc The CRC32 of the ENTRY_COUNT entries' bytes.
  */
 put_header :: fn(image: mut u8[], at: u64, alternate: u64, entries_block: u64, first_usable: u64, last_usable: u64, disk_guid: Guid,

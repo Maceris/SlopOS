@@ -36,8 +36,9 @@ DeadExtent :: struct {
 /**
  * Get whose key records a volume uses: its own, or for a clone, its origin's.
  *
- * @param id The volume's ID.
- * @param record Its record.
+ * @param id The volume the record is of; it's what's returned when the record names no other owner.
+ * @param record The volume's record, only read: its key_owner, nonzero for a clone, names the volume whose key
+ *     records it uses.
  * @return The record's key_owner, or id when that's 0.
  */
 key_owner_of :: fn(id: u64, record: ptr[VolumeRecord]) -> u64 {
@@ -49,7 +50,7 @@ key_owner_of :: fn(id: u64, record: ptr[VolumeRecord]) -> u64 {
  * List a volume's snapshots, by number, so oldest first.
  *
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
- * @param id The volume's ID.
+ * @param id The volume whose Snapshot records are listed; not checked, so a volume that isn't there lists none.
  * @param found Where they're added, with context's allocator; the caller's to free, even on an error, when it may
  *     hold some.
  * @error Corrupt A record isn't a SnapshotRecord, or a node couldn't be read or didn't check out.
@@ -77,7 +78,7 @@ snapshot_records :: fn(container: ptr[mut Container], id: u64, found: ptr[mut Nu
 /**
  * Get a snapshot's name.
  *
- * @param record Its record.
+ * @param record The snapshot's record: name_bytes says how much of its name field is the name.
  * @return Its name's bytes, a view into the record, good as long as it is; empty if name_bytes is past the field.
  */
 name_of_snapshot :: fn(record: ptr[SnapshotRecord]) -> u8[] {
@@ -92,7 +93,7 @@ name_of_snapshot :: fn(record: ptr[SnapshotRecord]) -> u8[] {
  * Find a volume's snapshot by its name.
  *
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
- * @param id The volume's ID.
+ * @param id The volume whose snapshots are searched; not checked, so a volume that isn't there has none.
  * @param name The snapshot's name, compared byte for byte.
  * @return The snapshot; null if the volume has none of the name.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
@@ -136,7 +137,8 @@ volume_name_holds :: fn(name: u8[]) -> bool {
  * snapshot holds goes on its dead list, charged to it.
  *
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
- * @param id The volume's ID.
+ * @param id The volume to snapshot, which has to be there; its record's root and next object as committed are
+ *     pinned, and its floor is raised to the durable transaction.
  * @param name The snapshot's name, which volume_name_holds, and none of the volume's other snapshots has.
  * @param now When it's taken, as its taker says, kept in its record.
  * @return Its number, one more than the volume's highest now.
@@ -186,7 +188,7 @@ take_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], now: u64
  * tree have it; extents waiting to go on it this transaction aren't listed.
  *
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
- * @param id The volume's ID.
+ * @param id The volume whose Dead records are listed; not checked, so a volume that isn't there lists none.
  * @param found Where they're added, with context's allocator; the caller's to free, even on an error.
  * @error Corrupt A record isn't a DeadValue, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for the list or a node.
@@ -237,8 +239,9 @@ held_by :: fn(snapshots: NumberedSnapshot[], birth: u64, freed: u64) -> bool {
  * be freed when another snapshot is deleted.
  *
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
- * @param id The volume's ID.
- * @param name The snapshot's name.
+ * @param id The volume the snapshot is of; its dead extents are freed, uncharged, and its floor set to its newest
+ *     remaining snapshot's transaction, or 0.
+ * @param name The snapshot's name, compared byte for byte with the volume's snapshots'.
  * @param freed Where the extents freed are added, for whoever keeps who owns what, with context's allocator; null
  *     when no one does.
  * @error NotFound The volume has no snapshot of the name.
@@ -320,7 +323,8 @@ delete_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], freed:
  * before that, and so on.
  *
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
- * @param record The volume's record.
+ * @param record The volume's record, only read: its origin (0 for none) and the transaction its blocks are the
+ *     origin's up to; each origin's own record is then read from the container.
  * @return Its lineage, nearest first; empty for a volume that isn't a clone.
  * @error TooLarge The lineage is longer than MAX_LINEAGE.
  * @error NotFound An origin isn't there.
@@ -358,8 +362,10 @@ lineage_of :: fn(container: ptr[mut Container], record: ptr[VolumeRecord]) -> Re
  * are the origin's, and the snapshot can't be deleted while the clone is there. It has no quota.
  *
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
- * @param id The origin's ID.
- * @param snapshot The snapshot's name.
+ * @param id The volume to clone, which has to be there: its hash key, cipher, generation and key owner go to the
+ *     clone, and it becomes the clone's origin.
+ * @param snapshot The name of the origin's snapshot to clone, compared byte for byte; its root, next object and
+ *     transaction start the clone.
  * @param name The clone's name, which volume_name_holds and no volume in the container has.
  * @param now When it's made, as its maker says, kept in its record.
  * @return The clone's ID, a new one.
@@ -462,8 +468,9 @@ load_floors :: fn(container: ptr[mut Container]) -> Result[void, Error] {
  *
  * It's to be served read only: its server commits nothing.
  *
- * @param volume The volume's record.
- * @param snapshot The snapshot's record.
+ * @param volume The record of the volume the snapshot is of, copied, not changed: everything but its root and
+ *     next object is kept.
+ * @param snapshot The snapshot's record, only read: its root and next object replace the volume's.
  * @return The record, a copy.
  */
 snapshot_volume_record :: fn(volume: ptr[VolumeRecord], snapshot: ptr[SnapshotRecord]) -> VolumeRecord {
@@ -479,8 +486,9 @@ snapshot_volume_record :: fn(volume: ptr[VolumeRecord], snapshot: ptr[SnapshotRe
  * It isn't among the open volumes, so nothing commits it or frees it with the container.
  *
  * @param container The container, which has to outlive the volume.
- * @param id The volume's ID.
- * @param name The snapshot's name.
+ * @param id The volume the snapshot is of, which has to be there; the snapshot is served under this ID, with its
+ *     lineage.
+ * @param name The snapshot's name, compared byte for byte with the volume's snapshots'.
  * @param keys For an encrypted volume, its keys, which the volume then owns, freed with it even when opening fails
  *     after the snapshot is found; null for one that isn't encrypted.
  * @return The snapshot's volume, the caller's to free with free_volume.
@@ -520,7 +528,7 @@ open_snapshot :: fn(container #escaping : ptr[mut Container], id: u64, name: u8[
 /**
  * Tell whether two byte strings are the same.
  *
- * @param a One.
+ * @param a A byte string, of any length.
  * @param b The other byte string, of any length.
  * @return True if they're the same length and byte for byte alike.
  */
@@ -571,7 +579,8 @@ find_volume_named :: fn(container: ptr[mut Container], name: u8[]) -> Result[u64
  * past it is kept.
  *
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
- * @param id The volume's ID.
+ * @param id The volume to limit, which has to be there; its record is changed, and its open volume's copy and the
+ *     space's account with it.
  * @param blocks The most blocks it may have, its snapshots' included; 0 for no limit.
  * @error NotFound The volume isn't there.
  * @error OutOfMemory No memory for the account or a node.

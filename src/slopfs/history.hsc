@@ -169,7 +169,7 @@ changes_since :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: 
 /**
  * Get the ChangeKind a record's kind field holds.
  *
- * @param kind The field's value.
+ * @param kind A change record's kind field, as stored; any value is taken.
  * @return Its ChangeKind; Written for any value that isn't another's, 2 included.
  */
 kind_of_change :: fn(kind: u32) -> ChangeKind {

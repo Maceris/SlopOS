@@ -44,7 +44,8 @@ Clients :: struct {
  * Add a client, bound to a port, in the place of one that went away if there is one, so a service has room for
  * MAX_CLIENTS at once rather than in its life.
  *
- * @param clients The service's clients.
+ * @param clients The service's clients, changed: end goes in the first freed place, or the next unused one, count
+ *     growing then.
  * @param port The service's port, which the end is bound to, persistently, for readable and peer-closed, under the
  *     client's index as its key; a binding left under that key is undone first.
  * @param end The client's end, which the clients keep when it's added; not closed when it isn't.
@@ -57,7 +58,8 @@ add_client #export :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slo
 /**
  * Add a client as add_client does, giving where it went, for state a service keeps per client.
  *
- * @param clients The service's clients.
+ * @param clients The service's clients, changed: end goes in the first freed place, or the next unused one, count
+ *     growing then; unchanged if it isn't added.
  * @param port The service's port, which the end is bound to under the client's index.
  * @param end The client's end, which the clients keep when it's added; not closed when it isn't.
  * @return The client's index, 0 to MAX_CLIENTS - 1, the lowest freed place or the next; null if there's no room, or
@@ -92,7 +94,8 @@ add_client_index #export :: fn(clients: ptr[mut Clients], port: slop_os.Port, en
  *
  * Its port binding is left, undone when its place is next used; count doesn't shrink.
  *
- * @param clients The service's clients.
+ * @param clients The service's clients, changed: the end at index is closed and its place set to NO_HANDLE, which
+ *     add_client then reuses.
  * @param index The client's index; one past MAX_CLIENTS is nothing.
  */
 drop_client #export :: fn(clients: ptr[mut Clients], index: usize) {

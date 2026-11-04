@@ -58,7 +58,8 @@ NO_TIER :: -1
  * Checking every import edge covers what's imported indirectly too. A std package without a PACKAGE_TIER is reported.
  *
  * @param target The target being built, whose operating system gives the project's packages their tier.
- * @param program The target's program.
+ * @param program The program as the compiler describes it once checked; only read. Every package's import edges are
+ *     checked, the imported package found by its path.
  * @return True if it holds; false if a problem was reported, at the import or the package.
  */
 check_tiers :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
@@ -137,8 +138,10 @@ tier_name :: fn(tier: int) -> string {
 /**
  * Tell whether a package is std's: it's in a std folder, or something in the program imports it from "std".
  *
- * @param program The target's program.
- * @param path The package's path.
+ * @param program The program as the compiler describes it once checked; only read, its packages' import edges looked
+ *     through for one from "std".
+ * @param path The package's path, as PackageInfo.path or an import edge has it; one with a std folder in it, "/std/" or
+ *     "\std\", is std's whatever imports it.
  * @return True if it's std's.
  */
 is_std :: fn(program: ptr[compiler.ProgramInfo], path: string) -> bool {
@@ -210,7 +213,8 @@ check_iommu_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
  * is_idempotent function (decisions/0040, 0071). What its messages hold, and its Response's Unsupported, the generator
  * checks itself.
  *
- * @param program The target's program.
+ * @param program The program as the compiler describes it once checked; only read. Each of its packages that declares
+ *     validate_request is checked.
  * @return True if it holds; false if a problem was reported, at the package.
  */
 check_protocols :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
@@ -234,8 +238,9 @@ check_protocols :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
 /**
  * Tell whether anything in the program imports a package under an alias.
  *
- * @param program The target's program.
- * @param path The package's path.
+ * @param program The program as the compiler describes it once checked; only read, every package's import edges looked
+ *     through.
+ * @param path The imported package's path, compared whole with each import edge's.
  * @param alias The alias, or with prefix, what the alias starts with.
  * @param prefix Whether alias is a prefix, as "iommu_" is, rather than the whole alias.
  * @return True if some import of the package is under that alias.
@@ -320,7 +325,7 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
 /**
  * Tell whether a function's file is a not_yet_implemented.hsc, as the stubs of what isn't implemented yet are.
  *
- * @param path The file's path.
+ * @param path The path of the file a function is declared in, as its location gives it; only its end is compared.
  * @return True if it ends with not_yet_implemented.hsc.
  */
 is_stub :: fn(path: string) -> bool {
@@ -333,7 +338,8 @@ is_stub :: fn(path: string) -> bool {
  *
  * @param implementation The implementing function, by value: it came from find_function, so a pointer to it couldn't
  *     be passed on.
- * @param interface The interface's function.
+ * @param interface The function the interface package declares without a body, which implementation has to match; only
+ *     read.
  * @return True if they match.
  */
 signatures_match :: fn(implementation: compiler.FunctionInfo, interface: ptr[compiler.FunctionInfo]) -> bool {
@@ -415,7 +421,8 @@ struct_name :: fn(info: ptr[compiler.TypeInfo]) -> string {
 /**
  * Make a type value from its descriptor: a type value is its descriptor's address (Hemera docs/types.md).
  *
- * @param info The type's descriptor.
+ * @param info Any type's descriptor, as type_info_of or a descriptor's member gives it; not checked, only
+ *     reinterpreted.
  * @return The type value whose descriptor info is, for comparing with ==.
  */
 described_type :: fn(info: ptr[compiler.TypeInfo]) -> type {
@@ -426,7 +433,7 @@ described_type :: fn(info: ptr[compiler.TypeInfo]) -> type {
  * Tell whether a package declares a type of a name.
  *
  * @param package The package whose declared types are looked through; types it imports aren't.
- * @param name The type's name.
+ * @param name The name to find, compared whole with each declared type's own name, without a package prefix.
  * @return True if one of its types has it.
  */
 declares_type :: fn(package: ptr[compiler.PackageInfo], name: string) -> bool {
@@ -505,7 +512,8 @@ is_own :: fn(program: ptr[compiler.ProgramInfo], package: ptr[compiler.PackageIn
  * complex or quaternion type, or vector of them, in what a function of its own packages takes, gives or uses.
  *
  * @param target The target being built; anything but the kernel holds.
- * @param program The target's program.
+ * @param program The program as the compiler describes it once checked; only read. Its own packages' functions are
+ *     checked, not base's or std's.
  * @return True if it holds; false if a problem was reported.
  */
 check_kernel_floats :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
@@ -563,7 +571,7 @@ is_floating :: fn(checked: type) -> bool {
 /**
  * Follow a type's aliases to the type they name.
  *
- * @param info The type's descriptor.
+ * @param info Any type's descriptor; an alias's is followed through its base types, however many.
  * @return The first descriptor along the aliases that isn't an alias's; info itself if it isn't one.
  */
 unaliased :: fn(info: ptr[compiler.TypeInfo]) -> ptr[compiler.TypeInfo] {
@@ -610,7 +618,8 @@ check_syscall_results :: fn(target: ptr[compiler.BuildOptions], program: ptr[com
 /**
  * Tell whether a value of a type holds a pointer: itself, or a member's, element's or variant's, however deep.
  *
- * @param info The type's descriptor.
+ * @param info The descriptor of the type looked into: aliases, arrays, struct members and the types a variant holds are
+ *     followed.
  * @param seen The types already looked at, which this adds to, so a type that holds itself ends; each is looked into
  *     once, and false the second time.
  * @return True if it holds a pointer.
@@ -677,7 +686,8 @@ ALLOCATORS :: string.["new", "new_aligned", "new_array", "new_array_aligned", "a
  * Tell whether a function, or anything it calls by name in the project's packages or base's, calls an allocator,
  * reporting each such call.
  *
- * @param program The target's program.
+ * @param program The program as the compiler describes it once checked; only read, to find each called function's
+ *     package by its path. Calls into packages other than the project's own and base's aren't followed.
  * @param function The function; one INTERRUPT_ALLOCATIONS lists is taken not to allocate.
  * @param package The function's package's name.
  * @param visited The calls already followed, which this adds to, so each is followed once.
@@ -745,7 +755,8 @@ is_program :: fn(package: ptr[compiler.PackageInfo]) -> bool {
  * Programs don't share code by importing each other (decisions/0029, 0100): a program may import another to launch it,
  * for its entry's type and its constants, but calls nothing of it. What two programs share goes in a library package.
  *
- * @param program The target's program.
+ * @param program The program as the compiler describes it once checked; only read. Every call one program package makes
+ *     into another it imports is reported.
  * @return True if it holds; false if a problem was reported, at each call.
  */
 check_program_imports :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
@@ -901,7 +912,8 @@ HARDWARE_FOLDERS :: string.["/src/arch/", "/src/drivers/", "/src/iommu/", "/src/
  *
  * Its files are read whole; one that can't be read is passed over.
  *
- * @param program The target's program.
+ * @param program The program as the compiler describes it once checked; only read. The packages in a hardware folder
+ *     have their #packed structs checked.
  * @return True if it holds; false if a problem was reported, at each struct.
  */
 check_hardware_layouts :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
@@ -1097,7 +1109,7 @@ is_listed_in :: fn(names: string[], name: string) -> bool {
  *
  * @param names The list, as DISCARDED_RESULTS is.
  * @param package The function's package's name.
- * @param function The function's name.
+ * @param function The function's name as its FunctionInfo has it, without its package; compared exactly.
  * @return True if one of names is exactly package, a dot, and function.
  */
 is_listed_function :: fn(names: string[], package: string, function: string) -> bool {
@@ -1245,7 +1257,8 @@ matches_at :: fn(text: string, at: usize, part: string) -> bool {
 /**
  * Find a package of the program by its path.
  *
- * @param program The target's program.
+ * @param program The program as the compiler describes it once checked; only read, its packages looked through in
+ *     order.
  * @param path The package's path, as an import edge has it.
  * @return The package, which the program holds; null if it has none at path.
  */
@@ -1261,7 +1274,8 @@ package_at :: fn(program: ptr[compiler.ProgramInfo], path: string) -> ptr[compil
 /**
  * Find a package of the program by its name.
  *
- * @param program The target's program.
+ * @param program The program as the compiler describes it once checked; only read, its packages looked through in
+ *     order.
  * @param name The package's name, as its package line has it.
  * @return The first package of that name, which the program holds; null if it has none.
  */

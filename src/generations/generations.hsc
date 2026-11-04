@@ -203,7 +203,8 @@ record_path :: fn(number: u64, storage: ptr[mut u8[128]]) -> string {
 /**
  * Give a boot-set file's name as text.
  *
- * @param name The name's bytes.
+ * @param name A boot-set file's name field, as a record holds it; only read, and not checked to be ended (ended does
+ *     that).
  * @return Its bytes up to the first zero, all NAME_BYTES of them if there's none, as a view of name, good as long as
  *     name is; empty if the first byte is zero.
  */
@@ -283,7 +284,7 @@ set_line :: fn(line: ptr[mut u8[COMMAND_LINE_BYTES]], text: string) -> bool {
 /**
  * Tell whether a boot-set file's name is ended by a zero within its bytes.
  *
- * @param name The name's bytes.
+ * @param name A boot-set file's name field, as a record holds it; only read, all NAME_BYTES of it.
  * @return True if any of its bytes is zero.
  */
 ended :: fn(name: ptr[u8[NAME_BYTES]]) -> bool {
