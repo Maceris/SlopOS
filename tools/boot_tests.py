@@ -79,14 +79,20 @@ def boot_arguments(arguments: list, more: list) -> list:
         argument for argument in arguments if argument not in (WITH_PROGRAMS, WITH_IMAGE_BUILDER)]
 
 
-def program_test(name: str, program: str, line: str, words: str = "", qemu: list = []) -> tuple:
+def tests_passed(program: str, count: int) -> str:
+    """The line a program's tests end with when every one of them passed (Hemera's docs/testing.md)."""
+    return f"[user] {program}: {count} tests: {count} passed, 0 failed"
+
+
+def program_test(name: str, program: str, line, words: str = "", qemu: list = []) -> tuple:
     """
     A test program the root task runs (src/tests, knowledge/decisions/0069) on 2 CPUs, with more QEMU arguments if it
-    needs a device: it says line and ends with 0, its budget is back to nothing, and once the root task has ended, only
-    the kernel's own objects are left.
+    needs a device: it says line, or, given a number, reports that many tests all passed (decisions/0175), and ends with
+    0, its budget is back to nothing, and once the root task has ended, only the kernel's own objects are left.
     """
     command_line = f"test_exit {words} test_program={program}" if words else f"test_exit test_program={program}"
-    return (name, 7, [WITH_PROGRAMS, f"--command-line={command_line}", f"--expect-line=[user] {program}: {line}",
+    said = tests_passed(program, line) if isinstance(line, int) else f"[user] {program}: {line}"
+    return (name, 7, [WITH_PROGRAMS, f"--command-line={command_line}", f"--expect-line={said}",
                       f"--expect-line=[user] root task: {program} ended with 0, and its budget is back to nothing",
                       "--expect-line=[info] objects left: only the kernel's own", "--", "-smp", "2", *qemu])
 
@@ -789,8 +795,7 @@ TESTS = [
     ("runs a CPU budget's threads on its CPUs", 7, [WITH_PROGRAMS, "--command-line=test_exit test_program=test_affinity",
         "--expect-line=[user] test_affinity: its budget's threads ran only on its CPUs, and CPUs outside its parent's or under its children's were refused",
         "--expect-line=[user] root task: test_affinity ended with 0, and its budget is back to nothing", "--", "-smp", "2"]),
-    program_test("runs threads of its own, each preempted and with its own vector state", "test_threads",
-        "4 threads of its own, each preempted and run again, each with its own vector state"),
+    program_test("runs threads of its own, each preempted and with its own vector state", "test_threads", 1),
     program_test("takes system calls on handles", "test_syscalls",
         "handles were looked up, copied, refused, closed and went stale; threads and processes made and destroyed"),
     program_test("waits on ports, wakes them and sets their timers", "test_ports",

@@ -1,7 +1,7 @@
 """
-Builds and runs every package's tests (decisions/0033, Tests): each test/ folder under src/ is a
-package whose main returns 0 if everything worked, or the number of the first check that failed.
-They're hosted programs, built for this machine by SlopOS's build package (src/build, targets=tests)
+Builds and runs every package's tests (decisions/0033, Tests, and 0175): each test/ folder under src/ is a package of
+#test functions, which Hemera's testing runs and reports (its docs/testing.md), ending with 0 if every one passed, or
+how many failed. They're hosted programs, built for this machine by SlopOS's build package (src/build, targets=tests)
 with Hemera's compiler (hemera on the PATH, or HEMERA), so they test code that doesn't need ring 0,
 like the frame allocator over a buffer.
 
@@ -66,7 +66,7 @@ def main() -> int:
             if code == 0:
                 print(f"passed: {name}")
             else:
-                print(f"FAILED: {name}, check {code}")
+                print(f"FAILED: {name}, {code} of its tests" if 0 < code <= LARGEST_CHECK else f"FAILED: {name}, ended with {code}")
                 failed += 1
         if not tests:
             print("FAILED: no tests were built")

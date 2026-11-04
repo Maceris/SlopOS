@@ -1,12 +1,21 @@
 /**
- * What SlopOS's test programs share (src/tests, decisions/0069): each is a program the root task runs with
- * test_program=<name> on the kernel's command line, with a TestGrants' worth of handles, and ends with 0 if
- * everything worked, or the number of the first check that failed, saying which in its debug log. Each keeps
- * what calls gave in results, and compares them with what they should have given:
+ * What SlopOS's test programs share (src/tests, decisions/0069, 0175): each is a program the root task runs with
+ * test_program=<name> on the kernel's command line, with a TestGrants' worth of handles. Its checks are #test
+ * functions (Hemera's docs/testing.md), which main runs with run, reporting each to the debug log, and it ends with
+ * how many failed. What main was given reaches the tests as a context extension, which given finds:
  *
- *     results : u64[16]
- *     results[0] = test_kit.tag_of(slop_os.handle_close(handle))
- *     return test_kit.check(log, "test_syscalls", results, u64.[0])
+ *     Given :: struct { log : slop_os.DebugLog, budget : slop_os.MemoryBudget }
+ *
+ *     closes_handles #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+ *         given :: test_kit.given(t, Given)?
+ *         testing.expect_ok(t, slop_os.handle_close(handle), "an open handle closes")
+ *         return .Ok
+ *     }
+ *
+ *     main :: fn(log: slop_os.DebugLog, ...) -> int {
+ *         state :: Given.{log = log, ...}
+ *         return test_kit.run(log, "test_syscalls", #insert testing.tests_of(compiler.load_package(".")), state)
+ *     }
  *
  * Threads of their own run #no_context functions on stacks of their own (start_thread), as there's no thread
  * support in the runtime yet.
@@ -16,6 +25,7 @@ package test_kit
 import intrinsics from "base"
 import runtime from "base"
 import slop_os from "std/os"
+import testing from "std"
 import log_line from "../log_line"
 
 /** The size of a test thread's stack, in bytes, as start_thread maps it: 64 KiB. */
@@ -74,6 +84,63 @@ check :: fn(log: slop_os.DebugLog, name: string, results: u64[], expected: u64[]
         }
     }
     return 0
+}
+
+/** Where run's report goes: the debug log, each line started with the test program's name, as its own lines are. */
+LogReporter :: struct #scoped {
+    /** The debug log, which needs RIGHT_DEBUG_LOG_WRITE. */
+    log : slop_os.DebugLog,
+    /** The program's name, which starts each line. */
+    name : string,
+}
+
+/**
+ * Write a line of a report to the debug log, as a Reporter's write, after the program's name.
+ *
+ * @param target The LogReporter, which lasts while run does.
+ * @param text The line, ending with its newline, which log_line adds again, so it's taken off.
+ */
+write_log :: fn(target: rawptr, text: string) {
+    reporting :: cast[ptr[LogReporter]](target)
+    line :: if text.count > 0 && text[text.count - 1] == '\n' { text[0..<text.count - 1] } else { text }
+    log_line.write(reporting.log, "%: %", reporting.name, line)
+}
+
+/**
+ * Run a test program's tests, each line of the report in the debug log as "<name>: <line>", with what main was given
+ * reachable from each test through given.
+ *
+ * @tparam G What main was given, as the program's own struct.
+ * @param log The debug log, which needs RIGHT_DEBUG_LOG_WRITE.
+ * @param name The program's name, which starts each line, as boot_tests.py looks for it.
+ * @param tests The tests, from testing.tests_of.
+ * @param state What main was given, copied to the heap, as a context value can't point into the stack, and the copy
+ *     pushed as a context extension while the tests run; the copy is freed after.
+ * @return How many tests failed, main's exit code: 0 when all passed.
+ */
+run :: fn[G](log: slop_os.DebugLog, name: string, tests: testing.Test[], state: G) -> int {
+    reporting := LogReporter.{log = log, name = name}
+    reporter :: testing.Reporter.{target = cast[rawptr](&reporting), write = write_log}
+    held :: runtime.new(G)
+    defer runtime.free(held)
+    held^ = state
+    node := runtime.extension_node(held)
+    failed : usize = 0
+    push_context with_given (extensions = &node) {
+        failed = testing.run(tests, reporter)
+    }
+    return cast[int](failed)
+}
+
+/**
+ * Find what main was given, from a test run gave it to.
+ *
+ * @param t The test's state, which a failure is recorded in if there's nothing to find.
+ * @param G What main was given, the type it passed to run.
+ * @return It; Error(Failed), recorded, when the test wasn't run by run with a G.
+ */
+given :: fn[G](t: ptr[mut testing.T], G: type, location := #caller_location) -> Result[ptr[mut G], testing.Stopped] {
+    return testing.require_some(t, runtime.get_extension(G), "the test was run by test_kit.run with what main was given", location)
 }
 
 /**

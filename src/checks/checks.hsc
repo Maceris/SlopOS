@@ -1066,7 +1066,7 @@ is_result :: fn(checked: type) -> bool {
 RAW_POINTERS :: string.[
     "arch_aarch64", "arch_x86_64", "container_service", "elf_loader", "events_service", "fat", "fat_server", "fat_test",
     "bootloader", "frames", "gpt", "gpt_test", "image_builder", "iommu_vtd", "kernel", "partition_server",
-    "pci", "slopfs", "slopfs_test", "slopos_boot", "volume_server", "x86_64_test",
+    "pci", "slopfs", "slopfs_test", "slopos_boot", "test_kit", "volume_server", "x86_64_test",
 ]
 
 /** Functions of the kernel's, as package.function, that may discard a Result: losing its error is right there. */

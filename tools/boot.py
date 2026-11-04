@@ -1024,6 +1024,7 @@ def main() -> int:
         missing = [line for line in arguments.expect_line if line not in lines]
         for line in missing:
             print(f"boot.py: the serial output has no line {line!r}", file=sys.stderr)
+        missing += failed_tests(output)
         shown = console.lines() if console is not None else []
         missing_shown = [line for line in arguments.expect_console_line if line not in shown]
         missing_shown += [line for line in arguments.refuse_console_line if line in shown]
@@ -1092,7 +1093,28 @@ def run_efi(arguments: argparse.Namespace, qemu: Path, aarch64: bool) -> int:
     missing = [line for line in arguments.expect_line if line not in output.splitlines()]
     for line in missing:
         print(f"boot.py: the serial output has no line {line!r}", file=sys.stderr)
-    return 0 if code == arguments.expect and not missing else 1
+    failed = failed_tests(output)
+    return 0 if code == arguments.expect and not missing and not failed else 1
+
+
+# A test that failed, as Hemera's testing reports it (docs/testing.md), after a program's name or the kernel's tag
+FAILED_TEST = re.compile(r": test \S+ \.\.\. FAILED$")
+
+
+def failed_tests(output: str) -> list:
+    """The lines of output that report a failed test, each said on standard error with what follows it."""
+    lines = output.splitlines()
+    failed = []
+    for i, line in enumerate(lines):
+        if FAILED_TEST.search(line):
+            failed.append(line)
+            print(f"boot.py: {line}", file=sys.stderr)
+            # Its failures, indented beneath it
+            for following in lines[i + 1:]:
+                if ":     " not in following:
+                    break
+                print(f"boot.py: {following}", file=sys.stderr)
+    return failed
 
 
 def description_of(code: int) -> str:

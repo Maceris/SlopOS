@@ -352,6 +352,10 @@ add_tools :: fn(folder: string) {
  * Add every folder named test under a folder, at any depth, as a hosted program named after the package it tests,
  * <package>_test in the tests_output folder.
  *
+ * A test package with a main of its own, as one the robustness sweeps run through robustness/hosted is, starts there;
+ * any other is built as a test program, its #test functions run and reported by the entry Hemera gives it
+ * (decisions/0175).
+ *
  * @param folder The folder searched, relative to src/build; a test folder's own subfolders aren't.
  */
 add_tests :: fn(folder: string) {
@@ -374,6 +378,8 @@ add_tests :: fn(folder: string) {
         test.name = text_buffer.as_string(&test_name)
         test.root = subfolder
         test.output_path = text_buffer.as_string(&output)
+        info :: compiler.load_package(subfolder) or_else compiler.PackageInfo.{}
+        test.test = compiler.find_function(&info, "main") is_none
         target :: compiler.add_target(test)
     }
 }

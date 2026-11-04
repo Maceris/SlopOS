@@ -7,12 +7,13 @@
  */
 package test_threads
 
+import compiler from "base"
 import intrinsics from "base"
 import runtime from "base"
 import os from "std"
+import testing from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
-import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */
@@ -29,6 +30,12 @@ SLOT_WRONG :: 2
 RUN_NANOSECONDS : u64 : 100_000_000
 /** The vector a thread keeps its pattern plus its count in, in both lanes. */
 Lanes :: vector[u64, 2]
+
+/** What main was given that the tests use. */
+Given :: struct {
+    /** The debug log. */
+    log : slop_os.DebugLog,
+}
 
 /**
  * Count, for good, keeping a vector of the thread's pattern plus its count, and checking it each time.
@@ -51,34 +58,22 @@ counter #calling_convention(.c) #no_context :: fn(slot: ptr[mut u64[4]]) #never_
 }
 
 /**
- * Check that threads of the program's own are each preempted and run again, each with its own vector state.
+ * Check that threads of the program's own are each preempted and run again, each with its own vector state, and that
+ * their budget comes back to nothing once they're closed.
  *
- * @param log The debug log, writable, where the test says what it found and which thread failed.
- * @param platform Not used.
- * @param test_device Not used.
- * @param firmware Not used.
- * @param manager Not used.
- * @param program Not used.
- * @param peer Not used.
- * @param cpu_budget Not used.
- * @return 0 if every check passed. Otherwise, of the first thread that failed, though each is logged: its index plus 1
- *     if it hadn't counted by halfway or didn't count on after, or its index plus 11 if its vector went wrong. 20 if
- *     the budget didn't come back to nothing once the threads were closed. 100 if the slots, 101 the budget, or 102
- *     a thread couldn't be made.
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the slots, the budget or a thread couldn't be made.
  */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+threads_are_preempted_and_keep_their_vectors #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()
     slots, error :: runtime.new_array(u64[4], THREADS)
-    if error != null {
-        return 100
-    }
-    budget :: slop_os.memory_budget_create(block.budget, 1 << 20) or_return 101
+    testing.require(t, error == null, "the threads' slots are allocated")?
+    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for the threads")?
     threads : slop_os.Thread[THREADS]
     for &slot, i in slots {
         intrinsics.volatile_store_u64(&slot^[SLOT_INDEX], cast[u64](i) + 1)
         if i < threads.count {
-            threads[i] = test_kit.start_thread(budget, cast[u64](counter), cast[u64](slot)) or_return 102
+            threads[i] = testing.require_ok(t, test_kit.start_thread(budget, cast[u64](counter), cast[u64](slot)), "each thread starts")?
         }
     }
     test_kit.wait_nanoseconds(RUN_NANOSECONDS)
@@ -89,33 +84,41 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
         }
     }
     test_kit.wait_nanoseconds(RUN_NANOSECONDS)
-    failed := 0
+    // Each thread's, so a failure says which
+    counted_on : bool[THREADS]
+    kept_vector : bool[THREADS]
     for slot, i in slots {
-        now :: intrinsics.volatile_load_u64(&slot[SLOT_COUNT])
-        before :: if i < halfway.count { halfway[i] } else { cast[u64](0) }
-        if now <= before || before == 0 {
-            log_line.write(log, "%: thread % counted % by halfway, then %", NAME, i, before, now)
-            if failed == 0 {
-                failed = cast[int](i) + 1
-            }
-        }
-        if intrinsics.volatile_load_u64(&slot[SLOT_WRONG]) != 0 {
-            log_line.write(log, "%: thread %'s vector didn't keep its value", NAME, i)
-            if failed == 0 {
-                failed = cast[int](i) + 11
-            }
+        if i < THREADS {
+            now :: intrinsics.volatile_load_u64(&slot[SLOT_COUNT])
+            counted_on[i] = halfway[i] != 0 && now > halfway[i]
+            kept_vector[i] = intrinsics.volatile_load_u64(&slot[SLOT_WRONG]) == 0
         }
     }
     for thread in threads {
         _ = slop_os.handle_close(cast[slop_os.Handle](thread))
     }
-    if failed != 0 {
-        return failed
-    }
-    if !test_kit.wait_for_budget(budget, 0, 1_000_000_000) {
-        log_line.write(log, "%: its budget still has % bytes charged", NAME, test_kit.used(budget))
-        return 20
-    }
-    log_line.write(log, "%: % threads of its own, each preempted and run again, each with its own vector state", NAME, THREADS)
-    return 0
+    every :: bool.[true, true, true, true]
+    testing.expect_eq(t, counted_on, every, "each thread counted by halfway and again after, so each was preempted and run again")
+    testing.expect_eq(t, kept_vector, every, "no thread's vector state was mixed up with another's")
+    testing.expect(t, test_kit.wait_for_budget(budget, 0, 1_000_000_000), "the budget is back to nothing once the threads are closed")
+    return .Ok
+}
+
+/**
+ * Run the tests, reporting to the debug log.
+ *
+ * @param log The debug log, writable, where each test is reported.
+ * @param platform Not used.
+ * @param test_device Not used.
+ * @param firmware Not used.
+ * @param manager Not used.
+ * @param program Not used.
+ * @param peer Not used.
+ * @param cpu_budget Not used.
+ * @return How many tests failed: 0 when every one passed.
+ */
+main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
+    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+    given :: Given.{log = log}
+    return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }
