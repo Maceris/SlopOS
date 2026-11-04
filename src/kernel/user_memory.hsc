@@ -65,8 +65,11 @@ copy_from_user :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address:
  * @param other The kernel virtual address on the other side, valid for size bytes.
  * @param size How many bytes to copy; 0 succeeds at once.
  * @param to_user True to copy from other to the user range, which then has to be writable; false to copy from it.
+ * A page mapped but not yet touched is brought in first, as a fault on it would (present_user_page).
+ *
  * @return True if every byte was copied; false at the first page that's outside the user half, not mapped, not user
- *     memory, or, copying to user, not writable, with the pages before it copied.
+ *     memory, device memory or a framebuffer (which the direct map doesn't reach), or, copying to user, not writable,
+ *     with the pages before it copied.
  */
 copy_user :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address: u64, other: u64, size: u64, to_user: bool) -> bool {
     if size == 0 {
@@ -81,8 +84,12 @@ copy_user :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address: u64,
     copied : u64 = 0
     loop {
         at :: address + copied
-        found :: arch.translate(&space.table, cast[arch_interface.VirtualAddress](at)) or_return false
+        found :: present_user_page(kernel, space, at, to_user) or_return false
         if !found.mapping.user || (to_user && found.mapping.protection != .ReadWrite) {
+            return false
+        }
+        // Device registers and framebuffers aren't in the direct map, so they're refused, not reached through it
+        if !reachable_in_direct_map(kernel, cast[u64](found.physical_address), found.mapping.cache) {
             return false
         }
         // As far as this page goes
@@ -99,4 +106,30 @@ copy_user :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address: u64,
     }
     while copied < size
     return true
+}
+
+/**
+ * Find a user page's translation, bringing it in first if it's mapped but not yet touched, as a fault on it would.
+ *
+ * The kernel's copies to and from user memory can't take a fault themselves, so they ask here: a page of anonymous
+ * memory gets its zeroed frame, a window's or device memory's its frame, as resolve_fault gives them. Paged memory its
+ * pager hasn't supplied yet isn't waited for, and fails.
+ *
+ * @param kernel The kernel, whose frames a new page comes from.
+ * @param space The address space, its lock (level Space) held by the caller.
+ * @param address The user address, any alignment.
+ * @param write Whether the page will be written, which the mapping has to allow.
+ * @return The page's translation; null if it isn't mapped, the mapping doesn't allow the access, or it can't be had.
+ */
+present_user_page :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address: u64, write: bool) -> arch_interface.Translation? {
+    match arch.translate(&space.table, cast[arch_interface.VirtualAddress](address)) {
+        case Some(found) => return found
+        case None => {}
+    }
+    fault :: arch_interface.PageFault.{address = cast[arch_interface.VirtualAddress](address), access = if write { arch_interface.Access.Write }
+        else { arch_interface.Access.Read }, present = false}
+    if resolve_fault_locked(cast[ptr[mut Kernel]](kernel), null, space, fault) != .Mapped {
+        return null
+    }
+    return arch.translate(&space.table, cast[arch_interface.VirtualAddress](address))
 }

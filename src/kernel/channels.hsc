@@ -33,8 +33,8 @@ import robustness from "../robustness"
  * mapping is on its address space's list of rings, and is let go when it's unmapped or the space is
  * released (spaces.hsc). Closing an end unmaps its rings.
  *
- * Lock order: a core's lock, then a port's, then a run queue's. A space's lock is never taken with a
- * core's.
+ * Lock order: a core's lock, then a space's (copying a message to or from user memory, or unmapping a ring), then a
+ * port's, then a run queue's, as their LockRanks rise; a core's lock is never taken with a space's held.
  */
 //TODO(claude): the rings as a memory object (knowledge/design/ipc.md §2)
 

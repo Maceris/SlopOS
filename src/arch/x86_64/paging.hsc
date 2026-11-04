@@ -311,7 +311,8 @@ map :: fn(
  * @param freed Where emptied tables' frames go, at most 3, after those already in it.
  * @param flush The TLB batch the page is added to, with table's tag.
  * @return The physical address the page mapped.
- * @error NotMapped Nothing of that size is mapped there; nothing was changed.
+ * @error NotMapped Nothing of that size is mapped there, or the address isn't aligned to size or is outside
+ *     the table's own half (a user table never unmaps the kernel's shared pages); nothing was changed.
  * @error PartOfLargerPage The address is in a larger page, which can't be split; nothing was changed.
  * @error NeedFreedSpace freed hasn't room for the tables that would empty; empty it and call again. Nothing was
  *     changed.
@@ -324,6 +325,10 @@ unmap :: fn(
     flush: ptr[mut arch_interface.TlbBatch],
 ) -> Result[arch_interface.PhysicalAddress, arch_interface.UnmapError] {
     address :: cast[u64](virtual_address)
+    // Only the table's own half, as map allows: a user table can't reach the kernel's shared tables through it
+    if address % page_bytes(size) != 0 || !may_map(table, address, page_bytes(size), !table.kernel) {
+        return .Error(.NotMapped)
+    }
     leaf :: leaf_level(size)
     path :: walk(table, address, leaf)?
     physical :: page_address(load_entry(path.leaf_slot), leaf)

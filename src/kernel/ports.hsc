@@ -811,8 +811,8 @@ ticks_at :: fn(kernel: ptr[Kernel], nanoseconds: u64) -> u64 {
 /**
  * Tell whether a range of user memory is all mapped for user mode and writable now.
  *
- * Takes the space's lock. It reads the page tables only, so memory mapped but not yet touched (memory.hsc), which a
- * fault would fill in, counts as not writable.
+ * Takes the space's lock. A page mapped but not yet touched is brought in, as a fault on it would (present_user_page),
+ * so a buffer the process hasn't written to yet is writable.
  *
  * @param space The address space whose page tables are read; its lock is taken, so the caller holds none at that level
  *     or above.
@@ -830,7 +830,7 @@ is_user_writable :: fn(space: ptr[mut AddressSpace], address: u64, size: u64) ->
     defer unlock_at(&space.lock, .Space)
     page := address & ~cast[u64](4095)
     loop {
-        found :: arch.translate(&space.table, cast[arch_interface.VirtualAddress](page)) or_return false
+        found :: present_user_page(per_cpu().kernel, space, page, true) or_return false
         if !found.mapping.user || found.mapping.protection != .ReadWrite {
             return false
         }

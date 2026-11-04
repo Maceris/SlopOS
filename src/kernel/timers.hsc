@@ -122,7 +122,9 @@ arm_timer :: fn(entry: ptr[mut TimerEntry], deadline: u64) -> bool {
  *
  * Takes the heap's lock of the CPU it was armed on, at LockRank Timers. An entry that already fired, or is firing, is
  * left alone, and what it was for may still be acted on (fire_timers works from a copy), which is why firing checks
- * owner_generation. The entry's CPU is read before the lock is taken, so it mustn't be armed again at the same time.
+ * owner_generation. The entry's CPU is read before that lock is taken, so it may fire and be armed again on another
+ * CPU meanwhile: under the lock it's checked to still be in that heap, where its index says, and if it's moved, it's
+ * followed to the heap it's on now.
  *
  * @param kernel The kernel, whose per_cpus finds the entry's CPU.
  * @param entry The entry: armed, never armed, or already fired or cancelled.
@@ -130,19 +132,28 @@ arm_timer :: fn(entry: ptr[mut TimerEntry], deadline: u64) -> bool {
  */
 cancel_timer :: fn(kernel: ptr[Kernel], entry: ptr[mut TimerEntry]) -> bool {
     per_cpus :: kernel.per_cpus
-    cpu_index :: cast[usize](entry.cpu)
-    if entry.index == NOT_QUEUED || cpu_index >= per_cpus.count {
-        return false
+    loop {
+        cpu_index :: cast[usize](entry.cpu)
+        if entry.index == NOT_QUEUED || cpu_index >= per_cpus.count {
+            return false
+        }
+        heap :: &cast[ptr[mut PerCpu]](per_cpus[cpu_index]).timers
+        lock_at(&heap.lock, .Timers)
+        index :: cast[usize](entry.index)
+        if entry.index == NOT_QUEUED {
+            unlock_at(&heap.lock, .Timers)
+            return false
+        }
+        // Armed again on another CPU's heap since cpu was read: follow it there
+        if cast[usize](entry.cpu) != cpu_index || index >= heap.count || index >= heap.entries.count
+            || heap.entries[index] != cast[u64](cast[uintptr](entry)) {
+            unlock_at(&heap.lock, .Timers)
+            continue
+        }
+        remove_at(heap, index)
+        unlock_at(&heap.lock, .Timers)
+        return true
     }
-    heap :: &cast[ptr[mut PerCpu]](per_cpus[cpu_index]).timers
-    lock_at(&heap.lock, .Timers)
-    defer unlock_at(&heap.lock, .Timers)
-    index :: entry.index
-    if index == NOT_QUEUED || cast[usize](index) >= heap.count {
-        return false
-    }
-    remove_at(heap, cast[usize](index))
-    return true
 }
 
 /**

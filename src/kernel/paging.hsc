@@ -271,7 +271,7 @@ page_wanted :: fn(memory: ptr[mut Memory]) -> Result[u64, slop_os.MemoryError] {
  * @param source The memory copied from, whose page is given a frame if it's anonymous and had none.
  * @param source_offset The page's offset in source, in bytes, page aligned, below its size.
  * @return Null once the page is there; NotPaged for memory that isn't paged, InvalidSize for an offset that isn't page
- *     aligned or is past either's end, OutOfMemory if source's page has no frame (as an unsupplied page of paged memory
+ *     aligned or is past either's end, or a source that's device memory or a framebuffer (which can't be copied from), OutOfMemory if source's page has no frame (as an unsupplied page of paged memory
  *     hasn't) or no frame is free for the copy, BudgetExceeded if the budget can't pay for the page.
  */
 supply_page :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64, source: ptr[Memory], source_offset: u64)
@@ -286,6 +286,10 @@ supply_page :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64,
     from :: frame_for(kernel, source, source_offset / frames.FRAME_SIZE)
     if from == 0 {
         return .OutOfMemory
+    }
+    // Copied through the direct map, which doesn't reach device memory or a framebuffer
+    if !reachable_in_direct_map(kernel, from, source.cache) {
+        return .InvalidSize
     }
     // Its page charged first, which pressure on its budget is raised for
     generation :: intrinsics.atomic_load_u32_acquire(&memory.header.generation)

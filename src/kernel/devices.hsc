@@ -177,7 +177,11 @@ create_device :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, address: u
     with {
         other := kernel.first_device
     }
+    // Each device listed, none for the first one made
     loop {
+        if other == 0 {
+            break
+        }
         listed :: cast[ptr[Device]](other)
         if listed.address == address || (order != 0 && listed.msi_source == msi_source) {
             taken = true
@@ -185,7 +189,6 @@ create_device :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, address: u
         }
         other = listed.next
     }
-    while other != 0
     if !taken {
         device.next = kernel.first_device
         if kernel.first_device != 0 {

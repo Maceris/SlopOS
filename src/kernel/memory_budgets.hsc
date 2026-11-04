@@ -145,7 +145,7 @@ charge_new :: fn(budget_address: u64, object: u64, bytes: u64) -> bool {
     }
     budget :: cast[ptr[mut MemoryBudget]](budget_address)
     lock_at(&budget.lock, .MemoryBudget)
-    if budget.closed || bytes > budget.limit - budget.used {
+    if budget.closed || bytes > room_of(budget) {
         unlock_at(&budget.lock, .MemoryBudget)
         return false
     }
@@ -176,7 +176,7 @@ charge_new :: fn(budget_address: u64, object: u64, bytes: u64) -> bool {
 charge_more :: fn(object: u64, bytes: u64) -> bool {
     header :: cast[ptr[mut ObjectHeader]](object)
     budget :: lock_budget_of(object) or_return true
-    if fails(.Budget) || budget.closed || bytes > budget.limit - budget.used {
+    if fails(.Budget) || budget.closed || bytes > room_of(budget) {
         unlock_at(&budget.lock, .MemoryBudget)
         return false
     }
@@ -366,6 +366,19 @@ move_charges :: fn(kernel: ptr[mut Kernel], objects: ptr[u64[64]], count: u32, t
 }
 
 /**
+ * Give how many more bytes a budget can be charged.
+ *
+ * A charge moved back to a budget unchecked (move_charges undoing a move) can leave it over its limit, when it was
+ * charged meanwhile; it then has no room, rather than limit - used wrapping round to nearly all of a u64.
+ *
+ * @param budget The budget, its lock held by the caller.
+ * @return Its limit less what's charged to it, in bytes; 0 when it's at or over its limit.
+ */
+room_of :: fn(budget: ptr[MemoryBudget]) -> u64 {
+    return if budget.used >= budget.limit { cast[u64](0) } else { budget.limit - budget.used }
+}
+
+/**
  * Move an object's charge between two budgets whose locks are held, relinking it.
  *
  * @param object The object's address, charged to from_address.
@@ -378,7 +391,7 @@ move_locked :: fn(object: u64, from_address: u64, to_address: u64, checked: bool
     header :: cast[ptr[mut ObjectHeader]](object)
     charge :: header.charge
     to :: cast[ptr[mut MemoryBudget]](to_address)
-    if to_address != 0 && checked && (to.closed || charge > to.limit - to.used) {
+    if to_address != 0 && checked && (to.closed || charge > room_of(to)) {
         return false
     }
     if from_address != 0 {

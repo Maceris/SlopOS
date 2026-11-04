@@ -198,7 +198,9 @@ test_user_pages :: fn(kernel: ptr[mut arch.PageTable], memory: ptr[mut Memory]) 
     if !mapped(kernel, KERNEL_PAGE, 0x9000, .Size4K, KERNEL_DATA, &tables) || !translates_to(&user, KERNEL_PAGE, 0x9000, KERNEL_DATA) {
         return 30
     }
-    if !map_fails(&user, KERNEL_PAGE + FRAME_SIZE, 0x9000, .Size4K, KERNEL_DATA, &tables, .InvalidAddress) {
+    // Nor unmapped through a user table: the kernel's page stays
+    if !map_fails(&user, KERNEL_PAGE + FRAME_SIZE, 0x9000, .Size4K, KERNEL_DATA, &tables, .InvalidAddress)
+        || !unmap_fails(&user, KERNEL_PAGE, .Size4K, &freed, &flush, .NotMapped) || !translates_to(kernel, KERNEL_PAGE, 0x9000, KERNEL_DATA) {
         return 31
     }
 

@@ -372,6 +372,24 @@ page_slot :: fn(memory: ptr[Memory], page: u64) -> ptr[mut u64] {
 }
 
 /**
+ * Say whether the kernel can reach a page through its direct map: whether it's RAM, which the direct map covers, and
+ * not a device's registers or a framebuffer, which it doesn't.
+ *
+ * A page is taken as RAM when it's mapped write-back and below the end of the last RAM region the frame allocator has
+ * states for. Device memory the platform made write-back inside a hole in RAM would pass, though the direct map
+ * doesn't cover it; only the platform service can make such memory.
+ *
+ * @param kernel The kernel, whose frame allocator knows where RAM ends.
+ * @param physical The page's physical address.
+ * @param cache The cache mode the page is mapped with, or its memory object's.
+ * @return True if the kernel may copy the page through the direct map; false for device registers, framebuffers, and
+ *     anything past RAM, which have to be refused rather than reached there.
+ */
+reachable_in_direct_map :: fn(kernel: ptr[Kernel], physical: u64, cache: arch_interface.CacheMode) -> bool {
+    return cache == .WriteBack && (physical >> frames.FRAME_SHIFT) < kernel.frames.frame_count
+}
+
+/**
  * Find a page's frame, giving anonymous memory a zeroed one if it had none yet.
  *
  * Takes no lock: two callers giving the same page a frame at once agree on one, and the other's goes back.
@@ -893,9 +911,27 @@ take_down :: fn(kernel: ptr[mut Kernel], mapping: ptr[mut MemoryMapping]) {
  */
 resolve_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arch_interface.PageFault) -> FaultOutcome {
     space :: thread.space
-    address :: cast[u64](fault.address) & ~(frames.FRAME_SIZE - 1)
     lock_at(&space.lock, .Space)
     defer unlock_at(&space.lock, .Space)
+    return resolve_fault_locked(kernel, thread, space, fault)
+}
+
+/**
+ * Resolve a page fault in a space whose lock the caller holds: resolve_fault's work, which the kernel's copies to and
+ * from user memory use too, for pages mapped but not yet touched.
+ *
+ * @param kernel The kernel: new frames come from this CPU's frame cache.
+ * @param thread The thread that waits for a pager if the page is paged memory its pager hasn't supplied; null for the
+ *     kernel's own copies, which can't wait, so such a page fails.
+ * @param space The address space the fault is in, its lock (level Space) held by the caller.
+ * @param fault The fault: its address, the access, and whether the page was present.
+ * @return Mapped when the page can be touched now; Blocked when thread waits for the pager; Failed when the address
+ *     isn't mapped, the access isn't allowed, the page was present already, no frame could be had, or the page is
+ *     paged memory not yet supplied and there's no thread to wait.
+ */
+resolve_fault_locked :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]?, space: ptr[mut AddressSpace],
+    fault: arch_interface.PageFault) -> FaultOutcome {
+    address :: cast[u64](fault.address) & ~(frames.FRAME_SIZE - 1)
     found := cast[ptr[mut MemoryMapping]](0)
     with {
         mapping := space.first_mapping
@@ -928,7 +964,8 @@ resolve_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arc
     page :: (address - found.address + found.offset) / frames.FRAME_SIZE
     root, root_page :: paged_root(memory, page)
     if root.pager_binding != 0 {
-        return resolve_paged_fault(kernel, thread, space, address, root, root_page, mapping_for(protection, memory.cache))
+        waiting :: thread or_return FaultOutcome.Failed
+        return resolve_paged_fault(kernel, waiting, space, address, root, root_page, mapping_for(protection, memory.cache))
     }
     // A whole 2 MiB of anonymous memory, where the mapping lines it up with a large page (decisions/0129)
     match large_frame(kernel, memory, found, address, page) {

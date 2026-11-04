@@ -713,13 +713,15 @@ give_domain_id :: fn(registered: ptr[mut RegisteredIommu], id: u32) {
  * @param kernel The kernel, whose frames come from this CPU's frame cache.
  * @param tables The table frames, filled as far as possible.
  * @param owner The object whose budget pays for the frames, as an address; 0 for none.
- * @return True if the set is full, or has any frames at all after stopping early; false only if it's empty.
+ * @return True if the set is full, or this call added a frame to it before stopping; false if it added none, so a
+ *     caller retrying on NeedFrames stops when no more can be had rather than trying again for good.
  */
 refill_iommu_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[mut iommu_interface.TableFrames], owner: u64) -> bool {
     cache :: &per_cpu().frame_cache
+    before :: tables.count
     for i in cast[usize](tables.count)..<tables.frames.count {
         if owner != 0 && !charge_more(owner, frames.FRAME_SIZE) {
-            return tables.count != 0
+            return tables.count != before
         }
         match frames.take_frame(cache, &kernel.frames) {
             case Ok(frame) => {
@@ -731,7 +733,7 @@ refill_iommu_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[mut iommu_interfa
                 if owner != 0 {
                     uncharge(owner, cast[ptr[ObjectHeader]](owner).generation, frames.FRAME_SIZE)
                 }
-                return tables.count != 0
+                return tables.count != before
             }
         }
     }
