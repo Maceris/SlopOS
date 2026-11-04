@@ -2059,9 +2059,18 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 _ = slop_os.handle_close(cast[slop_os.Handle](service.accounts_end))
                 service.accounts_end = NONE
                 runtime.log_info("the account service went; dialing again")
+                // A step waiting on its answer would wait for good: each goes back to where it was asked from
                 if service.setup == .Making {
                     say(service, "The account service stopped while it made the account. Type the password again.")
                     setup_step(service, if service.elevating { SetupStep.AdminName } else { SetupStep.Password })
+                }
+                else if service.setup == .LoggingIn {
+                    say(service, "The account service stopped while it opened your session. Type the password again.")
+                    setup_step(service, .LoginPassword)
+                }
+                else if service.setup == .Sharing {
+                    say(service, "The account service stopped while it shared the volume. Type the volume's name again.")
+                    setup_step(service, .ShareName)
                 }
                 dial_accounts(service)
                 if service.accounts_end == NONE {

@@ -244,24 +244,38 @@ open :: fn(config: u64, bars: u64[6]) -> Transport? {
 }
 
 /**
+ * How many times start reads a device's status, spinning between, waiting for its reset to finish before giving up on
+ * it: some hundreds of milliseconds at the least, far past what a working device takes.
+ */
+RESET_SPINS : u64 : 1 << 24
+
+/**
  * Reset a device, tell it a driver has it, and negotiate its features (virtio 1.2 §3.1.1, steps 1 to 6).
  *
  * The features taken are those of wanted the device offers, always with VERSION_1, and with ACCESS_PLATFORM where it's
  * offered, since memory_device_address gives what the device's DMA reaches memory at. It waits, spinning, until the
- * device's reset is done.
+ * device's reset is done, or RESET_SPINS spins have gone by without it.
  *
  * @param transport The device's transport, from open.
  * @param wanted The device-specific features the driver can use, as bits; those the device doesn't offer are left out.
- * @return The features taken, which the device accepted; null, the device marked FAILED, if it isn't modern (no
- *     VERSION_1) or it refused them.
+ * @return The features taken, which the device accepted; null, the device marked FAILED, if its reset never finished,
+ *     it isn't modern (no VERSION_1), or it refused them.
  */
 start :: fn(transport: ptr[Transport], wanted: u64) -> u64? {
     common :: transport.common
     write_u8(common, DEVICE_STATUS, 0)
+    spins := cast[u64](0)
     loop {
+        if read_u8(common, DEVICE_STATUS) == 0 {
+            break
+        }
+        if spins >= RESET_SPINS {
+            write_u8(common, DEVICE_STATUS, STATUS_FAILED)
+            return null
+        }
         intrinsics.spin_hint()
+        spins += 1
     }
-    while read_u8(common, DEVICE_STATUS) != 0
     write_u8(common, DEVICE_STATUS, STATUS_ACKNOWLEDGE)
     write_u8(common, DEVICE_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER)
     write_u32(common, DEVICE_FEATURE_SELECT, 0)
@@ -294,18 +308,19 @@ start :: fn(transport: ptr[Transport], wanted: u64) -> u64? {
  * @param entry The table entry, from 0, which a queue is then set up to interrupt through.
  * @param address The message's address, as slop_os.irq_message gives it.
  * @param data The message's data, as slop_os.irq_message gives it.
- * @return True once it's set; false if entry is past the table's, or the MSI-X capability isn't found.
+ * @return True once it's set; false, nothing written, if entry is past the table's, or the MSI-X capability isn't
+ *     found.
  */
 set_vector :: fn(transport: ptr[Transport], entry: u32, address: u64, data: u32) -> bool {
     if entry >= transport.msix_entries {
         return false
     }
+    msix :: pci.find_capability(transport.config, CAPABILITY_MSIX) or_return false
     at :: transport.msix_table + cast[u64](entry) * 16
     write_u32(at, 0, cast[u32](address))
     write_u32(at, 4, cast[u32](address >> 32))
     write_u32(at, 8, data)
     write_u32(at, 12, 0)
-    msix :: pci.find_capability(transport.config, CAPABILITY_MSIX) or_return false
     control :: pci.read_u16(transport.config, msix + 2)
     // Enabled (bit 15), and the function not masked (bit 14)
     pci.write_u16(transport.config, msix + 2, (control | 0x8000) & ~cast[u16](0x4000))
@@ -383,17 +398,21 @@ offer :: fn(queue: ptr[mut Queue], device_address: u64, length: u32, device_writ
  *
  * @param queue The queue, set up and ready, as many of whose descriptors as there are parts are taken.
  * @param parts The buffers, 1 to MAX_CHAIN of them; the memory each names has to stay as it is until the device's done.
- * @return The first descriptor's index, which take_used gives back; NO_DESCRIPTOR, nothing offered, if not enough
- *     descriptors are free or there are more than MAX_CHAIN parts.
+ * @return The first descriptor's index, which take_used gives back; NO_DESCRIPTOR, nothing offered, if there are no
+ *     parts, not enough descriptors are free, or there are more than MAX_CHAIN parts.
  */
 offer_chain :: fn(queue: ptr[mut Queue], parts: Part[]) -> u16 {
+    if parts.count == 0 {
+        return NO_DESCRIPTOR
+    }
     ids : u16[MAX_CHAIN]
     taken : usize = 0
     for &id in ids {
         if taken >= parts.count {
             break
         }
-        found :: first_free(queue) or_return NO_DESCRIPTOR
+        // None free: those taken so far are given back below
+        found :: first_free(queue) or_break
         id^ = found
         queue.free &= ~(cast[u64](1) << cast[u64](found))
         taken += 1

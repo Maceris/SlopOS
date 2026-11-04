@@ -170,12 +170,19 @@ serve :: fn(service: ptr[mut Entropy], connected: ptr[mut service_kit.Clients], 
 /**
  * Take a hardware RNG's driver's channel as a source: bind it to the port and ask it for SEED_BYTES at once.
  *
- * @param service The service, which keeps the channel in sources when it's taken.
+ * @param service The service, which keeps the channel in sources when it's taken: in the slot of a source that's
+ *     gone, or else the next one.
  * @param end The driver's channel, which moves to the service: kept as a source, or closed when MAX_SOURCES are
  *     already taken or it can't be bound.
  */
 add_source :: fn(service: ptr[mut Entropy], end: slop_os.Channel) {
-    index :: service.source_count
+    index := service.source_count
+    for i in 0..<service.source_count {
+        if i < service.sources.count && cast[slop_os.Handle](service.sources[i]) == slop_os.NO_HANDLE {
+            index = i
+            break
+        }
+    }
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     if index >= service.sources.count {
         _ = slop_os.handle_close(cast[slop_os.Handle](end))
@@ -189,7 +196,9 @@ add_source :: fn(service: ptr[mut Entropy], end: slop_os.Channel) {
         }
     }
     service.sources[index] = end
-    service.source_count = index + 1
+    if index == service.source_count {
+        service.source_count = index + 1
+    }
     ask(service, index)
 }
 
@@ -234,6 +243,8 @@ take_bytes :: fn(service: ptr[mut Entropy], index: usize, into: ptr[mut os.Incom
             case Received => {}
             case Empty => return void
             case Failed(error) => {
+                // Its slot and key free for the next source added
+                _ = slop_os.port_unbind(service.port, SOURCE_KEY + cast[u64](index))
                 _ = slop_os.handle_close(cast[slop_os.Handle](end))
                 service.sources[index] = cast[slop_os.Channel](slop_os.NO_HANDLE)
                 return void

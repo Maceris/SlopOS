@@ -199,13 +199,13 @@ TYPED_TEXT :: "kept with its type"
  * @param system The system volume's root, which a second connection is made to.
  * @param port A port bound to system's end.
  * @param esp The EFI system partition's root; without it, that part isn't checked.
- * @return 0 if all of it held; 60 if a second connection couldn't be made, 61 if the note couldn't be written, 62 if
- *     it couldn't be read back, 63 if it read back wrong, 64 if opening it as an OtherNote wasn't refused as
- *     WrongType, 65 if a value that isn't a note wasn't refused as WrongType, 66 if the ESP couldn't be connected to,
- *     and 67 if a typed file on it wasn't refused as WrongType.
+ * @return 0 if all of it held; 51 if a second connection couldn't be made, 52 if the note couldn't be written, 53 if
+ *     it couldn't be read back, 54 if it read back wrong, 55 if opening it as an OtherNote wasn't refused as
+ *     WrongType, 56 if a value that isn't a note wasn't refused as WrongType, 57 if the ESP couldn't be connected to,
+ *     and 58 if a typed file on it wasn't refused as WrongType.
  */
 check_typed :: fn(system: os.Channel[dir.Dir], port: slop_os.Port, esp: os.Channel[dir.Dir]?) -> int {
-    directory :: second_connection(system, port) or_return 60
+    directory :: second_connection(system, port) or_return 51
     defer os.close_directory(directory)
     out := os.Outgoing.{}
     note :: os.begin[CheckedNote](&out)
@@ -213,29 +213,29 @@ check_typed :: fn(system: os.Channel[dir.Dir], port: slop_os.Port, esp: os.Chann
     note.kept = true
     note.text = os.append(&out, string_bytes(TYPED_TEXT))
     if os.write_typed_in[CheckedNote](directory, TYPED_FILE, os.value_bytes(&out)) != null {
-        return 61
+        return 52
     }
-    back :: os.read_typed_in[CheckedNote](directory, TYPED_FILE) or_return 62
+    back :: os.read_typed_in[CheckedNote](directory, TYPED_FILE) or_return 53
     defer runtime.free_array(back)
     read :: os.typed_value[CheckedNote](back)
     text :: os.items_of(back, read.text)
     if read.mark != 0x51ed || !read.kept || text.count != TYPED_TEXT.count {
-        return 63
+        return 54
     }
     for byte, i in text {
         if i < TYPED_TEXT.count && byte != cast[u8](TYPED_TEXT[i]) {
-            return 63
+            return 54
         }
     }
     // Of another type: refused, opened or read
     match os.open_typed_in[OtherNote](directory, TYPED_FILE, .READ) {
         case Ok(file) => {
             os.close(file)
-            return 64
+            return 55
         }
         case Error(error) => {
             if error != .WrongType {
-                return 64
+                return 55
             }
         }
     }
@@ -245,15 +245,15 @@ check_typed :: fn(system: os.Channel[dir.Dir], port: slop_os.Port, esp: os.Chann
     wrong.mark = 1
     cast[ptr[mut u8]](&wrong.kept)^ = 2
     if os.write_typed_in[CheckedNote](directory, "Not a note", os.value_bytes(&bad)) != OsError.WrongType {
-        return 65
+        return 56
     }
     match esp {
         case Some(partition) => {
-            esp_port :: os.port_for(slop_os.startup_block().budget, partition.end) or_return 66
-            fat :: second_connection(partition, esp_port) or_return 66
+            esp_port :: os.port_for(slop_os.startup_block().budget, partition.end) or_return 57
+            fat :: second_connection(partition, esp_port) or_return 57
             defer os.close_directory(fat)
             if os.write_typed_in[CheckedNote](fat, "A typed note.bin", os.value_bytes(&out)) != OsError.WrongType {
-                return 67
+                return 58
             }
         }
         case None => {}

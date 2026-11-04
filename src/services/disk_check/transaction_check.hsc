@@ -25,16 +25,15 @@ TRANSACTION_LOG_BYTES : u64 : 65536
  * @param to The debug log; unused, as what's found is logged through runtime.
  * @param system The system volume's root.
  * @param buffer The buffer file connections read and write through.
- * @return 0 if all of it held; 60 if a port couldn't be made, 61 if the first cursor couldn't be had, 62 to 67 if
- *     replacing an open file failed or the reader didn't keep the old contents, 68 to 73 if the transaction of two new
- *     files failed or its files were seen before it committed, 74 to 77 if a conflicting transaction wasn't refused
- *     with Conflict or changed something, 81 to 85 if a transaction failing partway through left something of itself
- *     or the volume didn't go on after it, and 78 to 80 if following the changes failed or missed some. 60 to 67 are
- *     check_typed's numbers too, so they say which check failed only with the log.
+ * @return 0 if all of it held; 170 if a port couldn't be made, 171 if the first cursor couldn't be had, 172 to 177 if
+ *     replacing an open file failed or the reader didn't keep the old contents, 178 to 183 if the transaction of two
+ *     new files failed or its files were seen before it committed, 184 to 187 if a conflicting transaction wasn't
+ *     refused with Conflict or changed something, 191 to 195 if a transaction failing partway through left something of
+ *     itself or the volume didn't go on after it, and 188 to 190 if following the changes failed or missed some.
  */
 check_transactions :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], buffer: ptr[Buffer]) -> int {
     budget :: slop_os.startup_block().budget
-    port :: os.port_for(budget, system.end) or_return 60
+    port :: os.port_for(budget, system.end) or_return 170
     into := os.Incoming.{}
     out := os.Outgoing.{}
     // The cursor to follow from: anything older resyncs
@@ -44,70 +43,70 @@ check_transactions :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], buff
     asking^ = .Changes(0)
     match ask_dir(system.end, port, &out, &into) {
         case Resync(next) => cursor = next
-        case _ => return 61
+        case _ => return 171
     }
 
     // Replaced whole, while a reader has the old one open
     if !write_file(system.end, port, "replace me.txt", .New, "the old contents", buffer) {
-        return 62
+        return 172
     }
-    old :: open_read_only(system.end, port, "replace me.txt", buffer) or_return 63
+    old :: open_read_only(system.end, port, "replace me.txt", buffer) or_return 173
     defer slop_os.handle_close(cast[slop_os.Handle](old.end))
-    old_port :: os.port_for(budget, old.end) or_return 63
+    old_port :: os.port_for(budget, old.end) or_return 173
     out = os.Outgoing.{}
     replacing :: os.begin[dir.Request](&out)
     replacing^ = .Replace(bytes_of(&out, "replace me.txt"))
     replacement := os.Channel[file.File].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     match ask_dir(system.end, port, &out, &into) {
         case OpenedFile(made) => replacement = made
-        case _ => return 64
+        case _ => return 174
     }
     if !write_through(replacement.end, "the new contents", buffer, true) {
-        return 65
+        return 175
     }
     _ = slop_os.handle_close(cast[slop_os.Handle](replacement.end))
     if !holds(system.end, port, "replace me.txt", "the new contents", buffer) {
-        return 66
+        return 176
     }
     if !connection_holds(old.end, old_port, "the old contents", buffer) {
-        return 67
+        return 177
     }
 
     // A transaction of two new files: not there until it commits, then both
-    memory :: slop_os.memory_create(budget, TRANSACTION_LOG_BYTES) or_return 68
+    memory :: slop_os.memory_create(budget, TRANSACTION_LOG_BYTES) or_return 178
     out = os.Outgoing.{}
     beginning :: os.begin[dir.Request](&out)
     beginning^ = .Begin(memory)
     transaction := os.Channel[dir.Dir].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     match ask_dir(system.end, port, &out, &into) {
         case Began(made) => transaction = made
-        case _ => return 69
+        case _ => return 179
     }
     defer slop_os.handle_close(cast[slop_os.Handle](transaction.end))
-    transaction_port :: os.port_for(budget, transaction.end) or_return 69
+    transaction_port :: os.port_for(budget, transaction.end) or_return 179
     for name in string.["transacted one.txt", "transacted two.txt"] {
         if !write_file(transaction.end, transaction_port, name, .New, name, buffer) {
-            return 70
+            return 180
         }
     }
     if open_read_only(system.end, port, "transacted one.txt", buffer) is_some {
-        return 71
+        return 181
     }
     if !committed(transaction.end, transaction_port) {
-        return 72
+        return 182
     }
     for name in string.["transacted one.txt", "transacted two.txt"] {
         if !holds(system.end, port, name, name, buffer) {
-            return 73
+            return 183
         }
     }
 
     // A transaction that writes a file someone else changes meanwhile is refused, and changes nothing
     if !write_file(transaction.end, transaction_port, "transacted one.txt", .Existing, "from the transaction", buffer) {
-        return 74
+        return 184
     }
     if !write_file(system.end, port, "transacted one.txt", .Truncate, "from outside", buffer) {
-        return 75
+        return 185
     }
     out = os.Outgoing.{}
     committing :: os.begin[dir.Request](&out)
@@ -115,25 +114,25 @@ check_transactions :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], buff
     match ask_dir(transaction.end, transaction_port, &out, &into) {
         case Failed(error) => {
             if error != .Conflict {
-                return 76
+                return 186
             }
         }
-        case _ => return 76
+        case _ => return 186
     }
     if !holds(system.end, port, "transacted one.txt", "from outside", buffer) {
-        return 77
+        return 187
     }
 
     // A transaction that fails partway through being applied leaves nothing of itself: its first file isn't there
     if !write_file(transaction.end, transaction_port, "half done.txt", .New, "never there", buffer) {
-        return 81
+        return 191
     }
     out = os.Outgoing.{}
     removing :: os.begin[dir.Request](&out)
     removing^ = .Remove(bytes_of(&out, "not there.txt"))
     match ask_dir(transaction.end, transaction_port, &out, &into) {
         case Done => {}
-        case _ => return 82
+        case _ => return 192
     }
     out = os.Outgoing.{}
     failing :: os.begin[dir.Request](&out)
@@ -141,17 +140,17 @@ check_transactions :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], buff
     match ask_dir(transaction.end, transaction_port, &out, &into) {
         case Failed(error) => {
             if error != .NotFound {
-                return 83
+                return 193
             }
         }
-        case _ => return 83
+        case _ => return 193
     }
     if open_read_only(system.end, port, "half done.txt", buffer) is_some {
-        return 84
+        return 194
     }
     // And the volume goes on: a file written and synced after it
     if !write_file(system.end, port, "after the undo.txt", .New, "after the undo", buffer) || !holds(system.end, port, "after the undo.txt", "after the undo", buffer) {
-        return 85
+        return 195
     }
 
     // Everything since the cursor, followed to the end: the replacement and the transaction's two files among it
@@ -175,14 +174,14 @@ check_transactions :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], buff
                 }
             }
             case UpToDate(next) => break
-            case _ => return 78
+            case _ => return 188
         }
         if followed > 1000 {
-            return 79
+            return 189
         }
     }
     if !saw_replaced || saw_created < 2 {
-        return 80
+        return 190
     }
     runtime.log_info("on the system volume, replaced an open file, committed a transaction, was refused a conflicting one, had a failing one leave nothing, and followed every change")
     return 0

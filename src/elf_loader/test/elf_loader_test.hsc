@@ -57,8 +57,13 @@ checks :: fn() -> int {
         return 9
     }
     too_small : u8[16]
-    if refused(elf_loader.load(&executable, file, too_small)) != .ImageTooSmall {
-        return 10
+    match refused(elf_loader.load(&executable, file, too_small)) {
+        case Some(error) => {
+            if error != .ImageTooSmall {
+                return 10
+            }
+        }
+        case None => return 10
     }
     return refusals(file, executable)
 }
@@ -93,12 +98,12 @@ read_works :: fn(file: u8[]) -> bool {
  * Give the error a load or relocate result refused with.
  *
  * @param result What load or relocate returned.
- * @return The error, or ImageTooSmall for a result that wasn't refused at all.
+ * @return The error; null for a result that wasn't refused at all.
  */
-refused :: fn(result: Result[void, elf_loader.LoadError]) -> elf_loader.LoadError {
+refused :: fn(result: Result[void, elf_loader.LoadError]) -> elf_loader.LoadError? {
     return match result {
         case Error(error) => error
-        case Ok => .ImageTooSmall
+        case Ok => null
     }
 }
 
@@ -151,8 +156,8 @@ refusals :: fn(file: u8[], executable: elf_loader.Executable) -> int {
     if changed(file, 16, 2, 2) != .NotPositionIndependent {
         return 21
     }
-    // For ARM64
-    if changed(file, 18, 2, 183) != .Unsupported {
+    // For the other architecture: ARM64's on x86-64, x86-64's on ARM64
+    if changed(file, 18, 2, if elf_loader.MACHINE == 62 { cast[u64](183) } else { cast[u64](62) }) != .Unsupported {
         return 22
     }
     // The first loadable segment readable, writable and executable

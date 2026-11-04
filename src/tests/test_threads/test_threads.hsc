@@ -61,7 +61,7 @@ counter #calling_convention(.c) #no_context :: fn(slot: ptr[mut u64[4]]) #never_
  * @param program Not used.
  * @param peer Not used.
  * @param cpu_budget Not used.
- * @return 0 if every check passed. Otherwise, of the last thread that failed, as each is logged: its index plus 1
+ * @return 0 if every check passed. Otherwise, of the first thread that failed, though each is logged: its index plus 1
  *     if it hadn't counted by halfway or didn't count on after, or its index plus 11 if its vector went wrong. 20 if
  *     the budget didn't come back to nothing once the threads were closed. 100 if the slots, 101 the budget, or 102
  *     a thread couldn't be made.
@@ -95,11 +95,15 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
         before :: if i < halfway.count { halfway[i] } else { cast[u64](0) }
         if now <= before || before == 0 {
             log_line.write(log, "%: thread % counted % by halfway, then %", NAME, i, before, now)
-            failed = cast[int](i) + 1
+            if failed == 0 {
+                failed = cast[int](i) + 1
+            }
         }
         if intrinsics.volatile_load_u64(&slot[SLOT_WRONG]) != 0 {
             log_line.write(log, "%: thread %'s vector didn't keep its value", NAME, i)
-            failed = cast[int](i) + 11
+            if failed == 0 {
+                failed = cast[int](i) + 11
+            }
         }
     }
     for thread in threads {

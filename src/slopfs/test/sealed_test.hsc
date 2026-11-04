@@ -9,7 +9,7 @@ import slopfs from ".."
  * its names or bytes found anywhere on the disk; locked without its keys, refused with the wrong passphrase, and read
  * back whole with the right one, a container with it locked still checking out; a new key generation, what was
  * written before readable and what's written after sealed with it; a sealed chunk changed, or copied over another,
- * found by its seal; and the same with AES-256-GCM. Checks from 800.
+ * found by its seal; and the same with AES-256-GCM. Checks from 1400.
  */
 
 /** The size of an encryption test's disk, in blocks: 4 MiB. */
@@ -87,15 +87,15 @@ chunk_record :: fn(volume: ptr[mut slopfs.Volume], file: u64, index: u64) -> slo
 /**
  * Check encrypted volumes with ChaCha20-Poly1305, then with AES-256-GCM.
  *
- * @return 0 if every check passed, or the number of the first that failed: 800 to 850 for ChaCha20-Poly1305, 850 to
- *     900 for AES-256-GCM.
+ * @return 0 if every check passed, or the number of the first that failed: 1400 to 1450 for ChaCha20-Poly1305, 1450
+ *     to 1500 for AES-256-GCM.
  */
 check_sealed :: fn() -> int {
-    failed := check_cipher(.ChaCha20Poly1305, 800)
+    failed := check_cipher(.ChaCha20Poly1305, 1400)
     if failed != 0 {
         return failed
     }
-    return check_cipher(.Aes256Gcm, 850)
+    return check_cipher(.Aes256Gcm, 1450)
 }
 
 /**

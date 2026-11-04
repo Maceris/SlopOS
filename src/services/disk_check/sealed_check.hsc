@@ -43,13 +43,12 @@ CONTAINER_TYPE :: u8.[0x53, 0x4c, 0x4f, 0x50, 0x4f, 0x53, 0x20, 0x43, 0x4f, 0x4e
  * @param manager The connection to the storage manager.
  * @param port A port bound to manager.
  * @param system The system volume's root.
- * @return 0 if all of it held; 60 if no container was found among the first 64 partitions, 61 and 62 if it wasn't
- *     refused as Locked without a passphrase or as WrongKey with the wrong one, 63 if it couldn't be opened with its
- *     own, 64 if the buffer or a port couldn't be made, 65 if the image builder's file didn't read as it should, 66 if
- *     the check's file couldn't be written or read back, 67 and 68 if a new key generation, the second, wasn't
- *     started, 69 and 70 if writing after it, or reading all three, failed, and 71 and 72 if, served, it wasn't
+ * @return 0 if all of it held; 200 if no container was found among the first 64 partitions, 201 and 202 if it wasn't
+ *     refused as Locked without a passphrase or as WrongKey with the wrong one, 203 if it couldn't be opened with its
+ *     own, 204 if the buffer or a port couldn't be made, 205 if the image builder's file didn't read as it should, 206
+ *     if the check's file couldn't be written or read back, 207 and 208 if a new key generation, the second, wasn't
+ *     started, 209 and 210 if writing after it, or reading all three, failed, and 211 and 212 if, served, it wasn't
  *     refused the wrong passphrase or opened again with its own; and check_links', then check_snapshots', numbers.
- *     60 to 72 are other checks' numbers too, so they say which check failed only with the log.
  */
 check_sealed :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.Port, system: os.Channel[dir.Dir]) -> int {
     container := cast[u32](0xffffffff)
@@ -65,25 +64,25 @@ check_sealed :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os
         }
     }
     if container == 0xffffffff {
-        return 60
+        return 200
     }
     // Refused without its passphrase, and with the wrong one
     match open_volume(manager, port, container, "") {
         case Locked => {}
-        case _ => return 61
+        case _ => return 201
     }
     match open_volume(manager, port, container, "not its passphrase") {
         case WrongKey => {}
-        case _ => return 62
+        case _ => return 202
     }
     sealed := os.Channel[dir.Dir].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     match open_volume(manager, port, container, SEALED_PASSPHRASE) {
         case OpenedFiles(root) => sealed = root
-        case _ => return 63
+        case _ => return 203
     }
-    buffer := new_buffer() or_return 64
+    buffer := new_buffer() or_return 204
     budget :: slop_os.startup_block().budget
-    sealed_port :: os.port_for(budget, sealed.end) or_return 64
+    sealed_port :: os.port_for(budget, sealed.end) or_return 204
     sealed_storage : u8[64]
     sealed_text :: capitals(SEALED_TEXT, sealed_storage)
     before_storage : u8[64]
@@ -91,10 +90,10 @@ check_sealed :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os
     after_storage : u8[64]
     after_text :: capitals(AFTER_TEXT, after_storage)
     if !holds(sealed.end, sealed_port, SEALED_FILE, sealed_text, &buffer) {
-        return 65
+        return 205
     }
     if !write_new(sealed.end, sealed_port, BEFORE_FILE, before_text, &buffer) || !holds(sealed.end, sealed_port, BEFORE_FILE, before_text, &buffer) {
-        return 66
+        return 206
     }
     // A new key generation, sealing what's written from now on
     generation := cast[u32](0)
@@ -103,26 +102,26 @@ check_sealed :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os
     rotating^ = .Rotate(storage.VolumeNamed.{partition = container, name = bytes_of(&out, SEALED_VOLUME)})
     match ask_storage(manager, port, &out) {
         case Rotated(made) => generation = made
-        case _ => return 67
+        case _ => return 207
     }
     if generation != 2 {
-        return 68
+        return 208
     }
     if !write_new(sealed.end, sealed_port, AFTER_FILE, after_text, &buffer) {
-        return 69
+        return 209
     }
     if !holds(sealed.end, sealed_port, SEALED_FILE, sealed_text, &buffer) || !holds(sealed.end, sealed_port, BEFORE_FILE, before_text, &buffer)
         || !holds(sealed.end, sealed_port, AFTER_FILE, after_text, &buffer) {
-        return 70
+        return 210
     }
     // Served now, it's opened again only with its passphrase
     match open_volume(manager, port, container, "not its passphrase") {
         case WrongKey => {}
-        case _ => return 71
+        case _ => return 211
     }
     match open_volume(manager, port, container, SEALED_PASSPHRASE) {
         case OpenedFiles(again) => _ = slop_os.handle_close(cast[slop_os.Handle](again.end))
-        case _ => return 72
+        case _ => return 212
     }
     runtime.log_info("on the sealed volume, was refused locked and with a wrong passphrase, unlocked it, read its file, wrote one, started key generation %, wrote another and read all three",
         generation)
@@ -163,8 +162,8 @@ capitals :: fn(text: string, into: mut u8[]) -> string {
  * @param port A port bound to manager.
  * @param container The container's index among the storage manager's partitions.
  * @param passphrase The passphrase, or "" for none.
- * @return The storage manager's answer: OpenedFiles with its root, which the caller owns, Locked without a
- *     passphrase, WrongKey with the wrong one, or another refusal; Unsupported if it couldn't be asked.
+ * @return The storage manager's answer: OpenedFiles with its root, which the caller owns, Locked without a passphrase,
+ *     WrongKey with the wrong one, or another refusal; Unsupported if it couldn't be asked.
  */
 open_volume :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, passphrase: string) -> storage.Response {
     out := os.Outgoing.{}

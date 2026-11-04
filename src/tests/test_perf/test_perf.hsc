@@ -141,7 +141,7 @@ report :: fn(log: slop_os.DebugLog, name: string, nanoseconds: u64) {
  *
  * @param budget The memory budget the channel, ports and thread are charged to.
  * @return The time of one round trip, in nanoseconds, averaged over ROUNDS; or null if setting up failed or a round
- *     trip did. An answer that isn't what was sent isn't noticed.
+ *     trip did, or an answer wasn't what was sent.
  */
 ipc_round_trip :: fn(budget: slop_os.MemoryBudget) -> u64? {
     block :: slop_os.startup_block()
@@ -154,11 +154,17 @@ ipc_round_trip :: fn(budget: slop_os.MemoryBudget) -> u64? {
     slop_os.port_bind(port, cast[slop_os.Handle](pair.a), slop_os.SIGNAL_READABLE, ANSWER_KEY, .Persistent) or_return null
     thread :: test_kit.start_thread(budget, cast[u64](echo), cast[u64](echoing)) or_return null
     for i in cast[u64](0)..<WARM_UP {
-        round_trip(pair.a, port, i) or_return null
+        echoed :: round_trip(pair.a, port, i) or_return null
+        if !echoed {
+            return null
+        }
     }
     start :: test_kit.clock_now()
     for i in cast[u64](0)..<ROUNDS {
-        round_trip(pair.a, port, i) or_return null
+        echoed :: round_trip(pair.a, port, i) or_return null
+        if !echoed {
+            return null
+        }
     }
     took :: test_kit.clock_now() - start
     _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))

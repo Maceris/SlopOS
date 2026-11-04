@@ -110,9 +110,9 @@ DMA_LIMIT : u64 : 1 << 32
  *     25 closing the device, 26 its IRQ not gone with it, 27 closing the domain, or 28 its memory still having a
  *     device address; 29 configuration space not on a page not refused with BadAddress; 30 bus mastering still on
  *     once the device is closed; 33 moving the MSI to CPU 1, 34 it not arriving there, or 35 CPU 64 not refused with
- *     InvalidArgument. 30 too if the budget didn't come back to nothing. 102 to 109 if setting up failed: 102 the
- *     memory budget, 103 mapping the tables, 104 finding or mapping ECAM, 105 edu not on bus 0 or without an address
- *     for its registers, 106 mapping its registers, 107 the port, 108 the domain, 109 mapping the DMA memory.
+ *     InvalidArgument. 102 to 109 if setting up failed: 102 the memory budget, 103 mapping the tables, 104 finding or
+ *     mapping ECAM, 105 edu not on bus 0 or without an address for its registers, 106 mapping its registers, 107 the
+ *     port, 108 the domain, 109 mapping the DMA memory. 110 if the budget didn't come back to nothing after.
  */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
@@ -289,7 +289,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     _ = slop_os.handle_close(cast[slop_os.Handle](port))
     if !test_kit.wait_for_budget(budget, 0, 1_000_000_000) {
         log_line.write(log, "%: its budget still has % bytes charged", NAME, test_kit.used(budget))
-        return 30
+        return 110
     }
     log_line.write(log, "%: edu took its MSI and copied a page through DMA memory, and its device took its IRQs with it", NAME)
     return 0

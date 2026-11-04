@@ -267,6 +267,8 @@ Root :: struct {
     records_module : slop_os.Memory,
     /** The stream each service the root task loads itself gets its seed from, and the placing of its parts. */
     stream : random_stream.Stream,
+    /** Where the builder stages each service the root task loads, kept so restarting them doesn't use up its addresses. */
+    staging : process_builder.Staging,
     /**
      * Its end of the entropy service's listener, through which it connects services to it; NO_HANDLE before it's
      * started. Held under entropy_lock.
@@ -680,10 +682,12 @@ start_itself :: fn(root: ptr[mut Root], name #escaping : string, grants: process
  * Load a service the system configuration names with the root task's own loader: start_itself's work, without the
  * remembering or the logging.
  *
- * Its budget is left in root.launched_budget for remember to take. It's given the root task's libraries too, each a
- * copy, with the generation's substitute in place of one the policy replaces (decisions/0121, 0125).
+ * Its budget is left in root.launched_budget for remember to take, once it's started. It's given the root task's
+ * libraries too, each a copy, with the generation's substitute in place of one the policy replaces (decisions/0121,
+ * 0125). When it can't be started, its budget, process and address space are destroyed, and launched_budget is left
+ * as it was, so a later remember doesn't take a stale budget.
  *
- * @param root The root task, whose stream is drawn from and whose launched_budget is set once the budget's made.
+ * @param root The root task, whose stream is drawn from and whose launched_budget is set once it's started.
  * @param name The service's name in the system configuration.
  * @param grants Its grants, besides the libraries; their handles are the program's once it's started, and the
  *     caller's still if it isn't.
@@ -692,16 +696,53 @@ start_itself :: fn(root: ptr[mut Root], name #escaping : string, grants: process
  *     MAX_SELF_GRANTS grants, a library can't be shared, or the loader failed.
  */
 start_with_loader :: fn(root: ptr[mut Root], name: string, grants: process_builder.Grant[]) -> Result[slop_os.Process, string] {
-    block :: root.block
     service :: service_of(root, name) or_return .Error("the system configuration doesn't have it")
-    budget :: slop_os.memory_budget_create(block.budget, service.budget) or_return .Error("no budget")
-    root.launched_budget = budget
-    process :: slop_os.process_create(budget) or_return .Error("no process")
-    space :: slop_os.address_space_create(budget) or_return .Error("no address space")
-    module :: find_module(block, service.module) or_return .Error("its module isn't there")
-    size :: slop_os.memory_size(cast[slop_os.Memory](module)) or_return .Error("its module has no size")
-    address :: runtime.reserve_addresses(cast[usize](size)) or_return .Error("no room to read its module")
-    slop_os.memory_map(cast[slop_os.Memory](module), block.space, address, 0, size, slop_os.PROTECTION_READ) or_return .Error("its module doesn't map")
+    budget :: slop_os.memory_budget_create(root.block.budget, service.budget) or_return .Error("no budget")
+    process :: match slop_os.process_create(budget) {
+        case Ok(made) => made
+        case Error(error) => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](budget))
+            return .Error("no process")
+        }
+    }
+    space :: match slop_os.address_space_create(budget) {
+        case Ok(made) => made
+        case Error(error) => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](process))
+            _ = slop_os.handle_close(cast[slop_os.Handle](budget))
+            return .Error("no address space")
+        }
+    }
+    target :: process_builder.Target.{process = process, space = space, budget = budget}
+    match load_with_loader(root, service, target, grants) {
+        case Some(why) => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](space))
+            _ = slop_os.handle_close(cast[slop_os.Handle](process))
+            _ = slop_os.handle_close(cast[slop_os.Handle](budget))
+            return .Error(why)
+        }
+        case None => {
+            root.launched_budget = budget
+            return .Ok(process)
+        }
+    }
+}
+
+/**
+ * Load a service's program into a process made for it, with the root task's loader, and start its first thread.
+ *
+ * @param root The root task, whose stream is drawn from, whose libraries are given, and whose staging is used.
+ * @param service The service, as the system configuration has it: its module is loaded.
+ * @param target The process, address space and budget made for it, which the caller destroys if this fails.
+ * @param grants Its grants, besides the libraries, as start_with_loader takes them.
+ * @return Null once its first thread is started; or why not, a phrase as start_with_loader gives.
+ */
+load_with_loader :: fn(root: ptr[mut Root], service: Service, target: process_builder.Target, grants: process_builder.Grant[]) -> string? {
+    block :: root.block
+    module :: find_module(block, service.module) or_return "its module isn't there"
+    size :: slop_os.memory_size(cast[slop_os.Memory](module)) or_return "its module has no size"
+    address :: runtime.reserve_addresses(cast[usize](size)) or_return "no room to read its module"
+    slop_os.memory_map(cast[slop_os.Memory](module), block.space, address, 0, size, slop_os.PROTECTION_READ) or_return "its module doesn't map"
     defer _ = slop_os.memory_unmap(block.space, address)
     file :: view_of(cast[ptr[u8]](address), cast[usize](size))
     // Its seed, drawn from the root task's stream, so the two never share one
@@ -712,7 +753,7 @@ start_with_loader :: fn(root: ptr[mut Root], name: string, grants: process_build
     count := cast[usize](0)
     for grant in grants {
         if count >= all.count {
-            return .Error("too many grants")
+            return "too many grants"
         }
         all[count] = grant
         count += 1
@@ -725,7 +766,7 @@ start_with_loader :: fn(root: ptr[mut Root], name: string, grants: process_build
             continue
         }
         if count >= all.count {
-            return .Error("too many grants")
+            return "too many grants"
         }
         given := grant.handle
         for &kept, i in root.substituted {
@@ -733,14 +774,13 @@ start_with_loader :: fn(root: ptr[mut Root], name: string, grants: process_build
                 given = cast[slop_os.Handle](kept.memory)
             }
         }
-        all[count] = process_builder.grant(label, slop_os.handle_duplicate(given, library_rights) or_return .Error("a library can't be shared"))
+        all[count] = process_builder.grant(label, slop_os.handle_duplicate(given, library_rights) or_return "a library can't be shared")
         count += 1
     }
-    target :: process_builder.Target.{process = process, space = space, budget = budget}
     given :: if count <= all.count { all[0..<count] } else { all[0..<0] }
-    match process_builder.build(target, file, given, seed, &root.stream, cast[slop_os.Memory](module)) {
-        case Ok(thread) => return .Ok(process)
-        case Error(error) => return .Error("its loader failed")
+    match process_builder.build(target, file, given, seed, &root.stream, cast[slop_os.Memory](module), slop_os.ABI_VERSION, &root.staging) {
+        case Ok(thread) => return null
+        case Error(error) => return "its loader failed"
     }
 }
 

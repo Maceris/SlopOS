@@ -76,25 +76,44 @@ confirmed against the code before it was fixed; what each became is marked on it
 
 - **Hemera `std/text_buffer/format.hsc` `digit_count`**: returns 2 for 0 to 9, so `append_shifted`'s exponent can be one
   too high.
+  *Fixed, with a check in the format scenario (1e27 wrote e+28).*
 - **Hemera `std/os/windows.hsc`**: the `_in` path functions and directory listing mishandle non-ASCII paths (trailing NULs
   in NT names, a cut search pattern); `system_path_kind_in` doesn't check the length limit; `system_open` with APPEND
   appends once, not on every write.
+  *Fixed, with checks in the files scenario: NT names are the converted length, the pattern isn't cut,
+  system_path_kind_in checks the length, and APPEND opens to append only.*
 - **Hemera `std/os/linux.hsc`**: closing the zero File or Directory closes descriptor 0.
+  *Fixed: the zero File or Directory closes nothing.*
 - **Hemera `std/logger`**: Options without `stream` write to standard output, though the comment says standard error.
+  *Fixed: Options has to_output, false by default, so a literal leaving it out logs to standard error.*
 - **Hemera `std/crypto/blake2b.hsc` `blake2b_finish`**: output past the hasher's size is zeros, then repeats.
+  *Fixed: zeros past the digest, however long.*
 - **Hemera `std/time`**: tiered Freestanding, but `parse_zone` allocates.
+  *Fixed: time zones are their own package, time_zones, Allocating; time stays Freestanding, as locale needs.*
 - **Hemera `base/runtime/slop_os.hsc` `os_entry_grant`**: reads grant 0 when there are none.
+  *Fixed.*
 - **Hemera compiler reflection**: `FunctionInfo.generic_bindings` is never filled in, `FunctionParameter.default_value`
   is always None, and `BuildOptions.configuration`, `TargetOptions.linker` and `max_frame_size` aren't read.
+  *Open: these are features to build, not slips; the documentation says they aren't read or filled in yet.*
 - **PCI**: configuration space is read in the CPU's byte order (right only on little-endian targets).
+  *Fixed: configuration space is read and written little-endian.*
 - **Virtio**: `start` spins forever if the device never finishes resetting; `offer_chain` with no parts offers an index
   never taken; `set_vector` writes the MSI-X entry before finding the capability.
+  *Fixed: start gives up after RESET_SPINS; offer_chain refuses no parts and gives back descriptors taken when it runs
+  out partway (which it didn't either); set_vector finds the capability first.*
 - **ELF loader test**: check 10 passes even if loading into a too-small image succeeds; check 22 fails on an arm64 build.
+  *Fixed.*
 - **Terminal service**: `take_accounts` resets only the Making step on failure, so Sharing and LoggingIn stay stuck.
+  *Fixed: LoggingIn and Sharing go back to where they were asked from.*
 - **Root task**: a failed start leaves a stale `launched_budget` given to the next service.
+  *Fixed: a failed start destroys its budget, process and address space, and leaves launched_budget alone.*
 - **Entropy**: a source's slot is never reused, so at most 4 can ever be added.
+  *Fixed: a gone source's slot and key are reused.*
 - **Test failure numbers that overlap**: `disk_check` 60 to 85, `sealed_test` 800 to 900, `test_msi_dma` 30.
+  *Fixed: disk_check's typed-file checks are 51 to 58, transactions 170 to 195, sealed volumes 200 to 212; sealed_test
+  1400 to 1500; test_msi_dma's budget 110. A testing framework would make numbers unnecessary.*
 - **`test_threads`** reports the last failing thread, not the first; **`test_perf`** never notices a wrong echo.
+  *Fixed, both.*
 
 ## The shell (11b, 11c: to fix with 11d)
 

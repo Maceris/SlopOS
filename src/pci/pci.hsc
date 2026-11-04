@@ -355,36 +355,35 @@ read_u8 :: fn(config: u64, offset: u64) -> u8 #no_context {
 }
 
 /**
- * Read a 16-bit register of a function's configuration space, with one volatile load in the CPU's byte order, which
- * is the little-endian PCI's on every target SlopOS runs on.
+ * Read a 16-bit register of a function's configuration space, with one volatile load, as PCI has it: little-endian.
  *
  * @param config Where the function's 4 KiB of configuration space is mapped, or a firmware table, readable.
  * @param offset The register's offset, 2-byte aligned.
  * @return The register's value as the device or table gives it at the load, in the CPU's byte order; never cached.
  */
 read_u16 :: fn(config: u64, offset: u64) -> u16 #no_context {
-    return intrinsics.volatile_load_u16(cast[ptr[u16]](config + offset))
+    return bit_cast[u16le](intrinsics.volatile_load_u16(cast[ptr[u16]](config + offset)))
 }
 
 /**
- * Read a 32-bit register of a function's configuration space, with one volatile load in the CPU's byte order.
+ * Read a 32-bit register of a function's configuration space, with one volatile load, as PCI has it: little-endian.
  *
  * @param config Where the function's 4 KiB of configuration space is mapped, readable.
  * @param offset The register's offset, 4-byte aligned.
  * @return The register's value as the device gives it at the load, in the CPU's byte order; never cached.
  */
 read_u32 :: fn(config: u64, offset: u64) -> u32 #no_context {
-    return intrinsics.volatile_load_u32(cast[ptr[u32]](config + offset))
+    return bit_cast[u32le](intrinsics.volatile_load_u32(cast[ptr[u32]](config + offset)))
 }
 
 /**
- * Read 8 bytes at any alignment, as a firmware table holds a 64-bit field, in the CPU's byte order.
+ * Read 8 bytes at any alignment, as a firmware table holds a 64-bit field, little-endian as ACPI's are.
  *
  * @param at Where they are, readable.
- * @return Their value.
+ * @return Their value, in the CPU's byte order.
  */
 read_u64 :: fn(at: u64) -> u64 #no_context {
-    value : u64 = 0
+    value : u64le = 0
     intrinsics.mem_copy_non_overlapping(cast[mut rawptr](&value), cast[rawptr](at), 8)
     return value
 }
@@ -402,25 +401,25 @@ write_u8 :: fn(config: u64, offset: u64, value: u8) #no_context {
 }
 
 /**
- * Write a 16-bit register of a function's configuration space, with one volatile store in the CPU's byte order.
+ * Write a 16-bit register of a function's configuration space, with one volatile store, little-endian as PCI has it.
  *
  * @param config Where the function's 4 KiB of configuration space is mapped, writable.
  * @param offset The register's offset, 2-byte aligned.
  * @param value What's written.
  */
 write_u16 :: fn(config: u64, offset: u64, value: u16) #no_context {
-    intrinsics.volatile_store_u16(cast[ptr[mut u16]](config + offset), value)
+    intrinsics.volatile_store_u16(cast[ptr[mut u16]](config + offset), bit_cast[u16](cast[u16le](value)))
 }
 
 /**
- * Write a 32-bit register of a function's configuration space, with one volatile store in the CPU's byte order.
+ * Write a 32-bit register of a function's configuration space, with one volatile store, little-endian as PCI has it.
  *
  * @param config Where the function's 4 KiB of configuration space is mapped, writable.
  * @param offset The register's offset, 4-byte aligned.
  * @param value What's written.
  */
 write_u32 :: fn(config: u64, offset: u64, value: u32) #no_context {
-    intrinsics.volatile_store_u32(cast[ptr[mut u32]](config + offset), value)
+    intrinsics.volatile_store_u32(cast[ptr[mut u32]](config + offset), bit_cast[u32](cast[u32le](value)))
 }
 
 /**
