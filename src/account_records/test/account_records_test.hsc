@@ -1,8 +1,8 @@
 /**
- * account_records' tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the number of
- * the first check that failed. Names and passwords held to their rules; the common list searched; a record's home secret
- * unsealed by its password and its recovery code and by nothing else, and by a new password once it's changed; a
- * recovery code shown and read back, however it's typed.
+ * account_records' tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the number
+ * of the first check that failed. Names and passwords held to their rules; the common list searched; a record's home
+ * secret unsealed by its password and its recovery code and by nothing else, and by a new password once it's changed;
+ * a recovery code shown and read back, however it's typed.
  */
 package account_records_test
 
@@ -10,13 +10,27 @@ import compiler from "base"
 import crypto from "std"
 import account_records from ".."
 
-/** Argon2id kept cheap for the tests */
+/** Argon2id kept cheap for the tests: 64 KiB, one pass, one lane. */
 TEST_ARGON2 :: crypto.Argon2Parameters.{memory_kib = 64, passes = 1, lanes = 1}
 
+/**
+ * View a string's bytes.
+ *
+ * @param value Any text; not copied, so the view returned is of its bytes.
+ * @return Its bytes, a view of the string's, good as long as it is.
+ */
 text :: fn(value: string) -> u8[] {
     return string_bytes(value)
 }
 
+/**
+ * Tell whether password_problem finds a given problem with a password.
+ *
+ * @param name The account's name, which password_problem compares the password with, ignoring ASCII case.
+ * @param password The password to check, as its UTF-8 bytes.
+ * @param expected The problem the check passes on: TooShort, TooLong, Common or IsName.
+ * @return True if that's the problem found; false for another, or none.
+ */
 problem_is :: fn(name: string, password: string, expected: account_records.PasswordProblem) -> bool {
     match account_records.password_problem(text(name), text(password)) {
         case Some(found) => return found == expected
@@ -24,10 +38,24 @@ problem_is :: fn(name: string, password: string, expected: account_records.Passw
     }
 }
 
+/**
+ * Tell whether password_problem finds nothing wrong with a password.
+ *
+ * @param name The account's name, which password_problem compares the password with, ignoring ASCII case.
+ * @param password The password to check, as its UTF-8 bytes.
+ * @return True if password_problem finds no problem with it; false for any.
+ */
 fine :: fn(name: string, password: string) -> bool {
     return account_records.password_problem(text(name), text(password)) is_none
 }
 
+/**
+ * Compare two keys in constant time.
+ *
+ * @param a A key, read only, compared with b through all 32 bytes.
+ * @param b The key it's compared with, read only.
+ * @return True if every byte is the same; only the answer is declassified.
+ */
 same_key #constant_time :: fn(a: ptr[crypto.Key256], b: ptr[crypto.Key256]) -> bool {
     difference := compiler.secret(cast[u8](0))
     for i in cast[usize](0)..<32 {
@@ -36,6 +64,13 @@ same_key #constant_time :: fn(a: ptr[crypto.Key256], b: ptr[crypto.Key256]) -> b
     return compiler.declassify(difference == 0)
 }
 
+/**
+ * Compare two recovery codes in constant time.
+ *
+ * @param a A recovery code, read only, compared with b through all 16 bytes.
+ * @param b The code it's compared with, read only.
+ * @return True if every byte is the same; only the answer is declassified.
+ */
 same_code #constant_time :: fn(a: ptr[account_records.RecoveryCode], b: ptr[account_records.RecoveryCode]) -> bool {
     difference := compiler.secret(cast[u8](0))
     for i in cast[usize](0)..<16 {
@@ -44,6 +79,11 @@ same_code #constant_time :: fn(a: ptr[account_records.RecoveryCode], b: ptr[acco
     return compiler.declassify(difference == 0)
 }
 
+/**
+ * Run account_records' tests.
+ *
+ * @return 0 if every check passed, or the number of the first check that failed.
+ */
 main :: fn() -> int {
     // Names
     if !account_records.valid_name(text("admin")) || !account_records.valid_name(text("a-b_9")) || account_records.valid_name(text(""))

@@ -1,13 +1,14 @@
 /**
  * test_perf (roadmap Perf, 9c5, decisions/0097, 0112): the kernel's benchmarks, each a number on a line of its own,
- * "perf: <name> <nanoseconds>", which tools/perf_tests.py reads. Under QEMU's -icount, a nanosecond is an instruction, so
- * the numbers are counts it can hold to a baseline; booted as usual, they're wall time, recorded but not held to one.
+ * "perf: <name> <nanoseconds>", which tools/perf_tests.py reads. Under QEMU's -icount, a nanosecond is an
+ * instruction, so the numbers are counts it can hold to a baseline; booted as usual, they're wall time, recorded but
+ * not held to one.
  * - ipc_round_trip: a message to a thread of its own and its answer, through a channel's kernel path, each way waking
  *   the other through a port: per round trip;
  * - page_fault: a touch of a page of anonymous memory nothing has touched: per page;
  * - thread_create: a thread made, started, ended, and seen to end: per thread;
- * - process_create: a copy of the program launched through the process manager, ending at once as one given nothing it
- *   needs does, and seen to end: per process.
+ * - process_create: a copy of the program launched through the process manager, ending at once as one given nothing
+ *   it needs does, and seen to end: per process.
  */
 package test_perf
 
@@ -19,33 +20,57 @@ import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
+/** The test's name, which starts each line it logs. */
 NAME :: "test_perf"
+/** A page, in bytes. */
 PAGE : u64 : 4096
-// How many of each are measured, after WARM_UP rounds that aren't
+/** How many round trips ipc_round_trip measures, after WARM_UP that it doesn't. */
 ROUNDS : u64 : 200
+/** How many round trips are made before measuring, so caches and the scheduler settle. */
 WARM_UP : u64 : 20
+/** How many pages page_fault touches. */
 PAGES : u64 : 256
+/** How many threads thread_create makes. */
 THREADS : u64 : 16
+/** How many copies process_create launches. */
 PROCESSES : u64 : 4
+/** Each copy's memory budget, in bytes: 4 MiB. */
 COPY_BUDGET : u64 : 4 * 1024 * 1024
+/** The key the echoing thread's end wakes its port under. */
 ECHO_KEY : u64 : 1
+/**
+ * The first key the watches for an end queue under: thread_create's and process_create's each add their index, as
+ * a fired Once binding keeps its key.
+ */
 ENDED_KEY : u64 : 2
+/** The key the measuring thread's end wakes its port under when the answer comes. */
 ANSWER_KEY : u64 : 3
 
 /** The echoing thread's end of the channel, and the port its end wakes. */
 Echo :: struct {
+    /** The echoing thread's end, which it reads and writes back on. */
     end : slop_os.Channel,
+    /** The port end is bound to for Readable, under ECHO_KEY. */
     port : slop_os.Port,
 }
 
 /** What a copy launched with nothing is given, against its entry's type, which takes nothing. */
 NoGrants :: struct {}
 
+/**
+ * Stand for an entry that takes nothing, which the copy's isn't, so the launch gives it no grants and it ends at once.
+ *
+ * @return 0, though it never runs: the copy runs main.
+ */
 takes_nothing :: fn() -> int {
     return 0
 }
 
-/** Each message that arrives written back, until the other end closes. */
+/**
+ * Write back each message that arrives, until the other end closes, then end the thread.
+ *
+ * @param echo The end and its port, which have to outlive the thread.
+ */
 echo #calling_convention(.c) #no_context :: fn(echo: ptr[Echo]) #never_returns {
     data : u8[8]
     loop {
@@ -62,11 +87,31 @@ echo #calling_convention(.c) #no_context :: fn(echo: ptr[Echo]) #never_returns {
     }
 }
 
-/** A thread that ends at once. */
+/**
+ * End the thread at once.
+ *
+ * @param argument Ignored.
+ */
 ends #calling_convention(.c) #no_context :: fn(argument: u64) #never_returns {
     slop_os.thread_exit()
 }
 
+/**
+ * Measure the kernel's benchmarks, and log each as "perf: <name> <nanoseconds>".
+ *
+ * @param log The debug log, writable, where the numbers go.
+ * @param platform Not used.
+ * @param test_device Not used.
+ * @param firmware Not used.
+ * @param manager The process manager, which launches the copies process_create measures; without it the test ends
+ *     with 104, after the other benchmarks.
+ * @param program The test's own module, which the copies run; without it the test ends with 104.
+ * @param peer Not used.
+ * @param cpu_budget Not used.
+ * @return 0 once every benchmark is measured and logged; it holds them to nothing itself. 100 if the memory budget
+ *     couldn't be made; 101 if ipc_round_trip, 102 page_fault, 103 thread_create, or 105 process_create couldn't
+ *     be measured.
+ */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     block :: slop_os.startup_block()
@@ -80,11 +125,24 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     return 0
 }
 
+/**
+ * Log a benchmark's number, as tools/perf_tests.py reads it.
+ *
+ * @param log The debug log the line goes to, which needs RIGHT_DEBUG_LOG_WRITE; a write that fails is ignored.
+ * @param name The benchmark's name, one word.
+ * @param nanoseconds What one of it took, in nanoseconds, or instructions under -icount.
+ */
 report :: fn(log: slop_os.DebugLog, name: string, nanoseconds: u64) {
     log_line.write(log, "%: perf: % %", NAME, name, nanoseconds)
 }
 
-/** Round trips to a thread that echoes, per round trip. */
+/**
+ * Measure round trips to a thread that echoes.
+ *
+ * @param budget The memory budget the channel, ports and thread are charged to.
+ * @return The time of one round trip, in nanoseconds, averaged over ROUNDS; or null if setting up failed or a round
+ *     trip did. An answer that isn't what was sent isn't noticed.
+ */
 ipc_round_trip :: fn(budget: slop_os.MemoryBudget) -> u64? {
     block :: slop_os.startup_block()
     pair :: slop_os.channel_create(budget, 0, 0) or_return null
@@ -109,7 +167,15 @@ ipc_round_trip :: fn(budget: slop_os.MemoryBudget) -> u64? {
     return took / ROUNDS
 }
 
-/** value to the echoing thread through end, and its answer back, waited for on port: null if it didn't come back. */
+/**
+ * Send a value to the echoing thread, and wait for its answer.
+ *
+ * @param end The measuring thread's end.
+ * @param port The port end is bound to for Readable.
+ * @param value Any value, sent as one 8-byte message; the round's index, so an echo of an earlier round doesn't
+ *     match.
+ * @return Whether the answer was value; or null if writing failed, or reading failed other than finding nothing.
+ */
 round_trip :: fn(end: slop_os.Channel, port: slop_os.Port, value: u64) -> bool? {
     sent : u64[1]
     sent[0] = value
@@ -129,7 +195,13 @@ round_trip :: fn(end: slop_os.Channel, port: slop_os.Port, value: u64) -> bool? 
     }
 }
 
-/** Pages of anonymous memory touched for the first time, per page. */
+/**
+ * Measure touching pages of anonymous memory for the first time.
+ *
+ * @param budget The memory budget the memory is charged to.
+ * @return The time of one touch, in nanoseconds, averaged over PAGES; or null if the memory couldn't be made or
+ *     mapped.
+ */
 page_fault :: fn(budget: slop_os.MemoryBudget) -> u64? {
     block :: slop_os.startup_block()
     memory :: slop_os.memory_create(budget, PAGES * PAGE) or_return null
@@ -146,7 +218,13 @@ page_fault :: fn(budget: slop_os.MemoryBudget) -> u64? {
     return took / PAGES
 }
 
-/** Threads made, started, ended, and seen to end, per thread. */
+/**
+ * Measure making threads, starting them, and seeing them end.
+ *
+ * @param budget The memory budget the threads and the port are charged to.
+ * @return The time of one thread, in nanoseconds, averaged over THREADS; or null if the port or a thread couldn't be
+ *     made, or a thread couldn't be watched.
+ */
 thread_create :: fn(budget: slop_os.MemoryBudget) -> u64? {
     port :: slop_os.port_create(budget) or_return null
     start :: test_kit.clock_now()
@@ -169,7 +247,15 @@ thread_create :: fn(budget: slop_os.MemoryBudget) -> u64? {
     return took / THREADS
 }
 
-/** Copies of the program launched through the manager, each ending at once, given nothing, and seen to, per process. */
+/**
+ * Measure launching copies of the program through the manager, each ending at once, given nothing, and seen to.
+ *
+ * Each copy's budget is waited for, up to a second, to come back to nothing before the next, and that's in the time.
+ *
+ * @param loader The process manager connection.
+ * @param executable The test's own module, which the copies run.
+ * @return The time of one process, in nanoseconds, averaged over PROCESSES; or null if a port or a launch failed.
+ */
 process_create :: fn(loader: os.Channel[process_manager.ProcessManager], executable: slop_os.Memory) -> u64? {
     block :: slop_os.startup_block()
     manager_port :: os.port_for(block.budget, loader.end) or_return null

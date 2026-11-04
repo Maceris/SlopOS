@@ -12,15 +12,31 @@ import slopfs from ".."
  * origin's passphrase and shares its key generations. Checks from 900.
  */
 
+/** The size of the snapshot test's disk, in blocks: 8 MiB. */
 SNAPSHOT_BLOCKS : u64 : 2048
+/** What a file holds when the snapshot is taken, which the snapshot keeps reading. */
 FIRST_TEXT :: "what the volume held when the snapshot was taken"
+/** What the file is changed to after the snapshot, which only the volume reads. */
 SECOND_TEXT :: "what it holds now"
 
+/**
+ * Get text's bytes, as a volume's or a snapshot's name.
+ *
+ * @param text The text, whose bytes are viewed, not copied.
+ * @return Its bytes, a view of it.
+ */
 name_bytes :: fn(text: string) -> u8[] {
     return string_bytes(text)
 }
 
-/** Whether the file at name in a volume's root holds text and only that. */
+/**
+ * Tell whether the file of a name in a volume's root holds text and only that.
+ *
+ * @param volume The volume under test, open.
+ * @param name The file's name.
+ * @param text The text, at most 256 bytes.
+ * @return True if the file is there and its bytes are text's; false otherwise, or on any error.
+ */
 file_holds :: fn(volume: ptr[mut slopfs.Volume], name: string, text: u8[]) -> bool {
     file :: match slopfs.lookup(volume, slopfs.ROOT_OBJECT, name) {
         case Ok(found) => found or_return false
@@ -31,7 +47,17 @@ file_holds :: fn(volume: ptr[mut slopfs.Volume], name: string, text: u8[]) -> bo
     return count == text.count && count <= bytes.count && same(bytes[0..<count], text)
 }
 
-/** Whether a large file holds the pattern seed makes, size bytes of it. */
+/**
+ * Tell whether a large file in a volume's root holds the pattern a seed makes, and nothing past it.
+ *
+ * @param volume The volume under test, open.
+ * @param name The file's name.
+ * @param seed The pattern's seed.
+ * @param size The bytes it should hold, at most a Data's.
+ * @param data Where the pattern is made, overwritten.
+ * @param back Where the file is read to, overwritten.
+ * @return True if the file is there and its first size bytes are the pattern's; false otherwise, or on any error.
+ */
 large_holds :: fn(volume: ptr[mut slopfs.Volume], name: string, seed: u64, size: usize, data: ptr[mut Data], back: ptr[mut Data]) -> bool {
     file :: match slopfs.lookup(volume, slopfs.ROOT_OBJECT, name) {
         case Ok(found) => found or_return false
@@ -45,6 +71,13 @@ large_holds :: fn(volume: ptr[mut slopfs.Volume], name: string, seed: u64, size:
     return count == size && same(back.bytes[0..<size], data.bytes[0..<size])
 }
 
+/**
+ * Count the extents on a volume's dead list.
+ *
+ * @param container The container under test, mounted.
+ * @param id The volume's ID.
+ * @return How many there are; 0xffffffff if the list couldn't be read.
+ */
 dead_count :: fn(container: ptr[mut slopfs.Container], id: u64) -> u64 {
     dead : slopfs.DeadExtent[..]
     defer runtime.array_free(&dead)
@@ -54,6 +87,12 @@ dead_count :: fn(container: ptr[mut slopfs.Container], id: u64) -> u64 {
     }
 }
 
+/**
+ * Check snapshots and clones on a volume that isn't encrypted, then on one that is.
+ *
+ * @return 0 if every check passed, or the number of the first that failed: 900 to 949, or 950 to 999 for the
+ *     encrypted volume.
+ */
 check_snapshots :: fn() -> int {
     failed := check_snapshots_of(false, 900)
     if failed != 0 {
@@ -62,6 +101,17 @@ check_snapshots :: fn() -> int {
     return check_snapshots_of(true, 950)
 }
 
+/**
+ * Check snapshots and clones: a volume's snapshot reads as the volume did when it was taken, while what the volume
+ * gives back that it holds goes on its dead list rather than being freed; deleting a snapshot frees only what no other
+ * one holds; a clone starts as a snapshot, changes apart from its origin, and gives back nothing of its origin's; a
+ * snapshot with a clone can't be deleted; everything holds across a mount, and the container checks out whole at
+ * every step. An encrypted volume's clone unlocks with its origin's passphrase and shares its key generations.
+ *
+ * @param sealed Whether the volume is encrypted.
+ * @param base The number of the first check, the rest numbered after it.
+ * @return 0 if every check passed, or the number of the first that failed, base to base + 49.
+ */
 check_snapshots_of :: fn(sealed: bool, base: int) -> int {
     device :: new_device_of(SNAPSHOT_BLOCKS) or_return base
     defer free_device(device)
@@ -240,7 +290,14 @@ check_snapshots_of :: fn(sealed: bool, base: int) -> int {
     return 0
 }
 
-/** A volume by ID: as it is, or unlocked with the tests' passphrase. */
+/**
+ * Open a volume by its ID: as it is, or unlocked with the tests' passphrase.
+ *
+ * @param container The container, which keeps the volume among its open ones.
+ * @param id The volume's ID.
+ * @param sealed Whether the volume is encrypted.
+ * @return The volume, or why it couldn't be opened, as open_volume or open_sealed_volume says.
+ */
 open_test_volume_id :: fn(container #escaping : ptr[mut slopfs.Container], id: u64, sealed: bool) -> Result[ptr[mut slopfs.Volume], slopfs.Error] {
     if sealed {
         return slopfs.open_sealed_volume(container, id, passphrase())
@@ -248,7 +305,13 @@ open_test_volume_id :: fn(container #escaping : ptr[mut slopfs.Container], id: u
     return slopfs.open_volume(container, id)
 }
 
-/** An encrypted volume's keys, unlocked with the tests' passphrase, for a snapshot of it. */
+/**
+ * Unlock an encrypted volume's keys with the tests' passphrase, for opening a snapshot of it.
+ *
+ * @param container The container under test, mounted.
+ * @param id The volume's ID, whose own key records are used.
+ * @return The keys, the caller's (open_snapshot takes them); null if they couldn't be read or unlocked.
+ */
 unlocked_keys :: fn(container: ptr[mut slopfs.Container], id: u64) -> ptr[mut slopfs.Keys]? {
     record :: slopfs.volume_record(container, id) or_return null
     wraps : slopfs.WrapRecord[..]

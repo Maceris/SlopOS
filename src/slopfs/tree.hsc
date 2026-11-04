@@ -15,42 +15,55 @@ import maps from "std"
  * left less than a quarter full is merged into its neighbour where both fit in one.
  */
 
+/** Why a slopfs operation failed. */
 Error :: enum {
-    /** The device couldn't be read or written */
+    /** The device couldn't be written or flushed, or a file's bytes couldn't be read. */
     DeviceError,
-    /** What was read doesn't check out: a seal, a header or a structure */
+    /** What was read doesn't check out, or couldn't be read: a seal, a header or a structure. */
     Corrupt,
+    /** No free extent big enough, or a quota or the reserve refuses one. */
     NoSpace,
+    /** No such object, name, volume, snapshot or record. */
     NotFound,
+    /** A directory was needed, and it's a file. */
     NotADirectory,
+    /** A file was needed, and it's a directory. */
     IsADirectory,
+    /** Something of the name is there already. */
     AlreadyExists,
+    /** A directory to remove has something in it. */
     DirectoryNotEmpty,
-    /** Empty, too long, or holding '/' or NUL */
+    /** Empty, too long, or holding '/' or NUL, or something else a name can't hold. */
     InvalidName,
-    /** A value, a name list or a file past what's held */
+    /** A value, a name list or a file past what's held. */
     TooLarge,
-    /** Not a container: no superblock, or no checkpoint that checks out */
+    /** Not a container: no superblock, or no checkpoint that checks out. */
     NotSlopfs,
-    /** A write failed: commits are refused until the container is mounted again (design/storage.md §4) */
+    /** A write failed: commits are refused until the container is mounted again (design/storage.md §4). */
     Failed,
-    /** An encrypted volume, opened without its keys (keys.hsc) */
+    /** An encrypted volume, opened without its keys (keys.hsc). */
     Locked,
-    /** A passphrase that doesn't unwrap the volume's key */
+    /** A passphrase that doesn't unwrap the volume's key. */
     WrongKey,
-    /** A snapshot a clone was made from, which can't be deleted while it's there (snapshot.hsc) */
+    /** A snapshot a clone was made from, which can't be deleted while it's there (snapshot.hsc). */
     InUse,
-    /** A stored link, where a file or a directory was needed (links.hsc) */
+    /** A stored link, where a file or a directory was needed (links.hsc). */
     IsALink,
-    /** No memory for a node or a buffer (decisions/0104): nothing was changed for want of it */
+    /** No memory for a node or a buffer (decisions/0104): nothing was changed for want of it. */
     OutOfMemory,
-    /** A typed file of another type than the one asked for (decisions/0108) */
+    /** A typed file of another type than the one asked for (decisions/0108). */
     WrongType,
 }
 
 /**
- * A new T, or OutOfMemory: every node and buffer slopfs takes comes from here (decisions/0104), each taken before
- * what it's for changes anything, so a caller can fail without it and nothing is left half done.
+ * Allocate a new T with context's allocator: every node and buffer slopfs takes comes from here (decisions/0104),
+ * each taken before what it's for changes anything, so a caller can fail without it and nothing is left half done.
+ *
+ * @tparam T The type.
+ * @param T The type, as a value.
+ * @param location Where it's called from, for the allocator's records.
+ * @return The new T, its contents as the allocator leaves them; the caller's to free with runtime.free.
+ * @error OutOfMemory The allocator had no memory for it.
  */
 make :: fn[T](T: type, location := #caller_location) -> Result[ptr[mut T], Error] {
     made, error :: runtime.new_aligned(T, align_of(T), context.allocator, location)
@@ -60,30 +73,55 @@ make :: fn[T](T: type, location := #caller_location) -> Result[ptr[mut T], Error
     return .Ok(made)
 }
 
-/**
- * A device of 4 KiB blocks: count of them from block into into, or from from, and making what's written durable. Its
- * context is memory that outlives it, not the stack, so the nodes and containers that hold it can be pointed to.
- */
+/** A device of BLOCK_BYTES blocks, read, written and flushed through its functions. */
 Device :: struct {
+    /**
+     * What the functions are given back, the caller's own: memory that outlives the device, not the stack, so the
+     * nodes and containers that hold it can be pointed to.
+     */
     context : rawptr,
+    /** The device's size in blocks. */
     block_count : u64,
+    /** Read count blocks, from block, into into, at least count * BLOCK_BYTES bytes; true if they were read. */
     read : fn(context: rawptr, block: u64, count: u64, into: mut u8[]) -> bool,
+    /**
+     * Write count blocks, from block, from from's first count * BLOCK_BYTES bytes; true if they were written, though
+     * not yet durable until a flush.
+     */
     write : fn(context: rawptr, block: u64, count: u64, from: u8[]) -> bool,
+    /** Make everything written so far durable; true if it is. */
     flush : fn(context: rawptr) -> bool,
 }
 
-/** A key in memory. */
+/** A key in memory, ordered by object, then kind, then offset (compare_keys). */
 Key :: struct {
+    /** The object or extent the record is of, as DiskKey's. */
     object : u64,
+    /** The record's RecordKind, as a byte. */
     kind : u8,
+    /** Which of the object's records of the kind, as DiskKey's. */
     offset : u64,
 }
 
+/**
+ * Make a key.
+ *
+ * @param object The object or extent the record is of.
+ * @param kind The record's kind.
+ * @param offset Which of the object's records of the kind.
+ * @return The key, its fields as given.
+ */
 key_of :: fn(object: u64, kind: RecordKind, offset: u64) -> Key {
     return Key.{object = object, kind = cast[u8](kind), offset = offset}
 }
 
-/** Below 0, a is before b; above, after; 0, they're the same. */
+/**
+ * Compare two keys, by object, then kind, then offset, each unsigned.
+ *
+ * @param a One key.
+ * @param b The other key, compared with a.
+ * @return -1 if a is before b, 1 if after, 0 if they're the same.
+ */
 compare_keys :: fn(a: Key, b: Key) -> int {
     if a.object != b.object {
         return if a.object < b.object { -1 } else { 1 }
@@ -97,7 +135,12 @@ compare_keys :: fn(a: Key, b: Key) -> int {
     return 0
 }
 
-/** The key just after key, for walking records in order, or null after the last there can be. */
+/**
+ * Get the key just after another, for walking records in order.
+ *
+ * @param key The key to step from, any key.
+ * @return The least key greater than it; null after the last there can be, all ones.
+ */
 key_after :: fn(key: Key) -> Key? {
     if key.offset != 0xffffffffffffffff {
         return Key.{object = key.object, kind = key.kind, offset = key.offset + 1}
@@ -111,45 +154,70 @@ key_after :: fn(key: Key) -> Key? {
     return null
 }
 
+/**
+ * Make a key as it's stored.
+ *
+ * @param key The key in memory.
+ * @return It as a DiskKey, little-endian, its reserved bytes zero.
+ */
 disk_key_of :: fn(key: Key) -> DiskKey {
     return DiskKey.{object = cast[u64le](key.object), kind = key.kind, offset = cast[u64le](key.offset)}
 }
 
+/**
+ * Make a stored key a key in memory.
+ *
+ * @param key The stored key; its reserved bytes are ignored.
+ * @return The key in memory, its fields as stored.
+ */
 memory_key_of :: fn(key: ptr[DiskKey]) -> Key {
     return Key.{object = cast[u64](key.object), kind = key.kind, offset = cast[u64](key.offset)}
 }
 
+/** A node's bytes, as an integer for sizes: NODE_BYTES. */
 NODE_SIZE :: 16384
+/** A node header's bytes: size_of(NodeHeader). */
 HEADER_SIZE :: 64
+/** A leaf item's bytes: size_of(LeafItem). */
 ITEM_SIZE :: 32
+/** A branch entry's bytes: size_of(BranchEntry). */
 ENTRY_SIZE :: 88
-// A branch's entries at most, and a leaf's items
+/** The most entries a branch holds: as many as fit after its header. */
 BRANCH_CAPACITY :: 185
+/** The most items a leaf holds, values or none: as many 32-byte items as fit after its header, less one. */
 LEAF_CAPACITY :: 510
 
 /**
  * A node in memory: dirty, owned by the transaction's set until it's written; or read for a moment, then given back.
+ *
+ * It's from make; a dirty one is freed when it's written or discarded, a read one by done.
  */
 Node :: struct {
+    /** Its bytes, as they are on the device unsealed. */
     bytes : u8[NODE_SIZE],
+    /** The first block of its second copy, for a tree written twice; 0 for none. */
     copy : u64,
+    /** Whether it's among the transaction's dirty nodes, changed in place until it's written. */
     dirty : bool,
 }
 
-/**
- * A tree: its root (address 0 while it's empty), which it is, whose, whether its nodes are written twice, an encrypted
- * volume's keys, which seal its nodes (keys.hsc), or null for a BLAKE3 seal, and for a clone's, who wrote its older
- * blocks.
- */
+/** A tree: where its root is, which tree it is, whose, and how its nodes are sealed and placed. */
 Tree :: struct {
+    /** Its root's pointer; address 0 while it's empty. */
     root : BlockPointer,
+    /** Which tree it is, as its nodes' headers say. */
     kind : TreeKind,
+    /** The volume it's of, or 0, the container; its nodes' headers name it, and its new blocks are charged to it. */
     owner : u64,
+    /** Whether its nodes are written twice, as the container's trees are. */
     ditto : bool,
+    /** An encrypted volume's keys, which seal its nodes (keys.hsc); null for a BLAKE3 seal. Not the tree's to free. */
     keys : ptr[mut Keys]?,
+    /** For a clone's tree, who wrote its older blocks; empty otherwise. */
     lineage : Lineage,
 }
 
+/** The most origins a clone's lineage goes back: a clone of a clone of a clone of a clone. */
 MAX_LINEAGE :: 4
 
 /**
@@ -157,12 +225,21 @@ MAX_LINEAGE :: 4
  * holds, and the origin's own origin up to the one before, and so on, nearest first.
  */
 Lineage :: struct {
+    /** How many of owners and up_to are used, 0 to MAX_LINEAGE. */
     count : usize,
+    /** The origins, nearest first. */
     owners : u64[MAX_LINEAGE],
+    /** For each origin, the last transaction whose blocks are its. */
     up_to : u64[MAX_LINEAGE],
 }
 
-/** Whose a tree's block born in birth is: the oldest ancestor whose part holds it, or the tree's own owner's. */
+/**
+ * Work out whose a tree's block is: the oldest ancestor whose part holds it, or the tree's own owner's.
+ *
+ * @param tree The tree the block is in, its owner and lineage.
+ * @param birth The transaction the block was born in.
+ * @return The volume that wrote it, whose ID its header and associated data name.
+ */
 owner_at :: fn(tree: ptr[Tree], birth: u64) -> u64 {
     owner := tree.owner
     for i in 0..<tree.lineage.count {
@@ -173,39 +250,74 @@ owner_at :: fn(tree: ptr[Tree], birth: u64) -> u64 {
     return owner
 }
 
-/**
- * The nodes of one transaction: the device they're on, the dirty ones by address, and where extents come from and go
- * back to: allocate gives count blocks for owner, or null, data saying they're for a file's bytes rather than a tree's
- * nodes, which a quota and the reserve don't hold back (space.hsc); release takes an extent back, born in birth.
- */
+/** The nodes of one transaction: the device they're on, the dirty ones by address, and where extents come from. */
 Nodes :: struct {
+    /** The device the nodes are on. */
     device : Device,
+    /** The transaction being made: new nodes are born in it, and a node born in it is dirty. */
     transaction : u64,
+    /** The dirty nodes, by address, each from make; written and freed by tree_write. */
     dirty : maps.HashMap[u64, ptr[mut Node], maps.hash_integer[u64]],
+    /** What allocate and release are given back: the container's Space. */
     space : rawptr,
+    /**
+     * Allocate blocks for an owner, in one extent: its first block, or null if there's none. data says they're for a
+     * file's bytes rather than a tree's nodes, which a quota and the reserve don't hold back (space.hsc).
+     */
     allocate : fn(space: rawptr, blocks: u64, owner: u64, data: bool) -> u64?,
+    /** Take back an extent an owner had, born in birth. */
     release : fn(space: rawptr, address: u64, blocks: u64, owner: u64, birth: u64),
 }
 
 // Fields of a node's bytes.
 
+/**
+ * Get a node's header.
+ *
+ * @param node The node, in memory, read or dirty.
+ * @return Its header, a view of its first bytes, good as long as the node is.
+ */
 header_of :: fn(node: ptr[mut Node]) -> ptr[mut NodeHeader] {
     return cast[ptr[mut NodeHeader]](&node.bytes[0])
 }
 
+/**
+ * Get how many items or entries a node holds.
+ *
+ * @param node The node, in memory, read or dirty.
+ * @return Its header's count.
+ */
 count_of :: fn(node: ptr[mut Node]) -> usize {
     return cast[usize](cast[u16](header_of(node).count))
 }
 
+/**
+ * Get a node's level.
+ *
+ * @param node The node, in memory, read or dirty.
+ * @return 0 for a leaf; more for a branch.
+ */
 level_of :: fn(node: ptr[mut Node]) -> u16 {
     return cast[u16](header_of(node).level)
 }
 
+/**
+ * Set how many items or entries a node holds.
+ *
+ * @param node The node, dirty or being made.
+ * @param count The count, at most the node's capacity.
+ */
 set_count :: fn(node: ptr[mut Node], count: usize) {
     header_of(node).count = cast[u16le](cast[u16](count))
 }
 
-/** A leaf's item at index, which its count bounds (checked when it's read). */
+/**
+ * Get a leaf's item.
+ *
+ * @param node The leaf, in memory; its count bounds its items.
+ * @param index The item's index, which the leaf's count bounds (checked when it's read).
+ * @return The item, in the node; the first one's place if index would be past the node's end.
+ */
 item_at :: fn(node: ptr[mut Node], index: usize) -> ptr[mut LeafItem] {
     at :: HEADER_SIZE + index * ITEM_SIZE
     if at + ITEM_SIZE <= NODE_SIZE && at < node.bytes.count {
@@ -214,6 +326,13 @@ item_at :: fn(node: ptr[mut Node], index: usize) -> ptr[mut LeafItem] {
     return cast[ptr[mut LeafItem]](&node.bytes[HEADER_SIZE])
 }
 
+/**
+ * Get a branch's entry.
+ *
+ * @param node The branch, in memory; its count bounds its entries.
+ * @param index The entry's index, which the branch's count bounds.
+ * @return The entry, in the node; the first one's place if index would be past the node's end.
+ */
 entry_at :: fn(node: ptr[mut Node], index: usize) -> ptr[mut BranchEntry] {
     at :: HEADER_SIZE + index * ENTRY_SIZE
     if at + ENTRY_SIZE <= NODE_SIZE && at < node.bytes.count {
@@ -222,15 +341,36 @@ entry_at :: fn(node: ptr[mut Node], index: usize) -> ptr[mut BranchEntry] {
     return cast[ptr[mut BranchEntry]](&node.bytes[HEADER_SIZE])
 }
 
+/**
+ * Get a leaf's item's key.
+ *
+ * @param node The leaf, in memory; its count bounds its items.
+ * @param index The item's index.
+ * @return The item's key, in memory form.
+ */
 item_key :: fn(node: ptr[mut Node], index: usize) -> Key {
     return memory_key_of(&item_at(node, index).key)
 }
 
+/**
+ * Get a branch's entry's key.
+ *
+ * @param node The branch, in memory; its count bounds its entries.
+ * @param index The entry's index.
+ * @return The key; the first entry's isn't used.
+ */
 entry_key :: fn(node: ptr[mut Node], index: usize) -> Key {
     return memory_key_of(&entry_at(node, index).key)
 }
 
-/** An item's value's bytes, in the node. */
+/**
+ * Get a leaf's item's value.
+ *
+ * @param node The leaf, in memory; its count bounds its items.
+ * @param index The item's index.
+ * @return The value's bytes, a view into the node, good until the node changes or is freed; empty if the item says
+ *     it's outside the node.
+ */
 value_of :: fn(node: ptr[mut Node], index: usize) -> mut u8[] {
     item :: item_at(node, index)
     start :: cast[usize](cast[u16](item.value_offset))
@@ -241,18 +381,34 @@ value_of :: fn(node: ptr[mut Node], index: usize) -> mut u8[] {
     return view_of(&node.bytes[start], count)
 }
 
+/**
+ * Get where a leaf's values start.
+ *
+ * @param node The leaf, in memory; a branch's field is unused.
+ * @return The byte offset in the node; NODE_SIZE when it has none.
+ */
 values_start :: fn(node: ptr[mut Node]) -> usize {
     return cast[usize](cast[u16](header_of(node).values_start))
 }
 
-/** A leaf's room between its items and its values. */
+/**
+ * Get a leaf's room between its items and its values, not counting holes removals left.
+ *
+ * @param node The leaf, in memory, read or dirty.
+ * @return The bytes free there, 0 or more.
+ */
 leaf_room :: fn(node: ptr[mut Node]) -> usize {
     items_end :: HEADER_SIZE + count_of(node) * ITEM_SIZE
     start :: values_start(node)
     return if start > items_end { start - items_end } else { 0 }
 }
 
-/** What a leaf's items and values take. */
+/**
+ * Get what a leaf's items and values take, without the holes removals left.
+ *
+ * @param node The leaf, in memory, read or dirty.
+ * @return The bytes, not counting the header.
+ */
 leaf_used :: fn(node: ptr[mut Node]) -> usize {
     used := count_of(node) * ITEM_SIZE
     for i in 0..<count_of(node) {
@@ -261,7 +417,15 @@ leaf_used :: fn(node: ptr[mut Node]) -> usize {
     return used
 }
 
-/** A node's bytes, starting empty: a header for tree at level, with nothing in it. */
+/**
+ * Start a node's bytes empty: zeros, and a header for a tree, with nothing in it.
+ *
+ * @param node The node; its copy and dirty are left as they were.
+ * @param tree The tree it's of, which its header names, and its owner.
+ * @param level Its level, 0 for a leaf.
+ * @param transaction The transaction it's written in.
+ * @param address The block it's to be written to.
+ */
 start_node :: fn(node: ptr[mut Node], tree: ptr[Tree], level: u16, transaction: u64, address: u64) {
     for i in 0..<node.bytes.count {
         node.bytes[i] = 0
@@ -276,6 +440,13 @@ start_node :: fn(node: ptr[mut Node], tree: ptr[Tree], level: u16, transaction: 
     header.address = cast[u64le](address)
 }
 
+/**
+ * Copy bytes into a buffer, as many as fit.
+ *
+ * @param into The bytes copied into, from at on.
+ * @param at Where in it they go.
+ * @param from The bytes; those that would fall past into's end are dropped.
+ */
 copy_bytes :: fn(into: mut u8[], at: usize, from: u8[]) {
     for byte, i in from {
         j :: at + i
@@ -285,7 +456,13 @@ copy_bytes :: fn(into: mut u8[], at: usize, from: u8[]) {
     }
 }
 
-/** The node's structure, read from the device: its count within what it can hold, and a leaf's values inside it. */
+/**
+ * Check a node's structure, as read from the device: its count within what it can hold, and a leaf's values inside
+ * it, of at most MAX_VALUE_BYTES, and its keys in order.
+ *
+ * @param node The node as read, before it's trusted.
+ * @return True if it holds; false if anything's out of place, so it's Corrupt.
+ */
 structure_holds :: fn(node: ptr[mut Node]) -> bool {
     count :: count_of(node)
     if level_of(node) > 0 {
@@ -314,8 +491,16 @@ structure_holds :: fn(node: ptr[mut Node]) -> bool {
 }
 
 /**
- * The node a pointer names: dirty, if this transaction has it; otherwise read, from its first copy or its second,
- * each checked by its seal, its header and its structure. One read is given back with done.
+ * Get the node a pointer names: dirty, if this transaction has it; otherwise read, from its first copy or its second,
+ * each checked by its seal, its header and its structure.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree it's in, which its header has to name, with its owner.
+ * @param pointer Its pointer.
+ * @return The node: a dirty one, the transaction's, or one read, the caller's; either way given back with done.
+ * @error OutOfMemory No memory to read it into.
+ * @error Corrupt Neither copy could be read and checks out: its seal, its header (magic, tree, owner, address,
+ *     transaction) and its structure.
  */
 load :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointer]) -> Result[ptr[mut Node], Error] {
     address :: cast[u64](pointer.address)
@@ -343,7 +528,17 @@ load :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointer]) -
     return .Error(.Corrupt)
 }
 
-/** The node at place, into node: as it is, or opened with its tree's keys, which checks its seal. */
+/**
+ * Read a node from a place: as it is, or opened with its tree's keys, which checks its seal.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree it's in.
+ * @param pointer Its pointer, its seal and birth.
+ * @param place The block to read it from: its address or its copy's.
+ * @param node Where its bytes go.
+ * @return True if it was read, and for an encrypted tree, opened; false if the device couldn't read it, its seal
+ *     doesn't hold, or there wasn't the memory to open it.
+ */
 read_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointer], place: u64, node: ptr[mut Node]) -> bool {
     match tree.keys {
         case None => return nodes.device.read(nodes.device.context, place, NODE_BLOCKS, node.bytes)
@@ -359,6 +554,14 @@ read_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointe
     }
 }
 
+/**
+ * Check a node read: its BLAKE3 seal (an encrypted one's held when it was opened), its header and its structure.
+ *
+ * @param node The node, as read.
+ * @param tree The tree it's in.
+ * @param pointer Its pointer.
+ * @return True if it checks out; false if anything doesn't, as for a damaged or misdirected write.
+ */
 node_checks_out :: fn(node: ptr[mut Node], tree: ptr[Tree], pointer: ptr[BlockPointer]) -> bool {
     // An encrypted node's seal held when it was opened
     if tree.keys is_none {
@@ -377,14 +580,25 @@ node_checks_out :: fn(node: ptr[mut Node], tree: ptr[Tree], pointer: ptr[BlockPo
     return structure_holds(node)
 }
 
-/** A node load gave, given back if it was only read. */
+/**
+ * Give back a node load gave: freed if it was only read, kept if it's dirty.
+ *
+ * @param node The node; one that was only read may not be used again.
+ */
 done :: fn(node: ptr[mut Node]) {
     if !node.dirty {
         runtime.free(node)
     }
 }
 
-/** Blocks for a node of tree, and a second place for a tree written twice. */
+/**
+ * Allocate blocks for a node of a tree, and a second place for a tree written twice.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree, whose owner they're charged to.
+ * @return Its pointer: its address, its copy's or 0, its birth this transaction and NODE_BLOCKS; no seal yet.
+ * @error NoSpace No free extent for it, or for its copy, the first given back then.
+ */
 place_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree]) -> Result[BlockPointer, Error] {
     address :: nodes.allocate(nodes.space, NODE_BLOCKS, tree.owner, false) or_return .Error(.NoSpace)
     copy : u64 = 0
@@ -399,7 +613,13 @@ place_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree]) -> Result[BlockPointer,
         blocks = cast[u32le](cast[u32](NODE_BLOCKS))})
 }
 
-/** A placed node's blocks given back, unused: what place_node gave, when what it was for couldn't be made. */
+/**
+ * Give back a placed node's blocks, unused: what place_node gave, when what it was for couldn't be made.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree it was for.
+ * @param pointer What place_node gave.
+ */
 unplace :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: BlockPointer) {
     nodes.release(nodes.space, cast[u64](pointer.address), NODE_BLOCKS, tree.owner, nodes.transaction)
     if cast[u64](pointer.copy) != 0 {
@@ -409,11 +629,22 @@ unplace :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: BlockPointer) {
 
 /** A node and where it is. */
 Placed :: struct {
+    /** The node, dirty, the transaction's. */
     node : ptr[mut Node],
+    /** Where it is, its seal set when it's written. */
     pointer : BlockPointer,
 }
 
-/** A new, empty, dirty node of tree at level. */
+/**
+ * Make a new, empty, dirty node of a tree at a level.
+ *
+ * @param nodes The transaction's nodes, which keep it.
+ * @param tree The tree it's for: its kind, owner and whether it's written twice.
+ * @param level Its level, 0 for a leaf.
+ * @return The node and its pointer.
+ * @error OutOfMemory No memory for it, or to keep it among the dirty nodes; nothing was allocated.
+ * @error NoSpace No free extent for it.
+ */
 new_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], level: u16) -> Result[Placed, Error] {
     // Its memory first, so a node placed is a node made
     node :: make(Node)?
@@ -437,8 +668,17 @@ new_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], level: u16) -> Result[Pla
 }
 
 /**
- * The node pointer names, made writable in this transaction: dirty already, or copied to a new place, the old one
- * given back as of the transaction it was born in, and pointer changed to the copy (its seal is set when it's written).
+ * Make the node a pointer names writable in this transaction: dirty already, or copied to a new place, the old one
+ * given back as of the transaction it was born in, and the pointer changed to the copy.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree it's in; the copy is its owner's, even a clone's copy of its origin's node.
+ * @param pointer Its pointer, in its parent or the tree's root, changed to the copy's (its seal is set when it's
+ *     written).
+ * @return The node, dirty, the transaction's.
+ * @error OutOfMemory No memory for it or its copy; nothing was changed.
+ * @error NoSpace No free extent for the copy; nothing was changed.
+ * @error Corrupt It couldn't be read, or didn't check out.
  */
 writable :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockPointer]) -> Result[ptr[mut Node], Error] {
     node :: load(nodes, tree, pointer)?
@@ -487,7 +727,13 @@ writable :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockPoi
     return .Ok(copy)
 }
 
-/** A dirty node taken out of the tree: forgotten, and its blocks given back. */
+/**
+ * Take a node out of the tree: forgotten if it's dirty, and its blocks given back as of when it was born.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree it was in.
+ * @param pointer Its pointer, which may not be loaded again.
+ */
 discard :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointer]) {
     address :: cast[u64](pointer.address)
     if cast[u64](pointer.birth) == nodes.transaction {
@@ -505,7 +751,14 @@ discard :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointer]
     }
 }
 
-/** Where key is in a leaf, or would go, and whether it's there. */
+/**
+ * Find where a key is in a leaf, or would go.
+ *
+ * @param node The leaf, in memory, its keys in order.
+ * @param key The key looked for.
+ * @return index The item's index if it's there; otherwise the index it would go at, 0 to the leaf's count.
+ * @return found Whether it's there.
+ */
 leaf_find :: fn(node: ptr[mut Node], key: Key) -> (index : usize, found : bool) {
     low : usize = 0
     high := count_of(node)
@@ -526,7 +779,13 @@ leaf_find :: fn(node: ptr[mut Node], key: Key) -> (index : usize, found : bool) 
     return low, false
 }
 
-/** The child of a branch key would be under: the last entry whose key is at most it, the first otherwise. */
+/**
+ * Find the child of a branch a key would be under.
+ *
+ * @param node The branch, with at least one entry.
+ * @param key The key looked for.
+ * @return The index of the last entry whose key is at most it, the first's key not counted; 0 if there's none.
+ */
 branch_find :: fn(node: ptr[mut Node], key: Key) -> usize {
     low : usize = 1
     high := count_of(node)
@@ -544,8 +803,12 @@ branch_find :: fn(node: ptr[mut Node], key: Key) -> usize {
 }
 
 /**
- * A leaf's values packed at its end again, without the holes removals left, in place: each moved up in turn, the
- * highest first, so none is written over before it's moved, and nothing needs memory of its own (decisions/0104).
+ * Pack a leaf's values at its end again, without the holes removals left, in place.
+ *
+ * Each is moved up in turn, the highest first, so none is written over before it's moved, and nothing needs memory of
+ * its own (decisions/0104).
+ *
+ * @param node The leaf; its items' offsets and values_start change, not their order.
  */
 leaf_compact :: fn(node: ptr[mut Node]) {
     count :: count_of(node)
@@ -592,7 +855,14 @@ leaf_compact :: fn(node: ptr[mut Node]) {
     header_of(node).values_start = cast[u16le](cast[u16](end))
 }
 
-/** A key and value put in a leaf at index, which has room for them once it's compacted. */
+/**
+ * Put a key and value in a leaf, compacting it first if it has to.
+ *
+ * @param node The leaf, which has to have room for them once it's compacted, and fewer than LEAF_CAPACITY items.
+ * @param index Where the item goes, keeping the keys in order: 0 to the leaf's count.
+ * @param key The key, which isn't in the leaf.
+ * @param value The value, at most MAX_VALUE_BYTES, copied.
+ */
 leaf_insert :: fn(node: ptr[mut Node], index: usize, key: Key, value: u8[]) {
     if leaf_room(node) < ITEM_SIZE + value.count {
         leaf_compact(node)
@@ -614,7 +884,12 @@ leaf_insert :: fn(node: ptr[mut Node], index: usize, key: Key, value: u8[]) {
     set_count(node, count + 1)
 }
 
-/** A leaf's item at index taken out, its value left as a hole until it's compacted. */
+/**
+ * Take a leaf's item out, its value left as a hole until it's compacted.
+ *
+ * @param node The leaf, with at least one item.
+ * @param index The item's index, below the leaf's count.
+ */
 leaf_remove :: fn(node: ptr[mut Node], index: usize) {
     count :: count_of(node)
     for i in index..<count - 1 {
@@ -626,7 +901,14 @@ leaf_remove :: fn(node: ptr[mut Node], index: usize) {
     }
 }
 
-/** A branch's entry put at index. */
+/**
+ * Put an entry in a branch.
+ *
+ * @param node The branch, with fewer than BRANCH_CAPACITY entries.
+ * @param index Where it goes, keeping the keys in order: 0 to the branch's count.
+ * @param key The least key the child holds; not used for the first entry.
+ * @param child Where the child is.
+ */
 branch_insert :: fn(node: ptr[mut Node], index: usize, key: Key, child: BlockPointer) {
     count :: count_of(node)
     with {
@@ -641,6 +923,12 @@ branch_insert :: fn(node: ptr[mut Node], index: usize, key: Key, child: BlockPoi
     set_count(node, count + 1)
 }
 
+/**
+ * Take an entry out of a branch, the child it names left alone.
+ *
+ * @param node The branch, with at least one entry.
+ * @param index The entry's index, below the branch's count.
+ */
 branch_remove :: fn(node: ptr[mut Node], index: usize) {
     count :: count_of(node)
     for i in index..<count - 1 {
@@ -653,9 +941,18 @@ branch_remove :: fn(node: ptr[mut Node], index: usize) {
  * A node's level where it's reached: a root's at most MAX_LEVEL, and a child's one below its parent's, so a tree read
  * from the disk can't lead back up into itself, however its seals were made.
  */
+/** The level given for a root, which has no parent. */
 NO_PARENT : u16 : 0xffff
+/** The highest level a root may be at, far more than a tree of a container's size needs. */
 MAX_LEVEL : u16 : 16
 
+/**
+ * Tell whether a node's level fits where it's reached.
+ *
+ * @param node The node as reached, read or dirty.
+ * @param above Its parent's level, or NO_PARENT for a root.
+ * @return True if a root's is at most MAX_LEVEL, or a child's is one below its parent's.
+ */
 level_fits :: fn(node: ptr[mut Node], above: u16) -> bool {
     level :: level_of(node)
     return if above == NO_PARENT { level <= MAX_LEVEL } else { level + 1 == above }
@@ -663,13 +960,25 @@ level_fits :: fn(node: ptr[mut Node], above: u16) -> bool {
 
 /** A node split in two: the right half's first key and where it is. */
 Split :: struct {
+    /** The right half's first key, its entry's key in the parent. */
     key : Key,
+    /** Where the right half is, a new dirty node. */
     pointer : BlockPointer,
 }
 
 /**
- * A leaf too full for key and value, split: its items and the new one, in order, the first half of their bytes left
+ * Split a leaf too full for a key and value: its items and the new one, in order, the first half of their bytes left
  * in it and the rest in a new leaf.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree the leaf is in, whose owner the new leaf is charged to.
+ * @param node The leaf, dirty; it keeps its address.
+ * @param index Where the new item goes among the leaf's.
+ * @param key The new item's key.
+ * @param value The new item's value.
+ * @return The new right leaf's first key and pointer, for the parent to take.
+ * @error OutOfMemory No memory for the copy or the new leaf; the leaf is unchanged.
+ * @error NoSpace No free extent for the new leaf; the leaf is unchanged.
  */
 split_leaf :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], node: ptr[mut Node], index: usize, key: Key, value: u8[]) -> Result[Split, Error] {
     // Its memory first, so nothing's changed without it
@@ -705,7 +1014,19 @@ split_leaf :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], node: ptr[mut Node], in
     return .Ok(Split.{key = item_key(right.node, 0), pointer = right.pointer})
 }
 
-/** A full branch split for an entry at index: half its entries, with the new one, moved to a new branch. */
+/**
+ * Split a full branch for a new entry: half its entries, with the new one where it goes, moved to a new branch.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree the branch is in, whose owner the new branch is charged to.
+ * @param node The branch, dirty and full.
+ * @param index Where the new entry goes among the branch's.
+ * @param key The new entry's key.
+ * @param child The new entry's child.
+ * @return The new right branch's first key and pointer, for the parent to take.
+ * @error OutOfMemory No memory for the new branch; the branch is unchanged.
+ * @error NoSpace No free extent for the new branch; the branch is unchanged.
+ */
 split_branch :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], node: ptr[mut Node], index: usize, key: Key, child: BlockPointer) -> Result[Split, Error] {
     right :: new_node(nodes, tree, level_of(node))?
     count :: count_of(node)
@@ -724,7 +1045,21 @@ split_branch :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], node: ptr[mut Node], 
     return .Ok(Split.{key = entry_key(right.node, 0), pointer = right.pointer})
 }
 
-/** key's value put in the tree, replacing what was there. */
+/**
+ * Put a key's value in a tree, replacing what was there.
+ *
+ * The nodes on the way are made writable, copied in this transaction; nothing is written to the device until
+ * tree_write. A split that fails for want of memory or space leaves the key's old value taken out.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree; its root changes when it's copied, made or split.
+ * @param key The record's key; a record already there is replaced.
+ * @param value The value, at most MAX_VALUE_BYTES, copied.
+ * @error TooLarge The value is longer than MAX_VALUE_BYTES; nothing changed.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node.
+ * @error Corrupt A node couldn't be read, didn't check out, or is at the wrong level.
+ */
 tree_put :: fn(nodes: ptr[mut Nodes], tree: ptr[mut Tree], key: Key, value: u8[]) -> Result[void, Error] {
     if cast[u64](value.count) > MAX_VALUE_BYTES {
         return .Error(.TooLarge)
@@ -748,6 +1083,20 @@ tree_put :: fn(nodes: ptr[mut Nodes], tree: ptr[mut Tree], key: Key, value: u8[]
     return .Ok
 }
 
+/**
+ * Put a key's value beneath a node, splitting what's too full on the way back up.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree the node is in.
+ * @param pointer The node's pointer, changed if it's copied.
+ * @param above Its parent's level, or NO_PARENT for the root.
+ * @param key The record's key.
+ * @param value The record's value, at most MAX_VALUE_BYTES, copied.
+ * @return The node's right half, if it was split, for its parent to take; null if it wasn't.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node.
+ * @error Corrupt A node couldn't be read, didn't check out, or is at the wrong level.
+ */
 put_into :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockPointer], above: u16, key: Key, value: u8[]) -> Result[Split?, Error] {
     node :: writable(nodes, tree, pointer)?
     if !level_fits(node, above) {
@@ -778,7 +1127,20 @@ put_into :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockPoi
     }
 }
 
-/** key taken out of the tree, and whether it was there. */
+/**
+ * Take a key out of a tree.
+ *
+ * Nodes left empty are dropped, a node left less than a quarter full is merged into its neighbour where both fit,
+ * and a branch root left with one child gives way to it.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree; its root changes when it's copied or replaced.
+ * @param key The record's key; one that isn't there changes nothing.
+ * @return True if it was there and is taken out; false if it wasn't, nothing changed.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node's copy.
+ * @error Corrupt A node couldn't be read, didn't check out, or is at the wrong level.
+ */
 tree_delete :: fn(nodes: ptr[mut Nodes], tree: ptr[mut Tree], key: Key) -> Result[bool, Error] {
     if cast[u64](tree.root.address) == 0 || !(tree_has(nodes, tree, key)?) {
         return .Ok(false)
@@ -802,6 +1164,18 @@ tree_delete :: fn(nodes: ptr[mut Nodes], tree: ptr[mut Tree], key: Key) -> Resul
     return .Ok(true)
 }
 
+/**
+ * Take a key out from beneath a node, dropping children left empty and merging those left less than a quarter full.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree the node is in.
+ * @param pointer The node's pointer, changed if it's copied.
+ * @param above Its parent's level, or NO_PARENT for the root.
+ * @param key The key; not being there is no error.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node's copy.
+ * @error Corrupt A node couldn't be read, didn't check out, or is at the wrong level.
+ */
 delete_from :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockPointer], above: u16, key: Key) -> Result[void, Error] {
     node :: writable(nodes, tree, pointer)?
     if !level_fits(node, above) {
@@ -829,11 +1203,27 @@ delete_from :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut Block
     return .Ok
 }
 
+/**
+ * Get what a node's contents take.
+ *
+ * @param node The node, in memory, read or dirty.
+ * @return The bytes its items and values (a leaf) or entries (a branch) take, not counting the header.
+ */
 node_used :: fn(node: ptr[mut Node]) -> usize {
     return if level_of(node) == 0 { leaf_used(node) } else { count_of(node) * ENTRY_SIZE }
 }
 
-/** A branch's children at left and left + 1 made one, where both fit in one node. */
+/**
+ * Merge two neighbouring children of a branch into the left one, where both fit in one node; otherwise leave them.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree the children are in.
+ * @param parent The branch, dirty.
+ * @param left The left child's index; the right is the one after it, and nothing's done if there's none.
+ * @error OutOfMemory No memory for a child's copy.
+ * @error NoSpace No free extent for a child's copy.
+ * @error Corrupt A child couldn't be read, didn't check out, or is at the wrong level.
+ */
 merge :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], parent: ptr[mut Node], left: usize) -> Result[void, Error] {
     right_index :: left + 1
     if right_index >= count_of(parent) {
@@ -869,15 +1259,31 @@ merge :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], parent: ptr[mut Node], left:
     return .Ok
 }
 
-/** Whether key is in the tree. */
+/**
+ * Tell whether a key is in a tree.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree, its root as this transaction has it.
+ * @param key The record's key.
+ * @return True if it is.
+ * @error OutOfMemory No memory to read a node.
+ * @error Corrupt A node couldn't be read, didn't check out, or is at the wrong level.
+ */
 tree_has :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], key: Key) -> Result[bool, Error] {
     scratch : u8[1]
     return .Ok(tree_get(nodes, tree, key, scratch)? is_some)
 }
 
 /**
- * key's value copied into into, as much as fits, and its length, or null if it isn't there. Reading walks down from
- * the root a node at a time.
+ * Get a key's value from a tree. Reading walks down from the root a node at a time, and changes nothing.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree, its root as this transaction has it.
+ * @param key The record's key.
+ * @param into Where the value is copied, as much as fits; the rest of it is left as it was.
+ * @return The value's whole length in bytes, which may be more than into holds; null if the key isn't there.
+ * @error OutOfMemory No memory to read a node.
+ * @error Corrupt A node couldn't be read, didn't check out, or is at the wrong level.
  */
 tree_get :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], key: Key, into: mut u8[]) -> Result[usize?, Error] {
     if cast[u64](tree.root.address) == 0 {
@@ -911,11 +1317,23 @@ tree_get :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], key: Key, into: mut u8[])
 
 /** A record found by a search: its key and its value's length, the value copied as far as it fits. */
 Found :: struct {
+    /** The record's key. */
     key : Key,
+    /** The value's whole length in bytes, which may be more than was copied. */
     bytes : usize,
 }
 
-/** The first record whose key is at least key, or null. */
+/**
+ * Find the first record in a tree whose key is at least a key.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree, its root as this transaction has it.
+ * @param key The least key the record may have.
+ * @param into Where its value is copied, as much as fits.
+ * @return The record found; null if there's none at or after the key.
+ * @error OutOfMemory No memory to read a node.
+ * @error Corrupt A node couldn't be read, didn't check out, or is at the wrong level.
+ */
 tree_next :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], key: Key, into: mut u8[]) -> Result[Found?, Error] {
     if cast[u64](tree.root.address) == 0 {
         return .Ok(null)
@@ -923,6 +1341,19 @@ tree_next :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], key: Key, into: mut u8[]
     return next_in(nodes, tree, &tree.root, NO_PARENT, key, into)
 }
 
+/**
+ * Find the first record beneath a node whose key is at least a key.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree the node is in.
+ * @param pointer The node's pointer.
+ * @param above Its parent's level, or NO_PARENT for the root.
+ * @param key The least key the record may have.
+ * @param into Where its value is copied, as much as fits.
+ * @return The record found; null if there's none beneath the node.
+ * @error OutOfMemory No memory to read a node.
+ * @error Corrupt A node couldn't be read, didn't check out, or is at the wrong level.
+ */
 next_in :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointer], above: u16, key: Key, into: mut u8[]) -> Result[Found?, Error] {
     node :: load(nodes, tree, pointer)?
     defer done(node)
@@ -949,7 +1380,17 @@ next_in :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointer]
     return .Ok(null)
 }
 
-/** The last record whose key is at most key, or null. */
+/**
+ * Find the last record in a tree whose key is at most a key.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree, its root as this transaction has it.
+ * @param key The greatest key the record may have.
+ * @param into Where its value is copied, as much as fits.
+ * @return The record found; null if there's none at or before the key.
+ * @error OutOfMemory No memory to read a node.
+ * @error Corrupt A node couldn't be read, didn't check out, or is at the wrong level.
+ */
 tree_previous :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], key: Key, into: mut u8[]) -> Result[Found?, Error] {
     if cast[u64](tree.root.address) == 0 {
         return .Ok(null)
@@ -957,6 +1398,19 @@ tree_previous :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], key: Key, into: mut 
     return previous_in(nodes, tree, &tree.root, NO_PARENT, key, into)
 }
 
+/**
+ * Find the last record beneath a node whose key is at most a key.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree the node is in.
+ * @param pointer The node's pointer.
+ * @param above Its parent's level, or NO_PARENT for the root.
+ * @param key The greatest key the record may have.
+ * @param into Where its value is copied, as much as fits.
+ * @return The record found; null if there's none beneath the node.
+ * @error OutOfMemory No memory to read a node.
+ * @error Corrupt A node couldn't be read, didn't check out, or is at the wrong level.
+ */
 previous_in :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointer], above: u16, key: Key, into: mut u8[]) -> Result[Found?, Error] {
     node :: load(nodes, tree, pointer)?
     defer done(node)
@@ -993,8 +1447,18 @@ previous_in :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPoin
 }
 
 /**
- * A tree's dirty nodes written, children first, each parent's pointer taking its child's seal, and the root's
- * pointer last. Writing allocates nothing, so it comes after everything else in a commit has changed what it will.
+ * Write a tree's dirty nodes, children first, each parent's pointer taking its child's seal, and the root's pointer
+ * last.
+ *
+ * Writing allocates nothing, so it comes after everything else in a commit has changed what it will. Nothing is
+ * flushed: what's written isn't durable until the commit's flush. Nodes written are freed, so a failure partway
+ * leaves the rest dirty.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree; its root's seal is set.
+ * @error DeviceError A node couldn't be written.
+ * @error OutOfMemory No memory to seal an encrypted node in.
+ * @error Corrupt An encrypted node couldn't be sealed.
  */
 tree_write :: fn(nodes: ptr[mut Nodes], tree: ptr[mut Tree]) -> Result[void, Error] {
     if cast[u64](tree.root.address) == 0 || cast[u64](tree.root.birth) != nodes.transaction {
@@ -1003,6 +1467,17 @@ tree_write :: fn(nodes: ptr[mut Nodes], tree: ptr[mut Tree]) -> Result[void, Err
     return write_node(nodes, tree, &tree.root)
 }
 
+/**
+ * Write a dirty node and its dirty children, children first, and free it.
+ *
+ * @param nodes The transaction's nodes.
+ * @param tree The tree the node is in, whose keys, if any, seal it.
+ * @param pointer The node's pointer, which takes its seal (and on an encrypted tree, its generation); a node that
+ *     isn't dirty is left alone.
+ * @error DeviceError A node couldn't be written.
+ * @error OutOfMemory No memory to seal an encrypted node in.
+ * @error Corrupt An encrypted node couldn't be sealed.
+ */
 write_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockPointer]) -> Result[void, Error] {
     address :: cast[u64](pointer.address)
     node :: maps.map_get(&nodes.dirty, address) or_return .Ok
@@ -1034,7 +1509,15 @@ write_node :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockP
     return .Ok
 }
 
-/** A node's bytes written at address, and at copy, its second place, unless that's 0. */
+/**
+ * Write a node's bytes to its place, and to its second place unless that's 0.
+ *
+ * @param nodes The transaction's nodes.
+ * @param address Its first block.
+ * @param copy Its second copy's first block, or 0.
+ * @param bytes Its bytes as they go on the device, NODE_SIZE of them.
+ * @error DeviceError A copy couldn't be written.
+ */
 write_node_bytes :: fn(nodes: ptr[mut Nodes], address: u64, copy: u64, bytes: u8[]) -> Result[void, Error] {
     if !nodes.device.write(nodes.device.context, address, NODE_BLOCKS, bytes) {
         return .Error(.DeviceError)

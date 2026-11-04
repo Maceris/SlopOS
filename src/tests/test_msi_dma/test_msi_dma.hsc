@@ -24,43 +24,96 @@ import log_line from "../../log_line"
 import pci from "../../pci"
 import test_kit from "../../test_kit"
 
+/** The test's name, which starts each line it logs. */
 NAME :: "test_msi_dma"
+/** A page, in bytes. */
 PAGE : u64 : 4096
-// Bus 0's configuration space through ECAM: 32 devices of 8 functions, 4 KiB each
+/** Bus 0's configuration space through ECAM, in bytes: 32 devices of 8 functions, 4 KiB each. */
 BUS_BYTES : u64 : 1 << 20
+/** edu's vendor and device ID, as its configuration space's first word reads. */
 EDU_ID : u32 : 0x11e81234
+/** The size of edu's registers, its BAR 0, in bytes: 1 MiB. */
 EDU_REGISTERS : u64 : 1 << 20
-// edu's registers: its ID, the interrupt it raises and acknowledges, and its DMA engine
+/** The offset of edu's identification register, whose low byte is 0xed. */
 EDU_IDENTIFICATION : u64 : 0x00
+/** The offset of edu's liveness register, which reads back the inverse of what's written. */
 EDU_LIVENESS : u64 : 0x04
+/** The offset of the register that raises edu's interrupt, with the status written. */
 EDU_INTERRUPT_RAISE : u64 : 0x60
+/** The offset of the register that acknowledges edu's interrupt, clearing the status written. */
 EDU_INTERRUPT_ACK : u64 : 0x64
+/** The offset of edu's DMA source address. */
 EDU_DMA_SOURCE : u64 : 0x80
+/** The offset of edu's DMA destination address. */
 EDU_DMA_DESTINATION : u64 : 0x88
+/** The offset of edu's DMA transfer count, in bytes. */
 EDU_DMA_COUNT : u64 : 0x90
+/** The offset of edu's DMA command register, DMA_* bits. */
 EDU_DMA_COMMAND : u64 : 0x98
-// Its own buffer, as its DMA engine addresses it
+/** edu's own buffer, as its DMA engine addresses it. */
 EDU_BUFFER : u64 : 0x40000
+/** The DMA command's bit that starts a transfer; edu clears it once the transfer's done. */
 DMA_START : u64 : 1
+/** The DMA command's bit for a transfer from edu's buffer to RAM, rather than from RAM. */
 DMA_TO_RAM : u64 : 2
+/** The DMA command's bit that raises edu's interrupt when the transfer's done. */
 DMA_INTERRUPT : u64 : 4
-/** The interrupt status a finished DMA raises */
+/** The interrupt status a finished DMA raises. */
 DMA_DONE_STATUS : u32 : 0x100
-// Configuration space: the command register's memory space and bus master bits, the capability list, MSI's ID
+/** The offset of the configuration space's command register. */
 CONFIG_COMMAND : u64 : 0x04
+/** The command register's memory space bit, which lets the function's BARs answer. */
 COMMAND_MEMORY : u16 : 1 << 1
+/** The command register's bus master bit, which lets the function do DMA and raise MSIs. */
 COMMAND_BUS_MASTER : u16 : 1 << 2
+/** The offset of the configuration space's status register. */
 CONFIG_STATUS : u64 : 0x06
+/** The status register's bit saying the function has a capability list. */
 STATUS_CAPABILITIES : u16 : 1 << 4
+/** The offset of the configuration space's BAR 0. */
 CONFIG_BAR0 : u64 : 0x10
+/** The offset of the configuration space's capabilities pointer. */
 CONFIG_CAPABILITIES : u64 : 0x34
+/** The MSI capability's ID. */
 CAPABILITY_MSI : u8 : 0x05
+/** The MSI capability's control bit that enables it. */
 MSI_ENABLE : u16 : 1
+/** The MSI capability's control bit saying its address is 64 bits. */
 MSI_64_BIT : u16 : 1 << 7
+/** The key the MSI's binding queues its packets under. */
 IRQ_KEY : u64 : 3
-/** DMA below 4 GiB: where both machines' RAM is */
+/** The limit DMA memory is made below: 4 GiB, below which both machines' RAM is. */
 DMA_LIMIT : u64 : 1 << 32
 
+/**
+ * Check a driver's view of a PCIe function: the firmware tables' copy, its configuration space, a Device, MSIs and
+ * DMA through a domain, with QEMU's edu device.
+ *
+ * @param log The debug log, writable, where the test says what it found and which check failed.
+ * @param platform The platform capability, which makes devices, device memory and DMA domains; without it the test
+ *     ends with 100.
+ * @param test_device Not used.
+ * @param firmware The firmware tables' read-only copy, which says where ECAM is; without it the test ends with 100.
+ * @param manager Not used.
+ * @param program Not used.
+ * @param peer Not used.
+ * @param cpu_budget Not used.
+ * @return 0 if every check passed. Otherwise the first that failed, by its result's index plus one: 1 the tables'
+ *     copy mapped writable not refused with MissingRight, 2 its header's magic, or 3 its tables wrong; 4 edu's ID,
+ *     or 5 its liveness register, wrong; 6 making its Device, 7 a second at its address not refused with
+ *     DeviceExists, or 8 one without the platform capability not refused with WrongKind; 9 making its MSI, 10 its
+ *     message having no address, 11 edu having no MSI capability, 12 binding the IRQ, or 13 the interrupt not
+ *     arriving; 14 fewer than 31 more MSIs, or 15 one more not refused with TooManyVectors; 16 attaching the device
+ *     to the domain; 17 DMA memory whose limit is below its size not refused with InvalidSize, 18 making DMA memory,
+ *     19 its device address out of place, or 20 ordinary memory having one; 21 edu's DMA into its buffer not
+ *     finishing, 22 its MSI on the way back not arriving, 23 its status not saying DMA, or 24 the page not copied;
+ *     25 closing the device, 26 its IRQ not gone with it, 27 closing the domain, or 28 its memory still having a
+ *     device address; 29 configuration space not on a page not refused with BadAddress; 30 bus mastering still on
+ *     once the device is closed; 33 moving the MSI to CPU 1, 34 it not arriving there, or 35 CPU 64 not refused with
+ *     InvalidArgument. 30 too if the budget didn't come back to nothing. 102 to 109 if setting up failed: 102 the
+ *     memory budget, 103 mapping the tables, 104 finding or mapping ECAM, 105 edu not on bus 0 or without an address
+ *     for its registers, 106 mapping its registers, 107 the port, 108 the domain, 109 mapping the DMA memory.
+ */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     block :: slop_os.startup_block()
@@ -243,7 +296,11 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
 }
 
 /**
- * Whether the firmware tables' copy has what this machine's firmware gives: ACPI's RSDP, FADT, DSDT and MCFG, or a device tree.
+ * Tell whether the firmware tables' copy has what this machine's firmware gives.
+ *
+ * @param tables Where the copy is mapped, starting with its slop_os.FirmwareTables header.
+ * @return True if, on x86-64, it's ACPI's and has the RSDP, FADT, DSDT and MCFG, or, on AArch64, it's a device
+ *     tree's and has the DTB, and nothing else counted; false otherwise.
  */
 tables_right :: fn(tables: u64) -> bool {
     header :: cast[ptr[slop_os.FirmwareTables]](tables)
@@ -262,7 +319,13 @@ tables_right :: fn(tables: u64) -> bool {
     }
 }
 
-/** The message into the function's MSI capability, one vector, enabled: whether it has one. */
+/**
+ * Program an MSI's message into a function's MSI capability, one vector, and enable it.
+ *
+ * @param config Where the function's configuration space is mapped.
+ * @param message The message, as irq_message gives it; a 32-bit capability takes only its address's low half.
+ * @return True if the function has an MSI capability, now programmed; false if it hasn't, and nothing's written.
+ */
 program_msi :: fn(config: u64, message: slop_os.MsiMessage) -> bool {
     capability :: find_msi(config) or_return false
     control :: cast[ptr[mut u16]](config + capability + 2)
@@ -280,13 +343,24 @@ program_msi :: fn(config: u64, message: slop_os.MsiMessage) -> bool {
     return true
 }
 
+/**
+ * Disable a function's MSI, if it has one, so it raises nothing more.
+ *
+ * @param config Where the function's configuration space is mapped.
+ */
 stop_msi :: fn(config: u64) {
     capability :: find_msi(config) or_return void
     control :: cast[ptr[mut u16]](config + capability + 2)
     intrinsics.volatile_store_u16(control, intrinsics.volatile_load_u16(control) & ~MSI_ENABLE)
 }
 
-/** Where the function's MSI capability is in its configuration space, if it has one. */
+/**
+ * Find a function's MSI capability in its configuration space.
+ *
+ * @param config Where the function's configuration space is mapped.
+ * @return Its offset in the configuration space, or null if the function has no capability list, the list has no
+ *     MSI, or it's longer than 48, as a looping one would be.
+ */
 find_msi :: fn(config: u64) -> u64? {
     if intrinsics.volatile_load_u16(cast[ptr[u16]](config + CONFIG_STATUS)) & STATUS_CAPABILITIES == 0 {
         return null
@@ -304,14 +378,25 @@ find_msi :: fn(config: u64) -> u64? {
     return null
 }
 
-/** Whether an Irq packet for the key arrives within a second. */
+/**
+ * Wait up to a second for the MSI's packet.
+ *
+ * @param port The port the MSI is bound to, under IRQ_KEY.
+ * @return True if the first packet to arrive is an Irq packet for IRQ_KEY counting at least one interrupt; false if
+ *     none arrived within a second, or another did.
+ */
 wait_for_interrupt :: fn(port: slop_os.Port) -> bool {
     packets : slop_os.Packet[1]
     waited :: slop_os.port_wait(port, packets, test_kit.clock_now() + 1_000_000_000) or_else 0
     return waited == 1 && packets[0].key == IRQ_KEY && packets[0].kind == .Irq && packets[0].data[0] >= 1
 }
 
-/** Whether edu's DMA is done within a second. */
+/**
+ * Wait up to a second, spinning, for edu's DMA to finish.
+ *
+ * @param edu Where edu's registers are mapped.
+ * @return True if DMA_START is clear, so the transfer's done; false if it's still set after a second.
+ */
 wait_for_dma :: fn(edu: u64) -> bool {
     started :: test_kit.clock_now()
     loop {
@@ -321,14 +406,35 @@ wait_for_dma :: fn(edu: u64) -> bool {
     return intrinsics.volatile_load_u64(cast[ptr[u64]](edu + EDU_DMA_COMMAND)) & DMA_START == 0
 }
 
+/**
+ * Read one of edu's 32-bit registers.
+ *
+ * @param edu Where edu's registers are mapped.
+ * @param offset The register's offset, an EDU_* constant.
+ * @return The register's value.
+ */
 read_edu :: fn(edu: u64, offset: u64) -> u32 {
     return intrinsics.volatile_load_u32(cast[ptr[u32]](edu + offset))
 }
 
+/**
+ * Write one of edu's 32-bit registers.
+ *
+ * @param edu Where edu's registers are mapped.
+ * @param offset The register's offset, an EDU_* constant.
+ * @param value What's written.
+ */
 write_edu :: fn(edu: u64, offset: u64, value: u32) {
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](edu + offset), value)
 }
 
+/**
+ * Write one of edu's 64-bit registers, its DMA engine's.
+ *
+ * @param edu Where edu's registers are mapped.
+ * @param offset The register's offset, an EDU_DMA_* constant.
+ * @param value What's written.
+ */
 write_edu_u64 :: fn(edu: u64, offset: u64, value: u64) {
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](edu + offset), value)
 }

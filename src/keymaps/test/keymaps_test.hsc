@@ -8,6 +8,14 @@ package keymaps_test
 
 import keymaps from ".."
 
+/**
+ * Check the keymaps.
+ *
+ * @return 0 if every check passed; otherwise the first that failed: 1 if there's no US layout; 2 if its letters, 3
+ *     its digits, 4 its space and punctuation, 5 Enter, Tab, Escape, Backspace or a key outside the table, or 6
+ *     digit_of, type wrongly; 7 if find finds a layout that doesn't exist; 8 if there's no UK layout; 9 if its own
+ *     keys type wrongly; 10 if next doesn't go round, or the ISO backslash key types wrongly.
+ */
 main :: fn() -> int {
     us :: keymaps.find("us") or_return 1
     if keymaps.typed(us, 0x04, false) != "a" || keymaps.typed(us, 0x1d, true) != "Z" {

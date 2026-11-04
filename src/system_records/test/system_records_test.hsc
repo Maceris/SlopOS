@@ -8,9 +8,18 @@ package system_records_test
 import runtime from "base"
 import system_records from ".."
 
+/** The tag of the protocol the test's server serves and its client takes a channel to; any value but 0 would do. */
 SERVED_TAG : u64 : 0x1234
+/** The tag the test's config store listens for and its client's Config takes. */
 CONFIG_TAG : u64 : 0x5678
 
+/**
+ * Run the system records' tests: check and apply on records of three services, each change that should be refused
+ * refused, and the protocol tag's hash.
+ *
+ * @return 0 if every check passed; otherwise the number of the first that failed, 1 to 20, or 99 if there wasn't the
+ *     memory for the records.
+ */
 main :: fn() -> int {
     made, error :: runtime.new_aligned(system_records.SystemRecords, align_of(system_records.SystemRecords))
     if error != null {
@@ -128,7 +137,10 @@ main :: fn() -> int {
 }
 
 /**
- * Three services: server, with a listener for SERVED_TAG; client, with a channel to it and an optional Config; config.
+ * Make the test's records, which check takes: three services, server, with a listener for SERVED_TAG; client, with a
+ * channel to it and an optional Config; config, with a listener for CONFIG_TAG.
+ *
+ * @return The records, with a default CPU share and no installations.
  */
 records :: fn() -> system_records.SystemRecords {
     made := system_records.SystemRecords.{magic = system_records.MAGIC, service_count = 3, parameter_count = 4}
@@ -143,6 +155,16 @@ records :: fn() -> system_records.SystemRecords {
     return made
 }
 
+/**
+ * Fill in a service's record: a well-formed one the supervisor starts through the process manager, with a 1 MiB
+ * budget, from program.elf.
+ *
+ * @param records The records being made.
+ * @param index Which service, below MAX_SERVICES; one past them is ignored.
+ * @param name The service's name.
+ * @param first Its first parameter's index in the records' parameters.
+ * @param count How many parameters it has.
+ */
 service :: fn(records: ptr[mut system_records.SystemRecords], index: usize, name: string, first: u32, count: u32) {
     if index >= records.services.count {
         return void
@@ -157,6 +179,16 @@ service :: fn(records: ptr[mut system_records.SystemRecords], index: usize, name
     made.parameter_count = count
 }
 
+/**
+ * Fill in a parameter's record.
+ *
+ * @param records The records being made.
+ * @param index Which parameter, below MAX_PARAMETERS; one past them is ignored.
+ * @param name The parameter's name.
+ * @param kind What it is, a KIND_ value.
+ * @param tag Its protocol's tag.
+ * @param optional 1 if it's optional, 0 if it's required.
+ */
 parameter :: fn(records: ptr[mut system_records.SystemRecords], index: usize, name: string, kind: u8, tag: u64, optional: u8) {
     if index >= records.parameters.count {
         return void

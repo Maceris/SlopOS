@@ -17,16 +17,42 @@ import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
-// How far its thread counts before it's destroyed.
+/** How far its thread counts before it's destroyed. */
 COUNT_BEFORE_CLOSE : u64 : 100000
+/** The test's name, which starts each line it logs. */
 NAME :: "test_syscalls"
 
+/**
+ * Count, for good, until the thread is destroyed.
+ *
+ * @param counter The count, which only this thread writes; it wraps after 2^64 counts.
+ */
 count_forever #calling_convention(.c) #no_context :: fn(counter: ptr[mut u64]) #never_returns {
     loop {
         intrinsics.volatile_store_u64(counter, intrinsics.volatile_load_u64(counter) + 1)
     }
 }
 
+/**
+ * Check handles and the objects they reach: looking them up, copying, refusing, closing, and going stale.
+ *
+ * Every test's entry has this type (system_config checks it), so the root task can launch any of them alike.
+ *
+ * @param log The debug log, writable, where the test says what it found and which check failed.
+ * @param platform Not used.
+ * @param test_device Not used.
+ * @param firmware Not used.
+ * @param manager Not used.
+ * @param program Not used.
+ * @param peer Not used.
+ * @param cpu_budget Not used.
+ * @return 0 if every check passed. Otherwise the first that failed, by its result's index plus one: 1 to 3 its
+ *     address space's handle not an AddressSpace's with every right; 4 copying it with fewer rights, or 5 the copy
+ *     not having just those; 6 a copy asking for more not refused with MissingRight; 7 closing the copy, or 8 closing
+ *     it again not refused with InvalidHandle; 9 starting the thread, 10 copying its handle, 11 making a process, or
+ *     12 closing it; 13 closing the thread, 14 the copy still reaching it, or 15 it counting on; 16 the budget not
+ *     coming back to nothing. 100 if the count's memory, or 101 the budget, couldn't be made.
+ */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     block :: slop_os.startup_block()

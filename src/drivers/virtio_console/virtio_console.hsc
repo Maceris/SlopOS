@@ -16,36 +16,77 @@ import serial from "../../protocols/serial"
 import service_kit from "../../libraries/service_kit"
 import virtio from "../../virtio"
 
+/** The bytes of a page: 4096. */
 PAGE : u64 : 4096
+/** The index of port 0's receive queue, receiveq (virtio 1.2 §5.3.2). */
 RECEIVE_QUEUE : u16 : 0
+/** The index of port 0's transmit queue, transmitq. */
 TRANSMIT_QUEUE : u16 : 1
+/** How many receive buffers the device always has offered: 4. */
 RECEIVE_BUFFERS :: 4
+/** The bytes of each buffer, receive or transmit: 256. */
 BUFFER_BYTES : u64 : 256
+/** The most bytes that have arrived the driver keeps for Reads, 1024; what arrives past them is dropped. */
 INPUT_BYTES :: 1024
-/** Clients are bound to the port under their indexes, the IRQ above them */
+/** The port key the device's interrupt is bound with; clients are bound under their indexes, below it. */
 IRQ_KEY : u64 : 1000
-/** The longest the device may take to send a buffer */
+/** The longest the device may take to send a buffer, in nanoseconds, 1 s, before a Write stops there. */
 SEND_NANOSECONDS : u64 : 1_000_000_000
 
+/** The driver's state, on the heap, main's for its life. */
 Driver :: struct {
+    /** Where its lines go, or NO_HANDLE when it wasn't given a log. */
     log : slop_os.DebugLog,
+    /** The device's registers. */
     transport : virtio.Transport,
+    /** The receive queue, which RECEIVE_BUFFERS buffers are always offered on. */
     receive : virtio.Queue,
+    /** The transmit queue, which one buffer at a time is offered on. */
     transmit : virtio.Queue,
-    // The buffers' page, through the driver's mapping and to the device: RECEIVE_BUFFERS to receive, then one to send
+    /**
+     * Where the buffers' page is, through the driver's mapping: RECEIVE_BUFFERS buffers to receive, then one to send,
+     * BUFFER_BYTES each.
+     */
     buffers : u64,
+    /** Where the same page is to the device, its device address. */
     buffers_device : u64,
-    // Which receive buffer each descriptor holds
+    /** Which receive buffer each receive descriptor holds, by descriptor index. */
     buffer_of : u8[virtio.MAX_QUEUE_SIZE],
+    /** The one port its interrupt and its clients are bound to. */
     port : slop_os.Port,
-    // What's arrived and no Read has taken yet
+    /** What's arrived and no Read has taken yet, oldest first, in the first input_count bytes. */
     input : u8[INPUT_BYTES],
+    /** How many of input's bytes are waiting, 0 to INPUT_BYTES. */
     input_count : usize,
-    // Each client's held Read: the most it takes, or 0 for none
+    /** Each client's held Read, by its index: the most bytes it takes, or 0 for none held. */
     held : u32[service_kit.MAX_CLIENTS],
+    /** Its clients, the listener among them. */
     clients : service_kit.Clients,
 }
 
+/**
+ * Drive a virtio console device's first port as a serial line, for the clients that connect to it.
+ *
+ * It sets the device up, keeps RECEIVE_BUFFERS receive buffers offered, and serves the serial protocol on its
+ * listener and each connection made through it, until the system stops. It's started by the supervisor, for a device
+ * the platform service gave it, with what its driver holds of it.
+ *
+ * @param log The debug log its lines go to; without one, it writes nothing there.
+ * @param device The device, for its MSI.
+ * @param config The device's 4 KiB of configuration space, mapped to find its capabilities and turn bus mastering on.
+ * @param bar0 BAR 0's memory, if the device has it; each BAR given is mapped, for the virtio structures in it.
+ * @param bar1 BAR 1's memory, if the device has it.
+ * @param bar2 BAR 2's memory, if the device has it.
+ * @param bar3 BAR 3's memory, if the device has it.
+ * @param bar4 BAR 4's memory, if the device has it.
+ * @param bar5 BAR 5's memory, if the device has it.
+ * @param domain The DMA domain the device is attached to, which its queues and buffers are made in.
+ * @param clients The listener its clients' Connects arrive on, served as a client itself.
+ * @return It doesn't return while it serves; 99 if its state couldn't be had (decisions/0104), 2 if config couldn't
+ *     be mapped, 3 if the device isn't a virtio one it can drive, 4 if it refused its features, 5 if no port could be
+ *     made, 6 if its MSI couldn't be set up, 7 if its DMA memory couldn't be made or mapped, 8 if its queues couldn't
+ *     be set up, 9 if the listener couldn't be bound.
+ */
 main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memory, bar0: slop_os.Memory?, bar1: slop_os.Memory?,
     bar2: slop_os.Memory?, bar3: slop_os.Memory?, bar4: slop_os.Memory?, bar5: slop_os.Memory?, domain: slop_os.DmaDomain,
     clients: os.Listener[serial.Serial]) -> int {
@@ -107,7 +148,18 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     }
 }
 
-/** Every request a client has sent, until there are none left, or it's gone. */
+/**
+ * Answer every request a client has sent, until there are none left, or it's gone.
+ *
+ * A Write is sent at once, waited for, and answered; a Read is held, to be answered once there's input; Features is
+ * answered Line(0); a Connect adds a client, closing its end when there's no room. An unknown request is answered
+ * Unsupported, and anything else is skipped.
+ *
+ * @param driver The driver, whose clients and held Reads change.
+ * @param index Which client, by its index; one past them, or a freed place, is nothing to serve. A client whose end
+ *     failed is dropped, and its held Read with it.
+ * @param into Where each request is received, reused for each.
+ */
 serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
     if index >= driver.clients.ends.count {
         return void
@@ -154,6 +206,13 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
     }
 }
 
+/**
+ * Send a response to a client; one that can't be sent is dropped.
+ *
+ * @param driver The driver, whose port is waited on while end's ring is full.
+ * @param end The client's end.
+ * @param response The response, which has no variable-size data.
+ */
 answer :: fn(driver: ptr[mut Driver], end: slop_os.Channel, response: serial.Response) {
     out := os.Outgoing.{}
     made :: os.begin[serial.Response](&out)
@@ -161,7 +220,14 @@ answer :: fn(driver: ptr[mut Driver], end: slop_os.Channel, response: serial.Res
     _ = serial.send_response(end, driver.port, &out)
 }
 
-/** bytes, through the transmit queue a buffer at a time, each waited for: how many went. */
+/**
+ * Send bytes through the transmit queue, a buffer of BUFFER_BYTES at a time, each waited for.
+ *
+ * @param driver The driver, its transmit queue and buffer used, waiting on its port.
+ * @param bytes The bytes, copied into the transmit buffer; empty sends one empty buffer.
+ * @return How many bytes went, from the first: all of them, or fewer when the device didn't take a buffer within
+ *     SEND_NANOSECONDS, which is logged.
+ */
 send :: fn(driver: ptr[mut Driver], bytes: u8[]) -> u32 {
     buffer :: driver.buffers + cast[u64](RECEIVE_BUFFERS) * BUFFER_BYTES
     sent : usize = 0
@@ -185,7 +251,14 @@ send :: fn(driver: ptr[mut Driver], bytes: u8[]) -> u32 {
     return cast[u32](sent)
 }
 
-/** Whether the device took the buffer it was given to send, waiting for its MSI. */
+/**
+ * Wait for the device to take the buffer it was given to send, at most SEND_NANOSECONDS.
+ *
+ * Any packet on the driver's port wakes it to look again, a client's included.
+ *
+ * @param driver The driver, a buffer offered on its transmit queue.
+ * @return True once the device has given back a transmit buffer; false if it didn't in time.
+ */
 wait_sent :: fn(driver: ptr[mut Driver]) -> bool {
     deadline :: (slop_os.clock_monotonic() or_else 0) + SEND_NANOSECONDS
     loop {
@@ -199,7 +272,12 @@ wait_sent :: fn(driver: ptr[mut Driver]) -> bool {
     }
 }
 
-/** A receive buffer offered to the device to write into. */
+/**
+ * Offer a receive buffer to the device to write into, noting which buffer its descriptor holds.
+ *
+ * @param driver The driver, its receive queue offered the buffer.
+ * @param buffer Which receive buffer, 0 to RECEIVE_BUFFERS - 1.
+ */
 offer_receive :: fn(driver: ptr[mut Driver], buffer: u8) {
     id :: virtio.offer(&driver.receive, driver.buffers_device + cast[u64](buffer) * BUFFER_BYTES, cast[u32](BUFFER_BYTES), true)
     if cast[usize](id) < driver.buffer_of.count {
@@ -207,7 +285,13 @@ offer_receive :: fn(driver: ptr[mut Driver], buffer: u8) {
     }
 }
 
-/** What the device has written into receive buffers, added to the input, and each buffer offered again. */
+/**
+ * Take what the device has written into receive buffers into the input, offering each buffer again.
+ *
+ * Bytes past INPUT_BYTES waiting are dropped.
+ *
+ * @param driver The driver, whose input grows.
+ */
 take_input :: fn(driver: ptr[mut Driver]) {
     loop {
         used :: virtio.take_used(&driver.receive) or_break
@@ -224,7 +308,13 @@ take_input :: fn(driver: ptr[mut Driver]) {
     }
 }
 
-/** Held Reads answered from the input, in order, while there's any. */
+/**
+ * Answer held Reads from the input, client by client in index order, while there's any.
+ *
+ * Each takes the oldest bytes, as many as it asked for and serial.MAX_BYTES; what's left moves to the input's front.
+ *
+ * @param driver The driver, whose input shrinks and held Reads are cleared as they're answered.
+ */
 answer_held :: fn(driver: ptr[mut Driver]) {
     for &most, index in driver.held {
         if driver.input_count == 0 {

@@ -7,13 +7,24 @@
  */
 package test_device
 
+/** The page the kernel grants the root task as "test_device", laid out as the kernel writes it. */
 TestDeviceInfo :: struct {
-    // Its interrupt controller's slop_os.ControllerKind, the device's line on it, and its IRQ_* flags
+    /** The device's interrupt controller, as a slop_os.ControllerKind's value. */
     kind : u32,
+    /** The device's interrupt line on that controller. */
     line : u32,
+    /**
+     * The line's IRQ_* flags, as an IRQ for it is made with: IRQ_LEVEL if it's level-triggered, IRQ_ACTIVE_LOW if
+     * it's active low, or 0 for an edge-triggered, active-high line.
+     */
     flags : u32,
+    /** Unused; it aligns registers to 8 bytes. */
     reserved : u32,
-    // The controller's registers, and RAM the kernel owns
+    /** The physical address of the controller's registers. */
     registers : u64,
+    /**
+     * The physical address of a page of RAM the kernel owns (this page's own frame), which device memory and
+     * controllers mustn't be at, so a test can check the kernel refuses them there.
+     */
     kernel_ram : u64,
 }

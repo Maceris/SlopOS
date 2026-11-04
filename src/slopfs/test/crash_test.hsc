@@ -17,17 +17,29 @@ import slopfs from ".."
  * first; and the disk, mounted again, holds the last acknowledged commit. Checks from 560.
  */
 
+/** The size of the crash tests' disk, in blocks: 4 MiB. */
 CRASH_BLOCKS : u64 : 1024
+/** How many steps of the workload run, each followed by a commit. */
 STEPS :: 14
-/** Random subsets tried for each interval between flushes */
+/** Random subsets tried for each interval between flushes. */
 SUBSETS :: 6
 
 /** The state after an acknowledged commit, and how much of the log it took, through its last flush. */
 Acknowledged :: struct {
+    /** The volume's state then, as state_digest makes it. */
     digest : slopfs.Seal,
+    /** How many entries of the disk's log the commit took, through its last flush; 0 for the state before the log. */
     log_end : usize,
 }
 
+/**
+ * Check crashes: a workload of commits run on a disk that records every write and flush, with a snapshot taken
+ * partway and deleted later, then every image a crash could leave replayed (replay).
+ *
+ * @param sealed Whether the volume is encrypted.
+ * @return 0 if every check passed, or the number of the first that failed: 500 to 514 here (511 to 514 a workload
+ *     step's), or replay's.
+ */
 check_crashes :: fn(sealed: bool) -> int {
     device :: new_device_of(CRASH_BLOCKS) or_return 500
     defer free_device(device)
@@ -78,6 +90,12 @@ check_crashes :: fn(sealed: bool) -> int {
     return replay(base, disk, acknowledged, sealed)
 }
 
+/**
+ * Copy bytes into a buffer, as many as fit.
+ *
+ * @param into The buffer, from its start.
+ * @param from The bytes; those past into's end are dropped.
+ */
 copy_into :: fn(into: mut u8[], from: u8[]) {
     for byte, i in from {
         if i < into.count {
@@ -86,7 +104,13 @@ copy_into :: fn(into: mut u8[], from: u8[]) {
     }
 }
 
-/** One step of the workload: files made, written, overwritten, renamed, cut and removed. */
+/**
+ * Run one step of the workload: files made, written, overwritten, renamed, cut and removed, without committing.
+ *
+ * @param volume The volume under test, open.
+ * @param step The step, 0 to STEPS - 1, each doing its own part.
+ * @return 0 if it ran, or the number of what failed in it, 1 to 4.
+ */
 workload :: fn(volume: ptr[mut slopfs.Volume], step: int) -> int {
     data := runtime.new(Data)
     defer runtime.free(data)
@@ -169,7 +193,14 @@ workload :: fn(volume: ptr[mut slopfs.Volume], step: int) -> int {
     return 0
 }
 
-/** What's named name in directory, if it's there and nothing went wrong. */
+/**
+ * Look up what a name names in a directory.
+ *
+ * @param volume The volume under test, open.
+ * @param directory The directory's ID.
+ * @param name The name to look up.
+ * @return The object's ID; null if nothing has the name, or the lookup failed.
+ */
 found :: fn(volume: ptr[mut slopfs.Volume], directory: u64, name: string) -> u64? {
     match slopfs.lookup(volume, directory, name) {
         case Ok(object) => return object
@@ -177,7 +208,12 @@ found :: fn(volume: ptr[mut slopfs.Volume], directory: u64, name: string) -> u64
     }
 }
 
-/** A volume's whole state, every name, kind and byte, as one BLAKE3 hash. */
+/**
+ * Hash a volume's whole state, every name, kind and byte, beneath its root, as one BLAKE3 hash.
+ *
+ * @param volume The volume under test, open.
+ * @return The hash, the same for the same state; null if anything couldn't be listed or read.
+ */
 state_digest :: fn(volume: ptr[mut slopfs.Volume]) -> slopfs.Seal? {
     hasher := crypto.blake3_start()
     buffer := runtime.new(Data)
@@ -190,6 +226,17 @@ state_digest :: fn(volume: ptr[mut slopfs.Volume]) -> slopfs.Seal? {
     return seal
 }
 
+/**
+ * Hash a directory's entries, in listing order: each name and kind, and a file's size and bytes, or a directory's
+ * entries in turn.
+ *
+ * @param volume The volume under test, open.
+ * @param hasher The hash, updated.
+ * @param directory The directory's ID.
+ * @param buffer Where files are read to, overwritten; a file bigger than it fails.
+ * @param depth How deep the directory is, from 0 for the root; past 8 fails.
+ * @return True if it was all hashed; false if anything couldn't be listed or read.
+ */
 digest_directory :: fn(volume: ptr[mut slopfs.Volume], hasher: ptr[mut crypto.Blake3], directory: u64, buffer: ptr[mut Data], depth: int) -> bool {
     if depth > 8 {
         return false
@@ -237,13 +284,22 @@ digest_directory :: fn(volume: ptr[mut slopfs.Volume], hasher: ptr[mut crypto.Bl
 
 /** Replaying: the counts of what was checked, for the log. */
 Replayed :: struct {
+    /** How many images were checked. */
     images : u64,
+    /** How many of them held the commit being made, not the last acknowledged one. */
     newer : u64,
 }
 
 /**
- * Every image a crash could leave, from base and the log: prefixes as the log goes, and at each flush, the interval
- * before it in random subsets and with each write torn.
+ * Check every image a crash could leave, from the disk before the log and the log: prefixes as the log goes, and at
+ * each flush, the interval before it in random subsets and with each write torn.
+ *
+ * @param base The disk's bytes before the log.
+ * @param recorded The disk that recorded the log.
+ * @param acknowledged The states after each acknowledged commit, the first the one before the log.
+ * @param sealed Whether the volume is encrypted.
+ * @return 0 if every image checked out, or the number of the first check that failed: 520 or 521 here, or
+ *     check_image's.
  */
 replay :: fn(base: u8[], recorded: ptr[mut Disk], acknowledged: Acknowledged[], sealed: bool) -> int {
     image :: new_device_of(CRASH_BLOCKS) or_return 520
@@ -312,7 +368,14 @@ replay :: fn(base: u8[], recorded: ptr[mut Disk], acknowledged: Acknowledged[], 
     return 0
 }
 
-/** A recorded write applied to an image: whole, or torn, its first half only. */
+/**
+ * Apply a recorded write to an image: whole, or torn, its first half only.
+ *
+ * @param image The image's bytes.
+ * @param recorded The disk that recorded the write, its logged bytes.
+ * @param entry The write; a flush applies nothing.
+ * @param torn Whether only its first half is applied.
+ */
 apply :: fn(image: mut u8[], recorded: ptr[mut Disk], entry: Recorded, torn: bool) {
     start :: cast[usize](entry.block * slopfs.BLOCK_BYTES)
     length := cast[usize](entry.count * slopfs.BLOCK_BYTES)
@@ -328,9 +391,18 @@ apply :: fn(image: mut u8[], recorded: ptr[mut Disk], entry: Recorded, torn: boo
     }
 }
 
-/*
- * The image mounts and checks out whole, and holds the state after the last commit the log through `durable` made
- * durable, or the one after it; and, with usable, takes another commit and still checks out.
+/**
+ * Check an image a crash could leave: it mounts and checks out whole, and holds the state after the last commit the
+ * log through `durable` made durable, or the one after it; and, with usable, takes another commit and still checks
+ * out.
+ *
+ * @param device The device over the image.
+ * @param acknowledged The states after each acknowledged commit.
+ * @param durable How many of the log's entries are surely on the disk.
+ * @param usable Whether to make a file and commit after the crash too.
+ * @param replayed The counts, updated.
+ * @param sealed Whether the volume is encrypted.
+ * @return 0 if it checked out, or the number of the first check that failed, 530 to 538.
  */
 check_image :: fn(device: ptr[slopfs.Device], acknowledged: Acknowledged[], durable: usize, usable: bool, replayed: ptr[mut Replayed],
     sealed: bool) -> int {
@@ -370,9 +442,17 @@ check_image :: fn(device: ptr[slopfs.Device], acknowledged: Acknowledged[], dura
     return 0
 }
 
-/** The data a failed write is tried with: big enough to be written as blocks, not inline in its record */
+/** The bytes a failed write is tried with: big enough to be written as blocks, not inline in its record. */
 FAILED_BYTES :: 8192
 
+/**
+ * Check failed writes beside torn ones (decisions/0096's R4, 0112): a write the disk refuses is refused, the chunk it
+ * was for refused to reads rather than given as it was, while other files read; every commit after it fails, not only
+ * the first; and the disk, mounted again, holds the last acknowledged commit.
+ *
+ * @param sealed Whether the volume is encrypted.
+ * @return 0 if every check passed, or the number of the first that failed, 560 to 574.
+ */
 check_failed_writes :: fn(sealed: bool) -> int {
     device :: new_device_of(CRASH_BLOCKS) or_return 560
     defer free_device(device)

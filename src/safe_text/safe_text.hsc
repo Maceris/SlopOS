@@ -15,23 +15,51 @@ MAX_CLUSTER_BYTES :: 32
 
 /** A cluster made safe: the bytes to show, and the columns they take. */
 Shown :: struct {
+    /**
+     * The bytes to show, UTF-8, their first count used; what doesn't fit, as when many code points of one cluster
+     * are written out, is dropped.
+     */
     bytes : u8[MAX_CLUSTER_BYTES + 16],
+    /** How many of bytes are used, 0 for a cluster that shows nothing. */
     count : usize,
+    /** The terminal columns the bytes take, as std's unicode text_width counts them. */
     columns : usize,
 }
 
-/** Whether the cluster at at is a line break: LF, CR LF, or a lone CR. */
+/**
+ * Tell whether a cluster is a line break, which the caller handles rather than showing: LF, CR LF, or a lone CR.
+ *
+ * @param text The text the cluster is in.
+ * @param at Where the cluster starts, a byte index into text.
+ * @param end Where it ends, as std's unicode grapheme_end gives it; not before at.
+ * @return True if the cluster starts with LF or CR and has at most 2 bytes, false otherwise, or when at is past
+ *     text's end.
+ */
 is_line_break :: fn(text: u8[], at: usize, end: usize) -> bool {
     return at < text.count && (text[at] == 0x0a || text[at] == 0x0d) && end - at <= 2
 }
 
+/**
+ * Tell whether a cluster is a tab, which the caller handles rather than showing.
+ *
+ * @param text The text the cluster is in.
+ * @param at Where the cluster starts, a byte index into text.
+ * @param end Where it ends, as std's unicode grapheme_end gives it.
+ * @return True if the cluster is the one byte 0x09, false otherwise, or when at is past text's end.
+ */
 is_tab :: fn(text: u8[], at: usize, end: usize) -> bool {
     return at < text.count && text[at] == 0x09 && end == at + 1
 }
 
 /**
- * The cluster text[at..<end] made safe to show, into shown. Each code point that wouldn't show becomes its substitute,
- * and the columns are counted from what's shown.
+ * Make a grapheme cluster safe to show. Each code point that wouldn't show becomes its substitute, and the columns
+ * are counted from what's shown.
+ *
+ * @param text The text the cluster is in.
+ * @param at Where the cluster starts, a byte index into text.
+ * @param end Where it ends, as std's unicode grapheme_end gives it. A cluster of more than MAX_CLUSTER_BYTES shows
+ *     as one U+FFFD, 1 column; one that's empty or runs past text's end shows nothing.
+ * @param shown Where what's shown goes, overwritten whole: its bytes, their count, and their columns.
  */
 show :: fn(text: u8[], at: usize, end: usize, shown: ptr[mut Shown]) {
     shown.count = 0
@@ -84,7 +112,16 @@ show :: fn(text: u8[], at: usize, end: usize, shown: ptr[mut Shown]) {
     }
 }
 
-/** Whether a default ignorable, after something shown in its cluster, is part of how the cluster shows. */
+/**
+ * Tell whether a default ignorable, after something shown in its cluster, is part of how the cluster shows.
+ *
+ * @param point The default ignorable's code point.
+ * @param pictographic Whether the cluster starts with an Extended_Pictographic code point, as an emoji ZWJ sequence
+ *     does.
+ * @param more_after Whether more of the cluster comes after it.
+ * @return True for a variation selector, standard or supplementary, and for a ZWJ inside a cluster that starts with
+ *     a pictograph; false for any other, which is written out.
+ */
 kept_in_cluster :: fn(point: u32, pictographic: bool, more_after: bool) -> bool {
     // Variation selectors, standard and supplementary
     if (point >= 0xfe00 && point <= 0xfe0f) || (point >= 0xe0100 && point <= 0xe01ef) {
@@ -94,6 +131,12 @@ kept_in_cluster :: fn(point: u32, pictographic: bool, more_after: bool) -> bool 
     return point == 0x200d && pictographic && more_after
 }
 
+/**
+ * Add a byte to what's shown.
+ *
+ * @param shown What's shown so far, count moved on by one.
+ * @param byte The byte; it's dropped if bytes is full.
+ */
 append_byte :: fn(shown: ptr[mut Shown], byte: u8) {
     if shown.count < shown.bytes.count {
         shown.bytes[shown.count] = byte
@@ -101,6 +144,13 @@ append_byte :: fn(shown: ptr[mut Shown], byte: u8) {
     }
 }
 
+/**
+ * Add a code point to what's shown, encoded in UTF-8.
+ *
+ * @param shown What's shown so far.
+ * @param point The code point; 0 adds nothing, which is how show says a control has no picture. Bytes past bytes'
+ *     end are dropped, so a point may be cut short.
+ */
 append_point :: fn(shown: ptr[mut Shown], point: u32) {
     if point == 0 {
         return void
@@ -114,9 +164,15 @@ append_point :: fn(shown: ptr[mut Shown], point: u32) {
     }
 }
 
+/** The hexadecimal digits a written-out code point uses, uppercase. */
 HEX_DIGITS :: "0123456789ABCDEF"
 
-/** ⟨U+XXXX⟩, with at least four uppercase digits */
+/**
+ * Add a code point to what's shown written out, as ⟨U+XXXX⟩, with at least four uppercase digits.
+ *
+ * @param shown What's shown so far; what doesn't fit in bytes is dropped.
+ * @param point The code point: 4 digits up to U+FFFF, 5 up to U+FFFFF, 6 above.
+ */
 append_written_out :: fn(shown: ptr[mut Shown], point: u32) {
     append_point(shown, 0x27e8)
     append_byte(shown, cast[u8]('U'))

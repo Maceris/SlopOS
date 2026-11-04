@@ -24,35 +24,57 @@ import slop_os from "std/os"
 import elf_loader from "../elf_loader"
 import random_stream from "../random_stream"
 
+/** The page size mappings are made in, in bytes: 4 KiB, on both architectures. */
 PAGE : u64 : 4096
 // The first thread's stack, and the free range a program's runtime maps its own memory in.
+/** The first thread's stack's size, in bytes: 256 KiB, a whole number of pages. */
 STACK_SIZE : u64 : 256 * 1024
+/** The free range's size, in bytes: 1 TiB of addresses, none of them mapped at the start. */
 FREE_SIZE : u64 : 1 << 40
 // User addresses, on both architectures (src/arch/*/paging.hsc).
+/** The lowest user address a part is placed at: 64 KiB, the architectures' lowest user address. */
 USER_LOW : u64 : 0x10000
+/** One past the highest user address a part is placed at: a page below 2^47. */
 USER_HIGH : u64 : 0x00007ffffffff000
-/** The most grants a process starts with, from this. */
+/** The most grants a process starts with, from this; build refuses more with TooManyGrants. */
 MAX_GRANTS :: 48
 /** Handles that go to the process besides its grants: its space, itself, its budget, its image, stack and block. */
 OWN_HANDLES :: 6
 
-/** What to build into: the requester's. */
+/** What to build into: the requester's, made before build is called, and still the requester's to destroy. */
 Target :: struct {
-    /** RIGHT_PROCESS_THREADS, RIGHT_DUPLICATE and RIGHT_TRANSFER */
+    /** The process, with RIGHT_PROCESS_THREADS, RIGHT_DUPLICATE and RIGHT_TRANSFER; build doesn't close it. */
     process : slop_os.Process,
-    /** Owning: it goes to the process */
+    /**
+     * The process's address space, an owning handle: build maps in it and starts the thread in it through a duplicate,
+     * and the handle itself goes to the process when build gets that far, staying the caller's if build fails before.
+     */
     space : slop_os.AddressSpace,
-    /** RIGHT_BUDGET_CHARGE, RIGHT_DUPLICATE and RIGHT_TRANSFER: everything is charged to it */
+    /**
+     * The budget everything is charged to: the image, stack, block and first thread. It needs RIGHT_BUDGET_CHARGE,
+     * RIGHT_DUPLICATE and RIGHT_TRANSFER; build gives the process a duplicate of it, and doesn't close it.
+     */
     budget : slop_os.MemoryBudget,
 }
 
 /** A handle the process starts with, which goes to it, and its label, padded with zeros. */
 Grant :: struct {
+    /**
+     * The label the process finds the handle by in its startup block: text padded with zeros, not necessarily ended
+     * by one when it takes all GRANT_LABEL_SIZE bytes.
+     */
     label : u8[slop_os.GRANT_LABEL_SIZE],
+    /** The handle, which needs RIGHT_TRANSFER: it moves to the process once build gives the process its handles. */
     handle : slop_os.Handle,
 }
 
-/** A grant labeled label. */
+/**
+ * Make a grant from a label's text and a handle.
+ *
+ * @param label The label; bytes past GRANT_LABEL_SIZE are silently left out.
+ * @param handle The handle the grant gives; it isn't checked or duplicated.
+ * @return The grant, its label padded with zeros.
+ */
 grant :: fn(label: string, handle: slop_os.Handle) -> Grant {
     made := Grant.{handle = handle}
     for byte, i in label {
@@ -63,30 +85,63 @@ grant :: fn(label: string, handle: slop_os.Handle) -> Grant {
     return made
 }
 
+/** Why a process couldn't be built. */
 BuildError :: enum {
+    /** The file isn't an executable elf_loader can load. */
     NotAProgram,
+    /** More than MAX_GRANTS grants. */
     TooManyGrants,
-    /** No room in the builder's free range for its own mappings */
+    /** No room in the builder's own free range for its own mappings (runtime.reserve_addresses). */
     NoAddresses,
-    /** The target's budget couldn't pay, or there was no memory */
+    /** The target's budget couldn't pay, there was no memory, or a mapping couldn't be made. */
     NoMemory,
-    /** A call on the target's handles failed: missing rights, or objects gone */
+    /** A call on the target's or the grants' handles failed: missing rights, or objects gone. */
     Failed,
 }
 
-/** Where its parts go in its address space. */
+/** Where a process's parts go in its address space: page-aligned user addresses. */
 Layout :: struct {
+    /** The image's base, the address its relocations are applied for, in the lowest quarter of user addresses. */
     image : u64,
+    /** The stack's lowest address, in the second quarter of user addresses; the stack grows down from its top. */
     stack : u64,
+    /** The startup block's address: a page above the stack's top, the page between left unmapped. */
     block : u64,
+    /** The free range's start, FREE_SIZE bytes in the upper half of user addresses. */
     free : u64,
 }
 
-/*
- * The executable in file, loaded into target with grants, and its first thread started: its ID. seed goes
- * in its startup block, for its context.random (decisions/0068), and random places its parts.
- * On a failure, what was made is closed, and the grants are the caller's still; the target is the
- * requester's to destroy.
+/**
+ * Build a process from an executable in the target, and start its first thread.
+ *
+ * The image, stack and startup block are made, each a memory object charged to the target's budget, and mapped at
+ * random places in the target's address space; then they, the address space, a handle to the process itself, a
+ * duplicate of its budget, and the grants all go to the process, and its first thread starts at the executable's
+ * entry with the startup block's address as its argument. The builder keeps none of it.
+ *
+ * On a failure the handles made are closed, but what's already mapped in the target's space stays: the target is the
+ * requester's to destroy. The grants and the target's space are the caller's still, unless only starting the thread
+ * failed, by when they've gone to the process. Addresses the builder took from its own free range for staging aren't
+ * given back, even on success.
+ *
+ * @param target The process, address space and budget to build into, with the rights Target's fields say.
+ * @param file The whole executable file; only read, and not kept.
+ * @param grants The handles the process starts with, at most MAX_GRANTS, each with RIGHT_TRANSFER, in the order the
+ *     startup block lists them.
+ * @param seed The 32 bytes that go in the startup block, for the process's context.random (decisions/0068); they
+ *     should be secret and random.
+ * @param random The stream the parts' places are drawn from, moved on by each draw; the layout is as random as it.
+ * @param source The memory object file is in, for read-only segments to be mapped from it and shared (decisions/0094),
+ *     where the handle allows; null maps every segment from the image.
+ * @param abi_version The ABI version the startup block says: the kernel's, unless a test asks for another to see a
+ *     program refuse it.
+ * @return The ID of the process's first thread, not a handle: the caller doesn't own it.
+ * @error TooManyGrants There are more than MAX_GRANTS grants; nothing is made.
+ * @error NotAProgram elf_loader can't read, load or relocate the file.
+ * @error NoAddresses The builder's free range has no room left to stage the image or the block.
+ * @error NoMemory The budget couldn't pay for a memory object, or a mapping couldn't be made.
+ * @error Failed A handle couldn't be duplicated or inspected, the staging couldn't be unmapped, the handles couldn't
+ *     go to the process, or the thread couldn't be started.
  */
 build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: ptr[mut random_stream.Stream], source: slop_os.Memory? = null,
     abi_version: u32 = slop_os.ABI_VERSION) -> Result[u64, BuildError] {
@@ -183,10 +238,18 @@ build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: p
 
 /** Handles build made, closed if it fails before they go to the process. */
 Made :: struct {
+    /** The handles, owning, their first count used; build makes 5 of them. */
     handles : slop_os.Handle[8],
+    /** How many of handles are build's to close: 0 once they've gone to the process. */
     count : usize,
 }
 
+/**
+ * Remember a handle build made, to be closed if build fails.
+ *
+ * @param made Where it's remembered.
+ * @param handle The handle, owning; when made is full it isn't remembered, and wouldn't be closed.
+ */
 remember :: fn(made: ptr[mut Made], handle: slop_os.Handle) {
     if made.count < made.handles.count {
         made.handles[made.count] = handle
@@ -194,6 +257,11 @@ remember :: fn(made: ptr[mut Made], handle: slop_os.Handle) {
     }
 }
 
+/**
+ * Close every handle remembered, ignoring failures, and forget them.
+ *
+ * @param made The handles; its count is 0 after, so closing again closes nothing.
+ */
 close_all :: fn(made: ptr[mut Made]) {
     for handle, i in made.handles {
         if i >= made.count {
@@ -204,16 +272,35 @@ close_all :: fn(made: ptr[mut Made]) {
     made.count = 0
 }
 
-/** A memory object of size bytes, charged to budget, remembered in made. */
+/**
+ * Make a memory object charged to a budget, and remember it to close if build fails.
+ *
+ * @param made Where the new handle is remembered.
+ * @param budget The budget that pays for it, with RIGHT_BUDGET_CHARGE.
+ * @param size Its size in bytes, as memory_create takes it.
+ * @return An owning handle to the memory object, zeroed as memory_create makes it.
+ * @error NoMemory The budget couldn't pay, or memory_create failed for another reason.
+ */
 memory :: fn(made: ptr[mut Made], budget: slop_os.MemoryBudget, size: u64) -> Result[slop_os.Memory, BuildError] {
     created :: slop_os.memory_create(budget, size) or_return .Error(.NoMemory)
     remember(made, cast[slop_os.Handle](created))
     return .Ok(created)
 }
 
-/*
- * The image's segments, mapped in space from base, each with its protection, and its RELRO pages
- * read-only.
+/**
+ * Map the image's segments in an address space, each with its protection, and its RELRO pages read-only.
+ *
+ * Each segment takes whole pages, from the page its start is on to the page its end is on. In a writable segment,
+ * the RELRO range's pages, its start rounded down and its end rounded down, are mapped read only. A read-only
+ * segment with all its bytes in the file is mapped from source, shared, if source is given and that mapping can be
+ * made; otherwise from the image.
+ *
+ * @param executable The executable the image was loaded from; not changed.
+ * @param image The memory object holding the loaded, relocated image, its byte 0 the image's base.
+ * @param space The address space to map in, with RIGHT_SPACE_MAP.
+ * @param base Where the image's base goes in space, page-aligned.
+ * @param source The memory object holding the executable's file, or null to map everything from image.
+ * @error NoMemory A mapping from image couldn't be made; segments before it stay mapped.
  */
 map_segments :: fn(executable: ptr[elf_loader.Executable], image: slop_os.Memory, space: slop_os.AddressSpace, base: u64,
     source: slop_os.Memory?) -> Result[void, BuildError] {
@@ -254,7 +341,17 @@ map_segments :: fn(executable: ptr[elf_loader.Executable], image: slop_os.Memory
     return .Ok
 }
 
-/** The image's pages from start to end, mapped at base + start with protection, if there are any. */
+/**
+ * Map a range of the image's pages in an address space, if there are any.
+ *
+ * @param image The memory object holding the image.
+ * @param space The address space to map in.
+ * @param base Where the image's base goes in space, page-aligned.
+ * @param start Where the range starts, in bytes from the image's base, page-aligned.
+ * @param end Where it ends, in bytes from the image's base, page-aligned; at or below start maps nothing.
+ * @param protection What the pages are mapped with.
+ * @error NoMemory The mapping couldn't be made.
+ */
 map_part :: fn(image: slop_os.Memory, space: slop_os.AddressSpace, base: u64, start: u64, end: u64, protection: slop_os.Protection)
     -> Result[void, BuildError] {
     if end <= start {
@@ -265,9 +362,15 @@ map_part :: fn(image: slop_os.Memory, space: slop_os.AddressSpace, base: u64, st
 }
 
 /**
- * Where the image, the stack and the startup block, and the free range go: each at a random page in a
- * quarter of user addresses of its own (the free range in the upper half), as the kernel places the root
- * task's.
+ * Choose where the image, the stack and the startup block, and the free range go.
+ *
+ * Each goes at a random page in a quarter of user addresses of its own (the free range in the upper half), as the
+ * kernel places the root task's, the block a page above the stack's top.
+ *
+ * @param random The stream the places are drawn from, moved on by each draw.
+ * @param image_size The image's size in bytes, a whole number of pages.
+ * @param block_size The startup block's size in bytes, a whole number of pages.
+ * @return The layout, every address page-aligned.
  */
 choose_layout :: fn(random: ptr[mut random_stream.Stream], image_size: u64, block_size: u64) -> Layout {
     quarter :: ((USER_HIGH - USER_LOW) / 4) & ~(PAGE - 1)
@@ -281,7 +384,16 @@ choose_layout :: fn(random: ptr[mut random_stream.Stream], image_size: u64, bloc
     }
 }
 
-/** A random page-aligned place for size bytes in the room bytes from start. */
+/**
+ * Choose a random page-aligned place for a range, within a region.
+ *
+ * @param random The stream the place is drawn from, moved on by a draw.
+ * @param start Where the region starts, page-aligned.
+ * @param room The region's size in bytes.
+ * @param size The range's size in bytes.
+ * @return An address from start up to start + room - size, a whole number of pages past start, each as likely; start
+ *     itself when size is room or more, so the range may then run past the region.
+ */
 random_place :: fn(random: ptr[mut random_stream.Stream], start: u64, room: u64, size: u64) -> u64 {
     if size >= room {
         return start
@@ -289,14 +401,34 @@ random_place :: fn(random: ptr[mut random_stream.Stream], start: u64, room: u64,
     return start + random_stream.below(random, (room - size) / PAGE + 1) * PAGE
 }
 
+/**
+ * Round a size or address up to a whole number of pages.
+ *
+ * @param value The bytes to round up; at most 2^64 - 4096, or the result wraps.
+ * @return value rounded up to a multiple of PAGE, value itself if it's one already.
+ */
 page_up :: fn(value: u64) -> u64 {
     return (value + PAGE - 1) & ~(PAGE - 1)
 }
 
+/**
+ * Give the smaller of two numbers.
+ *
+ * @param a One number, any value.
+ * @param b The other number, any value; it's what comes back when the two are equal.
+ * @return The smaller, b when they're equal.
+ */
 min_u64 :: fn(a: u64, b: u64) -> u64 {
     return if a < b { a } else { b }
 }
 
+/**
+ * Give the larger of two numbers.
+ *
+ * @param a One number, any value.
+ * @param b The other number, any value; it's what comes back when the two are equal.
+ * @return The larger, b when they're equal.
+ */
 max_u64 :: fn(a: u64, b: u64) -> u64 {
     return if a > b { a } else { b }
 }

@@ -28,67 +28,117 @@ import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
+/** The test's name, which starts each line it logs. */
 NAME :: "test_control"
+/** The size of the memory D maps where T1 faulted, in bytes. */
 PAGE : u64 : 4096
+/** The key D's intercept of T queues its stops' packet under. */
 CONTROL_KEY : u64 : 21
+/** The key D's watch for T's end queues under. */
 WATCH_KEY : u64 : 22
+/** The key D's watch for E's end queues under. */
 EXIT_WATCH_KEY : u64 : 23
+/** The code E ends itself with. */
 EXIT_VALUE : u64 : 42
+/** What D makes T1's first, skipped, ClockMonotonic give. */
 SKIPPED_VALUE : u64 : 12345
+/** What D changes T1's second ClockMonotonic's result to, at its exit. */
 CHANGED_VALUE : u64 : 777
+/** What T1 writes where it faults, and reads back once D has mapped memory there. */
 FAULT_VALUE : u64 : 4242
+/** How long D waits, twice, to see a suspended T2's count stand still, in nanoseconds: 10 ms. */
 COUNTING_NANOSECONDS : u64 : 10_000_000
+/** How long D waits at most for a resumed T2 to count again, in nanoseconds: 200 ms. */
 RESUME_NANOSECONDS : u64 : 200_000_000
-// What D tells a copy it is, in the first message on its peer channel.
+/** What D tells T, in the first message on its peer channel: be the target. */
 ROLE_TARGET : u64 : 1
+/** What D tells E, in the first message on its peer channel: end yourself when told. */
 ROLE_EXITING : u64 : 2
-// A copy's page, by its slots: what D writes to start it, T2's count, T1's end, and T1's results.
+/** The slot of a copy's page, a u64 by index, D writes to start it. */
 SLOT_GO :: 0
+/** The slot T2, and the thread D starts in T, count in. */
 SLOT_COUNTER :: 1
+/** The slot T1 sets to 1 once it's done. */
 SLOT_DONE :: 2
+/** The first of T1's three results' slots: its two clock calls' results, then what it read where it faulted. */
 SLOT_RESULTS :: 8
 /*
  * In a thread's registers as a debugger sees them (slop_os.THREAD_REGISTERS): the system call number's, and
  * the result's tag's and first value's
  */
 #if TARGET_ARCH == .x86_64 {
+    /** The index of the register holding a system call's number: rax. */
     REGISTER_NUMBER :: 0
+    /** The index of the register holding a call's result's tag: rax. */
     REGISTER_TAG :: 0
+    /** The index of the register holding a call's result's first value: rdx. */
     REGISTER_FIRST :: 3
 }
 #else_if TARGET_ARCH == .arm64 {
+    /** The index of the register holding a system call's number: x8. */
     REGISTER_NUMBER :: 8
+    /** The index of the register holding a call's result's tag: x0. */
     REGISTER_TAG :: 0
+    /** The index of the register holding a call's result's first value: x1. */
     REGISTER_FIRST :: 1
 }
 
 /** What T tells D, with its address space's handle in the message's batch: where its things are. */
 TargetReport :: struct {
+    /** The address in T of its page, u64[16], whose slots D reads and writes. */
     page : u64,
+    /** The address in T, reserved and left unmapped, T1 writes to and faults on; 0 from E. */
     fault_at : u64,
+    /** The address in T of counter, which the thread D starts there runs; 0 from E. */
     counter_entry : u64,
+    /** The top of a stack T mapped for the thread D starts, 8 below a multiple of 16; 0 from E. */
     stack_top : u64,
 }
 
 /** What a copy is given (main): its log, and its peer channel to D. */
 CopyGrants :: struct {
+    /** A copy of D's debug log, writable. */
     log : slop_os.DebugLog,
+    /** Not given. */
     platform : slop_os.Platform?,
+    /** Not given. */
     test_device : slop_os.Memory?,
+    /** Not given. */
     firmware : slop_os.Memory?,
+    /** Not given. */
     manager : os.Channel[process_manager.ProcessManager]?,
+    /** Not given. */
     program : slop_os.Memory?,
+    /** The copy's end of its peer channel to D, which makes main run as a copy. */
     peer : slop_os.Channel?,
+    /** Not given. */
     cpu_budget : slop_os.CpuBudget?,
 }
 
-/** T2, and the thread D starts in T: counts in its page for good. */
+/**
+ * Count in a page, for good: T2, and the thread D starts in T.
+ *
+ * @param page The page, whose SLOT_COUNTER is counted in; it wraps after 2^64 counts.
+ */
 counter #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[16]]) #never_returns {
     loop {
         intrinsics.volatile_store_u64(&page^[SLOT_COUNTER], intrinsics.volatile_load_u64(&page^[SLOT_COUNTER]) + 1)
     }
 }
 
+/**
+ * Check what a debugger can do to processes in its subtree; or, run as T or E, be one of them.
+ *
+ * @param log The debug log, writable, where the test says what it found and which check failed.
+ * @param platform Not used.
+ * @param test_device Not used.
+ * @param firmware Not used.
+ * @param manager The process manager, which launches T and E; without it the test ends with 100.
+ * @param program The test's own module, which T and E are launched from; without it the test ends with 100.
+ * @param peer Given only to T and E, by D: the channel their role comes on. With it, this runs as a copy.
+ * @param cpu_budget Not used.
+ * @return What run_debugger gives for D, or run_copy for T or E.
+ */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     match peer {
@@ -100,7 +150,16 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     return run_debugger(log, connection, executable)
 }
 
-/** T or E, as D says in its first message. */
+/**
+ * Run as T or E, as D says in its first message: report where its things are, with its address space, then do what
+ * D controls.
+ *
+ * @param peer The copy's end of its peer channel to D.
+ * @return For E, it ends itself with EXIT_VALUE once D writes to its page, so never returns. T never returns, as D
+ *     kills it. Either gives 1 if no port could be made for peer, 2 if the role couldn't be received, 3 if its page
+ *     couldn't be allocated, 7 if its address space's handle couldn't be duplicated; T 4 if T2 couldn't be started, 5
+ *     if the stack couldn't be made, 6 if no addresses were left to fault on.
+ */
 run_copy :: fn(peer: slop_os.Channel) -> int {
     block :: slop_os.startup_block()
     port :: os.port_for(block.budget, peer) or_return 1
@@ -151,11 +210,25 @@ run_copy :: fn(peer: slop_os.Channel) -> int {
 
 /** A copy launched with a peer channel, told its role: its process, the end D keeps, and the end's port. */
 Copy :: struct {
+    /** The copy's process and memory budget, as the launch gave them, which D owns. */
     launched : os.Launched,
+    /** D's end of the peer channel. */
     end : slop_os.Channel,
+    /** D's port for end. */
     port : slop_os.Port,
 }
 
+/**
+ * Launch a copy of the test, with a peer channel, and tell it its role.
+ *
+ * @param log The test's debug log, duplicated for the copy.
+ * @param manager The process manager connection the copy is launched through.
+ * @param manager_port D's port for the manager connection.
+ * @param program The test's own module, which the copy runs.
+ * @param name The copy's process name.
+ * @param role ROLE_TARGET or ROLE_EXITING, sent on the peer channel.
+ * @return The copy, or null if any step failed, leaving behind whatever it had made.
+ */
 launch_copy :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessManager], manager_port: slop_os.Port,
     program: slop_os.Memory, name: string, role: u64) -> Copy? {
     block :: slop_os.startup_block()
@@ -173,7 +246,14 @@ launch_copy :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.Pro
     }
 }
 
-/** The next stop's StopInfo, once the intercept's packet says there is one. */
+/**
+ * Wait for an intercepted thread's next stop.
+ *
+ * @param port The port the intercept queues its packet on, waited on while there's no stop.
+ * @param intercept The intercept on the thread's process, attached with port; intercept_next is asked again each
+ *     time a packet comes, until it gives a stop. Packets of other kinds on port are taken and dropped.
+ * @param stop Where the stop's StopInfo goes.
+ */
 next_stop :: fn(port: slop_os.Port, intercept: slop_os.Intercept, stop: ptr[mut slop_os.StopInfo]) {
     loop {
         if test_kit.tag_of(slop_os.intercept_next(intercept, stop)) == 0 {
@@ -184,13 +264,43 @@ next_stop :: fn(port: slop_os.Port, intercept: slop_os.Intercept, stop: ptr[mut 
     }
 }
 
-/** A u64 of T's page, read through D's handle to it. */
+/**
+ * Read a slot of T's page through D's handle to T.
+ *
+ * @param target D's handle to T.
+ * @param space T's address space.
+ * @param page The page's address in T.
+ * @param slot Which slot, a u64 by index.
+ * @return What the slot holds, or 0 if it couldn't be read.
+ */
 read_target :: fn(target: slop_os.Process, space: slop_os.AddressSpace, page: u64, slot: u64) -> u64 {
     value : u64 = 0
     _ = slop_os.process_read_memory(target, space, page + slot * 8, os.mut_bytes_of(&value))
     return value
 }
 
+/**
+ * Run as D: launch T and E, control them, and check what each call did.
+ *
+ * @param log The debug log, duplicated for the copies.
+ * @param manager The process manager connection the copies are launched through.
+ * @param program The test's own module, which the copies run.
+ * @return 0 if every check passed. Otherwise the first that failed, by its result's index plus one: 1 T not having
+ *     two threads; 2 intercepting T, 3 intercepting it twice not refused with AlreadyIntercepted, or 4 watching for
+ *     its end; 5 starting T1; 6 and 7 T1's first stop not ClockMonotonic's entry; 8 reading T1's registers, or 9
+ *     their call number not ClockMonotonic's; 10 writing them, or 11 skipping the call; 12 the second call not
+ *     stopping at its entry, or 13 at its exit; 14 skipping a call at its exit not refused with NotStopped; 15 the
+ *     fault not stopping, 16 not at fault_at, or 17 mapping memory there; 18 to 20 what T1 got not SKIPPED_VALUE,
+ *     CHANGED_VALUE and FAULT_VALUE; 21 suspending T2, 22 its count not standing still, 23 reading its registers, 24
+ *     resuming it, 25 its count not going on, or 26 reading its registers while it runs not refused with NotStopped;
+ *     27 killing T, or 28 its end not seen as killed; 29 watching E, 30 telling it to end, or 31 its code not
+ *     EXIT_VALUE; 32 a thread in a space outside T's subtree not refused with BadAddress, or 33 one in T's not
+ *     started; 34 giving T the memory, or 35 the memory's handle still D's; 36 giving a process its own owning
+ *     handle not refused with NotTransferable; 37 memory_size wrong; 38 giving a handle without RIGHT_TRANSFER not
+ *     refused with MissingRight. 90 if D's, T's or E's budget didn't come back to nothing. 101 to 110 if setting up
+ *     failed: 101 the memory budget, 102 the manager's port, 103 launching T or E, 104 their reports, 105 the ports,
+ *     107 the memory, 108 the other address space, 109 the child process, 110 the sized memory.
+ */
 run_debugger :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessManager], program: slop_os.Memory) -> int {
     block :: slop_os.startup_block()
     budget :: slop_os.memory_budget_create(block.budget, 1 << 20) or_return 101

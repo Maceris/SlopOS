@@ -10,8 +10,17 @@ import slopfs from ".."
  * from 1300.
  */
 
+/** What each volume made at run time is given to hold, in its file "made.txt". */
 MADE_TEXT :: "made at run time"
 
+/**
+ * Check volumes made at run time (decisions/0141): one registered with nothing in it, which the same name can't be
+ * again; a sealed one's first keys made apart from the container, which is given only the wrapped records; each filled
+ * with its root directory, written, committed, and read back whole after a mount, the sealed one Locked without its
+ * passphrase.
+ *
+ * @return 0 if every check passed, or the number of the first that failed, 1300 to 1327.
+ */
 check_made :: fn() -> int {
     device :: new_device_of(SEALED_BLOCKS) or_return 1300
     defer free_device(device)

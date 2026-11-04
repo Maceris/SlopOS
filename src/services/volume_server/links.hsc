@@ -33,21 +33,35 @@ import volume_protocol from "../../protocols/volume"
 
 /** What's asked of the storage manager, in order: for the connection waiting on it, and a claim's, for an Issue. */
 Asked :: struct {
+    /** The slot of the client's connection waiting for the answer. */
     client : usize,
+    /** For an Issue, the slot of the claim's connection; null for a Resolve. */
     claim : usize?,
 }
 
 /** Where a request's path leads: within this volume, or through a link, which has been asked about. */
 Followed :: union {
+    /** Within this volume, or nowhere, for the request's own code to open or report. */
     Local,
+    /** Through a link: the storage manager has been asked, and the connection waits for its answer. */
     Asked,
+    /** Through a link that couldn't be read or asked about: answered with this. */
     Failed(files.FileError),
 }
 
 /**
- * A path from a client's connection followed: through a link, what it leads to asked for, as opening says, and the
- * connection left waiting for the answer; Local if the path stays in this volume or doesn't lead anywhere, for the
- * request's own code, which reports that. A linked connection follows no links.
+ * Follow a path from a client's connection: through a link, ask the storage manager for what it leads to, as opening
+ * says, and leave the connection waiting for the answer.
+ *
+ * @param server The server, whose volume's tree is walked; through a link, the storage manager is asked on its links
+ *     connection, and not waited for.
+ * @param index The client's connection's slot; a linked connection follows no links.
+ * @param directory The directory object the path is beneath.
+ * @param path The path; "" stays Local.
+ * @param opening How what it leads to is opened.
+ * @return Local if the path stays in this volume or doesn't lead anywhere, for the request's own code, which reports
+ *     that; Asked once the storage manager's asked; Failed if the link can't be read, or the storage manager can't be
+ *     asked (Unavailable).
  */
 follow :: fn(server: ptr[mut Server], index: usize, directory: u64, path: string, opening: links.Opening) -> Followed {
     if index >= server.connections.count || server.connections[index].linked || path.count == 0 {
@@ -76,7 +90,16 @@ follow :: fn(server: ptr[mut Server], index: usize, directory: u64, path: string
     return .Asked
 }
 
-/** A request to the storage manager sent, and what it's for queued: false if it can't be. */
+/**
+ * Send a request to the storage manager on the links connection, queue what it's for, and mark the client waiting.
+ *
+ * @param server The server, whose queue of what's asked grows by one, and whose client's connection is marked waiting,
+ *     so it isn't read until answered.
+ * @param out The request; its handles are moved out when it's sent.
+ * @param asked What it's for, answered in the order asked.
+ * @return Whether it was sent and queued; false if MAX_CONNECTIONS are waiting already, the storage manager's gone, or
+ *     it couldn't be sent.
+ */
 ask_links :: fn(server: ptr[mut Server], out: ptr[mut os.Outgoing], asked: Asked) -> bool {
     if server.asked_count >= server.asked.count || cast[slop_os.Handle](server.links) == slop_os.NO_HANDLE {
         return false
@@ -93,7 +116,17 @@ ask_links :: fn(server: ptr[mut Server], out: ptr[mut os.Outgoing], asked: Asked
     return true
 }
 
-/** The storage manager's answers, each to what's first in the queue. */
+/**
+ * Give the storage manager's answers on the links connection, each to what's first in the queue; an answer with
+ * nothing queued has its connection closed.
+ *
+ * If the storage manager's gone, everything queued is answered Unavailable and the links connection dropped.
+ *
+ * @param server The server, whose queue of what's asked is taken from; if the storage manager's gone, its links is set
+ *     to NO_HANDLE.
+ * @param index The links connection's slot.
+ * @param into Where each answer is read into, reused.
+ */
 serve_links :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     loop {
         match links.receive_response(server.links, server.port, into, false) {
@@ -123,6 +156,12 @@ serve_links :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomi
     }
 }
 
+/**
+ * Take what's first in the queue of what's asked of the storage manager.
+ *
+ * @param server The server, whose queue isn't empty.
+ * @return What was first.
+ */
 take_asked :: fn(server: ptr[mut Server]) -> Asked {
     asked :: server.asked[server.asked_first % server.asked.count]
     server.asked_first = (server.asked_first + 1) % server.asked.count
@@ -130,7 +169,15 @@ take_asked :: fn(server: ptr[mut Server]) -> Asked {
     return asked
 }
 
-/** An answer given to the connection that waited for it: a link made with an Issue's, or a Resolve's relayed. */
+/**
+ * Give an answer to the connection that waited for it: for an Issue, the link made with the number issued, or why
+ * not; for a Resolve, the connection opened, relayed.
+ *
+ * @param server The server: for an Issue, a link is made in its volume and the claim's connection dropped; for a
+ *     Resolve, the client is answered.
+ * @param asked What the answer is for.
+ * @param answer The storage manager's answer, whose connection, if it has one the client can't take, is closed.
+ */
 finish :: fn(server: ptr[mut Server], asked: Asked, answer: links.Response) {
     match asked.claim {
         case Some(claim) => {
@@ -146,7 +193,15 @@ finish :: fn(server: ptr[mut Server], asked: Asked, answer: links.Response) {
     }
 }
 
-/** The link a claim was for, made now it's issued under number. */
+/**
+ * Make the link a claim was for, now it's issued, at the claim's name in its target directory.
+ *
+ * @param server The server, whose volume is given the link, durable with its next commit; the claim's connection gives
+ *     its grant's container, volume and write, and its target and name.
+ * @param claim The claim's connection's slot.
+ * @param number The number the link is issued under, by the volume it leads into.
+ * @return Null once it's made; why not, otherwise, Unavailable for a slot past them.
+ */
 made_link :: fn(server: ptr[mut Server], claim: usize, number: u64) -> files.FileError? {
     if claim >= server.connections.count {
         return files.FileError.Unavailable
@@ -160,7 +215,14 @@ made_link :: fn(server: ptr[mut Server], claim: usize, number: u64) -> files.Fil
     }
 }
 
-/** What a link opened, relayed to the client that asked, as its own protocol has it. */
+/**
+ * Relay what a link opened to the client that asked, as its own protocol has it, and let it be read again.
+ *
+ * @param server The server, whose added is set so the client is served again.
+ * @param client The client's connection's slot; one gone, or not waiting, has the answer's connection closed.
+ * @param answer The storage manager's answer: the connection opened, which moves to the client, or why not. One the
+ *     client's protocol can't take, as a writable file for a read-only directory, is closed, and Unavailable answered.
+ */
 answer_opened :: fn(server: ptr[mut Server], client: usize, answer: links.Response) {
     if client >= server.connections.count || !server.connections[client].waiting {
         close_opened(answer)
@@ -198,7 +260,11 @@ answer_opened :: fn(server: ptr[mut Server], client: usize, answer: links.Respon
     }
 }
 
-/** The connection an answer brought, if it brought one, closed. */
+/**
+ * Close the connection an answer brought, if it brought one.
+ *
+ * @param answer An answer of the storage manager's; an Opened one's connection is closed, and anything else left.
+ */
 close_opened :: fn(answer: links.Response) {
     handle :: match answer {
         case OpenedFile(made) => cast[slop_os.Handle](made.end)
@@ -215,8 +281,17 @@ close_opened :: fn(answer: links.Response) {
 // Making a link (Link)
 
 /**
- * A grant kept as a link at path beneath directory: claimed from its server, on a connection of the grant's own, and
- * the client's left waiting until the link is made or refused. An error now if it can't be begun.
+ * Begin keeping a grant as a link: claim it from its server, on a connection of the grant's own, and leave the
+ * client's connection waiting until the link is made or refused.
+ *
+ * @param server The server, whose volume is read; a Claim connection is added and the Claim sent on it, not waited for,
+ *     and the client's connection marked waiting.
+ * @param index The client's connection's slot.
+ * @param directory The directory object the path is beneath.
+ * @param path The link's path; nothing may be there.
+ * @param given The grant, which the server takes over: kept as the claim's connection, or closed if it can't be begun.
+ * @return Null once it's begun, the answer to come; why not, now: AlreadyExists for something at path, NoSpace without
+ *     a slot, Unavailable if the claim couldn't be sent, or why the path couldn't be followed.
  */
 begin_link :: fn(server: ptr[mut Server], index: usize, directory: u64, path: string, given: os.Channel[grant.Grant]) -> files.FileError? {
     leaf := slopfs.Leaf.{}
@@ -257,7 +332,14 @@ begin_link :: fn(server: ptr[mut Server], index: usize, directory: u64, path: st
     return null
 }
 
-/** A grant's answer to its Claim: what it says taken to the storage manager to be issued, or the link refused. */
+/**
+ * Read a grant's answer to its Claim: take what it says to the storage manager to be issued, or refuse the link.
+ *
+ * @param server The server: the claim's connection is marked claimed and the storage manager asked to Issue, or the
+ *     claim is ended and its client answered.
+ * @param index The claim's connection's slot; one claimed already is left alone.
+ * @param into Where the answer is read into.
+ */
 serve_claim :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count || server.connections[index].claimed {
         return void
@@ -291,7 +373,14 @@ serve_claim :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomi
     }
 }
 
-/** A claim done with: its client answered, Done or with error, and the grant's connection closed. */
+/**
+ * Be done with a claim: close the grant's connection, and answer its client, if it's still waiting.
+ *
+ * @param server The server, whose claim connection is dropped; its client, if it's waiting, is answered and let be read
+ *     again.
+ * @param claim The claim's connection's slot.
+ * @param error Why the link wasn't made; null for Done.
+ */
 end_claim :: fn(server: ptr[mut Server], claim: usize, error: files.FileError?) {
     if claim >= server.connections.count {
         return void
@@ -316,7 +405,18 @@ end_claim :: fn(server: ptr[mut Server], claim: usize, error: files.FileError?) 
 
 // Issuing them (Grant, and the storage manager's IssueTo and OpenIssued)
 
-/** A grant of what's at path beneath directory ("" for directory itself), to write as well if write. */
+/**
+ * Make a grant of what's at a path, a connection speaking grant, which its holder hands to a directory in another
+ * volume to keep as a link.
+ *
+ * @param server The server, whose volume is read, not changed, and which a Grant connection is added to.
+ * @param index The client's connection's slot; a linked one grants nothing (ReadOnly).
+ * @param directory The directory object the path is beneath.
+ * @param path The path, or "" for the directory itself.
+ * @param write Whether the grant is to write as well as read.
+ * @return Granted with the grant's other end, which the caller sends; Failed with ReadOnly, IsALink for a link,
+ *     NoSpace without a slot, or why the path couldn't be followed.
+ */
 grant_of :: fn(server: ptr[mut Server], index: usize, directory: u64, path: string, write: bool) -> dir.Response {
     if index >= server.connections.count || server.connections[index].linked {
         return .Failed(.ReadOnly)
@@ -340,7 +440,14 @@ grant_of :: fn(server: ptr[mut Server], index: usize, directory: u64, path: stri
     return .Granted(made)
 }
 
-/** A grant's one Claim: a ticket for the storage manager to bring back, made here at random. */
+/**
+ * Answer a grant's one Claim with a ticket, made here at random, for the storage manager to bring back with the
+ * volume to issue it to; a second Claim is refused with AlreadyExists. A grant whose end fails is dropped.
+ *
+ * @param server The server, whose grant connection keeps the ticket and is marked claimed.
+ * @param index The grant's connection's slot.
+ * @param into Where each request is read into, reused.
+ */
 serve_grant :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
@@ -377,7 +484,13 @@ serve_grant :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomi
     }
 }
 
-/** Whether two tickets are the same, looking at every byte whatever they hold. */
+/**
+ * Tell whether two tickets are the same, looking at every byte whatever they hold, so how long it takes says nothing.
+ *
+ * @param a One ticket, 32 bytes.
+ * @param b The other ticket, 32 bytes.
+ * @return Whether every byte is the same.
+ */
 same_ticket :: fn(a: u8[32], b: u8[32]) -> bool {
     differ : u8 = 0
     for byte, i in a {
@@ -386,7 +499,17 @@ same_ticket :: fn(a: u8[32], b: u8[32]) -> bool {
     return differ == 0
 }
 
-/** The grant whose claim gave ticket issued to the volume the storage manager says, durable before it's answered. */
+/**
+ * Issue the grant whose claim gave a ticket to the volume the storage manager says, durable before it's answered.
+ *
+ * A grant issues once: its ticket matches nothing after.
+ *
+ * @param server The server: the grant matched is marked issued, and the issued record added to its volume and
+ *     committed, waited for.
+ * @param to The ticket, and the volume to issue it to.
+ * @return Issued with the link's number, once committed; Failed if the commit failed; Refused with NotFound for a
+ *     ticket no unissued grant has, or why it couldn't be issued.
+ */
 issue_to :: fn(server: ptr[mut Server], to: volume_protocol.IssueTo) -> volume_protocol.Response {
     for &connection, i in server.connections {
         if i >= server.count || connection.kind != .Grant || !connection.claimed || connection.issued || !same_ticket(connection.ticket, to.ticket) {
@@ -408,9 +531,17 @@ issue_to :: fn(server: ptr[mut Server], to: volume_protocol.IssueTo) -> volume_p
 }
 
 /**
- * What a link issued from here leads to, and path beneath it, opened as opening says for the volume the storage manager
- * says holds the link: Revoked if it wasn't issued to that volume, or isn't any more; ReadOnly to change what was
- * issued only to read. The connection is linked.
+ * Open what a link issued from here leads to, and a path beneath it, as the link's opening says, for the volume the
+ * storage manager says holds the link. The connection is linked, as is everything opened from it.
+ *
+ * @param server The server, whose volume is read, changed only when a File or Directory opening makes or cuts
+ *     something, and given the connection opened, linked.
+ * @param asked The link's number, the volume holding it, and how it's opened.
+ * @param path The path beneath what it leads to, at most files.PATH_BYTES bytes; "" for that itself.
+ * @return The connection opened, a file's or a directory's, read only or not, which goes to the storage manager;
+ *     Refused with Revoked if it wasn't issued to that volume, or isn't any more, ReadOnly to change what was issued
+ *     only to read, AlreadyExists for a New file that is the link's target, NoSpace without a slot, or why the path
+ *     couldn't be opened.
  */
 open_issued :: fn(server: ptr[mut Server], asked: volume_protocol.OpenIssued, path: string) -> volume_protocol.Response {
     record := slopfs.IssuedRecord.{}
@@ -482,7 +613,20 @@ open_issued :: fn(server: ptr[mut Server], asked: volume_protocol.OpenIssued, pa
     return .OpenedReadOnlyDirectory(made)
 }
 
-/** The file at path beneath directory, to read: IsADirectory or IsALink if it's neither. */
+/**
+ * Find a file to read.
+ *
+ * @param volume The volume, read only.
+ * @param directory The directory object the path is beneath.
+ * @param path The file's path.
+ * @return The file's object.
+ * @error NotFound Nothing is at path.
+ * @error IsADirectory It's a directory.
+ * @error IsALink It's a link.
+ * @error NotADirectory What's on the way to it isn't a directory.
+ * @error DeviceError A block couldn't be read.
+ * @error Corrupt The tree couldn't be read as one.
+ */
 readable_file :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: string) -> Result[u64, slopfs.Error] {
     object :: slopfs.resolve(volume, directory, path)?
     slopfs.file_record(volume, object)?
@@ -491,7 +635,19 @@ readable_file :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: string
 
 // Listing and revoking them (Links, Revoke)
 
-/** The first link issued at or after cursor for what's beneath directory, with the path to it from there. */
+/**
+ * List the first link issued at or after a cursor for what's beneath a directory, with the path to it from there.
+ *
+ * Links for what's gone, or moved out from beneath the directory, or whose path can't be found, are passed over.
+ *
+ * @param server The server, whose volume's issued records are read, not changed.
+ * @param index The client's connection's slot; a linked one lists nothing (ReadOnly).
+ * @param directory The directory object whose links, for itself or what's beneath it, are listed, their paths from it.
+ * @param cursor Where to start: 0, or what the last listing's next said.
+ * @param out The answer being built, which the path is appended to.
+ * @return Issued with its number, the path, whether it's to write, when it was made and the next cursor; End past the
+ *     last; or Failed.
+ */
 issued_link :: fn(server: ptr[mut Server], index: usize, directory: u64, cursor: u64, out: ptr[mut os.Outgoing]) -> dir.Response {
     if index >= server.connections.count || server.connections[index].linked {
         return .Failed(.ReadOnly)
@@ -520,7 +676,16 @@ issued_link :: fn(server: ptr[mut Server], index: usize, directory: u64, cursor:
     }
 }
 
-/** A link issued for what's beneath directory revoked by its number. */
+/**
+ * Revoke a link issued for what's beneath a directory, by its number, so it opens nothing.
+ *
+ * @param server The server, whose volume's issued record is deleted, durable with its next commit.
+ * @param index The client's connection's slot; a linked one revokes nothing (ReadOnly).
+ * @param directory The directory object; one issued for what's gone may be revoked beneath the root.
+ * @param number The link's number.
+ * @return Done once it's revoked, durable with the volume's next commit; Failed with NotFound for no such link, or one
+ *     not beneath the directory, or why it couldn't be revoked.
+ */
 revoked :: fn(server: ptr[mut Server], index: usize, directory: u64, number: u64) -> dir.Response {
     if index >= server.connections.count || server.connections[index].linked {
         return .Failed(.ReadOnly)

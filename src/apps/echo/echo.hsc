@@ -1,17 +1,17 @@
 /**
  * echo (decisions/0136, 0150): a session's first program until the shell, which the session manager starts with the
- * session's terminal connection, and its home volume's root once someone's logged in; it says how many entries the home
- * directory has, then how numbers and dates look in its session's locale (decisions/0152). It reads lines with
- * Hemera's std/terminal line editor (decisions/0164), the line being typed kept as the terminal's input line, below what
- * anything writes (decisions/0147), with a cursor and history, and answers each line with the line itself and "echo: "
- * and the line, which it also logs; Ctrl-C drops the line, shown with ^C after it. Its session ends with its terminal
- * connection, and so does it. Asked to stop on its lifecycle channel (decisions/0139), it ends with 0.
+ * session's terminal connection, and its home volume's root once someone's logged in; it says how many entries the
+ * home directory has, then how numbers and dates look in its session's locale (decisions/0152). It reads lines with
+ * Hemera's std/terminal line editor (decisions/0164), the line being typed kept as the terminal's input line, below
+ * what anything writes (decisions/0147), with a cursor and history, and answers each line with the line itself and
+ * "echo: " and the line, which it also logs; Ctrl-C drops the line, shown with ^C after it. Its session ends with its
+ * terminal connection, and so does it. Asked to stop on its lifecycle channel (decisions/0139), it ends with 0.
  *
  * With its session's powerbox (decisions/0156), three lines ask the user for something on the trusted path: "open" for
  * a file, whose first line it shows; "save" and some text for a file to write the text in, suggesting notes.txt, and
- * asking to keep it as "notes" (decisions/0158); and "list" for a directory, whose entries it names. "reopen" opens what
- * was kept as "notes" again, without asking, and shows its first line. "adduser" asks for another account, which the
- * administrator allows on the trusted path, where its name and password are typed too.
+ * asking to keep it as "notes" (decisions/0158); and "list" for a directory, whose entries it names. "reopen" opens
+ * what was kept as "notes" again, without asking, and shows its first line. "adduser" asks for another account, which
+ * the administrator allows on the trusted path, where its name and password are typed too.
  */
 package echo
 
@@ -28,15 +28,42 @@ import dir from "std/os/slop_os"
 import read_only_dir from "std/os/slop_os"
 import powerbox_protocol from "../../protocols/powerbox"
 
+/** The most bytes of a line that fit in echo's answer to it; what's past them is cut. */
 LINE_BYTES :: 256
+/** No channel: what box_end is without a powerbox. */
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 
+/** What echo runs with: its terminal and its session's powerbox. */
 Echo :: struct {
+    /** The session's terminal, opened on the terminal connection, which every line is read from and written to. */
     console : terminal.Terminal,
-    // Its session's powerbox, NONE without one
+    /** Its session's powerbox's channel end, NONE without one; the grant's, never closed. */
     box_end : slop_os.Channel,
+    /** A port bound to box_end, waited on for the powerbox's answers; unset without a powerbox. */
     box_port : slop_os.Port,
 }
+
+/**
+ * Echo each line typed on the session's terminal, and answer a few commands with the session's powerbox.
+ *
+ * It first says how many entries the home directory has, and how numbers and dates look in the session's locale. Then
+ * each line typed is answered with "echo: " and the line, and logged. With a powerbox, "open" asks the user for a file
+ * and shows its first line; "save" and some text asks for a file to write the text in, suggesting notes.txt and asking
+ * to keep it as "notes"; "list" asks for a directory and names its entries; "reopen" opens what was kept as "notes"
+ * again without asking; "adduser" asks for another account, which the administrator allows on the trusted path
+ * (Ctrl+Alt+Delete shows what the powerbox asks). Ctrl-C drops the line being typed.
+ *
+ * @param log The kernel's debug log. echo writes its lines through base's logger, to the events service, instead, so
+ *     it's taken but not used.
+ * @param session_terminal The connection to the session's terminal, which echo reads and writes for as long as it
+ *     runs; when it goes, the session's over and echo ends.
+ * @param home The root of the home volume of whoever's logged in, whose entries echo counts at the start. Without it,
+ *     as before anyone's logged in, nothing's said of a home directory.
+ * @param powerbox The session's powerbox, which the commands open, save, list, reopen and adduser ask. Without it,
+ *     each of them says there's no powerbox to ask.
+ * @return 0 when it's asked to stop on its lifecycle channel; 2 if the terminal couldn't be opened or a port for the
+ *     powerbox couldn't be made; 3 when its terminal goes.
+ */
 
 main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Terminal], home: os.Channel[dir.Dir]?,
     powerbox: os.Channel[powerbox_protocol.Powerbox]?) -> int {
@@ -74,7 +101,12 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Termina
     }
 }
 
-/** A number and a date as the session's locale writes them, the last day of 2026 for the date. */
+/**
+ * Show a number and a date as the session's locale writes them, the last day of 2026 for the date, and log the
+ * locale's name.
+ *
+ * @param echo The program's state, whose terminal the line is written to.
+ */
 show_locale :: fn(echo: ptr[mut Echo]) {
     storage : u8[96]
     line := text_buffer.make(storage)
@@ -88,7 +120,14 @@ show_locale :: fn(echo: ptr[mut Echo]) {
     runtime.log_info("its locale is %", if current.name.count > 0 { current.name } else { "neutral" })
 }
 
-/** How many entries the home directory has, said on the terminal and in the log. */
+/**
+ * Say how many entries the home directory has, on the terminal and in the log.
+ *
+ * Nothing's said if the directory can't be opened or listed.
+ *
+ * @param echo The program's state, whose terminal the line is written to.
+ * @param root The home volume's root, which stays the grant's: the directory opened on it is closed, not the root.
+ */
 greet :: fn(echo: ptr[mut Echo], root: os.Channel[dir.Dir]) {
     directory, error :: os.directory_on(root.end)
     if error != null {
@@ -112,7 +151,13 @@ greet :: fn(echo: ptr[mut Echo], root: os.Channel[dir.Dir]) {
     runtime.log_info("home has % %", count, if count == 1 { "entry" } else { "entries" })
 }
 
-/** A line answered: "echo: " and the line, written and logged, then done if it's a command. */
+/**
+ * Answer a line: "echo: " and the line written, the line logged, then the command it names, if any, done.
+ *
+ * @param echo The program's state.
+ * @param line The line typed, which stays the caller's; an empty line isn't answered. Only as much of it as fits
+ *     LINE_BYTES is in the answer.
+ */
 answer :: fn(echo: ptr[mut Echo], line: string) {
     if line.count == 0 {
         return void
@@ -126,7 +171,12 @@ answer :: fn(echo: ptr[mut Echo], line: string) {
     command(echo, line)
 }
 
-/** A line that asks the powerbox for something: open, save and its text, or list. */
+/**
+ * Do what a line asks of the powerbox, if it's one of its commands: open, reopen, adduser, save and its text, or list.
+ *
+ * @param echo The program's state.
+ * @param line The line typed; one that's none of the commands, or "save " without text, does nothing.
+ */
 command :: fn(echo: ptr[mut Echo], line: string) {
     if line == "open" {
         open_chosen(echo)
@@ -145,7 +195,11 @@ command :: fn(echo: ptr[mut Echo], line: string) {
     }
 }
 
-/** A file the user chooses, its first line shown. */
+/**
+ * Ask the powerbox for a file to read, which the user chooses on the trusted path, and show its first line.
+ *
+ * @param echo The program's state, whose powerbox is asked and whose terminal shows the line or the refusal.
+ */
 open_chosen :: fn(echo: ptr[mut Echo]) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
@@ -158,7 +212,12 @@ open_chosen :: fn(echo: ptr[mut Echo]) {
     show_first_line(echo, &into)
 }
 
-/** What was kept as "notes", opened again without asking, its first line shown. */
+/**
+ * Ask the powerbox to open what was kept as "notes" again, read only and without asking the user, and show its first
+ * line.
+ *
+ * @param echo The program's state, whose powerbox is asked and whose terminal shows the line or the refusal.
+ */
 reopen_kept :: fn(echo: ptr[mut Echo]) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
@@ -170,7 +229,14 @@ reopen_kept :: fn(echo: ptr[mut Echo]) {
     show_first_line(echo, &into)
 }
 
-/** The powerbox's answer, a file to read, its first line shown; or that it gave nothing. */
+/**
+ * Show the first line of the file the powerbox's answer gives, or say that it gave nothing.
+ *
+ * Only the file's first 200 bytes are read, so a longer first line is cut there. The file is closed after.
+ *
+ * @param echo The program's state, whose terminal shows the line.
+ * @param into The powerbox's answer: GrantedReadOnlyFile for a file to read; any other answer is a refusal.
+ */
 show_first_line :: fn(echo: ptr[mut Echo], into: ptr[mut os.Incoming]) {
     match os.message_of[powerbox_protocol.Response](into)^ {
         case GrantedReadOnlyFile(given) => {
@@ -206,7 +272,13 @@ show_first_line :: fn(echo: ptr[mut Echo], into: ptr[mut os.Incoming]) {
     }
 }
 
-/** A file the user chooses, notes.txt suggested, text written in it. */
+/**
+ * Ask the powerbox for a file to write, which the user chooses on the trusted path, notes.txt suggested and kept as
+ * "notes" for reopen, and write text in it.
+ *
+ * @param echo The program's state, whose powerbox is asked and whose terminal says whether it was saved.
+ * @param text The text written, from the file's start; the file is closed after.
+ */
 save_chosen :: fn(echo: ptr[mut Echo], text: string) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
@@ -233,7 +305,14 @@ save_chosen :: fn(echo: ptr[mut Echo], text: string) {
     }
 }
 
-/** A directory the user chooses, its entries named. */
+/**
+ * Ask the powerbox for a directory to read, which the user chooses on the trusted path, and name its entries.
+ *
+ * The entries are listed one request at a time, until the directory answers something other than an entry; names past
+ * the line's room are cut. The directory's channel is closed after.
+ *
+ * @param echo The program's state, whose powerbox is asked and whose terminal shows the entries or the refusal.
+ */
 list_chosen :: fn(echo: ptr[mut Echo]) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
@@ -292,7 +371,12 @@ list_chosen :: fn(echo: ptr[mut Echo]) {
     }
 }
 
-/** Another account, made once the administrator allows it on the trusted path. */
+/**
+ * Ask the powerbox for another account, made once the administrator allows it on the trusted path, where its name and
+ * password are typed too, and say the new account's name.
+ *
+ * @param echo The program's state, whose powerbox is asked and whose terminal shows the account's name or the refusal.
+ */
 add_user :: fn(echo: ptr[mut Echo]) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
@@ -319,7 +403,14 @@ add_user :: fn(echo: ptr[mut Echo]) {
 }
 
 /**
- * A request to the powerbox, and its answer, which waits for the user if it asks them, into into: false without a powerbox.
+ * Send a request to the powerbox and wait for its answer, which waits for the user if it asks them.
+ *
+ * @param echo The program's state, whose powerbox is asked; without one, it says there's no powerbox to ask.
+ * @param out The request, put together by the caller.
+ * @param into Where the answer is received, for the caller to read when this returns true.
+ * @param asks_user Whether the request asks the user, so the terminal first says how to see what's asked.
+ * @return True with the answer in into; false without a powerbox, or if the request couldn't be sent or the answer
+ *     received, each said on the terminal.
  */
 ask_box :: fn(echo: ptr[mut Echo], out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming], asks_user: bool) -> bool {
     if echo.box_end == NONE {
@@ -345,11 +436,22 @@ ask_box :: fn(echo: ptr[mut Echo], out: ptr[mut os.Outgoing], into: ptr[mut os.I
     }
 }
 
+/**
+ * Say on the terminal, and in the log, that the powerbox gave nothing.
+ *
+ * @param echo The program's state, whose terminal it's said on.
+ */
 refused :: fn(echo: ptr[mut Echo]) {
     say(echo, "The powerbox gave nothing.")
     runtime.log_info("the powerbox gave nothing")
 }
 
+/**
+ * Write a line on the terminal, ignoring a failure: a terminal that's gone is noticed when the next line is read.
+ *
+ * @param echo The program's state, whose terminal it's written on.
+ * @param text The line, without its line feed.
+ */
 say :: fn(echo: ptr[mut Echo], text: string) {
     _ = terminal.write_line(&echo.console, text)
 }

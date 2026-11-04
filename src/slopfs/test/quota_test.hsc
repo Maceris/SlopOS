@@ -10,10 +10,19 @@ import slopfs from ".."
  * work; and a volume's count of its blocks, which always matches the owners tree, across a mount. Checks from 1100.
  */
 
+/** The size of the quota test's disk, in blocks: 8 MiB. */
 QUOTA_BLOCKS : u64 : 2048
+/** The bytes of each file the tests write: one chunk, slopfs.CHUNK_BYTES, so 16 blocks. */
 CHUNK : usize : 65536
 
-/** The blocks the owners tree says a volume has. */
+/**
+ * Count the blocks the owners tree says a volume has, as its last commit (or this transaction's changes taken so
+ * far) left them.
+ *
+ * @param container The container under test, mounted.
+ * @param id The volume's ID.
+ * @return The blocks; all ones if the owners tree couldn't be read.
+ */
 owned_blocks :: fn(container: ptr[mut slopfs.Container], id: u64) -> u64 {
     value := slopfs.OwnerValue.{}
     at := slopfs.Key.{}
@@ -31,12 +40,25 @@ owned_blocks :: fn(container: ptr[mut slopfs.Container], id: u64) -> u64 {
     return total
 }
 
-/** Whether the volume's count of its blocks is what the owners tree says, once committed. */
+/**
+ * Tell whether a volume's count of its blocks is what the owners tree says; it should be once committed.
+ *
+ * @param container The container under test, mounted.
+ * @param id The volume's ID.
+ * @return True if usage_of's used is owned_blocks'.
+ */
 counted :: fn(container: ptr[mut slopfs.Container], id: u64) -> bool {
     return slopfs.usage_of(container, id).used == owned_blocks(container, id)
 }
 
-/** A new file of a chunk's bytes in the root, named by number: whether it was written. */
+/**
+ * Make a new file of a chunk's bytes in the root, named by a number; one that can't be written whole is removed.
+ *
+ * @param volume The volume under test, open.
+ * @param number The file's number, its name.
+ * @param data The bytes, the first CHUNK of them written.
+ * @return True if it was made and written; false if either failed, as at a quota or the reserve.
+ */
 write_file :: fn(volume: ptr[mut slopfs.Volume], number: int, data: ptr[mut Data]) -> bool {
     name : u8[16]
     length :: name_of_number(name, number)
@@ -53,6 +75,13 @@ write_file :: fn(volume: ptr[mut slopfs.Volume], number: int, data: ptr[mut Data
     }
 }
 
+/**
+ * Remove a file in the root named by a number.
+ *
+ * @param volume The volume under test, open.
+ * @param number The file's number, its name.
+ * @return True if it was removed; false on any error.
+ */
 remove_file :: fn(volume: ptr[mut slopfs.Volume], number: int) -> bool {
     name : u8[16]
     length :: name_of_number(name, number)
@@ -62,6 +91,14 @@ remove_file :: fn(volume: ptr[mut slopfs.Volume], number: int) -> bool {
     }
 }
 
+/**
+ * Check quotas: a volume's files written until its quota refuses more, and a file deleted at its quota, which makes
+ * room; a snapshot's blocks kept charged to its volume, so deleting files under it frees nothing until the snapshot
+ * goes; a volume's count of its blocks, which always matches the owners tree, and its quota, across a mount; then
+ * check_reserve.
+ *
+ * @return 0 if every check passed, or the number of the first that failed: 1100 to 1122, or check_reserve's.
+ */
 check_quotas :: fn() -> int {
     device :: new_device_of(QUOTA_BLOCKS) or_return 1100
     defer free_device(device)
@@ -150,7 +187,12 @@ check_quotas :: fn() -> int {
     return check_reserve()
 }
 
-/** A container filled to its reserve, with no quota: deleting and committing still work. */
+/**
+ * Check the reserve: a container filled to it, with no quota, keeps it free of files' bytes, and deleting and
+ * committing still work, freeing blocks.
+ *
+ * @return 0 if every check passed, or the number of the first that failed, 1130 to 1138.
+ */
 check_reserve :: fn() -> int {
     blocks : u64 = 512
     device :: new_device_of(blocks) or_return 1130

@@ -7,15 +7,24 @@ import boot_info from "../../boot_info"
 
 // Model-specific registers and control register bits
 //SPEC: Intel SDM Vol. 4 (MSRs), Vol. 3A §2.5 (control registers), §2.2.1 (EFER)
+/** The IA32_EFER MSR's number: extended features, like SYSCALL and no-execute. */
 IA32_EFER : u32 : 0xc0000080
+/** The IA32_STAR MSR's number: the segment selectors SYSCALL and SYSRET load. */
 IA32_STAR : u32 : 0xc0000081
+/** The IA32_LSTAR MSR's number: the virtual address SYSCALL jumps to in 64-bit mode. */
 IA32_LSTAR : u32 : 0xc0000082
+/** The IA32_FMASK MSR's number: the RFLAGS bits SYSCALL clears. */
 IA32_FMASK : u32 : 0xc0000084
+/** The IA32_FS_BASE MSR's number: the fs segment's base address. */
 IA32_FS_BASE : u32 : 0xc0000100
+/** The IA32_GS_BASE MSR's number: the gs segment's base address, the CPU's ArchCpu while in the kernel. */
 IA32_GS_BASE : u32 : 0xc0000101
+/** The IA32_KERNEL_GS_BASE MSR's number: the gs base swapgs exchanges with IA32_GS_BASE. */
 IA32_KERNEL_GS_BASE : u32 : 0xc0000102
 
+/** IA32_EFER bit 0 (SCE): SYSCALL and SYSRET enabled. */
 EFER_SYSCALL_ENABLE : u64 : 1 << 0
+/** IA32_EFER bit 11 (NXE): the no-execute bit in page-table entries enabled. */
 EFER_NO_EXECUTE_ENABLE : u64 : 1 << 11
 
 /*
@@ -23,39 +32,61 @@ EFER_NO_EXECUTE_ENABLE : u64 : 1 << 11
  * at the base plus 16 and user data at the base plus 8, so the base sits below user data.
  */
 //SPEC: Intel SDM Vol. 3A §5.8.8 (fast system calls in 64-bit mode)
+/** IA32_STAR bits 32-47: the selector base SYSCALL loads cs (and ss, 8 above it) from, the kernel's code selector. */
 STAR_SYSCALL_SELECTORS : u64 : cast[u64](KERNEL_CODE_SELECTOR) << 32
+/** IA32_STAR bits 48-63: the selector base 64-bit SYSRET loads from, 8 below user data, with RPL 3. */
 STAR_SYSRET_SELECTORS : u64 : cast[u64](USER_DATA_SELECTOR - 8) << 48
-/** Flags SYSCALL clears: trap, interrupts, direction and alignment check */
+/** The RFLAGS bits SYSCALL clears, for IA32_FMASK: trap (8), interrupt (9), direction (10), alignment check (18). */
 SYSCALL_FLAGS_MASK : u64 : (1 << 8) | (1 << 9) | (1 << 10) | (1 << 18)
 
+/** CR0 bit 1 (MP): with TS, WAIT and FWAIT raise device-not-available too. */
 CR0_MONITOR_COPROCESSOR : u64 : 1 << 1
+/** CR0 bit 2 (EM): x87 instructions emulated, raising device-not-available; cleared for the FPU to work. */
 CR0_EMULATION : u64 : 1 << 2
+/** CR0 bit 5 (NE): x87 errors reported natively, as #MF, not through the legacy external interrupt. */
 CR0_NUMERIC_ERROR : u64 : 1 << 5
 
+/** CR4 bit 9 (OSFXSR): the OS saves SSE state with FXSAVE and XSAVE, which enables SSE instructions. */
 CR4_OSFXSR : u64 : 1 << 9
+/** CR4 bit 10 (OSXMMEXCPT): unmasked SIMD floating-point exceptions raise #XM. */
 CR4_OSXMMEXCPT : u64 : 1 << 10
+/** CR4 bit 17 (PCIDE): process-context identifiers enabled, the address-space tags in CR3's low 12 bits. */
 CR4_PCID : u64 : 1 << 17
+/** CR4 bit 18 (OSXSAVE): XSAVE and XSETBV enabled, and XCR0 in use. */
 CR4_OSXSAVE : u64 : 1 << 18
+/** CR4 bit 20 (SMEP): the kernel can't execute user-mode pages. */
 CR4_SMEP : u64 : 1 << 20
+/** CR4 bit 21 (SMAP): the kernel can't access user-mode pages unless RFLAGS.AC is set. */
 CR4_SMAP : u64 : 1 << 21
 
 // XCR0 state components: x87, SSE and AVX by default (decisions/0023)
+/** XCR0 bit 0: the x87 state component, which has to be set. */
 XCR0_X87 : u64 : 1 << 0
+/** XCR0 bit 1: the SSE state component, XMM registers and MXCSR. */
 XCR0_SSE : u64 : 1 << 1
+/** XCR0 bit 2: the AVX state component, the YMM registers' upper halves. */
 XCR0_AVX : u64 : 1 << 2
 
 // Code and data segments for 64-bit mode: base and limit are ignored, only the access bits matter.
 //SPEC: Intel SDM Vol. 3A §3.4.5, Figure 3-8 (segment descriptors), §5.2.1 (code segments in 64-bit mode)
+/** The kernel's code segment descriptor: present, DPL 0, execute/read, 64-bit (L set). */
 KERNEL_CODE_DESCRIPTOR : u64 : 0x00af9a000000ffff
+/** The kernel's data segment descriptor: present, DPL 0, read/write. */
 KERNEL_DATA_DESCRIPTOR : u64 : 0x00cf92000000ffff
+/** User mode's data segment descriptor: present, DPL 3, read/write. */
 USER_DATA_DESCRIPTOR : u64 : 0x00cff2000000ffff
+/** User mode's code segment descriptor: present, DPL 3, execute/read, 64-bit (L set). */
 USER_CODE_DESCRIPTOR : u64 : 0x00affa000000ffff
 
-/*
- * The two GDT entries of a 64-bit TSS descriptor for a TSS at base: present, DPL 0, type 9
- * (available 64-bit TSS).
+/**
+ * Make the two GDT entries of a 64-bit TSS descriptor: present, DPL 0, type 9 (available 64-bit TSS).
+ *
+ * SPEC: Intel SDM Vol. 3A §8.2.3, Figure 8-4 (TSS descriptor in 64-bit mode).
+ *
+ * @param base The TSS's virtual address. Its limit is the size of TaskStateSegment, less 1.
+ * @return The descriptor's low 8 bytes, the entry the TSS's selector names.
+ * @return Its high 8 bytes, bits 32-63 of base, the entry after it.
  */
-/** SPEC: Intel SDM Vol. 3A §8.2.3, Figure 8-4 (TSS descriptor in 64-bit mode) */
 tss_descriptor :: fn(base: u64) -> (u64, u64) {
     limit :: cast[u64](size_of(TaskStateSegment) - 1)
     low := limit & 0xffff
@@ -66,7 +97,14 @@ tss_descriptor :: fn(base: u64) -> (u64, u64) {
     return low, base >> 32
 }
 
-/** An interrupt gate to handler, on interrupt stack table slot ist (0 for none). */
+/**
+ * Make an IDT entry: an interrupt gate, DPL 0, in the kernel's code segment, so user mode can't raise it with INT.
+ *
+ * @param handler The entry stub's virtual address.
+ * @param ist The interrupt stack table slot to switch to, 1 to 7, or 0 for none.
+ * @return The 16-byte gate, present, for the caller to store in the IDT; handler's 64 bits are split across its
+ *     three offset fields.
+ */
 gate :: fn(handler: u64, ist: u8) -> IdtEntry {
     return IdtEntry.{
         offset_low = cast[u16](handler & 0xffff),
@@ -79,7 +117,15 @@ gate :: fn(handler: u64, ist: u8) -> IdtEntry {
     }
 }
 
-/** Set up the IDT. Called once, on the boot CPU, before init_cpu. */
+/**
+ * Set up the state shared by every CPU: the IDT, every vector at its entry point, and the legacy PICs masked.
+ *
+ * Called once, on the boot CPU, before init_cpu.
+ *
+ * @param system Where the IDT goes, which mustn't move afterwards: each CPU's IDTR points at it.
+ * @param firmware The firmware's tables, which x86-64 doesn't need here.
+ * @param direct_map_offset Where the bootloader's direct map is, not needed here either.
+ */
 init_system :: fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) {
     for &entry in system.idt {
         entry^ = IdtEntry.{}
@@ -88,9 +134,18 @@ init_system :: fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareT
     mask_legacy_pics()
 }
 
-/*
- * Set up the calling CPU: GDT and TSS with the stacks entries use, the IDT, no-execute, user-access
- * protection, address-space tags, the default vector state, and the gs base for entries.
+/**
+ * Set up the calling CPU.
+ *
+ * In order: its GDT and TSS with the stacks entries use, the IDT, no-execute, user-access protection, the x87, SSE and
+ * AVX state, address-space tags, SYSCALL, the gs base for entries, and its local APIC in x2APIC mode. It runs once on
+ * each CPU, at ring 0 with interrupts disabled, after init_system.
+ *
+ * @param system The shared state init_system set up, whose IDT this CPU loads.
+ * @param cpu This CPU's state, which mustn't move afterwards: the GDT, TSS and gs base point into it.
+ * @param carrier The CPU's carrier block, which entries load; kept, so it has to outlive the CPU's running.
+ * @param context The context entries push; kept, so it has to outlive the CPU's running.
+ * @param stacks The kernel stack and the critical events' stacks, their tops put in the TSS.
  */
 init_cpu :: fn(
     system: ptr[ArchSystem],
@@ -116,9 +171,14 @@ init_cpu :: fn(
 }
 
 /**
- * Every entry runs on the kernel stack, through the interrupt stack table, including entries from
- * idle: the kernel stack holds nothing then, so each entry starts again at its top. The critical
- * events get stacks of their own, since they can arrive while the kernel stack is in use.
+ * Record where the calling CPU's entries run, in its TSS, its SYSCALL scratch and its stack limits.
+ *
+ * Every entry runs on the kernel stack, through the interrupt stack table, including entries from idle: the kernel
+ * stack holds nothing then, so each entry starts again at its top. The critical events get stacks of their own, since
+ * they can arrive while the kernel stack is in use. The TSS is rebuilt from zero, with no I/O permission bitmap.
+ *
+ * @param cpu The CPU's state, whose tss, syscall.kernel_stack and stack limits are set.
+ * @param stacks The kernel stack and the critical events' stacks, indexed by arch_interface.CriticalEvent.
  */
 record_stacks :: fn(cpu: ptr[mut ArchCpu], stacks: ptr[arch_interface.CpuStacks]) {
     kernel_top :: cast[u64](stacks.kernel.high)
@@ -136,6 +196,14 @@ record_stacks :: fn(cpu: ptr[mut ArchCpu], stacks: ptr[arch_interface.CpuStacks]
     }
 }
 
+/**
+ * Fill the calling CPU's GDT and load it, the kernel's segments, the TSS and the IDT.
+ *
+ * Loading the segments resets the fs and gs bases, so they're set after this.
+ *
+ * @param system The shared state whose IDT is loaded.
+ * @param cpu The CPU's state, whose gdt is filled and whose tss is loaded, so it has to be filled first.
+ */
 load_descriptor_tables :: fn(system: ptr[ArchSystem], cpu: ptr[mut ArchCpu]) {
     cpu.gdt[0] = 0
     cpu.gdt[1] = KERNEL_CODE_DESCRIPTOR
@@ -155,8 +223,11 @@ load_descriptor_tables :: fn(system: ptr[ArchSystem], cpu: ptr[mut ArchCpu]) {
 }
 
 /**
- * No-execute, user-access protection and address-space tags where the CPU has them, and the
- * x87, SSE and AVX state for user threads. The kernel itself never uses vector registers.
+ * Turn on the calling CPU's features: no-execute, SMEP, SMAP and PCIDs where the CPU has them, and the x87, SSE and
+ * AVX state for user threads, XCR0 set to XCR0_BASE.
+ *
+ * The kernel itself never uses vector registers. PCIDs are only turned on when CR3's low 12 bits are 0, as the CPU
+ * requires; init_paging records whether they were.
  */
 enable_cpu_features :: fn() {
     x86_64.wrmsr(IA32_EFER, x86_64.rdmsr(IA32_EFER) | EFER_NO_EXECUTE_ENABLE)
@@ -184,7 +255,10 @@ enable_cpu_features :: fn() {
     x86_64.xsetbv(0, XCR0_BASE)
 }
 
-/** SYSCALL enters at system_call_entry, with interrupts disabled. */
+/**
+ * Turn on SYSCALL on the calling CPU: it enters at system_call_entry, in the kernel's code segment, with the trap,
+ * interrupt, direction and alignment-check flags cleared, so interrupts are disabled.
+ */
 enable_system_calls :: fn() {
     x86_64.wrmsr(IA32_STAR, STAR_SYSCALL_SELECTORS | STAR_SYSRET_SELECTORS)
     x86_64.wrmsr(IA32_LSTAR, cast[u64](system_call_entry))

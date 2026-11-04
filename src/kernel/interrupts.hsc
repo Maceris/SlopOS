@@ -24,22 +24,28 @@ import concurrency from "std"
  * IRQ's port binding; a line has at most one IRQ.
  */
 
+/** How many wired interrupt controllers the kernel keeps, registered for good: kernel.controllers' size. */
 MAX_CONTROLLERS :: 8
 /** Device interrupt IDs a CPU keeps routes for: at least as many as any architecture has. */
 MAX_DEVICE_INTERRUPTS :: 256
 /** Bytes of registers mapped for each controller: a GICv3 distributor's, which an I/O APIC's 4 KiB fit in. */
 CONTROLLER_REGISTERS_SIZE : u64 : 64 * 1024
 
+/** Why a controller couldn't be registered, or a line or message routed. */
 InterruptError :: enum {
     /** This architecture doesn't have that kind of controller. */
     UnsupportedKind,
     /** The registers aren't a controller of that kind. */
     NotFound,
+    /** MAX_CONTROLLERS controllers are registered already, and none is ever unregistered. */
     TooManyControllers,
     /** No room for the registers in the kernel window, or memory for its page tables. */
     NoMapping,
+    /** No controller is registered at that index. */
     NoSuchController,
+    /** The controller has no line of that number. */
     NoSuchLine,
+    /** No CPU has that index, or it hasn't started. */
     NoSuchCpu,
     /** Every device interrupt ID on that CPU is taken. */
     NoFreeInterrupt,
@@ -47,32 +53,57 @@ InterruptError :: enum {
     LineInUse,
 }
 
+/** A wired interrupt controller the kernel has registered: kernel.controllers' entries, never removed. */
 WiredController :: struct {
-    // Held while its registers are used: each one is reached through a select register.
+    /** Held while its registers are used (rank Wired), since each one is reached through a select register. */
     lock : concurrency.SpinLock,
+    /** The architecture's state for it, set up by arch.init_interrupt_controller. */
     controller : arch.InterruptController,
+    /** What kind of controller it is. */
     kind : arch_interface.ControllerKind,
-    // In the kernel window, and where they are.
+    /** Where its registers are mapped in the kernel window, CONTROLLER_REGISTERS_SIZE bytes of them, uncached. */
     registers : u64,
+    /** The physical address of its registers, as it was registered with; how a second registration is known. */
     physical : u64,
+    /** How many lines it has, numbered from 0. */
     lines : u32,
 }
 
 /** Where one of a CPU's device interrupt IDs comes from. */
 DeviceRoute :: struct {
+    /** Whether the ID is routed; the rest means nothing when it isn't. */
     used : bool,
+    /**
+     * The index of the controller whose line it's routed from; MSI_CONTROLLER for a message-signaled IRQ, and
+     * IOMMU_CONTROLLER for an IOMMU's faults.
+     */
     controller : u32,
+    /** The controller's line, or for a message-signaled interrupt, its event; an IOMMU's number for its faults. */
     line : u32,
+    /** How the line triggers: a level-triggered line is masked as each interrupt arrives, until it's acknowledged. */
     trigger : arch_interface.Trigger,
-    /** Interrupts that arrived. */
+    /** How many interrupts have arrived since it was routed, counted on its CPU without a lock. */
     count : u64,
     /** The Irq object it's for (irqs.hsc), 0 for one the kernel routed for itself. */
     irq : u64,
 }
 
 /**
- * Map a controller's registers and set it up with every line masked: its index, for routing its
- * lines. kind and registers come from the firmware tables, through the platform service.
+ * Map a controller's registers and set it up with every line masked, so its lines can be routed.
+ *
+ * kind and registers come from the firmware tables, through the platform service, or from arch.test_device for
+ * test_ioapic. Registering one already registered, the same kind at the same address, gives its index again and
+ * changes nothing. A controller is registered for good. Takes interrupts_lock.
+ *
+ * @param kernel The kernel, whose controllers it joins.
+ * @param kind What kind of controller it is; the architecture supports only some kinds.
+ * @param registers The physical address of its registers, which needn't be page aligned;
+ *     CONTROLLER_REGISTERS_SIZE bytes from it are mapped, uncached.
+ * @return Its index in kernel.controllers, below MAX_CONTROLLERS, for routing its lines.
+ * @error NoMapping The registers couldn't be mapped into the kernel window.
+ * @error UnsupportedKind This architecture doesn't have that kind of controller; the registers are unmapped again.
+ * @error NotFound The registers aren't a controller of that kind; they're unmapped again.
+ * @error TooManyControllers MAX_CONTROLLERS are registered already; the registers are unmapped again.
  */
 register_controller :: fn(kernel: ptr[mut Kernel], kind: arch_interface.ControllerKind, registers: boot_info.PhysicalAddress)
     -> Result[u32, InterruptError] {
@@ -109,9 +140,27 @@ register_controller :: fn(kernel: ptr[mut Kernel], kind: arch_interface.Controll
     return .Ok(index)
 }
 
-/*
- * Route a controller's line to a free device interrupt ID on the CPU with index cpu_index, still
- * masked: the ID.
+/**
+ * Route a controller's line to a free device interrupt ID on a CPU, leaving the line masked.
+ *
+ * The route is recorded in the CPU's device_routes under interrupts_lock, then the controller is programmed under its
+ * own lock. Nothing checks that the line isn't routed already, unless it's for an IRQ.
+ *
+ * @param kernel The kernel, whose per_cpus' routes change under interrupts_lock; the controller is programmed
+ *     under its own lock after. The caller holds no lock of rank Interrupts or above.
+ * @param controller_index The controller's index, from register_controller.
+ * @param line The controller's line, below its count of lines.
+ * @param cpu_index The index of the CPU its interrupts go to, which has to have started.
+ * @param trigger How the line triggers; a level-triggered line is masked as each interrupt arrives.
+ * @param polarity Whether the line is active high or low, as the firmware tables say.
+ * @param irq The Irq object (irqs.hsc) the route delivers to, as its address, or 0 for a route the kernel keeps for
+ *     itself, like test_ioapic's. A line has at most one IRQ.
+ * @return The device interrupt ID the line now raises on that CPU, in arch.device_interrupt_range.
+ * @error NoSuchController No controller is registered at controller_index.
+ * @error NoSuchLine The controller has no such line.
+ * @error NoSuchCpu No started CPU has that index.
+ * @error LineInUse irq isn't 0, and an IRQ has the line already, on any CPU.
+ * @error NoFreeInterrupt Every device interrupt ID on that CPU is routed.
  */
 route_line :: fn(
     kernel: ptr[mut Kernel],
@@ -165,8 +214,22 @@ route_line :: fn(
 MSI_CONTROLLER : u32 : 0xffffffff
 
 /**
- * A free device interrupt ID on the CPU with index cpu_index for irq, a message-signaled IRQ, whose line is its
- * event: the ID. The kernel routes one for itself as controller's line, irq 0, as an IOMMU's faults are.
+ * Take a free device interrupt ID on a CPU for a message-signaled interrupt, edge-triggered.
+ *
+ * Only the CPU's route is recorded, under interrupts_lock; the caller has the device or the IOMMU send the message
+ * that raises the ID (arch.route_msi).
+ *
+ * @param kernel The kernel, whose per_cpus' routes change under interrupts_lock, so the caller holds no lock of
+ *     rank Interrupts or above.
+ * @param cpu_index The index of the CPU the interrupt goes to, which has to have started.
+ * @param event The interrupt's event, its number among its device's, recorded as the route's line; for an IOMMU's
+ *     faults, the IOMMU's number.
+ * @param irq The message-signaled Irq object it's for, as its address, or 0 for one the kernel routes for itself.
+ * @param controller What the route says it comes from: MSI_CONTROLLER for an IRQ's message, IOMMU_CONTROLLER for an
+ *     IOMMU's faults.
+ * @return The device interrupt ID routed, in arch.device_interrupt_range.
+ * @error NoSuchCpu No started CPU has that index.
+ * @error NoFreeInterrupt Every device interrupt ID on that CPU is routed.
  */
 route_message :: fn(kernel: ptr[mut Kernel], cpu_index: u32, event: u32, irq: u64, controller: u32 = MSI_CONTROLLER)
     -> Result[arch_interface.InterruptId, InterruptError] {
@@ -195,6 +258,14 @@ route_message :: fn(kernel: ptr[mut Kernel], cpu_index: u32, event: u32, irq: u6
     return .Ok(cast[arch_interface.InterruptId](cast[u32](first) + cast[u32](slot)))
 }
 
+/**
+ * Mask a controller's line, so it raises nothing until it's unmasked. Takes the controller's lock.
+ *
+ * @param kernel The kernel, whose controllers are read; the controller's lock (rank Wired) is taken. Safe in
+ *     interrupt context, as handle_device_interrupt masks a level-triggered line.
+ * @param controller_index The controller's index; one not registered, like MSI_CONTROLLER, is ignored.
+ * @param line One of the controller's lines; another stops the kernel.
+ */
 mask_line :: fn(kernel: ptr[mut Kernel], controller_index: u32, line: u32) {
     wired :: controller_at(kernel, controller_index) or_return void
     runtime.assert(line < wired.lines, "mask_line takes one of the controller's lines")
@@ -203,6 +274,13 @@ mask_line :: fn(kernel: ptr[mut Kernel], controller_index: u32, line: u32) {
     unlock_at(&wired.lock, .Wired)
 }
 
+/**
+ * Unmask a controller's line, so its interrupts arrive at the ID it's routed to. Takes the controller's lock.
+ *
+ * @param kernel The kernel, whose controllers are read; the controller's lock (rank Wired) is taken.
+ * @param controller_index The controller's index; one not registered, like MSI_CONTROLLER, is ignored.
+ * @param line One of the controller's lines; another stops the kernel.
+ */
 unmask_line :: fn(kernel: ptr[mut Kernel], controller_index: u32, line: u32) {
     wired :: controller_at(kernel, controller_index) or_return void
     runtime.assert(line < wired.lines, "unmask_line takes one of the controller's lines")
@@ -211,7 +289,14 @@ unmask_line :: fn(kernel: ptr[mut Kernel], controller_index: u32, line: u32) {
     unlock_at(&wired.lock, .Wired)
 }
 
-/** Whether an IRQ has controller_index's line, on any CPU. Takes interrupts_lock as held. */
+/**
+ * Tell whether an IRQ has a controller's line, on any CPU.
+ *
+ * @param kernel The kernel, whose interrupts_lock the caller holds.
+ * @param controller_index The controller's index.
+ * @param line The controller's line.
+ * @return True if a route for an IRQ (not one the kernel keeps for itself) has the line.
+ */
 line_has_irq :: fn(kernel: ptr[Kernel], controller_index: u32, line: u32) -> bool {
     for address in kernel.per_cpus {
         if address != 0 {
@@ -226,7 +311,17 @@ line_has_irq :: fn(kernel: ptr[Kernel], controller_index: u32, line: u32) -> boo
     return false
 }
 
-/** Forget the route at slot on the CPU with index cpu_index, an IRQ's being destroyed. */
+/**
+ * Forget a route, an IRQ's being destroyed, so its device interrupt ID is free again. Takes interrupts_lock.
+ *
+ * The controller isn't touched: the caller masks the line, or stops the message, first.
+ *
+ * @param kernel The kernel, whose per_cpus' routes change under interrupts_lock, so the caller holds no lock of
+ *     rank Interrupts or above.
+ * @param cpu_index The index of the CPU the route is on; one with no started CPU is ignored.
+ * @param slot The route's index in that CPU's device_routes, its ID less the range's first; MAX_DEVICE_INTERRUPTS
+ *     or more, as an IRQ never routed has, is ignored.
+ */
 unroute :: fn(kernel: ptr[mut Kernel], cpu_index: u32, slot: u32) {
     per_cpus :: kernel.per_cpus
     if cast[usize](cpu_index) >= per_cpus.count || per_cpus[cpu_index] == 0 || cast[usize](slot) >= MAX_DEVICE_INTERRUPTS {
@@ -238,6 +333,13 @@ unroute :: fn(kernel: ptr[mut Kernel], cpu_index: u32, slot: u32) {
     unlock_at(&kernel.interrupts_lock, .Interrupts)
 }
 
+/**
+ * Find a registered controller.
+ *
+ * @param kernel The kernel, whose controller_count is loaded with acquire; no lock is taken.
+ * @param index The controller's index, from register_controller.
+ * @return The controller, which stays registered and where it is for good; null if none is registered at index.
+ */
 controller_at :: fn(kernel: ptr[mut Kernel], index: u32) -> ptr[mut WiredController]? {
     if index >= intrinsics.atomic_load_u32_acquire(&kernel.controller_count) || cast[usize](index) >= MAX_CONTROLLERS {
         return null
@@ -246,8 +348,13 @@ controller_at :: fn(kernel: ptr[mut Kernel], index: u32) -> ptr[mut WiredControl
 }
 
 /**
- * A device interrupt on this CPU, from idle or user mode. A level-triggered line stays masked until
- * it's acknowledged; the interrupt is acknowledged to the local controller either way.
+ * Handle a device interrupt on this CPU, from idle or user mode, with interrupts disabled.
+ *
+ * The route's count goes up; a level-triggered line is masked until it's acknowledged (irq_ack); the interrupt is
+ * acknowledged to the local controller either way. Then an IRQ's binding gets a packet, or an IOMMU's faults are
+ * read. An ID routed from nothing is logged and acknowledged.
+ *
+ * @param id The device interrupt ID that arrived, which should be in arch.device_interrupt_range.
  */
 handle_device_interrupt :: fn(id: arch_interface.InterruptId) {
     cpu :: per_cpu()

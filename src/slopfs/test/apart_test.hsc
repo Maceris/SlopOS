@@ -13,15 +13,35 @@ import slopfs from ".."
 
 /** A volume's side of its container: what a volume server's requests to the container service carry. */
 Side :: struct {
+    /** The container the volume is in. */
     container : ptr[mut slopfs.Container],
+    /** The volume's ID, which every block it takes and gives back is charged to. */
     id : u64,
 }
 
+/**
+ * Allocate blocks from the container's space for a volume apart, as the container service does for a volume server.
+ *
+ * @param context The volume's Side, as a rawptr.
+ * @param blocks How many blocks.
+ * @param owner Whose the tree says they are; the Side's ID is used instead.
+ * @param data Whether they're for a file's bytes, which a quota and the reserve hold back.
+ * @return The first block; null if there's no room, as space_allocate says.
+ */
 side_allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u64? {
     side :: cast[ptr[mut Side]](context)
     return slopfs.space_allocate(cast[rawptr](&side.container.space), blocks, side.id, data)
 }
 
+/**
+ * Give blocks back to the container's space for a volume apart, as the container service does for a volume server.
+ *
+ * @param context The volume's Side, as a rawptr.
+ * @param address The extent's first block.
+ * @param blocks Its length in blocks.
+ * @param owner Whose the tree says it is; the Side's ID is used instead.
+ * @param birth The transaction it was born in.
+ */
 side_release :: fn(context: rawptr, address: u64, blocks: u64, owner: u64, birth: u64) {
     side :: cast[ptr[mut Side]](context)
     slopfs.space_release(cast[rawptr](&side.container.space), address, blocks, side.id, birth)
@@ -29,11 +49,22 @@ side_release :: fn(context: rawptr, address: u64, blocks: u64, owner: u64, birth
 
 /** A volume taken out of the container's process and opened on nodes of its own. */
 Apart :: struct {
+    /** What its nodes allocate and release through. */
     side : Side,
+    /** Its own nodes, its own transaction's, which allocate from the container's space as the volume's owner. */
     nodes : slopfs.Nodes,
+    /** The volume, open on nodes. */
     volume : ptr[mut slopfs.Volume],
 }
 
+/**
+ * Take a volume out of the container's process and open it on nodes of its own, as a volume server does.
+ *
+ * @param container The container, which has to outlive what's made; the volume is closed in it first.
+ * @param id The volume's ID.
+ * @return What's made, the caller's to free with free_apart; null if the volume's record or memory for it couldn't
+ *     be had.
+ */
 apart :: fn(container #escaping : ptr[mut slopfs.Container], id: u64) -> ptr[mut Apart]? {
     record :: slopfs.volume_record(container, id) or_return null
     slopfs.close_volume(container, id)
@@ -51,7 +82,13 @@ apart :: fn(container #escaping : ptr[mut slopfs.Container], id: u64) -> ptr[mut
     return made
 }
 
-/** A volume's commit, as a volume server makes one: its tree written, then its record committed by the container. */
+/**
+ * Commit a volume apart, as a volume server does: its tree written, then its record committed by the container,
+ * which takes only its changes and the container's own. Its nodes then make the container's next transaction.
+ *
+ * @param made The volume apart, from apart; its nodes start the container's next transaction.
+ * @return True if it was committed; false on any error.
+ */
 commit_apart :: fn(made: ptr[mut Apart]) -> bool {
     record :: slopfs.write_volume(made.volume) or_return false
     if slopfs.commit_volume(made.side.container, made.side.id, &record) is_error {
@@ -61,6 +98,11 @@ commit_apart :: fn(made: ptr[mut Apart]) -> bool {
     return true
 }
 
+/**
+ * Free a volume apart: its dirty nodes, uncommitted changes lost with them, its volume and itself.
+ *
+ * @param made The volume apart, from apart; it may not be used again.
+ */
 free_apart :: fn(made: ptr[mut Apart]) {
     for i in 0..<made.nodes.dirty.used.count {
         if i < made.nodes.dirty.used.count && i < made.nodes.dirty.values.count && made.nodes.dirty.used[i] {
@@ -72,7 +114,13 @@ free_apart :: fn(made: ptr[mut Apart]) {
     runtime.free(made)
 }
 
-/** A volume's ID by its name, or 0. */
+/**
+ * Find a volume's ID by its name.
+ *
+ * @param container The container under test, mounted.
+ * @param name The volume's name.
+ * @return Its ID; 0 if no volume has the name, or it couldn't be looked up.
+ */
 volume_id :: fn(container: ptr[mut slopfs.Container], name: string) -> u64 {
     match slopfs.find_volume(container, name) {
         case Ok(found) => return found or_else 0
@@ -80,6 +128,14 @@ volume_id :: fn(container: ptr[mut slopfs.Container], name: string) -> u64 {
     }
 }
 
+/**
+ * Check volumes apart from their container, as volume servers hold them: two volumes commit alone, one freeing a file
+ * it committed and writing another without committing, while the other commits twice from where the freed blocks are.
+ * As a crash would leave the disk then, the first volume's committed file is whole, its uncommitted one never there,
+ * the second's files all there, and the container checks out with nothing leaked; committed, it checks out too.
+ *
+ * @return 0 if every check passed, or the number of the first that failed, 700 to 733.
+ */
 check_apart :: fn() -> int {
     device :: new_device() or_return 700
     defer free_device(device)

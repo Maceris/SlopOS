@@ -12,24 +12,37 @@ import read_only_file from "std/os/slop_os"
 /*
  * The system volume (decisions/0089): a SlopOS container's, served by a volume server through a container service.
  * The check reads a module from it and compares it with the copy on the EFI system partition, boot/modules, which the
- * test disk keeps beside the generation's objects; writes a file of its own, syncs it, which commits it, and reads it back; and moves it into a directory it makes.
- * Checks from 40.
+ * test disk keeps beside the generation's objects; writes a file of its own, syncs it, which commits it, and reads it
+ * back; and moves it into a directory it makes. Checks from 40.
  */
 
+/** The module the check reads from the system volume, relative to its root. */
 MODULE_ON_VOLUME :: "modules/hello.elf"
+/** The same module's copy on the EFI system partition, which should hold the same bytes. */
 MODULE_ON_ESP :: "boot/modules/hello.elf"
+/** The file the check writes in the system volume's root, then moves into "made by the guest". */
 SYSTEM_FILE :: "Written to the system volume.txt"
+/** What the check writes in SYSTEM_FILE. */
 SYSTEM_TEXT :: "Written to the system volume by the guest, and synced"
-// The buffer file connections read and write through, and the most of a file read whole
+/** The size of the buffer file connections read and write through, in bytes: the most moved by one request. */
 TRANSFER_BYTES : u64 : 65536
+/** The most of a file read whole, in bytes; reading stops once past it, with what's been read. */
 MAX_FILE_BYTES : usize : 1 << 20
 
 /** A buffer for file connections: a memory object mapped here, given to each server as a handle of its own. */
 Buffer :: struct {
+    /** The memory object, TRANSFER_BYTES long, paid for from the process's budget; the check's own. */
     memory : slop_os.Memory,
+    /** Where memory is mapped, readable and writable, in the process's address space. */
     address : u64,
 }
 
+/**
+ * Make a buffer for file connections, mapped here.
+ *
+ * @return The buffer, which the caller unmaps and closes when it's done with it, if it is before the process ends;
+ *     null if memory or addresses couldn't be had, or it couldn't be mapped.
+ */
 new_buffer :: fn() -> Buffer? {
     startup :: slop_os.startup_block()
     memory :: slop_os.memory_create(startup.budget, TRANSFER_BYTES) or_return null
@@ -41,7 +54,14 @@ new_buffer :: fn() -> Buffer? {
     }
 }
 
-/** A handle to the buffer for a file's server, which maps it. */
+/**
+ * Make a handle to the buffer for a file's server, which maps it to read into or write from.
+ *
+ * @param buffer The check's buffer, kept by it: its memory handle stays open, and the duplicate is a new handle to the
+ *     same memory.
+ * @return A new handle to its memory, to read, write and transfer, which the caller sends, moving it; null if it
+ *     couldn't be duplicated.
+ */
 handed :: fn(buffer: ptr[Buffer]) -> slop_os.Memory? {
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
     match slop_os.handle_duplicate(cast[slop_os.Handle](buffer.memory), rights) {
@@ -50,10 +70,29 @@ handed :: fn(buffer: ptr[Buffer]) -> slop_os.Memory? {
     }
 }
 
+/**
+ * Give the buffer's bytes, as mapped here.
+ *
+ * @param buffer The check's buffer, mapped at its address, readable and writable.
+ * @return Its TRANSFER_BYTES bytes, a view good while it's mapped.
+ */
 window_of :: fn(buffer: ptr[Buffer]) -> mut u8[] {
     return view_of(cast[ptr[mut u8]](buffer.address), cast[usize](TRANSFER_BYTES))
 }
 
+/**
+ * Check the system volume: read a module and compare it with the EFI system partition's copy; write a file of its
+ * own, sync it and read it back, logging how long making and syncing it took as a benchmark (decisions/0112); move
+ * it into a directory it makes and sync that; then check typed files and transactions.
+ *
+ * @param to The debug log, passed on to the transactions' check.
+ * @param system The system volume's root.
+ * @param esp The EFI system partition's root, to compare the module with; without it, the module isn't compared.
+ * @return 0 if all of it held; 40 if the buffer couldn't be made, 41 if a port couldn't be, 42 if the module couldn't
+ *     be read or is empty, 43 to 45 if the ESP's copy couldn't be read or differs, 46 if the file couldn't be written
+ *     and synced, 47 if it didn't read back as written, 48 if the directory couldn't be made, 49 if the move failed,
+ *     50 if the sync failed; and check_typed's, then check_transactions', numbers.
+ */
 check_system :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], esp: os.Channel[dir.Dir]?) -> int {
     buffer := new_buffer() or_return 40
     budget :: slop_os.startup_block().budget
@@ -131,24 +170,39 @@ check_system :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], esp: os.Ch
     return check_transactions(to, system, &buffer)
 }
 
-/** A typed file's value (decisions/0046, 0108), as the system check writes it and reads it back */
+/** A typed file's value (decisions/0046, 0108), as the system check writes it and reads it back. */
 CheckedNote :: struct {
+    /** A number the check writes, 0x51ed, and expects back. */
     mark : u32,
+    /** True as written; a bool that's 2 makes a value that isn't a CheckedNote. */
     kept : bool,
+    /** TYPED_TEXT's bytes. */
     text : slop_os.Relative[u8],
 }
 
-/** Another type, which the note's file isn't */
+/** Another type, which the note's file isn't, so opening the file as one is refused. */
 OtherNote :: struct {
+    /** A field, so the type's schema differs from CheckedNote's. */
     mark : u64,
 }
 
+/** The typed file the check writes in the system volume's root. */
 TYPED_FILE :: "A typed note"
+/** The text in the note the check writes. */
 TYPED_TEXT :: "kept with its type"
 
 /**
- * A typed file on the system volume: written as a CheckedNote, read back checked, refused as an OtherNote; and refused
- * on the EFI system partition, whose FAT keeps no types.
+ * Check typed files: on the system volume, one written as a CheckedNote, read back checked, and refused as an
+ * OtherNote, and a value that isn't a CheckedNote refused; and on the EFI system partition, whose FAT keeps no types,
+ * a typed file refused.
+ *
+ * @param system The system volume's root, which a second connection is made to.
+ * @param port A port bound to system's end.
+ * @param esp The EFI system partition's root; without it, that part isn't checked.
+ * @return 0 if all of it held; 60 if a second connection couldn't be made, 61 if the note couldn't be written, 62 if
+ *     it couldn't be read back, 63 if it read back wrong, 64 if opening it as an OtherNote wasn't refused as
+ *     WrongType, 65 if a value that isn't a note wasn't refused as WrongType, 66 if the ESP couldn't be connected to,
+ *     and 67 if a typed file on it wasn't refused as WrongType.
  */
 check_typed :: fn(system: os.Channel[dir.Dir], port: slop_os.Port, esp: os.Channel[dir.Dir]?) -> int {
     directory :: second_connection(system, port) or_return 60
@@ -208,7 +262,15 @@ check_typed :: fn(system: os.Channel[dir.Dir], port: slop_os.Port, esp: os.Chann
     return 0
 }
 
-/** Another connection to a directory, as an os.Directory, which closes it. */
+/**
+ * Make another connection to a directory, sending Connect on it, and open it as an os.Directory; Connect's answer,
+ * if there is one, isn't waited for.
+ *
+ * @param directory The directory, which stays open.
+ * @param port A port bound to directory's end.
+ * @return The new connection, as a Directory, which the caller closes with os.close_directory; null if a channel or
+ *     its port couldn't be made, or Connect couldn't be sent.
+ */
 second_connection :: fn(directory: os.Channel[dir.Dir], port: slop_os.Port) -> os.Directory? {
     budget :: slop_os.startup_block().budget
     pair :: os.channel_for[dir.Dir](budget, 0) or_return null
@@ -227,7 +289,17 @@ second_connection :: fn(directory: os.Channel[dir.Dir], port: slop_os.Port) -> o
     return made
 }
 
-/** The file at path beneath a directory, read whole into bytes through a read_only_file connection. */
+/**
+ * Read a file beneath a directory whole, through a read_only_file connection, closed afterwards.
+ *
+ * @param end The directory, speaking dir.
+ * @param port A port bound to end.
+ * @param path The file's path beneath the directory.
+ * @param buffer The buffer the file's server reads into.
+ * @param bytes What's read is added to, from the context's allocator, which the caller frees.
+ * @return Whether it was read, up to MAX_FILE_BYTES and a transfer past them; false if it couldn't be opened or read,
+ *     what's read so far left in bytes.
+ */
 read_whole :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, buffer: ptr[Buffer], bytes: ptr[mut u8[..]]) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -239,7 +311,17 @@ read_whole :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, buffer:
     }
 }
 
-/** The file at path beneath a read-only directory, read whole into bytes. */
+/**
+ * Read a file beneath a read-only directory whole, through a read_only_file connection, closed afterwards.
+ *
+ * @param end The directory, speaking read_only_dir.
+ * @param port A port bound to end.
+ * @param path The file's path beneath the directory.
+ * @param buffer The buffer the file's server reads into.
+ * @param bytes What's read is added to, from the context's allocator, which the caller frees.
+ * @return Whether it was read, up to MAX_FILE_BYTES and a transfer past them; false if it couldn't be opened or read,
+ *     what's read so far left in bytes.
+ */
 read_whole_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, buffer: ptr[Buffer], bytes: ptr[mut u8[..]]) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -251,7 +333,16 @@ read_whole_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, path: strin
     }
 }
 
-/** A read_only_file connection's file read whole into bytes, and the connection closed. */
+/**
+ * Read a read_only_file connection's file whole, a transfer of up to TRANSFER_BYTES at a time, and close the
+ * connection.
+ *
+ * @param opened The connection, which is closed here whatever happens.
+ * @param buffer The buffer the file's server reads into, a new handle to which it's given.
+ * @param bytes What's read is added to, from the context's allocator, which the caller frees.
+ * @return Whether it was read: true once a transfer is short, or bytes is past MAX_FILE_BYTES; false if a port, the
+ *     buffer's handle, or a read failed.
+ */
 read_file_whole :: fn(opened: os.Channel[read_only_file.ReadOnlyFile], buffer: ptr[Buffer], bytes: ptr[mut u8[..]]) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -293,12 +384,31 @@ read_file_whole :: fn(opened: os.Channel[read_only_file.ReadOnlyFile], buffer: p
     }
 }
 
-/** A new file at path beneath a directory holding text, written through a file connection and synced. */
+/**
+ * Write a new file beneath a directory holding text, through a file connection, and sync it, which commits it.
+ *
+ * @param end The directory, speaking dir.
+ * @param port A port bound to end.
+ * @param path The file's path beneath the directory; a file there already is a failure.
+ * @param text The file's bytes, at most TRANSFER_BYTES of them.
+ * @param buffer The buffer the file's server writes from; text is copied into it.
+ * @return Whether it was made, written whole and synced.
+ */
 write_new :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, text: string, buffer: ptr[Buffer]) -> bool {
     return write_new_bytes(end, port, path, text, text.count, buffer)
 }
 
-/** A new file at path beneath a directory, count bytes of the buffer starting with text, written and synced. */
+/**
+ * Write a new file beneath a directory, from the buffer, through a file connection, and sync it, which commits it.
+ *
+ * @param end The directory, speaking dir.
+ * @param port A port bound to end.
+ * @param path The file's path beneath the directory; a file there already is a failure.
+ * @param text What's copied to the buffer's start first; the rest of the buffer is as the caller left it.
+ * @param count How many of the buffer's bytes the file holds, at most TRANSFER_BYTES.
+ * @param buffer The buffer the file's server writes from.
+ * @return Whether it was made, count bytes written, and synced; the file connection is closed either way.
+ */
 write_new_bytes :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, text: string, count: usize, buffer: ptr[Buffer]) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -338,6 +448,15 @@ write_new_bytes :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, te
     return true
 }
 
+/**
+ * Send one request on a read_only_file connection, and wait for its answer.
+ *
+ * @param end The read_only_file connection, kept by the caller and not closed.
+ * @param port A port bound to end.
+ * @param out The request; its handles are moved out when it's sent.
+ * @param into Where the answer is read into.
+ * @return The answer, a copy; Unsupported if it couldn't be sent or the connection failed.
+ */
 ask_read_only_file :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> read_only_file.Response {
     if read_only_file.send_request(end, port, out) is_some {
         return .Unsupported
@@ -351,6 +470,15 @@ ask_read_only_file :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut 
     }
 }
 
+/**
+ * Send one request on a file connection, and wait for its answer.
+ *
+ * @param end The file connection, kept by the caller and not closed.
+ * @param port A port bound to end.
+ * @param out The request; its handles are moved out when it's sent.
+ * @param into Where the answer is read into.
+ * @return The answer, a copy; Unsupported if it couldn't be sent or the connection failed.
+ */
 ask_file :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> file.Response {
     if file.send_request(end, port, out) is_some {
         return .Unsupported

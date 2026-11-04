@@ -9,6 +9,17 @@ package log_line
 import slop_os from "std/os"
 import text_buffer from "std"
 
+/**
+ * Write a formatted line in the kernel's log.
+ *
+ * The line is formatted into 200 bytes on the stack, so it needs no allocator; what doesn't fit is dropped, as the
+ * kernel drops what's past DEBUG_LOG_LINE anyway. Failing to write it is ignored: there's nowhere else to report it.
+ *
+ * @param log The debug log, which needs RIGHT_DEBUG_LOG_WRITE; with an invalid one, nothing is written.
+ * @param format The line, without its line break, each % replaced by the next value, as std's text_buffer
+ *     append_format formats it.
+ * @param values The values for format's placeholders, in order.
+ */
 write :: fn(log: slop_os.DebugLog, format: string, values: any...) {
     storage : u8[200]
     line := text_buffer.make(storage)

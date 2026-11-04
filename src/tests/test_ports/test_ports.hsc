@@ -20,19 +20,32 @@ import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
+/** The test's name, which starts each line it logs. */
 NAME :: "test_ports"
-// What A and B share, by its slots.
+/** The slot, a u64 by index, of what A and B share, holding the port's handle. */
 SHARED_PORT :: 0
+/** The slot B sets once it's about to wait on the port. */
 SHARED_B_WAITING :: 1
+/** The slot A sets once it has B's packet. */
 SHARED_A_WOKEN :: 2
+/** The slot B puts its wait's result in, as test_kit.tag_of gives it. */
 SHARED_B_GOT :: 3
+/** The slot B sets once its wait has returned. */
 SHARED_B_DONE :: 4
+/** The wake binding's key. */
 PORT_KEY : u64 : 7
+/** The timer's key. */
 TIMER_KEY : u64 : 9
+/** How far off the timer is set, in nanoseconds: 20 ms. */
 TIMER_NANOSECONDS : u64 : 20_000_000
+/** How far off a wait's deadline is set, in nanoseconds: 15 ms. */
 DEADLINE_NANOSECONDS : u64 : 15_000_000
 
-/** B: wakes A, waits for A to have it, then waits on the port until it's closed. */
+/**
+ * Wake A through the port, wait for A to have the packet, then wait on the port until it's closed: B.
+ *
+ * @param shared What A and B share, by the SHARED_* slots.
+ */
 helper #calling_convention(.c) #no_context :: fn(shared: ptr[mut u64[8]]) #never_returns {
     port :: test_kit.handle_at[slop_os.Port](intrinsics.volatile_load_u64(&shared^[SHARED_PORT]))
     _ = slop_os.port_wake(port, PORT_KEY, 0x100)
@@ -48,6 +61,25 @@ helper #calling_convention(.c) #no_context :: fn(shared: ptr[mut u64[8]]) #never
     slop_os.thread_exit()
 }
 
+/**
+ * Check a port: wake bindings, timers, deadlines, waking from another thread, and closing it under a waiter.
+ *
+ * @param log The debug log, writable, where the test says what it found and which check failed.
+ * @param platform Not used.
+ * @param test_device Not used.
+ * @param firmware Not used.
+ * @param manager Not used.
+ * @param program Not used.
+ * @param peer Not used.
+ * @param cpu_budget Not used.
+ * @return 0 if every check passed. Otherwise the first that failed, by its result's index plus one: 1 binding the
+ *     wake key, or 2 binding it twice not refused with KeyInUse; 3 waking a key with no binding not refused with
+ *     NoSuchKey; 4 the wait, or 5 to 8 its one User packet for the key with both bits; 9 and 10 the timer's packet,
+ *     or 11 it coming early; 12 a packet before the deadline, or 13 the deadline coming early; 14 packets to memory
+ *     A can't write not refused with BadBuffer; 15 B's packet; 16 B not woken with ObjectGone, or 17 not done; 18
+ *     unbinding the key, or 19 waking it then not refused with NoSuchKey; 20 closing the port; 21 the budget not
+ *     coming back to nothing. 100 if the shared slots, 101 the budget, 102 the port, or 103 B couldn't be made.
+ */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     block :: slop_os.startup_block()

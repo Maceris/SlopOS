@@ -19,90 +19,137 @@ import random from "std"
  * the count: the format's 32 bytes, as a BLAKE3 seal's are.
  */
 
+/** The AEAD a volume's blocks are sealed with, as its record's cipher byte holds it. */
 Cipher :: enum #backed_by(u8) {
-    /** Sealed with BLAKE3 alone, as the system volume is */
+    /** Sealed with BLAKE3 alone, as the system volume is: checked, not encrypted. */
     None = 0,
+    /** ChaCha20-Poly1305, fast anywhere without AES instructions. */
     ChaCha20Poly1305 = 1,
-    /** Fast where the CPU has AES instructions, and readable anywhere (decisions/0019) */
+    /** AES-256-GCM, fast where the CPU has AES instructions, and readable anywhere (decisions/0019). */
     Aes256Gcm = 2,
 }
 
 /** One key generation's key. */
 GenerationKey :: struct {
+    /** The generation's number, from 1. */
     number : u32,
+    /** Its key, secret: zeroed when it's let go of. */
     key : crypto.Key256,
 }
 
 /**
  * An unlocked volume's keys: its cipher, its volume key (for wrapping new generations), every generation's key, the
  * newest's number, and the transaction sealing now, with its salt, how many blocks it has sealed and its key.
+ *
+ * It's from new_keys, freed, its keys zeroed, by free_keys or by the volume it's given to.
  */
 Keys :: struct {
+    /** The AEAD blocks are sealed with. */
     cipher : Cipher,
+    /** The volume key, which wraps each generation's key; secret. */
     volume_key : crypto.Key256,
+    /** Every generation's key unwrapped, from context's allocator. */
     generations : GenerationKey[..],
+    /** The newest generation's number, which new blocks are sealed with; 0 before there's one. */
     current : u32,
+    /** The transaction the block key is derived for; 0 when it has to be derived again before the next seal. */
     transaction : u64,
+    /** The random salt chosen for the transaction sealing now. */
     salt : u8[8],
+    /** How many blocks have been sealed with the block key, the next one's nonce. */
     sealed : u32,
+    /** The block key derived from the current generation's key, the transaction and the salt; secret. */
     block_key : crypto.Key256,
 }
 
 /** What the volume key is wrapped by. */
 WrapKind :: enum #backed_by(u32) {
+    /** A passphrase, through Argon2id. */
     Passphrase = 1,
 }
 
 /**
  * The volume key wrapped, keyed (volume, KeyWrap, index) in the container's volumes tree: for a passphrase, Argon2id's
- * parameters and salt, and the key sealed with what it derives.
+ * parameters and salt, and the key sealed with what it derives. Little-endian.
  */
 WrapRecord :: struct #packed {
+    /** Its WrapKind. */
     kind : u32le,
+    /** Argon2id's memory, in KiB. */
     memory_kib : u32le,
+    /** Argon2id's passes over its memory. */
     passes : u32le,
+    /** Argon2id's lanes. */
     lanes : u32le,
+    /** Argon2id's salt, random, new with each wrap. */
     salt : u8[16],
+    /** The volume key, sealed with ChaCha20-Poly1305 under the key Argon2id derives, nonce 0. */
     wrapped : u8[32],
+    /** The seal's tag. */
     tag : u8[16],
 }
 
 #assert size_of(WrapRecord) == 80
 
-/** A generation's key wrapped by the volume key, keyed (volume, KeyGeneration, number): the transaction it began in. */
+/** A generation's key wrapped by the volume key, keyed (volume, KeyGeneration, number). */
 GenerationRecord :: struct #packed {
+    /** The transaction the generation began in. */
     began : u64le,
+    /** The generation's key, sealed with ChaCha20-Poly1305 under the volume key, the generation's number its nonce. */
     wrapped : u8[32],
+    /** The seal's tag. */
     tag : u8[16],
 }
 
 #assert size_of(GenerationRecord) == 56
 
-// A block's seal on an encrypted volume: its tag, its transaction's salt and its count in the transaction.
+/*
+ * A block's seal on an encrypted volume: its tag in bytes 0 to 15, its transaction's salt in 16 to 23 and its count
+ * in the transaction, little-endian, in 24 to 27.
+ */
+/** Where a block's seal holds its transaction's salt, 8 bytes. */
 SEAL_SALT : usize : 16
+/** Where a block's seal holds its count in its transaction, a little-endian u32, its nonce. */
 SEAL_COUNT : usize : 24
 
 /** Argon2id's parameters for a passphrase, unless they're given (RFC 9106's second choice, with less memory). */
 DEFAULT_PASSPHRASE :: crypto.Argon2Parameters.{memory_kib = 65536, passes = 3, lanes = 1}
 /**
- * A volume made at run time's (decisions/0141), wrapped by its volume server inside the 8 MiB its budget has for
- * Argon2id: its passphrase is a random secret the account service keeps, which hashes the password it's kept by itself.
+ * Argon2id's parameters for a volume made at run time (decisions/0141), wrapped by its volume server inside the 8 MiB
+ * its budget has for Argon2id: its passphrase is a random secret the account service keeps, which hashes the password
+ * it's kept by itself.
  */
 MADE_PASSPHRASE :: crypto.Argon2Parameters.{memory_kib = 4096, passes = 3, lanes = 1}
 
+/**
+ * Make an empty set of keys for a cipher: no volume key, no generation.
+ *
+ * @param cipher The cipher the keys seal with; None for keys unlock fills in.
+ * @return The keys, from make, the caller's to free with free_keys.
+ * @error OutOfMemory No memory for them.
+ */
 new_keys :: fn(cipher: Cipher) -> Result[ptr[mut Keys], Error] {
     keys :: make(Keys)?
     keys^ = Keys.{cipher = cipher}
     return .Ok(keys)
 }
 
+/**
+ * Zero a key, in constant time.
+ *
+ * @param key The key, all zero once this returns.
+ */
 zero_key #constant_time :: fn(key: ptr[mut crypto.Key256]) {
     for i in cast[usize](0)..<32 {
         key[i] = 0
     }
 }
 
-/** Keys' memory given back, the keys in it zeroed first. */
+/**
+ * Free keys' memory, the keys in it zeroed first.
+ *
+ * @param keys The keys, from new_keys; they may not be used again.
+ */
 free_keys :: fn(keys: ptr[mut Keys]) {
     zero_key(&keys.volume_key)
     zero_key(&keys.block_key)
@@ -115,6 +162,11 @@ free_keys :: fn(keys: ptr[mut Keys]) {
     runtime.free(keys)
 }
 
+/**
+ * Make a random key, from the system's random source.
+ *
+ * @return The key; the bytes it was made in are zeroed.
+ */
 random_key #constant_time :: fn() -> crypto.Key256 {
     bytes : u8[32]
     random.fill(bytes)
@@ -126,6 +178,13 @@ random_key #constant_time :: fn() -> crypto.Key256 {
     return key
 }
 
+/**
+ * Find a generation's key.
+ *
+ * @param keys The keys, unlocked or being filled in.
+ * @param number The generation's number.
+ * @return The key, inside keys, good until keys' generations change; null if it has no generation of the number.
+ */
 generation_key :: fn(keys: ptr[Keys], number: u32) -> ptr[crypto.Key256]? {
     for i in 0..<keys.generations.count {
         if i < keys.generations.count && keys.generations[i].number == number {
@@ -135,6 +194,13 @@ generation_key :: fn(keys: ptr[Keys], number: u32) -> ptr[crypto.Key256]? {
     return null
 }
 
+/**
+ * Put a little-endian u64 into a buffer, each byte only if it's within it.
+ *
+ * @param into The bytes written to, as associated data or a hash's input.
+ * @param at Its first byte's offset.
+ * @param value The value, any u64, written low byte first.
+ */
 put_u64 :: fn(into: mut u8[], at: usize, value: u64) {
     for i in cast[usize](0)..<8 {
         j :: at + i
@@ -144,6 +210,13 @@ put_u64 :: fn(into: mut u8[], at: usize, value: u64) {
     }
 }
 
+/**
+ * Put a little-endian u32 into a buffer, each byte only if it's within it.
+ *
+ * @param into The bytes written to, as a seal's count.
+ * @param at Its first byte's offset.
+ * @param value The value, any u32, written low byte first.
+ */
 put_u32 :: fn(into: mut u8[], at: usize, value: u32) {
     for i in cast[usize](0)..<4 {
         j :: at + i
@@ -153,6 +226,13 @@ put_u32 :: fn(into: mut u8[], at: usize, value: u32) {
     }
 }
 
+/**
+ * Get a little-endian u32 from a buffer.
+ *
+ * @param from The bytes read from, as a seal's count.
+ * @param at Its first byte's offset.
+ * @return The value, any byte past the buffer's end taken as 0.
+ */
 get_u32 :: fn(from: u8[], at: usize) -> u32 {
     value : u32 = 0
     for i in cast[usize](0)..<4 {
@@ -164,9 +244,18 @@ get_u32 :: fn(from: u8[], at: usize) -> u32 {
     return value
 }
 
+/** What a block key's BLAKE3 starts with, so it's derived for nothing else. */
 BLOCK_KEY_CONTEXT :: "slopfs block key"
 
-/** The key a transaction's blocks are sealed with: its generation's key, keyed BLAKE3 of the transaction and salt. */
+/**
+ * Derive the key a transaction's blocks are sealed with: BLAKE3, keyed with the generation's key, of
+ * BLOCK_KEY_CONTEXT, the transaction (little-endian) and the salt.
+ *
+ * @param generation The generation's key.
+ * @param transaction The transaction the blocks are written in.
+ * @param salt The transaction's salt, 8 random bytes.
+ * @return The block key, secret; the caller zeroes it when done.
+ */
 derive_block_key #constant_time :: fn(generation: ptr[crypto.Key256], transaction: u64, salt: u8[]) -> crypto.Key256 {
     key_bytes : crypto.SecretByte[32]
     for i in cast[usize](0)..<32 {
@@ -193,7 +282,13 @@ derive_block_key #constant_time :: fn(generation: ptr[crypto.Key256], transactio
     return derived
 }
 
-/** A block's associated data: where it is, when it was written and whose it is. */
+/**
+ * Make a block's associated data, so a block read from another place, time or volume doesn't open.
+ *
+ * @param pointer The block's pointer: its address and birth.
+ * @param owner The volume whose tree holds it, who wrote it.
+ * @return Its address, birth and owner, each a little-endian u64.
+ */
 associated_of :: fn(pointer: ptr[BlockPointer], owner: u64) -> u8[24] {
     associated : u8[24]
     put_u64(associated, 0, cast[u64](pointer.address))
@@ -202,6 +297,12 @@ associated_of :: fn(pointer: ptr[BlockPointer], owner: u64) -> u8[24] {
     return associated
 }
 
+/**
+ * Make a nonce from a count.
+ *
+ * @param count The count: a block's in its transaction, or a generation's number.
+ * @return The count, little-endian, in the nonce's first 4 bytes, the rest zero.
+ */
 nonce_of :: fn(count: u32) -> crypto.Nonce96 {
     nonce : crypto.Nonce96
     nonce[0] = cast[u8](count)
@@ -211,6 +312,18 @@ nonce_of :: fn(count: u32) -> crypto.Nonce96 {
     return nonce
 }
 
+/**
+ * Seal bytes with a cipher's AEAD.
+ *
+ * @param cipher The cipher: Aes256Gcm, or ChaCha20-Poly1305 for any other.
+ * @param key The key, secret, 32 bytes.
+ * @param nonce The nonce, never used twice with the key.
+ * @param plain The bytes to seal.
+ * @param associated The associated data, checked, not sealed.
+ * @param sealed Where the sealed bytes go, as many as plain.
+ * @param tag Where the tag goes.
+ * @return True if it was sealed; false if the AEAD refused, as for buffers that don't match.
+ */
 aead_seal #constant_time :: fn(cipher: Cipher, key: ptr[crypto.Key256], nonce: ptr[crypto.Nonce96], plain: crypto.SecretByte[],
     associated: u8[], sealed: mut u8[], tag: ptr[mut crypto.Tag128]) -> bool {
 
@@ -220,6 +333,18 @@ aead_seal #constant_time :: fn(cipher: Cipher, key: ptr[crypto.Key256], nonce: p
     return crypto.chacha20_poly1305_seal(key, nonce, plain, associated, sealed, tag)
 }
 
+/**
+ * Open bytes sealed with a cipher's AEAD.
+ *
+ * @param cipher The cipher: Aes256Gcm, or ChaCha20-Poly1305 for any other.
+ * @param key The key they were sealed with, secret.
+ * @param nonce The nonce they were sealed with.
+ * @param sealed The sealed bytes, as read from the device.
+ * @param associated The associated data they were sealed with.
+ * @param tag Their tag.
+ * @param plain Where the opened bytes go, as many as sealed.
+ * @return True if the tag holds and they were opened; false if it doesn't, what's in plain then not to be used.
+ */
 aead_open #constant_time :: fn(cipher: Cipher, key: ptr[crypto.Key256], nonce: ptr[crypto.Nonce96], sealed: u8[], associated: u8[],
     tag: ptr[crypto.Tag128], plain: mut crypto.SecretByte[]) -> bool {
 
@@ -230,8 +355,17 @@ aead_open #constant_time :: fn(cipher: Cipher, key: ptr[crypto.Key256], nonce: p
 }
 
 /**
- * plain sealed into sealed, of the same count, for the block pointer names, which owner's tree holds: its generation
- * and seal set. pointer's address and birth are where and when it's written.
+ * Seal a block's bytes for where and when its pointer says it's written, setting the pointer's generation and seal.
+ *
+ * The block key is derived again, with a new salt, for each new transaction, and after 2^32 - 1 blocks in one, so no
+ * nonce is used twice even when a crash reuses a transaction's number.
+ *
+ * @param keys The volume's keys; their block key, salt and count advance.
+ * @param owner The volume whose tree holds the block.
+ * @param pointer The block's pointer, its address and birth set; its generation and seal are set here.
+ * @param plain The block's bytes.
+ * @param sealed Where the sealed bytes go, as many as plain.
+ * @return True if it was sealed; false if the keys have no current generation or the AEAD refused.
  */
 seal_block #constant_time :: fn(keys: ptr[mut Keys], owner: u64, pointer: ptr[mut BlockPointer], plain: u8[], sealed: mut u8[]) -> bool {
     birth :: cast[u64](pointer.birth)
@@ -264,7 +398,17 @@ seal_block #constant_time :: fn(keys: ptr[mut Keys], owner: u64, pointer: ptr[mu
     return true
 }
 
-/** sealed opened into plain, of the same count, if pointer's seal holds for it, where it says and whose it is. */
+/**
+ * Open a block's sealed bytes, if its pointer's seal holds for them, where it says and whose it is.
+ *
+ * @param keys The volume's keys.
+ * @param owner The volume whose tree holds the block, who wrote it.
+ * @param pointer The block's pointer.
+ * @param sealed The block's bytes as read.
+ * @param plain Where the opened bytes go, as many as sealed.
+ * @return True if they were opened; false if the keys have no key for the pointer's generation, or the seal doesn't
+ *     hold: the block is damaged, misplaced, or another volume's.
+ */
 open_block #constant_time :: fn(keys: ptr[Keys], owner: u64, pointer: ptr[BlockPointer], sealed: u8[], plain: mut u8[]) -> bool {
     generation :: generation_key(keys, cast[u32](pointer.generation)) or_return false
     seal :: pointer.seal
@@ -281,7 +425,14 @@ open_block #constant_time :: fn(keys: ptr[Keys], owner: u64, pointer: ptr[BlockP
     return aead_open(keys.cipher, &key, &nonce, sealed, associated, &tag, opened)
 }
 
-/** Wrapping: the volume key's and each generation's associated data, naming the container and volume they're for. */
+/**
+ * Make the associated data a wrapped key is sealed with, naming what it is and the container and volume it's for.
+ *
+ * @param what What's wrapped: "slopfs volume key" or "slopfs generation"; up to 24 bytes kept.
+ * @param container The container's ID.
+ * @param volume The volume's ID, whose key records they are.
+ * @return The data: what, zero-padded to 24 bytes, the container's ID and the volume's, little-endian.
+ */
 wrap_associated :: fn(what: string, container: u8[16], volume: u64) -> u8[48] {
     associated : u8[48]
     for character, i in what {
@@ -297,8 +448,14 @@ wrap_associated :: fn(what: string, container: u8[16], volume: u64) -> u8[48] {
 }
 
 /**
- * The key Argon2id derives from a passphrase with a wrap record's parameters and salt: None if it couldn't. Its
- * memory, which held what the passphrase made, is zeroed before it's given back.
+ * Derive a key from a passphrase with Argon2id, with a wrap record's parameters and salt.
+ *
+ * Its memory, which held what the passphrase made, is zeroed before it's given back.
+ *
+ * @param passphrase The passphrase, secret.
+ * @param record The wrap record, its parameters and salt.
+ * @return The key, secret; the caller zeroes it when done. Null if Argon2id's memory couldn't be had, or it refused
+ *     the parameters.
  */
 passphrase_key #constant_time :: fn(passphrase: u8[], record: ptr[WrapRecord]) -> crypto.Key256? {
     parameters :: crypto.Argon2Parameters.{memory_kib = cast[u32](record.memory_kib), passes = cast[u32](record.passes),
@@ -322,6 +479,11 @@ passphrase_key #constant_time :: fn(passphrase: u8[], record: ptr[WrapRecord]) -
     return key
 }
 
+/**
+ * Zero Argon2id's memory, in constant time.
+ *
+ * @param blocks Its blocks.
+ */
 zero_argon2 #constant_time :: fn(blocks: mut crypto.Argon2Block[]) {
     for i in 0..<blocks.count {
         for j in cast[usize](0)..<128 {
@@ -330,7 +492,16 @@ zero_argon2 #constant_time :: fn(blocks: mut crypto.Argon2Block[]) {
     }
 }
 
-// The volume key wrapped by a passphrase, with Argon2id's parameters and a new salt.
+/**
+ * Wrap the volume key with a passphrase, with Argon2id's parameters and a new random salt.
+ *
+ * @param volume_key The volume key to wrap, secret; it isn't changed.
+ * @param passphrase The passphrase, secret.
+ * @param parameters Argon2id's parameters: DEFAULT_PASSPHRASE, MADE_PASSPHRASE or the caller's.
+ * @param container The container's ID.
+ * @param volume The volume's ID, whose key records it goes in.
+ * @return The wrap record, public; null if Argon2id couldn't run or the seal failed.
+ */
 wrap_with_passphrase #constant_time :: fn(volume_key: ptr[crypto.Key256], passphrase: u8[], parameters: crypto.Argon2Parameters,
     container: u8[16], volume: u64) -> WrapRecord? {
 
@@ -357,7 +528,16 @@ wrap_with_passphrase #constant_time :: fn(volume_key: ptr[crypto.Key256], passph
     return compiler.declassify(record)
 }
 
-/** The volume key a passphrase unwraps from record: None if it's the wrong passphrase. */
+/**
+ * Unwrap the volume key from a wrap record with a passphrase.
+ *
+ * @param record The wrap record, as read from the volumes tree.
+ * @param passphrase The passphrase, secret.
+ * @param container The container's ID, as it was wrapped for.
+ * @param volume The ID of the volume whose key records it's in, as it was wrapped for.
+ * @return The volume key, secret; the caller zeroes it when done. Null if the record isn't a passphrase's, Argon2id
+ *     couldn't run, or the passphrase is the wrong one.
+ */
 unwrap_with_passphrase #constant_time :: fn(record: ptr[WrapRecord], passphrase: u8[], container: u8[16], volume: u64) -> crypto.Key256? {
     if cast[u32](record.kind) != cast[u32](WrapKind.Passphrase) {
         return null
@@ -381,7 +561,16 @@ unwrap_with_passphrase #constant_time :: fn(record: ptr[WrapRecord], passphrase:
     return key
 }
 
-// A generation's key wrapped by the volume key, its number the nonce, since each is wrapped once.
+/**
+ * Wrap a generation's key with the volume key, its number the nonce, since each is wrapped once.
+ *
+ * @param volume_key The volume key that wraps it, secret.
+ * @param generation The generation, its number and key; the number is the nonce, so each is wrapped once.
+ * @param began The transaction it begins in.
+ * @param container The container's ID.
+ * @param volume The ID of the volume whose key records it goes in.
+ * @return The generation's record, public; null if the seal failed.
+ */
 wrap_generation #constant_time :: fn(volume_key: ptr[crypto.Key256], generation: ptr[GenerationKey], began: u64, container: u8[16],
     volume: u64) -> GenerationRecord? {
 
@@ -402,7 +591,16 @@ wrap_generation #constant_time :: fn(volume_key: ptr[crypto.Key256], generation:
     return compiler.declassify(record)
 }
 
-// A generation's key unwrapped by the volume key: None if it doesn't open.
+/**
+ * Unwrap a generation's key with the volume key.
+ *
+ * @param volume_key The volume key it was wrapped with, secret.
+ * @param number The generation's number, its record's key's offset.
+ * @param record Its record.
+ * @param container The container's ID, as it was wrapped for.
+ * @param volume The ID of the volume whose key records it's in, as it was wrapped for.
+ * @return The generation's key, secret; null if it doesn't open, as with the wrong volume key or a damaged record.
+ */
 unwrap_generation #constant_time :: fn(volume_key: ptr[crypto.Key256], number: u32, record: ptr[GenerationRecord], container: u8[16],
     volume: u64) -> GenerationKey? {
 
@@ -424,8 +622,16 @@ unwrap_generation #constant_time :: fn(volume_key: ptr[crypto.Key256], number: u
 }
 
 /**
- * A new generation for keys, numbered after its newest, which seals what's written from now on: its key, and the
- * record of it wrapped, to keep where the volume's keys are kept.
+ * Start a new generation, numbered after the newest, which seals what's written from now on.
+ *
+ * Nothing already written is sealed again (decisions/0042).
+ *
+ * @param keys The volume's keys, its volume key unwrapped; the new generation's key is added and made current.
+ * @param began The transaction it begins in.
+ * @param container The container's ID.
+ * @param volume The ID of the volume whose key records it goes in.
+ * @return The generation's record, to keep where the volume's keys are kept; null, with keys unchanged, if it
+ *     couldn't be wrapped or there wasn't the memory to keep it.
  */
 start_generation #constant_time :: fn(keys: ptr[mut Keys], began: u64, container: u8[16], volume: u64) -> GenerationRecord? {
     generation := GenerationKey.{number = keys.current + 1, key = random_key()}
@@ -440,7 +646,13 @@ start_generation #constant_time :: fn(keys: ptr[mut Keys], began: u64, container
     return record
 }
 
-/** The newest generation forgotten, previous sealing again: one start_generation made that couldn't be kept. */
+/**
+ * Forget the newest generation, one start_generation made whose record couldn't be kept, so the one before seals
+ * again.
+ *
+ * @param keys The volume's keys; the newest generation's key is zeroed and dropped.
+ * @param previous The number of the generation current before it.
+ */
 drop_generation :: fn(keys: ptr[mut Keys], previous: u32) {
     last :: keys.generations.count
     if last > 0 && last - 1 < keys.generations.count && keys.generations[last - 1].number == keys.current {

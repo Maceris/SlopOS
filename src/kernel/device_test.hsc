@@ -16,9 +16,19 @@ import runtime from "base"
  * It waits for them up to DEVICE_TEST_TICKS of the boot CPU's ticks rather than the boot's few, so an emulator slowed
  * by its host still gets them in, and says how many came if they don't.
  */
+/** How many of the test device's interrupts test_ioapic waits for before it stops the kernel. */
 DEVICE_TEST_INTERRUPTS : u64 : 10
+/** How many of the boot CPU's ticks test_ioapic waits for its interrupts, at most. */
 DEVICE_TEST_TICKS : u64 : 200
 
+/**
+ * Start test_ioapic: register the test device's controller, route its line to the boot CPU for the kernel itself,
+ * unmask it, and start the device's interrupts, the kernel to stop after DEVICE_TEST_TICKS ticks.
+ *
+ * A controller or route that can't be had is logged, and the test goes no further.
+ *
+ * @param kernel The kernel, whose test_controller and stop_after_ticks it sets; called on the boot CPU at boot.
+ */
 test_io_apic :: fn(kernel: ptr[mut Kernel]) {
     device :: arch.test_device()
     index := cast[u32](0)
@@ -43,7 +53,13 @@ test_io_apic :: fn(kernel: ptr[mut Kernel]) {
     arch.test_device_interrupts(true)
 }
 
-/** After each of the test device's interrupts. */
+/**
+ * Count one of the test device's interrupts, from handle_device_interrupt with test_ioapic on; at the
+ * DEVICE_TEST_INTERRUPTS-th, stop the device, mask its line again, and stop the kernel, halted.
+ *
+ * @param kernel The kernel, whose test_device_count it sets.
+ * @param route The route the interrupt came through, its count already raised.
+ */
 test_device_interrupt :: fn(kernel: ptr[mut Kernel], route: ptr[DeviceRoute]) {
     kernel.test_device_count = route.count
     if route.count != DEVICE_TEST_INTERRUPTS {
@@ -55,7 +71,14 @@ test_device_interrupt :: fn(kernel: ptr[mut Kernel], route: ptr[DeviceRoute]) {
     stop(.Halted)
 }
 
-/** At the boot CPU's last tick while test_ioapic runs: how many came, if not all of them. */
+/**
+ * Log, at the boot CPU's last tick while test_ioapic runs, how many interrupts came, if not all of them did. Other
+ * ticks, and runs without test_ioapic, do nothing.
+ *
+ * @param kernel The kernel, whose options, stop_after_ticks and test_device_count are read; called from the timer
+ *     interrupt on the boot CPU.
+ * @param tick The boot CPU's tick count, from 1.
+ */
 device_test_tick :: fn(kernel: ptr[mut Kernel], tick: u64) {
     if !kernel.options.test_ioapic || tick != kernel.stop_after_ticks || kernel.test_device_count >= DEVICE_TEST_INTERRUPTS {
         return void

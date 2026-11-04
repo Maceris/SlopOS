@@ -67,8 +67,11 @@ import test_threads from "../tests/test_threads"
 
 /** Who starts a service, and owns it: the root task, the supervisor, or the storage manager. */
 Starter :: enum {
+    /** The root task, which starts what the supervisor needs, itself or through the process manager. */
     RootTask,
+    /** The supervisor, which starts the rest of the services and the drivers, and restarts them. */
     Supervisor,
+    /** The storage manager, which starts a server for each disk, partition, container and volume as it needs one. */
     StorageManager,
 }
 
@@ -77,74 +80,87 @@ Starter :: enum {
  * nanoseconds at priority, which a service runs at while it has time, and in the background band after.
  */
 CpuShare :: struct {
+    /** Its priority while it has time; higher runs first. */
     priority : u32,
+    /** Its period, in nanoseconds, which its time is given again each of. */
     period_ns : u64,
+    /** Its time each period, in nanoseconds, at most period_ns. */
     time_ns : u64,
     /**
-     * The CPUs its threads run on, and its IRQs are routed to, a bit per CPU's index; 0 for every CPU (decisions/0099)
+     * The CPUs its threads run on, and its IRQs are routed to, a bit per CPU's index; 0 for every CPU
+     * (decisions/0099).
      */
     cpus : u64,
 }
 
-/*
- * The budget every service without one of its own runs on, at a middling priority: half a CPU, so that what has budgets
- * of its own is never kept waiting by everything else, which runs on in the background band once this is spent.
- */
 /**
- * Dependencies (decisions/0113, 0115): an os.Channel[P] a service takes is required, and an optional one optional; a
- * service named in LATE is one the system is healthy without, as the test devices' drivers are, and the disk check, whose
- * checks expect a disk as the image builder made it, not as a boot before left it. What isn't late, and is
- * started, has to be up within its deadline, DEFAULT_DEADLINE_MS from boot unless it has its own, or the boot is
- * degraded.
+ * The services the system is healthy without, by name (decisions/0113, 0115): the test devices' drivers, and the disk
+ * check, whose checks expect a disk as the image builder made it, not as a boot before left it.
+ *
+ * An os.Channel[P] a service takes is required, and an optional one optional. What isn't late, and is started, has to
+ * be up within its deadline, DEFAULT_DEADLINE_MS from boot unless it has its own, or the boot is degraded.
  */
 LATE :: string.["edu_dma", "virtio_input", "disk_check"]
 
 /**
- * The system's installations (decisions/0113, 0117): each a name, which names its data directory and its configuration's
- * owner, and the program it runs, a bundle in the store's boot root whose entry the supervisor was built with
- * (counter_app's). At run time they're the config store's value "installations" of owner "system", these its default.
+ * The system's installations (decisions/0113, 0117): each a name, which names its data directory and its
+ * configuration's owner, and the program it runs, a bundle in the store's boot root whose entry the supervisor was
+ * built with (counter_app's). At run time they're the config store's value "installations" of owner "system", these its
+ * default.
  */
 Installation :: struct {
+    /** Its name, which names its data directory and its configuration's owner. */
     name : string,
+    /** The program it runs, a bundle's name in the store's boot root. */
     program : string,
 }
 
+/** The default installations: counter, running counter. */
 INSTALLATIONS :: Installation.[Installation.{name = "counter", program = "counter"}]
+/** How long a service has to be up, from boot, in milliseconds, unless it has its own deadline: 120 s. */
 DEFAULT_DEADLINE_MS : u32 : 120_000
 
+/**
+ * The budget every service without one of its own runs on, at a middling priority: half a CPU, so that what has
+ * budgets of its own is never kept waiting by everything else, which runs on in the background band once this is
+ * spent.
+ */
 DEFAULT_CPU :: CpuShare.{priority = 100, period_ns = 10_000_000, time_ns = 5_000_000}
 
-/** What talks to people runs first: a tenth of a CPU each, at a high priority */
+/** What talks to people runs first: a tenth of a CPU each, at a high priority. */
 INTERACTIVE_CPU :: CpuShare.{priority = 200, period_ns = 10_000_000, time_ns = 1_000_000}
 
 /**
  * The trusted path, the input and terminal services (decisions/0097, 0139): above everything people run, so the secure
- * attention key always answers; a tenth of a CPU each of their own, which they lend to no server
+ * attention key always answers; a tenth of a CPU each of their own, which they lend to no server.
  */
 TRUSTED_PATH_CPU :: CpuShare.{priority = 250, period_ns = 10_000_000, time_ns = 1_000_000}
 
+/** A service the system starts: what it is, who starts it, what it's given, and how it's run. */
 Service :: struct {
-    // Its name, as the supervisor reports it, and the boot module it's started from
+    /** Its name, as the supervisor reports it, at most a grant label's bytes. */
     name : string,
+    /** The boot module, or the system volume's module, it's started from, like "entropy.elf". */
     module : string,
+    /** Who starts it, and owns it. */
     starter : Starter,
     /**
      * Whether its starter asks the process manager to load it, rather than loading it itself as the root task
-     * does the services the manager needs
+     * does the services the manager needs.
      */
     by_manager : bool,
-    /** Its memory budget, split off its starter's, in bytes */
+    /** Its memory budget, split off its starter's, in bytes. */
     budget : u64,
-    /** Its entry's type, whose parameters are what it's given */
+    /** Its entry's type, whose parameters are what it's given, each the grant of its name. */
     entry : type,
     /**
      * A driver's: the devices it takes, one process each, which the supervisor claims from the platform service; all
-     * zeros for a service that isn't a driver (is_driver)
+     * zeros for a service that isn't a driver (is_driver).
      */
     devices : platform_protocol.DeviceMatch,
     /**
      * A driver's: whether it's trusted with DMA where no IOMMU confines its device, as SlopOS's own drivers are; one
-     * that isn't gets no DMA memory there (decisions/0039, 0084)
+     * that isn't gets no DMA memory there (decisions/0039, 0084).
      */
     trusted_with_dma : bool,
     /**
@@ -152,29 +168,35 @@ Service :: struct {
      * modules; everything else is loaded from the volume's modules folder, the modules standing in where there's none.
      */
     boot_set : bool,
-    /** Its CPU budget, which the scheduler service splits off the root's; None for the default (DEFAULT_CPU) */
+    /** Its CPU budget, which the scheduler service splits off the root's; None for the default (DEFAULT_CPU). */
     cpu : CpuShare?,
     /**
      * Whether its starter leaves it ended when it ends other than by exiting with 0, rather than starting it again, as
-     * the supervisor does everything else it starts, up to three times a minute (decisions/0077, 0093)
+     * the supervisor does everything else it starts, up to three times a minute (decisions/0077, 0093).
      */
     not_restarted : bool,
-    /** How long it has to be up, from boot, in milliseconds (decisions/0115); 0 for DEFAULT_DEADLINE_MS */
+    /** How long it has to be up, from boot, in milliseconds (decisions/0115); 0 for DEFAULT_DEADLINE_MS. */
     deadline_ms : u32,
 }
 
-/** Whether a service is a driver, with devices it takes. */
+/**
+ * Tell whether a service is a driver, with devices it takes.
+ *
+ * @param service The service, as SERVICES has it.
+ * @return True if any of its devices' vendor, device and class isn't 0.
+ */
 is_driver :: fn(service: Service) -> bool {
     return service.devices.vendor != 0 || service.devices.device != 0 || service.devices.class != 0
 }
 
+/** The bytes of a MiB: 1048576. */
 MIB : u64 : 1024 * 1024
 
 /**
- * In the order they start. The entropy service comes first, since the process manager draws from it, and the
- * supervisor's budget pays for what it starts too. The platform service starts before the supervisor, which claims
- * devices from it for the drivers, and starts them first: the input service needs keyboards, the terminal service a
- * serial line and the input service, and hello and echo the terminal service.
+ * The services the system starts, in the order they start. The entropy service comes first, since the process manager
+ * draws from it, and the supervisor's budget pays for what it starts too. The platform service starts before the
+ * supervisor, which claims devices from it for the drivers, and starts them first: the input service needs keyboards,
+ * the terminal service a serial line and the input service, and hello and echo the terminal service.
  */
 SERVICES :: Service.[
     Service.{name = "entropy", boot_set = true, module = "entropy.elf", starter = .RootTask, by_manager = false, budget = 2 * MIB,
@@ -191,8 +213,10 @@ SERVICES :: Service.[
     // Every program's log records but the root task's and what it starts, first, so each is given a ring for them (decisions/0093)
     Service.{name = "events", boot_set = true, module = "events_service.elf", starter = .Supervisor, by_manager = true, budget = 8 * MIB,
         entry = type_of(events_service.main)},
-    // The real-time clock's driver, next, so everything after it is given the clock page it keeps (decisions/0093).
-    // Its stack, image, heap chunks and events ring come to about 1 MiB, before the page tables its space needs
+    /*
+     * The real-time clock's driver, next, so everything after it is given the clock page it keeps (decisions/0093).
+     * Its stack, image, heap chunks and events ring come to about 1 MiB, before the page tables its space needs
+     */
     Service.{name = "clock", boot_set = true, module = "clock.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(clock_service.main)},
     // The seat's keyboards, the console's terminal, and its reader until sessions (decisions/0136)
@@ -200,8 +224,10 @@ SERVICES :: Service.[
         entry = type_of(input_service.main), cpu = TRUSTED_PATH_CPU},
     Service.{name = "terminal", module = "terminal_service.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,
         entry = type_of(terminal_service.main), cpu = TRUSTED_PATH_CPU},
-    // Each session, made once someone's logged in, its powerbox, its first program, echo, and its installations, their
-    // budgets split off this one's (decisions/0150, 0153, 0156)
+    /*
+     * Each session, made once someone's logged in, its powerbox, its first program, echo, and its installations, their
+     * budgets split off this one's (decisions/0150, 0153, 0156)
+     */
     Service.{name = "sessions", module = "session_manager.elf", starter = .Supervisor, by_manager = true, budget = 48 * MIB,
         entry = type_of(session_manager.main)},
     Service.{name = "echo", module = "echo.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
@@ -217,8 +243,10 @@ SERVICES :: Service.[
     // What writes generations onto the ESP, told each boot's assessment by the supervisor (decisions/0116)
     Service.{name = "update", module = "update_service.elf", starter = .Supervisor, by_manager = true, budget = 8 * MIB,
         entry = type_of(update_service.main)},
-    // Every disk's, and a partition server for each, which holds only its disk (decisions/0086); room for the volume
-    // servers it starts, three sealed ones among them (decisions/0141)
+    /*
+     * Every disk's, and a partition server for each, which holds only its disk (decisions/0086); room for the volume
+     * servers it starts, three sealed ones among them (decisions/0141)
+     */
     Service.{name = "storage_manager", boot_set = true, module = "storage_manager.elf", starter = .Supervisor, by_manager = true, budget = 96 * MIB,
         entry = type_of(storage_manager.main)},
     Service.{name = "partition_server", boot_set = true, module = "partition_server.elf", starter = .StorageManager, by_manager = true, budget = 2 * MIB,
@@ -231,12 +259,16 @@ SERVICES :: Service.[
         budget = 4 * MIB, entry = type_of(container_service.main)},
     Service.{name = "volume_server", boot_set = true, module = "volume_server.elf", starter = .StorageManager, by_manager = true, budget = 6 * MIB,
         entry = type_of(volume_server.main)},
-    // Every account, on its own volume, and each one's home volume (decisions/0141): Argon2id's 64 MiB for one password at
-    // a time, on top; started only when there's a disk
+    /*
+     * Every account, on its own volume, and each one's home volume (decisions/0141): Argon2id's 64 MiB for one password
+     * at a time, on top; started only when there's a disk
+     */
     Service.{name = "accounts", module = "account_service.elf", starter = .Supervisor, by_manager = true, budget = 72 * MIB,
         entry = type_of(account_service.main)},
-    // Started only when there's a disk
-    // Its checks write to the disks, once a boot
+    /*
+     * Started only when there's a disk
+     * Its checks write to the disks, once a boot
+     */
     Service.{name = "disk_check", module = "disk_check.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(disk_check.main), not_restarted = true},
     // A modern virtio entropy device (virtio's device ID 4, as PCI device 0x1040 + 4)
@@ -272,6 +304,11 @@ TEST_ENTRIES :: type.[type_of(test_channels.main), type_of(test_control.main), t
 
 #assert same_test_entries()
 
+/**
+ * Tell whether every test program's entry is test_syscalls', as the root task launches them all as it.
+ *
+ * @return True if every one of TEST_ENTRIES is the same type.
+ */
 same_test_entries :: fn() -> bool {
     for entry in TEST_ENTRIES {
         if entry != type_of(test_syscalls.main) {
@@ -291,7 +328,8 @@ ROOT_TASK_SERVES :: type.[os.Listener[supervision.Supervision]]
 SUPERVISOR_SERVES :: type.[os.Listener[connector.Connector], os.Listener[session.Session]]
 
 /**
- * What the storage manager serves itself: each volume server's stored links, on a connection it makes for each (roadmap 8f).
+ * What the storage manager serves itself: each volume server's stored links, on a connection it makes for each
+ * (roadmap 8f).
  */
 STORAGE_MANAGER_SERVES :: type.[os.Listener[links.Links]]
 
@@ -301,7 +339,12 @@ STORAGE_MANAGER_SERVES :: type.[os.Listener[links.Links]]
  */
 SESSION_MANAGER_SERVES :: type.[os.Listener[powerbox.Powerbox]]
 
-/** The service named name. */
+/**
+ * Find a service by its name.
+ *
+ * @param name The service's name, compared exactly.
+ * @return A copy of its entry in SERVICES; null if there's none of that name.
+ */
 service :: fn(name: string) -> Service? {
     for each in SERVICES {
         if each.name == name {
@@ -319,6 +362,12 @@ service :: fn(name: string) -> Service? {
  */
 RECORDS :: #run make_records()
 
+/**
+ * Make SERVICES, INSTALLATIONS and what each starter serves itself into system records, at compile time.
+ *
+ * @return The records; their magic is 0, so they don't check, when there are more services, parameters, served
+ *     protocols or installations than they hold, or a name doesn't fit. Installations past what they hold are dropped.
+ */
 make_records :: fn() -> system_records.SystemRecords {
     made := system_records.SystemRecords.{magic = system_records.MAGIC, default_deadline_ms = DEFAULT_DEADLINE_MS}
     made.default_cpu = system_records.CpuRecord.{has = 1, priority = DEFAULT_CPU.priority, period_ns = DEFAULT_CPU.period_ns,
@@ -402,7 +451,12 @@ make_records :: fn() -> system_records.SystemRecords {
     return made
 }
 
-/** Whether a service is in LATE. */
+/**
+ * Tell whether a service is one the system is healthy without.
+ *
+ * @param name The service's name.
+ * @return True if LATE has it.
+ */
 is_late :: fn(name: string) -> bool {
     for each in LATE {
         if each == name {
@@ -412,6 +466,13 @@ is_late :: fn(name: string) -> bool {
     return false
 }
 
+/**
+ * Record a protocol a starter serves itself.
+ *
+ * @param records The records being made; their magic is set to 0 when there's no room for another.
+ * @param tag The protocol's channel end tag (os.end_tag), an os.Listener[P]'s.
+ * @param by Who serves it, one of system_records' SERVED_BY_ values.
+ */
 serve :: fn(records: ptr[mut system_records.SystemRecords], tag: u64, by: u8) {
     at :: cast[usize](records.served_count)
     if at >= records.served.count || at >= records.served_by.count {
@@ -424,9 +485,10 @@ serve :: fn(records: ptr[mut system_records.SystemRecords], tag: u64, by: u8) {
 }
 
 /**
- * RECORDS checked with system_records.check, as the root task checks them at boot: every os.Channel[P] and
- * config.Config[T] a service takes has a server, and the rest is well formed. One that isn't fails the build, saying
- * which.
+ * Check RECORDS with system_records.check, at compile time, as the root task checks them at boot: every
+ * os.Channel[P] and config.Config[T] a service takes has a server, and the rest is well formed.
+ *
+ * Records that don't check fail the build, with an assertion naming the service and what's wrong.
  */
 check_records :: fn() {
     match system_records.check(&RECORDS) {
@@ -443,7 +505,12 @@ check_records :: fn() {
 
 #run check_records()
 
-/** What an optional holds, or the type itself. */
+/**
+ * Give what an optional holds, for a parameter that may be left out.
+ *
+ * @param type The parameter's type's descriptor.
+ * @return The type its Some holds, for a union with one; type itself otherwise.
+ */
 held_type :: fn(type: ptr[compiler.TypeInfo]) -> ptr[compiler.TypeInfo] {
     if type.variant == .UNION {
         optional :: cast[ptr[compiler.TypeInfoUnion]](type)
@@ -456,7 +523,13 @@ held_type :: fn(type: ptr[compiler.TypeInfo]) -> ptr[compiler.TypeInfo] {
     return type
 }
 
-/** Whether type is a struct whose name starts with prefix, like an instance of Channel. */
+/**
+ * Tell whether a type is a struct whose name starts with a prefix, like an instance of Channel.
+ *
+ * @param type The type's descriptor.
+ * @param prefix What its name starts with, as "Channel[".
+ * @return True for a struct whose name does.
+ */
 is_named :: fn(type: ptr[compiler.TypeInfo], prefix: string) -> bool {
     if type.variant != .STRUCT {
         return false

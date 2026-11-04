@@ -22,18 +22,30 @@ import read_only_file from "std/os/slop_os"
  * Elevation (decisions/0158): RequestAccount asks for another account to be made, which the administrator allows on
  * the trusted path, with their password, then the new account's name and password, typed there and never seen by the
  * program; it's answered with the new account's name.
+ *
+ * The protocol is for the channels between a session's powerbox and the session's programs, and the session manager:
+ * they send the requests, and the powerbox answers them.
  */
 Powerbox :: struct {}
 
+/**
+ * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
+ * server, here the powerbox, pays for its work from its own budget.
+ */
 PROTOCOL :: slop_os.Protocol.{name = "powerbox", major_version = 1, lending = .Server}
 
-// The most bytes of a purpose, a suggested name and a program's name, and of a kept grant's key
+/** The most bytes of a request's purpose: 96. */
 PURPOSE_BYTES :: 96
+/** The most bytes of a suggested name, and of a program's name: 64. */
 NAME_BYTES :: 64
+/** The most bytes of a kept grant's key: 32, each a letter, a digit, - or _. */
 KEY_BYTES :: 32
 
+/** What a kept grant is opened again as. */
 Kind :: enum #backed_by(u32) {
+    /** A file. */
     File = 1,
+    /** A directory. */
     Directory = 2,
 }
 
@@ -42,63 +54,112 @@ Kind :: enum #backed_by(u32) {
  * the key to keep it under if the user lets it, empty to not ask.
  */
 FileRequest :: struct {
+    /** Why the program asks, in its own words, as UTF-8, up to PURPOSE_BYTES, shown to the user. */
     purpose : slop_os.Relative[u8],
+    /** The name it suggests for a new file, as UTF-8, up to NAME_BYTES, which the chooser starts with; may be empty. */
     suggested : slop_os.Relative[u8],
+    /** Whether the program would write the file; without it, the file's given read only. */
     write : bool,
+    /**
+     * The key to keep the grant under if the user lets it, 1 to KEY_BYTES letters, digits, - and _; empty to not
+     * ask. A key not of those is Refused.
+     */
     keep : slop_os.Relative[u8],
 }
 
 /** A directory asked for: why, whether it would write in it, and the key to keep it under, empty to not ask. */
 DirectoryRequest :: struct {
+    /** Why the program asks, in its own words, as UTF-8, up to PURPOSE_BYTES, shown to the user. */
     purpose : slop_os.Relative[u8],
+    /** Whether the program would write in the directory; without it, the directory's given read only. */
     write : bool,
+    /**
+     * The key to keep the grant under if the user lets it, 1 to KEY_BYTES letters, digits, - and _; empty to not
+     * ask. A key not of those is Refused.
+     */
     keep : slop_os.Relative[u8],
 }
 
 /** A kept grant asked for again: its key, and what it's opened as. */
 Reopening :: struct {
+    /** The key the program kept it under, 1 to KEY_BYTES letters, digits, - and _. */
     key : slop_os.Relative[u8],
+    /** Whether it's opened as a file or a directory. */
     kind : Kind,
+    /** Whether it's opened to write, which the kept grant has to allow. */
     write : bool,
 }
 
 /** Another account asked for, and why. */
 AccountRequest :: struct {
+    /** Why the program asks, in its own words, as UTF-8, up to PURPOSE_BYTES, shown to the administrator. */
     purpose : slop_os.Relative[u8],
 }
 
 /** A program of the session's, to serve on its end under its name. */
 Served :: struct {
+    /** The program's name, as the session manager gave it, as UTF-8; the powerbox keeps up to NAME_BYTES of it. */
     name : slop_os.Relative[u8],
+    /** The powerbox's end of the program's connection, which moves to the powerbox. */
     end : os.Channel[Powerbox],
 }
 
+/** What a program, or the session manager, asks the powerbox. */
 Request :: union {
+    /**
+     * Ask the user for a file, on the trusted path. Answered once the user has chosen, with GrantedFile, or
+     * GrantedReadOnlyFile without write, or Refused; at once with Busy, or Refused when the powerbox has no home or
+     * trusted path, or the key isn't one.
+     */
     RequestFile(FileRequest),
+    /** Ask the user for a directory, as RequestFile asks for a file; answered with GrantedDirectory or the rest. */
     RequestDirectory(DirectoryRequest),
+    /**
+     * Open a grant the program kept, again, without asking the user. Answered with the Granted response for its kind
+     * and write, or Refused if it isn't kept, was revoked, or the key isn't one.
+     */
     Reopen(Reopening),
+    /**
+     * Ask for another account to be made, which the administrator allows on the trusted path (decisions/0158).
+     * Answered with AccountMade, or Refused; at once with Busy.
+     */
     RequestAccount(AccountRequest),
-    /** The session manager's: another program to serve */
+    /**
+     * The session manager's, on its own connection only: serve another program on its end, under its name. Answered
+     * with Done, or Refused when there's no room or it isn't the session manager's, the end then closed.
+     */
     Serve(Served),
 }
 
+/** What the powerbox answers. */
 Response :: union {
+    /** A file chosen, or reopened, to write: a connection to it, which moves to the program. */
     GrantedFile(os.Channel[file.File]),
+    /** A file chosen, or reopened, to read only: a connection to it, which moves to the program. */
     GrantedReadOnlyFile(os.Channel[read_only_file.ReadOnlyFile]),
+    /** A directory chosen, or reopened, to write in: a connection to it, which moves to the program. */
     GrantedDirectory(os.Channel[dir.Dir]),
+    /** A directory chosen, or reopened, to read only: a connection to it, which moves to the program. */
     GrantedReadOnlyDirectory(os.Channel[read_only_dir.ReadOnlyDir]),
-    /** The user refused, or what they chose couldn't be opened */
+    /** The user refused, or what they chose couldn't be opened, or it couldn't be asked. */
     Refused,
-    /** This program's request before is still waiting */
+    /** A request before, this program's or another's, is still waiting for the user; one waits at a time. */
     Busy,
-    /** Serve's answer */
+    /** Serve's answer: the program is served. */
     Done,
-    /** RequestAccount's: the account made, by its name */
+    /** RequestAccount's answer: the account made, by its name, as UTF-8. */
     AccountMade(slop_os.Relative[u8]),
+    /** The answer to a request the powerbox doesn't know, as from a newer program; every protocol has it. */
     Unsupported,
 }
 
-/** Asking again would ask the user again. */
+/**
+ * Tell whether a request may be sent again, after a reconnect, without doing more than sending it once did.
+ *
+ * @param request The request, which isn't changed.
+ * @return True for Reopen, a kept grant opened again giving another connection to it; false for the rest, which would
+ *     ask the user again, or serve a program twice.
+ */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case RequestFile(_) => false

@@ -12,9 +12,20 @@ import dir from "std/os/slop_os"
  * Australia/Sydney the other way round. Checks from 150.
  */
 
+/** London's zone file, relative to the system volume's root. */
 LONDON_ZONE :: "zoneinfo/Europe/London"
+/** Sydney's zone file, relative to the system volume's root. */
 SYDNEY_ZONE :: "zoneinfo/Australia/Sydney"
 
+/**
+ * Check time zones read from the system volume's zoneinfo/ with std's time.
+ *
+ * @param to The debug log; unused, as what's found is logged through runtime.
+ * @param system The system volume's root.
+ * @return 0 if all of it held; 150 if the buffer couldn't be made, 151 if a port couldn't be, 152 and 155 if London's
+ *     or Sydney's file couldn't be read, 153 and 156 if one couldn't be parsed, and 154 and 157 if one gave the wrong
+ *     offset or abbreviation.
+ */
 check_zones :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir]) -> int {
     buffer := new_buffer() or_return 150
     // Given back after, as disk_check's budget is small
@@ -48,7 +59,16 @@ check_zones :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir]) -> int {
     return 0
 }
 
-/** Whether the zone's offset and abbreviation are these at noon UTC on the 15th of the month. */
+/**
+ * Tell whether a zone's offset and abbreviation are these at noon UTC on the 15th of a month.
+ *
+ * @param zone The zone asked, parsed from a zoneinfo file by time.parse_zone; only read.
+ * @param year The year, in the Gregorian calendar, as 2026; the instant asked is in it.
+ * @param month The month, 1 for January to 12.
+ * @param offset The offset from UTC expected, in seconds east.
+ * @param abbreviation The abbreviation expected, as "BST".
+ * @return Whether both are what's expected.
+ */
 zone_is :: fn(zone: ptr[time.Zone], year: i64, month: int, offset: i32, abbreviation: string) -> bool {
     found, dst, name :: time.offset_of(zone, time.from_utc(time.DateTime.{year = year, month = month, day = 15, hour = 12}))
     return found == offset && name == abbreviation

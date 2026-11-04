@@ -11,8 +11,8 @@
  * the read-only directory gave. Given the system volume, it reads, writes and moves files there (system_check.hsc), and
  * unlocks an encrypted volume beside it through the storage manager (sealed_check.hsc), keeps links from one to the
  * other (link_check.hsc), takes, reads and clones snapshots of them (snapshot_check.hsc), and makes volumes of its own
- * (made_check.hsc). It says what it found in its
- * debug log, and ends with 0 if all of it held, or the number of the first check that didn't.
+ * (made_check.hsc). It says what it found in its debug log, and ends with 0 if all of it held, or the number of the
+ * first check that didn't.
  */
 package disk_check
 
@@ -29,30 +29,64 @@ import connector from "../../protocols/connector"
 import partitions from "../../protocols/partitions"
 import storage from "../../protocols/storage"
 
+/** The name of the partition the check reads and writes, which tools/boot.py makes, among every disk's. */
 CHECKED :: "SlopOS check"
-// What tools/boot.py put on the EFI system partition, and what the check writes there
+/** A file tools/boot.py put on the EFI system partition, relative to the working directory. */
 HOST_FILE :: "EFI/SlopOS/hello.txt"
+/** What HOST_FILE holds, exactly. */
 HOST_TEXT :: "Hello from the host's FAT32"
+/** A file with a long name tools/boot.py put on the EFI system partition. */
 LONG_FILE :: "EFI/SlopOS/A long name, from the host.txt"
+/** What LONG_FILE holds, exactly. */
 LONG_TEXT :: "A long name, from the host"
+/** The file the check writes on the EFI system partition, then moves into EFI/SlopOS/made. */
 GUEST_FILE :: "EFI/SlopOS/Written by the guest.txt"
+/** What the check writes in GUEST_FILE. */
 GUEST_TEXT :: "Written by the guest, through std's files"
+/** What tools/boot.py wrote at the start of the checked partition's block 0. */
 HOST_MARK :: "SlopOS disk check: from the host"
+/** What the check writes at the start of the checked partition's block 1. */
 GUEST_MARK :: "SlopOS disk check: from the guest"
-// Where in the buffer each part goes, in bytes
+/** Where in the block buffer block 0 is read to, and a read past the end is asked for, in bytes. */
 READ_AT : u32 : 0
+/** Where in the block buffer the check's mark is written from, in bytes. */
 WRITE_AT : u32 : 4096
+/** Where in the block buffer block 1 is read back to, in bytes. */
 CHECK_AT : u32 : 8192
+/** Where in the block buffer the blocks read at once go, a block apart, in bytes. */
 MANY_AT : u32 : 16384
+/** How many blocks are read at once, blocks 2 onward, each its own request in flight. */
 MANY :: 8
 
+/** A block connection to the checked partition, and where its buffer is mapped. */
 Disk :: struct {
+    /** The debug log what's found is said in; NO_HANDLE when there's none. */
     log : slop_os.DebugLog,
+    /** The block connection, narrowed to the checked partition. */
     end : slop_os.Channel,
+    /** A port bound to end, waited on for its answers. */
     port : slop_os.Port,
+    /** Where the connection's buffer is mapped, readable and writable, in the process's address space. */
     buffer : u64,
 }
 
+/**
+ * Check the storage stack end to end: a partition through the storage manager, block by block; the EFI system
+ * partition through std's files and the protocols beneath them; and the system volume, an encrypted volume beside it,
+ * links, snapshots, volumes made, and time zones.
+ *
+ * It's a test: it writes to the partition named CHECKED's block 1, to EFI/SlopOS on the EFI system partition, and to
+ * the system volume. Each part is checked only when what it needs is given; what it found is said in its debug log.
+ *
+ * @param log The debug log what's found is said in; without one, it's said nowhere.
+ * @param storage A connector to the storage manager. Without it there's nothing to check, and it ends with 0.
+ * @param working_directory The first EFI system partition's root, the process's working directory, which std's files
+ *     use. Without it, it ends with 0 after the partition's checked.
+ * @param system The system volume's root. Without it, it ends with 0 after the EFI system partition's checked.
+ * @return 0 if everything given held; otherwise the number of the first check that didn't: 1 for a port or a dial
+ *     that failed, 2 to 14 for the partition, 20 to 30 for std's files, 31 to 36 for the protocols, and the system
+ *     volume's, zones', and sealed volume's checks' own numbers from there.
+ */
 main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, working_directory: os.Channel[dir.Dir]?,
     system: os.Channel[dir.Dir]?) -> int {
     block_of_startup :: slop_os.startup_block()
@@ -200,7 +234,17 @@ main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, wo
     }
 }
 
-/** The EFI system partition, its working directory, through std's files. */
+/**
+ * Check the EFI system partition, the process's working directory, through std's files: read the host's files, one
+ * with a long name; write a file, make a directory and move the file into it; list EFI/SlopOS; read the file back
+ * through the directory opened; and be refused a path above the working directory.
+ *
+ * @param to The debug log; unused, as what's found is logged through runtime.
+ * @return 0 if all of it held; 20 or 21 if a host's file couldn't be read, 22 if one doesn't hold what it should, 23 if
+ *     the file couldn't be written or the directory made, 24 if the move failed, 25 if the listing failed, 26 if it
+ *     didn't list the host's files and the directory, alone but the bootloader's, 27 to 29 if the file couldn't be read
+ *     back through the directory, and 30 if a path above the working directory wasn't refused as InvalidPath.
+ */
 check_files :: fn(to: slop_os.DebugLog) -> int {
     host :: os.read_entire_file(HOST_FILE) or_return 20
     long :: os.read_entire_file(LONG_FILE) or_return 21
@@ -250,7 +294,14 @@ check_files :: fn(to: slop_os.DebugLog) -> int {
     return 0
 }
 
-/** One request to the storage manager, and its answer, waited for. */
+/**
+ * Send one request to the storage manager, and wait for its answer.
+ *
+ * @param end The connection to the storage manager.
+ * @param port A port bound to end.
+ * @param request The request, which holds no handles or arrays.
+ * @return The answer, a copy; Unsupported if it couldn't be sent or the connection failed.
+ */
 ask :: fn(end: slop_os.Channel, port: slop_os.Port, request: storage.Request) -> storage.Response {
     out := os.Outgoing.{}
     made :: os.begin[storage.Request](&out)
@@ -268,6 +319,13 @@ ask :: fn(end: slop_os.Channel, port: slop_os.Port, request: storage.Request) ->
     }
 }
 
+/**
+ * Send a request on the block connection, without waiting for its answer; a failure to send shows as no answer.
+ *
+ * @param disk The check's disk, whose end and port the request goes on; nothing in it changes. Its answer is the next
+ *     one receive gives only when no other request is in flight.
+ * @param request The request, copied into the message whole; it holds no handles or arrays to move.
+ */
 send :: fn(disk: ptr[Disk], request: block.Request) {
     out := os.Outgoing.{}
     made :: os.begin[block.Request](&out)
@@ -275,7 +333,13 @@ send :: fn(disk: ptr[Disk], request: block.Request) {
     _ = block.send_request(disk.end, disk.port, &out)
 }
 
-/** The next answer, waited for; Unsupported if the connection's gone. */
+/**
+ * Wait for the next answer on the block connection.
+ *
+ * @param disk The check's disk, whose end and port are waited on, blocking until an answer comes or the connection
+ *     fails.
+ * @return The answer, a copy; Unsupported if the connection's gone.
+ */
 receive :: fn(disk: ptr[Disk]) -> block.Response {
     into := os.Incoming.{}
     loop {
@@ -287,7 +351,13 @@ receive :: fn(disk: ptr[Disk]) -> block.Response {
     }
 }
 
-/** One request, and how it finished. */
+/**
+ * Send one request on the block connection, and wait for how it finished.
+ *
+ * @param disk The block connection, with no other request in flight, so the next answer is this one's.
+ * @param request The request sent, copied whole: a Read or Write uses the connection's buffer, which disk.buffer maps.
+ * @return Its completion's status; DeviceError if the answer wasn't a completion, as when the connection's gone.
+ */
 run :: fn(disk: ptr[Disk], request: block.Request) -> block.Status {
     send(disk, request)
     return match receive(disk) {
@@ -296,6 +366,13 @@ run :: fn(disk: ptr[Disk], request: block.Request) -> block.Status {
     }
 }
 
+/**
+ * Put text at the start of a block in the buffer, the rest of the block zeros.
+ *
+ * @param disk The block connection, with its buffer mapped.
+ * @param offset Where in the buffer the block starts, in bytes; it and a block after it must be in the buffer.
+ * @param text The text, at most block.BLOCK_BYTES bytes; what's past them is dropped.
+ */
 put :: fn(disk: ptr[Disk], offset: u32, text: string) {
     bytes :: view_of(cast[ptr[mut u8]](disk.buffer + cast[u64](offset)), cast[usize](block.BLOCK_BYTES))
     for &byte, i in bytes {
@@ -303,6 +380,14 @@ put :: fn(disk: ptr[Disk], offset: u32, text: string) {
     }
 }
 
+/**
+ * Tell whether the buffer holds text at an offset.
+ *
+ * @param disk The block connection, with its buffer mapped.
+ * @param offset Where in the buffer to look, in bytes; it and text's bytes after it must be in the buffer.
+ * @param text The bytes looked for, compared exactly; empty is always there.
+ * @return Whether the bytes there are text's.
+ */
 starts_with :: fn(disk: ptr[Disk], offset: u32, text: string) -> bool {
     bytes :: view_of(cast[ptr[u8]](disk.buffer + cast[u64](offset)), text.count)
     for character, i in text {
@@ -314,8 +399,17 @@ starts_with :: fn(disk: ptr[Disk], offset: u32, text: string) -> bool {
 }
 
 /**
- * Beneath std's files, through the protocols: EFI/SlopOS opened, narrowed to read only, a set of its files selected
- * by a pattern, which FAT matches ignoring case, and a file made through that set refused.
+ * Check the EFI system partition beneath std's files, through the protocols: open EFI/SlopOS, narrow it to read only,
+ * select a set of its files by a pattern, which FAT matches ignoring case, and be refused a file made through that
+ * set.
+ *
+ * The connections it makes aren't closed; the process ends soon after.
+ *
+ * @param to The debug log; unused, as what's found is logged through runtime.
+ * @param working_directory The EFI system partition's root.
+ * @return 0 if all of it held; 31 if EFI/SlopOS couldn't be opened, 32 if it couldn't be narrowed, 33 if the set
+ *     couldn't be selected, 34 if it couldn't be listed, 35 if it didn't hold the host's two files alone, and 36 if a
+ *     file made through it wasn't refused as ReadOnly.
  */
 check_protocols :: fn(to: slop_os.DebugLog, working_directory: os.Channel[dir.Dir]) -> int {
     budget :: slop_os.startup_block().budget
@@ -385,12 +479,28 @@ check_protocols :: fn(to: slop_os.DebugLog, working_directory: os.Channel[dir.Di
     return 0
 }
 
-/** A path's bytes appended to out, as a Relative. */
+/**
+ * Append text's bytes to a message being built.
+ *
+ * @param out The message being built; the bytes are appended after what it holds, and the result is relative to its
+ *     start.
+ * @param text The text, as a path or a pattern.
+ * @return Where the bytes are in the message, for a request's field.
+ */
 bytes_of :: fn(out: ptr[mut os.Outgoing], text: string) -> slop_os.Relative[u8] {
     return os.append(out, string_bytes(text))
 }
 
-/** One request on a dir connection, and its answer, waited for. */
+/**
+ * Send one request on a dir connection, and wait for its answer.
+ *
+ * @param end The dir connection, kept by the caller and not closed.
+ * @param port A port bound to end.
+ * @param out The request; its handles are moved out when it's sent.
+ * @param into Where the answer is read into.
+ * @return The answer, a copy, whose handles the caller owns; Unsupported if it couldn't be sent or the connection
+ *     failed.
+ */
 ask_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> dir.Response {
     if dir.send_request(end, port, out) is_some {
         return .Unsupported
@@ -404,7 +514,16 @@ ask_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing
     }
 }
 
-/** One request on a read_only_dir connection, and its answer, waited for. */
+/**
+ * Send one request on a read_only_dir connection, and wait for its answer.
+ *
+ * @param end The read_only_dir connection, kept by the caller and not closed.
+ * @param port A port bound to end.
+ * @param out The request; its handles are moved out when it's sent.
+ * @param into Where the answer is read into.
+ * @return The answer, a copy, whose handles the caller owns; Unsupported if it couldn't be sent or the connection
+ *     failed.
+ */
 ask_read_only_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> read_only_dir.Response {
     if read_only_dir.send_request(end, port, out) is_some {
         return .Unsupported
@@ -418,7 +537,16 @@ ask_read_only_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut o
     }
 }
 
-/** One request on a file_set connection, and its answer, waited for. */
+/**
+ * Send one request on a file_set connection, and wait for its answer.
+ *
+ * @param end The file_set connection, kept by the caller and not closed.
+ * @param port A port bound to end.
+ * @param out The request; its handles are moved out when it's sent.
+ * @param into Where the answer is read into.
+ * @return The answer, a copy, whose handles the caller owns; Unsupported if it couldn't be sent or the connection
+ *     failed.
+ */
 ask_file_set :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> file_set.Response {
     if file_set.send_request(end, port, out) is_some {
         return .Unsupported

@@ -1,10 +1,11 @@
 /**
  * SlopOS's bootloader (roadmap B, decisions/0131, 0133, 0134, 0135): a UEFI application, BOOTX64.EFI or BOOTAA64.EFI on
- * the ESP of a disk or an ISO's El Torito image. It reads the ESP's generations (src/generations), boots the newest, each of its files checked
- * against its hash, and hands the kernel SlopOS's own boot protocol (src/boot_protocol): the kernel loaded and relocated
- * at a random place, every module in its own pages, a direct map at a random offset, the memory map, the firmware's
- * tables and the framebuffer, then the firmware's boot services left and the kernel entered. Nothing is parsed but the
- * generation records, which generations.check checks, and the kernel's ELF; FAT is the firmware's.
+ * the ESP of a disk or an ISO's El Torito image. It reads the ESP's generations (src/generations), boots the newest,
+ * each of its files checked against its hash, and hands the kernel SlopOS's own boot protocol (src/boot_protocol): the
+ * kernel loaded and relocated at a random place, every module in its own pages, a direct map at a random offset, the
+ * memory map, the firmware's tables and the framebuffer, then the firmware's boot services left and the kernel
+ * entered. Nothing is parsed but the generation records, which generations.check checks, and the kernel's ELF; FAT is
+ * the firmware's.
  */
 package bootloader
 
@@ -23,21 +24,35 @@ import boot_protocol from "../../boot_protocol"
     import aarch64 from "base/intrinsics"
 }
 
-/** The key that boots the recovery generation, held or pressed as the machine starts */
+/** The key that boots the recovery generation, held or pressed as the machine starts; its capital does too. */
 RECOVERY_KEY :: 'r'
 // How long the bootloader looks for it: 100 ms, in steps
+/** How many steps the bootloader looks for RECOVERY_KEY in, ended early by the first key it sees. */
 KEY_WINDOW_STEPS :: 10
+/** How long each step of looking for RECOVERY_KEY waits, in microseconds: 10 ms. */
 KEY_WINDOW_STEP_MICROSECONDS : usize : 10000
 /**
  * The seed file (decisions/0131): random bytes kept on the ESP, mixed into the entropy the kernel's pool starts from,
- * and replaced every boot, so a machine whose firmware has no RNG still boots differently each time
+ * and replaced every boot, so a machine whose firmware has no RNG still boots differently each time.
+ *
+ * The path is from the ESP's root; the file is 32 bytes, and one of another size is ignored and replaced.
  */
 SEED_PATH :: "EFI/SlopOS/SEED"
 
 // Memory kinds of the bootloader's, past UEFI's own, so the memory map says what each page holds
+/**
+ * UEFI's EfiLoaderData memory type: the bootloader's own allocations, which the kernel gets as boot-reclaimable
+ * memory.
+ */
 LOADER_DATA : u32 : 2
+/** The memory type of the kernel image's pages, in the OS-defined range; the kernel gets them as KernelImage. */
 KERNEL_MEMORY : u32 : 0x80000001
+/** The memory type of the boot modules' pages, in the OS-defined range; the kernel gets them as BootModule. */
 MODULE_MEMORY : u32 : 0x80000002
+/**
+ * The memory type of the panic record's page, in the OS-defined range; the kernel gets it as FirmwareReserved, so
+ * nothing allocates it.
+ */
 PANIC_MEMORY : u32 : 0x80000003
 
 /*
@@ -45,14 +60,29 @@ PANIC_MEMORY : u32 : 0x80000003
  * RAM, which the firmware, allocating from the top, leaves alone
  */
 #if TARGET_ARCH == .x86_64 {
+    /** The panic record page's physical address on x86-64: 4 MiB, 4096-aligned. */
     PANIC_RECORD_AT : u64 : 0x400000
 }
 #else {
+    /** The panic record page's physical address on AArch64: 4 MiB above 0x40000000, where RAM starts on QEMU's virt. */
     PANIC_RECORD_AT : u64 : 0x40400000
 }
-/** Where the ESP keeps the last panic record's text */
+/**
+ * Where the ESP keeps the last panic record's text, from its root: the record's whole text field, the text then zeros,
+ * written over each time the boot before left a sealed record.
+ */
 LAST_PANIC_PATH :: "EFI/SlopOS/LAST_PANIC"
 
+/**
+ * Boot SlopOS: choose a generation, load its boot set and kernel, build the handoff and page tables, leave the
+ * firmware's boot services, start the other CPUs and enter the kernel.
+ *
+ * Runs as a UEFI application on the boot CPU, with boot services, until it leaves them; from then nothing of the
+ * firmware's is called and interrupts are masked. Pages allocated before a failure aren't freed.
+ *
+ * @return 1, after logging why, when booting failed before the boot services were left, so the firmware tries its
+ *     next boot option. Once the kernel is entered it doesn't return.
+ */
 main :: fn() -> int {
     runtime.log_info("bootloader: SlopOS's bootloader")
     services :: uefi.boot_services() or_return fail("no boot services")
@@ -135,17 +165,30 @@ main :: fn() -> int {
     }
 }
 
-/** The bootloader stopped, saying why; the firmware tries the next boot option. */
+/**
+ * Log why the bootloader stopped, as an error on the firmware's console.
+ *
+ * @param why What went wrong, a phrase that follows "bootloader: ".
+ * @return 1, main's result for a failure, so the firmware tries the next boot option.
+ */
 fail :: fn(why: string) -> int {
     runtime.log_error("bootloader: %", why)
     return 1
 }
 
 /**
- * The generation to boot (roadmap B3, decisions/0131): the recovery generation if a key asks for it; otherwise the
- * newest whose record checks out but the recovery generation, a tentative one only with tries left, one taken from it
- * and its record written back before it boots, so one that never comes up healthy runs out and the one before it boots
- * instead; the recovery generation once none is left. Null if there's not even that.
+ * Choose the generation to boot (roadmap B3, decisions/0131).
+ *
+ * The recovery generation if a key asks for it; otherwise the newest whose record checks out but the recovery
+ * generation, a tentative one only with tries left, one taken from it and its record written back before it boots, so
+ * one that never comes up healthy runs out and the one before it boots instead; the recovery generation once none is
+ * left. A tentative generation whose record can't be written back is skipped, so a read-only ESP boots only the
+ * others. Records whose names aren't decimal numbers, or that don't check out, are skipped.
+ *
+ * @param root The ESP's root folder, open, which has to be writable for a tentative generation to boot.
+ * @return The generation, its record checked and, for a tentative one, its try already counted on the ESP; null if
+ *     the records folder can't be listed and no key asked for recovery, or the recovery generation is needed but
+ *     missing or doesn't check out.
  */
 choose_generation :: fn(root: ptr[uefi.File]) -> generations.Generation? {
     if recovery_asked() {
@@ -189,14 +232,31 @@ choose_generation :: fn(root: ptr[uefi.File]) -> generations.Generation? {
     return read_generation(root, generations.RECOVERY_NUMBER)
 }
 
-/** The generation numbered number, its record checked, or null. */
+/**
+ * Read a generation's record from the ESP and check it.
+ *
+ * The record's pages, boot-reclaimable, aren't freed; the generation returned is a copy.
+ *
+ * @param root The ESP's root folder, open.
+ * @param number The generation's number, which names its record's file (generations.record_path);
+ *     generations.RECOVERY_NUMBER for the recovery generation.
+ * @return The generation; null if its record isn't there, can't be read, or generations.generation_of rejects it.
+ */
 read_generation :: fn(root: ptr[uefi.File], number: u64) -> generations.Generation? {
     path_storage : u8[128]
     pages :: read_file(root, generations.record_path(number, &path_storage), LOADER_DATA) or_return null
     return generations.generation_of(view_of(cast[ptr[u8]](cast[rawptr](pages.address)), cast[usize](pages.size)))
 }
 
-/** RECOVERY_KEY, or its capital, typed on the console as the bootloader starts, every key waiting taken. */
+/**
+ * Tell whether RECOVERY_KEY, or its capital, is typed on the console as the bootloader starts.
+ *
+ * Looks for up to KEY_WINDOW_STEPS steps of KEY_WINDOW_STEP_MICROSECONDS; the first step that finds any key ends the
+ * look, and takes up to 64 keys waiting, so they don't reach the kernel.
+ *
+ * @return True if a key seen in that step was RECOVERY_KEY or its capital; false if none was, no key came within the
+ *     window, or boot services are gone.
+ */
 recovery_asked :: fn() -> bool {
     services :: uefi.boot_services() or_return false
     // A firmware's console may take what's typed a moment to see, so a short window, ended by the first key
@@ -223,9 +283,17 @@ recovery_asked :: fn() -> bool {
 }
 
 /**
- * The panic record's page, at PANIC_RECORD_AT if the firmware leaves it there, for the kernel: what it holds, if it's
- * a sealed record from the boot before, kept as LAST_PANIC_PATH on the ESP, the text's bytes then zeros, and handed
- * to the kernel as the module boot_info.LAST_PANIC_MODULE; then it's emptied for this boot.
+ * Claim the panic record's page for the kernel, keeping what the boot before left in it.
+ *
+ * The page is at PANIC_RECORD_AT if the firmware leaves it there. If it holds a sealed record from the boot before,
+ * its whole text field, the text's bytes then zeros, is written as LAST_PANIC_PATH on the ESP, and the text is handed
+ * to the kernel as the module boot_info.LAST_PANIC_MODULE when the handoff has room for a module; then the page is
+ * zeroed for this boot. If PANIC_RECORD_AT can't be had, a page anywhere is used, which the next boot won't look at,
+ * or none if no page can be had. Failing to write the ESP is logged, not fatal.
+ *
+ * @param root The ESP's root folder, open; written to only when there's a record.
+ * @param handoff The handoff, whose panic_record gets the page's physical address, or 0 without one, and which may get
+ *     a module.
  */
 keep_panic_record :: fn(root: ptr[uefi.File], handoff: ptr[mut boot_protocol.Handoff]) {
     services :: uefi.boot_services() or_return void
@@ -270,7 +338,15 @@ keep_panic_record :: fn(root: ptr[uefi.File], handoff: ptr[mut boot_protocol.Han
     handoff.panic_record = address
 }
 
-/** An object of the ESP's, boot/objects/<hex>, in pages of memory_kind, if its bytes have its hash. */
+/**
+ * Read an object of the ESP's, boot/objects/<hex>, and check its bytes against its hash.
+ *
+ * @param root The ESP's root folder, open.
+ * @param hash The object's hash, which names its file and which its bytes have to have.
+ * @param memory_kind The UEFI memory type of the pages it's read into, which says what the kernel gets them as.
+ * @return The object's pages and size; null if it's missing, can't be read, or its bytes don't have its hash, in which
+ *     case pages already read aren't freed.
+ */
 read_object :: fn(root: ptr[uefi.File], hash: bundle.Hash, memory_kind: u32) -> Pages? {
     path_storage : u8[128]
     pages :: read_file(root, generations.object_path(hash, &path_storage), memory_kind) or_return null
@@ -281,7 +357,14 @@ read_object :: fn(root: ptr[uefi.File], hash: bundle.Hash, memory_kind: u32) -> 
 }
 
 /**
- * The kernel's command line: the generation's, then its number, recovery for the recovery generation, and the store's root.
+ * Write the kernel's command line into the handoff.
+ *
+ * It's the generation's command line, then " generation=" and its number in decimal, " recovery" for the recovery
+ * generation, and " store_root=" and the store's root hash in hex when it has one. What doesn't fit in
+ * handoff.command_line with a zero after it is cut off.
+ *
+ * @param handoff The handoff, its command_line zeroed beforehand; the bytes after the line are left zero.
+ * @param generation The generation being booted.
  */
 write_command_line :: fn(handoff: ptr[mut boot_protocol.Handoff], generation: ptr[generations.Generation]) {
     line : u8[..]
@@ -305,13 +388,25 @@ write_command_line :: fn(handoff: ptr[mut boot_protocol.Handoff], generation: pt
     }
 }
 
+/**
+ * Append text's bytes to a growing line.
+ *
+ * @param line The line, grown with context's allocator.
+ * @param text The text, its bytes appended as they are.
+ */
 append :: fn(line: ptr[mut u8[..]], text: string) {
     for byte in string_bytes(text) {
         runtime.array_add(line, byte)
     }
 }
 
-/** A decimal number, or null. */
+/**
+ * Parse a decimal number, as a generation's record's file name is.
+ *
+ * @param text The text: ASCII digits only, without a sign or spaces.
+ * @return Its value, which wraps past the largest u64 without being checked; null if text is empty or has anything but
+ *     digits.
+ */
 number_of :: fn(text: string) -> u64? {
     if text.count == 0 {
         return null
@@ -326,7 +421,14 @@ number_of :: fn(text: string) -> u64? {
     return value
 }
 
-/** The firmware's tables, by their configuration tables' GUIDs. */
+/**
+ * Find the firmware's tables in its configuration tables, by their GUIDs, and put their addresses in the handoff.
+ *
+ * ACPI's RSDP is the 2.0 one if there is one, else the 1.0 one; SMBIOS's entry point the 3.0 one, else the older one.
+ * Each address is physical, and 0 when the firmware has no such table.
+ *
+ * @param handoff The handoff, whose acpi_rsdp, devicetree, smbios and efi_system_table are written.
+ */
 firmware_tables :: fn(handoff: ptr[mut boot_protocol.Handoff]) {
     acpi := uefi.configuration_table(uefi.ACPI_20_GUID)
     if acpi is_none {
@@ -345,7 +447,14 @@ firmware_tables :: fn(handoff: ptr[mut boot_protocol.Handoff]) {
     }
 }
 
-/** The firmware's framebuffer, if it has a linear one of 32-bit pixels. */
+/**
+ * Describe the firmware's framebuffer in the handoff, if it has a linear one of 32-bit pixels.
+ *
+ * Only Graphics Output's red-green-blue and blue-green-red formats, 8 bits a channel, are taken; one described by bit
+ * masks, one that's only blitted to, or none at all leaves has_framebuffer 0.
+ *
+ * @param handoff The handoff, whose framebuffer, its base a physical address, and has_framebuffer are written.
+ */
 framebuffer :: fn(handoff: ptr[mut boot_protocol.Handoff]) {
     output :: uefi.locate[uefi.GraphicsOutput](uefi.GRAPHICS_OUTPUT_GUID) or_return void
     mode :: output.mode
@@ -363,9 +472,16 @@ framebuffer :: fn(handoff: ptr[mut boot_protocol.Handoff]) {
 }
 
 /**
- * Random bytes for the kernel's pool: the firmware's RNG's, the seed file's and the CPU's counter, hashed together. The
- * kernel's bytes and the next seed are each hashed from that apart, so one doesn't tell the other; the next seed is
- * written before the kernel boots, so no two boots start from the same seed.
+ * Gather random bytes for the kernel's pool, and write the next boot's seed.
+ *
+ * The firmware's RNG's 32 bytes, the seed file's 32 and the CPU's counter are hashed together. The kernel's bytes and
+ * the next seed are each hashed from that apart, so one doesn't tell the other; the next seed is written before the
+ * kernel boots, so no two boots start from the same seed. An ESP that can't be written, as an ISO's, is logged, not
+ * fatal.
+ *
+ * @param handoff The handoff, whose entropy is written, and has_entropy set to 1 if the RNG or the seed file
+ *     contributed, 0 if only the counter did.
+ * @param root The ESP's root folder, open, which SEED_PATH is read from and written to.
  */
 entropy :: fn(handoff: ptr[mut boot_protocol.Handoff], root: ptr[uefi.File]) {
     // The firmware's bytes, the seed's and the counter, then a byte saying which of the two hashes
@@ -413,7 +529,12 @@ entropy :: fn(handoff: ptr[mut boot_protocol.Handoff], root: ptr[uefi.File]) {
     }
 }
 
-/** The CPU's cycle or virtual counter. */
+/**
+ * Read the CPU's counter, a little entropy and a fallback for randomness.
+ *
+ * @return The time-stamp counter on x86-64, the virtual counter, CNTVCT_EL0, on AArch64: ticks since an unspecified
+ *     start, at a rate the CPU sets.
+ */
 cpu_counter :: fn() -> u64 {
     #if TARGET_ARCH == .x86_64 {
         return x86_64.rdtsc()
@@ -423,7 +544,12 @@ cpu_counter :: fn() -> u64 {
     }
 }
 
-/** The boot CPU's hardware identifier: its initial local APIC ID. */
+/**
+ * Read the boot CPU's hardware identifier, as boot_protocol.Cpu's hardware_id holds it.
+ *
+ * @return On x86-64 its initial local APIC ID from CPUID leaf 1, 0 to 255; on AArch64 its MPIDR_EL1's affinity fields,
+ *     Aff3 and Aff2 to Aff0 with the other bits cleared, as PSCI's CPU_ON and the device tree's cpu nodes name it.
+ */
 boot_cpu_id :: fn() -> u64 {
     #if TARGET_ARCH == .x86_64 {
         return cast[u64](x86_64.cpuid(1).ebx >> 24)
@@ -438,9 +564,19 @@ boot_cpu_id :: fn() -> u64 {
  * or with none, the CPU's. Without KASLR, always 0.
  */
 Random :: struct {
+    /** Whether the generation asks for KASLR; false makes every number 0, so the kernel and direct map don't move. */
     kaslr : bool,
 }
 
+/**
+ * Draw a random number for placing the kernel or the direct map.
+ *
+ * Boot services have to be running. It's the firmware's RNG's if it has one that answers; otherwise RDRAND or RNDR
+ * where the CPU has it, else the CPU's counter, which is hardly random.
+ *
+ * @param random Whether KASLR is on.
+ * @return Any u64 when KASLR is on; 0 when it's off.
+ */
 random_u64 :: fn(random: ptr[Random]) -> u64 {
     if !random.kaslr {
         return 0
@@ -475,7 +611,13 @@ random_u64 :: fn(random: ptr[Random]) -> u64 {
     }
 }
 
-/** The direct map's offset: the bottom of the higher half, a random number of GiB up, within its first 32 TiB. */
+/**
+ * Choose the direct map's offset: the bottom of the higher half, a random number of GiB up, within its first 32 TiB.
+ *
+ * @param random Whether KASLR is on; without it the offset is HIGHER_HALF itself.
+ * @return The virtual address physical address 0 is mapped at, 1 GiB-aligned, from HIGHER_HALF up to HIGHER_HALF plus
+ *     32 TiB less 1 GiB.
+ */
 direct_map_offset :: fn(random: ptr[Random]) -> u64 {
     return HIGHER_HALF + (random_u64(random) % 32768) * GIGABYTE
 }

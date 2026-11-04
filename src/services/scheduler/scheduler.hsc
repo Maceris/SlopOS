@@ -2,10 +2,10 @@
  * The scheduler service (roadmap 9a, decisions/0037, 0093): it holds the root CPU budget, which the root task gives it,
  * and splits a budget off it for each service the system configuration gives a CPU share, and one more, the default,
  * for every service without one. The system configuration is the boot set's, which the root task gives it, and it
- * checks again (decisions/0110). Whoever starts a service asks it for that service's budget by name (the scheduler protocol), and
- * puts the service on it before it starts, with the CPUs its share names, if it names any (decisions/0099), so its
- * threads run there and its IRQs are routed there. It adjusts nothing on its own yet; if it ends, every budget keeps
- * what it was given, as the kernel keeps them.
+ * checks again (decisions/0110). Whoever starts a service asks it for that service's budget by name (the scheduler
+ * protocol), and puts the service on it before it starts, with the CPUs its share names, if it names any
+ * (decisions/0099), so its threads run there and its IRQs are routed there. It adjusts nothing on its own yet; if it
+ * ends, every budget keeps what it was given, as the kernel keeps them.
  */
 package scheduler
 
@@ -16,23 +16,55 @@ import service_kit from "../../libraries/service_kit"
 import protocol from "../../protocols/scheduler"
 import system_records from "../../system_records"
 
-/** The budgets it splits: one per service with a share, and the default */
+/**
+ * The most budgets it splits for services with a share of their own; services with a share past this many are given
+ * the default instead. The default isn't counted.
+ */
 MAX_BUDGETS :: 32
 
-/** A budget it split, and the service it's for, or "" for the default. */
+/** A budget it split for a service with a share of its own. */
 Split :: struct {
+    /**
+     * The service's name, as the system configuration has it; a view of the configuration's copy, which is kept for
+     * the scheduler's life.
+     */
     name : string,
+    /** The budget, the scheduler's own, with every right; only bind-only copies are given away. */
     budget : slop_os.CpuBudget,
 }
 
+/** The service's state, all of it main's, kept for its life. */
 Scheduler :: struct {
+    /** Where its lines go, or NO_HANDLE when it wasn't given a log, so lines go nowhere. */
     log : slop_os.DebugLog,
+    /** The port every client is bound to, waited on between passes. */
     port : slop_os.Port,
+    /** The budgets split for services with a share of their own, in the configuration's order. */
     budgets : Split[MAX_BUDGETS],
+    /** How many of budgets are in use, from the first: 0 to MAX_BUDGETS. */
     count : usize,
+    /** The budget for every service without one of its own, or NO_HANDLE when it couldn't be made. */
     default_budget : slop_os.CpuBudget,
 }
 
+/**
+ * Split the root CPU budget into the services' budgets, and give each to whoever starts that service.
+ *
+ * The default budget is made first, then one for each service the system configuration gives a CPU share, in its
+ * order, restricted to the CPUs the share names; one that can't be made is logged, and its service gets the default.
+ * Then the program serves BudgetFor requests until the system stops.
+ *
+ * @param log The debug log it writes its lines to: the budgets made, and each that couldn't be. Without one, it
+ *     writes nothing.
+ * @param cpu_budget The root CPU budget, from the root task, which every budget is split off; kept for the
+ *     program's life.
+ * @param clients The listener new clients' connections arrive on, from the root task; it's served as a client, its
+ *     Connects each adding a client, up to service_kit's MAX_CLIENTS at once.
+ * @param system The system configuration, the boot set's, from the root task; it's copied out and checked again, the
+ *     copy kept for the program's life.
+ * @return 1 when no port could be made, 2 when the listener couldn't be bound to it, 3 when the system configuration
+ *     doesn't check out; it doesn't return otherwise.
+ */
 main :: fn(log: slop_os.DebugLog?, cpu_budget: slop_os.CpuBudget, clients: os.Listener[protocol.Scheduler], system: slop_os.Memory) -> int {
     block :: slop_os.startup_block()
     service := Scheduler.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE),
@@ -101,7 +133,18 @@ main :: fn(log: slop_os.DebugLog?, cpu_budget: slop_os.CpuBudget, clients: os.Li
     }
 }
 
-/** Every request client index has sent, until there are none left, or it's gone. */
+/**
+ * Answer every request one client has sent, until none is left or the client's gone.
+ *
+ * A BudgetFor is answered with Budget, a bind-only copy of the named service's budget or of the default for a name
+ * without one, or NoBudget when there's no budget to give or it can't be copied. A Connect adds its channel as a
+ * client, closing it when the table's full. An unknown request is answered Unsupported; an invalid one is skipped.
+ *
+ * @param service The service, which isn't changed but for its budgets' copies given away.
+ * @param connected The clients; a client whose channel failed is dropped, its channel closed and its place freed.
+ * @param index Which client, an index in connected; one past its end, or a freed place, is nothing to serve.
+ * @param into Where each request is received, reused for each and left holding the last.
+ */
 serve :: fn(service: ptr[mut Scheduler], connected: ptr[mut service_kit.Clients], index: usize, into: ptr[mut os.Incoming]) {
     if index >= connected.ends.count {
         return void
@@ -147,7 +190,15 @@ serve :: fn(service: ptr[mut Scheduler], connected: ptr[mut service_kit.Clients]
     }
 }
 
-/** The budget split for the service named name, or the default. */
+/**
+ * Find the budget for a service.
+ *
+ * @param service The service, which keeps the budget; the handle returned is still its own.
+ * @param name The service's name, compared exactly with the configuration's names; "" or an unknown name gets the
+ *     default.
+ * @return The budget split for name, or the default budget when it has none, which is NO_HANDLE when the default
+ *     couldn't be made.
+ */
 budget_of :: fn(service: ptr[Scheduler], name: string) -> slop_os.CpuBudget {
     for each, i in service.budgets {
         if i < service.count && each.name == name {
@@ -157,7 +208,12 @@ budget_of :: fn(service: ptr[Scheduler], name: string) -> slop_os.CpuBudget {
     return service.default_budget
 }
 
-/** A handle to budget that may only put processes on it, to give away. */
+/**
+ * Copy a budget's handle with only the rights to put processes on it and to send it, to give away.
+ *
+ * @param budget The budget, which stays the caller's, unchanged.
+ * @return The copy, the caller's to send or close; null when budget is NO_HANDLE or can't be duplicated.
+ */
 bindable :: fn(budget: slop_os.CpuBudget) -> slop_os.CpuBudget? {
     if cast[slop_os.Handle](budget) == slop_os.NO_HANDLE {
         return null

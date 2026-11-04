@@ -1,15 +1,16 @@
 /**
  * The powerbox (decisions/0018, 0156, design/console-and-sessions.md §5): one per session, which the session manager
- * starts with the session's home, the trusted path's prompt connection for the session, and a connection of its own, on
- * which it has the powerbox serve each of the session's programs, under the program's name. A program's RequestFile or
- * RequestDirectory goes to the trusted path as an Ask, with the program's name, its purpose and the home, read only, for
- * the chooser to list; the program's answered once the user has chosen, with what they chose opened on the home, read
- * only unless it asked to write, or refused. One request waits at a time; another is answered Busy. It holds only its
- * session's home, so a bug in it reaches one user's files.
+ * starts with the session's home, the trusted path's prompt connection for the session, and a connection of its own,
+ * on which it has the powerbox serve each of the session's programs, under the program's name. A program's RequestFile
+ * or RequestDirectory goes to the trusted path as an Ask, with the program's name, its purpose and the home, read
+ * only, for the chooser to list; the program's answered once the user has chosen, with what they chose opened on the
+ * home, read only unless it asked to write, or refused. One request waits at a time; another is answered Busy. It
+ * holds only its session's home, so a bug in it reaches one user's files.
  *
  * Kept grants (decisions/0158): a request that asks to be kept under a key, if the user ticks "keep for next time", is
- * granted again by the home and kept as a stored link, grants/<program>/<key>, in the home; Reopen with the key opens it
- * again without asking the user. Revoking its issued record, from the trusted path's grants view, makes it open nothing.
+ * granted again by the home and kept as a stored link, grants/<program>/<key>, in the home; Reopen with the key opens
+ * it again without asking the user. Revoking its issued record, from the trusted path's grants view, makes it open
+ * nothing.
  *
  * Elevation: RequestAccount goes to the trusted path as an Ask for an account, which it answers with the account made,
  * once the administrator has allowed it there; the program's told its name.
@@ -26,40 +27,78 @@ import powerbox from "../../protocols/powerbox"
 import prompt from "../../protocols/prompt"
 import service_kit from "../../libraries/service_kit"
 
+/** No channel: what home_end is without a home, and prompt_end once the trusted path's gone. */
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
-// The prompt connection is bound to the port under this key, and a stop under the next, above the clients'
+/** The key the prompt connection is bound to the port under, above the clients'. */
 PROMPT_KEY : u64 : 1000
+/** The key a request to stop is bound to the port under. */
 STOP_KEY : u64 : 1001
+/** The most bytes of a kept grant's link's path, grants/<program>/<key>; a longer one is cut. */
 PATH_BYTES :: 160
-/** The session manager's connection is the first client */
+/** The client index of the session manager's connection, the first client, which alone may send Serve. */
 MANAGER : usize : 0
 
+/** A program's name, as the session manager gave it in Serve. */
 Name :: struct {
+    /** The name's bytes, the first count of them; a longer name is cut at NAME_BYTES. */
     bytes : u8[powerbox.NAME_BYTES],
+    /** How many of bytes are the name: 0 for none, as for the session manager's own connection. */
     count : usize,
 }
 
 /** The request waiting for the user: whose, what it asked for, and the key to keep it under, if it asked. */
 Waiting :: struct {
+    /** The client index of the program that asked; MAX_CLIENTS once it's gone, so no one's answered. */
     client : usize,
+    /** What it asked for: a file, a directory, or an account. */
     kind : prompt.Kind,
+    /** Whether it asked to write, not only read. */
     write : bool,
+    /** The key to keep the grant under, the first key_count bytes, valid_key's. */
     key : u8[powerbox.KEY_BYTES],
+    /** How many of key's bytes are the key: 0 if it didn't ask to keep it. */
     key_count : usize,
 }
 
+/** The powerbox's state: its connections, its clients, and the request waiting for the user. */
 Box :: struct {
+    /** The port every client, the prompt connection and a stop are bound to, under their keys. */
     port : slop_os.Port,
+    /** The session's home's dir connection, NONE without one; the grant's, never closed. */
     home_end : slop_os.Channel,
+    /** A port bound to home_end, waited on for its answers. */
     home_port : slop_os.Port,
+    /** The trusted path's prompt connection for the session; NONE once it's gone, which it closes. */
     prompt_end : slop_os.Channel,
+    /** A port bound to prompt_end, waited on for its answers. */
     prompt_port : slop_os.Port,
+    /** The clients: the session manager's connection first, then each program it has served. */
     clients : service_kit.Clients,
+    /** Each client's program's name, by client index. */
     names : Name[service_kit.MAX_CLIENTS],
+    /** The request waiting for the user, while has_waiting. */
     waiting : Waiting,
+    /** Whether a request is waiting for the user; while one is, others are answered Busy. */
     has_waiting : bool,
 }
 
+/**
+ * Serve a session's programs as its powerbox: ask the user on the trusted path for files, directories and accounts
+ * the programs request, and give them what the user chooses.
+ *
+ * A file or directory is opened on the home, read only unless the program asked to write; the program never sees the
+ * home itself. Nothing is given without the user choosing it on the trusted path, except a grant the user chose to
+ * keep, which Reopen opens again until it's revoked. It runs until it's asked to stop on its lifecycle channel.
+ *
+ * @param home The session's home volume's root, which every grant is opened on. Without it, as for a session no one's
+ *     logged in to, every request is refused.
+ * @param prompts The trusted path's prompt connection for the session, on which each request is asked of the user.
+ *     If it goes, the request waiting is refused, and so is every request after it.
+ * @param manager The session manager's connection, on which it sends Serve with each of the session's programs'
+ *     connections and names.
+ * @return 0 when it's asked to stop; 1 if its port couldn't be made; 2 if a port for the home or the prompt
+ *     connection couldn't be made or bound; 3 if the manager's connection couldn't be served.
+ */
 main :: fn(home: os.Channel[dir.Dir]?, prompts: os.Channel[prompt.Prompt], manager: os.Channel[powerbox.Powerbox]) -> int {
     block :: slop_os.startup_block()
     box := runtime.new(Box)
@@ -101,7 +140,18 @@ main :: fn(home: os.Channel[dir.Dir]?, prompts: os.Channel[prompt.Prompt], manag
     }
 }
 
-/** Every request client index has sent, until there are none left, or it's gone. */
+/**
+ * Answer every request a client has sent, until there are none left, or it's gone.
+ *
+ * Serve is taken only from the session manager; from anyone else, it's refused and the end it gave is closed. A
+ * request for the user waits unanswered until take_answer answers it. A client that's gone is dropped, and a request
+ * of its that's waiting is answered to no one.
+ *
+ * @param box The powerbox, whose port the client's end is bound to: a client that's gone is dropped from its clients,
+ *     a request for the user becomes its waiting one, and Serve adds a client.
+ * @param index The client's index; one past the clients, or dropped, is passed over.
+ * @param into Where each request is received, reused from one to the next.
+ */
 serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
     if index >= box.clients.ends.count {
         return void
@@ -162,7 +212,16 @@ serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
     }
 }
 
-/** A program of the session's served on end, under name: whether there was room. */
+/**
+ * Serve a program of the session's on a connection, under its name.
+ *
+ * @param box The powerbox: the connection is bound to its port as a new client, and the name kept in its names.
+ * @param name The program's name, shown on the trusted path with each request it makes, and the folder its kept
+ *     grants are in; cut at NAME_BYTES.
+ * @param end The program's connection, which the powerbox keeps as a client from now on; on failure it isn't closed
+ *     here.
+ * @return True if it's served; false if there was no room for another client.
+ */
 serve_program :: fn(box: ptr[mut Box], name: u8[], end: os.Channel[powerbox.Powerbox]) -> bool {
     index :: service_kit.add_client_index(&box.clients, box.port, end.end) or_return false
     if index < box.names.count {
@@ -177,6 +236,14 @@ serve_program :: fn(box: ptr[mut Box], name: u8[], end: os.Channel[powerbox.Powe
     return true
 }
 
+/**
+ * Find the name of the program a client is.
+ *
+ * @param box The powerbox, whose names are read.
+ * @param index The client's index; past the names, the name is empty.
+ * @return Its name, a view of the box's, good until the client's index is served again; empty for the session
+ *     manager's connection or an index past the clients.
+ */
 name_of :: fn(box: ptr[Box], index: usize) -> u8[] {
     if index >= box.names.count {
         return box.names[0].bytes[0..<0]
@@ -186,8 +253,20 @@ name_of :: fn(box: ptr[Box], index: usize) -> u8[] {
 }
 
 /**
- * A request sent to the trusted path, with the home, read only, for the chooser: null once it's waiting there, or the
- * answer at once, Busy with one waiting already, Refused without a home or the trusted path.
+ * Ask the user on the trusted path for what a program requests, with the program's name, its purpose and the home,
+ * read only, for the chooser to list.
+ *
+ * @param box The powerbox; the request becomes its waiting one.
+ * @param index The client index of the program asking.
+ * @param kind What it asks for: a file, a directory, or an account.
+ * @param write Whether it asks to write, not only read.
+ * @param purpose Why it asks, in its own words, shown to the user as the program's.
+ * @param suggested A file name to suggest, or empty.
+ * @param key The key to keep the grant under if the user agrees, or empty not to ask; one that isn't valid_key's is
+ *     refused.
+ * @return Null once it's waiting for the user, to be answered by take_answer; or the answer at once: Busy with a
+ *     request waiting already, Refused for a bad key, without a home or the trusted path, or if the home couldn't be
+ *     narrowed or the Ask sent.
  */
 ask :: fn(box: ptr[mut Box], index: usize, kind: prompt.Kind, write: bool, purpose: u8[], suggested: u8[], key: u8[]) -> powerbox.Response? {
     if box.has_waiting {
@@ -226,7 +305,13 @@ ask :: fn(box: ptr[mut Box], index: usize, kind: prompt.Kind, write: bool, purpo
 }
 
 /**
- * The trusted path's answer, if it's come: what the user chose opened and given to the program that asked, or refused.
+ * Take the trusted path's answer to the waiting request, if it's come, and answer the program that asked.
+ *
+ * What the user chose is opened on the home and given, and kept if the user ticked to keep it; an account made is
+ * named; anything else is refused. If the trusted path's gone, its connection's closed and the request refused.
+ *
+ * @param box The powerbox; its waiting request is answered, unless the answer hasn't come.
+ * @param into Where the answer is received.
  */
 take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
     if !box.has_waiting || box.prompt_end == NONE {
@@ -271,8 +356,15 @@ take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
 }
 
 /**
- * What's at path, opened on the home as asked: a file, read only unless it would write, made if it's new; or a directory,
- * read only unless it would write. Null if it can't be.
+ * Open what's at a path on the home as asked: a file, read only unless it would write, made if it's new; or a
+ * directory, read only unless it would write, made if it's new.
+ *
+ * @param box The powerbox, on whose home everything's opened, each request waited for on its home port.
+ * @param path The path beneath the home; empty for the home itself, as a directory.
+ * @param new Whether it's to be made: a new file is made only to write, so a new one to read is refused.
+ * @param kind A file or a directory.
+ * @param write Whether to grant writing as well as reading.
+ * @return The grant, whose end moves to the program in the answer; null if it can't be opened.
  */
 opened :: fn(box: ptr[mut Box], path: u8[], new: bool, kind: prompt.Kind, write: bool) -> powerbox.Response? {
     out := os.Outgoing.{}
@@ -325,8 +417,16 @@ opened :: fn(box: ptr[mut Box], path: u8[], new: bool, kind: prompt.Kind, write:
 }
 
 /**
- * What the user chose kept for the program at index, under key: granted by the home again, read only unless it was
- * asked for to write, and the grant kept as a stored link at grants/<program>/<key>, in place of one there before.
+ * Keep what the user chose for a program under a key: granted by the home again, read only unless it was asked for
+ * to write, and the grant kept as a stored link at grants/<program>/<key>, in place of one there before.
+ *
+ * Failing to keep it is only logged; the program has its grant either way.
+ *
+ * @param box The powerbox, whose home the grants folder and the link are made in, each request waited for.
+ * @param index The client index of the program, whose name names the folder; a program without one keeps nothing.
+ * @param key The key, valid_key's.
+ * @param path What the user chose, beneath the home; the home itself, empty, isn't kept.
+ * @param write Whether the kept grant writes.
  */
 keep :: fn(box: ptr[mut Box], index: usize, key: u8[], path: u8[], write: bool) {
     who :: name_of(box, index)
@@ -363,7 +463,14 @@ keep :: fn(box: ptr[mut Box], index: usize, key: u8[], path: u8[], write: bool) 
 }
 
 /**
- * A grant the program at index kept under key, opened again through its link, as asked; Refused if it's gone or revoked.
+ * Open again, through its link, a grant a program kept under a key, without asking the user.
+ *
+ * @param box The powerbox, whose home the link is opened on, its answer waited for.
+ * @param index The client index of the program, whose kept grants alone it can reopen.
+ * @param key The key it was kept under.
+ * @param kind A file or a directory.
+ * @param write Whether to open it to write; a link kept read only won't open to write.
+ * @return The grant; Refused without a home or a name, for a key that isn't valid_key's, or if it's gone or revoked.
  */
 reopen :: fn(box: ptr[mut Box], index: usize, key: u8[], kind: powerbox.Kind, write: bool) -> powerbox.Response {
     who :: name_of(box, index)
@@ -384,7 +491,14 @@ reopen :: fn(box: ptr[mut Box], index: usize, key: u8[], kind: powerbox.Kind, wr
     }
 }
 
-/** The directory at path beneath the home, made if it isn't there: whether it is. */
+/**
+ * Make a directory beneath the home if it isn't there.
+ *
+ * @param box The powerbox, whose home the directory is made on, its answer waited for; the directory's end that comes
+ *     back is closed.
+ * @param path The directory's path beneath the home.
+ * @return True if it's there now.
+ */
 made_directory :: fn(box: ptr[mut Box], path: u8[]) -> bool {
     out := os.Outgoing.{}
     making :: os.begin[dir.Request](&out)
@@ -398,7 +512,14 @@ made_directory :: fn(box: ptr[mut Box], path: u8[]) -> bool {
     }
 }
 
-/** grants/<program>, and /<key> after it if there's one, into storage. */
+/**
+ * Write the path of a program's kept grants: grants/<program>, and /<key> after it if there's one.
+ *
+ * @param who The program's name.
+ * @param key The key, or empty for the program's folder.
+ * @param storage Where the path is written; what's past PATH_BYTES is cut.
+ * @return The path, a view of storage, good as long as it is.
+ */
 kept_path :: fn(who: u8[], key: u8[], storage: ptr[mut u8[PATH_BYTES]]) -> u8[] {
     count : usize = 0
     append_bytes(storage, &count, string_bytes("grants/"))
@@ -410,6 +531,13 @@ kept_path :: fn(who: u8[], key: u8[], storage: ptr[mut u8[PATH_BYTES]]) -> u8[] 
     return if count <= storage.count { storage^[0..<count] } else { storage^[0..<0] }
 }
 
+/**
+ * Append bytes to a path being written, as many as fit.
+ *
+ * @param storage The path's storage.
+ * @param count How many of its bytes are in use, moved on by those appended.
+ * @param bytes The bytes; those past PATH_BYTES are dropped.
+ */
 append_bytes :: fn(storage: ptr[mut u8[PATH_BYTES]], count: ptr[mut usize], bytes: u8[]) {
     for byte in bytes {
         at :: count^
@@ -420,11 +548,22 @@ append_bytes :: fn(storage: ptr[mut u8[PATH_BYTES]], count: ptr[mut usize], byte
     }
 }
 
+/**
+ * View bytes as text, for the log.
+ *
+ * @param bytes The bytes, not checked to be UTF-8.
+ * @return The text, a view of bytes; empty for none.
+ */
 as_text :: fn(bytes: u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }
 
-/** A key: letters, digits, - and _, at most KEY_BYTES of them. */
+/**
+ * Tell whether a key is one a grant may be kept under, so it can't name a path outside the program's folder.
+ *
+ * @param key The key's bytes, as the program sent them; any length, read only.
+ * @return True for 1 to KEY_BYTES ASCII letters, digits, - and _.
+ */
 valid_key :: fn(key: u8[]) -> bool {
     if key.count == 0 || key.count > powerbox.KEY_BYTES {
         return false
@@ -438,7 +577,13 @@ valid_key :: fn(key: u8[]) -> bool {
     return true
 }
 
-/** The waiting request for an account answered with the account's name. */
+/**
+ * Answer the waiting request for an account with the account made, unless the program that asked has gone; either
+ * way, it's no longer waiting.
+ *
+ * @param box The powerbox, whose waiting request is answered on its client's end and is no longer waiting.
+ * @param name The account's name, as the trusted path gave it, copied into the answer.
+ */
 answer_made :: fn(box: ptr[mut Box], name: u8[]) {
     box.has_waiting = false
     index :: box.waiting.client
@@ -451,7 +596,12 @@ answer_made :: fn(box: ptr[mut Box], name: u8[]) {
     _ = powerbox.send_response(box.clients.ends[index], box.port, &out)
 }
 
-/** The waiting request answered, unless the program that asked has gone, and no longer waiting. */
+/**
+ * Answer the waiting request, unless the program that asked has gone; either way, it's no longer waiting.
+ *
+ * @param box The powerbox, whose waiting request is answered on its client's end and is no longer waiting.
+ * @param given The answer; a grant's end moves to the program, and is lost if the program's gone.
+ */
 answer :: fn(box: ptr[mut Box], given: powerbox.Response) {
     box.has_waiting = false
     index :: box.waiting.client
@@ -463,13 +613,31 @@ answer :: fn(box: ptr[mut Box], given: powerbox.Response) {
     _ = powerbox.send_response(box.clients.ends[index], box.port, &out)
 }
 
+/**
+ * Send one request on a dir connection, and wait for its answer.
+ *
+ * @param box The powerbox; only passed on to ask_dir_with, which doesn't use it.
+ * @param end The dir connection the request is sent on; the caller's, not closed.
+ * @param port A port bound to it.
+ * @param request The request, without items.
+ * @return The answer; Unsupported if it couldn't be sent or answered.
+ */
 ask_dir :: fn(box: ptr[mut Box], end: slop_os.Channel, port: slop_os.Port, request: dir.Request) -> dir.Response {
     out := os.Outgoing.{}
     os.begin[dir.Request](&out)^ = request
     return ask_dir_with(box, end, port, &out)
 }
 
-/** One request on a dir connection, and its answer, waited for. */
+/**
+ * Send one request on a dir connection, and wait for its answer.
+ *
+ * @param box The powerbox; not used.
+ * @param end The dir connection the request is sent on, and the answer waited for on, with no deadline; the caller's,
+ *     not closed.
+ * @param port A port bound to it.
+ * @param out The request, put together by the caller.
+ * @return The answer, whose handles are the caller's; Unsupported if it couldn't be sent or answered.
+ */
 ask_dir_with :: fn(box: ptr[mut Box], end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing]) -> dir.Response {
     if dir.send_request(end, port, out) is_some {
         return .Unsupported
@@ -485,7 +653,13 @@ ask_dir_with :: fn(box: ptr[mut Box], end: slop_os.Channel, port: slop_os.Port, 
 }
 
 /**
- * Another connection to the directory end speaks for, its one end sent to its server, which takes it without answering.
+ * Make another connection to the directory a dir connection speaks for: one end of a new channel sent to its server
+ * in Connect, which takes it without answering.
+ *
+ * @param end The dir connection Connect is sent on; the caller's, not closed.
+ * @param port A port bound to it.
+ * @return The new connection's end, the caller's to give or close; null if the channel couldn't be made or Connect
+ *     sent.
  */
 connection_to :: fn(end: slop_os.Channel, port: slop_os.Port) -> slop_os.Channel? {
     pair :: os.channel_for[dir.Dir](slop_os.startup_block().budget, 0) or_return null

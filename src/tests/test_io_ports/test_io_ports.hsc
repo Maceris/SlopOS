@@ -16,10 +16,30 @@ import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
+/** The test's name, which starts each line it logs. */
 NAME :: "test_io_ports"
+/** The RTC's first port, its index register; its data register is the next. */
 RTC_PORTS : u32 : 0x70
+/** The index of the RTC's status register A, written to the index port to read it through the data port. */
 RTC_STATUS_A : u32 : 0x0a
 
+/**
+ * Check ranges of I/O ports: reading the RTC through one, and what's refused.
+ *
+ * @param log The debug log, writable, where the test says what it found and which check failed.
+ * @param platform The platform capability, which makes port ranges; without it the test ends with 100.
+ * @param test_device Not used.
+ * @param firmware Not used.
+ * @param manager Not used.
+ * @param program Not used.
+ * @param peer Not used.
+ * @param cpu_budget Not used.
+ * @return 0 if every check passed. Otherwise the first that failed. On x86-64: 1 making the RTC's range; 2 writing
+ *     its index port, or 3 reading its data port; 4 register A's divider not 010; 5 a port past the range, 6 a width
+ *     of 3, or 7 a range past the last port not refused with InvalidArgument; 8 the budget not coming back to
+ *     nothing. On AArch64: 1 a range not refused with InvalidArgument; 2 the budget not coming back. 101 if the
+ *     memory budget couldn't be made.
+ */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     block :: slop_os.startup_block()

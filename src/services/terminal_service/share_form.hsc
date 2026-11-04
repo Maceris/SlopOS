@@ -1,9 +1,9 @@
 /**
  * Shared volumes (decisions/0158), on the trusted path: H on the secure attention key's screen opens this form, for the
- * session's user, the volume's owner. They type a shared volume's name, made the first time, and another user's: Enter
- * shares it with them, Delete takes them out of it, which revokes every link into it and starts its next key generation.
- * The account service does it (Share, Unshare) and answers with a grant of the volume's root, which is linked here as
- * shared/<name> in the owner's home; a member's link is made when they next log in. Escape goes back.
+ * session's user, the volume's owner. They type a shared volume's name, made the first time, and another user's:
+ * Enter shares it with them, Delete takes them out of it, which revokes every link into it and starts its next key
+ * generation. The account service does it (Share, Unshare) and answers with a grant of the volume's root, which is
+ * linked here as shared/<name> in the owner's home; a member's link is made when they next log in. Escape goes back.
  */
 package terminal_service
 
@@ -18,10 +18,20 @@ import account_records from "../../account_records"
 import accounts from "../../protocols/accounts"
 import screen from "../../screen"
 
+/** The status line's text while the share form is up. */
 STATUS_SHARING :: " SlopOS │ console │ sharing a volume"
+/** The USB HID usage of the H key, which opens the share form from the secure attention key's screen. */
 USAGE_H : u16 : 0x0b
 
-/** The form, over the active view, for its session's user. */
+/**
+ * Open the share form over the active view, for its session's user, the owner of the volumes it shares.
+ *
+ * It does nothing without the account service, without a connection to the session's home, or when no user is logged
+ * in to the view. Otherwise the secure attention key's screen is left for it, the form asks for the volume's name, and
+ * every key goes to setup_key until it's closed.
+ *
+ * @param service The service, its secure attention key's screen up.
+ */
 enter_share_form :: fn(service: ptr[mut Service]) {
     if service.accounts_end == NONE || view(service).home_end == NONE || !view(service).logged_in || view(service).user_count == 0 {
         return void
@@ -35,7 +45,12 @@ enter_share_form :: fn(service: ptr[mut Service]) {
     update_status(service)
 }
 
-/** The form closed, what was typed forgotten, and the session drawn again. */
+/**
+ * Close the share form: zero the field being typed, put setup back to Off, and draw the session again from the screen
+ * model.
+ *
+ * @param service The service, its share form up.
+ */
 end_share_form :: fn(service: ptr[mut Service]) {
     service.sharing = false
     service.setup = .Off
@@ -46,7 +61,19 @@ end_share_form :: fn(service: ptr[mut Service]) {
     redraw(service)
 }
 
-/** The share asked for: the volume named, shared with the member typed, or them taken out of it for unshare. */
+/**
+ * Ask the account service to share the volume named with the member typed, or to take them out of it, without waiting
+ * for its answer.
+ *
+ * The request (Share or Unshare) names the view's user as the owner, the volume's name taken at the first step, and the
+ * member's name in the field. Nothing is sent while the member's field is empty. If it can't be sent, it says so and
+ * asks for the member again; otherwise the form waits at the Sharing step, where keys are ignored, for take_accounts to
+ * hand the answer to shared or say why it was refused.
+ *
+ * @param service The service, its share form at the member's step.
+ * @param unshare Whether to take the member out of the volume (Delete), which revokes every link into it, rather than
+ *     share it with them (Enter).
+ */
 send_share :: fn(service: ptr[mut Service], unshare: bool) {
     member :: field_bytes(service)
     if member.count == 0 || service.share_name_count > service.share_name.count {
@@ -69,8 +96,15 @@ send_share :: fn(service: ptr[mut Service], unshare: bool) {
 }
 
 /**
- * The account service's answer to a share: the volume's root linked as shared/<name> in the owner's home, in place of
- * the link there, and the form closed.
+ * Take the account service's Shared answer: link the volume's root as shared/<name> in the owner's home, in place of
+ * any link there, and close the form.
+ *
+ * On the view's home connection it makes the shared directory if it's missing, removes whatever is at shared/<name>,
+ * and links the grant there, each request waited for. A failed step is only logged; the form closes either way.
+ *
+ * @param service The service, its share form at the Sharing step.
+ * @param given The grant of the volume's root, which moves here: it goes to the home in the Link request, or is closed
+ *     if the home can't be reached.
  */
 shared :: fn(service: ptr[mut Service], given: os.Channel[grant.Grant]) {
     home :: view(service).home_end
@@ -112,7 +146,15 @@ shared :: fn(service: ptr[mut Service], given: os.Channel[grant.Grant]) {
     end_share_form(service)
 }
 
-/** Enter on the form: the name taken, then the share asked for. */
+/**
+ * Take Enter on the share form: at the volume's step, keep the name and ask for the member; at the member's, send the
+ * share.
+ *
+ * A volume's name has to be valid as an account's name is (account_records.valid_name); one that isn't is refused with
+ * a message, and asked for again.
+ *
+ * @param service The service, its share form up.
+ */
 share_enter :: fn(service: ptr[mut Service]) {
     typed :: field_bytes(service)
     if service.setup == .ShareName {
@@ -130,7 +172,14 @@ share_enter :: fn(service: ptr[mut Service]) {
     }
 }
 
-/** The form: the volume's name, the member's, what it last said, and its keys; drawn whole, or only its fields. */
+/**
+ * Draw the share form on the active view's panel: the volume's name, the member's, what it last said, and its keys,
+ * with the cursor at the end of the field being typed.
+ *
+ * @param service The service, its share form up.
+ * @param whole Whether to show the panel and draw every row of it; false clears and draws only the rows of the fields
+ *     and the message, which is all a key changes.
+ */
 draw_share_form :: fn(service: ptr[mut Service], whole: bool) {
     panel :: &view(service).screen.panel
     rows : u16 = 7

@@ -23,38 +23,60 @@ import concurrency from "std"
  * have changed meanwhile, which each kind checks (ports.hsc).
  */
 
+/** A TimerEntry's index while it isn't on any heap: never armed, cancelled, or taken off to fire. */
 NOT_QUEUED : u32 : 0xffffffff
 
+/** What a timer entry is for, which says what firing it does. */
 TimerKind :: enum #backed_by(u8) {
-    /** A port's timer binding: its packet is queued. */
+    /** A port's timer binding: its packet is queued on the port (ports.hsc, fire_port_timer). */
     PortTimer,
-    /** A thread waiting on a port with a deadline: it's woken. */
+    /** A thread waiting on a port with a deadline: it's woken (ports.hsc, fire_wait_timeout). */
     WaitTimeout,
 }
 
+/**
+ * A deadline, kept by what times out (a port's timer binding, a waiting thread) inside itself, and put on a CPU's
+ * TimerHeap while it's armed. make_timer makes one that isn't armed.
+ */
 TimerEntry :: struct {
-    /** In counter ticks. */
+    /** When it fires, as a value of arch.counter(), in counter ticks. */
     deadline : u64,
-    // Where it is in its CPU's heap, NOT_QUEUED if it isn't, and that CPU.
+    /** Where it is in its CPU's heap, NOT_QUEUED if it isn't on one; changed under that heap's lock. */
     index : u32,
+    /** The index of the CPU whose heap it was last armed on; meaningful only while index isn't NOT_QUEUED. */
     cpu : u32,
+    /** What it's for, which says what owner is. */
     kind : TimerKind,
-    // What it's for, and that's generation when it was armed: a Binding, or a Thread.
+    /** What it's for, as an address: a Binding for PortTimer, a Thread for WaitTimeout. Set by whoever arms it. */
     owner : u64,
+    /**
+     * What owner was when it was armed, so firing can tell it changed since: a binding's generation, or a thread's
+     * generation in the high 32 bits and its wait's sequence number in the low.
+     */
     owner_generation : u64,
-    /** The port it's for. */
+    /** The Port it's for, as an address. */
     port : u64,
 }
 
-/** One CPU's armed timers, earliest first. */
+/** One CPU's armed timers, a binary min-heap by deadline, earliest first. */
 TimerHeap :: struct {
+    /** Held, at LockRank Timers, while the heap or an entry's index changes; any CPU may take it to cancel. */
     lock : concurrency.SpinLock,
-    // Entries' addresses, from the heap allocator.
+    /**
+     * The armed entries' addresses, in heap order, from the kernel heap; empty until the first entry is armed. Its
+     * count is the room it has, which only grows, doubling from 16.
+     */
     entries : mut u64[],
+    /** How many of entries are armed: the first count of them. */
     count : usize,
 }
 
-/** An entry that isn't armed. */
+/**
+ * Make a timer entry that isn't armed.
+ *
+ * @return The entry, zeroed but for its index, NOT_QUEUED; its owner, owner_generation, kind and port are the
+ *     caller's to set before it's armed.
+ */
 make_timer :: fn() -> TimerEntry {
     result : TimerEntry
     result.index = NOT_QUEUED
@@ -62,8 +84,16 @@ make_timer :: fn() -> TimerEntry {
 }
 
 /**
- * Arm entry on the calling CPU, at deadline, reprogramming its timer if this comes first. False without
- * memory for the heap to grow.
+ * Arm a timer entry on the calling CPU's heap, reprogramming the CPU's timer if it comes first.
+ *
+ * Takes the heap's lock, at LockRank Timers, and may allocate from the kernel heap under it to grow the heap. The
+ * entry fires from this CPU's timer interrupt (fire_timers) once the counter reaches its deadline.
+ *
+ * @param entry The entry, not armed, with its kind, owner, owner_generation and port set. It stays on the heap until
+ *     it fires or is cancelled, so it has to stay where it is, and not be freed, until then.
+ * @param deadline When it fires, in counter ticks; one already past fires at the CPU's next timer interrupt.
+ * @return True if it's armed; false, with it not armed, if the heap had no room and couldn't grow: no memory, or fault
+ *     injection failed it.
  */
 arm_timer :: fn(entry: ptr[mut TimerEntry], deadline: u64) -> bool {
     cpu :: per_cpu()
@@ -87,7 +117,17 @@ arm_timer :: fn(entry: ptr[mut TimerEntry], deadline: u64) -> bool {
     return true
 }
 
-/** Disarm entry, wherever it's armed: whether it was. */
+/**
+ * Disarm a timer entry, from any CPU, wherever it's armed.
+ *
+ * Takes the heap's lock of the CPU it was armed on, at LockRank Timers. An entry that already fired, or is firing, is
+ * left alone, and what it was for may still be acted on (fire_timers works from a copy), which is why firing checks
+ * owner_generation. The entry's CPU is read before the lock is taken, so it mustn't be armed again at the same time.
+ *
+ * @param kernel The kernel, whose per_cpus finds the entry's CPU.
+ * @param entry The entry: armed, never armed, or already fired or cancelled.
+ * @return True if it was armed and is now off its heap; false if it wasn't armed.
+ */
 cancel_timer :: fn(kernel: ptr[Kernel], entry: ptr[mut TimerEntry]) -> bool {
     per_cpus :: kernel.per_cpus
     cpu_index :: cast[usize](entry.cpu)
@@ -106,8 +146,15 @@ cancel_timer :: fn(kernel: ptr[Kernel], entry: ptr[mut TimerEntry]) -> bool {
 }
 
 /**
- * Take every entry due by now off the calling CPU's heap and fire it: what each was for, copied while it
- * was still armed.
+ * Fire every entry due by now on the calling CPU's heap, earliest first.
+ *
+ * Each is taken off the heap under its lock, which is then given back, and fired from a copy made while it was still
+ * armed, so what it was for may have changed or gone meanwhile; each kind checks that (ports.hsc). Runs from the
+ * CPU's timer interrupt, with no other lock held.
+ *
+ * @param kernel The kernel, whose fired entries' ports and owners are acted on (ports.hsc), each kind taking the
+ *     port's lock. Runs in this CPU's timer interrupt, with interrupts off and no lock held.
+ * @param now The counter's value now, in ticks: entries whose deadline is at most this fire.
  */
 fire_timers :: fn(kernel: ptr[mut Kernel], now: u64) {
     cpu :: per_cpu()
@@ -135,7 +182,12 @@ fire_timers :: fn(kernel: ptr[mut Kernel], now: u64) {
 }
 
 /**
- * The calling CPU's timer, for its next tick or its earliest deadline; only the latter while it's idle without ticking.
+ * Program a CPU's timer for its next tick or its earliest deadline, whichever comes first.
+ *
+ * While the CPU idles without ticking, its next tick doesn't count: only its earliest deadline, or none. Takes the
+ * heap's lock, at LockRank Timers.
+ *
+ * @param cpu The calling CPU's PerCpu: the timer programmed is the one of the CPU this runs on.
  */
 program_deadline :: fn(cpu: ptr[mut PerCpu]) {
     deadline := if intrinsics.atomic_load_u32_acquire(&cpu.tickless) == 1 { ~cast[u64](0) } else { cpu.next_tick }
@@ -150,7 +202,13 @@ program_deadline :: fn(cpu: ptr[mut PerCpu]) {
     arch.set_deadline(deadline)
 }
 
-/** Room for one more entry. Takes the lock as held. */
+/**
+ * Make room in a heap for one more entry, doubling its array from the kernel heap if it's full.
+ *
+ * @param heap The heap, whose lock the caller holds.
+ * @return True if there's room; false if it was full and couldn't grow (no memory, or fault injection failed it),
+ *     when it's unchanged.
+ */
 grow_heap :: fn(heap: ptr[mut TimerHeap]) -> bool {
     if heap.count < heap.entries.count {
         return true
@@ -174,7 +232,13 @@ grow_heap :: fn(heap: ptr[mut TimerHeap]) -> bool {
     return true
 }
 
-/** Take the entry at index out, keeping the heap's order. Takes the lock as held. */
+/**
+ * Take the entry at an index off a heap, keeping the heap's order: its index becomes NOT_QUEUED, and the last entry
+ * takes its place.
+ *
+ * @param heap The heap, whose lock the caller holds.
+ * @param index The entry's index, below the heap's count; asserted.
+ */
 remove_at :: fn(heap: ptr[mut TimerHeap], index: usize) {
     entries :: heap.entries
     count :: heap.count
@@ -191,6 +255,13 @@ remove_at :: fn(heap: ptr[mut TimerHeap], index: usize) {
     sift_down(heap, cast[usize](cast[ptr[TimerEntry]](entries[index]).index))
 }
 
+/**
+ * Move an entry toward the heap's root while its deadline is earlier than its parent's, updating each moved entry's
+ * index.
+ *
+ * @param heap The heap, whose lock the caller holds.
+ * @param start The entry's index; 0 does nothing.
+ */
 sift_up :: fn(heap: ptr[mut TimerHeap], start: usize) {
     entries :: heap.entries
     index := start
@@ -205,6 +276,13 @@ sift_up :: fn(heap: ptr[mut TimerHeap], start: usize) {
     while index > 0
 }
 
+/**
+ * Move an entry away from the heap's root while a child's deadline is earlier than its own, updating each moved
+ * entry's index.
+ *
+ * @param heap The heap, whose lock the caller holds.
+ * @param start The entry's index, below the heap's count.
+ */
 sift_down :: fn(heap: ptr[mut TimerHeap], start: usize) {
     entries :: heap.entries
     count :: heap.count
@@ -228,11 +306,25 @@ sift_down :: fn(heap: ptr[mut TimerHeap], start: usize) {
     while true
 }
 
+/**
+ * Read the deadline of a heap's entry.
+ *
+ * @param entries The heap's entries' addresses.
+ * @param index The entry's index, below entries' count; asserted.
+ * @return Its deadline, in counter ticks.
+ */
 deadline_at :: fn(entries: u64[], index: usize) -> u64 {
     runtime.assert(index < entries.count, "deadline_at takes an entry")
     return cast[ptr[TimerEntry]](entries[index]).deadline
 }
 
+/**
+ * Swap two of a heap's entries, and set each one's index to its new place.
+ *
+ * @param entries The heap's entries' addresses, whose heap's lock the caller holds.
+ * @param a One entry's index, below entries' count; asserted.
+ * @param b The other's, below entries' count; asserted.
+ */
 swap :: fn(entries: mut u64[], a: usize, b: usize) {
     runtime.assert(a < entries.count && b < entries.count, "swap takes two entries")
     held :: entries[a]

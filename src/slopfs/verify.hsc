@@ -12,54 +12,77 @@ import maps from "std"
  * check each image they mount with it.
  */
 
+/** What's wrong with a container, as verify finds it. */
 Problem :: enum {
-    /** A node or a record couldn't be read, or didn't check out */
+    /** A node or a record couldn't be read, or didn't check out. */
     Unreadable,
-    /** Two extents in use overlap, or one in use is also free */
+    /** Two extents in use overlap, or one in use is also free. */
     Overlap,
-    /** Blocks neither in use nor free */
+    /** Blocks neither in use nor free. */
     Leak,
-    /** An extent in use outside the data blocks */
+    /** An extent in use, or a free one, outside the data blocks. */
     OutOfRange,
-    /** The owners tree doesn't say what's in use, or by whom */
+    /** The owners tree doesn't say what's in use, or by whom. */
     Owners,
-    /** No memory to keep what the walk found (decisions/0104), so nothing's known either way */
+    /** No memory to keep what the walk found (decisions/0104), so nothing's known either way. */
     OutOfMemory,
 }
 
-/** What a check found. */
+/** What a check found, in a container that checks out. */
 Report :: struct {
+    /** The nodes walked, each counted once however many trees share it. */
     nodes : u64,
+    /** The files' chunks in blocks walked, each counted once. */
     chunks : u64,
+    /** The blocks in use: nodes, their second copies, chunks, and locked volumes' extents. */
     used_blocks : u64,
+    /** The blocks free, as the space in memory has them. */
     free_blocks : u64,
+    /** The volumes in the container, clones included. */
     volumes : u64,
-    /** Encrypted volumes that weren't open, whose trees weren't read */
+    /** Encrypted volumes that weren't open, whose trees weren't read; their extents are taken from the owners tree. */
     locked : u64,
 }
 
 /** An extent in use, and its owner. */
 Used :: struct {
+    /** Its first block. */
     start : u64,
+    /** Its length in blocks. */
     blocks : u64,
+    /** The volume whose it is, or 0, the container. */
     owner : u64,
 }
 
+/** A check's walk: what it's found so far. */
 Walk :: struct {
+    /** The extents in use found, in the order found, from context's allocator. */
     used : Used[..],
+    /** What's counted so far. */
     report : Report,
-    /** Every node and chunk found so far, by its first block, since snapshots and clones share them */
+    /** Every node and chunk found so far, by its first block, since snapshots and clones share them. */
     seen : maps.HashMap[u64, bool, maps.hash_integer[u64]],
-    /** Out of memory: the walk stopped short, and what it found says nothing */
+    /** Out of memory: the walk stopped short, and what it found says nothing. */
     short : bool,
 }
 
-/** Why a walk stopped: what it couldn't read, or the memory it hadn't. */
+/**
+ * Say why a walk stopped.
+ *
+ * @param walk The walk that stopped.
+ * @return OutOfMemory if it ran out of memory; Unreadable for anything else, what it couldn't read.
+ */
 stopped :: fn(walk: ptr[Walk]) -> Problem {
     return if walk.short { Problem.OutOfMemory } else { Problem.Unreadable }
 }
 
-/** A used extent kept, or false, the walk stopped short, without the memory for it. */
+/**
+ * Keep an extent in use.
+ *
+ * @param walk The walk, its used list added to.
+ * @param used The extent in use, with its owner.
+ * @return True if it was kept; false, the walk marked short, without the memory for it.
+ */
 add_used :: fn(walk: ptr[mut Walk], used: Used) -> bool {
     if runtime.array_try_add(&walk.used, used) != null {
         walk.short = true
@@ -68,6 +91,24 @@ add_used :: fn(walk: ptr[mut Walk], used: Used) -> bool {
     return true
 }
 
+/**
+ * Check a container whole, as fsck checks a filesystem.
+ *
+ * Every node of every tree, each volume's as it is in memory where it's open and from its record where it isn't,
+ * and every snapshot's, is read and checked. The extents they and their chunks take, with the free ones, have to
+ * cover the data blocks exactly once each, and be what the owners tree says. Nothing is written. It's for a
+ * container with nothing waiting to commit, as one just mounted or just committed is: changes the space map and
+ * owners haven't taken yet look like problems.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @return What it found, if the container checks out.
+ * @error Unreadable A node or a record couldn't be read, or didn't check out.
+ * @error Overlap Two extents in use overlap, or one in use is also free.
+ * @error Leak Blocks are neither in use nor free.
+ * @error OutOfRange An extent in use starts before the data blocks, or the free and used ones run past the last.
+ * @error Owners The owners tree doesn't list exactly the extents in use, with their lengths and owners.
+ * @error OutOfMemory There wasn't the memory to keep what the walk found.
+ */
 verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
     walk := Walk.{}
     defer runtime.array_free(&walk.used)
@@ -208,7 +249,14 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
     return .Ok(walk.report)
 }
 
-/** The extents the owners tree says are owner's, as in use. */
+/**
+ * Keep the extents the owners tree says are an owner's, as in use, those not found already.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param walk The walk, its used list and seen set added to.
+ * @param owner The volume, a locked one whose tree can't be read.
+ * @return True if they were kept; false if the owners tree couldn't be read, or there wasn't the memory.
+ */
 add_owned :: fn(container: ptr[mut Container], walk: ptr[mut Walk], owner: u64) -> bool {
     value := OwnerValue.{}
     at := Key.{}
@@ -228,7 +276,14 @@ add_owned :: fn(container: ptr[mut Container], walk: ptr[mut Walk], owner: u64) 
     return true
 }
 
-/** Every node of a tree, and every chunk a volume's leaves name. */
+/**
+ * Walk every node of a tree, and every chunk a volume's leaves name, keeping the extents in use.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param walk The walk, its counts, used list and seen set added to.
+ * @param tree The tree; an empty one has nothing to walk.
+ * @return True if it was walked; false if a node couldn't be read or didn't check out, or there wasn't the memory.
+ */
 walk_tree :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tree]) -> bool {
     if cast[u64](tree.root.address) == 0 {
         return true
@@ -236,7 +291,13 @@ walk_tree :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tr
     return walk_node(container, walk, tree, &tree.root, NO_PARENT)
 }
 
-/** Whether the extent starting at start is found for the first time, which it then has been. */
+/**
+ * Tell whether the extent starting at a block is found for the first time, noting that it has been.
+ *
+ * @param walk The walk, its seen set added to.
+ * @param start The extent's first block.
+ * @return True the first time; false after, or without the memory to note it, which marks the walk short.
+ */
 first_time :: fn(walk: ptr[mut Walk], start: u64) -> bool {
     if maps.map_get(&walk.seen, start) is_some {
         return false
@@ -248,6 +309,17 @@ first_time :: fn(walk: ptr[mut Walk], start: u64) -> bool {
     return true
 }
 
+/**
+ * Walk a node and what's beneath it, once: a node another tree shares is the same below, copy-on-write.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param walk The walk, its counts, used list and seen set added to.
+ * @param tree The tree it's in.
+ * @param pointer Its pointer, from its parent or the tree's root.
+ * @param above Its parent's level, so its own has to be one less; NO_PARENT for a root.
+ * @return True if it and everything beneath it was walked; false if a node couldn't be read or didn't check out, or
+ *     there wasn't the memory.
+ */
 walk_node :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tree], pointer: ptr[BlockPointer], above: u16) -> bool {
     // A node another tree has is the same below, copy-on-write: walked once
     if !first_time(walk, cast[u64](pointer.address)) {
@@ -296,7 +368,11 @@ walk_node :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tr
     return true
 }
 
-/** Extents in use by their start: a shell sort, as there are a few thousand at most in a test. */
+/**
+ * Sort extents in use by their start: a shell sort, as there are a few thousand at most in a test.
+ *
+ * @param used The extents, sorted in place.
+ */
 sort_used :: fn(used: mut Used[]) {
     gap := used.count / 2
     loop {

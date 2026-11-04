@@ -13,6 +13,15 @@ import runtime from "base"
 import os from "std"
 import reflection from "std"
 
+/**
+ * Check a target's program against every house rule, the check the build registers with compiler.add_check.
+ *
+ * Every rule runs, whatever the others found, so all the problems are reported at once.
+ *
+ * @param target The target being built, whose options say whether it's the kernel.
+ * @param program The target's program, as the compiler describes it once it's checked.
+ * @return True if every rule holds; false if any reported a problem.
+ */
 check_program :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
     tiers_hold := check_tiers(target, program)
     arch_holds := check_arch_interface(program)
@@ -30,19 +39,27 @@ check_program :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.Pr
         && imports_hold && raw_hold && layouts_hold && discards_hold && locks_hold
 }
 
-// std tiers
+// ---- std tiers
 
-// What std tiers are, as numbers that grow with what a package needs (std's tiers.Tier).
+/** The Freestanding tier, as a number that grows with what a package needs (std's tiers.Tier): base alone. */
 FREESTANDING :: 0
+/** The Allocating tier: an allocator, but no operating system. */
 ALLOCATING :: 1
+/** The Os tier: an operating system. */
 OS :: 2
+/** No tier: a std package that declares no PACKAGE_TIER. */
 NO_TIER :: -1
 
 /**
- * No package imports a package of a higher tier than its own (decisions/0007). A std package's tier is
- * its PACKAGE_TIER; base is below every tier, since a Freestanding package needs only base; any other
- * package has the target's: Allocating without an operating system, like the kernel, and Os otherwise.
- * Checking every import edge covers what's imported indirectly too.
+ * Check that no package imports a package of a higher tier than its own (decisions/0007).
+ *
+ * A std package's tier is its PACKAGE_TIER; base is below every tier, since a Freestanding package needs only base;
+ * any other package has the target's: Allocating without an operating system, like the kernel, and Os otherwise.
+ * Checking every import edge covers what's imported indirectly too. A std package without a PACKAGE_TIER is reported.
+ *
+ * @param target The target being built, whose operating system gives the project's packages their tier.
+ * @param program The target's program.
+ * @return True if it holds; false if a problem was reported, at the import or the package.
  */
 check_tiers :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
     holds := true
@@ -67,7 +84,15 @@ check_tiers :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.Prog
     return holds
 }
 
-/** A package's tier, or NO_TIER for a std package that declares none. */
+/**
+ * Give a package's std tier.
+ *
+ * @param target The target being built.
+ * @param program The target's program, to tell std's packages.
+ * @param package The package whose tier is given, one of program's.
+ * @return FREESTANDING for base's; for std's, its PACKAGE_TIER's, NO_TIER if it declares none or another; for the
+ *     project's, ALLOCATING for a target with no operating system, OS otherwise.
+ */
 tier_of :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo], package: ptr[compiler.PackageInfo]) -> int {
     // base's packages are the compiler's, at paths like <base>/runtime
     if starts_with(package.path, "<base>/") {
@@ -93,6 +118,12 @@ tier_of :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramI
     return NO_TIER
 }
 
+/**
+ * Name a tier, for a problem's message.
+ *
+ * @param tier FREESTANDING, ALLOCATING or OS.
+ * @return Its name as std's tiers.Tier has it; "Os" for any other number.
+ */
 tier_name :: fn(tier: int) -> string {
     if tier == FREESTANDING {
         return "Freestanding"
@@ -103,7 +134,13 @@ tier_name :: fn(tier: int) -> string {
     return "Os"
 }
 
-/** Whether the package at path is std's: something in the program imports it from "std". */
+/**
+ * Tell whether a package is std's: it's in a std folder, or something in the program imports it from "std".
+ *
+ * @param program The target's program.
+ * @param path The package's path.
+ * @return True if it's std's.
+ */
 is_std :: fn(program: ptr[compiler.ProgramInfo], path: string) -> bool {
     // What the compiler loads itself, as std/schema into a build that makes or calls a typed library, has no edge
     // importing it: it's std's by where it is, Hemera's std folder
@@ -120,18 +157,22 @@ is_std :: fn(program: ptr[compiler.ProgramInfo], path: string) -> bool {
     return false
 }
 
-// The arch interface
+// ---- The arch interface
 
 /**
- * A package imported as arch implements the program's arch_interface package (decisions/0007, 0032):
- * every function arch_interface declares, with a body, and the same signature. A type arch_interface
- * declares as an empty struct, like ArchCpu, is the architecture's own: the implementation declares a
- * type of the same name, and a signature using one matches a signature using the other.
+ * Check that a package imported as arch implements the program's arch_interface package (decisions/0007, 0032):
+ * every function arch_interface declares, with a body, and the same signature.
  *
- * What an architecture doesn't implement yet, it lists in NOT_YET_IMPLEMENTED (decisions/0005). Those
- * may be missing, or stubs in its not_yet_implemented.hsc, which the kernel's other code needs to compile
- * on an architecture that doesn't run it yet. One defined anywhere else, a stub that isn't listed, or a
- * name arch_interface doesn't declare is an error, so the list stays true.
+ * A type arch_interface declares as an empty struct, like ArchCpu, is the architecture's own: the implementation
+ * declares a type of the same name, and a signature using one matches a signature using the other.
+ *
+ * What an architecture doesn't implement yet, it lists in NOT_YET_IMPLEMENTED (decisions/0005). Those may be missing,
+ * or stubs in its not_yet_implemented.hsc, which the kernel's other code needs to compile on an architecture that
+ * doesn't run it yet. One defined anywhere else, a stub that isn't listed, or a name arch_interface doesn't declare is
+ * an error, so the list stays true.
+ *
+ * @param program The target's program; one without arch_interface holds.
+ * @return True if it holds; false if a problem was reported.
  */
 check_arch_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     interface :: package_named(program, "arch_interface") or_return true
@@ -148,6 +189,9 @@ check_arch_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
  * Each package imported under an alias starting iommu_, like iommu_vtd, implements the program's iommu_interface
  * package (decisions/0039, 0079), by the arch interface's rules: an IOMMU package is to iommu_interface what an
  * architecture package is to arch_interface.
+ *
+ * @param program The target's program; one without iommu_interface holds.
+ * @return True if it holds; false if a problem was reported.
  */
 check_iommu_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     interface :: package_named(program, "iommu_interface") or_return true
@@ -161,9 +205,13 @@ check_iommu_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
 }
 
 /**
- * A package that generates protocol code (os.protocol_code, which declares validate_request) says what protocol it
- * is, a PROTOCOL constant, and which of its requests can be sent again after a reconnect, an is_idempotent function
- * (decisions/0040, 0071). What its messages hold, and its Response's Unsupported, the generator checks itself.
+ * Check that a package that generates protocol code (os.protocol_code, which declares validate_request) says what
+ * protocol it is, a PROTOCOL constant, and which of its requests can be sent again after a reconnect, an
+ * is_idempotent function (decisions/0040, 0071). What its messages hold, and its Response's Unsupported, the generator
+ * checks itself.
+ *
+ * @param program The target's program.
+ * @return True if it holds; false if a problem was reported, at the package.
  */
 check_protocols :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     holds := true
@@ -184,7 +232,13 @@ check_protocols :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
 }
 
 /**
- * Whether anything in the program imports the package at path as alias, or, with prefix, under an alias starting so.
+ * Tell whether anything in the program imports a package under an alias.
+ *
+ * @param program The target's program.
+ * @param path The package's path.
+ * @param alias The alias, or with prefix, what the alias starts with.
+ * @param prefix Whether alias is a prefix, as "iommu_" is, rather than the whole alias.
+ * @return True if some import of the package is under that alias.
  */
 imported_as :: fn(program: ptr[compiler.ProgramInfo], path: string, alias: string, prefix: bool) -> bool {
     for &package in program.packages {
@@ -197,6 +251,13 @@ imported_as :: fn(program: ptr[compiler.ProgramInfo], path: string, alias: strin
     return false
 }
 
+/**
+ * Check that a package implements an interface package, by the arch interface's rules (check_arch_interface).
+ *
+ * @param implementation The implementing package, whose NOT_YET_IMPLEMENTED lists what it doesn't do yet.
+ * @param interface The interface package: its functions without bodies, and its empty structs.
+ * @return True if it implements it; false if a problem was reported, each where it's best fixed.
+ */
 implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compiler.PackageInfo]) -> bool {
     holds := true
     gaps :: compiler.find_constant(implementation, "NOT_YET_IMPLEMENTED") or_else compiler.ConstantInfo.{}
@@ -256,12 +317,25 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
     return holds
 }
 
-/** Whether a function's file is a not_yet_implemented.hsc, as the stubs of what isn't implemented yet are. */
+/**
+ * Tell whether a function's file is a not_yet_implemented.hsc, as the stubs of what isn't implemented yet are.
+ *
+ * @param path The file's path.
+ * @return True if it ends with not_yet_implemented.hsc.
+ */
 is_stub :: fn(path: string) -> bool {
     return ends_with(path, "not_yet_implemented.hsc")
 }
 
-/** The implementation by value: it came from find_function, so a pointer to it couldn't be passed on */
+/**
+ * Tell whether an implementation's signature matches an interface's: the same parameters, by name, type, escaping and
+ * varargs, the same results' types, and the same never_returns, types matching as types_match says.
+ *
+ * @param implementation The implementing function, by value: it came from find_function, so a pointer to it couldn't
+ *     be passed on.
+ * @param interface The interface's function.
+ * @return True if they match.
+ */
 signatures_match :: fn(implementation: compiler.FunctionInfo, interface: ptr[compiler.FunctionInfo]) -> bool {
     // Copies of the views, which types_match can't change, so their counts stay compared
     parameters :: interface.parameters
@@ -287,8 +361,12 @@ signatures_match :: fn(implementation: compiler.FunctionInfo, interface: ptr[com
 }
 
 /**
- * The same type, or the same shape with an architecture's own type where arch_interface has its empty
- * struct of the same name: ptr[mut ArchCpu] in both, say.
+ * Tell whether an implementation's type matches an interface's: the same type, or the same shape with an
+ * architecture's own type where the interface has its empty struct of the same name: ptr[mut ArchCpu] in both, say.
+ *
+ * @param implementation The type in the implementation's signature.
+ * @param interface The type in the interface's.
+ * @return True if they match; pointers match when they're both mutable or both not, and their targets match.
  */
 types_match :: fn(implementation: type, interface: type) -> bool {
     if implementation == interface {
@@ -312,21 +390,45 @@ types_match :: fn(implementation: type, interface: type) -> bool {
     return false
 }
 
-/** An empty struct, which arch_interface declares for each architecture to define. */
+/**
+ * Tell whether a type is an architecture's own: an empty struct, which arch_interface declares for each architecture
+ * to define.
+ *
+ * @param declared A type an interface package declares, as its PackageInfo's types list it.
+ * @return True for a struct without members.
+ */
 is_architecture_type :: fn(declared: type) -> bool {
     info :: type_info_of(declared)
     return info.variant == .STRUCT && cast[ptr[compiler.TypeInfoStruct]](info).members.count == 0
 }
 
+/**
+ * Give a struct type's name.
+ *
+ * @param info The type's descriptor, which has to be a struct's.
+ * @return Its name, as the compiler gives it.
+ */
 struct_name :: fn(info: ptr[compiler.TypeInfo]) -> string {
     return cast[ptr[compiler.TypeInfoStruct]](info).name
 }
 
-/** A type value from its descriptor: a type value is its descriptor's address (Hemera docs/types.md). */
+/**
+ * Make a type value from its descriptor: a type value is its descriptor's address (Hemera docs/types.md).
+ *
+ * @param info The type's descriptor.
+ * @return The type value whose descriptor info is, for comparing with ==.
+ */
 described_type :: fn(info: ptr[compiler.TypeInfo]) -> type {
     return bit_cast[type](info)
 }
 
+/**
+ * Tell whether a package declares a type of a name.
+ *
+ * @param package The package whose declared types are looked through; types it imports aren't.
+ * @param name The type's name.
+ * @return True if one of its types has it.
+ */
 declares_type :: fn(package: ptr[compiler.PackageInfo], name: string) -> bool {
     for &declared in package.types {
         if declared.name == name {
@@ -337,8 +439,11 @@ declares_type :: fn(package: ptr[compiler.PackageInfo], name: string) -> bool {
 }
 
 /**
- * The names in a constant that's an array of strings, like NOT_YET_IMPLEMENTED, or none if it's
- * something else or there's no such constant.
+ * Give the names in a constant that's an array of strings, like NOT_YET_IMPLEMENTED.
+ *
+ * @param names The constant's value, as compiler.ConstantInfo has it; one with no data is no constant.
+ * @return The strings, a view into the constant's value; none if there's no constant, or it's anything but a static
+ *     array of strings.
  */
 listed_names :: fn(names: any) -> string[] {
     none : string[]
@@ -356,6 +461,13 @@ listed_names :: fn(names: any) -> string[] {
     return view_of(cast[ptr[string]](names.data), array.dimensions[0].count)
 }
 
+/**
+ * Tell whether a constant that's an array of strings lists a name.
+ *
+ * @param names The constant's value, as listed_names takes it.
+ * @param name The name looked for, compared whole and exactly.
+ * @return True if it's one of the strings.
+ */
 is_listed :: fn(names: any, name: string) -> bool {
     for listed in listed_names(names) {
         if listed == name {
@@ -365,21 +477,36 @@ is_listed :: fn(names: any, name: string) -> bool {
     return false
 }
 
-// The kernel's code (decisions/0029, 0100)
+// ---- The kernel's code (decisions/0029, 0100)
 
-/** Whether the target is the kernel: built for no operating system. */
+/**
+ * Tell whether the target is the kernel: built for no operating system.
+ *
+ * @param target The target being built.
+ * @return True if its operating system is None.
+ */
 is_kernel :: fn(target: ptr[compiler.BuildOptions]) -> bool {
     return target.target_options.os == .None
 }
 
-/** Whether a package is the project's own: not base's, and not std's. */
+/**
+ * Tell whether a package is the project's own: not base's, and not std's.
+ *
+ * @param program The target's program, to tell std's packages.
+ * @param package One of program's packages.
+ * @return True if it's the project's.
+ */
 is_own :: fn(program: ptr[compiler.ProgramInfo], package: ptr[compiler.PackageInfo]) -> bool {
     return !starts_with(package.path, "<base>/") && !is_std(program, package.path)
 }
 
 /**
- * No floating point in the kernel, which is built without SIMD or floating-point state: no float, complex or
- * quaternion type, or vector of them, in what a function of its takes, gives or uses.
+ * Check that there's no floating point in the kernel, which is built without SIMD or floating-point state: no float,
+ * complex or quaternion type, or vector of them, in what a function of its own packages takes, gives or uses.
+ *
+ * @param target The target being built; anything but the kernel holds.
+ * @param program The target's program.
+ * @return True if it holds; false if a problem was reported.
  */
 check_kernel_floats :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
     if !is_kernel(target) {
@@ -415,6 +542,12 @@ check_kernel_floats :: fn(target: ptr[compiler.BuildOptions], program: ptr[compi
     return holds
 }
 
+/**
+ * Tell whether a type is floating point: a float, complex or quaternion, or a vector of them, through aliases.
+ *
+ * @param checked A type a kernel function takes, gives or uses; its aliases are followed.
+ * @return True if it is; false for a vector of bits.
+ */
 is_floating :: fn(checked: type) -> bool {
     info :: unaliased(type_info_of(checked))
     if info.variant == .FLOAT || info.variant == .COMPLEX || info.variant == .QUATERNION {
@@ -427,6 +560,12 @@ is_floating :: fn(checked: type) -> bool {
     return false
 }
 
+/**
+ * Follow a type's aliases to the type they name.
+ *
+ * @param info The type's descriptor.
+ * @return The first descriptor along the aliases that isn't an alias's; info itself if it isn't one.
+ */
 unaliased :: fn(info: ptr[compiler.TypeInfo]) -> ptr[compiler.TypeInfo] {
     at := info
     loop {
@@ -438,8 +577,12 @@ unaliased :: fn(info: ptr[compiler.TypeInfo]) -> ptr[compiler.TypeInfo] {
 }
 
 /**
- * No kernel address reaches user space through a system call's result (decisions/0021): what a sys_ function of the
- * kernel's gives has no pointer in it, however deep.
+ * Check that no kernel address reaches user space through a system call's result (decisions/0021): what a sys_
+ * function of the kernel package gives has no pointer in it, however deep.
+ *
+ * @param target The target being built; anything but the kernel holds.
+ * @param program The target's program; one without a kernel package holds.
+ * @return True if it holds; false if a problem was reported, at the function.
  */
 check_syscall_results :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
     if !is_kernel(target) {
@@ -464,7 +607,14 @@ check_syscall_results :: fn(target: ptr[compiler.BuildOptions], program: ptr[com
     return holds
 }
 
-/** Whether a value of the type holds a pointer: itself, or a member's, element's or variant's, however deep. */
+/**
+ * Tell whether a value of a type holds a pointer: itself, or a member's, element's or variant's, however deep.
+ *
+ * @param info The type's descriptor.
+ * @param seen The types already looked at, which this adds to, so a type that holds itself ends; each is looked into
+ *     once, and false the second time.
+ * @return True if it holds a pointer.
+ */
 has_pointer :: fn(info: ptr[compiler.TypeInfo], seen: ptr[mut uintptr[..]]) -> bool {
     for each in seen^ {
         if each == cast[uintptr](info) {
@@ -501,8 +651,13 @@ has_pointer :: fn(info: ptr[compiler.TypeInfo], seen: ptr[mut uintptr[..]]) -> b
 }
 
 /**
- * Interrupt handlers don't allocate: nothing the kernel's entry for an interrupt reaches, by calls it names, calls an
- * allocator. A call through a function value isn't followed.
+ * Check that interrupt handlers don't allocate: nothing the kernel's entry for an interrupt (kernel_entry.interrupt)
+ * reaches, by calls it names, calls an allocator, except what INTERRUPT_ALLOCATIONS lists. A call through a function
+ * value isn't followed, nor one into std.
+ *
+ * @param target The target being built; anything but the kernel holds.
+ * @param program The target's program; one without the interrupt entry holds.
+ * @return True if it holds; false if a problem was reported, at each call to an allocator.
  */
 check_interrupt_allocation :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
     if !is_kernel(target) {
@@ -515,10 +670,19 @@ check_interrupt_allocation :: fn(target: ptr[compiler.BuildOptions], program: pt
     return !allocates(program, handler, entry.name, &visited)
 }
 
-/** The allocators: base's, and the kernel's heap's and objects'. */
+/** The allocators, by the names they're called by: base's, and the kernel's heap's and objects'. */
 ALLOCATORS :: string.["new", "new_aligned", "new_array", "new_array_aligned", "array_reserve", "allocate_block", "new_object"]
 
-// Whether a function, or anything it calls by name, calls an allocator; each such call reported.
+/**
+ * Tell whether a function, or anything it calls by name in the project's packages or base's, calls an allocator,
+ * reporting each such call.
+ *
+ * @param program The target's program.
+ * @param function The function; one INTERRUPT_ALLOCATIONS lists is taken not to allocate.
+ * @param package The function's package's name.
+ * @param visited The calls already followed, which this adds to, so each is followed once.
+ * @return True if an allocator is called.
+ */
 allocates :: fn(program: ptr[compiler.ProgramInfo], function: compiler.FunctionInfo, package: string,
     visited: ptr[mut compiler.FunctionCall[..]]) -> bool {
     if is_listed_function(INTERRUPT_ALLOCATIONS, package, function.name) {
@@ -554,12 +718,17 @@ allocates :: fn(program: ptr[compiler.ProgramInfo], function: compiler.FunctionI
     return found
 }
 
-// Programs
+// ---- Programs
 
-/** Folders whose packages that declare main are programs. */
+/** The folders whose packages that declare main are programs, written with /. */
 PROGRAM_FOLDERS :: string.["/src/apps/", "/src/services/", "/src/drivers/", "/src/tests/"]
 
-/** Whether a package is a program: one of the project's, in a program folder, that declares main. */
+/**
+ * Tell whether a package is a program: one in a program folder that declares main.
+ *
+ * @param package One of the program's packages, by its path and its functions.
+ * @return True if it's a program.
+ */
 is_program :: fn(package: ptr[compiler.PackageInfo]) -> bool {
     if compiler.find_function(package, "main") is_none {
         return false
@@ -575,6 +744,9 @@ is_program :: fn(package: ptr[compiler.PackageInfo]) -> bool {
 /**
  * Programs don't share code by importing each other (decisions/0029, 0100): a program may import another to launch it,
  * for its entry's type and its constants, but calls nothing of it. What two programs share goes in a library package.
+ *
+ * @param program The target's program.
+ * @return True if it holds; false if a problem was reported, at each call.
  */
 check_program_imports :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     holds := true
@@ -605,6 +777,9 @@ check_program_imports :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
  * rawptr only where it's needed (decisions/0029, 0100, 0102): in the packages RAW_POINTERS names, each one that works
  * with memory as bytes or as hardware sees it. Everywhere else, a pointer has a type: in what functions use, and in the
  * members of the structs and unions a package declares.
+ *
+ * @param program The target's program; only the project's own packages are checked.
+ * @return True if it holds; false if a problem was reported, at each use or declaration.
  */
 check_raw_pointers :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     holds := true
@@ -631,12 +806,23 @@ check_raw_pointers :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     return holds
 }
 
+/**
+ * Tell whether a type is a rawptr: a pointer with no target type, through aliases.
+ *
+ * @param checked A type a function uses; its aliases are followed.
+ * @return True if it is.
+ */
 is_raw_pointer :: fn(checked: type) -> bool {
     info :: unaliased(type_info_of(checked))
     return info.variant == .POINTER && (cast[ptr[compiler.TypeInfoPointer]](info).base_type is_none)
 }
 
-/** Whether a declared struct's members, or a union's variants, spell a rawptr (spells_raw_pointer). */
+/**
+ * Tell whether a declared struct's members, or a union's variants, spell a rawptr (spells_raw_pointer).
+ *
+ * @param info The declared type's descriptor; any other kind than a struct or a union spells none.
+ * @return True if one does.
+ */
 declares_raw_pointer :: fn(info: ptr[compiler.TypeInfo]) -> bool {
     if info.variant == .STRUCT {
         for &member in cast[ptr[compiler.TypeInfoStruct]](info).members {
@@ -658,9 +844,12 @@ declares_raw_pointer :: fn(info: ptr[compiler.TypeInfo]) -> bool {
 }
 
 /**
- * Whether a member's type is a rawptr, or has one in it as written: an array's elements, an optional's value, a pointer's
- * target, or a function type's parameters and results. Another named type, an alias or a struct or union, is its own
- * package's to answer for, so it isn't looked into.
+ * Whether a member's type is a rawptr, or has one in it as written: an array's elements, an optional's value, a
+ * pointer's target, or a function type's parameters and results. Another named type, an alias or a struct or union, is
+ * its own package's to answer for, so it isn't looked into.
+ *
+ * @param info The member's type's descriptor.
+ * @return True if it spells a rawptr.
  */
 spells_raw_pointer :: fn(info: ptr[compiler.TypeInfo]) -> bool {
     if info.variant == .POINTER {
@@ -700,11 +889,21 @@ spells_raw_pointer :: fn(info: ptr[compiler.TypeInfo]) -> bool {
 }
 
 /**
- * Hardware structs have their layouts checked (decisions/0029, 0100): a #packed struct in a hardware package is
- * hardware's, and its package asserts its size, an #assert with size_of(Name) in one of its files.
+ * The folders whose packages are hardware packages, written with /: a path that has one in it, anywhere, is in it, so
+ * "/src/pci" holds "/src/pci_whatever" too.
  */
 HARDWARE_FOLDERS :: string.["/src/arch/", "/src/drivers/", "/src/iommu/", "/src/virtio", "/src/pci", "/src/gpt", "/src/fat", "/src/slopfs"]
 
+/**
+ * Check that hardware structs have their layouts checked (decisions/0029, 0100): a #packed struct in a hardware
+ * package is hardware's, and its package asserts its size, an #assert with size_of(Name) on a line of one of its
+ * files.
+ *
+ * Its files are read whole; one that can't be read is passed over.
+ *
+ * @param program The target's program.
+ * @return True if it holds; false if a problem was reported, at each struct.
+ */
 check_hardware_layouts :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     holds := true
     for &package in program.packages {
@@ -742,7 +941,13 @@ check_hardware_layouts :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     return holds
 }
 
-/** Whether text has a line with #assert and size_of(name) on it. */
+/**
+ * Tell whether text has a line with #assert and size_of(name) after it.
+ *
+ * @param text A file's text.
+ * @param name The struct's name, matched whole within size_of's parentheses.
+ * @return True if some line has both.
+ */
 asserts_size :: fn(text: string, name: string) -> bool {
     at := find(text, "#assert", 0)
     loop {
@@ -764,6 +969,10 @@ asserts_size :: fn(text: string, name: string) -> bool {
  * The kernel's locks are ranked (decisions/0096, 0106): no kernel function takes or gives back a std spin lock itself
  * but the ranked ones of locks.hsc, which check the order with robustness=on. The frame allocator's, the slab's and the
  * architectures' leaves are other packages, outside this.
+ *
+ * @param target The target being built; anything but the kernel holds.
+ * @param program The target's program; one without a kernel package holds.
+ * @return True if it holds; false if a problem was reported, at each call.
  */
 check_kernel_locks :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
     if !is_kernel(target) {
@@ -792,6 +1001,10 @@ LOCK_WRAPPERS :: string.["lock_at", "lock_after", "unlock_at"]
 /**
  * Errors aren't ignored in the kernel (decisions/0029, 0100): no function of its discards a Result with _ =, unless
  * DISCARDED_RESULTS names it, as package.function, where losing the error is right.
+ *
+ * @param target The target being built; anything but the kernel holds.
+ * @param program The target's program; only the project's own packages are checked.
+ * @return True if it holds; false if a problem was reported, at each discard.
  */
 check_kernel_discards :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
     if !is_kernel(target) {
@@ -815,25 +1028,28 @@ check_kernel_discards :: fn(target: ptr[compiler.BuildOptions], program: ptr[com
     return holds
 }
 
+/**
+ * Tell whether a type is a Result, by its name, through aliases.
+ *
+ * @param checked The type of a value a function discards; its aliases are followed.
+ * @return True for a union whose name starts with Result.
+ */
 is_result :: fn(checked: type) -> bool {
     info :: unaliased(type_info_of(checked))
     return info.variant == .UNION && starts_with(cast[ptr[compiler.TypeInfoUnion]](info).name, "Result")
 }
 
-// Allow-lists
+// ---- Allow-lists
 
 /**
- * Packages whose code may use rawptr (decisions/0100, 0102, 0103), for one of these reasons, and a package joins only for
- * one:
- * - an instruction, or base's mem_copy and mem_zero, takes an address without a type (the architectures, the kernel,
- *   frames, elf_loader, pci, iommu_vtd, x86_64_test);
- * - base's own interfaces hide a type: the allocator's, the clock's and the context's data, the carrier's, the stack
- *   trace's addresses (the kernel, slopos_boot);
- * - the firmware's tables and protocols are reached through addresses without a type (bootloader);
- * - a device's callbacks take their context without a type, which Hemera's function values, capturing nothing, need
- *   (fat, gpt, slopfs, the servers and tests that give one, image_builder);
- * - structs are read at offsets in a buffer of bytes, from the address of its data, which base gives as a rawptr
- *   (events_service). A string's bytes are string_bytes(text), not its data.
+ * Packages whose code may use rawptr (decisions/0100, 0102, 0103), for one of these reasons, and a package joins only
+ * for one: - an instruction, or base's mem_copy and mem_zero, takes an address without a type (the architectures, the
+ * kernel, frames, elf_loader, pci, iommu_vtd, x86_64_test); - base's own interfaces hide a type: the allocator's, the
+ * clock's and the context's data, the carrier's, the stack trace's addresses (the kernel, slopos_boot); - the
+ * firmware's tables and protocols are reached through addresses without a type (bootloader); - a device's callbacks
+ * take their context without a type, which Hemera's function values, capturing nothing, need (fat, gpt, slopfs, the
+ * servers and tests that give one, image_builder); - structs are read at offsets in a buffer of bytes, from the address
+ * of its data, which base gives as a rawptr (events_service). A string's bytes are string_bytes(text), not its data.
  */
 RAW_POINTERS :: string.[
     "arch_aarch64", "arch_x86_64", "container_service", "elf_loader", "events_service", "fat", "fat_server", "fat_test",
@@ -860,6 +1076,13 @@ INTERRUPT_ALLOCATIONS :: string.[
     "kernel.grow_heap",
 ]
 
+/**
+ * Tell whether a list has a name.
+ *
+ * @param names The list, as RAW_POINTERS is.
+ * @param name The name, compared whole.
+ * @return True if it's listed.
+ */
 is_listed_in :: fn(names: string[], name: string) -> bool {
     for listed in names {
         if listed == name {
@@ -869,7 +1092,14 @@ is_listed_in :: fn(names: string[], name: string) -> bool {
     return false
 }
 
-/** Whether names has package.function. */
+/**
+ * Tell whether a list has a function, as package.function.
+ *
+ * @param names The list, as DISCARDED_RESULTS is.
+ * @param package The function's package's name.
+ * @param function The function's name.
+ * @return True if one of names is exactly package, a dot, and function.
+ */
 is_listed_function :: fn(names: string[], package: string, function: string) -> bool {
     for listed in names {
         if listed.count == package.count + 1 + function.count && package.count < listed.count && starts_with(listed, package)
@@ -880,16 +1110,32 @@ is_listed_function :: fn(names: string[], package: string, function: string) -> 
     return false
 }
 
-// Text
+// ---- Text
 
+/**
+ * Tell whether text has a part in it.
+ *
+ * @param text The text looked through, as a path.
+ * @param part The part, matched byte for byte.
+ * @return True if it's anywhere in text; an empty part is in any text.
+ */
 contains :: fn(text: string, part: string) -> bool {
     return find(text, part, 0) != NOT_FOUND
 }
 
+/** What find gives when the part isn't there: the largest usize. */
 NOT_FOUND : usize : 0xffffffffffffffff
+/** A line's end, as a hardware package's files are searched by line. */
 NEWLINE :: "\n"
 
-/** Where part is in text, at or after from, or NOT_FOUND. */
+/**
+ * Find a part in text, at or after an index.
+ *
+ * @param text The text looked through, as a file's.
+ * @param part The part, matched byte for byte.
+ * @param from Where to start looking, a byte index.
+ * @return Where the first match starts, a byte index; NOT_FOUND if there's none, or part is longer than text.
+ */
 find :: fn(text: string, part: string, from: usize) -> usize {
     if part.count > text.count {
         return NOT_FOUND
@@ -910,7 +1156,15 @@ find :: fn(text: string, part: string, from: usize) -> usize {
     return NOT_FOUND
 }
 
-/** Whether text has size_of(name), name whole, between from and to. */
+/**
+ * Tell whether text has size_of(name), name whole, between two indexes.
+ *
+ * @param text A file's text.
+ * @param name The name in the parentheses.
+ * @param from Where to start looking, a byte index.
+ * @param to Where to stop: a match has to start before it, and its ) be before it.
+ * @return True if there's one.
+ */
 has_size_of :: fn(text: string, name: string, from: usize, to: usize) -> bool {
     at := find(text, "size_of(", from)
     loop {
@@ -926,7 +1180,12 @@ has_size_of :: fn(text: string, name: string, from: usize, to: usize) -> bool {
     }
 }
 
-/** A call's name without its generic arguments: new for new[u64]. */
+/**
+ * Give a call's name without its generic arguments: new for new[u64].
+ *
+ * @param name The call's name, as compiler.FunctionCall has it.
+ * @return What's before its first [, a view into name; all of name without one.
+ */
 generic_name :: fn(name: string) -> string {
     for character, index in name {
         if character == '[' {
@@ -936,7 +1195,13 @@ generic_name :: fn(name: string) -> string {
     return name
 }
 
-/** Whether a path has folder, written with /, in it, whichever separator the path uses. */
+/**
+ * Tell whether a path has a folder in it, whichever separator the path uses.
+ *
+ * @param path The path, with / or \ separators.
+ * @param folder The folder, written with /, as "/src/drivers/"; each / matches a \ in path too.
+ * @return True if it's anywhere in path.
+ */
 in_folder :: fn(path: string, folder: string) -> bool {
     if folder.count > path.count {
         return false
@@ -958,7 +1223,14 @@ in_folder :: fn(path: string, folder: string) -> bool {
     return false
 }
 
-/** Whether part is in text at at. */
+/**
+ * Tell whether a part is in text at an index.
+ *
+ * @param text The text looked in, as a path.
+ * @param at The byte index the part has to start at.
+ * @param part What has to be there, matched byte for byte; an empty part always is.
+ * @return True if text's bytes from at are part's; false if they differ or text ends first.
+ */
 matches_at :: fn(text: string, at: usize, part: string) -> bool {
     for character, index in part {
         if at + index >= text.count || text[at + index] != character {
@@ -968,8 +1240,15 @@ matches_at :: fn(text: string, at: usize, part: string) -> bool {
     return true
 }
 
-// Finding packages
+// ---- Finding packages
 
+/**
+ * Find a package of the program by its path.
+ *
+ * @param program The target's program.
+ * @param path The package's path, as an import edge has it.
+ * @return The package, which the program holds; null if it has none at path.
+ */
 package_at :: fn(program: ptr[compiler.ProgramInfo], path: string) -> ptr[compiler.PackageInfo]? {
     for &package in program.packages {
         if package.path == path {
@@ -979,6 +1258,13 @@ package_at :: fn(program: ptr[compiler.ProgramInfo], path: string) -> ptr[compil
     return null
 }
 
+/**
+ * Find a package of the program by its name.
+ *
+ * @param program The target's program.
+ * @param name The package's name, as its package line has it.
+ * @return The first package of that name, which the program holds; null if it has none.
+ */
 package_named :: fn(program: ptr[compiler.ProgramInfo], name: string) -> ptr[compiler.PackageInfo]? {
     for &package in program.packages {
         if package.name == name {
@@ -988,6 +1274,13 @@ package_named :: fn(program: ptr[compiler.ProgramInfo], name: string) -> ptr[com
     return null
 }
 
+/**
+ * Tell whether text ends with a suffix.
+ *
+ * @param text The text looked at, as a path.
+ * @param suffix The suffix, matched byte for byte.
+ * @return True if it does; an empty suffix always does.
+ */
 ends_with :: fn(text: string, suffix: string) -> bool {
     if text.count < suffix.count {
         return false
@@ -1002,6 +1295,13 @@ ends_with :: fn(text: string, suffix: string) -> bool {
     return true
 }
 
+/**
+ * Tell whether text starts with a prefix.
+ *
+ * @param text The text looked at, as a path or a name.
+ * @param prefix The prefix, matched byte for byte.
+ * @return True if it does; an empty prefix always does.
+ */
 starts_with :: fn(text: string, prefix: string) -> bool {
     if text.count < prefix.count {
         return false

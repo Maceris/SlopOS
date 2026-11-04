@@ -15,15 +15,27 @@ import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
+/** The test's name, which starts each line it logs. */
 NAME :: "test_threads"
+/** How many threads count: more than the CPUs the test is booted with, so each is preempted. */
 THREADS :: 4
-// Each thread's slot: its index plus one, its count, and whether its vector went wrong.
+/** The word of a thread's slot holding its index plus one, which its pattern is made from. */
 SLOT_INDEX :: 0
+/** The word of a thread's slot holding its count. */
 SLOT_COUNT :: 1
+/** The word of a thread's slot set to 1 once its vector went wrong. */
 SLOT_WRONG :: 2
+/** How long the threads count before the counts are noted, and again after, in nanoseconds: 100 ms. */
 RUN_NANOSECONDS : u64 : 100_000_000
+/** The vector a thread keeps its pattern plus its count in, in both lanes. */
 Lanes :: vector[u64, 2]
 
+/**
+ * Count, for good, keeping a vector of the thread's pattern plus its count, and checking it each time.
+ *
+ * @param slot The thread's slot: its index plus one is read from SLOT_INDEX; its count is written to SLOT_COUNT, and
+ *     SLOT_WRONG set if the vector is ever not what it should be.
+ */
 counter #calling_convention(.c) #no_context :: fn(slot: ptr[mut u64[4]]) #never_returns {
     pattern :: intrinsics.volatile_load_u64(&slot^[SLOT_INDEX]) * 0x0101010101010101
     lanes := intrinsics.splat[Lanes](pattern)
@@ -38,6 +50,22 @@ counter #calling_convention(.c) #no_context :: fn(slot: ptr[mut u64[4]]) #never_
     }
 }
 
+/**
+ * Check that threads of the program's own are each preempted and run again, each with its own vector state.
+ *
+ * @param log The debug log, writable, where the test says what it found and which thread failed.
+ * @param platform Not used.
+ * @param test_device Not used.
+ * @param firmware Not used.
+ * @param manager Not used.
+ * @param program Not used.
+ * @param peer Not used.
+ * @param cpu_budget Not used.
+ * @return 0 if every check passed. Otherwise, of the last thread that failed, as each is logged: its index plus 1
+ *     if it hadn't counted by halfway or didn't count on after, or its index plus 11 if its vector went wrong. 20 if
+ *     the budget didn't come back to nothing once the threads were closed. 100 if the slots, 101 the budget, or 102
+ *     a thread couldn't be made.
+ */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     block :: slop_os.startup_block()

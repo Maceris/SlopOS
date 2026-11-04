@@ -17,28 +17,49 @@ import input from "../../protocols/input"
 import service_kit from "../../libraries/service_kit"
 import virtio from "../../virtio"
 
+/** The bytes of a page: 4096. */
 PAGE : u64 : 4096
+/** The index of the device's event queue, eventq (virtio 1.2 §5.8.2). */
 EVENT_QUEUE : u16 : 0
+/** How many event buffers the device always has offered: 32. */
 EVENT_BUFFERS :: 32
+/** The bytes of each event buffer, one virtio_input_event: 8. */
 EVENT_BYTES : u64 : 8
+/**
+ * How many events the driver keeps for clients that haven't had them, 64; a client further behind misses the oldest.
+ */
 WAITING :: 64
+/** The port key the device's interrupt is bound with; clients are bound under their indexes, below it. */
 IRQ_KEY : u64 : 1000
 
-// evdev's event types, and the codes that aren't keys
+// ---- evdev's event types, and the codes that aren't keys (Linux's input-event-codes.h)
+
+/** evdev's event type of a synchronization, which ends a group of events; dropped here. */
 EV_SYN : u16 : 0
+/** evdev's event type of a key or a button, its value 1 down, 2 repeating, 0 up. */
 EV_KEY : u16 : 1
+/** evdev's event type of a relative axis's motion. */
 EV_REL : u16 : 2
+/** evdev's event type of an absolute axis's position. */
 EV_ABS : u16 : 3
+/** evdev's relative axis code across. */
 REL_X : u16 : 0
+/** evdev's relative axis code down. */
 REL_Y : u16 : 1
+/** evdev's relative axis code of the wheel. */
 REL_WHEEL : u16 : 8
+/** evdev's absolute axis code across. */
 ABS_X : u16 : 0
+/** evdev's absolute axis code down. */
 ABS_Y : u16 : 1
+/** evdev's code of the first mouse button, the left, which is button 0 here. */
 BTN_LEFT : u16 : 0x110
+/** evdev's code of the last mouse button taken as a button, button 7 here. */
 BTN_LAST : u16 : 0x117
 
 /**
- * evdev's key codes from 0 to 127, as USB HID usages (page 7), 0 for one that has none here
+ * evdev's key codes from 0 to 127, as USB HID usages (page 7), 0 for one that has none here.
+ *
  * SPEC: Linux's input-event-codes.h; USB HID Usage Tables 1.4, §10 (Keyboard/Keypad Page)
  */
 HID_OF_KEY :: u8.[
@@ -52,33 +73,73 @@ HID_OF_KEY :: u8.[
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe3, 0xe7, 0x65,
 ]
 
+/** An event as the device writes it, virtio_input_event (virtio 1.2 §5.8.6): an evdev triple, little-endian. */
 DeviceEvent :: struct #packed {
+    /** Its evdev type, EV_ and the rest. */
     kind : u16le,
+    /** Its evdev code, a key's, a button's or an axis's. */
     code : u16le,
+    /** Its value: for a key 1 down, 2 repeating, 0 up; for an axis, a signed amount or position. */
     value : u32le,
 }
 
 #assert size_of(DeviceEvent) == 8
 
+/** The driver's state, on the heap, main's for its life. */
 Driver :: struct {
+    /** Where its lines go, or NO_HANDLE when it wasn't given a log. */
     log : slop_os.DebugLog,
+    /** The device's registers. */
     transport : virtio.Transport,
+    /** The event queue, which EVENT_BUFFERS buffers are always offered on. */
     queue : virtio.Queue,
+    /** Where the event buffers' page is, through the driver's mapping, EVENT_BYTES each. */
     buffers : u64,
+    /** Where the same page is to the device, its device address. */
     buffers_device : u64,
+    /** Which buffer each descriptor holds, by descriptor index. */
     buffer_of : u8[virtio.MAX_QUEUE_SIZE],
+    /** The one port its interrupt and its clients are bound to. */
     port : slop_os.Port,
-    // Events not every client has taken: each client's next, by index into a ring of them
+    /** The events kept for clients, a ring: event n is at n % WAITING, for the last WAITING written. */
     waiting : input.Event[WAITING],
+    /** How many events have been written in all; only grows. */
     written : u64,
+    /** Each client's next event, by its index: the number of the first it hasn't had. */
     next_of : u64[service_kit.MAX_CLIENTS],
+    /** Each client's held Read, by its index: the most events it takes, or 0 for none held. */
     held : u32[service_kit.MAX_CLIENTS],
+    /** Its clients, the listener among them. */
     clients : service_kit.Clients,
-    // A tablet's position so far, which each axis's event changes half of
+    /** A tablet's position across so far, which each ABS_X changes. */
     x : i32,
+    /** A tablet's position down so far, which each ABS_Y changes. */
     y : i32,
 }
 
+/**
+ * Drive a virtio input device, a keyboard, mouse or tablet, as the input protocol, for the clients that connect to it.
+ *
+ * It sets the device up, keeps EVENT_BUFFERS buffers offered, turns each evdev event into one of the protocol's, and
+ * gives every client every event that arrives after it connected, until the system stops. It's started by the
+ * supervisor, for a device the platform service gave it, with what its driver holds of it.
+ *
+ * @param log The debug log its lines go to; without one, it writes nothing there.
+ * @param device The device, for its MSI.
+ * @param config The device's 4 KiB of configuration space, mapped to find its capabilities and turn bus mastering on.
+ * @param bar0 BAR 0's memory, if the device has it; each BAR given is mapped, for the virtio structures in it.
+ * @param bar1 BAR 1's memory, if the device has it.
+ * @param bar2 BAR 2's memory, if the device has it.
+ * @param bar3 BAR 3's memory, if the device has it.
+ * @param bar4 BAR 4's memory, if the device has it.
+ * @param bar5 BAR 5's memory, if the device has it.
+ * @param domain The DMA domain the device is attached to, which its queue and buffers are made in.
+ * @param clients The listener its clients' Connects arrive on, served as a client itself.
+ * @return It doesn't return while it serves; 99 if its state couldn't be had (decisions/0104), 2 if config couldn't
+ *     be mapped, 3 if the device isn't a virtio one it can drive, 4 if it refused its features, 5 if no port could be
+ *     made, 6 if its MSI couldn't be set up, 7 if its DMA memory couldn't be made or mapped, 8 if its queue couldn't
+ *     be set up, 9 if the listener couldn't be bound.
+ */
 main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memory, bar0: slop_os.Memory?, bar1: slop_os.Memory?,
     bar2: slop_os.Memory?, bar3: slop_os.Memory?, bar4: slop_os.Memory?, bar5: slop_os.Memory?, domain: slop_os.DmaDomain,
     clients: os.Listener[input.Input]) -> int {
@@ -138,6 +199,18 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     }
 }
 
+/**
+ * Take every request a client has sent, until there are none left, or it's gone.
+ *
+ * A Read is held, replacing one held, to be answered once there are events; a Connect adds a client, which sees what
+ * arrives from then on, closing its end when there's no room. An unknown request is answered Unsupported, and
+ * anything else is skipped.
+ *
+ * @param driver The driver, whose clients, next events and held Reads change.
+ * @param index Which client, by its index; one past them, or a freed place, is nothing to serve. A client whose end
+ *     failed is dropped, and its held Read with it.
+ * @param into Where each request is received, reused for each.
+ */
 serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
     if index >= driver.clients.ends.count {
         return void
@@ -187,6 +260,12 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
     }
 }
 
+/**
+ * Offer an event buffer to the device to write into, noting which buffer its descriptor holds.
+ *
+ * @param driver The driver, its event queue offered the buffer.
+ * @param buffer Which buffer, 0 to EVENT_BUFFERS - 1.
+ */
 offer_buffer :: fn(driver: ptr[mut Driver], buffer: u8) {
     id :: virtio.offer(&driver.queue, driver.buffers_device + cast[u64](buffer) * EVENT_BYTES, cast[u32](EVENT_BYTES), true)
     if cast[usize](id) < driver.buffer_of.count {
@@ -194,7 +273,14 @@ offer_buffer :: fn(driver: ptr[mut Driver], buffer: u8) {
     }
 }
 
-/** The device's events, as the protocol's, added to what's waiting; each buffer offered again. */
+/**
+ * Take the device's events, as the protocol's, into what's waiting, offering each buffer again.
+ *
+ * An event with nothing in the protocol, like a SYN, is dropped; one past WAITING ahead of a client overwrites the
+ * oldest it hasn't had.
+ *
+ * @param driver The driver, whose waiting events grow.
+ */
 take_events :: fn(driver: ptr[mut Driver]) {
     loop {
         used :: virtio.take_used(&driver.queue) or_break
@@ -214,7 +300,18 @@ take_events :: fn(driver: ptr[mut Driver]) {
     }
 }
 
-/** An evdev event as the protocol's, or null for one it has nothing for, like a SYN. */
+/**
+ * Turn an evdev event into the protocol's.
+ *
+ * Mouse buttons BTN_LEFT to BTN_LAST are Buttons 0 to 7; a key code below 128 with a HID usage is a Key; REL_X and
+ * REL_Y are Motion, REL_WHEEL a Wheel; ABS_X and ABS_Y update the tablet's position and give it whole, as Position.
+ *
+ * @param driver The driver, whose tablet position an absolute axis's event changes.
+ * @param kind The evdev event type: EV_KEY, EV_REL or EV_ABS give events, any other none.
+ * @param code The evdev code: a key's, a button's or an axis's, as kind says.
+ * @param value The evdev value, taken as signed for an axis.
+ * @return The protocol's event; null for one it has nothing for, like a SYN or a key without a usage here.
+ */
 translate :: fn(driver: ptr[mut Driver], kind: u16, code: u16, value: u32) -> input.Event? {
     signed :: bit_cast[i32](value)
     if kind == EV_KEY && code >= BTN_LEFT && code <= BTN_LAST {
@@ -246,7 +343,15 @@ translate :: fn(driver: ptr[mut Driver], kind: u16, code: u16, value: u32) -> in
     return null
 }
 
-/** Each held Read answered with the events its client hasn't had, oldest first, while there are any. */
+/**
+ * Answer each held Read with the events its client hasn't had, oldest first, as many as it asked for and
+ * input.MAX_EVENTS.
+ *
+ * A client a whole ring behind skips to the oldest still kept. A response that can't be sent is dropped, its events
+ * counted as had.
+ *
+ * @param driver The driver, whose clients' next events move on and held Reads are cleared as they're answered.
+ */
 answer_held :: fn(driver: ptr[mut Driver]) {
     for &most, index in driver.held {
         if most^ == 0 || index >= driver.clients.ends.count || index >= driver.next_of.count {

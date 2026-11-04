@@ -4,9 +4,13 @@ import runtime from "base"
 import slopfs from ".."
 
 /**
- * The container and its volumes: formatted, mounted, a volume made with directories and files of every size, renamed
- * and removed, committed and mounted again; space coming back once what held it is gone; and what's damaged on the
- * disk found, a checkpoint by falling back to the one before, a file's block by its seal. Checks from 100.
+ * Check the container and its volumes: an empty disk isn't mounted, and a formatted one is; then check_volume.
+ *
+ * Together they check a volume made with directories and files of every size, renamed and removed, committed and
+ * mounted again; space coming back once what held it is gone; and what's damaged on the disk found, a checkpoint by
+ * falling back to the one before, a file's block by its seal.
+ *
+ * @return 0 if every check passed, or the number of the first that failed: 100 to 103 here, or check_volume's.
  */
 check_container :: fn() -> int {
     device :: new_device() or_return 100
@@ -29,6 +33,11 @@ check_container :: fn() -> int {
     return check_volume(&device)
 }
 
+/**
+ * Make the hash key the tests' volumes are made with: fixed, so runs are alike.
+ *
+ * @return The key: byte i is i * 7 + 3.
+ */
 key_of_volume :: fn() -> u8[32] {
     key : u8[32]
     for i in 0..<key.count {
@@ -37,6 +46,17 @@ key_of_volume :: fn() -> u8[32] {
     return key
 }
 
+/**
+ * Check a volume on a formatted container: only the container trees' nodes used after formatting; directories and
+ * files (empty, inline, across chunks, with a hole) made, refused names refused, a typed file's schema kept; files
+ * read back before and after a mount; files overwritten, grown past inline, cut, renamed over and moved, and a
+ * directory refused beneath itself; everything removed and the space back; leaked blocks found by verify; then
+ * check_damage and check_model.
+ *
+ * @param device The device, formatted.
+ * @return 0 if every check passed, or the number of the first that failed: 104 to 198 and 436 to 440 here, or
+ *     check_files', check_damage's or check_model's.
+ */
 check_volume :: fn(device: ptr[slopfs.Device]) -> int {
     container := slopfs.mount(device^) or_return 104
     // Only the space map and owners' nodes, two copies each, are used
@@ -217,10 +237,18 @@ check_volume :: fn(device: ptr[slopfs.Device]) -> int {
     return check_model(device)
 }
 
+/** A buffer of test bytes, too big for the stack, from runtime.new. */
 Data :: struct {
+    /** The bytes. */
     bytes : u8[400000],
 }
 
+/**
+ * Fill bytes with a pattern made from a seed, the same for the same seed and different for others.
+ *
+ * @param into The bytes, all filled.
+ * @param seed The seed, any value; the same seed makes the same bytes.
+ */
 pattern :: fn(into: mut u8[], seed: u64) {
     state := seed * 0x9e3779b97f4a7c15 + 1
     for i in 0..<into.count {
@@ -229,7 +257,12 @@ pattern :: fn(into: mut u8[], seed: u64) {
     }
 }
 
-/** Whether a commit failed, or what it left doesn't check out whole. */
+/**
+ * Commit a container, and tell whether the commit failed, or what it left doesn't check out whole.
+ *
+ * @param container The container under test, mounted.
+ * @return True if the commit failed or verify found a problem; false if all's well.
+ */
 commit_failed :: fn(container: ptr[mut slopfs.Container]) -> bool {
     match slopfs.commit(container) {
         case Ok => return !verified(container)
@@ -237,6 +270,12 @@ commit_failed :: fn(container: ptr[mut slopfs.Container]) -> bool {
     }
 }
 
+/**
+ * Tell whether a container checks out whole, logging what verify found wrong if it doesn't.
+ *
+ * @param container The container under test, mounted.
+ * @return True if verify found no problem.
+ */
 verified :: fn(container: ptr[mut slopfs.Container]) -> bool {
     match slopfs.verify(container) {
         case Ok(report) => return true
@@ -247,6 +286,13 @@ verified :: fn(container: ptr[mut slopfs.Container]) -> bool {
     }
 }
 
+/**
+ * Count a directory's entries by listing them.
+ *
+ * @param volume The volume under test, open.
+ * @param directory The directory's ID.
+ * @return How many there are, up to 100000; 9999 if listing failed.
+ */
 count_entries :: fn(volume: ptr[mut slopfs.Volume], directory: u64) -> u64 {
     name : u8[255]
     count : u64 = 0
@@ -264,7 +310,18 @@ count_entries :: fn(volume: ptr[mut slopfs.Volume], directory: u64) -> u64 {
     return count
 }
 
-/** The files as written: the empty one, 100 bytes, 200000 bytes, and 10 bytes after a 300000-byte hole. */
+/**
+ * Check the files as check_volume wrote them: the empty one, 100 bytes, 200000 bytes, and 10 bytes after a
+ * 300000-byte hole, which reads as zeros.
+ *
+ * @param volume The volume under test, open.
+ * @param data The pattern they were written from.
+ * @param small The 100-byte file's ID.
+ * @param large The 200000-byte file's ID.
+ * @param holey The file with a hole's ID.
+ * @param base The number of the first check, the rest numbered after it.
+ * @return 0 if every check passed, or the number of the first that failed, base to base + 7.
+ */
 check_files :: fn(volume: ptr[mut slopfs.Volume], data: ptr[mut Data], small: u64, large: u64, holey: u64, base: int) -> int {
     back := runtime.new(Data)
     defer runtime.free(back)
@@ -289,8 +346,12 @@ check_files :: fn(volume: ptr[mut slopfs.Volume], data: ptr[mut Data], small: u6
 }
 
 /**
- * Damage: the newest checkpoint broken, so mounting takes the one before and what it named; a file's block broken,
- * so reading it is Corrupt. Checks from 300.
+ * Check damage: the newest checkpoint broken, so mounting takes the one before and what it named; a file's block
+ * broken, so reading it is Corrupt.
+ *
+ * @param device The device, its container holding volume 1.
+ * @param data A buffer for the pattern written, overwritten.
+ * @return 0 if every check passed, or the number of the first that failed, 300 to 316.
  */
 check_damage :: fn(device: ptr[slopfs.Device], data: ptr[mut Data]) -> int {
     container := slopfs.mount(device^) or_return 300
@@ -339,6 +400,12 @@ check_damage :: fn(device: ptr[slopfs.Device], data: ptr[mut Data]) -> int {
     return 0
 }
 
+/**
+ * Change one byte of a test disk, as damage would.
+ *
+ * @param disk The test disk, changed in place.
+ * @param at The byte's offset; past the disk's end, nothing changes.
+ */
 flip :: fn(disk: ptr[mut Disk], at: u64) {
     index :: cast[usize](at)
     if index < disk.bytes.count {
@@ -346,7 +413,13 @@ flip :: fn(disk: ptr[mut Disk], at: u64) {
     }
 }
 
-/** Where bytes first are on the disk, at a block's start. */
+/**
+ * Find where bytes first are on a test disk, at a block's start.
+ *
+ * @param disk The test disk, searched, not changed.
+ * @param bytes The bytes looked for, at most a block of them.
+ * @return Their byte offset on the disk, a block's start; null if no block starts with them.
+ */
 find :: fn(disk: ptr[mut Disk], bytes: u8[]) -> u64? {
     for block in 0..<BLOCKS {
         start :: cast[usize](block * slopfs.BLOCK_BYTES)
@@ -358,23 +431,34 @@ find :: fn(disk: ptr[mut Disk], bytes: u8[]) -> u64? {
     return null
 }
 
+/** How many files check_model keeps a model of. */
 FILES :: 6
+/** The most bytes a modelled file grows to. */
 MODEL_BYTES :: 300000
 
+/** Every modelled file, too big for the stack, from runtime.new. */
 Models :: struct {
+    /** The files' models. */
     files : Model[FILES],
 }
 
-/** What each file should hold, and how long it is. */
+/** What a file should hold, and how long it is. */
 Model :: struct {
+    /** Its bytes as they should be, its first size used; zeros past what was written. */
     bytes : u8[MODEL_BYTES],
+    /** Its size in bytes, at most MODEL_BYTES. */
     size : usize,
+    /** The file's ID. */
     object : u64,
 }
 
 /**
- * Files against a model: hundreds of writes at random places and lengths, sizes set up and down, reads compared,
- * committed every so often and mounted again; then a directory of many entries, listed whole. Checks from 400.
+ * Check files against a model: hundreds of writes at random places and lengths, sizes set up and down, reads
+ * compared, committed every so often and mounted again; then a directory of many entries, its records split across
+ * leaves, listed whole, every one once.
+ *
+ * @param device The device, its container holding volume 1.
+ * @return 0 if every check passed, or the number of the first that failed, 400 to 435.
  */
 check_model :: fn(device: ptr[slopfs.Device]) -> int {
     container := slopfs.mount(device^) or_return 400
@@ -488,7 +572,13 @@ check_model :: fn(device: ptr[slopfs.Device]) -> int {
     return 0
 }
 
-/** "file-" and a number's digits. */
+/**
+ * Make a file's name from a number: "file-" and its digits.
+ *
+ * @param text Where the name goes; what doesn't fit is cut.
+ * @param number The number, 0 or more, at most 8 digits.
+ * @return The name's length in bytes, counted as if it all fit.
+ */
 name_of_number :: fn(text: mut u8[], number: int) -> usize {
     prefix :: "file-"
     for character, i in prefix {
@@ -517,6 +607,15 @@ name_of_number :: fn(text: mut u8[], number: int) -> usize {
     return prefix.count + count
 }
 
+/**
+ * Compare a file with its model: its size and every byte.
+ *
+ * @param volume The volume under test, open.
+ * @param model The file's model.
+ * @param back A buffer to read it into, overwritten.
+ * @param base The number of the first check, the rest numbered after it.
+ * @return 0 if it matches, or the number of the first check that failed, base to base + 3.
+ */
 compare_file :: fn(volume: ptr[mut slopfs.Volume], model: ptr[mut Model], back: ptr[mut Data], base: int) -> int {
     info :: slopfs.info(volume, model.object) or_return base
     if info.size != cast[u64](model.size) {
@@ -529,10 +628,17 @@ compare_file :: fn(volume: ptr[mut slopfs.Volume], model: ptr[mut Model], back: 
     return 0
 }
 
-/** "naïve": an accent, which a name may have */
+/** "naïve" in UTF-8: an accent, which a name may have. */
 ACCENTED :: u8.[0x6e, 0x61, 0xc3, 0xaf, 0x76, 0x65]
 
-/** Whether a name of these bytes is refused as InvalidName. */
+/**
+ * Tell whether a file of a name is refused as InvalidName.
+ *
+ * @param volume The volume under test, open.
+ * @param directory The directory to make it in.
+ * @param bytes The name's bytes; none is never refused here, so false.
+ * @return True if create refused it with InvalidName; false if it made it, or failed otherwise.
+ */
 refused :: fn(volume: ptr[mut slopfs.Volume], directory: u64, bytes: u8[]) -> bool {
     if bytes.count == 0 {
         return false

@@ -12,12 +12,22 @@ import log_line from "../../log_line"
  * the pixels' memory takes the framebuffer from the kernel's console.
  */
 
+/** The first framebuffer, as the kernel's "FB  " table describes it, found once at the platform service's start. */
 Framebuffer :: struct {
+    /** The physical address of its pixels' first byte. */
     physical : u64,
+    /** Its layout, copied from the table: its width, height and pitch, among the rest. */
     layout : slop_os.FramebufferLayout,
 }
 
-/** The framebuffer the firmware tables' "FB  " table describes, or null. */
+/**
+ * Find the framebuffer the firmware tables' "FB  " table describes.
+ *
+ * @param tables Where the firmware tables' copy is mapped, readable, in the platform service's address space.
+ * @param size The firmware tables' copy's size in bytes; a table running past it isn't taken.
+ * @return The first "FB  " table's framebuffer, or null if the tables are too small or malformed, or have no "FB  "
+ *     table big enough for a layout.
+ */
 find_framebuffer :: fn(tables: u64, size: u64) -> Framebuffer? {
     header :: cast[ptr[slop_os.FirmwareTables]](tables)
     if size < cast[u64](size_of(slop_os.FirmwareTables)) || header.magic != slop_os.FIRMWARE_MAGIC {
@@ -34,8 +44,21 @@ find_framebuffer :: fn(tables: u64, size: u64) -> Framebuffer? {
 }
 
 /**
- * The framebuffer for client, made anew each time it's asked, since what it held may have died with the service it gave
- * it to; NoDevice if there's none, or another client claimed it.
+ * Give a client the framebuffer: its pixels, and a page holding its layout, made anew each time it's asked, since
+ * what it held may have died with the service it gave it to.
+ *
+ * The first client to claim it keeps it: only that client is given it again. Making the pixels' memory takes the
+ * framebuffer from the kernel's console.
+ *
+ * @param to The debug log the platform service writes to, NO_HANDLE for none; a failure to make the pixels' memory is
+ *     logged there, and so is the first claim.
+ * @param platform The platform capability, which the pixels' memory is made with.
+ * @param state The platform service's state: its framebuffer is read, and its framebuffer_claimed and
+ *     framebuffer_claimer set.
+ * @param client The asking client, by its index in the platform service's clients.
+ * @return ClaimedFramebuffer with the pixels, write-combining device memory rounded up to whole pages, and a page
+ *     holding a slop_os.FramebufferLayout, both moving to the client with the response; or NoDevice if there's no
+ *     framebuffer, another client claimed it, or its memory couldn't be made or mapped.
  */
 claim_framebuffer :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], client: usize) -> protocol.Response {
     framebuffer :: state.framebuffer or_return .NoDevice

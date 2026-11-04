@@ -35,18 +35,39 @@ import frames from "frames"
  * lock, then a memory's page_lock, then a port's.
  */
 
+/** A page slot's mark for a page a touch wants that its pager hasn't been told of yet; no frame's address. */
 PAGE_WANTED : u64 : 1
+/** A page slot's mark for a wanted page memory_page_wanted has reported to its pager; no frame's address. */
 PAGE_REPORTED : u64 : 3
 
 /** How a fault on a mapping came out: mapped, failed, or the thread blocked, waiting for its pager. */
 FaultOutcome :: enum {
+    /** The page is mapped, by this fault or another CPU's; the thread touches it again. */
     Mapped,
+    /** The access isn't one a mapping allows, or no frame could be had; the thread can't go on. */
     Failed,
+    /** The thread is blocked on the memory, waiting for its pager to supply the page; it's switched away from. */
     Blocked,
 }
 
 /**
- * Paged memory of size bytes, owned by owner and charged to budget, whose pager raises key's wake binding on port.
+ * Make paged memory, whose pages its pager supplies.
+ *
+ * It's charged for its slot and page array now, and for each page once it's supplied. It can be mapped only to read or
+ * execute. Takes the port's lock (level Port) to find the binding.
+ *
+ * @param kernel The kernel: its Memory pool gives the slot and its frames the page array.
+ * @param owner The Process that owns it, as an address; 0 for the kernel.
+ * @param budget The MemoryBudget it's charged to, as an address; 0 for the kernel's own.
+ * @param port The pager's port, which has the wake binding.
+ * @param key The key of the wake binding on port that's raised when a page is wanted.
+ * @param size Its size in bytes: a whole number of pages, at least one, at most slop_os.MAX_MEMORY_SIZE.
+ * @return The memory, the owner's (or the kernel's) until it's destroyed, its pages wanted from its pager as touched.
+ * @error NoPager The port has no wake binding with that key, or is being destroyed.
+ * @error InvalidSize The size is 0, not a whole number of pages, or more than MAX_MEMORY_SIZE.
+ * @error BudgetExceeded The budget can't pay for its slot and page array.
+ * @error OutOfMemory No slot or frames for it.
+ * @error ObjectGone The owner is being destroyed.
  */
 create_paged_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, port: ptr[mut Port], key: u64, size: u64)
     -> Result[ptr[mut Memory], slop_os.MemoryError] {
@@ -73,7 +94,14 @@ create_paged_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, port
     return .Ok(memory)
 }
 
-/** The memory a window's page is of, through its parents, and the page there. */
+/**
+ * Find the memory a window's page is of, through its parents, and the page there.
+ *
+ * @param memory The memory, a window or not; for one that isn't, it's its own root.
+ * @param page The page's index in memory.
+ * @return The memory at the root of memory's windows, which isn't a window.
+ * @return The page's index in that root.
+ */
 paged_root :: fn(memory: ptr[Memory], page: u64) -> (ptr[mut Memory], u64) {
     root := cast[ptr[mut Memory]](memory)
     at := page
@@ -86,9 +114,24 @@ paged_root :: fn(memory: ptr[Memory], page: u64) -> (ptr[mut Memory], u64) {
     }
 }
 
-/*
- * A fault at address, in space (whose lock is held), on a page of paged memory: mapped if it's been supplied, or the
- * thread blocked on the memory, its pager told the page is wanted if it wasn't yet.
+/**
+ * Resolve a fault on a page of paged memory: map it if it's been supplied, or block the thread on the memory.
+ *
+ * A page wanted for the first time is marked PAGE_WANTED and the pager's wake binding is raised. The blocked thread is
+ * on the memory's waiters until a supply wakes it, and touches the page again then. Takes the memory's page lock, then
+ * the pager port's lock; if the thread is running on this CPU, its time is accounted and vector state saved.
+ *
+ * @param kernel The kernel: a page that's there is mapped with table frames charged to the space, and the pager's
+ *     binding is queued on its port.
+ * @param thread The faulting thread, running on this CPU or not; when it blocks, its state, fault_memory and wait links
+ *     are set, under the memory's page lock.
+ * @param space The thread's address space, whose lock the caller holds.
+ * @param address The faulting page's user virtual address, page aligned.
+ * @param memory The paged memory, the root of any windows the fault went through.
+ * @param page The page's index in memory.
+ * @param mapping How the page is mapped once it's there.
+ * @return Mapped if the page was there and is mapped now (or another CPU mapped it); Blocked if the thread now waits
+ *     for the pager; Failed if mapping it failed or the pager's binding is gone.
  */
 resolve_paged_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], space: ptr[mut AddressSpace], address: u64,
     memory: ptr[mut Memory], page: u64, mapping: arch_interface.Mapping) -> FaultOutcome {
@@ -136,7 +179,10 @@ resolve_paged_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], spac
 }
 
 /**
- * Every thread waiting on the memory made ready, to touch its page again. Takes the page lock as held.
+ * Make every thread waiting on paged memory ready, to touch its page again.
+ *
+ * @param kernel The kernel, whose scheduler each thread is made ready on, asking for the CPU its cpu field names.
+ * @param memory The paged memory, whose page lock the caller holds; it has no waiters after.
  */
 wake_fault_waiters :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
     loop {
@@ -156,7 +202,13 @@ wake_fault_waiters :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
     }
 }
 
-/** A thread being destroyed stops waiting for its page. */
+/**
+ * Stop a thread being destroyed from waiting for its page, if it was waiting for one.
+ *
+ * Takes the memory's page lock.
+ *
+ * @param thread The thread, no longer running; its fault_memory is 0 after.
+ */
 cancel_fault_wait :: fn(thread: ptr[mut Thread]) {
     address :: thread.fault_memory
     if address == 0 {
@@ -179,7 +231,16 @@ cancel_fault_wait :: fn(thread: ptr[mut Thread]) {
     unlock_at(&memory.page_lock, .MemoryPages)
 }
 
-/** The offset of a wanted page not reported yet, reported now. */
+/**
+ * Report a page of paged memory that's wanted and hasn't been reported yet, the lowest such: memory_page_wanted.
+ *
+ * Takes the memory's page lock. A page is reported once; it stays wanted until it's supplied.
+ *
+ * @param memory The paged memory, not a window onto it.
+ * @return The page's offset in the memory, in bytes, page aligned.
+ * @error NotPaged The memory isn't paged memory, or is a window.
+ * @error NothingWanted No page is wanted that hasn't been reported.
+ */
 page_wanted :: fn(memory: ptr[mut Memory]) -> Result[u64, slop_os.MemoryError] {
     if memory.pager_binding == 0 {
         return .Error(.NotPaged)
@@ -198,8 +259,20 @@ page_wanted :: fn(memory: ptr[mut Memory]) -> Result[u64, slop_os.MemoryError] {
 }
 
 /**
- * The page at offset of paged memory, a copy of source's page at source_offset, unless it's been supplied already, and
- * every thread waiting on the memory woken.
+ * Supply a page of paged memory, a copy of a page of another memory object: memory_supply.
+ *
+ * The page is charged to the memory's budget first, which raises pressure there if it's pressed. If the page was
+ * supplied already, the copy is dropped and the charge given back. Either way, every thread waiting on the memory is
+ * woken. Takes the memory's page lock.
+ *
+ * @param kernel The kernel, whose frame for the copy comes from this CPU's frame cache.
+ * @param memory The paged memory, not a window onto it.
+ * @param offset The page's offset in memory, in bytes, page aligned, below its size.
+ * @param source The memory copied from, whose page is given a frame if it's anonymous and had none.
+ * @param source_offset The page's offset in source, in bytes, page aligned, below its size.
+ * @return Null once the page is there; NotPaged for memory that isn't paged, InvalidSize for an offset that isn't page
+ *     aligned or is past either's end, OutOfMemory if source's page has no frame (as an unsupplied page of paged memory
+ *     hasn't) or no frame is free for the copy, BudgetExceeded if the budget can't pay for the page.
  */
 supply_page :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64, source: ptr[Memory], source_offset: u64)
     -> slop_os.MemoryError? {
@@ -247,17 +320,32 @@ supply_page :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64,
 
 /** A space a page of paged memory was unmapped from, to be flushed from every CPU before its frame goes. */
 Unmapped :: struct {
+    /** The AddressSpace, as an address. */
     space : u64,
+    /** The space's generation then, so the tables' charge isn't given back to a space made since. */
     generation : u32,
+    /** The space's address-space tag, for the TLB flush. */
     tag : arch_interface.AddressSpaceTag,
+    /** The user virtual address the page was mapped at, page aligned. */
     address : u64,
+    /** The page tables the unmapping emptied, freed once every CPU has flushed the address. */
     freed : arch_interface.FreedTables,
 }
 
 /**
- * The page at offset of paged memory given back: out of its page array, so the next touch waits for its pager; unmapped
- * from every space that maps it, through its windows too; and once every CPU has forgotten it, freed and uncharged.
- * NotSupplied if it isn't there, and MappedWidely, leaving it, if more spaces map it than MAX_EVICT_SPACES.
+ * Give back a page of paged memory: memory_evict (decisions/0111).
+ *
+ * It's taken out of the page array, so the next touch waits for its pager; unmapped from every space that maps it,
+ * through its windows too; and once every CPU has forgotten it, freed and uncharged, with the tables the unmapping
+ * emptied. Called with no lock held, since it shoots down TLB entries; takes the memory's locks and each space's.
+ *
+ * @param kernel The kernel: TLB entries are shot down on every CPU, and the frame and emptied tables go to this CPU's
+ *     frame cache.
+ * @param memory The paged memory, not a window onto it.
+ * @param offset The page's offset in memory, in bytes, page aligned, below its size.
+ * @return Null once the page is gone; NotPaged for memory that isn't paged or is a window, InvalidSize for a bad
+ *     offset, MappedWidely, leaving the page, if more mappings cover it than MAX_EVICT_SPACES, NotSupplied if it isn't
+ *     there.
  */
 evict_page :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64) -> slop_os.MemoryError? {
     if memory.pager_binding == 0 || memory.parent != 0 {
@@ -323,8 +411,16 @@ evict_page :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64) 
 }
 
 /**
- * The page of memory, frame, unmapped from each mapping of memory that covers it, each space's entry noted in unmapped
- * from count on: the count after. Takes memory's lock as held.
+ * Unmap a page from each mapping of a memory object that covers it and still maps the frame.
+ *
+ * Each space's entry is noted in unmapped, its TLB not yet flushed. Takes each mapping's space's lock in turn.
+ *
+ * @param memory The paged memory or a window onto it, whose lock the caller holds.
+ * @param page The page's index in memory.
+ * @param frame The page's frame, physical; a mapping of another frame there is left.
+ * @param unmapped Where each space unmapped from is noted; mappings past its room are left mapped.
+ * @param count How many of unmapped's entries are used already.
+ * @return How many of unmapped's entries are used after.
  */
 unmap_page_in :: fn(memory: ptr[mut Memory], page: u64, frame: u64, unmapped: ptr[mut Unmapped[slop_os.MAX_EVICT_SPACES]], count: usize)
     -> usize {
@@ -364,7 +460,17 @@ unmap_page_in :: fn(memory: ptr[mut Memory], page: u64, frame: u64, unmapped: pt
     return made
 }
 
-/** How many mappings of memory, and of its windows, cover its page: the spaces evict_page may take it from. */
+/**
+ * Count the mappings of a memory object, and of its windows, that cover a page: the spaces evict_page may take it
+ * from.
+ *
+ * Takes the memory's lock, then each window's.
+ *
+ * @param memory The paged memory, not a window; its lock is taken (level MemoryParent), so the caller holds none of
+ *     its.
+ * @param page The page's index in memory.
+ * @return The number of mappings, which may change once the locks are let go.
+ */
 mappings_of_page :: fn(memory: ptr[mut Memory], page: u64) -> u64 {
     count := cast[u64](0)
     lock_at(&memory.lock, .MemoryParent)
@@ -388,7 +494,13 @@ mappings_of_page :: fn(memory: ptr[mut Memory], page: u64) -> u64 {
     return count
 }
 
-/** How many of memory's mappings cover its page. Takes memory's lock as held. */
+/**
+ * Count a memory object's own mappings that cover a page.
+ *
+ * @param memory The memory, whose lock the caller holds.
+ * @param page The page's index in memory.
+ * @return The number of its mappings whose range includes the page.
+ */
 covering :: fn(memory: ptr[Memory], page: u64) -> u64 {
     count := cast[u64](0)
     with {
@@ -409,9 +521,19 @@ covering :: fn(memory: ptr[Memory], page: u64) -> u64 {
 }
 
 /**
- * Whether the page at offset of paged memory was touched through any mapping since this last asked, the marks cleared:
- * where the hardware keeps them (arch.take_accessed). Unflushed, so a CPU still holding the page's entry may touch it
- * unmarked, which only makes a page look colder than it is.
+ * Tell whether a page of paged memory was touched through any mapping since this last asked, clearing the marks:
+ * memory_page_accessed.
+ *
+ * The marks are where the hardware keeps them (arch.take_accessed). They're cleared unflushed, so a CPU still holding
+ * the page's entry may touch it unmarked, which only makes a page look colder than it is. Takes the memory's lock,
+ * each window's and each mapping's space's.
+ *
+ * @param kernel Unused; the hardware's marks are all that's read.
+ * @param memory The paged memory, not a window onto it.
+ * @param offset The page's offset in memory, in bytes, page aligned, below its size.
+ * @return 1 if it was touched, 0 if not.
+ * @error NotPaged The memory isn't paged memory, or is a window.
+ * @error InvalidSize The offset isn't page aligned, or is past the memory's end.
  */
 page_accessed :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64) -> Result[u64, slop_os.MemoryError] {
     if memory.pager_binding == 0 || memory.parent != 0 {
@@ -443,7 +565,15 @@ page_accessed :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u6
     return .Ok(if touched { cast[u64](1) } else { cast[u64](0) })
 }
 
-/** Whether any of memory's mappings of its page was touched, every one's mark cleared. Takes memory's lock as held. */
+/**
+ * Tell whether any of a memory object's own mappings of a page was touched, clearing every one's mark.
+ *
+ * Takes each mapping's space's lock in turn.
+ *
+ * @param memory The memory, whose lock the caller holds.
+ * @param page The page's index in memory.
+ * @return True if the hardware marked the page accessed in any of the mappings.
+ */
 take_accessed_in :: fn(memory: ptr[Memory], page: u64) -> bool {
     touched := false
     with {

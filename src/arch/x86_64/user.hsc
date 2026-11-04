@@ -11,12 +11,15 @@ import arch_interface from "../../arch_interface"
  * rax, rdx and r8.
  */
 
-/** Interrupts enabled, and bit 1, which is always set. */
+/** A new thread's RFLAGS: interrupts enabled (bit 9), and bit 1, which is always set. */
 USER_RFLAGS : u64 : 0x202
 
 /**
- * A new thread's registers: every one zero but its instruction and stack pointers, its argument in rdi,
- * user-mode segments, and interrupts enabled.
+ * Set a new thread's registers: every one zero but its instruction and stack pointers, its argument in rdi, user-mode
+ * segments, and interrupts enabled, so no kernel value leaks (0026).
+ *
+ * @param registers The thread's registers, all of them overwritten.
+ * @param start Where the thread starts, in user addresses, and the argument it gets; not checked here.
  */
 init_user_registers :: fn(registers: ptr[mut UserRegisters], start: ptr[arch_interface.UserStart]) {
     registers.frame = x86_64.RegisterFrame.{}
@@ -28,11 +31,23 @@ init_user_registers :: fn(registers: ptr[mut UserRegisters], start: ptr[arch_int
     registers.frame.rflags = USER_RFLAGS
 }
 
+/**
+ * Read a system call's number.
+ *
+ * @param registers The registers SYSCALL's entry saved.
+ * @return rax, the number, as user mode put it there; not checked.
+ */
 syscall_number :: fn(registers: ptr[UserRegisters]) -> u64 {
     return registers.frame.rax
 }
 
-/** One of the six argument registers, by index; 0 past the sixth. */
+/**
+ * Read one of a system call's arguments.
+ *
+ * @param registers The registers SYSCALL's entry saved.
+ * @param index Which argument, 0 to 5: rdi, rsi, rdx, r10, r8 and r9, r10 in rcx's place since SYSCALL takes rcx.
+ * @return The argument register's value, or 0 for an index past 5.
+ */
 syscall_argument :: fn(registers: ptr[UserRegisters], index: u32) -> u64 {
     frame :: &registers.frame
     return match index {
@@ -46,39 +61,76 @@ syscall_argument :: fn(registers: ptr[UserRegisters], index: u32) -> u64 {
     }
 }
 
+/**
+ * Put a system call's result in the registers returning to user mode loads.
+ *
+ * @param registers The registers SYSCALL's entry saved, whose rax, rdx and r8 are set.
+ * @param result The result: its tag goes in rax, its values in rdx and r8.
+ */
 set_syscall_result :: fn(registers: ptr[mut UserRegisters], result: ptr[arch_interface.SyscallResult]) {
     registers.frame.rax = result.tag
     registers.frame.rdx = result.values[0]
     registers.frame.r8 = result.values[1]
 }
 
+/**
+ * Read where user mode was, or will go on: after SYSCALL, the instruction after it; after a fault, the faulting one.
+ *
+ * @param registers The registers an entry saved.
+ * @return rip, a user address.
+ */
 instruction_pointer :: fn(registers: ptr[UserRegisters]) -> arch_interface.VirtualAddress {
     return cast[arch_interface.VirtualAddress](registers.frame.rip)
 }
 
 /**
- * SYSCALL is two bytes, 0f 05.
- * SPEC: Intel SDM Vol. 2B, SYSCALL
+ * The bytes of the SYSCALL instruction: two, 0f 05.
+ *
+ * SPEC: Intel SDM Vol. 2B, SYSCALL.
  */
 SYSCALL_LENGTH : u64 : 2
 
+/**
+ * Move a thread back to its SYSCALL instruction, so returning to user mode makes the call again.
+ *
+ * It's how a call a debugger stopped at its entry runs once it's let go (knowledge/design/kernel.md §4).
+ *
+ * @param registers The registers SYSCALL's entry saved, whose rip is after the SYSCALL; its other registers have to
+ *     still hold the call's number and arguments.
+ */
 restart_syscall :: fn(registers: ptr[mut UserRegisters]) {
     registers.frame.rip -= SYSCALL_LENGTH
 }
 
 /**
- * The flags user mode may set: CF, PF, AF, ZF, SF, DF and OF.
- * SPEC: Intel SDM Vol. 1 §3.4.3 (EFLAGS)
+ * The RFLAGS bits a debugger may set for user mode: CF, PF, AF, ZF, SF, DF and OF.
+ *
+ * SPEC: Intel SDM Vol. 1 §3.4.3 (EFLAGS).
  */
 USER_CHANGEABLE_FLAGS : u64 : 0xcd5
 
-/** rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8 to r15, rip, rflags (slop_os.THREAD_REGISTERS). */
+/**
+ * How many registers a debugger sees: rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8 to r15, rip and rflags
+ * (slop_os.THREAD_REGISTERS).
+ */
 USER_REGISTER_COUNT :: 18
 
+/**
+ * Count the registers a debugger sees, in the order slop_os.THREAD_REGISTERS gives for x86-64.
+ *
+ * @return USER_REGISTER_COUNT, 18.
+ */
 user_register_count :: fn() -> u32 {
     return USER_REGISTER_COUNT
 }
 
+/**
+ * Read one of a thread's registers as a debugger sees them.
+ *
+ * @param registers The thread's saved registers.
+ * @param index Which register, 0 to 17: rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8 to r15, rip, rflags.
+ * @return The register's value, or 0 for an index past 17.
+ */
 get_user_register :: fn(registers: ptr[UserRegisters], index: u32) -> u64 {
     frame :: &registers.frame
     return match index {
@@ -104,6 +156,16 @@ get_user_register :: fn(registers: ptr[UserRegisters], index: u32) -> u64 {
     }
 }
 
+/**
+ * Set one of a thread's registers as a debugger sees them.
+ *
+ * @param registers The thread's saved registers, changed only when this returns true.
+ * @param index Which register, 0 to 17, as get_user_register numbers them.
+ * @param value The new value. For rsp (7) and rip (16) it has to be a user address, in user_address_range, since
+ *     returning to a non-canonical or kernel address would fault in the kernel. For rflags (17), only the bits in
+ *     USER_CHANGEABLE_FLAGS are taken; the others keep what they had.
+ * @return True if it was set; false for an index past 17, or rsp or rip outside user addresses, and nothing changed.
+ */
 set_user_register :: fn(registers: ptr[mut UserRegisters], index: u32, value: u64) -> bool {
     frame :: &registers.frame
     low, high :: user_address_range()
@@ -135,7 +197,11 @@ set_user_register :: fn(registers: ptr[mut UserRegisters], index: u32, value: u6
     return true
 }
 
-/** Back to user mode with registers, by sysretq where it can, iretq otherwise. */
+/**
+ * Return to user mode with registers, on the calling CPU's active page table, by sysretq where it can, iretq otherwise.
+ *
+ * @param registers The registers to load, which have to be user mode's: user segments and user addresses.
+ */
 return_to_user :: fn(registers: ptr[UserRegisters]) #never_returns {
     x86_64.return_to_user(&registers.frame)
 }

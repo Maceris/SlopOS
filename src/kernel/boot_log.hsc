@@ -3,7 +3,12 @@ package kernel
 import runtime from "base"
 import boot_info from "../boot_info"
 
-/** What the kernel was given, for the boot log. */
+/**
+ * Log what the kernel was given at boot: the bootloader and firmware, the memory map's usable total, the image, the
+ * CPUs, modules and framebuffers, and which firmware tables were found.
+ *
+ * @param info The boot information the boot adapter built; only read.
+ */
 log_boot_info :: fn(info: ptr[boot_info.BootInfo]) {
     bootloader :: if info.bootloader.count > 0 { info.bootloader } else { "an unknown bootloader" }
     runtime.log_info("SlopOS, booted by % (%)", bootloader, firmware_name(info.firmware))
@@ -27,6 +32,12 @@ log_boot_info :: fn(info: ptr[boot_info.BootInfo]) {
         tables.devicetree is_some, tables.smbios is_some, tables.efi_system_table is_some)
 }
 
+/**
+ * Name a kind of firmware, for the log.
+ *
+ * @param firmware The firmware the machine booted through.
+ * @return A constant name: "BIOS", "UEFI", "32-bit UEFI" or "SBI".
+ */
 firmware_name :: fn(firmware: boot_info.Firmware) -> string {
     return match firmware {
         case .Bios => "BIOS"

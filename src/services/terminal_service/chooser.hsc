@@ -1,7 +1,7 @@
 /**
- * The powerbox's chooser (decisions/0156), on the trusted path. A session's powerbox asks on its prompt connection (Ask):
- * the request's shown on the status line, naming the program and what it asks for, until the secure attention key
- * opens the chooser over the session, which lists the directory it's in from the home the powerbox gave, read only.
+ * The powerbox's chooser (decisions/0156), on the trusted path. A session's powerbox asks on its prompt connection
+ * (Ask): the request's shown on the status line, naming the program and what it asks for, until the secure attention
+ * key opens the chooser over the session, which lists the directory it's in from the home the powerbox gave, read only.
  * Up and Down move, Enter opens a directory or chooses, typing narrows the list to the names with what's typed in them
  * and, for a file to write, offers a new file of that name; Escape refuses. A request that may be kept offers "keep for
  * next time", off until Tab ticks it (decisions/0158). The answer goes back on the prompt connection, and the session's
@@ -19,68 +19,118 @@ import files from "std/os/slop_os"
 import prompt from "../../protocols/prompt"
 import screen from "../../screen"
 
-// Each view's prompt connection is bound to the port under this key and its index
+/**
+ * The first of the port keys the views' prompt connections are bound under: view i's is PROMPT_KEY + i, for i below
+ * MAX_VIEWS.
+ */
 PROMPT_KEY : u64 : 1100
+/** The most entries of a directory the chooser lists; those past it aren't shown. */
 CHOOSER_ENTRIES :: 64
+/** The most bytes of an entry's name, or of the filter, kept; a longer name is cut short. */
 ENTRY_BYTES :: 64
+/** The most bytes of a path beneath the home the chooser or a kept grant holds; a longer one is cut short. */
 PATH_BYTES :: 256
+/** The most bytes of an Ask's requester or purpose kept; longer text is cut short. */
 ASK_BYTES :: 96
-// The chooser's rows: its items from ITEMS_ROW, ITEMS_SHOWN of them at a time
+/** The panel row the chooser's first item is drawn on. */
 ITEMS_ROW : u16 : 7
+/** How many of the chooser's items are shown at a time, a window that follows the chosen one. */
 ITEMS_SHOWN :: 13
 
 /**
  * A request a session's powerbox is waiting on the user for: whose, why, what it suggests, and the home to choose in.
  */
 Asked :: struct {
+    /** The program asking, by the name the session manager gave it; its first requester_count bytes. */
     requester : u8[ASK_BYTES],
+    /** How many bytes of requester are used, 0 to ASK_BYTES. */
     requester_count : usize,
+    /** Why it asks, in the program's words; its first purpose_count bytes. */
     purpose : u8[ASK_BYTES],
+    /** How many bytes of purpose are used, 0 to ASK_BYTES. */
     purpose_count : usize,
+    /** A file's suggested name, which the chooser's filter starts with; its first suggested_count bytes. */
     suggested : u8[ENTRY_BYTES],
+    /** How many bytes of suggested are used, 0 to ENTRY_BYTES; 0 for no suggestion. */
     suggested_count : usize,
+    /** What's asked for: a file or a directory, chosen in the chooser, or an account, made on the elevation screen. */
     kind : prompt.Kind,
+    /** Whether the program asks to write what's chosen, not only read it; a file to write may be a new one. */
     write : bool,
+    /** Whether the program asked to keep what's chosen, so the chooser offers "keep for next time". */
     keep : bool,
+    /**
+     * The home to choose in, a read-only directory connection the service holds while the request waits, closed by
+     * drop_ask; NONE for none.
+     */
     home : slop_os.Channel,
 }
 
+/** One entry of the directory the chooser is in. */
 Entry :: struct {
+    /** The entry's name, its first count bytes. */
     name : u8[ENTRY_BYTES],
+    /** How many bytes of name are used, 0 to ENTRY_BYTES. */
     count : usize,
+    /** Whether it's a directory, which Enter opens, rather than a file. */
     directory : bool,
 }
 
 /**
- * The chooser's state: the directory it's in beneath the home, what's typed, what the directory has, and the item chosen.
+ * The chooser's state: the directory it's in beneath the home, what's typed, what the directory has, and the item
+ * chosen.
  */
 Chooser :: struct {
+    /** The directory it's in, a path beneath the home without a leading or trailing /; empty for the home itself. */
     path : u8[PATH_BYTES],
+    /** How many bytes of path are used, 0 to PATH_BYTES. */
     path_count : usize,
+    /** What's typed: only entries whose names contain it are listed, and a new file is offered by this name. */
     filter : u8[ENTRY_BYTES],
+    /** How many bytes of filter are used, 0 to ENTRY_BYTES. */
     filter_count : usize,
+    /** The directory's entries, as the volume lists them; the first entry_count are used. */
     entries : Entry[CHOOSER_ENTRIES],
+    /** How many of entries are used, 0 to CHOOSER_ENTRIES. */
     entry_count : usize,
+    /** The index of the chosen item among those items_of gives, which Enter acts on. */
     selected : usize,
-    /** Whether the user's ticked "keep for next time" */
+    /** Whether the user's ticked "keep for next time", which Tab toggles; sent only if the request may be kept. */
     keep : bool,
 }
 
+/** What one of the chooser's items is. */
 ItemKind :: enum {
-    /** The directory it's in, for a directory asked for */
+    /** The directory it's in, chosen as the answer, for a directory asked for. */
     Here,
+    /** The directory above, which Enter goes up to; offered below the home only. */
     Up,
+    /** One of the directory's entries, by its index in Chooser.entries. */
     Entry,
-    /** A new file of the name typed */
+    /** A new file of the name typed, for a file to write that no entry has that name. */
     New,
 }
 
+/** One line of the chooser's list. */
 Item :: struct {
+    /** What the line is. */
     kind : ItemKind,
+    /** For an Entry, its index in Chooser.entries; unused for the others. */
     entry : usize,
 }
 
-/** Asks waiting on the views' prompt connections, kept for the user; a connection that's gone, closed. */
+/**
+ * Take what's waiting on the views' prompt connections: an Ask is kept in its view for the user, and shown on the
+ * status line if its view is the one shown and nothing of the trusted path's is up.
+ *
+ * A view that's already asking isn't read, so one Ask waits at a time and the next stays in its connection. Requests
+ * this side doesn't know are answered Unsupported. A connection that's failed is closed and set to NONE, leaving that
+ * view without a powerbox.
+ *
+ * @param service The service's state, from its main loop: each view's prompt connection is read, an Ask kept in the
+ *     view as asking, a failed connection closed and set to NONE, and the status line drawn for the active view.
+ * @param into Where requests are received; an Ask's home handle moves into the view's Asked.
+ */
 take_prompts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
     for &each, i in service.views {
         if !each.in_use || each.prompt_end == NONE || each.asking {
@@ -118,7 +168,12 @@ take_prompts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
     }
 }
 
-/** What's waiting, for the status line: who asks for what, and the key that opens the chooser. */
+/**
+ * Append what's waiting to a status line: who asks for what, and the key that opens the chooser.
+ *
+ * @param status The status line's text so far; what doesn't fit its buffer is cut off as text_buffer does.
+ * @param asked The request waiting, which isn't changed.
+ */
 append_asking :: fn(status: ptr[mut text_buffer.TextBuffer], asked: ptr[Asked]) {
     text_buffer.append(status, " │ ")
     text_buffer.append(status, bytes_text(first_of(asked.requester[0..<asked.requester.count], asked.requester_count)))
@@ -127,7 +182,14 @@ append_asking :: fn(status: ptr[mut text_buffer.TextBuffer], asked: ptr[Asked]) 
     text_buffer.append(status, ": Ctrl+Alt+Delete")
 }
 
-/** The chooser opened over the active view, for its request, in the home, what was suggested typed already. */
+/**
+ * Open the chooser over the active view, for its file or directory request: in the home, with the suggested name typed
+ * already, the best item chosen.
+ *
+ * Keys go to chooser_key until the request is answered or refused.
+ *
+ * @param service The service, its secure attention key's screen up and its active view asking.
+ */
 enter_chooser :: fn(service: ptr[mut Service]) {
     asked :: &view(service).ask
     service.choosing = true
@@ -140,7 +202,16 @@ enter_chooser :: fn(service: ptr[mut Service]) {
     draw_chooser(service)
 }
 
-/** A key while the chooser's up. */
+/**
+ * Take a key while the chooser is up: Escape refuses, Tab ticks "keep for next time" if it's offered, Enter acts on the
+ * item chosen, Up and Down choose, Backspace takes back the last character typed, and other text narrows the list.
+ *
+ * Text typed with Control or Alt is ignored, as are controls and /, which no name has.
+ *
+ * @param service The service, its chooser up.
+ * @param event The key, by its USB HID usage and modifiers.
+ * @param text The text the key typed, UTF-8, possibly empty; read only during the call.
+ */
 chooser_key :: fn(service: ptr[mut Service], event: terminal.Event, text: u8[]) {
     chooser :: &service.chooser
     if event.code == USAGE_ESCAPE {
@@ -202,7 +273,15 @@ chooser_key :: fn(service: ptr[mut Service], event: terminal.Event, text: u8[]) 
     draw_chooser(service)
 }
 
-/** Enter on the item chosen: a directory opened, the one it's in or an entry chosen, or a new file named. */
+/**
+ * Take Enter on the item chosen: the directory it's in chosen (Here), the one above opened (Up), a directory entry
+ * opened or a file entry chosen (Entry), or a new file of the name typed chosen (New).
+ *
+ * Choosing answers the request and closes the chooser; a directory's entry is never chosen, only opened, and a file's
+ * entry is chosen only when a file was asked for.
+ *
+ * @param service The service, its chooser up.
+ */
 activate :: fn(service: ptr[mut Service]) {
     chooser :: &service.chooser
     items : Item[CHOOSER_ENTRIES + 3]
@@ -251,7 +330,11 @@ activate :: fn(service: ptr[mut Service]) {
     }
 }
 
-/** The directory the chooser's in now, listed, with nothing typed. */
+/**
+ * List the directory the chooser is now in, with what was typed cleared, choose the best item, and draw the chooser.
+ *
+ * @param service The service, its chooser up, its path just changed.
+ */
 opened_directory :: fn(service: ptr[mut Service]) {
     service.chooser.filter_count = 0
     list_chooser(service)
@@ -260,8 +343,16 @@ opened_directory :: fn(service: ptr[mut Service]) {
 }
 
 /**
- * The request answered with path and whether it's new, or refused for null, on the active view's prompt connection; the
- * chooser closed, the home given back, and the session drawn again.
+ * Answer the active view's request on its prompt connection, close the chooser, and leave the secure attention key's
+ * screen, drawing the session again.
+ *
+ * The answer, Chosen or Refused, is sent if the view still has a prompt connection, and not waited for. The request is
+ * dropped and its home closed either way.
+ *
+ * @param service The service, its chooser up.
+ * @param path The path chosen, beneath the home, empty for the home itself; null refuses. Copied into the answer, so it
+ *     need only last the call.
+ * @param new Whether the path names a new file for the program to make; ignored when refusing.
  */
 answer_ask :: fn(service: ptr[mut Service], path: u8[]?, new: bool) {
     shown :: view(service)
@@ -286,7 +377,11 @@ answer_ask :: fn(service: ptr[mut Service], path: u8[]?, new: bool) {
     leave_attention(service)
 }
 
-/** A view's waiting request let go, its home closed. */
+/**
+ * Let go of a view's waiting request, closing its home, and clear it; nothing is answered.
+ *
+ * @param each The view; if it isn't asking, its request is only cleared.
+ */
 drop_ask :: fn(each: ptr[mut View]) {
     if each.asking && each.ask.home != NONE {
         _ = slop_os.handle_close(cast[slop_os.Handle](each.ask.home))
@@ -295,7 +390,16 @@ drop_ask :: fn(each: ptr[mut View]) {
     each.ask = Asked.{}
 }
 
-/** The chooser's directory's entries, from the home: up to CHOOSER_ENTRIES of them, as the volume lists them. */
+/**
+ * List the chooser's directory's entries from the active view's home: up to CHOOSER_ENTRIES of them, in the order the
+ * volume lists them.
+ *
+ * The directory beneath the home is opened (OpenDirectory) and listed a cursor at a time (List), each answer waited
+ * for; what was opened, and the ports made, are closed after. The list stops at the first answer that isn't Listed.
+ * With no home, or a directory that can't be opened, it's left empty.
+ *
+ * @param service The service, its chooser up.
+ */
 list_chooser :: fn(service: ptr[mut Service]) {
     chooser :: &service.chooser
     chooser.entry_count = 0
@@ -357,7 +461,16 @@ list_chooser :: fn(service: ptr[mut Service]) {
     }
 }
 
-/** One request on a read-only directory's connection, and its answer, waited for. */
+/**
+ * Send one request on a read-only directory's connection and wait, with no deadline, for its answer.
+ *
+ * @param end The directory connection, which stays the caller's.
+ * @param port A port for end, the caller's, which the answer is waited on.
+ * @param out The request, built by the caller.
+ * @param into Where the answer's message is received; its items, such as names, stay readable there until into is
+ *     used again.
+ * @return The answer; Unsupported also when the request couldn't be sent or the connection failed.
+ */
 ask_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> read_only_dir.Response {
     if read_only_dir.send_request(end, port, out) is_some {
         return .Unsupported
@@ -372,9 +485,15 @@ ask_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Ou
 }
 
 /**
- * The chooser's items, into items unless it's null: the directory it's in, for a directory; the one above, below the
- * home; the entries with what's typed in their names, only directories for a directory; and a new file of the name
- * typed, for a file to write, if no entry has that name. How many.
+ * Make the chooser's list of items, in the order they're shown.
+ *
+ * They are: the directory it's in, for a directory asked for; the one above, below the home; the entries whose names
+ * contain what's typed, only directories for a directory; and a new file of the name typed, for a file to write, when
+ * something's typed and no entry has exactly that name.
+ *
+ * @param service The service, its chooser up; nothing is changed.
+ * @param items Where the items go, the first of them as many as are returned; null to only count them.
+ * @return How many items there are, 0 to CHOOSER_ENTRIES + 3.
  */
 items_of :: fn(service: ptr[mut Service], items: ptr[mut Item[CHOOSER_ENTRIES + 3]]?) -> usize {
     chooser :: &service.chooser
@@ -415,7 +534,10 @@ items_of :: fn(service: ptr[mut Service], items: ptr[mut Item[CHOOSER_ENTRIES + 
 }
 
 /**
- * The item to start on: the entry named what's typed, or a new file of that name, or the first entry, or the first item.
+ * Choose the item to start on: the entry named exactly what's typed; failing that, when something's typed, the first
+ * entry matching it, or the new file if none does; failing that, the first item.
+ *
+ * @param service The service, its chooser up; only its selected changes.
  */
 select_best :: fn(service: ptr[mut Service]) {
     chooser :: &service.chooser
@@ -446,9 +568,15 @@ select_best :: fn(service: ptr[mut Service]) {
     chooser.selected = if chosen != NO_ITEM { chosen } else { 0 }
 }
 
+/** No item: what select_best has before it's found one. */
 NO_ITEM : usize : 0xffffffff
 
-/** The chooser, drawn on the panel: what's asked, by whom, the directory it's in, what's typed, and its items. */
+/**
+ * Draw the chooser on the active view's panel: what's asked, by whom, the directory it's in, what's typed, "keep for
+ * next time" if it's offered, and a window of ITEMS_SHOWN items with the chosen one inverse.
+ *
+ * @param service The service, its chooser up.
+ */
 draw_chooser :: fn(service: ptr[mut Service]) {
     screen.show_panel(&view(service).screen, true)
     panel :: &view(service).screen.panel
@@ -516,13 +644,27 @@ draw_chooser :: fn(service: ptr[mut Service]) {
     redraw(service)
 }
 
-/** The chooser's path with name added: name alone in the home. */
+/**
+ * Go down into a directory: add name to the chooser's path, after a /, or as the whole path in the home. A path longer
+ * than PATH_BYTES is cut short.
+ *
+ * @param chooser The chooser, whose path changes.
+ * @param name The entry's name, without a /; read only during the call.
+ */
 join :: fn(chooser: ptr[mut Chooser], name: u8[]) {
     storage : u8[PATH_BYTES]
     path :: joined(chooser, name, &storage)
     chooser.path_count = copy_bytes(path, chooser.path[0..<chooser.path.count])
 }
 
+/**
+ * Make the path of name in the chooser's directory: the path, a /, and name, or name alone in the home.
+ *
+ * @param chooser The chooser, which isn't changed.
+ * @param name The name to add; read only during the call.
+ * @param storage Where the path is made; what doesn't fit its PATH_BYTES is cut off.
+ * @return The path, a view of storage, good while storage is and until it's used again.
+ */
 joined :: fn(chooser: ptr[Chooser], name: u8[], storage: ptr[mut u8[PATH_BYTES]]) -> u8[] {
     count : usize = 0
     path :: first_of(chooser.path[0..<chooser.path.count], chooser.path_count)
@@ -534,6 +676,13 @@ joined :: fn(chooser: ptr[Chooser], name: u8[], storage: ptr[mut u8[PATH_BYTES]]
     return first_of(storage^[0..<storage.count], count)
 }
 
+/**
+ * Append part to a path being made, as much of it as fits.
+ *
+ * @param storage The path's bytes.
+ * @param count How many bytes of storage are used, moved on by as many as are appended, to PATH_BYTES at most.
+ * @param part The bytes to append; read only during the call.
+ */
 add_part :: fn(storage: ptr[mut u8[PATH_BYTES]], count: ptr[mut usize], part: u8[]) {
     for byte in part {
         at :: count^
@@ -544,7 +693,13 @@ add_part :: fn(storage: ptr[mut u8[PATH_BYTES]], count: ptr[mut usize], part: u8
     }
 }
 
-/** from copied into into, as much as fits: how much did. */
+/**
+ * Copy bytes into a buffer from its start, as many as fit.
+ *
+ * @param from The bytes copied, from the first; only read.
+ * @param into Where they go; bytes past those copied aren't touched.
+ * @return How many were copied: the smaller of from's count and into's.
+ */
 copy_bytes :: fn(from: u8[], into: mut u8[]) -> usize {
     count : usize = 0
     for byte in from {
@@ -556,6 +711,13 @@ copy_bytes :: fn(from: u8[], into: mut u8[]) -> usize {
     return count
 }
 
+/**
+ * Tell whether a name has part in it, byte for byte, as the chooser's filter matches.
+ *
+ * @param name The bytes searched, such as an entry's name; only read.
+ * @param part The bytes looked for; empty is in every name.
+ * @return True if part appears anywhere in name, matched exactly, case and all.
+ */
 contains :: fn(name: u8[], part: u8[]) -> bool {
     if part.count == 0 {
         return true
@@ -572,11 +734,23 @@ contains :: fn(name: u8[], part: u8[]) -> bool {
     return false
 }
 
-/** The first count of bytes, or all of them. */
+/**
+ * Take the used part of a fixed buffer, given how many of its bytes are used.
+ *
+ * @param bytes A fixed buffer, not copied.
+ * @param count How many of its bytes are used.
+ * @return A view of bytes' first count bytes, or all of them if count is past its end; good while bytes is.
+ */
 first_of :: fn(bytes: u8[], count: usize) -> u8[] {
     return if count <= bytes.count { bytes[0..<count] } else { bytes }
 }
 
+/**
+ * View bytes as a string, for showing or logging; they aren't checked to be UTF-8.
+ *
+ * @param bytes The bytes viewed, any of them, not copied.
+ * @return A string over the same bytes, good while they are; "" for none.
+ */
 bytes_text :: fn(bytes: u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }

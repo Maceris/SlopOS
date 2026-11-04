@@ -9,12 +9,25 @@ import runtime from "base"
 import gpt from ".."
 import hosted_faults from "../../robustness/hosted"
 
+/** The size of the stand-in disk, in gpt.BLOCK_BYTES blocks: 128 KiB, room for the table and two partitions. */
 BLOCKS : u64 : 256
 
+/** The stand-in disk read_blocks reads: a buffer of BLOCKS blocks. */
 Image :: struct {
+    /** The disk's bytes, the test's own, BLOCKS * gpt.BLOCK_BYTES of them. */
     bytes : mut u8[],
 }
 
+/**
+ * Run the checks in order, stopping at the first that fails.
+ *
+ * They check crc32 against the standard check value; that write_table writes the protective MBR and a table that
+ * read_table reads back with both partitions as written; that a broken primary header is read from the backup; that
+ * with both copies of the entries broken no table is read; and that write_table refuses a partition outside the usable
+ * blocks.
+ *
+ * @return 0 if every check passed, or the number of the first that failed, 1 to 13.
+ */
 checks :: fn() -> int {
     // The CRC everyone checks against
     check :: "123456789"
@@ -76,14 +89,24 @@ checks :: fn() -> int {
     return 0
 }
 
-/** One byte of the image changed, where it's there. */
+/**
+ * Invert one byte of the image, as a broken disk would have it.
+ *
+ * @param bytes The image's bytes, changed in place.
+ * @param at The byte's offset; past the image's end, nothing changes.
+ */
 flip :: fn(bytes: mut u8[], at: usize) {
     if at < bytes.count {
         bytes[at] ~= 0xff
     }
 }
 
-/** A GUID of one repeated byte. */
+/**
+ * Make a GUID of one repeated byte, distinct for each byte.
+ *
+ * @param byte The byte; 0 makes the all-zero GUID of an unused entry.
+ * @return The GUID, its 16 bytes all the given byte.
+ */
 guid :: fn(byte: u8) -> gpt.Guid {
     made : gpt.Guid
     for &each in made {
@@ -92,6 +115,15 @@ guid :: fn(byte: u8) -> gpt.Guid {
     return made
 }
 
+/**
+ * Read blocks from the stand-in disk, as a gpt.Disk's read does.
+ *
+ * @param context The Image, as a rawptr.
+ * @param first The first block to read.
+ * @param count How many blocks to read.
+ * @param into Where they go; at least count * gpt.BLOCK_BYTES bytes.
+ * @return True if they were read; false if they run past the image's end or into is too small, with nothing read.
+ */
 read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
     image :: cast[ptr[Image]](context)
     start :: first * gpt.BLOCK_BYTES
@@ -108,7 +140,11 @@ read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bo
     return true
 }
 
-/** The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness) */
+/**
+ * Run the checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness).
+ *
+ * @return 0 if every check passed, or the number of the first that failed.
+ */
 main :: fn() -> int {
     return hosted_faults.run(checks)
 }

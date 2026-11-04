@@ -34,26 +34,52 @@ import slop_os from "std/os"
  * Lock order: an intercept's lock, then a thread's control lock, then a port's.
  */
 
+/** An intercept, a kernel object: a debugger's hold on a process's subtree, and the threads it has stopped. */
 Intercept :: struct #align(16) {
+    /** The object's header; first, as for every kernel object. */
     header : ObjectHeader,
-    // Held for its list of stopped threads and its binding.
+    /** Held (rank Intercept, before a thread's control lock and a port's) for its stopped threads and its binding. */
     lock : concurrency.SpinLock,
+    /** The Process whose subtree it intercepts, as its address. */
     process : u64,
+    /** The process's generation when it was made, so a destroyed process isn't taken for it. */
     process_generation : u32,
-    // Which calls, a bit per number below 64, and where (slop_os.STOP_*).
+    /** The system calls it stops at, a bit per call number below 64. */
     calls : u64,
+    /** Where it stops threads: slop_os.STOP_* bits, for a call's entry and exit, and faults. */
     points : u32,
-    // Its port binding, and that binding's generation, which changes once the port drops it.
+    /** The binding's generation when it was made, which changes once the port drops it. */
     binding_generation : u32,
+    /** Its port binding, as its address, which counts the stops in its Stop packet; 0 once it's destroyed. */
     binding : u64,
-    // The threads it stopped, oldest first, through their stop_next and stop_previous.
+    /** The first thread it stopped, the oldest, through their stop_next; 0 for none. */
     first_stopped : u64,
+    /** The last thread it stopped, the newest, through their stop_previous; 0 for none. */
     last_stopped : u64,
 }
 
-/*
- * An intercept of process's subtree, owned by owner, charged to budget, reporting to port under key. One
- * per process.
+/**
+ * Make an intercept of a process's subtree, reporting its stops to a port.
+ *
+ * Its binding is made first, so a stop always has somewhere to go; then the process is claimed, as a process has
+ * one intercept. Takes the port's lock.
+ *
+ * @param kernel The kernel: the object comes from its Intercept pool, the binding from its binding pool, and its
+ *     count of intercepts goes up once the process is claimed.
+ * @param owner The Process to own it, as its address, or 0 for the kernel.
+ * @param budget The MemoryBudget the object is charged to, as its address, or 0 for the kernel's own; the binding
+ *     is charged to the port's.
+ * @param process The process whose subtree it intercepts.
+ * @param port The port its Stop packet goes to.
+ * @param key The key its packet carries, which no binding on the port may have yet.
+ * @param calls The system calls to stop at, a bit per call number below 64.
+ * @param points Where to stop threads, slop_os.STOP_* bits.
+ * @return The intercept, owned by owner, the process's; the caller makes a handle to it.
+ * @error OutOfMemory No memory could be had for the object or its binding.
+ * @error BudgetExceeded budget hadn't room for the object, or the port's for the binding.
+ * @error ObjectGone The port is being destroyed, or owner is; in owner's case, the intercept is destroyed again.
+ * @error WrongKind A binding on the port has the key already.
+ * @error AlreadyIntercepted The process has an intercept already; the binding is dropped again.
  */
 create_intercept :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, process: ptr[mut Process], port: ptr[mut Port], key: u64,
     calls: u64, points: u32) -> Result[ptr[mut Intercept], slop_os.ControlError] {
@@ -111,8 +137,14 @@ create_intercept :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, process
 }
 
 /**
- * Destroying an intercept: its process isn't intercepted any more, every thread it stopped goes on (as
- * with Continue), and its binding goes.
+ * Destroy an intercept, as destroy_object does each kind: its process isn't intercepted any more, every thread it
+ * stopped goes on (as with Continue), and its binding goes.
+ *
+ * Takes its lock, then a thread's control lock, then the port's, one after the other.
+ *
+ * @param kernel The kernel, whose count of intercepts goes down if the process still had this one; called from
+ *     destroy_object, on any CPU, with interrupts off.
+ * @param intercept The intercept being destroyed, already dying.
  */
 destroy_intercept :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) {
     // Unless the process was destroyed first, when it let go of its intercept itself
@@ -145,10 +177,23 @@ destroy_intercept :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) 
     }
 }
 
+/**
+ * Release a destroyed intercept, as release_object does each kind: destroy_intercept let go of everything it held,
+ * so this does nothing.
+ *
+ * @param kernel Unused: the intercept holds nothing of the kernel's by now.
+ * @param intercept The destroyed intercept, whose memory release_object frees after this.
+ */
 release_intercept :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) {
 }
 
-/** A process being destroyed lets go of its intercept, if it has one. */
+/**
+ * Let go of a process's intercept, as the process is destroyed, if it has one; the intercept itself lives on until
+ * its handles go, holding nothing of the process's.
+ *
+ * @param kernel The kernel, whose count of intercepts goes down.
+ * @param process The process being destroyed.
+ */
 forget_intercept :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
     held :: intrinsics.atomic_load_u64_acquire(&process.intercept)
     if held == 0 {
@@ -160,7 +205,15 @@ forget_intercept :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
     }
 }
 
-/** The intercept a thread stops for: its nearest intercepted process's, or 0. */
+/**
+ * Find the intercept a thread stops for: its nearest intercepted owner's, up at most MAX_OWNER_DEPTH processes.
+ *
+ * Takes no lock; with no intercept anywhere, it costs one load.
+ *
+ * @param kernel The kernel, whose count of intercepts is loaded with acquire, so a kernel with none stops at once.
+ * @param thread The thread, whose owner chain is walked; it may be running on this CPU, at a system call or fault.
+ * @return The Intercept, as its address, or 0 for none.
+ */
 intercept_of :: fn(kernel: ptr[Kernel], thread: ptr[Thread]) -> u64 {
     if intrinsics.atomic_load_u32_acquire(&kernel.intercepts) == 0 {
         return 0
@@ -180,9 +233,19 @@ intercept_of :: fn(kernel: ptr[Kernel], thread: ptr[Thread]) -> u64 {
 }
 
 /**
- * Stop thread at point if its intercept asks: number is the call's (or a fault's access), address a
- * fault's. current: it's the CPU's current thread, whose vector state is still in the CPU. True if it
- * stopped, when the caller takes it off the CPU.
+ * Stop a thread at a point, if its intercept asks to: held and parked, put on the intercept's list, and reported.
+ *
+ * A call made again after its entry stop (Continue) doesn't stop at its entry a second time. Takes the intercept's
+ * lock, then the thread's control lock, then the port's.
+ *
+ * @param kernel The kernel, whose count of intercepts says whether to look; the port's queue changes if it stops.
+ * @param thread The thread, at a point where its whole state is its saved registers; a dying one isn't stopped.
+ * @param point Where it is: a system call's entry or exit, or a fault its memory didn't resolve.
+ * @param number The system call's number, or for a fault, its access; a call stops only if its bit is in the
+ *     intercept's calls.
+ * @param address The faulting address, for a fault; reported, not checked.
+ * @param current Whether it's this CPU's current thread, whose vector state is still in the CPU and is saved.
+ * @return True if it stopped, when the caller takes it off the CPU; false if it goes on.
  */
 stop_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], point: slop_os.StopPoint, number: u64, address: u64, current: bool) -> bool {
     if is_dying(cast[u64](thread)) {
@@ -229,11 +292,24 @@ stop_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], point: slop_
     return true
 }
 
+/**
+ * Tell whether an intercept stops at a system call.
+ *
+ * @param intercept The intercept, whose calls are read without its lock; they never change once it's made.
+ * @param number The call's number.
+ * @return True if number is below 64 and its bit is in the intercept's calls.
+ */
 wants_call :: fn(intercept: ptr[Intercept], number: u64) -> bool {
     return number < 64 && intercept.calls & (cast[u64](1) << number) != 0
 }
 
-/** One more stop counted in the intercept's packet, queued if it isn't. Takes the intercept's lock as held. */
+/**
+ * Count one more stop in an intercept's packet, queued if it isn't, which wakes a waiter. Nothing happens once the
+ * port dropped the binding. Takes the port's lock.
+ *
+ * @param kernel The kernel; only the port's queue changes, under the port's lock.
+ * @param intercept The intercept, whose lock the caller holds.
+ */
 report_stop :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) {
     if intercept.binding == 0 {
         return void
@@ -245,7 +321,16 @@ report_stop :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) {
     queue_binding(kernel, port, binding)
 }
 
-/** The next stop not yet reported, written at buffer in space. */
+/**
+ * Report the oldest stop not yet reported, as a slop_os.StopInfo written to user memory. Takes the intercept's lock.
+ *
+ * @param kernel The kernel, for the direct map the StopInfo is written through.
+ * @param intercept The intercept; its lock is taken, so the caller holds none of rank Intercept or above.
+ * @param space The caller's address space.
+ * @param buffer The user address the StopInfo is written at, in space.
+ * @return Null once written; Empty if every stop has been reported; BadBuffer if the buffer isn't writable user
+ *     memory, when the stop counts as reported all the same.
+ */
 intercept_next :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], space: ptr[mut AddressSpace], buffer: u64) -> slop_os.ControlError? {
     info := slop_os.StopInfo.{}
     found := false
@@ -277,7 +362,17 @@ intercept_next :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], spa
     return null
 }
 
-/** Let a thread the intercept stopped go on as action says. */
+/**
+ * Let a thread the intercept stopped go on as an action says. Takes the intercept's lock, then the thread's control
+ * lock.
+ *
+ * @param kernel The kernel: a thread let go joins a run queue, and one killed is destroyed.
+ * @param intercept The intercept; its lock is taken, so the caller holds none of rank Intercept or above.
+ * @param id The thread's ID.
+ * @param action Continue, Skip (only at a call's entry) or Kill.
+ * @return Null once it's let go; NoSuchThread if the intercept stopped no thread with that ID; NotStopped for Skip
+ *     at a point other than a call's entry, when the thread stays stopped.
+ */
 intercept_resume :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], id: u64, action: slop_os.InterceptAction) -> slop_os.ControlError? {
     lock_at(&intercept.lock, .Intercept)
     found := cast[ptr[mut Thread]](0)
@@ -310,8 +405,15 @@ intercept_resume :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], i
 }
 
 /**
- * A stopped thread, off its intercept's list, going on: at an entry, Continue makes the call again from
- * user mode, without its entry stop; Kill destroys it.
+ * Let a stopped thread go on: at an entry, Continue makes the call again from user mode, without its entry stop;
+ * Skip returns with its registers as written; Kill destroys it.
+ *
+ * The thread runs again once nothing else holds it, a suspend for one.
+ *
+ * @param kernel The kernel: Kill destroys the thread through destroy_object, and otherwise it may join a run
+ *     queue. Called with no lock held.
+ * @param thread The thread, already off its intercept's list.
+ * @param action What it does.
  */
 let_go :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], action: slop_os.InterceptAction) {
     if action == .Kill {
@@ -325,7 +427,12 @@ let_go :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], action: slop_os.I
     unhold_thread(kernel, thread, HELD_STOP)
 }
 
-/** A thread being destroyed, off the list of the intercept that stopped it, if one did. */
+/**
+ * Take a thread being destroyed off the list of the intercept that stopped it, if one did. Takes that intercept's
+ * lock.
+ *
+ * @param thread The thread being destroyed.
+ */
 forget_stop :: fn(thread: ptr[mut Thread]) {
     address :: thread.stop_intercept
     if address == 0 {
@@ -337,7 +444,12 @@ forget_stop :: fn(thread: ptr[mut Thread]) {
     unlock_at(&intercept.lock, .Intercept)
 }
 
-/** Takes the intercept's lock as held. */
+/**
+ * Put a thread last on an intercept's list of stopped threads.
+ *
+ * @param intercept The intercept, whose lock the caller holds.
+ * @param thread The thread, on no intercept's list.
+ */
 link_stopped :: fn(intercept: ptr[mut Intercept], thread: ptr[mut Thread]) {
     thread.stop_next = 0
     thread.stop_previous = intercept.last_stopped
@@ -351,6 +463,12 @@ link_stopped :: fn(intercept: ptr[mut Intercept], thread: ptr[mut Thread]) {
     thread.stop_linked = true
 }
 
+/**
+ * Take a thread off an intercept's list of stopped threads, if it's on that list.
+ *
+ * @param intercept The intercept, whose lock the caller holds.
+ * @param thread The thread; one not on the list, or on another intercept's, is left alone.
+ */
 unlink_stopped :: fn(intercept: ptr[mut Intercept], thread: ptr[mut Thread]) {
     if !thread.stop_linked || thread.stop_intercept != cast[u64](intercept) {
         return void

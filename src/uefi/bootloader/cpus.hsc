@@ -16,22 +16,33 @@ import boot_protocol from "../../boot_protocol"
  */
 #if TARGET_ARCH == .x86_64 {
     // Where the trampoline's data is, from its page's start
+    /** The GDT's offset in bytes in the trampoline's page: its three descriptors, 8 bytes each. */
     GDT_AT : u64 : 0x100
+    /** The GDT pointer's offset, which lgdt loads: a 16-bit limit, then the GDT's 32-bit physical address. */
     GDT_POINTER_AT : u64 : 0x118
+    /** The offset of the page tables' root, a 32-bit physical address, which the trampoline loads into CR3. */
     PAGE_TABLE_AT : u64 : 0x120
+    /** The offset of the mailbox's address, 64 bits: the starting CPU's boot_protocol.Cpu in the handoff. */
     MAILBOX_AT : u64 : 0x130
+    /** The offset of the acknowledgement, 32 bits, which the CPU sets to 1 once it's in long mode on its stack. */
     ACKNOWLEDGED_AT : u64 : 0x138
     // Where in the code the far jump's offset, and the absolute addresses of the mailbox and the acknowledgement, go
+    /** The offset of the far jump's 32-bit target in the code, which gets the long-mode code's physical address. */
     LONG_JUMP_OFFSET_AT : u64 : 0x3a
+    /** The offset of the long-mode code, where the far jump goes. */
     LONG_MODE_AT : u64 : 0x40
+    /** The offset of the 32-bit absolute address in the instruction that loads the mailbox's address. */
     MAILBOX_LOAD_AT : u64 : 0x52
+    /** The offset of the 32-bit absolute address in the instruction that stores the acknowledgement. */
     ACKNOWLEDGE_STORE_AT : u64 : 0x5d
 
     /**
-     * Real mode, 16-bit: the GDT loaded, PAE on, CR3 the page tables, EFER.LME on, then protection and paging at once,
-     * and a far jump into the 64-bit code segment. Long mode: the data segments loaded, the mailbox's address and its
-     * stack taken, the bootloader told it's there, then a wait for the mailbox's goto_address, and a jump to it with its
-     * argument in rdi and a zero return address.
+     * The x86-64 trampoline's machine code, copied to the start of its page, with its addresses written in after.
+     *
+     * Real mode, 16-bit: the GDT loaded, PAE on, CR3 the page tables, EFER.LME on, then protection and paging at
+     * once, and a far jump into the 64-bit code segment. Long mode: the data segments loaded, the mailbox's address
+     * and its stack taken, the bootloader told it's there, then a wait for the mailbox's goto_address, and a jump to
+     * it with its argument in rdi and a zero return address.
      */
     TRAMPOLINE :: u8.[
         // 0x00: cli; cld; mov ax, cs; mov ds, ax; lgdt [0x118]
@@ -60,30 +71,53 @@ import boot_protocol from "../../boot_protocol"
         0x48, 0x8b, 0x7e, 0x10, 0x6a, 0x00, 0xff, 0xe0,
     ]
 
-    /** The trampoline's GDT: null, 64-bit code, data */
+    /**
+     * The trampoline's GDT: null, then 64-bit code (selector 0x08), then data (selector 0x10), flat, ring 0 (Intel SDM,
+     * volume 3, segment descriptors).
+     */
     GDT :: u64.[0, 0x00af9a000000ffff, 0x00cf92000000ffff]
 
     // IA32_APIC_BASE and its x2APIC bit, and x2APIC's ICR
+    /** IA32_APIC_BASE's MSR number: the local APIC's base address and its enable bits. */
     APIC_BASE_MSR : u32 : 0x1b
+    /** IA32_APIC_BASE's EXTD bit, bit 10: the local APIC is in x2APIC mode. */
     X2APIC_ENABLED : u64 : 1 << 10
+    /** x2APIC's interrupt command register's MSR number, written whole, the destination in its high 32 bits. */
     X2APIC_ICR : u32 : 0x830
     // xAPIC's ICR, its low and high halves, and the delivery status bit
+    /** xAPIC's interrupt command register's low half, its offset in bytes from the local APIC's base. */
     ICR_LOW : u64 : 0x300
+    /** xAPIC's interrupt command register's high half, whose bits 31 to 24 are the destination APIC ID. */
     ICR_HIGH : u64 : 0x310
+    /** The ICR's delivery status bit, bit 12: the IPI hasn't been accepted yet. xAPIC only. */
     DELIVERY_PENDING : u32 : 1 << 12
+    /** An ICR command: INIT delivery, level assert, physical destination. */
     INIT_ASSERT : u32 : 0x4500
+    /** An ICR command: start-up delivery, level assert; its low byte is the trampoline's page number below 1 MiB. */
     STARTUP : u32 : 0x4600
 
     /** What starting the other CPUs needs, made before the boot services are left. */
     Starting :: struct {
+        /** The trampoline page's physical address, 4096-aligned and below 0xa0000, so a SIPI's vector can name it. */
         trampoline : u64,
+        /** How many TSC ticks a microsecond is, measured against the firmware's Stall; at least 1. */
         ticks_per_microsecond : u64,
     }
 
     /**
-     * Every CPU the firmware knows of, enabled, into the handoff, the boot CPU first, each other one with a stack; the
-     * trampoline's page below 1 MiB; and the TSC's speed, for the waits starting them takes. Null if there's no room
-     * for the trampoline; the boot CPU alone if the firmware has no MP services.
+     * Prepare to start the other CPUs: list them in the handoff, give each a stack, and write the trampoline.
+     *
+     * Every CPU the firmware's MP services know of and say is enabled goes into the handoff, the boot CPU first, each
+     * other one with a stack of BOOT_STACK_SIZE bytes in loader-data pages; the boot CPU alone if the firmware has no
+     * MP services. The trampoline's page goes below 1 MiB, and the TSC's speed is measured, for the waits starting them
+     * takes, over a 10 ms Stall. Boot services have to be running.
+     *
+     * @param handoff The handoff, whose cpus and cpu_count are written; CPUs past what cpus holds are left out.
+     * @param tables The page tables the trampoline loads, its root below 4 GiB, mapping the trampoline and the handoff
+     *     where they are and the stacks in the direct map.
+     * @param direct_map_offset The direct map's offset, which each stack_top is a virtual address in.
+     * @return What start_cpus needs; null if boot services are gone, a stack couldn't be had, or there's no room for
+     *     the trampoline below 1 MiB.
      */
     prepare_cpus :: fn(handoff: ptr[mut boot_protocol.Handoff], tables: ptr[PageTables], direct_map_offset: u64) -> Starting? {
         page_table :: tables.root
@@ -138,9 +172,16 @@ import boot_protocol from "../../boot_protocol"
     }
 
     /**
-     * Every CPU but the boot CPU started, after the boot services are left, one at a time: its mailbox's address in
-     * the trampoline, INIT, 10 ms, a SIPI, 200 µs, another, then up to 100 ms for it to say it's in long mode. One that
-     * doesn't is left out of the handoff.
+     * Start every CPU but the boot CPU, after the boot services are left, one at a time.
+     *
+     * For each: its mailbox's address in the trampoline, INIT, 10 ms, a SIPI, 200 µs, another, then up to 100 ms for it
+     * to say it's in long mode. One that doesn't is left out of the handoff, the CPUs after it moved down. Each started
+     * CPU waits on its mailbox, its boot_protocol.Cpu in the handoff, for a goto_address. Runs with interrupts off on
+     * the boot CPU, with the firmware's page tables still loaded.
+     *
+     * @param handoff The handoff, whose cpus are those prepare_cpus listed; cpu_count becomes how many are running,
+     *     the boot CPU included.
+     * @param starting What prepare_cpus made.
      */
     start_cpus :: fn(handoff: ptr[mut boot_protocol.Handoff], starting: Starting) {
         started := cast[u64](1)
@@ -177,11 +218,25 @@ import boot_protocol from "../../boot_protocol"
         handoff.cpu_count = started
     }
 
+    /**
+     * Load a 32-bit word that another CPU writes, without the compiler keeping or merging it.
+     *
+     * @param address The word's address, identity-mapped.
+     * @return The word as it is in memory now.
+     */
     intrinsics_load :: fn(address: ptr[u32]) -> u32 {
         return intrinsics.volatile_load_u32(address)
     }
 
-    /** An IPI to the CPU with apic_id, through the local APIC, x2APIC's or xAPIC's, as the firmware left it. */
+    /**
+     * Send an IPI to a CPU through the boot CPU's local APIC, x2APIC's or xAPIC's, as the firmware left it.
+     *
+     * With xAPIC it waits, up to 100000 reads, for the IPI to be accepted; with x2APIC it doesn't wait. The local
+     * APIC's registers have to be identity-mapped.
+     *
+     * @param apic_id The destination CPU's local APIC ID; in xAPIC mode only its low 8 bits count.
+     * @param command The ICR's low 32 bits: INIT_ASSERT, or STARTUP with the trampoline's page number.
+     */
     send_ipi :: fn(apic_id: u64, command: u32) {
         base :: x86_64.rdmsr(APIC_BASE_MSR)
         if base & X2APIC_ENABLED != 0 {
@@ -198,6 +253,12 @@ import boot_protocol from "../../boot_protocol"
         }
     }
 
+    /**
+     * Wait by spinning on the TSC.
+     *
+     * @param starting What prepare_cpus made, with the TSC's speed.
+     * @param microseconds How long to wait, in microseconds, as near as the measured speed allows.
+     */
     wait_microseconds :: fn(starting: Starting, microseconds: u64) {
         until :: x86_64.rdtsc() + microseconds * starting.ticks_per_microsecond
         loop {
@@ -212,16 +273,23 @@ import boot_protocol from "../../boot_protocol"
     import aarch64 from "base/intrinsics"
     import devicetree from "../../devicetree"
 
-    /**
+    /*
      * AArch64's: the CPUs from the device tree's cpu nodes, each started by PSCI's CPU_ON, through the conduit its psci
-     * node names, at the trampoline, its mailbox's address in x0, at EL1 with its MMU off. The trampoline loads the boot
-     * CPU's memory attributes, translation control, tables and system control, turning its MMU on, takes its stack, and
-     * waits on its mailbox as x86-64's does. Its words are its instructions, then the registers' values from DATA_AT.
+     * node names, at the trampoline, its mailbox's address in x0, at EL1 with its MMU off. The trampoline loads the
+     * boot CPU's memory attributes, translation control, tables and system control, turning its MMU on, takes its
+     * stack, and waits on its mailbox as x86-64's does. Its words are its instructions, then the registers' values
+     * from DATA_AT.
+     */
+
+    /**
+     * The offset in bytes in the trampoline's page of the values it loads, 8 bytes each: MAIR_EL1, TCR_EL1, TTBR0_EL1,
+     * TTBR1_EL1 and SCTLR_EL1.
      */
     DATA_AT : u64 : 0x80
-    /** CPU_ON, SMC64's */
+    /** PSCI's CPU_ON function ID, its SMC64 one (Arm Power State Coordination Interface specification). */
     PSCI_CPU_ON : u64 : 0xc4000003
 
+    /** The AArch64 trampoline's instructions, copied to the start of its page, with its data at DATA_AT. */
     TRAMPOLINE :: u32.[
         0x10000409, // adr x9, data
         0xf9400121, // ldr x1, [x9]
@@ -252,12 +320,29 @@ import boot_protocol from "../../boot_protocol"
         0xd61f00e0, // br x7
     ]
 
+    /** What starting the other CPUs needs, made before the boot services are left. */
     Starting :: struct {
+        /** The trampoline page's physical address, 4096-aligned, where CPU_ON starts each CPU. */
         trampoline : u64,
-        /** PSCI's conduit: SMC, or HVC */
+        /** PSCI's conduit: true for SMC, false for HVC, as the psci node's method says, HVC without one. */
         smc : bool,
     }
 
+    /**
+     * Prepare to start the other CPUs: list them in the handoff, give each a stack, and write the trampoline.
+     *
+     * The CPUs come from the device tree's cpu nodes, and PSCI's conduit from its psci node, "arm,psci-1.0" or
+     * "arm,psci-0.2"; without a device tree or a psci node, the boot CPU alone is listed. The trampoline's data holds
+     * the boot CPU's SCTLR_EL1 as it is now, with the bootloader's MAIR, TCR and roots. Boot services have to be
+     * running.
+     *
+     * @param handoff The handoff, whose cpus and cpu_count are written, each CPU but the boot CPU with a stack of
+     *     BOOT_STACK_SIZE bytes; CPUs past what cpus holds are left out.
+     * @param tables The page tables the trampoline loads, mapping the trampoline and the handoff where they are and
+     *     the stacks in the direct map.
+     * @param direct_map_offset The direct map's offset, which each stack_top is a virtual address in.
+     * @return What start_cpus needs; null if a page for the trampoline or a stack couldn't be had.
+     */
     prepare_cpus :: fn(handoff: ptr[mut boot_protocol.Handoff], tables: ptr[PageTables], direct_map_offset: u64) -> Starting? {
         handoff.cpu_count = 1
         handoff.cpus[0] = boot_protocol.Cpu.{hardware_id = boot_cpu_id()}
@@ -309,8 +394,15 @@ import boot_protocol from "../../boot_protocol"
     }
 
     /**
-     * Every CPU but the boot CPU started, after the boot services are left: what it reads with its MMU off cleaned to
-     * the point of coherency first, then CPU_ON. One PSCI won't start is left out of the handoff.
+     * Start every CPU but the boot CPU, after the boot services are left, by PSCI's CPU_ON.
+     *
+     * What each reads with its MMU off, the trampoline and its mailbox, is cleaned to the point of coherency first.
+     * One PSCI won't start is left out of the handoff, the CPUs after it moved down. CPU_ON returns once the CPU is
+     * started, not once it's waiting on its mailbox. Runs on the boot CPU, interrupts masked.
+     *
+     * @param handoff The handoff, whose cpus are those prepare_cpus listed; cpu_count becomes how many PSCI started,
+     *     the boot CPU included.
+     * @param starting What prepare_cpus made.
      */
     start_cpus :: fn(handoff: ptr[mut boot_protocol.Handoff], starting: Starting) {
         clean(starting.trampoline, 4096)
@@ -337,7 +429,11 @@ import boot_protocol from "../../boot_protocol"
     }
 
     /**
-     * size bytes at address cleaned to the point of coherency, a 64-byte line at a time, for a CPU whose caches are off.
+     * Clean memory to the point of coherency, a 64-byte line at a time, for a CPU whose caches are off, then wait for
+     * it with a full-system DSB.
+     *
+     * @param address The memory's address, identity-mapped; it needn't be line-aligned.
+     * @param size How many bytes, each line they touch cleaned.
      */
     clean :: fn(address: u64, size: u64) {
         line := address & ~cast[u64](63)

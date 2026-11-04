@@ -8,7 +8,14 @@ package safe_text_test
 import unicode from "std"
 import safe_text from ".."
 
-/** The first cluster of text, shown, and whether it's expected, in columns too. */
+/**
+ * Show the first cluster of a text, and check it shows as expected.
+ *
+ * @param text The text; only its first grapheme cluster is shown.
+ * @param expected The bytes it should show as.
+ * @param columns The columns it should take.
+ * @return True if the cluster shows as expected and takes that many columns, false otherwise.
+ */
 shows :: fn(text: u8[], expected: string, columns: usize) -> bool {
     end :: unicode.grapheme_end(text, 0)
     shown := safe_text.Shown.{}
@@ -19,6 +26,15 @@ shows :: fn(text: u8[], expected: string, columns: usize) -> bool {
     return string_of(&shown.bytes[0], shown.count) == expected && shown.columns == columns
 }
 
+/**
+ * Check safe_text's substitutes.
+ *
+ * @return 0 if every check passed; otherwise the first that failed: 1 if printable text, wide text included, isn't
+ *     shown as it is; 2 if a C0 control or DEL isn't its Control Picture; 3 if a C1 control, 4 RIGHT-TO-LEFT
+ *     OVERRIDE, 5 a ZERO WIDTH SPACE, or 6 a ZWJ after a letter isn't written out; 7 if an emoji ZWJ sequence or a
+ *     variation selector isn't kept; 8 if a byte that isn't UTF-8 isn't U+FFFD; 9 if a tag character isn't written
+ *     out.
+ */
 main :: fn() -> int {
     if !shows(string_bytes("a"), "a", 1) || !shows(string_bytes("中"), "中", 2) {
         return 1

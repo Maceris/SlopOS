@@ -23,17 +23,25 @@ import arch_interface from "../arch_interface"
  * a shootdown starts with no other lock held.
  */
 
+/** The kernel's one TLB shootdown at a time: the batch being flushed and who hasn't flushed it yet. */
 Shootdown :: struct {
-    // 0, or 1 while a shootdown runs.
+    /** 1 while a shootdown runs, 0 otherwise; taken with an atomic compare-exchange, so one runs at a time. */
     running : u32,
+    /** What the running shootdown flushes, copied here so every CPU can read it until pending reaches 0. */
     batch : arch_interface.TlbBatch,
-    /** CPUs that haven't flushed this batch yet. */
+    /** How many other CPUs haven't flushed this batch yet; each decrements it atomically as it does. */
     pending : u32,
 }
 
 /**
- * Flush batch from every online CPU's TLB, this one's included, and return once they all have.
- * Called with no other lock held.
+ * Flush a batch from every online CPU's TLB, this one's included, and return once they all have.
+ *
+ * Waits for any other shootdown to finish first, flushing for it meanwhile, so two CPUs starting shootdowns at once
+ * don't wait on each other. Each other online CPU is sent a TlbFlush IPI and spun on until it has flushed. Called with
+ * no lock held, since a CPU holding one another CPU waits for, with interrupts off, would never take the IPI.
+ *
+ * @param kernel The kernel, whose shootdown state and online CPUs are used.
+ * @param batch The TLB entries to flush, copied before the IPIs go, so it needn't outlive the call.
  */
 shootdown :: fn(kernel: ptr[mut Kernel], batch: ptr[arch_interface.TlbBatch]) {
     cpu :: per_cpu()
@@ -69,14 +77,23 @@ shootdown :: fn(kernel: ptr[mut Kernel], batch: ptr[arch_interface.TlbBatch]) {
     intrinsics.atomic_store_u32_release(&kernel.shootdown.running, 0)
 }
 
+/**
+ * Try to become the running shootdown.
+ *
+ * @param shootdown The kernel's shootdown state.
+ * @return True if none was running and this CPU's now is, with acquire ordering; false if another is running.
+ */
 start_shootdown :: fn(shootdown: ptr[mut Shootdown]) -> bool {
     _, started :: intrinsics.interlocked_compare_exchange_u32_acquire(&shootdown.running, 1, 0)
     return started
 }
 
 /**
- * Flush this CPU's TLB for the shootdown waiting on it, if there is one: at a TlbFlush IPI, and while
- * waiting to start a shootdown.
+ * Flush this CPU's TLB for the shootdown waiting on it, if there is one, and tell the shootdown's CPU it has.
+ *
+ * Called at a TlbFlush IPI, and while waiting to start a shootdown. Does nothing if no flush was requested of this CPU.
+ *
+ * @param cpu The calling CPU's PerCpu, whose flush_requested is cleared once it has flushed.
  */
 flush_for_shootdown :: fn(cpu: ptr[mut PerCpu]) {
     if intrinsics.atomic_load_u32_acquire(&cpu.flush_requested) == 0 {

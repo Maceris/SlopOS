@@ -14,14 +14,36 @@ import storage from "../../protocols/storage"
  * and a snapshot of the encrypted volume, opened with its passphrase. Checks from 80.
  */
 
+/** The system volume's name in its container. */
 SYSTEM_VOLUME :: "system"
+/** The name of the system volume's snapshot the check takes. */
 SNAPSHOT :: "before"
+/** The name of the clone the check makes of the snapshot, which quota_check.hsc gives a quota. */
 CLONE :: "trial"
+/** The file written to the system volume after the snapshot, which the snapshot hasn't. */
 AFTER_SNAPSHOT_FILE :: "Written after the snapshot.txt"
+/** What AFTER_SNAPSHOT_FILE holds. */
 AFTER_SNAPSHOT_TEXT :: "Written to the system volume after its snapshot was taken"
+/** The file written to the clone, which the system volume hasn't. */
 CLONE_FILE :: "Written to the clone.txt"
+/** What CLONE_FILE holds. */
 CLONE_TEXT :: "Written to a clone of the system volume's snapshot"
 
+/**
+ * Check snapshots and clones through the storage manager, then quotas and volumes made.
+ *
+ * @param to The debug log, passed on.
+ * @param manager The connection to the storage manager.
+ * @param port A port bound to manager.
+ * @param system The system volume's root.
+ * @param container The container's index among the storage manager's partitions.
+ * @return 0 if all of it held; 80 if the buffer or a port couldn't be made, 81 if the snapshot couldn't be taken, 82
+ *     if the file after it couldn't be written, 83 to 85 if the snapshot couldn't be opened read-only, didn't read the
+ *     module, or had the file written after it, 87 and 88 if it wasn't first among the volume's snapshots, 89 to 93 if
+ *     the clone couldn't be made, opened, read, or written apart from the volume, 94 if deleting the snapshot wasn't
+ *     refused as InUse, and 95 and 96 if a snapshot of the encrypted volume couldn't be taken or read; and
+ *     check_quotas' numbers.
+ */
 check_snapshots :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.Port, system: os.Channel[dir.Dir], container: u32) -> int {
     buffer := new_buffer() or_return 80
     budget :: slop_os.startup_block().budget
@@ -129,12 +151,26 @@ check_snapshots :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop
     return check_quotas(to, manager, port, clone, container)
 }
 
+/** What volume_request asks of a snapshot. */
 SnapshotAction :: enum {
+    /** Take it, as the volume is now. */
     Take,
+    /** Delete it. */
     Delete,
 }
 
-// A snapshot of a volume taken or deleted.
+/**
+ * Ask the storage manager to take or delete a snapshot of a volume, at time 1.
+ *
+ * @param manager The connection to the storage manager.
+ * @param port A port bound to manager.
+ * @param container The container's index among the storage manager's partitions.
+ * @param volume The volume's name.
+ * @param snapshot The snapshot's name.
+ * @param action Whether it's taken or deleted.
+ * @return The storage manager's answer: Done, InUse for a snapshot a clone keeps, or another refusal; Unsupported if
+ *     it couldn't be asked.
+ */
 volume_request :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, volume: string, snapshot: string,
     action: SnapshotAction) -> storage.Response {
 
@@ -146,7 +182,15 @@ volume_request :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u3
 }
 
 /**
- * A container's volume, or "volume@snapshot", opened, with a passphrase if it's encrypted, or without one, if it's empty.
+ * Ask the storage manager to open a container's volume, or a snapshot of one.
+ *
+ * @param manager The connection to the storage manager.
+ * @param port A port bound to manager.
+ * @param container The container's index among the storage manager's partitions.
+ * @param name The volume's name, or "volume@snapshot" for a snapshot.
+ * @param passphrase The passphrase, for an encrypted volume, or "" for none.
+ * @return The storage manager's answer: OpenedFiles with a volume's root, or OpenedReadOnlyFiles with a snapshot's,
+ *     which the caller owns, or a refusal; Unsupported if it couldn't be asked.
  */
 open_named :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, name: string, passphrase: string) -> storage.Response {
     out := os.Outgoing.{}

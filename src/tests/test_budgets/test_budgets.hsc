@@ -1,20 +1,20 @@
 /**
  * test_budgets (decisions/0099, from the kernel's test of 0050): on 1 CPU, a pair of threads sharing a CPU budget of
- * 30 ms every 100 ms at priority 10, against a thread on a budget of 60 ms every 100 ms at priority 5, each counting as fast
- * as it can. The program launches two copies of itself for them, since a budget is a process's: P, whose two threads
- * are the pair, and Q, whose one is the rival; it gives each its budget, and a page they count in. Then it sleeps,
- * and reads the counts.
+ * 30 ms every 100 ms at priority 10, against a thread on a budget of 60 ms every 100 ms at priority 5, each counting
+ * as fast as it can. The program launches two copies of itself for them, since a budget is a process's: P, whose two
+ * threads are the pair, and Q, whose one is the rival; it gives each its budget, and a page they count in. Then it
+ * sleeps, and reads the counts.
  *
  * The pair runs its 30 ms at priority 10, above the rival, then the rival its 60 ms, then all three share what's left,
  * round robin, until the pair's budget comes back at the next period: so the pair counts about a third of the counts,
- * between 20% and 55% allowing for ticks, since budgets are
- * charged at ticks; and the two of it about alike, as one that waited while their budget was spent is moved up when it
- * comes back (scheduler.hsc, relevel), rather than waiting behind the other.
+ * between 20% and 55% allowing for ticks, since budgets are charged at ticks; and the two of it about alike, as one
+ * that waited while their budget was spent is moved up when it comes back (scheduler.hsc, relevel), rather than
+ * waiting behind the other.
  *
  * The counts stand for CPU time only if every counter counts at the same rate, so all three are threads started at
- * counter, running the same instructions at the same address, and each copy's own thread sleeps (decisions/0173): under
- * an emulator, how fast a loop runs depends on where it is, and a main thread calling counter could run a copy of it
- * inlined elsewhere.
+ * counter, running the same instructions at the same address, and each copy's own thread sleeps (decisions/0173):
+ * under an emulator, how fast a loop runs depends on where it is, and a main thread calling counter could run a copy
+ * of it inlined elsewhere.
  */
 package test_budgets
 
@@ -26,37 +26,76 @@ import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
+/** The test's name, which starts each line it logs. */
 NAME :: "test_budgets"
+/** A millisecond, in nanoseconds, for budgets' periods and times. */
 MILLISECOND : u64 : 1_000_000
+/** How long the copies count before the test reads the counts, in nanoseconds: 1 s, ten of the budgets' periods. */
 RUN_NANOSECONDS : u64 : 1_000_000_000
+/** Each copy's memory budget, in bytes: 4 MiB. */
 COPY_BUDGET : u64 : 4 << 20
+/** The size of the page the copies count in, in bytes. */
 PAGE : u64 : 4096
-// The counts' slots in the page: the pair's two, and the rival's
+/** The slot, a u64 of the page by index, the pair's first thread counts in. */
 SLOT_FIRST :: 0
+/** The slot the pair's second thread counts in. */
 SLOT_SECOND :: 1
+/** The slot the rival counts in. */
 SLOT_RIVAL :: 2
-// What each copy is told, in its first message
+/** What P is told in its first message: start the pair's two threads. */
 ROLE_PAIR : u64 : 1
+/** What Q is told in its first message: start the rival's one thread. */
 ROLE_RIVAL : u64 : 2
 
+/** What a copy is launched with, as main takes it: the same entry, a copy's grants. */
 CopyGrants :: struct {
+    /** A copy of the test's debug log, writable. */
     log : slop_os.DebugLog,
+    /** Not given. */
     platform : slop_os.Platform?,
+    /** The page to count in, readable and writable; the copy's entry takes it in test_device's place. */
     test_device : slop_os.Memory?,
+    /** Not given. */
     firmware : slop_os.Memory?,
+    /** Not given. */
     manager : os.Channel[process_manager.ProcessManager]?,
+    /** Not given. */
     program : slop_os.Memory?,
+    /** The copy's end of a channel to the test, whose first message says its role. */
     peer : slop_os.Channel?,
+    /** Not given: the copy's CPU budget is bound by its launch instead. */
     cpu_budget : slop_os.CpuBudget?,
 }
 
-/** Counts in its slot of the page for good. */
+/**
+ * Count in a slot of the page, for good, as fast as the thread's budget lets it.
+ *
+ * @param slot The slot, a u64 in the shared page, which only this thread writes; it wraps after 2^64 counts.
+ */
 counter #calling_convention(.c) #no_context :: fn(slot: ptr[mut u64]) #never_returns {
     loop {
         intrinsics.volatile_store_u64(slot, intrinsics.volatile_load_u64(slot) + 1)
     }
 }
 
+/**
+ * Check that a CPU budget's threads run its time at its priority, and share it alike; or, run as a copy, count.
+ *
+ * @param log The debug log, writable, where the test says what it found and which check failed.
+ * @param platform Not used.
+ * @param test_device For a copy, the page it counts in; not used by the test itself. A copy without it ends with 1.
+ * @param firmware Not used.
+ * @param manager The process manager, which launches the copies; without it the test ends with 101.
+ * @param program The test's own module, which the copies are launched from; without it the test ends with 102.
+ * @param peer Given only to a copy, by the test that launched it: the channel its role comes on. With it, this is a
+ *     copy, which counts until it's killed.
+ * @param cpu_budget The root CPU budget, split for the copies' budgets; without it the test ends with 100.
+ * @return 0 if both checks passed; 1 if the pair's share of the counts was outside 20 to 55 percent; 2 if the first
+ *     of the pair's share of theirs was outside 35 to 65 percent. 103 to 110 if setting up failed: 103 the manager's
+ *     port, 104 the memory budget, 105 the pair's CPU budget, 106 the rival's, 107 the page, 108 launching P, 109
+ *     launching Q, 110 the port it sleeps on. A copy ends only if it can't start counting: 2 if its port, 3 receiving
+ *     its role, 4 mapping the page, 5 its threads' memory budget, 6 starting a thread, 7 the port it sleeps on failed.
+ */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     match peer {
@@ -103,7 +142,20 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     return 0
 }
 
-// A copy launched on budget, given the page to count in and told its role: its process.
+/**
+ * Launch a copy of the test on a CPU budget, given the page to count in, and tell it its role.
+ *
+ * @param log The test's debug log, duplicated for the copy.
+ * @param manager The process manager connection the copy is launched through.
+ * @param manager_port The test's port for the manager connection.
+ * @param program The test's own module, which the copy runs.
+ * @param counts The page the copies count in, duplicated for the copy, readable and writable.
+ * @param budget The CPU budget the copy's threads run on, which stays the test's; the copy is given a handle that
+ *     can only bind it.
+ * @param role ROLE_PAIR or ROLE_RIVAL, sent on the copy's channel.
+ * @return An owning handle to the copy's process, which the test kills; or null if any step failed, leaving behind
+ *     whatever it had made.
+ */
 launch_copy :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessManager], manager_port: slop_os.Port,
     program: slop_os.Memory, counts: slop_os.Memory, budget: slop_os.CpuBudget, role: u64) -> slop_os.Process? {
     block :: slop_os.startup_block()
@@ -126,7 +178,16 @@ launch_copy :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.Pro
     return launched.process
 }
 
-/** P or Q, as told in its first message: the pair's two threads, or the rival's one, counting in the page given. */
+/**
+ * Run as P or Q, as told in the first message on peer: start the pair's two threads, or the rival's one, counting in
+ * the page given, then sleep until killed.
+ *
+ * @param peer The copy's end of the channel to the test.
+ * @param counts The page to count in.
+ * @return 2 if no port could be made for peer, 3 if the role couldn't be received, 4 if the page couldn't be mapped,
+ *     5 if the threads' memory budget couldn't be made, 6 if a thread couldn't be started, 7 if the port to sleep on
+ *     couldn't be made; it doesn't return otherwise.
+ */
 run_copy :: fn(peer: slop_os.Channel, counts: slop_os.Memory) -> int {
     block :: slop_os.startup_block()
     port :: os.port_for(block.budget, peer) or_return 2

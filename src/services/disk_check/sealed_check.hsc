@@ -16,18 +16,41 @@ import storage from "../../protocols/storage"
  * among them. Checks from 60.
  */
 
+/** The encrypted volume's name in the system volume's container. */
 SEALED_VOLUME :: "sealed"
+/** The passphrase the image builder sealed it with. */
 SEALED_PASSPHRASE :: "slopos test passphrase"
-// What the image builder put in it (image_builder.hsc), in capitals, and what the check writes, in capitals
+/** The file the image builder put in the encrypted volume (image_builder.hsc). */
 SEALED_FILE :: "sealed.txt"
+/** What SEALED_FILE holds, in capitals; written here in lowercase, so these bytes aren't the file's on the disk. */
 SEALED_TEXT :: "only its passphrase opens this"
+/** The file the check writes before a new key generation. */
 BEFORE_FILE :: "before.txt"
+/** What BEFORE_FILE holds, in capitals. */
 BEFORE_TEXT :: "Written to the sealed volume with its first key generation"
+/** The file the check writes after a new key generation. */
 AFTER_FILE :: "after.txt"
+/** What AFTER_FILE holds, in capitals. */
 AFTER_TEXT :: "Written to the sealed volume with its second key generation"
-/** A SlopOS container's partition type, "SLOPOS CONTAINER" in ASCII */
+/** A SlopOS container's partition type, "SLOPOS CONTAINER" in ASCII. */
 CONTAINER_TYPE :: u8.[0x53, 0x4c, 0x4f, 0x50, 0x4f, 0x53, 0x20, 0x43, 0x4f, 0x4e, 0x54, 0x41, 0x49, 0x4e, 0x45, 0x52]
 
+/**
+ * Check the encrypted volume in the system volume's container, through the storage manager, then links, snapshots,
+ * quotas and volumes made, in turn.
+ *
+ * @param to The debug log, passed on.
+ * @param manager The connection to the storage manager.
+ * @param port A port bound to manager.
+ * @param system The system volume's root.
+ * @return 0 if all of it held; 60 if no container was found among the first 64 partitions, 61 and 62 if it wasn't
+ *     refused as Locked without a passphrase or as WrongKey with the wrong one, 63 if it couldn't be opened with its
+ *     own, 64 if the buffer or a port couldn't be made, 65 if the image builder's file didn't read as it should, 66 if
+ *     the check's file couldn't be written or read back, 67 and 68 if a new key generation, the second, wasn't
+ *     started, 69 and 70 if writing after it, or reading all three, failed, and 71 and 72 if, served, it wasn't
+ *     refused the wrong passphrase or opened again with its own; and check_links', then check_snapshots', numbers.
+ *     60 to 72 are other checks' numbers too, so they say which check failed only with the log.
+ */
 check_sealed :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.Port, system: os.Channel[dir.Dir]) -> int {
     container := cast[u32](0xffffffff)
     for index in 0..<cast[u32](64) {
@@ -111,7 +134,13 @@ check_sealed :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os
     return check_snapshots(to, manager, port, system, container)
 }
 
-/** text in capitals, in into. */
+/**
+ * Make text in capitals, ASCII letters only.
+ *
+ * @param text The text to copy, only read; bytes other than a to z are copied as they are.
+ * @param into Where it's made; what doesn't fit is cut off.
+ * @return A view of into's bytes, good while into is unchanged; "" for nothing.
+ */
 capitals :: fn(text: string, into: mut u8[]) -> string {
     count : usize = 0
     for character, i in text {
@@ -127,7 +156,16 @@ capitals :: fn(text: string, into: mut u8[]) -> string {
     return string_of(&into[0], count)
 }
 
-/** The sealed volume, opened with a passphrase, or without one, if it's empty. */
+/**
+ * Ask the storage manager to open the encrypted volume, SEALED_VOLUME.
+ *
+ * @param manager The connection to the storage manager.
+ * @param port A port bound to manager.
+ * @param container The container's index among the storage manager's partitions.
+ * @param passphrase The passphrase, or "" for none.
+ * @return The storage manager's answer: OpenedFiles with its root, which the caller owns, Locked without a
+ *     passphrase, WrongKey with the wrong one, or another refusal; Unsupported if it couldn't be asked.
+ */
 open_volume :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, passphrase: string) -> storage.Response {
     out := os.Outgoing.{}
     opening :: os.begin[storage.Request](&out)
@@ -136,7 +174,15 @@ open_volume :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, 
     return ask_storage(manager, port, &out)
 }
 
-/** One request to the storage manager, sent from out, and its answer, waited for. */
+/**
+ * Send one request to the storage manager, and wait for its answer.
+ *
+ * @param end The connection to the storage manager.
+ * @param port A port bound to end.
+ * @param out The request; its handles are moved out when it's sent.
+ * @return The answer, a copy, whose handles the caller owns; its Relatives point into a message that's gone, so they
+ *     aren't read. Unsupported if it couldn't be sent or the connection failed.
+ */
 ask_storage :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing]) -> storage.Response {
     if storage.send_request(end, port, out) is_some {
         return .Unsupported

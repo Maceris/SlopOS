@@ -11,8 +11,15 @@ import text_buffer from "std"
 import elf_loader from ".."
 import hosted_faults from "../../robustness/hosted"
 
+/** The address the test relocates hello.elf to run at: a page-aligned user address, never actually run there. */
 BASE : u64 : 0x7000_0000_0000
 
+/**
+ * Load hello.elf, relocate it, and check the result, then check that broken copies of it are refused.
+ *
+ * @return 0 if every check passed, or the number of the first that failed: 1 without the folder argument, 2 if
+ *     the file can't be read, 3 to 10 for reading, loading and relocating it, and 20 to 28 from refusals.
+ */
 checks :: fn() -> int {
     arguments :: os.arguments()
     if arguments.count < 2 {
@@ -56,7 +63,12 @@ checks :: fn() -> int {
     return refusals(file, executable)
 }
 
-/** Whether a result is Ok. */
+/**
+ * Tell whether loading or relocating succeeded.
+ *
+ * @param result What load or relocate returned.
+ * @return True for Ok, false for any error.
+ */
 done :: fn(result: Result[void, elf_loader.LoadError]) -> bool {
     return match result {
         case Ok => true
@@ -64,7 +76,12 @@ done :: fn(result: Result[void, elf_loader.LoadError]) -> bool {
     }
 }
 
-/** Whether file reads as an executable. */
+/**
+ * Tell whether a file reads as an executable.
+ *
+ * @param file The bytes to read; only read.
+ * @return True if elf_loader.read accepts them, false for any error.
+ */
 read_works :: fn(file: u8[]) -> bool {
     return match elf_loader.read(file) {
         case Ok => true
@@ -72,7 +89,12 @@ read_works :: fn(file: u8[]) -> bool {
     }
 }
 
-/** What a result refused with, or NotElf for one that wasn't refused, which no check here expects. */
+/**
+ * Give the error a load or relocate result refused with.
+ *
+ * @param result What load or relocate returned.
+ * @return The error, or ImageTooSmall for a result that wasn't refused at all.
+ */
 refused :: fn(result: Result[void, elf_loader.LoadError]) -> elf_loader.LoadError {
     return match result {
         case Error(error) => error
@@ -80,7 +102,17 @@ refused :: fn(result: Result[void, elf_loader.LoadError]) -> elf_loader.LoadErro
     }
 }
 
-/** read's error for a copy of file, changed at offset to value, of size bytes. */
+/**
+ * Read a copy of a file with a few bytes changed, giving the error read refuses it with.
+ *
+ * The copy is made with the heap's allocator and freed before it returns; file isn't changed.
+ *
+ * @param file The executable's bytes to copy.
+ * @param offset Where in the copy the change goes, in bytes; bytes past the copy's end aren't written.
+ * @param size How many bytes are changed, 0 to 8.
+ * @param value What's written there, little-endian, its low size bytes.
+ * @return The error read refuses the copy with, or null if read accepts it or the copy couldn't be allocated.
+ */
 changed :: fn(file: u8[], offset: u64, size: u64, value: u64) -> elf_loader.LoadError? {
     copy, error :: runtime.new_array(u8, file.count)
     if error != null {
@@ -104,7 +136,13 @@ changed :: fn(file: u8[], offset: u64, size: u64, value: u64) -> elf_loader.Load
     }
 }
 
-/** Copies of file made wrong, each refused for what's wrong with it. */
+/**
+ * Check that copies of an executable made wrong are each refused for what's wrong with them.
+ *
+ * @param file The bytes of hello.elf, which read accepts.
+ * @param executable What read gave for file, for where its relocations are and its size.
+ * @return 0 if every copy was refused as it should be, or the number of the first check that failed, 20 to 28.
+ */
 refusals :: fn(file: u8[], executable: elf_loader.Executable) -> int {
     if changed(file, 0, 1, 0) != .NotElf {
         return 20
@@ -151,7 +189,11 @@ refusals :: fn(file: u8[], executable: elf_loader.Executable) -> int {
     return 0
 }
 
-/** The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness) */
+/**
+ * Run the checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness).
+ *
+ * @return 0 if every check passed, or the number of the first that failed, as checks returns it.
+ */
 main :: fn() -> int {
     return hosted_faults.run(checks)
 }

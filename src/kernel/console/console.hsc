@@ -9,35 +9,61 @@ import psf2 from "../../psf2"
  * holding its console lock.
  */
 Console :: struct {
-    // The framebuffer's first pixel, in the direct map.
+    /** The virtual address of the framebuffer's first pixel, in the direct map. */
     pixels : u64,
+    /** The framebuffer's visible width, in pixels. */
     width : u32,
+    /** The framebuffer's visible height, in pixels. */
     height : u32,
+    /** Bytes from the start of one pixel row to the start of the next. */
     pitch : u32,
+    /** The bytes one pixel takes: 2, 3 or 4. */
     bytes_per_pixel : u32,
+    /** The text's pixel value, in the framebuffer's layout: light grey. */
     foreground : u32,
+    /** The background's pixel value, in the framebuffer's layout: black. */
     background : u32,
+    /** The built-in font (psf2.FONT_DATA), parsed; its views are of the kernel image, so they stay good. */
     font : psf2.Font,
+    /** How many character cells fit across: the width over the font's width, at least 1. */
     columns : u32,
+    /** How many lines of cells fit down: the height over the font's height, at least 1. */
     rows : u32,
+    /** The cell the next character goes in, from 0; it may equal columns, when the next one starts a new line. */
     column : u32,
+    /** The line being written, from 0 to rows - 1. */
     row : u32,
 }
 
+/** Why a console couldn't be made on a framebuffer. */
 ConsoleError :: union {
+    /** The built-in font didn't parse, for the reason given. */
     Font(psf2.FontError),
     /** Pixels that aren't 2, 3 or 4 bytes, or a framebuffer too small for one character. */
     UnsupportedFramebuffer,
 }
 
 // Light grey on black, like a text-mode console.
+/** The text color's red, of 0 to 255. */
 FOREGROUND_RED : u32 : 0xaa
+/** The text color's green, of 0 to 255. */
 FOREGROUND_GREEN : u32 : 0xaa
+/** The text color's blue, of 0 to 255. */
 FOREGROUND_BLUE : u32 : 0xaa
 
 /**
- * A console on framebuffer, which is mapped at direct_map_offset plus its physical address,
- * cleared to black.
+ * Make a console on a framebuffer, cleared to black, its cursor at the top left.
+ *
+ * Every visible pixel is written, so the framebuffer has to be mapped writable at direct_map_offset plus its physical
+ * address, for pitch times height bytes, for as long as the console is used.
+ *
+ * @param framebuffer The framebuffer, as the boot information describes it; read only while this runs.
+ * @param direct_map_offset What's added to a physical address to reach it through the direct map.
+ * @return The console, which refers to the framebuffer's memory through the direct map, and to the font in the
+ *     kernel image.
+ * @error Font The built-in font didn't parse.
+ * @error UnsupportedFramebuffer Pixels that aren't 2, 3 or 4 bytes, or a framebuffer narrower or shorter than one
+ *     character; nothing is written to it.
  */
 make_console :: fn(framebuffer: ptr[boot_info.Framebuffer], direct_map_offset: u64) -> Result[Console, ConsoleError] {
     made : Console
@@ -67,13 +93,27 @@ make_console :: fn(framebuffer: ptr[boot_info.Framebuffer], direct_map_offset: u
 }
 
 /**
- * The pixel value of a color given as 8-bit channels, in the framebuffer's layout: each channel
- * keeps its highest bits, shifted to its place.
+ * Make the pixel value of a color, in the framebuffer's layout.
+ *
+ * @param framebuffer The framebuffer, whose channels say where each color's bits go.
+ * @param red The color's red, 0 to 255.
+ * @param green The color's green, 0 to 255.
+ * @param blue The color's blue, 0 to 255.
+ * @return The pixel's value, its bytes lowest first in memory: each channel's highest bits, as many as the
+ *     framebuffer has for it, shifted to its place.
  */
 pixel_value :: fn(framebuffer: ptr[boot_info.Framebuffer], red, green, blue: u32) -> u32 {
     return channel(framebuffer.red, red) | channel(framebuffer.green, green) | channel(framebuffer.blue, blue)
 }
 
+/**
+ * Place one 8-bit color in a pixel value.
+ *
+ * @param where Where the color's bits are in a pixel. With no bits, the color is left out; with 8 or more, all 8 go
+ *     in at the bottom of the channel's bits.
+ * @param value The color, 0 to 255.
+ * @return The color's bits, shifted to their place, with every other bit 0.
+ */
 channel :: fn(where: boot_info.ColorChannel, value: u32) -> u32 {
     if where.size == 0 {
         return 0
@@ -84,7 +124,15 @@ channel :: fn(where: boot_info.ColorChannel, value: u32) -> u32 {
     return (value >> (8 - cast[u32](where.size))) << cast[u32](where.shift)
 }
 
-/** Write UTF-8 text: a line feed starts a new line, a carriage return goes back to the line's start. */
+/**
+ * Write text at the cursor, wrapping at the right edge and scrolling at the bottom.
+ *
+ * A line feed starts a new line, and a carriage return goes back to the line's start; every other code point is
+ * drawn, as the font's replacement glyph if it has none. Not synchronized: the caller holds the kernel's console lock.
+ *
+ * @param console The console, whose cursor moves past the text.
+ * @param text UTF-8 text; a malformed sequence is drawn as U+FFFD, one byte at a time. Empty text draws U+FFFD.
+ */
 write :: fn(console: ptr[mut Console], text: string) {
     bytes :: bit_cast[u8[]](text)
     with {
@@ -110,6 +158,14 @@ write :: fn(console: ptr[mut Console], text: string) {
     while at < bytes.count
 }
 
+/**
+ * Find the glyph a code point is drawn with.
+ *
+ * @param font The console's parsed PSF font, whose views are of the built-in font data in the kernel image, so it
+ *     stays valid for the kernel's life.
+ * @param code_point The Unicode code point to draw, as decode_utf8 gives it; U+FFFD for a malformed sequence.
+ * @return Its glyph's index, or the font's replacement glyph when it has none.
+ */
 glyph_for :: fn(font: ptr[psf2.Font], code_point: u32) -> u16 {
     glyph :: psf2.glyph_index(font, code_point)
     if glyph == psf2.NO_GLYPH {
@@ -118,7 +174,11 @@ glyph_for :: fn(font: ptr[psf2.Font], code_point: u32) -> u16 {
     return glyph
 }
 
-/** Move to the next line's start, scrolling up a line from the bottom. */
+/**
+ * Move the cursor to the next line's start, scrolling everything up a line from the bottom.
+ *
+ * @param console The console, whose cursor moves.
+ */
 new_line :: fn(console: ptr[mut Console]) {
     console.column = 0
     if console.row + 1 < console.rows {
@@ -128,8 +188,12 @@ new_line :: fn(console: ptr[mut Console]) {
     scroll(console)
 }
 
-/*
- * Move every line up one, by copying the framebuffer's pixels, and clear the bottom line.
+/**
+ * Move every line of text up one, by copying the framebuffer's pixels, and clear the bottom line.
+ *
+ * Pixel rows below the last whole line of text are left alone.
+ *
+ * @param console The console; its cursor isn't moved.
  */
 //TODO(claude): scroll a copy in normal memory once there's a frame allocator (M2): reading the
 //framebuffer is slow, since it's mapped write-combining
@@ -140,7 +204,16 @@ scroll :: fn(console: ptr[mut Console]) {
     fill_rows(console, (console.rows - 1) * console.font.height, console.font.height)
 }
 
-/** Copy count bytes from source down to target, which is below it, 8 bytes at a time where they line up. */
+/**
+ * Copy bytes down in memory, 8 at a time while both addresses are 8-byte aligned, then a byte at a time.
+ *
+ * It copies forward, so overlapping ranges are safe only when target is below source. The first 8 bytes are copied
+ * whole before anything is checked, so count has to be at least 8, and both addresses are best 8-byte aligned.
+ *
+ * @param target The virtual address copied to, below source.
+ * @param source The virtual address copied from.
+ * @param count How many bytes to copy, at least 8.
+ */
 copy_bytes :: fn(target, source, count: u64) {
     done : u64 = 0
     loop {
@@ -155,7 +228,13 @@ copy_bytes :: fn(target, source, count: u64) {
     while done < count
 }
 
-/** Fill count pixel rows from first with the background. */
+/**
+ * Fill pixel rows with the background color, across the visible width.
+ *
+ * @param console The console, which isn't changed; its pixels are.
+ * @param first The first pixel row filled, from the top.
+ * @param count How many pixel rows are filled; first plus count can be at most the height.
+ */
 fill_rows :: fn(console: ptr[Console], first, count: u32) {
     for y in first..<first + count {
         row :: console.pixels + cast[u64](y) * cast[u64](console.pitch)
@@ -165,6 +244,14 @@ fill_rows :: fn(console: ptr[Console], first, count: u32) {
     }
 }
 
+/**
+ * Draw a glyph in a character cell, its lit pixels in the foreground and the rest in the background.
+ *
+ * @param console The console, which isn't changed; its pixels are.
+ * @param glyph The glyph's index in the console's font; one the font doesn't have is drawn as background.
+ * @param column The cell's column, below the console's columns.
+ * @param row The cell's row, below the console's rows.
+ */
 draw_glyph :: fn(console: ptr[Console], glyph: u16, column, row: u32) {
     rows :: psf2.glyph_rows(&console.font, glyph)
     left :: column * console.font.width
@@ -185,7 +272,13 @@ draw_glyph :: fn(console: ptr[Console], glyph: u16, column, row: u32) {
     }
 }
 
-/** Write a pixel's bytes, lowest first. */
+/**
+ * Write a pixel's bytes, lowest first: one 32-bit store for 4-byte pixels, otherwise byte by byte.
+ *
+ * @param console The console, for its bytes per pixel.
+ * @param address The pixel's virtual address, in the direct map.
+ * @param value The pixel's value, as pixel_value makes it; bits past the pixel's bytes are dropped.
+ */
 put_pixel :: fn(console: ptr[Console], address: u64, value: u32) {
     if console.bytes_per_pixel == 4 {
         cast[ptr[mut u32]](address)^ = value

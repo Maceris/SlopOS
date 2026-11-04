@@ -14,18 +14,36 @@ import slopfs from ".."
  * default. Checks from 600.
  */
 
+/** The size of the fuzzer's disk, in blocks: 4 MiB. */
 FUZZ_BLOCKS : u64 : 1024
+/** How many rounds of damage the fuzzer runs unless SLOPOS_FUZZ_ROUNDS asks for another number. */
 FUZZ_ROUNDS :: 600
 
 /** What the rounds came to, for the log. */
 Survived :: struct {
+    /** How many rounds ran. */
     rounds : u64,
+    /** How many images weren't mounted. */
     refused : u64,
+    /** How many were mounted. */
     mounted : u64,
+    /** How many of those checked out whole. */
     verified : u64,
+    /** How many of those took a commit after being used. */
     committed : u64,
 }
 
+/**
+ * Check that an image damaged in many ways can be mounted and used as far as it goes without crashing or hanging.
+ *
+ * A volume of files and directories is made by the crash test's workload, then each round damages a copy one of
+ * three ways in turn (bytes flipped anywhere, a block copied over another or zeroed, or a node changed and every seal
+ * above it made again) and runs exercise on it. Errors from the volume are expected and ignored.
+ *
+ * @param sealed Whether the volume is encrypted.
+ * @return 0 if the rounds ran to their end with at least one image mounted, or the number of the first check that
+ *     failed, 600 to 606.
+ */
 check_fuzz :: fn(sealed: bool) -> int {
     device :: new_device_of(FUZZ_BLOCKS) or_return 600
     defer free_device(device)
@@ -96,6 +114,12 @@ check_fuzz :: fn(sealed: bool) -> int {
     return 0
 }
 
+/**
+ * Read a decimal number, as SLOPOS_FUZZ_ROUNDS gives one.
+ *
+ * @param text The text, digits only.
+ * @return The number; null if the text is empty or has anything but digits. Overflow isn't checked.
+ */
 number_of :: fn(text: string) -> u64? {
     value : u64 = 0
     if text.count == 0 {
@@ -110,7 +134,14 @@ number_of :: fn(text: string) -> u64? {
     return value
 }
 
-/** A damaged image, mounted and used as far as it goes, every error taken. */
+/**
+ * Mount a damaged image and use it as far as it goes, every error taken: verified, volumes 1 and 2 opened and used,
+ * and committed.
+ *
+ * @param device The device over the damaged image.
+ * @param survived The counts, updated.
+ * @param sealed Whether the volumes are encrypted, opened with the tests' passphrase.
+ */
 exercise :: fn(device: ptr[slopfs.Device], survived: ptr[mut Survived], sealed: bool) {
     container := slopfs.Container.{}
     mounted := false
@@ -136,6 +167,12 @@ exercise :: fn(device: ptr[slopfs.Device], survived: ptr[mut Survived], sealed: 
     }
 }
 
+/**
+ * Use a volume of a damaged image, every error ignored: everything read, a file made, written, cut and renamed, and
+ * files removed.
+ *
+ * @param volume The volume under test, open.
+ */
 use_volume :: fn(volume: ptr[mut slopfs.Volume]) {
     _ = state_digest(volume)
     root :: slopfs.ROOT_OBJECT
@@ -154,8 +191,13 @@ use_volume :: fn(volume: ptr[mut slopfs.Volume]) {
 }
 
 /**
- * A node of the newest checkpoint's trees changed, and resealed with every node above it and the checkpoint, so
+ * Change a node of the newest checkpoint's trees, and reseal it with every node above it and the checkpoint, so
  * mounting reads it as if it had been written so.
+ *
+ * Only BLAKE3 seals are made again, so on an encrypted volume a node of its own tree changed this way doesn't open.
+ *
+ * @param disk The disk, changed in place.
+ * @param random The generator choosing what changes.
  */
 mutate_sealed :: fn(disk: ptr[mut Disk], random: ptr[mut Random]) {
     newest : usize = 0
@@ -191,9 +233,16 @@ mutate_sealed :: fn(disk: ptr[mut Disk], random: ptr[mut Random]) {
 }
 
 /**
- * The node a pointer names, or one beneath it, changed: going down to a random child, or for the volumes tree from a
- * leaf into a volume's tree, or changing this one's bytes; then resealed, both copies written, and the pointer given
+ * Change the node a pointer names, or one beneath it: going down to a random child, or for the volumes tree from a
+ * leaf into a volume's tree, or changing this one's bytes; then reseal it, write both copies, and give the pointer
  * the new seal.
+ *
+ * @param disk The disk, changed in place.
+ * @param pointer The node's pointer, its seal changed.
+ * @param volumes Whether it's of the volumes tree, whose leaves' values may start with a volume's root.
+ * @param random The generator choosing what changes.
+ * @param depth How far down it is, from 0; nothing goes past 8 down.
+ * @return True if the node, or one beneath it, was changed; false if the pointer points nowhere on the disk.
  */
 mutate_at :: fn(disk: ptr[mut Disk], pointer: ptr[mut slopfs.BlockPointer], volumes: bool, random: ptr[mut Random], depth: int) -> bool {
     start :: cast[usize](cast[u64](pointer.address) * slopfs.BLOCK_BYTES)

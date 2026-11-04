@@ -41,59 +41,86 @@ import fat_server from "../fat_server"
 import partition_server from "../partition_server"
 import volume_server from "../volume_server"
 
+/** The most disks it holds: one connector each, disk0 to disk3. */
 MAX_DISKS :: 4
+/** The most partitions it lists, across every disk; those past it aren't served. */
 MAX_PARTITIONS :: 32
+/** A partition server's memory budget, in bytes. */
 PARTITION_SERVER_BUDGET : u64 : 2 * 1024 * 1024
+/** A FAT server's memory budget, in bytes. */
 FAT_SERVER_BUDGET : u64 : 2 * 1024 * 1024
+/** A container service's memory budget, in bytes. */
 CONTAINER_SERVICE_BUDGET : u64 : 4 * 1024 * 1024
+/** A plain volume's server's memory budget, in bytes. */
 VOLUME_SERVER_BUDGET : u64 : 6 * 1024 * 1024
-// An encrypted volume's: Argon2id's memory, for a passphrase whose parameters ask for up to 8 MiB, on top
+/**
+ * An encrypted volume's server's memory budget, in bytes: Argon2id's memory, for a passphrase whose parameters ask for
+ * up to 8 MiB, on top.
+ */
 SEALED_VOLUME_SERVER_BUDGET : u64 : VOLUME_SERVER_BUDGET + 8 * 1024 * 1024
+/** The most volumes served at once, across every container; a place a volume server that ended left is used again. */
 MAX_VOLUMES :: 8
+/** The longest volume name, in bytes, "volume@snapshot" included. */
 VOLUME_NAME_BYTES :: 64
-/** The keys volume servers' links connections are bound to the port with, after the clients' */
+/** The keys volume servers' links connections are bound to the port with, plus their place in served. */
 LINKS_KEY : u64 : 1000
 /**
- * Its connection to the process manager, watched for its other end closing, dialed again when it does (decisions/0140)
+ * The key its connection to the process manager is bound to the port with, watched for its other end closing, and
+ * dialed again when it does (decisions/0140).
  */
 MANAGER_KEY : u64 : 900
-// The keys the servers it starts are watched under from their launch: partition servers by disk, FAT servers and
-// container services by partition, volume servers by their place in served
+/** The key a partition server is watched under from its launch, plus its disk's index. */
 PARTITION_SERVER_KEY : u64 : 2000
+/** The key a FAT server is watched under from its launch, plus its partition's index. */
 FAT_SERVER_KEY : u64 : 3000
+/** The key a container service is watched under from its launch, plus its partition's index. */
 CONTAINER_KEY : u64 : 4000
+/** The key a volume server is watched under from its launch, plus its place in served. */
 VOLUME_KEY : u64 : 5000
-// How often a server is started again in RESTART_WINDOW before it's left ended (decisions/0077)
+/** How often a server is started again in RESTART_WINDOW before it's left ended (decisions/0077). */
 RESTARTS : u32 : 3
+/** The window RESTARTS are counted in, in nanoseconds: a minute. */
 RESTART_WINDOW : u64 : 60_000_000_000
-// A SlopOS container's partition type, "SLOPOS CONTAINER" in ASCII, and the volume its files are (decisions/0088, 0089)
+/** A SlopOS container's partition type, "SLOPOS CONTAINER" in ASCII (decisions/0088). */
 CONTAINER_TYPE :: u8.[0x53, 0x4c, 0x4f, 0x50, 0x4f, 0x53, 0x20, 0x43, 0x4f, 0x4e, 0x54, 0x41, 0x49, 0x4e, 0x45, 0x52]
+/** The volume a container's files are, as OpenFiles serves them (decisions/0089). */
 SYSTEM_VOLUME :: "system"
-// The GPT types whose partitions hold FAT volumes, as their bytes are on the disk: the EFI system partition
-// (C12A7328-F81F-11D2-BA4B-00A0C93EC93B) and a basic data partition (EBD0A0A2-B9E5-4433-87C0-68B6B72699C7)
+/** The EFI system partition's GPT type, C12A7328-F81F-11D2-BA4B-00A0C93EC93B, as its bytes are on the disk. */
 ESP_TYPE :: u8.[0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11, 0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b]
+/** A basic data partition's GPT type, EBD0A0A2-B9E5-4433-87C0-68B6B72699C7, as its bytes are on the disk. */
 BASIC_DATA_TYPE :: u8.[0xa2, 0xa0, 0xd0, 0xeb, 0xe5, 0xb9, 0x33, 0x44, 0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99, 0xc7]
 
 /** What a FAT server is given (fat_server.main). */
 FatServerGrants :: struct {
+    /** A copy of the storage manager's debug log; none if it couldn't be duplicated. */
     log : slop_os.DebugLog?,
+    /** A block connection narrowed to the FAT partition, from its disk's partition server. */
     partition : os.Channel[block.Block],
+    /** The listener for connections to the volume's root; the storage manager keeps the other end. */
     clients : os.Listener[dir.Dir],
 }
 
 /** What a container service is given (container_service.main). */
 ContainerServiceGrants :: struct {
+    /** A copy of the storage manager's debug log; none if it couldn't be duplicated. */
     log : slop_os.DebugLog?,
+    /** A block connection narrowed to the container's partition, from its disk's partition server. */
     partition : os.Channel[block.Block],
+    /** The listener for the storage manager's container connections; it keeps the other end. */
     clients : os.Listener[container.Container],
 }
 
 /** What a volume server is given (volume_server.main). */
 VolumeServerGrants :: struct {
+    /** A copy of the storage manager's debug log; none if it couldn't be duplicated. */
     log : slop_os.DebugLog?,
+    /** A connection to the container service for this one volume, or snapshot. */
     volume : os.Channel[container.Container],
+    /** The listener for connections to the volume's root; the storage manager keeps the other end. */
     clients : os.Listener[dir.Dir],
+    /** The listener the storage manager speaks the volume protocol on: Unlock, Commit, Rotate, and links' requests. */
     control : os.Listener[volume_protocol.Volume],
+    /** The volume server's links connection to the storage manager, which knows it's this volume's. */
     stored_links : os.Channel[links.Links],
 }
 
@@ -103,20 +130,31 @@ VolumeServerGrants :: struct {
  * container and ID, and the end its volume server's stored links are asked on.
  */
 Served :: struct {
+    /** The index of the container's partition. */
     partition : usize,
+    /** The container's ID, as the container service describes it. */
     container : u8[16],
+    /** The volume's ID in its container. */
     id : u64,
+    /** The volume server's links connection, the storage manager's end; NO_HANDLE once it's gone. */
     links : slop_os.Channel,
+    /** The volume's name, name_bytes of it, or "volume@snapshot" for a snapshot's. */
     name : u8[VOLUME_NAME_BYTES],
+    /** How many of name's bytes are its. */
     name_bytes : usize,
+    /** The volume server's root listener's other end, which each client's connection to the root is made through. */
     root : Disk,
+    /** The end the volume protocol is spoken on, to the volume server. */
     control : Disk,
+    /** Whether the volume is encrypted, and so opened only with its passphrase. */
     encrypted : bool,
+    /** Whether an encrypted volume has been unlocked since its volume server started. */
     unlocked : bool,
-    /** A snapshot's, "volume@snapshot", whose root is read only */
+    /** Whether it's a snapshot's, "volume@snapshot", whose root is read only. */
     read_only : bool,
-    // Its volume server's process; and whether it's ended, so another can be served in its place
+    /** Its volume server's process and budget. */
     running : Running,
+    /** Whether its volume server has ended, so another can be served in its place. */
     gone : bool,
 }
 
@@ -126,73 +164,126 @@ Served :: struct {
  * has ended since it was last started.
  */
 Running :: struct {
+    /** The server's process, the storage manager's handle; NO_HANDLE once it's let go of. */
     process : slop_os.Process,
+    /** The server's budget, the storage manager's handle, closed once it ends so what it had comes back. */
     budget : slop_os.MemoryBudget,
+    /** How many times it's been started again since restarts_since. */
     restarts : u32,
+    /** When the restart window began, in nanoseconds of the monotonic clock. */
     restarts_since : u64,
+    /** Whether it has ended since it was last started. */
     ended : bool,
 }
 
-/** A connector to a disk, which may not be given */
+/** A connector to a disk, which may not be given. */
 DiskConnector :: os.Channel[connector.Connector]?
 
 /** What a partition server is given (partition_server.main). */
 PartitionServerGrants :: struct {
+    /** A copy of the storage manager's debug log; none if it couldn't be duplicated. */
     log : slop_os.DebugLog?,
+    /** A block connection to the whole disk, dialed through its connector. */
     disk : os.Channel[block.Block],
+    /** The listener for the storage manager's partitions connection; it keeps the other end. */
     clients : os.Listener[partitions.Partitions],
-    /** The kernel's command line, for faulty_block, which a robustness build reads (decisions/0112) */
+    /** A read-only copy of the kernel's command line, for faulty_block in robustness builds (decisions/0112). */
     command_line : slop_os.Memory?,
 }
 
-/** A disk's partition server: the end it's spoken to on, and a port for that end. */
+/** An end a server is spoken to on, and a port bound to it; both NO_HANDLE when there's none. */
 Disk :: struct {
+    /** The end, the storage manager's own. */
     end : slop_os.Channel,
+    /** A port bound to end, waited on for its answers. */
     port : slop_os.Port,
 }
 
+/** The storage manager's state, kept on main's stack for as long as it runs. */
 Manager :: struct {
+    /** The debug log it, and the servers it starts, say what they're doing in; NO_HANDLE for none. */
     log : slop_os.DebugLog,
+    /** The port clients, links connections, the process manager's connection and started servers are bound to. */
     port : slop_os.Port,
-    // The kernel's command line, if it was given, for the partition servers
+    /** The kernel's command line, if it was given, for the partition servers; NO_HANDLE otherwise. */
     command_line : slop_os.Memory,
+    /** Each disk's partition server's end; NO_HANDLE while it isn't running. */
     disks : Disk[MAX_DISKS],
+    /** How many disks have a partition server started. */
     disk_count : usize,
-    // Each disk's connector, kept to dial its driver again for a restarted partition server, and its partition server
+    /** Each disk's connector, kept to dial its driver again for a restarted partition server. */
     connectors : Disk[MAX_DISKS],
+    /** Each disk's partition server's process. */
     disk_running : Running[MAX_DISKS],
+    /** The partition server's module, launched for each disk. */
     partition_server_module : slop_os.Memory,
-    // Each partition's FAT server and container service, as files and containers have their listeners
+    /** Each partition's FAT server's process, by partition index. */
     files_running : Running[MAX_PARTITIONS],
+    /** Each partition's container service's process, by partition index. */
     containers_running : Running[MAX_PARTITIONS],
+    /** Every disk's partitions, listed once at start, by one index. */
     partitions : storage.Partition[MAX_PARTITIONS],
+    /** How many of partitions are listed. */
     partition_count : usize,
-    /** Each partition's FAT server, its listener's end and a port for it, NO_HANDLE until it's started */
+    /** Each partition's FAT server, its listener's end and a port for it, NO_HANDLE until it's started. */
     files : Disk[MAX_PARTITIONS],
-    // Each container's service, the same way, and the volumes being served
+    /** Each container's service, its listener's end and a port for it, NO_HANDLE until it's started. */
     containers : Disk[MAX_PARTITIONS],
+    /** The volumes served, and places volume servers that ended left. */
     served : Served[MAX_VOLUMES],
+    /** How many of served have been used. */
     served_count : usize,
+    /** The connection to the process manager, which servers are launched through; dialed again when it closes. */
     manager : os.Channel[process_manager.ProcessManager],
+    /** A port bound to manager, waited on for its answers. */
     manager_port : slop_os.Port,
-    // The connector the process manager's dialed through
+    /** The connector the process manager's dialed through. */
     manager_connector : slop_os.Channel,
+    /** A port bound to manager_connector. */
     connector_port : slop_os.Port,
+    /** The FAT server's module. */
     fat_server_module : slop_os.Memory,
+    /** The container service's module. */
     container_service_module : slop_os.Memory,
+    /** The volume server's module. */
     volume_server_module : slop_os.Memory,
+    /** The clients' ends: the listener's, and connections arrived as Connects. */
     clients : service_kit.Clients,
     /**
      * test_storage_restart on the kernel's command line: the first disk's partition server killed once it's listed its
-     * partitions, and TestRestart taken
+     * partitions, and TestRestart taken.
      */
     test_restart : bool,
-    // How many times a partition server was started, which a test waits on; and whether a wait took the port's packets
-    // meant for the main loop, whose clients are read again before it waits
+    /** How many times a partition server was started, which a test waits on. */
     partition_server_starts : u64,
+    /** Whether a wait took the port's packets meant for the main loop, whose clients are read again before it waits. */
     serve_again : bool,
 }
 
+/**
+ * Hold every disk, start a partition server for each, and serve their partitions: block connections narrowed to one,
+ * FAT partitions' files, and a SlopOS container's volumes, each through a server of its own started as it's first
+ * asked for.
+ *
+ * Runs until it's stopped. Servers that end are started again, up to RESTARTS times in RESTART_WINDOW.
+ *
+ * @param log The debug log it, and the servers it starts, say what they're doing in; without one, nothing's said.
+ * @param manager A connector to the process manager, which servers are launched through; dialed again whenever the
+ *     connection closes.
+ * @param partition_server_module The partition server's module, launched for each disk.
+ * @param fat_server_module The FAT server's module.
+ * @param container_service_module The container service's module.
+ * @param volume_server_module The volume server's module.
+ * @param disk0 A connector to the first disk's driver; without it, there's no such disk.
+ * @param disk1 A connector to the second disk's driver; without it, there's no such disk.
+ * @param disk2 A connector to the third disk's driver; without it, there's no such disk.
+ * @param disk3 A connector to the fourth disk's driver; without it, there's no such disk.
+ * @param clients The listener its clients' connections arrive on; more arrive as Connects on those.
+ * @param command_line The kernel's command line, for test_storage_restart and the partition servers' faulty_block;
+ *     without it, neither is asked for.
+ * @return 1 if its port couldn't be made or the process manager couldn't be dialed, and 2 if clients couldn't be
+ *     added. It doesn't return otherwise.
+ */
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], partition_server_module: slop_os.Memory,
     fat_server_module: slop_os.Memory, container_service_module: slop_os.Memory, volume_server_module: slop_os.Memory,
     disk0: os.Channel[connector.Connector]?, disk1: os.Channel[connector.Connector]?,
@@ -271,8 +362,11 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], par
 }
 
 /**
- * A connection to the process manager through its connector, in place of one that's gone, watched for its other end
- * closing, as when the root task starts the process manager again: whether there's one.
+ * Dial the process manager through its connector, in place of a connection that's gone, as when the root task starts
+ * the process manager again, and watch the new one for its other end closing.
+ *
+ * @param state The storage manager's state, whose manager and manager_port are replaced.
+ * @return Whether there's a connection; false if it couldn't be dialed, or a port for it made.
  */
 dial_manager :: fn(state: ptr[mut Manager]) -> bool {
     again :: cast[slop_os.Handle](state.manager.end) != slop_os.NO_HANDLE
@@ -290,8 +384,12 @@ dial_manager :: fn(state: ptr[mut Manager]) -> bool {
 }
 
 /**
- * For tests: a disk's partition server killed, and what arrives on the port handled until it's started again, or not
- * to be; whether it was.
+ * Kill a disk's partition server, for tests, and handle servers' ends on the port until it's started again, or won't
+ * be. Other packets that arrive meanwhile are dropped; clients are read again after.
+ *
+ * @param state The storage manager's state.
+ * @param index The disk's index.
+ * @return Whether it was started again; false for a disk past MAX_DISKS, or one that's ended RESTARTS times.
  */
 kill_and_restart :: fn(state: ptr[mut Manager], index: usize) -> bool {
     if index >= MAX_DISKS {
@@ -316,8 +414,13 @@ kill_and_restart :: fn(state: ptr[mut Manager], index: usize) -> bool {
 }
 
 /**
- * A disk's partition server, with a block connection dialed again through its connector, watched from its launch:
- * whether it started.
+ * Start a disk's partition server, with a block connection dialed again through its connector, watched from its
+ * launch under PARTITION_SERVER_KEY plus the disk's index.
+ *
+ * @param state The storage manager's state, whose disks, disk_running and partition_server_starts are set.
+ * @param index The disk's index.
+ * @return Whether it started; false if the driver couldn't be dialed, a channel made, or the launch failed. If the
+ *     launch worked but a port for its listener couldn't be made, it's false with the server running unreached.
  */
 start_partition_server :: fn(state: ptr[mut Manager], index: usize) -> bool {
     startup :: slop_os.startup_block()
@@ -344,7 +447,14 @@ start_partition_server :: fn(state: ptr[mut Manager], index: usize) -> bool {
     return true
 }
 
-/** A launch watched from its start under key, on the storage manager's port. */
+/**
+ * Make the options for a launch watched from its start, and given the wall clock's page, as a FAT server's times need.
+ *
+ * @param state The storage manager's state.
+ * @param key The key the server's end is signalled under on the storage manager's port.
+ * @return The options, with a read-only copy of the clock page the storage manager was given, if it was and it could
+ *     be duplicated.
+ */
 watched :: fn(state: ptr[Manager], key: u64) -> os.LaunchOptions {
     options := os.LaunchOptions.{watch = os.LaunchWatch.{port = state.port, key = key}}
     // The clock page the storage manager was given, so its servers have the wall clock too, as a FAT server's times need
@@ -359,14 +469,23 @@ watched :: fn(state: ptr[Manager], key: u64) -> os.LaunchOptions {
     return options
 }
 
-/** What a launch gave, kept while the server runs. */
+/**
+ * Keep what a launch gave while the server runs.
+ *
+ * @param running Where it's kept, its restarts left as they were.
+ * @param launched The launched process's handle and its budget's, which move to running.
+ */
 keep :: fn(running: ptr[mut Running], launched: os.Launched) {
     running.process = launched.process
     running.budget = launched.budget
     running.ended = false
 }
 
-/** A server that ended let go of: its process's and its budget's handles closed, so its budget comes back. */
+/**
+ * Let go of a server that ended: close its process's and its budget's handles, so what its budget had comes back.
+ *
+ * @param running The server, marked ended.
+ */
 let_go :: fn(running: ptr[mut Running]) {
     for each in slop_os.Handle.[cast[slop_os.Handle](running.process), cast[slop_os.Handle](running.budget)] {
         if each != slop_os.NO_HANDLE {
@@ -378,7 +497,11 @@ let_go :: fn(running: ptr[mut Running]) {
     running.ended = true
 }
 
-/** A server that's running killed, so its end tears it down. */
+/**
+ * Kill a server that's running; what its ending tears down is the caller's to let go of.
+ *
+ * @param running The server; one already let go of is left alone.
+ */
 kill_running :: fn(running: ptr[Running]) {
     if cast[slop_os.Handle](running.process) != slop_os.NO_HANDLE {
         _ = slop_os.process_kill(running.process)
@@ -386,8 +509,11 @@ kill_running :: fn(running: ptr[Running]) {
 }
 
 /**
- * Whether a server that ended may be started again: up to RESTARTS times in RESTART_WINDOW, as the supervisor starts
- * its drivers again (decisions/0077). One that hasn't ended may always be started.
+ * Tell whether a server may be started: one that ended, up to RESTARTS times in RESTART_WINDOW, as the supervisor
+ * starts its drivers again (decisions/0077); one that hasn't ended, always.
+ *
+ * @param running The server, whose restarts is counted, and its window begun again once it's past.
+ * @return Whether it may be started.
  */
 may_start :: fn(running: ptr[mut Running]) -> bool {
     if !running.ended {
@@ -406,10 +532,15 @@ may_start :: fn(running: ptr[mut Running]) -> bool {
 }
 
 /**
- * A server it started has ended, by its key. A partition server is started again at once, once everything served from
- * its disk is killed, since each holds a connection it narrowed; a FAT server, a container service or a volume server
- * is let go, and started again the next time it's asked for. A container service's volume servers go with it, and an
- * encrypted volume served again is locked until its passphrase is given again.
+ * Handle a server it started having ended, by its key.
+ *
+ * A partition server is started again at once, once everything served from its disk is killed, since each holds a
+ * connection it narrowed; a FAT server, a container service or a volume server is let go, and started again the next
+ * time it's asked for. A container service's volume servers go with it, and an encrypted volume served again is
+ * locked until its passphrase is given again.
+ *
+ * @param state The storage manager's state.
+ * @param key The key the server was watched under, PARTITION_SERVER_KEY or above, which is unbound.
  */
 ended :: fn(state: ptr[mut Manager], key: u64) {
     _ = slop_os.port_unbind(state.port, key)
@@ -459,7 +590,12 @@ ended :: fn(state: ptr[mut Manager], key: u64) {
     }
 }
 
-/** A FAT server that ended, or was killed: let go of, and its slot freed for the next request to start another. */
+/**
+ * Let go of a FAT server that ended, or was killed, and close its listener's end, so the next request starts another.
+ *
+ * @param state The storage manager's state.
+ * @param index Its partition's index; one past MAX_PARTITIONS is ignored.
+ */
 files_gone :: fn(state: ptr[mut Manager], index: usize) {
     if index >= MAX_PARTITIONS {
         return void
@@ -469,7 +605,12 @@ files_gone :: fn(state: ptr[mut Manager], index: usize) {
     runtime.log_info("the FAT server for partition % ended", index)
 }
 
-/** A container service that ended, or was killed, and its volume servers with it. */
+/**
+ * Let go of a container service that ended, or was killed, close its listener's end, and kill its volume servers.
+ *
+ * @param state The storage manager's state.
+ * @param index Its partition's index; one past MAX_PARTITIONS is ignored.
+ */
 container_gone :: fn(state: ptr[mut Manager], index: usize) {
     if index >= MAX_PARTITIONS {
         return void
@@ -480,7 +621,12 @@ container_gone :: fn(state: ptr[mut Manager], index: usize) {
     kill_volumes(state, index)
 }
 
-/** Every volume server serving a volume of the partition at index killed, and gone now. */
+/**
+ * Kill every volume server serving a volume of a partition, and let go of each.
+ *
+ * @param state The storage manager's state.
+ * @param index The container's partition's index.
+ */
 kill_volumes :: fn(state: ptr[mut Manager], index: usize) {
     for i in 0..<state.served_count {
         if i < state.served.count && state.served[i].partition == index && !state.served[i].gone {
@@ -491,7 +637,13 @@ kill_volumes :: fn(state: ptr[mut Manager], index: usize) {
     }
 }
 
-/** A volume server that ended: its ends closed, and its place in served free for the next. */
+/**
+ * Let go of a volume server that ended: close its ends, and free its place in served for the next; an encrypted
+ * volume is locked again.
+ *
+ * @param state The storage manager's state.
+ * @param slot Its place in served, taken modulo MAX_VOLUMES.
+ */
 volume_gone :: fn(state: ptr[mut Manager], slot: usize) {
     served :: &state.served[slot % MAX_VOLUMES]
     let_go(&served.running)
@@ -508,6 +660,11 @@ volume_gone :: fn(state: ptr[mut Manager], slot: usize) {
     runtime.log_info("the volume server for the % volume ended", if count > 0 { string_of(&served.name[0], count) } else { "" })
 }
 
+/**
+ * Close an end a server is spoken to on, and its port, those that are open.
+ *
+ * @param disk The end and its port, both NO_HANDLE afterwards.
+ */
 close_disk :: fn(disk: ptr[mut Disk]) {
     for each in slop_os.Handle.[cast[slop_os.Handle](disk.end), cast[slop_os.Handle](disk.port)] {
         if each != slop_os.NO_HANDLE {
@@ -518,7 +675,12 @@ close_disk :: fn(disk: ptr[mut Disk]) {
     disk.port = cast[slop_os.Port](slop_os.NO_HANDLE)
 }
 
-/** A disk's partitions, from 0 until its partition server has no more, each logged. */
+/**
+ * List a disk's partitions, from 0 until its partition server has no more, each added to the partitions and logged.
+ *
+ * @param state The storage manager's state.
+ * @param disk The disk's index. Listing stops once MAX_PARTITIONS are listed, from every disk.
+ */
 list_partitions :: fn(state: ptr[mut Manager], disk: usize) {
     for index in 0..<cast[u32](MAX_PARTITIONS) {
         match ask(state, disk, .Describe(index)) {
@@ -538,7 +700,17 @@ list_partitions :: fn(state: ptr[mut Manager], disk: usize) {
     }
 }
 
-/** A client's requests, until it has none. */
+/**
+ * Answer a client's requests, until it has none, or it's gone.
+ *
+ * A request for a partition that isn't listed, or isn't a container where one is wanted, is answered NoPartition.
+ * Connect adds a client, with no answer. A client whose end fails is dropped. A request that starts a server, or asks
+ * one, waits for it, so every client waits meanwhile.
+ *
+ * @param state The storage manager's state.
+ * @param index The client's index in state.clients; one past them, or one dropped, is left alone.
+ * @param into Where each request is read into, reused.
+ */
 serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incoming]) {
     if index >= state.clients.ends.count {
         return void
@@ -675,8 +847,13 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
 }
 
 /**
- * A connection to the root of the FAT volume on a partition, from its FAT server, started the first time with a
- * connection narrowed to the partition: null for a partition of another kind, or if the server can't be started.
+ * Make a connection to the root of a partition's files: a FAT volume's, from its FAT server, started the first time
+ * with a connection narrowed to the partition and nothing else; or a container's system volume's.
+ *
+ * @param state The storage manager's state.
+ * @param index The partition's index.
+ * @return The connection, which the caller owns and passes on; null for a partition of another kind, an encrypted
+ *     system volume, or if the server can't be started or connected to.
  */
 files_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
     if index >= state.partitions.count || index >= state.files.count {
@@ -722,8 +899,14 @@ files_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
 }
 
 /**
- * A container's service, started the first time with a connection narrowed to its partition and nothing else: its
- * listener's end and a port for it, or null.
+ * Find a container's service, or start it the first time, with a connection narrowed to its partition and nothing
+ * else, watched under CONTAINER_KEY plus the partition's index.
+ *
+ * @param state The storage manager's state.
+ * @param index The container's partition's index.
+ * @return Its listener's end and a port for it, the storage manager's own; null if it may not be started again, its
+ *     partition couldn't be opened, or the launch failed. If the launch worked but a port couldn't be made, it's null
+ *     with the service running unreached.
  */
 container_of :: fn(state: ptr[mut Manager], index: usize) -> Disk? {
     if index >= state.partitions.count || index >= state.containers.count {
@@ -760,7 +943,14 @@ container_of :: fn(state: ptr[mut Manager], index: usize) -> Disk? {
     return state.containers[index]
 }
 
-/** The volume being served on the partition at index with a name, if it is. */
+/**
+ * Find a volume being served by its name.
+ *
+ * @param state The storage manager's state.
+ * @param index The container's partition's index.
+ * @param name The volume's name, or "volume@snapshot".
+ * @return Its place in served, good while the storage manager runs; null if it isn't served, or its server's gone.
+ */
 served_volume :: fn(state: ptr[mut Manager], index: usize, name: u8[]) -> ptr[mut Served]? {
     for i in 0..<state.served_count {
         if i < state.served.count {
@@ -774,6 +964,13 @@ served_volume :: fn(state: ptr[mut Manager], index: usize, name: u8[]) -> ptr[mu
     return null
 }
 
+/**
+ * Tell whether two byte arrays hold the same bytes.
+ *
+ * @param a One array's bytes, read only.
+ * @param b The other's bytes, read only; a different count is never the same.
+ * @return Whether they're as long as each other, with the same bytes.
+ */
 same_bytes :: fn(a: u8[], b: u8[]) -> bool {
     if a.count != b.count {
         return false
@@ -787,10 +984,20 @@ same_bytes :: fn(a: u8[], b: u8[]) -> bool {
 }
 
 /**
- * The root of the container's volume on the partition at index named name: its volume server started the first time,
- * with a connection to the container service for that volume and nothing else, and for an encrypted volume, unlocked
- * with passphrase, which given says there is. An encrypted volume being served is opened again only with its
- * passphrase, which its volume server checks.
+ * Open a container's volume's root: its volume server started the first time, with a connection to the container
+ * service for that volume and nothing else, and for an encrypted volume, unlocked with its passphrase.
+ *
+ * An encrypted volume being served is opened again only with its passphrase, which its volume server checks; one whose
+ * passphrase was wrong stays served, locked, waiting for the right one.
+ *
+ * @param state The storage manager's state.
+ * @param index The container's partition's index.
+ * @param name The volume's name, or "volume@snapshot" for a snapshot's, read only; 1 to VOLUME_NAME_BYTES bytes.
+ * @param passphrase The passphrase, for an encrypted volume.
+ * @param given Whether a passphrase was given; without one, an encrypted volume is Locked.
+ * @return OpenedFiles with a new connection to its root, or OpenedReadOnlyFiles for a snapshot's, which the caller
+ *     owns; Locked, WrongKey, NoVolume if the container service hasn't it, or Failed if a name, a place in served, the
+ *     container service, a channel or the launch couldn't be had.
  */
 volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u8[], given: bool) -> storage.Response {
     startup :: slop_os.startup_block()
@@ -899,8 +1106,17 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
 }
 
 /**
- * A new volume named name on the container at index (decisions/0141): registered by the container service with nothing
- * in it, then opened, its volume server making its keys from passphrase if cipher seals it, and its root directory.
+ * Make a new volume on a container (decisions/0141): registered by the container service with nothing in it, durable,
+ * then opened, its volume server making its keys from the passphrase if the cipher seals it.
+ *
+ * @param state The storage manager's state.
+ * @param index The container's partition's index.
+ * @param name The volume's name, 1 to VOLUME_NAME_BYTES bytes, without '@'.
+ * @param passphrase The passphrase it's sealed with; given exactly when cipher seals it.
+ * @param cipher slopfs.Cipher's value; 0 for none.
+ * @param now When it's made, as the client says.
+ * @return What opening it answers: OpenedFiles with its root, which the caller owns, or why not; AlreadyExists for a
+ *     name taken, or Failed for arguments that don't agree or a container that couldn't make it.
  */
 create_volume :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u8[], cipher: u8, now: u64) -> storage.Response {
     sealed :: cipher != 0
@@ -919,7 +1135,12 @@ create_volume :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphras
     return volume_of(state, index, name, passphrase, sealed)
 }
 
-/** Whether a name is a snapshot's, "volume@snapshot". */
+/**
+ * Tell whether a name is a snapshot's, "volume@snapshot".
+ *
+ * @param name A volume's name as a client gave it, any bytes.
+ * @return Whether it has an '@' in it.
+ */
 is_snapshot :: fn(name: u8[]) -> bool {
     for byte in name {
         if byte == cast[u8]('@') {
@@ -929,7 +1150,13 @@ is_snapshot :: fn(name: u8[]) -> bool {
     return false
 }
 
-/** A new connection to a served volume's root: a dir, or a snapshot's read_only_dir. */
+/**
+ * Make a new connection to a served volume's root.
+ *
+ * @param served A served volume, read; the connection is made through its root's end, a read_only_dir for a snapshot's.
+ * @return OpenedFiles with a dir connection, or OpenedReadOnlyFiles with a snapshot's read_only_dir, which the caller
+ *     owns; Failed if it couldn't be made.
+ */
 root_of :: fn(served: ptr[Served]) -> storage.Response {
     startup :: slop_os.startup_block()
     if served.read_only {
@@ -940,7 +1167,14 @@ root_of :: fn(served: ptr[Served]) -> storage.Response {
     return .OpenedFiles(root)
 }
 
-/** A served volume's server asked to unlock it, or check, with passphrase. */
+/**
+ * Ask a served volume's server to unlock it with a passphrase, or, unlocked already, to check it.
+ *
+ * @param served A served, encrypted volume, whose volume server is asked on its control connection, waited for; served
+ *     isn't changed.
+ * @param passphrase The passphrase's bytes, copied into the request; not kept.
+ * @return The volume server's answer: Unlocked, WrongKey, or another failure; Failed if it couldn't be asked.
+ */
 unlock :: fn(served: ptr[Served], passphrase: u8[]) -> volume_protocol.Response {
     out := os.Outgoing.{}
     request :: os.begin[volume_protocol.Request](&out)
@@ -948,7 +1182,14 @@ unlock :: fn(served: ptr[Served], passphrase: u8[]) -> volume_protocol.Response 
     return ask_volume(served, &out)
 }
 
-/** One request to a volume server, on the volume protocol, and its answer, waited for. */
+/**
+ * Send one request to a volume server, on the volume protocol, and wait for its answer.
+ *
+ * @param served A served volume, whose control connection carries the request and is waited on, so nothing else is
+ *     served meanwhile.
+ * @param out The request; its handles are moved out when it's sent.
+ * @return The answer, a copy, whose handles the caller owns; Failed if it couldn't be sent or the connection failed.
+ */
 ask_volume :: fn(served: ptr[Served], out: ptr[mut os.Outgoing]) -> volume_protocol.Response {
     if volume_protocol.send_request(served.control.end, served.control.port, out) is_some {
         return .Failed
@@ -963,7 +1204,15 @@ ask_volume :: fn(served: ptr[Served], out: ptr[mut os.Outgoing]) -> volume_proto
     }
 }
 
-/** A new key generation for a served, unlocked volume. */
+/**
+ * Start a new key generation for a served, unlocked volume, sealing what's written from now on.
+ *
+ * @param state The storage manager's state.
+ * @param index The container's partition's index.
+ * @param name The volume's name.
+ * @return Rotated with the new generation's number; NoVolume if it isn't served, NotEncrypted, Locked if it hasn't
+ *     been unlocked, or Failed.
+ */
 rotate :: fn(state: ptr[mut Manager], index: usize, name: u8[]) -> storage.Response {
     served :: served_volume(state, index, name) or_return .NoVolume
     if !served.encrypted {
@@ -982,7 +1231,16 @@ rotate :: fn(state: ptr[mut Manager], index: usize, name: u8[]) -> storage.Respo
     }
 }
 
-/** One request to a container service, sent from out, and its answer, waited for. */
+/**
+ * Send one request to a container service, and wait for its answer.
+ *
+ * @param end A connection to a container service, kept, with no other request in flight, so the next answer is this
+ *     one's.
+ * @param port A port bound to end.
+ * @param out The request; its handles are moved out when it's sent.
+ * @return The answer, a copy, whose handles the caller owns; its Relatives point into a message that's gone, so they
+ *     aren't read. Unsupported if it couldn't be sent or the connection failed.
+ */
 ask_container :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing]) -> container.Response {
     if container.send_request(end, port, out) is_some {
         return .Unsupported
@@ -997,7 +1255,15 @@ ask_container :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Ou
     }
 }
 
-/** One request to a disk's partition server, and its answer, waited for. */
+/**
+ * Send one request to a disk's partition server, and wait for its answer.
+ *
+ * @param state The storage manager's state.
+ * @param disk The disk's index.
+ * @param request The request, sent as it is: Describe or Open, of a partition by its index on the disk.
+ * @return The answer, a copy, whose handles the caller owns; Unsupported for a disk with no partition server, or if it
+ *     couldn't be asked.
+ */
 ask :: fn(state: ptr[mut Manager], disk: usize, request: partitions.Request) -> partitions.Response {
     if disk >= state.disk_count || disk >= state.disks.count {
         return .Unsupported
@@ -1019,6 +1285,13 @@ ask :: fn(state: ptr[mut Manager], disk: usize, request: partitions.Request) -> 
     }
 }
 
+/**
+ * Make a copy of the debug log to give a server.
+ *
+ * @param log The storage manager's debug log.
+ * @return A new handle to it, to write, duplicate and transfer, which the caller gives away; null if there's no log or
+ *     it couldn't be duplicated.
+ */
 duplicate_log :: fn(log: slop_os.DebugLog) -> slop_os.DebugLog? {
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     match slop_os.handle_duplicate(cast[slop_os.Handle](log), rights) {
@@ -1027,7 +1300,13 @@ duplicate_log :: fn(log: slop_os.DebugLog) -> slop_os.DebugLog? {
     }
 }
 
-/** A read-only copy of the kernel's command line, to give a partition server, or null without one. */
+/**
+ * Make a read-only copy of the kernel's command line, to give a partition server.
+ *
+ * @param state The storage manager's state.
+ * @return A new handle to it, to read and transfer, which the caller gives away; null without a command line, or if it
+ *     couldn't be duplicated.
+ */
 command_line_copy :: fn(state: ptr[Manager]) -> slop_os.Memory? {
     if cast[slop_os.Handle](state.command_line) == slop_os.NO_HANDLE {
         return null
@@ -1041,15 +1320,29 @@ command_line_copy :: fn(state: ptr[Manager]) -> slop_os.Memory? {
 
 // Snapshots and clones (roadmap 8e)
 
-/** Whether the partition at an index holds a SlopOS container. */
+/**
+ * Tell whether a partition holds a SlopOS container.
+ *
+ * @param state The storage manager's state.
+ * @param partition The partition's index.
+ * @return Whether it's listed and its type is CONTAINER_TYPE.
+ */
 is_container :: fn(state: ptr[Manager], partition: u32) -> bool {
     index :: cast[usize](partition)
     return index < state.partition_count && index < state.partitions.count && state.partitions[index].info.type_guid == CONTAINER_TYPE
 }
 
 /**
- * A snapshot of a container's volume: what its server has waiting committed first, if it's being served, so the
- * snapshot holds everything written to it so far.
+ * Take a snapshot of a container's volume: what its server has waiting committed first, if it's being served and
+ * unlocked, so the snapshot holds everything written to it so far.
+ *
+ * @param state The storage manager's state.
+ * @param index The container's partition's index.
+ * @param volume The volume's name.
+ * @param snapshot The snapshot's name.
+ * @param now When it's taken, as the client says.
+ * @return Done once it's durable; Failed if the volume server didn't commit, or the container's answer, as
+ *     to_container gives it.
  */
 take_snapshot :: fn(state: ptr[mut Manager], index: usize, volume: u8[], snapshot: u8[], now: u64) -> storage.Response {
     match served_volume(state, index, volume) {
@@ -1073,8 +1366,15 @@ take_snapshot :: fn(state: ptr[mut Manager], index: usize, volume: u8[], snapsho
 }
 
 /**
- * A request to a container's service, from out, and its answer as the storage protocol has it; a snapshot's name,
- * if it's one, is copied into answer, the reply being built.
+ * Send a request to a container's service, starting it if it isn't running, and give its answer as the storage
+ * protocol has it.
+ *
+ * @param state The storage manager's state.
+ * @param index The container's partition's index.
+ * @param out The request, built by the caller; its handles are moved out when it's sent.
+ * @param answer The reply being built, which a snapshot's name is copied into; null when the answer can't be one.
+ * @return Done, NoVolume, NoSnapshot, AlreadyExists, InUse, NoMore, Used or Snapshot as the container answers; Failed
+ *     for any other answer, a Snapshot without a reply to copy its name into, or a service that couldn't be had.
  */
 to_container :: fn(state: ptr[mut Manager], index: usize, out: ptr[mut os.Outgoing], answer: ptr[mut os.Outgoing]?) -> storage.Response {
     service :: container_of(state, index) or_return .Failed
@@ -1108,7 +1408,16 @@ to_container :: fn(state: ptr[mut Manager], index: usize, out: ptr[mut os.Outgoi
 
 // Stored links (roadmap 8f)
 
-/** A volume server's requests on its links connection, until it has none. */
+/**
+ * Answer a volume server's requests on its links connection, until it has none, or it's gone; one gone is closed.
+ *
+ * Each is answered after the volume it's for answers, so a volume server's link into its own volume is answered
+ * while it waits, as any other is.
+ *
+ * @param state The storage manager's state.
+ * @param index The volume's place in served.
+ * @param into Where each request is read into, reused.
+ */
 serve_links :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incoming]) {
     if index >= state.served_count || index >= state.served.count {
         return void
@@ -1144,8 +1453,13 @@ serve_links :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incomi
 }
 
 /**
- * The volume being served as container's volume id, to issue or open links: not a snapshot, and unlocked if it's
- * encrypted; null if there's none, which a link calls Unavailable.
+ * Find the volume being served that a link is to or from, to issue or open links.
+ *
+ * @param state The storage manager's state.
+ * @param container The volume's container's ID.
+ * @param id The volume's ID in its container.
+ * @return Its place in served: not a snapshot, and unlocked if it's encrypted; null if there's none, which a link
+ *     calls Unavailable.
  */
 linked_volume :: fn(state: ptr[mut Manager], container: u8[16], id: u64) -> ptr[mut Served]? {
     for i in 0..<state.served_count {
@@ -1159,7 +1473,15 @@ linked_volume :: fn(state: ptr[mut Manager], container: u8[16], id: u64) -> ptr[
     return null
 }
 
-/** A grant the volume served at index claimed, issued to it by the volume the grant is from. */
+/**
+ * Have a grant a volume claimed issued to it, by the volume the grant is from.
+ *
+ * @param state The storage manager's state.
+ * @param index The claiming volume's place in served, which says whose it is.
+ * @param claim The claim: the grant's volume and its ticket.
+ * @return Issued with the link's number; Failed with the issuing volume's refusal, or Unavailable if it isn't served,
+ *     unlocked, or couldn't be asked.
+ */
 issue :: fn(state: ptr[mut Manager], index: usize, claim: grant.Claim) -> links.Response {
     if index >= state.served.count {
         return .Failed(.Unavailable)
@@ -1176,7 +1498,17 @@ issue :: fn(state: ptr[mut Manager], index: usize, claim: grant.Claim) -> links.
     }
 }
 
-/** What a link held by the volume served at index leads to, and path beneath it, opened by the volume it leads into. */
+/**
+ * Open what a link a volume holds leads to, and a path beneath it, by the volume it leads into, which checks it issued
+ * the link to that volume.
+ *
+ * @param state The storage manager's state.
+ * @param index The holding volume's place in served.
+ * @param resolving The link: the volume it leads into, its number, and how it's opened.
+ * @param path The path beneath what it leads to; empty for that itself.
+ * @return The connection opened, a file's or a directory's, read only or not, which goes back to the volume server
+ *     that asked; Failed with the volume's refusal, or Unavailable if it isn't served, unlocked, or couldn't be asked.
+ */
 resolve :: fn(state: ptr[mut Manager], index: usize, resolving: links.Resolving, path: u8[]) -> links.Response {
     if index >= state.served.count {
         return .Failed(.Unavailable)

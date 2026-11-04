@@ -19,30 +19,50 @@ import system_records from "../../system_records"
 PLUS :: #run compiler.target_setting("service_kit_build", default = "") == "plus"
 
 #if PLUS {
-    /** Which build this is */
+    /**
+     * Tell which build of the library this is, the export only the plus build has.
+     *
+     * @return "plus", static text.
+     */
     build_name #export :: fn() -> string {
         return "plus"
     }
 }
 
-/** The most clients one service serves. */
+/** The most clients one service serves at once: 16. */
 MAX_CLIENTS :: 16
 
 /** A service's clients: an end each, bound to its port under its index, NO_HANDLE once it's closed. */
 Clients :: struct {
+    /** Each client's end, by its index, the service's own; NO_HANDLE for a place freed by drop_client. */
     ends : slop_os.Channel[MAX_CLIENTS],
+    /** How many places have been used, from the first, freed ones included: 0 to MAX_CLIENTS. */
     count : usize,
 }
 
 /**
- * One more client, bound to port, in the place of one that went away if there is one, so a service has room for
- * MAX_CLIENTS at once rather than in its life: false if there's no room, or it can't be bound.
+ * Add a client, bound to a port, in the place of one that went away if there is one, so a service has room for
+ * MAX_CLIENTS at once rather than in its life.
+ *
+ * @param clients The service's clients.
+ * @param port The service's port, which the end is bound to, persistently, for readable and peer-closed, under the
+ *     client's index as its key; a binding left under that key is undone first.
+ * @param end The client's end, which the clients keep when it's added; not closed when it isn't.
+ * @return True once it's added; false if there's no room, or it can't be bound.
  */
 add_client #export :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slop_os.Channel) -> bool {
     return add_client_index(clients, port, end) is_some
 }
 
-/** add_client's, giving where the client went, for state a service keeps per client. */
+/**
+ * Add a client as add_client does, giving where it went, for state a service keeps per client.
+ *
+ * @param clients The service's clients.
+ * @param port The service's port, which the end is bound to under the client's index.
+ * @param end The client's end, which the clients keep when it's added; not closed when it isn't.
+ * @return The client's index, 0 to MAX_CLIENTS - 1, the lowest freed place or the next; null if there's no room, or
+ *     it can't be bound.
+ */
 add_client_index #export :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slop_os.Channel) -> usize? {
     index := clients.count
     for i in cast[usize](0)..<clients.count {
@@ -67,7 +87,14 @@ add_client_index #export :: fn(clients: ptr[mut Clients], port: slop_os.Port, en
     return index
 }
 
-/** A client that went away, closed. */
+/**
+ * Let go of a client that went away: close its end, and free its place for the next client.
+ *
+ * Its port binding is left, undone when its place is next used; count doesn't shrink.
+ *
+ * @param clients The service's clients.
+ * @param index The client's index; one past MAX_CLIENTS is nothing.
+ */
 drop_client #export :: fn(clients: ptr[mut Clients], index: usize) {
     if index < clients.ends.count {
         _ = slop_os.handle_close(cast[slop_os.Handle](clients.ends[index]))
@@ -75,7 +102,12 @@ drop_client #export :: fn(clients: ptr[mut Clients], index: usize) {
     }
 }
 
-/** A label's text, without its padding. */
+/**
+ * Give a grant's label as text, without its padding.
+ *
+ * @param label The label, padded with zeros to GRANT_LABEL_SIZE bytes.
+ * @return Its bytes up to the first zero, all of them if there's none: a view into label, good while it is.
+ */
 text_of_label #export :: fn(label: ptr[u8[slop_os.GRANT_LABEL_SIZE]]) -> string {
     count : usize = 0
     for byte in label^ {
@@ -87,7 +119,16 @@ text_of_label #export :: fn(label: ptr[u8[slop_os.GRANT_LABEL_SIZE]]) -> string 
     return string_of(&label^[0], count)
 }
 
-/** Text in memory, like the kernel's command line: its bytes up to its first zero, mapped read-only. */
+/**
+ * Map text in memory, like the kernel's command line, read-only, and give it as text.
+ *
+ * The mapping isn't undone, nor its addresses given back, so the text stays good for the process's life.
+ *
+ * @param block The process's startup block, whose address space it's mapped into.
+ * @param memory The memory holding the text, which stays the caller's.
+ * @return Its bytes up to its first zero, all of them if there's none; null if its size couldn't be read, or it
+ *     couldn't be mapped.
+ */
 text_of #export :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> string? {
     size :: slop_os.memory_size(memory) or_return null
     address :: runtime.reserve_addresses(cast[usize](size)) or_return null
@@ -105,8 +146,16 @@ text_of #export :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) 
 }
 
 /**
- * The system configuration in memory, as the build wrote it into the boot set as system.records (decisions/0110):
- * copied out of it, and checked with system_records.check, as the build checked it. The copy, or why not.
+ * Read the system configuration from memory, as the build wrote it into the boot set as system.records
+ * (decisions/0110): copied out of it, and checked with system_records.check, as the build checked it.
+ *
+ * The memory is mapped only while it's copied.
+ *
+ * @param block The process's startup block, whose address space it's mapped into.
+ * @param memory The memory holding the records, which stays the caller's.
+ * @return The copy, from context's allocator, the caller's to free; or, as the error, why not: a Problem whose
+ *     service is MAX_SERVICES when it can't be read, is too small, or can't be copied without memory, or
+ *     system_records.check's when it doesn't check.
  */
 read_records #export :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> Result[ptr[mut system_records.SystemRecords], system_records.Problem] {
     unreadable :: system_records.Problem.{reason = "can't be read", service = system_records.MAX_SERVICES}
@@ -135,7 +184,14 @@ read_records #export :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Mem
     }
 }
 
-/** What follows prefix in the word of text that starts with it, or null. */
+/**
+ * Find a word of text that starts with a prefix, and give what follows it, as for "name=value" on a command line.
+ *
+ * @param text The words, which single spaces separate.
+ * @param prefix What the word starts with.
+ * @return The rest of the first word that starts with prefix, a view into text, empty if the word is just prefix;
+ *     null if no word does.
+ */
 word_after #export :: fn(text: string, prefix: string) -> string? {
     start : usize = 0
     for character, i in text {
@@ -150,7 +206,12 @@ word_after #export :: fn(text: string, prefix: string) -> string? {
     return word_from(text, start, text.count, prefix)
 }
 
-/** A decimal number, or null if text isn't one or it's too big for a u64. */
+/**
+ * Read a decimal number.
+ *
+ * @param text The number's digits, nothing else: no sign, no spaces.
+ * @return Its value; null if text is empty, isn't all digits, or has more than 19 of them, which a u64 may not hold.
+ */
 number_of #export :: fn(text: string) -> u64? {
     if text.count == 0 || text.count > 19 {
         return null
@@ -165,7 +226,16 @@ number_of #export :: fn(text: string) -> u64? {
     return value
 }
 
-/** What follows prefix in text's bytes from start to end, if they start with it. */
+/**
+ * Give what follows a prefix in a word of text, if it starts with it.
+ *
+ * @param text The whole text, as the kernel's command line, which the word is in.
+ * @param start Where the word starts, in bytes.
+ * @param end Where the word ends, in bytes, at most text's count.
+ * @param prefix What the word has to start with.
+ * @return The rest of the word after prefix, a view into text; null if it doesn't start with it, or start and end
+ *     aren't a range of text.
+ */
 word_from :: fn(text: string, start: usize, end: usize, prefix: string) -> string? {
     if end < start || end > text.count {
         return null
@@ -177,7 +247,13 @@ word_from :: fn(text: string, start: usize, end: usize, prefix: string) -> strin
     return word[prefix.count..<word.count]
 }
 
-/** Whether word is one of the words of text, which spaces separate. */
+/**
+ * Tell whether a word is one of the words of text, as a flag on a command line.
+ *
+ * @param text The words, which single spaces separate.
+ * @param word The word, compared whole and exactly.
+ * @return True if one of text's words is word.
+ */
 has_word #export :: fn(text: string, word: string) -> bool {
     start : usize = 0
     for character, i in text {
@@ -191,7 +267,16 @@ has_word #export :: fn(text: string, word: string) -> bool {
     return is_word_at(text, start, text.count, word)
 }
 
-/** Whether text's bytes from start to end are word. */
+/**
+ * Tell whether a part of text is a word.
+ *
+ * @param text The whole text, as the kernel's command line, which the part is in.
+ * @param start Where the part starts, in bytes.
+ * @param end Where it ends, in bytes, at most text's count.
+ * @param word The word, compared whole and exactly.
+ * @return True if text's bytes from start to end are word's; false otherwise, or if start and end aren't a range of
+ *     text.
+ */
 is_word_at :: fn(text: string, start: usize, end: usize, word: string) -> bool {
     if end < start || end > text.count {
         return false

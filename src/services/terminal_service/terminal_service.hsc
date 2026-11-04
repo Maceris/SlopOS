@@ -1,10 +1,10 @@
 /**
- * The terminal service (decisions/0136, 0137, 0138, design/console-and-sessions.md §2, §3), which replaced the console
- * service of decisions/0075 and 0077. It serves the console's terminal over the terminal protocol, keeping what it shows
- * in a screen model (src/screen): what its clients write goes into the model, a grapheme cluster at a time, made safe
- * (safe_text) so text can't become a control sequence, and is shown on the first serial line through the VT adapter and,
- * if there's one, on the framebuffer, drawn from the model (src/glyph_screen): one console, shown on both. The top row
- * is the status line, which only this service writes; programs have the rows below it.
+ * The terminal service (decisions/0136, 0137, 0138, design/console-and-sessions.md §2, §3), which replaced the
+ * console service of decisions/0075 and 0077. It serves the console's terminal over the terminal protocol, keeping
+ * what it shows in a screen model (src/screen): what its clients write goes into the model, a grapheme cluster at a
+ * time, made safe (safe_text) so text can't become a control sequence, and is shown on the first serial line through
+ * the VT adapter and, if there's one, on the framebuffer, drawn from the model (src/glyph_screen): one console, shown
+ * on both. The top row is the status line, which only this service writes; programs have the rows below it.
  *
  * What's typed, on the serial line or the seat's keyboards, which the input service types through its keymap, becomes
  * typed input for the client that reads it first, except the secure attention key, Ctrl+Alt+Delete (on the serial line
@@ -31,9 +31,9 @@
  * attention key opens the chooser instead of this screen, and G there shows what its user has let programs keep
  * (grants_view.hsc, decisions/0158); a request for another account opens the elevation screen instead (elevation.hsc),
  * and H there shares a volume with another user (share_form.hsc).
- * Both are reached
- * through connectors, dialed again when they go, with the banner shown on each new serial line. Without a serial line
- * it keeps the model and shows nothing.
+ *
+ * The serial line and the input service are reached through connectors, dialed again when they go, with the banner
+ * shown on each new serial line. Without a serial line it keeps the model and shows nothing.
  */
 package terminal_service
 
@@ -59,166 +59,263 @@ import screen from "../../screen"
 import glyph_screen from "../../glyph_screen"
 import vt from "../../vt"
 
-// The serial line and the seat are bound to the port above the clients
+/** The port key the serial line's connection is bound under, above the clients'. */
 SERIAL_KEY : u64 : 1000
+/** The port key the input service's connection is bound under, above the clients'. */
 SEAT_KEY : u64 : 1001
+/** The port key the account service's connection is bound under, above the clients'. */
 ACCOUNTS_KEY : u64 : 1002
+/** The line shown on each new serial line before anything else. */
 BANNER :: "SlopOS console"
+/** No channel: what a connection or end not had is set to. */
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
+/** The columns between tab stops: a tab is written as spaces to the next multiple of it. */
 TAB_STOP : u16 : 8
+/** The console's width in columns, the screen model's. */
 COLUMNS : u16 : screen.COLUMNS
+/** The console's height in rows, the status line's included. */
 ROWS : u16 : screen.ROWS
+/** The rows programs have, below the status line; a program's row 0 is the console's row 1. */
 PROGRAM_ROWS : u16 : screen.PROGRAM_ROWS
 
-// What the status line says: no one has logged in until sessions (10c)
+/** The status line with no one logged in to the view, as before a login or with no account service. */
 STATUS :: " SlopOS │ console │ no session"
+/** The status line while the secure attention key's screen is up. */
 STATUS_ATTENTION :: " SlopOS │ console │ secure attention"
+/** The status line during first-boot setup, followed by the keyboard layout. */
 STATUS_SETUP :: " SlopOS │ console │ first-boot setup"
+/** The status line on the login screen, followed by the keyboard layout. */
 STATUS_LOGIN :: " SlopOS │ console │ log in"
+/** The status line of the session with no user, on a boot with no accounts. */
 STATUS_NO_ACCOUNTS :: " SlopOS │ console │ no accounts"
+/** The status line while the console is locked. */
 STATUS_LOCKED :: " SlopOS │ console │ locked"
 
-// Output waiting for the serial line, and how many Writes may be in flight on it, which its ring holds
+/** The bytes of output kept waiting for the serial line; what's emitted past them is dropped. */
 OUTPUT_BYTES :: 16384
+/** How many Writes may be sent on the serial line before one is answered, which its ring holds. */
 MAX_IN_FLIGHT : u32 : 2
 
+/** The USB HID usage of Backspace, which takes back the last cluster typed in a field. */
 USAGE_BACKSPACE : u16 : 0x2a
+/** The USB HID usage of F2, which changes the keyboard layout on the setup and login screens. */
 USAGE_F2 : u16 : 0x3b
+/** The USB HID usage of C, which with Control is an interrupt for the program. */
 USAGE_C : u16 : 0x06
+/** The USB HID usage of E, which ends the program chosen on the secure attention key's screen. */
 USAGE_E : u16 : 0x08
+/** The USB HID usage of L, which locks the console from the secure attention key's screen. */
 USAGE_L : u16 : 0x0f
+/** The USB HID usage of N, which logs in another session from the secure attention key's screen. */
 USAGE_N : u16 : 0x11
+/** The USB HID usage of O, which logs out from the secure attention key's screen. */
 USAGE_O : u16 : 0x12
+/** The USB HID usage of S, which switches to the next session from the secure attention key's screen. */
 USAGE_S : u16 : 0x16
+/** The USB HID usage of Enter. */
 USAGE_ENTER : u16 : 0x28
+/** The USB HID usage of Escape. */
 USAGE_ESCAPE : u16 : 0x29
+/** The USB HID usage of Delete, which with Control and Alt is the secure attention key. */
 USAGE_DELETE : u16 : 0x4c
+/** The USB HID usage of the Down arrow. */
 USAGE_DOWN : u16 : 0x51
+/** The USB HID usage of the Up arrow. */
 USAGE_UP : u16 : 0x52
-// The panel's rows: where the list of programs starts
+/** The panel row the secure attention key's screen starts its list of programs on. */
 PROGRAMS_ROW : u16 : 7
+/** The most bytes of the boot before's panic line kept to show; a longer one is cut short. */
 PANIC_TEXT :: 160
-/** Bytes typed on the serial line decoded at a time, fewer than the events held */
+/**
+ * Bytes typed on the serial line decoded at a time, so the trusted path looks at each slice's keys before the next is
+ * decoded; fewer than the events held.
+ */
 FEED_SLICE : usize : 8
-// The most sessions' views, and a client's with none
+/** The most sessions' views, so the most sessions at once, the login screen's included. */
 MAX_VIEWS :: 4
+/** No view: a client's view when it's in none, and another_session's answer when there's no other. */
 NO_VIEW : usize : 0xffffffff
-/** The most bytes of the line the input's owner is editing */
+/** The most bytes of the line the input's owner is editing kept; a longer line is cut short. */
 INPUT_LINE_BYTES :: 512
 
-/** First-boot setup's steps (decisions/0148). */
+/** Which step the trusted path's own screen is at: first-boot setup (decisions/0148), login, elevation, or sharing. */
 SetupStep :: enum {
+    /** None: no screen of setup's is up, and keys go to programs or the secure attention key's screen. */
     Off,
+    /** The new account's name being typed. */
     Name,
+    /** The new account's password being typed, checked against the rules on Enter. */
     Password,
+    /** The new account's password typed again, compared on Enter. */
     Again,
-    /** The account service making the account, which takes Argon2id's time */
+    /** The account service making the account, which takes Argon2id's time; keys are ignored. */
     Making,
-    /** The recovery code shown, until Enter */
+    /** The recovery code shown, until Enter. */
     Code,
-    /** Logging in (decisions/0150): the name, the password, and the session being made */
+    /** Logging in (decisions/0150): the name being typed. */
     LoginName,
+    /** Logging in: the password being typed, or, while locked, the session's user's. */
     LoginPassword,
+    /** Logging in: the account service opening the home and the session being made; keys are ignored. */
     LoggingIn,
-    /** Elevation (decisions/0158): the administrator's name and password, before the new account's */
+    /** Elevation (decisions/0158): the administrator's name being typed, before the new account's. */
     AdminName,
+    /** Elevation: the administrator's password being typed. */
     AdminPassword,
-    /** Sharing a volume: its name, the member's, and the account service sharing it */
+    /** Sharing a volume: its name being typed. */
     ShareName,
+    /** Sharing a volume: the member's name being typed. */
     ShareMember,
+    /** Sharing a volume: the account service sharing it; keys are ignored. */
     Sharing,
 }
 
-/** Setup's first row of fields: the name, the password, it again, then a blank row and its message */
+/** The panel row of setup's first field: the name, the password, it again, then a blank row and its message. */
 SETUP_FIELDS_ROW : u16 : 6
-// A field's bytes, and a setup message's
+/** The most bytes a field typed on setup's screens holds; what's typed past them is dropped. */
 FIELD_BYTES :: 256
+/** The most bytes of what setup's screens last said; a longer message is cut short. */
 MESSAGE_BYTES :: 160
 
+/**
+ * The terminal service's state: its connections, the sessions' views, the input waiting, and the trusted path's
+ * screens. There's one, made by main and kept for as long as the service runs.
+ */
 Service :: struct {
+    /** The kernel debug log it was given, or NO_HANDLE without one. */
     log : slop_os.DebugLog,
+    /** The port every connection is bound to and the service waits on: clients under their index, others by key. */
     port : slop_os.Port,
-    // The connectors to the serial line and the input service, and the connections they gave, NONE without
+    /** The connector to the serial line, dialed again whenever the line goes; NONE without one. */
     serial_connector : slop_os.Channel,
+    /** The connector to the input service, dialed again whenever it goes; NONE without one. */
     seat_connector : slop_os.Channel,
+    /** The serial line's connection, bound under SERIAL_KEY; NONE while there's none. */
     line_end : slop_os.Channel,
-    // Whether a Read to the serial line is waiting for its answer
+    /** Whether a Read to the serial line is waiting for its answer, so another isn't sent. */
     line_reading : bool,
+    /** The input service's connection, bound under SEAT_KEY; NONE while there's none. */
     seat_end : slop_os.Channel,
-    // Whether a Read to the input service is waiting for its answer, and the keys it's given that wait for room
-    // among the decoded input, in order, with their text
+    /** Whether a Read to the input service is waiting for its answer, so another isn't sent. */
     seat_reading : bool,
+    /**
+     * The keys the input service gave that wait for room among the decoded input, in order, the first typed_count;
+     * each one's text_start is into typed_text.
+     */
     typed : seat.Event[TYPED_KEYS],
+    /** How many of typed are waiting, 0 to TYPED_KEYS; keys past them are dropped. */
     typed_count : usize,
+    /** The waiting keys' text, UTF-8, the first typed_text_count bytes. */
     typed_text : u8[TYPED_TEXT],
+    /** How many bytes of typed_text are used, 0 to TYPED_TEXT. */
     typed_text_count : usize,
-    // What's waiting to be sent on the serial line: a ring, from output_start
+    /** What's waiting to be sent on the serial line: a ring of output_count bytes from output_start. */
     output : u8[OUTPUT_BYTES],
+    /** Where in output the oldest byte waiting is, below OUTPUT_BYTES. */
     output_start : usize,
+    /** How many bytes are waiting in output, 0 to OUTPUT_BYTES. */
     output_count : usize,
+    /** How many Writes on the serial line haven't been answered, 0 to MAX_IN_FLIGHT. */
     in_flight : u32,
-    // The sessions' views (decisions/0151), the one in use (view), which is the active one but while another's client
-    // is served, and the active one, shown; each client's view, NO_VIEW for one in none, which writes to the active one's
+    /** The sessions' views (decisions/0151), each in use or not. */
     views : View[MAX_VIEWS],
+    /**
+     * The index of the view in use, which view() gives: the active one, but while another session's client is served,
+     * that session's.
+     */
     viewing : usize,
+    /** The index of the active view, the one shown on the console. */
     active : usize,
+    /** Each client's view by the client's index; NO_VIEW for a client in none, which writes to the active one. */
     client_view : usize[service_kit.MAX_CLIENTS],
-    // The framebuffer it's drawn on, if there's one
+    /** The framebuffer it's drawn on, mapped, valid only when has_canvas. */
     canvas : glyph_screen.Canvas,
+    /** Whether there's a framebuffer to draw on; without one only the serial line shows the console. */
     has_canvas : bool,
-    /** Whether the secure attention key's screen is up, which every key goes to */
+    /** Whether the secure attention key's screen is up, which every key goes to. */
     attention : bool,
-    /** A new keyboard's code, shown on the status line until it's typed, 0 for none */
+    /** A new keyboard's code, shown on the status line until it's typed on it; 0 for none. */
     waiting_code : u32,
-    // The session's programs, from whoever runs them (decisions/0139), and the one chosen on the panel
+    /** The session channel to whoever runs the console's programs (decisions/0139), the session manager; or NONE. */
     session_end : slop_os.Channel,
+    /** A port of session_end's own, which its answers are waited on, apart from the service's port. */
     session_port : slop_os.Port,
+    /** The programs listed for the secure attention key's screen, the first program_count. */
     programs : session.Program[session.MAX_PROGRAMS],
+    /** How many of programs are used, 0 to session.MAX_PROGRAMS. */
     program_count : usize,
+    /** The index in programs of the one chosen on the panel, which E ends. */
     chosen : usize,
-    // The first line of the boot before's panic record, if it stopped for a fault, and whether the panel's shown it
+    /** The first line of the boot before's panic record, if it stopped for a fault, the first panic_count bytes. */
     panic : u8[PANIC_TEXT],
+    /** How many bytes of panic are used; 0 if the boot before didn't panic. */
     panic_count : usize,
+    /** Whether the secure attention key's screen has been up since, so the status line stops pointing to it. */
     panic_seen : bool,
-    // Input waiting for the active view's owner: decoded, as the trusted path takes what's its own first
+    /** The decoder of what's typed on the serial line, which keeps an escape sequence cut between reads. */
     decoder : vt.Decoder,
+    /**
+     * The input waiting for the active view's owner, decoded as terminal events, so the trusted path takes what's its
+     * own before any program sees it.
+     */
     decoded : vt.Decoded,
-    // The account service, through its connector, and first-boot setup: its step, the field being typed, the name and
-    // password so far, what it last said, and the recovery code to show
+    /** The connector to the account service, dialed again whenever it goes; NONE for a boot with no accounts. */
     accounts_connector : slop_os.Channel,
+    /** The account service's connection, bound under ACCOUNTS_KEY; NONE while there's none. */
     accounts_end : slop_os.Channel,
+    /** The step of the trusted path's own screen: setup, login, elevation or sharing; Off for none. */
     setup : SetupStep,
+    /** The field being typed, the first field_count bytes; zeroed whenever a step changes. */
     field : u8[FIELD_BYTES],
+    /** How many bytes of field are used, 0 to FIELD_BYTES. */
     field_count : usize,
+    /** The account name taken from a field, for setup, login, lock or elevation, the first name_count bytes. */
     name : u8[account_records.MAX_NAME_BYTES],
+    /** How many bytes of name are used. */
     name_count : usize,
+    /** The new account's password typed once, to compare with it again; zeroed once it's sent. */
     password : u8[FIELD_BYTES],
+    /** How many bytes of password are used. */
     password_count : usize,
+    /** What the screen last said, such as why something was refused, the first message_count bytes. */
     message : u8[MESSAGE_BYTES],
+    /** How many bytes of message are used; 0 for nothing said. */
     message_count : usize,
+    /** The recovery code of the account just made, shown once at the Code step, zeroed once it's left. */
     code : u8[accounts.RECOVERY_TEXT_BYTES],
-    // The clients, and the keyboard layout the login screen chose
+    /** The terminal protocol's clients, each bound to port under its index. */
     connected : service_kit.Clients,
+    /** The keyboard layout's name, as keymaps knows it, chosen on the login screen and given to new sessions. */
     layout : string,
-    // The view a login for another session was started from, to go back to; and whether the login screen is unlocking
+    /** The view a login for another session was started from, which Escape goes back to. */
     previous : usize,
+    /** Whether the login screen is unlocking the console, asking only for the session's user's password. */
     unlocking : bool,
-    // Whether the secure attention key brought up the powerbox's chooser, and its state
+    /** Whether the secure attention key brought up the powerbox's chooser, which keys then go to. */
     choosing : bool,
+    /** The chooser's state, while choosing. */
     chooser : Chooser,
-    // Whether its G brought up the grants view, and what it lists
+    /** Whether G brought up the grants view, which keys then go to. */
     granting : bool,
+    /** The grants view's state, while granting. */
     grants : GrantsView,
-    // Whether the setup screen is elevation's, and the administrator's name and password typed there
+    /** Whether setup's screen is elevation's, making an account a program asked for. */
     elevating : bool,
+    /** The administrator's name typed on the elevation screen, the first admin_count bytes. */
     admin : u8[account_records.MAX_NAME_BYTES],
+    /** How many bytes of admin are used. */
     admin_count : usize,
+    /** The administrator's password typed on the elevation screen; zeroed once it's sent. */
     admin_password : u8[FIELD_BYTES],
+    /** How many bytes of admin_password are used. */
     admin_password_count : usize,
-    // Whether the setup screen is the share form, whether what it asked takes a member out, and the volume's name
+    /** Whether setup's screen is the share form. */
     sharing : bool,
+    /** Whether the share form's request takes a member out of the volume (Unshare), not shares it. */
     unsharing : bool,
+    /** The volume's name typed on the share form, the first share_name_count bytes. */
     share_name : u8[account_records.MAX_NAME_BYTES],
+    /** How many bytes of share_name are used. */
     share_name_count : usize,
 }
 
@@ -227,33 +324,74 @@ Service :: struct {
  * is; one is shown at a time, and the others keep what their programs write for when they're switched to.
  */
 View :: struct {
+    /** Whether the view belongs to a session, or to a login screen; one not in use is free for another. */
     in_use : bool,
+    /** The screen model: the status line, the program's lines or whole screen, and the trusted path's panel. */
     screen : screen.Screen,
+    /** The index of the client that owns its input, the first to Read; null for none. */
     owner : usize?,
+    /** How many events the owner's Read asked for, which deliver sends at most; 0 when no Read is held. */
     held : u32,
-    // The line the owner's editing, the cursor in it, and whether it's drawn, from which row
+    /** The line the owner's editing (InputLine, decisions/0147), the first input_count bytes, UTF-8. */
     input : u8[INPUT_LINE_BYTES],
+    /** How many bytes of input are used; 0 for no line, which isn't drawn. */
     input_count : usize,
+    /** Where in input the cursor is, a byte offset, 0 to input_count. */
     input_cursor : usize,
+    /** Whether the line is drawn below the output now. */
     input_drawn : bool,
+    /** The program row the line starts on, while it's drawn. */
     input_row : u16,
-    // While it's drawn, where the output goes on: its row and column, and the lines' scrolls then
+    /** While the line's drawn, the program row the output goes on from. */
     output_row : u16,
+    /** While the line's drawn, the column the output goes on from. */
     output_column : u16,
+    /** The lines' scroll count when the line was drawn, so output_row is moved up by what's scrolled since. */
     output_scrolls : u64,
-    // Whose session it is, and the session manager's number for it
+    /** The name of the session's user, the first user_count bytes; empty for a session with no user. */
     user : u8[account_records.MAX_NAME_BYTES],
+    /** How many bytes of user are used. */
     user_count : usize,
+    /** Whether a session runs in the view, made by the session manager; false on a login screen. */
     logged_in : bool,
+    /** The session manager's number for the session, valid while logged_in. */
     session : u32,
-    // Its powerbox's prompt connection, NONE without one, and the request waiting on it for the user
+    /** Its powerbox's prompt connection, bound under PROMPT_KEY plus the view's index; NONE without one. */
     prompt_end : slop_os.Channel,
+    /** Whether a request from the powerbox is waiting on the user, in ask. */
     asking : bool,
+    /** The powerbox's request waiting, while asking. */
     ask : Asked,
-    /** A connection of its own to the session's home, for the grants view; NONE without one */
+    /** A connection of its own to the session's home, for the grants view and the share form; NONE without one. */
     home_end : slop_os.Channel,
 }
 
+/**
+ * Serve the console's terminal: show what programs write on the serial line and the framebuffer, give them what's
+ * typed, and run the trusted path, the secure attention key's screen, first-boot setup, login, and the sessions.
+ *
+ * It runs until the system stops, serving its clients and the connections it dials in one loop.
+ *
+ * @param log The kernel debug log, for its own messages. Without one, they go nowhere.
+ * @param serial_line A connector to the serial line, dialed for its connection, and again whenever it goes. Without
+ *     one, nothing is shown on a serial line, and the screen model alone keeps what's written.
+ * @param input A connector to the input service, which gives the seat's keyboards' keys, the secure attention key, and
+ *     new keyboards' codes. Without one, only what's typed on the serial line is input.
+ * @param framebuffer The framebuffer's pixels, a memory object mapped to draw the console on. Without it, or without
+ *     framebuffer_layout, the console is shown on the serial line only.
+ * @param framebuffer_layout A page holding the framebuffer's layout (slop_os.FramebufferLayout): its width, height and
+ *     pitch. Needed with framebuffer.
+ * @param programs A session channel to the session manager, which makes sessions, lists and ends their programs, and is
+ *     told which session is shown. Without one, no session is made and the secure attention key's screen lists no
+ *     programs.
+ * @param last_panic The boot before's panic record, a memory object of text, if it stopped for a fault; its first line
+ *     is shown on the secure attention key's screen and pointed to from the status line. Without one, nothing is.
+ * @param accounts_service A connector to the account service, for first-boot setup, login, locking, elevation and
+ *     sharing. Without one, a boot with no accounts, the session with no user is made at once.
+ * @param clients The terminal protocol's listener, which programs connect through; their Connects bring more clients.
+ * @return 2 if its port couldn't be made, or 3 if the listener couldn't be added as a client; it doesn't return
+ *     otherwise.
+ */
 main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?, input: os.Channel[connector.Connector]?,
     framebuffer: slop_os.Memory?, framebuffer_layout: slop_os.Memory?, programs: os.Channel[session.Session]?,
     last_panic: slop_os.Memory?, accounts_service: os.Channel[connector.Connector]?, clients: os.Listener[terminal.Terminal]) -> int {
@@ -340,7 +478,17 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
     }
 }
 
-/** A canvas on the framebuffer, if there's one: its pixels mapped, as its layout says they're laid out. */
+/**
+ * Make a canvas on the framebuffer: its layout page mapped read only, and its pixels mapped readable and writable, as
+ * the layout says they're laid out.
+ *
+ * The mappings are kept for as long as the service runs; one made before a failure isn't undone.
+ *
+ * @param framebuffer The framebuffer's pixels, a memory object; null for no framebuffer.
+ * @param layout_page A page holding its slop_os.FramebufferLayout; null for none.
+ * @return The canvas; null without either memory object, if addresses or mappings couldn't be had, if the pixels'
+ *     memory is smaller than pitch times height, or if glyph_screen can't draw on the layout.
+ */
 canvas_on :: fn(framebuffer: slop_os.Memory?, layout_page: slop_os.Memory?) -> glyph_screen.Canvas? {
     pixels :: framebuffer or_return null
     page :: layout_page or_return null
@@ -360,7 +508,13 @@ canvas_on :: fn(framebuffer: slop_os.Memory?, layout_page: slop_os.Memory?) -> g
     return made
 }
 
-/** What changed, drawn on the framebuffer, with the cursor where a program's is. */
+/**
+ * Draw what changed in the view in use on the framebuffer, if there's one, with the cursor where a program's is; the
+ * cursor isn't drawn while the secure attention key's screen is up.
+ *
+ * @param service The service's state, from its main loop: when has_canvas, its canvas is drawn on from the view in
+ *     use's screen model, whose changed rows are marked drawn; without a canvas nothing happens.
+ */
 draw_framebuffer :: fn(service: ptr[mut Service]) {
     if service.has_canvas {
         glyph_screen.draw(&service.canvas, &view(service).screen, !service.attention)
@@ -368,8 +522,13 @@ draw_framebuffer :: fn(service: ptr[mut Service]) {
 }
 
 /**
- * A serial line through its connector, if there's one: bound to the port, with the banner shown, the rows below the
- * status line made the ones that scroll, the status line drawn, and a Read held.
+ * Dial the serial line through its connector, if there's one: bind its connection to the port under SERIAL_KEY, show
+ * the banner, make the rows below the status line the ones that scroll, draw the status line, and hold a Read.
+ *
+ * It waits for the connector's answer. If the dial or the bind fails, the line stays NONE, and isn't tried again until
+ * something calls this again. Writes in flight are forgotten, as the old line's are gone.
+ *
+ * @param service The service, its line_end NONE.
  */
 dial_serial :: fn(service: ptr[mut Service]) {
     if cast[slop_os.Handle](service.serial_connector) == slop_os.NO_HANDLE {
@@ -402,7 +561,14 @@ dial_serial :: fn(service: ptr[mut Service]) {
     pump(service)
 }
 
-/** The input service through its connector, if there's one: bound to the port, with a Read held. */
+/**
+ * Dial the input service through its connector, if there's one: bind its connection to the port under SEAT_KEY, and
+ * hold a Read.
+ *
+ * It waits for the connector's answer. If the dial or the bind fails, the input service stays NONE.
+ *
+ * @param service The service, its seat_end NONE.
+ */
 dial_seat :: fn(service: ptr[mut Service]) {
     if cast[slop_os.Handle](service.seat_connector) == slop_os.NO_HANDLE {
         return void
@@ -422,6 +588,25 @@ dial_seat :: fn(service: ptr[mut Service]) {
     read_seat(service)
 }
 
+/**
+ * Serve every request waiting from one client, in its own session's view.
+ *
+ * Writes, cursor moves, clears and scrolls go into the view's screen model, and onto the serial line if the view is
+ * shown and nothing of the trusted path's is up; the line being typed is taken away first and drawn again after. A
+ * Read makes the client the input's owner if there's none (it holds until the owner goes); an InputLine from the
+ * owner replaces the line. Describe is answered at once; requests it doesn't know are answered Unsupported. A Connect's
+ * new connection is added as a client, or closed if there's no room.
+ *
+ * A client whose connection fails is dropped, and, if it owned its view's input, the input's freed and its line
+ * forgotten.
+ *
+ * @param service The service's state, from its main loop: the client's view is the one in use while it's served and
+ *     the active one after, and its screen model, input owner and line, and the serial queue change as requests say.
+ * @param connected The service's clients: a failing client is dropped from it, its end closed, and a Connect's new
+ *     end added.
+ * @param index The client's index in connected; one past its ends or with no end is skipped.
+ * @param into Where requests are received, reused for each.
+ */
 serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], index: usize, into: ptr[mut os.Incoming]) {
     if index >= connected.ends.count {
         return void
@@ -539,6 +724,13 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
     }
 }
 
+/**
+ * Tell whether a client owns the input of the view in use.
+ *
+ * @param service The service's state, whose view in use's input owner is compared; only read.
+ * @param index The client's index.
+ * @return True if it's the owner; false for any other, or when there's none.
+ */
 is_owner :: fn(service: ptr[mut Service], index: usize) -> bool {
     return match view(service).owner {
         case Some(owner) => owner == index
@@ -547,8 +739,13 @@ is_owner :: fn(service: ptr[mut Service], index: usize) -> bool {
 }
 
 /**
- * The line being typed taken away, if it's drawn: its rows cleared, and the cursor back where the output left off, the
- * row it was on moved up by the lines' scrolls since, or at the top if it's scrolled away.
+ * Take away the line being typed in the view in use, if it's drawn: clear its rows, and put the cursor back where the
+ * output left off, its row moved up by the lines' scrolls since, or at the top if it's scrolled away.
+ *
+ * The line itself is kept, to be drawn again by show_input.
+ *
+ * @param service The service's state: the view in use's line is marked not drawn, its rows cleared in its screen
+ *     model and the cursor moved back, and that's queued for the serial line if the view's shown.
  */
 hide_input :: fn(service: ptr[mut Service]) {
     if !view(service).input_drawn {
@@ -569,9 +766,15 @@ hide_input :: fn(service: ptr[mut Service]) {
 }
 
 /**
- * The line being typed drawn below the output, in lines, if there's one: from the start of the row after the output's,
- * if the output's has something on it, made safe a cluster at a time as written text is, with the cursor left where
- * the owner says.
+ * Draw the line being typed in the view in use below the output, if there's one and the program is on lines, not a
+ * whole screen.
+ *
+ * It starts at the start of the row after the output's, if the output's row has something on it, and is made safe a
+ * cluster at a time as written text is, a line break or tab shown as its substitute; the cursor's left where the owner
+ * says. Where the output left off is kept, for hide_input. A line already drawn isn't drawn twice.
+ *
+ * @param service The service's state: the view in use's line is written into its screen model, where the output left
+ *     off kept in the view, and queued for the serial line if the view's shown.
  */
 show_input :: fn(service: ptr[mut Service]) {
     if view(service).input_drawn || view(service).input_count == 0 || view(service).screen.using_whole || view(service).input_count > view(service).input.count {
@@ -643,19 +846,39 @@ show_input :: fn(service: ptr[mut Service]) {
     view(service).input_drawn = true
 }
 
-/** Whether two styles are the same. */
+/**
+ * Tell whether two styles are the same, so a style needn't be sent again.
+ *
+ * @param a A style, only read.
+ * @param b A style compared with a, only read; the order doesn't matter.
+ * @return True if their attributes, foregrounds and backgrounds are all the same.
+ */
 same_style :: fn(a: terminal.Style, b: terminal.Style) -> bool {
     return a.attributes == b.attributes && same_color(a.foreground, b.foreground) && same_color(a.background, b.background)
 }
 
+/**
+ * Tell whether two colors are the same, field by field.
+ *
+ * @param a A color, only read.
+ * @param b A color compared with a, only read; the order doesn't matter.
+ * @return True if their kinds, indexes and red, green and blue are all the same, including those their kind doesn't
+ *     use.
+ */
 same_color :: fn(a: terminal.Color, b: terminal.Color) -> bool {
     return a.kind == b.kind && a.index == b.index && a.red == b.red && a.green == b.green && a.blue == b.blue
 }
 
 /**
- * A Write: its text a grapheme cluster at a time, each in its run's style, made safe, into the screen and onto the
- * serial line; line breaks as CR LF, tabs as spaces to the next stop. The style and any link are ended with it, so
- * another client's text starts plain.
+ * Take a Write: put its text, a grapheme cluster at a time, each in its run's style, made safe, into the view's screen
+ * model and onto the serial line; line breaks as CR LF, tabs as spaces to the next stop.
+ *
+ * The style and any link are ended with it, so another client's text starts plain. Text past the last run takes the
+ * last run's style; a link whose bytes run past the links given isn't started.
+ *
+ * @param service The service, its view in use the writer's.
+ * @param into The received request, which text's items are read from.
+ * @param text The Write's text, its runs of styles and their links.
  */
 write :: fn(service: ptr[mut Service], into: ptr[os.Incoming], text: terminal.Text) {
     bytes :: os.items(into, text.text)
@@ -746,7 +969,12 @@ write :: fn(service: ptr[mut Service], into: ptr[os.Incoming], text: terminal.Te
     emit_program(service, &out)
 }
 
-/** The cursor: anywhere on a whole screen; on lines, only along the line being written. */
+/**
+ * Take a MoveCursor: anywhere on a whole screen; on lines, only along the line being written, the row ignored.
+ *
+ * @param service The service, its view in use the client's.
+ * @param position Where, in the program's rows and columns from 0; the screen model keeps it within them.
+ */
 move_cursor :: fn(service: ptr[mut Service], position: terminal.Position) {
     screen.move(&view(service).screen, position.column, position.row)
     grid :: screen.current(&view(service).screen)
@@ -762,8 +990,11 @@ move_cursor :: fn(service: ptr[mut Service], position: terminal.Position) {
 }
 
 /**
- * An area made blank: on a whole screen, each of its rows; on lines, the line being written, with the cursor at its
- * start, which is how a program redraws a line it's editing.
+ * Take a Clear: on a whole screen, blank the area's cells; on lines, blank the whole line being written, with the
+ * cursor at its start, whatever the area, which is how a program redraws a line it's editing.
+ *
+ * @param service The service, its view in use the client's.
+ * @param area The area, in the program's rows and columns; what's past the screen's edges is ignored.
  */
 clear :: fn(service: ptr[mut Service], area: terminal.Area) {
     storage : u8[128]
@@ -797,7 +1028,13 @@ clear :: fn(service: ptr[mut Service], area: terminal.Area) {
     }
 }
 
-/** An area scrolled, on a whole screen, where it's as wide as the screen, which is what a VT can scroll. */
+/**
+ * Take a Scroll: scroll an area of a whole screen, if it's as wide as the screen, which is what a VT can scroll. On
+ * lines, or for a narrower or empty area, nothing happens.
+ *
+ * @param service The service, its view in use the client's.
+ * @param scrolled The area, in the program's rows, and how many lines it scrolls by, as screen.scroll takes them.
+ */
 scroll :: fn(service: ptr[mut Service], scrolled: terminal.ScrollArea) {
     area :: scrolled.area
     if !view(service).screen.using_whole || area.column != 0 || area.columns < COLUMNS || area.row >= PROGRAM_ROWS || area.rows == 0 {
@@ -812,7 +1049,13 @@ scroll :: fn(service: ptr[mut Service], scrolled: terminal.ScrollArea) {
     emit_program(service, &out)
 }
 
-/** A screen of the program's own, or back to the lines it left. */
+/**
+ * Take a Screen: switch to a whole screen of the program's own, blank, or back to the lines it left; the status line is
+ * drawn again unless the secure attention key's screen is up.
+ *
+ * @param service The service, its view in use the client's.
+ * @param whole True for a whole screen, false for lines; asking for what's in use already does nothing.
+ */
 use_screen :: fn(service: ptr[mut Service], whole: bool) {
     if whole == view(service).screen.using_whole {
         return void
@@ -832,7 +1075,16 @@ use_screen :: fn(service: ptr[mut Service], whole: bool) {
     }
 }
 
-/** The status line's text, for whether the secure attention key's screen is up and any keyboard is waiting, drawn. */
+/**
+ * Make the view in use's status line say what's going on, and draw it.
+ *
+ * It names the screen that's up (secure attention, locked, elevation, sharing, setup or login with the keyboard
+ * layout), or the session's user; then, first of these that applies, a new keyboard's code to type, the powerbox's
+ * request waiting, or the boot before's fault not yet seen.
+ *
+ * @param service The service's state, which the status line's text is taken from: the view in use's status line is
+ *     set and queued for the serial line, whether or not the view is shown.
+ */
 update_status :: fn(service: ptr[mut Service]) {
     storage : u8[160]
     status := text_buffer.make(storage)
@@ -880,7 +1132,13 @@ update_status :: fn(service: ptr[mut Service]) {
     draw_status(service)
 }
 
-/** The status line, on the top row, inverse, with the cursor put back where it was. */
+/**
+ * Draw the view in use's status line on the serial line's top row, inverse, with the cursor put back where it was.
+ *
+ * It's emitted even when the view isn't the one shown.
+ *
+ * @param service The service's state: the view in use's status line is queued for the serial line, and marked drawn.
+ */
 draw_status :: fn(service: ptr[mut Service]) {
     storage : u8[384]
     out := text_buffer.make(storage)
@@ -899,8 +1157,15 @@ draw_status :: fn(service: ptr[mut Service]) {
 }
 
 /**
- * The secure attention key's screen: drawn over the program's rows, with the status line saying so. Nothing a program
- * writes is shown until it's left, though the screen model keeps it.
+ * Bring up the secure attention key's screen over the program's rows, with the status line saying so.
+ *
+ * Nothing a program writes is shown until it's left, though the screen model keeps it, and every key goes to it. If
+ * the view's powerbox has a request waiting, the chooser or, for an account, the elevation screen opens instead of the
+ * panel. Otherwise the session's programs are asked for, waiting for the session manager's answer, and the panel's
+ * drawn. Calling it while it's up does nothing.
+ *
+ * @param service The service's state, from its main loop: attention and panic_seen are set, and the status line,
+ *     panel, chooser or elevation screen drawn; it may wait on the session manager.
  */
 enter_attention :: fn(service: ptr[mut Service]) {
     if service.attention {
@@ -926,8 +1191,11 @@ enter_attention :: fn(service: ptr[mut Service]) {
 }
 
 /**
- * The panel: what's waiting (nothing, until the powerbox), the boot before's panic if it stopped for one, and the
- * console's programs with their memory, those that didn't answer a Ping marked, the chosen one inverse.
+ * Draw the secure attention key's panel: whose session it is, the boot before's panic if it stopped for one, the
+ * session's programs with their memory in KiB, those that didn't answer a Ping marked, the chosen one inverse, and the
+ * keys that do something here.
+ *
+ * @param service The service, its secure attention key's screen up, its programs listed.
  */
 draw_panel :: fn(service: ptr[mut Service]) {
     screen.show_panel(&view(service).screen, true)
@@ -992,7 +1260,15 @@ draw_panel :: fn(service: ptr[mut Service]) {
     redraw(service)
 }
 
-/** The session's programs, asked for; none without a session channel, or if it doesn't answer. */
+/**
+ * Ask the session manager for the view in use's session's programs (List), wait for the answer, and keep them in
+ * service.programs, as many as fit.
+ *
+ * None are kept without a session channel, or if it fails or answers anything but Programs.
+ *
+ * @param service The service's state: programs and program_count are replaced, none kept if none come back; it waits
+ *     for the session manager.
+ */
 list_programs :: fn(service: ptr[mut Service]) {
     service.program_count = 0
     reply :: ask_session(service, .List(view(service).session)) or_return void
@@ -1010,7 +1286,12 @@ list_programs :: fn(service: ptr[mut Service]) {
     }
 }
 
-/** The chosen program ended, and the list asked for again. */
+/**
+ * End the program chosen on the panel: ask the session manager to (End), waiting for its answer, whatever it is; then
+ * list the programs again, keep the choice within them, and draw the panel.
+ *
+ * @param service The service, its panel up; nothing happens with no program chosen.
+ */
 end_chosen :: fn(service: ptr[mut Service]) {
     if service.chosen >= service.program_count || service.chosen >= service.programs.count {
         return void
@@ -1025,7 +1306,17 @@ end_chosen :: fn(service: ptr[mut Service]) {
     draw_panel(service)
 }
 
-/** request, sent on the session channel, and its answer waited for; null without one. */
+/**
+ * Send a request to the session manager and wait, with no deadline, for its answer.
+ *
+ * The wait is on the session channel's own port, so nothing else is served meanwhile.
+ *
+ * @param service The service's state, whose session_end and session_port the request and answer go through; the
+ *     service's own port isn't served while it waits.
+ * @param request The request; it carries no items or handles, as it's built without an Outgoing of the caller's.
+ * @return The answer, received, for the caller to read; null without a session channel, if the request couldn't be
+ *     sent, or if the channel failed.
+ */
 ask_session :: fn(service: ptr[mut Service], request: session.Request) -> os.Incoming? {
     if service.session_end == NONE {
         return null
@@ -1045,7 +1336,15 @@ ask_session :: fn(service: ptr[mut Service], request: session.Request) -> os.Inc
     }
 }
 
-/** The first line of the boot before's panic record, without where in the kernel, as the root task logs it. */
+/**
+ * Keep the first line of the boot before's panic record to show, without where in the kernel (from " at " on), as the
+ * root task logs it; at most PANIC_TEXT bytes.
+ *
+ * @param service The service's state, at its start: the line is added to panic after any bytes it already holds, up
+ *     to PANIC_TEXT.
+ * @param last_panic The panic record, a memory object of text, which stays the caller's; null if the boot before
+ *     didn't panic, which keeps nothing, as does a record that can't be read.
+ */
 keep_panic :: fn(service: ptr[mut Service], last_panic: slop_os.Memory?) {
     record :: last_panic or_return void
     text :: service_kit.text_of(slop_os.startup_block(), record) or_return void
@@ -1074,7 +1373,13 @@ keep_panic :: fn(service: ptr[mut Service], last_panic: slop_os.Memory?) {
     runtime.log_info("showing the boot before's fault: %", first)
 }
 
-/** Back from the secure attention key's screen: the program's rows drawn again from the screen model. */
+/**
+ * Leave the secure attention key's screen, and the chooser or grants view on it: draw the program's rows again from the
+ * screen model, and the status line. Calling it while it isn't up does nothing.
+ *
+ * @param service The service's state: attention, choosing and granting are cleared, and the view in use's panel is
+ *     hidden and its status line and program rows queued for the serial line.
+ */
 leave_attention :: fn(service: ptr[mut Service]) {
     if !service.attention {
         return void
@@ -1089,14 +1394,24 @@ leave_attention :: fn(service: ptr[mut Service]) {
 }
 
 /**
- * Every row of what's shown, the panel or the program's, from the screen model, each up to its last cell that isn't
- * blank, then cleared; and the cursor where the program left it.
+ * Draw every program row of what the view in use shows, the panel or the program's, from the screen model, each up to
+ * its last cell that isn't blank, then cleared to its end; and put the cursor where it is in what's shown.
+ *
+ * @param service The service's state: the view in use's rows are queued for the serial line, whether or not it's
+ *     shown; the screen model isn't changed.
  */
 redraw :: fn(service: ptr[mut Service]) {
     redraw_rows(service, 0, PROGRAM_ROWS)
 }
 
-/** Rows first to last, not including last, of what's shown, as redraw draws them; and the cursor where it is. */
+/**
+ * Draw some program rows of what the view in use shows, as redraw draws them, and put the cursor where it is.
+ *
+ * @param service The service's state: the view in use's rows are queued for the serial line, whether or not it's
+ *     shown; the screen model isn't changed.
+ * @param first The first program row drawn.
+ * @param last_row The row after the last drawn; past PROGRAM_ROWS, it's PROGRAM_ROWS.
+ */
 redraw_rows :: fn(service: ptr[mut Service], first: u16, last_row: u16) {
     grid :: screen.shown(&view(service).screen)
     plain :: terminal.Style.{}
@@ -1143,14 +1458,29 @@ redraw_rows :: fn(service: ptr[mut Service], first: u16, last_row: u16) {
     emit(service, string_bytes(text_buffer.as_string(&out)))
 }
 
-/** A program's output for the serial line, unless the secure attention key's screen is up. */
+/**
+ * Queue a program's output for the serial line, unless the view in use isn't shown, or the secure attention key's
+ * screen or setup's is up; then it's only in the screen model, and is drawn from there later.
+ *
+ * @param service The service's state, whose attention, setup and view in use decide whether out is queued for the
+ *     serial line.
+ * @param out The output, VT sequences and text; copied, so it need only last the call.
+ */
 emit_program :: fn(service: ptr[mut Service], out: ptr[text_buffer.TextBuffer]) {
     if !service.attention && service.setup == .Off && is_shown(service) {
         emit(service, string_bytes(text_buffer.as_string(out)))
     }
 }
 
-/** bytes, queued for the serial line; what doesn't fit the queue is dropped. Without a serial line nothing is kept. */
+/**
+ * Queue bytes for the serial line, to be sent by pump.
+ *
+ * What doesn't fit the queue's OUTPUT_BYTES is dropped. Without a serial line connector nothing is kept; while the
+ * line is being dialed again, bytes are kept for it.
+ *
+ * @param service The service's state: the bytes go at the end of its output ring, as many as fit OUTPUT_BYTES.
+ * @param bytes The bytes, copied, so they need only last the call.
+ */
 emit :: fn(service: ptr[mut Service], bytes: u8[]) {
     if cast[slop_os.Handle](service.serial_connector) == slop_os.NO_HANDLE {
         return void
@@ -1167,7 +1497,12 @@ emit :: fn(service: ptr[mut Service], bytes: u8[]) {
     }
 }
 
-/** Writes on the serial line from the queue, while it has room for them. */
+/**
+ * Send what's queued on the serial line, in Writes of at most serial.MAX_BYTES, while fewer than MAX_IN_FLIGHT are
+ * unanswered; the answers aren't waited for. A Write that can't be sent stays queued.
+ *
+ * @param service The service; without a serial line, nothing is sent.
+ */
 pump :: fn(service: ptr[mut Service]) {
     if cast[slop_os.Handle](service.line_end) == slop_os.NO_HANDLE {
         return void
@@ -1197,9 +1532,13 @@ pump :: fn(service: ptr[mut Service]) {
 }
 
 /**
- * Another Read, held by the driver until something's typed, unless one's waiting: for as many bytes as the decoded
- * input has room for events, each byte at most one, so typing faster than a client reads waits in the driver rather than
- * being dropped here; with too little room, it's asked once a delivery makes some.
+ * Send the serial line another Read, held by the driver until something's typed, unless one's waiting.
+ *
+ * It asks for as many bytes as the decoded input has room for events, each byte at most one, up to serial.MAX_BYTES,
+ * so typing faster than a client reads waits in the driver rather than being dropped here. With room for fewer than
+ * FEED_SLICE, none is sent; it's asked again once a delivery makes some.
+ *
+ * @param service The service; without a serial line, nothing is sent.
  */
 read_more :: fn(service: ptr[mut Service]) {
     if service.line_end == NONE || service.line_reading || service.decoded.count + FEED_SLICE > service.decoded.events.count {
@@ -1212,7 +1551,11 @@ read_more :: fn(service: ptr[mut Service]) {
     service.line_reading = serial.send_request(service.line_end, service.port, &out) is_none
 }
 
-/** A Read to the input service, unless one's waiting. */
+/**
+ * Send the input service a Read for up to seat.MAX_EVENTS events, unless one's waiting; the answer comes to take_seat.
+ *
+ * @param service The service; without the input service, nothing is sent.
+ */
 read_seat :: fn(service: ptr[mut Service]) {
     if service.seat_end == NONE || service.seat_reading {
         return void
@@ -1223,7 +1566,15 @@ read_seat :: fn(service: ptr[mut Service]) {
     service.seat_reading = seat.send_request(service.seat_end, service.port, &out) is_none
 }
 
-/** What the serial line answered: Writes taken, and bytes typed, decoded. A line that's gone, dialed again. */
+/**
+ * Take everything the serial line has answered: a Written frees room for another Write; Data's bytes are decoded,
+ * FEED_SLICE at a time, each slice's keys screened by the trusted path before the next, and another Read is sent.
+ *
+ * A line that's failed is closed and dialed again, and the new one read until it's empty.
+ *
+ * @param service The service; without a serial line, nothing is read.
+ * @param into Where answers are received, reused for each.
+ */
 take_serial :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
     if cast[slop_os.Handle](service.line_end) == slop_os.NO_HANDLE {
         return void
@@ -1281,8 +1632,17 @@ take_serial :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
 }
 
 /**
- * The events decoded from first on, checked before anything reads them: the secure attention key brings up its screen,
- * and while that's up every key is its own, so none of them reach a program.
+ * Screen the events decoded from first on before anything reads them, giving the trusted path the keys that are its
+ * own.
+ *
+ * While setup's screen is up every key goes to setup_key. Otherwise Ctrl+Alt+Delete brings up the secure attention
+ * key's screen, and while that's up every key goes to it, the chooser or the grants view. Whatever came with the key,
+ * or while one of these screens was up, is dropped, so none of it reaches a program; once the chooser answers, or a
+ * session's key brings up another screen, what's left of the batch is dropped too.
+ *
+ * @param service The service's state, from its main loop: its decoded events from first on are screened, and dropped
+ *     or left for the owner, and keys may change the trusted path's screens, as they say.
+ * @param first The index in service.decoded of the first event not screened yet.
  */
 screen_keys :: fn(service: ptr[mut Service], first: usize) {
     decoded :: &service.decoded
@@ -1357,7 +1717,13 @@ screen_keys :: fn(service: ptr[mut Service], first: usize) {
     }
 }
 
-/** Whether a Ctrl+Alt+Delete is among the events from first on. */
+/**
+ * Tell whether a Ctrl+Alt+Delete is among the decoded events from first on.
+ *
+ * @param decoded The decoded input, which isn't changed.
+ * @param first The index of the first event looked at.
+ * @return True if a Delete key event with Control and Alt is there, other modifiers allowed.
+ */
 attention_in :: fn(decoded: ptr[vt.Decoded], first: usize) -> bool {
     for i in first..<decoded.count {
         if i < decoded.events.count && decoded.events[i].kind == cast[u8](terminal.EventKind.Key) && decoded.events[i].code == USAGE_DELETE
@@ -1368,7 +1734,12 @@ attention_in :: fn(decoded: ptr[vt.Decoded], first: usize) -> bool {
     return false
 }
 
-/** The events from first on taken back, with their text, as if they'd never come. */
+/**
+ * Take back the decoded events from first on, with their text, as if they'd never come.
+ *
+ * @param service The service's state, whose decoded events and text are cut back to before first.
+ * @param first The index of the first event dropped; at or past the count, nothing is.
+ */
 drop_from :: fn(service: ptr[mut Service], first: usize) {
     decoded :: &service.decoded
     if first >= decoded.count {
@@ -1382,8 +1753,13 @@ drop_from :: fn(service: ptr[mut Service], first: usize) {
 }
 
 /**
- * What the input service gave: keys, typed into the input; the secure attention key; and a new keyboard's code, shown
- * on the status line until it's typed. A seat that's gone is dialed again.
+ * Take everything the input service has given: each Input's events go to take_seat_event, the keys waiting are decoded
+ * as room allows, and another Read is sent.
+ *
+ * An input service that's failed is closed and dialed again, and the new one read until it's empty.
+ *
+ * @param service The service; without the input service, nothing is read.
+ * @param into Where answers are received, reused for each.
  */
 take_seat :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
     if cast[slop_os.Handle](service.seat_end) == slop_os.NO_HANDLE {
@@ -1421,11 +1797,25 @@ take_seat :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
     }
 }
 
-// The most keys kept waiting for room among the decoded input, and their text's bytes; and the most text one key has.
+/** The most keys from the input service kept waiting for room among the decoded input; keys past them are dropped. */
 TYPED_KEYS :: 256
+/** The most bytes of text the keys waiting have between them; a key whose text doesn't fit is dropped. */
 TYPED_TEXT :: 1024
+/** The most bytes of text one key has, which the decoded input has to have room for before a key's decoded. */
 KEY_TEXT :: 8
 
+/**
+ * Take one event from the input service.
+ *
+ * The secure attention key, unless setup's screen is up, drops the keys waiting, which were for what was shown, and
+ * brings up its screen. A new keyboard's code waiting is shown on the status line, and taken off once it's accepted. A
+ * key is kept waiting, its text with it, behind any others; one that doesn't fit is dropped.
+ *
+ * @param service The service's state: a key goes on typed and typed_text, a keyboard's code changes waiting_code and
+ *     the status line, and the secure attention key empties typed and brings up its screen.
+ * @param event The event; an unknown kind is ignored.
+ * @param text The Input's text, which the event's text_start and text_bytes index; read only during the call.
+ */
 take_seat_event :: fn(service: ptr[mut Service], event: seat.Event, text: u8[]) {
     kind :: seat.kind_of(event) or_return void
     match kind {
@@ -1470,8 +1860,14 @@ take_seat_event :: fn(service: ptr[mut Service], event: seat.Event, text: u8[]) 
 }
 
 /**
- * The keys waiting decoded, in order, as many as the decoded input has room for: the rest wait for a delivery to make
- * some, so a burst of typing longer than one delivery isn't lost. The screens the trusted path shows take theirs.
+ * Decode the keys waiting from the input service, in order, as many as the decoded input has room for, and screen
+ * them for the trusted path.
+ *
+ * The rest wait for a delivery to make room, so a burst of typing longer than one delivery isn't lost. Ctrl+C is
+ * decoded as an Interrupt event rather than a key.
+ *
+ * @param service The service's state: keys move from typed to its decoded events, as room allows, and those left
+ *     move to typed's front; the new events are screened.
  */
 take_typed :: fn(service: ptr[mut Service]) {
     decoded :: &service.decoded
@@ -1521,8 +1917,15 @@ take_typed :: fn(service: ptr[mut Service]) {
 }
 
 /**
- * The input waiting, to the owner, once it holds a Read: as many events as it asked for, and as fit its connection's
- * ring, halved until they do; those after wait for its next Read.
+ * Deliver the input waiting to the active view's owner, once it holds a Read: as many events as it asked for, and as
+ * fit its connection's ring, halved until they do, with their text; those after wait for its next Read.
+ *
+ * Nothing's delivered while the secure attention key's screen or setup's is up. If the answer can't be sent for any
+ * reason but its size, the input stays waiting and the Read stays held.
+ *
+ * @param service The service's state, from its main loop: its decoded input is sent to the active view's owner and
+ *     what's sent taken off, and the owner's Read is no longer held once something's sent.
+ * @param connected The clients, the owner's connection among them.
  */
 deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
     if service.decoded.count == 0 || view(service).held == 0 || service.attention || service.setup != .Off {
@@ -1561,7 +1964,14 @@ deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
     keep_after(service, count)
 }
 
-/** The decoded events after the first count, with their text, kept for the next Read; none left, the decoder reset. */
+/**
+ * Keep the decoded events after the first count, with their text, moved to the front for the next Read; with none
+ * left, or text that doesn't add up, the decoder and the decoded input are reset.
+ *
+ * @param service The service's state, whose decoded events and text lose the first count; or its decoder and decoded
+ *     input are reset.
+ * @param count How many events were delivered, from the first.
+ */
 keep_after :: fn(service: ptr[mut Service], count: usize) {
     decoded :: &service.decoded
     if count >= decoded.count || count >= decoded.events.count {
@@ -1596,7 +2006,12 @@ keep_after :: fn(service: ptr[mut Service], count: usize) {
 // ---- First-boot setup (decisions/0148)
 
 /**
- * The account service through its connector, if there's one: bound to the port, and asked how many accounts there are.
+ * Dial the account service through its connector, if there's one: bind its connection to the port under ACCOUNTS_KEY,
+ * and ask how many accounts there are (Describe), without waiting; the answer brings up setup or the login screen.
+ *
+ * It waits for the connector's answer. If the dial or the bind fails, the account service stays NONE.
+ *
+ * @param service The service, its accounts_end NONE.
  */
 dial_accounts :: fn(service: ptr[mut Service]) {
     if service.accounts_connector == NONE {
@@ -1617,8 +2032,18 @@ dial_accounts :: fn(service: ptr[mut Service]) {
 }
 
 /**
- * What the account service answered: how many accounts there are, and how making the first went. One that's gone,
- * dialed again.
+ * Take everything the account service has answered, and move the screen that asked on.
+ *
+ * Described brings up first-boot setup with no accounts, or the login screen, if no screen is up and no one's logged in
+ * to the view. OpenedHome logs in, or unlocks. Created shows the recovery code. Refusals (wrong credentials, too many
+ * tries, a password or name refused, an account that exists) say why and go back to the step to type again; while the
+ * share form waits, its answers go to it.
+ *
+ * An account service that's failed is unbound, closed and dialed again; an account being made is asked for again from
+ * its password, or for elevation, the administrator's name.
+ *
+ * @param service The service; without the account service, nothing is read.
+ * @param into Where answers are received, reused for each.
  */
 take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
     if service.accounts_end == NONE {
@@ -1766,6 +2191,12 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
     }
 }
 
+/**
+ * Bring up first-boot setup's screen, asking for the administrator's account's name; every key is its own until the
+ * account's made and the recovery code's been seen.
+ *
+ * @param service The service, with no accounts yet.
+ */
 enter_setup :: fn(service: ptr[mut Service]) {
     runtime.log_info("first-boot setup: no accounts yet")
     service.setup = .Name
@@ -1773,14 +2204,24 @@ enter_setup :: fn(service: ptr[mut Service]) {
     draw_setup(service, true)
 }
 
-/** Setup done: the recovery code forgotten, and the login screen up. */
+/**
+ * End first-boot setup: zero the recovery code, and bring up the login screen.
+ *
+ * @param service The service's state, at setup's Code step: its recovery code is zeroed, and the login screen brought
+ *     up in the view in use.
+ */
 leave_setup :: fn(service: ptr[mut Service]) {
     wipe(service.code[0..<service.code.count])
     runtime.log_info("first-boot setup ended")
     enter_login(service)
 }
 
-/** The login screen (decisions/0150). */
+/**
+ * Bring up the login screen (decisions/0150) in the view in use, asking for a name, with nothing said.
+ *
+ * @param service The service's state: its message is cleared, setup goes to LoginName with the field, password and
+ *     name zeroed, and the screen and status line drawn.
+ */
 enter_login :: fn(service: ptr[mut Service]) {
     runtime.log_info("login: asking for a name and password")
     say(service, "")
@@ -1788,7 +2229,15 @@ enter_login :: fn(service: ptr[mut Service]) {
     update_status(service)
 }
 
-/** The login screen's name and password opened the account's home: the session made with it, and the screen gone. */
+/**
+ * Take the account's home, opened by the name and password typed: make the session with it, zero what was typed, and
+ * close the login screen.
+ *
+ * If the session can't be made, it says so and asks for the password again.
+ *
+ * @param service The service, its login screen at LoggingIn.
+ * @param root The home's root, which moves to start_session and on to the session manager.
+ */
 logged_in :: fn(service: ptr[mut Service], root: os.Channel[dir.Dir]) {
     name :: name_bytes(service)
     for byte, i in name {
@@ -1814,8 +2263,18 @@ logged_in :: fn(service: ptr[mut Service], root: os.Channel[dir.Dir]) {
 }
 
 /**
- * The session made by the session manager, with a terminal connection of its own, which this serves as any client, and
- * the home's root: the user's who logged in, or with no home, the one with no user of a boot with no accounts.
+ * Have the session manager make a session in the view in use, and wait for its answer.
+ *
+ * The session gets a terminal connection of its own, which this serves as any client, writing to the view; with a
+ * home, also the user's name, the keyboard layout, the home's root, and a prompt connection for its powerbox, which
+ * is bound under PROMPT_KEY plus the view's index; and the view keeps a connection of its own to the home. On success
+ * the view is logged in and the session manager told it's shown.
+ *
+ * @param service The service, the user's name in its view in use for a home.
+ * @param home The home's root of the user who logged in, which moves to the session manager in the Start request; null
+ *     for the session with no user of a boot with no accounts.
+ * @return True if the session was made; false without a session channel, if no client could be added or a channel
+ *     made, if the request couldn't be sent, or if the session manager refused.
  */
 start_session :: fn(service: ptr[mut Service], home: os.Channel[dir.Dir]?) -> bool {
     if service.session_end == NONE {
@@ -1898,18 +2357,33 @@ start_session :: fn(service: ptr[mut Service], home: os.Channel[dir.Dir]?) -> bo
 }
 
 /**
- * The session manager told which session is shown, none on a login screen, for its memory pressure policy (decisions/0153).
+ * Tell the session manager which session is shown, for its memory pressure policy (decisions/0153), and wait for its
+ * answer.
+ *
+ * @param service The service; its active view's session is told, or session.NO_SESSION for a login screen.
  */
 tell_shown :: fn(service: ptr[mut Service]) {
     shown :: &service.views[service.active % service.views.count]
     _ = ask_session(service, .Shown(if shown.in_use && shown.logged_in { shown.session } else { session.NO_SESSION }))
 }
 
+/**
+ * Tell whether a step is the login screen's.
+ *
+ * @param step Any step of the trusted path's screen, Off among them.
+ * @return True for LoginName, LoginPassword and LoggingIn.
+ */
 is_login :: fn(step: SetupStep) -> bool {
     return step == .LoginName || step == .LoginPassword || step == .LoggingIn
 }
 
-/** The next keyboard layout, for the input service to type through, and shown on the status line. */
+/**
+ * Change to the next keyboard layout keymaps knows: tell the input service to type through it (SetLayout, not waited
+ * for), and show it on the status line. Sessions made after are given it.
+ *
+ * @param service The service's state: its layout becomes the next keymaps knows, after the last the first, and the
+ *     input service, if connected, is told.
+ */
 next_layout :: fn(service: ptr[mut Service]) {
     layout :: keymaps.next(service.layout)
     service.layout = layout.name
@@ -1923,7 +2397,16 @@ next_layout :: fn(service: ptr[mut Service]) {
     update_status(service)
 }
 
-/** A step, its field empty, drawn. */
+/**
+ * Go to a step of the trusted path's screen, with its field zeroed and empty, and draw the screen whole.
+ *
+ * Going back to a name or password step also zeroes the password kept; LoginName zeroes the name; AdminName the
+ * administrator's password.
+ *
+ * @param service The service's state: its setup becomes step, its field and, by step, its password, name or
+ *     administrator's password are zeroed, and the view in use's screen drawn whole.
+ * @param step The step to go to; Off isn't passed, leaving the screen setting it directly.
+ */
 setup_step :: fn(service: ptr[mut Service], step: SetupStep) {
     wipe(service.field[0..<service.field.count])
     service.field_count = 0
@@ -1943,7 +2426,18 @@ setup_step :: fn(service: ptr[mut Service], step: SetupStep) {
     draw_setup(service, true)
 }
 
-/** One key on setup's screen: text typed into the field, Backspace taking a cluster back, Enter going on. */
+/**
+ * Take one key on the trusted path's own screen: text typed into the field, Backspace taking a grapheme cluster back,
+ * Enter going on, F2 changing the layout.
+ *
+ * Escape gives up a login for another session, refuses elevation, or closes the share form; Delete on the share form's
+ * member takes them out. Keys are ignored while the account service is working (Making, LoggingIn, Sharing). Text
+ * typed with Control or Alt, and controls, aren't put in a field; what doesn't fit FIELD_BYTES is dropped.
+ *
+ * @param service The service, setup's screen up.
+ * @param event The key, by its USB HID usage and modifiers.
+ * @param text The text the key typed, UTF-8, possibly empty; read only during the call.
+ */
 setup_key :: fn(service: ptr[mut Service], event: terminal.Event, text: u8[]) {
     if service.setup == .Making || service.setup == .LoggingIn {
         return void
@@ -2019,7 +2513,16 @@ setup_key :: fn(service: ptr[mut Service], event: terminal.Event, text: u8[]) {
     draw_setup(service, false)
 }
 
-/** Enter: the name checked, the password checked against the rules, the two compared, and the account asked for. */
+/**
+ * Take Enter on the trusted path's own screen, at whatever step it's at.
+ *
+ * A new account's name is checked (account_records.valid_name), its password checked against the rules, the two
+ * typings compared, and the account asked for; Enter on the recovery code ends setup or elevation; the
+ * administrator's name and password are kept; a login's name is kept, then its password sent. An empty name, or one
+ * too long, is ignored. What's refused says why and is asked for again.
+ *
+ * @param service The service, setup's screen up.
+ */
 setup_enter :: fn(service: ptr[mut Service]) {
     if service.field_count > service.field.count {
         return void
@@ -2125,7 +2628,16 @@ setup_enter :: fn(service: ptr[mut Service]) {
     }
 }
 
-/** The account's home asked for with the name and password typed, the password forgotten once it's sent. */
+/**
+ * Ask the account service to open the account's home (OpenHome) with the name kept and the password typed, without
+ * waiting; the answer, to take_accounts, logs in or unlocks, or says why not.
+ *
+ * Once it's sent, or failed to be, the message's words and the field are zeroed. If the account service isn't there or
+ * can't be asked, it says so and asks for the password again; otherwise it waits at LoggingIn.
+ *
+ * @param service The service, its login screen at LoginPassword.
+ * @param password The password typed, a view of the service's field, which is zeroed here.
+ */
 open_home :: fn(service: ptr[mut Service], password: u8[]) {
     if service.accounts_end == NONE || service.name_count > service.name.count {
         say(service, "The account service isn't there. Type the password again.")
@@ -2150,7 +2662,16 @@ open_home :: fn(service: ptr[mut Service], password: u8[]) {
     setup_step(service, .LoggingIn)
 }
 
-/** The account asked for, the password forgotten once it's sent. */
+/**
+ * Ask the account service to make the administrator's account (Create) with the name and password typed, without
+ * waiting; the answer, to take_accounts, shows the recovery code or says why not.
+ *
+ * The request carries the time now in nanoseconds since the epoch (0 if the clock can't be read). Once it's sent, or
+ * failed to be, the message's words and the password are zeroed. If the account service isn't there or can't be
+ * asked, it says so and asks for the password again; otherwise it waits at Making.
+ *
+ * @param service The service, at first-boot setup, the password typed twice and matching.
+ */
 make_account :: fn(service: ptr[mut Service]) {
     if service.accounts_end == NONE || service.name_count > service.name.count || service.password_count > service.password.count {
         say(service, "The account service isn't there. Type the password again.")
@@ -2181,7 +2702,13 @@ make_account :: fn(service: ptr[mut Service]) {
     setup_step(service, .Making)
 }
 
-/** Why a password was refused, as account_records.PasswordProblem's value. */
+/**
+ * Say why a password was refused, on the screen's message row.
+ *
+ * @param service The service's state, whose message is replaced, to be shown when the screen's next drawn.
+ * @param problem The account_records.PasswordProblem's value: 1 too short, 2 too long, 3 too common, 4 the account's
+ *     name; any other is said as a password that can't be used.
+ */
 say_problem :: fn(service: ptr[mut Service], problem: u8) {
     say(service, if problem == 1 { "A password needs at least 8 characters." }
         else if problem == 2 { "That password is too long: 256 bytes at most." }
@@ -2190,6 +2717,12 @@ say_problem :: fn(service: ptr[mut Service], problem: u8) {
         else { "That password can't be used. Choose another." })
 }
 
+/**
+ * Set what the trusted path's screen says on its message row, shown when it's next drawn.
+ *
+ * @param service The service's state, whose message and message_count are replaced; nothing's drawn.
+ * @param text The message, copied, cut short at MESSAGE_BYTES; "" says nothing.
+ */
 say :: fn(service: ptr[mut Service], text: string) {
     service.message_count = 0
     for byte in string_bytes(text) {
@@ -2201,9 +2734,15 @@ say :: fn(service: ptr[mut Service], text: string) {
 }
 
 /**
- * Setup's screen: what it's for, the name, the password and it again as dots, what it last said, and once the account's
- * made, the recovery code; the cursor at the field being typed. All of it drawn, or as keys are typed, only the fields'
- * rows and the message's, which is all a key changes.
+ * Draw the trusted path's own screen: the elevation screen, the share form, or the login screen if one of those is up;
+ * otherwise first-boot setup's.
+ *
+ * Setup's shows what it's for, the name, the password and it again as dots, what it last said, and once the account's
+ * made, the recovery code, with the cursor at the field being typed.
+ *
+ * @param service The service, setup's screen up.
+ * @param whole Whether to show the panel and draw all of it; false draws only the fields' rows and the message's,
+ *     which is all a key changes.
  */
 draw_setup :: fn(service: ptr[mut Service], whole: bool) {
     panel :: &view(service).screen.panel
@@ -2279,8 +2818,12 @@ draw_setup :: fn(service: ptr[mut Service], whole: bool) {
 }
 
 /**
- * The login screen: the name, the password as dots, what it last said, and how to change the keyboard layout, which the
- * status line shows; drawn whole, or only its fields and message.
+ * Draw the login screen, or while locked, the unlock screen: the name, the password as dots, what it last said, and
+ * how to change the keyboard layout, which the status line shows.
+ *
+ * @param service The service, its login screen up.
+ * @param whole Whether to draw every row; false draws only the fields' rows and the message's. Either way the panel
+ *     is expected to be shown and cleared already, as draw_setup does.
  */
 draw_login :: fn(service: ptr[mut Service], whole: bool) {
     panel :: &view(service).screen.panel
@@ -2328,26 +2871,56 @@ draw_login :: fn(service: ptr[mut Service], whole: bool) {
     }
 }
 
-/** What's typed in the field, the name and the password so far, as far as they're in their buffers. */
+/**
+ * Take what's typed in the field so far.
+ *
+ * @param service The service's state, whose field is viewed; only read.
+ * @return A view of the field's used bytes, good until it's typed in or zeroed; empty if the count is past the buffer.
+ */
 field_bytes :: fn(service: ptr[Service]) -> u8[] {
     return if service.field_count <= service.field.count { service.field[0..<service.field_count] } else { service.field[0..<0] }
 }
 
+/**
+ * Take the account name kept.
+ *
+ * @param service The service's state, whose name is viewed; only read.
+ * @return A view of the name's used bytes, good until it's changed or zeroed; empty if the count is past the buffer.
+ */
 name_bytes :: fn(service: ptr[Service]) -> u8[] {
     return if service.name_count <= service.name.count { service.name[0..<service.name_count] } else { service.name[0..<0] }
 }
 
+/**
+ * Take the new account's password kept from its first typing.
+ *
+ * @param service The service's state, whose password is viewed; only read.
+ * @return A view of the password's used bytes, good until it's zeroed; empty if the count is past the buffer.
+ */
 password_bytes :: fn(service: ptr[Service]) -> u8[] {
     return if service.password_count <= service.password.count { service.password[0..<service.password_count] } else { service.password[0..<0] }
 }
 
-/** count dots in a row, for a password's clusters, up to 40. */
+/**
+ * Write dots in a row of the panel, one for each of a password's grapheme clusters, up to 40.
+ *
+ * @param panel The grid the dots are written into, the trusted path's panel in a view's screen model.
+ * @param row The panel row the dots go in, from 0 at the top of the program rows, below PROGRAM_ROWS.
+ * @param column The column of the first dot.
+ * @param count How many dots; past 40, 40.
+ */
 dots :: fn(panel: ptr[mut screen.Grid], row: u16, column: u16, count: usize) {
     for i in 0..<min_count(count, 40) {
         screen.write_at(panel, row, column + cast[u16](i), "•", terminal.Style.{})
     }
 }
 
+/**
+ * Count the grapheme clusters in UTF-8 text, as a person counts the characters typed.
+ *
+ * @param bytes UTF-8 text, such as a field typed; not checked to be valid, and only read.
+ * @return How many clusters, 0 for none.
+ */
 clusters :: fn(bytes: u8[]) -> usize {
     count : usize = 0
     at : usize = 0
@@ -2365,10 +2938,24 @@ clusters :: fn(bytes: u8[]) -> usize {
     return count
 }
 
+/**
+ * Take the smaller of two counts.
+ *
+ * @param a A count, any value.
+ * @param b A count, any value; the order doesn't matter.
+ * @return Whichever is smaller.
+ */
 min_count :: fn(a: usize, b: usize) -> usize {
     return if a < b { a } else { b }
 }
 
+/**
+ * Tell whether two byte strings are the same, byte for byte.
+ *
+ * @param a Bytes compared, only read.
+ * @param b Bytes compared with a, only read; the order doesn't matter.
+ * @return True if they're the same length and every byte matches; it isn't constant-time.
+ */
 same_bytes :: fn(a: u8[], b: u8[]) -> bool {
     if a.count != b.count {
         return false
@@ -2381,6 +2968,11 @@ same_bytes :: fn(a: u8[], b: u8[]) -> bool {
     return true
 }
 
+/**
+ * Zero bytes, so a password or recovery code typed isn't left in memory.
+ *
+ * @param bytes The bytes, every one set to 0.
+ */
 wipe :: fn(bytes: mut u8[]) {
     for i in 0..<bytes.count {
         bytes[i] = 0
@@ -2389,7 +2981,14 @@ wipe :: fn(bytes: mut u8[]) {
 
 // ---- Sessions' views (decisions/0151)
 
-/** A view made ready for a session: blank, its lines written at the bottom, as a serial line's are, and scroll up. */
+/**
+ * Make a view ready for a session, in use: blank, everything else in it reset, its lines written from the bottom row
+ * and scrolling up, as a serial line's are, its status line the one for no session.
+ *
+ * @param service The service's state, whose views[index] is overwritten; the view in use and the active one aren't
+ *     changed, and nothing's drawn.
+ * @param index The view's index; one past MAX_VIEWS does nothing.
+ */
 open_view :: fn(service: ptr[mut Service], index: usize) {
     if index >= service.views.count {
         return void
@@ -2401,27 +3000,55 @@ open_view :: fn(service: ptr[mut Service], index: usize) {
     screen.mark_all(&view.screen.lines)
 }
 
-/** The view in use: the session's whose client is being served, or the active one. */
+/**
+ * Take the view in use: the session's whose client is being served, or the active one.
+ *
+ * @param service The service's state, whose viewing picks the view, wrapped to MAX_VIEWS.
+ * @return The view, inside the service, good as long as it is.
+ */
 view :: fn(service: ptr[mut Service]) -> ptr[mut View] {
     return &service.views[service.viewing % service.views.count]
 }
 
-/** The view client index writes to used: its session's, or with none, the active one's. */
+/**
+ * Make the view a client writes to the one in use: its session's, or, for a client in none or a view no longer in use,
+ * the active one.
+ *
+ * @param service The service's state, whose viewing is set; nothing's drawn.
+ * @param index The client's index.
+ */
 use_view_of :: fn(service: ptr[mut Service], index: usize) {
     which :: if index < service.client_view.count { service.client_view[index] } else { NO_VIEW }
     service.viewing = if which < service.views.count && service.views[which].in_use { which } else { service.active }
 }
 
+/**
+ * Make the active view the one in use again, once another session's client has been served.
+ *
+ * @param service The service's state, whose viewing is set to its active.
+ */
 use_active :: fn(service: ptr[mut Service]) {
     service.viewing = service.active
 }
 
-/** Whether the view in use is the one shown. */
+/**
+ * Tell whether the view in use is the one shown.
+ *
+ * @param service The service's state, whose viewing and active are compared; only read.
+ * @return True if it's the active view, so what's written to it goes on the console now.
+ */
 is_shown :: fn(service: ptr[Service]) -> bool {
     return service.viewing == service.active
 }
 
-/** One of the session keys on the secure attention key's screen, done: whether it was one. */
+/**
+ * Do what a session key on the secure attention key's screen asks: S switches to the next session, N logs in another,
+ * L locks, O logs out.
+ *
+ * @param service The service, its secure attention key's screen up.
+ * @param code The key's USB HID usage.
+ * @return True if it was one of those keys, whether or not it could be done; false for any other.
+ */
 session_key :: fn(service: ptr[mut Service], code: u16) -> bool {
     if code == USAGE_S {
         switch_next(service)
@@ -2441,7 +3068,12 @@ session_key :: fn(service: ptr[mut Service], code: u16) -> bool {
     return true
 }
 
-/** A logged-in view other than the active one, the next after it going round, or NO_VIEW. */
+/**
+ * Find a logged-in view other than the active one, the next after it going round.
+ *
+ * @param service The service's state, whose views are looked through from after the active one; only read.
+ * @return The view's index, or NO_VIEW if there's no other session.
+ */
 another_session :: fn(service: ptr[Service]) -> usize {
     for step in 1..<service.views.count {
         index :: (service.active + step) % service.views.count
@@ -2452,7 +3084,14 @@ another_session :: fn(service: ptr[Service]) -> usize {
     return NO_VIEW
 }
 
-/** The view at index shown, the secure attention key's screen left. */
+/**
+ * Show another view: leave the secure attention key's screen, make the view active, draw it whole from its screen
+ * model, and tell the session manager it's shown, waiting for its answer.
+ *
+ * @param service The service's state, from its main loop: the secure attention key's screen is left, active and
+ *     viewing become index, and the view drawn; it waits for the session manager.
+ * @param index The view's index; one past MAX_VIEWS does nothing.
+ */
 switch_to :: fn(service: ptr[mut Service], index: usize) {
     if index >= service.views.count {
         return void
@@ -2470,7 +3109,11 @@ switch_to :: fn(service: ptr[mut Service], index: usize) {
     }
 }
 
-/** The next session shown, if there's another. */
+/**
+ * Show the next session's view, if there's another session; otherwise nothing changes.
+ *
+ * @param service The service's state, which switch_to changes when there's another session.
+ */
 switch_next :: fn(service: ptr[mut Service]) {
     next :: another_session(service)
     if next == NO_VIEW {
@@ -2479,7 +3122,14 @@ switch_next :: fn(service: ptr[mut Service]) {
     switch_to(service, next)
 }
 
-/** A view of its own for another session, its login screen up; Esc there goes back. */
+/**
+ * Start a login for another session, in a free view of its own, made active with its login screen up; Escape there
+ * goes back to the view it was started from.
+ *
+ * Nothing happens without the account service or with every view in use (MAX_VIEWS sessions).
+ *
+ * @param service The service, its secure attention key's screen up.
+ */
 log_in_another :: fn(service: ptr[mut Service]) {
     if service.accounts_end == NONE {
         return void
@@ -2505,7 +3155,14 @@ log_in_another :: fn(service: ptr[mut Service]) {
     enter_login(service)
 }
 
-/** A login for another session given up: its view let go, and the session it was started from shown again. */
+/**
+ * Give up a login for another session: zero the field, let its view go, and show the session it was started from, or
+ * failing that another.
+ *
+ * Nothing happens when there's no session to go back to, as at the first login, or when the view is logged in.
+ *
+ * @param service The service, its login screen at LoginName.
+ */
 abandon_login :: fn(service: ptr[mut Service]) {
     back :: if service.previous < service.views.count && service.views[service.previous].logged_in { service.previous } else { another_session(service) }
     if back == NO_VIEW || view(service).logged_in {
@@ -2518,7 +3175,14 @@ abandon_login :: fn(service: ptr[mut Service]) {
     switch_to(service, back)
 }
 
-/** The console locked: the session's user's password, through the account service, unlocks it. */
+/**
+ * Lock the console: leave the secure attention key's screen for the unlock screen, which asks for the session's
+ * user's password and has the account service check it by opening the home.
+ *
+ * Nothing happens unless a user is logged in to the view; a session with no user can't be locked.
+ *
+ * @param service The service, its secure attention key's screen up.
+ */
 lock :: fn(service: ptr[mut Service]) {
     if !view(service).logged_in || view(service).user_count == 0 || view(service).user_count > service.name.count {
         return void
@@ -2541,7 +3205,12 @@ lock :: fn(service: ptr[mut Service]) {
     draw_setup(service, true)
 }
 
-/** The password was right: the session shown again. */
+/**
+ * Unlock the console, the password having opened the home: zero the field, close the unlock screen, and draw the
+ * session again.
+ *
+ * @param service The service, its unlock screen up.
+ */
 unlocked :: fn(service: ptr[mut Service]) {
     service.unlocking = false
     wipe(service.field[0..<service.field.count])
@@ -2554,7 +3223,13 @@ unlocked :: fn(service: ptr[mut Service]) {
 }
 
 /**
- * The active session ended: its programs, by the session manager, its connections, and its view; another shown, or the login screen.
+ * Log out of the active session: have the session manager end it and its programs (EndSession, waited for), drop its
+ * clients, drop its powerbox's request, close its prompt and home connections, and let its view go.
+ *
+ * Another session is shown if there is one; otherwise the view is opened again with the login screen up. Nothing
+ * happens if no one's logged in to the view.
+ *
+ * @param service The service, its secure attention key's screen up.
  */
 log_out :: fn(service: ptr[mut Service]) {
     if !view(service).logged_in {

@@ -38,21 +38,38 @@ import concurrency from "std"
  */
 //SPEC: knowledge/design/scheduling.md §2 (dispatch, Demote, replenishment)
 
+/** How many run-queue levels there are: the background band, then one for each of 256 priorities. */
 LEVELS :: 257
+/** The background band's level, below every priority: threads whose budget is spent, or that have none. */
 BACKGROUND_LEVEL : u32 : 0
 /** PerCpu.current_level while it has no thread. */
 IDLE_LEVEL : u32 : 0xffffffff
 
+/** One CPU's ready threads: a list per level, round robin within each. */
 RunQueue :: struct {
+    /** Held, at rank RunQueue, while the queue or a queued thread's links change. */
     lock : concurrency.SpinLock,
+    /** Each level's first thread, as an address, 0 when it has none. */
     first : u64[LEVELS],
+    /** Each level's last thread, as an address, 0 when it has none. */
     last : u64[LEVELS],
-    // A bit per level with threads.
+    /** A bit per level with threads, level l at bit l % 64 of word l / 64. */
     nonempty : u64[5],
+    /** How many threads are queued; written with a release store under the lock, read without it as a hint. */
     count : u32,
 }
 
-/** The level thread runs at now: its budget's priority while it has time, the background band otherwise. */
+/**
+ * Work out the level a thread runs at now: its budget's priority while it has time, the background band otherwise.
+ *
+ * Takes the CpuTime's lock, at rank CpuTime, as replenishing it may change it.
+ *
+ * @param thread The thread, whose budget, a CpuTime, may be replenished: read while the caller holds at most locks
+ *     below rank CpuTime, as a run queue's.
+ * @param now The counter's value now, in ticks.
+ * @return Its budget's priority plus 1, from 1 to 256, if its budget has time at now; BACKGROUND_LEVEL if it doesn't,
+ *     or the thread has no budget.
+ */
 level_of :: fn(thread: ptr[Thread], now: u64) -> u32 {
     if thread.budget == 0 {
         return BACKGROUND_LEVEL
@@ -62,8 +79,18 @@ level_of :: fn(thread: ptr[Thread], now: u64) -> u32 {
 }
 
 /**
- * Put thread on cpu_index's run queue, and if it should run there before what runs there now, tell that
- * CPU at once.
+ * Make a thread ready: put it on a CPU's run queue, at the level it runs at now, and if it should run there before
+ * what runs there now, tell that CPU at once with a reschedule IPI.
+ *
+ * If it's queued behind what runs there, a CPU idle without ticking, if there is one, gets the IPI instead, so it
+ * can steal it. Takes the target's run-queue lock, at rank RunQueue, so it's called with no lock held of that rank
+ * or above.
+ *
+ * @param kernel The kernel: kernel.per_cpus and kernel.cpus find the target and its interrupt ID, and the target's
+ *     run-queue lock is taken, at rank RunQueue.
+ * @param thread The thread, on no run queue, not running, and not being destroyed by the caller.
+ * @param asked The index of the CPU it's wanted on, an online one; if its budget's CPUs don't include it, the next
+ *     online CPU after it that they do is used (cpu_for).
  */
 make_ready :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], asked: u32) {
     per_cpus :: kernel.per_cpus
@@ -92,7 +119,13 @@ make_ready :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], asked: u32) {
     }
 }
 
-/** Whether thread may run on the CPU with index cpu_index: any, without a budget, or one of its budget's. */
+/**
+ * Tell whether a thread may run on a CPU: any, without a budget, or one of its budget's.
+ *
+ * @param thread The thread, whose budget's CPUs are read atomically, without a lock.
+ * @param cpu_index The CPU's index; one past 63 is always allowed, as a budget's set has 64 bits (decisions/0099).
+ * @return True if it may run there.
+ */
 may_run_on :: fn(thread: ptr[Thread], cpu_index: u32) -> bool {
     if thread.budget == 0 || cpu_index >= 64 {
         return true
@@ -101,7 +134,15 @@ may_run_on :: fn(thread: ptr[Thread], cpu_index: u32) -> bool {
     return (cpus >> cast[u64](cpu_index)) & 1 != 0
 }
 
-/** cpu_index if thread may run there, otherwise the next online CPU after it that it may, or cpu_index if none. */
+/**
+ * Choose the CPU a thread goes on, near the one asked for.
+ *
+ * @param kernel The kernel, for the online CPUs.
+ * @param thread The thread, whose budget's CPUs are read atomically, without a lock.
+ * @param cpu_index The CPU asked for, by index.
+ * @return cpu_index if the thread may run there; otherwise the next online CPU after it, wrapping round, that it may;
+ *     or cpu_index if it may run on none.
+ */
 cpu_for :: fn(kernel: ptr[Kernel], thread: ptr[Thread], cpu_index: u32) -> u32 {
     if may_run_on(thread, cpu_index) {
         return cpu_index
@@ -121,6 +162,13 @@ cpu_for :: fn(kernel: ptr[Kernel], thread: ptr[Thread], cpu_index: u32) -> u32 {
  * level or higher, round robin; at any other entry, a thread of a higher level than the current one,
  * which otherwise goes on. With no thread, a ready one here or on another CPU, or idle. A thread being
  * destroyed is dropped wherever it's found.
+ *
+ * The current thread is charged for its time first. One that's held is parked, and one that may no longer run on
+ * this CPU is made ready on one it may. Called on the CPU's kernel stack, with interrupts off and no lock held; it
+ * leaves through return_to_user or idle.
+ *
+ * @param tick Whether this entry is a timer tick: threads of the current one's level get their turn, and threads in
+ *     the background band whose budget has time again move up (relevel).
  */
 schedule :: fn(tick: bool) #never_returns {
     cpu :: per_cpu()
@@ -187,7 +235,13 @@ schedule :: fn(tick: bool) #never_returns {
     }
 }
 
-/** Charge the time since the current thread started running, or since the last charge. */
+/**
+ * Charge the time since the current thread started running, or since the last charge, to it and its budget.
+ *
+ * @param cpu The calling CPU's PerCpu, whose run_start becomes now.
+ * @param thread The CPU's current thread.
+ * @param now The counter's value now, in ticks, no earlier than run_start.
+ */
 account :: fn(cpu: ptr[mut PerCpu], thread: ptr[mut Thread], now: u64) {
     used :: now - cpu.run_start
     thread.run_time += used
@@ -198,8 +252,19 @@ account :: fn(cpu: ptr[mut PerCpu], thread: ptr[mut Thread], now: u64) {
 }
 
 /**
- * Switch to thread: its address space, its vector state, its registers. Returns only if it turns out to
- * be dying.
+ * Switch to a thread: its address space, its vector state, its registers, and return to user mode in it.
+ *
+ * A woken thread finishes its port wait first, and may stop at its call's exit; a held one is parked. This is a
+ * quiescent point (pass_quiescent), passed only once the thread is known not to be dying.
+ *
+ * It returns only when the thread doesn't run after all: it's dying, its wait blocked it again, it stopped, or it
+ * was parked. The caller then looks for another.
+ *
+ * @param kernel The kernel, whose epoch is read for the quiescent point, and whose objects past their grace period
+ *     this CPU frees there.
+ * @param cpu The calling CPU's PerCpu, which has no current thread.
+ * @param thread The thread, off every run queue.
+ * @param now The counter's value now, in ticks, from which its running is charged.
  */
 run :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Thread], now: u64) {
     if cpu.space != cast[u64](thread.space) {
@@ -234,8 +299,15 @@ run :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Thread]
 }
 
 /**
- * Back to the current thread, whose registers, vector state and address space are all still its own.
- * Returns only if it turns out to be dying.
+ * Go back to the current thread, whose registers, vector state and address space are all still its own: a
+ * quiescent point (pass_quiescent).
+ *
+ * It returns only if the thread turns out to be dying; the caller then looks for another.
+ *
+ * @param kernel The kernel, whose epoch is read for the quiescent point.
+ * @param cpu The calling CPU's PerCpu.
+ * @param thread The CPU's current thread.
+ * @param level The level it runs at now, which current_level becomes.
  */
 go_on :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Thread], level: u32) {
     epoch :: intrinsics.atomic_load_u64(&kernel.epoch)
@@ -248,7 +320,15 @@ go_on :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Threa
     arch.return_to_user(&thread.registers)
 }
 
-/** Nothing to run: the kernel's own page tables, so no address space stays active here, then idle. */
+/**
+ * Go idle, with nothing to run: switch to the kernel's own page tables, so no address space stays active here, pass
+ * a quiescent point, and wait for an interrupt.
+ *
+ * A CPU other than the boot CPU with nothing queued and nothing in limbo stops ticking until an interrupt wakes it.
+ *
+ * @param kernel The kernel: its page tables are activated, and its epoch read for the quiescent point.
+ * @param cpu The calling CPU's PerCpu, whose current thread is cleared.
+ */
 go_idle :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu]) #never_returns {
     cpu.current = 0
     intrinsics.atomic_store_u32_release(&cpu.current_level, IDLE_LEVEL)
@@ -271,8 +351,10 @@ go_idle :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu]) #never_returns {
 }
 
 /**
- * An interrupt woke an idle CPU: one that wasn't ticking records the epoch now, before anything it runs could reach an
- * object, and ticks again from now.
+ * Leave idle, as an interrupt wakes the calling CPU: one that wasn't ticking records the epoch now, before anything
+ * it runs could reach an object, and ticks again from now, its next tick a tick's time away.
+ *
+ * Called at an interrupt's entry, on the CPU's kernel stack; a CPU that was ticking is left as it was.
  */
 leave_idle :: fn() {
     cpu :: per_cpu()
@@ -287,7 +369,11 @@ leave_idle :: fn() {
 }
 
 /**
- * An idle CPU that isn't ticking, other than skip, by index, or NO_CPU: which a busy CPU's queue wakes to steal from it.
+ * Find an idle CPU that isn't ticking, which a busy CPU's queue wakes to steal from it.
+ *
+ * @param kernel The kernel, whose online CPUs' tickless flags are read atomically.
+ * @param skip The index of a CPU not to choose, the busy one.
+ * @return The lowest such CPU's index, or NO_CPU if there's none.
  */
 tickless_cpu :: fn(kernel: ptr[Kernel], skip: u32) -> u32 {
     per_cpus :: kernel.per_cpus
@@ -303,9 +389,20 @@ tickless_cpu :: fn(kernel: ptr[Kernel], skip: u32) -> u32 {
     return NO_CPU
 }
 
+/** No CPU: what tickless_cpu finds when no CPU is idle without ticking. */
 NO_CPU : u32 : 0xffffffff
 
-/** A ready thread that may run on cpu from another online CPU's run queue, the first at its highest level, or 0. */
+/**
+ * Steal a ready thread from another online CPU's run queue, for a CPU with nothing to run.
+ *
+ * The other CPUs are tried in turn from the one after cpu, each one's queue lock taken in a short spell, at rank
+ * RunQueue; one whose queue looks empty is skipped without it.
+ *
+ * @param kernel The kernel, whose online CPUs' run queues are searched.
+ * @param cpu The calling CPU's PerCpu, holding no run-queue lock.
+ * @return The thread, as an address, taken off its queue: the first at the highest level of the first queue that has
+ *     one that may run on cpu. 0 if there's none.
+ */
 steal :: fn(kernel: ptr[Kernel], cpu: ptr[PerCpu]) -> u64 {
     per_cpus :: kernel.per_cpus
     online :: cast[usize](intrinsics.atomic_load_u32_acquire(&kernel.online_cpus))
@@ -328,7 +425,12 @@ steal :: fn(kernel: ptr[Kernel], cpu: ptr[PerCpu]) -> u64 {
     return 0
 }
 
-/** The highest level with threads, or IDLE_LEVEL. Takes the lock as held. */
+/**
+ * Find a queue's highest level with threads. Takes the lock as held.
+ *
+ * @param queue The run queue, whose lock the caller holds.
+ * @return The level, 0 to LEVELS - 1, or IDLE_LEVEL if the queue is empty.
+ */
 highest_level :: fn(queue: ptr[RunQueue]) -> u32 {
     for word in 0..<5 #reverse {
         bits :: queue.nonempty[word]
@@ -339,7 +441,12 @@ highest_level :: fn(queue: ptr[RunQueue]) -> u32 {
     return IDLE_LEVEL
 }
 
-/** The highest set bit of a value that has one, by halves. */
+/**
+ * Find the highest set bit of a value, by halves.
+ *
+ * @param value The value, which has a bit set.
+ * @return The bit's index, 0 to 63; 0 for a value of 0 too.
+ */
 highest_bit :: fn(value: u64) -> u32 {
     bits := value
     result : u32 = 0
@@ -352,7 +459,13 @@ highest_bit :: fn(value: u64) -> u32 {
     return result
 }
 
-/** Append thread to its level's list. Takes the lock as held. */
+/**
+ * Append a thread to a level's list. Takes the lock as held.
+ *
+ * @param queue The run queue, whose lock the caller holds; its count is published with a release store.
+ * @param thread The thread, on no run queue; its level becomes level.
+ * @param level The level, below LEVELS; a larger one is taken modulo LEVELS.
+ */
 enqueue :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread], level: u32) {
     index :: cast[usize](level) % LEVELS
     thread.level = cast[u32](index)
@@ -371,8 +484,11 @@ enqueue :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread], level: u32) {
 }
 
 /**
- * Every thread in the background band whose budget has time again, moved up to its budget's level, behind what's
- * there. Takes the lock as held.
+ * Move every thread in the background band whose budget has time again up to its budget's level, behind what's
+ * there. Takes the lock as held, and each budget's lock in turn.
+ *
+ * @param queue The run queue, whose lock the caller holds, at rank RunQueue, so each budget's lock can be taken.
+ * @param now The counter's value now, in ticks.
  */
 relevel :: fn(queue: ptr[mut RunQueue], now: u64) {
     at := queue.first[BACKGROUND_LEVEL]
@@ -391,10 +507,19 @@ relevel :: fn(queue: ptr[mut RunQueue], now: u64) {
 }
 
 /**
- * The thread to run next instead of current, at current_level, or 0 to go on with it: the first at the highest level,
- * if that's above current's, or the same at a tick. A thread waiting at a level its budget no longer has time for, spent
- * by another of its budget's threads meanwhile, is moved down to where it belongs first, so a budget's threads together
- * never run past it by more than a tick. Takes the lock as held.
+ * Choose the thread to run next instead of the current one.
+ *
+ * A thread waiting at a level its budget no longer has time for, spent by another of its budget's threads meanwhile,
+ * is moved down to where it belongs first, so a budget's threads together never run past it by more than a tick.
+ * Takes the lock as held.
+ *
+ * @param queue The calling CPU's run queue.
+ * @param now The counter's value now, in ticks.
+ * @param current The CPU's current thread, as an address, or 0 for none.
+ * @param current_level The current thread's level, IDLE_LEVEL for none.
+ * @param tick Whether this is a timer tick, when a thread of current's own level takes its turn.
+ * @return The thread, as an address, taken off the queue: the first at the highest level, if that's above current's,
+ *     or the same at a tick; any at all with no current thread. 0 to go on with current, or with nothing queued.
  */
 pick :: fn(queue: ptr[mut RunQueue], now: u64, current: u64, current_level: u32, tick: bool) -> u64 {
     loop {
@@ -411,7 +536,13 @@ pick :: fn(queue: ptr[mut RunQueue], now: u64, current: u64, current_level: u32,
     }
 }
 
-/** The first thread at the highest level that may run on cpu_index, taken off, or 0. Takes the lock as held. */
+/**
+ * Take a thread that may run on a CPU off a queue, for stealing. Takes the lock as held.
+ *
+ * @param queue Another CPU's run queue.
+ * @param cpu_index The index of the CPU it's for.
+ * @return The first thread at the highest level that may run on cpu_index, as an address, or 0 if there's none.
+ */
 take_for :: fn(queue: ptr[mut RunQueue], cpu_index: u32) -> u64 {
     for level in 0..<LEVELS #reverse {
         index :: cast[usize](level)
@@ -433,7 +564,13 @@ take_for :: fn(queue: ptr[mut RunQueue], cpu_index: u32) -> u64 {
     return 0
 }
 
-/** The first thread at level, taken off. Takes the lock as held. */
+/**
+ * Take the first thread at a level off a queue. Takes the lock as held.
+ *
+ * @param queue The run queue, whose lock the caller holds.
+ * @param level The level, one with threads; an empty one fails an assertion, which stops the kernel.
+ * @return The thread, as an address.
+ */
 dequeue :: fn(queue: ptr[mut RunQueue], level: u32) -> u64 {
     index :: cast[usize](level) % LEVELS
     first :: queue.first[index]
@@ -442,7 +579,12 @@ dequeue :: fn(queue: ptr[mut RunQueue], level: u32) -> u64 {
     return first
 }
 
-/** Take thread off its level's list. Takes the lock as held. */
+/**
+ * Take a thread off its level's list. Takes the lock as held.
+ *
+ * @param queue The run queue it's on.
+ * @param thread The thread, queued there at its level.
+ */
 unlink :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread]) {
     index :: cast[usize](thread.level) % LEVELS
     if thread.previous != 0 {

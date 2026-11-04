@@ -32,9 +32,13 @@ import slab from "slab"
  */
 //TODO(claude): slack, to coalesce timers (knowledge/design/scheduling.md §2, Timers); bindings charged to a budget (M5, budgets)
 
+/** What raises a binding's packet, which says what its data holds and which PacketKind its packet reports. */
 BindingKind :: enum #backed_by(u8) {
+    /** A port_wake binding: data is the bits raised since its packet was last taken; packets are User. */
     Wake,
+    /** A timer (port_set_timer): data is its deadline, in monotonic nanoseconds, kept when its packet is taken. */
     Timer,
+    /** An object's signals (a channel end, a process, a thread, a device, a budget): data is the signals seen. */
     Signal,
     /** An IRQ's (irqs.hsc): data counts the interrupts. */
     Irq,
@@ -42,40 +46,67 @@ BindingKind :: enum #backed_by(u8) {
     Stop,
 }
 
-/** A key's packet slot, from a type-stable pool, so a timer that fires late finds a binding, if not its own. */
+/**
+ * A key's packet slot, from a type-stable pool, so a timer that fires late finds a binding, if not its own.
+ *
+ * It's made when the key is bound (new_binding), so raising an event never allocates: a binding already queued just
+ * takes the new event into data. Its fields are under its port's lock, unless a field says otherwise.
+ */
 Binding :: struct #align(16) {
     /** The slab allocator's, while the slot is free. */
     free_link : u64,
-    // Changed when it's unbound, so a timer firing for it then sees it isn't its own.
+    /**
+     * The slot's generation, kept across reuse and changed when it's unbound (free_binding), so a timer or an object
+     * that kept the binding's address sees it isn't its own any more.
+     */
     generation : u32,
+    /** What raises its packet, and what data holds. */
     kind : BindingKind,
+    /** Whether its packet is on the port's ready list, waiting to be taken. */
     queued : bool,
+    /** The key the binder chose, unique on its port, reported in its packets. */
     key : u64,
+    /**
+     * The address of the Port it's on; read without the lock by lock_bound_port, and 0 for a moment while new_binding
+     * makes the slot anew.
+     */
     port : u64,
     /** Wake bits or signals raised since its packet was taken; a timer's deadline, in nanoseconds. */
     data : u64,
     /** Its packet's second word: for a process's end, how it ended (slop_os.EXIT_KILLED or its code). */
     detail : u64,
-    // A signal binding's: the object and its generation, the signals it sees, and whether it's armed,
-    // and disarmed once its packet is queued (BindMode.Once).
+    /** A signal binding's object: its address, 0 for other kinds. */
     object : u64,
+    /** A signal binding's object's generation when it was bound, telling that object from a later one in its slot. */
     object_generation : u32,
+    /** A signal binding's: the signals (slop_os.SIGNAL_ bits) it queues a packet for. */
     signals : u32,
+    /** A signal binding's: whether a signal it sees queues its packet now. */
     armed : bool,
+    /** A signal binding's: whether it's disarmed once its packet is queued (BindMode.Once), or stays armed. */
     once : bool,
-    // Its neighbors on the port's ready list.
+    /** The next binding on the port's ready list, a newer one, or 0 for the last. */
     ready_next : u64,
+    /** The previous binding on the port's ready list, an older one, or 0 for the first. */
     ready_previous : u64,
+    /** A timer binding's entry in a CPU's timer heap, armed in counter ticks; unarmed for other kinds. */
     timer : TimerEntry,
 }
 
+/**
+ * A port: the one wait mechanism (knowledge/design/ipc.md §3). Everything but its header is under its lock, which ranks
+ * as LockRank.Port: after a channel core's, before a run queue's.
+ */
 Port :: struct #align(16) {
+    /** The object header every kernel object starts with. */
     header : ObjectHeader,
+    /** Guards the bindings, the ready list, the waiters and short_of_budget. */
     lock : concurrency.SpinLock,
     /** Every binding's address, by key. */
     bindings : maps.HashMap[u64, u64, maps.hash_integer[u64]],
-    // Bindings with a packet, oldest first.
+    /** The oldest binding with a packet waiting to be taken, or 0 for none. */
     ready_first : u64,
+    /** The newest binding with a packet waiting to be taken, or 0 for none. */
     ready_last : u64,
     /** Threads waiting, the most recent first. */
     waiters : u64,
@@ -83,21 +114,38 @@ Port :: struct #align(16) {
     short_of_budget : bool,
 }
 
-/** Why new_binding gave none. Takes the lock as held. */
+/**
+ * Tell why new_binding gave no binding, as the error the call that asked for one returns.
+ *
+ * @param port The port new_binding failed on, whose lock the caller still holds since that call.
+ * @return BudgetExceeded if the port's memory budget couldn't pay for the binding, OutOfMemory if the binding pool
+ *     couldn't give a slot or the port's map couldn't grow.
+ */
 binding_failure :: fn(port: ptr[Port]) -> slop_os.PortError {
     return if port.short_of_budget { slop_os.PortError.BudgetExceeded } else { slop_os.PortError.OutOfMemory }
 }
 
 /** What starting a wait comes to. */
 WaitOutcome :: union {
+    /** The wait is over: how many packets were written to the caller's buffer, 0 when the deadline passed first. */
     Done(u32),
+    /** The wait failed: ObjectGone if the port was destroyed, BadBuffer if the buffer isn't writable. */
     Failed(slop_os.PortError),
-    /** The thread left its CPU and waits. */
+    /** The thread left its CPU and waits; its result is written when the wait is over (complete_wait). */
     Blocked,
 }
 
 /**
- * A port owned by owner (a Process's address, 0 for the kernel), charged to budget, with its bindings as they're made.
+ * Make a port, empty: its bindings are made as keys are bound.
+ *
+ * @param kernel The kernel, whose port pool the port comes from.
+ * @param owner The Process the port belongs to, by address, or 0 for the kernel; destroying the owner destroys it.
+ * @param budget The MemoryBudget that pays for the port, by address, or 0 for the kernel's own; each binding is charged
+ *     to it too, when it's made.
+ * @return The new port, live, owned by owner; the caller makes its handle.
+ * @error OutOfMemory The port pool had no slot.
+ * @error BudgetExceeded The budget couldn't pay for the port.
+ * @error OwnerGone The owner is being destroyed; the port was destroyed again.
  */
 create_port :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> Result[ptr[mut Port], ObjectError] {
     object :: new_object(kernel, .Port, budget, 0)?
@@ -112,7 +160,18 @@ create_port :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> Result[pt
     return .Ok(port)
 }
 
-/** A wake binding for key. */
+/**
+ * Bind key to a wake binding on a port, for port_wake to raise bits on.
+ *
+ * Takes the port's lock. The binding is charged to the port's memory budget.
+ *
+ * @param kernel The kernel, whose binding pool the binding comes from.
+ * @param port The port, live or being destroyed.
+ * @param key The key, any value not yet bound on the port.
+ * @return Null once it's bound, with no packet queued; otherwise the error, and nothing is bound: ObjectGone if the
+ *     port is being destroyed, KeyInUse if key is bound already, of any kind, or BudgetExceeded or OutOfMemory as
+ *     binding_failure says.
+ */
 port_bind_wake :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64) -> slop_os.PortError? {
     lock_at(&port.lock, .Port)
     defer unlock_at(&port.lock, .Port)
@@ -128,7 +187,18 @@ port_bind_wake :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64) -> 
     return null
 }
 
-/** Raise bits on key's wake binding: its packet is queued, or takes the bits in if it already is. */
+/**
+ * Raise bits on key's wake binding: its packet is queued, or takes the bits in if it already is.
+ *
+ * Takes the port's lock. Queuing the packet wakes the port's most recent waiter, if there is one.
+ *
+ * @param kernel The kernel, whose timer heaps and run queues waking a port's waiter goes through.
+ * @param port The port, live or being destroyed.
+ * @param key The key of a wake binding on the port.
+ * @param bits The bits to raise, ORed into the bits raised since the packet was last taken; 0 still queues the packet.
+ * @return Null once the bits are raised; ObjectGone if the port is being destroyed, or NoSuchKey if key isn't bound or
+ *     isn't a wake binding.
+ */
 port_wake :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, bits: u64) -> slop_os.PortError? {
     lock_at(&port.lock, .Port)
     defer unlock_at(&port.lock, .Port)
@@ -142,8 +212,21 @@ port_wake :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, bits: u6
 }
 
 /**
- * Key's timer, binding it if it isn't yet, for deadline (monotonic nanoseconds): its packet is queued
- * then. Setting it again moves the deadline.
+ * Set key's timer, binding it if it isn't yet, for deadline: its packet is queued then. Setting it again moves the
+ * deadline.
+ *
+ * Takes the port's lock. The timer is armed on the calling CPU's timer heap, and fires from its timer interrupt
+ * (fire_port_timer). A packet already queued for an earlier deadline stays queued.
+ *
+ * @param kernel The kernel, whose binding pool a new binding comes from.
+ * @param port The port, live or being destroyed.
+ * @param key The key of a timer binding on the port, or a key not yet bound, which is bound to a new timer binding.
+ * @param deadline When, in monotonic nanoseconds, as the timer packet's data[0] reports it; one passed already, or
+ *     before the monotonic clock starts, queues the packet at once; slop_os.NO_DEADLINE arms it for a time that never
+ *     comes.
+ * @return Null once it's set; otherwise ObjectGone if the port is being destroyed, KeyInUse if key is bound to another
+ *     kind of binding, BudgetExceeded or OutOfMemory if a new binding couldn't be made (binding_failure), or
+ *     OutOfMemory if the CPU's timer heap couldn't grow, when the binding stays, with its deadline but unarmed.
  */
 port_set_timer :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, deadline: u64) -> slop_os.PortError? {
     lock_at(&port.lock, .Port)
@@ -175,7 +258,17 @@ port_set_timer :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, dea
     return null
 }
 
-/** Take key's binding off the port, with its packet and its timer. */
+/**
+ * Take key's binding off the port, with its packet and its timer, and free it.
+ *
+ * Takes the port's lock. The binding's charge goes back to the port's budget, and its generation changes, so an object
+ * that kept it (a channel end, an IRQ) sees it's gone.
+ *
+ * @param kernel The kernel, whose binding pool the binding goes back to.
+ * @param port The port, live or being destroyed.
+ * @param key The key of a binding of any kind on the port.
+ * @return Null once it's unbound; ObjectGone if the port is being destroyed, or NoSuchKey if key isn't bound.
+ */
 port_unbind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64) -> slop_os.PortError? {
     lock_at(&port.lock, .Port)
     defer unlock_at(&port.lock, .Port)
@@ -188,10 +281,24 @@ port_unbind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64) -> slo
     return null
 }
 
-/*
- * The calling thread's port_wait: up to capacity packets at buffer in its address space, at once if
- * there are any, nothing if deadline (counter ticks, or slop_os.NO_DEADLINE) has passed, and otherwise
- * it blocks.
+/**
+ * Start the calling thread's port_wait: take packets at once if there are any, give nothing if the deadline has passed,
+ * and otherwise block.
+ *
+ * Runs on the thread's own CPU, in its system call. Blocking takes the thread off the CPU (the CPU's current thread
+ * becomes 0), so the caller mustn't write its result: complete_wait writes it once the wait is over.
+ *
+ * @param kernel The kernel: packets are copied through its direct map, and a blocked thread's deadline is armed on the
+ *     calling CPU's timer heap.
+ * @param thread The calling thread, the CPU's current one; its wait fields are set for the wait.
+ * @param port The port to wait on, from a handle with RIGHT_PORT_WAIT.
+ * @param buffer Where the packets go: a user address in the thread's address space, checked here to be writable for
+ *     the packets that fit, and written again when they're taken.
+ * @param capacity How many packets fit at buffer; at most slop_os.MAX_PACKETS_PER_WAIT are taken, whatever it says,
+ *     and 0 gives Done(0) at once without looking.
+ * @param deadline When to give up, in counter ticks (ticks_at), or slop_os.NO_DEADLINE to wait for as long as it takes.
+ * @return Done with how many packets were written, or 0 when the deadline passed; Failed with BadBuffer if buffer
+ *     isn't writable user memory, or ObjectGone if the port is being destroyed; or Blocked if the thread waits.
  */
 port_wait_begin :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], port: ptr[mut Port], buffer: u64, capacity: u32,
     deadline: u64) -> WaitOutcome {
@@ -220,8 +327,17 @@ port_wait_begin :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], port: pt
 }
 
 /**
- * When a woken thread is about to run: its wait finished, its result in its registers, true; or false if
- * it found nothing and blocked again.
+ * Finish a woken thread's wait as it's about to run, from the scheduler: take its packets, or block it again if another
+ * waiter took them first.
+ *
+ * Takes the port's lock. On the CPU about to run the thread, which is its current thread then.
+ *
+ * @param kernel The kernel: packets are copied through its direct map, and a thread that blocks again has its deadline
+ *     armed on this CPU's timer heap.
+ * @param thread The thread, whose wait_port isn't 0: it was blocked in port_wait_begin and has been woken.
+ * @return True if its wait is over, its result (the packet count, or the error's tag) written to its system call
+ *     result registers, and it can run; false if it found nothing before its deadline and blocked again, when it has
+ *     left the CPU.
  */
 complete_wait :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> bool {
     match finish_or_block(kernel, thread) {
@@ -237,14 +353,33 @@ complete_wait :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> bool {
     }
 }
 
+/**
+ * Write a finished wait's result into the thread's saved registers, as its system call's result.
+ *
+ * @param thread The thread, not running, whose registers are written.
+ * @param tag The result's tag: 0 for success, or the error's value (slop_os.PortError, or the ChannelError of
+ *     ChannelNotifyAndWait, which shares its tags).
+ * @param value The first result value: the packet count on success, 0 otherwise.
+ */
 set_wait_result :: fn(thread: ptr[mut Thread], tag: u64, value: u64) {
     result :: arch_interface.SyscallResult.{tag = tag, values = u64.[value, 0]}
     arch.set_syscall_result(&thread.registers, &result)
 }
 
 /**
- * Take the thread's packets and finish its wait, or block it on its port: null when it blocked, having
- * saved its vector state, since another CPU may run it as soon as it's woken.
+ * Take the thread's packets and finish its wait, or block it on its port.
+ *
+ * Takes the port's lock, and copies the packets to the thread's buffer after letting go of it. Blocking saves the
+ * thread's vector state first if it's the CPU's current thread, since another CPU may run it as soon as it's woken,
+ * charges its time so far to its budget, and arms its wait timer on the calling CPU for its deadline; if the timer heap
+ * can't grow, it waits without its deadline rather than fail.
+ *
+ * @param kernel The kernel, for the direct map the packets are copied through.
+ * @param thread The waiting thread, its wait fields (wait_port, wait_buffer, wait_capacity, wait_deadline) set by
+ *     port_wait_begin; wait_port is set to 0 once the wait is over.
+ * @return The wait's outcome when it's over: Done with the packets taken, Done(0) when the deadline has passed, Failed
+ *     with ObjectGone if the port was destroyed (or its slot reused), or Failed with BadBuffer if the packets taken
+ *     couldn't be written, when they're lost. Null when the thread blocked, waiting on the port.
  */
 finish_or_block :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> WaitOutcome? {
     port :: cast[ptr[mut Port]](thread.wait_port)
@@ -292,8 +427,15 @@ finish_or_block :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> WaitO
 }
 
 /**
- * Up to capacity packets from the ready bindings, oldest first, each binding's packet taken: wake bits
- * start again from none. Takes the lock as held.
+ * Take up to capacity packets from the ready bindings, oldest first, each binding's packet taken: wake bits, signals
+ * and counts start again from none; a timer's deadline stays.
+ *
+ * Takes the port's lock as held.
+ *
+ * @param port The port, whose lock the caller holds; the bindings taken come off its ready list.
+ * @param packets Where the packets go, from the first.
+ * @param capacity The most packets to take; at most slop_os.MAX_PACKETS_PER_WAIT are, and 0 takes none.
+ * @return How many packets were taken and written, from 0 when no binding is ready.
  */
 take_packets :: fn(port: ptr[mut Port], packets: ptr[mut slop_os.Packet[slop_os.MAX_PACKETS_PER_WAIT]], capacity: u32) -> u32 {
     taken : u32 = 0
@@ -322,7 +464,15 @@ take_packets :: fn(port: ptr[mut Port], packets: ptr[mut slop_os.Packet[slop_os.
     return taken
 }
 
-/** A binding's packet, queued if it isn't yet, which wakes a waiter. Takes the lock as held. */
+/**
+ * Queue a binding's packet, last on the ready list, if it isn't queued yet, which wakes the port's most recent waiter.
+ *
+ * Takes the port's lock as held. A binding already queued is left where it is, and no waiter is woken.
+ *
+ * @param kernel The kernel, whose timer heaps and run queues waking a port's waiter goes through.
+ * @param port The binding's port.
+ * @param binding The binding, whose data the caller has already updated.
+ */
 queue_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], binding: ptr[mut Binding]) {
     if binding.queued {
         return void
@@ -340,6 +490,14 @@ queue_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], binding: ptr[m
     wake_waiter(kernel, port)
 }
 
+/**
+ * Take a binding's packet off the port's ready list, if it's on it.
+ *
+ * Takes the port's lock as held. The binding's data is left as it is.
+ *
+ * @param port The binding's port.
+ * @param binding The binding, queued or not.
+ */
 unqueue :: fn(port: ptr[mut Port], binding: ptr[mut Binding]) {
     if !binding.queued {
         return void
@@ -360,9 +518,15 @@ unqueue :: fn(port: ptr[mut Port], binding: ptr[mut Binding]) {
 }
 
 /**
- * The most recent waiter, woken: made ready, to take what's queued when it runs, on its own CPU, or on
- * this one during a handoff (ChannelNotifyAndWait), where the caller is about to wait. Takes the lock
- * as held.
+ * Wake the port's most recent waiter, if it has one: made ready, to take what's queued when it runs, on its own CPU, or
+ * on this one during a handoff (ChannelNotifyAndWait), where the caller is about to wait.
+ *
+ * Takes the port's lock as held, and takes the timer heap's lock to disarm the waiter's deadline, and a run queue's to
+ * make it ready.
+ *
+ * @param kernel The kernel: the waiter's deadline is disarmed on whichever CPU's timer heap it's on, and it's made
+ *     ready on a run queue.
+ * @param port The port, whose lock the caller holds; one with no waiters is left as it is.
  */
 wake_waiter :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
     first :: port.waiters
@@ -376,6 +540,14 @@ wake_waiter :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
     make_ready(kernel, thread, if cpu.handoff { cpu.index } else { thread.cpu })
 }
 
+/**
+ * Put a thread first on the port's waiters, the next to be woken.
+ *
+ * Takes the port's lock as held.
+ *
+ * @param port The port, whose lock the caller holds.
+ * @param thread The thread, blocked, and not on any port's waiters.
+ */
 push_waiter :: fn(port: ptr[mut Port], thread: ptr[mut Thread]) {
     thread.wait_previous = 0
     thread.wait_next = port.waiters
@@ -386,6 +558,14 @@ push_waiter :: fn(port: ptr[mut Port], thread: ptr[mut Thread]) {
     thread.waiting = true
 }
 
+/**
+ * Take a thread off the port's waiters, if it's on them.
+ *
+ * Takes the port's lock as held. The thread's state isn't changed; the caller makes it ready if it should run.
+ *
+ * @param port The port the thread waits on.
+ * @param thread The thread, waiting or not.
+ */
 unlink_waiter :: fn(port: ptr[mut Port], thread: ptr[mut Thread]) {
     if !thread.waiting {
         return void
@@ -402,7 +582,17 @@ unlink_waiter :: fn(port: ptr[mut Port], thread: ptr[mut Thread]) {
     thread.waiting = false
 }
 
-/** A port timer came due: unless its binding was unbound or set again since, its packet is queued. */
+/**
+ * Queue a port timer's packet as it comes due, unless its binding was unbound or set again since.
+ *
+ * Runs from the timer interrupt of the CPU it was armed on (fire_timers), with the entry already off the heap. Takes
+ * the port's lock.
+ *
+ * @param kernel The kernel, whose timer heaps and run queues waking a port's waiter goes through.
+ * @param fired A copy of the timer's entry, taken while it was armed: its owner is the binding, its owner_generation
+ *     the binding's generation then, and its port the binding's port. The binding's slot may have been freed or reused
+ *     since; it's type-stable, so it's still a Binding.
+ */
 fire_port_timer :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
     port :: cast[ptr[mut Port]](fired.port)
     binding :: cast[ptr[mut Binding]](fired.owner)
@@ -415,7 +605,17 @@ fire_port_timer :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
     queue_binding(kernel, port, binding)
 }
 
-/** A waiting thread's deadline came: unless it was woken since, it's woken to find nothing. */
+/**
+ * Wake a waiting thread whose deadline came, unless it was woken since: it's made ready on its own CPU, to find
+ * nothing, or what came meanwhile, when it runs.
+ *
+ * Runs from the timer interrupt of the CPU it was armed on (fire_timers). Takes the port's lock.
+ *
+ * @param kernel The kernel, on whose run queues the thread is made ready.
+ * @param fired A copy of the wait timer's entry: its owner is the thread, its owner_generation the thread's generation
+ *     in the high 32 bits and its wait's sequence number in the low, and its port the port it waits on. A thread whose
+ *     generation or wait has changed since is left alone.
+ */
 fire_wait_timeout :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
     port :: cast[ptr[mut Port]](fired.port)
     thread :: cast[ptr[mut Thread]](fired.owner)
@@ -429,7 +629,14 @@ fire_wait_timeout :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
     make_ready(kernel, thread, thread.cpu)
 }
 
-/** A thread being destroyed stops waiting. */
+/**
+ * Stop a thread being destroyed from waiting: off its port's waiters, its deadline disarmed.
+ *
+ * Takes the port's lock, then the timer heap's. Does nothing if the thread isn't in a wait.
+ *
+ * @param kernel The kernel, on one of whose per-CPU timer heaps the thread's deadline may be armed.
+ * @param thread The thread being destroyed.
+ */
 cancel_wait :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     port_address :: thread.wait_port
     if port_address == 0 {
@@ -442,7 +649,15 @@ cancel_wait :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     _ = cancel_timer(kernel, &thread.wait_timer)
 }
 
-/** Destroying a port wakes its waiters, who find it gone, and drops its bindings. */
+/**
+ * Destroy a port: wake its waiters, who find it gone, and free its bindings and their map.
+ *
+ * Called once, from destroy_object, with the port already dying. Takes the port's lock. Each binding's charge goes
+ * back to the port's budget and its generation changes, so objects that kept it see it's gone.
+ *
+ * @param kernel The kernel: waiters are made ready on its run queues, and bindings go back to its binding pool.
+ * @param port The port being destroyed.
+ */
 destroy_port :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
     lock_at(&port.lock, .Port)
     loop {
@@ -464,10 +679,25 @@ destroy_port :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
     unlock_at(&port.lock, .Port)
 }
 
+/**
+ * Release a port once no CPU can use it: nothing to do, since destroy_port freed what it held.
+ *
+ * @param kernel The kernel; unused.
+ * @param port The port, destroyed, about to go back to its pool.
+ */
 release_port :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
 }
 
-/** key's binding of kind, or null. Takes the lock as held. */
+/**
+ * Find key's binding, if it's of kind.
+ *
+ * Takes the port's lock as held.
+ *
+ * @param port The port, whose lock the caller holds.
+ * @param key The key, any value; one not bound gives null.
+ * @param kind The kind it has to be.
+ * @return The binding, valid while the lock is held; null if key isn't bound, or is bound to another kind.
+ */
 binding_of :: fn(port: ptr[mut Port], key: u64, kind: BindingKind) -> ptr[mut Binding]? {
     address :: maps.map_get(&port.bindings, key) or_return null
     binding :: cast[ptr[mut Binding]](address)
@@ -475,10 +705,16 @@ binding_of :: fn(port: ptr[mut Port], key: u64, kind: BindingKind) -> ptr[mut Bi
 }
 
 /**
- * The port of a binding kept elsewhere (an end's, a watcher's, an IRQ's, an intercept's), locked, if it's still the
- * binding with generation and its port isn't dying; otherwise null. Bindings are type-stable, so one its port freed
- * is still a Binding, its generation changed; but while new_binding makes the slot anew, for any port, its port
- * reads 0 for a moment, and it isn't this binding then either.
+ * Lock the port of a binding kept elsewhere (an end's, a watcher's, an IRQ's, an intercept's), if it's still the
+ * binding with generation and its port isn't dying.
+ *
+ * Bindings are type-stable, so one its port freed is still a Binding, its generation changed; but while new_binding
+ * makes the slot anew, for any port, its port reads 0 for a moment, and it isn't this binding then either.
+ *
+ * @param binding The binding's address, as it was kept; its slot may have been freed or reused since.
+ * @param generation The binding's generation when it was kept.
+ * @return The binding's port with its lock taken, for the caller to let go of; null, with no lock held, if the binding
+ *     isn't that one any more or its port is being destroyed.
  */
 lock_bound_port :: fn(binding: ptr[Binding], generation: u32) -> ptr[mut Port]? {
     address :: intrinsics.atomic_load_u64(&binding.port)
@@ -494,7 +730,19 @@ lock_bound_port :: fn(binding: ptr[Binding], generation: u32) -> ptr[mut Port]? 
     return null
 }
 
-/** A binding for key, in the port's map, with no packet yet. Takes the lock as held. */
+/**
+ * Make a binding for key, in the port's map, with no packet yet and its data 0.
+ *
+ * Takes the port's lock as held. The binding is charged to the port's memory budget. It sets short_of_budget, for
+ * binding_failure to tell why it failed.
+ *
+ * @param kernel The kernel, whose binding pool the slot comes from.
+ * @param port The port, not dying.
+ * @param key The key, which the caller has checked isn't bound.
+ * @param kind What the binding is for; the caller fills in the fields its kind uses.
+ * @return The binding, which keeps its slot's generation; null if the budget couldn't pay for it, the pool had no slot,
+ *     or the map couldn't grow, when nothing is left charged or allocated.
+ */
 new_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, kind: BindingKind) -> ptr[mut Binding]? {
     port.short_of_budget = false
     if !charge_more(cast[u64](port), kernel.pools.bindings.object_size) {
@@ -522,7 +770,16 @@ new_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, kind: 
     return binding
 }
 
-/** Free a binding taken out of the port's map: off the ready list, its timer disarmed. Takes the lock as held. */
+/**
+ * Free a binding taken out of the port's map: off the ready list, its timer disarmed, its generation changed, its
+ * charge back to the port's budget.
+ *
+ * Takes the port's lock as held, and takes the timer heap's.
+ *
+ * @param kernel The kernel, whose binding pool the slot goes back to.
+ * @param port The binding's port.
+ * @param binding The binding, already removed from the port's map.
+ */
 free_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], binding: ptr[mut Binding]) {
     unqueue(port, binding)
     _ = cancel_timer(kernel, &binding.timer)
@@ -531,7 +788,14 @@ free_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], binding: ptr[mu
     uncharge(cast[u64](port), port.header.generation, kernel.pools.bindings.object_size)
 }
 
-/** Monotonic nanoseconds as a counter value. */
+/**
+ * Convert a monotonic time to the counter value it comes at.
+ *
+ * @param kernel The kernel, whose clock start and counter frequency convert it.
+ * @param nanoseconds A monotonic time, in nanoseconds as the monotonic clock reads (clock.hsc), or slop_os.NO_DEADLINE.
+ * @return The counter value, in ticks; the clock's start for a time before it starts; slop_os.NO_DEADLINE for
+ *     slop_os.NO_DEADLINE.
+ */
 ticks_at :: fn(kernel: ptr[Kernel], nanoseconds: u64) -> u64 {
     if nanoseconds == slop_os.NO_DEADLINE {
         return slop_os.NO_DEADLINE
@@ -543,7 +807,19 @@ ticks_at :: fn(kernel: ptr[Kernel], nanoseconds: u64) -> u64 {
     return kernel.clock_start + ticks_of(kernel, nanoseconds - MONOTONIC_START)
 }
 
-/** Whether size bytes at address in space are all mapped for user mode and writable. */
+/**
+ * Tell whether a range of user memory is all mapped for user mode and writable now.
+ *
+ * Takes the space's lock. It reads the page tables only, so memory mapped but not yet touched (memory.hsc), which a
+ * fault would fill in, counts as not writable.
+ *
+ * @param space The address space whose page tables are read; its lock is taken, so the caller holds none at that level
+ *     or above.
+ * @param address The range's start, a user virtual address, any alignment.
+ * @param size The range's size in bytes; 0 is writable if address is a user address.
+ * @return True if every page the range touches is mapped user and read/write; false if any isn't, or the range isn't
+ *     within the user address range.
+ */
 is_user_writable :: fn(space: ptr[mut AddressSpace], address: u64, size: u64) -> bool {
     low, high :: arch.user_address_range()
     if address < cast[u64](low) || address >= cast[u64](high) || size > cast[u64](high) - address {

@@ -10,8 +10,8 @@
  *   reads an ID the device gives: the HPET's vendor on x86-64, the PL011's first peripheral ID on AArch64;
  * - a window onto memory through a read-only handle can't be mapped writable, maps read-only and shows
  *   what was written through the memory; closing the memory destroys the window and its mapping;
- * - registering an IOMMU is refused for a kind there's none of, memory that isn't device memory, no requester IDs,
- *   and device memory that's another device, the HPET or the PL011;
+ * - registering an IOMMU is refused for a kind there's none of, memory that isn't device memory, no requester
+ *   IDs, and device memory that's another device, the HPET or the PL011;
  * - what it all charged its budget comes back.
  */
 package test_devices
@@ -25,27 +25,65 @@ import log_line from "../../log_line"
 import test_device as device_info from "../../test_device"
 import test_kit from "../../test_kit"
 
+/** The test's name, which starts each line it logs. */
 NAME :: "test_devices"
+/** A page, in bytes: what the device's info, its registers and the window are mapped in. */
 PAGE : u64 : 4096
+/** How many of the test device's interrupts the driver takes, at least, within two seconds. */
 INTERRUPTS : u64 : 10
+/** The key the IRQ's binding queues its packets under. */
 IRQ_KEY : u64 : 11
 #if TARGET_ARCH == .x86_64 {
-    // QEMU's HPET, where its firmware tables put it; its first register's high half is its vendor.
+    /** The physical address of QEMU's HPET, where its firmware tables put it. */
     DEVICE_MEMORY : u64 : 0xfed00000
+    /** The offset of the register the ID is in: the HPET's first, its capabilities and ID. */
     DEVICE_ID_OFFSET : u64 : 0
+    /** How far the ID is shifted up in its 32-bit register: the vendor is the first register's high half. */
     DEVICE_ID_SHIFT : u32 : 16
+    /** The ID the device gives: the HPET's vendor, Intel. */
     DEVICE_ID : u64 : 0x8086
+    /** The kind of IOMMU registering is tried for: the architecture's own, VT-d. */
     IOMMU : slop_os.IommuKind : .VtD
 }
 #else_if TARGET_ARCH == .arm64 {
-    // QEMU virt's PL011, where its device tree puts it; UARTPeriphID0 is 0x11.
+    /** The physical address of QEMU virt's PL011, where its device tree puts it. */
     DEVICE_MEMORY : u64 : 0x09000000
+    /** The offset of the register the ID is in: UARTPeriphID0. */
     DEVICE_ID_OFFSET : u64 : 0xfe0
+    /** How far the ID is shifted up in its 32-bit register: not at all. */
     DEVICE_ID_SHIFT : u32 : 0
+    /** The ID the device gives: UARTPeriphID0 is 0x11. */
     DEVICE_ID : u64 : 0x11
+    /** The kind of IOMMU registering is tried for: the architecture's own, an SMMUv3. */
     IOMMU : slop_os.IommuKind : .Smmuv3
 }
 
+/**
+ * Check what a driver can do with the platform capability: controllers, IRQs, device memory, windows and IOMMUs.
+ *
+ * @param log The debug log, writable, where the test says what it found and which check failed.
+ * @param platform The platform capability, which registers controllers and IOMMUs, makes IRQs and device memory;
+ *     without it the test ends with 100.
+ * @param test_device The page the kernel writes the test device's TestDeviceInfo in, from the test_device grant;
+ *     without it, as when the kernel's command line hasn't test_device, the test ends with 100.
+ * @param firmware Not used.
+ * @param manager Not used.
+ * @param program Not used.
+ * @param peer Not used.
+ * @param cpu_budget Not used.
+ * @return 0 if every check passed. Otherwise the first that failed, by its result's index plus one: 1 registering
+ *     the controller, 2 it not having the device's line, or 3 one in the kernel's RAM not refused with BadAddress;
+ *     4 making the IRQ, 5 a second for its line not refused with LineInUse, or 6 one without the platform capability
+ *     not refused with WrongKind; 7 binding it; 8 fewer than INTERRUPTS interrupts in two seconds, or 9 a packet not
+ *     the IRQ's; 10 closing it; 11 device memory over the kernel's RAM not refused with BadAddress; 12 making, or 13
+ *     mapping, the device's memory, or 14 its ID not DEVICE_ID; 15 making a window; 16 mapping it writable through a
+ *     read-only handle not refused with MissingRight, 17 mapping it read-only, or 18 it not showing what was written;
+ *     19 closing the memory, 20 the window not gone with it, or 21 its mapping not gone; registering an IOMMU 22 of a
+ *     kind there's none of, 23 in memory that isn't device memory, 24 with no requester IDs, or 25 in another
+ *     device's registers not refused with NoIommu, BadAddress, InvalidSize and NoIommu. 30 if its budget didn't come
+ *     back to nothing. 101 to 105 if setting up failed: 101 mapping the device's info, 102 the memory budget, 103
+ *     the port, 104 reserving addresses, 105 the memory.
+ */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     block :: slop_os.startup_block()

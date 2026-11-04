@@ -17,31 +17,57 @@ import frames from "frames"
  * On AArch64, the device tree's blob, which the bootloader's memory holds, through the direct map. Last, on both, the
  * kernel's own "RAM " table: the RAM it owns, a slop_os.PhysicalRange each, so the platform service knows what isn't
  * free for devices (decisions/0074); and, with a framebuffer, its own "FB  " table, the first framebuffer's
- * slop_os.FramebufferLayout at the framebuffer's physical address, for the terminal service to draw on (decisions/0138).
+ * slop_os.FramebufferLayout at the framebuffer's physical address, for the terminal service to draw on
+ * (decisions/0138).
  */
-//SPEC: ACPI Specification 6.5, §5.2.5 (RSDP), §5.2.6 (system description table header), §5.2.7-8 (RSDT, XSDT), §5.2.9 (FADT), §5.2.10 (FACS)
+//SPEC: ACPI Specification 6.5, §5.2.5 (RSDP), §5.2.6 (system description table header), §5.2.7-8 (RSDT, XSDT)
+//SPEC: ACPI Specification 6.5, §5.2.9 (FADT), §5.2.10 (FACS)
 //SPEC: Devicetree Specification 0.4, §5.2 (the header)
 
+/** The most firmware tables copied; any past them are left out, with a warning. */
 MAX_FIRMWARE_TABLES :: 64
 // The most bytes a table may have, and all of them: QEMU's are a few KiB, a large server's a few hundred.
+/** The most bytes one ACPI table may have; a longer one isn't copied. */
 MAX_TABLE_BYTES : u64 : 4 << 20
+/** The most bytes the whole copy may have, headers and the kernel's own tables included; past it, nothing's copied. */
 MAX_FIRMWARE_BYTES : u64 : 16 << 20
+/** The bytes of an ACPI system description table's header, before an RSDT's or XSDT's entries. */
 SDT_HEADER_SIZE : u64 : 36
+/** A device tree blob's magic, its first four bytes, big-endian. */
 DEVICE_TREE_MAGIC : u32 : 0xd00dfeed
 
+/** A firmware table found, to be copied. */
 FoundTable :: struct {
+    /** Its signature, four characters, as in the copy's entry. */
     signature : u8[4],
+    /** The physical address of its first byte. */
     physical : u64,
+    /** Its size in bytes, as its header says. */
     size : u64,
 }
 
+/** The firmware tables found, in the order they're copied. */
 FoundTables :: struct {
+    /** Whether they're ACPI's or a device tree. */
     kind : slop_os.FirmwareKind,
+    /** How many of tables are used. */
     count : usize,
+    /** The tables, each at a physical address of its own. */
     tables : FoundTable[MAX_FIRMWARE_TABLES],
 }
 
-// Copy the firmware tables, if the boot has any, for the root task: kernel.firmware, a read-only Memory.
+/**
+ * Copy the firmware tables, if the boot has any, for the root task: kernel.firmware, a read-only Memory.
+ *
+ * Called once at boot, while the bootloader's memory is still there. Failures leave kernel.firmware as it was and are
+ * logged: no tables found, a copy over MAX_FIRMWARE_BYTES, or no memory for it.
+ *
+ * @param kernel The kernel, whose ram ranges become the "RAM " table, and whose firmware it sets.
+ * @param tables Where the bootloader found the firmware's tables: ACPI's RSDP on x86-64, the device tree on AArch64.
+ * @param framebuffers The boot's framebuffers; the first, if there is one, becomes the "FB  " table.
+ * @param direct_map_offset What's added to a physical address to reach it through the direct map, where the device
+ *     tree is read.
+ */
 copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.FirmwareTables], framebuffers: boot_info.Framebuffer[],
     direct_map_offset: u64) {
     found : FoundTables
@@ -135,7 +161,14 @@ copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.Firmwa
     runtime.log_info("firmware tables: % copied for the root task, and % RAM ranges, % bytes", found.count, kernel.ram.count, total)
 }
 
-/** The tables an RSDP leads to, and the RSDP. */
+/**
+ * Find the ACPI tables an RSDP leads to, and the RSDP: every table its XSDT (or before ACPI 2, its RSDT) lists, and
+ * the FADT's DSDT and FACS. Each is read through the kernel window.
+ *
+ * @param kernel The kernel, whose window maps them for a moment.
+ * @param rsdp The RSDP's physical address; one with the wrong signature is logged, and nothing is found.
+ * @param found Where they're added; its kind is set to Acpi.
+ */
 find_acpi_tables :: fn(kernel: ptr[mut Kernel], rsdp: u64, found: ptr[mut FoundTables]) {
     found.kind = .Acpi
     bytes : u8[36]
@@ -178,7 +211,15 @@ find_acpi_tables :: fn(kernel: ptr[mut Kernel], rsdp: u64, found: ptr[mut FoundT
     }
 }
 
-/** The table at physical, by its header's signature and length, unless it's there already or too long: its length. */
+/**
+ * Add an ACPI table, by its header's signature and length, unless it's found already.
+ *
+ * @param kernel The kernel, whose window maps its header for a moment.
+ * @param found Where it's added.
+ * @param physical The table's physical address.
+ * @return Its length in bytes, even when it was found already or there's no room for it; 0 if the length is under 8
+ *     or over MAX_TABLE_BYTES, which is logged and not added.
+ */
 add_sdt :: fn(kernel: ptr[mut Kernel], found: ptr[mut FoundTables], physical: u64) -> u64 {
     header : u8[8]
     read_physical(kernel, physical, 8, cast[u64](&header))
@@ -193,6 +234,15 @@ add_sdt :: fn(kernel: ptr[mut Kernel], found: ptr[mut FoundTables], physical: u6
     return size
 }
 
+/**
+ * Add a table to those found, unless one at its address is there already; with no room left, it's logged and left
+ * out.
+ *
+ * @param found Where it's added.
+ * @param signature Its signature.
+ * @param physical Its physical address.
+ * @param size Its size in bytes.
+ */
 add_table :: fn(found: ptr[mut FoundTables], signature: u8[4], physical: u64, size: u64) {
     for table, i in found.tables {
         if i < found.count && table.physical == physical {
@@ -208,7 +258,12 @@ add_table :: fn(found: ptr[mut FoundTables], signature: u8[4], physical: u64, si
     found.count += 1
 }
 
-/** A signature of four characters, as its bytes. */
+/**
+ * Make a table's signature from its text.
+ *
+ * @param text Its four characters, ASCII; any past four are left out, and fewer leave zeros.
+ * @return Its four bytes, in the text's order, as the copy's entries hold them.
+ */
 signature_of :: fn(text: string) -> u8[4] {
     signature : u8[4]
     for byte, i in text {
@@ -219,7 +274,14 @@ signature_of :: fn(text: string) -> u8[4] {
     return signature
 }
 
-/** The device tree's blob, at address through the direct map and at physical. */
+/**
+ * Find the device tree's blob, by its header's magic and total size.
+ *
+ * @param address Where it is through the direct map, readable for its whole size.
+ * @param physical Its physical address.
+ * @param found Where it's added as "DTB "; its kind is set to DeviceTree. A wrong magic or a size over
+ *     MAX_FIRMWARE_BYTES is logged, and nothing is added.
+ */
 find_device_tree :: fn(address: u64, physical: u64, found: ptr[mut FoundTables]) {
     found.kind = .DeviceTree
     if big_endian_u32(address) != DEVICE_TREE_MAGIC {
@@ -234,7 +296,15 @@ find_device_tree :: fn(address: u64, physical: u64, found: ptr[mut FoundTables])
     add_table(found, signature_of("DTB "), physical, size)
 }
 
-/** size bytes from physical, through the kernel window, copied to into; zeros if they can't be mapped. */
+/**
+ * Copy physical memory through the kernel window, mapping it uncached for the copy and unmapping it after, since
+ * firmware may keep its tables in reserved memory the direct map leaves out.
+ *
+ * @param kernel The kernel, whose window maps it.
+ * @param physical The physical address of the first byte, aligned or not.
+ * @param size How many bytes.
+ * @param into The kernel virtual address they go to, writable for size bytes; zeroed if they can't be mapped.
+ */
 read_physical :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64, into: u64) {
     match map_device(kernel, cast[boot_info.PhysicalAddress](physical), size) {
         case Ok(address) => {
@@ -245,19 +315,39 @@ read_physical :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64, into: u64
     }
 }
 
+/**
+ * Read a little-endian u32 at any alignment.
+ *
+ * @param base A kernel virtual address.
+ * @param offset The value's offset from base, in bytes.
+ * @return The four bytes at base + offset, read as a little-endian u32.
+ */
 u32_at :: fn(base: u64, offset: u64) -> u32 {
     value : u32 = 0
     intrinsics.mem_copy_non_overlapping(cast[mut rawptr](&value), cast[rawptr](base + offset), 4)
     return value
 }
 
+/**
+ * Read a little-endian u64 at any alignment.
+ *
+ * @param base A kernel virtual address.
+ * @param offset The value's offset from base, in bytes.
+ * @return The eight bytes at base + offset, read as a little-endian u64.
+ */
 u64_at :: fn(base: u64, offset: u64) -> u64 {
     value : u64 = 0
     intrinsics.mem_copy_non_overlapping(cast[mut rawptr](&value), cast[rawptr](base + offset), 8)
     return value
 }
 
-/** Whether the bytes at address are text's. */
+/**
+ * Tell whether the bytes at an address are a text's.
+ *
+ * @param address A kernel virtual address, readable for the text's length.
+ * @param text The text, as ASCII.
+ * @return True if the bytes there match it, each one.
+ */
 bytes_are :: fn(address: u64, text: string) -> bool {
     bytes :: view_of(cast[ptr[u8]](address), text.count)
     for byte, i in text {
@@ -268,6 +358,12 @@ bytes_are :: fn(address: u64, text: string) -> bool {
     return true
 }
 
+/**
+ * Read a big-endian u32, as a device tree's are, at any alignment.
+ *
+ * @param address A kernel virtual address, readable for 4 bytes.
+ * @return The four bytes at address, most significant first.
+ */
 big_endian_u32 :: fn(address: u64) -> u32 {
     bytes :: view_of(cast[ptr[u8]](address), 4)
     if bytes.count < 4 {

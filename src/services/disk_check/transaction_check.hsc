@@ -16,8 +16,22 @@ import read_only_file from "std/os/slop_os"
  * Checks from 60.
  */
 
+/** The size of the memory a transaction keeps its log in, given with Begin, in bytes. */
 TRANSACTION_LOG_BYTES : u64 : 65536
 
+/**
+ * Check replacing, transactions and change cursors on the system volume.
+ *
+ * @param to The debug log; unused, as what's found is logged through runtime.
+ * @param system The system volume's root.
+ * @param buffer The buffer file connections read and write through.
+ * @return 0 if all of it held; 60 if a port couldn't be made, 61 if the first cursor couldn't be had, 62 to 67 if
+ *     replacing an open file failed or the reader didn't keep the old contents, 68 to 73 if the transaction of two new
+ *     files failed or its files were seen before it committed, 74 to 77 if a conflicting transaction wasn't refused
+ *     with Conflict or changed something, 81 to 85 if a transaction failing partway through left something of itself
+ *     or the volume didn't go on after it, and 78 to 80 if following the changes failed or missed some. 60 to 67 are
+ *     check_typed's numbers too, so they say which check failed only with the log.
+ */
 check_transactions :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], buffer: ptr[Buffer]) -> int {
     budget :: slop_os.startup_block().budget
     port :: os.port_for(budget, system.end) or_return 60
@@ -174,7 +188,17 @@ check_transactions :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], buff
     return 0
 }
 
-/** A file at path opened as creation says, through a dir connection, written whole and synced. */
+/**
+ * Open a file through a dir connection, or a transaction's, write text as its whole contents, and sync it.
+ *
+ * @param end The directory, or a transaction, speaking dir.
+ * @param port A port bound to end.
+ * @param path The file's path beneath it.
+ * @param creation Whether the file is made, must be there already, or is cut to nothing, as files.Creation says.
+ * @param text The file's contents, at most TRANSFER_BYTES bytes.
+ * @param buffer The buffer the file's server writes from; text is copied into it.
+ * @return Whether it was opened, written, sized and synced; the file connection is closed either way.
+ */
 write_file :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, creation: files.Creation, text: string, buffer: ptr[Buffer]) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -189,7 +213,16 @@ write_file :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, creatio
     return write_through(opened.end, text, buffer, false)
 }
 
-/** A file connection given the buffer, text written, its size cut to it, and synced, or installed. */
+/**
+ * Write text as a file connection's whole contents: give it the buffer, write text, set its size to it, and sync it,
+ * or install it, for a replacement.
+ *
+ * @param end The file connection, which stays open.
+ * @param text The contents, at most TRANSFER_BYTES bytes.
+ * @param buffer The buffer the file's server writes from; text is copied into it.
+ * @param install Whether it's finished with Install, putting a replacement in its file's place, or with Sync.
+ * @return Whether every request was done, and the write moved all of text.
+ */
 write_through :: fn(end: slop_os.Channel, text: string, buffer: ptr[Buffer], install: bool) -> bool {
     budget :: slop_os.startup_block().budget
     port :: os.port_for(budget, end) or_return false
@@ -222,7 +255,15 @@ write_through :: fn(end: slop_os.Channel, text: string, buffer: ptr[Buffer], ins
     return true
 }
 
-/** A read-only file at path, opened, its buffer given. */
+/**
+ * Open a file read-only through a dir connection; its buffer isn't given.
+ *
+ * @param end The directory, speaking dir.
+ * @param port A port bound to end.
+ * @param path The file's path beneath the directory.
+ * @param buffer Unused.
+ * @return The connection, which the caller closes; null if the file isn't there, or couldn't be opened.
+ */
 open_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, buffer: ptr[Buffer]) -> os.Channel[read_only_file.ReadOnlyFile]? {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -234,14 +275,31 @@ open_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, buf
     }
 }
 
-/** Whether the file at path holds text, read through a connection of its own. */
+/**
+ * Tell whether a file holds text, read through a connection of its own.
+ *
+ * @param end The directory, speaking dir.
+ * @param port A port bound to end.
+ * @param path The file's path beneath the directory.
+ * @param text What it should hold, exactly.
+ * @param buffer The buffer the file's server reads into.
+ * @return Whether it was read and holds text and nothing more.
+ */
 holds :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, text: string, buffer: ptr[Buffer]) -> bool {
     bytes : u8[..]
     defer runtime.array_free(&bytes)
     return read_whole(end, port, path, buffer, &bytes) && same_text(bytes, text)
 }
 
-/** Whether a read-only file connection, open from before, holds text. */
+/**
+ * Tell whether a read-only file connection, open from before, holds text: one read of up to TRANSFER_BYTES.
+ *
+ * @param end The connection, which stays open.
+ * @param port A port bound to end.
+ * @param text What it should hold, exactly.
+ * @param buffer The buffer the file's server reads into, a new handle to which it's given.
+ * @return Whether it read text and nothing more.
+ */
 connection_holds :: fn(end: slop_os.Channel, port: slop_os.Port, text: string, buffer: ptr[Buffer]) -> bool {
     memory :: handed(buffer) or_return false
     into := os.Incoming.{}
@@ -264,6 +322,13 @@ connection_holds :: fn(end: slop_os.Channel, port: slop_os.Port, text: string, b
     return false
 }
 
+/**
+ * Tell whether bytes are a text's.
+ *
+ * @param bytes The bytes compared, as read back from a file; only read.
+ * @param text The text they should be, compared byte for byte; only read.
+ * @return Whether they're as long as each other, with the same bytes.
+ */
 same_text :: fn(bytes: u8[], text: string) -> bool {
     if bytes.count != text.count {
         return false
@@ -276,7 +341,13 @@ same_text :: fn(bytes: u8[], text: string) -> bool {
     return true
 }
 
-/** A transaction's commit: whether it was made. */
+/**
+ * Commit a transaction.
+ *
+ * @param end The transaction, speaking dir.
+ * @param port A port bound to end.
+ * @return Whether it answered Done, committed.
+ */
 committed :: fn(end: slop_os.Channel, port: slop_os.Port) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}

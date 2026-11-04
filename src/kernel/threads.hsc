@@ -25,6 +25,7 @@ import slop_os from "std/os"
  */
 //TODO(claude): blocking threads on ports (M5, ports)
 
+/** Where a thread is in the scheduler's eyes. */
 ThreadState :: enum #backed_by(u8) {
     /** On a CPU's run queue. */
     Ready,
@@ -36,76 +37,109 @@ ThreadState :: enum #backed_by(u8) {
     Stopped,
 }
 
+/** A thread: what runs in user mode, an object owned by a process (or the kernel), under 1 KiB. */
 Thread :: struct #align(16) {
+    /** Its object header. */
     header : ObjectHeader,
     /** Saved at every entry from user mode, and restored by return_to_user. */
     registers : arch.UserRegisters,
-    // Its arch.VectorState, from the heap, and that block's size.
+    /** Its arch.VectorState's address, from the kernel heap, freed at its release; 0 once freed. */
     vector : u64,
+    /** The bytes of its vector state's block, as arch.vector_state_size gave for its configuration. */
     vector_size : u64,
+    /** The address space it runs in, which outlives it: destroying the space destroys its threads. */
     space : ptr[mut AddressSpace],
-    /** Its CpuTime (budgets.hsc), or 0 for the background band only. */
+    /** Its CpuTime (budgets.hsc), as an address, or 0 for the background band only. */
     budget : u64,
-    // The CpuBudget object that time is, and its neighbors among what runs on it (cpu_budgets.hsc), under kernel.cpu_budgets_lock.
+    /** The CpuBudget object that time is part of, as an address, 0 for none; under kernel.cpu_budgets_lock. */
     budget_object : u64,
+    /** The next thread on its CPU budget's list, 0 at the end; under kernel.cpu_budgets_lock (cpu_budgets.hsc). */
     budget_next : u64,
+    /** The previous thread on its CPU budget's list, 0 at the start; under kernel.cpu_budgets_lock. */
     budget_previous : u64,
+    /** Where it is in the scheduler: ready, running, blocked or stopped. */
     state : ThreadState,
-    // The CPU it's on, or last ran on; the run-queue level it's on there, and whether it's queued, which
-    // that CPU's run-queue lock guards (scheduler.hsc).
+    /**
+     * The index of the CPU it's on, or last ran on; written with a release store under that CPU's run-queue lock, so
+     * it may change until that lock is held and it's still the same (scheduler.hsc).
+     */
     cpu : u32,
+    /** The run-queue level it's queued at, or runs at, on that CPU: 0 for the background band, a priority plus 1. */
     level : u32,
+    /** Whether it's on its CPU's run queue; under that queue's lock. */
     queued : bool,
-    // Its neighbors on a run queue, as addresses, 0 at either end.
+    /** The next thread at its level on its run queue, as an address, 0 at the end; under the queue's lock. */
     next : u64,
+    /** The previous thread at its level on its run queue, as an address, 0 at the start; under the queue's lock. */
     previous : u64,
-    // Its neighbors among its address space's threads.
+    /** The next thread in its address space, 0 at the end; under the space's threads_lock. */
     space_next : u64,
+    /** The previous thread in its address space, 0 at the start; under the space's threads_lock. */
     space_previous : u64,
+    /** Whether it's on its address space's list of threads; under the space's threads_lock. */
     in_space : bool,
-    /** Started, so counted among its process's live threads (Process.live_threads) */
+    /** Started, so counted among its process's live threads (Process.live_threads). */
     counted : bool,
-    // Counter ticks it's run.
+    /** The counter ticks it has run, charged at each entry to the scheduler. */
     run_time : u64,
+    /** Its ID, unique for as long as the kernel runs, from 1 up (Kernel.next_thread_id). */
     id : u64,
-    // Its port_wait, while it has one (ports.hsc): the port and its generation, where its packets go and how
-    // many, until when (counter ticks, or slop_os.NO_DEADLINE), and its place among the port's waiters.
+    /** The port its port_wait waits on, as an address, 0 while it has none (ports.hsc). */
     wait_port : u64,
+    /** That port's generation when the wait began, so a port destroyed since isn't used. */
     wait_port_generation : u32,
+    /** How many packets its wait's buffer holds. */
     wait_capacity : u32,
+    /** Where its wait's packets go: a user virtual address in its space. */
     wait_buffer : u64,
+    /** When its wait times out, in counter ticks, or slop_os.NO_DEADLINE for never. */
     wait_deadline : u64,
+    /** Whether it's on its port's list of waiters; under the port's lock. */
     waiting : bool,
+    /** The next waiter on its port's list, or on its paged memory's, as an address, 0 at the end. */
     wait_next : u64,
+    /** The previous waiter on its port's list, or on its paged memory's, as an address, 0 at the start. */
     wait_previous : u64,
     /**
-     * The paged memory it waits on for a page (paging.hsc), 0 if none; linked there through wait_next and wait_previous.
+     * The paged memory it waits on for a page (paging.hsc), 0 if none; linked there through wait_next and
+     * wait_previous.
      */
     fault_memory : u64,
-    // Counts its waits, so a deadline from an earlier one doesn't wake a later one.
+    /** Counts its waits, so a deadline from an earlier one doesn't wake a later one. */
     wait_sequence : u64,
+    /** The timer that ends its wait at wait_deadline (timers.hsc). */
     wait_timer : TimerEntry,
-    // Process control (control.hsc): what holds it (HELD_*), and whether it's parked, under control.
+    /** Process control's lock (control.hsc), at rank ThreadControl: guards held, parked, its stop and watchers. */
     control : concurrency.SpinLock,
+    /** What holds it, HELD_* bits (control.hsc): it doesn't run while any is set. */
     held : u32,
+    /** Whether it's parked: held, and on no run queue until nothing holds it. */
     parked : bool,
-    // A stop (intercepts.hsc): the intercept, where and why, whether it's been reported, and its neighbors
-    // on the intercept's list.
+    /** Whether its stop has been reported to its intercept (intercepts.hsc). */
     stop_reported : bool,
+    /** Whether it's on its intercept's list of stopped threads; under the intercept's lock. */
     stop_linked : bool,
-    // Its next system call's entry stop is passed over: it's the call made again after one.
+    /** Its next system call's entry stop is passed over: it's the call made again after one. */
     restarted : bool,
+    /** Where it stopped, a slop_os.StopPoint's value. */
     stop_point : u32,
+    /** Why it stopped: the system call's number, or a fault's access. */
     stop_number : u32,
+    /** The Intercept that stopped it, as an address, while it's stopped. */
     stop_intercept : u64,
+    /** A fault's address, for a stop at a fault: a user virtual address. */
     stop_address : u64,
+    /** The next thread on its intercept's list of stopped threads, 0 at the end; under the intercept's lock. */
     stop_next : u64,
+    /** The previous thread on that list, 0 at the start; under the intercept's lock. */
     stop_previous : u64,
     /** The system call it's in, for its exit stop. */
     syscall_number : u64,
-    // On the kernel's list of threads, under threads_lock.
+    /** Whether it's on the kernel's list of threads; under kernel.threads_lock. */
     on_list : bool,
+    /** The next thread on the kernel's list, 0 at the end; under kernel.threads_lock. */
     all_next : u64,
+    /** The previous thread on the kernel's list, 0 at the start; under kernel.threads_lock. */
     all_previous : u64,
     /** Bindings watching for it to end (SIGNAL_TERMINATED), under control. */
     watchers : EndBinding[2],
@@ -113,7 +147,9 @@ Thread :: struct #align(16) {
 
 #assert size_of(Thread) <= 1024
 
+/** Why a thread couldn't be made. */
 ThreadError :: enum {
+    /** No slot for it, or no heap memory for its vector state. */
     OutOfMemory,
     /** Its owner or its address space is being destroyed. */
     OwnerGone,
@@ -121,10 +157,24 @@ ThreadError :: enum {
     BudgetExceeded,
 }
 
-/*
- * A thread owned by owner (a Process's address, 0 for the kernel), in space, starting at start, with
- * vector state for config, bound to CPU budget (0 for none), charged to memory_budget with its vector state.
- * It doesn't run until start_thread.
+/**
+ * Make a thread. It doesn't run until start_thread.
+ *
+ * @param kernel The kernel: its pools give the slot, its heap the vector state, kernel.next_thread_id the ID, and
+ *     kernel.threads_lock and kernel.cpu_budgets_lock are taken to put it on their lists.
+ * @param owner The Process that owns it, as an address, or 0 for the kernel.
+ * @param space The address space it runs in, which keeps it on its list of threads.
+ * @param start Where it starts: its instruction pointer, its stack pointer and its argument, user virtual addresses
+ *     in space; read before this returns.
+ * @param config What vector state it has, which says how big that state is.
+ * @param budget The CpuTime it runs on, as an address, as the kernel's tests give; or 0, when an owned thread joins
+ *     its process's CPU budget, and one the kernel owns runs only in the background band.
+ * @param memory_budget The MemoryBudget it's charged to, as an address, 0 for the kernel's own: its slot and its
+ *     vector state.
+ * @return The thread, owned by owner, on the kernel's list of threads, with an ID of its own.
+ * @error OutOfMemory No slot for it, or no heap memory for its vector state.
+ * @error BudgetExceeded memory_budget can't pay for it.
+ * @error OwnerGone Its owner or its address space is being destroyed; the thread was destroyed again.
  */
 create_thread :: fn(kernel: ptr[mut Kernel], owner: u64, space #escaping : ptr[mut AddressSpace], start: ptr[arch_interface.UserStart],
     config: arch_interface.VectorConfig, budget: u64, memory_budget: u64) -> Result[ptr[mut Thread], ThreadError] {
@@ -166,7 +216,13 @@ create_thread :: fn(kernel: ptr[mut Kernel], owner: u64, space #escaping : ptr[m
     return .Ok(thread)
 }
 
-/** Make a new thread ready on the next CPU in turn that its budget has. */
+/**
+ * Start a new thread: make it ready on the next CPU in turn that its budget has, and count it among its process's
+ * live threads, so the process ends when the last goes.
+ *
+ * @param kernel The kernel, whose next_start_cpu is advanced, and the chosen CPU's run-queue lock taken.
+ * @param thread The thread, made by create_thread and not yet started; started again, it isn't counted twice.
+ */
 start_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     owner :: thread.header.owner
     if owner != 0 && !thread.counted && cast[ptr[ObjectHeader]](owner).kind == .Process {
@@ -178,8 +234,16 @@ start_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
 }
 
 /**
- * Destroying a thread: off its address space's list and its run queue. If another CPU runs it, that CPU
- * is told, and doesn't resume it.
+ * Destroy a thread, as destroy_object does for its kind: off its CPU budget, its wait, its address space's list, its
+ * intercept's, the kernel's list and its run queue.
+ *
+ * Its watchers are raised with SIGNAL_TERMINATED, and its process ends if it was its last live thread. If another
+ * CPU runs it, that CPU gets a reschedule IPI, and doesn't resume it; if this CPU runs it, the scheduler drops it at
+ * its next entry.
+ *
+ * @param kernel The kernel: among others, kernel.cpu_budgets_lock, kernel.threads_lock, its space's threads_lock, its
+ *     control lock and its CPU's run-queue lock are each taken in turn; called during destroy_object.
+ * @param thread The thread, already dying, its generation advanced.
  */
 destroy_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     leave_thread_budget(kernel, thread)
@@ -216,9 +280,14 @@ destroy_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
 }
 
 /**
- * A started thread's process, once that was its last live thread, ends as killed, unless it's ending already
+ * End a started thread's process as killed, once that was its last live thread, unless it's ending already
  * (decisions/0104): so a process whose threads all fault, with nothing to fix them, doesn't linger with none, and
- * whoever watches it learns it ended. After the destroy this one's part of, if any.
+ * whoever watches it learns it ended.
+ *
+ * The process is destroyed after the destroy this one's part of, if any (destroy_later).
+ *
+ * @param kernel The kernel, for destroying the process later (destroy_later), on this CPU's doomed list.
+ * @param thread The thread that's going; one never started, or already uncounted, changes nothing.
  */
 end_process_if_last :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     if !thread.counted {
@@ -232,7 +301,13 @@ end_process_if_last :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     }
 }
 
-/** Once no CPU can use it: its vector state. */
+/**
+ * Release a destroyed thread once no CPU can use it, as release_object does for its kind: its vector state goes
+ * back to the heap.
+ *
+ * @param kernel The kernel, unused; the vector state goes back to the context's allocator, the kernel heap.
+ * @param thread The thread, its grace period over, or one create_thread is letting go of before it had vector state.
+ */
 release_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     if thread.vector != 0 {
         runtime.free_array_aligned(view_of(cast[ptr[u8]](thread.vector), cast[usize](thread.vector_size)), arch.vector_state_alignment())
@@ -240,12 +315,23 @@ release_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     }
 }
 
+/**
+ * Tell whether an object's destruction has started.
+ *
+ * @param object The object's address, a slot of a type-stable pool.
+ * @return True once its destruction has started, with a plain atomic load: it can become true the moment after false.
+ */
 is_dying :: fn(object: u64) -> bool {
     header :: cast[ptr[ObjectHeader]](object)
     return intrinsics.atomic_load_u32(&header.dying) != 0
 }
 
-/** Keep the registers an entry from user mode saved, in the CPU's current thread. */
+/**
+ * Keep the registers an entry from user mode saved, in the CPU's current thread.
+ *
+ * @param registers The registers, on this CPU's kernel stack; copied, so they needn't outlive the call. With no
+ *     current thread, as when idle, nothing is kept.
+ */
 save_user_registers :: fn(registers: ptr[arch.UserRegisters]) {
     cpu :: per_cpu()
     if cpu.current != 0 {

@@ -28,13 +28,25 @@ import slop_os from "std/os"
  */
 
 // What holds a thread (Thread.held).
+/** Thread.held's bit for a suspend, through ThreadSuspend, until ThreadResume. */
 HELD_SUSPEND : u32 : 1 << 0
+/** Thread.held's bit for a stop by an intercept, until it lets the thread go. */
 HELD_STOP : u32 : 1 << 1
 
 /** How far up an ownership chain a walk goes, so one through slots reused meanwhile always ends. */
 MAX_OWNER_DEPTH :: 4096
 
-/** Hold thread for bit: parked at once if it's on a run queue; told, if it runs on another CPU. */
+/**
+ * Hold a thread for a reason: parked at once if it's on a run queue; told with an IPI, if it runs on another CPU, so
+ * it parks as it next enters the kernel. A blocked thread parks once its wait is over.
+ *
+ * Takes the thread's control lock, then its run queue's.
+ *
+ * @param kernel The kernel, whose per_cpus give the thread's run queue, taken under its lock, and whose cpus give
+ *     the hardware ID an IPI goes to.
+ * @param thread The thread; its control lock is taken, so the caller holds none of rank ThreadControl or above.
+ * @param bit What holds it, HELD_SUSPEND or HELD_STOP; holding it again for the same bit changes nothing.
+ */
 hold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) {
     lock_at(&thread.control, .ThreadControl)
     defer unlock_at(&thread.control, .ThreadControl)
@@ -69,7 +81,15 @@ hold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) {
     }
 }
 
-/** Let go of thread for bit: made ready if it's parked and nothing else holds it. */
+/**
+ * Let go of a thread for a reason: made ready on its CPU if it's parked, nothing else holds it, and it isn't dying.
+ * Takes the thread's control lock, then its run queue's.
+ *
+ * @param kernel The kernel, whose run queue on the thread's CPU it joins when it's made ready.
+ * @param thread The thread; its control lock is taken, so the caller holds none of rank ThreadControl or above.
+ *     One dying stays parked.
+ * @param bit What no longer holds it, HELD_SUSPEND or HELD_STOP; one that didn't hold it changes nothing.
+ */
 unhold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) {
     lock_at(&thread.control, .ThreadControl)
     defer unlock_at(&thread.control, .ThreadControl)
@@ -81,8 +101,12 @@ unhold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) 
 }
 
 /**
- * Park thread if something holds it, saving its vector state if it's the CPU's current thread (saved):
- * whether it did. The caller takes it off the CPU.
+ * Park a thread if something holds it, at a point where its whole state is its saved registers. Takes the thread's
+ * control lock, only when it's held.
+ *
+ * @param thread The thread, about to leave the CPU at a point where its whole state is its saved registers.
+ * @param saved Whether it's this CPU's current thread, whose vector state is still in the CPU and is saved.
+ * @return True if it's parked, when the caller takes it off the CPU; false if nothing holds it.
  */
 park_if_held :: fn(thread: ptr[mut Thread], saved: bool) -> bool {
     if intrinsics.atomic_load_u32_acquire(&thread.held) == 0 {
@@ -101,16 +125,37 @@ park_if_held :: fn(thread: ptr[mut Thread], saved: bool) -> bool {
     return true
 }
 
-/** Whether a thread is held and parked, so its registers are its own to read and write. */
+/**
+ * Tell whether a thread is parked, so its saved registers are a debugger's to read and write. Takes the thread's
+ * control lock.
+ *
+ * @param thread The thread; its control lock is taken for the read.
+ * @return True if it's parked; it stays so until whatever holds it lets go.
+ */
 is_parked :: fn(thread: ptr[mut Thread]) -> bool {
     lock_at(&thread.control, .ThreadControl)
     defer unlock_at(&thread.control, .ThreadControl)
     return thread.parked
 }
 
-/*
- * Bind object, a process or a thread, to port under key, for its watchers: a Signal packet when it raises
- * any of signals, which only SIGNAL_TERMINATED is so far. Takes object's lock (lock) itself.
+/**
+ * Bind an object to a port under a key, for its watchers: a Signal packet when it raises any of some signals.
+ *
+ * An object has two watchers' slots. Binding the same object to the same port and key again arms it again and
+ * changes its signals and mode. Takes the object's watchers' lock, then the port's.
+ *
+ * @param kernel The kernel, whose pool the binding comes from.
+ * @param port The port, which is charged for the binding.
+ * @param object The object watched, a process, a thread or a device, as its address.
+ * @param watchers The object's watchers' slots.
+ * @param lock The lock that guards watchers.
+ * @param rank lock's rank, as lock_at takes it.
+ * @param signals The signals that raise a packet, like SIGNAL_TERMINATED.
+ * @param key The key its packets carry, which no other binding on the port may have.
+ * @param mode Once, for one packet and then none until it's bound again, or each signal's.
+ * @return Null once bound and armed; ObjectGone if the object or the port is being destroyed; KeyInUse if the key
+ *     is another binding's; TooManyBindings if both slots have bindings their ports still keep; BudgetExceeded or
+ *     OutOfMemory if the binding couldn't be made.
  */
 watch_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], object: u64, watchers: ptr[mut EndBinding[2]], lock: ptr[mut concurrency.SpinLock], rank: LockRank,
     signals: slop_os.Signals, key: u64, mode: slop_os.BindMode) -> slop_os.PortError? {
@@ -158,7 +203,18 @@ watch_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], object: u64, watc
     return null
 }
 
-// Raise signals on the bindings watching an object. Takes its lock (lock) itself.
+/**
+ * Raise signals on the bindings watching an object, each with a detail. A binding its port dropped is passed by.
+ * Takes the watchers' lock, then each port's.
+ *
+ * @param kernel The kernel; only the ports' queues change, each under its port's lock.
+ * @param watchers The object's watchers' slots.
+ * @param lock The lock that guards watchers.
+ * @param rank lock's rank, as lock_at takes it.
+ * @param signals The signals raised, slop_os.SIGNAL_* bits; a binding not watching for any of them, or not
+ *     armed, isn't queued.
+ * @param detail What the packet carries besides, like a DMA fault's address.
+ */
 raise_watchers :: fn(kernel: ptr[mut Kernel], watchers: ptr[mut EndBinding[2]], lock: ptr[mut concurrency.SpinLock], rank: LockRank, signals: u32,
     detail: u64) {
     lock_at(lock, rank)
@@ -180,7 +236,13 @@ raise_watchers :: fn(kernel: ptr[mut Kernel], watchers: ptr[mut EndBinding[2]], 
     }
 }
 
-/** Whether object is owned within process's subtree. */
+/**
+ * Tell whether an object is owned within a process's subtree, up at most MAX_OWNER_DEPTH owners.
+ *
+ * @param object The object, as its address.
+ * @param process The Process, as its address.
+ * @return True if the process owns the object, or owns what owns it, and so on; false for the process itself.
+ */
 in_subtree :: fn(object: u64, process: u64) -> bool {
     owner := cast[ptr[ObjectHeader]](object).owner
     for depth in 0..<MAX_OWNER_DEPTH {
@@ -195,7 +257,12 @@ in_subtree :: fn(object: u64, process: u64) -> bool {
     return false
 }
 
-/** Every thread, on the kernel's list, for finding one by its ID. */
+/**
+ * Put a thread on the kernel's list of every thread, for finding one by its ID. Takes threads_lock.
+ *
+ * @param kernel The kernel, whose list of threads (first_thread) changes under threads_lock.
+ * @param thread The thread, which isn't on the list yet.
+ */
 link_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     lock_at(&kernel.threads_lock, .Threads)
     thread.all_previous = 0
@@ -208,6 +275,12 @@ link_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     unlock_at(&kernel.threads_lock, .Threads)
 }
 
+/**
+ * Take a thread off the kernel's list of every thread, if it's on it. Takes threads_lock.
+ *
+ * @param kernel The kernel, whose list of threads (first_thread) changes under threads_lock.
+ * @param thread The thread, being destroyed; one not on the list is left alone.
+ */
 unlink_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     lock_at(&kernel.threads_lock, .Threads)
     defer unlock_at(&kernel.threads_lock, .Threads)
@@ -226,7 +299,15 @@ unlink_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     thread.on_list = false
 }
 
-/** The live thread with id in process's subtree, or null. */
+/**
+ * Find a live thread by its ID in a process's subtree. Takes threads_lock.
+ *
+ * @param kernel The kernel, whose list of threads is walked under threads_lock.
+ * @param process The Process, as its address.
+ * @param id The thread's ID.
+ * @return The thread, or null if none has the ID, or it's dying, or it isn't in the subtree. It may be destroyed
+ *     at any time after, but its memory isn't freed before this CPU's next quiescent point.
+ */
 thread_in :: fn(kernel: ptr[mut Kernel], process: u64, id: u64) -> ptr[mut Thread]? {
     lock_at(&kernel.threads_lock, .Threads)
     defer unlock_at(&kernel.threads_lock, .Threads)
@@ -246,7 +327,15 @@ thread_in :: fn(kernel: ptr[mut Kernel], process: u64, id: u64) -> ptr[mut Threa
     return null
 }
 
-/** How many threads process's subtree has; the first capacity's IDs, written at ids. */
+/**
+ * Count the live threads in a process's subtree, and list their IDs. Takes threads_lock.
+ *
+ * @param kernel The kernel, whose list of threads is walked under threads_lock.
+ * @param process The Process, as its address.
+ * @param ids Where the IDs are written, the newest thread first.
+ * @param capacity How many IDs to write, at most; more than 64 is taken as 64.
+ * @return How many live threads the subtree has, which may be more than capacity.
+ */
 threads_of :: fn(kernel: ptr[mut Kernel], process: u64, ids: ptr[mut u64[64]], capacity: u32) -> u32 {
     lock_at(&kernel.threads_lock, .Threads)
     defer unlock_at(&kernel.threads_lock, .Threads)
@@ -270,9 +359,18 @@ threads_of :: fn(kernel: ptr[mut Kernel], process: u64, ids: ptr[mut u64[64]], c
     return count
 }
 
-/*
- * Copy size bytes between two address spaces, through the kernel, a page's worth at a time: from (space,
- * address) to (other, buffer). False if either isn't mapped there.
+/**
+ * Copy bytes between two address spaces, through a 256-byte buffer on the kernel stack.
+ *
+ * @param kernel The kernel, for the direct map both spaces' pages are reached through; each space's lock is taken
+ *     in turn, a part at a time, so the caller holds none of rank Space or above.
+ * @param space The address space copied from.
+ * @param address The user address in space the bytes start at.
+ * @param other The address space copied to.
+ * @param buffer The user address in other they go to.
+ * @param size How many bytes; 0 copies nothing.
+ * @return True if all of them were copied; false if either range isn't user memory mapped, readable or writable as
+ *     it needs to be, in which case what's before the failed part may have been copied.
  */
 copy_between :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, other: ptr[mut AddressSpace], buffer: u64,
     size: u64) -> bool {
@@ -295,7 +393,15 @@ copy_between :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], addres
 /** The most registers a debugger sees on any architecture: x86-64's 18, AArch64's 34. */
 MAX_USER_REGISTERS :: 64
 
-/** A thread's registers, as a debugger sees them (slop_os.THREAD_REGISTERS), written at buffer in space. */
+/**
+ * Write a thread's saved registers, as a debugger sees them (slop_os.THREAD_REGISTERS), to user memory.
+ *
+ * @param kernel The kernel, for the direct map the registers are written through; space's lock is taken.
+ * @param thread The thread, parked so its registers don't change.
+ * @param space The caller's address space.
+ * @param buffer The user address in space they go to: arch.user_register_count u64s.
+ * @return True if written; false if the buffer isn't writable user memory.
+ */
 read_registers :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], space: ptr[mut AddressSpace], buffer: u64) -> bool {
     values : u64[MAX_USER_REGISTERS]
     count :: arch.user_register_count()
@@ -306,7 +412,17 @@ read_registers :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], space: pt
     return copy_to_user(kernel, space, buffer, cast[u64](&values[0]), cast[u64](count) * 8)
 }
 
-/** A parked thread's registers, set from buffer in space: why not, if they couldn't be. */
+/**
+ * Set a parked thread's saved registers from user memory, each checked, so a bad value leaves all of them as they
+ * were.
+ *
+ * @param kernel The kernel, for the direct map the registers are read through; space's lock is taken.
+ * @param thread The thread, parked.
+ * @param space The caller's address space.
+ * @param buffer The user address in space they come from: arch.user_register_count u64s.
+ * @return Null once set; BadBuffer if the buffer isn't readable user memory; BadRegisters if a value is one user
+ *     mode can't have.
+ */
 write_registers :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], space: ptr[mut AddressSpace], buffer: u64) -> slop_os.ControlError? {
     values : u64[MAX_USER_REGISTERS]
     count :: arch.user_register_count()

@@ -35,24 +35,36 @@ import robustness from "../robustness"
  * has the boot's random seed. Its end is the machine's: the kernel stops (processes.hsc), and only then.
  */
 
+/** The bytes of the root task's first thread's stack: 256 KiB, mapped readable and writable. */
 ROOT_STACK_SIZE : u64 : 256 * 1024
-/** The free range the root task's runtime maps its own memory in, 1 TiB. */
+/** The bytes of the free range the root task's runtime maps its own memory in: 1 TiB. */
 ROOT_FREE_SIZE : u64 : 1 << 40
-// The most grants the root task is given: its own, and every boot module
+/** The most grants the root task is given: its own, and one for every boot module after the first. */
 MAX_ROOT_GRANTS :: 64
+/** A page's bytes, a frame's: 4 KiB. */
 PAGE : u64 : frames.FRAME_SIZE
 
-/** Where the root task's parts go in its address space. */
+/** Where the root task's parts go in its address space: page-aligned user virtual addresses. */
 RootLayout :: struct {
+    /** Where its image is loaded and relocated to. */
     image : u64,
+    /** Its stack's lowest address; the stack is ROOT_STACK_SIZE bytes. */
     stack : u64,
+    /** Its startup block, a page above the stack's top, the page between left unmapped. */
     block : u64,
+    /** The free range, ROOT_FREE_SIZE bytes, which its startup block tells its runtime of. */
     free : u64,
 }
 
 /**
  * Start the root task from the first boot module, if the boot has any; on a failure, say why, and the
  * kernel carries on without it.
+ *
+ * On a failure, the firmware tables' copy kept for it is destroyed, and with robustness=on the kernel stops
+ * ROOT_END_TICKS later, so what the failed process held is freed before the check of what's left.
+ *
+ * @param kernel The kernel, with its root budget, root CPU budget and platform capability made; called once, on the
+ *     boot CPU.
  */
 start_root_task :: fn(kernel: ptr[mut Kernel]) {
     if kernel.modules.count == 0 {
@@ -78,7 +90,17 @@ start_root_task :: fn(kernel: ptr[mut Kernel]) {
     }
 }
 
-/** Load module as the root task and start it, or what went wrong: always a constant, never on the stack. */
+/**
+ * Load a boot module as the root task and start it.
+ *
+ * Its process, owned by the kernel and charged to the root budget, is destroyed if it can't start, with everything
+ * it was given (decisions/0104).
+ *
+ * @param kernel The kernel, on the boot CPU at boot: its frames hold the module, and its root budget pays for the
+ *     process; kernel.root_task and stop_after_ticks are set once it starts.
+ * @param module The module, an ELF executable in frames the bootloader loaded it into, read through the direct map.
+ * @return Null once it's started; otherwise what went wrong, always a constant string, never on the stack.
+ */
 load_root_task :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule) -> string? #unrestricted {
     file :: view_of(cast[ptr[u8]](frames.virtual_of(&kernel.frames, module.contents.base)), cast[usize](module.contents.size))
     executable := elf_loader.Executable.{}
@@ -100,7 +122,20 @@ load_root_task :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule) -> s
     return failure
 }
 
-// The root task's address space, image, stack, startup block and thread, in process, and it started; or what failed.
+/**
+ * Make the root task's address space, image, stack, startup block and first thread, in its process, and start it.
+ *
+ * Once it's started, kernel.root_task is its process, and only its end stops the kernel. On a failure, what was made
+ * is left in the process, for the caller to destroy with it.
+ *
+ * @param kernel The kernel, on the boot CPU at boot: kernel.root_budget pays for everything, and kernel.root_task and
+ *     stop_after_ticks are set once the thread starts.
+ * @param module The module it's loaded from, for its name in the log.
+ * @param process Its process, new, which owns everything made here, all charged to the root budget.
+ * @param executable The module's executable, as elf_loader.read found it.
+ * @param file The module's bytes, in the direct map.
+ * @return Null once it's started; otherwise what failed, a constant string.
+ */
 start_in :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule, process: ptr[mut Process], executable: ptr[elf_loader.Executable],
     file: u8[]) -> string? #unrestricted {
     budget :: kernel.root_budget
@@ -146,8 +181,14 @@ start_in :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule, process: p
 }
 
 /**
- * Where the image, the stack and the startup block, and the free range go: each at a random page in a
+ * Choose where the image, the stack and the startup block, and the free range go: each at a random page in a
  * quarter of user addresses of its own (the free range in the upper half), the same every boot without KASLR.
+ *
+ * @param kernel The kernel, for its options and randomness.
+ * @param image_size The image's bytes in memory.
+ * @param block_size The startup block's bytes, a whole number of pages.
+ * @return The layout, every address page-aligned and in the user range. A part bigger than its room is put at the
+ *     room's start.
  */
 choose_layout :: fn(kernel: ptr[Kernel], image_size: u64, block_size: u64) -> RootLayout {
     low_address, high_address :: arch.user_address_range()
@@ -165,7 +206,16 @@ choose_layout :: fn(kernel: ptr[Kernel], image_size: u64, block_size: u64) -> Ro
     }
 }
 
-/** A random page-aligned place for size bytes in the room bytes from start. */
+/**
+ * Choose a random page-aligned place for some bytes in a room.
+ *
+ * @param kernel The kernel, for its options and randomness.
+ * @param start The room's start, page-aligned.
+ * @param room The room's bytes, a multiple of a page.
+ * @param size The bytes to place.
+ * @return An address from start to start plus room less size, page-aligned, so the bytes fit; start itself with
+ *     no_kaslr, or when size is room or more, when they may not fit.
+ */
 random_place :: fn(kernel: ptr[Kernel], start: u64, room: u64, size: u64) -> u64 {
     if kernel.options.no_kaslr || size >= room {
         return start
@@ -174,7 +224,13 @@ random_place :: fn(kernel: ptr[Kernel], start: u64, room: u64, size: u64) -> u64
     return start + (random_bits(kernel) % (pages + 1)) * PAGE
 }
 
-/** 64 random bits: the CPU's, or the boot seed's when it has none. */
+/**
+ * Get 64 random bits: the CPU's, or the boot seed's when it has none.
+ *
+ * @param kernel The kernel, for the boot seed.
+ * @return The CPU's hardware entropy, tried up to 10 times; failing that, the boot seed's 32 bytes folded into 64
+ *     bits by exclusive or, the same value at every call.
+ */
 random_bits :: fn(kernel: ptr[Kernel]) -> u64 {
     for i in 0..<10 {
         match arch.hardware_entropy() {
@@ -189,18 +245,42 @@ random_bits :: fn(kernel: ptr[Kernel]) -> u64 {
     return seed
 }
 
-/** value rounded up to whole pages. */
+/**
+ * Round a number of bytes, or an address, up to whole pages.
+ *
+ * @param value The bytes or address, at most a page below 2^64, where it would wrap.
+ * @return The smallest multiple of PAGE at least value.
+ */
 page_up :: fn(value: u64) -> u64 {
     return (value + PAGE - 1) & ~(PAGE - 1)
 }
 
+/**
+ * Find the larger of two numbers.
+ *
+ * @param a One number, any u64.
+ * @param b The number compared with a, any u64.
+ * @return Whichever is larger, b when they're equal.
+ */
 max_u64 :: fn(a, b: u64) -> u64 {
     return if a > b { a } else { b }
 }
 
-/*
- * The executable, loaded and relocated for base, in a memory object process owns, mapped in space a segment
- * at a time with each one's protection, and its RELRO pages read-only.
+/**
+ * Load the root task's image: the executable, loaded and relocated for base, in a memory object the process owns,
+ * mapped in its space a segment at a time with each one's protection, and its RELRO pages read-only.
+ *
+ * The loading is done in a buffer from the kernel heap, freed before this returns, then copied into the memory
+ * object's frames.
+ *
+ * @param kernel The kernel, on the boot CPU at boot: the buffer comes from its heap, the image's frames from its
+ *     frame allocator, charged to kernel.root_budget.
+ * @param process The process that owns the image's memory, charged to the root budget.
+ * @param space The process's address space, where it's mapped.
+ * @param executable The executable, as elf_loader.read found it.
+ * @param file The executable's bytes.
+ * @param base Where the image goes, a page-aligned user virtual address.
+ * @return Null once it's loaded and mapped; otherwise what failed, a constant string.
  */
 load_image :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], space: ptr[mut AddressSpace], executable: ptr[elf_loader.Executable],
     file: u8[], base: u64) -> string? #unrestricted {
@@ -254,7 +334,18 @@ load_image :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], space: ptr[
     return null
 }
 
-// The image's pages from start to end, mapped at base + start with protection, if there are any.
+/**
+ * Map part of the root task's image.
+ *
+ * @param kernel The kernel, on the boot CPU at boot, for memory_map, which charges the mapping to space.
+ * @param image The image's memory object.
+ * @param space The address space it's mapped in.
+ * @param base Where the image starts in space, a page-aligned user virtual address.
+ * @param start The part's start, an offset in the image, page-aligned.
+ * @param end The part's end, an offset in the image, page-aligned; at or below start, nothing is mapped.
+ * @param protection The part's protection, slop_os.PROTECTION_* bits.
+ * @return Null once it's mapped, or when there was nothing to map; otherwise what failed, a constant string.
+ */
 map_part :: fn(kernel: ptr[mut Kernel], image: ptr[mut Memory], space: ptr[mut AddressSpace], base: u64, start: u64, end: u64,
     protection: u32) -> string? #unrestricted {
     if end <= start {
@@ -266,7 +357,14 @@ map_part :: fn(kernel: ptr[mut Kernel], image: ptr[mut Memory], space: ptr[mut A
     return null
 }
 
-/** bytes copied into memory's pages from its start, giving it frames: false if there are none. */
+/**
+ * Copy bytes into a memory object's pages from its start, giving it frames.
+ *
+ * @param kernel The kernel, whose frame allocator gives the pages that have none, through the direct map.
+ * @param memory The memory object, at least as big as bytes; its pages past them stay as they were, zeroed if new.
+ * @param bytes The bytes, from the start of the memory object on; the caller keeps them, as they're copied.
+ * @return True once they're all copied; false if a frame couldn't be had, when the pages before it are copied.
+ */
 copy_into :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], bytes: u8[]) -> bool {
     count :: cast[u64](bytes.count)
     for page in 0..<page_up(count) / PAGE {
@@ -282,9 +380,20 @@ copy_into :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], bytes: u8[]) -
     return true
 }
 
-/*
- * The root task's handles and grants, and its startup block, written in memory of its own, mapped
+/**
+ * Make the root task's handles and grants, and its startup block, written in memory of its own, mapped
  * read-only at layout.block.
+ *
+ * The firmware tables' copy, if there is one, is the process's from here on, and kernel.firmware is 0.
+ *
+ * @param kernel The kernel, on the boot CPU at boot: its platform, root budget, root CPU budget, boot seed,
+ *     features, command line, modules and options are read, and kernel.firmware is taken.
+ * @param process The root task's process, which owns everything made here, charged to the root budget.
+ * @param space The process's address space.
+ * @param own The root task's own module. It isn't used: the grants are of kernel.modules after the first.
+ * @param layout Where things go in space.
+ * @param block_size The startup block's bytes, a whole number of pages, with room for MAX_ROOT_GRANTS grants.
+ * @return Null once it's written and mapped; otherwise what failed, a constant string.
  */
 write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], space: ptr[mut AddressSpace], own: boot_info.BootModule,
     layout: RootLayout, block_size: u64) -> string? #unrestricted {
@@ -358,7 +467,14 @@ write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], sp
     return null
 }
 
-/** The kernel's command line, in memory process owns, its bytes then zeros: an owning handle to it. */
+/**
+ * Copy the kernel's command line into memory a process owns, its bytes then zeros.
+ *
+ * @param kernel The kernel, whose command_line is copied and whose root budget pays for the memory.
+ * @param process The process, charged to the root budget.
+ * @return An owning handle to the memory, in the process's table, at least one byte bigger than the command line, a
+ *     whole number of pages; null if there's no memory or no handle.
+ */
 copy_of_command_line :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> slop_os.Handle? {
     text :: kernel.command_line
     memory :: create_memory(kernel, cast[u64](process), kernel.root_budget, page_up(cast[u64](text.count) + 1)) or_return null
@@ -369,8 +485,12 @@ copy_of_command_line :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -
 }
 
 /**
- * What the firmware tables would say of the test device, in memory process owns (test_device.TestDeviceInfo):
- * an owning handle to it. The RAM it gives as the kernel's is the page's own frame.
+ * Write what the firmware tables would say of the test device in a page a process owns (test_device.TestDeviceInfo).
+ *
+ * @param kernel The kernel, whose root budget pays for the page and whose frame allocator gives its frame.
+ * @param process The process, charged to the root budget.
+ * @return An owning handle to the page's memory, in the process's table; the RAM it gives as the kernel's is the
+ *     page's own frame's physical address. Null if there's no memory, no frame or no handle.
  */
 test_device_page :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> slop_os.Handle? {
     memory :: create_memory(kernel, cast[u64](process), kernel.root_budget, PAGE) or_return null
@@ -394,7 +514,16 @@ test_device_page :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> sl
     return handle_for(kernel, process, cast[u64](memory), .Memory, true)
 }
 
-/** A handle in process's table to object, owning if it owns it: every right. */
+/**
+ * Make a handle with every right in a process's table.
+ *
+ * @param kernel The kernel, whose frames pay for a new page of the table, if one is needed.
+ * @param process The process whose table it goes in; it takes the table's lock, at rank HandleTable.
+ * @param object The object, as an address, live; its current generation goes in the handle.
+ * @param kind The object's kind.
+ * @param owning Whether it's the owning handle: the caller sees the process owns the object.
+ * @return The handle, or null if it couldn't be made, as the table is full or there's no memory.
+ */
 handle_for :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], object: u64, kind: slop_os.ObjectKind, owning: bool) -> slop_os.Handle? {
     header :: cast[ptr[ObjectHeader]](object)
     match install(kernel, &process.table, object, header.generation, kind, slop_os.RIGHTS_ALL, owning) {
@@ -403,7 +532,16 @@ handle_for :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], object: u64
     }
 }
 
-/** grants with one more, labeled label, after its first count: how many it has now. */
+/**
+ * Add a grant after the first ones in a startup block's grants.
+ *
+ * @param grants The grants, in the startup block's buffer, zeroed past count.
+ * @param count How many grants are there already.
+ * @param label The grant's label, cut short at slop_os.GRANT_LABEL_SIZE bytes; zeros fill the rest.
+ * @param kind The kind of object the handle is to.
+ * @param handle The handle, in the root task's table.
+ * @return How many grants there are now: count plus 1, or count if there was no room, when an error is logged.
+ */
 add_grant :: fn(grants: mut slop_os.Grant[], count: usize, label: string, kind: slop_os.ObjectKind, handle: slop_os.Handle) -> usize {
     if count >= grants.count {
         runtime.log_error("the root task has room for % grants, so it isn't given %", grants.count, label)
@@ -420,7 +558,12 @@ add_grant :: fn(grants: mut slop_os.Grant[], count: usize, label: string, kind: 
     return count + 1
 }
 
-/** Whether a boot module is a typed library, by its name's ending: .library. */
+/**
+ * Tell whether a boot module is a typed library, by its name's ending: .library.
+ *
+ * @param name The module's name.
+ * @return True if it ends with ".library", which may be all of it.
+ */
 is_library :: fn(name: string) -> bool {
     ending :: ".library"
     if name.count < ending.count {

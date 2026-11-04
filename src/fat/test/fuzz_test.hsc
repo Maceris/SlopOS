@@ -12,8 +12,20 @@ import fat from ".."
  * more rounds than the default. Checks from 100.
  */
 
+/** How many rounds of damage the fuzzer runs unless SLOPOS_FUZZ_ROUNDS asks for another number. */
 FUZZ_ROUNDS :: 400
 
+/**
+ * Check that a volume damaged where its structure is can be mounted and used without crashing or hanging.
+ *
+ * It makes directories and files to damage, then runs the rounds: each flips 1 to 6 random bytes in the boot
+ * sectors, the start of each FAT, or the first data clusters, runs exercise, and puts every sector the round changed
+ * back. Errors from the volume are expected and ignored; only setting it up can fail.
+ *
+ * @param image The stand-in disk, formatted; its undoing is set during the rounds and cleared after.
+ * @param device The device over the image.
+ * @return 0 if the rounds ran to their end, or 100 to 105 if the volume to damage couldn't be set up.
+ */
 check_fuzz :: fn(image: ptr[mut Image], device: fat.Device) -> int {
     volume := fat.mount(device) or_return 100
     root :: fat.root_of(&volume)
@@ -81,7 +93,12 @@ check_fuzz :: fn(image: ptr[mut Image], device: fat.Device) -> int {
     return 0
 }
 
-/** A sector's bytes kept, the first time a round changes it. */
+/**
+ * Save a sector's bytes, the first time a round changes it, so restore can put them back.
+ *
+ * @param image The stand-in disk; its undo and saved grow, with context's allocator.
+ * @param sector The sector; one already saved this round is left as it was saved.
+ */
 save_sector :: fn(image: ptr[mut Image], sector: u64) {
     for each in image.undo {
         if each.sector == sector {
@@ -98,7 +115,11 @@ save_sector :: fn(image: ptr[mut Image], sector: u64) {
     }
 }
 
-/** Every sector a round changed, as it was. */
+/**
+ * Put back every sector a round changed, as it was before the round, and forget them.
+ *
+ * @param image The stand-in disk; its undo and saved are emptied.
+ */
 restore :: fn(image: ptr[mut Image]) {
     for each in image.undo {
         start :: cast[usize](each.sector * fat.SECTOR_BYTES)
@@ -114,7 +135,13 @@ restore :: fn(image: ptr[mut Image]) {
     runtime.array_reset(&image.saved)
 }
 
-/** A damaged volume mounted and used as far as it goes; whether it mounted. */
+/**
+ * Mount a damaged volume and use it as far as it goes: every directory walked and every file read, a file made,
+ * written, cut, renamed and removed, and a path resolved. Every error is ignored.
+ *
+ * @param device The device over the damaged image.
+ * @return True if the volume mounted; false if it didn't, so nothing else was tried.
+ */
 exercise :: fn(device: fat.Device) -> bool {
     volume := fat.Volume.{device = device}
     match fat.mount(device) {
@@ -143,7 +170,14 @@ exercise :: fn(device: fat.Device) -> bool {
     return true
 }
 
-/** Every entry of a directory, a few levels down, and every file read. */
+/**
+ * Walk a directory: its first 300 entries listed, directories walked into up to 4 levels down, and each file read at
+ * its start and its middle. Every error is ignored; a listing that fails ends the walk of that directory.
+ *
+ * @param volume The volume under test, mounted on the stand-in disk.
+ * @param directory The directory's first cluster.
+ * @param depth How many levels down it is, from 0 for the root.
+ */
 walk :: fn(volume: ptr[mut fat.Volume], directory: u32, depth: int) {
     buffer : u8[4096]
     slot : u32 = 0
@@ -167,11 +201,18 @@ walk :: fn(volume: ptr[mut fat.Volume], directory: u32, depth: int) {
     }
 }
 
-/** xorshift64*, as slopfs's tests have it. */
+/** A random number generator, xorshift64*, as slopfs's tests have it: the same numbers for the same seed. */
 Random :: struct {
+    /** The generator's state; never 0, which would give only 0s. */
     state : u64,
 }
 
+/**
+ * Get the next random number.
+ *
+ * @param random The generator, its state advanced.
+ * @return A number, any u64.
+ */
 next_random :: fn(random: ptr[mut Random]) -> u64 {
     x := random.state
     x = x ~ (x >> 12)
@@ -181,6 +222,12 @@ next_random :: fn(random: ptr[mut Random]) -> u64 {
     return x * 0x2545f4914f6cdd1d
 }
 
+/**
+ * Read a decimal number, as SLOPOS_FUZZ_ROUNDS gives one.
+ *
+ * @param text The text, digits only.
+ * @return The number; null if the text is empty or has anything but digits. Overflow isn't checked.
+ */
 number_of :: fn(text: string) -> u64? {
     value : u64 = 0
     if text.count == 0 {

@@ -10,10 +10,10 @@
  * OutOfRange without reaching the driver; Describe is answered with the partition's size; everything the driver
  * answers goes back to the client as it is.
  *
- * Built with robustness=on (decisions/0096's R4, 0112), it's a faulty block connection when the kernel's command line,
- * which it's given, says faulty_block=<read|write|tear>:<n>: the nth read or write through its narrowed connections fails
- * as a device's would, DeviceError, without reaching the disk, or for tear, with only its first half written. Without
- * robustness=on, none of that is compiled in.
+ * Built with robustness=on (decisions/0096's R4, 0112), it's a faulty block connection when the kernel's command
+ * line, which it's given, says faulty_block=<read|write|tear>:<n>: the nth read or write through its narrowed
+ * connections fails as a device's would, DeviceError, without reaching the disk, or for tear, with only its first half
+ * written. Without robustness=on, none of that is compiled in.
  */
 package partition_server
 
@@ -27,57 +27,106 @@ import partitions from "../../protocols/partitions"
 import robustness from "../../robustness"
 import service_kit from "../../libraries/service_kit"
 
-// Narrowed connections, at most; each is bound to the port twice, its client from CLIENT_KEY and the driver from DRIVER_KEY
+/**
+ * The most narrowed connections made in the server's life; a slot isn't used again once its connection closes, so one
+ * past them is refused.
+ */
 MAX_NARROWED :: 16
+/** The key a narrowed connection's client is bound to the port with, plus its slot. */
 CLIENT_KEY : u64 : 100
+/** The key a narrowed connection's driver is bound to the port with, plus its slot. */
 DRIVER_KEY : u64 : 200
+/** No channel: to open, a connection with no client's end given, for which one is made. */
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 
 /**
- * A connection narrowed to a partition: the client's end, the driver's, and the partition's blocks and what the driver says.
+ * A connection narrowed to a partition: the client's end, the driver's, and the partition's blocks and what the
+ * driver says.
  */
 Narrowed :: struct {
+    /** The client's end, the server's own; NO_HANDLE once it's closed. */
     client : slop_os.Channel,
+    /** Its own connection to the disk's driver, the server's own; NO_HANDLE once it's closed. */
     driver : slop_os.Channel,
+    /** The partition's first block on the disk, which the client's blocks are moved by. */
     first : u64,
+    /** The partition's size in blocks; the client's blocks run from 0 to it. */
     count : u64,
+    /** What the driver says of itself, with the partition's size for its block count, answered to Describe. */
     info : block.Info,
-    // A torn write's tag, whose answer goes back as a failure, while torn
+    /** Whether a torn write's answer is waited for, to go back as a failure. */
     torn : bool,
+    /** The torn write's tag, while torn. */
     torn_tag : u64,
 }
 
 /** What faulty_block asks for (robustness=on only): which request fails, and how, and the reads and writes so far. */
 FaultyBlock :: struct {
+    /** Which kind of request fails, and how; None for none. */
     kind : FaultKind,
+    /** Which one fails, counting reads, or writes, from 1 across every narrowed connection. */
     nth : u64,
+    /** The reads through narrowed connections so far, inside their partitions. */
     reads : u64,
+    /** The writes through narrowed connections so far, inside their partitions. */
     writes : u64,
 }
 
+/** How faulty_block makes a request fail. */
 FaultKind :: enum {
+    /** Nothing fails. */
     None,
+    /** The nth read fails with DeviceError, without reaching the disk. */
     Read,
+    /** The nth write fails with DeviceError, without reaching the disk. */
     Write,
+    /** The nth write has only its first half written, and fails with DeviceError. */
     Tear,
 }
 
+/** The partition server's state, made once in main, on the heap, and kept for as long as it runs. */
 Server :: struct {
+    /** The debug log it says what it found in; NO_HANDLE for none. */
     log : slop_os.DebugLog,
+    /** The port its clients and narrowed connections are bound to. */
     port : slop_os.Port,
-    // Its own connection to the disk, which it reads the table through and makes the narrowed ones' with
+    /** Its own connection to the disk, which it reads the table through and makes the narrowed ones' with. */
     disk : slop_os.Channel,
+    /** A port bound to disk, waited on for its answers. */
     disk_port : slop_os.Port,
+    /** Where disk's buffer is mapped, readable and writable, in the process's address space. */
     buffer : u64,
+    /** The buffer's size in bytes. */
     buffer_bytes : u64,
+    /** The disk's size in blocks. */
     block_count : u64,
+    /** The disk's partitions, as its GPT says; none if it has no GPT that can be read. */
     table : gpt.Table,
+    /** The clients' ends: the listener's, and connections arrived as Connects. */
     clients : service_kit.Clients,
+    /** The narrowed connections, by slot, narrowed_count of them. */
     narrowed : Narrowed[MAX_NARROWED],
+    /** How many slots of narrowed have been used, closed ones included. */
     narrowed_count : usize,
+    /** What faulty_block asks for; nothing outside robustness=on. */
     faulty : FaultyBlock,
 }
 
+/**
+ * Serve a disk's partitions: read its GPT, describe each partition, and give block connections narrowed to one.
+ *
+ * Started by the storage manager, one per disk, with nothing but the disk, so a disk from outside is parsed by a
+ * process that can reach nothing else. A disk with no GPT that can be read has no partitions. Runs until it's stopped.
+ *
+ * @param log The debug log it says what it found in; without one, it says nothing.
+ * @param disk A block connection to the whole disk, which it takes the buffer of.
+ * @param clients The listener the storage manager's connection arrives on.
+ * @param command_line The kernel's command line, read for faulty_block when built with robustness=on; without it, or
+ *     without robustness=on, nothing fails on purpose.
+ * @return 99 without the memory for its state, 1 if its ports couldn't be made, 2 if the disk didn't describe itself,
+ *     3 if it didn't give its buffer, 4 if the buffer couldn't be mapped, 5 without the memory to read the table, and
+ *     6 if clients couldn't be added. It doesn't return otherwise.
+ */
 main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Listener[partitions.Partitions], command_line: slop_os.Memory?)
     -> int {
     startup :: slop_os.startup_block()
@@ -152,7 +201,16 @@ main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Li
     }
 }
 
-/** count blocks from first into into, through the disk's buffer, BLOCK_BYTES at a time as the buffer has room. */
+/**
+ * Read blocks of the disk through its buffer, as many at a time as the buffer has room for, for gpt's Disk.
+ *
+ * @param context The partition server, a ptr[mut Server] passed as gpt's Disk context; its disk connection is asked,
+ *     one read at a time, and its buffer overwritten.
+ * @param first The first block on the disk.
+ * @param count How many blocks.
+ * @param into Where they go, at least count blocks long.
+ * @return Whether they were all read; false if into is too short, the buffer holds no block, or a read failed.
+ */
 read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
     server :: cast[ptr[mut Server]](context)
     per_read :: server.buffer_bytes / block.BLOCK_BYTES
@@ -186,7 +244,18 @@ read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bo
     return true
 }
 
-/** A client's requests, until it has none: its partitions described, and connections to them made. */
+/**
+ * Answer a client's requests, until it has none, or it's gone: its partitions described, and connections to them
+ * made.
+ *
+ * Describe and Open of a partition the table hasn't are answered NoPartition, as an Open that can't be made is.
+ * Connect adds a client, with no answer. A client whose end fails is dropped.
+ *
+ * @param server The server, whose table is read; a client whose end fails is dropped from its clients, and a Connect's
+ *     end added to them.
+ * @param index The client's index in server.clients; one past them, or one dropped, is left alone.
+ * @param into Where each request is read into, reused.
+ */
 serve_client :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.clients.ends.count {
         return void
@@ -240,6 +309,12 @@ serve_client :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incom
     }
 }
 
+/**
+ * Describe a partition as the protocol does.
+ *
+ * @param partition The partition, as the GPT says.
+ * @return Its first block, its size in blocks, its type and unique GUIDs, and its name, cut to fit.
+ */
 info_of :: fn(partition: ptr[gpt.Partition]) -> partitions.PartitionInfo {
     info := partitions.PartitionInfo.{first = partition.first, count = partition.count, type_guid = partition.type_guid,
         unique_guid = partition.unique_guid, name_length = partition.name_length}
@@ -252,9 +327,19 @@ info_of :: fn(partition: ptr[gpt.Partition]) -> partitions.PartitionInfo {
 }
 
 /**
- * A connection to the blocks from first, count of them: a connection of its own to the driver, made through the
- * partition server's, and described; on client, the end a client gave, or, with NONE, a new channel, whose other end
- * is the client's, given back. Null if it can't be made.
+ * Make a connection narrowed to blocks of the disk: a connection of its own to the driver, made through the
+ * partition server's, and described, and the client's end, both bound to the port.
+ *
+ * Its requests waiting already are served before it returns, so its next message wakes the port.
+ *
+ * @param server The server, whose next narrowed slot is taken; the driver is connected to through its disk connection,
+ *     and asked to Describe, waited for.
+ * @param first The first block on the disk.
+ * @param count How many blocks.
+ * @param client The end a client gave, which the server takes over once it's made; or NONE, for a new channel.
+ * @return With NONE, the new channel's other end, the client's, which the caller owns; with an end given, NO_HANDLE.
+ *     Null if it can't be made: MAX_NARROWED made already, or the driver, a port, a channel or a binding couldn't be
+ *     had. An end given isn't closed then; the caller closes it.
  */
 open :: fn(server: ptr[mut Server], first: u64, count: u64, client: slop_os.Channel) -> slop_os.Channel? {
     slot :: server.narrowed_count
@@ -313,7 +398,19 @@ open :: fn(server: ptr[mut Server], first: u64, count: u64, client: slop_os.Chan
     return theirs
 }
 
-/** A narrowed connection's requests, until it has none: checked and moved to the partition's blocks, or answered. */
+/**
+ * Pass a narrowed connection's requests to its driver, until it has none, or it's gone.
+ *
+ * Reads and writes are checked against the partition's blocks and moved by its first, and one outside them answered
+ * OutOfRange; faulty_block's read or write fails here. Describe is answered with the partition's size, and Connect
+ * makes another narrowed connection to the same partition on the end given, closed if it can't be made. Everything
+ * else goes to the driver as it is. A connection whose end fails is closed.
+ *
+ * @param server The server, whose faulty_block counts go up with each read and write inside the partition; a Connect
+ *     takes another narrowed slot.
+ * @param index The narrowed connection's slot; a closed one is left alone.
+ * @param into Where each request is read into, reused.
+ */
 serve_narrowed :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.narrowed.count {
         return void
@@ -395,7 +492,15 @@ serve_narrowed :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inc
     }
 }
 
-/** What the driver answered a narrowed connection's requests, back to its client as it is. */
+/**
+ * Pass what the driver answered a narrowed connection's requests back to its client as it is, until there's nothing
+ * more; a torn write's answer goes back as DeviceError.
+ *
+ * @param server The server, on whose port the answers are read from the slot's driver connection and sent on to its
+ *     client.
+ * @param index The narrowed connection's slot; it's closed if its driver's connection fails.
+ * @param into Where each answer is read into, reused.
+ */
 pass_back :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.narrowed.count {
         return void
@@ -426,7 +531,12 @@ pass_back :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
     }
 }
 
-/** faulty_block's value: read:<n>, write:<n> or tear:<n>, n from 1; nothing fails for anything else. */
+/**
+ * Read faulty_block's value.
+ *
+ * @param text The value: read:<n>, write:<n> or tear:<n>, n from 1.
+ * @return Which request fails, and how; one where nothing fails for anything else.
+ */
 faulty_of :: fn(text: string) -> FaultyBlock {
     for kind in FaultKind.[.Read, .Write, .Tear] {
         prefix :: prefix_of(kind)
@@ -438,11 +548,22 @@ faulty_of :: fn(text: string) -> FaultyBlock {
     return FaultyBlock.{}
 }
 
+/**
+ * Give the prefix faulty_block's value has for a kind of fault.
+ *
+ * @param kind Read, Write or Tear.
+ * @return "read:", "write:", or "tear:" for any other kind.
+ */
 prefix_of :: fn(kind: FaultKind) -> string {
     return if kind == .Read { "read:" } else if kind == .Write { "write:" } else { "tear:" }
 }
 
-/** Whether this read is the one faulty_block fails. */
+/**
+ * Count a read, and tell whether it's the one faulty_block fails, logging it if it is.
+ *
+ * @param server The server, whose faulty.reads is counted up.
+ * @return Whether it fails; always false without robustness=on.
+ */
 faulty_read :: fn(server: ptr[mut Server]) -> bool {
     #if robustness.ON {
         server.faulty.reads += 1
@@ -454,7 +575,12 @@ faulty_read :: fn(server: ptr[mut Server]) -> bool {
     return false
 }
 
-/** How this write fails, if it's the one faulty_block fails: Write, Tear, or None. */
+/**
+ * Count a write, and tell how it fails, if it's the one faulty_block fails, logging it if it is.
+ *
+ * @param server The server, whose faulty.writes is counted up.
+ * @return Write or Tear for the write that fails; None otherwise, and always without robustness=on.
+ */
 faulty_write :: fn(server: ptr[mut Server]) -> FaultKind {
     #if robustness.ON {
         server.faulty.writes += 1
@@ -467,11 +593,23 @@ faulty_write :: fn(server: ptr[mut Server]) -> FaultKind {
     return .None
 }
 
-/** Whether a transfer's blocks are all the partition's. */
+/**
+ * Tell whether a transfer's blocks are all the partition's.
+ *
+ * @param narrowed The narrowed connection, read for its partition's size in blocks; not changed.
+ * @param transfer The transfer, its blocks counted from the partition's start.
+ * @return Whether its first block is inside the partition and its count reaches no further than the partition's end.
+ */
 inside :: fn(narrowed: ptr[Narrowed], transfer: block.Transfer) -> bool {
     return transfer.first < narrowed.count && cast[u64](transfer.count) <= narrowed.count - transfer.first
 }
 
+/**
+ * Close a narrowed connection's ends, the client's and the driver's; its slot isn't used again.
+ *
+ * @param narrowed The narrowed connection, whose client and driver ends are closed and set to NO_HANDLE; an end that's
+ *     NO_HANDLE already is left alone.
+ */
 close_narrowed :: fn(narrowed: ptr[mut Narrowed]) {
     for end in slop_os.Channel.[narrowed.client, narrowed.driver] {
         if cast[slop_os.Handle](end) != slop_os.NO_HANDLE {
@@ -482,6 +620,13 @@ close_narrowed :: fn(narrowed: ptr[mut Narrowed]) {
     narrowed.driver = cast[slop_os.Channel](slop_os.NO_HANDLE)
 }
 
+/**
+ * Send an answer on a block connection.
+ *
+ * @param end The client's end, kept open.
+ * @param port The server's port, waited on while the ring is full.
+ * @param response The answer, sent as it is, with any handle it carries; whether it could be sent isn't told.
+ */
 answer :: fn(end: slop_os.Channel, port: slop_os.Port, response: block.Response) {
     out := os.Outgoing.{}
     made :: os.begin[block.Response](&out)
@@ -489,7 +634,15 @@ answer :: fn(end: slop_os.Channel, port: slop_os.Port, response: block.Response)
     _ = block.send_response(end, port, &out)
 }
 
-/** One request on a block connection, and its answer, waited for; Unsupported if the connection's gone. */
+/**
+ * Send one request on a block connection, and wait for its answer.
+ *
+ * @param end The block connection, with no other request in flight, so the next answer is this one's.
+ * @param port A port bound to end.
+ * @param request The request, sent as it is; a Read or Write's blocks are the disk's, its data in the buffer.
+ * @return The answer, a copy, whose handles the caller owns; Unsupported if it couldn't be sent or the connection's
+ *     gone.
+ */
 call :: fn(end: slop_os.Channel, port: slop_os.Port, request: block.Request) -> block.Response {
     out := os.Outgoing.{}
     made :: os.begin[block.Request](&out)

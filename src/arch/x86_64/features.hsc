@@ -3,23 +3,37 @@ package arch_x86_64
 import x86_64 from "base/intrinsics"
 import slop_os from "std/os"
 
-/** Where one feature is reported: a CPUID leaf, subleaf, register and bit. */
+/** One of the four registers CPUID reports in. */
 CpuidRegister :: enum {
+    /** EAX. */
     Eax,
+    /** EBX. */
     Ebx,
+    /** ECX. */
     Ecx,
+    /** EDX. */
     Edx,
 }
 
+/** Where one feature is reported: a CPUID leaf, subleaf, register and bit. */
 FeatureBit :: struct {
+    /** The feature, as the system ABI names it. */
     feature : slop_os.CpuFeature,
+    /** The CPUID leaf, EAX's input: a basic leaf, or an extended one from 0x80000000. */
     leaf : u32,
+    /** The CPUID subleaf, ECX's input, 0 for leaves without subleaves. */
     subleaf : u32,
+    /** The register the bit is in. */
     register : CpuidRegister,
+    /** The bit, 0 to 31, set when the CPU has the feature. */
     bit : u32,
 }
 
-/** SPEC: Intel SDM Vol. 2A, CPUID (Tables 3-10, 3-11, leaf 07H, leaf 0DH, leaves 80000001H and 80000007H) */
+/**
+ * Where CPUID reports each feature detect_features looks for.
+ *
+ * SPEC: Intel SDM Vol. 2A, CPUID (Tables 3-10, 3-11, leaf 07H, leaf 0DH, leaves 80000001H and 80000007H).
+ */
 FEATURE_BITS :: FeatureBit.[
     .{.X86Sse3, 1, 0, .Ecx, 0},
     .{.X86Pclmulqdq, 1, 0, .Ecx, 1},
@@ -68,8 +82,8 @@ FEATURE_BITS :: FeatureBit.[
 ]
 
 /**
- * What SlopOS needs (decisions/0003, design/arch-x86-64.md): x86-64-v3, which includes v2, plus
- * no-execute for W^X, SYSCALL, and a local APIC. In the order they're checked.
+ * The features SlopOS needs (decisions/0003, design/arch-x86-64.md), in the order they're checked: x86-64-v3, which
+ * includes v2, plus no-execute for W^X, SYSCALL, and a local APIC.
  */
 BASELINE :: slop_os.CpuFeature.[
     .X86Cx16, .X86LahfSahf, .X86Popcnt, .X86Sse3, .X86Ssse3, .X86Sse41, .X86Sse42,
@@ -77,11 +91,25 @@ BASELINE :: slop_os.CpuFeature.[
     .X86NoExecute, .X86Syscall, .X86Apic,
 ]
 
+/**
+ * Tell whether a feature is in a set.
+ *
+ * @param features The set, as detect_features made it.
+ * @param feature Any feature, of any architecture: one this CPU can't have, or detect_features doesn't look for,
+ *     is simply not in the set.
+ * @return Whether it's in the set.
+ */
 has :: fn(features: ptr[slop_os.CpuFeatures], feature: slop_os.CpuFeature) -> bool {
     return slop_os.has_feature(features, feature)
 }
 
-/** The CPU's features, from CPUID. Leaves the CPU doesn't have report nothing. */
+/**
+ * Detect the calling CPU's features, from CPUID, as FEATURE_BITS says where each is.
+ *
+ * A leaf above the highest the CPU reports, basic or extended, isn't asked: its features count as missing.
+ *
+ * @return The features the CPU has, of those in FEATURE_BITS.
+ */
 detect_features :: fn() -> slop_os.CpuFeatures {
     features : slop_os.CpuFeatures
     highest_basic :: x86_64.cpuid(0).eax
@@ -98,6 +126,13 @@ detect_features :: fn() -> slop_os.CpuFeatures {
     return features
 }
 
+/**
+ * Pick one register of a CPUID result.
+ *
+ * @param result What CPUID returned.
+ * @param register Which register.
+ * @return That register's value.
+ */
 register_of :: fn(result: x86_64.CpuidResult, register: CpuidRegister) -> u32 {
     return match register {
         case .Eax => result.eax
@@ -107,7 +142,12 @@ register_of :: fn(result: x86_64.CpuidResult, register: CpuidRegister) -> u32 {
     }
 }
 
-/** The first baseline feature the CPU lacks, or null. */
+/**
+ * Find the first baseline feature the CPU lacks, in BASELINE's order.
+ *
+ * @param features The CPU's features, from detect_features.
+ * @return The feature's name, as feature_name gives it, a constant string, or null if it has every one.
+ */
 missing_baseline_feature :: fn(features: ptr[slop_os.CpuFeatures]) -> string? {
     for feature in BASELINE {
         if !has(features, feature) {
@@ -117,7 +157,12 @@ missing_baseline_feature :: fn(features: ptr[slop_os.CpuFeatures]) -> string? {
     return null
 }
 
-/** Each feature as the CPU manuals name it, which reads better than its enum member's name */
+/**
+ * Name a feature as the CPU manuals name it, which reads better than its enum member's name.
+ *
+ * @param feature The feature, one of BASELINE's to be named.
+ * @return The name, a constant string; "a feature" for any feature not in BASELINE.
+ */
 feature_name :: fn(feature: slop_os.CpuFeature) -> string {
     return match feature {
         case .X86Cx16 => "CMPXCHG16B"

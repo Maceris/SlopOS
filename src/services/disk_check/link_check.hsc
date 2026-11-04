@@ -13,18 +13,40 @@ import grant from "std/os/slop_os"
  * the encrypted one through the first link, which the encrypted volume then reads, and both are read through their
  * links; the file's link refuses writing, and lists as a link. A directory opened through a link grants nothing and
  * lists no links: what it reached isn't the holder's to share. The encrypted volume lists what it issued, and revokes
- * the file's link, which then opens nothing; and a grant kept in its own volume is followed as any other (decisions/0158).
- * Removing a link removes
- * only the link. Checks from 120.
+ * the file's link, which then opens nothing; and a grant kept in its own volume is followed as any other
+ * (decisions/0158). Removing a link removes only the link. Checks from 120.
  */
 
+/** The directory the encrypted volume makes and grants, to write, kept as the system volume's link "linked". */
 SHARED_DIRECTORY :: "shared"
+/** The file in it the encrypted volume grants, to read, kept as the system volume's link "links/note". */
 SHARED_FILE :: "shared/note.txt"
+/** What SHARED_FILE holds. */
 SHARED_TEXT :: "Kept in the sealed volume, read through a link"
+/** The file written in the system volume, through the link to SHARED_DIRECTORY. */
 THROUGH_FILE :: "linked/from the system volume.txt"
+/** What THROUGH_FILE is written with. */
 THROUGH_TEXT :: "Written through a link in the system volume"
+/** Where THROUGH_FILE lands in the encrypted volume. */
 LANDED_FILE :: "shared/from the system volume.txt"
 
+/**
+ * Check stored links between the system volume and the encrypted one beside it.
+ *
+ * @param to The debug log; unused, as what's found is logged through runtime.
+ * @param manager The connection to the storage manager; unused.
+ * @param port A port bound to manager; unused.
+ * @param system The system volume's root.
+ * @param sealed The encrypted volume's root, unlocked.
+ * @param container The container's partition index; unused.
+ * @return 0 if all of it held; 120 if the buffer or a port couldn't be made, 121 to 123 if the encrypted volume's
+ *     directory and file couldn't be made or granted, 124 to 126 if they couldn't be kept as links, 127 and 128 if
+ *     writing or reading through them failed, 129 if the file's link didn't refuse writing as ReadOnly, 130 if the
+ *     directory's link didn't list as one, 131 to 134 if a directory opened through a link granted or listed links,
+ *     135 if the encrypted volume didn't list the two links it issued, 136 to 138 if revoking the file's link didn't
+ *     work, or touched the other, 139 and 140 if a grant kept in its own volume couldn't be followed, and 141 and 142
+ *     if removing a link failed or removed what it reached.
+ */
 check_links :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.Port, system: os.Channel[dir.Dir], sealed: os.Channel[dir.Dir],
     container: u32) -> int {
     buffer := new_buffer() or_return 120
@@ -197,7 +219,14 @@ check_links :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.
     return 0
 }
 
-/** A directory at path made, or there already. */
+/**
+ * Make a directory, or find it there already.
+ *
+ * @param end The directory it's made beneath, speaking dir.
+ * @param port A port bound to end.
+ * @param path Its path beneath end.
+ * @return Whether it's there; the connection opened to it is closed.
+ */
 made_directory :: fn(end: slop_os.Channel, port: slop_os.Port, path: string) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -212,7 +241,15 @@ made_directory :: fn(end: slop_os.Channel, port: slop_os.Port, path: string) -> 
     }
 }
 
-/** What's at path granted, to write as well if write. */
+/**
+ * Ask a volume for a grant to what's at a path.
+ *
+ * @param end The directory, speaking dir.
+ * @param port A port bound to end.
+ * @param path The file or directory's path beneath end.
+ * @param write Whether the grant is to write as well as read.
+ * @return The grant, which the caller owns, to keep as a link or close; null if it was refused.
+ */
 granted :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, write: bool) -> os.Channel[grant.Grant]? {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -224,7 +261,15 @@ granted :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, write: boo
     }
 }
 
-/** A grant kept as a link at path. */
+/**
+ * Keep a grant as a link in a volume.
+ *
+ * @param end The directory it's kept beneath, speaking dir.
+ * @param port A port bound to end.
+ * @param path The link's path beneath end.
+ * @param given The grant, which moves to the volume with the request.
+ * @return The volume's answer: Done once it's kept; Unsupported if it couldn't be sent or the connection failed.
+ */
 linked :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, given: os.Channel[grant.Grant]) -> dir.Response {
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -233,7 +278,14 @@ linked :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, given: os.C
     return ask_dir(end, port, &out, &into)
 }
 
-/** Whether a directory's listing has name in it, as a link. */
+/**
+ * Tell whether a directory lists a name as a link.
+ *
+ * @param end The directory, speaking dir.
+ * @param port A port bound to end.
+ * @param name The entry's name.
+ * @return Whether it's among the first 64 entries listed, and is a link; false if the listing fails first.
+ */
 lists_link :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> bool {
     into := os.Incoming.{}
     cursor : u64 = 0

@@ -9,60 +9,91 @@ import runtime from "base"
 
 //SPEC: PSF1 and PSF2 font formats, as documented with the Linux kbd package (psffontformat)
 
+/** The first four bytes of a PSF2 file. */
 PSF2_MAGIC :: u8.[0x72, 0xb5, 0x4a, 0x86]
+/** The bytes of a PSF2 header as this reads it; a file's own header size can be larger, never smaller. */
 PSF2_HEADER_SIZE :: 32
-/** The font has a table mapping Unicode code points to its glyphs. */
+/** A PSF2 header's flag: the font has a table mapping Unicode code points to its glyphs. */
 PSF2_HAS_UNICODE_TABLE : u32 : 1
-// In the Unicode table: starts a sequence of code points drawn as one glyph, and ends a glyph's entry.
+/** In PSF2's Unicode table: the byte that starts a sequence of code points drawn as one glyph. */
 PSF2_SEQUENCE_START : u8 : 0xfe
+/** In PSF2's Unicode table: the byte that ends a glyph's entry. */
 PSF2_GLYPH_END : u8 : 0xff
+/** The first two bytes of a PSF1 file. */
 PSF1_MAGIC :: u8.[0x36, 0x04]
+/** The bytes of a PSF1 header: its magic, its mode and its glyphs' height. */
 PSF1_HEADER_SIZE :: 4
-// PSF1's mode bits: 512 glyphs rather than 256, and a Unicode table (either of two bits says so)
+/** PSF1's mode bit for 512 glyphs rather than 256. */
 PSF1_MODE_512 : u8 : 1
+/** PSF1's mode bits for a Unicode table after the glyphs: either of the two says so. */
 PSF1_MODE_HAS_TABLE : u8 : 6
-// In PSF1's Unicode table, 16-bit entries: a sequence's start and a glyph's end
+/** In PSF1's Unicode table, whose entries are 16 bits: the entry that starts a sequence. */
 PSF1_SEQUENCE_START : u32 : 0xfffe
+/** In PSF1's Unicode table: the entry that ends a glyph's entry. */
 PSF1_GLYPH_END : u32 : 0xffff
 /** How many code points are looked up in a table built once, instead of searching the Unicode table. */
 QUICK_CODE_POINTS :: 256
 
+/** Why a font's bytes couldn't be read as a font. */
 FontError :: enum {
-    /** Shorter than its header says it is. */
+    /** Shorter than its header says it is, or than a header. */
     Truncated,
+    /** Neither a PSF1 nor a PSF2 file: its first bytes are neither's magic. */
     BadMagic,
+    /** A PSF2 file of a version other than 0, the only one there is. */
     UnsupportedVersion,
-    /** A glyph's size doesn't match its width and height, or it has no glyphs. */
+    /** A glyph's size doesn't match its width and height, or it has no glyphs, or no width or height. */
     BadGlyphSize,
 }
 
+/**
+ * A PSF1 or PSF2 font, parsed: views of its file's bytes, and a table of its first code points' glyphs.
+ *
+ * Its views refer to the bytes it was parsed from, which have to outlive it.
+ */
 Font :: struct {
-    // Every glyph's rows, top first, each row padded to whole bytes, the leftmost pixel in the highest bit.
+    /** Every glyph's rows, top first, each row padded to whole bytes, the leftmost pixel in the highest bit. */
     glyphs : u8[],
+    /** How many glyphs the font has: at least 1; 256 or 512 for PSF1. */
     glyph_count : u32,
+    /** The bytes of one glyph: bytes_per_row times height. */
     bytes_per_glyph : u32,
+    /** The bytes of one glyph's row: its width in pixels, rounded up to whole bytes. */
     bytes_per_row : u32,
+    /** A glyph's width in pixels, at least 1; 8 for PSF1. */
     width : u32,
+    /** A glyph's height in pixels, at least 1. */
     height : u32,
     /** The Unicode table, empty when the font has none: then glyph i is code point i. */
     unicode_table : u8[],
     /** Glyph indexes of the first QUICK_CODE_POINTS code points; NO_GLYPH where the font has none. */
     quick : u16[QUICK_CODE_POINTS],
-    /** What's drawn for a code point the font doesn't have. */
+    /** What's drawn for a code point the font doesn't have: its glyph for '?', or glyph 0 without one. */
     replacement : u16,
-    /** A PSF1 font, whose Unicode table's entries are 16 bits */
+    /** Whether it's a PSF1 font, whose Unicode table's entries are 16 bits, not UTF-8. */
     psf1 : bool,
 }
 
 /** What's next in a Unicode table: a code point, a sequence's start, or a glyph's end. */
 TableEntry :: enum {
+    /** A code point the glyph is drawn for, on its own or, after SequenceStart, as part of a sequence. */
     Point,
+    /** The start of a sequence of code points drawn together as the glyph; single code points come before any. */
     SequenceStart,
+    /** The end of the glyph's entry, or of the table; the next entry is the next glyph's. */
     GlyphEnd,
 }
 
+/** No glyph: what glyph_index gives for a code point the font doesn't have. */
 NO_GLYPH : u16 : 0xffff
 
+/**
+ * Read a little-endian u32 from bytes.
+ *
+ * @param bytes The bytes read from.
+ * @param offset Where the u32 starts, in bytes; all four have to be in bytes, or this asserts.
+ * @return The four bytes at offset as one value, the first byte its lowest.
+ */
 read_u32 :: fn(bytes: u8[], offset: usize) -> u32 {
     runtime.assert(offset < bytes.count && offset + 4 <= bytes.count, "read_u32 reads four bytes that are there")
     return cast[u32](bytes[offset])
@@ -71,7 +102,21 @@ read_u32 :: fn(bytes: u8[], offset: usize) -> u32 {
         | (cast[u32](bytes[offset + 3]) << 24)
 }
 
-/** A font from a PSF1 or PSF2 file's bytes, which it keeps referring to. */
+/**
+ * Parse a font from a PSF1 or PSF2 file's bytes.
+ *
+ * It needs no allocator: the font refers to bytes, whose glyphs and Unicode table it views, and builds its quick table
+ * in itself.
+ *
+ * @param bytes The file's bytes, which the font keeps referring to, so they have to outlive it, like a #file_data.
+ * @return The font, PSF1 or PSF2 as the bytes' magic says: views of the bytes' glyphs and Unicode table (empty without
+ *     one), its quick table filled, and its replacement the glyph for '?', or glyph 0 without one.
+ * @error Truncated The bytes end before the header or the glyphs it counts, or a PSF2 header says it's shorter than a
+ *     header.
+ * @error BadMagic The bytes are neither a PSF1 nor a PSF2 file.
+ * @error UnsupportedVersion A PSF2 file of a version other than 0.
+ * @error BadGlyphSize No glyphs, a width or height of 0, or a glyph size that doesn't match them.
+ */
 parse_font :: fn(bytes #escaping : u8[]) -> Result[Font, FontError] {
     if bytes.count >= PSF1_HEADER_SIZE && bytes[0] == PSF1_MAGIC[0] && bytes[1] == PSF1_MAGIC[1] {
         return parse_psf1(bytes)
@@ -118,7 +163,15 @@ parse_font :: fn(bytes #escaping : u8[]) -> Result[Font, FontError] {
 }
 
 /**
- * A PSF1 font: 256 or 512 glyphs 8 pixels wide and as tall as its header says, and maybe a Unicode table after them.
+ * Parse a PSF1 font: 256 or 512 glyphs 8 pixels wide and as tall as its header says, and maybe a Unicode table after
+ * them.
+ *
+ * @param bytes The file's bytes, its magic already checked; the font keeps referring to them.
+ * @return The font, 256 or 512 glyphs 8 pixels wide: views of the bytes' glyphs and of the rest of the bytes after them
+ *     as its Unicode table when the mode says it has one, its quick table filled, and its replacement the glyph for
+ *     '?', or 0.
+ * @error Truncated The bytes end before the header or the glyphs.
+ * @error BadGlyphSize The header gives a height of 0.
  */
 parse_psf1 :: fn(bytes #escaping : u8[]) -> Result[Font, FontError] {
     if bytes.count < PSF1_HEADER_SIZE {
@@ -153,7 +206,15 @@ parse_psf1 :: fn(bytes #escaping : u8[]) -> Result[Font, FontError] {
     return .Ok(parsed)
 }
 
-/** The Unicode table's next entry at at: what it is, its code point if it's one, and how many bytes it takes. */
+/**
+ * Read the Unicode table's entry at a byte offset.
+ *
+ * @param font The font whose table it reads: 16-bit entries for PSF1, UTF-8 and marker bytes for PSF2.
+ * @param at The entry's offset in the table, in bytes. Past the table's end, the entry is GlyphEnd.
+ * @return What the entry is; GlyphEnd at the table's end, and for a PSF1 entry cut off by it.
+ * @return Its code point if it's a Point, else 0. Malformed UTF-8 is U+FFFD.
+ * @return How many bytes it takes, at least 1, so reading always moves on: 2 for PSF1, 1 to 4 for PSF2.
+ */
 table_entry :: fn(font: ptr[Font], at: usize) -> (TableEntry, u32, usize) {
     table :: font.unicode_table
     if font.psf1 {
@@ -180,7 +241,13 @@ table_entry :: fn(font: ptr[Font], at: usize) -> (TableEntry, u32, usize) {
     return .Point, code_point, length
 }
 
-/** The quick table, from the Unicode table, or glyph i for code point i without one. */
+/**
+ * Fill the font's quick table from its Unicode table, or with glyph i for code point i without one.
+ *
+ * Only single code points count; a code point the table gives more than one glyph is the first one's.
+ *
+ * @param font The font, whose quick field is written; its glyphs and Unicode table have to be set already.
+ */
 fill_quick_table :: fn(font: ptr[mut Font]) {
     for &entry, code_point in font.quick {
         entry^ = NO_GLYPH
@@ -218,8 +285,13 @@ fill_quick_table :: fn(font: ptr[mut Font]) {
 }
 
 /**
- * The glyph for a code point: from the quick table, or by searching the Unicode table.
- * NO_GLYPH if the font doesn't have it.
+ * Find the glyph for a code point: from the quick table, or by searching the Unicode table.
+ *
+ * Code points of QUICK_CODE_POINTS and up take a search of the table, as long as the table is.
+ *
+ * @param font The font, parsed.
+ * @param code_point The code point; a sequence's code points aren't found, only single ones.
+ * @return The glyph's index, below the font's glyph_count; NO_GLYPH if the font doesn't have it.
  */
 glyph_index :: fn(font: ptr[Font], code_point: u32) -> u16 {
     if code_point < QUICK_CODE_POINTS {
@@ -253,7 +325,14 @@ glyph_index :: fn(font: ptr[Font], code_point: u32) -> u16 {
     return NO_GLYPH
 }
 
-/** The rows of a glyph. */
+/**
+ * Find the rows of a glyph's pixels.
+ *
+ * @param font The font, parsed.
+ * @param glyph The glyph's index, as glyph_index gives it.
+ * @return Its rows, top first, each bytes_per_row bytes, the leftmost pixel in the highest bit: a view of the font's
+ *     bytes, good as long as they are. Empty for a glyph the font doesn't have, like NO_GLYPH.
+ */
 glyph_rows :: fn(font: ptr[Font], glyph: u16) -> u8[] {
     glyphs :: font.glyphs
     size :: cast[usize](font.bytes_per_glyph)
@@ -269,11 +348,18 @@ glyph_rows :: fn(font: ptr[Font], glyph: u16) -> u8[] {
     return glyphs[start..<end]
 }
 
-/*
- * The code point encoded in UTF-8 at bytes[at], and how many bytes it takes. A malformed or cut-off
- * sequence decodes as U+FFFD, one byte long, so decoding always moves on.
+/**
+ * Decode the code point encoded in UTF-8 at a byte offset.
+ *
+ * SPEC: RFC 3629 (UTF-8), section 3
+ *
+ * @param bytes The bytes decoded from.
+ * @param at Where the code point starts, in bytes.
+ * @return The code point; U+FFFD for a malformed, overlong or cut-off sequence, a surrogate, a value past U+10FFFF,
+ *     or an offset past the end.
+ * @return How many bytes it takes: 1 to 4, and 1 for U+FFFD put in a malformed sequence's place, so decoding always
+ *     moves on.
  */
-/** SPEC: RFC 3629 (UTF-8), section 3 */
 decode_utf8 :: fn(bytes: u8[], at: usize) -> (u32, usize) {
     if at >= bytes.count {
         return REPLACEMENT_CHARACTER, 1
@@ -324,4 +410,5 @@ decode_utf8 :: fn(bytes: u8[], at: usize) -> (u32, usize) {
     return code_point, length
 }
 
+/** U+FFFD, what a malformed UTF-8 sequence decodes as. */
 REPLACEMENT_CHARACTER : u32 : 0xfffd

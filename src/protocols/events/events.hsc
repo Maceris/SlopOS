@@ -16,74 +16,127 @@ import dir from "std/os/slop_os"
  * given the rings of the programs still running with Adopt, and reads them from where the last one stopped.
  */
 
+/**
+ * The events protocol, for the channels between the events service and its clients, and its listener: the clients
+ * send the requests, and the events service answers them.
+ */
 Events :: struct {}
 
+/**
+ * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
+ * server, here the events service, pays for its work from its own budget.
+ */
 PROTOCOL :: slop_os.Protocol.{name = "events", major_version = 1, lending = .Server}
 
 /** A program's ring for its records (base's runtime.SlopOsEventsRing), and the doorbell base's logger rings. */
 Source :: struct {
+    /**
+     * The ring, shared memory its header written already: the owning handle, which the launcher keeps and gives back
+     * with Retire, giving the program a duplicate that doesn't own it.
+     */
     ring : slop_os.Memory,
+    /** The program's end of the doorbell, which base's logger rings once it's written records; given to the program. */
     doorbell : slop_os.Channel,
 }
 
+/** What a Query asks for. */
 QueryOf :: struct {
-    /** The source's name, as Open was given it */
+    /** The source's name, as Open was given it; a source of that name needn't exist yet. */
     source : slop_os.Relative[u8],
-    /** The number of the first record to give, among the source's this boot, from 0 */
+    /** The number of the first record to give, among the source's this boot, from 0. */
     from : u64,
-    /** The lowest level given: a LogLevel */
+    /** The lowest level given: a LogLevel's value. */
     level : u8,
-    /** Whether to wait for a record at or after from, if there isn't one yet, rather than answering End */
+    /** Whether to wait for a record at or after from, if there isn't one yet, rather than answering End. */
     wait : bool,
 }
 
+/** A ring to adopt: whose records it holds, and a handle to it. */
 AdoptOf :: struct {
-    /** The source its records are, as Open was given it */
+    /**
+     * The source its records are, as Open was given it: 1 to the service's NAME_BYTES lowercase letters, digits and
+     * underscores.
+     */
     source : slop_os.Relative[u8],
-    /** A handle to it that doesn't own it */
+    /** A handle to it that can read and write it but doesn't own it, which moves to the service, closed if refused. */
     ring : slop_os.Memory,
 }
 
+/** A record found by a Query. */
 Found :: struct {
-    /** Its number among the source's */
+    /** Its number among the source's this boot, from 0; the next Query for more asks from one past it. */
     number : u64,
-    // The monotonic clock's nanoseconds when it was written, and its level, a LogLevel
+    /** The monotonic clock's nanoseconds when it was written. */
     time : u64,
+    /** Its level, a LogLevel's value. */
     level : u8,
-    // Whether it was read from where Store keeps records
+    /** Whether it was read from where Store keeps records, rather than memory. */
     stored : bool,
+    /** The record, rendered as text, as UTF-8. */
     text : slop_os.Relative[u8],
 }
 
+/** What a client asks the events service. */
 Request :: union {
-    /** A ring for a program the caller starts, whose records are the source named this */
+    /**
+     * Ask for a ring for a program the caller starts, whose records are the source named this, made a source if it
+     * isn't one: 1 to the service's NAME_BYTES lowercase letters, digits and underscores. Answered with Opened, or
+     * Refused.
+     */
     Open(slop_os.Relative[u8]),
-    /** Records kept in this directory from now on, those in memory with them */
+    /**
+     * Have records kept in this directory from now on, those in memory with them; the end moves to the service.
+     * Answered with Done.
+     */
     Store(os.Channel[dir.Dir]),
+    /**
+     * Read the first record of a source at or after a number, at a level or above. Answered with Found, or End;
+     * when it waits, answered once there's one, or End at once if it can't be held.
+     */
     Query(QueryOf),
-    /** Serve another client, on its end */
+    /**
+     * Have the events service serve another client, on the end given, which moves to it; it's closed if the service
+     * already has as many clients as it takes. Answered with nothing.
+     */
     Connect(os.Channel[Events]),
     /**
-     * A ring whose program has ended, its owning handle given back by whoever launched it: its records read, every
-     * ring's, then closed (decisions/0098)
+     * Give back a ring whose program has ended, by its owning handle, which moves to the service: its records read,
+     * every ring's, then closed (decisions/0098). Answered with Done.
      */
     Retire(slop_os.Memory),
-    /** A ring a service before this one opened, its program still running, read from here on */
+    /**
+     * Have the service read a ring a service before this one opened, its program still running, from here on.
+     * Answered with Done, or Refused.
+     */
     Adopt(AdoptOf),
 }
 
+/** What the events service answers. */
 Response :: union {
+    /** Open's answer: the ring and the doorbell, which move to the client, to keep the ring and give the rest on. */
     Opened(Source),
+    /** Store's, Retire's or Adopt's answer: it's done. */
     Done,
+    /** Query's answer: the record. */
     Found(Found),
-    /** No record at or after the query's from, or no such source */
+    /** Query's answer when there's no record at or after its from, or no such source, and it doesn't wait. */
     End,
-    /** Out of room for another source, or a name that's empty or too long */
+    /**
+     * Open's or Adopt's answer when there's no room for another source or ring, the name is empty, too long or not of
+     * the letters it takes, or the ring couldn't be made or read.
+     */
     Refused,
+    /** The answer to a request the events service doesn't know, as from a newer client; every protocol has it. */
     Unsupported,
 }
 
-/** Opening again opens another ring, and storing again changes nothing; a query only reads. */
+/**
+ * Tell whether a request may be sent again, after a reconnect, without doing more than sending it once did.
+ *
+ * @param request The request, which isn't changed.
+ * @return False for Open, which opens another ring, and Retire and Adopt, whose handles were given; true for Store,
+ *     which again changes nothing, Query, which only reads, and Connect.
+ */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Open(_) => false
@@ -97,7 +150,17 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #insert os.protocol_code(Request, Response)
 
-/** A request sent through end, and its answer, waited for on port; Unsupported if the connection's gone. */
+/**
+ * Send a request to the events service and wait for its answer.
+ *
+ * Responses that aren't one, unknown or invalid, are skipped while it waits.
+ *
+ * @param end A connection to the events service, kept by the caller.
+ * @param port A port bound to end, waited on for the answer and while end's ring is full.
+ * @param out The request, begun with os.begin; sent as it is, any handles in it moving to the service.
+ * @param into Where the answer is received, with any handles it brought, which are the caller's from then on.
+ * @return The answer, copied out of into; Unsupported if the request couldn't be sent or the connection's gone.
+ */
 ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> Response {
     if send_request(end, port, out) is_some {
         return .Unsupported
@@ -112,7 +175,16 @@ ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], i
     return os.message_of[Response](into)^
 }
 
-/** A ring for a program named name, through end: what to give it as os.LaunchEvents, or null. */
+/**
+ * Ask the events service for a ring for a program, and wait for it.
+ *
+ * @param end A connection to the events service, kept by the caller.
+ * @param port A port bound to end, waited on for the answer.
+ * @param name The source's name, which the program's records are labeled with: 1 to the service's NAME_BYTES
+ *     lowercase letters, digits and underscores.
+ * @return What to launch the program with as os.LaunchEvents: the ring's owning handle and the doorbell's end, the
+ *     caller's; null if the service refused, or couldn't be asked.
+ */
 open :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> os.LaunchEvents? {
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)

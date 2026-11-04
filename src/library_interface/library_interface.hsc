@@ -10,45 +10,79 @@
  */
 package library_interface
 
+/** An interface record's first 8 bytes: "HEMERAI2" in ASCII, read as a little-endian u64. */
 LIBRARY_MAGIC : u64 : 0x32494152454d4548
+/** ELF program header type: a loadable segment, whose file bytes addresses are read through. */
 PT_LOAD : u32 : 1
+/** ELF program header type: the dynamic section, where the relocations are found. */
 PT_DYNAMIC : u32 : 2
+/** ELF dynamic tag: the dynamic section's end. */
 DT_NULL : u64 : 0
+/** ELF dynamic tag: the RELA relocation table's address. */
 DT_RELA : u64 : 7
+/** ELF dynamic tag: the RELA relocation table's size, in bytes. */
 DT_RELASZ : u64 : 8
+/** An ELF64 RELA entry's size, in bytes: its offset, its info, then its addend, each 8 bytes. */
 RELA_SIZE : u64 : 24
+/** The relocation type R_X86_64_RELATIVE, in a RELA entry's info's low 32 bits: base plus addend. */
 X86_64_RELATIVE : u32 : 8
+/** The relocation type R_AARCH64_RELATIVE, in a RELA entry's info's low 32 bits: base plus addend. */
 AARCH64_RELATIVE : u32 : 1027
-// Where the record's fields are (runtime.LibraryInterface, LibraryExport)
+/* Where the record's fields are (runtime.LibraryInterface, LibraryExport). */
+/** The record's calling convention, a u64, in bytes from the record's start. */
 INTERFACE_CONVENTION : u64 : 8
+/** The record's Context's 32-byte hash, in bytes from the record's start. */
 INTERFACE_CONTEXT_HASH : u64 : 16
+/** The record's export count, a u64, then the pointer to its exports, in bytes from the record's start. */
 INTERFACE_EXPORTS : u64 : 48
+/** An export's type's 32-byte hash, in bytes from the export's start, after its name's count and pointer. */
 EXPORT_TYPE_HASH : u64 : 16
+/** An export's size in bytes, the distance from one export to the next. */
 EXPORT_SIZE : u64 : 56
-// The most exports, and the longest name, a record is read with
+/* The most exports, and the longest name, a record is read with. */
+/** The most exports a record may have; one with more isn't read. */
 MAX_EXPORTS : u64 : 4096
+/** The longest export name read, in bytes; a record with a longer one can't be read. */
 MAX_NAME : u64 : 4096
 
-/** A library's file, read by the addresses it was linked at. */
+/** A library's file, with what's found in it to read it by the addresses it was linked at. */
 Image :: struct #scoped {
+    /** The whole file; only read, and borrowed: the image is good only as long as the file's bytes are. */
     file : u8[],
-    // Its program headers' place and count
+    /** Where its program headers start, in bytes from the file's start; each is 56 bytes. */
     headers : u64,
+    /** How many program headers there are; all of them are within the file. */
     count : u64,
-    // Its relative relocations' place in the file, and their bytes
+    /** Where its RELA relocations start, in bytes from the file's start; 0 if it has none. */
     relocations : u64,
+    /** How many bytes of relocations there are at relocations, within the file; 0 if it has none. */
     relocation_bytes : u64,
 }
 
-/** An interface record's start, as read: where its exports are and how many. */
+/** An interface record's start, as read: its convention, and where its Context's hash and its exports are. */
 Record :: struct {
+    /** The calling convention the library was built for, as the record gives it. */
     convention : u64,
+    /** The address of the record's Context's 32-byte hash, as the library was linked; not the hash itself. */
     context_hash : u64,
+    /** The address of the record's first export, as the library was linked; each EXPORT_SIZE bytes after the last. */
     exports : u64,
+    /** How many exports there are, at most MAX_EXPORTS. */
     count : u64,
 }
 
-/** Whether new can stand in for old, or why not. */
+/**
+ * Check whether one build of a library can stand in for another.
+ *
+ * New can when both are ELF libraries with interface records, built for the same calling convention and Context, and
+ * every export of the old is in the new, by name, with the same type's hash; the new may have exports the old
+ * hasn't, in any order. An export's name found more than once in the new is compared with its first.
+ *
+ * @param old The old library's whole file; only read.
+ * @param new The new library's whole file; only read.
+ * @return Null if new can stand in for old, or why not: a constant sentence fragment, such as "an export's type
+ *     changed".
+ */
 check :: fn(old: u8[], new: u8[]) -> string? {
     before_image :: image_of(old) or_return "the old library isn't an ELF library"
     after_image :: image_of(new) or_return "the new library isn't an ELF library"
@@ -80,7 +114,13 @@ check :: fn(old: u8[], new: u8[]) -> string? {
     return null
 }
 
-/** A library's file's headers and relocations found, or null if it isn't a 64-bit little-endian ELF library. */
+/**
+ * Find a library's program headers and relocations in its file.
+ *
+ * @param file The library's whole file; the image borrows it.
+ * @return The image, or null if file isn't a 64-bit little-endian ELF shared object (ET_DYN) with 56-byte program
+ *     headers all within it, or its dynamic section or relocations can't be read within its segments' file bytes.
+ */
 image_of :: fn(file: u8[]) -> Image? {
     if file.count < 64 || file[0] != 0x7f || file[1] != 0x45 || file[2] != 0x4c || file[3] != 0x46 || file[4] != 2 || file[5] != 1
         || word_of(file, 16, 2) != 3 || word_of(file, 54, 2) != 56 {
@@ -118,7 +158,13 @@ image_of :: fn(file: u8[]) -> Image? {
     return image
 }
 
-/** The record at the library's entry, checked to be one. */
+/**
+ * Read the interface record at the library's entry point.
+ *
+ * @param image The library's image, from image_of.
+ * @return The record's start, or null if the entry's 8 bytes aren't LIBRARY_MAGIC, its fields can't be read from
+ *     the file, or it has more than MAX_EXPORTS exports.
+ */
 record_of :: fn(image: ptr[Image]) -> Record? {
     at :: word_of(image.file, 24, 8)
     if (word(image, at) or_return null) != LIBRARY_MAGIC {
@@ -132,7 +178,14 @@ record_of :: fn(image: ptr[Image]) -> Record? {
     return record
 }
 
-/** The string at address: its count, then a pointer to its bytes. */
+/**
+ * Read a string from the library as it was linked: its byte count, then a pointer to its bytes.
+ *
+ * @param image The library's image.
+ * @param address The string's address, as the library was linked.
+ * @return The string, a view of the image's file, good as long as the file is; empty for a count of 0, or null if
+ *     its count is more than MAX_NAME or its pointer or bytes can't be read (bytes_at).
+ */
 string_at :: fn(image: ptr[Image], address: u64) -> string? {
     count :: word(image, address) or_return null
     if count > MAX_NAME {
@@ -146,7 +199,16 @@ string_at :: fn(image: ptr[Image], address: u64) -> string? {
     return bit_cast[string](bytes)
 }
 
-/** Whether count bytes at a in one image are those at b in another. */
+/**
+ * Compare bytes in two libraries, each at an address as it was linked.
+ *
+ * @param image_a The first library's image.
+ * @param a The address of the first library's bytes.
+ * @param image_b The second library's image.
+ * @param b The address of the second library's bytes.
+ * @param count How many bytes are compared; 0 compares as false, as bytes_at reads no bytes.
+ * @return True if both ranges are each in one segment's file bytes and are the same, false otherwise.
+ */
 same_bytes :: fn(image_a: ptr[Image], a: u64, image_b: ptr[Image], b: u64, count: u64) -> bool {
     first :: bytes_at(image_a, a, count) or_return false
     second :: bytes_at(image_b, b, count) or_return false
@@ -158,7 +220,14 @@ same_bytes :: fn(image_a: ptr[Image], a: u64, image_b: ptr[Image], b: u64, count
     return true
 }
 
-/** The address a pointer at address holds once the library's relocated: its relocation's addend, or what's there. */
+/**
+ * Read a pointer from the library as it will be once it's relocated at base 0.
+ *
+ * @param image The library's image.
+ * @param address The pointer's address, as the library was linked.
+ * @return The addend of the relative relocation at address, if there's one, since the file holds such a pointer as
+ *     zeros; otherwise the 8 bytes at address; null if there's no relocation there and the bytes can't be read.
+ */
 pointer :: fn(image: ptr[Image], address: u64) -> u64? {
     for i in cast[u64](0)..<image.relocation_bytes / RELA_SIZE {
         entry :: image.relocations + i * RELA_SIZE
@@ -170,7 +239,14 @@ pointer :: fn(image: ptr[Image], address: u64) -> u64? {
     return word(image, address)
 }
 
-/** The 8 bytes at address. */
+/**
+ * Read a little-endian u64 from the library as it was linked.
+ *
+ * @param image The library's image.
+ * @param address The u64's address, as the library was linked.
+ * @return The u64, or null if address isn't in a loadable segment's file bytes or the 8 bytes run past the file's
+ *     end. The bytes may run past the segment's own file bytes, into what follows it in the file.
+ */
 word :: fn(image: ptr[Image], address: u64) -> u64? {
     offset :: offset_of_address(image, address) or_return null
     if offset > cast[u64](image.file.count) || 8 > cast[u64](image.file.count) - offset {
@@ -179,7 +255,19 @@ word :: fn(image: ptr[Image], address: u64) -> u64? {
     return word_of(image.file, offset, 8)
 }
 
-/** count bytes at address, all in one segment's bytes from the file. */
+/**
+ * View bytes of the library as it was linked, taken from the file.
+ *
+ * Only the first and last bytes are looked up: they have to be in loadable segments' file bytes, count - 1 bytes
+ * apart in the file as in memory, which holds when the range is in one segment.
+ *
+ * @param image The library's image.
+ * @param address The bytes' address, as the library was linked.
+ * @param count How many bytes; at least 1.
+ * @return The bytes, a view of the image's file, good as long as the file is; null for a count of 0, if the first
+ *     or last byte isn't in a segment's file bytes or they aren't count - 1 bytes apart in the file, or if the bytes
+ *     run past the file's end.
+ */
 bytes_at :: fn(image: ptr[Image], address: u64, count: u64) -> u8[]? {
     offset :: offset_of_address(image, address) or_return null
     if count == 0 || offset_of_address(image, address + count - 1) != offset + count - 1 {
@@ -192,7 +280,14 @@ bytes_at :: fn(image: ptr[Image], address: u64, count: u64) -> u8[]? {
     return image.file[cast[usize](offset)..<cast[usize](end)]
 }
 
-/** Where in the file the byte at address is: in a loadable segment's bytes from the file, or null. */
+/**
+ * Find where in the file the byte at an address, as the library was linked, is.
+ *
+ * @param image The library's image.
+ * @param address The byte's address.
+ * @return Its offset in the file, from the first loadable segment whose file bytes hold it, or null if none does;
+ *     the offset isn't checked against the file's size.
+ */
 offset_of_address :: fn(image: ptr[Image], address: u64) -> u64? {
     for i in cast[u64](0)..<image.count {
         header :: image.headers + i * 56
@@ -208,7 +303,14 @@ offset_of_address :: fn(image: ptr[Image], address: u64) -> u64? {
     return null
 }
 
-/** A little-endian number of size bytes at offset, or 0 past the end. */
+/**
+ * Read a little-endian unsigned number from bytes.
+ *
+ * @param bytes The bytes to read from.
+ * @param offset Where the number starts, in bytes.
+ * @param size How many bytes the number takes, 0 to 8; 0 reads 0.
+ * @return The number, or 0 if any of its bytes is past bytes' end, which can't be told from a number that's 0.
+ */
 word_of :: fn(bytes: u8[], offset: u64, size: u64) -> u64 {
     value : u64 = 0
     for i in cast[u64](0)..<size {
@@ -222,8 +324,13 @@ word_of :: fn(bytes: u8[], offset: u64, size: u64) -> u64 {
 }
 
 /**
- * How long a library's file is, from its ELF headers: where its section headers end, or its program headers or a
- * segment's bytes, whichever is last; 0 if it isn't an ELF file. Memory holding it can be longer, a page's multiple.
+ * Work out how long a library's file is, from its ELF headers.
+ *
+ * Memory holding a file can be longer, a page's multiple, so this tells how much of it is the file.
+ *
+ * @param file Memory holding the file from its start; only read.
+ * @return The file's length in bytes: where its section headers end, or its program headers or a segment's bytes,
+ *     whichever is last; 0 if it isn't an ELF file, or that end is past the memory's.
  */
 file_size :: fn(file: u8[]) -> u64 {
     if file.count < 64 || file[0] != 0x7f || file[1] != 0x45 || file[2] != 0x4c || file[3] != 0x46 {

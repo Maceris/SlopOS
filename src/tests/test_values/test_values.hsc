@@ -1,6 +1,6 @@
 /**
- * test_values (decisions/0162): an entry's parameters that aren't handles are values, written by whoever launches the
- * program in its grant "arguments" and read by its runtime before main. Launched by the root task with none, it
+ * test_values (decisions/0162): an entry's parameters that aren't handles are values, written by whoever launches
+ * the program in its grant "arguments" and read by its runtime before main. Launched by the root task with none, it
  * launches a copy of itself with a number, a string, a list of strings, an enum's member and a record, as std/os's
  * launch writes them, and waits for it: the copy checks each, and ends with 0 if every one is what was given.
  */
@@ -12,33 +12,66 @@ import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
+/** The test's name, which starts each line it logs. */
 NAME :: "test_values"
+/** The copy's memory budget, in bytes: 4 MiB. */
 COPY_BUDGET : u64 : 4 << 20
+/** The key the copy's watch queues its end under. */
 WATCH_KEY : u64 : 1
 
+/** An enum passed as a value, by its member. */
 Speed :: enum {
+    /** Slow; what the copy takes speed as without one. */
     Slow,
+    /** Fast; what the copy is given. */
     Fast,
 }
 
+/** A record passed as a value, with a signed number, a large one, and a string. */
 Limits :: struct {
+    /** A negative number, -7 as given, so its sign has to survive. */
     low : i32,
+    /** A number past 32 bits, 9,000,000,000 as given. */
     high : u64,
+    /** A string inside the record, "bounds" as given. */
     name : string,
 }
 
 /** What the copy is given: its log, and the values. */
 CopyGrants :: struct {
+    /** A copy of the test's debug log, writable. */
     log : slop_os.DebugLog,
+    /** Not given. */
     manager : os.Channel[process_manager.ProcessManager]?,
+    /** Not given. */
     program : slop_os.Memory?,
+    /** A number, 3, whose presence makes main run as the copy. */
     count : u64?,
+    /** A string, "three". */
     label : string?,
+    /** A list of strings, "a" and "bc". */
     tags : string[]?,
+    /** An enum's member, Fast. */
     speed : Speed?,
+    /** A record. */
     limits : Limits?,
 }
 
+/**
+ * Check values passed to an entry: launch a copy with some, and see it end with 0; or, run as the copy, check them.
+ *
+ * @param log The debug log, writable, where the test says what it found and which check failed.
+ * @param manager The process manager, which launches the copy; without it the test ends with 101.
+ * @param program The test's own module, which the copy is launched from; without it the test ends with 100.
+ * @param count Given only to the copy, 3. With it, this runs as the copy.
+ * @param label Given only to the copy, "three".
+ * @param tags Given only to the copy, "a" and "bc".
+ * @param speed Given only to the copy, Fast.
+ * @param limits Given only to the copy: -7, 9,000,000,000 and "bounds".
+ * @return 0 if both checks passed; 1 if the copy didn't end with 0, 2 if its budget didn't come back to nothing.
+ *     102 to 105 if setting up failed: 102 and 103 the ports, 104 the log's copy, 105 launching the copy. As the
+ *     copy, what check_copy gives.
+ */
 main :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, count: u64?,
     label: string?, tags: string[]?, speed: Speed?, limits: Limits?) -> int {
     match count {
@@ -68,7 +101,16 @@ main :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessMan
     return failed
 }
 
-/** In the copy: each value checked, 0 if all are what the test gave, or which wasn't. */
+/**
+ * Check each value the copy was given against what the test gave.
+ *
+ * @param count The number given, which should be 3.
+ * @param label The string given, which should be "three"; None fails.
+ * @param tags The list given, which should be "a" and "bc"; None fails.
+ * @param speed The member given, which should be Fast; None fails.
+ * @param limits The record given, which should be -7, 9,000,000,000 and "bounds"; None fails.
+ * @return 0 if every value is what was given; otherwise which wasn't: 1 count, 2 label, 3 tags, 4 speed, 5 limits.
+ */
 check_copy :: fn(count: u64, label: string?, tags: string[]?, speed: Speed?, limits: Limits?) -> int {
     if count != 3 {
         return 1
@@ -90,7 +132,12 @@ check_copy :: fn(count: u64, label: string?, tags: string[]?, speed: Speed?, lim
     return 0
 }
 
-/** How the process watched on port ended: its code, once it has. */
+/**
+ * Wait for a watched process to end, and tell how.
+ *
+ * @param port The port its watch, for SIGNAL_TERMINATED, queues on; nothing else may be bound to it.
+ * @return The process's exit code, or 0xffff if the wait failed.
+ */
 ended_with :: fn(port: slop_os.Port) -> u64 {
     packets : slop_os.Packet[1]
     taken :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_else 0

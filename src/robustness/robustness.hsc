@@ -14,66 +14,79 @@ import compiler from "base"
 import intrinsics from "base"
 import runtime from "base"
 
+/** Whether the build set robustness=on, compiling the machinery in; without it, nothing can be made to fail. */
 ON :: #run compiler.target_setting("robustness", default = "off") == "on"
 
 /** The failure points (decisions/0096, R1), each named on the command line as NAMES gives it. */
 Point :: enum #backed_by(u8) {
-    /** frames.allocate, allocate_below and take_frame: a block of frames, or a frame from a CPU's cache */
+    /** frames.allocate, allocate_below and take_frame: a block of frames, or a frame from a CPU's cache. */
     Frame = 0,
-    /** An object from a slab cache, for the kernel's object pools and the heap's small sizes */
+    /** An object from a slab cache, for the kernel's object pools and the heap's small sizes. */
     Slab = 1,
-    /** A block from the kernel heap */
+    /** A block from the kernel heap. */
     Heap = 2,
-    /** A memory budget's charge_new or charge_more */
+    /** A memory budget's charge_new or charge_more. */
     Budget = 3,
-    /** A frame for a handle table's growth */
+    /** A frame for a handle table's growth. */
     Handles = 4,
-    /** A timer heap's growth */
+    /** A timer heap's growth. */
     Timers = 5,
-    /** Device addresses from a DMA domain */
+    /** Device addresses from a DMA domain. */
     Iova = 6,
 }
 
+/** How many failure points there are, one for each of Point's members. */
 POINT_COUNT :: 7
+/** Each failure point's name on the command line, indexed by its Point's value. */
 NAMES :: string.["frame", "slab", "heap", "budget", "handles", "timers", "iova"]
 
 /** What fail= asks for. */
 FailMode :: enum #backed_by(u8) {
-    /** No fail= word: nothing counted or failed */
+    /** No fail= word: nothing counted or failed. */
     Off = 0,
-    /** fail=count */
+    /** fail=count: every pass counted, none failed. */
     Count = 1,
-    /** fail=<point>:<n> */
+    /** fail=<point>:<n>: the nth pass through one point fails. */
     Point = 2,
-    /** fail=any:<n> */
+    /** fail=any:<n>: the nth pass through any point fails. */
     Any = 3,
 }
 
 /** A fail= word, parsed (fail_of). */
 FailSpec :: struct {
+    /** What's asked for; Off, the zero value, for nothing. */
     mode : FailMode,
+    /** The point whose pass fails, for Point; ignored otherwise. */
     point : Point,
-    /** The pass that fails, from 1 */
+    /** The pass that fails, from 1, for Point and Any; ignored otherwise. */
     pass : u64,
 }
 
 /** The kernel's injection state: what fails, and the passes so far. */
 Faults :: struct {
+    /** What fail= asked for. */
     spec : FailSpec,
-    // Passes through each point, and through any
+    /** The passes so far through each point, indexed by its Point's value. */
     passes : u64[POINT_COUNT],
+    /** The passes so far through any point. */
     all : u64,
-    // The pass that failed, once one has: its point, and its number at that point
+    /** Whether a pass has failed; at most one does. */
     failed : bool,
+    /** The point of the pass that failed, once failed is set. */
     failed_point : Point,
+    /** The number of the pass that failed at its point, from 1, once failed is set. */
     failed_pass : u64,
-    /** Called when a pass fails, after saying so, by whoever made this: the kernel logs where it failed from */
+    /** Called when a pass fails, after saying so, by whoever made this: the kernel logs where it failed from. */
     on_fail : fn()?,
 }
 
 /**
- * The fail= word's value, after "fail=": count, any:<n> or <point>:<n>. Null if it isn't one of those, or n isn't a
- * number from 1.
+ * Parse the fail= word's value, after "fail=".
+ *
+ * @param text The value: count, any:<n> or <point>:<n>, point one of NAMES and n a decimal number from 1, of at most
+ *     19 digits.
+ * @return What it asks for, or null if it isn't one of those, its point isn't a name NAMES has, or n isn't a number
+ *     from 1.
  */
 fail_of :: fn(text: string) -> FailSpec? {
     if text == "count" {
@@ -100,7 +113,12 @@ fail_of :: fn(text: string) -> FailSpec? {
     return null
 }
 
-/** A decimal number, or null if text isn't one. */
+/**
+ * Read a decimal number.
+ *
+ * @param text The number's digits, nothing else: no sign, space or other byte.
+ * @return The number, or null if text is empty, has more than 19 digits, or has a byte that isn't a digit.
+ */
 number_of :: fn(text: string) -> u64? {
     if text.count == 0 || text.count > 19 {
         return null
@@ -116,8 +134,16 @@ number_of :: fn(text: string) -> u64? {
 }
 
 /**
- * Whether this pass through point fails. Always false without robustness=on, which leaves the rest out. Any CPU may
- * pass at once, so the counts are atomic; with more than one CPU, which pass is the nth can vary between runs.
+ * Count a pass through a failure point, and tell whether it fails as if the resource had run out.
+ *
+ * Any CPU may pass at once, so the counts are atomic; with more than one CPU, which pass is the nth can vary between
+ * runs. The pass that fails is recorded, logged as "faults: failing <point> pass <n>" for a run that hangs and never
+ * reports, and on_fail is called, before this returns.
+ *
+ * @param faults The kernel's injection state; nothing is counted when its spec is Off.
+ * @param point The point being passed through.
+ * @return True if this is the pass fail= asked to fail, which the caller treats as the resource running out; false
+ *     otherwise, and always false without robustness=on, which leaves the rest out.
  */
 fails :: fn(faults: ptr[mut Faults], point: Point) -> bool {
     #if ON {
@@ -150,8 +176,10 @@ fails :: fn(faults: ptr[mut Faults], point: Point) -> bool {
 }
 
 /**
- * The passes, and the pass that failed, as log lines, for boot_tests.py --robustness to read: "faults: passes ..."
- * and "faults: failed <point> pass <n>". Nothing without fail=.
+ * Log the passes, and the pass that failed, for boot_tests.py --robustness to read: "faults: passes ..." and
+ * "faults: failed <point> pass <n>".
+ *
+ * @param faults The kernel's injection state; nothing is logged when its spec is Off, or without robustness=on.
  */
 report :: fn(faults: ptr[Faults]) {
     #if ON {

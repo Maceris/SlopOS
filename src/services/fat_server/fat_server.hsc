@@ -26,16 +26,24 @@ import fat from "../../fat"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
 
+/** The most connections at once, of every kind; one past them is closed at once, and an open answered NoSpace. */
 MAX_CONNECTIONS :: 64
-/** The most bytes of a client's buffer mapped here */
+/** The most bytes of a client's buffer mapped here; a bigger one is refused with NoBuffer. */
 MAX_BUFFER_BYTES : u64 : 16 << 20
 
+/** What a connection is, and so which protocol it speaks. */
 Kind :: enum {
+    /** A slot no connection has. */
     Free,
+    /** A directory, speaking dir: the listener's, and those opened beneath it. */
     Dir,
+    /** A directory narrowed to read only, speaking read_only_dir. */
     ReadOnlyDir,
+    /** A file, speaking file, to read and write. */
     File,
+    /** A file, speaking read_only_file. */
     ReadOnlyFile,
+    /** A directory's files matching a pattern, speaking file_set. */
     FileSet,
 }
 
@@ -44,32 +52,67 @@ Kind :: enum {
  * pattern), and a file's buffer, mapped here.
  */
 Connection :: struct {
+    /** What it is; Free for a slot no connection has. */
     kind : Kind,
+    /** The client's end, the server's own, bound to the port under the connection's slot; closed by drop. */
     end : slop_os.Channel,
+    /** A directory's or a file set's directory: its first cluster; 0 for a file's. */
     directory : u32,
+    /** A file's place: where its directory entry is, which it's read from afresh for each request. */
     place : fat.Place,
+    /** Whether it may change nothing: a read-only directory, file or set, and what's opened through one. */
     read_only : bool,
+    /** Its name: the path it was opened at, a file's used to find its entry again, or a set's pattern. */
     name : u8[files.PATH_BYTES],
+    /** How many of name's bytes are its. */
     name_length : u32,
+    /** Where a file's buffer, its client's memory, is mapped here; 0 before UseBuffer. */
     buffer : u64,
+    /** The buffer's size in bytes, at most MAX_BUFFER_BYTES. */
     buffer_bytes : u64,
+    /** The buffer's memory, the server's handle to it, closed when it's let go of. */
     buffer_memory : slop_os.Memory,
 }
 
+/** The FAT server's state, made once in main, on the heap, and kept for as long as it runs. */
 Server :: struct {
+    /** The debug log it says what it's doing in; NO_HANDLE for none. */
     log : slop_os.DebugLog,
+    /** The port every connection is bound to, under its slot. */
     port : slop_os.Port,
+    /** The block connection narrowed to the FAT32 partition. */
     disk : slop_os.Channel,
+    /** A port bound to disk, waited on for its answers. */
     disk_port : slop_os.Port,
+    /** Where disk's buffer is mapped, readable and writable, in the process's address space. */
     disk_buffer : u64,
+    /** The disk's buffer's size in bytes. */
     disk_buffer_bytes : u64,
+    /** Whether the partition is read only, as its block connection says: nothing's made or written. */
     read_only : bool,
+    /** The connections, by slot. */
     connections : Connection[MAX_CONNECTIONS],
+    /** How many slots of connections have ever been used: one past the highest. */
     count : usize,
-    /** Whether a connection was added during this pass, which may have taken a free slot it's already past */
+    /** Whether a connection was added during this pass, which may have taken a free slot it's already past. */
     added : bool,
 }
 
+/**
+ * Serve a FAT32 partition's files: mount it, and serve directories, files and file sets on it, each connection its own
+ * capability, reaching nothing above where it was opened.
+ *
+ * Started by the storage manager, one per FAT32 partition, with nothing but the partition, so a crafted volume
+ * reaches only this process. FSInfo's free count is checked against the FAT's at mount, and the FAT's kept if they
+ * differ. Runs until it's stopped.
+ *
+ * @param log The debug log it says what it's doing in; without one, it says nothing.
+ * @param partition A block connection narrowed to the FAT32 partition, which it takes the buffer of.
+ * @param clients The listener for connections to the volume's root directory.
+ * @return 99 without the memory for its state, 1 if its ports couldn't be made, 2 if the partition didn't describe
+ *     itself, 3 if it didn't give its buffer, 4 if the buffer couldn't be mapped, 5 if there's no FAT32 volume on it,
+ *     and 6 if clients couldn't be added. It doesn't return otherwise.
+ */
 main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: os.Listener[dir.Dir]) -> int {
     startup :: slop_os.startup_block()
     // Its state; without the memory for it, it ends with 99 (decisions/0104)
@@ -154,7 +197,11 @@ main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: 
     }
 }
 
-/** The wall clock's time as FAT holds it, or the epoch without a wall clock. */
+/**
+ * Read the wall clock's time, as FAT stamps what's made or written.
+ *
+ * @return The time in UTC as FAT holds it, to two seconds; fat.EPOCH_STAMP without a wall clock.
+ */
 stamp_now :: fn() -> u32 {
     match time.now() {
         case Ok(now) => {
@@ -165,12 +212,27 @@ stamp_now :: fn() -> u32 {
     }
 }
 
+/**
+ * Give the protection to map memory readable and writable.
+ *
+ * @return PROTECTION_READ and PROTECTION_WRITE.
+ */
 read_write :: fn() -> slop_os.Protection {
     return cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
 }
 
 // The disk, a request at a time
 
+/**
+ * Send one request to the partition, and wait for its answer.
+ *
+ * @param server The FAT server's state, whose disk connection the request goes on, waiting on disk_port for the answer;
+ *     the disk must have no other request in flight.
+ * @param request The request, copied whole into the message; a Read or Write moves bytes through the disk's buffer, not
+ *     the message.
+ * @return The answer, a copy, whose handles the caller owns; Unsupported if it couldn't be sent or the connection
+ *     failed.
+ */
 call :: fn(server: ptr[mut Server], request: block.Request) -> block.Response {
     out := os.Outgoing.{}
     made :: os.begin[block.Request](&out)
@@ -188,6 +250,12 @@ call :: fn(server: ptr[mut Server], request: block.Request) -> block.Response {
     }
 }
 
+/**
+ * Tell whether a block request finished as it should.
+ *
+ * @param response A block request's answer, as call gives it; only read.
+ * @return Whether it's Finished with Done.
+ */
 done :: fn(response: block.Response) -> bool {
     return match response {
         case Finished(completion) => completion.status == .Done
@@ -195,6 +263,16 @@ done :: fn(response: block.Response) -> bool {
     }
 }
 
+/**
+ * Read sectors of the partition through its buffer, as many at a time as it holds, for fat's Device.
+ *
+ * @param context The Server main gave the Device, cast back; its disk is read through its mapped buffer, which is
+ *     overwritten.
+ * @param first The first 512-byte sector in the partition.
+ * @param count How many 512-byte sectors, read in pieces of as many as the buffer holds.
+ * @param into Where they go, at least count sectors long.
+ * @return Whether they were all read; false if into is too short, the buffer holds no sector, or a read failed.
+ */
 read_sectors :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
     server :: cast[ptr[mut Server]](context)
     per :: server.disk_buffer_bytes / block.BLOCK_BYTES
@@ -220,6 +298,18 @@ read_sectors :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> b
     }
 }
 
+/**
+ * Write sectors of the partition through its buffer, as many at a time as it holds, for fat's Device; each write
+ * goes to the disk at once, durable once a Flush is.
+ *
+ * @param context The Server main gave the Device, cast back; its mapped disk buffer is overwritten and written to the
+ *     disk.
+ * @param first The first 512-byte sector in the partition.
+ * @param count How many 512-byte sectors, written in pieces of as many as the buffer holds.
+ * @param from What's written, at least count sectors long.
+ * @return Whether they were all written; false if from is too short, the buffer holds no sector, or a write failed,
+ *     what was written before it written.
+ */
 write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool {
     server :: cast[ptr[mut Server]](context)
     per :: server.disk_buffer_bytes / block.BLOCK_BYTES
@@ -248,8 +338,16 @@ write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool
 // Connections
 
 /**
- * A connection on end, bound to the port under its index, and read until it's empty: its index, or null with end
- * closed if there's no room.
+ * Add a connection, in the first free slot, bound to the port under its slot; it's read in the main loop's next pass.
+ *
+ * @param server The server, whose added is set.
+ * @param kind What it is.
+ * @param end The client's end, which the server takes over: closed here if it can't be added.
+ * @param directory A directory's or a set's first cluster; 0 for a file.
+ * @param place A file's place; empty for another kind.
+ * @param read_only Whether it may change nothing.
+ * @param name The path it was opened at, or a set's pattern; cut to files.PATH_BYTES.
+ * @return Its slot; null, with end closed, if there are MAX_CONNECTIONS already or it couldn't be bound.
  */
 add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, directory: u32, place: fat.Place, read_only: bool, name: string) -> usize? {
     slot := server.count
@@ -287,7 +385,18 @@ add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, directory: 
     return slot
 }
 
-/** A new connection of kind P's protocol: the other end, for the client, or null. */
+/**
+ * Make a new connection speaking P's protocol, and add it.
+ *
+ * @tparam P The protocol: dir, read_only_dir, file, read_only_file or file_set's.
+ * @param server The FAT server's state, given the new slot, whose added is set.
+ * @param kind What it is, which must speak P.
+ * @param directory A directory's or a set's first cluster; 0 for a file.
+ * @param place A file's place; empty for another kind.
+ * @param read_only Whether it may change nothing.
+ * @param name The path it was opened at, or a set's pattern.
+ * @return The other end, the client's, which the caller sends; null if a channel or a slot couldn't be had.
+ */
 open_connection :: fn[P](server: ptr[mut Server], kind: Kind, directory: u32, place: fat.Place, read_only: bool, name: string) -> os.Channel[P]? {
     startup :: slop_os.startup_block()
     pair :: os.channel_for[P](startup.budget, 0) or_return null
@@ -298,7 +407,13 @@ open_connection :: fn[P](server: ptr[mut Server], kind: Kind, directory: u32, pl
     return os.Channel[P].{end = pair.b}
 }
 
-/** A connection whose client went: its end closed, its buffer unmapped. */
+/**
+ * Drop a connection whose client went: unbind it, close its end, let go of its buffer, and free its slot.
+ *
+ * @param server The FAT server's state: the slot is unbound from its port, its end closed and buffer let go of, and
+ *     left Free for add to reuse; count isn't lowered.
+ * @param index The connection's slot; one past them is ignored.
+ */
 drop :: fn(server: ptr[mut Server], index: usize) {
     if index >= server.connections.count {
         return void
@@ -310,6 +425,12 @@ drop :: fn(server: ptr[mut Server], index: usize) {
     connection.kind = .Free
 }
 
+/**
+ * Let go of a file connection's buffer: unmap it and close its memory, if it has one.
+ *
+ * @param connection A connection's slot; its buffer, if mapped, is unmapped from this process and its memory handle
+ *     closed, and buffer and buffer_bytes set to 0. One without a buffer is left as it is.
+ */
 release_buffer :: fn(connection: ptr[mut Connection]) {
     if connection.buffer != 0 {
         startup :: slop_os.startup_block()
@@ -320,10 +441,25 @@ release_buffer :: fn(connection: ptr[mut Connection]) {
     }
 }
 
+/**
+ * Give a connection's name: the path it was opened at, or a set's pattern.
+ *
+ * @param connection A connection's slot, whose name and name_length are read; a length past files.PATH_BYTES is cut to
+ *     it.
+ * @return A view of its name's bytes, good while the connection is unchanged.
+ */
 name_of :: fn(connection: ptr[Connection]) -> string {
     return string_of(&connection.name[0], cast[usize](if connection.name_length > files.PATH_BYTES { cast[u32](files.PATH_BYTES) } else { connection.name_length }))
 }
 
+/**
+ * Answer a connection's requests, as its kind says, until it has none.
+ *
+ * @param server The FAT server's state, whose slot is served by its kind; slots may be added or dropped.
+ * @param volume The mounted volume, main's, which the slot's requests read or change.
+ * @param index The connection's slot; a free one, or one past them, is left alone.
+ * @param into Where each request is read into, reused.
+ */
 serve :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
@@ -348,7 +484,13 @@ serve :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usize, 
 
 // Paths
 
-/** A path's text from a message, if it's no longer than a path may be. */
+/**
+ * Read a path from a message.
+ *
+ * @param into The message the request was read into, which the path is in; only read.
+ * @param path Where the path's bytes are in it.
+ * @return The path, a view into the message, good while it is; null if it's empty or longer than files.PATH_BYTES.
+ */
 path_of :: fn(into: ptr[os.Incoming], path: slop_os.Relative[u8]) -> string? {
     bytes :: os.items(into, path)
     if bytes.count == 0 || bytes.count > files.PATH_BYTES {
@@ -359,10 +501,25 @@ path_of :: fn(into: ptr[os.Incoming], path: slop_os.Relative[u8]) -> string? {
 
 /** Where a path's last component goes: the directory that holds it, and its name. */
 Leaf :: struct {
+    /** The directory's first cluster. */
     directory : u32,
+    /** The last component, a view into the path. */
     name : string,
 }
 
+/**
+ * Find where a path's last component goes.
+ *
+ * @param volume The mounted volume, main's, whose directories on the way are read; nothing on it is written, though its
+ *     walk of a directory's chain moves.
+ * @param directory The first cluster of the directory the path is beneath.
+ * @param path The path, components separated by '/'.
+ * @return The directory that holds its last component, which must exist, and the component, a view into path.
+ * @error NotADirectory What's before the last component isn't a directory.
+ * @error NotFound A directory on the way isn't there.
+ * @error DeviceError The disk refused a read.
+ * @error Corrupt A directory on the way couldn't be read as one.
+ */
 leaf_of :: fn(volume: ptr[mut fat.Volume], directory: u32, path: string) -> Result[Leaf, fat.FatError] {
     last := path.count
     for character, i in path {
@@ -380,6 +537,12 @@ leaf_of :: fn(volume: ptr[mut fat.Volume], directory: u32, path: string) -> Resu
     return .Ok(Leaf.{directory = fat.directory_cluster(volume, &parent), name = string_of(cast[ptr[u8]](cast[u64](path.data) + cast[u64](last + 1)), path.count - last - 1)})
 }
 
+/**
+ * Give the file protocols' error for a FAT error.
+ *
+ * @param error Any FAT error, as fat's functions return it.
+ * @return The same error, but NotFat as Corrupt and InvalidName as InvalidPath.
+ */
 file_error :: fn(error: fat.FatError) -> files.FileError {
     return match error {
         case .NotFat => files.FileError.Corrupt
@@ -396,7 +559,25 @@ file_error :: fn(error: fat.FatError) -> files.FileError {
     }
 }
 
-/** The file at path beneath directory, opened as creation says. */
+/**
+ * Find or make a file's entry, as creation says.
+ *
+ * @param volume The mounted volume, main's; making the file or cutting it writes the volume's structures to the disk.
+ * @param directory The first cluster of the directory the path is beneath.
+ * @param path The file's path beneath directory, components separated by '/'; not empty, as path_of gives it.
+ * @param creation New makes it, refusing one there; Existing finds it, refusing none; Truncate finds or makes it, cut
+ *     to nothing, written to the disk at once; and any other finds or makes it as it is.
+ * @return The file's entry.
+ * @error AlreadyExists It's there, and creation is New.
+ * @error NotFound It isn't there, and creation is Existing; or a directory on the way isn't.
+ * @error IsADirectory What's at path is a directory.
+ * @error NotADirectory What's on the way to it isn't a directory.
+ * @error InvalidName Its name can't be a FAT name.
+ * @error NoSpace Making it, or its directory's growing, needed a cluster the volume hasn't.
+ * @error ReadOnly The partition is read only, and it had to be made or cut.
+ * @error DeviceError The disk refused a read or a write.
+ * @error Corrupt The volume's structures couldn't be followed.
+ */
 open_file_entry :: fn(volume: ptr[mut fat.Volume], directory: u32, path: string, creation: files.Creation) -> Result[fat.Entry, fat.FatError] {
     leaf :: leaf_of(volume, directory, path)?
     existing := fat.Entry.{}
@@ -430,7 +611,22 @@ open_file_entry :: fn(volume: ptr[mut fat.Volume], directory: u32, path: string,
     return fat.create(volume, leaf.directory, leaf.name, false)
 }
 
-/** The directory at path beneath directory, made, with any missing on the way to it, if create. */
+/**
+ * Find a directory, or make it, with any missing on the way to it.
+ *
+ * @param volume The mounted volume, main's; with create, making directories writes the volume's structures to the disk.
+ * @param directory The first cluster of the directory the path is beneath.
+ * @param path The directory's path beneath directory, components separated by '/'.
+ * @param create Whether it, and each directory missing on the way, is made, written to the disk at once.
+ * @return Its first cluster.
+ * @error NotADirectory What's at path, or on the way to it, isn't a directory.
+ * @error NotFound It isn't there, and create is false.
+ * @error InvalidName Making it, a component is empty, "." or "..", or can't be a FAT name.
+ * @error NoSpace Making it needed a cluster the volume hasn't.
+ * @error ReadOnly The partition is read only.
+ * @error DeviceError The disk refused a read or a write.
+ * @error Corrupt The volume's structures couldn't be followed.
+ */
 open_directory_entry :: fn(volume: ptr[mut fat.Volume], directory: u32, path: string, create: bool) -> Result[u32, fat.FatError] {
     if !create {
         found :: fat.resolve(volume, directory, path)?
@@ -470,7 +666,19 @@ open_directory_entry :: fn(volume: ptr[mut fat.Volume], directory: u32, path: st
     return .Ok(current)
 }
 
-/** A listing's entry at or after cursor, matching pattern unless it's "". */
+/**
+ * List a directory's entry at or after a cursor, the first that matches a pattern.
+ *
+ * @param volume The mounted volume, main's, whose directory is read; nothing on it is written, though its walk of the
+ *     chain moves.
+ * @param directory The directory's first cluster.
+ * @param cursor Where to start: 0 for the first entry, or what the last listing's next said.
+ * @param pattern The pattern the name must match, ignoring case; "" for every entry.
+ * @param out The answer being built, which the entry's name is appended to.
+ * @return The entry: its name, kind, size in bytes and the cursor after it; null past the last.
+ * @error Corrupt The directory couldn't be read as one.
+ * @error DeviceError The disk refused a read.
+ */
 listing_of :: fn(volume: ptr[mut fat.Volume], directory: u32, cursor: u64, pattern: string, out: ptr[mut os.Outgoing]) -> Result[files.Listing?, fat.FatError] {
     slot := cast[u32](cursor)
     loop {
@@ -486,11 +694,23 @@ listing_of :: fn(volume: ptr[mut fat.Volume], directory: u32, cursor: u64, patte
     }
 }
 
+/**
+ * Tell whether two bytes of a name are the same, as FAT compares them, ignoring case.
+ *
+ * @param a A byte of the pattern, or of the name, as file_set.matches gives it.
+ * @param b The byte it's compared with, from the other.
+ * @return Whether they're the same in upper case.
+ */
 same_byte :: fn(a: u8, b: u8) -> bool {
     return fat.upper(a) == fat.upper(b)
 }
 
-/** Whether a schema hash asks for no type: all zeros. */
+/**
+ * Tell whether a schema hash asks for no type, as FAT keeps none (decisions/0108).
+ *
+ * @param schema The schema hash an OpenFile asked for, 32 bytes.
+ * @return Whether it's all zeros.
+ */
 untyped :: fn(schema: u8[32]) -> bool {
     for byte in schema {
         if byte != 0 {
@@ -500,16 +720,46 @@ untyped :: fn(schema: u8[32]) -> bool {
     return true
 }
 
+/**
+ * Describe a connection's directory or file.
+ *
+ * @param out The answer being built, which the name is appended to.
+ * @param kind Directory or File.
+ * @param size A file's size in bytes; 0 for a directory.
+ * @param name The name described, a connection's path or a set's pattern, appended to out as bytes.
+ * @return The Info: kind and size as given, and name as the bytes appended to out, so it's good in out's answer only.
+ */
 info_of :: fn(out: ptr[mut os.Outgoing], kind: files.Kind, size: u64, name: string) -> files.Info {
     return files.Info.{kind = kind, size = size, name = os.append(out, string_bytes(name))}
 }
 
+/**
+ * Say what FAT's file system does: it ignores case.
+ *
+ * @return Its features.
+ */
 features :: fn() -> files.Features {
     return files.Features.{ignores_case = true}
 }
 
 // Directories
 
+/**
+ * Answer a directory connection's requests, until it has none, or it's gone.
+ *
+ * Every request is done before the next is read, and every write goes to the disk at once, so Sync is a Flush; after
+ * a failed write, every Sync fails, not only the first (decisions/0112). On a read-only partition, files are opened
+ * only to read, and directories aren't made. Transactions, Replace and change cursors are the native file system's,
+ * answered Unsupported (decisions/0089). Connect adds a connection to the same directory, with no answer. A
+ * connection whose end fails is dropped.
+ *
+ * @param server The FAT server's state: answers go on the slot's end, opens and Connect add slots, setting added, Sync
+ *     flushes its disk, and a failed end drops the slot.
+ * @param volume The mounted volume, main's: Open, Remove and Rename may change it, written to the disk at once, and a
+ *     failed write sets its failed, so every Sync fails after.
+ * @param index The connection's slot among server's connections; one past them is left alone.
+ * @param into Where each request is read into, reused.
+ */
 serve_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
@@ -641,7 +891,15 @@ serve_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usi
     }
 }
 
-/** What's at from moved to to, both beneath directory. */
+/**
+ * Move a file or a directory, written to the disk at once.
+ *
+ * @param volume The mounted volume, main's; the move writes its directories to the disk at once.
+ * @param directory The first cluster of the directory both paths are beneath.
+ * @param from Its path beneath directory, components separated by '/'.
+ * @param to Where it goes; the directory that holds it must exist.
+ * @return Null once it's moved; why not, otherwise, as fat.rename and the paths' lookups say.
+ */
 moved :: fn(volume: ptr[mut fat.Volume], directory: u32, from: string, to: string) -> fat.FatError? {
     entry := fat.Entry.{}
     match fat.resolve(volume, directory, from) {
@@ -659,7 +917,17 @@ moved :: fn(volume: ptr[mut fat.Volume], directory: u32, from: string, to: strin
     }
 }
 
-/** A read-only file at path beneath directory, for a dir or a read_only_dir. */
+/**
+ * Open a file read only, for a dir, a read_only_dir or a file set.
+ *
+ * @param server The FAT server's state, given a ReadOnlyFile slot for the file.
+ * @param volume The mounted volume, main's, whose directories are read; nothing on it is written.
+ * @param directory The first cluster of the directory the path is beneath.
+ * @param path The file's path; "" is refused with InvalidPath.
+ * @param out The answer being built; unused.
+ * @return OpenedReadOnlyFile with the connection's other end, which the caller sends; Failed with IsADirectory for a
+ *     directory, NoSpace without a slot, or why it couldn't be found.
+ */
 read_only_open :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], directory: u32, path: string, out: ptr[mut os.Outgoing]) -> dir.Response {
     if path.count == 0 {
         return .Failed(.InvalidPath)
@@ -678,6 +946,17 @@ read_only_open :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], direc
     }
 }
 
+/**
+ * Answer a read-only directory connection's requests, until it has none, or it's gone: files opened read only,
+ * directories opened read only, never made, listings, sets, and Connect, which adds a connection to the same
+ * directory with no answer. A connection whose end fails is dropped.
+ *
+ * @param server The FAT server's state: answers go on the slot's end, opens and Connect add read-only slots, setting
+ *     added, and a failed end drops the slot.
+ * @param volume The mounted volume, main's, only read: nothing on it is written through a read-only directory.
+ * @param index The connection's slot among server's connections; one past them is left alone.
+ * @param into Where each request is read into, reused.
+ */
 serve_read_only_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
@@ -752,6 +1031,18 @@ serve_read_only_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], 
     }
 }
 
+/**
+ * Answer a file set's requests, until it has none, or it's gone: its files listed, and opened by a name of one
+ * component matching its pattern, NotFound for another, and ReadOnly for a read-only set's OpenFile. Connect adds a
+ * connection to the same set, with no answer. A connection whose end fails is dropped.
+ *
+ * @param server The FAT server's state: answers go on the slot's end, opens and Connect add slots, setting added, and a
+ *     failed end drops the slot.
+ * @param volume The mounted volume, main's; an OpenFile through a set that may write may make or cut a file, written to
+ *     the disk at once.
+ * @param index The connection's slot among server's connections; one past them is left alone.
+ * @param into Where each request is read into, reused.
+ */
 serve_file_set :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
@@ -832,7 +1123,13 @@ serve_file_set :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index
     }
 }
 
-/** Whether a name is one of a set's: one component, matching its pattern. */
+/**
+ * Tell whether a name is one of a set's.
+ *
+ * @param pattern The set's pattern, as file_set.matches takes it, compared ignoring case.
+ * @param name The name asked for, as the request gave it, not yet checked; "" or one with a "/" is never in a set.
+ * @return Whether it's one component, not empty, matching the pattern, ignoring case.
+ */
 in_set :: fn(pattern: string, name: string) -> bool {
     for character in name {
         if character == '/' {
@@ -844,7 +1141,15 @@ in_set :: fn(pattern: string, name: string) -> bool {
 
 // Files
 
-/** A file connection's buffer: its client's memory, mapped here. */
+/**
+ * Take a file connection's buffer: its client's memory, mapped here, readable and writable, in place of any before.
+ *
+ * @param connection A file connection's slot: its buffer before is let go of first, whether or not the new one's taken;
+ *     once mapped, buffer, buffer_bytes and buffer_memory are set.
+ * @param memory The memory, which the server takes over: kept, or closed when it's refused; but if addresses
+ *     can't be reserved for it, it isn't closed.
+ * @return Null once it's mapped; NoBuffer if it's empty, larger than MAX_BUFFER_BYTES, or couldn't be mapped.
+ */
 use_buffer :: fn(connection: ptr[mut Connection], memory: slop_os.Memory) -> files.FileError? {
     release_buffer(connection)
     size :: slop_os.memory_size(memory) or_else 0
@@ -867,17 +1172,43 @@ use_buffer :: fn(connection: ptr[mut Connection], memory: slop_os.Memory) -> fil
     return null
 }
 
-/** Whether a transfer's bytes are all in a connection's buffer. */
+/**
+ * Tell whether a transfer's bytes are all in a connection's buffer.
+ *
+ * @param connection A file connection's slot, whose buffer and buffer_bytes are read.
+ * @param transfer The Read or Write asked for; its buffer_offset and count, in bytes, are checked, and its offset in
+ *     the file isn't.
+ * @return Whether it has a buffer and the transfer's offset and count, in bytes, are inside it.
+ */
 fits :: fn(connection: ptr[Connection], transfer: files.Transfer) -> bool {
     return connection.buffer != 0 && cast[u64](transfer.buffer_offset) + cast[u64](transfer.count) <= connection.buffer_bytes
 }
 
-/** Where a transfer's bytes are in a connection's buffer, which they fit in. */
+/**
+ * Give where a transfer's bytes are in a connection's buffer.
+ *
+ * @param connection A file connection's slot, with a buffer mapped.
+ * @param transfer The transfer, which fits.
+ * @return A view of the buffer, good while it's mapped; the client may change it meanwhile.
+ */
 buffer_of :: fn(connection: ptr[Connection], transfer: files.Transfer) -> mut u8[] {
     return view_of(cast[ptr[mut u8]](connection.buffer + cast[u64](transfer.buffer_offset)), cast[usize](transfer.count))
 }
 
-/** A file's read, from its entry as it is now. */
+/**
+ * Read a file into its connection's buffer, from its entry as it is now, so what other connections wrote is seen.
+ *
+ * @param server Unused.
+ * @param volume The mounted volume, main's, only read: nothing on it is written.
+ * @param connection A file or read-only file connection's slot: its place and name find the entry afresh, and its
+ *     buffer is read into.
+ * @param transfer Where to read from in the file and to in the buffer, and how many bytes.
+ * @return How many bytes were read: fewer than asked only at the file's end, 0 past it.
+ * @error NoBuffer The connection has no buffer, or the transfer doesn't fit in it.
+ * @error NotFound The file's entry isn't there any more.
+ * @error DeviceError The disk refused a read.
+ * @error Corrupt The file's clusters couldn't be followed.
+ */
 read_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], connection: ptr[Connection], transfer: files.Transfer) -> Result[u32, files.FileError] {
     if !fits(connection, transfer) {
         return .Error(.NoBuffer)
@@ -890,6 +1221,19 @@ read_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], connection
     }
 }
 
+/**
+ * Answer a file connection's requests, until it has none, or it's gone.
+ *
+ * Every write goes to the disk at once; Sync is a Flush, and after a failed write every Sync fails. Connect adds a
+ * connection to the same file, and Narrow makes a read-only one. A connection whose end fails is dropped.
+ *
+ * @param server The FAT server's state: answers go on the slot's end, Narrow and Connect add slots, setting added, Sync
+ *     flushes its disk, and a failed end drops the slot.
+ * @param volume The mounted volume, main's: Write and SetSize change the file, written to the disk at once, and a
+ *     failed write sets its failed, so every Sync fails after.
+ * @param index The connection's slot among server's connections; one past them is left alone.
+ * @param into Where each request is read into, reused.
+ */
 serve_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
@@ -974,6 +1318,16 @@ serve_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: us
     }
 }
 
+/**
+ * Answer a read-only file connection's requests, until it has none, or it's gone: UseBuffer, Read, Info, and
+ * Connect, which adds a connection to the same file with no answer. A connection whose end fails is dropped.
+ *
+ * @param server The FAT server's state: answers go on the slot's end, Connect adds a read-only slot, setting added, and
+ *     a failed end drops the slot.
+ * @param volume The mounted volume, main's, only read: nothing on it is written through a read-only file.
+ * @param index The connection's slot among server's connections; one past them is left alone.
+ * @param into Where each request is read into, reused.
+ */
 serve_read_only_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void

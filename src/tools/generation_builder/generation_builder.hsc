@@ -1,8 +1,8 @@
 /**
  * The generation builder (roadmap 9d1, decisions/0113): a hosted program that writes a generation onto an EFI system
  * partition's folder on the host, for the image builder to copy into the ESP, as the update service writes one on the
- * device: the kernel and every boot-set file as objects named by their hashes, and the generation's record, which SlopOS's
- * bootloader boots it by (decisions/0133). tools/boot.py runs it, for boot disks and ISOs.
+ * device: the kernel and every boot-set file as objects named by their hashes, and the generation's record, which
+ * SlopOS's bootloader boots it by (decisions/0133). tools/boot.py runs it, for boot disks and ISOs.
  *
  *     generation_builder [--recovery] <esp folder> <store folder> <number> <yes|no, for KASLR> <command line> <kernel>
  *         [<file>...]
@@ -17,7 +17,8 @@
  * Staged instead (decisions/0116), it's an update for the update service to install: its objects put in the store
  * folder's objects, as the bundle store keeps them, and its record, tentative, as the system volume's updates/pending.
  *
- *     generation_builder --stage <system volume folder> <store folder> <number> <yes|no> <command line> <kernel> <file>...
+ *     generation_builder --stage <system volume folder> <store folder> <number> <yes|no> <command line> <kernel>
+ *         <file>...
  */
 package generation_builder
 
@@ -27,6 +28,17 @@ import strings from "std"
 import bundle from "../../bundle"
 import generations from "../../generations"
 
+/**
+ * Write a generation onto an ESP's folder on the host, or, with --stage, stage one in a system volume's folder.
+ *
+ * Its arguments are as the package says: an optional --recovery, the ESP folder, the store folder, the generation's
+ * number, yes or no for KASLR, the kernel's command line, the kernel, and the boot set's files. The ESP's boot,
+ * objects and records folders are made if they aren't there.
+ *
+ * @return 0 once it's written; 1 for too few arguments, 2 if a folder couldn't be made, 3 for a number that isn't one
+ *     or a command line too long, 4 if a file couldn't be read or put, 5 for too many boot-set files or too long a
+ *     name, 6 if the generation doesn't check, 7 if its record couldn't be written; stage's for --stage.
+ */
 main :: fn() -> int {
     arguments :: os.arguments()
     if argument(arguments, 1) == "--stage" {
@@ -105,7 +117,16 @@ main :: fn() -> int {
     return 0
 }
 
-/** A generation staged in the system volume's folder, its objects in the store folder's. */
+/**
+ * Stage a generation as an update: its objects in the store folder's objects, and its record, tentative with
+ * generations.TRIES tries, as the system volume folder's updates/pending, replacing one there.
+ *
+ * @param arguments The program's arguments: --stage, the system volume folder, the store folder, the number, yes or
+ *     no for KASLR, the command line, the kernel, and at least one boot-set file.
+ * @return 0 once it's staged; 1 for too few arguments, 3 for a number that isn't one or a command line too long, 4 if
+ *     a file couldn't be read or put, 5 for too many boot-set files or too long a name, 6 if the generation doesn't
+ *     check, 7 if its record couldn't be written.
+ */
 stage :: fn(arguments: string[]) -> int {
     if arguments.count < 9 {
         runtime.log_error("usage: generation_builder --stage <system volume folder> <store folder> <number> <yes|no> <command line> <kernel> <file>...")
@@ -149,7 +170,14 @@ stage :: fn(arguments: string[]) -> int {
     return 0
 }
 
-/** A file put in folder + objects, named by its hash in hex: the hash, or null if it couldn't be read or written. */
+/**
+ * Put a file as an object in a folder's objects, named by its hash in hex.
+ *
+ * @param folder The folder, as the store folder.
+ * @param objects The objects folder's path in it, separators at both ends, as "/objects/".
+ * @param path The file's path.
+ * @return Its hash; null if it couldn't be read or written, which isn't logged.
+ */
 put_in :: fn(folder: string, objects: string, path: string) -> bundle.Hash? {
     contents :: os.read_entire_file(path) or_return null
     hash :: bundle.hash_of(bit_cast[u8[]](contents))
@@ -163,8 +191,12 @@ put_in :: fn(folder: string, objects: string, path: string) -> bundle.Hash? {
 }
 
 /**
- * A library put in the store folder's objects, and pinned there as library_<its name without .library>, as the bundle
- * store keeps pins (pins/<name>, its hash in hex): whether it was.
+ * Put a typed library in the store folder's objects, and pin it there as library_<its name without .library>, as the
+ * bundle store keeps pins (pins/<name>, its hash in hex), so collection keeps it.
+ *
+ * @param store The store folder, as the store builder wrote it; its pins folder is made if it isn't there.
+ * @param path The library's path, its name ending in .library.
+ * @return True once it's put and pinned; false if it couldn't be read or written, or pins/ couldn't be made.
  */
 pin_library :: fn(store: string, path: string) -> bool {
     hash :: put_in(store, "/objects/", path) or_return false
@@ -181,7 +213,13 @@ pin_library :: fn(store: string, path: string) -> bool {
     return os.write_entire_file(pin, bundle.hex(hash, &hex_storage)) == null
 }
 
-/** A file put in the ESP's objects, named by its hash: the hash, or null if it couldn't be read or written. */
+/**
+ * Put a file as an object in the ESP's objects, at generations.object_path for its hash.
+ *
+ * @param esp The ESP folder, whose objects folder has to be there.
+ * @param path The file's path.
+ * @return Its hash; null, logged, if it couldn't be read or written.
+ */
 put :: fn(esp: string, path: string) -> bundle.Hash? {
     contents :: match os.read_entire_file(path) {
         case Ok(read) => read
@@ -200,12 +238,23 @@ put :: fn(esp: string, path: string) -> bundle.Hash? {
     return hash
 }
 
-/** The argument at index, or "" past the last. */
+/**
+ * Give one of the program's arguments.
+ *
+ * @param arguments The program's arguments, the program's own name first.
+ * @param index Which, from 0.
+ * @return The argument; "" past the last.
+ */
 argument :: fn(arguments: string[], index: usize) -> string {
     return if index < arguments.count { arguments[index] } else { "" }
 }
 
-/** A decimal number, or null. */
+/**
+ * Read a decimal number, as a generation's.
+ *
+ * @param text The digits, nothing else.
+ * @return Its value, wrapping past a u64's largest, as it isn't checked; null if text is empty or isn't all digits.
+ */
 number_of :: fn(text: string) -> u64? {
     if text.count == 0 {
         return null
@@ -220,7 +269,12 @@ number_of :: fn(text: string) -> u64? {
     return value
 }
 
-/** A path's last part. */
+/**
+ * Give a path's last part, as a boot-set file's name.
+ *
+ * @param path The path, with / or \ separators.
+ * @return What's after its last separator, a view into path; all of it without one.
+ */
 file_name :: fn(path: string) -> string {
     start := cast[usize](0)
     for character, i in path {
@@ -231,7 +285,15 @@ file_name :: fn(path: string) -> string {
     return path[start..<path.count]
 }
 
-/** a, b, c and d, one after another, into storage. */
+/**
+ * Join three pieces of text, one after another, in storage.
+ *
+ * @param a The first piece, as a folder's path.
+ * @param b The second piece; "" for none.
+ * @param c The third; "" for none.
+ * @param storage Where they're written; what's past its 1024 bytes is dropped.
+ * @return The joined text, a view into storage, good while it is; empty if all are.
+ */
 joined :: fn(a: string, b: string, c: string, storage: ptr[mut u8[1024]]) -> string {
     count := cast[usize](0)
     for text in string.[a, b, c] {

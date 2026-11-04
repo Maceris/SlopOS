@@ -14,20 +14,31 @@ import connector from "../../protocols/connector"
 import entropy from "../../protocols/entropy"
 
 /**
- * The first SlopOS program (roadmap M6): it fills memory from its heap, draws random numbers, and says
- * whether both worked through base's logger, to the events service, and on the console, if it's given a connection to the
- * terminal service, through a connector to it (decisions/0075, 0077, 0136). Given a connection to the process manager,
- * it then waits for the manager to be gone and says it's still running, which shows a program outlives the
- * manager that loaded it (decisions/0067). It says the date the wall clock gives too, which it reads from the clock
- * page it's given (decisions/0093). Given a connection to the entropy service, it asks it for random bytes too
- * (decisions/0067, 0101). Given its settings in the config store (decisions/0109), it declares them, writes an override,
- * reads them back merged, and rolls the override back. It ends with 0 if its heap worked.
- *
- * Built a second time as hello_next.elf (the build's setting hello_build=next), it says it's the next build first: a
- * changed bundle for the test of generations applied live (decisions/0126).
+ * Whether this is the next build, hello_next.elf, built with the build's setting hello_build=next: it says it's the
+ * next build first, a changed bundle for the test of generations applied live (decisions/0126).
  */
 NEXT :: #run compiler.target_setting("hello_build", default = "") == "next"
 
+/**
+ * Check that a program's heap and random numbers work, and say so.
+ *
+ * The first SlopOS program (roadmap M6): it fills memory from its heap, draws random numbers, and says whether both
+ * worked through base's logger, to the events service, and on the console (decisions/0075, 0077, 0136). It says the
+ * date the wall clock gives too, which it reads from the clock page it's given (decisions/0093), or that there's no
+ * wall clock. The next build (NEXT) says so first.
+ *
+ * @param manager A connection to the process manager. Given one, hello waits at the end for the manager to be gone,
+ *     then says it's still running, which shows a program outlives the manager that loaded it (decisions/0067).
+ *     Without it, hello ends as soon as it has said everything else.
+ * @param console A connection to the terminal service's connector, dialed for a terminal on which hello writes one
+ *     line saying whether its heap and random numbers worked. Without it, nothing's written on the console.
+ * @param entropy_service A connection to the entropy service, asked for 32 random bytes; hello logs how many it gave
+ *     (decisions/0067, 0101). Without it, hello doesn't ask.
+ * @param settings hello's settings in the config store (decisions/0109): hello declares them, writes an override,
+ *     reads them back merged, and rolls the override back, logging how each step went. Without them, it skips this.
+ * @return 0 if its heap worked; 1 if the heap couldn't give it memory, 2 if the memory didn't hold what was written;
+ *     3, 4 or 5 if it couldn't wait for the process manager to be gone; 6 if it couldn't reach the terminal.
+ */
 main :: fn(manager: os.Channel[process_manager.ProcessManager]?, console: os.Channel[connector.Connector]?,
     entropy_service: os.Channel[entropy.Entropy]?, settings: config.Config[HelloSettings]?) -> int {
     #if NEXT {
@@ -82,16 +93,26 @@ main :: fn(manager: os.Channel[process_manager.ProcessManager]?, console: os.Cha
     return code
 }
 
-/** hello's settings, in the config store: only what it's been asked to show. */
+/** hello's settings, in the config store: only what it's been asked to show, as a test of the store. */
 HelloSettings :: struct {
+    /** A greeting, as bytes of text in the value; empty unless an override writes one. */
     greeting : slop_os.Relative[u8],
+    /** How many times to repeat the greeting, 1 by default; only written and read back, never acted on. */
     repeats : u32 = 1,
+    /** Whether to say it loudly, false by default; only read back, to check a write of other fields keeps it. */
     loud : bool,
 }
 
 /**
- * Its settings declared, an override of greeting and repeats written and read back over the default, which loud keeps,
- * Next answered at once for a version already past, and the override rolled back to the declared version's.
+ * Exercise the config store with hello's settings, logging what each step did.
+ *
+ * It declares the settings, writes an override of greeting and repeats (loud is written too, but not among the fields,
+ * so the default is kept), checks that Next is answered at once for the declared version, which the write is past, with
+ * the override merged over the default, reads who wrote the first version in the history, and rolls the override back
+ * to the declared version's. Nothing is returned: a step that fails is logged as refused or not read.
+ *
+ * @param settings The connection to the config store for hello's settings, which stays the caller's; a port for it is
+ *     made from the process's budget and not closed.
  */
 check_settings :: fn(settings: config.Config[HelloSettings]) {
     port :: os.port_for(slop_os.startup_block().budget, settings.end) or_return void
@@ -131,7 +152,16 @@ check_settings :: fn(settings: config.Config[HelloSettings]) {
         if wrote { "kept" } else { "refused" }, merged, author, if rolled { "kept" } else { "refused" }, after)
 }
 
-/** How many random bytes the entropy service gives, through end, for 32 asked for: 0 if it gives none. */
+/**
+ * Ask the entropy service for 32 random bytes and count how many it gives.
+ *
+ * It sends Fill(32) and waits for the answer; the bytes themselves are only counted.
+ *
+ * @param end The channel to the entropy service, which stays the caller's; a port for it is made from the process's
+ *     budget and not closed.
+ * @return How many bytes the service gave, at most 32; 0 if the port couldn't be made, the request couldn't be sent,
+ *     the answer failed, or it wasn't Filled.
+ */
 entropy_bytes :: fn(end: slop_os.Channel) -> usize {
     port :: os.port_for(slop_os.startup_block().budget, end) or_return 0
     out := os.Outgoing.{}
@@ -154,7 +184,12 @@ entropy_bytes :: fn(end: slop_os.Channel) -> usize {
     }
 }
 
-/** A field of a date, with a 0 in front of it below 10. */
+/**
+ * Append a field of a date in decimal, with a 0 in front of it below 10, so it's at least two digits.
+ *
+ * @param line The text to append to; what doesn't fit its storage is dropped, as text_buffer drops it.
+ * @param value The field: a month (1 to 12) or a day (1 to 31). A negative value isn't padded right.
+ */
 append_two_digits :: fn(line: ptr[mut text_buffer.TextBuffer], value: int) {
     if value < 10 {
         text_buffer.append_format(line, "0")
@@ -162,7 +197,11 @@ append_two_digits :: fn(line: ptr[mut text_buffer.TextBuffer], value: int) {
     text_buffer.append_format(line, "%", value)
 }
 
-/** 0 if memory from the heap holds what's written to it. */
+/**
+ * Check that memory from the heap holds what's written to it: 1000 numbers written and summed, then freed.
+ *
+ * @return 0 if the sum is right; 1 if the heap couldn't give the memory; 2 if the sum is wrong.
+ */
 fill_heap :: fn() -> int {
     values, error :: runtime.new_array(u64, 1000)
     if error != null {

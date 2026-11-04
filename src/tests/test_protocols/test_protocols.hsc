@@ -19,37 +19,61 @@ import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
+/** The test's name, which starts each line it logs. */
 NAME :: "test_protocols"
 
+/** The test's own protocol, for the channel it holds both ends of. */
 Probe :: struct {}
 
+/** What Probe says of itself: its name, which its channels' tag is made from, and its major version. */
 PROTOCOL :: slop_os.Protocol.{name = "probe", major_version = 1, lending = .Server}
 
+/** An enum a message carries, whose 0 isn't a member, so a message with 0 or 7 in its place is refused. */
 Shade :: enum #backed_by(u8) {
+    /** A light shade; what hand-made messages use. */
     Light = 1,
+    /** A dark shade; what the whole message carries. */
     Dark = 2,
 }
 
+/** A message's payload with one of every kind of field the generated code checks. */
 Everything :: struct {
+    /** A bool, which a message refuses as anything but 0 or 1. */
     flag : bool,
+    /** An enum, which a message refuses as a value that's no member. */
     shade : Shade,
+    /** A plain number, which any value is good for. */
     count : u32,
+    /** A handle, as its index in the message's batch, which the receiver gets as a handle of its own. */
     memory : slop_os.Memory,
+    /** u64s after the message's fixed part, by offset and count, which have to be within the message and aligned. */
     data : slop_os.Relative[u64],
+    /** A typed channel end, which has to speak Probe. */
     peer : os.Channel[Probe],
 }
 
+/** What's sent over a Probe channel. */
 Request :: union {
+    /** A number, which a short message of only the tag reads as 0. */
     Ping(u32),
+    /** One of everything. */
     Carry(Everything),
 }
 
+/** What's answered over a Probe channel. */
 Response :: union {
+    /** A ping's number, answered. */
     Pong(u32),
+    /** The answer to a request of a variant the receiver doesn't know. */
     Unsupported,
 }
 
-/** A ping is answered the same again; a carry moves handles, which only happens once. */
+/**
+ * Tell whether a request can be sent again, unanswered, with the same effect, as the generated code asks.
+ *
+ * @param request The request, as received or about to be sent; only its variant is read.
+ * @return True for a Ping, answered the same again; false for a Carry, which moves handles, which only happens once.
+ */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Ping(_) => true
@@ -59,6 +83,26 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #insert os.protocol_code(Request, Response)
 
+/**
+ * Check the code os.protocol_code generates: a whole message through, broken ones refused, an unknown variant, a
+ * channel of another protocol, and a short message.
+ *
+ * @param log The debug log, writable, where the test says what it found and which check failed.
+ * @param platform Not used.
+ * @param test_device Not used.
+ * @param firmware Not used.
+ * @param manager Not used.
+ * @param program Not used.
+ * @param peer Not used.
+ * @param cpu_budget Not used.
+ * @return 0 if every check passed. Otherwise the first that failed, by its result's index plus one: 1 sending the
+ *     whole message, or 2 receiving it; 3 its bytes, 4 its plain fields, 5 its memory or 6 its channel not arriving
+ *     as they were sent; a message refused as Invalid 7 with no tag, 8 with an enum, 9 a bool, that can't be, 10 a
+ *     handle index past the batch, 11 a Relative past the message's end, 12 over its fixed part, or 13 misaligned,
+ *     not refused; 14 an unknown variant not Unsupported; 15 a channel of another protocol not WrongProtocol; 16 a
+ *     short Ping not read as Ping(0). 100 to 104 if setting up failed: 100 the channel, 101 its ports, 102 the
+ *     memory, 103 the other channel, 104 the stranger channel.
+ */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     block :: slop_os.startup_block()
@@ -141,7 +185,12 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     return failed
 }
 
-/** What a receive gave, as a number. */
+/**
+ * Give what a receive gave as a number, for a result.
+ *
+ * @param arrival What the receive gave.
+ * @return 0 Received, 1 Empty, 2 Unsupported, 3 Invalid, 4 WrongProtocol, 5 Failed.
+ */
 arrival_code :: fn(arrival: os.Arrival) -> u64 {
     return match arrival {
         case Received => cast[u64](0)
@@ -153,14 +202,24 @@ arrival_code :: fn(arrival: os.Arrival) -> u64 {
     }
 }
 
+/** A field of Everything a hand-made message sets. */
 Field :: enum {
+    /** Everything's flag. */
     Flag,
+    /** Everything's shade. */
     Shade,
+    /** Everything's memory. */
     Memory,
+    /** Everything's data. */
     Data,
 }
 
-/** Where a field of Carry's Everything is in a message. */
+/**
+ * Tell where a field of Carry's Everything is in a message.
+ *
+ * @param field Any of the four fields; any value but Flag, Shade and Memory is taken as Data.
+ * @return Its offset in the message, in bytes from its start, the tag's byte.
+ */
 offset_of_field :: fn(field: Field) -> usize {
     payload :: payload_offset()
     if field == .Flag {
@@ -175,15 +234,30 @@ offset_of_field :: fn(field: Field) -> usize {
     return payload + offset_of(Everything, data)
 }
 
-/** Where Carry's Everything starts: after the tag, aligned for it. */
+/**
+ * Tell where Carry's Everything starts in a message.
+ *
+ * @return Its offset in bytes: after the tag's one byte, aligned for Everything.
+ */
 payload_offset :: fn() -> usize {
     alignment :: align_of(Everything)
     return (1 + alignment - 1) & ~(alignment - 1)
 }
 
-/*
- * A Carry made by hand, with size bytes at offset set to value (or no tag at all with size 0), and no handles:
- * what receiving it gave.
+/**
+ * Send a Carry made by hand, with a field broken, and no handles, and receive it.
+ *
+ * The rest of the message is a valid Carry: a Light shade, and the handles' indices all ones, no handle.
+ *
+ * @param end The Probe channel's end the message is sent on, kept open; it's sent with no handles.
+ * @param sender_port A port end is bound to, which the send waits on if the ring is full.
+ * @param reader The peer of end, kept open, read once, waiting for the message; what's received is left in into.
+ * @param port A port reader is bound to for Readable, waited on until the message arrives.
+ * @param into Where the message is received, zeroed first; a refused message leaves no handles there.
+ * @param offset Where in the message the broken bytes go.
+ * @param value What they're set to, little-endian.
+ * @param size How many bytes are set, at most 8; 0 sends a message of no bytes at all, not even a tag.
+ * @return What receiving it gave, as arrival_code gives it.
  */
 refused :: fn(end: slop_os.Channel, sender_port: slop_os.Port, reader: slop_os.Channel, port: slop_os.Port, into: ptr[mut os.Incoming],
     offset: usize, value: u64, size: usize) -> u64 {
@@ -213,7 +287,19 @@ refused :: fn(end: slop_os.Channel, sender_port: slop_os.Port, reader: slop_os.C
     return arrival_code(receive_request(reader, port, into, true))
 }
 
-// A Carry made by hand whose data is count u64s at start, with room after its fixed part: what receiving it gave.
+/**
+ * Send a Carry made by hand whose data is count u64s at start, with 64 bytes of room after its fixed part, and
+ * receive it.
+ *
+ * @param end The Probe channel's end the message is sent on, kept open; it's sent with no handles.
+ * @param sender_port A port end is bound to, which the send waits on if the ring is full.
+ * @param reader The peer of end, kept open, read once, waiting for the message; what's received is left in into.
+ * @param port A port reader is bound to for Readable, waited on until the message arrives.
+ * @param into Where the message is received, zeroed first; a refused message leaves no handles there.
+ * @param start The data's offset, in bytes from the message's start.
+ * @param count How many u64s the data has.
+ * @return What receiving it gave, as arrival_code gives it.
+ */
 refused_relative :: fn(end: slop_os.Channel, sender_port: slop_os.Port, reader: slop_os.Channel, port: slop_os.Port,
     into: ptr[mut os.Incoming], start: u32, count: u32) -> u64 {
     data_at :: offset_of_field(.Data)
@@ -235,7 +321,13 @@ refused_relative :: fn(end: slop_os.Channel, sender_port: slop_os.Port, reader: 
     return arrival_code(receive_request(reader, port, into, true))
 }
 
-/** value at bytes[at], if there's room. */
+/**
+ * Set a byte of a message, if there's room.
+ *
+ * @param bytes The message being built, changed in place; only bytes inside it are set.
+ * @param at The byte's index; one past the end is ignored.
+ * @param value What it's set to.
+ */
 put :: fn(bytes: mut u8[], at: usize, value: u8) {
     if at < bytes.count {
         bytes[at] = value

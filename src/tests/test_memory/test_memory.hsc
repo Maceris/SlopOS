@@ -22,23 +22,37 @@ import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
+/** The test's name, which starts each line it logs. */
 NAME :: "test_memory"
+/** A page, in bytes. */
 PAGE : u64 : 4096
+/** The size of the memory A makes with the child budget, in bytes: 8 pages. */
 MEMORY_SIZE : u64 : 32768
+/** How many pages that memory has. */
 MEMORY_PAGES :: 8
+/** The limit of the budget A splits off its own for the test, in bytes: 1 MiB. */
 TEST_LIMIT : u64 : 1 << 20
+/** The limit of the child budget A splits off that, in bytes: 64 KiB. */
 CHILD_LIMIT : u64 : 65536
-// Large pages (decisions/0129): memory of two of them, mapped on a 2 MiB boundary, then a page off it
+/** A large page, in bytes: 2 MiB (decisions/0129). */
 LARGE : u64 : 2 * 1024 * 1024
+/** The size of each object whose page tables are measured: two large pages. */
 LARGE_MEMORY : u64 : 2 * LARGE
-/** How long A gives B to be stopped. */
+/** How long A gives B to be stopped, in nanoseconds: 20 ms. */
 STOP_NANOSECONDS : u64 : 20_000_000
-// What A and B share, by its slots, and where B writes.
+/** The slot, a u64 by index, of what A and B share, that B sets once it's started. */
 SHARED_B_STARTED :: 0
+/** The slot B would set after its write, if it weren't stopped. */
 SHARED_B_AFTER :: 1
+/** The slot holding where B writes: the read-only mapping's address. */
 SHARED_TARGET :: 2
 
-/** B: writes where it may only read, which stops it. */
+/**
+ * Write where the thread may only read, which stops it: B.
+ *
+ * @param shared What A and B share: B sets SHARED_B_STARTED, writes 7 at SHARED_TARGET's address, and would set
+ *     SHARED_B_AFTER if the write didn't stop it.
+ */
 writer #calling_convention(.c) #no_context :: fn(shared: ptr[mut u64[4]]) #never_returns {
     intrinsics.volatile_store_u64(&shared^[SHARED_B_STARTED], 1)
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](intrinsics.volatile_load_u64(&shared^[SHARED_TARGET])), 7)
@@ -46,6 +60,30 @@ writer #calling_convention(.c) #no_context :: fn(shared: ptr[mut u64[4]]) #never
     slop_os.thread_exit()
 }
 
+/**
+ * Check memory budgets and memory objects: splitting and closing budgets, making, mapping and touching memory, and a
+ * thread stopped by a write it may not make; then that large pages are used where they can be.
+ *
+ * @param log The debug log, writable, where the test says what it found and which check failed.
+ * @param platform Not used.
+ * @param test_device Not used.
+ * @param firmware Not used.
+ * @param manager Not used.
+ * @param program Not used.
+ * @param peer Not used.
+ * @param cpu_budget Not used.
+ * @return 0 if every check passed. Otherwise the first that failed, by its result's index plus one: 1 reading the
+ *     test budget, or 2 its limit not TEST_LIMIT; 3 making the child, or 4 and 5 its limit and use not CHILD_LIMIT
+ *     and 0; 6 memory past the child's limit not refused with BudgetExceeded, or 7 memory of 1000 bytes not refused
+ *     with InvalidSize; 8 making the memory, or 9 mapping it; mapping it 10 over itself, 11 past its end, or 12
+ *     writable and executable not refused with BadAddress, InvalidSize and BadProtection; 13 a page not reading as
+ *     zeros; 14 mapping it again read-only, or 15 that not showing what was written; 16 starting B, 17 B going on
+ *     past its write, or 18 its handle still reaching it; 19 unmapping the second mapping, or 20 unmapping it again
+ *     not refused with NotMapped. 30 if closing the child didn't give the parent what it should, or the memory was
+ *     gone; 31 if the test budget didn't come back to nothing; 32 if the large memory couldn't be made or mapped; 34
+ *     if 4 MiB mapped 2 MiB-aligned didn't take less in page tables than mapped a page off. 100 to 102 if setting up
+ *     failed: 100 the shared slots, 101 reserving addresses, 102 the test budget.
+ */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     block :: slop_os.startup_block()
@@ -152,17 +190,24 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     return 0
 }
 
-/*
- * What the page tables cost the process's budget as two objects of 4 MiB are touched, a page at a time: one mapped on a
- * 2 MiB boundary, the other a page past one. Both are made and mapped first, and closed after, so nothing else is
- * charged or given back meanwhile. Null if they can't be made or mapped.
- */
 /** What touching 4 MiB cost in page tables, mapped on a 2 MiB boundary and a page past one. */
 TableCosts :: struct {
+    /** The bytes the process's budget was charged touching the object mapped on a 2 MiB boundary. */
     aligned : u64,
+    /** The bytes charged touching the object mapped a page past one. */
     unaligned : u64,
 }
 
+/**
+ * Measure what the page tables cost the process's budget as two objects of 4 MiB are touched, a page at a time: one
+ * mapped on a 2 MiB boundary, the other a page past one.
+ *
+ * Both are made and mapped first, and closed after, so nothing else is charged or given back meanwhile.
+ *
+ * @param block The process's startup block, whose budget pays and whose address space they're mapped in.
+ * @return What each cost, 0 for one whose touching charged nothing; or null if they can't be made or mapped, in
+ *     which case what was made is left behind.
+ */
 page_tables_touching :: fn(block: ptr[slop_os.StartupBlock]) -> TableCosts? {
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     places : u64[2]

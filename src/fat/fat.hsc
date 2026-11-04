@@ -16,109 +16,191 @@
  * the count is kept as clusters are taken and freed, and written back with write_info (decisions/0101). A volume whose
  * count is unknown counts its free clusters the first time free_clusters is asked.
  *
- * A write the device fails (decisions/0112, after fsyncgate) marks the volume failed, which every Sync after it reports,
- * not only the first, and its sectors are remembered: a read of them is refused, since what's there isn't what was
- * written, until a later write of all of each succeeds; a write of part of one, which needs what's there, is refused too.
+ * A write the device fails (decisions/0112, after fsyncgate) marks the volume failed, which every Sync after it
+ * reports, not only the first, and its sectors are remembered: a read of them is refused, since what's there isn't
+ * what was written, until a later write of all of each succeeds; a write of part of one, which needs what's there, is
+ * refused too.
  */
 /**
+ * Read and write FAT32 volumes, with long names, through functions that read and write a device's sectors.
+ *
  * SPEC: Microsoft Extensible Firmware Initiative FAT32 File System Specification, version 1.03 (2000): §3 (the boot
- * SPEC: sector and BPB), §4 (the FAT), §5 (FSInfo), §6 (directories), §7 (long names); UEFI Specification 2.10 §13.3
+ * SPEC: sector and BPB), §4 (the FAT), §5 (FSInfo), §6 (directories), §7 (long names); UEFI Specification 2.10 §13.3.
  */
 package fat
 
+/** The size of a sector, in bytes: the only sector size a volume may have (the BPB's bytes per sector). */
 SECTOR_BYTES : u64 : 512
+/** The size of a directory slot, in bytes: one short entry or one long-name entry. */
 ENTRY_BYTES : u64 : 32
-// A name's UTF-16 code units at most, and the most bytes it takes as UTF-8
+/** The most UTF-16 code units a name may have, as FAT allows. */
 MAX_NAME_UNITS :: 255
+/** The most bytes a name takes as UTF-8: MAX_NAME_UNITS units of at most 3 bytes each. */
 NAME_BYTES :: 765
-/** Long-name entries for one name at most: 13 code units each */
+/** The most long-name entries one name has: 13 code units each, so 20 hold MAX_NAME_UNITS. */
 MAX_LONG_ENTRIES :: 20
 
-// Attributes of a short entry
+/** A short entry's attribute bit: its file may only be read, as FAT has it; kept and listed, not enforced here. */
 READ_ONLY : u8 : 0x01
+/** A short entry's attribute bit: it's hidden from ordinary listings; kept and listed, not acted on here. */
 HIDDEN : u8 : 0x02
+/** A short entry's attribute bit: it belongs to the system; kept and listed, not acted on here. */
 SYSTEM : u8 : 0x04
+/** A short entry's attribute bit: it's the volume's label, not a file; listings leave it out. */
 VOLUME_ID : u8 : 0x08
+/** A short entry's attribute bit: it's a directory, its cluster chain holding its slots. */
 DIRECTORY : u8 : 0x10
+/** A short entry's attribute bit: its file has changed since it was backed up; set on every file made here. */
 ARCHIVE : u8 : 0x20
+/** The attributes of a long-name entry (read-only, hidden, system and volume ID together), in its low six bits. */
 LONG_NAME : u8 : 0x0f
-// A short entry's first byte for a free one, and for one never used (and all after it)
+/** A slot's first byte when its entry has been removed, so the slot is free. */
 DELETED : u8 : 0xe5
+/** A slot's first byte when it has never been used, so it and every slot after it in the directory are free. */
 END : u8 : 0x00
-// The FAT's entries: free, and the end of a chain (anything from END_OF_CHAIN up), of 28 bits
+/** A FAT entry's value for a free cluster. */
 FREE_CLUSTER : u32 : 0
+/** The least FAT entry value, of its 28 bits, that ends a chain: any value from it up does. */
 END_OF_CHAIN : u32 : 0x0ffffff8
+/** The value written to a FAT entry to end a chain. */
 CHAIN_END_MARK : u32 : 0x0fffffff
+/** The 28 bits of a FAT entry that are its value; the top 4 are reserved, kept as they are when an entry is written. */
 CLUSTER_MASK : u32 : 0x0fffffff
-/** The most slots in a directory: 65536, as FAT has it, 2 MiB of entries */
+/**
+ * The most slots in a directory: 65536, as FAT has it, 2 MiB of entries; a chain longer than that isn't read past
+ * it, so even one that loops ends.
+ */
 MAX_DIRECTORY_SLOTS : u32 : 65536
-/** The fewest clusters a FAT32 volume has */
+/** The fewest clusters a FAT32 volume has, by the specification; fewer is FAT12 or FAT16. */
 MIN_CLUSTERS : u32 : 65525
 
+/** Why a volume operation failed. */
 FatError :: enum {
-    /** Not a FAT32 volume: no boot sector, another FAT, or a layout that doesn't fit the device */
+    /** Not a FAT32 volume: no boot sector, another FAT, or a layout that doesn't fit the device. */
     NotFat,
+    /** No entry has the name, or the entry looked for has been removed. */
     NotFound,
+    /** A path's component before its last is a file, not a directory. */
     NotADirectory,
+    /** A file's operation was asked of a directory. */
     IsADirectory,
+    /** An entry with the name is already in the directory. */
     AlreadyExists,
+    /** A directory to remove has entries in it besides "." and "..". */
     DirectoryNotEmpty,
-    /** A name FAT can't hold: empty, too long, a character it refuses, or ending in a space or a dot */
+    /**
+     * A name FAT can't hold: empty, too long, a character it refuses, or ending in a space or a dot; also a path with
+     * an empty, "." or ".." component, a move that would put a directory beneath itself, and a format's bad cluster
+     * size.
+     */
     InvalidName,
+    /** No free cluster, no free slots in a directory at its most, no free alias tail, or a file past 4 GiB - 1. */
     NoSpace,
-    /** The device couldn't be read or written */
+    /** The device couldn't be read or written, or a read was of a sector a failed write was for. */
     DeviceError,
-    /** A chain or a directory that doesn't hold together */
+    /** A chain or a directory that doesn't hold together: a link outside the volume, a loop, or a chain too short. */
     Corrupt,
+    /** The device is read-only, so nothing may be written. */
     ReadOnly,
 }
 
-/** A device to read and write: count sectors from first into into, or from from, true if it could. */
+/** A device to read and write: a partition or disk of SECTOR_BYTES sectors, through its functions. */
 Device :: struct #scoped {
+    /** What read and write are given back as their context, the caller's own; never read here. */
     context : rawptr,
+    /** The device's size in sectors; a volume's layout has to fit in it. */
     sector_count : u64,
+    /**
+     * Read count sectors, from sector first, into into, which holds at least count * SECTOR_BYTES bytes; true if they
+     * were read, false if the device couldn't read them.
+     */
     read : fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool,
+    /**
+     * Write count sectors, from sector first, from from's first count * SECTOR_BYTES bytes; true if they were
+     * written, false if the device couldn't write them, which leaves what's in them unknown.
+     */
     write : fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool,
+    /**
+     * Whether the device may only be read: every operation that would write fails with ReadOnly, and write_info
+     * writes nothing. format doesn't look at it.
+     */
     read_only : bool,
 }
 
-/** FSInfo's count of free clusters when it's unknown. */
+/** FSInfo's count of free clusters when it's unknown, as a volume's free_count is until it's counted. */
 UNKNOWN_FREE : u32 : 0xffffffff
 
-/** A mounted volume: its device, its layout, and where the next free cluster is likely to be. */
+/**
+ * A mounted volume: its device, its layout, and where the next free cluster is likely to be.
+ *
+ * Its fields are this package's to keep, all but stamp, which its user sets; a caller reads them at most. A volume
+ * holds nothing that needs freeing.
+ */
 Volume :: struct #scoped {
+    /** The device the volume is on, read and written through its functions. */
     device : Device,
+    /** The sectors in a cluster, a power of two. */
     sectors_per_cluster : u64,
+    /** The bytes in a cluster: sectors_per_cluster * SECTOR_BYTES. */
     cluster_bytes : u64,
+    /** The sectors before the first FAT, from the volume's start; the boot sector and FSInfo are among them. */
     reserved_sectors : u64,
+    /** How many FATs the volume has, at least 1; every one is written alike, and the first is the one read. */
     fat_count : u64,
+    /** The sectors in each FAT. */
     fat_sectors : u64,
+    /** The first sector of cluster 2, after the reserved sectors and every FAT. */
     first_data_sector : u64,
+    /** How many clusters there are, numbered from 2 to cluster_count + 1: at least MIN_CLUSTERS. */
     cluster_count : u32,
+    /** The root directory's first cluster, from the BPB. */
     root_cluster : u32,
+    /** FSInfo's sector, from the BPB; 0, or one not among the reserved sectors, when the volume has none. */
     info_sector : u64,
+    /** The cluster to start looking for a free one at: a hint, not a promise that it's free. */
     next_free : u32,
-    // How many clusters are free, or UNKNOWN_FREE; and whether that, or next_free, changed since FSInfo was written
+    /** How many clusters are free, kept as clusters are taken and freed; UNKNOWN_FREE until it's read or counted. */
     free_count : u32,
+    /** Whether free_count or next_free changed since FSInfo was written, so write_info has something to write. */
     info_changed : bool,
-    // The date, in its high 16 bits, and time an entry made or written to now gets, as FAT holds them (stamp_of)
+    /**
+     * The date, in its high 16 bits, and time, in its low, that an entry made or written to now gets, as FAT holds
+     * them (stamp_of); EPOCH_STAMP until its user sets it.
+     */
     stamp : u32,
+    /** The volume's label from the boot sector: 11 bytes, space-padded, as they are there. */
     label : u8[11],
-    // Where a walk along a directory's chain last was: its first cluster, how many clusters in, and that cluster, so a
-    // directory read slot by slot follows its chain once, not from its start for each slot, even a chain that loops
+    /*
+     * Where a walk along a directory's chain last was: its first cluster, how many clusters in, and that cluster, so a
+     * directory read slot by slot follows its chain once, not from its start for each slot, even a chain that loops.
+     */
+    /** The first cluster of the directory last walked; FREE_CLUSTER when no walk is kept, as after the FAT changes. */
     chain_first : u32,
+    /** How many clusters into the walked directory's chain chain_cluster is, from 0. */
     chain_index : u64,
+    /** The cluster chain_index clusters into the walked directory's chain. */
     chain_cluster : u32,
-    // Whether a write has failed since it was mounted, and the sectors failed writes were for, past MAX_FAILED_SECTORS all
+    /** Whether a write has failed since the volume was mounted; once set, it stays set. */
     failed : bool,
+    /** The sectors failed writes were for, not written whole since; the first failed_count are used. */
     failed_sectors : u64[MAX_FAILED_SECTORS],
+    /** How many of failed_sectors are used; past MAX_FAILED_SECTORS, some weren't kept, so every read is refused. */
     failed_count : u32,
 }
 
-/** The most sectors of failed writes a volume remembers; past it, every read is refused */
+/** The most sectors of failed writes a volume remembers; past it, every read is refused. */
 MAX_FAILED_SECTORS :: 32
 
-/** count sectors from first read into into, unless a failed write was for one of them: whether they were. */
+/**
+ * Read sectors from the volume's device, unless a failed write was for one of them.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param first The first sector, from the volume's start.
+ * @param count How many sectors.
+ * @param into Where they go, at least count * SECTOR_BYTES bytes.
+ * @return True if they were read; false if the device couldn't read them, or one is a sector a failed write was for
+ *     (or more than MAX_FAILED_SECTORS were), since what's there isn't what was written.
+ */
 read_sectors :: fn(volume: ptr[mut Volume], first: u64, count: u64, into: mut u8[]) -> bool {
     if volume.failed_count > MAX_FAILED_SECTORS {
         return false
@@ -132,7 +214,16 @@ read_sectors :: fn(volume: ptr[mut Volume], first: u64, count: u64, into: mut u8
 }
 
 /**
- * count sectors from first written from from: whether they were. One that wasn't marks the volume failed, and its sectors.
+ * Write sectors to the volume's device, keeping track of failed writes.
+ *
+ * A write that fails marks the volume failed for good and remembers its sectors, so reads of them are refused; one
+ * that succeeds forgets its sectors' earlier failures, since they now hold what was written.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param first The first sector, from the volume's start.
+ * @param count How many sectors.
+ * @param from Their bytes, at least count * SECTOR_BYTES.
+ * @return True if they were written; false if the device couldn't write them.
  */
 write_sectors :: fn(volume: ptr[mut Volume], first: u64, count: u64, from: u8[]) -> bool {
     wrote :: volume.device.write(volume.device.context, first, count, from)
@@ -145,7 +236,13 @@ write_sectors :: fn(volume: ptr[mut Volume], first: u64, count: u64, from: u8[])
     return wrote
 }
 
-/** A sector a write failed for, or one written whole since. */
+/**
+ * Note that a write of a whole sector failed or succeeded.
+ *
+ * @param volume The volume; once more than MAX_FAILED_SECTORS sectors have failed, nothing more is noted.
+ * @param sector The sector the write was for, from the volume's start.
+ * @param failed True if the write failed, so the sector is remembered; false if it succeeded, so it's forgotten.
+ */
 note_sector :: fn(volume: ptr[mut Volume], sector: u64, failed: bool) {
     if volume.failed_count > MAX_FAILED_SECTORS {
         return void
@@ -172,68 +269,113 @@ note_sector :: fn(volume: ptr[mut Volume], sector: u64, failed: bool) {
     volume.failed_count += 1
 }
 
-/** Where an entry's short entry is: its directory's first cluster, and its slot in that directory, from 0. */
+/** Where an entry's short entry is: its directory's first cluster, and its slot in that directory. */
 Place :: struct {
+    /** The first cluster of the directory the entry is in. */
     directory : u32,
+    /** The short entry's slot in the directory, from 0, ENTRY_BYTES each, below MAX_DIRECTORY_SLOTS. */
     slot : u32,
-    /** Its long-name entries, which come right before it */
+    /** How many long-name entries come right before the short entry, 0 if it has no long name. */
     long_entries : u32,
 }
 
 /**
- * An entry of a directory: its name as UTF-8, its short name, its attributes, its first cluster and size, and where it is.
+ * An entry of a directory, as read or made: its name as UTF-8, its short name, its attributes, its first cluster and
+ * size, and where it is.
+ *
+ * It's a copy: it doesn't change when the volume does, and its place stays good only until its entry is removed or
+ * renamed.
  */
 Entry :: struct {
+    /** The name as UTF-8, its first name_length bytes used: the long name, or the short name as text. */
     name : u8[NAME_BYTES],
+    /** How many bytes of name are used, 1 to NAME_BYTES. */
     name_length : u32,
+    /** The short name as it is on the volume: 8 bytes of base, 3 of extension, space-padded, upper-case. */
     short_name : u8[11],
+    /** The entry's attribute bits (DIRECTORY, ARCHIVE and the rest). */
     attributes : u8,
+    /** The first cluster of its chain; 0 for an empty file with none, or for ".." of the root's directories. */
     first_cluster : u32,
+    /** The file's size in bytes, at most 4 GiB - 1; 0 for a directory. */
     size : u32,
+    /** Where its short entry is. */
     place : Place,
-    /** When it was last written to: the date in the high 16 bits, the time in the low */
+    /** When it was last written to: the date in the high 16 bits, the time in the low, as stamp_of makes them. */
     written : u32,
 }
 
-/** A short directory entry, as it is on the volume. */
+/** A short directory entry, as it is on the volume: 32 bytes, little-endian. */
 ShortEntry :: struct #packed {
+    /** The 8.3 name: 8 bytes of base, 3 of extension, space-padded; a first byte of DELETED or END marks it free. */
     name : u8[11],
+    /** The attribute bits. */
     attributes : u8,
+    /** LOWER_BASE and LOWER_EXTENSION, for an 8.3 name kept in lower case without a long name; otherwise 0. */
     case_flags : u8,
+    /** The creation time's hundredths of a second, 0 to 199; always 0 here. */
     created_tenths : u8,
+    /** The creation time: seconds / 2, minutes and hours, in bits 0-4, 5-10 and 11-15. */
     created_time : u16le,
+    /** The creation date: day, month and years since 1980, in bits 0-4, 5-8 and 9-15. */
     created_date : u16le,
+    /** The last access date, as created_date. */
     accessed_date : u16le,
+    /** The first cluster's high 16 bits. */
     cluster_high : u16le,
+    /** The last write's time, as created_time. */
     written_time : u16le,
+    /** The last write's date, as created_date. */
     written_date : u16le,
+    /** The first cluster's low 16 bits. */
     cluster_low : u16le,
+    /** The file's size in bytes; 0 for a directory. */
     size : u32le,
 }
 
 #assert size_of(ShortEntry) == 32
 
-/** A long-name entry, 13 of the name's code units, last first. */
+/**
+ * A long-name entry, 13 of the name's UTF-16 code units; a name's long-name entries come right before its short
+ * entry, its last part first.
+ */
 LongEntry :: struct #packed {
+    /** The entry's part of the name, 1 to MAX_LONG_ENTRIES in its low 5 bits, with LAST_LONG_ENTRY on the last part. */
     order : u8,
+    /** Code units 1 to 5 of the entry's 13. */
     name1 : u16le[5],
+    /** LONG_NAME. */
     attributes : u8,
+    /** The entry's kind; 0 for a part of a name. */
     kind : u8,
+    /** The short name's checksum (short_checksum), the same in each of a name's long-name entries. */
     checksum : u8,
+    /** Code units 6 to 11. */
     name2 : u16le[6],
+    /** Zero. */
     cluster : u16le,
+    /** Code units 12 and 13. After the name's end come one zero unit, then 0xffff units. */
     name3 : u16le[2],
 }
 
 #assert size_of(LongEntry) == 32
 
-// 1980-01-01, the earliest date FAT holds: day 1, month 1, year 0
+/** The date of 1980-01-01, the earliest FAT holds, as an entry's date: day 1, month 1, year 0. */
 EPOCH_DATE : u16 : (1 << 5) | 1
+/** 1980-01-01 at midnight as a stamp, as stamp_of makes one: what a volume's stamp is until its user sets it. */
 EPOCH_STAMP : u32 : cast[u32](EPOCH_DATE) << 16
 
 /**
- * A date and time as FAT holds them, for a volume's stamp: the date in the high 16 bits (day, month, years since 1980),
- * the time in the low (seconds / 2, minutes, hours). A date before 1980 or after 2107 is the epoch.
+ * Make a date and time into a stamp as FAT holds them, for a volume's stamp.
+ *
+ * @param year The year, 1980 to 2107.
+ * @param month The month, 1 to 12.
+ * @param day The day of the month, 1 to 31; not checked against the month's length.
+ * @param hour The hour, 0 to 23.
+ * @param minute The minute, 0 to 59.
+ * @param second The second, 0 to 59; FAT keeps only even seconds, so an odd one is rounded down.
+ * @return The date in the high 16 bits (day, month, years since 1980) and the time in the low (seconds / 2, minutes,
+ *     hours); EPOCH_STAMP if any part is out of its range.
  */
 stamp_of :: fn(year: i64, month: int, day: int, hour: int, minute: int, second: int) -> u32 {
     if year < 1980 || year > 2107 || month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0
@@ -244,16 +386,27 @@ stamp_of :: fn(year: i64, month: int, day: int, hour: int, minute: int, second: 
     time :: cast[u32](hour) << 11 | cast[u32](minute) << 5 | cast[u32](second / 2)
     return date << 16 | time
 }
-// The case flags: an all-lower-case base name, or extension, kept in an 8.3 name with no long name
+/** A case flag: the 8.3 name's base is all lower case, kept so without a long name. */
 LOWER_BASE : u8 : 0x08
+/** A case flag: the 8.3 name's extension is all lower case, kept so without a long name. */
 LOWER_EXTENSION : u8 : 0x10
+/** The bit of a long-name entry's order that marks the name's last part, the first of its entries in the directory. */
 LAST_LONG_ENTRY : u8 : 0x40
 
 // Mounting
 
 /**
- * The FAT32 volume on device: its boot sector checked (512-byte sectors, a power of two of them to a cluster, no
- * fixed root directory, enough clusters to be FAT32, and a layout inside the device).
+ * Mount the FAT32 volume on a device, checking its boot sector.
+ *
+ * Nothing is written. FSInfo's free count and next free cluster are taken if its signatures are there and they fit
+ * the volume; otherwise the free count is UNKNOWN_FREE until free_clusters counts it.
+ *
+ * @param device The device, its first sector the volume's boot sector; the volume keeps a copy of it.
+ * @return The volume, its stamp EPOCH_STAMP until its user sets it.
+ * @error DeviceError The boot sector couldn't be read.
+ * @error NotFat The boot sector isn't a FAT32 one: no boot signature, sectors other than 512 bytes, a cluster that
+ *     isn't a power of two of sectors, a fixed root directory or 16-bit counts, too few clusters for FAT32 or too
+ *     many for its FAT, a root cluster outside the volume, or a layout bigger than the device.
  */
 mount :: fn(device: Device) -> Result[Volume, FatError] {
     sector : u8[512]
@@ -297,7 +450,14 @@ mount :: fn(device: Device) -> Result[Volume, FatError] {
     return .Ok(volume)
 }
 
-/** FSInfo's free count and next free cluster, where its signatures are and they fit the volume. */
+/**
+ * Take FSInfo's free count and next free cluster, where its signatures are and they fit the volume.
+ *
+ * A missing or unreadable FSInfo, or a value that doesn't fit, leaves the volume's free_count and next_free as they
+ * were.
+ *
+ * @param volume The volume, just mounted.
+ */
 read_info :: fn(volume: ptr[mut Volume]) {
     if volume.info_sector == 0 || volume.info_sector >= volume.reserved_sectors {
         return void
@@ -318,8 +478,16 @@ read_info :: fn(volume: ptr[mut Volume]) {
 }
 
 /**
- * FSInfo's free count and next free cluster written, and its backup's, after the backup boot sector, if they changed
- * and the volume has an FSInfo.
+ * Write the free count and next free cluster to FSInfo, and to its backup after the backup boot sector, if they
+ * changed and the volume has an FSInfo.
+ *
+ * They're only a hint to whoever mounts the volume next, so a crash before they're written loses nothing but the
+ * hint. Nothing is written for a read-only device, an unchanged count, no FSInfo, or an FSInfo whose signatures
+ * aren't there.
+ *
+ * @param volume The volume; its info_changed is cleared once both copies are written.
+ * @return Null if they were written, or there was nothing to write; DeviceError if FSInfo couldn't be read or
+ *     written, info_changed left set so a later call tries again.
  */
 write_info :: fn(volume: ptr[mut Volume]) -> FatError? {
     if !volume.info_changed || volume.device.read_only || volume.info_sector == 0 || volume.info_sector >= volume.reserved_sectors {
@@ -345,7 +513,16 @@ write_info :: fn(volume: ptr[mut Volume]) -> FatError? {
     return null
 }
 
-/** How many clusters are free: FSInfo's count, or counted through the FAT the first time it isn't known. */
+/**
+ * Get how many clusters are free: FSInfo's count as kept since mounting, or counted through the FAT the first time
+ * it isn't known.
+ *
+ * A count made is kept from then on, and marked to be written to FSInfo by write_info.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @return The free clusters, 0 to cluster_count; each is cluster_bytes bytes.
+ * @error DeviceError The FAT couldn't be read to count them.
+ */
 free_clusters :: fn(volume: ptr[mut Volume]) -> Result[u32, FatError] {
     if volume.free_count == UNKNOWN_FREE {
         volume.free_count = count_free(volume)?
@@ -354,7 +531,13 @@ free_clusters :: fn(volume: ptr[mut Volume]) -> Result[u32, FatError] {
     return .Ok(volume.free_count)
 }
 
-/** How many clusters the first FAT has free, read a sector at a time. */
+/**
+ * Count the clusters the first FAT has free, reading it a sector at a time.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @return The free clusters among 2 to cluster_count + 1, so 0 to cluster_count.
+ * @error DeviceError A sector of the FAT couldn't be read.
+ */
 count_free :: fn(volume: ptr[mut Volume]) -> Result[u32, FatError] {
     free : u32 = 0
     sector : u8[512]
@@ -379,23 +562,48 @@ count_free :: fn(volume: ptr[mut Volume]) -> Result[u32, FatError] {
     return .Ok(free)
 }
 
-/** The root directory's first cluster. */
+/**
+ * Get the root directory's first cluster, the directory to give resolve, lookup, next_entry and create.
+ *
+ * @param volume The volume, as mount made it; only its layout is used, nothing is read.
+ * @return The root's first cluster, from the BPB.
+ */
 root_of :: fn(volume: ptr[mut Volume]) -> u32 {
     return volume.root_cluster
 }
 
 // Clusters and the FAT
 
-/** The first sector of a cluster. */
+/**
+ * Get the first sector of a cluster.
+ *
+ * @param volume The volume, as mount made it; only its layout is used, nothing is read.
+ * @param cluster The cluster, 2 or more; not checked, so the caller checks it with is_cluster.
+ * @return The cluster's first sector, from the volume's start.
+ */
 sector_of :: fn(volume: ptr[mut Volume], cluster: u32) -> u64 {
     return volume.first_data_sector + cast[u64](cluster - 2) * volume.sectors_per_cluster
 }
 
+/**
+ * Tell whether a number is one of the volume's clusters.
+ *
+ * @param volume The volume, as mount made it; only its layout is used, nothing is read.
+ * @param cluster The number, as a FAT entry or a directory entry has it.
+ * @return True if it's from 2 to cluster_count + 1.
+ */
 is_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> bool {
     return cluster >= 2 && cluster < volume.cluster_count + 2
 }
 
-/** The FAT's entry for a cluster, from the first FAT. */
+/**
+ * Read a cluster's FAT entry from the first FAT.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param cluster The cluster, one of the volume's; not checked.
+ * @return The entry's 28 bits: FREE_CLUSTER, the next cluster, or END_OF_CHAIN or more for a chain's end.
+ * @error DeviceError The FAT's sector couldn't be read.
+ */
 fat_entry :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[u32, FatError] {
     offset :: cast[u64](cluster) * 4
     sector : u8[512]
@@ -405,7 +613,18 @@ fat_entry :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[u32, FatError] 
     return .Ok(get_u32(sector, cast[usize](offset % SECTOR_BYTES)) & CLUSTER_MASK)
 }
 
-/** A cluster's FAT entry set, in every FAT, its top four bits kept. */
+/**
+ * Set a cluster's FAT entry in every FAT, its top four bits kept.
+ *
+ * The FATs are written one after another, so a failure partway leaves them differing; the first is the one read.
+ * Any walk along a directory's chain kept in the volume is dropped, since a chain may have changed.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param cluster The cluster whose entry is set.
+ * @param value The new value, its low 28 bits used: FREE_CLUSTER, the next cluster, or CHAIN_END_MARK.
+ * @return Null if every FAT was written; ReadOnly for a read-only device, nothing written; DeviceError if a FAT's
+ *     sector couldn't be read or written.
+ */
 set_fat_entry :: fn(volume: ptr[mut Volume], cluster: u32, value: u32) -> FatError? {
     if volume.device.read_only {
         return FatError.ReadOnly
@@ -428,7 +647,15 @@ set_fat_entry :: fn(volume: ptr[mut Volume], cluster: u32, value: u32) -> FatErr
     return null
 }
 
-/** The cluster after one in its chain, or null at its end. */
+/**
+ * Get the cluster after one in its chain.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param cluster The cluster, one of the volume's.
+ * @return The next cluster, one of the volume's; null if cluster ends its chain.
+ * @error DeviceError The FAT couldn't be read.
+ * @error Corrupt The FAT entry is neither a chain's end nor one of the volume's clusters, as a free cluster's is.
+ */
 next_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[u32?, FatError] {
     entry :: fat_entry(volume, cluster)?
     if entry >= END_OF_CHAIN {
@@ -441,8 +668,17 @@ next_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[u32?, FatErr
 }
 
 /**
- * A free cluster, zeroed, marked as a chain's end, and linked after previous unless it's 0: from where the last was
- * found, around the volume once.
+ * Take a free cluster: marked as a chain's end, zeroed, and linked after another unless that's 0.
+ *
+ * The search starts at next_free and goes around the volume once. The cluster is marked taken before it's zeroed
+ * and linked, so a failure or a crash after that loses it (taken, but in no chain) rather than giving it out twice.
+ *
+ * @param volume The volume; its next_free and free count are updated.
+ * @param previous The cluster to link the new one after, which should end its chain; 0 to start a new chain.
+ * @return The cluster taken, zeroed, ending its chain.
+ * @error ReadOnly The device is read-only.
+ * @error NoSpace No cluster is free.
+ * @error DeviceError The FAT couldn't be read or written, or the cluster couldn't be zeroed.
  */
 allocate_cluster :: fn(volume: ptr[mut Volume], previous: u32) -> Result[u32, FatError] {
     if volume.device.read_only {
@@ -477,6 +713,13 @@ allocate_cluster :: fn(volume: ptr[mut Volume], previous: u32) -> Result[u32, Fa
     return .Error(.NoSpace)
 }
 
+/**
+ * Write zeros over every sector of a cluster.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param cluster The cluster, one of the volume's.
+ * @error DeviceError A sector couldn't be written; the sectors before it are zero.
+ */
 zero_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[void, FatError] {
     zeros : u8[512]
     first :: sector_of(volume, cluster)
@@ -488,7 +731,17 @@ zero_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[void, FatErr
     return .Ok
 }
 
-/** Every cluster of a chain from first, free again. */
+/**
+ * Free every cluster of a chain, first to last.
+ *
+ * Each cluster is freed in every FAT before the next is looked at, so a failure partway leaves the chain's start
+ * free and its rest taken but in no chain, lost until the volume is checked.
+ *
+ * @param volume The volume; its next_free and free count are updated.
+ * @param first The chain's first cluster; a number that isn't a cluster frees nothing.
+ * @return Null once the chain's end is freed; DeviceError if the FAT couldn't be read or written; Corrupt if a link
+ *     leads outside the volume or the chain is longer than the volume (a loop), or for a read-only device.
+ */
 free_chain :: fn(volume: ptr[mut Volume], first: u32) -> FatError? {
     cluster := first
     for step in 0..<volume.cluster_count {
@@ -518,7 +771,16 @@ free_chain :: fn(volume: ptr[mut Volume], first: u32) -> FatError? {
     return FatError.Corrupt
 }
 
-/** The index-th cluster of a chain from first, or null if it's shorter. */
+/**
+ * Find a cluster some way along a chain.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param first The chain's first cluster.
+ * @param index How many clusters along, 0 for first itself.
+ * @return The cluster; null if the chain is shorter, or first isn't a cluster (as an empty file's 0 isn't).
+ * @error DeviceError The FAT couldn't be read.
+ * @error Corrupt A link leads outside the volume.
+ */
 cluster_at :: fn(volume: ptr[mut Volume], first: u32, index: u64) -> Result[u32?, FatError] {
     cluster := first
     for step in 0..<index {
@@ -533,14 +795,26 @@ cluster_at :: fn(volume: ptr[mut Volume], first: u32, index: u64) -> Result[u32?
 
 // Directory slots
 
-/** A directory slot's 32 bytes, read; and where its sector is, and its offset in it. */
+/** Where a directory slot's ENTRY_BYTES bytes are on the device. */
 SlotAt :: struct {
+    /** The sector the slot is in, from the volume's start. */
     sector : u64,
+    /** The slot's offset in its sector, in bytes, a multiple of ENTRY_BYTES below SECTOR_BYTES. */
     offset : usize,
 }
 
 /**
- * Where a directory's slot is, or null past its chain's end, from where the last walk along its chain was if that's before it.
+ * Find where a directory's slot is on the device.
+ *
+ * The walk along the directory's chain starts from where the volume's last one was, if that's the same directory and
+ * not past the slot, so reading a directory slot by slot follows its chain once.
+ *
+ * @param volume The volume; its kept walk is updated.
+ * @param directory The directory's first cluster.
+ * @param slot The slot, from 0.
+ * @return Where the slot is; null if it's past the directory's chain's end or at MAX_DIRECTORY_SLOTS or more.
+ * @error DeviceError The FAT couldn't be read.
+ * @error Corrupt A link in the chain leads outside the volume.
  */
 slot_at :: fn(volume: ptr[mut Volume], directory: u32, slot: u32) -> Result[SlotAt?, FatError] {
     per_cluster :: volume.cluster_bytes / ENTRY_BYTES
@@ -572,6 +846,14 @@ slot_at :: fn(volume: ptr[mut Volume], directory: u32, slot: u32) -> Result[Slot
     return .Ok(SlotAt.{sector = sector_of(volume, cluster) + within / SECTOR_BYTES, offset = cast[usize](within % SECTOR_BYTES)})
 }
 
+/**
+ * Read a directory slot's bytes.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param at Where the slot is, from slot_at.
+ * @param into Where its 32 bytes go.
+ * @return Null if it was read; DeviceError if its sector couldn't be.
+ */
 read_slot :: fn(volume: ptr[mut Volume], at: SlotAt, into: ptr[mut u8[32]]) -> FatError? {
     sector : u8[512]
     if !read_sectors(volume, at.sector, 1, sector) {
@@ -583,6 +865,15 @@ read_slot :: fn(volume: ptr[mut Volume], at: SlotAt, into: ptr[mut u8[32]]) -> F
     return null
 }
 
+/**
+ * Write a directory slot's bytes, the rest of its sector kept.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param at Where the slot is, from slot_at.
+ * @param from Its 32 new bytes.
+ * @return Null if it was written; ReadOnly for a read-only device; DeviceError if its sector couldn't be read or
+ *     written.
+ */
 write_slot :: fn(volume: ptr[mut Volume], at: SlotAt, from: ptr[u8[32]]) -> FatError? {
     if volume.device.read_only {
         return FatError.ReadOnly
@@ -604,14 +895,25 @@ write_slot :: fn(volume: ptr[mut Volume], at: SlotAt, from: ptr[u8[32]]) -> FatE
 
 /** An entry listed, and the slot to list from next. */
 Listed :: struct {
+    /** The entry. */
     entry : Entry,
+    /** The slot after the entry's short entry, to give next_entry to list the one after it. */
     next : u32,
 }
 
 /**
- * The entry at or after slot in directory, and the slot after it, or null at the directory's end: its long name where
- * its long-name entries are whole and match its checksum, otherwise its short name. Volume labels and "." and ".."
- * are left out.
+ * List the entry at or after a slot in a directory.
+ *
+ * An entry's name is its long name where its long-name entries are whole and match its checksum, otherwise its short
+ * name as text. Volume labels, "." and ".." are left out, and broken long-name entries are skipped.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param directory The directory's first cluster.
+ * @param slot The slot to start at: 0 for the directory's first entry, or a Listed's next for the one after it.
+ * @return The entry and the slot after it; null at the directory's end (an END slot, its chain's end, or
+ *     MAX_DIRECTORY_SLOTS).
+ * @error DeviceError The directory or the FAT couldn't be read.
+ * @error Corrupt The directory's chain leads outside the volume.
  */
 next_entry :: fn(volume: ptr[mut Volume], directory: u32, slot: u32) -> Result[Listed?, FatError] {
     units : u16[MAX_NAME_UNITS + 13]
@@ -701,8 +1003,17 @@ next_entry :: fn(volume: ptr[mut Volume], directory: u32, slot: u32) -> Result[L
 }
 
 /**
- * The entry whose short entry is at place, as it is now, its name as given, so connections to one file see what each
- * writes; NotFound if it's been removed since.
+ * Read again the entry whose short entry is at a place, as it is now, so connections to one file see what each
+ * writes.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param place Where the short entry was, from an Entry got earlier.
+ * @param name The entry's name, copied into the result as it is, not read again.
+ * @return The entry, its size, first cluster and written time as they are now.
+ * @error NotFound The slot is past the directory's end, free, or a long-name entry: the entry has been removed. A
+ *     slot reused by another entry since isn't told apart.
+ * @error DeviceError The directory or the FAT couldn't be read.
+ * @error Corrupt The directory's chain leads outside the volume.
  */
 entry_at :: fn(volume: ptr[mut Volume], place: Place, name: string) -> Result[Entry, FatError] {
     at :: slot_at(volume, place.directory, place.slot)? or_return .Error(.NotFound)
@@ -725,7 +1036,19 @@ entry_at :: fn(volume: ptr[mut Volume], place: Place, name: string) -> Result[En
     return .Ok(entry)
 }
 
-/** The entry named name in directory, compared without regard to ASCII case, or NotFound. */
+/**
+ * Look up an entry in a directory by its name, compared without regard to ASCII case (same_name).
+ *
+ * Only the name next_entry lists is compared: the long name where there is one, not the short alias besides.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param directory The directory's first cluster.
+ * @param name The name, UTF-8, without '/'.
+ * @return The entry, a copy, with the name as the directory holds it, which may differ in case from the name asked for.
+ * @error NotFound No entry has the name.
+ * @error DeviceError The directory or the FAT couldn't be read.
+ * @error Corrupt The directory doesn't hold together (see next_entry).
+ */
 lookup :: fn(volume: ptr[mut Volume], directory: u32, name: string) -> Result[Entry, FatError] {
     slot := cast[u32](0)
     loop {
@@ -738,8 +1061,19 @@ lookup :: fn(volume: ptr[mut Volume], directory: u32, name: string) -> Result[En
 }
 
 /**
- * The entry at path beneath directory, its components separated by '/': each but the last a directory. "." and ".."
- * aren't components, so nothing leads above directory (decisions/0046).
+ * Resolve a path beneath a directory to its entry.
+ *
+ * "." and ".." aren't components, so nothing leads above the directory (decisions/0046).
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param directory The first cluster of the directory the path starts at.
+ * @param path The path: components separated by single '/', none empty, no leading or trailing '/'.
+ * @return The entry the last component names, a file or a directory.
+ * @error InvalidName The path is empty, or has an empty, "." or ".." component.
+ * @error NotFound A component isn't in its directory.
+ * @error NotADirectory A component before the last is a file.
+ * @error DeviceError A directory or the FAT couldn't be read.
+ * @error Corrupt A directory doesn't hold together.
  */
 resolve :: fn(volume: ptr[mut Volume], directory: u32, path: string) -> Result[Entry, FatError] {
     if path.count == 0 {
@@ -769,7 +1103,11 @@ resolve :: fn(volume: ptr[mut Volume], directory: u32, path: string) -> Result[E
 }
 
 /**
- * The first cluster of a directory entry's directory: the root's, for an entry whose cluster is 0 ("..", to the root).
+ * Get the first cluster of a directory entry's directory.
+ *
+ * @param volume The volume, as mount made it; only its layout is used, nothing is read.
+ * @param entry The directory's entry.
+ * @return Its first cluster; the root's for an entry whose cluster is 0 ("..", to the root).
  */
 directory_cluster :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> u32 {
     return if entry.first_cluster == 0 { volume.root_cluster } else { entry.first_cluster }
@@ -777,7 +1115,21 @@ directory_cluster :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> u32 {
 
 // Reading and writing files
 
-/** Bytes of a file from offset into into: how many, fewer at its end. */
+/**
+ * Read bytes of a file.
+ *
+ * Nothing is written: reading changes no time.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param entry The file's entry, as got; its size is the one read to, so a size changed since through another Entry
+ *     isn't seen (entry_at gets it again).
+ * @param offset The byte offset in the file to read from; at or past its size, nothing is read.
+ * @param into Where the bytes go; at most its count are read.
+ * @return How many bytes were read: fewer than into holds only at the file's end, 0 at or past it.
+ * @error IsADirectory The entry is a directory.
+ * @error DeviceError The file's sectors or the FAT couldn't be read, or a sector is one a failed write was for.
+ * @error Corrupt The file's chain is shorter than its size, or leads outside the volume.
+ */
 read :: fn(volume: ptr[mut Volume], entry: ptr[Entry], offset: u64, into: mut u8[]) -> Result[u64, FatError] {
     if entry.attributes & DIRECTORY != 0 {
         return .Error(.IsADirectory)
@@ -818,8 +1170,25 @@ read :: fn(volume: ptr[mut Volume], entry: ptr[Entry], offset: u64, into: mut u8
 }
 
 /**
- * Bytes into a file from offset, its chain grown to hold them and any gap before them zeroed, and its size, in its
- * directory entry, grown to their end: how many.
+ * Write bytes into a file, its chain grown to hold them and its size grown to their end.
+ *
+ * Clusters added are zeroed first, so a gap past the file's old end reads as zeros where it's in them; bytes in the
+ * old last cluster past its old size are left as they were. Sectors are written in order, then the directory entry,
+ * with the new size and the volume's stamp, if the size grew; a write within the file's size changes no time. A crash
+ * partway leaves some sectors written and the size as it was. A sector written only in part is read first, so one a
+ * failed write was for can't be written in part.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param entry The file's entry; its first cluster, size and written time are updated when they change.
+ * @param offset The byte offset in the file to write at; past the file's end, the file grows to it.
+ * @param from The bytes; none writes nothing.
+ * @return How many bytes were written, all of from's.
+ * @error IsADirectory The entry is a directory.
+ * @error ReadOnly The device is read-only.
+ * @error NoSpace The file would end past 4 GiB - 1, or the volume has no free cluster; clusters taken before it
+ *     ran out stay in the file's chain.
+ * @error DeviceError The device couldn't be read or written.
+ * @error Corrupt The file's chain doesn't hold together, or its entry's slot is past its directory's end.
  */
 write :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], offset: u64, from: u8[]) -> Result[u64, FatError] {
     if entry.attributes & DIRECTORY != 0 {
@@ -875,7 +1244,19 @@ write :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], offset: u64, from: u
     return .Ok(done)
 }
 
-/** A file's chain long enough for size bytes: clusters added, zeroed, after its last, or its first made. */
+/**
+ * Make a file's chain long enough for a size: clusters added, zeroed, after its last, or its first made.
+ *
+ * The entry's size isn't changed. A file given its first cluster has its directory entry written with it at once.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param entry The file's entry, its first_cluster set if it had none.
+ * @param size The bytes the chain has to hold; 0 needs nothing.
+ * @error ReadOnly The device is read-only.
+ * @error NoSpace The volume ran out of free clusters; those added before stay in the chain.
+ * @error DeviceError The device couldn't be read or written.
+ * @error Corrupt The chain doesn't hold together, or the entry's slot is past its directory's end.
+ */
 grow :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], size: u64) -> Result[void, FatError] {
     needed :: (size + volume.cluster_bytes - 1) / volume.cluster_bytes
     if needed == 0 {
@@ -908,8 +1289,21 @@ grow :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], size: u64) -> Result[
 }
 
 /**
- * A file's size set: shorter, its chain cut after the clusters it still needs, or all of it freed for 0; longer, its
- * chain grown, zeroed.
+ * Set a file's size: shorter, its chain cut after the clusters it still needs, or all of it freed for 0; longer, its
+ * chain grown, and every byte past the old size zeroed.
+ *
+ * The chain changes first, then the directory entry, with the new size and the volume's stamp. A crash between them
+ * leaves a shortened chain under the old size (Corrupt when read past it) or a grown chain under the old size (its
+ * clusters taken, unused).
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param entry The file's entry; its first cluster, size and written time are updated.
+ * @param size The new size in bytes, at most 4 GiB - 1.
+ * @error IsADirectory The entry is a directory.
+ * @error ReadOnly The device is read-only.
+ * @error NoSpace The size is past 4 GiB - 1, or the volume ran out of free clusters growing it.
+ * @error DeviceError The device couldn't be read or written.
+ * @error Corrupt The chain is shorter than the clusters to keep, or doesn't hold together.
  */
 set_size :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], size: u64) -> Result[void, FatError] {
     if entry.attributes & DIRECTORY != 0 {
@@ -958,7 +1352,16 @@ set_size :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], size: u64) -> Res
     return .Ok
 }
 
-/** A file's bytes from start to end, zeroed, its chain holding them already. */
+/**
+ * Write zeros over a range of a file's bytes, a sector at a time.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param entry The file's entry, its chain already holding the range.
+ * @param start The range's first byte offset in the file.
+ * @param end The byte offset just past the range; at or before start, nothing is written.
+ * @error DeviceError A sector couldn't be read or written.
+ * @error Corrupt The chain is shorter than the range.
+ */
 zero_range :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], start: u64, end: u64) -> Result[void, FatError] {
     if end <= start {
         return .Ok
@@ -987,7 +1390,14 @@ zero_range :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], start: u64, end
 }
 
 /**
- * An entry's first cluster and size, written back to its short entry, with the volume's stamp as its write and access times.
+ * Write an entry's first cluster and size back to its short entry, with the volume's stamp as its write and access
+ * times.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param entry The entry; its written time is set to the stamp. A directory's size is written as 0.
+ * @error ReadOnly The device is read-only.
+ * @error DeviceError The slot couldn't be read or written.
+ * @error Corrupt The entry's slot is past its directory's end.
  */
 update_entry :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry]) -> Result[void, FatError] {
     at :: slot_at(volume, entry.place.directory, entry.place.slot)? or_return .Error(.Corrupt)
@@ -1012,8 +1422,27 @@ update_entry :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry]) -> Result[voi
 // Making, removing and renaming
 
 /**
- * A new file, or directory, named name in directory: its long-name entries and its short entry in a run of free
- * slots, the directory grown by a cluster if it has none; a directory gets a cluster of its own with "." and "..".
+ * Make a new file or directory in a directory.
+ *
+ * Its long-name entries and its short entry go in a run of free slots, the directory grown by a cluster if it has
+ * none; a directory gets a cluster of its own with "." and "..". Its times are the volume's stamp. A file starts
+ * empty, with no cluster. The slots are written long-name entries first, so a crash partway leaves long-name entries
+ * without their short entry, which listing skips; a directory's cluster is taken before its entries are written, so
+ * a crash or failure then loses it.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param directory The first cluster of the directory to make it in.
+ * @param name The name, UTF-8: not empty, at most MAX_NAME_UNITS UTF-16 units, none of the characters FAT refuses,
+ *     not ending in a space or a dot. An 8.3 name in one case is kept as a short entry alone; any other gets long-name
+ *     entries and a short alias.
+ * @param is_directory True to make a directory, false a file.
+ * @return The new entry, its name as given.
+ * @error ReadOnly The device is read-only.
+ * @error InvalidName FAT can't hold the name.
+ * @error AlreadyExists An entry of the name, compared without regard to ASCII case, is in the directory.
+ * @error NoSpace The directory is at its most slots, the volume has no free cluster, or no alias tail is free.
+ * @error DeviceError The device couldn't be read or written.
+ * @error Corrupt The directory doesn't hold together.
  */
 create :: fn(volume: ptr[mut Volume], directory: u32, name: string, is_directory: bool) -> Result[Entry, FatError] {
     if volume.device.read_only {
@@ -1073,7 +1502,16 @@ create :: fn(volume: ptr[mut Volume], directory: u32, name: string, is_directory
     return .Ok(entry)
 }
 
-/** A directory's "." and "..", in its first cluster: ".." of the root's directories is cluster 0. */
+/**
+ * Write a new directory's "." and ".." into its first two slots.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param cluster The new directory's first cluster, zeroed.
+ * @param parent The first cluster of the directory it's in; ".." names cluster 0 when that's the root, as FAT has it.
+ * @error ReadOnly The device is read-only.
+ * @error DeviceError A slot couldn't be read or written.
+ * @error Corrupt The cluster isn't one of the volume's.
+ */
 make_dots :: fn(volume: ptr[mut Volume], cluster: u32, parent: u32) -> Result[void, FatError] {
     for which in 0..<cast[u32](2) {
         dots := Entry.{attributes = DIRECTORY, written = volume.stamp, first_cluster = if which == 0 { cluster } else if parent == volume.root_cluster { cast[u32](0) } else { parent }}
@@ -1090,6 +1528,14 @@ make_dots :: fn(volume: ptr[mut Volume], cluster: u32, parent: u32) -> Result[vo
     return .Ok
 }
 
+/**
+ * Make an entry's short entry, as its 32 bytes on the volume.
+ *
+ * @param entry The entry: its short name, attributes, first cluster, size (written as 0 for a directory), and its
+ *     written stamp, which becomes its creation, write and access times; a stamp of 0 is taken as EPOCH_STAMP.
+ * @param case_flags LOWER_BASE and LOWER_EXTENSION for an 8.3 name kept in lower case; 0 otherwise.
+ * @return The short entry's bytes.
+ */
 short_entry_of :: fn(entry: ptr[Entry], case_flags: u8) -> u8[32] {
     bytes : u8[32]
     for byte, i in entry.short_name {
@@ -1110,7 +1556,21 @@ short_entry_of :: fn(entry: ptr[Entry], case_flags: u8) -> u8[32] {
     return bytes
 }
 
-/** The first of count free slots in a row in directory, the directory grown by clusters, zeroed, until it has them. */
+/**
+ * Find a run of free slots in a directory, growing it by zeroed clusters until it has one.
+ *
+ * Slots are free when their first byte is DELETED or END. The clusters added stay in the directory, even when the
+ * caller then fails.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param directory The directory's first cluster.
+ * @param count How many slots in a row, 1 to MAX_LONG_ENTRIES + 1.
+ * @return The run's first slot.
+ * @error NoSpace The directory would need slots past MAX_DIRECTORY_SLOTS, or the volume has no free cluster.
+ * @error ReadOnly The device is read-only, and the directory has to grow.
+ * @error DeviceError The device couldn't be read or written.
+ * @error Corrupt The directory's chain doesn't hold together.
+ */
 free_slots :: fn(volume: ptr[mut Volume], directory: u32, count: u32) -> Result[u32, FatError] {
     run_start := cast[u32](0)
     run := cast[u32](0)
@@ -1149,6 +1609,15 @@ free_slots :: fn(volume: ptr[mut Volume], directory: u32, count: u32) -> Result[
     return .Error(.NoSpace)
 }
 
+/**
+ * Find the last cluster of a chain.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param first The chain's first cluster, one of the volume's.
+ * @return The cluster that ends the chain.
+ * @error DeviceError The FAT couldn't be read.
+ * @error Corrupt A link leads outside the volume, or the chain is longer than the volume (a loop).
+ */
 last_cluster :: fn(volume: ptr[mut Volume], first: u32) -> Result[u32, FatError] {
     cluster := first
     for step in 0..<volume.cluster_count {
@@ -1161,7 +1630,17 @@ last_cluster :: fn(volume: ptr[mut Volume], first: u32) -> Result[u32, FatError]
     return .Error(.Corrupt)
 }
 
-/** An entry's slots, its long-name entries and its short one, marked free. */
+/**
+ * Mark an entry's slots free: its long-name entries, then its short one, each set to DELETED.
+ *
+ * Its clusters are left as they are.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param entry The entry, its place as it is now.
+ * @error ReadOnly The device is read-only.
+ * @error DeviceError A slot couldn't be read or written; the slots before it are free.
+ * @error Corrupt A slot is past its directory's end.
+ */
 free_entry_slots :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> Result[void, FatError] {
     first :: entry.place.slot - entry.place.long_entries
     for slot in first..<entry.place.slot + 1 {
@@ -1180,7 +1659,19 @@ free_entry_slots :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> Result[voi
     return .Ok
 }
 
-/** An entry removed, its clusters freed: a directory only if it has nothing in it but "." and "..". */
+/**
+ * Remove an entry, its clusters freed.
+ *
+ * Its slots are freed first, then its chain, so a crash between them loses the clusters (taken, but in no chain)
+ * rather than leaving an entry pointing at free ones.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param entry The entry, its place as it is now; it isn't changed, but no longer names anything.
+ * @error ReadOnly The device is read-only.
+ * @error DirectoryNotEmpty The entry is a directory with entries in it besides "." and "..".
+ * @error DeviceError The device couldn't be read or written.
+ * @error Corrupt The entry's directory or its chain doesn't hold together.
+ */
 remove :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> Result[void, FatError] {
     if volume.device.read_only {
         return .Error(.ReadOnly)
@@ -1201,10 +1692,26 @@ remove :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> Result[void, FatErro
 }
 
 /**
- * An entry moved to name in directory, which may be its own: new entries for its clusters there, then its old ones
- * freed, and a moved directory's ".." pointed at its new parent. An entry already named name there is replaced, if
- * it's a file and so is the one moved, which is how a file's contents are replaced as atomically as FAT can (best
- * effort: a crash between the two leaves both names).
+ * Move an entry to a name in a directory, which may be its own.
+ *
+ * An entry already of that name there is removed first, if it's a file and so is the one moved, which is how a
+ * file's contents are replaced as atomically as FAT can. Then a new entry for its clusters is made there, then its
+ * old slots are freed, then a moved directory's ".." is pointed at its new parent. It's best effort: a crash after
+ * the removal and before the new entry leaves only the old name; one after the new entry and before the old one is
+ * freed leaves both names on one chain.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param entry The entry to move, its place as it is now; it no longer names anything once this succeeds.
+ * @param directory The first cluster of the directory to move it to.
+ * @param name The new name, as create takes one.
+ * @return The entry as moved, its new place and name, its attributes, clusters and size the old one's.
+ * @error ReadOnly The device is read-only.
+ * @error InvalidName FAT can't hold the name, or a directory would go beneath itself.
+ * @error AlreadyExists An entry of the name is there and it, or the one moved, is a directory. A name differing from
+ *     the entry's own only in ASCII case comes back AlreadyExists too, from create.
+ * @error NoSpace The directory has no free slots and can't grow, or no alias tail is free.
+ * @error DeviceError The device couldn't be read or written.
+ * @error Corrupt A directory or chain doesn't hold together, or ".." of the parents doesn't lead to the root.
  */
 rename :: fn(volume: ptr[mut Volume], entry: ptr[Entry], directory: u32, name: string) -> Result[Entry, FatError] {
     if volume.device.read_only {
@@ -1270,7 +1777,18 @@ rename :: fn(volume: ptr[mut Volume], entry: ptr[Entry], directory: u32, name: s
     return .Ok(moved)
 }
 
-/** Whether directory is ancestor, or beneath it, by following "..". */
+/**
+ * Tell whether a directory is another, or beneath it, by following "..".
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param directory The first cluster of the directory to start at.
+ * @param ancestor The first cluster of the directory looked for.
+ * @return True if directory is ancestor or beneath it; false once the root, or a number that isn't a cluster, is
+ *     reached without it.
+ * @error DeviceError A directory or the FAT couldn't be read.
+ * @error Corrupt The ".." links go 4096 deep without reaching the root, as a loop does, or a chain leads outside the
+ *     volume.
+ */
 is_beneath :: fn(volume: ptr[mut Volume], directory: u32, ancestor: u32) -> Result[bool, FatError] {
     current := directory
     for step in 0..<cast[u32](4096) {
@@ -1294,12 +1812,23 @@ is_beneath :: fn(volume: ptr[mut Volume], directory: u32, ancestor: u32) -> Resu
 
 // Names
 
-/** An entry's name, as text. */
+/**
+ * Get an entry's name as text.
+ *
+ * @param entry The entry, as next_entry, lookup, entry_at or create gave it.
+ * @return Its name, UTF-8: a view into the entry's name, good as long as the entry is.
+ */
 name_of :: fn(entry: ptr[Entry]) -> string {
     return string_of(&entry.name[0], cast[usize](if entry.name_length > NAME_BYTES { cast[u32](NAME_BYTES) } else { entry.name_length }))
 }
 
-/** Whether two names are the same to FAT: byte for byte but for ASCII letters' case. */
+/**
+ * Tell whether two names are the same to FAT: byte for byte but for ASCII letters' case.
+ *
+ * @param a One name, UTF-8.
+ * @param b The other, UTF-8.
+ * @return True if they're the same length and differ only in ASCII letters' case; other letters' case counts.
+ */
 same_name :: fn(a: string, b: string) -> bool {
     if a.count != b.count {
         return false
@@ -1312,15 +1841,36 @@ same_name :: fn(a: string, b: string) -> bool {
     return true
 }
 
+/**
+ * Upper-case an ASCII letter.
+ *
+ * @param byte A byte.
+ * @return The upper-case letter for 'a' to 'z'; any other byte as it is.
+ */
 upper :: fn(byte: u8) -> u8 {
     return if byte >= cast[u8]('a') && byte <= cast[u8]('z') { byte - 32 } else { byte }
 }
 
+/**
+ * Lower-case an ASCII letter.
+ *
+ * @param byte A byte.
+ * @return The lower-case letter for 'A' to 'Z'; any other byte as it is.
+ */
 lower :: fn(byte: u8) -> u8 {
     return if byte >= cast[u8]('A') && byte <= cast[u8]('Z') { byte + 32 } else { byte }
 }
 
-/** A short name as text: its base and extension, trimmed, lower-cased where its case flags say, a dot between. */
+/**
+ * Make a short name into text: its base and extension, trimmed, lower-cased where its case flags say, a dot between.
+ *
+ * A first byte of 0x05 stands for 0xe5, as FAT has it.
+ *
+ * @param short The short name as on the volume.
+ * @param case_flags The short entry's case flags.
+ * @param into Where the text goes, from its start.
+ * @return The text's length in bytes, at most 12; 0 for a name of spaces.
+ */
 name_of_short :: fn(short: ptr[u8[11]], case_flags: u8, into: ptr[mut u8[NAME_BYTES]]) -> u32 {
     length : usize = 0
     for i in 0..<cast[usize](8) {
@@ -1347,7 +1897,14 @@ name_of_short :: fn(short: ptr[u8[11]], case_flags: u8, into: ptr[mut u8[NAME_BY
     return cast[u32](length)
 }
 
-/** A byte at at in a name, if it fits: where the next goes. */
+/**
+ * Put a byte into a name buffer, if it fits.
+ *
+ * @param into Where the byte goes, a name buffer of NAME_BYTES.
+ * @param at The byte offset to put it at.
+ * @param byte The byte, any value; it isn't checked as UTF-8.
+ * @return Where the next byte goes: at + 1, or at if it didn't fit.
+ */
 put_name_byte :: fn(into: ptr[mut u8[NAME_BYTES]], at: usize, byte: u8) -> usize {
     if at < into^.count {
         into^[at] = byte
@@ -1356,7 +1913,12 @@ put_name_byte :: fn(into: ptr[mut u8[NAME_BYTES]], at: usize, byte: u8) -> usize
     return at
 }
 
-/** The checksum of a short name that its long-name entries carry. */
+/**
+ * Compute the checksum of a short name that its long-name entries carry, as the specification defines it.
+ *
+ * @param short The short name as on the volume.
+ * @return The checksum: each byte added to the sum rotated right by one bit, over all 11 bytes.
+ */
 short_checksum :: fn(short: ptr[u8[11]]) -> u8 {
     sum := cast[u8](0)
     for byte in short^ {
@@ -1366,9 +1928,16 @@ short_checksum :: fn(short: ptr[u8[11]]) -> u8 {
 }
 
 /**
- * A name as UTF-16 code units, if FAT can hold it: not empty, at most 255 units, no control characters, none of the
- * characters FAT refuses (double quote, asterisk, slash, colon, angle brackets, question mark, backslash, bar), and
- * not ending in a space or a dot. Its count.
+ * Convert a name to UTF-16 code units, if FAT can hold it.
+ *
+ * FAT can hold a name that isn't empty, takes at most MAX_NAME_UNITS units, has no control characters and none of
+ * the characters FAT refuses (double quote, asterisk, slash, colon, angle brackets, question mark, backslash, bar),
+ * and doesn't end in a space or a dot. UTF-8 is decoded leniently: continuation bytes aren't checked, and a sequence
+ * cut short at the name's end is taken as a shorter one.
+ *
+ * @param name The name, UTF-8.
+ * @param units Where the units go, from the start.
+ * @return How many units, 1 to MAX_NAME_UNITS; null if FAT can't hold the name, or a byte isn't UTF-8's.
  */
 units_of_name :: fn(name: string, units: ptr[mut u16[MAX_NAME_UNITS]]) -> usize? {
     if name.count == 0 {
@@ -1432,7 +2001,13 @@ units_of_name :: fn(name: string, units: ptr[mut u16[MAX_NAME_UNITS]]) -> usize?
     return count
 }
 
-/** UTF-16 code units, up to the first zero, as UTF-8 into into: its length. Unpaired surrogates become '?'. */
+/**
+ * Convert UTF-16 code units, up to the first zero, to UTF-8.
+ *
+ * @param units The units, as long-name entries hold them.
+ * @param into Where the UTF-8 goes, from its start; a code point that wouldn't fit is left out.
+ * @return The UTF-8 length in bytes, 0 to NAME_BYTES. An unpaired surrogate becomes '?'.
+ */
 utf8_of_units :: fn(units: u16[], into: ptr[mut u8[NAME_BYTES]]) -> u32 {
     length : usize = 0
     i : usize = 0
@@ -1455,6 +2030,14 @@ utf8_of_units :: fn(units: u16[], into: ptr[mut u8[NAME_BYTES]]) -> u32 {
     return cast[u32](length)
 }
 
+/**
+ * Put a code point as UTF-8 into a name buffer, if all its bytes fit.
+ *
+ * @param into Where the UTF-8 goes, a name buffer of NAME_BYTES.
+ * @param at The byte offset to put it at, 0 to NAME_BYTES.
+ * @param code The code point, at most 0x10ffff.
+ * @return Where the next code point goes: at plus its 1 to 4 bytes, or at if they didn't fit, so nothing was written.
+ */
 put_utf8 :: fn(into: ptr[mut u8[NAME_BYTES]], at: usize, code: u32) -> usize {
     bytes : u8[4]
     count : usize = 0
@@ -1492,6 +2075,13 @@ put_utf8 :: fn(into: ptr[mut u8[NAME_BYTES]], at: usize, code: u32) -> usize {
     return at + count
 }
 
+/**
+ * Copy a name into a name buffer, as much as fits.
+ *
+ * @param name The name, UTF-8.
+ * @param into Where it goes, from the start.
+ * @return How many bytes were copied: the name's length, or NAME_BYTES if it's longer, cut there.
+ */
 copy_name :: fn(name: string, into: ptr[mut u8[NAME_BYTES]]) -> u32 {
     count : usize = 0
     for character, i in name {
@@ -1503,7 +2093,16 @@ copy_name :: fn(name: string, into: ptr[mut u8[NAME_BYTES]]) -> u32 {
     return cast[u32](count)
 }
 
-/** Whether a name is an 8.3 name as it is, so it needs no long name: its short name, upper-case, into short. */
+/**
+ * Tell whether a name is an 8.3 name as it is, so it needs no long name, and make its short name.
+ *
+ * It is when its base is 1 to 8 short characters (is_short_character), with at most one dot and then 1 to 3 more,
+ * and neither part mixes upper and lower case; a part all in lower case is kept by the case flags (case_flags_of).
+ *
+ * @param name The name, UTF-8.
+ * @param short Where the short name goes, upper-case and space-padded; filled in part when it isn't one.
+ * @return True if it's an 8.3 name; false if it needs a long name and an alias.
+ */
 short_name_exactly :: fn(name: string, short: ptr[mut u8[11]]) -> bool {
     for &byte in short^ {
         byte^ = cast[u8](' ')
@@ -1555,7 +2154,12 @@ short_name_exactly :: fn(name: string, short: ptr[mut u8[11]]) -> bool {
     return !(lower_base && upper_base) && !(lower_extension && upper_extension)
 }
 
-/** The case flags an 8.3 name with no long name keeps its lower case in. */
+/**
+ * Get the case flags an 8.3 name with no long name keeps its lower case in.
+ *
+ * @param name The name, one short_name_exactly took.
+ * @return LOWER_BASE if its base has a lower-case letter, LOWER_EXTENSION if its extension does, or both, or 0.
+ */
 case_flags_of :: fn(name: string) -> u8 {
     flags := cast[u8](0)
     in_extension := false
@@ -1571,7 +2175,13 @@ case_flags_of :: fn(name: string) -> u8 {
     return flags
 }
 
-/** The characters a short name may have, besides letters, which it holds in upper case. */
+/**
+ * Tell whether a byte may be in a short name: an ASCII letter, which it holds in upper case, a digit, or one of
+ * $%'-_@~`!(){}^#&.
+ *
+ * @param byte A byte of a name's UTF-8, any value.
+ * @return True if it may; false for anything else, every non-ASCII byte included.
+ */
 is_short_character :: fn(byte: u8) -> bool {
     if (byte >= cast[u8]('A') && byte <= cast[u8]('Z')) || (byte >= cast[u8]('a') && byte <= cast[u8]('z')) || (byte >= cast[u8]('0') && byte <= cast[u8]('9')) || byte >= 0x80 {
         return byte < 0x80
@@ -1585,8 +2195,19 @@ is_short_character :: fn(byte: u8) -> bool {
 }
 
 /**
- * A short alias for a long name, as Windows makes one: the name's short characters upper-cased, the last dot's part
- * as its extension, its base cut to 6 with "~N" after it, N from 1 until no entry in directory has it.
+ * Make a short alias for a long name, as Windows makes one.
+ *
+ * The name's characters are upper-cased, those a short name can't hold made '_', spaces and dots dropped; the part
+ * after its last dot is the extension, cut to 3, and the rest the base, cut so "~N" fits after it within 8, N the
+ * least from 1 that no alias of the same base and extension in the directory has (found in one pass over it).
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param directory The first cluster of the directory the alias goes in.
+ * @param name The long name, UTF-8.
+ * @param short Where the alias goes, space-padded.
+ * @error NoSpace Every tail from 1 to MAX_TAILS is taken.
+ * @error DeviceError The directory or the FAT couldn't be read.
+ * @error Corrupt The directory doesn't hold together.
  */
 make_alias :: fn(volume: ptr[mut Volume], directory: u32, name: string, short: ptr[mut u8[11]]) -> Result[void, FatError] {
     for &byte in short^ {
@@ -1654,11 +2275,16 @@ make_alias :: fn(volume: ptr[mut Volume], directory: u32, name: string, short: p
     return .Error(.NoSpace)
 }
 
-/** The most tails tried: one more than a directory has entries. */
+/** The most alias tails tried: one more than a directory has slots, so one is always free. */
 MAX_TAILS : u32 : 65537
 
 /**
- * short made base's alias with tail: as much of the base as fits before "~" and the tail's digits, the extension kept.
+ * Make a short name a base's alias with a tail: as much of the base as fits before "~" and the tail's digits.
+ *
+ * @param short The short name, its extension already set and kept.
+ * @param base The alias's base, upper-case.
+ * @param base_count How many bytes of base are used, 1 to 8.
+ * @param tail The tail, 1 to MAX_TAILS.
  */
 put_alias :: fn(short: ptr[mut u8[11]], base: ptr[u8[8]], base_count: usize, tail: u32) {
     digits : u8[7]
@@ -1691,14 +2317,27 @@ put_alias :: fn(short: ptr[mut u8[11]], base: ptr[u8[8]], base_count: usize, tai
     }
 }
 
-/** How much of a base an alias keeps, before "~" and digit_count digits. */
+/**
+ * Work out how much of a base an alias keeps, so "~" and the tail's digits fit after it within 8 bytes.
+ *
+ * @param base_count How many bytes the base has, 1 to 8.
+ * @param digit_count How many digits the tail has, 1 to 6.
+ * @return The bytes of the base kept: all of them, or 7 - digit_count.
+ */
 alias_keep :: fn(base_count: usize, digit_count: usize) -> usize {
     return if base_count + digit_count + 1 > 8 { 8 - digit_count - 1 } else { base_count }
 }
 
 /**
- * The tail of name, if it's an alias of base with extension's extension: as much of base as fits, "~", digits and
- * spaces; or 0.
+ * Get the tail of a short name, if it's an alias of a base with an extension.
+ *
+ * It is when it has the extension, and as much of the base as fits, "~", 1 to 6 digits and spaces.
+ *
+ * @param name The short name, as in the directory.
+ * @param extension A short name whose extension (its last 3 bytes) is the alias's.
+ * @param base The alias's base, upper-case.
+ * @param base_count How many bytes of base are used.
+ * @return The tail, the number after "~"; 0 if the name isn't such an alias.
  */
 tail_of :: fn(name: ptr[u8[11]], extension: ptr[u8[11]], base: ptr[u8[8]], base_count: usize) -> u32 {
     for i in 8..<cast[usize](11) {
@@ -1743,9 +2382,20 @@ tail_of :: fn(name: ptr[u8[11]], extension: ptr[u8[11]], base: ptr[u8[8]], base_
 // Formatting
 
 /**
- * A new, empty FAT32 volume on a device of sector_count sectors: 32 reserved sectors with the boot sector and its
- * copy at 6 and FSInfo at 1, two FATs, clusters of sectors_per_cluster, and the root directory at cluster 2. Labelled
- * label, up to 11 characters. NoSpace if it would have too few clusters to be FAT32.
+ * Format a new, empty FAT32 volume onto a device.
+ *
+ * It has 32 reserved sectors, with the boot sector at 0 and its copy at 6 and FSInfo after each, two FATs, and the
+ * root directory, one zeroed cluster, at cluster 2. Everything from the volume's start to the root's cluster's end is
+ * zeroed first; the rest of the device is left as it was. It writes straight to the device, not looking at its
+ * read_only, and a failure partway leaves a volume that may not mount.
+ *
+ * @param device The device; its first sectors are written whatever its read_only says.
+ * @param sector_count The volume's size in sectors, at most the device's and at most 0xffffffff.
+ * @param sectors_per_cluster The sectors in a cluster: a power of two from 1 to 128.
+ * @param label The volume's label, its first 11 bytes upper-cased, space-padded.
+ * @return Null if the volume was written; InvalidName if sectors_per_cluster isn't a power of two up to 128 or
+ *     sector_count is more than the device has; NoSpace if the volume would have fewer than MIN_CLUSTERS clusters to
+ *     be FAT32; DeviceError if the device couldn't be written.
  */
 format :: fn(device: Device, sector_count: u64, sectors_per_cluster: u64, label: string) -> FatError? {
     if sectors_per_cluster == 0 || sectors_per_cluster & (sectors_per_cluster - 1) != 0 || sectors_per_cluster > 128 || sector_count > device.sector_count {
@@ -1827,29 +2477,71 @@ format :: fn(device: Device, sector_count: u64, sectors_per_cluster: u64, label:
 
 // Little-endian bytes in a buffer, where they fit.
 
+/**
+ * Get a byte from a buffer.
+ *
+ * @param bytes The bytes read from, as a rule a sector's or a slot's.
+ * @param at The byte's offset.
+ * @return The byte; 0 if at is past the buffer's end.
+ */
 get_u8 :: fn(bytes: u8[], at: usize) -> u8 {
     return if at < bytes.count { bytes[at] } else { cast[u8](0) }
 }
 
+/**
+ * Get a little-endian u16 from a buffer.
+ *
+ * @param bytes The bytes read from, as a rule a sector's or a slot's.
+ * @param at Its first byte's offset.
+ * @return The value, any byte past the buffer's end taken as 0.
+ */
 get_u16 :: fn(bytes: u8[], at: usize) -> u16 {
     return cast[u16](get_u8(bytes, at)) | cast[u16](get_u8(bytes, at + 1)) << 8
 }
 
+/**
+ * Get a little-endian u32 from a buffer.
+ *
+ * @param bytes The bytes read from: a sector's or a slot's, or a buffer of 4 or more.
+ * @param at Its first byte's offset.
+ * @return The value, any byte past the buffer's end taken as 0.
+ */
 get_u32 :: fn(bytes: u8[], at: usize) -> u32 {
     return cast[u32](get_u16(bytes, at)) | cast[u32](get_u16(bytes, at + 2)) << 16
 }
 
+/**
+ * Put a byte into a buffer, if it's within it.
+ *
+ * @param bytes The bytes written to, as a rule a sector's or a slot's.
+ * @param at The byte's offset; past the buffer's end, nothing is written.
+ * @param value The byte, any value.
+ */
 put_u8 :: fn(bytes: mut u8[], at: usize, value: u8) {
     if at < bytes.count {
         bytes[at] = value
     }
 }
 
+/**
+ * Put a little-endian u16 into a buffer, each byte only if it's within it.
+ *
+ * @param bytes The bytes written to, as a rule a sector's or a slot's.
+ * @param at Its first byte's offset.
+ * @param value The value, any u16, written low byte first.
+ */
 put_u16 :: fn(bytes: mut u8[], at: usize, value: u16) {
     put_u8(bytes, at, cast[u8](value & 0xff))
     put_u8(bytes, at + 1, cast[u8](value >> 8))
 }
 
+/**
+ * Put a little-endian u32 into a buffer, each byte only if it's within it.
+ *
+ * @param bytes The bytes written to, as a rule a sector's or a slot's.
+ * @param at Its first byte's offset.
+ * @param value The value, any u32, written low byte first.
+ */
 put_u32 :: fn(bytes: mut u8[], at: usize, value: u32) {
     put_u16(bytes, at, cast[u16](value & 0xffff))
     put_u16(bytes, at + 2, cast[u16](value >> 16))

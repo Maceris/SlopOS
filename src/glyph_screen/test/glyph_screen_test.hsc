@@ -13,9 +13,16 @@ import terminal from "std/os/slop_os"
 import glyph_screen from ".."
 import screen from "../../screen"
 
+/** The width of the framebuffer the tests stand a buffer in for, in pixels. */
 WIDTH : u32 : 1024
+/** The height of the framebuffer the tests stand a buffer in for, in pixels. */
 HEIGHT : u32 : 640
 
+/**
+ * Run the framebuffer back end's tests.
+ *
+ * @return 0 if every check passed, or the number of the first check that failed.
+ */
 main :: fn() -> int {
     pixels, error :: runtime.new_array(u32, cast[usize](WIDTH * HEIGHT))
     if error != null || pixels.count == 0 {
@@ -72,12 +79,28 @@ main :: fn() -> int {
     return 0
 }
 
+/**
+ * Read a pixel of the buffer standing in for the framebuffer, WIDTH pixels to a row.
+ *
+ * @param pixels The pixels the test drew into, only read, one u32 each in the test's layout, the first row first.
+ * @param x The pixel's column, from 0.
+ * @param y The pixel's row, from 0.
+ * @return The pixel, as 0xRRGGBB in the test's layout; 0xffffffff, which no drawn pixel is, past the buffer's end.
+ */
 pixel :: fn(pixels: u32[], x: u32, y: u32) -> u32 {
     at :: cast[usize](y * WIDTH + x)
     return if at < pixels.count { pixels[at] } else { cast[u32](0xffffffff) }
 }
 
-/** How many pixels of the cell whose top left is at x and y are color. */
+/**
+ * Count the pixels of a 12x24 cell that are one colour.
+ *
+ * @param pixels The buffer standing in for the framebuffer, WIDTH pixels to a row.
+ * @param x The cell's left column, in pixels.
+ * @param y The cell's top row, in pixels.
+ * @param color The colour, as the pixel holds it.
+ * @return How many of the cell's 288 pixels are that colour; pixels past the buffer's end aren't.
+ */
 lit :: fn(pixels: u32[], x: u32, y: u32, color: u32) -> u32 {
     count : u32 = 0
     for row in 0..<cast[u32](24) {

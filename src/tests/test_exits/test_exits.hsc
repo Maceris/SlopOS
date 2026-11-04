@@ -1,12 +1,12 @@
 /**
- * test_exits (decisions/0068, 0098): how a program ends when it can't start, seen by whoever started it. Two copies of
- * the program, each watched until it ends:
+ * test_exits (decisions/0068, 0098): how a program ends when it can't start, seen by whoever started it. Two copies
+ * of the program, each watched until it ends:
  * - one launched through the process manager as if its entry took nothing, given no grants, ends with
  *   EXIT_MISSING_GRANT (126), as its real entry requires its debug log;
  * - one built with the process builder directly, its startup block saying an ABI version that isn't the kernel's,
  *   ends with EXIT_WRONG_ABI (125) before its entry runs.
- * What both had comes back to its budget. And a launch refused, its watch's key still the first copy's, gives back what
- * it made for the copy, so its starter's budget is charged no more than before.
+ * What both had comes back to its budget. And a launch refused, its watch's key still the first copy's, gives back
+ * what it made for the copy, so its starter's budget is charged no more than before.
  */
 package test_exits
 
@@ -19,19 +19,44 @@ import test_kit from "../../test_kit"
 import process_builder from "../../process_builder"
 import random_stream from "../../random_stream"
 
+/** The test's name, which starts each line it logs. */
 NAME :: "test_exits"
+/** Each copy's memory budget, in bytes: 4 MiB. */
 COPY_BUDGET : u64 : 4 << 20
+/** The key the first copy's watch queues its end under, which the refused launch asks for again. */
 WATCH_KEY : u64 : 1
-/** The second copy's: a binding keeps its key after it fires */
+/** The key the second copy's watch queues its end under: its own, as a binding keeps its key after it fires. */
 BUILT_KEY : u64 : 2
 
-/** An entry that takes nothing, which the copy's isn't. */
+/**
+ * Stand for an entry that takes nothing, which the copy's isn't, so the launch gives it no grants.
+ *
+ * @return 0, though it never runs: the copy runs main.
+ */
 takes_nothing :: fn() -> int {
     return 0
 }
 
+/** The grants of an entry that takes nothing: none. */
 NoGrants :: struct {}
 
+/**
+ * Check how a copy of the program ends when it can't start, and that a refused launch gives back what it made.
+ *
+ * @param log The debug log, writable, where the test says what it found and which check failed.
+ * @param platform Not used.
+ * @param test_device Not used.
+ * @param firmware Not used.
+ * @param manager The process manager, which launches the first copy; without it the test ends with 101.
+ * @param program The test's own module, which both copies run; without it the test ends with 100.
+ * @param peer Not used: the copies never get as far as their entry.
+ * @param cpu_budget Not used.
+ * @return 0 if every check passed. Otherwise the first that failed: 1 if the copy without grants didn't end with
+ *     EXIT_MISSING_GRANT, or 2 its budget didn't come back to nothing; 3 if the copy told another ABI version didn't
+ *     end with EXIT_WRONG_ABI, or 4 its budget didn't come back; 5 if the launch asking for a key in use wasn't
+ *     refused, or 6 it left a copy's budget charged. 102 to 111 if setting up failed: 102 and 103 the ports, 104 the
+ *     first launch, 105 to 110 building the second copy, 111 reading the budget.
+ */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     block :: slop_os.startup_block()
@@ -88,7 +113,12 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     return failed
 }
 
-/** How the process watched on port ended: its code, once it has. */
+/**
+ * Wait for a watched process to end, and tell how.
+ *
+ * @param port The port its watch, for SIGNAL_TERMINATED, queues on; nothing else may be bound to it.
+ * @return The process's exit code, or 0xffff if the wait failed.
+ */
 ended_with :: fn(port: slop_os.Port) -> u64 {
     packets : slop_os.Packet[1]
     taken :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_else 0

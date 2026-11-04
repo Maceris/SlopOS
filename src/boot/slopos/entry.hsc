@@ -1,8 +1,9 @@
 /**
- * The boot adapter for SlopOS's own boot protocol (L0, roadmap B2, decisions/0131, 0133, src/boot_protocol): the kernel's
- * entry point when the Hemera bootloader (src/uefi/bootloader) boots it. It sets up a carrier block and the boot context,
- * turns the bootloader's handoff into a BootInfo, and calls the portable kernel entry. BootInfo's arrays and strings point into the handoff, which is in boot-reclaimable memory, through the direct
- * map, so it needs no memory of its own.
+ * The boot adapter for SlopOS's own boot protocol (L0, roadmap B2, decisions/0131, 0133, src/boot_protocol): the
+ * kernel's entry point when the Hemera bootloader (src/uefi/bootloader) boots it. It sets up a carrier block and the
+ * boot context, turns the bootloader's handoff into a BootInfo, and calls the portable kernel entry. BootInfo's arrays
+ * and strings point into the handoff, which is in boot-reclaimable memory, through the direct map, so it needs no
+ * memory of its own.
  */
 package slopos_boot
 
@@ -32,6 +33,15 @@ EARLY_LOGGER :: runtime.Logger.{
     name = "early",
 }
 
+/**
+ * Write one log line to the early console, prefixed with "[boot] ", at any level.
+ *
+ * The line is formatted into 256 bytes on the stack; a longer one is cut short and ends with "...".
+ *
+ * @param format_string The line's format, as text_buffer.append_format takes it.
+ * @param params The values format_string formats.
+ * @param location Where the log call is; unused.
+ */
 early_log : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
     storage : u8[256]
     line := text_buffer.make(storage)
@@ -45,13 +55,22 @@ early_log : runtime.LogFunction : fn(format_string: string, params: any..., loca
 }
 
 /**
- * The stack the bootloader gave the boot CPU is boot_protocol.BOOT_STACK_SIZE bytes, and this runs at most this far below its top
+ * How far below the top of its boot stack, in bytes, a CPU may already be when it sets its stack limit.
+ *
+ * Each boot stack the bootloader gives is boot_protocol.BOOT_STACK_SIZE bytes, and kernel_entry and cpu_entry run at
+ * most this far below its top, so the limit they set from their stack pointer stays inside the stack.
  */
 BOOT_STACK_SLACK :: 4096
 
 /**
- * Where the bootloader enters the kernel, on the boot CPU's boot stack, with interrupts disabled, given the handoff's
- * address in the direct map, with the C convention, and without a carrier block or a context.
+ * Enter the kernel from the bootloader, on the boot CPU, and never return.
+ *
+ * It runs on the boot CPU's boot stack with interrupts disabled, with the C convention and without a carrier block or a
+ * context: it makes a carrier block on that stack, pushes the boot context with the early logger, checks the handoff,
+ * builds the BootInfo and calls kernel.boot. A handoff that isn't one, or is another version's, stops the boot through
+ * kernel.boot_failed.
+ *
+ * @param handoff_address The virtual address, in the bootloader's direct map, of its boot_protocol.Handoff.
  */
 kernel_entry #calling_convention(.c) #no_context :: fn(handoff_address: u64) #never_returns {
     carrier : runtime.CarrierBlock
@@ -75,8 +94,16 @@ kernel_entry #calling_convention(.c) #no_context :: fn(handoff_address: u64) #ne
 }
 
 /**
- * BootInfo from the handoff at handoff_address, in the direct map, its arrays in the handoff's room for them
- * (boot_protocol.Handoff): by its address, so what points into it points into the direct map, never this stack.
+ * Fill a BootInfo from the bootloader's handoff.
+ *
+ * Its arrays are written into the handoff's room for them (boot_protocol.Handoff), and its strings point into the
+ * handoff, so the handoff is taken by its address: what points into it points into the direct map, never this stack.
+ * The CPUs' StartingCpu records are written into the handoff's starting room too. A memory map with more regions than
+ * the handoff holds stops the boot through kernel.boot_failed; extra segments, CPUs and modules are dropped.
+ *
+ * @param handoff_address The virtual address, in the direct map, of the handoff, already checked by is_handoff; its
+ *     image_segments, boot_cpus, boot_modules, framebuffers and starting rooms are written.
+ * @param info Where the BootInfo goes; every field is set. What it points to stays valid while the direct map does.
  */
 build_boot_info :: fn(handoff_address: u64, info: ptr[mut boot_info.BootInfo]) {
     handoff :: cast[ptr[mut boot_protocol.Handoff]](handoff_address)
@@ -154,7 +181,12 @@ build_boot_info :: fn(handoff_address: u64, info: ptr[mut boot_info.BootInfo]) {
     else { null }
 }
 
-/** The firmware tables the handoff names, by their physical addresses. */
+/**
+ * Read the firmware tables' physical addresses from the handoff.
+ *
+ * @param handoff The handoff, which isn't changed.
+ * @return Each table's physical address, or null where the handoff gives 0, for a table the firmware hasn't.
+ */
 firmware_tables :: fn(handoff: ptr[boot_protocol.Handoff]) -> boot_info.FirmwareTables {
     tables : boot_info.FirmwareTables
     tables.acpi_rsdp = address_or_none(handoff.acpi_rsdp)
@@ -164,6 +196,12 @@ firmware_tables :: fn(handoff: ptr[boot_protocol.Handoff]) -> boot_info.Firmware
     return tables
 }
 
+/**
+ * Make a handoff's physical address optional.
+ *
+ * @param address A physical address from the handoff, 0 for none.
+ * @return The address, or null when it's 0.
+ */
 address_or_none :: fn(address: u64) -> boot_info.PhysicalAddress? {
     if address == 0 {
         return null
@@ -171,7 +209,12 @@ address_or_none :: fn(address: u64) -> boot_info.PhysicalAddress? {
     return cast[boot_info.PhysicalAddress](address)
 }
 
-/** The text of bytes up to their first zero, in the handoff, where it stays. */
+/**
+ * View zero-terminated bytes as text, without copying.
+ *
+ * @param bytes The bytes, in the handoff, where they stay; the text escapes, so they have to outlive it.
+ * @return The bytes before the first zero, or all of them without one, as a view into bytes.
+ */
 text_of :: fn(bytes #escaping : u8[]) -> string {
     count := cast[usize](0)
     for byte in bytes {
@@ -188,16 +231,27 @@ text_of :: fn(bytes #escaping : u8[]) -> string {
  * (boot_protocol.Cpu), on its own stack. A BootCpu's boot_handle points at its StartingCpu, in the handoff's room.
  */
 StartingCpu :: struct {
-    /** The CPU's mailbox, in the handoff */
+    /** The virtual address, in the direct map, of the CPU's mailbox (boot_protocol.Cpu) in the handoff. */
     mailbox : u64,
-    // Set by start_cpu, before the CPU reads them
+    /** The carrier block the CPU loads, set by start_cpu before it releases the CPU. */
     carrier : ptr[mut runtime.CarrierBlock],
+    /** Where the CPU begins in the kernel, set by start_cpu before it releases the CPU. */
     entry : boot_info.CpuEntry,
 }
 
 #assert size_of(StartingCpu) <= 32
 
-/** Starts cpu at cpu_entry, which loads carrier and calls entry. Doesn't wait for it. */
+/**
+ * Start a parked CPU at cpu_entry, which loads carrier and calls entry. It doesn't wait for the CPU.
+ *
+ * It writes carrier and entry into the CPU's StartingCpu and the mailbox's argument, then, with a release store, the
+ * mailbox's goto address, which is what sets the parked CPU going; so the CPU reads everything else after it's written.
+ *
+ * @param cpu The CPU, one of BootInfo.cpus other than the boot CPU, not started before; its boot_handle is its
+ *     StartingCpu.
+ * @param carrier The carrier block the CPU loads, valid until entry loads one of its own.
+ * @param entry Where the CPU begins in the kernel.
+ */
 start_cpu : boot_info.StartCpu : fn(cpu: ptr[boot_info.BootCpu], carrier #escaping : ptr[mut runtime.CarrierBlock], entry: boot_info.CpuEntry) {
     starting :: cast[ptr[mut StartingCpu]](cast[rawptr](cpu.boot_handle))
     starting.carrier = carrier
@@ -209,9 +263,13 @@ start_cpu : boot_info.StartCpu : fn(cpu: ptr[boot_info.BootCpu], carrier #escapi
 }
 
 /**
- * Where a parked CPU jumps once started, on its boot stack, with interrupts disabled, given its StartingCpu's address.
- * Like kernel_entry, it has no carrier block or context yet: it sets carrier.stack_limit for its boot stack, loads the
- * carrier block start_cpu was given, pushes the boot context, and calls the kernel's entry.
+ * Begin a started CPU in the kernel, and never return.
+ *
+ * A parked CPU jumps here once started, on its boot stack, with interrupts disabled. Like kernel_entry, it has no
+ * carrier block or context yet: it sets carrier.stack_limit for its boot stack, loads the carrier block start_cpu was
+ * given, pushes the boot context with the early logger, and calls the kernel's entry.
+ *
+ * @param argument The address of the CPU's StartingCpu, from its mailbox's argument.
  */
 cpu_entry #calling_convention(.c) #no_context :: fn(argument: u64) #never_returns {
     starting :: cast[ptr[StartingCpu]](cast[rawptr](argument))

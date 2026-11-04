@@ -18,10 +18,22 @@ import accounts from "../../protocols/accounts"
 import prompt from "../../protocols/prompt"
 import screen from "../../screen"
 
+/** The status line's text while the elevation screen is up. */
 STATUS_ELEVATING :: " SlopOS │ console │ making an account"
+/**
+ * The rows of fields the elevation screen has: the administrator's name and password, then the new account's name, its
+ * password and the password again.
+ */
 ELEVATION_FIELDS :: 5
 
-/** The screen opened over the active view, for its request for an account. */
+/**
+ * Open the elevation screen over the active view, for the account its powerbox's request asks for.
+ *
+ * The secure attention key's screen is left for it, and the first step asks for the administrator's name; the status
+ * line says an account is being made. Every key goes to setup_key until the request is answered.
+ *
+ * @param service The service, whose active view has an Account request waiting (asking is true).
+ */
 enter_elevation :: fn(service: ptr[mut Service]) {
     service.attention = false
     service.elevating = true
@@ -33,7 +45,15 @@ enter_elevation :: fn(service: ptr[mut Service]) {
 }
 
 /**
- * The request answered, the account's name if it was made, or refused; what was typed forgotten, and the session drawn again.
+ * Answer the active view's account request, close the elevation screen, and draw the session again.
+ *
+ * The answer, AccountMade with the new account's name or Refused, is sent on the view's prompt connection if it still
+ * has one, and not waited for; the request is dropped, its home closed. Everything typed, the names, both passwords and
+ * the recovery code, is zeroed, setup goes back to Off, and the program's rows are drawn again from the screen model.
+ *
+ * @param service The service, its elevation screen up.
+ * @param made Whether the account was made: true answers with its name, which is service.name; false refuses, as Escape
+ *     or the account service's Refused does.
  */
 end_elevation :: fn(service: ptr[mut Service], made: bool) {
     shown :: view(service)
@@ -71,7 +91,18 @@ end_elevation :: fn(service: ptr[mut Service], made: bool) {
 }
 
 /**
- * The account asked for: the administrator's name and password, and the new account's, the passwords forgotten once sent.
+ * Ask the account service to make the new account on the administrator's say (CreateBy), without waiting for its
+ * answer.
+ *
+ * The request carries the administrator's name and password, the new account's name and password, and the time now in
+ * nanoseconds since the epoch (0 if the clock can't be read). Once it's sent, or failed to be, the message's words and
+ * both passwords are zeroed. The answer comes to take_accounts: Created, which shows the recovery code, or a refusal
+ * that asks again.
+ *
+ * Without the account service, or if the request can't be sent, it says so and goes back to asking for the
+ * administrator's name; otherwise it says the account's being made and goes to the Making step, where keys are ignored.
+ *
+ * @param service The service, its elevation screen up, the new account's password typed twice and matching.
  */
 make_account_by :: fn(service: ptr[mut Service]) {
     if service.accounts_end == NONE || service.name_count > service.name.count || service.password_count > service.password.count
@@ -110,7 +141,15 @@ make_account_by :: fn(service: ptr[mut Service]) {
 }
 
 /**
- * The elevation screen: who asks, the fields so far, what it last said, and how to go on; drawn whole, or only its fields.
+ * Draw the elevation screen on the active view's panel: who asks and why, the fields so far, what it last said, and the
+ * keys; or, at the Code step, the recovery code.
+ *
+ * Names are shown as typed, passwords as one dot per grapheme cluster (8 for one already sent), at most 40; the cursor
+ * is left at the end of the field being typed.
+ *
+ * @param service The service, its elevation screen up.
+ * @param whole Whether to show the panel and draw every row of it; false clears and draws only the rows of the fields
+ *     and the message, which is all a key changes.
  */
 draw_elevation :: fn(service: ptr[mut Service], whole: bool) {
     panel :: &view(service).screen.panel

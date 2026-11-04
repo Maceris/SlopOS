@@ -17,45 +17,67 @@ import crypto from "std"
 /**
  * A volume open: the nodes its tree changes in and the device it's on, the container's own in this process or, in a
  * volume server, its own (decisions/0089), and what its record holds.
+ *
+ * It's from make, freed with free_volume (close_volume, or unmount, for one among the container's open volumes). Its
+ * fields are this package's to keep, but now and history_bytes, which its user sets.
  */
 Volume :: struct {
+    /** The transaction's nodes its tree changes in, the container's or its volume server's, not the volume's. */
     nodes : ptr[mut Nodes],
+    /** The device its file chunks are read from and written to. */
     device : Device,
+    /** Its ID in the container. */
     id : u64,
+    /** Its tree, with its keys if it's encrypted, which it owns. */
     tree : Tree,
+    /** The ID its next object gets. */
     next_object : u64,
+    /** The key its names are hashed with. */
     hash_key : u8[32],
+    /** When it was made, as its maker said. */
     created : u64,
+    /** Its name, UTF-8, its first name_bytes used. */
     name : u8[VOLUME_NAME_BYTES],
+    /** How many bytes of name are used. */
     name_bytes : u16,
-    /** Whether its tree or its record changed since the last commit */
+    /** Whether its tree or its record changed since the last commit. */
     dirty : bool,
-    /** The time it is, as its user says, for the records it writes */
+    /** The time it is, as its user says, for the records it writes: objects' times and links issued. */
     now : u64,
-    /** A data write failed, so its commits are refused, every one after it (decisions/0112) */
+    /** A data write failed, so its commits are refused, every one after it (decisions/0112). */
     failed : bool,
     /*
-     * The chunks failed writes were for, each a file and the chunk's index, which reads are refused, since what's there
-     * isn't what was written; past MAX_FAILED_CHUNKS, every chunk's
+     * The chunks failed writes were for, each a file and the chunk's index, which reads are refused, since what's
+     * there isn't what was written; past MAX_FAILED_CHUNKS, every chunk's.
      */
+    /** The chunks failed writes were for, and not written whole since; the first failed_count are used. */
     failed_chunks : FailedChunk[MAX_FAILED_CHUNKS],
+    /** How many of failed_chunks are used; past MAX_FAILED_CHUNKS, some weren't kept, so every chunk is refused. */
     failed_count : u32,
-    /** The bytes of change history it keeps (history.hsc), or 0 for none */
+    /** The bytes of change history it keeps (history.hsc), or 0 for none. */
     history_bytes : u64,
-    /** Its record as it was opened, for what the volume doesn't change: a clone's origin, whose keys it uses */
+    /** Its record as it was opened, for what the volume doesn't change: a clone's origin, whose keys it uses. */
     opened : VolumeRecord,
 }
 
-/** The most failed writes a volume remembers by their chunks */
+/** The most failed writes a volume remembers by their chunks; past it, every chunk read is refused. */
 MAX_FAILED_CHUNKS :: 32
 
+/** A file's chunk a failed write was for. */
 FailedChunk :: struct {
+    /** The file's object ID. */
     file : u64,
+    /** The chunk's index, its byte offset / CHUNK_BYTES. */
     index : u64,
 }
 
 /**
- * Whether a failed write was for a file's chunk, so it can't be read (decisions/0112): every one, past MAX_FAILED_CHUNKS.
+ * Tell whether a failed write was for a file's chunk, so it can't be read (decisions/0112).
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param file The file's object ID.
+ * @param index The chunk's index.
+ * @return True if a failed write was for it, not written since, or more than MAX_FAILED_CHUNKS failed writes were.
  */
 chunk_failed :: fn(volume: ptr[Volume], file: u64, index: u64) -> bool {
     if volume.failed_count > MAX_FAILED_CHUNKS {
@@ -69,7 +91,14 @@ chunk_failed :: fn(volume: ptr[Volume], file: u64, index: u64) -> bool {
     return false
 }
 
-/** A file's chunk a write failed for, or, written since, one that's whole again. */
+/**
+ * Note that a write of a file's chunk failed, or succeeded, so it's whole again.
+ *
+ * @param volume The volume; once more than MAX_FAILED_CHUNKS have failed, nothing more is noted.
+ * @param file The file's object ID.
+ * @param index The chunk's index.
+ * @param failed True if the write failed, so the chunk is remembered; false if it succeeded, so it's forgotten.
+ */
 note_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, failed: bool) {
     if volume.failed_count > MAX_FAILED_CHUNKS {
         return void
@@ -96,42 +125,83 @@ note_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, failed: bool) {
     volume.failed_count += 1
 }
 
-/** What an object is. */
+/** What an object is, from its record. */
 Info :: struct {
+    /** Its object ID. */
     object : u64,
+    /** What kind of object it is. */
     kind : ObjectKind,
+    /** Its parent directory; the root's is itself. */
     parent : u64,
+    /** A file's size in bytes; 0 for a directory or a link. */
     size : u64,
+    /** When it was made, as the volume's user gave the time. */
     created : u64,
+    /** When its contents last changed, as the volume's user gave the time. */
     modified : u64,
+    /** The transaction it last changed in. */
     changed : u64,
-    /** A typed file's schema hash, all zeros for bytes alone (decisions/0046, 0108) */
+    /** A typed file's schema hash, all zeros for bytes alone (decisions/0046, 0108). */
     schema : u8[32],
 }
 
-/** An entry List gives: its name's bytes in the caller's buffer, what it names, and the cursor after it. */
+/** An entry list gives: its name's bytes in the caller's buffer, what it names, and the cursor after it. */
 Listed :: struct {
+    /** How many bytes the name has; as many as fit were copied into the caller's buffer. */
     name_bytes : usize,
+    /** The object it names. */
     object : u64,
+    /** The object's kind, as the entry says. */
     kind : ObjectKind,
+    /** The cursor to list the next entry from. */
     next : u64,
 }
 
+/** A volume's ID, as a type of its own. */
 VolumeId :: struct {
+    /** The ID. */
     id : u64,
 }
 
 /**
- * A new volume named name, with its root directory, open; hash_key, random, is what its names hash with. It's on the
- * disk once it's committed.
+ * Make a new volume, with its root directory, open in the container's own process.
+ *
+ * It's on the disk once it's committed. Its name isn't checked against the container's other volumes'.
+ *
+ * @param container The container, which has to outlive the volume, and which keeps it among its open ones.
+ * @param name Its name, 1 to VOLUME_NAME_BYTES bytes.
+ * @param hash_key The key its names hash with, random, so names can't be chosen to collide.
+ * @param now When it's made, as its maker says: its time, and its root's.
+ * @return The volume, the container's, freed by close_volume or unmount.
+ * @error InvalidName The name is empty or too long.
+ * @error OutOfMemory No memory for the volume or a node.
+ * @error NoSpace No free extent for its root's node.
+ * @error Corrupt A node couldn't be read or didn't check out.
  */
 create_volume :: fn(container #escaping : ptr[mut Container], name: string, hash_key: u8[32], now: u64) -> Result[ptr[mut Volume], Error] {
     return create_keyed_volume(container, name, hash_key, now, null)
 }
 
-/*
- * A new encrypted volume, as create_volume makes one: sealed with cipher, its volume key new and wrapped by passphrase
- * through Argon2id with parameters, and its first key generation's with it, kept in the container's volumes tree.
+/**
+ * Make a new encrypted volume, as create_volume makes one, its keys kept in the container's volumes tree.
+ *
+ * Its volume key is new and wrapped by a passphrase through Argon2id, and its first key generation's with it. The
+ * key records are put before the volume is made, so a failure after them (as for a bad name) leaves them under the
+ * ID the next volume gets.
+ *
+ * @param container The container, which has to outlive the volume, and which keeps it among its open ones.
+ * @param name Its name, 1 to VOLUME_NAME_BYTES bytes.
+ * @param hash_key The key its names hash with, random.
+ * @param now When it's made, as its maker says.
+ * @param cipher The cipher its blocks are sealed with; None makes a volume that isn't encrypted, as create_volume does.
+ * @param passphrase The passphrase its volume key is wrapped by, secret.
+ * @param parameters Argon2id's parameters: DEFAULT_PASSPHRASE, as a rule.
+ * @return The volume, the container's, freed by close_volume or unmount.
+ * @error InvalidName The name is empty or too long.
+ * @error WrongKey The volume key couldn't be wrapped: Argon2id couldn't run with the parameters.
+ * @error OutOfMemory No memory for the keys, the volume or a node.
+ * @error NoSpace No free extent for a node.
+ * @error Corrupt The first generation couldn't be made, or a node couldn't be read or didn't check out.
  */
 create_sealed_volume :: fn(container #escaping : ptr[mut Container], name: string, hash_key: u8[32], now: u64, cipher: Cipher,
     passphrase: u8[], parameters: crypto.Argon2Parameters) -> Result[ptr[mut Volume], Error] {
@@ -152,7 +222,19 @@ create_sealed_volume :: fn(container #escaping : ptr[mut Container], name: strin
     return create_keyed_volume(container, name, hash_key, now, keys)
 }
 
-// An encrypted volume's first wrap and generation records, in the container's volumes tree.
+/**
+ * Put an encrypted volume's first wrap and generation records in the container's volumes tree.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The volume's ID.
+ * @param keys Its keys, its volume key made; the first generation is started in them.
+ * @param passphrase The passphrase the volume key is wrapped by.
+ * @param parameters Argon2id's parameters.
+ * @error WrongKey The volume key couldn't be wrapped.
+ * @error Corrupt The first generation couldn't be made, or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node.
+ */
 make_first_keys :: fn(container: ptr[mut Container], id: u64, keys: ptr[mut Keys], passphrase: u8[],
     parameters: crypto.Argon2Parameters) -> Result[void, Error] {
 
@@ -163,6 +245,21 @@ make_first_keys :: fn(container: ptr[mut Container], id: u64, keys: ptr[mut Keys
     return .Ok
 }
 
+/**
+ * Make a new volume, encrypted with keys or not, with its root directory, open in the container's own process.
+ *
+ * @param container The container, which keeps the volume among its open ones.
+ * @param name Its name, 1 to VOLUME_NAME_BYTES bytes.
+ * @param hash_key The key its names hash with.
+ * @param now When it's made.
+ * @param keys Its keys, which it then owns, freed with it, or here on an error; null for a volume that isn't
+ *     encrypted.
+ * @return The volume, the container's.
+ * @error InvalidName The name is empty or too long.
+ * @error OutOfMemory No memory for the volume, its place among the open ones, or a node.
+ * @error NoSpace No free extent for its root's node.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 create_keyed_volume :: fn(container #escaping : ptr[mut Container], name: string, hash_key: u8[32], now: u64,
     keys #escaping : ptr[mut Keys]?) -> Result[ptr[mut Volume], Error] {
 
@@ -208,7 +305,18 @@ create_keyed_volume :: fn(container #escaping : ptr[mut Container], name: string
     return .Ok(volume)
 }
 
-/** The volume id, open: already, or from its record. */
+/**
+ * Open a volume that isn't encrypted in the container's own process: the one open already, or one from its record.
+ *
+ * @param container The container, which keeps the volume among its open ones.
+ * @param id The volume's ID.
+ * @return The volume, the container's, freed by close_volume or unmount.
+ * @error NotFound The volume, or an origin of a clone's, isn't there.
+ * @error Locked The volume is encrypted.
+ * @error TooLarge The volume's lineage is longer than MAX_LINEAGE.
+ * @error OutOfMemory No memory for the volume or a node.
+ * @error Corrupt A record or a node couldn't be read or didn't check out.
+ */
 open_volume :: fn(container #escaping : ptr[mut Container], id: u64) -> Result[ptr[mut Volume], Error] {
     for volume in container.open {
         if volume.id == id {
@@ -234,7 +342,20 @@ open_volume :: fn(container #escaping : ptr[mut Container], id: u64) -> Result[p
     return .Ok(volume)
 }
 
-/** The encrypted volume id, open: already, or from its record, unlocked with passphrase. */
+/**
+ * Open an encrypted volume in the container's own process: the one open already, or one from its record, unlocked
+ * with a passphrase. A volume that isn't encrypted is opened as open_volume opens it, the passphrase unused.
+ *
+ * @param container The container, which keeps the volume among its open ones.
+ * @param id The volume's ID.
+ * @param passphrase The passphrase, secret; not checked for a volume open already.
+ * @return The volume, the container's, freed by close_volume or unmount.
+ * @error NotFound The volume, or an origin of a clone's, isn't there.
+ * @error WrongKey The passphrase unwraps none of its key records.
+ * @error TooLarge The volume's lineage is longer than MAX_LINEAGE.
+ * @error OutOfMemory No memory for the keys, the volume or a node.
+ * @error Corrupt A record or a node didn't check out, the cipher isn't one, or a generation doesn't open.
+ */
 open_sealed_volume :: fn(container #escaping : ptr[mut Container], id: u64, passphrase: u8[]) -> Result[ptr[mut Volume], Error] {
     for volume in container.open {
         if volume.id == id {
@@ -277,9 +398,20 @@ open_sealed_volume :: fn(container #escaping : ptr[mut Container], id: u64, pass
     return .Ok(volume)
 }
 
-/*
- * A volume from its record, its tree changing in nodes and read and written on device: as open_volume opens one in
- * the container's own process, and as a volume server opens its own (decisions/0089).
+/**
+ * Make a volume from its record: as open_volume opens one in the container's own process, and as a volume server
+ * opens its own (decisions/0089).
+ *
+ * Nothing is read; it isn't put among any container's open volumes. Its lineage is empty until the caller sets it.
+ *
+ * @param nodes The transaction's nodes its tree changes in, which have to outlive the volume.
+ * @param device The device its chunks are on, whose context has to outlive the volume.
+ * @param id The volume's ID.
+ * @param record Its record, as it is now.
+ * @param keys Its keys, which it then owns, freed with it; null for a volume that isn't encrypted. On an error, they
+ *     aren't freed here.
+ * @return The volume, the caller's to free with free_volume.
+ * @error OutOfMemory No memory for it.
  */
 attach_volume :: fn(nodes #escaping : ptr[mut Nodes], device #escaping : Device, id: u64, record: VolumeRecord,
     keys #escaping : ptr[mut Keys]?) -> Result[ptr[mut Volume], Error] {
@@ -293,7 +425,11 @@ attach_volume :: fn(nodes #escaping : ptr[mut Nodes], device #escaping : Device,
 }
 
 /**
- * What a volume's record says now: its root as it was last written, its cipher and newest key generation, and the rest.
+ * Make a volume's record as it is now: its root as it was last written, its cipher and newest key generation, and
+ * the rest.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @return The record, a copy; what the volume doesn't change, as a clone's origin, as it was opened.
  */
 record_of :: fn(volume: ptr[Volume]) -> VolumeRecord {
     record := volume.opened
@@ -314,8 +450,17 @@ record_of :: fn(volume: ptr[Volume]) -> VolumeRecord {
 }
 
 /**
- * A volume's dirty nodes written, children first, and its record as it then is: what a volume server gives the
+ * Write a volume's dirty nodes, children first, and make its record as it then is: what a volume server gives the
  * container service to commit (decisions/0089), once the writes have finished.
+ *
+ * Nothing is flushed: the record names nodes that are durable only after the commit's flush.
+ *
+ * @param volume The volume; it's no longer dirty once this succeeds.
+ * @return The record, its root's seal set.
+ * @error Failed A data write failed since the volume was opened (or forget was last called).
+ * @error DeviceError A node couldn't be written.
+ * @error OutOfMemory No memory to seal an encrypted node in.
+ * @error Corrupt An encrypted node couldn't be sealed.
  */
 write_volume :: fn(volume: ptr[mut Volume]) -> Result[VolumeRecord, Error] {
     if volume.failed {
@@ -326,14 +471,31 @@ write_volume :: fn(volume: ptr[mut Volume]) -> Result[VolumeRecord, Error] {
     return .Ok(record_of(volume))
 }
 
-/** The volumes in the container, by ID, from at: the next one's ID, or null. */
+/**
+ * Find the next volume in the container, by ID, for walking them in order.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param at The ID to look from.
+ * @return The ID of the first object at or after at with a record in the volumes tree, which is a volume's ID as a
+ *     rule; null after the last.
+ * @error OutOfMemory No memory to read a node.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 next_volume_id :: fn(container: ptr[mut Container], at: u64) -> Result[u64?, Error] {
     value : u8[1]
     found :: tree_next(&container.nodes, &container.volumes, key_of(at, .VolumeEntry, 0), value)? or_return .Ok(null)
     return .Ok(found.key.object)
 }
 
-/** A volume open in the container's own process closed, what it changed since its last commit lost. */
+/**
+ * Close a volume open in the container's own process, freeing it.
+ *
+ * What it changed since its last commit isn't lost at once: its dirty nodes stay the container's, and the next
+ * commit writes them, though its record isn't updated to name them.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The volume's ID; one that isn't open is no error, and nothing's done.
+ */
 close_volume :: fn(container: ptr[mut Container], id: u64) {
     for volume, i in container.open {
         if volume.id == id {
@@ -344,7 +506,12 @@ close_volume :: fn(container: ptr[mut Container], id: u64) {
     }
 }
 
-/** A volume's memory given back, its keys with it. */
+/**
+ * Free a volume's memory, its keys with it, zeroed.
+ *
+ * @param volume The volume; it may not be used again. One among a container's open ones has to be taken out of them
+ *     first (close_volume does both).
+ */
 free_volume :: fn(volume: ptr[mut Volume]) {
     match volume.tree.keys {
         case Some(keys) => free_keys(keys)
@@ -354,9 +521,25 @@ free_volume :: fn(volume: ptr[mut Volume]) {
 }
 
 /**
- * A new volume registered in the container with nothing in it yet (decisions/0141): its record, with no root and no keys,
- * which the volume server that serves it first fills, making the keys of one with a cipher and writing its root. How
- * the container service makes a volume, without holding what opens it: its ID.
+ * Register a new volume in the container with nothing in it yet (decisions/0141): its record, with no root and no
+ * keys, which the volume server that serves it first fills, making the keys of one with a cipher and writing its
+ * root.
+ *
+ * It's how the container service makes a volume, without holding what opens it. The record is durable with the
+ * container's next commit.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param name Its name, 1 to VOLUME_NAME_BYTES bytes, which no volume in the container has.
+ * @param hash_key The key its names hash with, random.
+ * @param now When it's made.
+ * @param cipher Its cipher; for any but None, its record names generation 1, which first_keys starts.
+ * @return Its ID, a new one.
+ * @error InvalidName The name is empty or too long.
+ * @error AlreadyExists A volume in the container has the name.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node.
+ * @error NotFound A volume found by its ID isn't there to read.
+ * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
 register_volume :: fn(container: ptr[mut Container], name: u8[], hash_key: u8[32], now: u64, cipher: Cipher) -> Result[u64, Error] {
     if name.count == 0 || name.count > VOLUME_NAME_BYTES {
@@ -383,24 +566,41 @@ register_volume :: fn(container: ptr[mut Container], name: u8[], hash_key: u8[32
     return .Ok(id)
 }
 
-/** Whether a volume's record is one register_volume made that no volume server has filled yet: it has no root. */
+/**
+ * Tell whether a volume's record is one register_volume made that no volume server has filled yet.
+ *
+ * @param record The volume's record, as volume_record read it.
+ * @return True if it has no root and its next object is still the first after the root's.
+ */
 is_unfilled :: fn(record: ptr[VolumeRecord]) -> bool {
     return cast[u64](record.root.address) == 0 && cast[u64](record.next_object) == ROOT_OBJECT + 1
 }
 
-/**
- * A new sealed volume's first keys' records, made apart from its container: its key wrapped by passphrase, and its first generation.
- */
+/** A new sealed volume's first keys' records, made apart from its container, for the container service to keep. */
 FirstKeys :: struct {
+    /** Its volume key wrapped by its passphrase, to keep at KeyWrap index 0. */
     wrap : WrapRecord,
+    /** Its first generation's key wrapped by its volume key. */
     generation : GenerationRecord,
+    /** The first generation's number, 1 for keys with none before. */
     number : u32,
 }
 
-/*
- * The keys of a volume register_volume made with a cipher, in its volume server: keys's volume key made, and wrapped
- * by passphrase through Argon2id with parameters, and its first generation started at transaction; what the container
- * service is given to keep, which opens nothing without the passphrase.
+/**
+ * Make the keys of a volume register_volume made with a cipher, in its volume server: its volume key made, and
+ * wrapped by a passphrase through Argon2id, and its first generation started.
+ *
+ * What's returned is what the container service is given to keep, which opens nothing without the passphrase.
+ *
+ * @param keys The volume's keys, from new_keys with its cipher; its volume key is made and its first generation added.
+ * @param passphrase The passphrase, secret.
+ * @param parameters Argon2id's parameters: MADE_PASSPHRASE, as a rule.
+ * @param container The container's ID.
+ * @param id The volume's ID.
+ * @param transaction The transaction the first generation begins in.
+ * @return The records to keep.
+ * @error WrongKey The volume key couldn't be wrapped: Argon2id couldn't run with the parameters.
+ * @error Corrupt The first generation couldn't be wrapped, or kept for want of memory.
  */
 first_keys :: fn(keys: ptr[mut Keys], passphrase: u8[], parameters: crypto.Argon2Parameters, container: u8[16], id: u64,
     transaction: u64) -> Result[FirstKeys, Error] {
@@ -412,7 +612,13 @@ first_keys :: fn(keys: ptr[mut Keys], passphrase: u8[], parameters: crypto.Argon
 }
 
 /**
- * A volume register_volume made given its root directory, as create_volume gives one, to be written with its next commit.
+ * Give a volume register_volume made its root directory, as create_volume gives one, written with its next commit.
+ *
+ * @param volume The volume, unfilled.
+ * @param now When the root is made.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for the root's node.
+ * @error Corrupt A node couldn't be read or didn't check out.
  */
 fill_volume :: fn(volume: ptr[mut Volume], now: u64) -> Result[void, Error] {
     root := ObjectRecord.{kind = cast[u32le](cast[u32](ObjectKind.Directory)), parent = cast[u64le](ROOT_OBJECT),
@@ -422,12 +628,31 @@ fill_volume :: fn(volume: ptr[mut Volume], now: u64) -> Result[void, Error] {
     return .Ok
 }
 
+/**
+ * Put a volume's record in the container's volumes tree, durable with the container's next commit.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The volume's ID.
+ * @param record The record, copied.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 put_volume_record :: fn(container: ptr[mut Container], id: u64, record: ptr[VolumeRecord]) -> Result[void, Error] {
     tree_put(&container.nodes, &container.volumes, key_of(id, .VolumeEntry, 0), view_of(cast[ptr[u8]](record), size_of(VolumeRecord)))?
     return .Ok
 }
 
-/** A volume's record, from the container's volumes tree. */
+/**
+ * Read a volume's record from the container's volumes tree, as this transaction has it.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The volume's ID.
+ * @return The record, a copy.
+ * @error NotFound No volume has the ID.
+ * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory to read a node.
+ */
 volume_record :: fn(container: ptr[mut Container], id: u64) -> Result[VolumeRecord, Error] {
     record := VolumeRecord.{}
     bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .VolumeEntry, 0),
@@ -438,7 +663,16 @@ volume_record :: fn(container: ptr[mut Container], id: u64) -> Result[VolumeReco
     return .Ok(record)
 }
 
-/** The volume named name in the container: its ID, or null. */
+/**
+ * Find a volume in the container by its name.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param name The name, compared byte for byte.
+ * @return The volume's ID; null if no volume has the name.
+ * @error NotFound A volume found by its ID isn't there to read.
+ * @error Corrupt A record or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory to read a node.
+ */
 find_volume :: fn(container: ptr[mut Container], name: string) -> Result[u64?, Error] {
     at : u64 = 0
     loop {
@@ -457,6 +691,16 @@ find_volume :: fn(container: ptr[mut Container], name: string) -> Result[u64?, E
 
 // Objects' records.
 
+/**
+ * Read an object's record.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param object The object's ID.
+ * @return The record, a copy.
+ * @error NotFound No object has the ID.
+ * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory to read a node.
+ */
 get_object :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, Error] {
     record := ObjectRecord.{}
     bytes :: tree_get(volume.nodes, &volume.tree, key_of(object, .Object, 0),
@@ -467,16 +711,38 @@ get_object :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, E
     return .Ok(record)
 }
 
+/**
+ * Put an object's record, durable with the volume's next commit.
+ *
+ * @param volume The volume, marked dirty.
+ * @param object The object's ID.
+ * @param record The record, copied.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 put_object :: fn(volume: ptr[mut Volume], object: u64, record: ptr[ObjectRecord]) -> Result[void, Error] {
     volume.dirty = true
     tree_put(volume.nodes, &volume.tree, key_of(object, .Object, 0), view_of(cast[ptr[u8]](record), size_of(ObjectRecord)))?
     return .Ok
 }
 
+/**
+ * Get an object's kind from its record.
+ *
+ * @param record The object's record, as get_object read it.
+ * @return Its kind, as kind_of reads it.
+ */
 kind_of_record :: fn(record: ptr[ObjectRecord]) -> ObjectKind {
     return kind_of(cast[u32](record.kind))
 }
 
+/**
+ * Get the ObjectKind a kind field holds.
+ *
+ * @param kind The field's value.
+ * @return Directory or Link for theirs; File for any other value, 1 included.
+ */
 kind_of :: fn(kind: u32) -> ObjectKind {
     if kind == cast[u32](ObjectKind.Directory) {
         return .Directory
@@ -484,6 +750,16 @@ kind_of :: fn(kind: u32) -> ObjectKind {
     return if kind == cast[u32](ObjectKind.Link) { .Link } else { .File }
 }
 
+/**
+ * Get what an object is.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param object The object's ID.
+ * @return What its record says.
+ * @error NotFound No object has the ID.
+ * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory to read a node.
+ */
 info :: fn(volume: ptr[mut Volume], object: u64) -> Result[Info, Error] {
     record :: get_object(volume, object)?
     return .Ok(Info.{object = object, kind = kind_of_record(&record), parent = cast[u64](record.parent), size = cast[u64](record.size),
@@ -491,7 +767,19 @@ info :: fn(volume: ptr[mut Volume], object: u64) -> Result[Info, Error] {
         schema = record.schema})
 }
 
-/** A file made typed (decisions/0046, 0108): its schema hash, kept in its record, which only a new file's is given. */
+/**
+ * Make a file typed (decisions/0046, 0108): its schema hash kept in its record, durable with the next commit.
+ *
+ * Only a new file's is given one; this doesn't check that it's new, or a file, and changes no time.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param object The file's ID.
+ * @param schema The schema hash; all zeros makes it plain bytes again.
+ * @error NotFound No object has the ID.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node.
+ * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
+ */
 set_schema :: fn(volume: ptr[mut Volume], object: u64, schema: u8[32]) -> Result[void, Error] {
     record := get_object(volume, object)?
     record.schema = schema
@@ -499,7 +787,18 @@ set_schema :: fn(volume: ptr[mut Volume], object: u64, schema: u8[32]) -> Result
     return .Ok
 }
 
-/** The record of an object that's a directory, or NotADirectory, or IsALink for a link. */
+/**
+ * Read the record of an object that has to be a directory.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param object The object's ID.
+ * @return Its record.
+ * @error NotFound No object has the ID.
+ * @error NotADirectory It's a file.
+ * @error IsALink It's a stored link.
+ * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory to read a node.
+ */
 directory_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, Error] {
     record :: get_object(volume, object)?
     kind :: kind_of_record(&record)
@@ -512,6 +811,17 @@ directory_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRec
     return .Ok(record)
 }
 
+/**
+ * Mark an object changed now: its modified time the volume's now, its changed transaction this one, and its record
+ * put.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param object The object's ID.
+ * @param record Its record, as the caller has it, updated and put.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 touch :: fn(volume: ptr[mut Volume], object: u64, record: ptr[mut ObjectRecord]) -> Result[void, Error] {
     record.modified = cast[u64le](volume.now)
     record.changed = cast[u64le](volume.nodes.transaction)
@@ -521,10 +831,16 @@ touch :: fn(volume: ptr[mut Volume], object: u64, record: ptr[mut ObjectRecord])
 // Names.
 
 /**
- * Whether name can name something: not empty, not too long, not "." or "..", no '/', and UTF-8 with nothing that can't
- * be seen (decisions/0097, 0108): no C0 or C1 controls, no bidirectional controls, and none of Unicode's default
- * ignorable code points, which UTS #39 counts as invisible. Names are compared byte for byte (0046), so these are what
- * would let two names look the same, or one look like another.
+ * Tell whether a name can name something: not empty, not too long, not "." or "..", no '/', and UTF-8 with nothing
+ * that can't be seen (decisions/0097, 0108).
+ *
+ * Nothing that can't be seen means no C0 or C1 controls (NUL among them), no bidirectional controls, and none of
+ * Unicode's default ignorable code points, which UTS #39 counts as invisible. Names are compared byte for byte
+ * (0046), so these are what would let two names look the same, or one look like another.
+ *
+ * @param name The name's bytes, as given.
+ * @return True if it can; false if it's empty, longer than NAME_BYTES, "." or "..", or has '/', bytes that aren't
+ *     UTF-8, or a code point that isn't visible.
  */
 name_holds :: fn(name: string) -> bool {
     if name.count == 0 || name.count > NAME_BYTES || name == "." || name == ".." {
@@ -545,7 +861,15 @@ name_holds :: fn(name: string) -> bool {
     return true
 }
 
-/** The code point at at in bytes, and its length; length 0 for bytes that aren't UTF-8, overlong or a surrogate. */
+/**
+ * Decode the UTF-8 code point at an offset in bytes.
+ *
+ * @param bytes The bytes, any; they aren't trusted to be UTF-8.
+ * @param at The byte offset of the code point's first byte.
+ * @return point The code point; 0 when length is.
+ * @return length Its length in bytes, 1 to 4; 0 at the end, or for bytes that aren't UTF-8, an overlong form, a
+ *     surrogate or past 0x10ffff.
+ */
 decode_utf8 :: fn(bytes: u8[], at: usize) -> (point: u32, length: usize) {
     if at >= bytes.count {
         return 0, 0
@@ -595,7 +919,11 @@ decode_utf8 :: fn(bytes: u8[], at: usize) -> (point: u32, length: usize) {
 }
 
 /**
- * Whether a code point shows: not a control, a bidirectional control, or a default ignorable (DerivedCoreProperties).
+ * Tell whether a code point shows: not a control, a bidirectional control, or a default ignorable
+ * (DerivedCoreProperties).
+ *
+ * @param point The code point, as decode_utf8 gave it.
+ * @return True if it shows; false for U+0000 to U+001F, U+007F to U+009F, and the ranges in INVISIBLE.
  */
 visible :: fn(point: u32) -> bool {
     if point < 0x20 || (point >= 0x7f && point <= 0x9f) {
@@ -610,16 +938,23 @@ visible :: fn(point: u32) -> bool {
     return true
 }
 
-/** Unicode's Default_Ignorable_Code_Point ranges (Unicode 15.1), the bidirectional controls among them: low, high */
+/** Unicode's Default_Ignorable_Code_Point ranges (Unicode 15.1), the bidirectional controls among them: low, high. */
 INVISIBLE :: u32.[
     0x00ad, 0x00ad, 0x034f, 0x034f, 0x061c, 0x061c, 0x115f, 0x1160, 0x17b4, 0x17b5, 0x180b, 0x180f, 0x200b, 0x200f,
     0x202a, 0x202e, 0x2060, 0x206f, 0x3164, 0x3164, 0xfe00, 0xfe0f, 0xfeff, 0xfeff, 0xffa0, 0xffa0, 0xfff0, 0xfff8,
     0x1bca0, 0x1bca3, 0x1d173, 0x1d17a, 0xe0000, 0xe0fff,
 ]
 
+/** The bits a name's hash has: 56, so a list cursor holds it with a place among those alike in its low 8. */
 HASH_MASK : u64 : 0x00ffffffffffffff
 
-/** A name's hash, keyed by the volume's key: 56 bits, so a List cursor holds it and a place among those alike. */
+/**
+ * Hash a name, keyed by the volume's key: BLAKE3, its first 7 bytes, little-endian.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param name The name's bytes, hashed as they are.
+ * @return The hash, 0 to HASH_MASK.
+ */
 hash_name :: fn(volume: ptr[Volume], name: string) -> u64 {
     hasher := crypto.blake3_start_keyed(crypto.as_secret(volume.hash_key)) or_return 0
     crypto.blake3_update(&hasher, string_bytes(name))
@@ -639,16 +974,27 @@ hash_name :: fn(volume: ptr[Volume], name: string) -> u64 {
  * value is copied into a buffer of MAX_VALUE_BYTES.
  */
 EntryList :: struct {
+    /** The record's value. */
     bytes : u8[4096],
+    /** How many of bytes are used; 0 for no record. */
     count : usize,
 }
 
 /** The entry named name in a list: where it starts, and its head. */
 EntryAt :: struct {
+    /** Its head's byte offset in the list. */
     at : usize,
+    /** Its head, a copy. */
     head : EntryHead,
 }
 
+/**
+ * Read the head of the entry at an offset in a list.
+ *
+ * @param list The list, as get_entries filled it.
+ * @param at The entry's byte offset.
+ * @return The head, a copy; null if it doesn't fit in the list's used bytes.
+ */
 entry_head :: fn(list: ptr[EntryList], at: usize) -> EntryHead? {
     if at + size_of(EntryHead) > list.count || at >= list.bytes.count {
         return null
@@ -656,13 +1002,27 @@ entry_head :: fn(list: ptr[EntryList], at: usize) -> EntryHead? {
     return cast[ptr[EntryHead]](&list.bytes[at])^
 }
 
-/** Where each entry in a list starts, stepping from at; null at its end, or where it doesn't hold together. */
+/**
+ * Step from an entry in a list to the next.
+ *
+ * @param list The list, as get_entries filled it.
+ * @param at The entry's byte offset.
+ * @return The next entry's offset, which may be the list's end; null if the entry doesn't hold together.
+ */
 next_entry_at :: fn(list: ptr[EntryList], at: usize) -> usize? {
     head :: entry_head(list, at) or_return null
     next :: at + size_of(EntryHead) + cast[usize](cast[u16](head.name_bytes))
     return if next <= list.count { next } else { null }
 }
 
+/**
+ * Get an entry's name in a list.
+ *
+ * @param list The list, as get_entries filled it.
+ * @param at The entry's byte offset.
+ * @param head Its head.
+ * @return The name's bytes, a view into the list, good until it changes; empty if they don't fit in the list.
+ */
 entry_name :: fn(list: ptr[EntryList], at: usize, head: ptr[EntryHead]) -> u8[] {
     start :: at + size_of(EntryHead)
     count :: cast[usize](cast[u16](head.name_bytes))
@@ -672,6 +1032,13 @@ entry_name :: fn(list: ptr[EntryList], at: usize, head: ptr[EntryHead]) -> u8[] 
     return view_of(&list.bytes[start], count)
 }
 
+/**
+ * Tell whether bytes are a string's.
+ *
+ * @param a The bytes, as a list's name holds them.
+ * @param b The string, as a caller's name.
+ * @return True if they're the same length and byte for byte alike.
+ */
 same_bytes :: fn(a: u8[], b: string) -> bool {
     if a.count != b.count {
         return false
@@ -684,6 +1051,13 @@ same_bytes :: fn(a: u8[], b: string) -> bool {
     return true
 }
 
+/**
+ * Find an entry in a list by its name, compared byte for byte.
+ *
+ * @param list The list, as get_entries filled it.
+ * @param name The name looked for.
+ * @return Where it is and its head; null if no entry has it, or the list stops holding together before one does.
+ */
 find_in_list :: fn(list: ptr[EntryList], name: string) -> EntryAt? {
     at : usize = 0
     loop {
@@ -697,11 +1071,33 @@ find_in_list :: fn(list: ptr[EntryList], name: string) -> EntryAt? {
     return null
 }
 
+/**
+ * Read a directory's entries whose names have a hash.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param directory The directory's ID.
+ * @param hash The names' hash.
+ * @param list Where they go; its count is 0 if there are none.
+ * @error OutOfMemory No memory to read a node.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 get_entries :: fn(volume: ptr[mut Volume], directory: u64, hash: u64, list: ptr[mut EntryList]) -> Result[void, Error] {
     list.count = tree_get(volume.nodes, &volume.tree, key_of(directory, .Entry, hash), list.bytes)? or_else 0
     return .Ok
 }
 
+/**
+ * Put a directory's entries whose names have a hash, or take their record out when there are none.
+ *
+ * @param volume The volume, marked dirty.
+ * @param directory The directory's ID.
+ * @param hash The names' hash.
+ * @param list The entries, all of them for the hash, their count what's used.
+ * @error TooLarge The list's count is past its buffer.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 put_entries :: fn(volume: ptr[mut Volume], directory: u64, hash: u64, list: ptr[EntryList]) -> Result[void, Error] {
     volume.dirty = true
     key :: key_of(directory, .Entry, hash)
@@ -716,7 +1112,20 @@ put_entries :: fn(volume: ptr[mut Volume], directory: u64, hash: u64, list: ptr[
     return .Ok
 }
 
-/** The object named name in directory, or null. */
+/**
+ * Look up the object a name names in a directory.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param directory The directory's ID.
+ * @param name The name, compared byte for byte.
+ * @return The object's ID; null if nothing has the name.
+ * @error NotFound The directory isn't there.
+ * @error NotADirectory The directory is a file.
+ * @error IsALink The directory is a stored link.
+ * @error InvalidName The name can't name anything (name_holds).
+ * @error OutOfMemory No memory for the list or a node.
+ * @error Corrupt A record or a node couldn't be read or didn't check out.
+ */
 lookup :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[u64?, Error] {
     directory_record(volume, directory)?
     if !name_holds(name) {
@@ -729,7 +1138,20 @@ lookup :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[u6
     return .Ok(cast[u64](found.head.object))
 }
 
-/** A new entry in directory, naming object of kind. */
+/**
+ * Add an entry to a directory, naming an object. The object's record and the directory's aren't touched.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param directory The directory's ID, not checked to be one.
+ * @param name The name, which the caller has checked holds.
+ * @param object The object it names.
+ * @param kind The object's kind.
+ * @error AlreadyExists The directory has an entry of the name.
+ * @error TooLarge The entries whose names hash alike with it have no room for it in one record.
+ * @error OutOfMemory No memory for the list or a node.
+ * @error NoSpace No free extent for a node.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 add_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string, object: u64, kind: ObjectKind) -> Result[void, Error] {
     hash :: hash_name(volume, name)
     list :: make(EntryList)?
@@ -749,6 +1171,17 @@ add_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string, object: u
     return .Ok
 }
 
+/**
+ * Take an entry out of a directory. The object it named is left as it is.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param directory The directory's ID.
+ * @param name The name, compared byte for byte.
+ * @error NotFound The directory has no entry of the name.
+ * @error OutOfMemory No memory for the list or a node.
+ * @error NoSpace No free extent for a node's copy.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 remove_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[void, Error] {
     hash :: hash_name(volume, name)
     list :: make(EntryList)?
@@ -769,7 +1202,21 @@ remove_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Res
 
 // Paths: components with '/' between them, each a name, resolved beneath a directory, so nothing leads above it.
 
-/** The object at path beneath directory, each component looked up in the one before. */
+/**
+ * Resolve a path beneath a directory to its object, each component looked up in the one before. Links aren't
+ * followed: one before the last component is IsALink.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param directory The directory the path starts at.
+ * @param path The path: names separated by single '/', none empty, no leading or trailing '/'.
+ * @return The object at its end.
+ * @error InvalidName A component can't name anything: empty, ".", "..", or too long.
+ * @error NotFound A component isn't there.
+ * @error NotADirectory A component before the last is a file.
+ * @error IsALink A component before the last is a stored link.
+ * @error OutOfMemory No memory for a list or a node.
+ * @error Corrupt A record or a node couldn't be read or didn't check out.
+ */
 resolve :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[u64, Error] {
     at := directory
     start : usize = 0
@@ -789,10 +1236,26 @@ resolve :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[u
 
 /** Where a path's last component goes: the directory holding it, and its name. */
 Leaf :: struct {
+    /** The directory's ID. */
     directory : u64,
+    /** The last component, a view into the path, good as long as it is; not checked to hold. */
     name : string,
 }
 
+/**
+ * Find where a path's last component goes: the directory its components before it lead to, and its name.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param directory The directory the path starts at.
+ * @param path The path: names separated by single '/'; its last component isn't looked up.
+ * @return The directory and the name; a path without '/' is directory and the whole path.
+ * @error InvalidName A component before the last can't name anything.
+ * @error NotFound A component before the last isn't there.
+ * @error NotADirectory A component before the last is a file.
+ * @error IsALink A component before the last is a stored link.
+ * @error OutOfMemory No memory for a list or a node.
+ * @error Corrupt A record or a node couldn't be read or didn't check out.
+ */
 leaf_of :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[Leaf, Error] {
     last := path.count
     for character, i in path {
@@ -812,7 +1275,25 @@ leaf_of :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[L
 }
 
 /**
- * A new file or directory named name in directory: AlreadyExists if the name's taken.
+ * Make a new, empty file, directory or link object, named in a directory.
+ *
+ * Its times are the volume's now; the directory is touched and a Created change noted. It's durable with the
+ * volume's next commit.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param directory The directory's ID.
+ * @param name The name, which name_holds and the directory doesn't have.
+ * @param kind What it is; a Link's record is create_link's to put.
+ * @return The new object's ID.
+ * @error NotFound The directory isn't there.
+ * @error NotADirectory The directory is a file.
+ * @error IsALink The directory is a stored link.
+ * @error InvalidName The name can't name anything (name_holds).
+ * @error AlreadyExists The directory has something of the name.
+ * @error TooLarge The entries whose names hash alike with it have no room for it.
+ * @error OutOfMemory No memory for a list or a node.
+ * @error NoSpace No free extent for a node.
+ * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
 create :: fn(volume: ptr[mut Volume], directory: u64, name: string, kind: ObjectKind) -> Result[u64, Error] {
     parent := directory_record(volume, directory)?
@@ -830,14 +1311,39 @@ create :: fn(volume: ptr[mut Volume], directory: u64, name: string, kind: Object
     return .Ok(object)
 }
 
-/** Whether a directory has nothing in it. */
+/**
+ * Tell whether a directory has nothing in it.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param directory The directory's ID.
+ * @return True if it has no entries.
+ * @error OutOfMemory No memory to read a node.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 is_empty :: fn(volume: ptr[mut Volume], directory: u64) -> Result[bool, Error] {
     value : u8[1]
     found :: tree_next(volume.nodes, &volume.tree, key_of(directory, .Entry, 0), value)? or_return .Ok(true)
     return .Ok(found.key.object != directory || found.key.kind != cast[u8](RecordKind.Entry))
 }
 
-/** The file or empty directory named name in directory, removed, with everything it held. */
+/**
+ * Remove what a name names in a directory, a file, a link or an empty directory, with its chunks.
+ *
+ * Its blocks are given back, free once the volume's next commit is durable (or held by a snapshot). The directory is
+ * touched and a Removed change noted.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param directory The directory's ID.
+ * @param name The name, compared byte for byte.
+ * @error NotFound The directory, or anything of the name in it, isn't there.
+ * @error NotADirectory The directory is a file.
+ * @error IsALink The directory is a stored link.
+ * @error InvalidName The name can't name anything.
+ * @error DirectoryNotEmpty The name names a directory with something in it.
+ * @error OutOfMemory No memory for a list or a node.
+ * @error NoSpace No free extent for a node's copy.
+ * @error Corrupt A record or a node couldn't be read or didn't check out.
+ */
 remove :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[void, Error] {
     parent := directory_record(volume, directory)?
     object :: lookup(volume, directory, name)? or_return .Error(.NotFound)
@@ -852,7 +1358,17 @@ remove :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[vo
     return .Ok
 }
 
-/** An object's chunks and record gone, its blocks given back, and a link's record. */
+/**
+ * Destroy an object: its chunks and record taken out, its blocks given back, and a link's record.
+ *
+ * Its name, if it has one, is the caller's to take out.
+ *
+ * @param volume The volume, marked dirty.
+ * @param object The object's ID.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node's copy.
+ * @error Corrupt A chunk found can't be taken out, or a node couldn't be read or didn't check out.
+ */
 destroy :: fn(volume: ptr[mut Volume], object: u64) -> Result[void, Error] {
     _ = tree_delete(volume.nodes, &volume.tree, key_of(object, .Link, 0))?
     loop {
@@ -870,8 +1386,17 @@ destroy :: fn(volume: ptr[mut Volume], object: u64) -> Result[void, Error] {
 }
 
 /**
- * A chunk's record taken out, and its blocks given back if it had any. One a search found but deleting doesn't is a
- * damaged tree's, and Corrupt, so the loops that drop chunks one by one always end.
+ * Take a chunk's record out, and give its blocks back if it had any.
+ *
+ * One a search found but deleting doesn't is a damaged tree's, and Corrupt, so the loops that drop chunks one by one
+ * always end.
+ *
+ * @param volume The volume, marked dirty.
+ * @param key The chunk's key, as a search found it.
+ * @param extent Its record.
+ * @error Corrupt The record wasn't there to take out, or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node's copy.
  */
 drop_chunk :: fn(volume: ptr[mut Volume], key: Key, extent: ptr[ExtentRecord]) -> Result[void, Error] {
     if !(tree_delete(volume.nodes, &volume.tree, key)?) {
@@ -882,6 +1407,12 @@ drop_chunk :: fn(volume: ptr[mut Volume], key: Key, extent: ptr[ExtentRecord]) -
     return .Ok
 }
 
+/**
+ * Give back a chunk's blocks, if it's in blocks; an inline chunk has none.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param extent The chunk's record.
+ */
 release_extent :: fn(volume: ptr[mut Volume], extent: ptr[ExtentRecord]) {
     if cast[u32](extent.kind) == cast[u32](ExtentKind.Blocks) {
         nodes :: volume.nodes
@@ -893,7 +1424,18 @@ release_extent :: fn(volume: ptr[mut Volume], extent: ptr[ExtentRecord]) {
 /** The most directories deep a volume goes, so walking up from one ends even where a damaged volume loops. */
 MAX_DEPTH : u64 : 4096
 
-/** Whether directory is ancestor, or beneath it. */
+/**
+ * Tell whether a directory is another, or beneath it, by following parents.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param directory The directory to start at.
+ * @param ancestor The directory looked for.
+ * @return True if directory is ancestor or beneath it; false once the root is reached without it.
+ * @error NotFound A parent on the way isn't there.
+ * @error Corrupt The parents go MAX_DEPTH deep without reaching the root, as a loop does, or a record or a node
+ *     couldn't be read or didn't check out.
+ * @error OutOfMemory No memory to read a node.
+ */
 is_beneath :: fn(volume: ptr[mut Volume], directory: u64, ancestor: u64) -> Result[bool, Error] {
     at := directory
     for step in 0..<MAX_DEPTH {
@@ -910,8 +1452,26 @@ is_beneath :: fn(volume: ptr[mut Volume], directory: u64, ancestor: u64) -> Resu
 }
 
 /**
- * What's named from_name in from moved to to_name in to, replacing a file there; a directory can't be moved beneath
- * itself (InvalidName), and a directory isn't replaced (AlreadyExists).
+ * Move what a name names in one directory to a name in another, or the same, replacing a file there.
+ *
+ * It's all in the volume's transaction, so a commit makes all of it durable or none. A file replaced is destroyed, and
+ * a Removed change noted for it; the object moved is touched, as are both directories, and MovedOut and MovedIn
+ * changes noted. Moving something to the name it has already does nothing.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param from The directory it's in.
+ * @param from_name Its name there.
+ * @param to The directory it goes to.
+ * @param to_name Its name there.
+ * @error NotFound A directory, or anything of from_name in from, isn't there.
+ * @error NotADirectory A directory is a file.
+ * @error IsALink A directory is a stored link.
+ * @error InvalidName A name can't name anything, or a directory would go beneath itself.
+ * @error AlreadyExists Something of to_name is in to, and it, or what's moved, is a directory.
+ * @error TooLarge The entries in to whose names hash alike with to_name have no room for it.
+ * @error OutOfMemory No memory for a list or a node.
+ * @error NoSpace No free extent for a node.
+ * @error Corrupt A record or a node couldn't be read or didn't check out, or the parents loop.
  */
 rename :: fn(volume: ptr[mut Volume], from: u64, from_name: string, to: u64, to_name: string) -> Result[void, Error] {
     from_record := directory_record(volume, from)?
@@ -960,8 +1520,21 @@ rename :: fn(volume: ptr[mut Volume], from: u64, from_name: string, to: u64, to_
 }
 
 /**
- * The entry at or after a cursor in directory, its name copied into name, or null after the last. A cursor is a
- * name's hash and its place among those alike, so it stays good while the directory changes.
+ * List the entry at or after a cursor in a directory.
+ *
+ * A cursor is a name's hash and its place among those alike, so it stays good while the directory changes: entries
+ * added or removed elsewhere don't make it skip or repeat others, though ones that hash alike with it may.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param directory The directory's ID.
+ * @param cursor Where to list from: 0 for the first entry, or a Listed's next.
+ * @param name Where the entry's name is copied, as much as fits.
+ * @return The entry and the cursor after it; null after the last.
+ * @error NotFound The directory isn't there.
+ * @error NotADirectory The directory is a file.
+ * @error IsALink The directory is a stored link.
+ * @error OutOfMemory No memory for the list or a node.
+ * @error Corrupt A record's hash is past HASH_MASK, or a record or a node couldn't be read or didn't check out.
  */
 list :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: mut u8[]) -> Result[Listed?, Error] {
     directory_record(volume, directory)?
@@ -1004,7 +1577,14 @@ list :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: mut u8[])
 
 // Files' bytes.
 
-/** bytes from start up to end, or nothing where that's not inside them. */
+/**
+ * Get part of some bytes.
+ *
+ * @param bytes The bytes, viewed, not copied.
+ * @param start The part's first byte.
+ * @param end The byte after its last.
+ * @return The part, a view into bytes; empty where start..end isn't inside them.
+ */
 part :: fn(bytes: u8[], start: usize, end: usize) -> u8[] {
     if start <= end && end <= bytes.count {
         return bytes[start..<end]
@@ -1012,6 +1592,14 @@ part :: fn(bytes: u8[], start: usize, end: usize) -> u8[] {
     return bytes[0..<0]
 }
 
+/**
+ * Get part of some bytes, to write to.
+ *
+ * @param bytes The bytes, viewed, not copied.
+ * @param start The part's first byte.
+ * @param end The byte after its last.
+ * @return The part, a view into bytes; empty where start..end isn't inside them.
+ */
 mut_part :: fn(bytes: mut u8[], start: usize, end: usize) -> mut u8[] {
     if start <= end && end <= bytes.count {
         return bytes[start..<end]
@@ -1019,16 +1607,33 @@ mut_part :: fn(bytes: mut u8[], start: usize, end: usize) -> mut u8[] {
     return bytes[0..<0]
 }
 
-/** A record's value, and a chunk, in memory of their own. */
+/** A record's value, in memory of its own, from make. */
 ValueBuffer :: struct {
+    /** The value's bytes, MAX_VALUE_BYTES of them. */
     bytes : u8[4096],
 }
 
+/** A chunk, in memory of its own, from make. */
 ChunkBuffer :: struct {
+    /** The chunk's bytes, CHUNK_BYTES of them. */
     bytes : u8[65536],
 }
 
-/** A chunk's bytes, into a buffer of CHUNK_BYTES: how many were written, the rest of the buffer zeros. */
+/**
+ * Read a file's chunk.
+ *
+ * Nothing is changed. A chunk in blocks is checked by its seal, or opened with the volume's keys.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param file The file's ID.
+ * @param index The chunk's index, its byte offset / CHUNK_BYTES.
+ * @param buffer Where it goes, CHUNK_BYTES of it: its bytes that were written, then zeros.
+ * @return How many of its bytes were written, 0 to CHUNK_BYTES; 0 for a chunk that isn't there.
+ * @error DeviceError A failed write was for the chunk (decisions/0112), or its blocks couldn't be read.
+ * @error Corrupt Its record doesn't hold together, its seal doesn't hold, or a node couldn't be read or didn't
+ *     check out.
+ * @error OutOfMemory No memory for a buffer or a node.
+ */
 read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[]) -> Result[usize, Error] {
     // What a failed write should have changed isn't given as if it hadn't (decisions/0112)
     if chunk_failed(volume, file, index) {
@@ -1094,8 +1699,22 @@ read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[
 }
 
 /**
- * A chunk's first used bytes of buffer, written anew: in its record, or in new blocks, sealed, and the blocks it had
- * given back. buffer is zeros past used.
+ * Write a file's chunk anew: in its record, or in new blocks, sealed, and the blocks it had given back.
+ *
+ * Blocks are written at once, not flushed; the record naming them is durable with the volume's next commit. A write
+ * the device fails marks the volume failed and the chunk unreadable, gives the new blocks back and keeps the old
+ * record.
+ *
+ * @param volume The volume, marked dirty.
+ * @param file The file's ID.
+ * @param index The chunk's index.
+ * @param buffer The chunk's bytes, at least used rounded up to whole blocks, zeros past used.
+ * @param used How many of its bytes were written, 0 to CHUNK_BYTES (at most INLINE_BYTES inline).
+ * @param inline True to hold it in its record, as a small file's first chunk is; false for blocks.
+ * @error NoSpace No free extent for its blocks, or a quota or the reserve refuses them, or none for a node.
+ * @error DeviceError The device couldn't write its blocks.
+ * @error OutOfMemory No memory for a buffer or a node.
+ * @error Corrupt It couldn't be sealed, or a node couldn't be read or didn't check out.
  */
 write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[], used: usize, inline: bool) -> Result[void, Error] {
     key :: key_of(file, .Extent, index * CHUNK_BYTES)
@@ -1165,7 +1784,18 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
     return .Ok
 }
 
-/** The file record of an object that's a file, or IsADirectory, or IsALink. */
+/**
+ * Read the record of an object that has to be a file.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param object The object's ID.
+ * @return Its record.
+ * @error NotFound No object has the ID.
+ * @error IsADirectory It's a directory.
+ * @error IsALink It's a stored link.
+ * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory to read a node.
+ */
 file_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, Error] {
     record :: get_object(volume, object)?
     kind :: kind_of_record(&record)
@@ -1178,7 +1808,22 @@ file_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, 
     return .Ok(record)
 }
 
-/** Bytes of a file from offset into into: how many, fewer at its end. */
+/**
+ * Read bytes of a file. Nothing is changed.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param file The file's ID.
+ * @param offset The byte offset to read from; at or past the file's size, nothing is read.
+ * @param into Where the bytes go; at most its count are read.
+ * @return How many were read: fewer than into holds only at the file's end, 0 at or past it. Bytes never written
+ *     read as zeros.
+ * @error NotFound No object has the ID.
+ * @error IsADirectory It's a directory.
+ * @error IsALink It's a stored link.
+ * @error DeviceError A chunk a failed write was for, or one whose blocks couldn't be read.
+ * @error OutOfMemory No memory for a buffer or a node.
+ * @error Corrupt A chunk's record or seal, or a node, doesn't check out.
+ */
 read :: fn(volume: ptr[mut Volume], file: u64, offset: u64, into: mut u8[]) -> Result[usize, Error] {
     record :: file_record(volume, file)?
     size :: cast[u64](record.size)
@@ -1201,7 +1846,27 @@ read :: fn(volume: ptr[mut Volume], file: u64, offset: u64, into: mut u8[]) -> R
     return .Ok(cast[usize](end - offset))
 }
 
-/** from written into a file at offset, which grows it if it ends past its size. */
+/**
+ * Write bytes into a file, growing it if they end past its size.
+ *
+ * Each chunk they touch is written anew, whole; a file past INLINE_BYTES has its first chunk moved out of its record.
+ * The file is touched and a Written change noted (one for writes in one transaction). The chunks' blocks are written
+ * at once; the records naming them are durable with the volume's next commit, so a crash before it leaves the file
+ * as that commit had it.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param file The file's ID.
+ * @param offset The byte offset to write at; past the file's end, the gap reads as zeros.
+ * @param from The bytes, copied; none writes nothing but the time and the change.
+ * @error NotFound No object has the ID.
+ * @error IsADirectory It's a directory.
+ * @error IsALink It's a stored link.
+ * @error TooLarge The bytes would end past 2^64 - 1.
+ * @error NoSpace No free extent, or a quota or the reserve refuses one; chunks written before it stay written.
+ * @error DeviceError A chunk couldn't be read or written; the volume is failed after a write fails.
+ * @error OutOfMemory No memory for a buffer or a node.
+ * @error Corrupt A chunk or a node doesn't check out.
+ */
 write :: fn(volume: ptr[mut Volume], file: u64, offset: u64, from: u8[]) -> Result[void, Error] {
     record := file_record(volume, file)?
     end :: offset + cast[u64](from.count)
@@ -1236,7 +1901,17 @@ write :: fn(volume: ptr[mut Volume], file: u64, offset: u64, from: u8[]) -> Resu
     return .Ok
 }
 
-/** A file's first chunk, if it's in its record, moved to blocks. */
+/**
+ * Move a file's first chunk to blocks, if it's in its record.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param file The file's ID.
+ * @param chunk A buffer of CHUNK_BYTES to read it into, overwritten.
+ * @error NoSpace No free extent, or a quota or the reserve refuses one.
+ * @error DeviceError The chunk couldn't be read or written.
+ * @error OutOfMemory No memory for a buffer or a node.
+ * @error Corrupt The chunk or a node doesn't check out.
+ */
 move_inline :: fn(volume: ptr[mut Volume], file: u64, chunk: mut u8[]) -> Result[void, Error] {
     head := ExtentRecord.{}
     had :: tree_get(volume.nodes, &volume.tree, key_of(file, .Extent, 0), view_of(cast[ptr[mut u8]](&head), size_of(ExtentRecord)))?
@@ -1248,8 +1923,21 @@ move_inline :: fn(volume: ptr[mut Volume], file: u64, chunk: mut u8[]) -> Result
 }
 
 /**
- * A file made size bytes long: shorter, the chunks past it dropped and the last one cut, so what's past the end reads
- * as zeros if it grows again; longer, zeros after its end, without writing them.
+ * Make a file a size: shorter, the chunks past it dropped and the last one cut, so what's past the end reads as zeros
+ * if it grows again; longer, zeros after its end, without writing them.
+ *
+ * The file is touched and a Written change noted. It's durable with the volume's next commit.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param file The file's ID.
+ * @param size The new size in bytes.
+ * @error NotFound No object has the ID.
+ * @error IsADirectory It's a directory.
+ * @error IsALink It's a stored link.
+ * @error NoSpace No free extent for the cut chunk, or a node.
+ * @error DeviceError The cut chunk couldn't be read or written.
+ * @error OutOfMemory No memory for a buffer or a node.
+ * @error Corrupt A chunk or a node doesn't check out.
  */
 set_size :: fn(volume: ptr[mut Volume], file: u64, size: u64) -> Result[void, Error] {
     record := file_record(volume, file)?
@@ -1286,6 +1974,15 @@ set_size :: fn(volume: ptr[mut Volume], file: u64, size: u64) -> Result[void, Er
     return .Ok
 }
 
+/**
+ * Tell whether a file's first chunk is held in its record.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param file The file's ID.
+ * @return True if its first chunk's record is inline.
+ * @error OutOfMemory No memory to read a node.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 is_inline :: fn(volume: ptr[mut Volume], file: u64) -> Result[bool, Error] {
     head := ExtentRecord.{}
     had :: tree_get(volume.nodes, &volume.tree, key_of(file, .Extent, 0), view_of(cast[ptr[mut u8]](&head), size_of(ExtentRecord)))?
@@ -1294,11 +1991,33 @@ is_inline :: fn(volume: ptr[mut Volume], file: u64) -> Result[bool, Error] {
 
 // An encrypted volume's keys, in the container's volumes tree beside its record (keys.hsc).
 
+/**
+ * Put one of a volume's key wrap records, durable with the container's next commit.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The ID of the volume whose key records they are.
+ * @param index Which wrap, from 0.
+ * @param record The record, copied.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 put_wrap :: fn(container: ptr[mut Container], id: u64, index: u64, record: ptr[WrapRecord]) -> Result[void, Error] {
     tree_put(&container.nodes, &container.volumes, key_of(id, .KeyWrap, index), view_of(cast[ptr[u8]](record), size_of(WrapRecord)))?
     return .Ok
 }
 
+/**
+ * Put one of a volume's key generation records, durable with the container's next commit.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The ID of the volume whose key records they are.
+ * @param number The generation's number, from 1.
+ * @param record The record, copied.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 put_generation :: fn(container: ptr[mut Container], id: u64, number: u32, record: ptr[GenerationRecord]) -> Result[void, Error] {
     tree_put(&container.nodes, &container.volumes, key_of(id, .KeyGeneration, cast[u64](number)),
         view_of(cast[ptr[u8]](record), size_of(GenerationRecord)))?
@@ -1307,11 +2026,21 @@ put_generation :: fn(container: ptr[mut Container], id: u64, number: u32, record
 
 /** A generation's record and its number. */
 NumberedGeneration :: struct {
+    /** The generation's number, from 1. */
     number : u32,
+    /** Its record. */
     record : GenerationRecord,
 }
 
-/** The volume's key wrapped, each way it is, added to found, which is the caller's to free. */
+/**
+ * List a volume's key wrap records, each way its key is wrapped, by index.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The ID of the volume whose key records they are.
+ * @param found Where they're added, with context's allocator; the caller's to free, even on an error.
+ * @error Corrupt A record is the wrong size, or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory for the list or a node.
+ */
 volume_wraps :: fn(container: ptr[mut Container], id: u64, found: ptr[mut WrapRecord[..]]) -> Result[void, Error] {
     record := WrapRecord.{}
     at := key_of(id, .KeyWrap, 0)
@@ -1331,7 +2060,16 @@ volume_wraps :: fn(container: ptr[mut Container], id: u64, found: ptr[mut WrapRe
     return .Ok
 }
 
-/** The volume's key generations, oldest first, added to found, which is the caller's to free. */
+/**
+ * List a volume's key generation records, oldest first.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The ID of the volume whose key records they are.
+ * @param found Where they're added, with context's allocator; the caller's to free, even on an error.
+ * @error Corrupt A record is the wrong size or numbered 0 or past a u32, or a node couldn't be read or didn't
+ *     check out.
+ * @error OutOfMemory No memory for the list or a node.
+ */
 volume_generations :: fn(container: ptr[mut Container], id: u64, found: ptr[mut NumberedGeneration[..]]) -> Result[void, Error] {
     record := GenerationRecord.{}
     at := key_of(id, .KeyGeneration, 0)
@@ -1351,10 +2089,21 @@ volume_generations :: fn(container: ptr[mut Container], id: u64, found: ptr[mut 
     return .Ok
 }
 
-/*
- * An encrypted volume's keys, into keys, new: its volume key unwrapped with passphrase from its wrap records, and each
- * generation's with that; id is the volume whose key records they are, its own or a clone's origin's. WrongKey if none of them takes it, Corrupt if a generation doesn't open with what it does;
- * either way, keys are for free_keys.
+/**
+ * Unlock an encrypted volume's keys into new keys: its volume key unwrapped with a passphrase from its wrap records,
+ * and each generation's with that.
+ *
+ * @param container The container's ID.
+ * @param id The volume whose key records they are, its own or a clone's origin's.
+ * @param record The volume's record: its cipher and newest generation.
+ * @param wraps Its wrap records; the first the passphrase opens is used.
+ * @param generations Its generation records.
+ * @param passphrase The passphrase, secret.
+ * @param keys The keys, new, filled in here; on an error, they're for free_keys, holding what was unwrapped.
+ * @error Corrupt The record's cipher isn't one, a generation doesn't open with the volume key, or the record's
+ *     newest generation isn't among them.
+ * @error WrongKey The passphrase opens none of the wrap records.
+ * @error OutOfMemory No memory to keep a generation's key.
  */
 unlock :: fn(container: u8[16], id: u64, record: VolumeRecord, wraps: WrapRecord[], generations: NumberedGeneration[],
     passphrase: u8[], keys: ptr[mut Keys]) -> Result[void, Error] {
@@ -1393,8 +2142,20 @@ unlock :: fn(container: u8[16], id: u64, record: VolumeRecord, wraps: WrapRecord
 }
 
 /**
- * A new key generation for an encrypted volume open in the container's own process, sealing what's written from now
- * on; what was written before keeps its own (decisions/0042). Its number.
+ * Start a new key generation for an encrypted volume open in the container's own process, sealing what's written
+ * from now on; what was written before keeps its own (decisions/0042).
+ *
+ * It's numbered after the newest of the volume's key records, which a clone shares with its origin, and its record is
+ * put with them; the volume's record names it with the volume's next commit.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param volume The volume; its keys gain the generation, current from now on.
+ * @return The new generation's number.
+ * @error Locked The volume isn't encrypted, so it has no keys.
+ * @error NotFound The volume's record isn't there.
+ * @error Corrupt The generation couldn't be made, or a record or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory for a list or a node.
+ * @error NoSpace No free extent for a node.
  */
 rotate :: fn(container: ptr[mut Container], volume: ptr[mut Volume]) -> Result[u32, Error] {
     keys :: volume.tree.keys or_return .Error(.Locked)
@@ -1408,7 +2169,15 @@ rotate :: fn(container: ptr[mut Container], volume: ptr[mut Volume]) -> Result[u
     return .Ok(keys.current)
 }
 
-/** The newest generation in a volume's key records. */
+/**
+ * Find the newest generation in a volume's key records.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param key_owner The ID of the volume whose key records they are.
+ * @return Its number; 0 if there are none.
+ * @error Corrupt A record or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory for the list or a node.
+ */
 newest_generation :: fn(container: ptr[mut Container], key_owner: u64) -> Result[u32, Error] {
     generations : NumberedGeneration[..]
     defer runtime.array_free(&generations)
@@ -1422,7 +2191,16 @@ newest_generation :: fn(container: ptr[mut Container], key_owner: u64) -> Result
     return .Ok(newest)
 }
 
-/** One of the volume's key wrap records, by index from 0, or null past the last. */
+/**
+ * Read one of a volume's key wrap records.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The ID of the volume whose key records they are.
+ * @param index Which, from 0.
+ * @return The record; null if there's none of the index.
+ * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory to read a node.
+ */
 volume_wrap :: fn(container: ptr[mut Container], id: u64, index: u64) -> Result[WrapRecord?, Error] {
     record := WrapRecord.{}
     bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .KeyWrap, index),
@@ -1433,7 +2211,16 @@ volume_wrap :: fn(container: ptr[mut Container], id: u64, index: u64) -> Result[
     return .Ok(record)
 }
 
-/** One of the volume's key generations' records, by number from 1, or null past the newest. */
+/**
+ * Read one of a volume's key generation records.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The ID of the volume whose key records they are.
+ * @param number The generation's number, from 1.
+ * @return The record; null if there's none of the number.
+ * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory to read a node.
+ */
 volume_generation :: fn(container: ptr[mut Container], id: u64, number: u32) -> Result[GenerationRecord?, Error] {
     record := GenerationRecord.{}
     bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .KeyGeneration, cast[u64](number)),
@@ -1445,9 +2232,17 @@ volume_generation :: fn(container: ptr[mut Container], id: u64, number: u32) -> 
 }
 
 /**
- * A new key generation's record, made by the volume's server, kept for an encrypted volume with its key records (a
- * clone's origin's, for a clone): numbered after their newest, and named in the volume's record. Both are durable with
- * the next commit. NotFound for a volume that isn't encrypted or a number that isn't the next.
+ * Keep a new key generation's record, made by the volume's server, with an encrypted volume's key records (a clone's
+ * origin's, for a clone), and name it in the volume's record. Both are durable with the next commit.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The volume's ID.
+ * @param number The generation's number, which has to be one after the newest in its key records.
+ * @param generation The generation's record, copied.
+ * @error NotFound The volume isn't there, isn't encrypted, or the number isn't the next.
+ * @error Corrupt A record or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory for a list or a node.
+ * @error NoSpace No free extent for a node.
  */
 add_generation :: fn(container: ptr[mut Container], id: u64, number: u32, generation: ptr[GenerationRecord]) -> Result[void, Error] {
     record := volume_record(container, id)?

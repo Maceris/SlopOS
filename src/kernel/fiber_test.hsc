@@ -13,6 +13,8 @@ import frames from "frames"
 }
 
 /**
+ * The state test_fibers and test_segments share with their fibers, through each fiber's context's user_data.
+ *
  * test_fibers: two fibers on the boot CPU, taking turns, to check that a fiber suspends and resumes
  * with its frames, locals and return values intact (Hemera's docs/calling_convention.md, Suspending
  * and Resuming a Fiber). Each suspends at the bottom of a chain of calls, and again from a frame the
@@ -22,20 +24,38 @@ import frames from "frames"
  * user_data.
  */
 FiberTest :: struct {
+    /** The letters the fibers wrote, in order, as mark writes them; count of them are written. */
     marks : u8[16],
+    /** How many of marks are written, at most marks' count. */
     count : usize,
-    // Stack traces at the bottom, before suspending and once resumed, and the suspended fiber's from outside
+    /** The fiber's stack trace at the bottom of its calls, before it suspends: return addresses, innermost first. */
     before : rawptr[80],
+    /** How many of before are captured. */
     before_count : usize,
+    /** The same fiber's stack trace at the same place, once resumed, which should match before. */
     after : rawptr[80],
+    /** How many of after are captured. */
     after_count : usize,
+    /** The suspended fiber's stack trace, taken from outside it, which should end with before's frames. */
     outside : rawptr[80],
+    /** How many of outside are captured. */
     outside_count : usize,
 }
 
-/** What the fibers write, in the order taking turns gives. */
+/**
+ * What test_fibers' fibers write, in the order taking turns gives: a lower-case letter at each suspension, and an
+ * upper-case one when a fiber's calls returned the right sum.
+ */
 EXPECTED_MARKS :: "ababAB"
 
+/**
+ * Run test_fibers on the calling CPU, the boot CPU, logging whether it passed.
+ *
+ * Interrupts are masked while the fibers run, since a resumed fiber's frames sit above the stack pointer; they're left
+ * as they were found. The test's state and the fibers' frames are never freed.
+ *
+ * @param kernel The kernel, whose frame allocator gives the test's state and the fibers' blocks; kept by the fibers.
+ */
 test_fibers :: fn(kernel #escaping : ptr[mut Kernel]) {
     test : ptr[mut FiberTest]
     match allocate_object[FiberTest](&kernel.frames) {
@@ -92,7 +112,15 @@ test_fibers :: fn(kernel #escaping : ptr[mut Kernel]) {
     runtime.log_info("test_fibers: stack traces follow suspended and resumed fibers")
 }
 
-/** A fiber in a frame of its own, running function with a copy of this context pointing at test. */
+/**
+ * Make a fiber in a frame of its own, not yet started, running a function with a copy of the caller's context whose
+ * user_data points at the test.
+ *
+ * @param kernel The kernel, whose frame allocator gives the fiber's frame.
+ * @param test The test's state, which the fiber reads through its context; it has to outlive the fiber.
+ * @param function What the fiber runs, with an empty any as its data.
+ * @return The fiber, in the direct map, its frame never freed; null if there was no frame, which is logged.
+ */
 make_fiber :: fn(kernel: ptr[mut Kernel], test #escaping : ptr[mut FiberTest], function: runtime.ThreadFunction) -> ptr[mut runtime.Fiber]? {
     runtime.assert(cast[u64](runtime.FIBER_BLOCK_SIZE) <= frames.FRAME_SIZE, "a fiber's block fits in a frame")
     address : boot_info.PhysicalAddress
@@ -115,12 +143,22 @@ make_fiber :: fn(kernel: ptr[mut Kernel], test #escaping : ptr[mut FiberTest], f
     return fiber
 }
 
+/**
+ * Run test_fibers' first fiber: descend three calls, then mark 'A' if the sum came back right, 'x' if not.
+ *
+ * @param data Unused; empty.
+ */
 fiber_a : runtime.ThreadFunction : fn(data #escaping : any) {
     test :: cast[ptr[mut FiberTest]](context.user_data)
     // 31 + (21 + (11 + 1))
     mark(test, if descend(test, 'a', 3) == 64 { 'A' } else { 'x' })
 }
 
+/**
+ * Run test_fibers' second fiber: descend two calls, then mark 'B' if the sum came back right, 'y' if not.
+ *
+ * @param data Unused; empty.
+ */
 fiber_b : runtime.ThreadFunction : fn(data #escaping : any) {
     test :: cast[ptr[mut FiberTest]](context.user_data)
     // 21 + (11 + 1)
@@ -128,8 +166,16 @@ fiber_b : runtime.ThreadFunction : fn(data #escaping : any) {
 }
 
 /**
- * Down a chain of calls, suspending at the bottom, and again at depth 2 on the way back up: each
+ * Go down a chain of calls, suspending at the bottom, and again at depth 2 on the way back up: each
  * frame's local and the value returned to it have to survive both.
+ *
+ * At the bottom it marks the letter; for 'a' it also captures the stack trace before suspending and after resuming.
+ * At depth 2 it marks the letter again before suspending.
+ *
+ * @param test The test's state, marked and traced into.
+ * @param letter The fiber's letter, 'a' or 'b'.
+ * @param depth How many more calls to go down; 0 is the bottom.
+ * @return The sum over the frames of depth * 10 + 1, and 1 for the bottom: 64 from depth 3, 33 from depth 2.
  */
 descend :: fn(test: ptr[mut FiberTest], letter: char, depth: u64) -> u64 {
     here :: depth * 10 + 1
@@ -154,12 +200,22 @@ descend :: fn(test: ptr[mut FiberTest], letter: char, depth: u64) -> u64 {
     return here + below
 }
 
-/** Back to the scheduler, which resumes this fiber later. */
+/**
+ * Suspend the calling fiber, back to the code that started or resumed it, which resumes it later.
+ *
+ * Does nothing outside a fiber.
+ */
 pause :: fn() {
     fiber :: intrinsics.carrier().current_fiber or_return void
     intrinsics.fiber_suspend(fiber)
 }
 
+/**
+ * Write a letter in the test's marks, unless they're full.
+ *
+ * @param test The test's state.
+ * @param letter The letter, ASCII.
+ */
 mark :: fn(test: ptr[mut FiberTest], letter: char) {
     if test.count < test.marks.count {
         test.marks[test.count] = cast[u8](letter)
@@ -167,15 +223,22 @@ mark :: fn(test: ptr[mut FiberTest], letter: char) {
     }
 }
 
-/**
- * test_segments, in a kernel built with morestack (the build package's stack_check setting): a fiber
- * whose calls go far past its first segment, onto segments from the carrier's cache, suspending at
- * the bottom; resumed, it returns up through them, and they all go back to the carrier.
- */
+/** How many stack segments test_segments puts in the carrier's cache, a frame each. */
 SEGMENT_COUNT :: 4
-/** 64 + 63 + ... + 1 */
+/** What climb returns from depth 64: 64 + 63 + ... + 1. */
 DEEP_SUM : u64 : 2080
 
+/**
+ * Run test_segments, in a kernel built with morestack (the build package's stack_check setting): a fiber
+ * whose calls go far past its first segment, onto segments from the carrier's cache, suspending at
+ * the bottom; resumed, it returns up through them, and they all go back to the carrier.
+ *
+ * Runs on the calling CPU, the boot CPU, logging whether it passed. Interrupts are masked while the fiber runs, and
+ * left as they were found. The segments stay in the carrier's cache; the test's state and the fiber's frame are never
+ * freed.
+ *
+ * @param kernel The kernel, whose frame allocator gives the test's state, the segments and the fiber's block.
+ */
 test_segments :: fn(kernel #escaping : ptr[mut Kernel]) {
     test : ptr[mut FiberTest]
     match allocate_object[FiberTest](&kernel.frames) {
@@ -232,12 +295,25 @@ test_segments :: fn(kernel #escaping : ptr[mut Kernel]) {
     }
 }
 
+/**
+ * Run test_segments' fiber: climb 64 calls deep, then mark 'D' if the sum came back right, 'x' if not.
+ *
+ * @param data Unused; empty.
+ */
 fiber_deep : runtime.ThreadFunction : fn(data #escaping : any) {
     test :: cast[ptr[mut FiberTest]](context.user_data)
     mark(test, if climb(test, 64) == DEEP_SUM { 'D' } else { 'x' })
 }
 
-/** Down depth calls, each with 128 bytes of its own, suspending at the bottom: the sum of the depths. */
+/**
+ * Go down a chain of calls, each with 128 bytes of locals of its own, suspending at the bottom.
+ *
+ * At the bottom it marks 'd', and captures the stack trace before suspending and after resuming.
+ *
+ * @param test The test's state, marked and traced into.
+ * @param depth How many more calls to go down; 0 is the bottom.
+ * @return The sum of the depths from depth down to 1: DEEP_SUM from 64.
+ */
 climb :: fn(test: ptr[mut FiberTest], depth: u64) -> u64 {
     padding : u64[16]
     padding[depth % 16] = depth
@@ -251,7 +327,12 @@ climb :: fn(test: ptr[mut FiberTest], depth: u64) -> u64 {
     return climb(test, depth - 1) + first_nonzero(padding)
 }
 
-/** What's in values that isn't zero, which keeps them in the frame. */
+/**
+ * Find the first value that isn't zero; reading them keeps climb's locals in its frame.
+ *
+ * @param values The 16 words of padding of a climb frame, of which the one at its depth mod 16 is set to its depth.
+ * @return The first that isn't zero, or 0 if they all are.
+ */
 first_nonzero :: fn(values: u64[]) -> u64 {
     for value in values {
         if value != 0 {
@@ -262,8 +343,12 @@ first_nonzero :: fn(values: u64[]) -> u64 {
 }
 
 /**
- * Whether the traces agree: the one before suspending has at least least frames, the one after
+ * Tell whether a fiber test's traces agree: the one before suspending has at least least frames, the one after
  * resuming is the same, and the suspended fiber's own, taken from outside, ends with it.
+ *
+ * @param test The test's state, with its three traces captured.
+ * @param least The fewest frames the trace before suspending may have.
+ * @return True if they agree; false if not, with an error logged saying how.
  */
 traces_agree :: fn(test: ptr[FiberTest], least: usize) -> bool {
     before :: test.before

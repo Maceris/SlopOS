@@ -15,26 +15,53 @@ import maps from "std"
 /** The most times a commit goes round bringing the space map and owners up to date with what changing them changed. */
 MAX_ROUNDS :: 64
 
+/**
+ * A container, mounted or being made: its space, its three trees, the volumes open on it, and the transaction they're
+ * all changing.
+ *
+ * It's from make, the caller's until unmount frees it. Its fields are this package's to keep.
+ */
 Container :: struct {
+    /** The device it's on, the whole of it. */
     device : Device,
+    /** Its ID, from the superblock, which every checkpoint names. */
     id : u8[16],
+    /** The transaction being made, and its dirty nodes, shared by its trees and its open volumes'. */
     nodes : Nodes,
+    /** Its free extents and the changes its space map and owners have still to take. */
     space : Space,
+    /** The space map: its free extents, and those freed in the last commit. */
     space_map : Tree,
+    /** The owner of every allocated extent. */
     owners : Tree,
+    /** Its volumes, their keys, snapshots and dead lists. */
     volumes : Tree,
+    /** The ID the next volume made gets, from 1. */
     next_volume : u64,
+    /** Whether a write has failed since it was mounted, so every later commit is refused with Failed. */
     failed : bool,
-    /** Volumes open on it, which commit writes */
+    /** The volumes open on it, which commit writes and unmount frees; the container's own. */
     open : ptr[mut Volume][..],
 }
 
-/** The last block, where the second superblock is. */
+/**
+ * Get a device's last block, where the second superblock is.
+ *
+ * @param device The device, of at least 1 block.
+ * @return The last block's number, block_count - 1.
+ */
 last_block :: fn(device: Device) -> u64 {
     return device.block_count - 1
 }
 
-/** A container in memory, before anything is read or written: no trees, and the transaction after `transaction`. */
+/**
+ * Make a container in memory, before anything is read or written: no trees, and the transaction after another.
+ *
+ * @param device The device, which the container keeps; its context has to outlive the container.
+ * @param transaction The last durable transaction, 0 for a new container; the container makes the one after it.
+ * @return The container, from make, the caller's to free with unmount; its ID all zero until the caller sets it.
+ * @error OutOfMemory No memory for it.
+ */
 new_container :: fn(device #escaping : Device, transaction: u64) -> Result[ptr[mut Container], Error] {
     container :: make(Container)?
     container^ = Container.{device = device}
@@ -49,8 +76,19 @@ new_container :: fn(device #escaping : Device, transaction: u64) -> Result[ptr[m
 }
 
 /**
- * A new container on the whole device, named id: its superblocks, and a first checkpoint whose space map frees
- * everything but itself.
+ * Make a new container on a whole device: its superblocks, and a first checkpoint whose space map frees everything
+ * but itself.
+ *
+ * The superblocks are written first, then the first commit: its nodes, a flush, the checkpoint, a flush. A crash
+ * before the checkpoint is written leaves superblocks with no checkpoint, which doesn't mount (NotSlopfs). Nothing is
+ * left in memory.
+ *
+ * @param device The device, all of whose blocks the container takes; its context has to outlive the call.
+ * @param id The container's ID, which every checkpoint names.
+ * @error NoSpace The device has fewer than MIN_BLOCKS blocks.
+ * @error OutOfMemory No memory for the container or a node.
+ * @error DeviceError The device couldn't be written or flushed.
+ * @error Corrupt The first commit went round more than MAX_ROUNDS times.
  */
 format :: fn(device #escaping : Device, id: u8[16]) -> Result[void, Error] {
     if device.block_count < MIN_BLOCKS {
@@ -75,13 +113,21 @@ format :: fn(device #escaping : Device, id: u8[16]) -> Result[void, Error] {
     return commit(container)
 }
 
+/** The bytes in a block, as an integer for an array's size: BLOCK_BYTES. */
 BLOCK_SIZE :: 4096
 
-/** A block's bytes, in memory of their own. */
+/** A block's bytes, in memory of their own, from make, so a block isn't on the stack. */
 BlockBuffer :: struct {
+    /** The block's bytes. */
     bytes : u8[BLOCK_SIZE],
 }
 
+/**
+ * Copy text's bytes into a buffer, as much as fits.
+ *
+ * @param into The buffer, from its start; its bytes past the text are left as they were.
+ * @param text The text, copied byte for byte, not terminated.
+ */
 copy_text :: fn(into: mut u8[], text: string) {
     for character, i in text {
         if i < into.count {
@@ -90,6 +136,13 @@ copy_text :: fn(into: mut u8[], text: string) {
     }
 }
 
+/**
+ * Tell whether bytes start with text.
+ *
+ * @param bytes The bytes, as a magic field holds them.
+ * @param text The text the bytes should start with, as a magic is.
+ * @return True if the bytes start with all of text's; false if they differ or are too few.
+ */
 has_text :: fn(bytes: u8[], text: string) -> bool {
     for character, i in text {
         if i >= bytes.count || bytes[i] != cast[u8](character) {
@@ -99,12 +152,21 @@ has_text :: fn(bytes: u8[], text: string) -> bool {
     return true
 }
 
-/** A checkpoint's bytes, for those who write one into a block themselves, as the fuzzer does. */
+/**
+ * Get a checkpoint's size, for those who write one into a block themselves, as the fuzzer does.
+ *
+ * @return The bytes of a Checkpoint, 344.
+ */
 size_of_checkpoint :: fn() -> usize {
     return size_of(Checkpoint)
 }
 
-/** A record's seal: BLAKE3-256 of its bytes before the seal, which is its last 32. */
+/**
+ * Compute a record's seal: BLAKE3-256 of its bytes before the seal, which is its last 32.
+ *
+ * @param record The record's bytes, its seal last; fewer than 32 seals nothing.
+ * @param seal Where the seal goes, as a rule the record's own last 32 bytes.
+ */
 seal_record :: fn(record: u8[], seal: ptr[mut Seal]) {
     if record.count < 32 {
         return void
@@ -112,6 +174,13 @@ seal_record :: fn(record: u8[], seal: ptr[mut Seal]) {
     crypto.blake3(record[0..<record.count - 32], seal^)
 }
 
+/**
+ * Tell whether a record's seal holds.
+ *
+ * @param record The record's bytes, its seal last, at least 32 of them.
+ * @param seal The seal it says it has.
+ * @return True if the seal is BLAKE3-256 of the bytes before the record's last 32.
+ */
 record_sealed :: fn(record: u8[], seal: ptr[Seal]) -> bool {
     found : Seal
     seal_record(record, &found)
@@ -119,8 +188,19 @@ record_sealed :: fn(record: u8[], seal: ptr[Seal]) -> bool {
 }
 
 /**
- * The container on device: its superblock, the first's or else the last's, and the newest checkpoint in its ring
- * that checks out. NotSlopfs if there's neither.
+ * Mount the container on a device: its superblock, the first's or else the last's, and the newest checkpoint in its
+ * ring that checks out.
+ *
+ * Nothing is written. A superblock checks out with its magic, version, seal and block count the device's; a
+ * checkpoint with its magic, version, seal and the superblock's container ID. The space in memory is loaded from the
+ * space map, the pending extents of the last commit free now that it's durable, and the snapshots' and clones'
+ * floors from the volumes.
+ *
+ * @param device The device, which the container keeps; its context has to outlive the container.
+ * @return The container, from make, the caller's to free with unmount, making the transaction after its checkpoint's.
+ * @error NotSlopfs The device has fewer than MIN_BLOCKS blocks, neither superblock checks out, or no checkpoint does.
+ * @error OutOfMemory No memory for the container, a node or a buffer.
+ * @error Corrupt The space map or the volumes tree doesn't check out.
  */
 mount :: fn(device #escaping : Device) -> Result[ptr[mut Container], Error] {
     if device.block_count < MIN_BLOCKS {
@@ -187,7 +267,12 @@ mount :: fn(device #escaping : Device) -> Result[ptr[mut Container], Error] {
 }
 
 /**
- * The free list from the space map: its free extents, and those its checkpoint freed, which are free now it's durable.
+ * Load the free list from the space map: its free extents, and those its checkpoint freed, which are free now it's
+ * durable.
+ *
+ * @param container The container, just mounted, its free list empty.
+ * @error Corrupt A record's value isn't a SpaceValue, or its extent is empty or outside the data blocks.
+ * @error OutOfMemory No memory for a node.
  */
 load_free :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     value : u8[16]
@@ -205,7 +290,14 @@ load_free :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     }
 }
 
-/** A container's memory given back, its open volumes with it. What wasn't committed is lost. */
+/**
+ * Free a container's memory, its open volumes' with it.
+ *
+ * Nothing is written: what wasn't committed is lost, and the disk is as the last commit left it.
+ *
+ * @param container The container, from mount, format's own or new_container; it, and every Volume open on it, may
+ *     not be used again.
+ */
 unmount :: fn(container: ptr[mut Container]) {
     for volume in container.open {
         free_volume(volume)
@@ -223,13 +315,30 @@ unmount :: fn(container: ptr[mut Container]) {
 
 // The space map's records for an extent: free ones, keyed by their start, and pending ones, after (0, Pending).
 
+/**
+ * Put a free extent's record in the space map as it is, not joined to others.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param start The extent's first block.
+ * @param blocks Its length in blocks, at least 1.
+ * @error OutOfMemory No memory for a node.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 space_map_put_free :: fn(container: ptr[mut Container], start: u64, blocks: u64) -> Result[void, Error] {
     value := SpaceValue.{blocks = cast[u64le](blocks)}
     tree_put(&container.nodes, &container.space_map, key_of(start, .Free, 0), view_of(cast[ptr[mut u8]](&value), size_of(SpaceValue)))?
     return .Ok
 }
 
-/** A free extent in the space map, joined to the free ones it touches. */
+/**
+ * Put a free extent in the space map, joined to the free ones it touches.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param start The extent's first block.
+ * @param blocks Its length in blocks, at least 1; it shouldn't overlap a free extent.
+ * @error OutOfMemory No memory for a node.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 space_map_free :: fn(container: ptr[mut Container], start: u64, blocks: u64) -> Result[void, Error] {
     value : u8[16]
     first := start
@@ -259,7 +368,16 @@ space_map_free :: fn(container: ptr[mut Container], start: u64, blocks: u64) -> 
     return space_map_put_free(container, first, count)
 }
 
-/** An allocated extent taken out of the free extent in the space map that holds it. */
+/**
+ * Take an allocated extent out of the free extent in the space map that holds it, leaving what's before and after it
+ * free.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param start The extent's first block.
+ * @param blocks Its length in blocks.
+ * @error Corrupt No free extent in the space map holds it all.
+ * @error OutOfMemory No memory for a node.
+ */
 space_map_take :: fn(container: ptr[mut Container], start: u64, blocks: u64) -> Result[void, Error] {
     value : u8[16]
     found :: tree_previous(&container.nodes, &container.space_map, key_of(start, .Free, 0), value)? or_return .Error(.Corrupt)
@@ -282,7 +400,13 @@ space_map_take :: fn(container: ptr[mut Container], start: u64, blocks: u64) -> 
     return .Ok
 }
 
-/** The pending extents of the last commit, durable now, made free in the space map. */
+/**
+ * Make the pending extents of the last commit, durable now, free in the space map.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @error OutOfMemory No memory to list them, or for a node; none was settled if it's the list.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
 space_map_settle :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     pending : Extent[..]
     defer runtime.array_free(&pending)
@@ -306,7 +430,17 @@ space_map_settle :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     return .Ok
 }
 
-/** One change to the space, taken by the space map and the owners. */
+/**
+ * Make one change to the space in the space map and the owners, or for a Dead extent, the volumes tree.
+ *
+ * Allocated takes the extent out of the free ones and records its owner; FreedNow frees it at once; FreedLater
+ * makes it pending, freed in this transaction; Dead puts it on its owner's dead list.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param change The change, as the space recorded it; its owner says whose dead list a Dead one goes on.
+ * @error Corrupt An allocation isn't in a free extent, or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory for a node.
+ */
 apply_change :: fn(container: ptr[mut Container], change: Change) -> Result[void, Error] {
     match change.change {
         case .Allocated => {
@@ -336,9 +470,20 @@ apply_change :: fn(container: ptr[mut Container], change: Change) -> Result[void
 }
 
 /**
- * Everything changed since the last commit made durable (design/storage.md §3, §4): each open volume's tree written
- * and its record updated; the space map and owners brought up to date with every allocation and free, including
- * their own, until changing them changes nothing more; their nodes written; a flush; the checkpoint; a flush.
+ * Make everything changed since the last commit durable (design/storage.md §3, §4).
+ *
+ * Each open volume's tree is written and its record updated; the space map and owners are brought up to date with
+ * every allocation and free, including their own, until changing them changes nothing more; their nodes are written;
+ * a flush; the checkpoint; a flush. A crash before the checkpoint is written leaves the last commit's state; after
+ * the second flush, this one's. Extents freed in this commit become free once it's done.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @error Failed A write failed since the container was mounted, here or before, or an open volume failed; nothing is
+ *     committed, now or later, until it's mounted again.
+ * @error DeviceError A write or a flush failed; the container is failed from now on.
+ * @error OutOfMemory No memory for a node or a list; nothing is durable, and the commit may be tried again.
+ * @error Corrupt A node couldn't be read or didn't check out, an allocation wasn't in a free extent, or the space
+ *     map and owners went round more than MAX_ROUNDS times.
  */
 commit :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     if container.failed {
@@ -354,8 +499,15 @@ commit :: fn(container: ptr[mut Container]) -> Result[void, Error] {
 }
 
 /**
- * The container's own changes made durable, every volume's left waiting for its own commit: a snapshot taken or
+ * Make the container's own changes durable, every volume's left waiting for its own commit: a snapshot taken or
  * deleted, or a clone made, at once (snapshot.hsc).
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @error Failed A write failed since the container was mounted.
+ * @error DeviceError A write or a flush failed; the container is failed from now on.
+ * @error OutOfMemory No memory for a node or a list.
+ * @error Corrupt A node couldn't be read or didn't check out, or the space map and owners went round more than
+ *     MAX_ROUNDS times.
  */
 commit_own :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     if container.failed {
@@ -364,7 +516,13 @@ commit_own :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     return failing(container, commit_changes(container, 0))
 }
 
-/** A commit's result, a device error stopping every later one. */
+/**
+ * Pass a commit's result on, a device error marking the container failed so every later commit is refused.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param result The commit's result.
+ * @return The result as it was given, unchanged.
+ */
 failing :: fn(container: ptr[mut Container], result: Result[void, Error]) -> Result[void, Error] {
     match result {
         case Ok => return .Ok
@@ -377,6 +535,14 @@ failing :: fn(container: ptr[mut Container], result: Result[void, Error]) -> Res
     }
 }
 
+/**
+ * Commit every owner's changes: each dirty open volume's tree written and its record put, then commit_changes.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @error DeviceError A write or a flush failed.
+ * @error OutOfMemory No memory for a node or a list.
+ * @error Corrupt A node didn't check out, or the rounds didn't settle.
+ */
 commit_all :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     for volume in container.open {
         if volume.dirty {
@@ -388,9 +554,18 @@ commit_all :: fn(container: ptr[mut Container]) -> Result[void, Error] {
 }
 
 /**
- * A volume server's commit (decisions/0089): its tree already written, through block connections whose writes have all
- * finished; its record put in the volumes tree, and its changes and the container's own made durable, other volumes'
- * left waiting for their own commits. The transaction committed.
+ * Commit one volume, as its volume server does (decisions/0089): its record put in the volumes tree, and its changes
+ * and the container's own made durable, other volumes' left waiting for their own commits.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The volume's ID.
+ * @param record The volume's record, its tree already written, through block connections whose writes have all
+ *     finished.
+ * @return The transaction committed, durable once this returns.
+ * @error Failed A write failed since the container was mounted.
+ * @error DeviceError A write or a flush failed; the container is failed from now on.
+ * @error OutOfMemory No memory for a node or a list.
+ * @error Corrupt A node didn't check out, or the rounds didn't settle.
  */
 commit_volume :: fn(container: ptr[mut Container], id: u64, record: ptr[VolumeRecord]) -> Result[u64, Error] {
     if container.failed {
@@ -406,7 +581,18 @@ commit_volume :: fn(container: ptr[mut Container], id: u64, record: ptr[VolumeRe
 }
 
 /**
- * The space map and owners brought up to date with only's changes and the container's own, and the checkpoint written.
+ * Bring the space map and owners up to date with one owner's changes and the container's own, write the container's
+ * trees, and write the checkpoint between two flushes.
+ *
+ * Once it's done, what the changes freed is free and the next transaction starts.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param only The volume whose changes are taken, besides the container's own; 0 for the container's alone,
+ *     ALL_OWNERS for every owner's.
+ * @error OutOfMemory No memory for a node or a list.
+ * @error DeviceError A write or a flush failed.
+ * @error Corrupt A node couldn't be read or didn't check out, an allocation wasn't in a free extent, or the space
+ *     map and owners went round more than MAX_ROUNDS times.
  */
 commit_changes :: fn(container: ptr[mut Container], only: u64) -> Result[void, Error] {
     space_map_settle(container)?
@@ -459,8 +645,13 @@ commit_changes :: fn(container: ptr[mut Container], only: u64) -> Result[void, E
 }
 
 /**
- * A volume's waiting changes undone, as if it had made none since its last commit (forget, on its side): its
- * allocations free again, and the extents it gave back still its own. What was undone, for whoever keeps who owns what.
+ * Undo a volume's waiting changes in the space, as if it had made none since its last commit (forget, on its side):
+ * its allocations free again, and the extents it gave back still its own.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The volume's ID.
+ * @param undone Where the changes undone are added, for whoever keeps who owns what; the caller's to free.
+ * @return True if they were undone; false, with nothing changed, if there wasn't the memory to.
  */
 abandon_volume :: fn(container: ptr[mut Container], id: u64, undone: ptr[mut Change[..]]) -> bool {
     kept : Change[..]
@@ -498,7 +689,13 @@ abandon_volume :: fn(container: ptr[mut Container], id: u64, undone: ptr[mut Cha
     return true
 }
 
-/** Whether changes this commit takes are still waiting. */
+/**
+ * Tell whether changes a commit takes are still waiting, so it goes round again.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param only The owner the commit takes the changes of, as commit_changes has it.
+ * @return True if any waiting change is one the commit takes.
+ */
 changes_taken :: fn(container: ptr[Container], only: u64) -> bool {
     for change in container.space.changes {
         if takes(only, change.owner) {
@@ -508,6 +705,15 @@ changes_taken :: fn(container: ptr[Container], only: u64) -> bool {
     return false
 }
 
+/**
+ * Write the checkpoint for the transaction being made into its ring block, 1 + transaction % RING_BLOCKS.
+ *
+ * It isn't flushed here: commit_changes flushes before and after it.
+ *
+ * @param container The container, its trees' roots written.
+ * @error OutOfMemory No memory for the block.
+ * @error DeviceError The block couldn't be written.
+ */
 write_checkpoint :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     transaction :: container.nodes.transaction
     checkpoint := Checkpoint.{version = cast[u32le](FORMAT_VERSION), transaction = cast[u64le](transaction), container = container.id,
@@ -527,12 +733,23 @@ write_checkpoint :: fn(container: ptr[mut Container]) -> Result[void, Error] {
     return .Ok
 }
 
-/** The transaction the container's last commit made durable. */
+/**
+ * Get the transaction the container's last commit made durable.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @return The transaction, one before the one being made; 0 before the first commit.
+ */
 durable_transaction :: fn(container: ptr[Container]) -> u64 {
     return container.nodes.transaction - 1
 }
 
-/** The blocks free now, and those that will be once this transaction is committed. */
+/**
+ * Get how many blocks are free now, in memory.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @return The free blocks, of BLOCK_BYTES each: those in the free list now, including those freed at once in this
+ *     transaction, but not those that will be free once it's committed.
+ */
 free_blocks :: fn(container: ptr[Container]) -> u64 {
     return container.space.free_blocks
 }

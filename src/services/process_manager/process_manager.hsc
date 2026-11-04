@@ -19,18 +19,42 @@ import connector from "../../protocols/connector"
 import random_stream from "../../random_stream"
 import service_kit from "../../libraries/service_kit"
 
+/** The manager's state, all of it main's, kept for its life. */
 Manager :: struct {
+    /** The process's startup block, for its budget and address space, which the manager's own work is paid from. */
     block : ptr[slop_os.StartupBlock],
+    /** Where its lines go, or NO_HANDLE when it wasn't given a log, so lines go nowhere. */
     log : slop_os.DebugLog,
+    /** The port every client is bound to, waited on between passes. */
     port : slop_os.Port,
+    /** The clients: the listener, and each connection a Connect brought. */
     clients : service_kit.Clients,
+    /** The connection to the entropy service, the manager's own, or NO_HANDLE before the first dial. */
     entropy : slop_os.Channel,
+    /** A port bound to entropy alone, waited on for its answers; replaced with entropy on each dial. */
     entropy_port : slop_os.Port,
-    // The connector the entropy service is dialed through, and the port its answers wake
+    /** The connector the entropy service is dialed through, served by the root task; the manager's own. */
     entropy_connector : slop_os.Channel,
+    /** A port bound to entropy_connector alone, waited on for the connector's answers. */
     connector_port : slop_os.Port,
 }
 
+/**
+ * Load programs into processes other programs make, for the root task, the supervisor and whoever else is given it.
+ *
+ * The program runs until the system stops. A requester makes the process, its address space and its budget, and
+ * hands them over with the executable and the program's grants in a Load; the manager builds the program in, starts
+ * its first thread, and keeps none of it, so the program is the requester's and outlives the manager.
+ *
+ * @param log The debug log it writes its lines to: that it's serving, and each program started or not. Without one,
+ *     it writes nothing.
+ * @param entropy The connector the entropy service is reached through, from the root task; each program's seed is
+ *     drawn from it. It's dialed once at start, and again whenever the service has gone.
+ * @param clients The listener new clients' connections arrive on, from the root task; it's served as a client, its
+ *     Connects each adding a client, up to service_kit's MAX_CLIENTS at once.
+ * @return 1 when the entropy service can't be reached at start, 2 when no port could be made, 3 when the listener
+ *     couldn't be bound to it; it doesn't return otherwise.
+ */
 main :: fn(log: slop_os.DebugLog?, entropy: os.Channel[connector.Connector], clients: os.Listener[protocol.ProcessManager]) -> int {
     block :: slop_os.startup_block()
     manager := Manager.{block = block, entropy_connector = entropy.end, entropy = cast[slop_os.Channel](slop_os.NO_HANDLE)}
@@ -61,7 +85,17 @@ main :: fn(log: slop_os.DebugLog?, entropy: os.Channel[connector.Connector], cli
     }
 }
 
-/** Every request client index has sent, until there are none left, or it's gone. */
+/**
+ * Answer every request one client has sent, until none is left or the client's gone.
+ *
+ * Each Load is answered with load's Response, the client waiting while the entropy service is asked. A Connect adds
+ * its channel as a client, closing it when the table's full. An unknown request is answered Unsupported; an invalid one
+ * is skipped.
+ *
+ * @param manager The manager; a client whose channel failed is dropped, its channel closed and its place freed.
+ * @param index Which client, an index in manager.clients; one past its end, or a freed place, is nothing to serve.
+ * @param into Where each request is received, reused for each and left holding the last.
+ */
 serve :: fn(manager: ptr[mut Manager], index: usize, into: ptr[mut os.Incoming]) {
     if index >= manager.clients.ends.count {
         return void
@@ -103,8 +137,19 @@ serve :: fn(manager: ptr[mut Manager], index: usize, into: ptr[mut os.Incoming])
 }
 
 /**
- * One Load's answer: the program built into the requester's process, and its first thread's ID. Whatever happens,
- * the request's handles leave this process: to the program, or closed.
+ * Build a Load's program into the requester's process and start its first thread.
+ *
+ * 64 bytes are drawn from the entropy service: the first 32 the program's seed, for its startup block, the rest the
+ * seed of the stream that places its parts. The executable is mapped read-only while it's built from, and unmapped
+ * after. Whatever happens, the request's handles leave this process: to the program, or closed; when it fails, the
+ * process, space and budget are the requester's to destroy.
+ *
+ * @param manager The manager, whose entropy connection may be dialed again.
+ * @param request The Load, whose handles are all gone from this process when it returns.
+ * @return Loaded with the first thread's ID; or NotLoaded with BadRequest for more than MAX_GRANTS grants or an
+ *     executable that can't be mapped, NoRandom when the entropy service doesn't answer even when dialed again,
+ *     NoMemory when there are no addresses to map the executable at or the build ran out, NotAProgram when it isn't an
+ *     executable the loader takes, and Failed for any other failure building it.
  */
 load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.Response {
     defer close_all(request)
@@ -158,7 +203,15 @@ load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.R
     }
 }
 
-/** A connection to the entropy service through its connector, in place of one that's gone: whether there is one. */
+/**
+ * Dial the entropy service through its connector, in place of the connection there was, which is closed.
+ *
+ * connector.dial tries again while the service is restarting, so this may wait some seconds.
+ *
+ * @param manager The manager, whose entropy and entropy_port are replaced.
+ * @return Whether there's a connection now: false when the connector didn't give one that speaks the entropy
+ *     protocol, or no port could be made for it.
+ */
 dial_entropy :: fn(manager: ptr[mut Manager]) -> bool {
     if cast[slop_os.Handle](manager.entropy) != slop_os.NO_HANDLE {
         _ = slop_os.handle_close(cast[slop_os.Handle](manager.entropy))
@@ -171,7 +224,15 @@ dial_entropy :: fn(manager: ptr[mut Manager]) -> bool {
     return true
 }
 
-/** bytes, filled from the entropy service, dialed again once if its connection's gone: false if it didn't answer. */
+/**
+ * Fill bytes from the entropy service, dialing it again once if the first try fails.
+ *
+ * @param manager The manager, whose entropy connection may be replaced.
+ * @param bytes Where the bytes go, all of it; at most the entropy protocol's MAX_BYTES (256), since the service gives
+ *     no more and fewer fails.
+ * @return Whether bytes were all filled; false when the service didn't answer with enough even after a new dial,
+ *     bytes then unchanged.
+ */
 draw :: fn(manager: ptr[mut Manager], bytes: mut u8[]) -> bool {
     if draw_once(manager, bytes) {
         return true
@@ -179,6 +240,14 @@ draw :: fn(manager: ptr[mut Manager], bytes: mut u8[]) -> bool {
     return dial_entropy(manager) && draw_once(manager, bytes)
 }
 
+/**
+ * Ask the entropy service for bytes once, and wait for its answer.
+ *
+ * @param manager The manager, whose entropy connection is used as it is.
+ * @param bytes Where the bytes go, all of it.
+ * @return Whether the service answered with at least bytes' count; false when sending or receiving failed, or the
+ *     answer was another or too short, bytes then unchanged.
+ */
 draw_once :: fn(manager: ptr[mut Manager], bytes: mut u8[]) -> bool {
     out := os.Outgoing.{}
     request :: os.begin[entropy.Request](&out)
@@ -208,7 +277,13 @@ draw_once :: fn(manager: ptr[mut Manager], bytes: mut u8[]) -> bool {
     }
 }
 
-/** The request's handles still in this process's table, closed: one that went to a program is gone already. */
+/**
+ * Close the request's handles still in this process's table: its process, space, budget, executable and grants.
+ *
+ * One that went to the program is gone from the table already, so closing it fails, harmlessly.
+ *
+ * @param request The Load, whose handle fields are left as they were, naming nothing of this process's now.
+ */
 close_all :: fn(request: ptr[protocol.Load]) {
     _ = slop_os.handle_close(cast[slop_os.Handle](request.process))
     _ = slop_os.handle_close(cast[slop_os.Handle](request.space))

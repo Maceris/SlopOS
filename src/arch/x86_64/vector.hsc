@@ -14,28 +14,44 @@ import arch_interface from "../../arch_interface"
  */
 //SPEC: Intel SDM Vol. 1 §13 (XSAVE): §13.4 (the XSAVE area), §13.8 (XRSTOR), §13.9 (XSAVEOPT); CPUID leaf 0DH
 
+/** The state components every thread has, and XCR0 outside threads: x87, SSE and AVX (decisions/0023). */
 XCR0_BASE : u64 : XCR0_X87 | XCR0_SSE | XCR0_AVX
-/** AVX-512: the opmask registers, the upper halves of ZMM0 to ZMM15, and ZMM16 to ZMM31 */
+/** XCR0 bits 5-7, AVX-512's components: the opmask registers, ZMM0 to ZMM15's upper halves, and ZMM16 to ZMM31. */
 XCR0_AVX512 : u64 : (1 << 5) | (1 << 6) | (1 << 7)
-// The legacy region and the XSAVE header
+/** The bytes of an XSAVE area's legacy region (512) and XSAVE header (64), before any extended component. */
 XSAVE_LEGACY_AND_HEADER : u64 : 576
+/** The bytes of VectorState's own header, before the XSAVE area, which keeps the area 64-byte aligned. */
 VECTOR_HEADER_SIZE : u64 : 64
 // Where the x87 control word and MXCSR are in the legacy region, and their values at reset
+/** The byte offset of the x87 control word (FCW) in the XSAVE area's legacy region. */
 FCW_OFFSET : u64 : 0
+/** The byte offset of MXCSR in the XSAVE area's legacy region. */
 MXCSR_OFFSET : u64 : 24
+/** The x87 control word at reset: every exception masked, 64-bit precision, round to nearest. */
 FCW_INITIAL : u16 : 0x037f
+/** MXCSR at reset: every SIMD floating-point exception masked, round to nearest, no flush to zero. */
 MXCSR_INITIAL : u32 : 0x1f80
 
-/** A thread's vector state (arch_interface.VectorState): this header, then its XSAVE area. */
+/**
+ * A thread's vector state (arch_interface.VectorState): this 64-byte header, then its XSAVE area, in the standard
+ * (not compacted) format, vector_state_size bytes in all, 64-byte aligned.
+ */
 VectorState :: struct #align(64) {
-    // The state components the area holds, and XCR0 while the thread runs.
+    /** The state components the area holds, XCR0 bits, which XCR0 is set to while the thread runs. */
     components : u64,
+    /** Unused, 0, so the XSAVE area after the header is 64-byte aligned. */
     reserved : u64[7],
 }
 
 #assert size_of(VectorState) == 64
 
-/** The components a thread with config gets: the extended ones only where the CPU has them. */
+/**
+ * Choose the state components a thread with config gets.
+ *
+ * @param config Whether the thread asks for the extended state, AVX-512's.
+ * @return XCR0 bits: XCR0_BASE, and XCR0_AVX512 too when config is extended and the CPU supports all three of its
+ *     components, as CPUID leaf 0DH says.
+ */
 components_for :: fn(config: arch_interface.VectorConfig) -> u64 {
     if !config.extended {
         return XCR0_BASE
@@ -45,7 +61,12 @@ components_for :: fn(config: arch_interface.VectorConfig) -> u64 {
     return if supported & XCR0_AVX512 == XCR0_AVX512 { XCR0_BASE | XCR0_AVX512 } else { XCR0_BASE }
 }
 
-/** Bytes for the header and an XSAVE area of components, in the standard format. */
+/**
+ * Measure an XSAVE area of components in the standard format: where its last component ends, from CPUID leaf 0DH.
+ *
+ * @param components XCR0 bits; x87 and SSE live in the legacy region, so only the others change the size.
+ * @return The area's size in bytes, at least XSAVE_LEGACY_AND_HEADER, not counting VectorState's header.
+ */
 area_end :: fn(components: u64) -> u64 {
     size := XSAVE_LEGACY_AND_HEADER
     for component in 2..<64 {
@@ -61,17 +82,33 @@ area_end :: fn(components: u64) -> u64 {
     return size
 }
 
+/**
+ * Give the bytes a thread's VectorState needs, header and XSAVE area.
+ *
+ * @param config The thread's configuration, which decides its components as components_for does.
+ * @return The size in bytes, which init_vector_state fills and save_vector_state writes up to.
+ */
 vector_state_size :: fn(config: arch_interface.VectorConfig) -> usize {
     return cast[usize](VECTOR_HEADER_SIZE + area_end(components_for(config)))
 }
 
+/**
+ * Give the alignment a VectorState needs.
+ *
+ * @return 64 bytes, which XSAVE and XRSTOR require of their area.
+ */
 vector_state_alignment :: fn() -> usize {
     return 64
 }
 
 /**
- * The state at reset: every component in its initial state, which XRSTOR loads for components the
- * header marks absent, and the x87 control word and MXCSR, which come from the legacy region.
+ * Set a new thread's vector state to the state at reset.
+ *
+ * The area is zeroed, so its XSAVE header marks every component absent, which XRSTOR loads in its initial state; the
+ * x87 control word and MXCSR, which come from the legacy region, get their reset values.
+ *
+ * @param state The state, vector_state_size(config) bytes, aligned to vector_state_alignment(), all of it written.
+ * @param config The thread's configuration, which decides its components.
  */
 init_vector_state :: fn(state: ptr[mut VectorState], config: arch_interface.VectorConfig) {
     components :: components_for(config)
@@ -82,6 +119,14 @@ init_vector_state :: fn(state: ptr[mut VectorState], config: arch_interface.Vect
     cast[ptr[mut u32]](area + MXCSR_OFFSET)^ = MXCSR_INITIAL
 }
 
+/**
+ * Save the calling CPU's vector registers into a thread's state, each of its components.
+ *
+ * XSAVEOPT is used where the CPU has it, which skips components unchanged since the last XRSTOR from the same area, so
+ * state has to be the one restore_vector_state last loaded on this CPU, which it is at a thread switch.
+ *
+ * @param state The running thread's state, set up by init_vector_state.
+ */
 save_vector_state :: fn(state: ptr[mut VectorState]) {
     if current_cpu().xsaveopt {
         x86_64.xsaveopt(cast[rawptr](area_of(state)), state.components)
@@ -91,6 +136,13 @@ save_vector_state :: fn(state: ptr[mut VectorState]) {
     }
 }
 
+/**
+ * Load a thread's state into the calling CPU's vector registers.
+ *
+ * XCR0 is set to the state's components first, when the last state loaded had others.
+ *
+ * @param state The thread's state, set up by init_vector_state, and saved by save_vector_state if it has run before.
+ */
 restore_vector_state :: fn(state: ptr[VectorState]) {
     cpu :: current_cpu()
     if cpu.xcr0 != state.components {
@@ -100,6 +152,12 @@ restore_vector_state :: fn(state: ptr[VectorState]) {
     x86_64.xrstor(cast[rawptr](area_of(state)), state.components)
 }
 
+/**
+ * Find a state's XSAVE area, right after its header.
+ *
+ * @param state The state's header, only used for its address; nothing is read through it.
+ * @return The area's virtual address, VECTOR_HEADER_SIZE bytes past state, so 64-byte aligned when state is.
+ */
 area_of :: fn(state: ptr[VectorState]) -> u64 {
     return cast[u64](state) + VECTOR_HEADER_SIZE
 }

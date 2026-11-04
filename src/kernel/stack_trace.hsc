@@ -2,13 +2,18 @@ package kernel
 
 import intrinsics from "base"
 
-/** How many frames a stack trace shows. */
+/** The most frames a stack trace shows; deeper frames are left out. */
 STACK_TRACE_FRAMES :: 32
 
 /**
- * Log the current call stack, innermost first, starting with the caller of the function that calls
- * this (and skip more). Addresses are relative to the kernel image's base, so traces from different
- * boots compare, whatever KASLR chose (decisions/0021); match them with the ELF's symbols.
+ * Log the current call stack as fatal lines, innermost first, at most STACK_TRACE_FRAMES of them.
+ *
+ * Addresses are relative to the kernel image's base, written kernel+<offset>, so traces from different boots compare,
+ * whatever KASLR chose (decisions/0021); match them with the ELF's symbols. Before this CPU has the kernel's state,
+ * or for an address below the image, the address is written whole. The lines have no source location, being part of
+ * a fatal report already.
+ *
+ * @param skip How many frames to leave out after this function's own: 0 starts at the function that calls this.
  */
 log_stack_trace :: fn(skip: usize = 0) {
     addresses : rawptr[STACK_TRACE_FRAMES]

@@ -13,28 +13,47 @@ import runtime from "base"
 import arch from ".."
 import arch_interface from "../../../arch_interface"
 
+/** The pretend physical address of the buffer's first frame, 1 MiB. */
 MEMORY_BASE : u64 : 0x100000
+/** How many frames the buffer has, enough for the kernel half's 256 tables and every test's. */
 FRAME_COUNT : u64 : 300
+/** The bytes of a frame, a 4 KiB page. */
 FRAME_SIZE : u64 : 4096
 
 // Kernel and user addresses the tests map.
+/** A 4 KiB-aligned kernel address the tests map 4 KiB pages at, in the kernel half's first table. */
 KERNEL_PAGE : u64 : 0xffff800000100000
+/** A 2 MiB-aligned kernel address beside KERNEL_PAGE, in the same page directory, for 2 MiB pages. */
 KERNEL_LARGE_PAGE : u64 : 0xffff800000200000
+/** A user address the tests map 4 KiB pages at, 4 MiB. */
 USER_PAGE : u64 : 0x400000
 
+/** A kernel data mapping: read-write, write-back, global. */
 KERNEL_DATA :: arch_interface.Mapping.{protection = .ReadWrite, cache = .WriteBack, user = false, global = true}
+/** A kernel code mapping: read-execute, write-back, global. */
 KERNEL_CODE :: arch_interface.Mapping.{protection = .ReadExecute, cache = .WriteBack, user = false, global = true}
+/** A kernel read-only mapping: read, write-back, global. */
 KERNEL_READ_ONLY :: arch_interface.Mapping.{protection = .Read, cache = .WriteBack, user = false, global = true}
+/** A framebuffer-like mapping: read-write, write-combining, global. */
 FRAMEBUFFER :: arch_interface.Mapping.{protection = .ReadWrite, cache = .WriteCombining, user = false, global = true}
+/** A device-register mapping: read-write, uncached device memory, not global. */
 DEVICE :: arch_interface.Mapping.{protection = .ReadWrite, cache = .Device, user = false, global = false}
+/** A user data mapping: read-write, write-back, user. */
 USER_DATA :: arch_interface.Mapping.{protection = .ReadWrite, cache = .WriteBack, user = true, global = false}
 
 /** The memory standing in for physical memory, handed out a frame at a time. */
 Memory :: struct {
+    /** The offset that puts pretend physical address MEMORY_BASE at the buffer's start. */
     direct_map_offset : u64,
+    /** The index of the next frame to hand out, from 0 to FRAME_COUNT. */
     next_frame : u64,
 }
 
+/**
+ * Run every test: a kernel table, then a user address space sharing its kernel half.
+ *
+ * @return 0 if everything worked, 1 if the buffer couldn't be had, or the number of the first check that failed.
+ */
 main :: fn() -> int {
     bytes, error :: runtime.new_array(u8, cast[usize](FRAME_COUNT * FRAME_SIZE))
     if error != null {
@@ -58,6 +77,13 @@ main :: fn() -> int {
     return test_user_pages(&kernel, &memory)
 }
 
+/**
+ * Test mapping, translating, protecting and unmapping kernel pages of 4 KiB and 2 MiB, and the errors and TLB batches.
+ *
+ * @param kernel The kernel's own table, set up, with nothing mapped yet.
+ * @param memory Where new tables come from.
+ * @return 0 if every check passed, or the first failed check's number, 10 to 28.
+ */
 test_kernel_pages :: fn(kernel: ptr[mut arch.PageTable], memory: ptr[mut Memory]) -> int {
     tables : arch_interface.TableFrames
     freed : arch_interface.FreedTables
@@ -153,6 +179,13 @@ test_kernel_pages :: fn(kernel: ptr[mut arch.PageTable], memory: ptr[mut Memory]
     return 0
 }
 
+/**
+ * Test a user address space: the shared kernel half, user mappings, their errors, and releasing its tables.
+ *
+ * @param kernel The kernel's own table, which test_kernel_pages left with nothing mapped.
+ * @param memory Where new tables come from.
+ * @return 0 if every check passed, or the first failed check's number, 30 to 39.
+ */
 test_user_pages :: fn(kernel: ptr[mut arch.PageTable], memory: ptr[mut Memory]) -> int {
     tables : arch_interface.TableFrames
     freed : arch_interface.FreedTables
@@ -220,6 +253,12 @@ test_user_pages :: fn(kernel: ptr[mut arch.PageTable], memory: ptr[mut Memory]) 
     return 0
 }
 
+/**
+ * Hand out the buffer's next frame, zeroed since the buffer was.
+ *
+ * @param memory The buffer, with a frame left (asserted).
+ * @return The frame's pretend physical address.
+ */
 next_frame :: fn(memory: ptr[mut Memory]) -> arch_interface.PhysicalAddress {
     runtime.assert(memory.next_frame < FRAME_COUNT, "the tests fit in FRAME_COUNT frames")
     frame :: MEMORY_BASE + memory.next_frame * FRAME_SIZE
@@ -227,6 +266,12 @@ next_frame :: fn(memory: ptr[mut Memory]) -> arch_interface.PhysicalAddress {
     return cast[arch_interface.PhysicalAddress](frame)
 }
 
+/**
+ * Fill tables up to 4 frames with new ones, keeping those it has.
+ *
+ * @param tables The frames, count set to 4.
+ * @param memory Where the new frames come from.
+ */
 refill :: fn(tables: ptr[mut arch_interface.TableFrames], memory: ptr[mut Memory]) {
     for i in cast[usize](tables.count)..<4 {
         tables.frames[i] = next_frame(memory)
@@ -234,10 +279,28 @@ refill :: fn(tables: ptr[mut arch_interface.TableFrames], memory: ptr[mut Memory
     tables.count = 4
 }
 
+/**
+ * Make a virtual address of a number.
+ *
+ * @param value Any number, kernel or user, canonical or not; it isn't checked.
+ * @return The same bits, as a VirtualAddress.
+ */
 address :: fn(value: u64) -> arch_interface.VirtualAddress {
     return cast[arch_interface.VirtualAddress](value)
 }
 
+/**
+ * Map a page, as arch.map does.
+ *
+ * @param table The kernel's table or a user address space, its tables in the buffer standing in for physical
+ *     memory; changed if the page is mapped.
+ * @param virtual_address Where to map it.
+ * @param physical The page's pretend physical address.
+ * @param size The page's size, which virtual_address must be aligned to for the call to succeed.
+ * @param mapping The protection, cache mode, user flag and global bit to map it with, passed to arch.map as is.
+ * @param tables Zeroed frames arch.map takes new tables from, the last first; refill puts it back to 4.
+ * @return Whether it was mapped.
+ */
 mapped :: fn(
     table: ptr[mut arch.PageTable],
     virtual_address: u64,
@@ -249,7 +312,19 @@ mapped :: fn(
     return arch.map(table, address(virtual_address), cast[arch_interface.PhysicalAddress](physical), size, mapping, tables) is_ok
 }
 
-// Whether map fails with expected.
+/**
+ * Try a map that ought to fail.
+ *
+ * @param table The kernel's table or a user address space, its tables in the buffer standing in for physical
+ *     memory; left as it was if the map fails, changed if it wrongly succeeds.
+ * @param virtual_address Where to map it.
+ * @param physical The page's pretend physical address.
+ * @param size The page's size, which virtual_address must be aligned to for the call to succeed.
+ * @param mapping The protection, cache mode, user flag and global bit to map it with, passed to arch.map as is.
+ * @param tables Zeroed frames arch.map takes new tables from, the last first; refill puts it back to 4.
+ * @param expected The error it ought to fail with.
+ * @return Whether it failed with expected; false if it mapped, or failed otherwise.
+ */
 map_fails :: fn(
     table: ptr[mut arch.PageTable],
     virtual_address: u64,
@@ -265,7 +340,17 @@ map_fails :: fn(
     }
 }
 
-// The physical address unmap gives, or 1 if it fails.
+/**
+ * Unmap a page, as arch.unmap does.
+ *
+ * @param table The kernel's table or a user address space, its tables in the buffer standing in for physical
+ *     memory; changed if the page is unmapped.
+ * @param virtual_address The page's address.
+ * @param size The size the page was mapped with; a page of another size there makes the unmap fail.
+ * @param freed Where emptied tables go.
+ * @param flush The TLB batch the page is added to.
+ * @return The physical address it mapped, or 1, which no page is at, if unmapping failed.
+ */
 unmapped :: fn(
     table: ptr[mut arch.PageTable],
     virtual_address: u64,
@@ -279,7 +364,18 @@ unmapped :: fn(
     }
 }
 
-// Whether unmap fails with expected.
+/**
+ * Try an unmap that ought to fail.
+ *
+ * @param table The kernel's table or a user address space, its tables in the buffer standing in for physical
+ *     memory; left as it was if the unmap fails, changed if it wrongly succeeds.
+ * @param virtual_address The page's address.
+ * @param size The size the page was mapped with; a page of another size there makes the unmap fail.
+ * @param freed Where emptied tables would go.
+ * @param flush The TLB batch the page would be added to.
+ * @param expected The error it ought to fail with.
+ * @return Whether it failed with expected; false if it unmapped, or failed otherwise.
+ */
 unmap_fails :: fn(
     table: ptr[mut arch.PageTable],
     virtual_address: u64,
@@ -294,10 +390,28 @@ unmap_fails :: fn(
     }
 }
 
+/**
+ * Tell whether anything is mapped at an address.
+ *
+ * @param table The kernel's table or a user address space, its tables in the buffer standing in for physical
+ *     memory; only read.
+ * @param virtual_address Any address, kernel or user, anywhere in a page; a page of any size counts.
+ * @return Whether arch.translate finds a mapping.
+ */
 translates :: fn(table: ptr[arch.PageTable], virtual_address: u64) -> bool {
     return arch.translate(table, address(virtual_address)) != null
 }
 
+/**
+ * Tell whether an address is mapped to a physical address with a mapping.
+ *
+ * @param table The kernel's table or a user address space, its tables in the buffer standing in for physical
+ *     memory; only read.
+ * @param virtual_address Any address, kernel or user, anywhere in a page of any size.
+ * @param physical The physical address it ought to map to, its offset in the page included.
+ * @param mapping The mapping it ought to have, every field compared.
+ * @return Whether both match; false if nothing is mapped there.
+ */
 translates_to :: fn(table: ptr[arch.PageTable], virtual_address: u64, physical: u64, mapping: arch_interface.Mapping) -> bool {
     found :: arch.translate(table, address(virtual_address)) or_return false
     return cast[u64](found.physical_address) == physical

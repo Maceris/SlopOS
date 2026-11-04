@@ -13,8 +13,8 @@
  * - test: SlopOS's test partition type, zeros, which whoever made the image marks
  * - slopfs: a SlopOS container, with a volume named "system" holding the folder's tree, checked whole once it's made
  * With --sealed, each container also has an encrypted volume of that name, unlocked by that passphrase, holding
- * sealed.txt (SEALED_TEXT), for the boot tests (roadmap 8e). Each partition is printed as "partition <index> <first> <count> <name>". The GUIDs, the container's ID and its
- * volume's name-hash key are random.
+ * sealed.txt (SEALED_TEXT), for the boot tests (roadmap 8e). Each partition is printed as
+ * "partition <index> <first> <count> <name>". The GUIDs, the container's ID and its volume's name-hash key are random.
  *
  * With --fat, the image is a FAT32 volume alone, no partition table, holding the folder's tree: the EFI system
  * partition's image an ISO boots from by El Torito (roadmap B4, decisions/0135).
@@ -32,59 +32,94 @@ import fat from "../../fat"
 import gpt from "../../gpt"
 import slopfs from "../../slopfs"
 
+/** The bytes of a sector of the image: 512. */
 SECTOR_BYTES : u64 : 512
-// Partitions start at a MiB, as every tool aligns them
+/** Where partitions start, a multiple of this many sectors, 2048: a MiB, as every tool aligns them. */
 ALIGN_SECTORS : u64 : 2048
+/** The most partitions an image has: 16. */
 MAX_PARTITIONS :: 16
 
-// Partition types, as their bytes are on the disk
+// ---- Partition type GUIDs, as their bytes are on the disk (mixed-endian, as the GPT lays them out)
+
+/** The EFI system partition's type, C12A7328-F81F-11D2-BA4B-00A0C93EC93B. */
 ESP_TYPE :: u8.[0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11, 0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b]
+/** The basic data partition's type, EBD0A0A2-B9E5-4433-87C0-68B6B72699C7. */
 BASIC_DATA_TYPE :: u8.[0xa2, 0xa0, 0xd0, 0xeb, 0xe5, 0xb9, 0x33, 0x44, 0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99, 0xc7]
-// "SLOPOS TEST PART" and "SLOPOS CONTAINER", in ASCII
+/** SlopOS's test partition's type: "SLOPOS TEST PART" in ASCII. */
 TEST_TYPE :: u8.[0x53, 0x4c, 0x4f, 0x50, 0x4f, 0x53, 0x20, 0x54, 0x45, 0x53, 0x54, 0x20, 0x50, 0x41, 0x52, 0x54]
+/** A SlopOS container's partition type: "SLOPOS CONTAINER" in ASCII. */
 CONTAINER_TYPE :: u8.[0x53, 0x4c, 0x4f, 0x50, 0x4f, 0x53, 0x20, 0x43, 0x4f, 0x4e, 0x54, 0x41, 0x49, 0x4e, 0x45, 0x52]
 
+/** What a partition asked for is, as its argument's kind names it. */
 Kind :: enum {
+    /** esp: an EFI system partition, FAT32, holding the folder's tree. */
     Esp,
+    /** data: a basic data partition, FAT32, holding the folder's tree. */
     Data,
+    /** test: SlopOS's test partition, left zeros. */
     Test,
+    /** slopfs: a SlopOS container, its system volume holding the folder's tree. */
     Slopfs,
 }
 
 /** A partition asked for, and for a container, the encrypted volume asked for in it, if one was. */
 Wanted :: struct {
+    /** What it is. */
     kind : Kind,
+    /** Its GPT name, and a FAT volume's label. */
     name : string,
+    /** Its first sector in the image, a multiple of ALIGN_SECTORS. */
     first : u64,
+    /** How many sectors it has. */
     count : u64,
+    /** The host folder whose tree it holds; empty for a test partition. */
     folder : string,
+    /** For a container, the encrypted volume's name; empty for none. */
     sealed_name : string,
+    /** For a container, the encrypted volume's passphrase. */
     sealed_passphrase : string,
 }
 
 /**
  * What an encrypted volume the image builder makes holds, in sealed.txt: in capitals, which the disk check, on the
- * disk in the clear, holds only in small letters (sealed_check.hsc)
+ * disk in the clear, holds only in small letters (sealed_check.hsc).
  */
 SEALED_TEXT :: "ONLY ITS PASSPHRASE OPENS THIS"
-// Argon2id for its passphrase, kept within what a volume server is given room for (storage_manager.hsc)
+/** Argon2id for its passphrase, kept within what a volume server is given room for (storage_manager.hsc). */
 SEALED_ARGON2 :: crypto.Argon2Parameters.{memory_kib = 1024, passes = 2, lanes = 1}
+/** The option that asks for an encrypted volume in each container, --sealed=<name>:<passphrase>. */
 SEALED_OPTION :: "--sealed="
 
 /** What can go wrong filling a partition. */
 Failure :: enum {
+    /** The partition is too small for FAT32, which needs 65525 clusters. */
     TooSmallForFat,
+    /** What it made doesn't mount. */
     NotMounted,
+    /** A host folder can't be listed. */
     Unlisted,
+    /** A host file can't be read. */
     Unread,
+    /** A file, directory or volume can't be made, or the container can't be formatted. */
     NotMade,
+    /** A file can't be written whole, or FAT's FSInfo can't be. */
     NotWritten,
+    /** The host's folders are nested more than 16 deep. */
     TooDeep,
+    /** A container's partition isn't in whole 4 KiB blocks. */
     NotWholeBlocks,
+    /** The container can't be committed. */
     NotCommitted,
+    /** The container it made doesn't pass slopfs.verify. */
     NotChecked,
 }
 
+/**
+ * Say what went wrong, for a message.
+ *
+ * @param failure What went wrong.
+ * @return A phrase, static text.
+ */
 text_of :: fn(failure: Failure) -> string {
     return match failure {
         case .TooSmallForFat => "too small for FAT32, which needs 65525 clusters"
@@ -100,6 +135,17 @@ text_of :: fn(failure: Failure) -> string {
     }
 }
 
+/**
+ * Make a disk image, or with --fat a FAT32 volume's image, from folders on the host, as the package says.
+ *
+ * Its arguments are the output file, the image's size in 512-byte sectors, at least 8192, an optional
+ * --sealed=<name>:<passphrase>, and the partitions, kind,name,sectors[,folder], placed in order. Each partition is
+ * printed as it's filled; the image is written only once all are.
+ *
+ * @return 0 once the image is written; 2 for arguments it can't take, or partitions that don't fit, 3 if there's no
+ *     memory for the image, 4 if the partition table couldn't be written, 5 if a partition couldn't be filled, 6 if
+ *     the output couldn't be written.
+ */
 main :: fn() -> int {
     arguments :: os.arguments()
     if arguments.count == 5 && arguments[1] == "--fat" {
@@ -205,7 +251,14 @@ main :: fn() -> int {
     return 0
 }
 
-/** A FAT32 volume of sectors, holding the tree of the folder its arguments name, written to output alone. */
+/**
+ * Make a FAT32 volume's image alone, no partition table, holding the tree of the folder the arguments name last.
+ *
+ * @param output The file the image is written to, replacing one there.
+ * @param sectors The volume's size in 512-byte sectors; 0, as for a number that isn't one, is refused.
+ * @return 0 once it's written; 2 without a size, 3 if there's no memory for it, 5 if it couldn't be filled, 6 if the
+ *     output couldn't be written.
+ */
 fat_image :: fn(output: string, sectors: u64) -> int {
     // From the arguments, as main's partitions' folders are, which the volume may point at
     arguments :: os.arguments()
@@ -238,10 +291,22 @@ fat_image :: fn(output: string, sectors: u64) -> int {
     return 0
 }
 
+/**
+ * Round a sector up to where a partition may start.
+ *
+ * @param sector A sector of the image, from 0.
+ * @return The least multiple of ALIGN_SECTORS at least sector.
+ */
 align :: fn(sector: u64) -> u64 {
     return (sector + ALIGN_SECTORS - 1) / ALIGN_SECTORS * ALIGN_SECTORS
 }
 
+/**
+ * Give a partition's GPT type.
+ *
+ * @param kind What it is.
+ * @return Its type GUID, as its bytes are on the disk.
+ */
 type_of :: fn(kind: Kind) -> gpt.Guid {
     return match kind {
         case .Esp => ESP_TYPE
@@ -251,6 +316,12 @@ type_of :: fn(kind: Kind) -> gpt.Guid {
     }
 }
 
+/**
+ * Read a decimal number from an argument.
+ *
+ * @param text The digits, nothing else.
+ * @return Its value, wrapping past a u64's largest, as it isn't checked; null if text is empty or isn't all digits.
+ */
 number_of :: fn(text: string) -> u64? {
     if text.count == 0 {
         return null
@@ -265,7 +336,13 @@ number_of :: fn(text: string) -> u64? {
     return value
 }
 
-/** kind,name,sectors[,folder] */
+/**
+ * Read a partition's argument, kind,name,sectors[,folder], the folder last, so it may hold commas.
+ *
+ * @param text The partition's argument, as the command line has it.
+ * @return The partition, its first sector not yet placed, its fields views into text; null for a kind that isn't one,
+ *     sectors that aren't a number or are 0, or no folder for a kind that holds one.
+ */
 parse :: fn(text: string) -> Wanted? {
     fields : string[4]
     count : usize = 0
@@ -301,7 +378,13 @@ parse :: fn(text: string) -> Wanted? {
     return Wanted.{kind = kind, name = fields[1], count = sectors, folder = if count >= 4 { fields[3] } else { "" }}
 }
 
-/** A partition's contents written into the image, or what went wrong. */
+/**
+ * Fill a partition of the image with its contents: a FAT32 volume, a container, or nothing for a test partition.
+ *
+ * @param image The image, its partition's sectors written.
+ * @param partition The partition, placed.
+ * @return Null once it's filled; what went wrong otherwise.
+ */
 fill :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
     return match partition.kind {
         case .Test => null
@@ -313,11 +396,24 @@ fill :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
 
 /** A partition's sectors in the image, as a device. */
 Region :: struct {
+    /** The whole image, in memory. */
     image : mut u8[],
+    /** The partition's first sector in the image. */
     first : u64,
+    /** How many sectors it has; nothing past them is read or written. */
     count : u64,
 }
 
+/**
+ * Read units of a region, as a device's read callback does.
+ *
+ * @param context The Region, as a device's context.
+ * @param first The first unit, from the region's start.
+ * @param count How many units.
+ * @param into Where they go; bytes past its end aren't copied.
+ * @param unit The bytes of a unit: a sector's or a block's.
+ * @return True once they're read; false if they run past the region's end, or into is too short for them.
+ */
 region_read :: fn(context: rawptr, first: u64, count: u64, into: mut u8[], unit: u64) -> bool {
     region :: cast[ptr[mut Region]](context)
     if (first + count) * unit > region.count * SECTOR_BYTES {
@@ -334,6 +430,16 @@ region_read :: fn(context: rawptr, first: u64, count: u64, into: mut u8[], unit:
     return length <= into.count
 }
 
+/**
+ * Write units of a region, as a device's write callback does.
+ *
+ * @param context The Region, as a device's context.
+ * @param first The first unit, from the region's start.
+ * @param count How many units.
+ * @param from What's written; bytes past its end aren't.
+ * @param unit The bytes of a unit: a sector's or a block's.
+ * @return True once they're written; false if they run past the region's end, or from is too short for them.
+ */
 region_write :: fn(context: rawptr, first: u64, count: u64, from: u8[], unit: u64) -> bool {
     region :: cast[ptr[mut Region]](context)
     if (first + count) * unit > region.count * SECTOR_BYTES {
@@ -350,27 +456,77 @@ region_write :: fn(context: rawptr, first: u64, count: u64, from: u8[], unit: u6
     return length <= from.count
 }
 
+/**
+ * Read 512-byte sectors of a region: a FAT device's read.
+ *
+ * @param context The Region, as the FAT device's context.
+ * @param first The first sector, from the region's start.
+ * @param count How many sectors.
+ * @param into Where they go.
+ * @return True once they're read, as region_read.
+ */
 sector_read :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
     return region_read(context, first, count, into, SECTOR_BYTES)
 }
 
+/**
+ * Write 512-byte sectors of a region: a FAT device's write.
+ *
+ * @param context The Region, as the FAT device's context.
+ * @param first The first sector, from the region's start.
+ * @param count How many sectors.
+ * @param from What's written.
+ * @return True once they're written, as region_write.
+ */
 sector_write :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool {
     return region_write(context, first, count, from, SECTOR_BYTES)
 }
 
+/**
+ * Read slopfs's 4 KiB blocks of a region: a container device's read.
+ *
+ * @param context The Region, as the container device's context.
+ * @param first The first block, from the region's start.
+ * @param count How many blocks.
+ * @param into Where they go.
+ * @return True once they're read, as region_read.
+ */
 block_read :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
     return region_read(context, first, count, into, slopfs.BLOCK_BYTES)
 }
 
+/**
+ * Write slopfs's 4 KiB blocks of a region: a container device's write.
+ *
+ * @param context The Region, as the container device's context.
+ * @param first The first block, from the region's start.
+ * @param count How many blocks.
+ * @param from What's written.
+ * @return True once they're written, as region_write.
+ */
 block_write :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool {
     return region_write(context, first, count, from, slopfs.BLOCK_BYTES)
 }
 
+/**
+ * Flush a region: a container device's flush, which has nothing to do, the image being written whole at the end.
+ *
+ * @param context The Region, not used.
+ * @return True.
+ */
 flushed :: fn(context: rawptr) -> bool {
     return true
 }
 
-/** A FAT32 volume on the partition, with the folder's tree in it. */
+/**
+ * Format a FAT32 volume on a partition, labeled with its name, and copy the folder's tree into it.
+ *
+ * Its clusters are 2 sectors, or more for a bigger partition, up to 64, keeping well past FAT32's fewest clusters.
+ *
+ * @param image The image, which the partition's sectors are written in.
+ * @param partition The partition, placed.
+ * @return Null once it's filled; TooSmallForFat, NotMounted, NotWritten, or what copying the tree gave.
+ */
 fill_fat :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
     region := runtime.new(Region)
     defer runtime.free(region)
@@ -397,7 +553,14 @@ fill_fat :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
     return null
 }
 
-/** path/name, in a buffer. */
+/**
+ * Join a folder's path and an entry's name, path/name, in a buffer.
+ *
+ * @param buffer The buffer, cleared first; what's past its storage is cut off as text_buffer does.
+ * @param path The folder's path.
+ * @param name The entry's name.
+ * @return The joined path, a view into the buffer's storage, good until it's next changed.
+ */
 joined :: fn(buffer: ptr[mut text_buffer.TextBuffer], path: string, name: string) -> string {
     text_buffer.clear(buffer)
     text_buffer.append(buffer, path)
@@ -406,6 +569,16 @@ joined :: fn(buffer: ptr[mut text_buffer.TextBuffer], path: string, name: string
     return text_buffer.as_string(buffer)
 }
 
+/**
+ * Copy a host folder's tree into a FAT directory, each file whole.
+ *
+ * @param volume The FAT volume, mounted, which the files and directories are made in.
+ * @param directory The directory's first cluster.
+ * @param folder The host folder's path, its tree copied.
+ * @param depth How deep it is, 0 for the volume's root; past 16 is TooDeep.
+ * @return Null once it's copied; TooDeep, Unlisted, Unread, NotMade or NotWritten otherwise, what's copied by then
+ *     left.
+ */
 copy_to_fat :: fn(volume: ptr[mut fat.Volume], directory: u32, folder: string, depth: int) -> Failure? {
     if depth > 16 {
         return .TooDeep
@@ -435,7 +608,15 @@ copy_to_fat :: fn(volume: ptr[mut fat.Volume], directory: u32, folder: string, d
     return null
 }
 
-/** A SlopOS container on the partition, with a volume named "system" holding the folder's tree, checked whole. */
+/**
+ * Format a SlopOS container on a partition, with a volume named "system" holding the folder's tree, and an encrypted
+ * one if the partition asks for it; commit it, and check it whole.
+ *
+ * @param image The image, which the partition's sectors are written in.
+ * @param partition The partition, placed, its first sector and count multiples of 8, whole 4 KiB blocks.
+ * @return Null once it's filled and checks; NotWholeBlocks, NotMade, NotMounted, NotWritten, NotCommitted, NotChecked,
+ *     or what copying the tree gave.
+ */
 fill_slopfs :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
     if partition.first % 8 != 0 || partition.count % 8 != 0 {
         return .NotWholeBlocks
@@ -479,6 +660,16 @@ fill_slopfs :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure
     return null
 }
 
+/**
+ * Copy a host folder's tree into a slopfs directory, each file whole.
+ *
+ * @param volume The slopfs volume, mounted, which the files and directories are made in.
+ * @param directory The directory's object number.
+ * @param folder The host folder's path, its tree copied.
+ * @param depth How deep it is, 0 for the volume's root; past 16 is TooDeep.
+ * @return Null once it's copied; TooDeep, Unlisted, Unread, NotMade or NotWritten otherwise, what's copied by then
+ *     left.
+ */
 copy_to_slopfs :: fn(volume: ptr[mut slopfs.Volume], directory: u64, folder: string, depth: int) -> Failure? {
     if depth > 16 {
         return .TooDeep

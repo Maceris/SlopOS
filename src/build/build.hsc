@@ -10,7 +10,8 @@
  * - kernel_output: the kernel's ELF, kernel.elf by default.
  * - programs_output: the folder programs go in, each <name>.elf, the current folder by default, each with its manifest
  *   beside it, <name>.manifest: the schema of its entry's type (decisions/0044), which the store builder puts in its
- *   bundle (decisions/0094); and beside the root task, system.records, the system configuration as data (decisions/0110).
+ *   bundle (decisions/0094); and beside the root task, system.records, the system configuration as data
+ *   (decisions/0110).
  * - tests_output: the folder test programs go in, the current folder by default.
  * - tools_output: the folder tools go in, the current folder by default.
  * - stack_check: what the kernel's prologue checks do without room, trap (the default) or morestack,
@@ -29,6 +30,12 @@ import schema from "std"
 import text_buffer from "std"
 import checks from "../checks"
 
+/**
+ * Add every target the targets setting asks for, and the checks every target's program goes through: the house
+ * rules, the manifests, and system.records.
+ *
+ * It's run at compile time, by the #run at the file's end.
+ */
 build :: fn() {
     targets :: compiler.target_setting("targets", default = "all")
     if targets == "all" || targets == "kernel" {
@@ -54,9 +61,16 @@ build :: fn() {
 }
 
 /**
- * The system configuration as data (decisions/0110): system_config's RECORDS, as the root task's program has them,
- * which system_config checked with system_records.check as it was compiled, written beside the root task as
- * system.records, a module of the boot set, which the root task checks again at boot.
+ * Write the system configuration as data (decisions/0110) beside the root task, as system.records, a module of the
+ * boot set, which the root task checks again at boot.
+ *
+ * What's written is system_config's RECORDS, its bytes as the root task's program has them, which system_config
+ * checked with system_records.check as it was compiled. A compiler check, run for every target.
+ *
+ * @param target The target being built; only root_task.elf's is written for.
+ * @param program The target's program, which has to have the system_config package.
+ * @return True when it's written, or the target isn't the root task's; false, with an error reported, if
+ *     system_config isn't in the program, has no RECORDS, or the file couldn't be written.
  */
 write_system_records :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
     if target.name != "root_task.elf" {
@@ -92,8 +106,13 @@ write_system_records :: fn(target: ptr[compiler.BuildOptions], program: ptr[comp
 }
 
 /**
- * A SlopOS program's manifest (decisions/0044): the schema of its main's type (std's schema.write), written beside
- * the program as <name>.manifest. Other targets have none.
+ * Write a SlopOS program's manifest (decisions/0044): the schema of its main's type (std's schema.write), beside the
+ * program as <name>.manifest, its output's name with .elf replaced. A compiler check, run for every target.
+ *
+ * @param target The target being built; only a SlopOS program with startup code, whose output ends in .elf, has one.
+ * @param program The target's program, whose root package's main is described.
+ * @return True when it's written, or the target has none; false, with an error reported, if the program has no main or
+ *     the file couldn't be written.
  */
 write_manifest :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
     if target.target_options.os != .SlopOS || !target.target_options.startup_code || !checks.ends_with(target.output_path, ".elf") {
@@ -122,9 +141,13 @@ write_manifest :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.P
 }
 
 /**
- * The kernel, booted by SlopOS's own bootloader (decisions/0133): freestanding, entered at kernel_entry with its own carrier block, no red
- * zone and no SIMD (design/arch-x86-64.md), and stack checks that trap. On AArch64 that's no floating
- * point or Advanced SIMD, which trap at EL1 too until CPACR_EL1 allows them.
+ * Add the kernel as a target, booted by SlopOS's own bootloader (decisions/0133): freestanding, entered at
+ * kernel_entry with its own carrier block, no red zone and no SIMD (design/arch-x86-64.md), and stack checks that
+ * trap, or call morestack with stack_check=morestack. On AArch64 that's no floating point or Advanced SIMD, which trap
+ * at EL1 too until CPACR_EL1 allows them.
+ *
+ * Its output is the kernel_output setting, kernel.elf by default; its root is src/boot/slopos, with its linker script
+ * for the architecture.
  */
 add_kernel :: fn() {
     kernel := compiler.command_line_options()
@@ -150,9 +173,15 @@ add_kernel :: fn() {
 }
 
 /**
- * Every folder in folder, as a SlopOS program named after it: a position-independent executable for
- * x86-64-v3 (decisions/0003, 0004), or AArch64's ARMv8.2-A with LSE (0061), which its loader relocates and
- * starts with its startup block.
+ * Add every folder in a folder as a SlopOS program named after it: a position-independent executable for x86-64-v3
+ * (decisions/0003, 0004), or AArch64's baseline with arch=aarch64 (0061), which its loader relocates and starts with
+ * its startup block.
+ *
+ * Each is <name>.elf in the programs_output folder, linked against service_kit's library and any PROGRAM_LIBRARIES
+ * names for it. hello has a second build, hello_next.elf, with hello_build=next, for the test of generations applied
+ * live (decisions/0126).
+ *
+ * @param folder The folder whose subfolders are programs, relative to src/build.
  */
 add_programs :: fn(folder: string) {
     for subfolder in compiler.subfolders(folder) {
@@ -205,18 +234,26 @@ add_programs :: fn(folder: string) {
     }
 }
 
-/** A program that calls a library other than service_kit, which all do (decisions/0120, 0121), by their names */
+/** A program that calls a library other than service_kit, which all do (decisions/0120, 0121), by their names. */
 ProgramLibrary :: struct {
+    /** The program's name, its folder's. */
     program : string,
+    /** The library's name, its target's, which the program is linked against. */
     library : string,
 }
 
+/** Each program that calls a library other than service_kit, and which: test_libraries calls greeting. */
 PROGRAM_LIBRARIES :: ProgramLibrary.[ProgramLibrary.{program = "test_libraries", library = "greeting"}]
 
 /**
- * Every folder in folder, as a SlopOS typed library named after it (decisions/0119, 0120), <name>.library beside the
- * programs: its #export functions its interface, position-independent, for the programs' architecture, which a
- * program's runtime binds from the grant it's given (library:<name>.library).
+ * Add every folder in a folder as a SlopOS typed library named after it (decisions/0119, 0120), <name>.library in the
+ * programs_output folder: its #export functions its interface, position-independent, for the programs' architecture,
+ * which a program's runtime binds from the grant it's given (library:<name>.library).
+ *
+ * service_kit has a second build, service_kit_plus.library, with service_kit_build=plus, for substitution's test
+ * (decisions/0122).
+ *
+ * @param folder The folder whose subfolders are libraries, relative to src/build.
  */
 add_libraries :: fn(folder: string) {
     for subfolder in compiler.subfolders(folder) {
@@ -259,9 +296,11 @@ add_libraries :: fn(folder: string) {
 }
 
 /**
- * Every folder in folder, as a UEFI application named after it (roadmap B, decisions/0131), <name>.efi beside the
- * programs, for the programs' architecture, which the firmware runs: the bootloader, and the tests of Hemera's UEFI
- * target.
+ * Add every folder in a folder as a UEFI application named after it (roadmap B, decisions/0131), <name>.efi in the
+ * programs_output folder, for the programs' architecture, which the firmware runs: the bootloader, and the tests of
+ * Hemera's UEFI target.
+ *
+ * @param folder The folder whose subfolders are UEFI applications, relative to src/build.
  */
 add_uefi_programs :: fn(folder: string) {
     for subfolder in compiler.subfolders(folder) {
@@ -288,7 +327,11 @@ add_uefi_programs :: fn(folder: string) {
     }
 }
 
-/** Every folder in folder, as a hosted program named after it, for this machine. */
+/**
+ * Add every folder in a folder as a hosted program named after it, for this machine, in the tools_output folder.
+ *
+ * @param folder The folder whose subfolders are tools, relative to src/build.
+ */
 add_tools :: fn(folder: string) {
     for subfolder in compiler.subfolders(folder) {
         name :: last_part(subfolder)
@@ -305,7 +348,12 @@ add_tools :: fn(folder: string) {
     }
 }
 
-/** Every test folder under folder, as a hosted program named after the package it tests. */
+/**
+ * Add every folder named test under a folder, at any depth, as a hosted program named after the package it tests,
+ * <package>_test in the tests_output folder.
+ *
+ * @param folder The folder searched, relative to src/build; a test folder's own subfolders aren't.
+ */
 add_tests :: fn(folder: string) {
     for subfolder in compiler.subfolders(folder) {
         name :: last_part(subfolder)
@@ -330,14 +378,24 @@ add_tests :: fn(folder: string) {
     }
 }
 
-/** The last part of a path, after its last separator. */
+/**
+ * Give the last part of a path, after its last separator.
+ *
+ * @param path The path, with / or \ separators.
+ * @return What's after the last separator, a view into path; all of it without one, empty if it ends in one.
+ */
 last_part :: fn(path: string) -> string {
     after :: separator_after(path)
     runtime.assert(after <= path.count, "separator_after is inside the path")
     return path[after..<path.count]
 }
 
-/** A path without its last part. */
+/**
+ * Give a path without its last part.
+ *
+ * @param path The path, with / or \ separators.
+ * @return What's before the last separator, a view into path; empty without one.
+ */
 parent_of :: fn(path: string) -> string {
     after :: separator_after(path)
     runtime.assert(after <= path.count, "separator_after is inside the path")
@@ -347,7 +405,12 @@ parent_of :: fn(path: string) -> string {
     return path[0..<after - 1]
 }
 
-/** Where the last part of a path starts: just after its last / or \, or 0. */
+/**
+ * Find where the last part of a path starts.
+ *
+ * @param path The path, with / or \ separators.
+ * @return The index just after its last / or \, at most path's count; 0 without one.
+ */
 separator_after :: fn(path: string) -> usize {
     start : usize = 0
     for character, index in path {

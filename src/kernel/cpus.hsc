@@ -20,14 +20,32 @@ import frames from "frames"
  * ones after it.
  */
 
+/**
+ * How long the boot CPU waits for a CPU it started to report in, in milliseconds, before giving up on it and the ones
+ * after it.
+ */
 CPU_START_TIMEOUT_MS :: 1000
 
 // PerCpu.start_state.
+/** The CPU has been started but hasn't reported in yet, and the boot CPU still waits for it. */
 CPU_WAITING : u32 : 0
+/** The CPU reported in before the boot CPU gave up, and runs the kernel. */
 CPU_ONLINE : u32 : 1
+/** The boot CPU gave up on the CPU; if it starts after all, it halts at once (cpu_started). */
 CPU_ABANDONED : u32 : 2
 
-/** Start every CPU after the boot CPU, on the boot CPU, once its timer runs. */
+/**
+ * Start every CPU after the boot CPU, one at a time, in kernel.cpus' order.
+ *
+ * Runs on the boot CPU, once its timer runs, so kernel.counter_frequency is known. Each CPU gets a PerCpu and stacks
+ * (allocate_cpu) and is started at cpu_started; the boot CPU spins until it reports in or CPU_START_TIMEOUT_MS pass.
+ * A CPU that can't be given memory, or doesn't report in, is left out, and so is every one after it, so the online
+ * CPUs are always indices 0 to online_cpus - 1. A CPU given up on keeps its PerCpu and stacks, which it may still use.
+ *
+ * @param kernel The kernel, whose online_cpus is set to 1 and counts each CPU that reports in; kept by the CPUs
+ *     started.
+ * @param info The boot information, whose start_cpu starts a CPU; if it has none, only the boot CPU is online.
+ */
 start_cpus :: fn(kernel #escaping : ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
     // A copy of the view, which the calls below can't change
     cpus :: kernel.cpus
@@ -61,8 +79,12 @@ start_cpus :: fn(kernel #escaping : ptr[mut Kernel], info: ptr[boot_info.BootInf
 }
 
 /**
- * Where a started CPU enters the kernel, with its PerCpu's carrier block loaded, its stack_limit
- * set for the boot stack until the CPU first enters through the kernel stack.
+ * Enter the kernel on a CPU start_cpus started, and run it there: never returns.
+ *
+ * Runs on the new CPU with its PerCpu's carrier block loaded, its stack_limit set for the boot stack until the CPU
+ * first enters through the kernel stack. It sets the CPU up and takes the kernel's page table, then reports in by
+ * moving start_state from CPU_WAITING to CPU_ONLINE; if the boot CPU already gave up on it (CPU_ABANDONED), it halts
+ * instead. Online, it sets up its timer and first tick, joins the pool test if that's on, and goes idle.
  */
 cpu_started :: fn() #never_returns {
     cpu :: per_cpu()
@@ -87,9 +109,18 @@ cpu_started :: fn() #never_returns {
 }
 
 /**
- * A CPU's PerCpu and stacks, from the frame allocator, with its context and its carrier block
- * pointing back at the PerCpu. The carrier block's stack_limit is set once the CPU is on the stack
- * it starts on.
+ * Make a CPU's PerCpu and stacks, from the frame allocator, with its context and its carrier block pointing back at
+ * the PerCpu.
+ *
+ * The PerCpu is recorded in kernel.per_cpus at index, with start_state CPU_WAITING. Its context has the kernel's
+ * logger, heap allocator and clock. The carrier block's stack_limit is set once the CPU is on the stack it starts on.
+ * Neither is ever freed.
+ *
+ * @param kernel The kernel, whose frames they come from; kept in the PerCpu.
+ * @param index The CPU's index in kernel.cpus, below per_cpus' count, which keep_boot_info makes room for.
+ * @return The CPU's PerCpu, in the direct map, owned by the kernel for good.
+ * @error OutOfMemory No frames were left for the PerCpu or its stacks; a PerCpu made before the stacks failed isn't
+ *     given back.
  */
 allocate_cpu :: fn(kernel #escaping : ptr[mut Kernel], index: u32) -> Result[ptr[mut PerCpu], frames.FrameError] {
     cpu :: allocate_object[PerCpu](&kernel.frames)?
@@ -118,7 +149,13 @@ allocate_cpu :: fn(kernel #escaping : ptr[mut Kernel], index: u32) -> Result[ptr
     return .Ok(cpu)
 }
 
-/** Stop every other CPU that's online. They halt when the IPI arrives. */
+/**
+ * Stop every other online CPU, with a Stop IPI each; they halt when it arrives.
+ *
+ * Returns once the IPIs are sent, without waiting for the CPUs to halt.
+ *
+ * @param kernel The kernel, whose first online_cpus CPUs, the caller's apart, are sent the IPI.
+ */
 stop_other_cpus :: fn(kernel: ptr[Kernel]) {
     self :: per_cpu().index
     for cpu, index in kernel.cpus {

@@ -12,15 +12,29 @@ import frames from "../../frames"
 import boot_info from "../../../boot_info"
 import hosted_faults from "../../../robustness/hosted"
 
+/** The physical address the stand-in memory starts at: 256 KiB, frame 64. */
 MEMORY_BASE : u64 : 0x40000
+/** The stand-in memory's size in bytes: 256 KiB, 64 frames, the size of checks' buffer. */
 MEMORY_SIZE : u64 : 0x40000
+/** The frames the frame allocator has free once it has made: 64, less the one its state bytes take. */
 FREE_FRAMES : u64 : 63
 
+/**
+ * The memory map the tests' frame allocator is made from: reserved memory below MEMORY_BASE, then MEMORY_SIZE bytes
+ * usable. A constant, not on the stack, so the allocator made from it isn't held to a stack frame.
+ */
 REGIONS :: boot_info.MemoryRegion.[
     .{range = .{base = cast[boot_info.PhysicalAddress](0), size = MEMORY_BASE}, kind = .Reserved},
     .{range = .{base = cast[boot_info.PhysicalAddress](MEMORY_BASE), size = MEMORY_SIZE}, kind = .Usable},
 ]
 
+/**
+ * Run the slab allocator's checks, in order, stopping at the first that fails.
+ *
+ * Its buffer, on the stack, is the stand-in memory, so everything it makes is gone when it returns.
+ *
+ * @return 0 if every check passed, or the number of the first that failed (1 to 16, not in order of running).
+ */
 checks :: fn() -> int {
     memory : u64[32768]
     direct_map_offset :: cast[u64](&memory[0]) - MEMORY_BASE
@@ -117,15 +131,31 @@ checks :: fn() -> int {
     return 0
 }
 
+/**
+ * Tell whether a frame allocation succeeded.
+ *
+ * @param result The frame allocator's result; a block it holds isn't freed.
+ * @return True if it's Ok, false if it's an Error.
+ */
 succeeded_frames :: fn(result: Result[boot_info.PhysicalAddress, frames.FrameError]) -> bool {
     return result is_ok
 }
 
+/**
+ * Tell whether a slab allocation succeeded.
+ *
+ * @param result The slab allocator's result; an object it holds isn't freed.
+ * @return True if it's Ok, false if it's an Error.
+ */
 succeeded :: fn(result: Result[u64, frames.FrameError]) -> bool {
     return result is_ok
 }
 
-/** The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness) */
+/**
+ * Run the checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness).
+ *
+ * @return The program's exit status: 0 if every check passed, or the number of the first that failed.
+ */
 main :: fn() -> int {
     return hosted_faults.run(checks)
 }

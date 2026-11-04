@@ -3,8 +3,8 @@ package kernel
 import robustness from "../robustness"
 
 /**
- * The kernel's command line: words separated by spaces. Unknown words are ignored, so a command
- * line written for a newer kernel still boots an older one.
+ * The options the kernel's command line sets: words separated by spaces, each field named for its word. Unknown words
+ * are ignored, so a command line written for a newer kernel still boots an older one. A flag absent is false.
  */
 Options :: struct {
     /**
@@ -45,7 +45,8 @@ Options :: struct {
     /** test_shootdown: once booted, change a mapping every CPU has used, and check they all see the change. */
     test_shootdown : bool,
     /**
-     * test_tickless: once booted, count the timer interrupts of the CPUs other than the boot CPU, idle (decisions/0128).
+     * test_tickless: once booted, count the timer interrupts of the CPUs other than the boot CPU, idle
+     * (decisions/0128).
      */
     test_tickless : bool,
     /** test_ioapic: once booted, route the emulator's test device through its interrupt controller. */
@@ -68,7 +69,8 @@ Options :: struct {
     no_root_task : bool,
     /**
      * kernel_reserve=<MiB>: how much of the memory free at boot the kernel keeps out of the root budget, for its own
-     * allocations (decisions/0098); 0, or no such word, for the default, a sixteenth of it and at least 8 MiB.
+     * allocations (decisions/0098), in MiB; 0, no such word, or a value that isn't a decimal number for the default,
+     * a sixteenth of it and at least 8 MiB.
      */
     kernel_reserve_mib : u64,
     /**
@@ -78,6 +80,15 @@ Options :: struct {
     fail : robustness.FailSpec,
 }
 
+/**
+ * Parse the kernel's command line into its options.
+ *
+ * Callable before the kernel has any state; it allocates nothing.
+ *
+ * @param command_line The words, separated by single spaces; the bootloader's string, read only while this runs.
+ * @return The options the words set, every other one false or 0. A word given twice is applied twice, so the last
+ *     kernel_reserve= or fail= wins.
+ */
 parse_command_line :: fn(command_line: string) -> Options {
     options : Options
     with {
@@ -98,6 +109,14 @@ parse_command_line :: fn(command_line: string) -> Options {
     return options
 }
 
+/**
+ * Set the option a command line word names; a word that names none is ignored.
+ *
+ * @param options The options being parsed into; only the word's field changes.
+ * @param word One word, without spaces. A flag's word has to match exactly; kernel_reserve= and fail= need a value
+ *     after the =, and fail= is read only in a kernel built with robustness=on, its value ignored if fail_of can't
+ *     parse it.
+ */
 apply_option :: fn(options: ptr[mut Options], word: string) {
     if word == "test_exit" {
         options.test_exit = true
@@ -168,7 +187,12 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
 }
 
-/** A decimal number's value, or 0 if it isn't one. */
+/**
+ * Read a decimal number.
+ *
+ * @param text The digits, with no sign or spaces.
+ * @return Its value, or 0 if any character isn't a digit; a value past u64's range wraps around.
+ */
 number_of :: fn(text: string) -> u64 {
     value : u64 = 0
     for character in text {

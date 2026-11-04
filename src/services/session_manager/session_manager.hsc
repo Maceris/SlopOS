@@ -4,7 +4,8 @@
  * connection and its home volume's root; on a boot with no accounts, the one session there is, with no user. It serves
  * the session protocol on its listener: Start and StartWithoutUser, List with a session's programs, each pinged on its
  * lifecycle channel, End, a Stop on that channel, then the program killed if it hasn't ended once a grace period's
- * over, and EndSession, every program of a session ended so. There are up to MAX_SESSIONS at once (decisions/0151). A session's programs' budgets are split off its own, the session's node, and their log records go to the
+ * over, and EndSession, every program of a session ended so. There are up to MAX_SESSIONS at once (decisions/0151). A
+ * session's programs' budgets are split off its own, the session's node, and their log records go to the
  * events service through rings it opens for them, as the supervisor's programs' do. Each program is given its session's
  * locale (decisions/0152), from its user's settings in the config store, "session" of owner "user:" and their name, or
  * the keyboard layout they logged in with, which is kept as their setting then. Each session runs the system's
@@ -45,55 +46,77 @@ import prompt from "../../protocols/prompt"
 import session from "../../protocols/session"
 import service_kit from "../../libraries/service_kit"
 
+/** No channel: what a channel field is when there's none. */
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
-/** A program's end is watched under this key and its index */
+/** The port key a program's end is watched under, plus its index among the programs. */
 PROGRAM_KEY : u64 : 1000
-/** Its budget's pressure is bound to its port under this key */
+/** The port key the session manager's budget's pressure is bound under. */
 PRESSURE_KEY : u64 : 900
-// A session's shell's programs connection, bound under this plus the session's number
+/** The port key a session's shell's programs connection is bound under, plus the session's number. */
 PROGRAMS_KEY : u64 : 800
+/** The percentage of its budget's limit at which the session manager's under memory pressure. */
 PRESSURE_PERCENT : u64 : 80
+/** The percentage of its budget's limit it stops idle installations until it's under. */
 RELIEVED_PERCENT : u64 : 70
+/** The most programs of every session at once, first programs, powerboxes and installations together. */
 MAX_PROGRAMS :: 16
+/** The most sessions at once (decisions/0151). */
 MAX_SESSIONS :: 4
+/** echo's memory budget, in bytes. */
 ECHO_BUDGET : u64 : 2 * 1024 * 1024
-/** The shell's, which the programs it runs have theirs split off */
+/** The shell's memory budget, in bytes, which the programs it runs have theirs split off. */
 SHELL_BUDGET : u64 : 16 * 1024 * 1024
-// How long a program has to answer a Ping, and to stop once asked
+/** How long a program has to answer a Ping, in nanoseconds. */
 PING_WAIT : u64 : 200_000_000
+/** How long a program has to stop once asked, in nanoseconds, before it's killed. */
 STOP_GRACE : u64 : 2_000_000_000
+/** The most bytes of a session's user's name; a longer name's session is refused. */
 USER_BYTES :: 32
+/** The most bytes of a session's locale's name. */
 LOCALE_BYTES :: 16
-// "user:", a user's name, ":" and an installation's name
+/** The most bytes of a config store owner: "user:", a user's name, ":" and an installation's name; more are cut. */
 OWNER_BYTES :: 80
+/** An installation's memory budget, in bytes. */
 INSTALLATION_BUDGET : u64 : 4 * 1024 * 1024
+/** A session's powerbox's memory budget, in bytes. */
 POWERBOX_BUDGET : u64 : 2 * 1024 * 1024
-// How long test_installations waits for the counter to count
+/** How long test_installations waits for the counter to count, in nanoseconds. */
 COUNT_WAIT : u64 : 20_000_000_000
+/** No index: checking's value when test_installations has no session to check. */
 NOWHERE : usize : ~cast[usize](0)
 
-/** A user's settings for their sessions, in the config store. */
+/** A user's settings for their sessions, in the config store: "session" of owner "user:" and their name. */
 SessionSettings :: struct {
-    /** A std/locale name, as "en-GB"; empty until it's chosen */
+    /** A std/locale name, as "en-GB"; empty until it's chosen. Only en-US and en-GB are taken. */
     locale : slop_os.Relative[u8],
 }
 
 /**
- * What echo is given (echo.main): the session's terminal, and its home volume's root if it has one.
- * What the shell is given (shell.main), while it isn't the first program yet but with use_shell (decisions/0169).
+ * What the shell is given (shell.main), as each session's first program in echo's place with use_shell
+ * (decisions/0169).
  */
 ShellGrants :: struct {
+    /** A copy of the session manager's debug log, or null without one. */
     log : slop_os.DebugLog?,
+    /** The session's terminal connection, which moves to the shell. */
     session_terminal : os.Channel[terminal.Terminal],
+    /** The session's home volume's root, which moves to the shell; null for a session with no user. */
     home : os.Channel[dir.Dir]?,
+    /** A connection of its own to the process manager, to launch what it calls; null if one couldn't be made. */
     manager : os.Channel[process_manager.ProcessManager]?,
+    /** Its programs connection (decisions/0170), to find programs in the bundle store; null if one couldn't be made. */
     programs : os.Channel[programs.Programs]?,
 }
 
+/** What echo is given (echo.main): the session's terminal, its home volume's root if it has one, and its powerbox. */
 EchoGrants :: struct {
+    /** A copy of the session manager's debug log, or null without one. */
     log : slop_os.DebugLog?,
+    /** The session's terminal connection, which moves to echo. */
     session_terminal : os.Channel[terminal.Terminal],
+    /** The session's home volume's root, which moves to echo; null for a session with no user. */
     home : os.Channel[dir.Dir]?,
+    /** A connection to the session's powerbox, served under echo's name; null without a powerbox. */
     powerbox : os.Channel[powerbox.Powerbox]?,
 }
 
@@ -102,8 +125,11 @@ EchoGrants :: struct {
  * session manager's connection, on which it's asked to serve each program.
  */
 PowerboxGrants :: struct {
+    /** Another connection to the session's home, its own; null if one couldn't be made, or there's no home. */
     home : os.Channel[dir.Dir]?,
+    /** The trusted path's prompt connection, which moves to the powerbox. */
     prompts : os.Channel[prompt.Prompt],
+    /** The powerbox's end of its connection to the session manager, which sends it Serve for each program. */
     manager : os.Channel[powerbox.Powerbox],
 }
 
@@ -112,28 +138,38 @@ PowerboxGrants :: struct {
  * settings.
  */
 InstallationGrants :: struct {
+    /** Its data directory, apps/<name> in the session's apps directory, which moves to it. */
     data : installations.AppData,
+    /** A connection to its settings in the config store; null without the store. */
     settings : config.Config[counter_app.CounterSettings]?,
 }
 
 /** A session: whether it's one now, and its user's name, empty for a boot with no accounts. */
 Session :: struct {
+    /** Whether this place holds a session now. */
     in_use : bool,
+    /** Its user's name, the first user_bytes of it. */
     user : u8[USER_BYTES],
+    /** How many bytes its user's name has: 0 for a session with no user. */
     user_bytes : usize,
-    // Its locale's name, "" for none, and the page holding it, which its programs are given copies of to read, kept
-    // while it lasts
+    /** Its locale's name, the first locale_bytes of it. */
     locale : u8[LOCALE_BYTES],
+    /** How many bytes its locale's name has: 0 for none, as for a session with no user. */
     locale_bytes : usize,
+    /**
+     * The page holding its locale's name, which its programs are given read-only copies of, kept while the session
+     * lasts, since closing it would take the copies with it; NO_HANDLE until it's first given.
+     */
     locale_page : slop_os.Memory,
-    /** Its apps directory, its installations' data directories' parent; NONE for none */
+    /** Its apps directory, its installations' data directories' parent, the session manager's own; NONE for none. */
     apps : slop_os.Channel,
-    /** When it was last shown, by the count of Shown, 0 for never */
+    /** When it was last shown, by the count of Shown, 0 for never. */
     shown_at : u64,
-    // Its powerbox's connection for the session manager; NONE for none
+    /** Its powerbox's connection for the session manager, the session manager's own; NONE for none. */
     powerbox_end : slop_os.Channel,
+    /** A port bound to powerbox_end, waited on for the powerbox's answers; unset without one. */
     powerbox_port : slop_os.Port,
-    /** Its shell's programs connection (decisions/0170), bound to the session manager's port; NONE for none */
+    /** Its shell's programs connection (decisions/0170), bound to the session manager's port; NONE for none. */
     programs_end : slop_os.Channel,
 }
 
@@ -142,16 +178,26 @@ Session :: struct {
  * whether it's running.
  */
 Program :: struct {
+    /** Its session's number, its index among the sessions. */
     session : u32,
+    /** Its name, the first name_bytes of it, as it was launched: "echo", "shell", "powerbox", or an installation's. */
     name : u8[session.NAME_BYTES],
+    /** How many bytes its name has. */
     name_bytes : u8,
+    /** Its process, the session manager's handle, closed once it's ended. */
     process : slop_os.Process,
+    /** Its memory budget, split off the session manager's, closed, so given back, once it's ended. */
     budget : slop_os.MemoryBudget,
+    /** The session manager's end of its lifecycle channel, for Ping and Stop; closed once it's ended. */
     lifecycle : slop_os.Channel,
-    // Its log records' ring, the owning handle kept to give back once it's ended (events' Retire)
+    /**
+     * Its log records' ring, the owning handle, kept to give back once it's ended (events' Retire); NO_HANDLE for
+     * none.
+     */
     ring : slop_os.Memory,
+    /** Whether it's running; a place whose program isn't is free for the next. */
     running : bool,
-    /** Whether it's one of the system's installations, not the session's first program */
+    /** Whether it's one of the system's installations, not the session's first program. */
     installation : bool,
 }
 
@@ -160,56 +206,106 @@ Program :: struct {
  * lifecycle channel and its log records' ring that the session manager keeps.
  */
 Prepared :: struct {
+    /** Its place among the programs: one a program that ended left, or the next after them. */
     index : usize,
+    /** The launch's options: its end watched on the session manager's port, its lifecycle end, locale and ring. */
     options : os.LaunchOptions,
+    /** The session manager's end of its lifecycle channel. */
     lifecycle : slop_os.Channel,
+    /** The owning handle of its log records' ring; NO_HANDLE without the events service. */
     ring : slop_os.Memory,
 }
 
+/** An object from the bundle store, mapped to read. */
 MappedObject :: struct {
+    /** The object's memory, the session manager's handle, closed by unmap_object. */
     memory : slop_os.Memory,
+    /** Where it's mapped, in the session manager's address space. */
     address : u64,
+    /** The object's bytes, a view of the mapping, good until unmap_object. */
     bytes : u8[],
 }
 
+/** The session manager's state: its connections, its sessions and their programs, and its tests' progress. */
 Manager :: struct {
+    /** Its debug log, which programs it starts are given copies of; NO_HANDLE without one. */
     log : slop_os.DebugLog,
+    /** The port it waits on: clients, programs' ends, shells' programs connections and its budget's pressure. */
     port : slop_os.Port,
+    /** Its connection to the process manager, dialed through the manager grant, which it launches through. */
     manager : os.Channel[process_manager.ProcessManager],
+    /** A port bound to manager, for the process manager's answers. */
     manager_port : slop_os.Port,
+    /** echo's program, which each launch is given a copy of; null without one, when echo can't start. */
     echo_module : slop_os.Memory?,
+    /** The events service, which opens and retires its programs' log rings; NONE without it. */
     events_end : slop_os.Channel,
+    /** A port for events_end. */
     events_port : slop_os.Port,
-    // The config store's connection for users' values
+    /** The config store's connection for users' values; NONE without it. */
     settings_end : slop_os.Channel,
+    /** A port for settings_end. */
     settings_port : slop_os.Port,
-    // The bundle store, the system volume's apps directory, for a session with no user, and the system's list of
-    // installations, the config store's value "installations" of owner "system"
+    /** The bundle store, where the shell, the powerbox and the installations' programs come from; NONE without it. */
     store_end : slop_os.Channel,
+    /** A port for store_end. */
     store_port : slop_os.Port,
+    /** The system volume's apps directory, for a session with no user; NONE without it. */
     apps_end : slop_os.Channel,
+    /** The system's list of installations, the config store's value "installations" of owner "system"; NONE without. */
     list_end : slop_os.Channel,
+    /** A port for list_end. */
     list_port : slop_os.Port,
-    // test_installations' session, once there's one with a user, and whether it's still to come
+    /** Whether test_installations is still to come, in the first session with a user. */
     test_installations : bool,
+    /** The session test_installations checks once it's been answered for, or NOWHERE. */
     checking : usize,
-    // The session the console shows, or session.NO_SESSION, and how many times it's been told
+    /** The session the console shows, or session.NO_SESSION. */
     shown : u32,
+    /** How many times it's been told which session's shown; a session's shown_at is this when it was. */
     showings : u64,
-    /**
-     * test_pressure: whether it's still to come, and the budget it charges its own with to bring on pressure, until
-     * that's relieved
-     */
+    /** Whether test_pressure is still to come, once two sessions are. */
     test_pressure : bool,
-    // use_shell: the shell as each session's first program, in echo's place, from the bundle store
+    /** Whether use_shell makes the shell each session's first program, in echo's place, from the bundle store. */
     use_shell : bool,
+    /** The budget test_pressure charges its own with to bring on pressure, until it's relieved; NO_HANDLE for none. */
     ballast : slop_os.MemoryBudget,
-    // The sessions, and every session's programs
+    /** The sessions, by number. */
     sessions : Session[MAX_SESSIONS],
+    /** Every session's programs, the first count of them in use or once used. */
     programs : Program[MAX_PROGRAMS],
+    /** How many of programs have been used: those after it never have. */
     count : usize,
 }
 
+/**
+ * Make sessions for those the trusted path logs in, and run each session's programs.
+ *
+ * It serves the session protocol on its listener until the system ends: Start and StartWithoutUser make a session and
+ * start its first program, List gives a session's programs, End and EndSession end a program or a whole session, and
+ * Shown says which session the console shows. Its command line's words test_installations, test_pressure and
+ * use_shell turn on its tests, and the shell in echo's place.
+ *
+ * @param log The kernel's debug log, which every program it starts is given a copy of. Without it, they're given none.
+ * @param manager The connector to the process manager, dialed for the connection programs are launched through.
+ * @param echo_module echo's program, each session's first program unless use_shell. Without it, a session can't
+ *     start (without use_shell), and Start is refused.
+ * @param events_service The events service, which opens a log records' ring for each program and reads what's left in
+ *     it once it's ended. Without it, programs log to no ring.
+ * @param settings The config store's connection for users' values: each user's locale, and installations' settings.
+ *     Without it, each session's locale is the one its keyboard layout suggests, and installations have no settings.
+ * @param store The bundle store, where the shell, each session's powerbox and the installations' programs come from.
+ *     Without it, there's no powerbox, no installation and, with use_shell, no session.
+ * @param apps The system volume's apps directory, the installations' data directories' parent for a session with no
+ *     user. Without it, such a session runs no installations.
+ * @param installation_list The system's list of installations in the config store. Without it, sessions run none.
+ * @param command_line The kernel's command line, read for test_installations, test_pressure and use_shell. Without it,
+ *     none of them is on.
+ * @param clients Where connections from the session protocol's clients, the trusted path, arrive; more come through
+ *     Connect.
+ * @return 1 if its port couldn't be made or bound to its budget's pressure; 2 if the process manager couldn't be
+ *     dialed; 3 if the clients' listener couldn't be bound. It doesn't return otherwise.
+ */
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], echo_module: slop_os.Memory?,
     events_service: os.Channel[events.Events]?, settings: os.Channel[config.ConfigValue]?, store: os.Channel[bundle_store.BundleStore]?,
     apps: os.Channel[dir.Dir]?, installation_list: config.Config[system_records.Installations]?, command_line: slop_os.Memory?,
@@ -311,7 +407,15 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], ech
     }
 }
 
-/** Programs whose ends came among packets, marked so. */
+/**
+ * Mark the programs whose ends came among packets ended: their rings retired, and their process, budget and
+ * lifecycle channel closed, which gives the budget back to the session manager's.
+ *
+ * @param sessions The session manager: each program whose end came is marked not running, its ring retired
+ *     through the events service, and its handles closed.
+ * @param packets The packets a port wait gave; those that aren't a program's end's signal are skipped.
+ * @param taken How many of packets the wait filled.
+ */
 ended_in :: fn(sessions: ptr[mut Manager], packets: slop_os.Packet[], taken: usize) {
     for packet, i in packets {
         if i >= taken || packet.kind != .Signal || packet.key < PROGRAM_KEY {
@@ -333,7 +437,19 @@ ended_in :: fn(sessions: ptr[mut Manager], packets: slop_os.Packet[], taken: usi
     }
 }
 
-/** Every request client index has sent, until there are none left, or it's gone. */
+/**
+ * Answer every request a client has sent, until there are none left, or it's gone, in which case it's dropped.
+ *
+ * End and EndSession wait for programs to stop, up to STOP_GRACE each, and List up to PING_WAIT for their Pongs, so
+ * other clients wait meanwhile. Connect adds a client and isn't answered.
+ *
+ * @param sessions The session manager, whose port the client's end is bound to; its requests start and end
+ *     sessions and programs, which can wait on that port for STOP_GRACE or PING_WAIT.
+ * @param connected The clients bound to the session manager's port; Connect adds one, and a client whose channel
+ *     fails is dropped, its end closed.
+ * @param index The client's index among them; past them, or a client that's gone, nothing's done.
+ * @param into Where each request is received, reused.
+ */
 serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients], index: usize, into: ptr[mut os.Incoming]) {
     if index >= connected.ends.count {
         return void
@@ -384,9 +500,24 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
     }
 }
 
-/*
- * A session made, its first program started with its terminal and home: Started with its number, or Refused when
- * there's no room for another.
+/**
+ * Make a session and start its programs: its powerbox, if it's given the prompt connection, its first program with
+ * its terminal and home, and the system's installations.
+ *
+ * Its locale is its user's (locale_for). If test_installations is still to come and the session has a user, it's the
+ * session the test is run in, once this has been answered.
+ *
+ * @param sessions The session manager, which takes the first free session's place, and starts and keeps the
+ *     session's programs.
+ * @param user The user's name, copied; empty for a boot with no accounts, a session with no user, no locale and no
+ *     powerbox. One longer than USER_BYTES is refused.
+ * @param layout The keyboard layout they logged in with, like "uk", which suggests their locale if they have none.
+ * @param given_terminal The session's terminal connection, which moves to its first program, or is closed when the
+ *     session's refused for want of room.
+ * @param home The root of the user's home volume, which moves to the first program; null for none.
+ * @param prompts The trusted path's prompt connection, which moves to the powerbox; null for no powerbox.
+ * @return Started with the session's number; Refused when there's no room for another, the user's name is too long,
+ *     or its first program didn't start.
  */
 start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?,
     prompts: os.Channel[prompt.Prompt]?) -> session.Response {
@@ -450,7 +581,15 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
     return .Started(cast[u32](number))
 }
 
-/** Every program of session number asked to stop, then ended, and the session with them. */
+/**
+ * End a session: each of its programs asked to stop and, if it hasn't once STOP_GRACE is over, killed; then the
+ * session closed.
+ *
+ * @param sessions The session manager, whose session's programs are ended, waiting on its port up to STOP_GRACE
+ *     each, and whose session's place is freed.
+ * @param number The session's number; one that isn't a session now is already ended.
+ * @return Ended, always.
+ */
 end_session :: fn(sessions: ptr[mut Manager], number: u32) -> session.Response {
     if cast[usize](number) >= sessions.sessions.count || !sessions.sessions[cast[usize](number)].in_use {
         return .Ended
@@ -465,7 +604,14 @@ end_session :: fn(sessions: ptr[mut Manager], number: u32) -> session.Response {
     return .Ended
 }
 
-/** Session number's place freed, what it kept closed. */
+/**
+ * Free a session's place, closing what it kept: its locale page, apps directory, powerbox connection and programs
+ * connection. Its programs aren't touched.
+ *
+ * @param sessions The session manager, whose session's place is freed and what it kept closed; the programs
+ *     connection's binding to its port is undone.
+ * @param number The session's number; past MAX_SESSIONS, nothing's done.
+ */
 close_session :: fn(sessions: ptr[mut Manager], number: u32) {
     if cast[usize](number) >= sessions.sessions.count {
         return void
@@ -488,7 +634,18 @@ close_session :: fn(sessions: ptr[mut Manager], number: u32) {
     made^ = Session.{locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE), apps = NONE, powerbox_end = NONE, programs_end = NONE}
 }
 
-/** echo started in the session, its end watched and its lifecycle channel kept; whether it started. */
+/**
+ * Start the session's first program, echo, or with use_shell the shell, its end watched and its lifecycle channel
+ * kept.
+ *
+ * @param sessions The session manager, which launches through its process manager connection and keeps the
+ *     program in its programs; echo's program it holds is duplicated, not given away.
+ * @param number The session's number, below MAX_SESSIONS; the program's placed under it, and given its locale and
+ *     powerbox.
+ * @param given_terminal The session's terminal connection, given to the program.
+ * @param home The session's home volume's root, given to the program; null for none.
+ * @return Whether it started; not without echo's program, without room for another program, or if the launch failed.
+ */
 launch_echo :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?) -> bool {
     if sessions.use_shell {
         return launch_shell(sessions, number, given_terminal, home)
@@ -502,7 +659,20 @@ launch_echo :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.Ch
         powerbox = powerbox_for(sessions, number, "echo")}, prepared.options), false)
 }
 
-/** The shell, from the bundle store, in echo's place: whether it started. */
+/**
+ * Start the shell, from the bundle store, as the session's first program in echo's place.
+ *
+ * The bundle store's boot root's "shell" has to be a bundle whose manifest is shell.main's entry.
+ *
+ * @param sessions The session manager, which finds the shell in its bundle store, launches through its process
+ *     manager connection, and keeps the program in its programs.
+ * @param number The session's number, below MAX_SESSIONS; the shell's placed under it, and its programs
+ *     connection made for it.
+ * @param given_terminal The session's terminal connection, given to the shell.
+ * @param home The session's home volume's root, given to the shell; null for none.
+ * @return Whether it started; not without a shell in the bundle store, without room for another program, or if the
+ *     launch failed.
+ */
 launch_shell :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?) -> bool {
     expected :: bundle.Hash.{bytes = schema.hash(type_info_of(type_of(shell.main)))}
     program := cast[slop_os.Memory](slop_os.NO_HANDLE)
@@ -524,7 +694,13 @@ launch_shell :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.C
 }
 
 /**
- * A programs connection for session number's shell, the session manager's end kept and bound: the shell's end, or null.
+ * Make a programs connection for a session's shell (decisions/0170), the session manager's end kept and bound to its
+ * port, in place of any the session had.
+ *
+ * @param sessions The session manager, whose port the kept end is bound to, under PROGRAMS_KEY plus number.
+ * @param number The session's number; the session's programs connection, if it had one, is unbound and closed.
+ * @return The shell's end, the caller's to give it; null for a number past MAX_SESSIONS, or if the channel couldn't
+ *     be made or bound.
  */
 programs_connection :: fn(sessions: ptr[mut Manager], number: u32) -> os.Channel[programs.Programs]? {
     if cast[usize](number) >= sessions.sessions.count {
@@ -548,7 +724,12 @@ programs_connection :: fn(sessions: ptr[mut Manager], number: u32) -> os.Channel
 }
 
 /**
- * What each session's shell has asked for programs, answered, until it's asked nothing more; a connection gone, closed.
+ * Answer what each session's shell has asked of its programs connection, until it's asked nothing more; a connection
+ * that's gone is closed.
+ *
+ * @param sessions The session manager, whose sessions' programs connections are read on its port, Find answered
+ *     from its bundle store, and one that's gone unbound and closed.
+ * @param into Where each request is received, reused.
  */
 serve_programs :: fn(sessions: ptr[mut Manager], into: ptr[mut os.Incoming]) {
     for &made, number in sessions.sessions {
@@ -581,7 +762,16 @@ serve_programs :: fn(sessions: ptr[mut Manager], into: ptr[mut os.Incoming]) {
     }
 }
 
-/** A program of the store's boot root, by name: its executable and its manifest, or Missing. */
+/**
+ * Find a program the bundle store's boot root names: its bundle's executable and its manifest.
+ *
+ * @param sessions The session manager, whose bundle store is asked for the boot root, the bundle and its objects,
+ *     waiting for each answer.
+ * @param name The program's name, from 1 to programs.MAX_NAME bytes.
+ * @return Found with the executable's and the manifest's memory, both new handles for the shell to own, and the
+ *     manifest's size in bytes; Missing for a name out of range, one the root doesn't name, a bundle that refers to
+ *     fewer than two objects, or an object the store didn't give.
+ */
 find_program :: fn(sessions: ptr[mut Manager], name: u8[]) -> programs.Response {
     if name.count == 0 || name.count > programs.MAX_NAME {
         return .Missing
@@ -609,8 +799,18 @@ find_program :: fn(sessions: ptr[mut Manager], name: u8[]) -> programs.Response 
 }
 
 /**
- * The session's powerbox, from the bundle store, given another connection to its home and the prompt connection, and
- * its connection for the session manager kept: whether it started.
+ * Start the session's powerbox (decisions/0156), from the bundle store, given another connection to its home and the
+ * prompt connection, and keep its connection for the session manager.
+ *
+ * The bundle store's boot root's "powerbox_service" has to be a bundle whose manifest is powerbox_service.main's entry.
+ *
+ * @param sessions The session manager, which finds the powerbox in its bundle store, launches it through its
+ *     process manager connection, and keeps its connection in the session.
+ * @param number The session's number; past MAX_SESSIONS, prompts is closed and nothing's started.
+ * @param home The session's home volume's root, which stays the caller's; the powerbox gets a connection of its own.
+ * @param prompts The trusted path's prompt connection, which moves to the powerbox, or is closed when there's none.
+ * @return Whether it started; not without a powerbox in the bundle store, without room for another program, or if a
+ *     channel or the launch failed.
  */
 launch_powerbox :: fn(sessions: ptr[mut Manager], number: u32, home: os.Channel[dir.Dir]?, prompts: os.Channel[prompt.Prompt]) -> bool {
     if cast[usize](number) >= sessions.sessions.count {
@@ -649,7 +849,16 @@ launch_powerbox :: fn(sessions: ptr[mut Manager], number: u32, home: os.Channel[
 }
 
 /**
- * A connection to session number's powerbox for the program named name, which it serves under that name; null without one.
+ * Make a connection to a session's powerbox for a program, which it serves under the program's name.
+ *
+ * It sends the powerbox Serve, with the connection's other end, and waits for its answer.
+ *
+ * @param sessions The session manager, on whose session's powerbox connection Serve is sent and its answer
+ *     waited for, with no deadline.
+ * @param number The session's number; past MAX_SESSIONS, or a session without a powerbox, null comes back.
+ * @param name The program's name, which the powerbox shows on the trusted path when it asks the user for it.
+ * @return The program's end, the caller's to give it; null without a powerbox, or if the channel couldn't be made or
+ *     the powerbox didn't answer Done.
  */
 powerbox_for :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> os.Channel[powerbox.Powerbox]? {
     if cast[usize](number) >= sessions.sessions.count || sessions.sessions[cast[usize](number)].powerbox_end == NONE {
@@ -685,9 +894,18 @@ powerbox_for :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> os.
 }
 
 /**
- * A program's launch made ready: a place one that ended left, or the next; its end watched under its place's key; a
- * lifecycle channel; its session's locale; and a ring for its log records, the owning handle kept, the program given one
- * that doesn't own it. Null with no place left.
+ * Make a program's launch ready: a place one that ended left, or the next; its end watched under its place's key; a
+ * lifecycle channel; its session's locale; and a ring for its log records, the owning handle kept, the program given
+ * one that doesn't own it.
+ *
+ * What's made is the caller's, to give to placed with the launch's result.
+ *
+ * @param sessions The session manager: the place's old binding to its port is undone, and the events service
+ *     opens the ring. Its programs aren't changed until placed.
+ * @param number The session's number, whose locale the program's given.
+ * @param name The program's name, which the events service opens its ring under.
+ * @return What's ready; null with no place left among MAX_PROGRAMS, or if the lifecycle channel couldn't be made.
+ *     Without the events service, or if it opens no ring, the program has none.
  */
 prepare :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> Prepared? {
     index := sessions.count
@@ -733,7 +951,19 @@ prepare :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> Prepared
     return prepared
 }
 
-// A program launched with what prepare made ready, kept in its place, or what was made ready given back: whether it started.
+/**
+ * Keep a program launched with what prepare made ready in its place, or, if it didn't start, give back what was made
+ * ready: its lifecycle channel closed and its ring retired.
+ *
+ * @param sessions The session manager, whose programs keep the program at prepared's index, their count grown to
+ *     include it; on failure, the ring's retired through its events service.
+ * @param number The session's number, kept as the program's session.
+ * @param name The program's name, kept and logged; only session.NAME_BYTES of it are kept.
+ * @param prepared What prepare made ready for it.
+ * @param result The launch's result: its process and budget, kept by the program; or why it failed, logged.
+ * @param installation Whether it's one of the system's installations, which memory pressure may stop.
+ * @return Whether it started and was kept.
+ */
 placed :: fn(sessions: ptr[mut Manager], number: u32, name: string, prepared: Prepared, result: Result[os.Launched, os.LaunchError],
     installation: bool) -> bool {
     match result {
@@ -765,7 +995,18 @@ placed :: fn(sessions: ptr[mut Manager], number: u32, name: string, prepared: Pr
     }
 }
 
-/** Session number's programs that are running, into programs, each pinged: how many. */
+/**
+ * List a session's programs that are running, each pinged on its lifecycle channel to say whether it's responding.
+ *
+ * It waits up to PING_WAIT for their Pongs; answers left from earlier pings are dropped first.
+ *
+ * @param sessions The session manager, whose running programs of the session are pinged on their lifecycle
+ *     channels; their Pongs are read, waiting up to PING_WAIT.
+ * @param number The session's number; one with no running programs lists none.
+ * @param programs Where they're put, from the first: each one's index, name, memory used and limit, and whether it
+ *     answered.
+ * @return How many were put, at most session.MAX_PROGRAMS.
+ */
 list :: fn(sessions: ptr[mut Manager], number: u32, programs: ptr[mut session.Program[session.MAX_PROGRAMS]]) -> usize {
     count : usize = 0
     for &program, i in sessions.programs {
@@ -821,7 +1062,17 @@ list :: fn(sessions: ptr[mut Manager], number: u32, programs: ptr[mut session.Pr
 }
 
 /**
- * The program at index asked to stop, for why on its lifecycle channel, then killed if it hasn't ended once the grace period's over.
+ * End a program: ask it to stop on its lifecycle channel, then kill it if it hasn't ended once STOP_GRACE is over.
+ *
+ * It waits on the session manager's port meanwhile, taking programs' ends as they come; other packets that come then
+ * aren't acted on.
+ *
+ * @param sessions The session manager, whose program is asked to stop and killed after STOP_GRACE; programs
+ *     whose ends come on its port meanwhile are marked ended.
+ * @param index The program's index among the programs, as List gives it.
+ * @param why Why it's ended, for the log.
+ * @return Ended once it's stopped or been killed, or if it had ended already; Refused for an index that's never been a
+ *     program's.
  */
 end_program :: fn(sessions: ptr[mut Manager], index: usize, why: string) -> session.Response {
     if index >= sessions.count || index >= sessions.programs.count {
@@ -849,8 +1100,18 @@ end_program :: fn(sessions: ptr[mut Manager], index: usize, why: string) -> sess
 }
 
 /**
- * A user's locale: their settings', or with none, the one the keyboard layout they logged in with suggests, kept as their
- * setting from then on.
+ * Find a user's locale: their settings', or with none, the one the keyboard layout they logged in with suggests, kept
+ * as their setting from then on.
+ *
+ * It declares SessionSettings for "session" of owner "user:" and their name, and reads it; a value that isn't a locale
+ * it gives counts as none.
+ *
+ * @param sessions The session manager, through whose config store the user's settings are read, and written
+ *     when they have none.
+ * @param user The user's name, not empty; their values' owner is "user:" and it.
+ * @param layout The keyboard layout they logged in with: "uk" suggests en-GB, any other en-US.
+ * @return The locale's name, a constant: "en-US" or "en-GB". The suggested one without the config store, or if it
+ *     can't be read.
  */
 locale_for :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[]) -> string {
     suggested :: if layout.count == 2 && layout[0] == cast[u8]('u') && layout[1] == cast[u8]('k') { "en-GB" } else { "en-US" }
@@ -893,8 +1154,13 @@ locale_for :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[]) -> string
 }
 
 /**
- * The config store's owner of a user's values, "user:" and their name, "-" for a session with no user, and for an
- * installation's, ":" and its name after that, into owner: how many bytes it is.
+ * Make the config store's owner of a user's values, "user:" and their name, "-" for a session with no user, and for
+ * an installation's, ":" and its name after that.
+ *
+ * @param user The user's name; empty for a session with no user.
+ * @param installation The installation's name; empty for the user's own values.
+ * @param owner Where it's put, from the start; what's past OWNER_BYTES is cut.
+ * @return How many bytes of owner it is.
  */
 owner_of :: fn(user: u8[], installation: string, owner: ptr[mut u8[OWNER_BYTES]]) -> usize {
     count : usize = 0
@@ -907,6 +1173,13 @@ owner_of :: fn(user: u8[], installation: string, owner: ptr[mut u8[OWNER_BYTES]]
     return count
 }
 
+/**
+ * Append bytes to an owner being made, as far as it has room.
+ *
+ * @param owner The owner being made.
+ * @param count How many of owner's bytes are in use, moved on by those appended.
+ * @param bytes The bytes; those past OWNER_BYTES are dropped.
+ */
 add_bytes :: fn(owner: ptr[mut u8[OWNER_BYTES]], count: ptr[mut usize], bytes: u8[]) {
     for byte in bytes {
         at :: count^
@@ -917,7 +1190,12 @@ add_bytes :: fn(owner: ptr[mut u8[OWNER_BYTES]], count: ptr[mut usize], bytes: u
     }
 }
 
-/** The locale named by bytes, if it's one the session manager gives: its name as a constant. */
+/**
+ * Find the locale bytes name, if it's one the session manager gives.
+ *
+ * @param bytes The name, as the config store kept it.
+ * @return Its name as a constant, "en-US" or "en-GB"; null for any other, or none.
+ */
 locale_named :: fn(bytes: u8[]) -> string? {
     if bytes.count == 0 {
         return null
@@ -930,13 +1208,24 @@ locale_named :: fn(bytes: u8[]) -> string? {
     return null
 }
 
+/**
+ * Find a session's locale's name, for the log.
+ *
+ * @param made The session, read only; the name returned is a view of it.
+ * @return Its name, a view of the session's, good while it lasts; "no locale" for none.
+ */
 locale_of :: fn(made: ptr[Session]) -> string {
     return if made.locale_bytes > 0 && made.locale_bytes <= made.locale.count { string_of(&made.locale[0], made.locale_bytes) } else { "no locale" }
 }
 
 /**
- * A read-only copy of the page holding a session's locale's name, for a program's grant "locale", the page made the
- * first time and kept by the session, since closing it would take the copies with it; null for a session with none.
+ * Make a read-only copy of the page holding a session's locale's name, for a program's grant "locale".
+ *
+ * The page is made the first time and kept by the session, since closing it would take the copies with it.
+ *
+ * @param made The session, whose locale_page is made the first time it's asked for, kept until the session's
+ *     closed.
+ * @return The copy, the caller's to give; null for a session with no locale, or if the page or copy couldn't be made.
  */
 locale_page :: fn(made: ptr[mut Session]) -> slop_os.Memory? {
     count :: made.locale_bytes
@@ -962,7 +1251,14 @@ locale_page :: fn(made: ptr[mut Session]) -> slop_os.Memory? {
 // Memory pressure (decisions/0153)
 
 /**
- * The session the console shows now, its time shown counted; test_pressure's pressure brought on once two sessions are.
+ * Note the session the console shows now, its time shown counted; test_pressure's pressure brought on once two
+ * sessions are.
+ *
+ * test_pressure charges a budget split off the session manager's own up to its pressure threshold, once.
+ *
+ * @param sessions The session manager, whose shown session and count of showings change, and which test_pressure
+ *     gives a ballast budget.
+ * @param number The session's number, or session.NO_SESSION when the console shows none, as on the trusted path.
  */
 shown :: fn(sessions: ptr[mut Manager], number: u32) {
     sessions.shown = number
@@ -994,9 +1290,14 @@ shown :: fn(sessions: ptr[mut Manager], number: u32) {
 }
 
 /**
- * Pressure relieved: idle installations, those of the sessions not shown, the least recently shown session's first,
- * each asked to stop and ended, one at a time, until what its budget has charged is under RELIEVED_PERCENT of its
- * limit, or there are none left. test_pressure's charge given back after.
+ * Relieve memory pressure: idle installations, those of the sessions not shown, the least recently shown session's
+ * first, each asked to stop and ended, one at a time, until what its budget has charged is under RELIEVED_PERCENT of
+ * its limit, or there are none left. test_pressure's charge is given back after.
+ *
+ * A session's first program and its powerbox are never asked. Each stop can take up to STOP_GRACE.
+ *
+ * @param sessions The session manager, whose idle installations are ended, waiting on its port up to
+ *     STOP_GRACE each, and whose test_pressure ballast is closed after.
  */
 relieve :: fn(sessions: ptr[mut Manager]) {
     budget :: slop_os.startup_block().budget
@@ -1034,7 +1335,14 @@ relieve :: fn(sessions: ptr[mut Manager]) {
 
 // Installations (decisions/0153)
 
-/** The system's installations started in session number. */
+/**
+ * Start the system's installations in a session, each as start_installation does; one that can't start is logged
+ * and skipped.
+ *
+ * @param sessions The session manager, whose list of installations is read from the config store, and which
+ *     starts and keeps each installation.
+ * @param number The session's number, below MAX_SESSIONS; its apps directory holds the installations' data.
+ */
 start_installations :: fn(sessions: ptr[mut Manager], number: u32) {
     list :: read_installations(sessions)
     for i in cast[usize](0)..<list.entries.count {
@@ -1044,7 +1352,13 @@ start_installations :: fn(sessions: ptr[mut Manager], number: u32) {
     }
 }
 
-/** The system's installations, as the config store has them: none without the store, or before they're written. */
+/**
+ * Read the system's installations, as the config store has them.
+ *
+ * @param sessions The session manager, whose list connection to the config store is read, waiting for its
+ *     answer.
+ * @return The list; empty without the list's connection, before it's written, or if it can't be read or isn't valid.
+ */
 read_installations :: fn(sessions: ptr[mut Manager]) -> system_records.Installations {
     if sessions.list_end == NONE {
         return system_records.Installations.{}
@@ -1060,7 +1374,14 @@ read_installations :: fn(sessions: ptr[mut Manager]) -> system_records.Installat
     return stored
 }
 
-/** The system's installations written to the config store, marked written: whether it kept them. */
+/**
+ * Write the system's installations to the config store, marked written.
+ *
+ * @param sessions The session manager, on whose list connection to the config store the list is written, waiting
+ *     for its answer.
+ * @param list The list; its set is made 1.
+ * @return Whether the store kept it; false without the list's connection, or for a list that isn't valid.
+ */
 write_installations :: fn(sessions: ptr[mut Manager], list: system_records.Installations) -> bool {
     if sessions.list_end == NONE {
         return false
@@ -1079,10 +1400,18 @@ write_installations :: fn(sessions: ptr[mut Manager], list: system_records.Insta
 }
 
 /**
- * An installation started in session number: its bundle's program (the bundle it names, or the one the store's boot root
+ * Start an installation in a session: its bundle's program (the bundle it names, or the one the store's boot root
  * names after its program), if the bundle's manifest is the entry installations are launched with; its data directory,
  * apps/<name> in the session's apps directory, made if it isn't there; and its settings, the config store's value
- * "settings" of its owner (owner_of). Whether it started.
+ * "settings" of its owner (owner_of).
+ *
+ * @param sessions The session manager, which finds the program in its bundle store, opens its settings through
+ *     its config store, launches it, and keeps it.
+ * @param number The session's number; past MAX_SESSIONS, or a session without an apps directory, it has no data
+ *     directory, so it isn't started.
+ * @param entry The installation's record: its name, its program's name and the bundle it names, if any.
+ * @return Whether it started; not without its bundle, for a bundle of another entry, without a data directory,
+ *     without room for another program, or if the launch failed. Each is logged.
  */
 start_installation :: fn(sessions: ptr[mut Manager], number: u32, entry: system_records.InstallationRecord) -> bool {
     name :: system_records.text_of(&entry.name)
@@ -1123,7 +1452,16 @@ start_installation :: fn(sessions: ptr[mut Manager], number: u32, entry: system_
         counter.main, grants, prepared.options), true)
 }
 
-/** A connection to an installation's value of type T, "settings" of its owner in session number; null without one. */
+/**
+ * Open a connection to an installation's settings in the config store, "settings" of its owner (owner_of).
+ *
+ * @tparam T The settings' type.
+ * @param sessions The session manager, whose config store is asked for the value, waiting for its answer.
+ * @param number The session's number, whose user owns the installation's values.
+ * @param name The installation's name.
+ * @return The connection, the caller's to give; null without the config store, for a number past MAX_SESSIONS, or if
+ *     the store didn't open it.
+ */
 settings_for :: fn[T](sessions: ptr[mut Manager], number: u32, name: string) -> config.Config[T]? {
     if sessions.settings_end == NONE || cast[usize](number) >= sessions.sessions.count {
         return null
@@ -1141,7 +1479,13 @@ settings_for :: fn[T](sessions: ptr[mut Manager], number: u32, name: string) -> 
     }
 }
 
-/** The bundle an installation runs: the one it names, or the store's boot root's of its program's name. */
+/**
+ * Find the bundle an installation runs: the one it names, or the store's boot root's of its program's name.
+ *
+ * @param sessions The session manager, whose bundle store's boot root is read when the record names no bundle.
+ * @param entry The installation's record: its bundle, all zeros for none, and its program's name.
+ * @return The bundle's hash; null if it names none and the boot root doesn't name its program.
+ */
 installation_bundle :: fn(sessions: ptr[mut Manager], entry: system_records.InstallationRecord) -> bundle.Hash? {
     named := bundle.Hash.{bytes = entry.bundle}
     if !bundle.same(named, bundle.Hash.{}) {
@@ -1150,7 +1494,13 @@ installation_bundle :: fn(sessions: ptr[mut Manager], entry: system_records.Inst
     return bundle_named(sessions, system_records.text_of(&entry.program))
 }
 
-/** The bundle the store's boot root names name, or null. */
+/**
+ * Find the bundle the bundle store's boot root names by a name.
+ *
+ * @param sessions The session manager, whose bundle store is asked for its root, which is mapped, read and unmapped.
+ * @param name The name, like "shell" or an installation's program's.
+ * @return The bundle's hash; null without the store, if the root couldn't be read, or if it doesn't name it.
+ */
 bundle_named :: fn(sessions: ptr[mut Manager], name: string) -> bundle.Hash? {
     root :: match store_request(sessions, .Root) {
         case Rooted(hash) => hash
@@ -1174,15 +1524,28 @@ bundle_named :: fn(sessions: ptr[mut Manager], name: string) -> bundle.Hash? {
 }
 
 /**
- * A bundle's program, as paged memory from the store, if its manifest is the entry installations are launched with
- * (counter_app's, the schema of counter.main's type): null for one of another entry, which can't be given what it takes.
+ * Find a bundle's program, as paged memory from the store, if its manifest is the entry installations are launched
+ * with (counter_app's, the schema of counter.main's type).
+ *
+ * @param sessions The session manager, whose bundle store gives the bundle and its program.
+ * @param bundle_hash The bundle's hash in the bundle store; all zeros, or one it doesn't have, gives null.
+ * @return The program's memory, the caller's; null for a bundle of another entry, which can't be given what it takes,
+ *     or one the store doesn't give.
  */
 installation_program :: fn(sessions: ptr[mut Manager], bundle_hash: bundle.Hash) -> slop_os.Memory? {
     return program_of(sessions, bundle_hash, bundle.Hash.{bytes = schema.hash(type_info_of(type_of(counter.main)))})
 }
 
 /**
- * A bundle's program, as paged memory from the store, if its manifest is expected, the schema of the entry it's launched with.
+ * Find a bundle's program, as paged memory from the store, if its manifest is the one expected.
+ *
+ * A bundle refers to its program first and its manifest second.
+ *
+ * @param sessions The session manager, whose bundle store gives the bundle, mapped and unmapped, and its program.
+ * @param bundle_hash The bundle's hash in the bundle store; one it doesn't have gives null.
+ * @param expected The manifest's hash expected: the schema hash of the entry it's launched with.
+ * @return The program's memory, the caller's; null for another manifest, a bundle that can't be read or refers to
+ *     fewer than two objects, or a program the store doesn't give.
  */
 program_of :: fn(sessions: ptr[mut Manager], bundle_hash: bundle.Hash, expected: bundle.Hash) -> slop_os.Memory? {
     record :: mapped_object(sessions, bundle_hash) or_return null
@@ -1204,6 +1567,14 @@ program_of :: fn(sessions: ptr[mut Manager], bundle_hash: bundle.Hash, expected:
     }
 }
 
+/**
+ * Ask the bundle store something, and wait for its answer.
+ *
+ * @param sessions The session manager, on whose bundle store connection the request is sent and the answer
+ *     waited for.
+ * @param request The request, which can't carry items: Root or Get, as it's used here.
+ * @return The store's answer; Unsupported without the store. Handles in it are the caller's.
+ */
 store_request :: fn(sessions: ptr[mut Manager], request: bundle_store.Request) -> bundle_store.Response {
     if sessions.store_end == NONE {
         return .Unsupported
@@ -1214,7 +1585,15 @@ store_request :: fn(sessions: ptr[mut Manager], request: bundle_store.Request) -
     return bundle_store.ask(sessions.store_end, sessions.store_port, &out, &into)
 }
 
-/** An object from the store, mapped to read; null without it. */
+/**
+ * Get an object from the bundle store and map it to read.
+ *
+ * @param sessions The session manager, whose bundle store gives the object; it's mapped into the session
+ *     manager's own address space.
+ * @param hash The object's hash.
+ * @return The object, mapped, for the caller to give to unmap_object; null if the store didn't give it, or it couldn't
+ *     be mapped.
+ */
 mapped_object :: fn(sessions: ptr[mut Manager], hash: bundle.Hash) -> MappedObject? {
     object :: match store_request(sessions, .Get(hash)) {
         case Got(got) => got
@@ -1228,7 +1607,14 @@ mapped_object :: fn(sessions: ptr[mut Manager], hash: bundle.Hash) -> MappedObje
     return MappedObject.{memory = object.memory, address = address, bytes = view_of(cast[ptr[u8]](address), cast[usize](object.size))}
 }
 
-/** memory mapped to read, at an address of its own: 0 if it can't be. */
+/**
+ * Map memory to read, at addresses reserved for it.
+ *
+ * @param memory The memory object, which stays the caller's.
+ * @param size The bytes mapped, a multiple of 4096.
+ * @return Where it's mapped; 0 for a size of 0, or if it can't be. Addresses reserved for a failed mapping aren't
+ *     given back.
+ */
 map_in :: fn(memory: slop_os.Memory, size: u64) -> u64 {
     if size == 0 {
         return 0
@@ -1240,14 +1626,24 @@ map_in :: fn(memory: slop_os.Memory, size: u64) -> u64 {
     return address
 }
 
+/**
+ * Unmap an object mapped by mapped_object, and close its memory.
+ *
+ * @param object The object; its bytes are gone after this.
+ */
 unmap_object :: fn(object: MappedObject) {
     _ = slop_os.memory_unmap(slop_os.startup_block().space, object.address)
     _ = slop_os.handle_close(cast[slop_os.Handle](object.memory))
 }
 
 /**
- * A session's apps directory: its home's apps, made if it isn't there, or for a session without a home, a connection of
- * its own to the system volume's; NONE without either.
+ * Open a session's apps directory: its home's apps, made if it isn't there, or for a session without a home, a
+ * connection of its own to the system volume's.
+ *
+ * @param sessions The session manager, whose system apps directory a session without a home gets a connection
+ *     to.
+ * @param home The session's home volume's root, which stays the caller's; null for none.
+ * @return The directory, the caller's; NONE without either, or if it couldn't be opened.
  */
 apps_of :: fn(sessions: ptr[mut Manager], home: os.Channel[dir.Dir]?) -> slop_os.Channel {
     return match home {
@@ -1257,7 +1653,12 @@ apps_of :: fn(sessions: ptr[mut Manager], home: os.Channel[dir.Dir]?) -> slop_os
 }
 
 /**
- * The directory name beneath the one end speaks for, opened, made first if create and it isn't there; null if it can't be.
+ * Open a directory beneath the one a channel speaks for, and wait for it.
+ *
+ * @param end The directory's channel, which stays the caller's.
+ * @param name The directory's path beneath it.
+ * @param create Whether to make it first if it isn't there.
+ * @return The opened directory's channel, the caller's; null if it can't be opened, or the request fails.
  */
 opened_directory :: fn(end: slop_os.Channel, name: string, create: bool) -> slop_os.Channel? {
     port :: os.port_for(slop_os.startup_block().budget, end) or_return null
@@ -1283,7 +1684,12 @@ opened_directory :: fn(end: slop_os.Channel, name: string, create: bool) -> slop
 }
 
 /**
- * Another connection to the directory end speaks for, its one end sent to its server, which takes it without answering.
+ * Make another connection to the directory a channel speaks for, its one end sent to its server with Connect, which
+ * takes it without answering.
+ *
+ * @param end The directory's channel, which stays the caller's.
+ * @return The new connection's end, the caller's; null if the channel or a port couldn't be made, or Connect couldn't
+ *     be sent.
  */
 connection_to :: fn(end: slop_os.Channel) -> slop_os.Channel? {
     budget :: slop_os.startup_block().budget
@@ -1302,7 +1708,14 @@ connection_to :: fn(end: slop_os.Channel) -> slop_os.Channel? {
     return pair.b
 }
 
-/** The installation named name in session number, if it's running, asked to stop, and ended. */
+/**
+ * Stop an installation in a session, if it's running: asked to stop, and killed if it hasn't once STOP_GRACE is over.
+ *
+ * @param sessions The session manager, whose running installation of that name in the session is ended, waiting
+ *     on its port up to STOP_GRACE.
+ * @param number The session's number.
+ * @param name The installation's name, compared with each program's; none running by it does nothing.
+ */
 stop_installation :: fn(sessions: ptr[mut Manager], number: u32, name: string) {
     for i in 0..<sessions.count {
         if i < sessions.programs.count && sessions.programs[i].running && sessions.programs[i].installation
@@ -1313,8 +1726,17 @@ stop_installation :: fn(sessions: ptr[mut Manager], number: u32, name: string) {
 }
 
 /**
- * An installation removed, by session number: stopped there, taken from the system's list, its data directory in the
- * session's apps directory deleted, and its settings forgotten. Whether all of it went.
+ * Remove an installation, by a session: stopped there, taken from the system's list, its data directory in the
+ * session's apps directory deleted, and its settings forgotten.
+ *
+ * Only the files directly in its data directory are deleted, so a directory in it keeps the data directory too.
+ *
+ * @param sessions The session manager: the installation is stopped, its list rewritten in the config store, its
+ *     data deleted and its settings forgotten, waiting for each.
+ * @param number The session's number, whose apps directory and user's settings it's removed from.
+ * @param name The installation's name.
+ * @return Whether all of it went; false if any part didn't, or the session has no apps directory or there's no config
+ *     store, though what could go has.
  */
 uninstall :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> bool {
     stop_installation(sessions, number, name)
@@ -1372,7 +1794,14 @@ uninstall :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> bool {
     return whole
 }
 
-/** a/b, into storage. */
+/**
+ * Join two names into a path, a/b.
+ *
+ * @param a The name before the slash, as given; may be empty.
+ * @param b The name after the slash, as given; may be empty.
+ * @param storage Where the path's put; what's past 256 bytes is cut.
+ * @return The path, a view of storage, good as long as it is.
+ */
 joined_path :: fn(a: string, b: string, storage: ptr[mut u8[256]]) -> string {
     count := cast[usize](0)
     for text in string.[a, "/", b] {
@@ -1387,9 +1816,16 @@ joined_path :: fn(a: string, b: string, storage: ptr[mut u8[256]]) -> string {
 }
 
 /**
- * test_installations, in the first session with a user, once it's been answered for: the counter, once it's counted,
- * refused an update to hello's bundle, whose entry isn't the installations'; updated to counter_next's, which counts on
- * from its data; uninstalled, its data and settings with it; and installed again, counting from 1.
+ * Run test_installations, in the first session with a user, once it's been answered for: the counter, once it's
+ * counted, refused an update to hello's bundle, whose entry isn't the installations'; updated to counter_next's, which
+ * counts on from its data; uninstalled, its data and settings with it; and installed again, counting from 1. What
+ * happened is logged.
+ *
+ * It takes the counter to be the list's first installation.
+ *
+ * @param sessions The session manager, whose list of installations, programs and the session's counter data
+ *     the test reads, rewrites and restarts; it waits up to COUNT_WAIT at each step.
+ * @param number The session's number, the first with a user, in which the counter runs.
  */
 check_installations :: fn(sessions: ptr[mut Manager], number: u32) {
     list := read_installations(sessions)
@@ -1421,7 +1857,13 @@ check_installations :: fn(sessions: ptr[mut Manager], number: u32) {
 }
 
 /**
- * Whether the counter named name in session number has counted to count, in its data directory's file count, waited for.
+ * Wait for a counter in a session to count to a number, in its data directory's file count.
+ *
+ * @param sessions The session manager, whose session's apps directory is read; it waits on a port of its own.
+ * @param number The session's number.
+ * @param name The counter installation's name, its data directory's.
+ * @param count The number waited for.
+ * @return True once the file holds it; false if it doesn't within COUNT_WAIT, or the session has no apps directory.
  */
 counted :: fn(sessions: ptr[mut Manager], number: u32, name: string, count: u64) -> bool {
     if cast[usize](number) >= sessions.sessions.count || sessions.sessions[cast[usize](number)].apps == NONE {
@@ -1454,18 +1896,35 @@ counted :: fn(sessions: ptr[mut Manager], number: u32, name: string, count: u64)
     }
 }
 
-/** A session's user's name, empty for none. */
+/**
+ * Find a session's user's name.
+ *
+ * @param made The session, read only; the name returned is a view of it.
+ * @return The name, a view of the session's, good while it lasts; empty for none.
+ */
 user_of :: fn(made: ptr[Session]) -> u8[] {
     count :: made.user_bytes
     return if count <= made.user.count { made.user[0..<count] } else { made.user[0..<0] }
 }
 
-/** A port for end, or none. */
+/**
+ * Make a port for a channel, from the session manager's budget.
+ *
+ * @param end The channel the port is bound to; the caller's, not closed.
+ * @return The port, never closed; NO_HANDLE if it couldn't be made.
+ */
 port_of :: fn(end: slop_os.Channel) -> slop_os.Port {
     return os.port_for(slop_os.startup_block().budget, end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
 }
 
-/** An ended program's ring given back to the events service, which reads what's left in it, or closed without one. */
+/**
+ * Give an ended program's log ring back to the events service (Retire), which reads what's left in it; or close it,
+ * without the service or if it doesn't take it.
+ *
+ * @param sessions The session manager, on whose events service connection Retire is sent and its answer waited
+ *     for.
+ * @param ring The ring's owning handle, which moves; NO_HANDLE for none, which does nothing.
+ */
 retire_ring :: fn(sessions: ptr[mut Manager], ring: slop_os.Memory) {
     if cast[slop_os.Handle](ring) == slop_os.NO_HANDLE {
         return void
@@ -1483,7 +1942,12 @@ retire_ring :: fn(sessions: ptr[mut Manager], ring: slop_os.Memory) {
     _ = slop_os.handle_close(cast[slop_os.Handle](ring))
 }
 
-/** A copy of the session manager's debug log, for a program it starts, which logs through it. */
+/**
+ * Make a copy of the session manager's debug log, for a program it starts, which logs through it.
+ *
+ * @param log The debug log, or NO_HANDLE.
+ * @return The copy, with the rights to write, duplicate and transfer, the caller's to give; null without a log.
+ */
 duplicate_log :: fn(log: slop_os.DebugLog) -> slop_os.DebugLog? {
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     return match slop_os.handle_duplicate(cast[slop_os.Handle](log), rights) {
@@ -1492,6 +1956,12 @@ duplicate_log :: fn(log: slop_os.DebugLog) -> slop_os.DebugLog? {
     }
 }
 
+/**
+ * Wait for a while, on a port of its own, so no packet of the session manager's is taken meanwhile.
+ *
+ * @param sessions The session manager; not used, as the wait is on a port of its own.
+ * @param nanoseconds How long to wait; if a port can't be made, it doesn't wait.
+ */
 pause :: fn(sessions: ptr[mut Manager], nanoseconds: u64) {
     waiter :: slop_os.port_create(slop_os.startup_block().budget) or_return void
     defer slop_os.handle_close(cast[slop_os.Handle](waiter))
@@ -1499,6 +1969,12 @@ pause :: fn(sessions: ptr[mut Manager], nanoseconds: u64) {
     _ = slop_os.port_wait(waiter, packets, (slop_os.clock_monotonic() or_else 0) + nanoseconds)
 }
 
+/**
+ * Find a program's name.
+ *
+ * @param program The program's place, read only; the name returned is a view of it.
+ * @return Its name, a view of the program's, good while its place lasts; empty for none.
+ */
 name_of :: fn(program: ptr[Program]) -> string {
     count :: if cast[usize](program.name_bytes) <= program.name.count { cast[usize](program.name_bytes) } else { 0 }
     return if count == 0 { "" } else { string_of(&program.name[0], count) }

@@ -9,6 +9,14 @@ import slopfs from ".."
  * clone's copies of its origin's issued records issue nothing. Checks from 1200.
  */
 
+/**
+ * Check stored links: one volume issues links to a directory and a file, another keeps a link to each; a path walks
+ * up to its first link and no further; a link isn't a file or a directory to anything that doesn't follow it; what
+ * was issued is listed, revoked (once), numbered on, and kept across a mount; a clone's copies of its origin's issued
+ * records issue nothing, its own numbers following its origin's; and a link removed takes its record with it.
+ *
+ * @return 0 if every check passed, or the number of the first that failed, 1200 to 1268.
+ */
 check_links :: fn() -> int {
     device :: new_device_of(4096) or_return 1200
     defer free_device(device)
@@ -165,6 +173,13 @@ check_links :: fn() -> int {
     return 0
 }
 
+/**
+ * Tell whether two strings are the same.
+ *
+ * @param a One.
+ * @param b The other string, of any length.
+ * @return True if they're the same length and byte for byte alike.
+ */
 same_text :: fn(a: string, b: string) -> bool {
     if a.count != b.count {
         return false
@@ -177,6 +192,13 @@ same_text :: fn(a: string, b: string) -> bool {
     return true
 }
 
+/**
+ * Tell whether an operation was refused with a particular error.
+ *
+ * @param result Its result.
+ * @param expected The error it should have.
+ * @return True if it's that error; false if it succeeded or failed otherwise.
+ */
 refused_as :: fn(result: Result[u64, slopfs.Error], expected: slopfs.Error) -> bool {
     return match result {
         case Ok(_) => false

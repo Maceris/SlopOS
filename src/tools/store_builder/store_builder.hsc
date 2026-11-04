@@ -1,8 +1,8 @@
 /**
- * The store builder (roadmap 9b, decisions/0094): a hosted program that writes a bundle store's directory on the host,
- * for the image builder to copy into the system volume, as the bundle store keeps it: each program given an object,
- * named by its BLAKE3-256 hash in hex under objects/, with a bundle naming it, and a boot root naming each bundle by the
- * program's file name without its extension, whose hash is in root. tools/boot.py runs it.
+ * The store builder (roadmap 9b, decisions/0094): a hosted program that writes a bundle store's directory on the
+ * host, for the image builder to copy into the system volume, as the bundle store keeps it: each program given an
+ * object, named by its BLAKE3-256 hash in hex under objects/, with a bundle naming it, and a boot root naming each
+ * bundle by the program's file name without its extension, whose hash is in root. tools/boot.py runs it.
  *
  *     store_builder <store folder> <program>...
  *
@@ -15,6 +15,16 @@ import runtime from "base"
 import os from "std"
 import bundle from "../../bundle"
 
+/**
+ * Write a bundle store's directory on the host from programs the build made.
+ *
+ * Its arguments are the store's folder, made if it isn't there, then the programs' paths, each an object with a
+ * bundle, and its <name>.manifest beside it an object too when it's there. Objects already in the folder are written
+ * again; root is replaced.
+ *
+ * @return 0 once the store is written; 1 for too few arguments, 2 if the folder or its objects/ couldn't be made, 3 if
+ *     a program couldn't be read, 4 if an object couldn't be written, 5 if root couldn't be.
+ */
 main :: fn() -> int {
     arguments :: os.arguments()
     if arguments.count < 2 {
@@ -68,7 +78,13 @@ main :: fn() -> int {
     return 0
 }
 
-/** bytes written as an object in objects, named by their hash: the hash, or null if they couldn't be. */
+/**
+ * Write bytes as an object, named by their hash in hex.
+ *
+ * @param objects The objects folder, without a trailing separator.
+ * @param bytes The object's bytes.
+ * @return Their hash; null, logged, if the file couldn't be written.
+ */
 put :: fn(objects: string, bytes: u8[]) -> bundle.Hash? {
     hash :: bundle.hash_of(bytes)
     hex_storage : u8[64]
@@ -84,7 +100,12 @@ put :: fn(objects: string, bytes: u8[]) -> bundle.Hash? {
     return hash
 }
 
-/** A path without its extension. */
+/**
+ * Give a path without its last part's extension.
+ *
+ * @param path The path, with / or \ separators.
+ * @return What's before the last part's last dot, a view into path; all of path without one.
+ */
 without_extension :: fn(path: string) -> string {
     kept :: path.count - extension_bytes(path)
     if kept > path.count {
@@ -93,7 +114,12 @@ without_extension :: fn(path: string) -> string {
     return path[0..<kept]
 }
 
-/** How many bytes of a path its extension takes, its dot's among them; 0 without one. */
+/**
+ * Count the bytes of a path's last part's extension.
+ *
+ * @param path The path, with / or \ separators.
+ * @return How many bytes from its last part's last dot to its end, the dot's among them; 0 without one.
+ */
 extension_bytes :: fn(path: string) -> usize {
     count : usize = 0
     for character, i in path {
@@ -107,7 +133,13 @@ extension_bytes :: fn(path: string) -> usize {
     return count
 }
 
-/** A path's last part, without its extension. */
+/**
+ * Give a path's last part, without its extension, as a bundle's name in the root.
+ *
+ * @param path The path, with / or \ separators.
+ * @return What's after the last separator and before the last dot after it, a view into path; empty if that's
+ *     nothing, as for a name that starts with its only dot.
+ */
 stem :: fn(path: string) -> string {
     start : usize = 0
     end := path.count
@@ -126,6 +158,14 @@ stem :: fn(path: string) -> string {
     return path[start..<end]
 }
 
+/**
+ * Join two pieces of text, one after the other, in storage.
+ *
+ * @param a The first piece, as a folder's path.
+ * @param b The second piece, as a name or an extension.
+ * @param storage Where they're written; what's past its 1024 bytes is dropped.
+ * @return The joined text, a view into storage, good while it is; empty if both are.
+ */
 joined :: fn(a: string, b: string, storage: ptr[mut u8[1024]]) -> string {
     count : usize = 0
     for text in string.[a, b] {

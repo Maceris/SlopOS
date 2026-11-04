@@ -4,9 +4,12 @@ import runtime from "base"
 import slopfs from ".."
 
 /**
- * What a volume server keeps beyond the volume (history.hsc), on a volume apart: its change history, read beneath a
- * directory and trimmed to its budget; files replaced whole through orphans, the old contents readable until they're
- * given back; and everything since a commit forgotten and undone, leaving nothing behind. Checks from 800.
+ * Check what a volume server keeps beyond the volume (history.hsc), on a volume apart: its change history, read
+ * beneath a directory and trimmed to its budget; files replaced whole through orphans, the old contents readable
+ * until they're given back, and an orphan left behind swept; and everything since a commit forgotten and undone,
+ * leaving nothing behind.
+ *
+ * @return 0 if every check passed, or the number of the first that failed, 800 to 844.
  */
 check_history :: fn() -> int {
     device :: new_device() or_return 800
@@ -130,6 +133,12 @@ check_history :: fn() -> int {
     return 0
 }
 
+/**
+ * Get text's bytes.
+ *
+ * @param text The text, whose bytes are viewed, not copied.
+ * @return Its bytes, a view of it.
+ */
 text_bytes :: fn(text: string) -> u8[] {
     return string_bytes(text)
 }

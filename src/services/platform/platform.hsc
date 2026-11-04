@@ -24,63 +24,119 @@ import pci from "../../pci"
 import platform as protocol from "../../protocols/platform"
 import service_kit from "../../libraries/service_kit"
 
+/** The most PCI functions enumerated and given out; ones past it are skipped, and bridges among them not scanned. */
 MAX_FUNCTIONS :: 64
+/** A function's parent when it's on the host bridge's own bus, behind no bridge. */
 NO_PARENT : u32 : 0xffffffff
+/** A page's size in bytes, what device memory is made in multiples of. */
 PAGE : u64 : 4096
+/** Virtio's PCI vendor ID, whose devices' BARs test_reassign takes as unset. */
 VIRTIO_VENDOR : u16 : 0x1af4
+/** The header type, without its multi-function bit, of a PCI-to-PCI bridge. */
 HEADER_BRIDGE : u8 : 1
-/** The class register's top 24 bits for a host bridge, which no driver takes */
+/** The class register's top 24 bits for a host bridge, which no driver takes. */
 CLASS_HOST_BRIDGE : u32 : 0x060000
 
+/** A function's memory BAR, as found and as placed. */
 Bar :: struct {
-    // Where it is to its device, and how big; 0 for none, or a 64-bit one's upper half
+    /**
+     * Where it is to its device, a PCI address: 0 for none, not yet placed, or taken as unset by test_reassign. For a
+     * 64-bit BAR's upper half, which isn't a BAR of its own, the whole entry stays 0.
+     */
     pci : u64,
+    /** Its size in bytes, a power of two; 0 for no BAR, an I/O BAR, or a 64-bit BAR's upper half. */
     size : u64,
+    /** Whether it's a 64-bit BAR, taking this entry and the next, so it can be placed above 4 GiB. */
     wide : bool,
+    /** Whether its memory is prefetchable, as its BAR says. */
     prefetchable : bool,
-    /** Where it is, and overlaps nothing, as found or as placed */
+    /** Whether it's where pci says and overlaps nothing, as found or as placed; only a valid BAR is given out. */
     valid : bool,
 }
 
+/** A PCI function found on a bus, and what's been done with it. */
 Function :: struct {
+    /** Its bus number. */
     bus : u8,
+    /** Its device number on bus, 0 to 31. */
     device : u8,
+    /** Its function number on device, 0 to 7. */
     function : u8,
+    /** Its vendor ID. */
     vendor : u16,
+    /** Its device ID, the vendor's. */
     device_id : u16,
+    /** Its class code, subclass and programming interface: the class register's top 24 bits. */
     class : u32,
+    /** Whether it's a PCI-to-PCI bridge; bridges are scanned behind, never given out, and their BARs not sized. */
     bridge : bool,
-    // The bridge it's behind, by its index, or NO_PARENT on the host's own bus
+    /** The bridge it's behind, by its index in the functions, or NO_PARENT on the host's own bus. */
     parent : u32,
+    /** Where its configuration space is mapped, in the platform service's mapping of the host's ECAM. */
     config : u64,
+    /** Its six BARs, by their number; a 64-bit BAR's upper half is an empty entry. */
     bars : Bar[6],
+    /** Whether a client has claimed it, so it isn't given to another. */
     claimed : bool,
-    // The client that claimed it, by its index, and whether its driver is trusted with DMA no IOMMU confines
+    /** The client that claimed it, by its index in the platform service's clients; meaningful only once claimed. */
     claimer : usize,
+    /** Whether its driver is trusted with DMA no IOMMU confines, as the claim asked; its DMA domain is made so. */
     trusted : bool,
 }
 
+/** The platform service's state, one for its life, from the heap. */
 Platform :: struct {
+    /** The PCIe host bridge the firmware tables describe; all zeros if there's none. */
     host : pci.Host,
+    /** Where the host's ECAM, every bus of it, is mapped, readable and writable. */
     ecam : u64,
+    /** The RAM the kernel owns, a view into the firmware tables' copy, which BARs are never placed over. */
     ram : slop_os.PhysicalRange[],
+    /** The functions found, in the order they were, the first count of them used. */
     functions : Function[MAX_FUNCTIONS],
+    /** How many of functions are used, at most MAX_FUNCTIONS. */
     count : usize,
-    // The highest bus number in use, for giving a bridge the next
+    /** The highest bus number in use, for giving a bridge without bus numbers the next. */
     highest_bus : u8,
+    /** Whether test_reassign is on the kernel's command line: virtio BARs and bridges' bus numbers are reassigned. */
     reassign : bool,
+    /** How many BARs were placed, rather than kept where firmware put them, for the log. */
     placed : u32,
+    /** How many BARs found no room, so their functions' memory decoding stays off, for the log. */
     unplaced : u32,
-    // The real-time clock, if there is one, and the client that claimed it
+    /** The real-time clock, or null if there's none. */
     clock : Clock?,
+    /** Whether a client has claimed the clock, so only it is given it again. */
     clock_claimed : bool,
+    /** The client that claimed the clock, by its index; meaningful only once claimed. */
     clock_claimer : usize,
-    // The first framebuffer, if there is one, and the client that claimed it
+    /** The first framebuffer, or null if there's none. */
     framebuffer : Framebuffer?,
+    /** Whether a client has claimed the framebuffer, so only it is given it again. */
     framebuffer_claimed : bool,
+    /** The client that claimed the framebuffer, by its index; meaningful only once claimed. */
     framebuffer_claimer : usize,
 }
 
+/**
+ * Enumerate the PCIe devices and the real-time clock and framebuffer the firmware tables describe, and give each, once,
+ * to the client that claims it.
+ *
+ * It's started by the root task. It maps the firmware tables, numbers the buses, places BARs, registers the IOMMUs, and
+ * then serves its clients for good; without a host bridge it serves only the clock and the framebuffer.
+ *
+ * @param log Where it logs what it found, placed and gave out; without one it logs nothing.
+ * @param platform The platform capability, which device memory, devices, DMA domains, I/O ports and IOMMU
+ *     registrations are made with.
+ * @param firmware The firmware tables' copy, mapped read-only for the service's life.
+ * @param clients The listener its first client, the supervisor, connects on; further clients come as Connect
+ *     requests.
+ * @param command_line The kernel's command line; with test_reassign on it, virtio BARs and bridges' bus numbers are
+ *     reassigned. Without one, firmware's are kept where they hold.
+ * @return Only on failing to start: 99 without memory for its state, 2 if the firmware tables can't be mapped, 3 if the
+ *     configuration space can't be, 4 without a port, and 5 if its first client can't be added. Serving, it doesn't
+ *     return.
+ */
 main :: fn(log: slop_os.DebugLog?, platform: slop_os.Platform, firmware: slop_os.Memory, clients: os.Listener[protocol.Platform],
     command_line: slop_os.Memory?) -> int {
     block :: slop_os.startup_block()
@@ -138,7 +194,17 @@ main :: fn(log: slop_os.DebugLog?, platform: slop_os.Platform, firmware: slop_os
 }
 
 /**
- * Every function on bus, and behind its bridges, depth first; a bridge without bus numbers is given the next free ones.
+ * Record every function on a bus, and behind its bridges, depth first.
+ *
+ * A bridge without bus numbers, or with a secondary bus not above its own (every bridge, with test_reassign), is given
+ * the next free bus as its secondary, and as its subordinate the highest bus found behind it. A device without function
+ * 0 has none, and a single-function device is read only at function 0, since it answers for every function. Functions
+ * past MAX_FUNCTIONS aren't recorded, and bridges among them aren't scanned behind.
+ *
+ * @param state The platform service's state, its configuration space mapped: functions are added to it, count and
+ *     highest_bus raised, and bridges' bus number registers written.
+ * @param bus The bus to scan; a bus past the host's last is skipped.
+ * @param parent The bridge the bus is behind, by its index in the functions, or NO_PARENT for the host's own bus.
  */
 scan_bus :: fn(state: ptr[mut Platform], bus: u8, parent: u32) {
     if bus > state.host.last_bus {
@@ -187,8 +253,14 @@ scan_bus :: fn(state: ptr[mut Platform], bus: u8, parent: u32) {
 }
 
 /**
- * A function's memory BARs: each one's size, by writing all ones with memory decoding off and reading back, and
- * where it is now. A bridge's two are left as they are.
+ * Find a function's memory BARs: each one's size, by writing all ones with memory decoding off and reading back, and
+ * where it is now.
+ *
+ * Each BAR is written back as it was, and the command register restored. I/O BARs are skipped, left empty, and so is
+ * a bridge's every BAR. With test_reassign, a virtio function's BARs are recorded as unplaced.
+ *
+ * @param state The platform service's state: the function's bars are set.
+ * @param index The function, by its index in the functions; one past their count does nothing.
  */
 size_bars :: fn(state: ptr[mut Platform], index: usize) {
     if index >= state.functions.count {
@@ -238,8 +310,16 @@ size_bars :: fn(state: ptr[mut Platform], index: usize) {
 }
 
 /**
- * A function's BARs where they are, if that's inside a window they can be in and overlaps nothing valid already;
- * the others placed, and written; memory decoding on once all of them are somewhere.
+ * Keep a function's BARs where they are, if that's inside a window they can be in and overlaps nothing valid already,
+ * and place the others, writing them to the function.
+ *
+ * Memory decoding is turned on once every BAR it has is somewhere; a BAR with no room leaves it off, so the function
+ * decodes none of its BARs. A function without BARs is left as it is.
+ *
+ * @param to The debug log, NO_HANDLE for none; each BAR placed, and each with no room, is logged.
+ * @param state The platform service's state: the function's bars are made valid as they're kept or placed, and placed
+ *     or unplaced counted.
+ * @param index The function, by its index in the functions; one past their count does nothing.
  */
 place_bars :: fn(to: slop_os.DebugLog, state: ptr[mut Platform], index: usize) {
     if index >= state.functions.count {
@@ -285,7 +365,14 @@ place_bars :: fn(to: slop_os.DebugLog, state: ptr[mut Platform], index: usize) {
     }
 }
 
-/** Whether the function at index is behind the bridge at bridge, at any depth. */
+/**
+ * Tell whether a function is behind a bridge, at any depth.
+ *
+ * @param state The platform service's state.
+ * @param index The function, by its index in the functions; one past their count is behind nothing.
+ * @param bridge The bridge, by its index in the functions.
+ * @return True if bridge is the function's parent, or its parent's, and so on up to the host's bus.
+ */
 is_behind :: fn(state: ptr[Platform], index: usize, bridge: u32) -> bool {
     at := if index < state.functions.count { state.functions[index].parent } else { NO_PARENT }
     for depth in 0..<MAX_FUNCTIONS {
@@ -300,7 +387,16 @@ is_behind :: fn(state: ptr[Platform], index: usize, bridge: u32) -> bool {
     return false
 }
 
-/** Whether a BAR at address is inside a window it may be in: its bridge's, or the host's. */
+/**
+ * Tell whether a BAR at an address would be inside a window it may be in: its bridge's non-prefetchable memory window,
+ * or, on the host's own bus, one of the host's windows, a 64-bit window only for a 64-bit BAR.
+ *
+ * @param state The platform service's state, for the bridges' windows and the host's.
+ * @param function The BAR's function, whose parent decides which windows it may be in.
+ * @param bar The BAR, for its size and whether it's 64-bit.
+ * @param address Where it would be, a PCI address.
+ * @return True if all of its bytes from address are in such a window.
+ */
 fits_window :: fn(state: ptr[Platform], function: ptr[Function], bar: Bar, address: u64) -> bool {
     if function.parent != NO_PARENT {
         low, high :: bridge_window(state, function.parent)
@@ -316,8 +412,12 @@ fits_window :: fn(state: ptr[Platform], function: ptr[Function], bar: Bar, addre
 }
 
 /**
- * The non-prefetchable memory window of the bridge at index, as its first address and its last (the first above the
- * last for none).
+ * Read a bridge's non-prefetchable memory window, as its first address and its last.
+ *
+ * @param state The platform service's state, for the bridge's configuration space.
+ * @param index The bridge, by its index in the functions; one past their count has no window.
+ * @return low The window's first PCI address, 1 MiB aligned; above high when there's no window.
+ * @return high The window's last PCI address, the last byte of a 1 MiB block.
  */
 bridge_window :: fn(state: ptr[Platform], index: u32) -> (low: u64, high: u64) {
     if cast[usize](index) >= state.functions.count {
@@ -330,8 +430,16 @@ bridge_window :: fn(state: ptr[Platform], index: u32) -> (low: u64, high: u64) {
 }
 
 /**
- * Whether size bytes at address, for the function at index, overlap no valid BAR, no RAM, not the host's ECAM, and no
- * window of a bridge the function isn't behind, which forwards that range to its own bus.
+ * Tell whether a range of PCI addresses is free for one of a function's BARs.
+ *
+ * It's free if it overlaps no valid BAR, no RAM, not the host's ECAM, and no window of a bridge the function isn't
+ * behind, which would forward that range to its own bus.
+ *
+ * @param state The platform service's state.
+ * @param index The function the range is for, by its index in the functions.
+ * @param address The range's first PCI address.
+ * @param size The range's size in bytes.
+ * @return True if nothing overlaps it.
  */
 free_at :: fn(state: ptr[Platform], index: usize, address: u64, size: u64) -> bool {
     if overlaps(address, size, state.host.ecam, pci.ecam_size(&state.host)) {
@@ -366,13 +474,31 @@ free_at :: fn(state: ptr[Platform], index: usize, address: u64, size: u64) -> bo
     return true
 }
 
+/**
+ * Tell whether two ranges of addresses overlap.
+ *
+ * @param a The first range's first address.
+ * @param a_size The first range's size in bytes.
+ * @param b The second range's first address.
+ * @param b_size The second range's size in bytes.
+ * @return True if some address is in both; a range wrapping past the top of the address space isn't handled.
+ */
 overlaps :: fn(a: u64, a_size: u64, b: u64, b_size: u64) -> bool {
     return a < b + b_size && b < a + a_size
 }
 
 /**
- * The first address aligned to the BAR's size, in a window it may be in, where it overlaps nothing: its bridge's
- * window, or the host's, a 64-bit one in a wide window first.
+ * Find where to place a BAR: the first address aligned to its size, in a window it may be in, where it overlaps
+ * nothing.
+ *
+ * Behind a bridge, that's the bridge's non-prefetchable window. On the host's own bus it's the host's windows, a 64-bit
+ * BAR in a 64-bit window first, so 32-bit space is left for BARs that need it.
+ *
+ * @param state The platform service's state.
+ * @param index The BAR's function, by its index in the functions.
+ * @param function The BAR's function.
+ * @param bar The BAR, for its size and whether it's 64-bit; its size is a power of two, not 0.
+ * @return The PCI address to place it at, or null if there's no room in any window it may be in.
  */
 find_place :: fn(state: ptr[Platform], index: usize, function: ptr[Function], bar: Bar) -> u64? {
     if function.parent != NO_PARENT {
@@ -396,6 +522,18 @@ find_place :: fn(state: ptr[Platform], index: usize, function: ptr[Function], ba
     return null
 }
 
+/**
+ * Find the first free address for a BAR in a range, aligned to the BAR's size.
+ *
+ * @param state The platform service's state.
+ * @param index The BAR's function, by its index in the functions.
+ * @param bar The BAR, its size a power of two, not 0.
+ * @param start The range's first PCI address.
+ * @param size The range's size in bytes.
+ * @return The first aligned address from start where the BAR overlaps nothing, or null if there's none before the
+ *     range's end. The first aligned address is tried before the end is checked, so it can be returned even when the
+ *     BAR doesn't fit in the range.
+ */
 first_fit :: fn(state: ptr[Platform], index: usize, bar: Bar, start: u64, size: u64) -> u64? {
     at := pci.round_up(start, bar.size)
     loop {
@@ -408,7 +546,14 @@ first_fit :: fn(state: ptr[Platform], index: usize, bar: Bar, start: u64, size: 
     return null
 }
 
-/** The RAM the kernel owns, from the firmware tables' "RAM " table. */
+/**
+ * Find the RAM the kernel owns, from the firmware tables' "RAM " table.
+ *
+ * @param tables Where the firmware tables' copy is mapped, its header already checked.
+ * @param size The firmware tables' copy's size in bytes; a table running past it isn't taken.
+ * @return The RAM's ranges, a view into the firmware tables' copy, good while it's mapped; empty without a "RAM "
+ *     table.
+ */
 ram_of :: fn(tables: u64, size: u64) -> slop_os.PhysicalRange[] {
     header :: cast[ptr[slop_os.FirmwareTables]](tables)
     entries :: view_of(cast[ptr[slop_os.FirmwareTable]](tables + cast[u64](size_of(slop_os.FirmwareTables))), cast[usize](header.count))
@@ -420,7 +565,13 @@ ram_of :: fn(tables: u64, size: u64) -> slop_os.PhysicalRange[] {
     return view_of(cast[ptr[slop_os.PhysicalRange]](tables), 0)
 }
 
-/** Whether the kernel's command line, if there's one, has word on it. */
+/**
+ * Tell whether the kernel's command line has a word on it.
+ *
+ * @param command_line The command line's memory, mapped and read for the call; null for none.
+ * @param word The word, matched whole.
+ * @return True if the command line has it; false without a command line, or if it can't be read.
+ */
 has_word :: fn(command_line: slop_os.Memory?, word: string) -> bool {
     memory :: command_line or_return false
     text :: service_kit.text_of(slop_os.startup_block(), memory) or_return false
@@ -429,6 +580,15 @@ has_word :: fn(command_line: slop_os.Memory?, word: string) -> bool {
 
 // ---- Claims
 
+/**
+ * Serve the platform service's clients for good: claims, reissues, and new clients' connections.
+ *
+ * @param to The debug log, NO_HANDLE for none.
+ * @param platform The platform capability, which what's given out is made with.
+ * @param state The platform service's state, its claims kept in it.
+ * @param clients The listener for its first client, the supervisor; others connect through Connect.
+ * @return Only on failing to start serving: 4 without a port, 5 if the first client can't be added.
+ */
 serve :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], clients: os.Listener[protocol.Platform]) -> int {
     block :: slop_os.startup_block()
     port :: slop_os.port_create(block.budget) or_return 4
@@ -452,6 +612,21 @@ serve :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Pla
     }
 }
 
+/**
+ * Answer every request a client has waiting, until it has none.
+ *
+ * Claim, Reissue, ClaimClock and ClaimFramebuffer are each answered with a Response; Connect adds the client whose end
+ * it brings, closing that end if there's no room for it; an unknown request is answered Unsupported, and one that's
+ * invalid or of another protocol is skipped. A client whose channel fails is dropped.
+ *
+ * @param to The debug log, NO_HANDLE for none.
+ * @param platform The platform capability, which what's given out is made with.
+ * @param state The platform service's state, its claims kept in it.
+ * @param connected The clients; a new one is added, a failed one dropped.
+ * @param index The client to serve, by its index in connected; one past them, or a dropped one, does nothing.
+ * @param port The port every client's end is bound to.
+ * @param into Where each request is received; overwritten by each.
+ */
 serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], connected: ptr[mut service_kit.Clients],
     index: usize, port: slop_os.Port, into: ptr[mut os.Incoming]) {
     if index >= connected.ends.count {
@@ -511,9 +686,19 @@ serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
 }
 
 /**
- * A claimed device, by its address, given again to the client that claimed it, made anew; NoDevice for one another
- * client claimed. Its last Device and the rest died with the driver that held them. One nothing's claimed from this
- * platform service was claimed from the one before it, and is the asker's.
+ * Give a claimed device again, made anew, to the client that claimed it; its last Device and the rest died with the
+ * driver that held them.
+ *
+ * A device unclaimed here was claimed from the platform service before this one, which the root task started again
+ * (decisions/0140), so the client asking for it is taken to be its claimer, and claims it.
+ *
+ * @param to The debug log, NO_HANDLE for none; a reissue is logged.
+ * @param platform The platform capability, which the device's bundle is made with.
+ * @param state The platform service's state.
+ * @param client The asking client, by its index in the platform service's clients.
+ * @param address The device's segment and requester ID (slop_os.device_address).
+ * @return Claimed with the device's bundle, which moves to the client with the response; or NoDevice if no function
+ *     has that address, another client claimed it, or its bundle can't be made.
  */
 reissue :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], client: usize, address: u32) -> protocol.Response {
     for &function, i in state.functions {
@@ -543,7 +728,20 @@ reissue :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut P
     return .NoDevice
 }
 
-/** The next unclaimed function wanted matches, with what its driver holds of it; or NoDevice. */
+/**
+ * Give a client the next unclaimed function that matches what it wants, with what its driver holds of it.
+ *
+ * Bridges and host bridges are never given out. A function whose bundle can't be made is logged and passed over,
+ * left unclaimed.
+ *
+ * @param to The debug log, NO_HANDLE for none; each claim, and each function that can't be given out, is logged.
+ * @param platform The platform capability, which the bundle is made with.
+ * @param state The platform service's state: the function given is marked claimed by client.
+ * @param client The asking client, by its index in the platform service's clients.
+ * @param wanted Which devices it wants, and whether its driver is trusted with DMA no IOMMU confines.
+ * @return Claimed with the device's bundle, which moves to the client with the response; or NoDevice if nothing
+ *     unclaimed matches.
+ */
 claim :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], client: usize, wanted: protocol.Wanted)
     -> protocol.Response {
     for &function, i in state.functions {
@@ -568,6 +766,13 @@ claim :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Pla
     return .NoDevice
 }
 
+/**
+ * Tell whether a function is one a client wants.
+ *
+ * @param function A scanned function, whose vendor ID, device ID and class are compared; only read.
+ * @param wanted What's wanted: a vendor, a device and a class, each ANY_ID or ANY_CLASS for any.
+ * @return True if each of the three is any or the function's.
+ */
 matches :: fn(function: ptr[Function], wanted: protocol.DeviceMatch) -> bool {
     return (wanted.vendor == protocol.ANY_ID || wanted.vendor == function.vendor)
         && (wanted.device == protocol.ANY_ID || wanted.device == function.device_id)
@@ -575,9 +780,15 @@ matches :: fn(function: ptr[Function], wanted: protocol.DeviceMatch) -> bool {
 }
 
 /**
- * A function's driver's share of it, owned by the platform service until it's sent: its Device, its configuration
- * space, each placed BAR as device memory (at its CPU address), and a DMA domain it's attached to. Null, with what was
- * made closed, if any of it can't be made.
+ * Make a function's driver's share of it: its Device, its configuration space, each valid BAR as device memory (at its
+ * CPU address, whole pages), and a DMA domain it's attached to.
+ *
+ * @param platform The platform capability, which every handle is made with.
+ * @param state The platform service's state, for the host bridge.
+ * @param function The function; its trusted decides whether its DMA domain is trusted with DMA no IOMMU confines.
+ * @return The bundle, its handles owned by the platform service until it's sent, NO_HANDLE for a BAR it hasn't or whose
+ *     memory couldn't be made; or null, with what was made closed, if its Device, configuration space or domain can't
+ *     be made, or the Device can't be attached.
  */
 bundle_of :: fn(platform: slop_os.Platform, state: ptr[mut Platform], function: ptr[Function]) -> protocol.PciDevice? {
     block :: slop_os.startup_block()
@@ -617,7 +828,13 @@ bundle_of :: fn(platform: slop_os.Platform, state: ptr[mut Platform], function: 
     return result
 }
 
-/** Where an address in the host's windows is to the CPU. */
+/**
+ * Translate a PCI address in the host's windows to where the CPU sees it.
+ *
+ * @param host The host bridge, for its windows.
+ * @param address An address on the PCI bus, as a BAR is programmed with; any value.
+ * @return The CPU's address for it; address itself if it's in no window.
+ */
 cpu_address :: fn(host: ptr[pci.Host], address: u64) -> u64 {
     for window, i in host.windows {
         if cast[u32](i) < host.window_count && address >= window.pci && address - window.pci < window.size {
@@ -627,6 +844,12 @@ cpu_address :: fn(host: ptr[pci.Host], address: u64) -> u64 {
     return address
 }
 
+/**
+ * Close a bundle's Device, configuration space and DMA domain, those that were made, after it couldn't be finished.
+ *
+ * @param device The bundle; its BARs, which aren't made yet when it's closed, are left alone, and its handles aren't
+ *     cleared.
+ */
 close_bundle :: fn(device: ptr[mut protocol.PciDevice]) {
     for handle in slop_os.Handle.[cast[slop_os.Handle](device.device), cast[slop_os.Handle](device.config), cast[slop_os.Handle](device.domain)] {
         if handle != slop_os.NO_HANDLE {

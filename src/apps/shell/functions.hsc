@@ -7,10 +7,11 @@ import slop_os from "std/os"
 import dir from "std/os/slop_os"
 
 /*
- * Shell functions, errors as values, and the shell's directory (decisions/0171). A function is local to the session: its
- * parameters are matched as a program's are, by position and --name, and a bare word is read by the parameter's type;
- * its body runs in a scope of its own, its last statement's value or a return's its result. An error a statement of its
- * body meets is fatal unless the statement has ?, which makes it the function's own, for its caller to handle.
+ * Shell functions, errors as values, and the shell's directory (decisions/0171). A function is local to the session:
+ * its parameters are matched as a program's are, by position and --name, and a bare word is read by the parameter's
+ * type; its body runs in a scope of its own, its last statement's value or a return's its result. An error a
+ * statement of its body meets is fatal unless the statement has ?, which makes it the function's own, for its caller
+ * to handle.
  */
 
 /** How deep calls of shell functions go before the shell says so. */
@@ -19,7 +20,15 @@ MAX_DEPTH :: 64
 /** The types a function's parameters can have. */
 TYPE_NAMES :: string.["int", "size", "duration", "bool", "string", "path", "list", "record"]
 
-/** A function defined, replacing one of the same name; the built-ins' names are theirs. */
+/**
+ * Define a shell function, replacing one of the same name; the built-ins' names (print, exit, cd) are theirs.
+ *
+ * It fails, defining nothing, for a built-in's name or a parameter of a type the shell hasn't (TYPE_NAMES).
+ *
+ * @param shell The shell, whose functions it's added to.
+ * @param tree The Function node, kept by the shell for as long as it runs: its parameters, then its body.
+ * @return Null.
+ */
 define :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     if tree.text == "print" || tree.text == "exit" || tree.text == "cd" {
         return error_at(tree.at, message("% is built in", tree.text))
@@ -51,6 +60,13 @@ define :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value,
     return .Ok(.Null)
 }
 
+/**
+ * Find a shell function by name.
+ *
+ * @param shell The shell, whose functions are searched, read only.
+ * @param name The name, compared exactly.
+ * @return The function's Function node; null if there's none of that name.
+ */
 function_named :: fn(shell: ptr[Shell], name: string) -> ptr[Node]? {
     for each in shell.functions {
         if each.text == name {
@@ -61,7 +77,24 @@ function_named :: fn(shell: ptr[Shell], name: string) -> ptr[Node]? {
 }
 
 /**
- * A function's call: its arguments matched to its parameters and bound in a scope of its own, and its body run there.
+ * Call a shell function: its arguments matched to its parameters and bound in a scope of its own, and its body run
+ * there.
+ *
+ * Arguments are matched by --name, or by position to the first parameter not yet given; a bool's --name alone is true.
+ * A bare word is read by its parameter's type, anything else evaluated in the caller's scope; a parameter not given
+ * takes its default, false for a bool, or the call fails. A text value given for a path parameter becomes a path.
+ *
+ * It fails for calls more than MAX_DEPTH deep, arguments that don't match or aren't of their parameters' types, or a
+ * parameter missing. An error the body meets without ? comes back fatal, its message starting "in name: "; one passed
+ * by ? comes back as the function's own, which the caller can handle.
+ *
+ * @param shell The shell, whose scope is the function's while its body runs, and the caller's again after.
+ * @param function The function's Function node, as define kept it: its Parameter children, then its body, the last
+ *     child that isn't a Parameter; define's, kept by the shell for as long as it runs.
+ * @param tree The Call node, whose children are the arguments: Named nodes for --name, each followed by its value
+ *     unless it's a bool's given alone; Word nodes read by their parameter's type; anything else evaluated in the
+ *     caller's scope.
+ * @return The body's last statement's value, or what a return gave (shell.returned); an error as described above.
  */
 call_function :: fn(shell: ptr[mut Shell], function #escaping : ptr[Node], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     if shell.depth >= MAX_DEPTH {
@@ -196,11 +229,18 @@ call_function :: fn(shell: ptr[mut Shell], function #escaping : ptr[Node], tree 
 
 /** What a parameter's given: its argument, or for a bool's --name alone, true. */
 Matched :: struct {
+    /** The argument's node; null if it's given none. */
     node : ptr[Node]?,
+    /** Whether it's a bool given by its --name alone, so it's true. */
     flag : bool,
 }
 
-/** A parameter's type's name, "" for any. */
+/**
+ * Find a parameter's type's name.
+ *
+ * @param parameter A Parameter node of a Function, whose value is its type's name as Text when it's given one.
+ * @return One of TYPE_NAMES; "" for a parameter of any type.
+ */
 type_of_parameter :: fn(parameter: ptr[Node]) -> string {
     return match parameter.value {
         case Text(type) => type
@@ -208,7 +248,15 @@ type_of_parameter :: fn(parameter: ptr[Node]) -> string {
     }
 }
 
-/** A bare word read as a type: a number, a size or a duration as they're written in expressions, a bool, or text. */
+/**
+ * Read a bare word as a parameter's type: a number, a size or a duration as they're written in expressions, a bool,
+ * or text.
+ *
+ * @param type The type's name, "" for any; for any, string, list and record the word is text, and for path a path.
+ * @param word The word, as written.
+ * @return The value; null if the word isn't one of the type, like a bool other than true or false. For int, size and
+ *     duration, any number literal is given, of whatever kind it is, for the caller to check.
+ */
 word_as :: fn(type: string, word: string) -> Value? {
     if type == "" || type == "string" || type == "list" || type == "record" {
         return .Text(word)
@@ -232,7 +280,14 @@ word_as :: fn(type: string, word: string) -> Value? {
     }
 }
 
-/** Whether a value is of a parameter's type: text is a path, and anything is of no type. */
+/**
+ * Tell whether a value is of a parameter's type: text and a path are each of the other's type, and anything is of no
+ * type.
+ *
+ * @param type The type's name, "" for any; a name not in TYPE_NAMES takes nothing.
+ * @param value The value checked; only its kind is looked at, so any Int is an int and any list a list.
+ * @return True if the parameter takes it; Null is taken only by "", any type.
+ */
 of_type :: fn(type: string, value: Value) -> bool {
     return match value {
         case Null => type == ""
@@ -247,6 +302,12 @@ of_type :: fn(type: string, value: Value) -> bool {
     }
 }
 
+/**
+ * Make text a path.
+ *
+ * @param value Any value; a Text's string is shared by the Path made, not copied.
+ * @return A Path of the same text for Text; any other value as it is.
+ */
 as_path :: fn(value: Value) -> Value {
     return match value {
         case Text(text) => Value.Path(text)
@@ -254,13 +315,24 @@ as_path :: fn(value: Value) -> Value {
     }
 }
 
+/**
+ * Name what a parameter's type takes, as errors say it.
+ *
+ * @param type The type's name, one of TYPE_NAMES or "" for any; any other name is said as "text".
+ * @return Its name with an article, like "an integer"; "text" for string, any or an unknown name.
+ */
 type_article :: fn(type: string) -> string {
     return if type == "int" { "an integer" } else if type == "size" { "a size" } else if type == "duration" { "a duration" }
         else if type == "bool" { "true or false" } else if type == "path" { "a path" } else if type == "list" { "a list" }
         else if type == "record" { "a record" } else { "text" }
 }
 
-/** An error as a value, for catch: a record of its message and where in the line it was. */
+/**
+ * Make an error a value, for catch: a record of its message and where in the line it was.
+ *
+ * @param error The error, whose message the record keeps.
+ * @return A record of message, Text, and at, an Int of bytes from the line's start.
+ */
 error_record :: fn(error #escaping : EvalError) -> Value {
     made :: new_record()
     set_field(made, "message", .Text(error.message))
@@ -271,8 +343,14 @@ error_record :: fn(error #escaping : EvalError) -> Value {
 // ---- The shell's directory
 
 /**
- * cd: the shell's directory, a path beneath its home, from where it is; alone, its home. It has to be a directory
- * there.
+ * Change the shell's directory, for cd: to a path beneath its home, from where it is; alone, to its home.
+ *
+ * It fails if cd is given more than one argument or one that isn't a path or text, the path goes above the home, or
+ * isn't a directory there; the directory is then as it was.
+ *
+ * @param shell The shell, whose directory changes.
+ * @param tree The Call node of cd, its one argument, if any, the path.
+ * @return Null.
  */
 change_directory :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
     if tree.children.count > 1 {
@@ -315,9 +393,15 @@ change_directory :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, 
 }
 
 /**
- * A path as the shell resolves it, beneath its home: ~ is the home, ~/ starts from it, anything else starts from the
- * shell's directory; . is where it is and .. the directory above, never above the home. The path from the home, ""
- * for the home itself, or why it isn't one.
+ * Resolve a path as the shell does, beneath its home: ~ is the home, ~/ starts from it, anything else starts from the
+ * shell's directory; . is where it is and .. the directory above, never above the home.
+ *
+ * It fails, with why as a sentence for a person, for a path starting with / or going above the home. Nothing is
+ * opened, so what it names needn't exist.
+ *
+ * @param shell The shell, whose directory a relative path starts from.
+ * @param given The path, as written.
+ * @return The path from the home, its parts separated by /, on the heap; "" for the home itself.
  */
 resolve_path :: fn(shell: ptr[Shell], given #escaping : string) -> Result[string, string] {
     if given.count > 0 && slice(given, 0, 1) == "/" {
@@ -343,7 +427,15 @@ resolve_path :: fn(shell: ptr[Shell], given #escaping : string) -> Result[string
     return .Ok(if joined.count > 0 { string_of(&joined[0], joined.count) } else { "" })
 }
 
-/** A path's parts added to parts: . skipped, .. taking the last away; an error past the home. */
+/**
+ * Add a path's parts to a list of them: empty parts and . skipped, .. taking the last away.
+ *
+ * It fails, saying the path's above the home, for a .. with no part left to take away.
+ *
+ * @param parts The parts so far, each a view of its path, added to.
+ * @param path The path, its parts separated by /, viewed by the parts added.
+ * @return "", once the parts are added.
+ */
 add_parts :: fn(parts: ptr[mut string[..]], path #escaping : string) -> Result[string, string] {
     start : usize = 0
     for i in 0..<path.count + 1 {

@@ -8,14 +8,29 @@ import runtime from "base"
  * boot CPU's TICKLESS_FROM'th tick to its TICKLESS_TICKS'th, the others' timer interrupts are counted, which should be
  * none, and said; then the kernel stops.
  */
+/** The boot CPU's tick the count of the other CPUs' timer interrupts starts from, once they've gone idle. */
 TICKLESS_FROM : u64 : 10
+/** The boot CPU's tick the count ends at, said, and the kernel stops at. */
 TICKLESS_TICKS : u64 : 60
 
+/**
+ * Start test_tickless: the kernel stops at the boot CPU's TICKLESS_TICKS'th tick.
+ *
+ * @param kernel The kernel, whose stop_after_ticks it sets; called on the boot CPU at boot.
+ */
 start_tickless_test :: fn(kernel: ptr[mut Kernel]) {
     kernel.stop_after_ticks = TICKLESS_TICKS
 }
 
-/** At each of the boot CPU's ticks, under test_tickless. */
+/**
+ * Count the other CPUs' timer interrupts at the boot CPU's TICKLESS_FROM'th tick, and at its TICKLESS_TICKS'th log
+ * how many they took since. Other ticks, and runs without test_tickless, do nothing.
+ *
+ * The counts are read atomically from each online CPU's PerCpu but the boot CPU's.
+ *
+ * @param kernel The kernel, whose tickless_baseline holds the count from TICKLESS_FROM.
+ * @param tick The boot CPU's tick count, from 1.
+ */
 tickless_test_tick :: fn(kernel: ptr[mut Kernel], tick: u64) {
     if !kernel.options.test_tickless || (tick != TICKLESS_FROM && tick != TICKLESS_TICKS) {
         return void

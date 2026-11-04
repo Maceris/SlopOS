@@ -9,38 +9,67 @@ import text_buffer from "std"
  * values. Rendering is the shell's: a value written for a person, as a result is shown.
  */
 
+/** A shell value: typed, never re-parsed as text. */
 Value :: union {
+    /** No value: what a statement without one gives, and what isn't shown. */
     Null,
+    /** True or false. */
     Bool(bool),
+    /** A whole number, signed, 64 bits. */
     Int(i64),
-    /** Bytes */
+    /** A size, in bytes. */
     Size(u64),
-    /** Nanoseconds */
+    /** A duration, in nanoseconds; negative for one backwards. */
     Duration(i64),
+    /** Text, UTF-8, from the heap or the line, never freed. */
     Text(string),
+    /** A path, as the text written for it, resolved beneath the shell's directory only when it's used. */
     Path(string),
+    /** A list of values, on the heap, shared by every copy of the value. */
     List(ptr[mut ValueList]),
+    /** A record of named values, on the heap, shared by every copy of the value. */
     Record(ptr[mut RecordValue]),
 }
 
+/** A list's items. */
 ValueList :: struct {
+    /** The items, in order, from the heap. */
     items : Value[..],
 }
 
+/** A record's fields: names and values, each name's value at its own index. */
 RecordValue :: struct {
+    /** The fields' names, in the order they were first set; each appears once. */
     names : string[..],
+    /** The fields' values, names[i]'s at i. */
     values : Value[..],
 }
 
+/**
+ * Make an empty list.
+ *
+ * @return The list, on the heap from context's allocator; the shell never frees it.
+ */
 new_list :: fn() -> ptr[mut ValueList] {
     return runtime.new(ValueList)
 }
 
+/**
+ * Make an empty record.
+ *
+ * @return The record, on the heap from context's allocator; the shell never frees it.
+ */
 new_record :: fn() -> ptr[mut RecordValue] {
     return runtime.new(RecordValue)
 }
 
-/** A record's field by name, or null. */
+/**
+ * Find a record's field by name.
+ *
+ * @param record The record searched, read only; its names and values are kept the same length by set_field.
+ * @param name The field's name, compared exactly.
+ * @return The field's value, a copy sharing any list or record in it; null if the record has no such field.
+ */
 field :: fn(record: ptr[RecordValue], name: string) -> Value? {
     for each, i in record.names {
         if each == name && i < record.values.count {
@@ -50,6 +79,13 @@ field :: fn(record: ptr[RecordValue], name: string) -> Value? {
     return null
 }
 
+/**
+ * Set a record's field: replace its value if the record has it, or add it after the rest.
+ *
+ * @param record The record changed in place, which every copy of a value holding it sees.
+ * @param name The field's name, kept by the record as it's given when the field is added, so it has to live as long.
+ * @param value The value, kept by the record.
+ */
 set_field :: fn(record: ptr[mut RecordValue], name #escaping : string, value #escaping : Value) {
     for each, i in record.names {
         if each == name && i < record.values.count {
@@ -61,7 +97,12 @@ set_field :: fn(record: ptr[mut RecordValue], name #escaping : string, value #es
     runtime.array_add(&record.values, value)
 }
 
-/** What a value is, by name, as errors say. */
+/**
+ * Name what kind of value a value is, as errors say it.
+ *
+ * @param value Any value; only its kind is looked at, not what it holds.
+ * @return Its kind with an article, like "an integer", or "null"; a literal, never freed.
+ */
 type_name :: fn(value: Value) -> string {
     return match value {
         case Null => "null"
@@ -77,8 +118,16 @@ type_name :: fn(value: Value) -> string {
 }
 
 /**
- * A value as a person reads it, appended to out: text as it is at the top, quoted inside a list or record; a size in the
- * largest unit it's a whole number of, or with one decimal; a list one item a line, a record one field a line.
+ * Append a value as a person reads it.
+ *
+ * At the top, text is as it is, a list is one item a line, or a table when every item's a record, and a record is one
+ * field a line. Inside a list or record, text is quoted, a list is in brackets and a record in braces, on one line. A
+ * size is in the largest unit of 1024 it reaches, with a tenth when it isn't whole, and a duration in the largest unit
+ * it's a whole number of.
+ *
+ * @param out The text appended to; what doesn't fit its storage is dropped, as text_buffer drops it.
+ * @param value What's written, of any kind; a list's items and a record's fields are written in turn, nested.
+ * @param nested Whether it's inside a list or record, so it's written on one line; false at the top.
  */
 render :: fn(out: ptr[mut text_buffer.TextBuffer], value: Value, nested: bool = false) {
     match value {
@@ -152,6 +201,12 @@ render :: fn(out: ptr[mut text_buffer.TextBuffer], value: Value, nested: bool = 
     }
 }
 
+/**
+ * Append a signed number in decimal, with a '-' when it's negative.
+ *
+ * @param out The text appended to.
+ * @param number The number. The smallest i64 has no positive counterpart, so it isn't written right.
+ */
 append_signed :: fn(out: ptr[mut text_buffer.TextBuffer], number: i64) {
     if number < 0 {
         text_buffer.append(out, "-")
@@ -162,8 +217,16 @@ append_signed :: fn(out: ptr[mut text_buffer.TextBuffer], number: i64) {
     }
 }
 
+/** The units a size is shown in, each 1024 of the one before. */
 SIZE_UNITS :: string.["B", "KiB", "MiB", "GiB", "TiB"]
 
+/**
+ * Append a size in the largest of SIZE_UNITS it reaches, with one decimal, truncated, when it isn't whole, like
+ * "1.5 KiB".
+ *
+ * @param out The text appended to.
+ * @param bytes The size, in bytes; past 1023 TiB it's still shown in TiB.
+ */
 append_size :: fn(out: ptr[mut text_buffer.TextBuffer], bytes: u64) {
     unit : usize = 0
     whole := bytes
@@ -185,6 +248,12 @@ append_size :: fn(out: ptr[mut text_buffer.TextBuffer], bytes: u64) {
     text_buffer.append(out, SIZE_UNITS[unit % SIZE_UNITS.count])
 }
 
+/**
+ * Append a duration in the largest unit, from hours to nanoseconds, it's a whole number of, like "90 s" or "2 h".
+ *
+ * @param out The text appended to.
+ * @param nanos The duration, in nanoseconds; negative ones get a '-'. 0 is written "0 ns".
+ */
 append_duration :: fn(out: ptr[mut text_buffer.TextBuffer], nanos: i64) {
     if nanos < 0 {
         text_buffer.append(out, "-")
@@ -204,7 +273,12 @@ append_duration :: fn(out: ptr[mut text_buffer.TextBuffer], nanos: i64) {
     text_buffer.append(out, " ns")
 }
 
-/** Whether a list is shown as a table: it has items, and every one's a record. */
+/**
+ * Tell whether a list is shown as a table.
+ *
+ * @param list The list looked at, read only.
+ * @return True if it has items and every one's a record.
+ */
 is_table :: fn(list: ptr[ValueList]) -> bool {
     for item in list.items {
         match item {
@@ -216,8 +290,13 @@ is_table :: fn(list: ptr[ValueList]) -> bool {
 }
 
 /**
- * A list of records as a table: a column for each field, in the order they're first met, headed by its name, each as
- * wide as its widest cell, two spaces apart; a record without a field leaves its cell blank.
+ * Append a list of records as a table: a column for each field, in the order they're first met, headed by its name,
+ * each as wide as its widest cell, two spaces apart; a record without a field leaves its cell blank.
+ *
+ * Widths are counted in bytes, so text that isn't ASCII can leave its columns out of line.
+ *
+ * @param out The text appended to: the heading line, then a line for each record, without a line break at the end.
+ * @param list The list, every item a record (is_table); an item that isn't is a blank row.
  */
 render_table :: fn(out: ptr[mut text_buffer.TextBuffer], list: ptr[ValueList]) {
     columns : string[..]
@@ -270,7 +349,13 @@ render_table :: fn(out: ptr[mut text_buffer.TextBuffer], list: ptr[ValueList]) {
     }
 }
 
-/** A table's cell: a record's field, text as it is, anything else as it's shown inside a list. */
+/**
+ * Append a table's cell: a record's field, text as it is, anything else as it's shown inside a list.
+ *
+ * @param out The text appended to.
+ * @param item The row's record; nothing's appended for anything else.
+ * @param column The field's name; nothing's appended if the record hasn't the field.
+ */
 render_cell :: fn(out: ptr[mut text_buffer.TextBuffer], item: Value, column: string) {
     match item {
         case Record(record) => {
@@ -284,6 +369,13 @@ render_cell :: fn(out: ptr[mut text_buffer.TextBuffer], item: Value, column: str
     }
 }
 
+/**
+ * Measure a table's cell as render_cell writes it.
+ *
+ * @param item The row's record; anything else is a cell 0 wide.
+ * @param column The field's name; 0 if the record hasn't the field.
+ * @return The cell's width, in bytes, at most 256: a wider cell is counted as 256.
+ */
 cell_width :: fn(item: Value, column: string) -> usize {
     storage : u8[256]
     out := text_buffer.make(storage)
@@ -291,6 +383,12 @@ cell_width :: fn(item: Value, column: string) -> usize {
     return out.count
 }
 
+/**
+ * Append spaces.
+ *
+ * @param out The text appended to.
+ * @param count How many spaces.
+ */
 pad :: fn(out: ptr[mut text_buffer.TextBuffer], count: usize) {
     for i in 0..<count {
         text_buffer.append(out, " ")

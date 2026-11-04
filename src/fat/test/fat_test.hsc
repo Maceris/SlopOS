@@ -12,7 +12,7 @@ import runtime from "base"
 import fat from ".."
 import hosted_faults from "../../robustness/hosted"
 
-/** 34 MiB of 512-byte sectors, a sector a cluster: just enough clusters to be FAT32 */
+/** The stand-in disk's size in 512-byte sectors, 34 MiB: with a sector a cluster, just enough clusters to be FAT32. */
 SECTORS : u64 : 69632
 
 /**
@@ -20,20 +20,38 @@ SECTORS : u64 : 69632
  * what a round changed without copying the whole image.
  */
 Image :: struct {
+    /** The disk's bytes, SECTORS * fat.SECTOR_BYTES of them, the test's own. */
     bytes : mut u8[],
+    /** Whether a sector's bytes are saved before its first write (save_sector), so restore can put them back. */
     undoing : bool,
+    /** The sectors saved this round, each once, with where their bytes are in saved. */
     undo : Undo[..],
+    /** The saved sectors' bytes, fat.SECTOR_BYTES for each of undo, in its order. */
     saved : u8[..],
-    /** Writes fail while it's set, writing nothing */
+    /** Whether writes fail, writing nothing, as a failing disk's do. */
     failing : bool,
 }
 
 /** A sector's bytes from before a round wrote it, at `at` in saved. */
 Undo :: struct {
+    /** The sector saved. */
     sector : u64,
+    /** Where its fat.SECTOR_BYTES bytes start in the Image's saved. */
     at : usize,
 }
 
+/**
+ * Run the checks in order, stopping at the first that fails.
+ *
+ * They check that an empty buffer doesn't mount and a formatted one does, with FSInfo's free count; that 8.3 and long
+ * names are made, found in any case, and given aliases; that refused names and paths are refused; that a file is
+ * written across clusters, read back whole and from its middle, cut and grown with zeros; that entries are renamed
+ * and removed, and a directory with something in it isn't; that it all, and FSInfo's count, is there mounted again;
+ * then check_failed_writes and check_fuzz.
+ *
+ * @return 0 if every check passed, or the number of the first that failed: 1 to 47 here, 60 to 69 from
+ *     check_failed_writes, 100 and up from check_fuzz.
+ */
 checks :: fn() -> int {
     bytes, error :: runtime.new_array(u8, cast[usize](SECTORS * fat.SECTOR_BYTES))
     if error != null {
@@ -194,9 +212,13 @@ checks :: fn() -> int {
 }
 
 /**
- * A write the disk fails (decisions/0112): refused, the volume failed from then on, and what it was to change refused
- * to reads rather than given as it was, while other files read; written whole again, it reads again, the volume still
- * failed. A volume mounted afresh starts whole.
+ * Check what a write the disk fails does (decisions/0112): it's refused, the volume is failed from then on, and what
+ * it was to change is refused to reads rather than given as it was, while other files read; written whole again, it
+ * reads again, the volume still failed. A volume mounted afresh starts whole.
+ *
+ * @param image The stand-in disk, its failing set and cleared here.
+ * @param device The device over the image, formatted.
+ * @return 0 if every check passed, or the number of the first that failed, 60 to 69.
  */
 check_failed_writes :: fn(image: ptr[mut Image], device: fat.Device) -> int {
     volume := fat.mount(device) or_return 60
@@ -239,6 +261,12 @@ check_failed_writes :: fn(image: ptr[mut Image], device: fat.Device) -> int {
     return 0
 }
 
+/**
+ * Tell whether an operation succeeded.
+ *
+ * @param result Its result.
+ * @return True if it's Ok.
+ */
 done :: fn(result: Result[void, fat.FatError]) -> bool {
     match result {
         case Ok => return true
@@ -246,7 +274,14 @@ done :: fn(result: Result[void, fat.FatError]) -> bool {
     }
 }
 
-/** The first entry's name in a directory, or "". */
+/**
+ * Tell whether a directory has an entry at or after a slot.
+ *
+ * @param volume The volume under test, mounted on the stand-in disk.
+ * @param directory The directory's first cluster.
+ * @param slot The slot to list from.
+ * @return "something" if there's an entry, "" if there's none, "error" if listing failed; not the entry's name.
+ */
 next_name :: fn(volume: ptr[mut fat.Volume], directory: u32, slot: u32) -> string {
     match fat.next_entry(volume, directory, slot) {
         case Ok(found) => {
@@ -257,10 +292,27 @@ next_name :: fn(volume: ptr[mut fat.Volume], directory: u32, slot: u32) -> strin
     }
 }
 
+/**
+ * Write text into a file.
+ *
+ * @param volume The volume under test, mounted on the stand-in disk.
+ * @param entry The file's entry, updated as fat.write updates it.
+ * @param offset The byte offset to write at.
+ * @param text The text, its bytes written as they are.
+ * @return True if all of it was written; false on any error.
+ */
 written :: fn(volume: ptr[mut fat.Volume], entry: ptr[mut fat.Entry], offset: u64, text: string) -> bool {
     return (fat.write(volume, entry, offset, string_bytes(text)) or_else 0) == cast[u64](text.count)
 }
 
+/**
+ * Read a file's first 64 bytes as text.
+ *
+ * @param volume The volume under test, mounted on the stand-in disk.
+ * @param entry The file's entry.
+ * @return Up to 64 bytes read from its start, in a buffer from runtime.new_array that's never freed (it's a test);
+ *     "" if it's empty, couldn't be read, or the buffer couldn't be had.
+ */
 read_back :: fn(volume: ptr[mut fat.Volume], entry: ptr[fat.Entry]) -> string {
     buffer, error :: runtime.new_array(u8, 64)
     if error != null || buffer.count == 0 {
@@ -270,6 +322,12 @@ read_back :: fn(volume: ptr[mut fat.Volume], entry: ptr[fat.Entry]) -> string {
     return string_of(&buffer[0], cast[usize](count))
 }
 
+/**
+ * Make a short name as it is on the volume, to compare with an entry's.
+ *
+ * @param text Its 11 bytes, base and extension without a dot; fewer are padded with spaces, more are cut.
+ * @return The 11 bytes, as a short entry's name field holds them.
+ */
 short :: fn(text: string) -> u8[11] {
     made : u8[11]
     for &byte, i in made {
@@ -278,6 +336,15 @@ short :: fn(text: string) -> u8[11] {
     return made
 }
 
+/**
+ * Read sectors from the stand-in disk, as a fat.Device's read does.
+ *
+ * @param context The Image, as a rawptr.
+ * @param first The first sector, from the image's start.
+ * @param count How many sectors.
+ * @param into Where they go, at least count * fat.SECTOR_BYTES bytes.
+ * @return True if they were read; false if they run past the image's end or into is too small.
+ */
 read_sectors :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
     image :: cast[ptr[Image]](context)
     start :: first * fat.SECTOR_BYTES
@@ -294,6 +361,16 @@ read_sectors :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> b
     return true
 }
 
+/**
+ * Write sectors to the stand-in disk, as a fat.Device's write does, saving each first if the image is undoing.
+ *
+ * @param context The Image, as a rawptr.
+ * @param first The first sector, from the image's start.
+ * @param count How many sectors.
+ * @param from Their bytes, at least count * fat.SECTOR_BYTES.
+ * @return True if they were written; false, writing nothing, if they run past the image's end, from is too small,
+ *     or the image is failing.
+ */
 write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool {
     image :: cast[ptr[mut Image]](context)
     start :: first * fat.SECTOR_BYTES
@@ -318,7 +395,11 @@ write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool
     return true
 }
 
-/** The checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness) */
+/**
+ * Run the checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness).
+ *
+ * @return 0 if every check passed, or the number of the first that failed.
+ */
 main :: fn() -> int {
     return hosted_faults.run(checks)
 }

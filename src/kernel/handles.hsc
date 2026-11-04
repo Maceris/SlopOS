@@ -19,63 +19,105 @@ import robustness from "../robustness"
  * found through a directory frame.
  */
 
+/** How many entries a page of a table holds: 128 of 32 bytes, one 4 KiB frame. */
 ENTRIES_PER_PAGE :: 128
+/** How many pages a table's directory holds: 512 addresses of 8 bytes, one 4 KiB frame. */
 TABLE_PAGES :: 512
+/** The most entries a table has, 65536, so an index fits a handle's low 16 bits; index 0 is never a handle. */
 MAX_HANDLES :: ENTRIES_PER_PAGE * TABLE_PAGES
 
 // An entry's tag: its rights in the low 32 bits, then its kind, and these, then its generation in the top 16.
+/** The tag's bit for an entry that holds a handle. */
 TAG_VALID : u64 : 1 << 40
+/** The tag's bit for an owning handle, whose closing destroys its object. */
 TAG_OWNING : u64 : 1 << 41
+/** Where the entry's 16-bit generation starts in its tag. */
 TAG_GENERATION_SHIFT : u64 : 48
 /*
- * A fresh entry's generation: 0, or with robustness=on a few uses before 0xffff, where an entry is retired (decisions/0096,
- * 0105), so retiring runs in every test.
+ * A fresh entry's generation: 0, or with robustness=on a few uses before 0xffff, where an entry is retired
+ * (decisions/0096, 0105), so retiring runs in every test.
  */
 #if robustness.ON {
+    /** A fresh entry's generation: 0xfffc, four closes short of retiring. */
     HANDLE_GENERATION_START : u64 : 0xfffc
 }
 #else {
+    /** A fresh entry's generation: 0. */
     HANDLE_GENERATION_START : u64 : 0
 }
 
+/** One entry of a handle table, 32 bytes: a handle, or a free slot. */
 HandleEntry :: struct #align(32) {
+    /**
+     * The rights in the low 32 bits, the object's kind in bits 32 to 39, TAG_VALID and TAG_OWNING, and the entry's
+     * generation in the top 16. Written with a release store under the table's lock, and read without it.
+     */
     tag : u64,
+    /** The object's address, while TAG_VALID is set. */
     object : u64,
+    /** The object's generation when the handle was made, while TAG_VALID is set. */
     generation : u32,
-    // The next free entry's index, while it's free.
+    /** The next free entry's index, while it's free; 0 at the free list's end. */
     next_free : u32,
+    /** Unused, so an entry is 32 bytes. */
     reserved : u64,
 }
 
 #assert size_of(HandleEntry) == 32
 
+/** A process's handle table: entries in pages of ENTRIES_PER_PAGE, found through a directory frame. */
 HandleTable :: struct {
+    /** Held, at rank HandleTable, while an entry or the table's bookkeeping changes; lookups don't take it. */
     lock : concurrency.SpinLock,
-    /** A frame of TABLE_PAGES page addresses, 0 until the first handle. */
+    /** A frame of TABLE_PAGES page addresses, in the direct map, 0 until the first handle. */
     directory : u64,
-    // Free entries, by index, 0 for none; and the first index never used. Index 0 is never a handle.
+    /** The first free entry, by index, 0 for none; its next_free links the rest. */
     first_free : u32,
+    /** The first index never used, 0 before the first handle, then from 1 up to MAX_HANDLES. */
     next_unused : u32,
+    /** How many handles the table holds. */
     count : u32,
     /** Set when its process is destroyed: no more handles go in. */
     closed : bool,
-    // The object its pages are charged to, its process, and whether the last page couldn't be paid for.
+    /** The object its pages are charged to, its Process, as an address; 0 to charge nothing. */
     account : u64,
+    /** Whether the last page wanted couldn't be paid for, so install says BudgetExceeded rather than OutOfMemory. */
     short_of_budget : bool,
 }
 
 /** What a handle refers to, as a lookup found it. */
 Resolved :: struct {
+    /** The object's address. */
     object : u64,
+    /** The object's generation when the handle was made, which is_live checks it against. */
     generation : u32,
+    /** The object's kind, as the handle records it. */
     kind : slop_os.ObjectKind,
+    /** The handle's rights. */
     rights : slop_os.Rights,
+    /** Whether it's the owning handle, whose closing destroys the object. */
     owning : bool,
 }
 
-/*
- * A handle to object, a live object of kind with generation, with rights, owning or not: unless the
- * table is full or closed.
+/**
+ * Make a handle to an object in a table.
+ *
+ * Takes the table's lock, at rank HandleTable. A new entry may take a frame for its page, and one for the
+ * directory, each charged to the table's account.
+ *
+ * @param kernel The kernel, for frames.
+ * @param table The table it goes in.
+ * @param object The object, as an address: a live one, which the caller keeps from going away meanwhile.
+ * @param generation The object's generation, which the handle checks it against from now on.
+ * @param kind The object's kind.
+ * @param rights What the handle allows.
+ * @param owning Whether it's the owning handle, whose closing destroys the object; the caller sees there's one.
+ * @return The handle: the entry's index in the low 16 bits, never 0, and the entry's generation in the high 16.
+ * @error ObjectGone The table is closed, as its process is being destroyed.
+ * @error TableFull All MAX_HANDLES entries are in use.
+ * @error OutOfMemory No frame for the entry's page or the directory.
+ * @error BudgetExceeded The table's process's budget can't pay for a page.
+ * @error InvalidHandle A free entry's page is missing, which the table's own bookkeeping never allows.
  */
 install :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], object: u64, generation: u32, kind: slop_os.ObjectKind,
     rights: slop_os.Rights, owning: bool) -> Result[slop_os.Handle, slop_os.HandleError] {
@@ -115,8 +157,17 @@ install :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], object: u64,
 }
 
 /**
- * What handle refers to: InvalidHandle if it isn't one of the table's, ObjectGone if its object was
- * destroyed. Without the lock.
+ * Find what a handle refers to, without the table's lock.
+ *
+ * The entry is read until its tag is the same before and after, so what's read belongs together. The object may be
+ * destroyed the moment after; its memory stays an object of its kind until this CPU's next quiescent point.
+ *
+ * @param table The table, which may be closed: its entries stay readable until it's freed.
+ * @param handle The handle, as the process gave it.
+ * @return What it refers to, its object live when it was checked.
+ * @error InvalidHandle It isn't one of the table's: index 0, a page not there, a free entry, or one whose
+ *     generation has changed since, as it was closed.
+ * @error ObjectGone Its object was destroyed, or is being destroyed.
  */
 lookup :: fn(table: ptr[HandleTable], handle: slop_os.Handle) -> Result[Resolved, slop_os.HandleError] {
     index :: cast[u32](handle) & 0xffff
@@ -149,8 +200,16 @@ lookup :: fn(table: ptr[HandleTable], handle: slop_os.Handle) -> Result[Resolved
 }
 
 /**
- * Close handle: what it referred to, for the caller to destroy if it was the owning one. Whether the object
- * is still live doesn't matter.
+ * Close a handle.
+ *
+ * Takes the table's lock, at rank HandleTable. The entry's generation advances, so the handle fails from now on; an
+ * entry whose generation wraps to 0 isn't freed, and never used again.
+ *
+ * @param table The table, closed or not.
+ * @param handle The handle, as the process gave it.
+ * @return What it referred to, for the caller to destroy if it was the owning one. Whether the object is still live
+ *     isn't checked.
+ * @error InvalidHandle It isn't one of the table's: index 0, a page not there, a free entry, or one already closed.
  */
 remove :: fn(table: ptr[mut HandleTable], handle: slop_os.Handle) -> Result[Resolved, slop_os.HandleError] {
     index :: cast[u32](handle) & 0xffff
@@ -183,7 +242,14 @@ remove :: fn(table: ptr[mut HandleTable], handle: slop_os.Handle) -> Result[Reso
     return .Ok(removed)
 }
 
-/** The entry at index, if its page is there. */
+/**
+ * Find the entry at an index, without the table's lock.
+ *
+ * @param table The table, read with acquire loads, so it may be another CPU's to change meanwhile.
+ * @param index The entry's index, below MAX_HANDLES; a larger one is taken modulo the table's size.
+ * @return The entry, in its page in the direct map, good until the table is freed; null if the directory or the
+ *     entry's page isn't there yet. The entry may be free.
+ */
 entry_at :: fn(table: ptr[HandleTable], index: u32) -> ptr[mut HandleEntry]? {
     directory :: intrinsics.atomic_load_u64_acquire(&table.directory)
     page_index :: cast[usize](index) / ENTRIES_PER_PAGE % TABLE_PAGES
@@ -198,8 +264,17 @@ entry_at :: fn(table: ptr[HandleTable], index: u32) -> ptr[mut HandleEntry]? {
 }
 
 /**
- * The entry at index, a new one at the end, making its page, and the directory, if they aren't there
- * yet, each charged to the table's process: null if there's no memory, or the budget is short.
+ * Find the entry at an index, a new one at the end, making its page, and the directory, if they aren't there
+ * yet, each charged to the table's process.
+ *
+ * Called with the table's lock held. Sets short_of_budget to say why it failed. A directory made before a page
+ * failed is kept.
+ *
+ * @param kernel The kernel, for frames.
+ * @param table The table, whose lock the caller holds; its directory and page slots are published with release
+ *     stores, for lookups without the lock.
+ * @param index The entry's index, next_unused, below MAX_HANDLES.
+ * @return The entry, zeroed if its page is new; null if there's no memory, or the budget is short.
  */
 make_entry :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], index: u32) -> ptr[mut HandleEntry]? {
     table.short_of_budget = false
@@ -216,7 +291,14 @@ make_entry :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], index: u3
     return entry_at(table, index)
 }
 
-/** A zeroed frame for table, charged to its process; its whole charge comes back once the process is released. */
+/**
+ * Take a zeroed frame for a table, charged to its process; its whole charge comes back once the process is released.
+ *
+ * @param kernel The kernel, for frames, taken from this CPU's frame cache.
+ * @param table The table, whose account is charged a frame's 4 KiB; short_of_budget is set if it can't pay.
+ * @return The frame's address in the direct map; null if fault injection failed this pass, the budget can't pay, or
+ *     there's no frame, when the charge is given back.
+ */
 charged_frame :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) -> u64? {
     if fails(.Handles) {
         return null
@@ -232,7 +314,13 @@ charged_frame :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) -> u64
     return if frame != 0 { frame } else { null }
 }
 
-/** A zeroed frame from this CPU's cache, as an address in the direct map. */
+/**
+ * Take a zeroed frame from this CPU's frame cache, charged to nobody.
+ *
+ * @param kernel The kernel, for frames.
+ * @return The frame's address in the direct map, the caller's to give back with give_frame_at; null if there are no
+ *     frames.
+ */
 zeroed_frame :: fn(kernel: ptr[mut Kernel]) -> u64? {
     frame :: frames.take_frame(&per_cpu().frame_cache, &kernel.frames) or_return null
     address :: frames.virtual_of(&kernel.frames, frame)
@@ -240,14 +328,27 @@ zeroed_frame :: fn(kernel: ptr[mut Kernel]) -> u64? {
     return address
 }
 
-/** No more handles go in; the entries stay readable until the table is freed. */
+/**
+ * Close a table: no more handles go in; the entries stay readable until the table is freed.
+ *
+ * Takes the table's lock, at rank HandleTable.
+ *
+ * @param table The table, whose process is being destroyed.
+ */
 close_table :: fn(table: ptr[mut HandleTable]) {
     lock_at(&table.lock, .HandleTable)
     table.closed = true
     unlock_at(&table.lock, .HandleTable)
 }
 
-/** Free a closed table's pages and directory, once no CPU can be reading them. */
+/**
+ * Free a closed table's pages and directory, once no CPU can be reading them, as at its process's release.
+ *
+ * Their charge isn't given back here: it's part of the process's, which its release returns whole.
+ *
+ * @param kernel The kernel, whose frames they go back to through this CPU's frame cache.
+ * @param table The table, closed, whose directory is 0 afterwards; one that never had a handle has nothing to free.
+ */
 free_table :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) {
     if table.directory == 0 {
         return void
@@ -262,7 +363,12 @@ free_table :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) {
     table.directory = 0
 }
 
-/** Give back a frame by its address in the direct map. */
+/**
+ * Give back a single frame by its address in the direct map, to this CPU's frame cache.
+ *
+ * @param kernel The kernel, for frames.
+ * @param address The frame's address in the direct map: one frames.take_frame gave, which the caller no longer uses.
+ */
 give_frame_at :: fn(kernel: ptr[mut Kernel], address: u64) {
     frames.give_frame(&per_cpu().frame_cache, &kernel.frames, cast[boot_info.PhysicalAddress](address - kernel.frames.direct_map_offset))
 }

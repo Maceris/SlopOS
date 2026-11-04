@@ -13,10 +13,19 @@ import vt from ".."
 
 /** A string's bytes with ` as ESC and ^X as Ctrl-X. */
 Bytes :: struct {
+    /** The bytes, the first count of them. */
     bytes : u8[256],
+    /** How many of bytes there are, at most 256. */
     count : usize,
 }
 
+/**
+ * Make the bytes a test string stands for: ` as ESC, ^ and a character as its control code (^? as DEL).
+ *
+ * @param text The string; what's past 256 bytes, once made, is dropped.
+ * @return The bytes, by value, at most 256 of them: ` made ESC, ^? DEL, ^ and another character that character's low
+ *     five bits, and a ^ at the string's end kept as it is.
+ */
 bytes_of :: fn(text: string) -> Bytes {
     made := Bytes.{}
     source :: string_bytes(text)
@@ -41,16 +50,33 @@ bytes_of :: fn(text: string) -> Bytes {
     return made
 }
 
+/**
+ * View the bytes in a Bytes.
+ *
+ * @param made The Bytes, only read; its count is trusted only up to 256, past which the view is empty.
+ * @return Its first count bytes, a view of made's, good as long as it is.
+ */
 view :: fn(made: ptr[Bytes]) -> u8[] {
     return if made.count <= made.bytes.count { made.bytes[0..<made.count] } else { made.bytes[0..<0] }
 }
 
-/** Whether out holds what text, written as bytes_of reads it, is. */
+/**
+ * Tell whether a text buffer holds the bytes a test string stands for.
+ *
+ * @param out The text buffer, only read: its whole contents are compared, not just its start.
+ * @param text The test string, as bytes_of reads it.
+ * @return True if out holds exactly those bytes.
+ */
 same :: fn(out: ptr[text_buffer.TextBuffer], text: string) -> bool {
     expected := bytes_of(text)
     return text_buffer.as_string(out) == string_of(&expected.bytes[0], expected.count)
 }
 
+/**
+ * Run the VT adapter's tests.
+ *
+ * @return 0 if every check passed, or the number of the first check that failed.
+ */
 main :: fn() -> int {
     storage : u8[256]
     out := text_buffer.make(storage)
@@ -131,6 +157,16 @@ main :: fn() -> int {
     return 0
 }
 
+/**
+ * Tell whether an event is a key with the given usage, modifiers and text.
+ *
+ * @param decoded The events and their text, only read; only the first count events are looked at.
+ * @param index The event's index, from 0.
+ * @param code The key's HID usage expected, or 0 for one known by its text.
+ * @param modifiers The modifiers expected, as terminal.SHIFT, ALT, CONTROL and META's bits; they have to match exactly.
+ * @param text The text expected; only its first three bytes are compared (text_of).
+ * @return True if the event's there and is that key; false for an index past the events.
+ */
 is_key :: fn(decoded: ptr[vt.Decoded], index: usize, code: u16, modifiers: u8, text: string) -> bool {
     if index >= decoded.count || index >= decoded.events.count {
         return false
@@ -139,7 +175,14 @@ is_key :: fn(decoded: ptr[vt.Decoded], index: usize, code: u16, modifiers: u8, t
     return found.kind == cast[u8](terminal.EventKind.Key) && found.code == code && found.modifiers == modifiers && text_of(decoded, index) == text
 }
 
-/** The first three bytes of an event's text at most, which is all the checks need. */
+/**
+ * Find the first three bytes of an event's text at most, which is all the checks need.
+ *
+ * @param decoded The events and their text, only read; an index below MAX_EVENTS but past count reads whatever that
+ *     slot holds.
+ * @param index The event's index, from 0.
+ * @return The text, a view of decoded's, good until it's reset; empty for an event with none or an index past them.
+ */
 text_of :: fn(decoded: ptr[vt.Decoded], index: usize) -> string {
     if index >= decoded.events.count {
         return ""

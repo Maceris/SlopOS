@@ -21,51 +21,86 @@ import container from "../../protocols/container"
  * transaction records its version, so a change anyone makes after that is a newer version.
  */
 
+/** The most transactions open at once; a Begin past them is refused with NoBuffer. */
 MAX_TRANSACTIONS :: 16
+/** The most objects a transaction records the versions of; past them, its commit is refused as a conflict. */
 MAX_VERSIONS :: 64
 
+/** What a logged change is, as LogHead's op holds it. */
 Op :: enum #backed_by(u32) {
+    /** A file opened, as its creation says. */
     OpenFile = 1,
+    /** A file's bytes written, at an offset. */
     Write = 2,
+    /** A file's size set. */
     SetSize = 3,
+    /** What's at a path removed. */
     Remove = 4,
+    /** What's at a path moved to another. */
     Rename = 5,
 }
 
 /**
- * A logged change: what, a number (a write's offset, a size, a file's creation), its data's bytes, and its paths' bytes.
+ * A logged change: what, a number (a write's offset, a size, a file's creation), its data's bytes, and its paths'
+ * bytes. Its path's, its to's and its data's bytes follow it in the log, in that order.
  */
 LogHead :: struct #packed {
+    /** Op's value. */
     op : u32le,
+    /** An OpenFile's files.Creation's value; 0 for another op. */
     creation : u32le,
+    /** A write's offset or a size, in bytes; 0 for another op. */
     number : u64le,
+    /** How many data bytes follow the paths: a write's. */
     data_bytes : u32le,
+    /** How many bytes the path is, relative to the transaction's directory. */
     path_bytes : u16le,
+    /** How many bytes a rename's to path is; 0 for another op. */
     to_bytes : u16le,
 }
 
 #assert size_of(LogHead) == 24
 
+/** The version of an object a transaction read or changed: the transaction of the volume it last changed in. */
 Version :: struct {
+    /** The object. */
     object : u64,
+    /** The volume's transaction it last changed in, which must be the same at commit. */
     changed : u64,
 }
 
+/** A transaction under a directory: its log, in its client's memory, and the versions it recorded. */
 Transaction :: struct {
+    /** Whether the slot holds a transaction. */
     active : bool,
-    // The directory it's beneath
+    /** The directory object it's beneath, which its paths are relative to. */
     directory : u64,
+    /** The log's memory, its client's, the server's handle to it, closed when the transaction ends. */
     memory : slop_os.Memory,
+    /** Where the log is mapped, readable and writable, in the process's address space. */
     log : u64,
+    /** The log's size in bytes, at most MAX_BUFFER_BYTES. */
     log_bytes : u64,
+    /** How many of the log's bytes are logged changes. */
     used : u64,
+    /** The versions recorded, version_count of them. */
     versions : Version[MAX_VERSIONS],
+    /** How many of versions are recorded. */
     version_count : usize,
-    /** Too many versions to check, so its commit is refused as a conflict */
+    /** Whether there were too many versions to record, so its commit is refused as a conflict. */
     overflowed : bool,
 }
 
-/** A transaction begun beneath directory, its log in memory, mapped here: its index, or null. */
+/**
+ * Begin a transaction beneath a directory, its log in memory its client gives, mapped here, so the log is charged to
+ * the client and capped by what it gives.
+ *
+ * @param server The server, whose first free transaction slot is taken; directory isn't checked here.
+ * @param directory The directory object it's beneath.
+ * @param memory The log's memory, kept by the transaction once it's begun; the caller closes it when it isn't.
+ * @return The transaction's index; null if MAX_TRANSACTIONS are open, the memory is smaller than a LogHead or larger
+ *     than MAX_BUFFER_BYTES, or it couldn't be mapped.
+ */
 begin :: fn(server: ptr[mut Server], directory: u64, memory: slop_os.Memory) -> usize? {
     for transaction, i in server.transactions {
         if transaction.active {
@@ -88,7 +123,13 @@ begin :: fn(server: ptr[mut Server], directory: u64, memory: slop_os.Memory) -> 
     return null
 }
 
-/** A transaction ended, its log given back. */
+/**
+ * End a transaction, aborting what it logged: unmap its log and close its memory, freeing its slot.
+ *
+ * @param server The server, whose transaction slot is emptied: its log unmapped and its memory closed, nothing logged
+ *     applied.
+ * @param index The transaction's index; one not open is left alone.
+ */
 end_transaction :: fn(server: ptr[mut Server], index: usize) {
     if index >= server.transactions.count || !server.transactions[index].active {
         return void
@@ -100,7 +141,13 @@ end_transaction :: fn(server: ptr[mut Server], index: usize) {
     server.transactions[index] = Transaction.{}
 }
 
-/** A transaction's log emptied, to begin again after a commit or an abort. */
+/**
+ * Empty a transaction's log and versions, to begin again after a commit or an abort.
+ *
+ * @param server The server, whose transaction's used, version_count and overflowed are cleared; its log's memory is
+ *     kept.
+ * @param index The transaction's index; one past them is ignored.
+ */
 reset :: fn(server: ptr[mut Server], index: usize) {
     if index < server.transactions.count {
         server.transactions[index].used = 0
@@ -109,7 +156,20 @@ reset :: fn(server: ptr[mut Server], index: usize) {
     }
 }
 
-/** A change logged: false if the log is full. */
+/**
+ * Log a change at the end of a transaction's log.
+ *
+ * @param server The server, whose transaction's log, in its client's memory, is written at its end and its used counted
+ *     up.
+ * @param index The transaction's index.
+ * @param op What change it is, written as its value.
+ * @param creation An OpenFile's files.Creation's value; 0 otherwise.
+ * @param number A write's offset or a size, in bytes; 0 otherwise.
+ * @param path Its path, relative to the transaction's directory, at most 0xffff bytes.
+ * @param to A rename's to path, at most 0xffff bytes; "" otherwise.
+ * @param data A write's bytes; none otherwise.
+ * @return Whether it was logged; false if the log hasn't the room, a path is too long, or there's no such transaction.
+ */
 log_op :: fn(server: ptr[mut Server], index: usize, op: Op, creation: u32, number: u64, path: string, to: string, data: u8[]) -> bool {
     if index >= server.transactions.count {
         return false
@@ -131,7 +191,14 @@ log_op :: fn(server: ptr[mut Server], index: usize, op: Op, creation: u32, numbe
     return true
 }
 
-/** bytes put in log at at, as far as they fit: where the next go. */
+/**
+ * Put bytes in the log, as far as they fit.
+ *
+ * @param log The log's bytes, written to; what falls past their end is dropped.
+ * @param at Where they go, in bytes.
+ * @param bytes What's put, copied; not kept.
+ * @return Where the next go: at plus bytes' count, whether or not all fit.
+ */
 put_bytes :: fn(log: mut u8[], at: usize, bytes: u8[]) -> usize {
     for byte, i in bytes {
         j :: at + i
@@ -142,16 +209,27 @@ put_bytes :: fn(log: mut u8[], at: usize, bytes: u8[]) -> usize {
     return at + bytes.count
 }
 
-/** No bytes, for a logged change with no data. */
+/**
+ * Give no bytes, for a logged change with no data.
+ *
+ * @return An empty view.
+ */
 nothing :: fn() -> u8[] {
     empty :: ""
     return view_of(cast[ptr[u8]](empty.data), 0)
 }
 
 /**
- * The version of what's at path beneath a transaction's directory recorded, and of the directory it's in: committed
- * first if either has changes not yet committed, so a later change is a newer version. False if the volume can't
- * commit.
+ * Record the version of what's at a path beneath a transaction's directory, and of the directory it's in, each once.
+ *
+ * Either with changes not yet committed is committed first, so a change anyone makes after is a newer version. What
+ * isn't there yet isn't recorded; past MAX_VERSIONS, the transaction is marked overflowed.
+ *
+ * @param server The server, whose volume is committed if an object recorded has changes not yet committed, and whose
+ *     transaction's versions are added to.
+ * @param index The transaction's index.
+ * @param path The path, relative to the transaction's directory.
+ * @return Whether they were recorded; false if there's no such transaction or the volume couldn't commit.
  */
 note_versions :: fn(server: ptr[mut Server], index: usize, path: string) -> bool {
     if index >= server.transactions.count {
@@ -204,15 +282,30 @@ note_versions :: fn(server: ptr[mut Server], index: usize, path: string) -> bool
 
 /** A logged change, read back from the log, which its client could have changed, so it's checked as it's read. */
 Logged :: struct {
+    /** Op's value, unchecked; apply refuses one that isn't an Op. */
     op : u32,
+    /** An OpenFile's files.Creation's value. */
     creation : u32,
+    /** A write's offset or a size, in bytes. */
     number : u64,
+    /** Its path, a view into the log, which its client may change meanwhile. */
     path : string,
+    /** A rename's to path, a view into the log. */
     to : string,
+    /** A write's bytes, a view into the log. */
     data : u8[],
+    /** Where the next change starts in the log, in bytes. */
     next : u64,
 }
 
+/**
+ * Read a logged change back from the log, checked to lie within what's used.
+ *
+ * @param log The log's bytes, which its client may change at any time; read, and the change's views point into them.
+ * @param at Where it starts, in bytes.
+ * @param used How many of the log's bytes are logged changes.
+ * @return The change, its paths and data views into the log; null if its head or its bytes reach past what's used.
+ */
 logged_at :: fn(log: u8[], at: u64, used: u64) -> Logged? {
     start :: cast[usize](at)
     if at + cast[u64](size_of(LogHead)) > used || start + size_of(LogHead) > log.count || start >= log.count {
@@ -233,13 +326,30 @@ logged_at :: fn(log: u8[], at: u64, used: u64) -> Logged? {
         data = slopfs.part(log, to_end, data_end), next = cast[u64](data_end)}
 }
 
+/**
+ * Give the files.Creation a logged value is.
+ *
+ * @param number A logged OpenFile's creation value, which its client may have written anything to.
+ * @return New for 2, Either for 3, Truncate for 4, and Existing for anything else.
+ */
 creation_of :: fn(number: u32) -> files.Creation {
     return if number == 2 { .New } else if number == 3 { .Either } else if number == 4 { .Truncate } else { .Existing }
 }
 
 /**
- * A transaction committed: checked, applied whole and made durable, or Failed with why. Its log is emptied either way,
- * to begin again.
+ * Commit a transaction: check none of the versions it recorded changed meanwhile, apply its log in order, and commit,
+ * all in one transaction of the volume.
+ *
+ * What's waiting is committed first, so applying starts from a commit to go back to; if applying fails partway, the
+ * volume goes back to that commit, the container service undoing its allocations, so nothing of it is left. Its log
+ * is emptied either way, to begin again.
+ *
+ * @param server The server, whose volume is committed before and after the log is applied, or put back at its last
+ *     commit if applying fails.
+ * @param index The transaction's index.
+ * @return Done once it's durable; Failed with Conflict if a version changed, an object's gone or it overflowed,
+ *     DeviceError if a commit failed, InvalidPath for a log that can't be read or no such transaction, or why a change
+ *     couldn't be applied.
  */
 commit_transaction :: fn(server: ptr[mut Server], index: usize) -> dir.Response {
     defer reset(server, index)
@@ -298,7 +408,14 @@ commit_transaction :: fn(server: ptr[mut Server], index: usize) -> dir.Response 
     return .Done
 }
 
-/** One logged change applied beneath directory: what went wrong, or null. */
+/**
+ * Apply one logged change beneath a directory.
+ *
+ * @param server The server, whose volume the change is made to, durable only with its next commit.
+ * @param directory The transaction's directory object.
+ * @param logged The change, as logged_at read it; its paths and data are views into the client's log.
+ * @return Null once it's applied; why not, otherwise, InvalidPath for an op that isn't one.
+ */
 apply :: fn(server: ptr[mut Server], directory: u64, logged: ptr[Logged]) -> files.FileError? {
     volume :: server.volume
     if logged.op == cast[u32](Op.OpenFile) {
@@ -333,7 +450,12 @@ apply :: fn(server: ptr[mut Server], directory: u64, logged: ptr[Logged]) -> fil
 }
 
 /**
- * The volume back at its last commit, record: its dirty nodes forgotten, and the container service's changes for it undone.
+ * Put the volume back at its last commit: its dirty nodes forgotten, and the container service's changes for it
+ * since undone (Abandon).
+ *
+ * @param server The server: its container service is asked to Abandon, waited for, its volume's dirty nodes forgotten
+ *     and its commit_at cleared.
+ * @param committed The volume's record as last committed.
  */
 undo :: fn(server: ptr[mut Server], committed: slopfs.VolumeRecord) {
     _ = ask(server, .Abandon)
@@ -343,7 +465,14 @@ undo :: fn(server: ptr[mut Server], committed: slopfs.VolumeRecord) {
 
 // Replace and orphans
 
-/** Whether a connection other than skip has object open. */
+/**
+ * Tell whether a file connection, read-only or not, or a replacement, other than one, has an object open.
+ *
+ * @param server The server, whose connections are read; nothing's changed.
+ * @param object The object, by its number in the volume's tree.
+ * @param skip The slot of a connection not counted; one past them for none.
+ * @return Whether any connection but skip's, a file's, a read-only file's or a replacement's, is to object.
+ */
 has_open :: fn(server: ptr[Server], object: u64, skip: usize) -> bool {
     for connection, i in server.connections {
         if i < server.count && i != skip && connection.object == object
@@ -354,7 +483,13 @@ has_open :: fn(server: ptr[Server], object: u64, skip: usize) -> bool {
     return false
 }
 
-/** An orphan given back once nothing has it open. */
+/**
+ * Give an orphan back once nothing has it open; an object that isn't one, or is open, is left.
+ *
+ * @param server The server; an orphan given back changes its volume, durable with its next commit.
+ * @param object The object; 0 for none.
+ * @param skip The slot of a connection not counted, as the one closing; one past them for none.
+ */
 release_if_unused :: fn(server: ptr[mut Server], object: u64, skip: usize) {
     if object == 0 || has_open(server, object, skip) {
         return void
@@ -370,8 +505,13 @@ release_if_unused :: fn(server: ptr[mut Server], object: u64, skip: usize) {
 }
 
 /**
- * What's at path beneath directory removed: a file someone has open is orphaned, so they go on reading it, and given
- * back when the last of them is done.
+ * Remove what's at a path: a file someone has open is orphaned, so they go on reading it, and given back when the last
+ * of them is done.
+ *
+ * @param server The server, whose volume is changed, and whose connections are checked for what was removed.
+ * @param directory The directory object the path is beneath.
+ * @param path The path of what's removed, relative to directory.
+ * @return Null once it's removed, durable with the volume's next commit; why not, otherwise.
  */
 removed :: fn(server: ptr[mut Server], directory: u64, path: string) -> files.FileError? {
     volume :: server.volume
@@ -389,7 +529,15 @@ removed :: fn(server: ptr[mut Server], directory: u64, path: string) -> files.Fi
     }
 }
 
-/** A Replace: a new orphan to be the file at path beneath directory once it's installed. */
+/**
+ * Answer a Replace: make a new orphan to be the file at a path once it's installed, on a connection of its own.
+ *
+ * @param server The server; an orphan is made in its volume, and a Replacement connection added.
+ * @param directory The directory object the path is beneath.
+ * @param path The path; its directory must exist.
+ * @return OpenedFile with the replacement's connection, which the caller sends; Failed with NoSpace without a channel
+ *     or a slot, the orphan given back, or why the path couldn't be followed or the orphan made.
+ */
 replacement_of :: fn(server: ptr[mut Server], directory: u64, path: string) -> dir.Response {
     volume :: server.volume
     leaf := slopfs.Leaf.{}
@@ -419,7 +567,14 @@ replacement_of :: fn(server: ptr[mut Server], directory: u64, path: string) -> d
     }
 }
 
-/** A replacement installed at its name, the file it replaced given back once nothing has it, and made durable. */
+/**
+ * Install a replacement at its name, give the file it replaced back once nothing has it open, and commit, so it's
+ * durable before it's answered. The connection is a file's from then on.
+ *
+ * @param server The server, whose volume is changed and committed, waited for; the connection becomes a File's.
+ * @param index The replacement's connection's slot.
+ * @return Null once it's installed and committed; DeviceError if the commit failed, or why it couldn't be installed.
+ */
 installed :: fn(server: ptr[mut Server], index: usize) -> files.FileError? {
     if index >= server.connections.count {
         return files.FileError.InvalidPath
@@ -438,8 +593,15 @@ installed :: fn(server: ptr[mut Server], index: usize) -> files.FileError? {
 // Change cursors
 
 /**
- * A Changes answer for a directory: the first change beneath it at or after cursor, its name the path from the
- * directory as it now is (as far as each directory on the way can still be found), or UpToDate, or Resync.
+ * Answer Changes for a directory: the first change beneath it at or after a cursor.
+ *
+ * @param server The server, whose volume's change history is read.
+ * @param directory The directory object whose changes, its own and beneath it, are answered, their paths from it.
+ * @param cursor Where to start: what the last answer's next said.
+ * @param out The answer being built, which the change's name is appended to.
+ * @return Changed, its name the path from the directory as it now is, or the name alone if its directory can't be
+ *     walked back to; UpToDate past the last; Resync for a cursor older than the history kept; each with the next
+ *     cursor. Failed if the history couldn't be read.
  */
 changes_of :: fn(server: ptr[mut Server], directory: u64, cursor: u64, out: ptr[mut os.Outgoing]) -> dir.Response {
     volume :: server.volume
@@ -472,8 +634,14 @@ changes_of :: fn(server: ptr[mut Server], directory: u64, cursor: u64, out: ptr[
 }
 
 /**
- * The path from directory to object, through each object's parent, into path: its length, or 0 if object isn't
- * beneath it any more or a name on the way can't be found.
+ * Make the path from a directory to an object, through each object's parent.
+ *
+ * @param server The server, whose volume is read.
+ * @param directory The directory object the path starts from.
+ * @param object The object, at most 16 levels beneath it.
+ * @param path Where the path's bytes go, its components separated by '/'; its count is the most written.
+ * @return Its length in bytes; 0 if object isn't beneath directory any more, is deeper than 16, a name on the way
+ *     can't be found, the path doesn't fit, or object is directory.
  */
 path_to :: fn(server: ptr[mut Server], directory: u64, object: u64, path: mut u8[]) -> usize {
     volume :: server.volume
@@ -527,7 +695,15 @@ path_to :: fn(server: ptr[mut Server], directory: u64, object: u64, path: mut u8
     return length
 }
 
-/** The name object has in directory, found by listing it: its length in name. */
+/**
+ * Find the name an object has in a directory, by listing it.
+ *
+ * @param volume The volume, read only.
+ * @param directory The directory object, listed from its first entry.
+ * @param object The object whose entry is looked for.
+ * @param name Where the name goes, slopfs.NAME_BYTES long.
+ * @return Its length in bytes in name; null if it isn't in the directory, or the directory couldn't be listed.
+ */
 name_in :: fn(volume: ptr[mut slopfs.Volume], directory: u64, object: u64, name: mut u8[]) -> usize? {
     cursor : u64 = 0
     loop {
@@ -540,7 +716,17 @@ name_in :: fn(volume: ptr[mut slopfs.Volume], directory: u64, object: u64, name:
     }
 }
 
-/** A Begin: a transaction beneath directory, its log in memory, on a connection of its own. */
+/**
+ * Answer a Begin: a transaction beneath a directory, its log in memory its client gives, on a connection of its own.
+ *
+ * @param server The server; a transaction slot and a Transaction connection are taken, neither kept if the other can't
+ *     be had.
+ * @param directory The directory object it's beneath.
+ * @param memory The log's memory, which the server takes over: kept, or closed when it's refused.
+ * @param name The directory connection's name, the transaction's.
+ * @return Began with the transaction's connection, which the caller sends; Failed with NoBuffer if it couldn't be
+ *     begun, or NoSpace without a channel or a slot.
+ */
 transaction_connection :: fn(server: ptr[mut Server], directory: u64, memory: slop_os.Memory, name: string) -> dir.Response {
     began := begin(server, directory, memory) or_else MAX_TRANSACTIONS
     if began >= MAX_TRANSACTIONS {
@@ -565,8 +751,16 @@ transaction_connection :: fn(server: ptr[mut Server], directory: u64, memory: sl
 }
 
 /**
- * A file opened in a transaction: the open logged, as creation says, and a connection whose writes are logged too and
- * whose reads see the file as it is, if it's there yet.
+ * Open a file in a transaction: log the open, as creation says, and make a connection whose writes and sizes are
+ * logged too and whose reads see the file as it is now, if it's there yet.
+ *
+ * @param server The server, whose volume may be committed, as note_versions does; the open is logged, and a
+ *     TransactionFile connection added.
+ * @param index The transaction's index.
+ * @param path The file's path, relative to the transaction's directory.
+ * @param creation How it's opened when the transaction commits.
+ * @return OpenedFile with the connection, which the caller sends; Failed with InvalidPath for an empty path or no such
+ *     transaction, or NoSpace if the log is full, the volume couldn't commit, or there's no channel or slot.
  */
 open_in_transaction :: fn(server: ptr[mut Server], index: usize, path: string, creation: files.Creation) -> dir.Response {
     if index >= server.transactions.count {

@@ -26,21 +26,26 @@ import log_line from "../../log_line"
 import block from "../../protocols/block"
 import container from "../../protocols/container"
 
+/** The most connections at once: listeners, volumes' and block connections; one past them is closed at once. */
 MAX_CONNECTIONS :: 32
-// A connection's client is bound to the port under its index, and a block connection's driver from DRIVER_KEY
+/** The key a block connection's driver is bound to the port with, plus its slot; its client is bound under its slot. */
 DRIVER_KEY : u64 : 1000
+/** No channel: a connection without a driver. */
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
-/** 512-byte sectors in a 4 KiB block */
+/** 512-byte sectors in a 4 KiB block. */
 SECTORS_PER_BLOCK : u64 : 8
-/** The most blocks one Allocate asks for: a node's or a chunk's, with room */
+/** The most blocks one Allocate asks for: a node's or a chunk's, with room. */
 MAX_ALLOCATE : u64 : 256
 
+/** What a connection is. */
 Kind :: enum {
+    /** A slot no connection has. */
     Free,
-    /** The listener, or another connection not yet for a volume */
+    /** The listener, or another connection not yet for a volume: it asks for volumes, snapshots and the like. */
     Unbound,
+    /** A volume's connection, or a snapshot's, from OpenVolume. */
     Volume,
-    /** A block connection narrowed to a volume's extents */
+    /** A block connection narrowed to a volume's extents. */
     Blocks,
 }
 
@@ -49,13 +54,19 @@ Kind :: enum {
  * the transaction it holds, 0 for the live volume's.
  */
 Connection :: struct {
+    /** What it is; Free for a slot no connection has. */
     kind : Kind,
+    /** The client's end, the service's own, bound to the port under the connection's index; closed by drop. */
     end : slop_os.Channel,
-    // A block connection's own connection to the driver, through the container's partition
+    /** A block connection's own connection to the driver, through the container's partition; NONE for any other. */
     driver : slop_os.Channel,
+    /** The volume's ID, for a volume's connection or a block connection; 0 for an unbound one. */
     volume : u64,
+    /** A block connection's description, its driver's, answered to Describe without asking the driver. */
     info : block.Info,
+    /** Who wrote a clone's older blocks, and up to which transaction, which it may read. */
     lineage : slopfs.Lineage,
+    /** The transaction a snapshot's connection holds, read only; 0 for the live volume's. */
     snapshot : u64,
 }
 
@@ -64,30 +75,62 @@ Connection :: struct {
  * it after the volume gave it back.
  */
 Owned :: struct {
+    /** Its first 4 KiB block in the container. */
     start : u64,
+    /** How many 4 KiB blocks it is. */
     blocks : u64,
+    /** The ID of the volume that has it. */
     owner : u64,
+    /** The transaction it was allocated in. */
     birth : u64,
+    /** Whether it was allocated since its volume's last commit, and so may be written. */
     fresh : bool,
+    /** Whether the volume gave it back and a snapshot holds it, on its dead list, read only through the snapshot. */
     dead : bool,
 }
 
+/** The container service's state, made once in main, on the heap, and kept for as long as it runs. */
 Server :: struct {
+    /** The debug log it says what it's doing in; NO_HANDLE for none. */
     log : slop_os.DebugLog,
+    /** The port every connection's client, and every block connection's driver, is bound to. */
     port : slop_os.Port,
+    /** The block connection to the container's partition, which the container's own blocks are moved through. */
     disk : slop_os.Channel,
+    /** A port bound to disk, waited on for its answers. */
     disk_port : slop_os.Port,
+    /** Where disk's buffer is mapped, readable and writable, in the process's address space. */
     buffer : u64,
+    /** The buffer's size in bytes. */
     buffer_bytes : u64,
+    /** The partition's size in 512-byte sectors. */
     sector_count : u64,
+    /** The container, mounted, on the heap. */
     container : ptr[mut slopfs.Container],
-    // Sorted by start
+    /** Every extent a volume has, sorted by start; the container's own aren't here. */
     owned : Owned[..],
+    /** The connections, by slot, count of them used or once used. */
     connections : Connection[MAX_CONNECTIONS],
+    /** How many slots of connections have ever been used: one past the highest. */
     count : usize,
+    /** Whether a connection was added while serving, so main serves again before it waits. */
     added : bool,
 }
 
+/**
+ * Serve a SlopOS container partition: mount it, keep its space and its volumes' extents, and give volume servers
+ * connections to their volumes and block connections narrowed to their extents.
+ *
+ * Started by the storage manager, one per container partition. Runs until it's stopped.
+ *
+ * @param log The debug log it says what it's doing in; without one, it says nothing.
+ * @param partition A block connection narrowed to the container's partition, which it takes the buffer of.
+ * @param clients The listener the storage manager's connections arrive on, for volumes, snapshots, quotas and new
+ *     volumes.
+ * @return 99 without the memory for its state, 1 if its ports couldn't be made, 2 if the partition didn't describe
+ *     itself, 3 if it didn't give its buffer, 4 if the buffer couldn't be mapped, 5 if there's no container on it, 6
+ *     if the container's owners couldn't be read, and 7 if clients couldn't be added. It doesn't return otherwise.
+ */
 main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: os.Listener[container.Container]) -> int {
     startup :: slop_os.startup_block()
     // Its state; without the memory for it, it ends with 99 (decisions/0104)
@@ -150,12 +193,27 @@ main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: 
     }
 }
 
+/**
+ * Give the protection to map memory readable and writable.
+ *
+ * @return PROTECTION_READ and PROTECTION_WRITE.
+ */
 read_write :: fn() -> slop_os.Protection {
     return cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
 }
 
 // The container's own blocks, through its connection to the partition
 
+/**
+ * Send one request on a block connection, and wait for its answer.
+ *
+ * @param end The block connection, with no other request in flight, so the next answer is this one's.
+ * @param port A port bound to end.
+ * @param request The request, copied whole into the message; a Read or Write moves bytes through end's buffer, not the
+ *     message.
+ * @return The answer, a copy, whose handles the caller owns; Unsupported if it couldn't be sent or the connection
+ *     failed.
+ */
 call :: fn(end: slop_os.Channel, port: slop_os.Port, request: block.Request) -> block.Response {
     out := os.Outgoing.{}
     made :: os.begin[block.Request](&out)
@@ -173,6 +231,12 @@ call :: fn(end: slop_os.Channel, port: slop_os.Port, request: block.Request) -> 
     }
 }
 
+/**
+ * Tell whether a block request finished as it should.
+ *
+ * @param response A block request's answer, as call gives it; only read.
+ * @return Whether it's Finished with Done.
+ */
 done :: fn(response: block.Response) -> bool {
     return match response {
         case Finished(completion) => completion.status == .Done
@@ -180,22 +244,59 @@ done :: fn(response: block.Response) -> bool {
     }
 }
 
+/**
+ * Read the container's own blocks, for slopfs's Device.
+ *
+ * @param context The Server main gave the Device, cast back; its disk, port and mapped buffer are used, and nothing
+ *     else changes.
+ * @param first The first 4 KiB block in the partition.
+ * @param count How many 4 KiB blocks.
+ * @param into Where they go, at least count blocks long.
+ * @return Whether they were read whole.
+ */
 read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
     server :: cast[ptr[mut Server]](context)
     return move(server, first * SECTORS_PER_BLOCK, count * SECTORS_PER_BLOCK, into, false)
 }
 
+/**
+ * Write the container's own blocks, for slopfs's Device; durable only once flush is.
+ *
+ * @param context The Server main gave the Device, cast back; its disk, port and mapped buffer are used, and nothing
+ *     else changes.
+ * @param first The first 4 KiB block in the partition.
+ * @param count How many 4 KiB blocks.
+ * @param from What's written, at least count blocks long.
+ * @return Whether every write finished.
+ */
 write_blocks :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool {
     server :: cast[ptr[mut Server]](context)
     return move(server, first * SECTORS_PER_BLOCK, count * SECTORS_PER_BLOCK, view_of(cast[ptr[mut u8]](from.data), from.count), true)
 }
 
+/**
+ * Flush the partition's writes to the disk, for slopfs's Device.
+ *
+ * @param context The Server main gave the Device, cast back; a Flush is sent on its disk and waited for.
+ * @return Whether the flush finished, everything written before it durable.
+ */
 flush :: fn(context: rawptr) -> bool {
     server :: cast[ptr[mut Server]](context)
     return done(call(server.disk, server.disk_port, .Flush(1)))
 }
 
-/** Sectors from first moved through the buffer, as much at a time as it holds: into bytes, or from them. */
+/**
+ * Move sectors through the partition's buffer, as much at a time as it holds: read into bytes, or written from them.
+ *
+ * @param server The container service's state: its disk connection is used, waiting on each transfer, and its mapped
+ *     buffer, of buffer_bytes, is overwritten.
+ * @param first The first 512-byte sector in the partition.
+ * @param count How many 512-byte sectors, moved in pieces of as many as the buffer holds.
+ * @param bytes Where they're read to, or written from; at least count sectors long.
+ * @param writing Whether they're written, or read.
+ * @return Whether all of them moved; false if bytes is too short, the buffer holds no sector, or a transfer failed,
+ *     what was moved before it moved.
+ */
 move :: fn(server: ptr[mut Server], first: u64, count: u64, bytes: mut u8[], writing: bool) -> bool {
     per :: server.buffer_bytes / block.BLOCK_BYTES
     if per == 0 || count * block.BLOCK_BYTES > cast[u64](bytes.count) {
@@ -236,8 +337,13 @@ move :: fn(server: ptr[mut Server], first: u64, count: u64, bytes: mut u8[], wri
 // Who owns what
 
 /**
- * Every extent the owners tree says a volume has. The container's own aren't kept here: they change at every commit,
- * and no volume may reach them, so they're never what a check finds.
+ * Load every extent the owners tree says a volume has, then mark those on each volume's dead list.
+ *
+ * The container's own aren't kept here: they change at every commit, and no volume may reach them, so they're never
+ * what a check finds.
+ *
+ * @param server The server, its container mounted and owned empty.
+ * @return Whether they were all loaded; false if a tree couldn't be read or there wasn't the memory.
  */
 load_owned :: fn(server: ptr[mut Server]) -> bool {
     value := slopfs.OwnerValue.{}
@@ -282,7 +388,13 @@ load_owned :: fn(server: ptr[mut Server]) -> bool {
     return true
 }
 
-/** Where an extent starting at start is, or would go, in the owned list. */
+/**
+ * Find where an extent starting at a block is, or would go, in the owned list.
+ *
+ * @param server The container service's state, whose owned list, sorted by start, is searched and not changed.
+ * @param start A 4 KiB block in the container, compared with each extent's start.
+ * @return The index of the first extent whose start isn't below start; owned's count if there's none.
+ */
 owned_index :: fn(server: ptr[Server], start: u64) -> usize {
     low : usize = 0
     high := server.owned.count
@@ -299,7 +411,18 @@ owned_index :: fn(server: ptr[Server], start: u64) -> usize {
     return low
 }
 
-/** Whether it could be kept: false, and nothing changed, without the memory (decisions/0104). */
+/**
+ * Keep an extent as a volume's, in its place in the owned list.
+ *
+ * @param server The container service's state; the extent is inserted in its owned list, which may grow from the
+ *     context's allocator.
+ * @param start Its first 4 KiB block in the container.
+ * @param blocks How many 4 KiB blocks it is.
+ * @param owner The volume's ID.
+ * @param birth The transaction it was allocated in.
+ * @param fresh Whether it was allocated since the volume's last commit.
+ * @return Whether it could be kept: false, and nothing changed, without the memory (decisions/0104).
+ */
 own :: fn(server: ptr[mut Server], start: u64, blocks: u64, owner: u64, birth: u64, fresh: bool) -> bool {
     index :: owned_index(server, start)
     if runtime.array_try_add(&server.owned, Owned.{}) != null {
@@ -322,7 +445,14 @@ own :: fn(server: ptr[mut Server], start: u64, blocks: u64, owner: u64, birth: u
     return true
 }
 
-/** The extent holding blocks from first, count of them, whoever's it is, if one does. */
+/**
+ * Find the extent that holds blocks, whoever's it is.
+ *
+ * @param server The container service's state, whose owned list is searched and not changed.
+ * @param first The first 4 KiB block in the container.
+ * @param count How many 4 KiB blocks, from first.
+ * @return A copy of the one extent that holds all of them; null if none does, as for blocks across two extents.
+ */
 holding :: fn(server: ptr[Server], first: u64, count: u64) -> Owned? {
     index :: owned_index(server, first + 1)
     if index == 0 || index - 1 >= server.owned.count {
@@ -335,16 +465,29 @@ holding :: fn(server: ptr[Server], first: u64, count: u64) -> Owned? {
     return extent
 }
 
-/** Whether owner has blocks from first, count of them, all in one live extent of its own. */
+/**
+ * Tell whether a volume has blocks, all in one live extent of its own.
+ *
+ * @param server The container service's state, whose owned list is searched and not changed.
+ * @param owner The volume's ID.
+ * @param first The first 4 KiB block in the container.
+ * @param count How many 4 KiB blocks, from first.
+ * @return Whether one extent of owner's holds them all, and it isn't dead.
+ */
 owns :: fn(server: ptr[Server], owner: u64, first: u64, count: u64) -> bool {
     extent :: holding(server, first, count) or_return false
     return extent.owner == owner && !extent.dead
 }
 
 /**
- * Whether a connection may read blocks from first, count of them: its volume's own live extents, or for a snapshot's,
- * what the volume had by the snapshot's transaction, dead or not; and for a clone, its origins' up to what their
- * snapshots hold.
+ * Tell whether a connection may read blocks.
+ *
+ * @param server The container service's state, whose owned list is searched and not changed.
+ * @param connection The connection: a block connection for a volume or a snapshot.
+ * @param first The first 4 KiB block in the container.
+ * @param count How many blocks, all in one extent.
+ * @return Whether they're its volume's own live extents, or for a snapshot's, what the volume had by the snapshot's
+ *     transaction, dead or not; or, for a clone, its origins', up to what their snapshots hold.
  */
 may_read :: fn(server: ptr[Server], connection: ptr[Connection], first: u64, count: u64) -> bool {
     extent :: holding(server, first, count) or_return false
@@ -360,14 +503,26 @@ may_read :: fn(server: ptr[Server], connection: ptr[Connection], first: u64, cou
 }
 
 /**
- * Whether a connection may write blocks from first, count of them: only what its live volume allocated since its last commit.
+ * Tell whether a connection may write blocks: only what its live volume allocated since its last commit, so nothing a
+ * snapshot holds or a commit made durable is ever written again.
+ *
+ * @param server The container service's state, whose owned list is searched and not changed.
+ * @param connection The connection: a block connection for a volume; a snapshot's writes nothing.
+ * @param first The first 4 KiB block in the container.
+ * @param count How many blocks, all in one extent.
+ * @return Whether one fresh, live extent of its volume's holds them all.
  */
 may_write :: fn(server: ptr[Server], connection: ptr[Connection], first: u64, count: u64) -> bool {
     extent :: holding(server, first, count) or_return false
     return connection.snapshot == 0 && extent.owner == connection.volume && extent.fresh && !extent.dead
 }
 
-/** Every extent of a volume's allocated since its last commit, committed now. */
+/**
+ * Mark every extent of a volume's allocated since its last commit as committed, so it isn't written again.
+ *
+ * @param server The container service's state; every extent of volume's in its owned list is no longer fresh.
+ * @param volume The volume's ID, which has just committed.
+ */
 settle_fresh :: fn(server: ptr[mut Server], volume: u64) {
     for &extent in server.owned {
         if extent.owner == volume {
@@ -376,7 +531,13 @@ settle_fresh :: fn(server: ptr[mut Server], volume: u64) {
     }
 }
 
-/** An extent a volume gave back marked dead, or live again, as a snapshot holds it or no longer does. */
+/**
+ * Mark an extent a volume gave back dead, or live again, as a snapshot holds it or no longer does.
+ *
+ * @param server The container service's state, whose owned list has the extent changed in place.
+ * @param start The extent's first block; an extent not in the owned list is ignored.
+ * @param dead Whether it's dead.
+ */
 mark_dead :: fn(server: ptr[mut Server], start: u64, dead: bool) {
     index :: owned_index(server, start)
     if index < server.owned.count && server.owned[index].start == start {
@@ -384,7 +545,12 @@ mark_dead :: fn(server: ptr[mut Server], start: u64, dead: bool) {
     }
 }
 
-/** An extent no one has any more, whoever had it. */
+/**
+ * Take an extent no one has any more off the owned list, whoever had it.
+ *
+ * @param server The container service's state, whose owned list loses the extent.
+ * @param start The extent's first block; an extent not in the owned list is ignored.
+ */
 forget :: fn(server: ptr[mut Server], start: u64) {
     index :: owned_index(server, start)
     if index < server.owned.count && server.owned[index].start == start {
@@ -392,7 +558,15 @@ forget :: fn(server: ptr[mut Server], start: u64) {
     }
 }
 
-/** An extent owner had exactly, given back: whether it was owner's. */
+/**
+ * Take an extent a volume gave back off the owned list.
+ *
+ * @param server The container service's state, whose owned list loses the extent if it matches.
+ * @param owner The volume's ID.
+ * @param start The extent's first 4 KiB block in the container.
+ * @param blocks Its length in blocks, which must be the extent's whole length.
+ * @return Whether it was owner's, exactly that extent, and was taken off; false, and nothing changed, otherwise.
+ */
 disown :: fn(server: ptr[mut Server], owner: u64, start: u64, blocks: u64) -> bool {
     index :: owned_index(server, start)
     if index >= server.owned.count {
@@ -408,6 +582,17 @@ disown :: fn(server: ptr[mut Server], owner: u64, start: u64, blocks: u64) -> bo
 
 // Connections
 
+/**
+ * Add a connection, in the first free slot, binding its end, and its driver if it has one, to the port.
+ *
+ * @param server The server, whose added is set.
+ * @param kind What it is.
+ * @param end The client's end, which the server takes over: closed here if it can't be added.
+ * @param driver A block connection's own connection to the driver, taken over too and closed if binding it fails;
+ *     NONE for another kind. If there's no free slot, it isn't closed.
+ * @param volume The volume's ID, or 0 for an unbound connection.
+ * @return Its slot; null if there are MAX_CONNECTIONS already, or binding failed.
+ */
 add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, driver: slop_os.Channel, volume: u64) -> usize? {
     slot := server.count
     for connection, i in server.connections {
@@ -446,6 +631,13 @@ add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, driver: slo
     return slot
 }
 
+/**
+ * Drop a connection whose client has gone: unbind it, close its end and its driver's, and free its slot.
+ *
+ * @param server The container service's state: the slot's keys are unbound from its port, its handles closed, and the
+ *     slot left Free for add to reuse; count isn't lowered.
+ * @param index The connection's slot; one past them is ignored.
+ */
 drop :: fn(server: ptr[mut Server], index: usize) {
     if index >= server.connections.count {
         return void
@@ -461,6 +653,13 @@ drop :: fn(server: ptr[mut Server], index: usize) {
     connection^ = Connection.{}
 }
 
+/**
+ * Serve a connection: a container connection's requests, or a block connection's, and what its driver answered.
+ *
+ * @param server The container service's state, whose connections are served and may be added to or dropped.
+ * @param index The connection's slot; a free one, or one past them, is left alone.
+ * @param into Where each message is read into, reused.
+ */
 serve :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
@@ -475,7 +674,18 @@ serve :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     }
 }
 
-/** A container connection's requests, until it has none. */
+/**
+ * Answer a container connection's requests, until it has none, or it's gone.
+ *
+ * Requests on the listener's connections, OpenVolume, snapshots, clones, quotas, usage and new volumes, are answered
+ * on any container connection; the rest only on a volume's, NotAVolume on another. Connect adds a connection, with no
+ * answer. A connection whose end fails is dropped.
+ *
+ * @param server The container service's state: answers go out on the slot's end, Connect adds a slot, setting added,
+ *     and a failed end drops the slot.
+ * @param index The connection's slot among server's connections; one past them is left alone.
+ * @param into Where each request is read into, reused.
+ */
 serve_container :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
@@ -547,7 +757,12 @@ serve_container :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.In
     }
 }
 
-/** Where '@' is in a name, which splits a volume's from its snapshot's, or its count if it isn't there. */
+/**
+ * Find where '@' is in a name, which splits a volume's from its snapshot's.
+ *
+ * @param name The name, as OpenVolume's request gives it; only read.
+ * @return The index of the first '@'; name's count if there's none.
+ */
 at_of :: fn(name: u8[]) -> usize {
     for byte, i in name {
         if byte == cast[u8]('@') {
@@ -557,7 +772,13 @@ at_of :: fn(name: u8[]) -> usize {
     return name.count
 }
 
-/** The volume named name: its ID, or null. */
+/**
+ * Find a volume by its name.
+ *
+ * @param server The container service's state, whose mounted container is searched and not changed.
+ * @param name The volume's name, as a request gave it; only read.
+ * @return Its ID; null if there's no such volume, or the container couldn't be read.
+ */
 volume_named :: fn(server: ptr[mut Server], name: u8[]) -> u64? {
     match slopfs.find_volume_named(server.container, name) {
         case Ok(found) => return found
@@ -566,8 +787,15 @@ volume_named :: fn(server: ptr[mut Server], name: u8[]) -> u64? {
 }
 
 /**
- * A connection for the volume named name, or for "volume@snapshot", its snapshot's, read only. Each knows who wrote
- * a clone's older blocks, for its reads.
+ * Make a connection for a volume, or for a snapshot of one, read only. Each knows who wrote a clone's older blocks,
+ * for its reads.
+ *
+ * @param server The container service's state: a Volume slot is added, with the volume's lineage and the snapshot's
+ *     transaction, or 0.
+ * @param name The volume's name, or "volume@snapshot" for its snapshot's.
+ * @return OpenedVolume with the connection's other end, which the caller owns; NoVolume for no such volume, NoSnapshot
+ *     for no such snapshot, NoSpace if a channel or a slot couldn't be had, or Failed if the container couldn't be
+ *     read.
  */
 open_volume :: fn(server: ptr[mut Server], name: u8[]) -> container.Response {
     split :: at_of(name)
@@ -598,7 +826,16 @@ open_volume :: fn(server: ptr[mut Server], name: u8[]) -> container.Response {
     return .OpenedVolume(os.Channel[container.Container].{end = pair.b})
 }
 
-/** A volume's snapshot taken, of what its last commit left, durable at once. */
+/**
+ * Take a snapshot of a volume, of what its last commit left, durable at once with a commit of the container's own.
+ *
+ * @param server The container service's state, whose container takes the snapshot and commits it.
+ * @param volume The volume's name, as the request gave it.
+ * @param name The snapshot's name, as the request gave it; one the volume has already is AlreadyExists.
+ * @param now When it's taken, as the taker says.
+ * @return Done once it's durable; NoVolume, AlreadyExists for a name taken, or Failed if it couldn't be taken or
+ *     committed.
+ */
 take_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[], now: u64) -> container.Response {
     id :: volume_named(server, volume) or_return .NoVolume
     match slopfs.take_snapshot(server.container, id, name, now) {
@@ -608,7 +845,16 @@ take_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[], now: u64)
     return commit_own(server)
 }
 
-/** A volume's snapshot deleted, and what only it held freed, durable at once. */
+/**
+ * Delete a volume's snapshot, and free what only it held, durable at once with a commit of the container's own.
+ *
+ * @param server The container service's state: the container deletes the snapshot and commits, and the extents freed
+ *     leave the owned list.
+ * @param volume The volume's name, as the request gave it.
+ * @param name The snapshot's name, as the request gave it.
+ * @return Done once it's durable; NoVolume, NoSnapshot, InUse for a snapshot a clone keeps, or Failed if it couldn't
+ *     be deleted or committed.
+ */
 delete_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[]) -> container.Response {
     id :: volume_named(server, volume) or_return .NoVolume
     freed : slopfs.Extent[..]
@@ -625,7 +871,16 @@ delete_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[]) -> cont
     return commit_own(server)
 }
 
-/** A volume's snapshot by its place among them, its name in out. */
+/**
+ * Find a volume's snapshot by its place among them, oldest first.
+ *
+ * @param server The container service's state, whose container's snapshot records are read and not changed.
+ * @param volume The volume's name, as the request gave it.
+ * @param index Its place, from 0.
+ * @param out The answer being built, which the snapshot's name is appended to.
+ * @return Snapshot with its name, transaction and when it was taken; NoMore past the last, NoVolume, or Failed if
+ *     they couldn't be read.
+ */
 snapshot_at :: fn(server: ptr[mut Server], volume: u8[], index: u64, out: ptr[mut os.Outgoing]) -> container.Response {
     id :: volume_named(server, volume) or_return .NoVolume
     snapshots : slopfs.NumberedSnapshot[..]
@@ -641,7 +896,16 @@ snapshot_at :: fn(server: ptr[mut Server], volume: u8[], index: u64, out: ptr[mu
         created = cast[u64](found.created)})
 }
 
-/** A new volume cloned from a volume's snapshot, durable at once. */
+/**
+ * Make a new volume cloned from a volume's snapshot, durable at once with a commit of the container's own.
+ *
+ * @param server The container service's state, whose container makes the clone and commits it.
+ * @param volume The volume's name, as the request gave it.
+ * @param snapshot The name of the volume's snapshot cloned, as the request gave it.
+ * @param name The new volume's name, as the request gave it; one a volume has already is AlreadyExists.
+ * @param now When it's made, as the asker says.
+ * @return Done once it's durable; NoVolume, NoSnapshot, AlreadyExists for a name taken, or Failed.
+ */
 clone :: fn(server: ptr[mut Server], volume: u8[], snapshot: u8[], name: u8[], now: u64) -> container.Response {
     id :: volume_named(server, volume) or_return .NoVolume
     match slopfs.clone_snapshot(server.container, id, snapshot, name, now) {
@@ -653,10 +917,16 @@ clone :: fn(server: ptr[mut Server], volume: u8[], snapshot: u8[], name: u8[], n
     return commit_own(server)
 }
 
-// The container's own changes committed: a snapshot, a deletion or a clone.
 /**
- * A new volume, named name, with cipher, registered with nothing in it and made durable (decisions/0141): its name hash
- * key drawn here, and everything that opens it left to the volume server that first serves it.
+ * Make a new volume, registered with nothing in it, and make it durable (decisions/0141): its name hash key drawn
+ * here, and everything that opens it left to the volume server that first serves it.
+ *
+ * @param server The container service's state, whose container registers the volume and commits it; it's logged once
+ *     made.
+ * @param name The new volume's name, as the request gave it; one a volume has already is AlreadyExists.
+ * @param cipher slopfs.Cipher's value: None, ChaCha20Poly1305 or Aes256Gcm; another is refused.
+ * @param now When it's made, as the asker says.
+ * @return Created with its ID once it's durable; AlreadyExists for a name taken, or Failed.
  */
 create_volume :: fn(server: ptr[mut Server], name: u8[], cipher: u8, now: u64) -> container.Response {
     if cipher != cast[u8](slopfs.Cipher.None) && cipher != cast[u8](slopfs.Cipher.ChaCha20Poly1305) && cipher != cast[u8](slopfs.Cipher.Aes256Gcm) {
@@ -678,6 +948,14 @@ create_volume :: fn(server: ptr[mut Server], name: u8[], cipher: u8, now: u64) -
     return .Created(id)
 }
 
+/**
+ * Commit the container's own changes: a snapshot, a deletion, a clone, a quota or a new volume; other volumes'
+ * changes wait for their own commits.
+ *
+ * @param server The container service's state, whose container commits what it has pending, waiting until it's durable
+ *     or failed.
+ * @return Done once they're durable; Failed, logged, if the commit failed.
+ */
 commit_own :: fn(server: ptr[mut Server]) -> container.Response {
     match slopfs.commit_own(server.container) {
         case Ok => return .Done
@@ -688,7 +966,23 @@ commit_own :: fn(server: ptr[mut Server]) -> container.Response {
     }
 }
 
-/** A request on a volume's connection, or a snapshot's, at index. */
+/**
+ * Answer a request on a volume's connection, or a snapshot's: Describe, Allocate, Release, OpenBlocks, Abandon, the
+ * keys' requests, and Commit.
+ *
+ * A snapshot's connection is read only: Describe, OpenBlocks, WrapAt and GenerationAt alone, NotYours for the rest.
+ * Allocate keeps the extent as the volume's, fresh; Release gives one back, kept on the volume's dead list if a
+ * snapshot holds it; Abandon undoes every change since the volume's last commit; Commit makes the volume's record
+ * durable, its root checked to be in its own live extents.
+ *
+ * @param server The container service's state, whose container and owned list the request reads or changes, as it asks.
+ * @param index The volume connection's slot among server's connections; one past them is answered NotAVolume.
+ * @param request The request read from the slot's connection, a copy holding only values; one serve_container answers
+ *     itself, as OpenVolume, gets Unsupported here.
+ * @return The answer: NotYours for what the volume may not do, NoSpace for an allocation that can't be had or kept,
+ *     NoMore past a volume's wraps or generations, Failed for what the container couldn't do, and the request's own
+ *     answer otherwise.
+ */
 for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Request) -> container.Response {
     if index >= server.connections.count {
         return .NotAVolume
@@ -845,11 +1139,19 @@ for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Reque
 
 // Block connections narrowed to a volume's extents
 
-/*
- * A connection of its own to the driver, through the container's partition, for a volume's server: its reads and
- * writes checked against the volume's extents, the driver's buffer its own, so data moves with no copies here.
+/**
+ * Make a block connection for a volume's connection, reading and writing only what it may.
+ *
+ * It has a connection of its own to the driver, through the container's partition: its reads and writes are checked
+ * against the volume's extents, and the driver's buffer is its own, so data moves with no copies here.
+ *
+ * @param server The container service's state: a new driver connection through its disk is made, and a Blocks slot
+ *     added with it, copying the volume connection's volume, lineage and snapshot.
+ * @param index The volume connection's slot among server's connections, whose volume, lineage and snapshot the new one
+ *     gets.
+ * @return Blocks with the connection's other end, which the caller owns; NotAVolume for a slot past them, or NoSpace
+ *     if the driver, a channel or a slot couldn't be had.
  */
-/** A block connection for the volume connection at index, reading and writing what it may. */
 open_blocks :: fn(server: ptr[mut Server], index: usize) -> container.Response {
     if index >= server.connections.count {
         return .NotAVolume
@@ -886,7 +1188,16 @@ open_blocks :: fn(server: ptr[mut Server], index: usize) -> container.Response {
 }
 
 /**
- * A block connection's requests: reads and writes inside the volume's extents passed to the driver, the rest answered.
+ * Pass a block connection's requests to its driver, until it has none, or it's gone.
+ *
+ * Reads and writes outside what the connection may read or write are answered OutOfRange, Describe with its
+ * description, and Connect by closing the connection given; everything else goes to the driver, which answers it.
+ *
+ * @param server The container service's state: what may go to the driver goes on the slot's driver connection, the rest
+ *     is answered here, and a failed end drops the slot.
+ * @param index The block connection's slot among server's connections; one past them, or no longer Blocks, is left
+ *     alone.
+ * @param into Where each request is read into, reused.
  */
 serve_blocks :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
@@ -943,7 +1254,16 @@ serve_blocks :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incom
     }
 }
 
-/** Whether a transfer's sectors are all in one extent the connection may read, or write. */
+/**
+ * Tell whether a transfer's sectors are all in one extent the connection may read, or write.
+ *
+ * @param server The container service's state, whose owned list is searched and not changed.
+ * @param connection The block connection's slot, its volume, lineage and snapshot deciding what it may reach; only
+ *     read.
+ * @param transfer The transfer, in 512-byte sectors, which must be whole 4 KiB blocks and at least one.
+ * @param writing Whether it writes.
+ * @return Whether it may.
+ */
 in_volume :: fn(server: ptr[Server], connection: ptr[Connection], transfer: block.Transfer, writing: bool) -> bool {
     if transfer.first % SECTORS_PER_BLOCK != 0 || cast[u64](transfer.count) % SECTORS_PER_BLOCK != 0 || transfer.count == 0 {
         return false
@@ -953,7 +1273,14 @@ in_volume :: fn(server: ptr[Server], connection: ptr[Connection], transfer: bloc
     return if writing { may_write(server, connection, first, count) } else { may_read(server, connection, first, count) }
 }
 
-/** What the driver answered a block connection's requests, back to its client. */
+/**
+ * Pass what the driver answered a block connection's requests back to its client, until there's nothing more.
+ *
+ * @param server The container service's state; answers go out on the slot's end, waiting on its port while the ring is
+ *     full.
+ * @param index The block connection's slot; it's dropped if its driver's connection fails.
+ * @param into Where each answer is read into, reused.
+ */
 pass_back :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
@@ -976,6 +1303,13 @@ pass_back :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
     }
 }
 
+/**
+ * Send an answer on a block connection.
+ *
+ * @param end A block connection's client end, the server's own, kept open.
+ * @param port The server's port, waited on while the ring is full.
+ * @param response The answer, copied whole into the message; a failure to send it is ignored.
+ */
 answer :: fn(end: slop_os.Channel, port: slop_os.Port, response: block.Response) {
     out := os.Outgoing.{}
     made :: os.begin[block.Response](&out)

@@ -10,28 +10,55 @@ import rng from "../rng"
  * AddSource.
  */
 
+/**
+ * The entropy protocol, for the channels between the entropy service and its clients, and its listener: the clients
+ * send the requests, and the service answers them.
+ */
 Entropy :: struct {}
 
+/**
+ * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
+ * server, here the entropy service, pays for its work from its own budget.
+ */
 PROTOCOL :: slop_os.Protocol.{name = "entropy", major_version = 1, lending = .Server}
 
-/** The most bytes one Filled has. */
+/** The most bytes one Filled has, and so the most one Fill is answered with: 256. */
 MAX_BYTES :: 256
 
+/** What a client, or a hardware RNG's driver, asks the entropy service. */
 Request :: union {
-    /** count random bytes, up to MAX_BYTES */
+    /**
+     * Ask for the given count of random bytes; a count over MAX_BYTES is taken as MAX_BYTES. Answered at once with
+     * Filled.
+     */
     Fill(u32),
-    /** Serve another client, on its end */
+    /**
+     * Have the service serve another client, on the end given, which moves to the service; it's closed if the
+     * service already has as many clients as it takes. Sent on the listener, and answered with nothing.
+     */
     Connect(os.Channel[Entropy]),
-    /** Reseed from a hardware RNG, through its driver; answered with nothing */
+    /**
+     * Have the service reseed from a hardware RNG, through its driver's end of an rng channel, which moves to the
+     * service; past the service's limit of sources it's closed. Answered with nothing: the service reads the source
+     * at once, and again as it hands out more bytes.
+     */
     AddSource(os.Channel[rng.Rng]),
 }
 
+/** What the entropy service answers. */
 Response :: union {
+    /** The answer to Fill: the bytes asked for, or MAX_BYTES of them when more were, from the service's stream. */
     Filled(slop_os.Relative[u8]),
+    /** The answer to a request the service doesn't know, as from a newer client; every protocol has it. */
     Unsupported,
 }
 
-/** Asking again gives other bytes, which is as good. */
+/**
+ * Tell whether a request may be sent again, after a reconnect, without doing more than sending it once did.
+ *
+ * @param request The request, which isn't changed.
+ * @return True for every request: a Fill asked again gives other bytes, which are as good.
+ */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Fill(_) => true
@@ -43,8 +70,16 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 #insert os.protocol_code(Request, Response)
 
 /**
- * A new connection to the service listening on end: a channel for Entropy, one end sent in a Connect, the other given
- * back, or null.
+ * Make a new connection to the entropy service: a channel for the protocol, one end sent to the service in a Connect.
+ *
+ * It doesn't wait: the service takes the end when it next serves its listener, or closes it when it's full, which
+ * the caller learns of as its end's peer gone.
+ *
+ * @param end The service's listener, or any connection to it, kept by the caller.
+ * @param port A port bound to end, waited on while end's ring is full.
+ * @param budget The memory budget that pays for the new channel.
+ * @return The caller's end of the new connection, its own to keep and close; null if the channel couldn't be made, or
+ *     the Connect couldn't be sent, in which case both its ends are closed.
  */
 connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Entropy]? {
     pair :: os.channel_for[Entropy](budget, 0) or_return null

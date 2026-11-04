@@ -41,10 +41,13 @@ import robustness from "../robustness"
 /** The ports an end can be bound to at once. */
 MAX_END_BINDINGS :: 4
 
+/** Where an end's rings are in being mapped, under the core's lock. */
 MappingState :: enum #backed_by(u8) {
+    /** Not mapped: channel_map may map them, and the end may be sent. */
     None,
     /** ChannelMap is mapping it; if the end is destroyed meanwhile, it's doomed, and unmapped once mapped. */
     Mapping,
+    /** Mapped in a space, at its address; channel_unmap or the end's destruction unmaps it. */
     Mapped,
     /** Being unmapped. */
     Unmapping,
@@ -55,28 +58,41 @@ MappingState :: enum #backed_by(u8) {
  * space's list of rings, and the links, under the space's.
  */
 RingMapping :: struct {
+    /** How far mapping or unmapping has got, under the core's lock. */
     state : MappingState,
+    /** Set when the end is destroyed while it's Mapping: channel_map unmaps it again once it's mapped. */
     doomed : bool,
+    /** Whether it's on its space's list of rings, which holds a reference to the core; under the space's lock. */
     linked : bool,
+    /** The AddressSpace it's mapped in, by address, while it's not None. */
     space : u64,
+    /** Where in space it starts: a page-aligned user virtual address. */
     address : u64,
+    /** The ChannelCore it maps, by address; set when the channel is made, and never changed. */
     core : u64,
+    /** The next RingMapping on its space's list, or 0; under the space's lock. */
     next : u64,
+    /** The previous RingMapping on its space's list, or 0 for the first; under the space's lock. */
     previous : u64,
 }
 
 /** A signal binding of an end's: the binding, and its generation, which changes once the port drops it. */
 EndBinding :: struct {
+    /** The Binding's address, or 0 for a free slot. */
     binding : u64,
+    /** The binding's generation when it was made; one that differs means the port dropped it, and the slot is free. */
     generation : u32,
 }
 
-/** What a channel's core keeps for each end. */
+/** What a channel's core keeps for each end, under the core's lock. */
 CoreSide :: struct {
+    /** The end's Channel object, by address; kept after it's destroyed, though it may be released. */
     end : u64,
-    // Once its end is destroyed.
+    /** Set once its end is destroyed: the other end sees PeerClosed from then on. */
     closed : bool,
+    /** Where this end's holder mapped the rings (both directions), if it has. */
     mapping : RingMapping,
+    /** The ports bound to this end's signals, at most MAX_END_BINDINGS at once. */
     bindings : EndBinding[MAX_END_BINDINGS],
     /**
      * Batches of handles sent to it: a HandleBatch's address, RESERVED while the sender fills it in, 0
@@ -87,26 +103,34 @@ CoreSide :: struct {
 
 /** What a channel's ends share, freed once both are released and no mapping is left. */
 ChannelCore :: struct #align(16) {
-    // The slab allocator's, while the slot is free.
+    /** The slab allocator's, while the slot is free. */
     free_link : u64,
+    /** Guards the sides; ranks as LockRank.ChannelCore, taken before a port's and never with a space's. */
     lock : concurrency.SpinLock,
     /** The ends not yet released, and the mappings of its memory. */
     references : u32,
-    // The ring memory: 2^order contiguous frames.
+    /** The ring memory's physical address: 2^order contiguous frames, zeroed when the channel was made. */
     memory : u64,
+    /** The ring memory's size, as a frame allocator order. */
     order : u64,
+    /** Each ring's size in bytes: a power of two from slop_os.CHANNEL_MIN_RING to slop_os.CHANNEL_MAX_RING. */
     ring_bytes : u32,
-    // The protocol both ends speak, as whoever made it says: never interpreted here (decisions/0040, 0071)
+    /** The protocol both ends speak, as whoever made it says: never interpreted here (decisions/0040, 0071). */
     tag : u64,
+    /** What it keeps for each end: end A's at 0, end B's at 1. */
     sides : CoreSide[2],
 }
 
+/** A batch slot's value while its sender fills the batch in: no HandleBatch is at that address. */
 RESERVED : u64 : 1
 
 /** A channel end. */
 Channel :: struct #align(16) {
+    /** The object header every kernel object starts with. */
     header : ObjectHeader,
+    /** Its ChannelCore, by address, shared with the other end; 0 once it's released. */
     core : u64,
+    /** Which end it is: 0 for A, which writes the first ring, or 1 for B, which writes the second. */
     side : u32,
     /** Batches in flight with it in, under its core's lock: it can't be mapped meanwhile. */
     sending : u32,
@@ -114,13 +138,27 @@ Channel :: struct #align(16) {
 
 /** Handles in flight, from the kernel heap, charged to the end that sent them while it lives. */
 HandleBatch :: struct {
+    /** How many entries are filled in, up to slop_os.MAX_HANDLES_PER_BATCH. */
     count : u32,
+    /** The sender's generation when it sent them, so its charge goes back only to that end. */
     sender_generation : u32,
+    /** The sending end, by address, which the batch's size is charged to. */
     sender : u64,
+    /**
+     * The handles, as they were in the sender's table; an entry whose object is 0 was closed before it could be taken
+     * out, and goes as nothing.
+     */
     entries : Resolved[64],
 }
 
-/** A batch, freed, its charge back to its sender if that's still the same end. */
+/**
+ * Free a batch, its charge back to its sender if that's still the same end.
+ *
+ * Doesn't touch its entries: the caller has taken them, or let go of them (drop_batch).
+ *
+ * @param kernel The kernel, whose heap the batch goes back to.
+ * @param address The HandleBatch's address, from allocate_block.
+ */
 free_batch :: fn(kernel: ptr[mut Kernel], address: u64) {
     batch :: cast[ptr[mut HandleBatch]](address)
     if batch.sender != 0 {
@@ -129,14 +167,30 @@ free_batch :: fn(kernel: ptr[mut Kernel], address: u64) {
     free_block(kernel, address, cast[u64](size_of(HandleBatch)))
 }
 
+/** A new channel's two ends, as create_channel makes them. */
 ChannelPair :: struct {
+    /** End A, which writes the first ring and reads the second. */
     a : ptr[mut Channel],
+    /** End B, which writes the second ring and reads the first. */
     b : ptr[mut Channel],
 }
 
 /**
- * A channel with rings of ring_bytes each way (0 for the default), its ends owned by owner (a Process's
- * address, 0 for the kernel), charged to budget: end A with the core and the rings, end B its slot.
+ * Make a channel: two ends sharing a core, with a ring each way in zeroed memory, both rings' indices set to
+ * RING_INDEX_START.
+ *
+ * @param kernel The kernel, whose channel and core pools, and frames, it comes from.
+ * @param owner The Process both ends belong to, by address, or 0 for the kernel.
+ * @param budget The MemoryBudget that pays, by address, or 0 for the kernel's own: end A is charged its slot, the core
+ *     and the ring memory, end B its slot.
+ * @param ring_bytes Each ring's size in bytes: a power of two from slop_os.CHANNEL_MIN_RING to
+ *     slop_os.CHANNEL_MAX_RING, or 0 for slop_os.CHANNEL_DEFAULT_RING.
+ * @param tag The protocol the channel speaks, kept for channel_tag and never interpreted; 0 for none.
+ * @return Both ends, live and owned by owner, without handles; the caller makes them.
+ * @error InvalidSize ring_bytes isn't 0 or a power of two in range.
+ * @error BudgetExceeded The budget couldn't pay for an end.
+ * @error OutOfMemory The pools or the frame allocator had nothing to give; whatever was made is destroyed again.
+ * @error ObjectGone The owner is being destroyed; both ends are destroyed again.
  */
 create_channel :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, ring_bytes: u32, tag: u64) -> Result[ChannelPair, slop_os.ChannelError] {
     ring :: if ring_bytes == 0 { slop_os.CHANNEL_DEFAULT_RING } else { ring_bytes }
@@ -201,6 +255,13 @@ create_channel :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, ring_byte
     return .Ok(ChannelPair.{a = end_a, b = end_b})
 }
 
+/**
+ * Give an object to an owner, as adopt does, telling only whether it worked.
+ *
+ * @param owner The Process to own it, by address, or 0 for the kernel, which always works.
+ * @param object The object, by address.
+ * @return True if it's owner's now; false if owner is being destroyed, when nothing changed.
+ */
 adopted :: fn(owner: u64, object: u64) -> bool {
     match adopt(owner, object) {
         case Ok => return true
@@ -208,16 +269,34 @@ adopted :: fn(owner: u64, object: u64) -> bool {
     }
 }
 
-/** What the core keeps for side, 0 or 1. */
+/**
+ * Find what the core keeps for one end.
+ *
+ * @param core The channel's core.
+ * @param side The end: 0 for A, 1 for B; others are taken modulo 2.
+ * @return The side, inside the core; its fields are under the core's lock.
+ */
 side_of :: fn(core: ptr[mut ChannelCore], side: u32) -> ptr[mut CoreSide] {
     return &core.sides[cast[usize](side) % 2]
 }
 
+/**
+ * Find an end's core.
+ *
+ * @param end The end, not yet released.
+ * @return The core it shares with the other end, which lives at least until the end is released.
+ */
 core_of :: fn(end: ptr[Channel]) -> ptr[mut ChannelCore] {
     return cast[ptr[mut ChannelCore]](end.core)
 }
 
-/** Where the ring memory is in the direct map. */
+/**
+ * Find the ring memory in the direct map.
+ *
+ * @param kernel The kernel, whose direct map it's in.
+ * @param core The channel's core.
+ * @return The kernel virtual address of the memory's start: both directions' RingIndices, then the rings.
+ */
 memory_of :: fn(kernel: ptr[Kernel], core: ptr[ChannelCore]) -> u64 {
     return frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](core.memory))
 }
@@ -227,25 +306,52 @@ memory_of :: fn(kernel: ptr[Kernel], core: ptr[ChannelCore]) -> u64 {
  * ring's indices wrap within its first few messages. They're free-running, masked to the ring.
  */
 #if robustness.ON {
+    /** Where a new ring's head and tail start, in bytes: 256 before u32 wraps, so wrapping is tested early. */
     RING_INDEX_START : u32 : 0xffffff00
 }
 #else {
+    /** Where a new ring's head and tail start, in bytes. */
     RING_INDEX_START : u32 : 0
 }
 
-/** The indices of the ring side writes. */
+/**
+ * Find the indices of the ring an end writes.
+ *
+ * Both ends' holders can write them through a mapping, so what's read from them is untrusted.
+ *
+ * @param kernel The kernel, whose direct map the memory is in.
+ * @param core The channel's core.
+ * @param side The writing end: 0 for A, 1 for B.
+ * @return The indices' kernel virtual address.
+ */
 indices_of :: fn(kernel: ptr[Kernel], core: ptr[ChannelCore], side: u32) -> ptr[mut slop_os.RingIndices] {
     return cast[ptr[mut slop_os.RingIndices]](memory_of(kernel, core) + cast[u64](side) * cast[u64](size_of(slop_os.RingIndices)))
 }
 
-/** The ring side writes. */
+/**
+ * Find the ring an end writes.
+ *
+ * @param kernel The kernel, whose direct map the memory is in.
+ * @param core The channel's core.
+ * @param side The writing end: 0 for A, 1 for B.
+ * @return The ring's kernel virtual address; it's core.ring_bytes long.
+ */
 ring_of :: fn(kernel: ptr[Kernel], core: ptr[ChannelCore], side: u32) -> u64 {
     return memory_of(kernel, core) + cast[u64](slop_os.CHANNEL_RINGS_OFFSET) + cast[u64](side) * cast[u64](core.ring_bytes)
 }
 
 /**
- * Destroying an end: its bindings go, the batches sent to it are dropped, its rings are unmapped, and
+ * Destroy an end: its bindings go, the batches sent to it are dropped, its rings are unmapped, and
  * the other end sees PeerClosed.
+ *
+ * Called once, from destroy_object, with the end already dying. Takes the core's lock, and with it the bound ports';
+ * unmaps after letting go of it. A mapping still being made is left doomed, for channel_map to unmap. A batch still
+ * being filled in is left to its sender, who finds this side closed. The owning handles in dropped batches have their
+ * objects destroyed once this destroy is done (destroy_later). The core is kept until the end is released.
+ *
+ * @param kernel The kernel: bindings go back to its binding pool, the rings are unmapped with a TLB shootdown and their
+ *     page tables freed to its frames, and dropped batches go back to its heap.
+ * @param end The end being destroyed; one that never got its core (create_channel failing) is left alone.
  */
 destroy_channel :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel]) {
     if end.core == 0 {
@@ -288,7 +394,12 @@ destroy_channel :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel]) {
     }
 }
 
-/** Once no CPU can use the end: the core's let go of, and freed with the second end, unless still mapped. */
+/**
+ * Release an end once no CPU can use it: the core's let go of, and freed with the second end, unless still mapped.
+ *
+ * @param kernel The kernel, whose frames and core pool the core goes back to with its last reference.
+ * @param end The end, destroyed, about to go back to its pool; its core is set to 0.
+ */
 release_channel :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel]) {
     if end.core == 0 {
         return void
@@ -297,7 +408,15 @@ release_channel :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel]) {
     end.core = 0
 }
 
-/** One reference to a core let go of: with the last, its memory and the core are freed. */
+/**
+ * Let go of one reference to a core: with the last, its ring memory and the core are freed.
+ *
+ * Takes no lock; the count is atomic.
+ *
+ * @param kernel The kernel, whose frames and core pool they go back to.
+ * @param address The ChannelCore's address, which the caller holds a reference to (an end not yet released, or a
+ *     mapping on a space's list) and mustn't use after.
+ */
 drop_core :: fn(kernel: ptr[mut Kernel], address: u64) {
     core :: cast[ptr[mut ChannelCore]](address)
     // It gives the count from before
@@ -309,8 +428,24 @@ drop_core :: fn(kernel: ptr[mut Kernel], address: u64) {
 }
 
 /**
- * Map end's rings at address in space, read/write: both sides write indices in both rings (ipc.md §2).
- * The mapping is on the space's list of rings, holding the core, before anything is mapped.
+ * Map a channel's memory for an end's holder: both directions' indices and both rings, read/write, since both sides
+ * write indices in both rings (ipc.md §2).
+ *
+ * The mapping is on the space's list of rings, holding a reference to the core, before anything is mapped, so
+ * releasing the space lets go of it. Takes the core's lock, then the space's, never both at once. The page tables'
+ * frames are charged to the space's budget.
+ *
+ * @param kernel The kernel, whose frames the page tables come from, and whose core pool the core goes back to if this
+ *     held its last reference.
+ * @param end The end, from a handle with RIGHT_CHANNEL_MAP; one end is mapped once at a time.
+ * @param space The address space to map it in, from a handle with RIGHT_SPACE_MAP.
+ * @param address Where: a page-aligned user virtual address, with slop_os.channel_memory_size(ring_bytes) bytes free
+ *     from it in space, within the user address range.
+ * @return Null once it's mapped; otherwise, with nothing mapped: BadAddress if address isn't page-aligned, in range or
+ *     free, or the page tables couldn't map it; ObjectGone if the end or the space is being destroyed, the end even
+ *     after it was mapped, when it's unmapped again; Mapped if the end is mapped already or being mapped or unmapped;
+ *     InFlight if the end is in a handle batch on its way; OutOfMemory or BudgetExceeded if page tables couldn't be
+ *     had.
  */
 channel_map :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel], space: ptr[mut AddressSpace], address: u64) -> slop_os.ChannelError? {
     core :: core_of(end)
@@ -380,9 +515,19 @@ channel_map :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel], space: ptr[mut
     return null
 }
 
+/** How a channel's memory is mapped for user mode: read/write, never executable, write-back, per address space. */
 RING_MAPPING :: arch_interface.Mapping.{protection = .ReadWrite, cache = .WriteBack, user = true, global = false}
 
-/** Unmap end's rings. */
+/**
+ * Unmap what channel_map mapped for an end.
+ *
+ * Takes the core's lock, then unmaps with the space's (unmap_ring), and shoots down the TLB entries.
+ *
+ * @param kernel The kernel: the unmapping is shot down on its CPUs, freed page tables go back to its frames, and the
+ *     core to its pool with its last reference.
+ * @param end The end; no right is needed.
+ * @return Null once it's unmapped; BadAddress if it isn't mapped, or is being mapped or unmapped.
+ */
 channel_unmap :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel]) -> slop_os.ChannelError? {
     core :: core_of(end)
     mapping :: &side_of(core, end.side).mapping
@@ -397,6 +542,13 @@ channel_unmap :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel]) -> slop_os.C
     return null
 }
 
+/**
+ * Set a mapping's state under its core's lock.
+ *
+ * @param core The core, whose lock is taken; the caller doesn't hold it.
+ * @param mapping One of the core's sides' mappings.
+ * @param state Its new state.
+ */
 set_mapping_state :: fn(core: ptr[mut ChannelCore], mapping: ptr[mut RingMapping], state: MappingState) {
     lock_at(&core.lock, .ChannelCore)
     mapping.state = state
@@ -410,6 +562,13 @@ set_mapping_state :: fn(core: ptr[mut ChannelCore], mapping: ptr[mut RingMapping
  * released whole, without its lock, once a grace period has passed, which this CPU may already have passed
  * through, so its tables aren't touched: the ring is only taken off its list, here or by the release,
  * whichever comes first, and that one lets go of the core (decisions/0145).
+ *
+ * Takes the space's lock for each step, and the core's at the end to set the state back to None; the caller holds
+ * neither.
+ *
+ * @param kernel The kernel, whose page-table frames freed go back, after their TLB entries are shot down.
+ * @param core The channel's core, which the mapping holds a reference to until it's off its space's list.
+ * @param side The end whose mapping it is, 0 or 1; its state is Unmapping.
  */
 unmap_ring :: fn(kernel: ptr[mut Kernel], core: ptr[mut ChannelCore], side: u32) {
     mapping :: &side_of(core, side).mapping
@@ -450,7 +609,14 @@ unmap_ring :: fn(kernel: ptr[mut Kernel], core: ptr[mut ChannelCore], side: u32)
     }
 }
 
-/** Takes the space's lock as held. */
+/**
+ * Put a ring mapping first on its space's list of rings.
+ *
+ * Takes the space's lock as held. The list holds a reference to the mapping's core, which the caller takes.
+ *
+ * @param space The space it's mapped in.
+ * @param mapping The mapping, not on any list.
+ */
 link_ring :: fn(space: ptr[mut AddressSpace], mapping: ptr[mut RingMapping]) {
     mapping.previous = 0
     mapping.next = space.first_ring
@@ -461,7 +627,14 @@ link_ring :: fn(space: ptr[mut AddressSpace], mapping: ptr[mut RingMapping]) {
     mapping.linked = true
 }
 
-/** Takes the space's lock as held. */
+/**
+ * Take a ring mapping off its space's list of rings, if it's on it.
+ *
+ * Takes the space's lock as held. The caller lets go of the core reference the list held.
+ *
+ * @param space The space it's mapped in.
+ * @param mapping The mapping, on the list or not.
+ */
 unlink_ring :: fn(space: ptr[mut AddressSpace], mapping: ptr[mut RingMapping]) {
     if !mapping.linked {
         return void
@@ -478,7 +651,14 @@ unlink_ring :: fn(space: ptr[mut AddressSpace], mapping: ptr[mut RingMapping]) {
     mapping.linked = false
 }
 
-/** The first ring on a space's list, taken off it, or 0. Takes the space's lock as held. */
+/**
+ * Take the first ring mapping off a space's list, as a space being released lets go of them.
+ *
+ * Takes the space's lock as held.
+ *
+ * @param space The space being released, whose lock the caller holds.
+ * @return The RingMapping's address, its core reference now the caller's to let go of; 0 if the list is empty.
+ */
 take_ring :: fn(space: ptr[mut AddressSpace]) -> u64 {
     first :: space.first_ring
     if first != 0 {
@@ -487,7 +667,18 @@ take_ring :: fn(space: ptr[mut AddressSpace]) -> u64 {
     return first
 }
 
-/** Raise Readable or Writable on the other end. */
+/**
+ * Raise Readable or Writable on the other end: the doorbell of the rings' wake protocol, after writing or reading a
+ * ring directly.
+ *
+ * Takes the core's lock, then each bound port's.
+ *
+ * @param kernel The kernel, whose timer heaps and run queues waking a port's waiter goes through.
+ * @param end The caller's end; no right is needed.
+ * @param signals Which to raise: slop_os.SIGNAL_READABLE, slop_os.SIGNAL_WRITABLE, or both; other bits are ignored,
+ *     and none raises nothing.
+ * @return Null once they're raised; PeerClosed if the other end is closed.
+ */
 channel_notify :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel], signals: slop_os.Signals) -> slop_os.ChannelError? {
     core :: core_of(end)
     lock_at(&core.lock, .ChannelCore)
@@ -501,8 +692,14 @@ channel_notify :: fn(kernel: ptr[mut Kernel], end: ptr[mut Channel], signals: sl
 }
 
 /**
- * Signals raised on side's end: each binding that sees any of them, and is armed, takes them into its
- * packet. Takes the core's lock as held.
+ * Raise signals on one end: each binding that sees any of them, and is armed, takes them into its packet.
+ *
+ * Takes the core's lock as held, and each bound port's in turn. A binding its port dropped is skipped.
+ *
+ * @param kernel The kernel, whose timer heaps and run queues waking a port's waiter goes through.
+ * @param core The channel's core.
+ * @param side The end the signals are raised on, 0 or 1.
+ * @param signals The slop_os.SIGNAL_ bits raised; 0 raises nothing.
  */
 raise_signals :: fn(kernel: ptr[mut Kernel], core: ptr[mut ChannelCore], side: u32, signals: u32) {
     if signals == 0 {
@@ -525,7 +722,17 @@ raise_signals :: fn(kernel: ptr[mut Kernel], core: ptr[mut ChannelCore], side: u
     }
 }
 
-/** Takes the port's lock as held. */
+/**
+ * Raise signals on a signal binding: if it's armed and sees any of them, they're ORed into its data and its packet is
+ * queued, disarming it if it's Once.
+ *
+ * Takes the port's lock as held.
+ *
+ * @param kernel The kernel, whose timer heaps and run queues waking a port's waiter goes through.
+ * @param port The binding's port.
+ * @param binding A signal binding on port; its signals, armed and once fields say what it does.
+ * @param signals The slop_os.SIGNAL_ bits raised; only those it sees count.
+ */
 signal_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], binding: ptr[mut Binding], signals: u32) {
     seen :: signals & binding.signals
     if !binding.armed || seen == 0 {
@@ -539,7 +746,12 @@ signal_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], binding: ptr[
 }
 
 /**
- * Drop a side's binding slot: the binding, off its port, unless the port dropped it first. Takes the core's lock as held.
+ * Drop a side's binding slot: the binding, off its port, unless the port dropped it first.
+ *
+ * Takes the core's lock as held, and the port's. The slot is free afterwards.
+ *
+ * @param kernel The kernel, whose binding pool the binding goes back to.
+ * @param slot The slot, used or free.
  */
 drop_end_binding :: fn(kernel: ptr[mut Kernel], slot: ptr[mut EndBinding]) {
     if slot.binding == 0 {
@@ -557,14 +769,27 @@ drop_end_binding :: fn(kernel: ptr[mut Kernel], slot: ptr[mut EndBinding]) {
     slot.binding = 0
 }
 
-/*
- * A binding for key on port, queuing a Signal packet when end raises any of signals: Persistent, or Once,
- * disarmed after each packet. Binding key again to the same end arms it again, with the new signals.
- * PeerClosed stays raised, so binding to an end whose peer is closed queues a packet at once; and so does
- * binding for Readable to an end with messages waiting, which no read has found empty, so nothing else would
- * raise it (decisions/0099). Binding for Readable to an empty end says its reader waits, as a read finding it
- * empty does, so the next message raises Readable: a new end bound and not yet read, as a service's client in a
- * place it has already read past this pass, is woken by its first message (decisions/0144).
+/**
+ * Bind key on a port to a channel end's signals, queuing a Signal packet when the end raises any of them.
+ *
+ * Binding key again to the same end arms it again, with the new signals and mode. PeerClosed stays raised, so binding
+ * to an end whose peer is closed queues a packet at once; and so does binding for Readable to an end with messages
+ * waiting, which no read has found empty, so nothing else would raise it (decisions/0099). Binding for Readable to an
+ * empty end says its reader waits, as a read finding it empty does, so the next message raises Readable: a new end
+ * bound and not yet read, as a service's client in a place it has already read past this pass, is woken by its first
+ * message (decisions/0144).
+ *
+ * Takes the core's lock, then the port's. A new binding is charged to the port's budget.
+ *
+ * @param kernel The kernel, whose binding pool a new binding comes from.
+ * @param port The port, from a handle with RIGHT_PORT_BIND.
+ * @param end The channel end to watch.
+ * @param signals The slop_os.SIGNAL_ bits to queue a packet for; the end raises Readable, Writable and PeerClosed.
+ * @param key The key: one not yet bound on the port, or one already bound to this same end.
+ * @param mode Once, disarmed after each packet until it's bound again, or Persistent, armed until it's unbound.
+ * @return Null once it's bound and armed; otherwise ObjectGone if the end or the port is being destroyed, KeyInUse if
+ *     key is bound to anything else, TooManyBindings if the end has MAX_END_BINDINGS bindings already, or
+ *     BudgetExceeded or OutOfMemory if a new binding couldn't be made (binding_failure).
  */
 port_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], end: ptr[mut Channel], signals: slop_os.Signals, key: u64,
     mode: slop_os.BindMode) -> slop_os.PortError? {
@@ -625,11 +850,27 @@ port_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], end: ptr[mut Chann
     return null
 }
 
-/*
- * One message, payload's size bytes from the caller's memory, into the end's ring, with the batch its
- * handles are in (slop_os.NO_BATCH for none), as a producer mapping the ring would write it. Without room,
- * it says it waits for room, then looks again, and fails with Full: the reader raises Writable once it
- * makes some. If the reader waits for a message, Readable is raised on its end.
+/**
+ * Write one message into the ring an end writes, through the kernel, as a producer mapping the ring would write it.
+ *
+ * Without room, it says it waits for room (producer_waiting), then looks again, and fails with Full: the reader raises
+ * Writable once it makes some. If the reader waits for a message, Readable is raised on its end. The ring's indices
+ * are untrusted, since the other end may have mapped them. Takes the core's lock, and the bound ports' when it raises
+ * Readable.
+ *
+ * @param kernel The kernel, for the direct map the ring and the payload are reached through, and the run queues a woken
+ *     reader goes on.
+ * @param thread The calling thread, from whose address space the payload is copied.
+ * @param end The caller's end; no right is needed.
+ * @param payload The payload's start: a user virtual address in the thread's space, any alignment.
+ * @param size The payload's size in bytes, at most slop_os.channel_max_payload of the ring's size; 0 writes a message
+ *     with only its header.
+ * @param batch The handle batch, numbered below slop_os.HANDLE_BATCHES, whose handles the message carries, or
+ *     slop_os.NO_BATCH for none. It isn't checked to hold anything; the reader takes it with channel_take_handles.
+ * @return Null once the message is written and its tail published; otherwise, with nothing written: TooBig if size is
+ *     over the largest payload; NoSuchBatch for a batch out of range; PeerClosed if the other end is closed; Corrupt if
+ *     the ring's indices are impossible; Full if the ring hasn't room for the message now; or BadBuffer if the payload
+ *     isn't readable user memory.
  */
 channel_write :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end: ptr[mut Channel], payload: u64, size: u32,
     batch: u32) -> slop_os.ChannelError? {
@@ -695,15 +936,30 @@ channel_write :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end: ptr[m
  * error, and for BufferTooSmall, the message's size.
  */
 ReadOutcome :: union {
+    /** A message was read: its payload's size in bytes, and its header's flags with its batch's number at bit 16. */
     Read(u32, u32),
+    /** No message was read: the error, and for BufferTooSmall the message's payload size in bytes, otherwise 0. */
     Failed(slop_os.ChannelError, u32),
 }
 
 /**
- * The next message in the other end's ring, its payload copied to buffer in the caller's memory, as a
- * consumer mapping the ring would read it: the header is read once, and checked against what the ring
- * holds. With nothing to read, it says it waits for a message, then looks again, and fails with Empty,
- * or PeerClosed once nothing more can come. If the writer waits for room, Writable is raised on its end.
+ * Read the next message from the other end's ring, through the kernel, as a consumer mapping the ring would read it:
+ * the header is read once, and checked against what the ring holds.
+ *
+ * With nothing to read, it says it waits for a message (consumer_waiting), then looks again, and fails with Empty, or
+ * PeerClosed once nothing more can come. If the writer waits for room, Writable is raised on its end. Takes the core's
+ * lock, and the bound ports' when it raises Writable.
+ *
+ * @param kernel The kernel, for the direct map the ring and the buffer are reached through, and the run queues a woken
+ *     writer goes on.
+ * @param thread The calling thread, into whose address space the payload is copied.
+ * @param end The caller's end; no right is needed.
+ * @param buffer Where the payload goes: a user virtual address in the thread's space, any alignment.
+ * @param capacity How many bytes fit at buffer; a message bigger than that stays in the ring.
+ * @return Read with the message's size and flags once it's copied and consumed; or Failed with: Empty if there's no
+ *     message and the other end is open, PeerClosed if there's none and it's closed, Corrupt if the indices or the
+ *     header are impossible, BufferTooSmall with the size needed, or BadBuffer if buffer isn't writable user memory,
+ *     when the message stays in the ring.
  */
 channel_read :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end: ptr[mut Channel], buffer: u64, capacity: u32) -> ReadOutcome {
     core :: core_of(end)
@@ -757,11 +1013,25 @@ channel_read :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end: ptr[mu
     return .Read(size, cast[u32](header.flags) | (cast[u32](header.handle_batch) << 16))
 }
 
-/*
- * Move count handles, from handles in the caller's memory, out of its table into batch on the other end.
- * Each needs RIGHT_TRANSFER, and none can be this channel's own ends, nor an end whose rings are mapped.
- * Objects whose owning handles go keep their owner until the batch is taken; if it never is, they're
- * destroyed with it.
+/**
+ * Move handles out of the caller's table into a batch on the other end, for a message to name.
+ *
+ * Each handle needs RIGHT_TRANSFER, and none can be this channel's own ends, nor an end whose rings are mapped; ends
+ * sent are held unmapped until the batch is taken or dropped. Objects whose owning handles go keep their owner until
+ * the batch is taken; if it never is, they're destroyed with it. A handle closed between the checks and the move goes
+ * as nothing. The batch is charged to this end's budget until it's taken. Takes the core's lock in short spells, and
+ * the handle table's.
+ *
+ * @param kernel The kernel, whose heap the batch comes from.
+ * @param thread The calling thread, whose process's handles are moved.
+ * @param end The caller's end; no right is needed.
+ * @param handles The handles' start: a user virtual address in the thread's space of count slop_os.Handle values.
+ * @param count How many handles, at most slop_os.MAX_HANDLES_PER_BATCH; 0 sends an empty batch.
+ * @param batch The batch number on the other end, below slop_os.HANDLE_BATCHES, which has to be free.
+ * @return Null once the handles are in the batch, out of the caller's table; otherwise the error. TooBig, NoSuchBatch,
+ *     BadBuffer, InvalidHandle, ObjectGone, MissingRight, NotTransferable, BudgetExceeded, OutOfMemory, PeerClosed and
+ *     BatchInUse leave every handle where it was; so does Mapped, if an end among them is mapped. PeerClosed found
+ *     after the move drops the batch: the handles are gone, and owning ones' objects destroyed.
  */
 channel_send_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end: ptr[mut Channel], handles: u64, count: u32,
     batch: u32) -> slop_os.ChannelError? {
@@ -854,13 +1124,28 @@ channel_send_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end
     return null
 }
 
+/**
+ * Set a batch slot under its core's lock.
+ *
+ * @param core The core, whose lock is taken; the caller doesn't hold it.
+ * @param slot One of the core's sides' batch slots.
+ * @param value A HandleBatch's address, RESERVED, or 0 to free it.
+ */
 set_batch :: fn(core: ptr[mut ChannelCore], slot: ptr[mut u64], value: u64) {
     lock_at(&core.lock, .ChannelCore)
     slot^ = value
     unlock_at(&core.lock, .ChannelCore)
 }
 
-/** An end is about to be sent: unless its rings are mapped, it can't be mapped until it arrives. */
+/**
+ * Hold an end that's about to be sent unmapped: unless its rings are mapped, it can't be mapped until it arrives.
+ *
+ * Takes the end's core's lock. Each hold is let go of by let_go_of_end.
+ *
+ * @param end The end being sent, any channel's.
+ * @return True if it's held, its sending count one more; false if its rings are mapped, or being mapped or unmapped,
+ *     when it isn't.
+ */
 hold_for_sending :: fn(end: ptr[mut Channel]) -> bool {
     core :: core_of(end)
     lock_at(&core.lock, .ChannelCore)
@@ -876,6 +1161,11 @@ hold_for_sending :: fn(end: ptr[mut Channel]) -> bool {
  * An end held by hold_for_sending let go of, if it's still the end with generation. One destroyed since may have been
  * released, its core with it, before this call (a copy of it in a batch keeps nothing alive): its generation says so.
  * One that's still its own can't be released until this CPU passes a quiescent point (objects.hsc), so its core stays.
+ *
+ * Takes the end's core's lock.
+ *
+ * @param end The end, as a batch kept it; its slot may have been released and reused since.
+ * @param generation The end's generation when it was held.
  */
 let_go_of_end :: fn(end: ptr[mut Channel], generation: u32) {
     if intrinsics.atomic_load_u32_acquire(&end.header.generation) != generation {
@@ -889,7 +1179,14 @@ let_go_of_end :: fn(end: ptr[mut Channel], generation: u32) {
     unlock_at(&core.lock, .ChannelCore)
 }
 
-/** The ends among the first count handles, held by hold_for_sending, let go of again. */
+/**
+ * Let go again of the ends among the first handles of a send that failed part way, held by hold_for_sending.
+ *
+ * @param filled The batch being filled; unused, its entries aren't filled in yet.
+ * @param count How many of the handles were held, from the first.
+ * @param table The sender's handle table, where the handles still are; one closed meanwhile is skipped.
+ * @param given The handles, as the sender gave them.
+ */
 let_go_of_ends :: fn(filled: ptr[HandleBatch], count: u32, table: ptr[HandleTable], given: ptr[slop_os.Handle[64]]) {
     for handle, i in given^ {
         if i >= cast[usize](count) {
@@ -907,8 +1204,11 @@ let_go_of_ends :: fn(filled: ptr[HandleBatch], count: u32, table: ptr[HandleTabl
 }
 
 /**
- * A batch that won't be taken: owning handles' objects are destroyed, as closing them would, once the
- * destroy running on this CPU is done (destroy_later).
+ * Drop a batch that won't be taken: ends in it are let go of, and owning handles' objects are destroyed, as closing
+ * them would, once the destroy running on this CPU is done (destroy_later). The batch is freed.
+ *
+ * @param kernel The kernel: owning handles' objects are destroyed through it, and the batch goes back to its heap.
+ * @param batch The batch, filled in and in no slot; it's freed, so the caller mustn't use it after.
  */
 drop_batch :: fn(kernel: ptr[mut Kernel], batch: ptr[mut HandleBatch]) {
     for entry, i in batch.entries {
@@ -929,14 +1229,32 @@ drop_batch :: fn(kernel: ptr[mut Kernel], batch: ptr[mut HandleBatch]) {
 
 /** How many handles were taken; or the error, and for BufferTooSmall, how many there are. */
 TakeOutcome :: union {
+    /** The handles were taken: how many there were, each written, NO_HANDLE for one that couldn't be had. */
     Taken(u32),
+    /** None were taken: the error, and for BufferTooSmall how many handles the batch holds, otherwise 0. */
     Failed(slop_os.ChannelError, u32),
 }
 
-/*
- * Take batch's handles into the caller's table, in order, writing them to handles in its memory, up to
- * capacity: how many there were. One whose object was destroyed meanwhile, or that doesn't fit in the
- * table, comes out as NO_HANDLE. An object whose owning handle comes is the caller's process's from then on.
+/**
+ * Take a batch's handles into the caller's table, in order, writing them to its memory.
+ *
+ * One whose object was destroyed meanwhile, or that doesn't fit in the table, comes out as NO_HANDLE. An object whose
+ * owning handle comes is the caller's process's from then on, its charge moved to that process's budget: all of them,
+ * or the batch stays (decisions/0011). Takes the core's lock, then the handle table's after letting go of it.
+ *
+ * @param kernel The kernel: charges move under its budgets_lock, the handle table's new pages come from its frames, the
+ *     handles are written through its direct map, and the batch goes back to its heap.
+ * @param thread The calling thread, whose process takes the handles.
+ * @param end The caller's end, which the batch was sent to; no right is needed.
+ * @param batch The batch number, below slop_os.HANDLE_BATCHES.
+ * @param handles Where the handles go: a user virtual address in the thread's space, room for capacity
+ *     slop_os.Handle values.
+ * @param capacity How many handles fit at handles.
+ * @return Taken with the batch's count once they're taken and the batch freed; or Failed with: NoSuchBatch if the
+ *     number is out of range or the batch is empty or still being filled; BufferTooSmall with the count, BadBuffer, or
+ *     BudgetExceeded if the caller's budget can't take the objects' charges, all leaving the batch as it was; or
+ *     BadBuffer if writing the handles failed after they were taken, when they're in the table but the caller can't
+ *     know their values.
  */
 channel_take_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end: ptr[mut Channel], batch: u32, handles: u64,
     capacity: u32) -> TakeOutcome {
@@ -1001,7 +1319,19 @@ channel_take_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], end
     return .Taken(count)
 }
 
-/** One handle into process's table; an object whose owning handle it is, adopted first, or destroyed if that fails. */
+/**
+ * Install one handle from a batch in a process's table; an object whose owning handle it is, adopted first, or
+ * destroyed if that fails.
+ *
+ * Takes the owner lists' locks, then the handle table's.
+ *
+ * @param kernel The kernel: the table's new pages come from its frames, and an object that can't be taken is destroyed
+ *     through it.
+ * @param process The process taking it.
+ * @param entry The handle, as the batch kept it: its object live, its rights and whether it owns kept as they were.
+ * @return The handle in process's table; slop_os.NO_HANDLE if process is being destroyed or its table is full or
+ *     closed, when an owning handle's object is destroyed (destroy_later).
+ */
 take_one :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], entry: Resolved) -> slop_os.Handle {
     if entry.owning {
         disown(entry.object)

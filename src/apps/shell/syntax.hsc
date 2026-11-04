@@ -17,62 +17,96 @@ import strings from "std"
  * A call's arguments are kept as written; what a bare word is depends on what it's given to, which only the call knows.
  */
 
+/** What a node of the tree is, and so what its text, value and children hold. */
 NodeKind :: enum {
+    /** A line's or a block's statements: each a child, in order. */
     Statements,
+    /** let name = pipeline: text the name, the one child what it's bound to. */
     Let,
+    /** element | element ...: each element a child, in order. */
     Pipeline,
-    /** A pipeline's ? after it, and `or` with its block */
+    /** A pipeline's ? after it: the one child the pipeline, whose error ends what's running. */
     Try,
+    /** `or` with its block: the pipeline, then the block run if it fails. */
     Or,
+    /** A call: text its name, each argument a child, as written. */
     Call,
-    /** A call's --name, the argument after it its value unless the parameter's a bool */
+    /** A call's --name, text the name; the argument after it is its value unless the parameter's a bool. */
     Named,
-    /** A bare word in a call */
+    /** A bare word in a call, text as written, read by its parameter's type when the call's made. */
     Word,
+    /** A literal, its value in value: a number, a size, a duration, text, true, false or null; or a record's key. */
     Literal,
-    /** A string with $name in it, filled in when it's evaluated */
+    /** A string with $name in it, text the string, filled in when it's evaluated. */
     Interpolated,
+    /** $name or a bare name in an expression: text the name. */
     Variable,
+    /** [a, b]: each item a child. */
     List,
+    /** {name: value}: each field's name, a Literal with text the name, then its value, as children. */
     Record,
+    /** value.field: text the field's name, the one child the value. */
     Field,
+    /** value[index]: the value, then the index. */
     Index,
+    /** not or unary -: text the operator, the one child its operand. */
     Unary,
+    /** A binary operator: text the operator, the children its left and right operands. */
     Binary,
-    /** fn name(parameters) { body }: its parameters, then its body */
+    /** fn name(parameters) { body }: text the name, its parameters, then its body. */
     Function,
     /**
-     * A function's parameter: its name, its type's name as Text in its value (Null for any), and its default, if any
+     * A function's parameter: text its name, its type's name as Text in its value (Null for any), and its default,
+     * if any, its one child.
      */
     Parameter,
-    /** return, and the value after it, if any */
+    /** return, and the value after it, if any, its one child. */
     Return,
-    /** try { ... } catch name { ... }: the tried block, then the handler; text the name the error's bound to */
+    /** try { ... } catch name { ... }: the tried block, then the handler; text the name the error's bound to. */
     TryCatch,
 }
 
+/** A node of a parsed line's tree, on the heap, never freed. */
 Node :: struct {
+    /** What it is, which says what the rest hold. */
     kind : NodeKind,
-    /** Where it starts in the line */
+    /** Where it starts in the line, in bytes from 0, for an error to point at. */
     at : usize,
-    // A name, a word, an operator, or a string's text
+    /** A name, a word, an operator, or a string's text, a view of the parse's copy of the line or the heap. */
     text : string,
+    /** A Literal's value, a Parameter's type's name, or a string's text; Null otherwise. */
     value : Value,
+    /** Its children, as its kind says. */
     children : ptr[mut Node][..],
 }
 
+/** Why a line isn't the shell language, and where. */
 SyntaxError :: struct {
+    /** What's wrong, a sentence for a person, a literal. */
     message : string,
+    /** Where in the line, in bytes from 0. */
     at : usize,
 }
 
+/** A line being parsed. */
 Parser :: struct {
+    /** The line, the parse's own copy, which the tree's text views. */
     text : string,
+    /** Where it's read to, in bytes from 0; can pass the line's end. */
     at : usize,
+    /** The first error met, or null; once there's one the parse winds down, and later ones aren't kept. */
     error : SyntaxError?,
 }
 
-/** A line parsed: its statements, or why it isn't one. */
+/**
+ * Parse a line of the shell language into a tree of its statements.
+ *
+ * It fails with a SyntaxError when there's no memory for the copy, or the line isn't the shell language: the first
+ * thing wrong, and where.
+ *
+ * @param line The line, copied: the tree's text views the copy, which, like the tree, is never freed.
+ * @return The line's Statements node, each statement a child.
+ */
 parse :: fn(line: string) -> Result[ptr[mut Node], SyntaxError] {
     // A copy of its own, which the tree's words and names are parts of
     text :: strings.clone(line) or_return .Error(SyntaxError.{message = "there's no memory for it", at = 0})
@@ -85,6 +119,13 @@ parse :: fn(line: string) -> Result[ptr[mut Node], SyntaxError] {
     return .Ok(made)
 }
 
+/**
+ * Make a node, with no text, a Null value and no children.
+ *
+ * @param kind What it is, which says what its text, value and children are to hold; the caller fills them in.
+ * @param at Where it starts in the line, in bytes.
+ * @return The node, on the heap, never freed.
+ */
 node :: fn(kind: NodeKind, at: usize) -> ptr[mut Node] {
     made :: runtime.new(Node)
     made.kind = kind
@@ -93,26 +134,55 @@ node :: fn(kind: NodeKind, at: usize) -> ptr[mut Node] {
     return made
 }
 
+/**
+ * Add a child to a node, after the ones it has.
+ *
+ * @param parent The node whose children grow by one; what the child means is by parent's kind and its place.
+ * @param child The child, kept by parent.
+ */
 add :: fn(parent: ptr[mut Node], child #escaping : ptr[mut Node]) {
     runtime.array_add(&parent.children, child)
 }
 
+/**
+ * Record a syntax error where the parser is, unless there's one already: only the first is kept.
+ *
+ * @param parser The parser, whose error is set to the message at its position, unless it has one already.
+ * @param message What's wrong, kept, so a literal.
+ */
 fail :: fn(parser: ptr[mut Parser], message #escaping : string) {
     if parser.error is_none {
         parser.error = SyntaxError.{message = message, at = parser.at}
     }
 }
 
+/**
+ * Read a byte of the line.
+ *
+ * @param parser The parser, whose line is read; it isn't moved.
+ * @param at Where, in bytes from 0.
+ * @return The byte; 0 past the line's end.
+ */
 char_at :: fn(parser: ptr[Parser], at: usize) -> u8 {
     bytes :: string_bytes(parser.text)
     return if at < bytes.count { bytes[at] } else { 0 }
 }
 
+/**
+ * Read the byte where the parser is, without moving on.
+ *
+ * @param parser The parser, read at its position, which isn't changed.
+ * @return The byte; 0 at the line's end.
+ */
 peek :: fn(parser: ptr[Parser]) -> u8 {
     return char_at(parser, parser.at)
 }
 
-/** Spaces and tabs skipped, and a comment, to the line's end. */
+/**
+ * Skip spaces and tabs, and a # comment, which runs to the line break or the end; a line break isn't skipped.
+ *
+ * @param parser The parser, moved on.
+ */
 skip_spaces :: fn(parser: ptr[mut Parser]) {
     loop {
         byte :: peek(parser)
@@ -133,15 +203,32 @@ skip_spaces :: fn(parser: ptr[mut Parser]) {
     }
 }
 
+/**
+ * Tell whether a byte can start a name: an ASCII letter or _.
+ *
+ * @param byte Any byte; one of a UTF-8 sequence's, 128 or more, is never a letter.
+ * @return True for a to z, A to Z and _.
+ */
 is_letter :: fn(byte: u8) -> bool {
     return (byte >= cast[u8]('a') && byte <= cast[u8]('z')) || (byte >= cast[u8]('A') && byte <= cast[u8]('Z')) || byte == cast[u8]('_')
 }
 
+/**
+ * Tell whether a byte is an ASCII digit.
+ *
+ * @param byte Any byte, 0 included, as char_at gives past the line's end.
+ * @return True for 0 to 9.
+ */
 is_digit :: fn(byte: u8) -> bool {
     return byte >= cast[u8]('0') && byte <= cast[u8]('9')
 }
 
-/** A name: a letter or _, then letters, digits, _ and -, as manifests' names are. */
+/**
+ * Parse a name: a letter or _, then letters, digits, _ and -, as manifests' names are.
+ *
+ * @param parser The parser, moved past the name.
+ * @return The name, a view of the parser's text; empty, and the parser not moved, if there's no name there.
+ */
 parse_name :: fn(parser: ptr[mut Parser]) -> string {
     start :: parser.at
     if !is_letter(peek(parser)) {
@@ -157,11 +244,25 @@ parse_name :: fn(parser: ptr[mut Parser]) -> string {
     return slice(parser.text, start, parser.at)
 }
 
+/**
+ * Slice text, safely.
+ *
+ * @param text The text sliced, viewed, not copied: the slice is good for as long as it is.
+ * @param start Where the slice starts, in bytes.
+ * @param end Where it ends, in bytes, excluded.
+ * @return The slice, a view of text; empty if the bounds are backwards or past text's end.
+ */
 slice :: fn(text: string, start: usize, end: usize) -> string {
     return if start <= end && end <= text.count { text[start..<end] } else { "" }
 }
 
-/** Whether the word at the parser is keyword, followed by something that ends it. */
+/**
+ * Tell whether the word where the parser is is a keyword, followed by something that ends a name.
+ *
+ * @param parser The parser, not moved.
+ * @param keyword The keyword, compared byte for byte with the line at the parser's position.
+ * @return True if the keyword's there, as a whole word.
+ */
 at_keyword :: fn(parser: ptr[Parser], keyword: string) -> bool {
     end :: parser.at + keyword.count
     if slice(parser.text, parser.at, end) != keyword {
@@ -171,7 +272,13 @@ at_keyword :: fn(parser: ptr[Parser], keyword: string) -> bool {
     return !is_letter(after) && !is_digit(after) && after != cast[u8]('-')
 }
 
-/** Statements, up to the end, or a } for a block's. */
+/**
+ * Parse statements, separated by line breaks or ;, up to the line's end, or a } for a block's.
+ *
+ * @param parser The parser, moved past them, to the } that ends a block, which isn't taken.
+ * @param in_block Whether they're a block's, so a } ends them.
+ * @return A Statements node, each statement a child; as far as it got if there's an error.
+ */
 parse_statements :: fn(parser: ptr[mut Parser], in_block: bool) -> ptr[mut Node] {
     made :: node(.Statements, parser.at)
     loop {
@@ -195,6 +302,12 @@ parse_statements :: fn(parser: ptr[mut Parser], in_block: bool) -> ptr[mut Node]
     return made
 }
 
+/**
+ * Parse one statement: fn, return, try and catch, let, or a pipeline.
+ *
+ * @param parser The parser, moved past it.
+ * @return The statement's node; as far as it got if there's an error.
+ */
 parse_statement :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     if at_keyword(parser, "fn") {
         return parse_function(parser)
@@ -249,7 +362,12 @@ parse_statement :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return parse_pipeline(parser)
 }
 
-/** fn name(a: type = default, ...) { body } */
+/**
+ * Parse a function: fn name(a: type = default, ...) { body }.
+ *
+ * @param parser The parser, at fn, moved past the body.
+ * @return The Function node; as far as it got if there's an error.
+ */
 parse_function :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     made :: node(.Function, parser.at)
     parser.at += 2
@@ -309,7 +427,13 @@ parse_function :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return made
 }
 
-/** element (| element)*, then ? or `or { ... }`. */
+/**
+ * Parse a pipeline: element (| element)*, then ? or `or { ... }`, or both.
+ *
+ * @param parser The parser, moved past it.
+ * @return The element itself when there's one and nothing after it; else a Pipeline, wrapped in Try for ? and in Or
+ *     for `or`.
+ */
 parse_pipeline :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     skip_spaces(parser)
     start :: parser.at
@@ -348,7 +472,12 @@ parse_pipeline :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return made
 }
 
-/** { statements } */
+/**
+ * Parse a block: { statements }.
+ *
+ * @param parser The parser, at the {, moved past the }.
+ * @return The block's Statements node; an empty one, with an error, if there's no { there.
+ */
 parse_block :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     if peek(parser) != cast[u8]('{') {
         fail(parser, "a block starts with {")
@@ -364,7 +493,13 @@ parse_block :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return made
 }
 
-/** A call, for a bare word in command position; an expression otherwise. */
+/**
+ * Parse a pipeline's element: a call, for a bare word in command position other than true, false, null and not; an
+ * expression otherwise.
+ *
+ * @param parser The parser, moved past it.
+ * @return The Call node, or the expression's.
+ */
 parse_element :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     skip_spaces(parser)
     if is_letter(peek(parser)) && !at_keyword(parser, "true") && !at_keyword(parser, "false") && !at_keyword(parser, "null")
@@ -374,7 +509,14 @@ parse_element :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return parse_expression(parser)
 }
 
-/** A call: its name, then arguments up to | ; ) } or ? or `or`, or the line's end. */
+/**
+ * Parse a call: its name, then arguments up to | ; ) } or ? or `or`, or the line's end.
+ *
+ * where and map take one expression, of each item's fields, in place of arguments.
+ *
+ * @param parser The parser, at the name, moved past the arguments.
+ * @return The Call node, text its name, each argument a child.
+ */
 parse_call :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     made :: node(.Call, parser.at)
     made.text = parse_name(parser)
@@ -399,7 +541,15 @@ parse_call :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return made
 }
 
-/** One argument: --name, $name, "text", (expression), [list], or a bare word. */
+/**
+ * Parse one argument: --name, $name, "text", (expression), [list], or a bare word.
+ *
+ * A bare word runs to a space, tab, line break, | ; ) } " or (, and is kept as written: what it is, its parameter's
+ * type says.
+ *
+ * @param parser The parser, moved past it.
+ * @return The argument's node: Named, Word, or the value's, with any .field or [index] after it.
+ */
 parse_argument :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     start :: parser.at
     byte :: peek(parser)
@@ -428,24 +578,50 @@ parse_argument :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
 
 // ---- Expressions, by precedence
 
+/**
+ * Parse an expression, its operators by precedence.
+ *
+ * @param parser The parser, moved past it.
+ * @return The expression's node: a Binary for an or, the loosest operator, at its top, else a tighter one's; as far as
+ *     it got if there's an error.
+ */
 parse_expression :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return parse_binary(parser, 0)
 }
 
 // Each level's operators, loosest first
+/** How many levels of binary operators there are; the unary ones bind tighter than all. */
 LEVELS :: 5
+/** The loosest level's operator: or. */
 OR_LEVEL :: string.["or"]
+/** The second level's operator: and. */
 AND_LEVEL :: string.["and"]
+/** The third level's operators, comparisons; two-byte ones before their one-byte prefixes, so they're found first. */
 COMPARING :: string.["==", "!=", "<=", ">=", "<", ">"]
+/** The fourth level's operators: + and -. */
 ADDING :: string.["+", "-"]
+/** The tightest level's operators: * and /. */
 MULTIPLYING :: string.["*", "/"]
 
+/**
+ * Find a level's operators.
+ *
+ * @param level The level, 0 the loosest; 4 and up are MULTIPLYING's.
+ * @return The operators, a view of a constant.
+ */
 operators_of :: fn(level: usize) -> string[] {
     return if level == 0 { OR_LEVEL[0..<OR_LEVEL.count] } else if level == 1 { AND_LEVEL[0..<AND_LEVEL.count] }
         else if level == 2 { COMPARING[0..<COMPARING.count] } else if level == 3 { ADDING[0..<ADDING.count] }
         else { MULTIPLYING[0..<MULTIPLYING.count] }
 }
 
+/**
+ * Parse an expression of a level's binary operators and tighter ones, left-associative.
+ *
+ * @param parser The parser, moved past it.
+ * @param level The level, 0 the loosest; at LEVELS, a unary expression.
+ * @return The expression's node: Binary nodes, the leftmost operation deepest.
+ */
 parse_binary :: fn(parser: ptr[mut Parser], level: usize) -> ptr[mut Node] {
     if level >= LEVELS {
         return parse_unary(parser)
@@ -465,7 +641,13 @@ parse_binary :: fn(parser: ptr[mut Parser], level: usize) -> ptr[mut Node] {
     return left
 }
 
-/** Which of operators is at the parser: a word one only as a whole word. */
+/**
+ * Find which of some operators is where the parser is: a word one, like and, only as a whole word.
+ *
+ * @param parser The parser, not moved.
+ * @param operators The operators, tried in order, so the first that matches wins.
+ * @return The operator, a view of operators' string; null if none is there.
+ */
 operator_at :: fn(parser: ptr[Parser], operators: string[]) -> string? {
     for operator in operators {
         if is_letter(cast[u8](operator[0 % operator.count])) {
@@ -480,6 +662,15 @@ operator_at :: fn(parser: ptr[Parser], operators: string[]) -> string? {
     return null
 }
 
+/**
+ * Parse a unary expression: not or - before one, or a value with any .field and [index] after it.
+ *
+ * A - right before a digit is left for parse_primary, which then fails, since numbers have no sign.
+ *
+ * @param parser The parser, moved past it.
+ * @return A Unary node, text "not" or "-", its operand its one child; or the value's node, wrapped in any Field and
+ *     Index nodes after it; as far as it got if there's an error.
+ */
 parse_unary :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     skip_spaces(parser)
     start :: parser.at
@@ -500,7 +691,13 @@ parse_unary :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return parse_postfix(parser, parse_primary(parser))
 }
 
-/** .field and [index] after a value. */
+/**
+ * Parse any .field and [index] after a value.
+ *
+ * @param parser The parser, after the value, moved past them.
+ * @param base The value's node, kept in the tree.
+ * @return The outermost Field or Index node, or base when there are none.
+ */
 parse_postfix :: fn(parser: ptr[mut Parser], base #escaping : ptr[mut Node]) -> ptr[mut Node] {
     made := base
     loop {
@@ -531,6 +728,13 @@ parse_postfix :: fn(parser: ptr[mut Parser], base #escaping : ptr[mut Node]) -> 
     }
 }
 
+/**
+ * Parse a value: (pipeline), [list], {record}, "text", $name, a number, true, false, null, or a bare name, which is a
+ * variable.
+ *
+ * @param parser The parser, moved past it; moved past one byte on an error, so parsing goes on.
+ * @return The value's node; an empty Literal, with an error, if nothing that starts a value is there.
+ */
 parse_primary :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     skip_spaces(parser)
     start :: parser.at
@@ -598,7 +802,14 @@ parse_primary :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return node(.Literal, start)
 }
 
-/** A list's items, or a record's name: value pairs, separated by commas, up to close. */
+/**
+ * Parse a list's items, or a record's name: value pairs, separated by commas or line breaks, up to close.
+ *
+ * @param parser The parser, after the opening bracket, moved past close.
+ * @param made The List or Record node the items are added to: for a record, each name a Literal, then its value.
+ * @param close The closing byte: ] or }.
+ * @param named Whether they're a record's fields.
+ */
 parse_items :: fn(parser: ptr[mut Parser], made: ptr[mut Node], close: u8, named: bool) {
     loop {
         skip_spaces(parser)
@@ -640,7 +851,16 @@ parse_items :: fn(parser: ptr[mut Parser], made: ptr[mut Node], close: u8, named
     }
 }
 
-/** "text", with \n \t \" \\ \$ escapes; $name in it is filled in when it's evaluated. */
+/**
+ * Parse a string: "text", with \n \t \" \\ \$ escapes; $name in it is filled in when it's evaluated.
+ *
+ * Any other escaped byte is itself. An escaped $ in a string that's interpolated is kept as a 0 byte, so it isn't
+ * filled in; the evaluator turns it back into a $.
+ *
+ * @param parser The parser, at the opening ", moved past the closing one.
+ * @return A Literal with the text as its value, or an Interpolated node if a $ and a letter are in it; its text is
+ *     on the heap, never freed.
+ */
 parse_quoted :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     start :: parser.at
     parser.at += 1
@@ -680,7 +900,15 @@ parse_quoted :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return made
 }
 
-/** A number, with a size's or a duration's unit after it if it has one. */
+/**
+ * Parse a number, its digits maybe separated by _, with a size's or a duration's unit after it if it has one.
+ *
+ * Overflow isn't checked: a number past 64 bits, or a size or duration past them once scaled, wraps.
+ *
+ * @param parser The parser, at the first digit, moved past the unit.
+ * @return A Literal: an Int, or with a unit a Size in bytes or a Duration in nanoseconds; with an error if a name after
+ *     the digits isn't a unit.
+ */
 parse_number :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     start :: parser.at
     value := cast[u64](0)
@@ -712,11 +940,20 @@ parse_number :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     return made
 }
 
+/** A unit a number can have after it. */
 Unit :: struct {
+    /** What one of it is: in bytes for a size, nanoseconds for a duration. */
     scale : u64,
+    /** Whether it's a size's unit; a duration's if not. */
     size : bool,
 }
 
+/**
+ * Find a unit by its name: B, KiB to TiB and kB to TB for sizes, ns, us, ms, s, m, h and d for durations.
+ *
+ * @param unit The name, case and all.
+ * @return The unit; null for any other name.
+ */
 unit_value :: fn(unit: string) -> Unit? {
     sizes :: string.["B", "KiB", "MiB", "GiB", "TiB", "kB", "MB", "GB", "TB"]
     scales :: u64.[1, 1 << 10, 1 << 20, 1 << 30, 1 << 40, 1000, 1000 * 1000, 1000 * 1000 * 1000, 1000 * 1000 * 1000 * 1000]

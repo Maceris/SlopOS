@@ -9,6 +9,15 @@ package screen_test
 import terminal from "std/os/slop_os"
 import screen from ".."
 
+/**
+ * Find the cluster in a cell of a grid, as text.
+ *
+ * @param grid The grid, only read; the text returned is a view of its cell.
+ * @param row The cell's row, from 0.
+ * @param column The cell's column, from 0.
+ * @return The cell's cluster, a view of the grid's bytes, good until the cell changes; empty for an empty cell or one
+ *     past the grid.
+ */
 text_at :: fn(grid: ptr[mut screen.Grid], row: u16, column: u16) -> string {
     found :: screen.cell(grid, row, column) or_return ""
     if found.count == 0 || cast[usize](found.count) > found.bytes.count {
@@ -17,6 +26,11 @@ text_at :: fn(grid: ptr[mut screen.Grid], row: u16, column: u16) -> string {
     return string_of(&found.bytes[0], cast[usize](found.count))
 }
 
+/**
+ * Run the screen model's tests.
+ *
+ * @return 0 if every check passed, or the number of the first check that failed.
+ */
 main :: fn() -> int {
     shown := screen.Screen.{}
     plain :: terminal.Style.{}

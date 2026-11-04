@@ -1,8 +1,8 @@
 /**
- * test_shell_calls (decisions/0170, 0172): a program the shell calls through its manifest, taking a connection to the
- * shell's terminal, values of several types, some optional, and a directory beneath the shell's home. It writes what it
- * was given on one line, and ends with 0, or, given the label "fail", with its count. In a pipeline: given an output, it
- * writes count rows, or with an input, each row it reads with its id times ten.
+ * test_shell_calls (decisions/0170, 0172): a program the shell calls through its manifest, taking a connection to
+ * the shell's terminal, values of several types, some optional, and a directory beneath the shell's home. It writes
+ * what it was given on one line, and ends with 0, or, given the label "fail", with its count. In a pipeline: given an
+ * output, it writes count rows, or with an input, each row it reads with its id times ten.
  */
 package test_shell_calls
 
@@ -15,17 +15,44 @@ import dir from "std/os/slop_os"
 import stream from "std/os/slop_os"
 import terminal as protocol from "std/os/slop_os"
 
+/** A choice the shell passes by name. */
 Speed :: enum {
+    /** Slow; the odd rows' kind. */
     Slow,
+    /** Fast; the even rows' kind. */
     Fast,
 }
 
+/** A row the program writes to its output, or reads from its input, in a pipeline. */
 Row :: struct {
+    /** The row's number, from 1 for a row made; times ten for a row read and written back. */
     id : u64,
+    /** The row's name: the label then its id, for a row made. */
     name : string,
+    /** Slow for a row of odd id, Fast for an even one, for a row made. */
     kind : Speed,
 }
 
+/**
+ * Write what the shell gave on one line of the terminal, or, in a pipeline, write rows.
+ *
+ * @param session_terminal A connection to the shell's terminal, which the line is written on.
+ * @param count A number, written on the line; with an output and no input, how many rows are made; with the label
+ *     "fail", the exit code.
+ * @param label A word, written on the line, and starting each row's name made; "fail" makes the program end with
+ *     count instead of 0.
+ * @param loud A flag, written on the line.
+ * @param speed A choice, written on the line by name, or "none" without it.
+ * @param wait A duration, written on the line in milliseconds, or "none" without it.
+ * @param tags Words, written on the line joined by +, or "none" without them.
+ * @param place A directory beneath the shell's home, written on the line only as whether it was given.
+ * @param input Rows to read, in a pipeline, each written to output with its id times ten; given without an output,
+ *     the program ends with 9. Without it, nothing is read.
+ * @param output Where rows go, in a pipeline: those read from input, or, without one, count rows made after the line
+ *     is written. Without it, no rows are written.
+ * @return 0, or count with the label "fail", once the line or the rows are written. 2 if the terminal couldn't be
+ *     opened; 3 if the line couldn't be made; 9 if there's an input but no output; otherwise what write_rows gives.
+ */
 main :: fn(session_terminal: os.Channel[protocol.Terminal], count: u64, label: string, loud: bool, speed: Speed?, wait: time.Duration?,
     tags: string[]?, place: os.Channel[dir.Dir]?, input: os.Stream[Row]?, output: os.Sink[Row]?) -> int {
     console := terminal.open(session_terminal) or_return 2
@@ -76,7 +103,17 @@ main :: fn(session_terminal: os.Channel[protocol.Terminal], count: u64, label: s
     return 0
 }
 
-/** Rows written: each one read, its id times ten, or count of them made, named after label. */
+/**
+ * Write rows to an output: each one read from an input, its id times ten, or count of them made, named after label.
+ *
+ * @param sink The output, which the rows are written to and which is ended with status 0.
+ * @param input The rows to read; null makes count rows instead.
+ * @param count How many rows to make, without an input.
+ * @param label What each made row's name starts with; "fail" makes the result count instead of 0.
+ * @return 0, or count with the label "fail", once every row is written and the output ended. 4 if the output, or 5
+ *     the input, couldn't be opened; 6 if a row couldn't be written; 7 if a row's name couldn't be made; 8 if the
+ *     output couldn't be ended.
+ */
 write_rows :: fn(sink: os.Sink[Row], input: os.Stream[Row]?, count: u64, label: string) -> int {
     writer := stream.writer_on(sink) or_return 4
     match input {

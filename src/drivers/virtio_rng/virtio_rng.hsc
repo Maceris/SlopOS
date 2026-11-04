@@ -15,22 +15,57 @@ import entropy from "../../protocols/entropy"
 import rng from "../../protocols/rng"
 import virtio from "../../virtio"
 
+/** The bytes of a page: 4096. */
 PAGE : u64 : 4096
+/** The port key the device's interrupt is bound with. */
 IRQ_KEY : u64 : 1
+/** The port key the rng channel's end is bound with, for the entropy service's Reads. */
 REQUESTS_KEY : u64 : 2
-/** The longest the device may take to fill a buffer before a Read is answered with what there is */
+/**
+ * The longest the device may take to fill a buffer, in nanoseconds, 1 s, before a Read is answered with what there is.
+ */
 FILL_NANOSECONDS : u64 : 1_000_000_000
 
+/** The driver's state, main's for its life. */
 Driver :: struct {
+    /** Where its lines go, or NO_HANDLE when it wasn't given a log. */
     log : slop_os.DebugLog,
+    /** The device's registers. */
     transport : virtio.Transport,
+    /** The device's one queue, requestq, which buffers are offered on to fill. */
     queue : virtio.Queue,
-    // The page the device writes into: through the driver's mapping, and where it is to the device
+    /** Where the page the device writes into is, through the driver's mapping. */
     buffer : u64,
+    /** Where the same page is to the device, its device address. */
     buffer_device : u64,
+    /** The one port its interrupt and its channel are bound to. */
     port : slop_os.Port,
 }
 
+/**
+ * Drive a virtio entropy device, and offer it to the entropy service as a source of random bytes.
+ *
+ * It sets the device up, makes a channel of the rng protocol, sends one end to the entropy service in an AddSource,
+ * and answers each Read on the other until the entropy service lets go of it. It's started by the supervisor, for a
+ * device the platform service gave it, with what its driver holds of it.
+ *
+ * @param log The debug log its lines go to; without one, it writes nothing there.
+ * @param device The device, for its MSI.
+ * @param config The device's 4 KiB of configuration space, mapped to find its capabilities and turn bus mastering on.
+ * @param bar0 BAR 0's memory, if the device has it; each BAR given is mapped, for the virtio structures in it.
+ * @param bar1 BAR 1's memory, if the device has it.
+ * @param bar2 BAR 2's memory, if the device has it.
+ * @param bar3 BAR 3's memory, if the device has it.
+ * @param bar4 BAR 4's memory, if the device has it.
+ * @param bar5 BAR 5's memory, if the device has it.
+ * @param domain The DMA domain the device is attached to, which its queue and buffer are made in.
+ * @param entropy_service A connection to the entropy service, to offer the device to; without one, the driver's end
+ *     is closed, and it serves no one.
+ * @return 0 once the entropy service has let go of it; 2 if config couldn't be mapped, 3 if the device isn't a virtio
+ *     one it can drive, 4 if it refused its features, 5 if no port could be made, 6 if its MSI couldn't be set up, 7 if
+ *     its DMA memory couldn't be made or mapped, 8 if its queue couldn't be set up, 9 if its channel couldn't be made,
+ *     10 if the AddSource couldn't be sent.
+ */
 main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memory, bar0: slop_os.Memory?, bar1: slop_os.Memory?,
     bar2: slop_os.Memory?, bar3: slop_os.Memory?, bar4: slop_os.Memory?, bar5: slop_os.Memory?, domain: slop_os.DmaDomain,
     entropy_service: os.Channel[entropy.Entropy]?) -> int {
@@ -85,7 +120,15 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     return 0
 }
 
-/** Every Read on end, until its other end is gone. */
+/**
+ * Answer every Read on a channel, until its other end is gone.
+ *
+ * Each Read is answered with Bytes, as many as the device gave, up to the count asked and rng.MAX_BYTES; an unknown
+ * request is answered Unsupported, and anything else is skipped. It waits on the driver's port between them.
+ *
+ * @param driver The driver, its queue set up and ready.
+ * @param end The driver's end of the rng channel, bound to its port, kept by the caller.
+ */
 serve :: fn(driver: ptr[mut Driver], end: slop_os.Channel) {
     into := os.Incoming.{}
     loop {
@@ -116,7 +159,14 @@ serve :: fn(driver: ptr[mut Driver], end: slop_os.Channel) {
     }
 }
 
-/** count bytes from the device into the buffer: how many it wrote, waiting for its MSI. */
+/**
+ * Have the device fill the buffer with random bytes, and wait for it, at most FILL_NANOSECONDS.
+ *
+ * @param driver The driver, its queue set up and ready.
+ * @param count How many bytes to ask for, at most the buffer's page.
+ * @return How many bytes the device wrote at the buffer's start, at most count; 0 if it didn't finish in time, or no
+ *     descriptor was free. A buffer the device finishes late is taken by the next fill instead.
+ */
 fill :: fn(driver: ptr[mut Driver], count: u32) -> u32 {
     _ = virtio.offer(&driver.queue, driver.buffer_device, count, true)
     deadline :: (slop_os.clock_monotonic() or_else 0) + FILL_NANOSECONDS

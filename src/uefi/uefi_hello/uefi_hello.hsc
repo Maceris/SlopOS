@@ -8,6 +8,11 @@ package uefi_hello
 import runtime from "base"
 import uefi from "std/os"
 
+/**
+ * Add up 1000 numbers from the boot services' pool, log the sum, and turn the machine off.
+ *
+ * @return Never: uefi.reset turns the machine off.
+ */
 main :: fn() -> int {
     numbers : int[..]
     defer runtime.array_free(&numbers)

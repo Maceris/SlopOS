@@ -12,22 +12,41 @@ import slopfs from ".."
  * found by its seal; and the same with AES-256-GCM. Checks from 800.
  */
 
+/** The size of an encryption test's disk, in blocks: 4 MiB. */
 SEALED_BLOCKS : u64 : 1024
+/** The passphrase the tests' encrypted volumes are made with. */
 PASSPHRASE :: "correct horse battery staple"
-/** Argon2id kept cheap for the tests: each mount of an encrypted volume derives its key again */
+/** Argon2id's parameters, kept cheap for the tests: each mount of an encrypted volume derives its key again. */
 TEST_ARGON2 :: crypto.Argon2Parameters.{memory_kib = 64, passes = 1, lanes = 1}
-/** What a file holds, which mustn't be found on the disk */
+/** What a file holds, which mustn't be found on the disk. */
 MARKER :: "a sealed volume's own words"
 
+/**
+ * Get text's bytes.
+ *
+ * @param text The text, whose bytes are viewed, not copied.
+ * @return Its bytes, a view of it.
+ */
 text_of :: fn(text: string) -> u8[] {
     return string_bytes(text)
 }
 
+/**
+ * Get the tests' passphrase as bytes.
+ *
+ * @return PASSPHRASE's bytes.
+ */
 passphrase :: fn() -> u8[] {
     return text_of(PASSPHRASE)
 }
 
-/** Whether bytes are anywhere on the disk, at any offset. */
+/**
+ * Tell whether bytes are anywhere on the disk, at any offset.
+ *
+ * @param disk The test disk, searched, not changed.
+ * @param bytes The bytes looked for.
+ * @return True if they're found; false if not, or if there are none.
+ */
 appears :: fn(disk: ptr[mut Disk], bytes: u8[]) -> bool {
     if bytes.count == 0 || disk.bytes.count < bytes.count {
         return false
@@ -45,7 +64,14 @@ appears :: fn(disk: ptr[mut Disk], bytes: u8[]) -> bool {
     return false
 }
 
-/** A file's chunk's record, at index. */
+/**
+ * Read a file's chunk's record.
+ *
+ * @param volume The volume under test, open.
+ * @param file The file's ID.
+ * @param index The chunk's index.
+ * @return The record; null if the chunk has none, or it couldn't be read.
+ */
 chunk_record :: fn(volume: ptr[mut slopfs.Volume], file: u64, index: u64) -> slopfs.ExtentRecord? {
     record := slopfs.ExtentRecord.{}
     match slopfs.tree_get(volume.nodes, &volume.tree, slopfs.key_of(file, .Extent, index * slopfs.CHUNK_BYTES),
@@ -58,6 +84,12 @@ chunk_record :: fn(volume: ptr[mut slopfs.Volume], file: u64, index: u64) -> slo
     }
 }
 
+/**
+ * Check encrypted volumes with ChaCha20-Poly1305, then with AES-256-GCM.
+ *
+ * @return 0 if every check passed, or the number of the first that failed: 800 to 850 for ChaCha20-Poly1305, 850 to
+ *     900 for AES-256-GCM.
+ */
 check_sealed :: fn() -> int {
     failed := check_cipher(.ChaCha20Poly1305, 800)
     if failed != 0 {
@@ -66,6 +98,16 @@ check_sealed :: fn() -> int {
     return check_cipher(.Aes256Gcm, 850)
 }
 
+/**
+ * Check an encrypted volume: made with a passphrase, written and committed, and nothing of its names or bytes found
+ * anywhere on the disk; locked without its keys, refused with the wrong passphrase, and read back whole with the
+ * right one, a container with it locked still checking out; a new key generation, what was written before readable
+ * and what's written after sealed with it; and a sealed chunk changed, or copied over another, found by its seal.
+ *
+ * @param cipher The cipher the volume is made with: ChaCha20Poly1305 or Aes256Gcm.
+ * @param base The number of the first check, the rest numbered after it.
+ * @return 0 if every check passed, or the number of the first that failed, base to base + 50.
+ */
 check_cipher :: fn(cipher: slopfs.Cipher, base: int) -> int {
     device :: new_device_of(SEALED_BLOCKS) or_return base
     defer free_device(device)

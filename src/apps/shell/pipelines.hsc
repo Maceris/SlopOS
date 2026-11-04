@@ -8,16 +8,22 @@ import slop_os from "std/os"
 import stream from "std/os/slop_os"
 
 /*
- * Pipelines (design/shell.md §4, decisions/0172): a | b | c. Programs next to each other are connected straight: one's
- * Sink[T] named output to the next one's Stream[T] named input, their T checked the same before either starts, and
- * they run together. The shell reads what the last of them writes, each record a value by its manifest's schema, and
- * writes what comes before the first, each value a record. The built-in stages, where, map, sort, take and group, and
- * a value as the first stage, work on those values in the shell, a list, so a filter needs no process.
+ * Pipelines (design/shell.md §4, decisions/0172): a | b | c. Programs next to each other are connected straight:
+ * one's Sink[T] named output to the next one's Stream[T] named input, their T checked the same before either starts,
+ * and they run together. The shell reads what the last of them writes, each record a value by its manifest's schema,
+ * and writes what comes before the first, each value a record. The built-in stages, where, map, sort, take and group,
+ * and a value as the first stage, work on those values in the shell, a list, so a filter needs no process.
  */
 
 /** The built-in stages. */
 STAGES :: string.["where", "map", "sort", "take", "group"]
 
+/**
+ * Tell whether a pipeline's element is a built-in stage.
+ *
+ * @param tree One of a Pipeline node's children, of any kind; only a Call's name is looked at.
+ * @return True for a call named one of STAGES.
+ */
 is_stage :: fn(tree: ptr[Node]) -> bool {
     if tree.kind != .Call {
         return false
@@ -31,7 +37,12 @@ is_stage :: fn(tree: ptr[Node]) -> bool {
 }
 
 /**
- * Whether a pipeline's element is a program's call: a call that isn't a variable, a built-in, a stage or a function.
+ * Tell whether a pipeline's element is a program's call: a call that isn't a variable, a built-in, a stage or a
+ * function.
+ *
+ * @param shell The shell, whose names and functions are looked in.
+ * @param tree One of a Pipeline node's children, of any kind; anything but a Call isn't a program's.
+ * @return True if it's a program's call; whether there's such a program isn't asked.
  */
 is_program :: fn(shell: ptr[Shell], tree: ptr[Node]) -> bool {
     if tree.kind != .Call || is_stage(tree) || tree.text == "print" || tree.text == "exit" || tree.text == "cd" {
@@ -40,7 +51,18 @@ is_program :: fn(shell: ptr[Shell], tree: ptr[Node]) -> bool {
     return (lookup(shell.scope, tree.text) is_none) && (function_named(shell, tree.text) is_none)
 }
 
-/** A pipeline's value: what its last stage gives. */
+/**
+ * Evaluate a pipeline: programs next to each other run together, built-in stages work on what came before them, and
+ * the first element may be any value.
+ *
+ * It fails with the first error a stage or program meets, for a stage with nothing before it, or for an element after
+ * the first that's neither a program nor a stage.
+ *
+ * @param shell The shell: its scope and functions say what each element is, and it runs the programs and evaluates
+ *     the rest, as run_programs, run_stage and evaluate do.
+ * @param tree The Pipeline node, its elements its children.
+ * @return What its last stage gives; Null for a pipeline of nothing.
+ */
 pipeline :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     current : Value? = null
     at : usize = 0
@@ -79,8 +101,21 @@ pipeline :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Valu
 // ---- Programs
 
 /**
- * Programs run together, each one's output to the next one's input, given what comes before the first, if anything:
- * what the last one writes, a list, or nothing if it has no output. The first to fail is the error.
+ * Run programs together, each one's output to the next one's input, given what comes before the first, if anything.
+ *
+ * Each is prepared, and their inputs and outputs checked, before any starts; then they're started in order, each
+ * watched under CALL_KEY and the keys after it, what's given is written, what the last writes read, and each waited
+ * for. Everything they held is given back before this returns.
+ *
+ * It fails if a program can't be prepared or started, one reads from a pipeline and has nothing before it or takes
+ * nothing and has, one before another writes nothing, two next to each other write and read different types, what's
+ * given can't be written, or the last one's output can't be read; or with the first program's error, by exit code.
+ *
+ * @param shell The shell, whose process manager, home and programs connection the programs are prepared and started
+ *     through, and whose port their ends are watched on; it waits on that port until every one has ended.
+ * @param trees The programs' Call nodes, in order, at least one.
+ * @param given What comes before the first, written to its input; null if nothing does.
+ * @return What the last one writes, a list of its records as values; Null if it has no output.
  */
 run_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping : Value?) -> Result[Value, EvalError] {
     running := runtime.new(Running)
@@ -192,19 +227,31 @@ run_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping : 
     }
 }
 
+/** No channel: what Running's into and from are without a stream. */
 NO_END :: cast[slop_os.Channel](slop_os.NO_HANDLE)
 
 /**
- * Programs running together, on the heap: their calls, and the shell's ends of the streams into the first and from the last.
+ * Programs running together, on the heap: their calls, and the shell's ends of the streams into the first and from
+ * the last.
  */
 Running :: struct {
+    /** The programs' calls, in order, each the Running's to end. */
     calls : ptr[mut Call][..],
+    /** The shell's writing end of the stream into the first; NO_END without one. Once writer's open, it's writer's. */
     into : slop_os.Channel,
+    /** The shell's reading end of the stream from the last; NO_END without one, or once read_output has taken it. */
     from : slop_os.Channel,
+    /** The writer open on into, once what's given is being written; null until then. */
     writer : stream.Writer[stream.Untyped]?,
 }
 
-/** What programs running together held, given back, each waited for first if it started. */
+/**
+ * Give back what programs running together held: the stream ends and writer closed, then each call waited for, if it
+ * started, and ended.
+ *
+ * @param shell The shell, whose port the programs' ends are waited on.
+ * @param running The programs, freed: it can't be used after.
+ */
 end_running :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) {
     match running.writer {
         case Some(writer) => {
@@ -228,6 +275,12 @@ end_running :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) {
     runtime.free(running)
 }
 
+/**
+ * Make a stream's channel: its two ends, tagged with the stream protocol.
+ *
+ * @param budget The memory budget that pays for the channel.
+ * @return The ends, a the writing end and b the reading end, the caller's; null if the channel couldn't be made.
+ */
 stream_ends :: fn(budget: slop_os.MemoryBudget) -> slop_os.ChannelPair? {
     match slop_os.channel_create(budget, 0, os.protocol_tag[stream.Stream]()) {
         case Ok(pair) => return pair
@@ -235,6 +288,13 @@ stream_ends :: fn(budget: slop_os.MemoryBudget) -> slop_os.ChannelPair? {
     }
 }
 
+/**
+ * Tell whether two schema hashes are the same.
+ *
+ * @param a A schema's 32-byte hash, as schema.hash_rooted gives it.
+ * @param b The hash it's compared with, of the same form; the order doesn't matter.
+ * @return True if every byte is the same.
+ */
 same_hash :: fn(a: u8[32], b: u8[32]) -> bool {
     for byte, i in a {
         if i < b.count && byte != b[i] {
@@ -245,8 +305,19 @@ same_hash :: fn(a: u8[32], b: u8[32]) -> bool {
 }
 
 /**
- * What comes before the first program, written for it: each item of a list, or the value alone, as a record of its
+ * Write what comes before the first program for it: each item of a list, or the value alone, as a record of its
  * input's type, into a ring big enough for all of them, so writing never waits for the program to read.
+ *
+ * Every item is encoded before anything's written; then the writer is opened on the Running's into, without waiting
+ * for the program's answer, the records put, and the stream ended without waiting.
+ *
+ * It fails if the program has no input, an item can't be written as its input's type, or the stream can't be opened
+ * or written.
+ *
+ * @param running The programs, whose into the writer is opened on and kept in writer, for end_running to close.
+ * @param call The first program's call, started.
+ * @param given What's given: a list's items, nothing for Null, or a value alone.
+ * @return Null.
  */
 write_given :: fn(running: ptr[mut Running], call: ptr[mut Call], given #escaping : Value) -> Result[Value, EvalError] {
     reading :: parameter_giving(call, .Input) or_return error_at(call.tree.at, "it has no input")
@@ -296,7 +367,16 @@ write_given :: fn(running: ptr[mut Running], call: ptr[mut Call], given #escapin
     return .Ok(.Null)
 }
 
-/** What the last program writes, read: a list of its records as values, by its manifest. */
+/**
+ * Read what the last program writes, until it ends: a list of its records as values, by its manifest.
+ *
+ * It fails if the program writes another type than its manifest says, or the stream can't be opened. A program that
+ * ended without opening its output wrote nothing.
+ *
+ * @param running The programs, whose from is taken, and closed once it's read.
+ * @param call The last program's call, started.
+ * @return The records, a list, empty if it wrote nothing.
+ */
 read_output :: fn(running: ptr[mut Running], call: ptr[mut Call]) -> Result[Value, EvalError] {
     writes :: parameter_giving(call, .Output) or_return error_at(call.tree.at, "it has no output")
     end :: running.from
@@ -325,9 +405,19 @@ read_output :: fn(running: ptr[mut Running], call: ptr[mut Call]) -> Result[Valu
 // ---- Records as values
 
 /**
- * A value of the type at place, at `at` in a record's bytes (as std/schema's write_value writes one), as the shell's:
- * integers, bools, text, an enum's member's name, a duration, a record of a struct's fields, an optional's value or
- * null, and a list of an array's items. Text is copied: the record's bytes are the stream's.
+ * Read a value of the type at a place, at an offset in a record's bytes (as std/schema's write_value writes one), as
+ * the shell's: integers, bools, text, an enum's member's name, a duration, a record of a struct's fields, an
+ * optional's value or null, a union's variant as a record of it, and a list of an array's items.
+ *
+ * Bytes that aren't there read as 0, so a cut-short record gives zeros and empty text, never a fault.
+ *
+ * @param manifest The program's manifest, whose types the record's are; only read.
+ * @param place The type's place among the manifest's types, an alias's followed to what it names.
+ * @param bytes The record's bytes, the stream's, which nothing's kept of: text and names are copied to the heap.
+ * @param at Where the value starts in bytes.
+ * @param depth How deeply nested it is, from 0; past 16 it's Null, so a looping type can't recurse forever.
+ * @return The value; Null for a type the shell doesn't read, or one not in the manifest. An enum's value without a
+ *     member is an Int.
  */
 decode :: fn(manifest: ptr[schema.Schema], place: usize, bytes: u8[], at: usize, depth: usize) -> Value {
     type :: schema.type_in(manifest, schema.unaliased_place(manifest, place)) or_return Value.Null
@@ -439,7 +529,14 @@ decode :: fn(manifest: ptr[schema.Schema], place: usize, bytes: u8[], at: usize,
     return .Null
 }
 
-/** count bytes at `at`, little-endian; 0 if they aren't all there. */
+/**
+ * Read a little-endian number.
+ *
+ * @param bytes The bytes read from, a record's; only read.
+ * @param at Where it starts, in bytes.
+ * @param count How many bytes it is, at most 8.
+ * @return The number; 0 if the bytes aren't all there, or count is past 8.
+ */
 number_in :: fn(bytes: u8[], at: usize, count: usize) -> u64 {
     if count > 8 || at > bytes.count || count > bytes.count - at {
         return 0
@@ -451,7 +548,14 @@ number_in :: fn(bytes: u8[], at: usize, count: usize) -> u64 {
     return result
 }
 
-/** count bytes at `at`, as text of the shell's own; "" if they aren't all there. */
+/**
+ * Copy bytes as text of the shell's own.
+ *
+ * @param bytes The bytes the text is copied from, a record's; nothing of them is kept.
+ * @param at Where the text starts, in bytes.
+ * @param count How many bytes it is.
+ * @return The text, on the heap, never freed; "" if the bytes aren't all there, there are none, or there's no memory.
+ */
 text_in :: fn(bytes: u8[], at: usize, count: usize) -> string {
     if count == 0 || at >= bytes.count || count > bytes.count - at {
         return ""
@@ -461,7 +565,18 @@ text_in :: fn(bytes: u8[], at: usize, count: usize) -> string {
 
 // ---- The built-in stages
 
-/** A built-in stage's value, from what came before it. */
+/**
+ * Run a built-in stage on what came before it: where keeps the items its expression is true for, map makes each
+ * item its expression's value, take keeps the first n, sort orders them, and group groups them by a field.
+ *
+ * It fails for where or map without an expression, an expression's error, where's expression not a bool, or take's,
+ * sort's or group's errors.
+ *
+ * @param shell The shell, in whose scope the expressions are evaluated.
+ * @param stage The stage's Call node.
+ * @param given What came before it: a list's items, nothing for Null, or a value alone.
+ * @return A new list; given's own isn't changed.
+ */
 run_stage :: fn(shell: ptr[mut Shell], stage #escaping : ptr[Node], given #escaping : Value) -> Result[Value, EvalError] {
     items :: items_of(given).items
     made :: new_list()
@@ -497,7 +612,13 @@ run_stage :: fn(shell: ptr[mut Shell], stage #escaping : ptr[Node], given #escap
     return grouped(shell, stage, items)
 }
 
-/** What a stage works on: a list's items, nothing for null, or a value alone. */
+/**
+ * Find what a stage works on: a list's items, nothing for null, or a value alone.
+ *
+ * @param given What came before the stage: a List's own list is given back, Null is no items, and anything else is
+ *     one item, kept by the new list.
+ * @return The list itself for a List, so changing it changes given; a new list otherwise.
+ */
 items_of :: fn(given #escaping : Value) -> ptr[mut ValueList] {
     match given {
         case List(list) => return list
@@ -510,7 +631,16 @@ items_of :: fn(given #escaping : Value) -> ptr[mut ValueList] {
     }
 }
 
-/** An expression's value for one item: its fields bound as names, and the item itself as it. */
+/**
+ * Evaluate an expression for one item, in a scope of its own: a record's fields bound as names, and the item itself
+ * as it.
+ *
+ * @param shell The shell, whose scope the item's is in while it's evaluated, and is again after.
+ * @param item The item, kept by the scope.
+ * @param expression The expression's node, evaluated once for this item; its names find the record's fields and it
+ *     before the shell's own.
+ * @return The expression's value, or its error, as evaluate gives it.
+ */
 of_item :: fn(shell: ptr[mut Shell], item #escaping : Value, expression #escaping : ptr[Node]) -> Result[Value, EvalError] {
     scope := runtime.new(Scope)
     scope.parent = shell.scope
@@ -532,7 +662,15 @@ of_item :: fn(shell: ptr[mut Shell], item #escaping : Value, expression #escapin
     return result
 }
 
-/** take's count: its one argument, a whole number. */
+/**
+ * Find take's count: its first argument, a whole number.
+ *
+ * It fails without an argument, with one that isn't a whole number, or with its evaluation's error.
+ *
+ * @param shell The shell, which evaluates an argument that isn't a bare word.
+ * @param stage take's Call node.
+ * @return How many items it keeps; 0 or less keeps none.
+ */
 stage_number :: fn(shell: ptr[mut Shell], stage: ptr[Node]) -> Result[i64, EvalError] {
     argument :: first_child(stage) or_return .Error(EvalError.{message = "take needs how many", at = stage.at})
     value :: if argument.kind == .Word { word_as("int", argument.text) or_else Value.Null } else { evaluate(shell, argument)? }
@@ -542,7 +680,13 @@ stage_number :: fn(shell: ptr[mut Shell], stage: ptr[Node]) -> Result[i64, EvalE
     }
 }
 
-/** The field a stage's first word names, and whether --descending follows: "" for the items themselves. */
+/**
+ * Find the field a stage's bare word names, and whether it has --descending.
+ *
+ * @param stage The stage's Call node; of several bare words, the last is the field.
+ * @return field The field's name, a view of the line; "" for the items themselves.
+ * @return descending Whether --descending is among its arguments.
+ */
 stage_field :: fn(stage: ptr[Node]) -> (field : string, descending : bool) {
     field := ""
     descending := false
@@ -557,7 +701,13 @@ stage_field :: fn(stage: ptr[Node]) -> (field : string, descending : bool) {
     return field, descending
 }
 
-/** An item's field by name, or the item for "". */
+/**
+ * Find what an item is sorted or grouped by: a field of it, or itself.
+ *
+ * @param item The item, of any kind; what's given back shares any list or record in it.
+ * @param name The field's name; "" for the item itself.
+ * @return The field's value, or the item; Null for an item that isn't a record, or hasn't the field.
+ */
 key_of :: fn(item: Value, name: string) -> Value {
     if name.count == 0 {
         return item
@@ -569,7 +719,13 @@ key_of :: fn(item: Value, name: string) -> Value {
 }
 
 /**
- * sort [field] [--descending]: the items in order, by the field, or by themselves; those that don't compare stay put.
+ * Sort items, for sort [field] [--descending]: in order by the field, or by themselves, those that don't compare
+ * staying in the order they came. Equal ones keep their order too.
+ *
+ * @param shell The shell; not used, since sort evaluates nothing.
+ * @param stage sort's Call node.
+ * @param items The items, which aren't changed.
+ * @return A new list of them, sorted.
  */
 sorted :: fn(shell: ptr[mut Shell], stage: ptr[Node], items #escaping : Value[]) -> Result[Value, EvalError] {
     field, descending :: stage_field(stage)
@@ -602,7 +758,15 @@ sorted :: fn(shell: ptr[mut Shell], stage: ptr[Node], items #escaping : Value[])
 }
 
 /**
- * group field: a record for each of the field's values, in the order they first come: the value, how many, and the items.
+ * Group items, for group field: a record for each of the field's values, in the order they first come, of the value
+ * (named as the field), count, how many, and items, the items with it.
+ *
+ * A field named count or items is overwritten by the group's own. It fails without a field.
+ *
+ * @param shell The shell; not used, since group evaluates nothing.
+ * @param stage group's Call node.
+ * @param items The items, which aren't changed.
+ * @return A new list of the groups.
  */
 grouped :: fn(shell: ptr[mut Shell], stage: ptr[Node], items #escaping : Value[]) -> Result[Value, EvalError] {
     name, descending :: stage_field(stage)

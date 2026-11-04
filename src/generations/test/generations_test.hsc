@@ -8,6 +8,11 @@ package generations_test
 import bundle from "../../bundle"
 import generations from ".."
 
+/**
+ * Run the checks: a good record is accepted, broken ones are refused, and a record is read back from its bytes.
+ *
+ * @return 0 if every check passed, or the number of the first that failed, 1 to 13.
+ */
 main :: fn() -> int {
     made := generation(7, generations.STATE_PERMANENT)
     if generations.check(&made) is_some {
@@ -79,7 +84,13 @@ main :: fn() -> int {
     return 0
 }
 
-/** A generation numbered number, of the root task and the system records, with test_exit on its command line. */
+/**
+ * Make a generation that check accepts: of the root task and the system records, with test_exit on its command line.
+ *
+ * @param number The generation's number; not 0 nor RECOVERY_NUMBER, for check to accept it.
+ * @param state Its state, STATE_TENTATIVE or STATE_PERMANENT for check to accept it; its tries_left is left 0.
+ * @return The generation, kaslr on, the hashes made from fixed text.
+ */
 generation :: fn(number: u64, state: u8) -> generations.Generation {
     made := generations.Generation.{magic = generations.MAGIC, number = number, state = state, kaslr = 1, file_count = 2}
     made.kernel = bundle.hash_of(string_bytes("a kernel"))

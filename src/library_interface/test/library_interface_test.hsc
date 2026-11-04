@@ -9,17 +9,28 @@ import runtime from "base"
 import library_interface from ".."
 
 // Where the made library's parts are
+/** The interface record's address, and its offset in the file, which are the same: the library's entry. */
 RECORD : u64 : 128
+/** The exports' address and offset, each EXPORT_SIZE bytes after the last; room for 13 of them. */
 EXPORTS : u64 : 256
+/** Where the exports' names' bytes go, one after another. */
 NAMES : u64 : 1024
+/** The made library's memory, in bytes; its file, as file_size reads it, is 64 bytes shorter. */
 SIZE : u64 : 2048
 
 /** An export of a made library: its name, and the byte its type's hash is made of. */
 Made :: struct {
+    /** The export's name, copied into the library. */
     name : string,
+    /** The byte each of the type's hash's 32 bytes is, so exports of the same byte have the same type. */
     type : u8,
 }
 
+/**
+ * Run the checks: libraries that can and can't stand in for one, bytes that aren't a library, and a file's length.
+ *
+ * @return 0 if every check passed, or the number of the first that failed, 1 to 7.
+ */
 main :: fn() -> int {
     old : u8[SIZE]
     new : u8[SIZE]
@@ -58,7 +69,16 @@ main :: fn() -> int {
     return 0
 }
 
-/** A library made in bytes: its header, its segment, its record of convention, and exports. */
+/**
+ * Make a library in bytes: its header, one loadable segment of the file at address 0, and its record at its entry.
+ *
+ * Its pointers are written in place, with no relocations, which library_interface reads as the file's bytes.
+ *
+ * @param bytes Where the library is made, all overwritten.
+ * @param convention The record's calling convention; any value.
+ * @param exports The record's exports, in order: at most 13, their names together at most 896 bytes, for them to
+ *     fit where they're put, in the segment's 1920 bytes.
+ */
 make :: fn(bytes: ptr[mut u8[SIZE]], convention: u64, exports: Made[]) {
     for i in 0..<bytes.count {
         bytes^[i] = 0
@@ -94,7 +114,14 @@ make :: fn(bytes: ptr[mut u8[SIZE]], convention: u64, exports: Made[]) {
     }
 }
 
-/** size bytes of value, little-endian, at offset. */
+/**
+ * Write a number into the made library, little-endian.
+ *
+ * @param bytes The library's bytes; those past its end aren't written.
+ * @param offset Where the number goes, in bytes.
+ * @param size How many bytes it takes, 0 to 8.
+ * @param value The number; its low size bytes are written.
+ */
 put :: fn(bytes: ptr[mut u8[SIZE]], offset: u64, size: u64, value: u64) {
     for i in cast[u64](0)..<size {
         at :: cast[usize](offset + i)
