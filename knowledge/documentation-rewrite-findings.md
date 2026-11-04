@@ -85,7 +85,7 @@ confirmed against the code before it was fixed; what each became is marked on it
 - **Hemera `std/os/linux.hsc`**: closing the zero File or Directory closes descriptor 0.
   *Fixed: the zero File or Directory closes nothing.*
 - **Hemera `std/logger`**: Options without `stream` write to standard output, though the comment says standard error.
-  *Fixed: Options has to_output, false by default, so a literal leaving it out logs to standard error.*
+  *Fixed: Options.stream defaults to ERROR, so a literal leaving it out logs to standard error.*
 - **Hemera `std/crypto/blake2b.hsc` `blake2b_finish`**: output past the hasher's size is zeros, then repeats.
   *Fixed: zeros past the digest, however long.*
 - **Hemera `std/time`**: tiered Freestanding, but `parse_zone` allocates.
