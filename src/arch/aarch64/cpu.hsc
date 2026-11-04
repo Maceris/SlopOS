@@ -41,6 +41,11 @@ ArchCpu :: struct #align(64) {
     mpidr : u64,
     /** This CPU's GIC redistributor's registers, a virtual address through the direct map, or 0 if none was found. */
     redistributor : u64,
+    /**
+     * The GIC interrupt ID of the device interrupt this CPU took and hasn't ended yet, as ICC_IAR1_EL1 read it, which
+     * end_of_interrupt ends; NO_ACTIVE_INTERRUPT when there's none.
+     */
+    active_interrupt : u32,
     /** Whether the CPU is still on the bootloader's page tables, until the first activate flushes its TLB. */
     bootloader_tables : bool,
 }
@@ -292,6 +297,7 @@ init_cpu :: fn(
     cpu.console = system.console
     cpu.system = cast[u64](system)
     cpu.mpidr = affinity_of_this_cpu()
+    cpu.active_interrupt = NO_ACTIVE_INTERRUPT
     cpu.bootloader_tables = true
     aarch64.write_system_register(.TPIDR_EL1, cast[u64](cpu))
     aarch64.write_system_register(.VBAR_EL1, system.vectors)

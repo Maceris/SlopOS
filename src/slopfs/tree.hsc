@@ -1114,14 +1114,39 @@ put_into :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockPoi
     }
     if level_of(node) == 0 {
         index, found :: leaf_find(node, key)
+        /*
+         * The key's old value, copied aside before it's taken out, so a split that fails (no memory, no space) puts it
+         * back, and a failed put changes nothing the next commit would write
+         */
+        old : u8[]
         if found {
+            kept, error :: runtime.new_array(u8, value_of(node, index).count)
+            if error != null {
+                return .Error(.OutOfMemory)
+            }
+            for byte, i in value_of(node, index) {
+                if i < kept.count {
+                    kept[i] = byte
+                }
+            }
+            old = kept
             leaf_remove(node, index)
         }
+        defer runtime.free_array(old)
         if leaf_used(node) + ITEM_SIZE + value.count <= NODE_SIZE - HEADER_SIZE && count_of(node) < LEAF_CAPACITY {
             leaf_insert(node, index, key, value)
             return .Ok(null)
         }
-        return .Ok(split_leaf(nodes, tree, node, index, key, value)?)
+        match split_leaf(nodes, tree, node, index, key, value) {
+            case Ok(split) => return .Ok(split)
+            case Error(error) => {
+                // Back as it was: it fit before it was taken out
+                if found {
+                    leaf_insert(node, index, key, old)
+                }
+                return .Error(error)
+            }
+        }
     }
     index :: branch_find(node, key)
     split :: put_into(nodes, tree, &entry_at(node, index).child, level_of(node), key, value)?
@@ -1163,8 +1188,9 @@ tree_delete :: fn(nodes: ptr[mut Nodes], tree: ptr[mut Tree], key: Key) -> Resul
      */
     root :: load(nodes, tree, &tree.root)?
     if level_of(root) > 0 && count_of(root) == 0 {
-        discard(nodes, tree, &tree.root)
+        // The new leaf made first, so a failure to make it leaves the root as it was, not discarded
         leaf :: new_node(nodes, tree, 0)?
+        discard(nodes, tree, &tree.root)
         tree.root = leaf.pointer
     }
     else if level_of(root) > 0 && count_of(root) == 1 {

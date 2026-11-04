@@ -112,6 +112,46 @@ Layout :: struct {
 }
 
 /**
+ * Where a builder stages what it builds, in its own address space, kept from build to build: the image's addresses,
+ * and the startup block's. Zero is none yet.
+ */
+Staging :: struct {
+    /** Each area's address, 0 for none yet: the image's first, then the startup block's. */
+    addresses : u64[2],
+    /** Each area's size in bytes, a whole number of pages. */
+    sizes : u64[2],
+}
+
+/**
+ * Give an address to stage size bytes at, from staging's area if it's big enough, or else a new area of the builder's
+ * free range, at least twice the old one so a run of growing builds takes few.
+ *
+ * @param staging The builder's staging, whose area is replaced when it's too small; null takes new addresses.
+ * @param area Which area: 0 for the image, 1 for the startup block.
+ * @param size How many bytes are to be mapped there, in bytes.
+ * @return The area's address, page aligned, with at least size bytes nothing else uses; null if the free range has no
+ *     room left.
+ */
+staged :: fn(staging: ptr[mut Staging]?, area: usize, size: u64) -> u64? {
+    match staging {
+        case Some(kept) => {
+            if area >= kept.addresses.count || area >= kept.sizes.count {
+                return null
+            }
+            if kept.addresses[area] != 0 && kept.sizes[area] >= size {
+                return kept.addresses[area]
+            }
+            wanted :: if kept.sizes[area] * 2 > size { kept.sizes[area] * 2 } else { page_up(size) }
+            address :: runtime.reserve_addresses(cast[usize](wanted)) or_return null
+            kept.addresses[area] = address
+            kept.sizes[area] = wanted
+            return address
+        }
+        case None => return runtime.reserve_addresses(cast[usize](size))
+    }
+}
+
+/**
  * Build a process from an executable in the target, and start its first thread.
  *
  * The image, stack and startup block are made, each a memory object charged to the target's budget, and mapped at
@@ -121,8 +161,9 @@ Layout :: struct {
  *
  * On a failure the handles made are closed, but what's already mapped in the target's space stays: the target is the
  * requester's to destroy. The grants and the target's space are the caller's still, unless only starting the thread
- * failed, by when they've gone to the process. Addresses the builder took from its own free range for staging aren't
- * given back, even on success.
+ * failed, by when they've gone to the process. The builder stages the image and the startup block at addresses from
+ * its own free range, which can't be given back: given staging, the same ones are used again for every build, and a
+ * bigger one taken only when a build needs it; without, each build takes new ones, for good.
  *
  * @param target The process, address space and budget to build into, with the rights Target's fields say.
  * @param file The whole executable file; only read, and not kept.
@@ -135,6 +176,9 @@ Layout :: struct {
  *     where the handle allows; null maps every segment from the image.
  * @param abi_version The ABI version the startup block says: the kernel's, unless a test asks for another to see a
  *     program refuse it.
+ * @param staging Where the builder stages, kept from build to build by a caller that builds many processes over its
+ *     life, so its free range isn't used up; null for a caller that builds few, which takes new addresses each time.
+ *     Not safe to share between builds running at once.
  * @return The ID of the process's first thread, not a handle: the caller doesn't own it.
  * @error TooManyGrants There are more than MAX_GRANTS grants; nothing is made.
  * @error NotAProgram elf_loader can't read, load or relocate the file.
@@ -144,7 +188,7 @@ Layout :: struct {
  *     go to the process, or the thread couldn't be started.
  */
 build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: ptr[mut random_stream.Stream], source: slop_os.Memory? = null,
-    abi_version: u32 = slop_os.ABI_VERSION) -> Result[u64, BuildError] {
+    abi_version: u32 = slop_os.ABI_VERSION, staging: ptr[mut Staging]? = null) -> Result[u64, BuildError] {
     if grants.count > MAX_GRANTS {
         return .Error(.TooManyGrants)
     }
@@ -162,13 +206,13 @@ build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: p
 
     // The image, loaded and relocated where the builder can reach it, then mapped a segment at a time
     image :: memory(&made, target.budget, executable.size)?
-    staging :: runtime.reserve_addresses(cast[usize](executable.size)) or_return .Error(.NoAddresses)
+    image_staging :: staged(staging, 0, executable.size) or_return .Error(.NoAddresses)
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    slop_os.memory_map(image, own, staging, 0, executable.size, read_write) or_return .Error(.NoMemory)
-    contents :: view_of(cast[ptr[mut u8]](staging), cast[usize](executable.size))
+    slop_os.memory_map(image, own, image_staging, 0, executable.size, read_write) or_return .Error(.NoMemory)
+    contents :: view_of(cast[ptr[mut u8]](image_staging), cast[usize](executable.size))
     loaded :: elf_loader.load(&executable, file, contents)
     relocated :: elf_loader.relocate(&executable, file, contents, layout.image)
-    slop_os.memory_unmap(own, staging) or_return .Error(.Failed)
+    slop_os.memory_unmap(own, image_staging) or_return .Error(.Failed)
     loaded or_return .Error(.NotAProgram)
     relocated or_return .Error(.NotAProgram)
     map_segments(&executable, image, space, layout.image, source)?
@@ -176,7 +220,7 @@ build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: p
     stack :: memory(&made, target.budget, STACK_SIZE)?
     slop_os.memory_map(stack, space, layout.stack, 0, STACK_SIZE, read_write) or_return .Error(.NoMemory)
     block_memory :: memory(&made, target.budget, block_size)?
-    block_staging :: runtime.reserve_addresses(cast[usize](block_size)) or_return .Error(.NoAddresses)
+    block_staging :: staged(staging, 1, block_size) or_return .Error(.NoAddresses)
     slop_os.memory_map(block_memory, own, block_staging, 0, block_size, read_write) or_return .Error(.NoMemory)
     defer _ = slop_os.memory_unmap(own, block_staging)
     slop_os.memory_map(block_memory, space, layout.block, 0, block_size, slop_os.PROTECTION_READ) or_return .Error(.NoMemory)

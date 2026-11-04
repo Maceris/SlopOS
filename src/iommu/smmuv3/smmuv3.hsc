@@ -1,6 +1,7 @@
 package iommu_smmuv3
 
 import intrinsics from "base"
+import runtime from "base"
 import aarch64 from "base/intrinsics"
 import iommu_interface from "../../iommu_interface"
 
@@ -662,7 +663,9 @@ invalidate_stream :: fn(iommu: ptr[mut Iommu], stream: u32, vmid: u32) {
 /**
  * Put a command on the command queue, and tell the SMMU.
  *
- * It waits, up to SPINS spins, while the queue is full; after that the command is written anyway.
+ * It waits while the queue is full, for as long as the SMMU is reading it: a command written over one it hasn't read
+ * would be lost, and a lost invalidation leaves stale translations in use. If the SMMU has stopped at an erroneous
+ * command, it never reads on, so the kernel stops (an assertion) rather than wait for good or overwrite a command.
  *
  * @param iommu The SMMU, its command queue on; its command_producer moves past the command.
  * @param first The command's first word: its opcode and fields.
@@ -670,12 +673,13 @@ invalidate_stream :: fn(iommu: ptr[mut Iommu], stream: u32, vmid: u32) {
  */
 submit :: fn(iommu: ptr[mut Iommu], first: u64, second: u64) {
     size :: cast[u32](1) << cast[u32](QUEUE_LOG)
-    for spin in 0..<SPINS {
+    loop {
         consumer :: read_u32(iommu, COMMAND_CONSUMER)
         // Full: the same index, the other wrap
         if (iommu.command_producer ~ consumer) & ((size << 1) - 1) != size {
             break
         }
+        runtime.assert(consumer & CONSUMER_ERROR == 0, "the SMMU's command queue stopped at an erroneous command")
         intrinsics.spin_hint()
     }
     at :: iommu.commands + cast[u64](iommu.command_producer & (size - 1)) * COMMAND_BYTES

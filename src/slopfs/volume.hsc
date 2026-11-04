@@ -211,6 +211,10 @@ create_sealed_volume :: fn(container #escaping : ptr[mut Container], name: strin
     if cipher == .None {
         return create_volume(container, name, hash_key, now)
     }
+    // The name checked before any key record is put under the next volume's ID, so a bad one leaves none behind
+    if name.count == 0 || name.count > VOLUME_NAME_BYTES {
+        return .Error(.InvalidName)
+    }
     id :: container.next_volume
     keys :: new_keys(cipher)?
     keys.volume_key = random_key()
@@ -1751,16 +1755,17 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
     }
     else {
         blocks :: (cast[u64](used) + BLOCK_BYTES - 1) / BLOCK_BYTES
+        length :: cast[usize](blocks * BLOCK_BYTES)
+        // Checked before blocks are taken, so this failure has none to give back
+        if length > buffer.count {
+            return .Error(.Corrupt)
+        }
         nodes :: volume.nodes
         address :: nodes.allocate(nodes.space, blocks, volume.id, true) or_return .Error(.NoSpace)
-        length :: cast[usize](blocks * BLOCK_BYTES)
         device :: volume.device
         extent := ExtentRecord.{kind = cast[u32le](cast[u32](ExtentKind.Blocks)), bytes = cast[u32le](cast[u32](used))}
         extent.pointer = BlockPointer.{address = cast[u64le](address), birth = cast[u64le](nodes.transaction),
             blocks = cast[u32le](cast[u32](blocks))}
-        if length > buffer.count {
-            return .Error(.Corrupt)
-        }
         // Encrypted, what's written is sealed, and the pointer takes its seal and generation
         written := part(buffer, 0, length)
         sealed : ptr[mut ChunkBuffer]? = null
@@ -1776,6 +1781,7 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
                 sealed = made
                 if !seal_block(keys, volume.id, &extent.pointer, part(buffer, 0, length), mut_part(made.bytes, 0, length)) {
                     runtime.free(made)
+                    nodes.release(nodes.space, address, blocks, volume.id, nodes.transaction)
                     return .Error(.Corrupt)
                 }
                 written = part(made.bytes, 0, length)
@@ -2185,9 +2191,25 @@ rotate :: fn(container: ptr[mut Container], volume: ptr[mut Volume]) -> Result[u
     committed :: volume_record(container, volume.id)?
     key_owner :: key_owner_of(volume.id, &committed)
     // Numbered after the newest of the key records', which a clone shares with its origin
-    keys.current = newest_generation(container, key_owner)?
-    record := start_generation(keys, container.nodes.transaction, container.id, key_owner) or_return .Error(.Corrupt)
-    put_generation(container, key_owner, keys.current, &record)?
+    newest :: newest_generation(container, key_owner)?
+    // What's sealed with until now, restored if the new generation can't be kept, so nothing's sealed with a key no
+    // record holds
+    previous :: keys.current
+    keys.current = newest
+    record := match start_generation(keys, container.nodes.transaction, container.id, key_owner) {
+        case Some(made) => made
+        case None => {
+            keys.current = previous
+            return .Error(.Corrupt)
+        }
+    }
+    match put_generation(container, key_owner, keys.current, &record) {
+        case Ok => {}
+        case Error(error) => {
+            drop_generation(keys, previous)
+            return .Error(error)
+        }
+    }
     volume.dirty = true
     return .Ok(keys.current)
 }

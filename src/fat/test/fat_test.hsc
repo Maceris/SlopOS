@@ -46,10 +46,11 @@ Undo :: struct {
  * They check that an empty buffer doesn't mount and a formatted one does, with FSInfo's free count; that 8.3 and long
  * names are made, found in any case, and given aliases; that refused names and paths are refused; that a file is
  * written across clusters, read back whole and from its middle, cut and grown with zeros; that entries are renamed
- * and removed, and a directory with something in it isn't; that it all, and FSInfo's count, is there mounted again;
- * then check_failed_writes and check_fuzz.
+ * and removed, and a directory with something in it isn't; that a file renamed over another replaces it, a rename
+ * that changes only case is allowed, and a write past the end reads zeros in the gap; that it all, and FSInfo's
+ * count, is there mounted again; then check_failed_writes and check_fuzz.
  *
- * @return 0 if every check passed, or the number of the first that failed: 1 to 47 here, 60 to 69 from
+ * @return 0 if every check passed, or the number of the first that failed: 1 to 53 here, 60 to 69 from
  *     check_failed_writes, 100 and up from check_fuzz.
  */
 checks :: fn() -> int {
@@ -184,6 +185,44 @@ checks :: fn() -> int {
     }
     if fat.lookup(&volume, root, "boot") is_ok {
         return 33
+    }
+
+    // Renamed over another file, it replaces it, the other's cluster freed
+    old_file := fat.create(&volume, root, "old.txt", false) or_return 48
+    new_file := fat.create(&volume, root, "new.txt", false) or_return 48
+    if !written(&volume, &old_file, 0, "the old one") || !written(&volume, &new_file, 0, "the new one") {
+        return 48
+    }
+    free_before_replacing :: fat.free_clusters(&volume) or_return 48
+    replacing := fat.rename(&volume, &new_file, root, "old.txt") or_return 49
+    if (fat.lookup(&volume, root, "new.txt") is_ok) || read_back(&volume, &replacing) != "the new one" {
+        return 49
+    }
+    replaced := fat.lookup(&volume, root, "old.txt") or_return 50
+    if read_back(&volume, &replaced) != "the new one" || (fat.free_clusters(&volume) or_else 0) != free_before_replacing + 1 {
+        return 50
+    }
+    // Renamed to the same name in another case, it's renamed, not refused
+    recased := fat.rename(&volume, &replaced, root, "OLD.txt") or_return 51
+    looked := fat.lookup(&volume, root, "old.txt") or_return 51
+    if fat.name_of(&recased) != "OLD.txt" || fat.name_of(&looked) != "OLD.txt" || read_back(&volume, &looked) != "the new one" {
+        return 51
+    }
+    // Cut short, its cluster keeps the old bytes past the cut; a write past the end reads zeros there all the same
+    if !done(fat.set_size(&volume, &looked, 3)) || !written(&volume, &looked, 20, "x") {
+        return 52
+    }
+    gapped : u8[21]
+    if (fat.read(&volume, &looked, 0, gapped) or_else 0) != 21 || gapped[0] != cast[u8]('t') || gapped[20] != cast[u8]('x') {
+        return 53
+    }
+    for i in cast[usize](3)..<20 {
+        if gapped[i] != 0 {
+            return 53
+        }
+    }
+    if !done(fat.remove(&volume, &looked)) {
+        return 53
     }
 
     // Mounted again, it's all as it was left, FSInfo's count with it once it's written

@@ -210,7 +210,12 @@ booted_as :: fn(service: ptr[mut Service], booted: update.Booted) -> update.Resp
     }
     give_up_on_spent(service, booted.generation)
     installed :: install(service)
-    collect(service, current)
+    installed_number := cast[u64](0)
+    match installed {
+        case Some(found) => installed_number = found.number
+        case None => {}
+    }
+    collect(service, current, installed_number)
     // One that changes only services applies now
     match installed {
         case Some(found) => match read_record(service, booted.generation) {
@@ -359,15 +364,17 @@ install :: fn(service: ptr[mut Service]) -> generations.Generation? {
 
 /**
  * Collect what isn't kept on the ESP: every record but the generation booted and any newer, the newest permanent one
- * before it, and the recovery generation; then every object none of those names.
+ * before it, the recovery generation, and the one just installed; then every object none of those names.
  *
  * Failures to list or remove are passed over: what's left is collected another time.
  *
  * @param service The service's state, through whose esp records and objects are listed, read and removed.
  * @param current The generation booted's number; 0 if it was rolled back, or none was booted, when only the newest
- *     permanent generation and the recovery generation are kept, and no newer one.
+ *     permanent generation and the recovery generation are kept, and no newer one but installed.
+ * @param installed The generation install just put on the ESP, tentative and not yet booted, which is kept whatever
+ *     current is, so an update installed after a rollback isn't collected at once; 0 for none.
  */
-collect :: fn(service: ptr[mut Service], current: u64) {
+collect :: fn(service: ptr[mut Service], current: u64, installed: u64) {
     records : generations.Generation[..]
     defer runtime.array_free(&records)
     listed :: os.list_directory_in(service.esp, generations.RECORDS) or_return void
@@ -387,6 +394,7 @@ collect :: fn(service: ptr[mut Service], current: u64) {
     defer runtime.array_free(&kept)
     for each in records {
         keep :: each.state == generations.STATE_RECOVERY || each.number == previous || (current != 0 && each.number >= current)
+            || (installed != 0 && each.number == installed)
         if keep {
             runtime.array_add(&kept, each)
         }
@@ -511,7 +519,7 @@ substitute :: fn(service: ptr[mut Service], asked: update.SubstituteOf) -> updat
         return .Refused
     }
     runtime.log_info("generation % staged with % substitutions, booted next", made.number, asked.policy.count)
-    collect(service, asked.generation)
+    collect(service, asked.generation, 0)
     return .Staged(made.number)
 }
 
@@ -623,17 +631,29 @@ object_on_esp :: fn(service: ptr[mut Service], hash: bundle.Hash) -> u8[]? {
 }
 
 /**
- * Write an object to the ESP, as boot/objects/<hex>, in place, so a crash while writing can leave it partial.
+ * Write an object to the ESP, as boot/objects/<hex>: first whole as boot/objects/<hex>.part, then renamed into place,
+ * so a crash while writing leaves at most a .part file, which nothing names, never a partial object that on_esp would
+ * take as there and a generation would boot.
  *
  * @param service The service's state, through whose esp the file is written.
  * @param hash The object's hash, which bytes are trusted to have.
  * @param bytes The bytes written, all of them, in place of any file there; only read, and not checked against hash.
- * @return Whether it was written; a failure is logged.
+ * @return Whether it was written and renamed into place; a failure is logged, and leaves no object under its name.
  */
 write_object :: fn(service: ptr[mut Service], hash: bundle.Hash, bytes: u8[]) -> bool {
     path_storage : u8[128]
-    if os.write_entire_file_in(service.esp, generations.object_path(hash, &path_storage), bit_cast[string](bytes)) != null {
+    path :: generations.object_path(hash, &path_storage)
+    part_storage : u8[160]
+    part := text_buffer.make(part_storage)
+    text_buffer.append(&part, path)
+    text_buffer.append(&part, ".part")
+    if part.truncated || os.write_entire_file_in(service.esp, text_buffer.as_string(&part), bit_cast[string](bytes)) != null {
         runtime.log_warn("an object couldn't be written to the ESP")
+        return false
+    }
+    if os.rename_in(service.esp, text_buffer.as_string(&part), path) != null {
+        _ = os.delete_file_in(service.esp, text_buffer.as_string(&part))
+        runtime.log_warn("an object written to the ESP couldn't be renamed into place")
         return false
     }
     return true

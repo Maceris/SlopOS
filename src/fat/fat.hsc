@@ -1173,8 +1173,8 @@ read :: fn(volume: ptr[mut Volume], entry: ptr[Entry], offset: u64, into: mut u8
 /**
  * Write bytes into a file, its chain grown to hold them and its size grown to their end.
  *
- * Clusters added are zeroed first, so a gap past the file's old end reads as zeros where it's in them; bytes in the
- * old last cluster past its old size are left as they were. Sectors are written in order, then the directory entry,
+ * Clusters added are zeroed first, and a gap past the file's old end is zeroed in its old last cluster, so the whole
+ * gap reads as zeros. Sectors are written in order, then the directory entry,
  * with the new size and the volume's stamp, if the size grew; a write within the file's size changes no time. A crash
  * partway leaves some sectors written and the size as it was. A sector written only in part is read first, so one a
  * failed write was for can't be written in part.
@@ -1206,6 +1206,15 @@ write :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], offset: u64, from: u
         return .Ok(0)
     }
     grow(volume, entry, end)?
+    /*
+     * A gap from the old end: the clusters grow added are zeroed, but the old last cluster past the old size may hold
+     * old bytes, which would show
+     */
+    if offset > cast[u64](entry.size) {
+        old_end :: cast[u64](entry.size)
+        cluster_end :: (old_end + volume.cluster_bytes - 1) / volume.cluster_bytes * volume.cluster_bytes
+        zero_range(volume, entry, old_end, if offset < cluster_end { offset } else { cluster_end })?
+    }
     done := cast[u64](0)
     cluster := cluster_at(volume, entry.first_cluster, offset / volume.cluster_bytes)? or_return .Error(.Corrupt)
     within := offset % volume.cluster_bytes
@@ -1449,8 +1458,6 @@ create :: fn(volume: ptr[mut Volume], directory: u32, name: string, is_directory
     if volume.device.read_only {
         return .Error(.ReadOnly)
     }
-    units : u16[MAX_NAME_UNITS]
-    unit_count :: units_of_name(name, &units) or_return .Error(.InvalidName)
     match lookup(volume, directory, name) {
         case Ok(found) => return .Error(.AlreadyExists)
         case Error(error) => {
@@ -1459,6 +1466,27 @@ create :: fn(volume: ptr[mut Volume], directory: u32, name: string, is_directory
             }
         }
     }
+    return make_entry(volume, directory, name, is_directory)
+}
+
+/**
+ * Make a new entry in a directory, without looking for one already of its name; create looks first, and rename makes
+ * a new name for an entry whose old one differs only in case.
+ *
+ * @param volume The volume, as mount made it; reads go through its record of failed writes.
+ * @param directory The first cluster of the directory to make it in.
+ * @param name The name, as create takes one.
+ * @param is_directory True for a directory, given a zeroed cluster with "." and ".."; false for an empty file, given
+ *     none.
+ * @return The entry as made: its place, name and short name, its attributes, and its first cluster.
+ * @error InvalidName FAT can't hold the name.
+ * @error NoSpace The directory has no free slots and can't grow, no alias tail is free, or no cluster is free.
+ * @error DeviceError The device couldn't be read or written.
+ * @error Corrupt The directory's chain doesn't hold together.
+ */
+make_entry :: fn(volume: ptr[mut Volume], directory: u32, name: string, is_directory: bool) -> Result[Entry, FatError] {
+    units : u16[MAX_NAME_UNITS]
+    unit_count :: units_of_name(name, &units) or_return .Error(.InvalidName)
     entry := Entry.{attributes = if is_directory { DIRECTORY } else { ARCHIVE }, written = volume.stamp}
     needs_long :: !short_name_exactly(name, &entry.short_name)
     if needs_long {
@@ -1695,11 +1723,14 @@ remove :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> Result[void, FatErro
 /**
  * Move an entry to a name in a directory, which may be its own.
  *
- * An entry already of that name there is removed first, if it's a file and so is the one moved, which is how a
- * file's contents are replaced as atomically as FAT can. Then a new entry for its clusters is made there, then its
- * old slots are freed, then a moved directory's ".." is pointed at its new parent. It's best effort: a crash after
- * the removal and before the new entry leaves only the old name; one after the new entry and before the old one is
- * freed leaves both names on one chain.
+ * An entry already of that name there, if it's a file and so is the one moved, is replaced: its short entry is
+ * rewritten in one slot write to name the moved one's clusters, which is how a file's contents are replaced as
+ * atomically as FAT can, then the moved one's old slots are freed, then the replaced clusters. Otherwise a new entry
+ * for its clusters is made there (a name differing from the entry's own only in case among them), then its old slots
+ * are freed, then a moved directory's ".." is pointed at its new parent. It's best effort, but never loses both: a
+ * crash before the new name is written leaves the old name and the target as they were; one after it and before the
+ * old slots are freed leaves both names on one chain; one before the replaced clusters are freed loses only those
+ * clusters, taken but in no chain.
  *
  * @param volume The volume, as mount made it; reads go through its record of failed writes.
  * @param entry The entry to move, its place as it is now; it no longer names anything once this succeeds.
@@ -1708,8 +1739,7 @@ remove :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> Result[void, FatErro
  * @return The entry as moved, its new place and name, its attributes, clusters and size the old one's.
  * @error ReadOnly The device is read-only.
  * @error InvalidName FAT can't hold the name, or a directory would go beneath itself.
- * @error AlreadyExists An entry of the name is there and it, or the one moved, is a directory. A name differing from
- *     the entry's own only in ASCII case comes back AlreadyExists too, from create.
+ * @error AlreadyExists An entry of the name is there, not the entry itself, and it or the one moved is a directory.
  * @error NoSpace The directory has no free slots and can't grow, or no alias tail is free.
  * @error DeviceError The device couldn't be read or written.
  * @error Corrupt A directory or chain doesn't hold together, or ".." of the parents doesn't lead to the root.
@@ -1722,17 +1752,19 @@ rename :: fn(volume: ptr[mut Volume], entry: ptr[Entry], directory: u32, name: s
     if entry.attributes & DIRECTORY != 0 && is_beneath(volume, directory, entry.first_cluster)? {
         return .Error(.InvalidName)
     }
+    old := entry^
+    // A file it replaces, whose clusters are freed once nothing names them
+    replaced : Entry? = null
     match lookup(volume, directory, name) {
         case Ok(existing) => {
             if existing.place.directory == entry.place.directory && existing.place.slot == entry.place.slot {
-                // The same entry, by another case: its name changes in place, through a new entry
+                // The same entry, by another case: a new entry of the new name, made below
             }
             else if existing.attributes & DIRECTORY != 0 || entry.attributes & DIRECTORY != 0 {
                 return .Error(.AlreadyExists)
             }
             else {
-                replaced := existing
-                remove(volume, &replaced)?
+                replaced = existing
             }
         }
         case Error(error) => {
@@ -1741,9 +1773,14 @@ rename :: fn(volume: ptr[mut Volume], entry: ptr[Entry], directory: u32, name: s
             }
         }
     }
-    old := entry^
-    // The new entry, made as a file so no cluster is allocated, then given the old one's
-    moved := create(volume, directory, name, false)?
+    /*
+     * The entry that will name it: the replaced one's own slots, or a new entry made as a file so no cluster is
+     * allocated. Either way it's then given the old one's clusters in a single slot write
+     */
+    moved := match replaced {
+        case Some(target) => target
+        case None => make_entry(volume, directory, name, false)?
+    }
     moved.attributes = old.attributes
     moved.first_cluster = old.first_cluster
     moved.size = old.size
@@ -1762,6 +1799,17 @@ rename :: fn(volume: ptr[mut Volume], entry: ptr[Entry], directory: u32, name: s
         case None => {}
     }
     free_entry_slots(volume, &old)?
+    match replaced {
+        case Some(target) => {
+            if target.first_cluster != 0 {
+                match free_chain(volume, target.first_cluster) {
+                    case Some(error) => return .Error(error)
+                    case None => {}
+                }
+            }
+        }
+        case None => {}
+    }
     if old.attributes & DIRECTORY != 0 && old.first_cluster != 0 && old.place.directory != directory {
         // Its ".." is its second slot
         dots := Entry.{attributes = DIRECTORY, written = volume.stamp, first_cluster = if directory == volume.root_cluster { cast[u32](0) } else { directory }}

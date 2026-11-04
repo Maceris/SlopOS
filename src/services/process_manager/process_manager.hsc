@@ -37,6 +37,8 @@ Manager :: struct {
     entropy_connector : slop_os.Channel,
     /** A port bound to entropy_connector alone, waited on for the connector's answers. */
     connector_port : slop_os.Port,
+    /** Where the builder stages each program it loads, kept so loading one after another doesn't use up its addresses. */
+    staging : process_builder.Staging,
 }
 
 /**
@@ -190,7 +192,8 @@ load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.R
         }
     }
     target :: process_builder.Target.{process = request.process, space = request.space, budget = request.budget}
-    match process_builder.build(target, file, view_of(&grants[0], grant_count), seed, &stream, request.executable) {
+    match process_builder.build(target, file, view_of(&grants[0], grant_count), seed, &stream, request.executable, slop_os.ABI_VERSION,
+        &manager.staging) {
         case Ok(thread) => {
             log_line.write(manager.log, "process manager: started %", name)
             return .Loaded(thread)

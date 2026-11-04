@@ -2,48 +2,75 @@
 
 The documentation rewrite (`decisions/0174`, November 2026) read every declaration in SlopOS and in Hemera's `base` and
 `std` against its code. Where the code didn't do what the old comments said, or did something questionable, the new
-documentation describes what the code does, and the code was left alone. These are those findings, for review; none
-is fixed yet, and each needs confirming before it's acted on.
+documentation describes what the code does, and the code was left alone. These are those findings. Each was
+confirmed against the code before it was fixed; what each became is marked on it.
 
 ## Serious: memory safety, security, or data loss
 
 - **Kernel, x86-64 `paging.hsc` `unmap`**: never checks the address with `may_map`, so unmapping a kernel-half address
   through a user address space would edit the shared kernel tables.
+  *Fixed, on both architectures, with a paging test.*
 - **Kernel, `devices.hsc` `create_device`**: the duplicate-device loop dereferences null when `first_device` is 0.
+  *Fixed.*
 - **Kernel, `channels.hsc`**: the header says a space's lock is never held with a channel core's, but `channel_write`,
   `channel_read` and `channel_take_handles` take it (through user copies) while holding the core's. A lock-order
   problem, or an out-of-date note.
+  *An out-of-date note: the lock ranks allow it (a channel core's is below a space's). The note is corrected.*
 - **Kernel, `timers.hsc` `cancel_timer`**: reads the entry's CPU and index before taking the heap lock.
+  *Fixed: it checks under the lock, and follows an entry armed again elsewhere.*
 - **Kernel, `kernel_entry.hsc` `nmi`**: logs through the console spin lock, which can deadlock on the CPU holding it.
+  *Fixed: it only counts.*
 - **Kernel, `translation.hsc` `refill_iommu_tables`**: returns true when a charge fails partway, so `map_dma_memory` and
   `map_doorbell` may loop forever.
+  *Fixed.*
 - **Kernel, `user_memory.hsc` / `paging.hsc`**: `copy_user` and `supply_page` reach pages through the direct map, which is
   wrong for device memory.
+  *Fixed for pages past RAM and memory that isn't write-back; write-back device memory inside a hole in RAM can't be
+  told apart, which only the platform could make.*
 - **Kernel, `memory_budgets.hsc`**: `limit - used` wraps if `used` exceeds `limit`, which a rollback in `move_charges` allows.
+  *Fixed.*
 - **Kernel, `ports.hsc`**: `finish_or_block` loses packets when the copy-out fails; `is_user_writable` checks only page
   tables, so an untouched mapped page fails with BadBuffer.
+  *Fixed: the kernel's user copies bring an untouched page in, so a good buffer no longer fails.*
 - **AArch64, `its.hsc`**: `add_msi_device` sizes each device's table for 32 events but doesn't cap MAPD, so a device with
   more lets the ITS use memory past its table; `route_msi`/`move_msi` record a route for a CPU the LPI doesn't go to.
+  *Fixed. Lower risk than it read, as MAX_DEVICE_MSIS is 32; events are capped at the table's size anyway, and a CPU
+  with no collection gets no route.*
 - **AArch64, `gic.hsc`**: `end_of_interrupt` does nothing if no route matches, leaving the interrupt active.
+  *Fixed: the interrupt acknowledged is recorded, and that one is ended.*
 - **SMMUv3, `submit`**: writes a command when the queue is still full, possibly over one the SMMU hasn't consumed.
+  *Fixed: it waits while the queue is full.*
 - **VT-d**: `remap_interrupt`/`unmap_interrupt` choose an entry modulo the table but invalidate the raw index.
+  *Fixed.*
 - **Process builder**: staging addresses are never given back (a long-lived process manager runs out); RELRO's start is
   rounded down, making writable bytes read-only.
+  *Fixed: callers that build many keep their staging (process_builder.Staging). RELRO's rounding is not a bug: it's
+  glibc's convention, and the linker pads to it.*
 - **Update service**: after a degraded boot `collect(service, 0)` removes the update `install` just put on the ESP;
   objects are written in place, so a crash leaves a partial object that's never rewritten.
+  *Fixed: collect keeps the installed generation, and objects are written to a .part file renamed over.*
 - **SlopFS**: `tree_put`'s failed split has already removed the key's old value; `tree_delete` leaves `tree.root` on a
   discarded node if `new_node` fails; `delete_snapshot` deletes the record before reserving memory; `create_sealed_volume`
   leaves stray key records on a bad name; `rotate` doesn't restore `keys.current` on failure; `write_chunk` leaks blocks
   on two error paths.
+  *Fixed. A create_sealed_volume that runs out of memory after its key records are put still leaves them, unused; the
+  next sealed volume of that ID overwrites them.*
 - **FAT**: `rename`'s crash comment is wrong (a crash can lose the target); `write` past the end doesn't zero the gap in
   the old last cluster, so stale bytes show; a case-only rename is refused.
+  *Fixed, with checks in fat_test: rename never loses both names, a case-only rename works, and the gap is zeroed.*
 - **Bundle store**: `collect` silently skips a pin it can't parse, so what it pins can be collected; served objects are
   never closed, so at most 64 can ever be served.
+  *The pin is fixed: an unreadable pin or root stops the collection. Never closing objects is open: an object can't be
+  closed safely while a client may still map it, and the kernel has no way to tell the store none does. That needs a
+  design (a signal on paged memory when only its pager holds it, say).*
 - **Account records and service**: X25519 agreements, share and home plaintext, a lowercased password copy, and the
   recovery code's text are left unwiped; `seal_home` uses an all-zero nonce, reused if keys are set twice under the same
   home secret.
+  *Fixed: each is wiped, and the answer with a recovery code is wiped once sent. The key pair's seal has a nonce made
+  from its public key; records sealed before open with the zero nonce still.*
 - **Storage manager**: a server launched but not recorded (when `port_for` fails after launch) is launched again on the
   same partition.
+  *Fixed, for every server it launches: ports and bindings are made before the launch.*
 
 ## Wrong results
 

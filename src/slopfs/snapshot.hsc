@@ -264,10 +264,17 @@ delete_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], freed:
         }
         at = other + 1
     }
-    tree_delete(&container.nodes, &container.volumes, key_of(id, .Snapshot, found.number))?
+    // The snapshots left once it's gone, read before anything changes
+    listed : NumberedSnapshot[..]
+    defer runtime.array_free(&listed)
+    snapshot_records(container, id, &listed)?
     remaining : NumberedSnapshot[..]
     defer runtime.array_free(&remaining)
-    snapshot_records(container, id, &remaining)?
+    for each in listed {
+        if each.number != found.number && runtime.array_try_add(&remaining, each) != null {
+            return .Error(.OutOfMemory)
+        }
+    }
     dead : DeadExtent[..]
     defer runtime.array_free(&dead)
     dead_extents(container, id, &dead)?
@@ -285,6 +292,8 @@ delete_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], freed:
         }
         case None => {}
     }
+    // Only now, with every reservation made, is its record taken out: a failure before here changes nothing
+    tree_delete(&container.nodes, &container.volumes, key_of(id, .Snapshot, found.number))?
     for each in dead {
         if !held_by(remaining, cast[u64](each.value.birth), cast[u64](each.value.freed)) {
             tree_delete(&container.nodes, &container.volumes, key_of(id, .Dead, each.start))?

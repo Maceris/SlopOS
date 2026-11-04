@@ -421,8 +421,8 @@ kill_and_restart :: fn(state: ptr[mut Manager], index: usize) -> bool {
  * @param state The storage manager's state, whose disks, disk_running and partition_server_starts are set.
  * @param index Which disk, counted from 0, whose connector in connectors is dialed and whose disks and disk_running
  *     slots are set; one at MAX_DISKS or past gives false with nothing done.
- * @return Whether it started; false if the driver couldn't be dialed, a channel made, or the launch failed. If the
- *     launch worked but a port for its listener couldn't be made, it's false with the server running unreached.
+ * @return Whether it started; false if the driver couldn't be dialed, a channel or a port for it made, or the launch
+ *     failed. The port is made before the launch, so a server that's launched is always kept.
  */
 start_partition_server :: fn(state: ptr[mut Manager], index: usize) -> bool {
     startup :: slop_os.startup_block()
@@ -432,6 +432,15 @@ start_partition_server :: fn(state: ptr[mut Manager], index: usize) -> bool {
     dialing :: state.connectors[index]
     disk :: connector.dial[block.Block](dialing.end, dialing.port) or_return false
     pair :: os.channel_for[partitions.Partitions](startup.budget, 0) or_return false
+    // The port first: one that couldn't be made after the launch would leave a server running unrecorded
+    server_port :: match os.port_for(startup.budget, pair.b) {
+        case Some(made) => made
+        case None => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+            return false
+        }
+    }
     grants := PartitionServerGrants.{log = duplicate_log(state.log), disk = disk, clients = os.Listener[partitions.Partitions].{end = pair.a},
         command_line = command_line_copy(state)}
     match os.launch(state.manager, state.manager_port, "partition_server", state.partition_server_module, PARTITION_SERVER_BUDGET,
@@ -440,10 +449,10 @@ start_partition_server :: fn(state: ptr[mut Manager], index: usize) -> bool {
         case Error(error) => {
             runtime.log_info("no partition server for disk %: %", index, error)
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+            _ = slop_os.handle_close(cast[slop_os.Handle](server_port))
             return false
         }
     }
-    server_port :: os.port_for(startup.budget, pair.b) or_return false
     state.disks[index] = Disk.{end = pair.b, port = server_port}
     state.partition_server_starts += 1
     return true
@@ -883,6 +892,16 @@ files_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
             case _ => return null
         }
         pair :: os.channel_for[dir.Dir](startup.budget, 0) or_return null
+        // The port first: one that couldn't be made after the launch would leave a server running unrecorded
+        port :: match os.port_for(startup.budget, pair.b) {
+            case Some(made) => made
+            case None => {
+                _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
+                _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+                _ = slop_os.handle_close(cast[slop_os.Handle](narrowed.end))
+                return null
+            }
+        }
         grants := FatServerGrants.{log = duplicate_log(state.log), partition = narrowed, clients = os.Listener[dir.Dir].{end = pair.a}}
         match os.launch(state.manager, state.manager_port, "fat_server", state.fat_server_module, FAT_SERVER_BUDGET, fat_server.main, grants,
             watched(state, FAT_SERVER_KEY + cast[u64](index))) {
@@ -890,10 +909,10 @@ files_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
             case Error(error) => {
                 runtime.log_info("no FAT server for disk % partition %: %", partition.disk, partition.index, error)
                 _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+                _ = slop_os.handle_close(cast[slop_os.Handle](port))
                 return null
             }
         }
-        port :: os.port_for(startup.budget, pair.b) or_return null
         state.files[index] = Disk.{end = pair.b, port = port}
         runtime.log_info("started a FAT server for disk % partition %", partition.disk, partition.index)
     }
@@ -908,8 +927,8 @@ files_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
  * @param state The storage manager's state.
  * @param index The container's partition's index.
  * @return Its listener's end and a port for it, the storage manager's own; null if it may not be started again, its
- *     partition couldn't be opened, or the launch failed. If the launch worked but a port couldn't be made, it's null
- *     with the service running unreached.
+ *     partition couldn't be opened, a channel or port couldn't be made, or the launch failed. The port is made before
+ *     the launch, so a service that's launched is always kept.
  */
 container_of :: fn(state: ptr[mut Manager], index: usize) -> Disk? {
     if index >= state.partitions.count || index >= state.containers.count {
@@ -929,6 +948,16 @@ container_of :: fn(state: ptr[mut Manager], index: usize) -> Disk? {
         case _ => return null
     }
     listener :: os.channel_for[container.Container](startup.budget, 0) or_return null
+    // The port first: one that couldn't be made after the launch would leave a service running unrecorded
+    port :: match os.port_for(startup.budget, listener.b) {
+        case Some(made) => made
+        case None => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](listener.a))
+            _ = slop_os.handle_close(cast[slop_os.Handle](listener.b))
+            _ = slop_os.handle_close(cast[slop_os.Handle](narrowed.end))
+            return null
+        }
+    }
     grants := ContainerServiceGrants.{log = duplicate_log(state.log), partition = narrowed,
         clients = os.Listener[container.Container].{end = listener.a}}
     match os.launch(state.manager, state.manager_port, "container_service", state.container_service_module, CONTAINER_SERVICE_BUDGET,
@@ -937,11 +966,11 @@ container_of :: fn(state: ptr[mut Manager], index: usize) -> Disk? {
         case Error(error) => {
             runtime.log_info("no container service for disk % partition %: %", partition.disk, partition.index, error)
             _ = slop_os.handle_close(cast[slop_os.Handle](listener.b))
+            _ = slop_os.handle_close(cast[slop_os.Handle](port))
             return null
         }
     }
     runtime.log_info("started a container service for disk % partition %", partition.disk, partition.index)
-    port :: os.port_for(startup.budget, listener.b) or_return null
     state.containers[index] = Disk.{end = listener.b, port = port}
     return state.containers[index]
 }
@@ -1065,23 +1094,30 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
     volume_grants := VolumeServerGrants.{log = duplicate_log(state.log), volume = volume, clients = os.Listener[dir.Dir].{end = pair.a},
         control = os.Listener[volume_protocol.Volume].{end = control.a}, stored_links = os.Channel[links.Links].{end = stored_links.a}}
     budget :: if encrypted { SEALED_VOLUME_SERVER_BUDGET } else { VOLUME_SERVER_BUDGET }
+    /*
+     * The ports and the links binding first: any of them failing after the launch would leave a server running
+     * unrecorded, which the next open would launch again on the same volume
+     */
+    root_port :: os.port_for(startup.budget, pair.b) or_return .Failed
+    control_port :: os.port_for(startup.budget, control.b) or_return .Failed
+    signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+    if slop_os.port_bind(state.port, cast[slop_os.Handle](stored_links.b), signals, LINKS_KEY + cast[u64](slot), .Persistent) is_error {
+        return .Failed
+    }
     launched_volume := Running.{}
     match os.launch(state.manager, state.manager_port, "volume_server", state.volume_server_module, budget, volume_server.main, volume_grants,
         watched(state, VOLUME_KEY + cast[u64](slot))) {
         case Ok(launched) => keep(&launched_volume, launched)
         case Error(error) => {
             runtime.log_info("no volume server for the % volume: %", string_of(&name[0], name.count), error)
+            _ = slop_os.port_unbind(state.port, LINKS_KEY + cast[u64](slot))
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
             _ = slop_os.handle_close(cast[slop_os.Handle](control.b))
             _ = slop_os.handle_close(cast[slop_os.Handle](stored_links.b))
+            _ = slop_os.handle_close(cast[slop_os.Handle](root_port))
+            _ = slop_os.handle_close(cast[slop_os.Handle](control_port))
             return .Failed
         }
-    }
-    root_port :: os.port_for(startup.budget, pair.b) or_return .Failed
-    control_port :: os.port_for(startup.budget, control.b) or_return .Failed
-    signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if slop_os.port_bind(state.port, cast[slop_os.Handle](stored_links.b), signals, LINKS_KEY + cast[u64](slot), .Persistent) is_error {
-        return .Failed
     }
     served := Served.{partition = index, container = identity.container, id = identity.id, links = stored_links.b, name_bytes = name.count,
         root = Disk.{end = pair.b, port = root_port}, control = Disk.{end = control.b, port = control_port}, encrypted = encrypted,

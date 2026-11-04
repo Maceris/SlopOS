@@ -264,6 +264,8 @@ interrupt_source :: fn() -> kernel_entry.InterruptSource {
     if interrupt >= FIRST_SPI {
         id :: device_id_for(system, cpu.mpidr, interrupt)
         if id != NO_ROUTE {
+            // Ended as the GIC gave it, whatever its route becomes meanwhile
+            cpu.active_interrupt = interrupt
             return .Device(cast[arch_interface.InterruptId](id))
         }
         acknowledge(interrupt)
@@ -337,21 +339,25 @@ device_interrupt_range :: fn() -> (first: arch_interface.InterruptId, count: u32
 }
 
 /**
- * Acknowledge the interrupt routed to id on the calling CPU (arch_interface.end_of_interrupt).
+ * Acknowledge the device interrupt the calling CPU took (arch_interface.end_of_interrupt).
  *
- * Nothing is acknowledged if no route on this CPU has that ID.
+ * It ends the GIC interrupt ID interrupt_source read for it, not one looked up by id, so an interrupt whose route
+ * was moved or taken away between its delivery and now is still ended, and doesn't stay active, blocking its priority.
  *
- * @param id The kernel's device interrupt ID, as interrupt_source gave it.
+ * @param id The kernel's device interrupt ID, as interrupt_source gave it; the interrupt ended is the one that ID was
+ *     given for. Nothing is ended if this CPU has no device interrupt active.
  */
 end_of_interrupt :: fn(id: arch_interface.InterruptId) {
     cpu :: current_cpu()
-    for route in current_system().routes {
-        if route.used && route.cpu == cpu.mpidr && route.id == cast[u32](id) {
-            acknowledge(route.interrupt)
-            return void
-        }
+    if cpu.active_interrupt == NO_ACTIVE_INTERRUPT {
+        return void
     }
+    acknowledge(cpu.active_interrupt)
+    cpu.active_interrupt = NO_ACTIVE_INTERRUPT
 }
+
+/** ArchCpu.active_interrupt when the CPU has no device interrupt active: no GIC interrupt has this ID. */
+NO_ACTIVE_INTERRUPT : u32 : 0xffffffff
 
 /**
  * Send an IPI to a CPU as an SGI, through ICC_SGI1R_EL1 (arch_interface.send_ipi).

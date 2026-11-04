@@ -760,11 +760,38 @@ read_hash :: fn(service: ptr[Store], path: string) -> bundle.Hash? {
 }
 
 /**
+ * Read a hash a collection marks from, a pin or the boot root, telling a file that isn't there from one that can't be
+ * read or doesn't hold a hash.
+ *
+ * @param service The store's state, only read: path is read through its directory.
+ * @param path The file's path in the store's directory.
+ * @return The hash; Ok(null) if there's no such file; an error if it couldn't be read, or Unsupported if it doesn't
+ *     hold a hash in hex, which a collection can't mark from, and so has to stop for.
+ */
+marked_from :: fn(service: ptr[Store], path: string) -> Result[bundle.Hash?, os.OsError] {
+    text :: match os.read_entire_file_in(service.directory, path) {
+        case Ok(read) => read
+        case Error(error) => {
+            if error == .NotFound {
+                return .Ok(null)
+            }
+            return .Error(error)
+        }
+    }
+    defer runtime.free_array(bit_cast[u8[]](text))
+    match bundle.from_hex(text) {
+        case Some(hash) => return .Ok(hash)
+        case None => return .Error(.Unsupported)
+    }
+}
+
+/**
  * Remove every object no root reaches, but those open: marked from the boot root and every pin, through what each
  * refers to.
  *
- * Anything not marked is removed, so a root or a pin that can't be read through, or a pins directory that can't be
- * listed, stops the collection before anything's removed. A pin or root file that doesn't hold a hash is passed over.
+ * Anything not marked is removed, so a root or a pin that can't be read, or read through, or a pins directory that
+ * can't be listed, stops the collection before anything's removed; so does a pin or root file that doesn't hold a hash,
+ * since what it was meant to keep isn't known.
  * Every file in objects/ whose name isn't a marked or open object's hash is removed, .part files left by a crash
  * among them.
  *
@@ -776,13 +803,18 @@ collect :: fn(service: ptr[mut Store]) -> u64 {
     marked : bundle.Hash[..]
     defer runtime.array_free(&marked)
     // Anything not marked through is collected, so a root or a pin that can't be read through stops the collection
-    match read_hash(service, "root") {
-        case Some(root) => {
-            if !mark(service, root, &marked, 0) {
-                return 0
+    match marked_from(service, "root") {
+        case Ok(found) => {
+            match found {
+                case Some(root) => {
+                    if !mark(service, root, &marked, 0) {
+                        return 0
+                    }
+                }
+                case None => {}
             }
         }
-        case None => {}
+        case Error(error) => return 0
     }
     match os.list_directory_in(service.directory, "pins") {
         case Ok(pins) => {
@@ -792,9 +824,15 @@ collect :: fn(service: ptr[mut Store]) -> u64 {
                     continue
                 }
                 path_storage : u8[80]
-                match read_hash(service, path_in("pins/", pin.name, &path_storage)) {
-                    case Some(hash) => whole = whole && mark(service, hash, &marked, 0)
-                    case None => {}
+                // A pin gone since the listing keeps nothing; one that can't be read might, so nothing's collected
+                match marked_from(service, path_in("pins/", pin.name, &path_storage)) {
+                    case Ok(found) => {
+                        match found {
+                            case Some(hash) => whole = whole && mark(service, hash, &marked, 0)
+                            case None => {}
+                        }
+                    }
+                    case Error(error) => whole = false
                 }
             }
             os.free_directory_listing(pins)

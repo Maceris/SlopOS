@@ -172,7 +172,7 @@ valid_name :: fn(name: u8[]) -> bool {
  * first problem found is the one given. Malformed UTF-8 counts a character a byte.
  *
  * @param name The account's name, compared ignoring ASCII case.
- * @param password The password, as typed; not kept, but a lowercased copy is left on the stack.
+ * @param password The password, as typed; not kept, and the lowercased copy made of it is wiped before it returns.
  * @return The problem, or null if the password is fine.
  */
 password_problem :: fn(name: u8[], password: u8[]) -> PasswordProblem? {
@@ -193,6 +193,7 @@ password_problem :: fn(name: u8[], password: u8[]) -> PasswordProblem? {
         return .TooShort
     }
     lower : u8[MAX_PASSWORD_BYTES]
+    defer zero_bytes(lower)
     for byte, i in password {
         if i < lower.count {
             lower[i] = ascii_lower(byte)
@@ -308,7 +309,8 @@ new_record #constant_time :: fn(name: u8[], administrator: bool, created: u64, p
     random.fill(record.recovery_salt)
     recovery := recovery_key(code, &record) or_return null
     defer zero_key(&recovery)
-    sealed :: seal_home(&recovery, home, &record, "recovery") or_return null
+    zero_nonce : crypto.Nonce96
+    sealed :: seal_home(&recovery, home, &record, "recovery", zero_nonce) or_return null
     record.recovery_wrapped = sealed.wrapped
     record.recovery_tag = sealed.tag
     if !set_password(&record, home, password, parameters) || !set_keys(&record, home) {
@@ -335,11 +337,12 @@ has_keys :: fn(record: ptr[AccountRecord]) -> bool {
 /**
  * Give a record a new X25519 key pair, its secret key sealed by the home volume's secret.
  *
- * The secret key is zeroed once it's sealed. The seal's nonce is fixed, so a record is given a key pair once under a
- * home volume's secret, never again.
+ * The secret key is zeroed once it's sealed. The seal's nonce is made from the new public key (key_pair_nonce), so
+ * giving a record a key pair again under the same home volume's secret, as a retry after a failed write does, never
+ * seals two secret keys under one nonce.
  *
- * @param record The record, whose public_key, private_wrapped and private_tag are written; on failure, only some may
- *     be.
+ * @param record The record, whose public_key, then private_wrapped and private_tag, are written; on failure, only the
+ *     public key may be.
  * @param home The home volume's secret, the seal's key, read only.
  * @return True once the pair is in the record; false if the seal failed.
  */
@@ -354,12 +357,12 @@ set_keys #constant_time :: fn(record: ptr[mut AccountRecord], home: ptr[crypto.K
     for i in cast[usize](0)..<32 {
         key[i] = 0
     }
-    sealed :: seal_home(home, &secret, record, "key pair") or_return false
-    record.private_wrapped = sealed.wrapped
-    record.private_tag = sealed.tag
     for i in cast[usize](0)..<32 {
         record.public_key[i] = public[i]
     }
+    sealed :: seal_home(home, &secret, record, "key pair", key_pair_nonce(record)) or_return false
+    record.private_wrapped = sealed.wrapped
+    record.private_tag = sealed.tag
     return true
 }
 
@@ -368,11 +371,17 @@ set_keys #constant_time :: fn(record: ptr[mut AccountRecord], home: ptr[crypto.K
  *
  * @param record The account's record, read only, whose private_wrapped and private_tag are opened, bound to its name.
  * @param home The home volume's secret, read only.
+ * A record sealed before the key pair had a nonce of its own, with the zero nonce, is opened with that.
+ *
  * @return The secret key, which the caller wipes once it's done with it; null if the record has none, or home isn't
  *     its secret.
  */
 secret_key #constant_time :: fn(record: ptr[AccountRecord], home: ptr[crypto.Key256]) -> crypto.X25519SecretKey? {
-    opened := open_home(home, record.private_wrapped, record.private_tag, record, "key pair") or_return null
+    zero_nonce : crypto.Nonce96
+    opened := match open_home(home, record.private_wrapped, record.private_tag, record, "key pair", key_pair_nonce(record)) {
+        case Some(found) => found
+        case None => open_home(home, record.private_wrapped, record.private_tag, record, "key pair", zero_nonce) or_return null
+    }
     defer zero_key(&opened)
     key : crypto.X25519SecretKey
     for i in cast[usize](0)..<32 {
@@ -406,6 +415,7 @@ seal_share #constant_time :: fn(secret: ptr[crypto.Key256], public: u8[32], shar
         theirs[i] = public[i]
     }
     agreed : crypto.SecretByte[32]
+    defer zero_secret(agreed)
     agreed_ok :: crypto.x25519(&ephemeral, &theirs, &agreed)
     for i in cast[usize](0)..<32 {
         ephemeral[i] = 0
@@ -422,6 +432,7 @@ seal_share #constant_time :: fn(secret: ptr[crypto.Key256], public: u8[32], shar
     nonce : crypto.Nonce96
     associated :: share_associated(share)
     plain : crypto.SecretByte[32]
+    defer zero_secret(plain)
     for i in cast[usize](0)..<32 {
         plain[i] = cast[crypto.SecretByte](secret[i])
     }
@@ -451,6 +462,7 @@ open_share #constant_time :: fn(key: ptr[crypto.X25519SecretKey], public: u8[32]
         theirs[i] = sealed.ephemeral[i]
     }
     agreed : crypto.SecretByte[32]
+    defer zero_secret(agreed)
     if !crypto.x25519(key, &theirs, &agreed) {
         return null
     }
@@ -463,6 +475,7 @@ open_share #constant_time :: fn(key: ptr[crypto.X25519SecretKey], public: u8[32]
         tag[i] = sealed.tag[i]
     }
     plain : crypto.SecretByte[32]
+    defer zero_secret(plain)
     if !crypto.chacha20_poly1305_open(&opening, &nonce, sealed.wrapped, associated, &tag, plain) {
         return null
     }
@@ -488,6 +501,7 @@ share_key #constant_time :: fn(agreed: ptr[crypto.SecretByte[32]], ephemeral: u8
     crypto.blake3_update(&hasher, ephemeral)
     crypto.blake3_update(&hasher, public)
     hash : crypto.SecretByte[32]
+    defer zero_secret(hash)
     crypto.blake3_finish_secret(&hasher, hash)
     key : crypto.Key256
     for i in cast[usize](0)..<32 {
@@ -559,7 +573,8 @@ set_password #constant_time :: fn(record: ptr[mut AccountRecord], home: ptr[cryp
     random.fill(record.salt)
     key := password_key(password, record) or_return false
     defer zero_key(&key)
-    sealed :: seal_home(&key, home, record, "password") or_return false
+    zero_nonce : crypto.Nonce96
+    sealed :: seal_home(&key, home, record, "password", zero_nonce) or_return false
     record.home_wrapped = sealed.wrapped
     record.home_tag = sealed.tag
     return true
@@ -580,7 +595,8 @@ set_password #constant_time :: fn(record: ptr[mut AccountRecord], home: ptr[cryp
 unlock_home #constant_time :: fn(record: ptr[AccountRecord], password: u8[]) -> crypto.Key256? {
     key := password_key(password, record) or_return null
     defer zero_key(&key)
-    return open_home(&key, record.home_wrapped, record.home_tag, record, "password")
+    zero_nonce : crypto.Nonce96
+    return open_home(&key, record.home_wrapped, record.home_tag, record, "password", zero_nonce)
 }
 
 /**
@@ -594,7 +610,8 @@ unlock_home #constant_time :: fn(record: ptr[AccountRecord], password: u8[]) -> 
 recover_home #constant_time :: fn(record: ptr[AccountRecord], code: ptr[RecoveryCode]) -> crypto.Key256? {
     key := recovery_key(code, record) or_return null
     defer zero_key(&key)
-    return open_home(&key, record.recovery_wrapped, record.recovery_tag, record, "recovery")
+    zero_nonce : crypto.Nonce96
+    return open_home(&key, record.recovery_wrapped, record.recovery_tag, record, "recovery", zero_nonce)
 }
 
 /**
@@ -650,19 +667,23 @@ associated_of :: fn(what: string, record: ptr[AccountRecord]) -> u8[48] {
 /**
  * Seal a 32-byte secret with ChaCha20-Poly1305, bound to an account and a use.
  *
- * The nonce is all zeros, which is safe only because each key seals once: the keys from a password or the recovery
- * code are new with their salt, and a home volume's secret seals one key pair.
+ * The plaintext copy made to seal is wiped before it returns.
  *
  * @param key The sealing key, read only.
  * @param home The secret sealed: the home volume's, or, for "key pair", the account's secret key.
  * @param record The account, whose name the seal is bound to.
  * @param what What it's for, which the seal is bound to.
+ * @param nonce The nonce, which must never seal two secrets under one key: all zeros for a key from a password or
+ *     the recovery code, each new with its salt and sealing once; key_pair_nonce for a key pair under the home
+ *     volume's secret, which may seal more than one.
  * @return The sealed secret, declassified, as it's public by design; null if the seal failed.
  */
-seal_home #constant_time :: fn(key: ptr[crypto.Key256], home: ptr[crypto.Key256], record: ptr[AccountRecord], what: string) -> Sealed? {
-    nonce : crypto.Nonce96
+seal_home #constant_time :: fn(key: ptr[crypto.Key256], home: ptr[crypto.Key256], record: ptr[AccountRecord], what: string,
+    nonce: crypto.Nonce96) -> Sealed? {
+
     associated :: associated_of(what, record)
     plain : crypto.SecretByte[32]
+    defer zero_secret(plain)
     for i in cast[usize](0)..<32 {
         plain[i] = cast[crypto.SecretByte](home[i])
     }
@@ -687,17 +708,20 @@ seal_home #constant_time :: fn(key: ptr[crypto.Key256], home: ptr[crypto.Key256]
  * @param record The account whose name the seal was bound to, read only; its whole name field, padding included, has
  *     to be as it was sealed.
  * @param what What it's for, as it was sealed.
+ * @param nonce The nonce it was sealed with.
  * @return The secret, which the caller wipes once it's done with it; null if the key's wrong or anything it's bound
- *     to differs.
+ *     to differs. The plaintext copy made while opening is wiped.
  */
-open_home #constant_time :: fn(key: ptr[crypto.Key256], wrapped: u8[32], stored_tag: u8[16], record: ptr[AccountRecord], what: string) -> crypto.Key256? {
-    nonce : crypto.Nonce96
+open_home #constant_time :: fn(key: ptr[crypto.Key256], wrapped: u8[32], stored_tag: u8[16], record: ptr[AccountRecord], what: string,
+    nonce: crypto.Nonce96) -> crypto.Key256? {
+
     associated :: associated_of(what, record)
     tag : crypto.Tag128
     for i in cast[usize](0)..<16 {
         tag[i] = stored_tag[i]
     }
     plain : crypto.SecretByte[32]
+    defer zero_secret(plain)
     if !crypto.chacha20_poly1305_open(key, &nonce, wrapped, associated, &tag, plain) {
         return null
     }
@@ -754,11 +778,13 @@ recovery_key #constant_time :: fn(code: ptr[RecoveryCode], record: ptr[AccountRe
     crypto.blake3_update(&hasher, string_bytes("SlopOS account recovery"))
     crypto.blake3_update(&hasher, record.recovery_salt)
     secret : crypto.SecretByte[16]
+    defer zero_secret(secret)
     for i in cast[usize](0)..<16 {
         secret[i] = cast[crypto.SecretByte](code[i])
     }
     crypto.blake3_update_secret(&hasher, secret)
     hash : crypto.SecretByte[32]
+    defer zero_secret(hash)
     crypto.blake3_finish_secret(&hasher, hash)
     key : crypto.Key256
     for i in cast[usize](0)..<32 {
@@ -776,6 +802,48 @@ zero_key #constant_time :: fn(key: ptr[mut crypto.Key256]) {
     for i in cast[usize](0)..<32 {
         key[i] = 0
     }
+}
+
+/**
+ * Wipe secret bytes: an agreement, a plaintext copy, a hash a key is made from.
+ *
+ * @param bytes The bytes, every one overwritten with zero in place; empty wipes nothing.
+ */
+zero_secret #constant_time :: fn(bytes: mut crypto.SecretByte[]) {
+    for i in 0..<bytes.count {
+        bytes[i] = cast[crypto.SecretByte](0)
+    }
+}
+
+/**
+ * Wipe bytes that held a secret, such as a copy of a password.
+ *
+ * @param bytes The bytes, every one overwritten with zero in place; empty wipes nothing.
+ */
+zero_bytes :: fn(bytes: mut u8[]) {
+    for i in 0..<bytes.count {
+        bytes[i] = 0
+    }
+}
+
+/**
+ * Make the nonce a record's X25519 secret key is sealed with under its home volume's secret: the first 12 bytes of
+ * BLAKE3 of the record's public key, so each key pair a home secret seals has its own.
+ *
+ * @param record The record, whose public_key, written before the seal, is all that's read.
+ * @return The nonce, public, as the public key is.
+ */
+key_pair_nonce :: fn(record: ptr[AccountRecord]) -> crypto.Nonce96 {
+    hasher := crypto.blake3_start()
+    crypto.blake3_update(&hasher, string_bytes("SlopOS key pair nonce"))
+    crypto.blake3_update(&hasher, record.public_key)
+    hash : u8[32]
+    crypto.blake3_finish(&hasher, hash)
+    nonce : crypto.Nonce96
+    for i in cast[usize](0)..<12 {
+        nonce[i] = hash[i]
+    }
+    return nonce
 }
 
 /**

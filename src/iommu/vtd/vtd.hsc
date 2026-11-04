@@ -356,13 +356,15 @@ enable :: fn(iommu: ptr[mut Iommu], memory: iommu_interface.PhysicalAddress, dir
  *     and data 0.
  */
 remap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32) -> iommu_interface.MsiMessage {
-    entry :: iommu.remapping + cast[u64](index % INTERRUPT_ENTRIES) * 16
+    // One index for the entry, its invalidation and its handle, so they never disagree
+    slot :: index % INTERRUPT_ENTRIES
+    entry :: iommu.remapping + cast[u64](slot) * 16
     // SVT 1, SQ 0: the requester ID must be stream's
     store(iommu, entry + 8, cast[u64](stream & 0xffff) | ENTRY_VERIFY_SOURCE)
     destination :: if iommu.extended_mode { cpu_hardware_id & 0xffffffff } else { (cpu_hardware_id & 0xff) << 8 }
     store(iommu, entry, destination << ENTRY_DESTINATION_SHIFT | cast[u64](vector & 0xff) << ENTRY_VECTOR_SHIFT | ENTRY_PRESENT)
-    invalidate_interrupt(iommu, index)
-    handle :: cast[u64](index)
+    invalidate_interrupt(iommu, slot)
+    handle :: cast[u64](slot)
     return iommu_interface.MsiMessage.{address = MESSAGE_BASE | (handle & 0x7fff) << 5 | MESSAGE_REMAPPABLE | ((handle >> 15) & 1) << 2,
         data = 0}
 }
@@ -374,10 +376,11 @@ remap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardwa
  * @param index The remapped interrupt's index, below INTERRUPT_ENTRIES.
  */
 unmap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32) {
-    entry :: iommu.remapping + cast[u64](index % INTERRUPT_ENTRIES) * 16
+    slot :: index % INTERRUPT_ENTRIES
+    entry :: iommu.remapping + cast[u64](slot) * 16
     store(iommu, entry, 0)
     store(iommu, entry + 8, 0)
-    invalidate_interrupt(iommu, index)
+    invalidate_interrupt(iommu, slot)
 }
 
 /**

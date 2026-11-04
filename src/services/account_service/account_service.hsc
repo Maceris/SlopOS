@@ -344,6 +344,8 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
         // What the request held, its passwords among it, gone before the next
         wipe(into)
         _ = accounts.send_response(end, service.port, &out)
+        // And what the answer held, a new recovery code's text among it
+        wipe_out(&out)
     }
 }
 

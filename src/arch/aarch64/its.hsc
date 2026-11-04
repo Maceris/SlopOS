@@ -397,8 +397,11 @@ msi_device_memory :: fn() -> u64? {
     if !its.ready {
         return null
     }
-    return its.itt_entry_size * 32
+    return its.itt_entry_size * cast[u64](ITT_EVENTS)
 }
+
+/** The events a device's interrupt translation table has room for: slop_os.MAX_DEVICE_MSIS, a power of two. */
+ITT_EVENTS : u32 : 32
 
 /**
  * Map a device to its interrupt translation table, with MAPD, under its_lock (arch_interface.add_msi_device).
@@ -408,19 +411,21 @@ msi_device_memory :: fn() -> u64? {
  * @param source The device's ITS device ID, below 2 to its.device_bits.
  * @param memory The interrupt translation table: msi_device_memory's bytes, zeroed and contiguous, physical,
  *     256-byte aligned as the ITS needs; the ITS owns it until remove_msi_device.
- * @param events How many events the device may raise, numbered from 0; the table is given room for at least 4,
- *     the next power of two at least events, though msi_device_memory's bytes hold only 32.
+ * @param events How many events the device may raise, numbered from 0; the table is given room for at least 4, the
+ *     next power of two at least events, and at most the 32 msi_device_memory's bytes hold, so the ITS never uses
+ *     memory past the table (an event of 32 or more is refused by the ITS).
  */
 add_msi_device :: fn(source: u32, memory: arch_interface.PhysicalAddress, events: u32) {
     its :: &current_system().its
     if !its.ready || cast[u64](source) >> its.device_bits != 0 {
         return void
     }
+    wanted :: if events > ITT_EVENTS { ITT_EVENTS } else { events }
     bits := cast[u64](1)
     loop {
         bits += 1
     }
-    while cast[u64](1) << bits < cast[u64](events)
+    while cast[u64](1) << bits < cast[u64](wanted)
     concurrency.lock(&its.lock)
     run_command(its, COMMAND_MAPD | cast[u64](source) << 32, bits - 1, BASER_VALID | cast[u64](memory))
     concurrency.unlock(&its.lock)
@@ -453,8 +458,9 @@ remove_msi_device :: fn(source: u32) {
  * Give a device's event an LPI of its own, enabled, on the collection of the CPU with this hardware ID, and route the
  * LPI to id there (arch_interface.route_msi), with MAPTI, INV and SYNC, under its_lock.
  *
- * Without an ITS set up, or with no LPI or route slot free (logged as an error), nothing is routed, but the message
- * is still returned. A CPU with no collection gets collection 0's.
+ * Without an ITS set up, with no LPI or route slot free, or for a CPU with no collection (each logged as an error),
+ * nothing is routed, but the message is still returned: the interrupt id is the CPU's own, so its LPI can't be sent to
+ * another CPU's collection.
  *
  * @param source The device's ITS device ID, added with add_msi_device.
  * @param event The event's number, below the events add_msi_device was given.
@@ -469,11 +475,12 @@ route_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interfac
     if !its.ready {
         return message
     }
-    affinity :: ((cpu_hardware_id >> 32) & 0xff) << 24 | (cpu_hardware_id & 0xffffff)
     collection := cast[u64](0)
-    for found, index in its.collections {
-        if cast[u32](index) < its.collection_count && found.affinity == affinity {
-            collection = cast[u64](index)
+    match collection_of(its, cpu_hardware_id) {
+        case Some(found) => collection = found
+        case None => {
+            runtime.log_error("GIC ITS: the CPU an MSI is routed to has no collection")
+            return message
         }
     }
     concurrency.lock(&its.lock)
@@ -516,10 +523,28 @@ route_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interfac
 }
 
 /**
+ * Find the collection that targets a CPU.
+ *
+ * @param its The ITS, set up by init_msi, whose collections are read without its lock: they're fixed once it's ready.
+ * @param cpu_hardware_id The CPU's MPIDR; only its affinity fields are compared.
+ * @return The collection's index, below its.collection_count; null if no collection targets that CPU.
+ */
+collection_of :: fn(its: ptr[ItsState], cpu_hardware_id: u64) -> u64? {
+    affinity :: ((cpu_hardware_id >> 32) & 0xff) << 24 | (cpu_hardware_id & 0xffffff)
+    for found, index in its.collections {
+        if cast[u32](index) < its.collection_count && found.affinity == affinity {
+            return cast[u64](index)
+        }
+    }
+    return null
+}
+
+/**
  * Move a routed event's LPI to the collection of the CPU with this hardware ID, with MOVI and SYNC, and route it
  * to id there (arch_interface.move_msi), under its_lock.
  *
- * Nothing moves without an ITS set up, or if the event isn't routed. A CPU with no collection gets collection 0's.
+ * Nothing moves without an ITS set up, if the event isn't routed, or for a CPU with no collection (logged as an
+ * error), where it stays routed as it was.
  *
  * @param source The device's ITS device ID.
  * @param event The event's number, routed by route_msi.
@@ -534,11 +559,12 @@ move_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interface
     if !its.ready {
         return message
     }
-    affinity :: ((cpu_hardware_id >> 32) & 0xff) << 24 | (cpu_hardware_id & 0xffffff)
     collection := cast[u64](0)
-    for found, index in its.collections {
-        if cast[u32](index) < its.collection_count && found.affinity == affinity {
-            collection = cast[u64](index)
+    match collection_of(its, cpu_hardware_id) {
+        case Some(found) => collection = found
+        case None => {
+            runtime.log_error("GIC ITS: the CPU an MSI is moved to has no collection")
+            return message
         }
     }
     concurrency.lock(&its.lock)
