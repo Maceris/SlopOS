@@ -35,6 +35,8 @@ MADE_TEXT :: "Written to a volume made at run time"
  */
 volumes_are_made_at_run_time #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
+    // Beside the system volume, so skipped without it
+    _ = system_of(t, given)?
     manager :: manager_of(t, given)?
     container :: testing.require_some(t, given.container, "the sealed volume's test, run before, found the container")?
     buffer :: buffer_of(t, given)?

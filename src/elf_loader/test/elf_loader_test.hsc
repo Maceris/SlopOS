@@ -68,8 +68,8 @@ hello_reads_as_a_relocatable_executable #test :: fn(t: ptr[mut testing.T]) -> te
     made :: hello(t)?
     defer free_hello(made)
     executable :: made.executable
-    testing.expect(t, executable.segment_count >= 2, "code and data are segments of their own")
-    testing.expect(t, executable.relocation_count > 0, "a position-independent program has relocations")
+    testing.expect_ge(t, executable.segment_count, 2, "code and data are segments of their own")
+    testing.expect_gt(t, executable.relocation_count, 0, "a position-independent program has relocations")
     testing.expect_eq(t, executable.size % elf_loader.PAGE_SIZE, 0, "the image is a whole number of pages")
     return .Ok
 }

@@ -206,7 +206,7 @@ check_snapshots_of :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome
     deleting_one :: slopfs.delete_snapshot(container, origin_id, name_bytes("one"), null)
     require_done(t, deleting_one, "a snapshot without a clone is deleted")?
     require_commit(t, container, "the deletion commits")?
-    testing.expect(t, slopfs.free_blocks(container) > before_delete, "deleting a snapshot frees what only it held")
+    testing.expect_gt(t, slopfs.free_blocks(container), before_delete, "deleting a snapshot frees what only it held")
 
     // All of it across a mount
     slopfs.unmount(container)

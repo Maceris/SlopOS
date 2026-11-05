@@ -157,7 +157,7 @@ transactions_replace_commit_conflict_and_undo #test :: fn(t: ptr[mut testing.T])
         }
     }
     testing.expect(t, saw_replaced, "following the changes finds the file replaced")
-    testing.expect(t, saw_created >= 2, "following the changes finds both files the transaction made")
+    testing.expect_ge(t, saw_created, 2, "following the changes finds both files the transaction made")
     return .Ok
 }
 

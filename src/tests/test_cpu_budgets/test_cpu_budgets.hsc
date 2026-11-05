@@ -48,7 +48,7 @@ the_root_budget_is_every_cpu_s_whole_time #test :: fn(t: ptr[mut testing.T]) -> 
     testing.expect_eq(t, whole.priority, 255, "the root budget has the top priority, which every other is under")
     // Its CPUs are any there may be, but its share counts those online, which the test isn't told
     testing.expect_eq(t, whole.share % 1_000_000, 0, "the root budget's share is the whole of each CPU it has")
-    testing.expect(t, whole.share >= 1_000_000, "the root budget has at least the boot CPU's whole time")
+    testing.expect_ge(t, whole.share, 1_000_000, "the root budget has at least the boot CPU's whole time")
     testing.expect_eq(t, whole.children_share, 0, "nothing has been split off the root budget before the test")
     return .Ok
 }

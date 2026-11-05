@@ -172,8 +172,8 @@ memory_fills_as_touched_and_shares_its_frames #test :: fn(t: ptr[mut testing.T])
      * Closing the child gave the parent back the limit less what the child paid for the memory, and the child's own
      * slot too if its grace period is over already
      */
-    testing.expect(t, with_child - after >= CHILD_LIMIT - child_used, "closing a child gives its parent back the rest of its limit")
-    testing.expect(t, after >= child_used, "closing a child leaves its parent paying for the memory the child paid for")
+    testing.expect_ge(t, with_child - after, CHILD_LIMIT - child_used, "closing a child gives its parent back the rest of its limit")
+    testing.expect_ge(t, after, child_used, "closing a child leaves its parent paying for the memory the child paid for")
     testing.expect_eq(t, still_there, 1003, "memory outlives the budget that paid for it, with what was written")
     testing.expect_ok(t, closed_memory, "the memory closes")
     _ = test_kit.wait_for_budget(budget, 0, 1_000_000_000)
@@ -193,7 +193,7 @@ memory_on_a_large_page_boundary_maps_with_large_pages #test :: fn(t: ptr[mut tes
     block :: slop_os.startup_block()
     // 4 MiB mapped 2 MiB-aligned takes two large pages, so none of the tables of 4 KiB pages it takes mapped a page off
     costs :: testing.require_some(t, page_tables_touching(block), "two objects of 4 MiB are made and mapped")?
-    saved :: testing.expect(t, costs.aligned + 2 * PAGE <= costs.unaligned, "4 MiB mapped 2 MiB-aligned takes large pages, not the tables of 4 KiB pages it takes mapped a page off")
+    saved :: testing.expect_le(t, costs.aligned + 2 * PAGE, costs.unaligned, "4 MiB mapped 2 MiB-aligned takes large pages, not the tables of 4 KiB pages it takes mapped a page off")
     if !saved {
         log_line.write(given.log, "%: 4 MiB took % bytes of page tables mapped 2 MiB-aligned, and % mapped a page off", NAME, costs.aligned,
             costs.unaligned)

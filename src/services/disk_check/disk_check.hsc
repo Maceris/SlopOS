@@ -17,7 +17,7 @@
  * Each of those is a #test function (Hemera's docs/testing.md), run by main with test_kit.run in ORDER, as each builds
  * on what those before it did to the disk, and reported to its debug log as "disk_check: <line>". A test finds what
  * main was given, and what tests before it made, like the storage manager's connection, in Given, through
- * test_kit.given. Tests whose grant wasn't given aren't run, so the summary says how many were.
+ * test_kit.given. A test whose grant wasn't given skips itself, so the summary always counts every one.
  */
 package disk_check
 
@@ -69,42 +69,24 @@ MANY :: 8
 /** How many partitions the storage manager is asked to describe at most, looking for one. */
 MOST_PARTITIONS : u32 : 64
 
-/** What a test needs given for it to be run. */
-Needs :: enum {
-    /** A connector to the storage manager, which main needs for any test. */
-    Storage,
-    /** The EFI system partition's root, the working directory, too. */
-    EfiSystemPartition,
-    /** The system volume's root, too. */
-    SystemVolume,
-}
-
-/** A test in the order main runs them, and what it needs. */
-Step :: struct {
-    /** The #test function's name. */
-    name : string,
-    /** What has to be given for it to be run. */
-    needs : Needs,
-}
-
 /**
- * The tests in the order main runs them, each after what it builds on: the links need the sealed volume unlocked, the
- * quota the snapshot's clone. A #test function not named here runs after these, whatever was given.
+ * The tests' names in the order main runs them, each after what it builds on: the links need the sealed volume
+ * unlocked, the quota the snapshot's clone. A #test function not named here runs after these.
  */
-ORDER :: Step.[
-    Step.{name = "dials_the_storage_manager", needs = .Storage},
-    Step.{name = "the_checked_partition_reads_writes_and_refuses_past_its_end", needs = .Storage},
-    Step.{name = "std_files_work_on_the_efi_system_partition", needs = .EfiSystemPartition},
-    Step.{name = "a_read_only_directory_selects_files_and_refuses_making_one", needs = .EfiSystemPartition},
-    Step.{name = "the_system_volume_reads_writes_and_moves_files", needs = .SystemVolume},
-    Step.{name = "typed_files_keep_their_type", needs = .SystemVolume},
-    Step.{name = "transactions_replace_commit_conflict_and_undo", needs = .SystemVolume},
-    Step.{name = "time_zones_read_from_the_system_volume", needs = .SystemVolume},
-    Step.{name = "the_sealed_volume_opens_only_with_its_passphrase", needs = .SystemVolume},
-    Step.{name = "links_reach_another_volume_and_grant_nothing_further", needs = .SystemVolume},
-    Step.{name = "snapshots_read_as_the_volume_was_and_clone", needs = .SystemVolume},
-    Step.{name = "a_quota_refuses_what_is_past_it", needs = .SystemVolume},
-    Step.{name = "volumes_are_made_at_run_time", needs = .SystemVolume},
+ORDER :: string.[
+    "dials_the_storage_manager",
+    "the_checked_partition_reads_writes_and_refuses_past_its_end",
+    "std_files_work_on_the_efi_system_partition",
+    "a_read_only_directory_selects_files_and_refuses_making_one",
+    "the_system_volume_reads_writes_and_moves_files",
+    "typed_files_keep_their_type",
+    "transactions_replace_commit_conflict_and_undo",
+    "time_zones_read_from_the_system_volume",
+    "the_sealed_volume_opens_only_with_its_passphrase",
+    "links_reach_another_volume_and_grant_nothing_further",
+    "snapshots_read_as_the_volume_was_and_clone",
+    "a_quota_refuses_what_is_past_it",
+    "volumes_are_made_at_run_time",
 ]
 
 /** A connection to the storage manager, and the port its answers wake. */
@@ -160,14 +142,15 @@ Disk :: struct {
  * links, snapshots, quotas, volumes made, and time zones.
  *
  * It's a test: it writes to the partition named CHECKED's block 1, to EFI/SlopOS on the EFI system partition, and to
- * the system volume. Each test is run only when what it needs is given (ORDER), and reported in its debug log.
+ * the system volume. Each test runs in ORDER, skipping itself when what it needs wasn't given, and is reported in its
+ * debug log.
  *
  * @param log The debug log the tests are reported in; without one, they're reported nowhere.
  * @param storage A connector to the storage manager. Without it there's nothing to check, and it ends with 0.
  * @param working_directory The first EFI system partition's root, the process's working directory, which std's files
- *     use. Without it, its two tests aren't run.
- * @param system The system volume's root. Without it, the tests of it and the volumes beside it aren't run.
- * @return How many tests failed: 0 when every one run passed, or with no storage manager.
+ *     use. Without it, its two tests skip themselves.
+ * @param system The system volume's root. Without it, the tests of it and the volumes beside it skip themselves.
+ * @return How many tests failed: 0 when every one passed or skipped itself, or with no storage manager.
  */
 main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, working_directory: os.Channel[dir.Dir]?,
     system: os.Channel[dir.Dir]?) -> int {
@@ -176,49 +159,33 @@ main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, wo
         runtime.log_info("no storage manager")
         return 0
     }
-    if working_directory is_none {
-        runtime.log_info("no EFI system partition")
-    }
-    if system is_none {
-        runtime.log_info("no system volume")
-    }
     given :: Given.{log = to, storage = storage, working_directory = working_directory, system = system}
     every := #insert testing.tests_of(compiler.load_package("."))
-    chosen := in_order(every, working_directory is_some, system is_some)
+    chosen := in_order(every)
     defer runtime.array_free(&chosen)
     return test_kit.run(to, NAME, chosen[0..<chosen.count], given)
 }
 
 /**
- * Put the package's tests in ORDER, leaving out those whose needs weren't given.
+ * Put the package's tests in ORDER.
  *
  * @param tests Every #test function of the package, as tests_of gives them; only read.
- * @param efi_system_partition Whether the EFI system partition's root was given.
- * @param system_volume Whether the system volume's root was given.
- * @return The tests to run, from the context's allocator, which the caller frees: ORDER's that were given what they
- *     need, in its order, then any test it doesn't name, in the order tests has them.
+ * @return The tests to run, from the context's allocator, which the caller frees: ORDER's, in its order, then any test
+ *     it doesn't name, in the order tests has them.
  */
-in_order :: fn(tests: testing.Test[], efi_system_partition: bool, system_volume: bool) -> testing.Test[..] {
+in_order :: fn(tests: testing.Test[]) -> testing.Test[..] {
     chosen : testing.Test[..]
-    for step in ORDER {
-        given_enough :: match step.needs {
-            case .Storage => true
-            case .EfiSystemPartition => efi_system_partition
-            case .SystemVolume => system_volume
-        }
-        if !given_enough {
-            continue
-        }
+    for name in ORDER {
         for test in tests {
-            if test.name == step.name {
+            if test.name == name {
                 runtime.array_add(&chosen, test)
             }
         }
     }
     for test in tests {
         named := false
-        for step in ORDER {
-            named = named || step.name == test.name
+        for name in ORDER {
+            named = named || name == test.name
         }
         if !named {
             runtime.array_add(&chosen, test)
@@ -253,15 +220,37 @@ manager_of :: fn(t: ptr[mut testing.T], given: ptr[Given], location := #caller_l
 }
 
 /**
- * Find the system volume's root, for a test of it, which main runs only when it's given.
+ * Find the system volume's root, for a test of it or of the volumes beside it, or skip the test when there's none.
  *
- * @param t The test's state, which a failure is recorded in if there's none.
+ * @param t The test's state, marked skipped if there's none.
  * @param given What main was given.
- * @param location Where the test asked; the caller's own.
- * @return The root, borrowed from given; Error(Failed), recorded, if it wasn't given.
+ * @return The root, borrowed from given; Error(Skipped) if it wasn't given, for the test to return with ?.
  */
-system_of :: fn(t: ptr[mut testing.T], given: ptr[Given], location := #caller_location) -> Result[os.Channel[dir.Dir], testing.Stopped] {
-    return testing.require_some(t, given.system, "main runs the system volume's tests only when it's given", location)
+system_of :: fn(t: ptr[mut testing.T], given: ptr[Given]) -> Result[os.Channel[dir.Dir], testing.Stopped] {
+    match given.system {
+        case Some(system) => return .Ok(system)
+        case None => {
+            _ = testing.skip(t, "no system volume")
+            return .Error(.Skipped)
+        }
+    }
+}
+
+/**
+ * Find the EFI system partition's root, the working directory, for a test of it, or skip the test when there's none.
+ *
+ * @param t The test's state, marked skipped if there's none.
+ * @param given What main was given.
+ * @return The root, borrowed from given; Error(Skipped) if it wasn't given, for the test to return with ?.
+ */
+working_directory_of :: fn(t: ptr[mut testing.T], given: ptr[Given]) -> Result[os.Channel[dir.Dir], testing.Stopped] {
+    match given.working_directory {
+        case Some(directory) => return .Ok(directory)
+        case None => {
+            _ = testing.skip(t, "no EFI system partition")
+            return .Error(.Skipped)
+        }
+    }
 }
 
 /**
@@ -340,7 +329,7 @@ the_checked_partition_reads_writes_and_refuses_past_its_end #test :: fn(t: ptr[m
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     mapped :: slop_os.memory_map(window, block_of_startup.space, checked.buffer, 0, info.buffer_bytes, read_write)
     testing.require_ok(t, mapped, "the block buffer maps read/write at addresses reserved for it")?
-    testing.require(t, info.block_count >= 10, "tools/boot.py makes the partition 2048 blocks, past the 10 the check uses")?
+    testing.require_ge(t, info.block_count, 10, "tools/boot.py makes the partition 2048 blocks, past the 10 the check uses")?
 
     // The host's mark, in block 0
     testing.require_eq(t, run(&checked, .Read(block.Transfer.{tag = 1, first = 0, count = 1, offset = READ_AT})), block.Status.Done,
@@ -399,7 +388,7 @@ the_checked_partition_reads_writes_and_refuses_past_its_end #test :: fn(t: ptr[m
  */
 std_files_work_on_the_efi_system_partition #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
-    _ = testing.require_some(t, given.working_directory, "main runs the EFI system partition's tests only when it's given")?
+    _ = working_directory_of(t, given)?
     host_read :: os.read_entire_file(HOST_FILE)
     host :: testing.require_ok(t, host_read, "tools/boot.py put HOST_FILE on the EFI system partition")?
     long_read :: os.read_entire_file(LONG_FILE)
@@ -558,7 +547,7 @@ starts_with :: fn(disk: ptr[Disk], offset: u32, text: string) -> bool {
  */
 a_read_only_directory_selects_files_and_refuses_making_one #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
-    working_directory :: testing.require_some(t, given.working_directory, "main runs the EFI system partition's tests only when it's given")?
+    working_directory :: working_directory_of(t, given)?
     budget :: slop_os.startup_block().budget
     into := os.Incoming.{}
     root_port :: os.port_for(budget, working_directory.end)

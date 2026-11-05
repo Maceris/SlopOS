@@ -66,7 +66,7 @@ test_shootdown :: fn(kernel: ptr[mut Kernel]) {
  */
 every_cpu_reads_the_new_page_after_a_shootdown #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     kernel :: per_cpu().kernel
-    require_within(t, cast[i64](kernel.online_cpus), 2, SHOOTDOWN_TEST_CPUS,
+    testing.require_within(t, cast[i64](kernel.online_cpus), 2, SHOOTDOWN_TEST_CPUS,
         "the test is booted with other CPUs to read the page, and no more than ShootdownTest.seen keeps")?
     made :: allocate_object[ShootdownTest](&kernel.frames)
     test :: testing.require_ok(t, made, "a boot's free frames hold the test's state")?

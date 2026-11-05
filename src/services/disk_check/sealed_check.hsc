@@ -48,6 +48,8 @@ CONTAINER_TYPE :: u8.[0x53, 0x4c, 0x4f, 0x50, 0x4f, 0x53, 0x20, 0x43, 0x4f, 0x4e
  */
 the_sealed_volume_opens_only_with_its_passphrase #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
+    // Beside the system volume, so skipped without it
+    _ = system_of(t, given)?
     manager :: manager_of(t, given)?
     container := cast[u32](0xffffffff)
     for index in 0..<MOST_PARTITIONS {

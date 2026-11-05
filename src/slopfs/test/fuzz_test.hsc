@@ -111,7 +111,7 @@ check_fuzz :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome {
     }
     runtime.log_info("fuzz%: % rounds: % refused at mount, % mounted, % of those checked out whole, % committed after", if sealed { " (sealed)" } else { "" },
         survived.rounds, survived.refused, survived.mounted, survived.verified, survived.committed)
-    testing.expect(t, survived.mounted > 0, "some damage, most of all behind the seals, still mounts")
+    testing.expect_gt(t, survived.mounted, 0, "some damage, most of all behind the seals, still mounts")
     return .Ok
 }
 

@@ -131,7 +131,7 @@ links_reach_another_volume_and_grant_nothing_further #test :: fn(t: ptr[mut test
             case Issued(link) => {
                 path :: os.items(&into, link.path)
                 expected :: if i == 0 { SHARED_DIRECTORY } else { SHARED_FILE }
-                testing.require(t, i < 2, "the encrypted volume issued two links, so it lists two")?
+                testing.require_lt(t, i, 2, "the encrypted volume issued two links, so it lists two")?
                 testing.expect(t, same_text(path, expected), "a volume lists the links it issued in the order it issued them, by path")
                 testing.expect_eq(t, link.write, i == 0, "a volume lists whether each link it issued may write: the directory's, not the file's")
                 if i < numbers.count {

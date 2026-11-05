@@ -108,7 +108,7 @@ test_pool :: fn(kernel: ptr[mut Kernel]) {
  */
 two_pools_share_five_cpus #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     kernel :: per_cpu().kernel
-    require_within(t, cast[i64](kernel.online_cpus), cast[i64](POOL_CPUS), cast[i64](0xffffffff),
+    testing.require_within(t, cast[i64](kernel.online_cpus), cast[i64](POOL_CPUS), cast[i64](0xffffffff),
         "the test is booted with the boot CPU and five more to run the pools")?
     made :: allocate_object[PoolTest](&kernel.frames)
     test :: testing.require_ok(t, made, "a boot's free frames hold the test's state")?

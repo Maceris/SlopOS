@@ -376,10 +376,10 @@ expect_traces_agree :: fn(t: ptr[mut testing.T], test: ptr[FiberTest], least: us
     after :: test.after
     outside :: test.outside
     count :: test.before_count
-    expect_within(t, cast[i64](count), cast[i64](least), cast[i64](before.count),
+    testing.expect_within(t, cast[i64](count), cast[i64](least), cast[i64](before.count),
         "the trace before suspending has every frame of the fiber's calls, and they fit in it", location)
     testing.expect_eq(t, test.after_count, count, "the trace once resumed has as many frames as before, the resume loop having re-entered them", location)
-    expect_within(t, cast[i64](test.outside_count), cast[i64](count), cast[i64](outside.count),
+    testing.expect_within(t, cast[i64](test.outside_count), cast[i64](count), cast[i64](outside.count),
         "the trace from outside has the suspended fiber's frames, and those of what suspended it", location)
     if count > before.count || test.outside_count < count || test.outside_count > outside.count {
         return void

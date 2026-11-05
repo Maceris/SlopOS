@@ -73,7 +73,7 @@ AccountsGiven :: struct {
 check_accounts :: fn(supervisor: ptr[mut Supervisor]) {
     shared :: AccountsGiven.{supervisor_at = cast[u64](supervisor), end = cast[slop_os.Channel](slop_os.NO_HANDLE),
         port = cast[slop_os.Port](slop_os.NO_HANDLE)}
-    _ = test_kit.run(supervisor.log, ACCOUNTS_TEST_NAME, #insert testing.tests_of(compiler.load_package(".")), shared)
+    _ = test_kit.run(supervisor.log, ACCOUNTS_TEST_NAME, #insert testing.tests_of(compiler.load_package("."), "accounts_check.hsc"), shared)
 }
 
 /**

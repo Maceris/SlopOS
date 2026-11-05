@@ -284,8 +284,8 @@ formatted :: fn(t: ptr[mut testing.T], blocks: u64, first: u8) -> Result[slopfs.
 }
 
 /**
- * Require a result to be Ok, as expect_ok checks, ending the test with ? if it isn't; unlike testing.require_ok, for a
- * result of any value, void too, which is dropped.
+ * Require a result to be Ok, as expect_ok checks, ending the test with ? if it isn't, its value dropped: for a step
+ * whose value isn't wanted, which testing.require_ok would give.
  *
  * @param t The test's state, which a failure is recorded in.
  * @param result The result, of any Result type.

@@ -122,7 +122,7 @@ threads_run_only_on_their_budget_cpus #test :: fn(t: ptr[mut testing.T]) -> test
     _ = slop_os.process_kill(copy)
     _ = slop_os.process_kill(spinner)
     log_line.write(given.log, "%: the counter counted % kept to CPU 0, % on CPU 1", NAME, kept, moved)
-    testing.expect(t, spun > 0, "the spinner ran on CPU 0, where its budget keeps it")
+    testing.expect_gt(t, spun, 0, "the spinner ran on CPU 0, where its budget keeps it")
     testing.expect(t, moved > 0 && kept * 10 < moved, "kept to CPU 0 under the spinner, the counter hardly counts, as idle CPU 1 may not take it; moved there, it counts ten times as much")
     testing.expect_eq(t, (slop_os.cpu_budget_describe(budget) or_else slop_os.CpuBudgetInfo.{}).cpus, CPU_1, "a budget's CPUs are those it was last set to")
     // Their shares back to the root, for the tests after

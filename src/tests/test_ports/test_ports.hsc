@@ -120,13 +120,13 @@ timers_and_deadlines_end_waits_no_sooner #test :: fn(t: ptr[mut testing.T]) -> t
     after_timer :: test_kit.clock_now()
     testing.expect_eq(t, timed or_else 0, 1, "the timer's firing gives the wait one packet")
     testing.expect_eq(t, packets[0].kind, slop_os.PacketKind.Timer, "a timer's firing raises a Timer packet")
-    testing.expect(t, after_timer - set >= TIMER_NANOSECONDS, "a timer fires no sooner than its deadline")
+    testing.expect_ge(t, after_timer - set, TIMER_NANOSECONDS, "a timer fires no sooner than its deadline")
     // A deadline, with nothing to take
     started :: test_kit.clock_now()
     nothing :: slop_os.port_wait(port, packets, started + DEADLINE_NANOSECONDS)
     after_deadline :: test_kit.clock_now()
     testing.expect_eq(t, nothing or_else 1, 0, "a wait with nothing to take ends at its deadline with no packets")
-    testing.expect(t, after_deadline - started >= DEADLINE_NANOSECONDS, "a wait ends at its deadline, no sooner")
+    testing.expect_ge(t, after_deadline - started, DEADLINE_NANOSECONDS, "a wait ends at its deadline, no sooner")
     // Memory it can't write
     unwritable :: slop_os.port_wait(port, test_kit.packets_at(0x10, 4), slop_os.NO_DEADLINE)
     testing.expect_error(t, unwritable, slop_os.PortError.BadBuffer, "packets can't be put in memory the process can't write")

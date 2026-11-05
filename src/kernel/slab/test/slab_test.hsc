@@ -183,7 +183,7 @@ big_objects_get_slabs_of_several_frames_until_there_are_none #test :: fn(t: ptr[
     while slab.allocate(&big, &allocator) is_ok
     // Every block of 4 frames left became a slab
     testing.expect_eq(t, count, big.slab_count * big.capacity, "every slab made was filled before allocation failed")
-    testing.expect(t, big.slab_count >= 10, "every block of four free frames became a slab")
+    testing.expect_ge(t, big.slab_count, 10, "every block of four free frames became a slab")
     testing.expect(t, frames.allocate(&allocator, 2) is_error, "so none is left: running out of frames is an error")
     return .Ok
 }

@@ -32,6 +32,8 @@ LARGE_BYTES : usize : 65536
  */
 a_quota_refuses_what_is_past_it #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
+    // Beside the system volume, so skipped without it
+    _ = system_of(t, given)?
     manager :: manager_of(t, given)?
     clone :: testing.require_some(t, given.clone, "the snapshots' test, run before, made and opened the clone")?
     container :: testing.require_some(t, given.container, "the sealed volume's test, run before, found the container")?
@@ -55,7 +57,7 @@ a_quota_refuses_what_is_past_it #test :: fn(t: ptr[mut testing.T]) -> testing.Ou
     after_usage :: usage_of(manager.end, manager.port, container, CLONE)
     after :: testing.require_some(t, after_usage, "the storage manager says the usage of a volume it serves")?
     testing.expect_eq(t, after.quota, quota, "a volume's usage says the quota set on it")
-    testing.expect(t, after.used <= quota + 16, "a volume uses at most a chunk past its quota, as only the chunk being written can go past it")
+    testing.expect_le(t, after.used, quota + 16, "a volume uses at most a chunk past its quota, as only the chunk being written can go past it")
     return .Ok
 }
 

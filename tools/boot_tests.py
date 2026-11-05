@@ -79,9 +79,15 @@ def boot_arguments(arguments: list, more: list) -> list:
         argument for argument in arguments if argument not in (WITH_PROGRAMS, WITH_IMAGE_BUILDER)]
 
 
-def tests_passed(program: str, count: int) -> str:
-    """The line a program's tests end with when every one of them passed (Hemera's docs/testing.md)."""
-    return f"[user] {program}: {count} tests: {count} passed, 0 failed"
+def summary(count: int, passed: int, skipped: int = 0) -> str:
+    """A run of tests' last line when none failed (Hemera's docs/testing.md): how many ran, passed and skipped themselves."""
+    line = f"{count} test{'' if count == 1 else 's'}: {passed} passed, 0 failed"
+    return line + (f", {skipped} skipped" if skipped else "")
+
+
+def tests_passed(program: str, count: int, skipped: int = 0) -> str:
+    """The line a program's tests end with when none failed: count of them, all but skipped passing."""
+    return f"[user] {program}: {summary(count, count - skipped, skipped)}"
 
 
 def program_test(name: str, program: str, line, words: str = "", qemu: list = []) -> tuple:
@@ -310,7 +316,7 @@ TESTS = [
         "--expect-line=[user] storage_manager: disk 0 partition 2: EFI system partition, 69632 blocks from 6144",
         "--expect-line=[user] storage_manager: started a FAT server for disk 0 partition 2",
         "--expect-line=[user] fat_server: serving a FAT32 volume of 68512 clusters of 512 bytes",
-        f"--expect-line={tests_passed('disk_check', 4)}",
+        f"--expect-line={tests_passed('disk_check', 13, 9)}",
         "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # Booted from a disk the image builder made rather than the ISO: the bootloader read from its EFI system partition,
@@ -763,11 +769,11 @@ TESTS = [
     ("allocates from the kernel heap", 0, ["--command-line=test_exit test_heap",
         "--expect-line=[info] test_heap: 2 tests: 2 passed, 0 failed"]),
     ("keeps time with the counter", 0, ["--command-line=test_exit test_clock",
-        "--expect-line=[info] test_clock: 1 tests: 1 passed, 0 failed"]),
+        "--expect-line=[info] test_clock: 1 test: 1 passed, 0 failed"]),
     ("lets idle CPUs other than the boot CPU stop ticking", 0, ["--command-line=test_exit test_tickless",
-        "--expect-line=[info] test_tickless: 1 tests: 1 passed, 0 failed", "--", "-smp", "4"]),
+        "--expect-line=[info] test_tickless: 1 test: 1 passed, 0 failed", "--", "-smp", "4"]),
     ("shoots down TLB entries on every CPU", 0, ["--command-line=test_exit test_shootdown",
-        "--expect-line=[info] test_shootdown: 1 tests: 1 passed, 0 failed", "--", "-smp", "4"]),
+        "--expect-line=[info] test_shootdown: 1 test: 1 passed, 0 failed", "--", "-smp", "4"]),
     ("routes a device's interrupts through the I/O APIC", 0, ["--command-line=test_exit test_ioapic",
         "--expect-line=[info] test_ioapic: test the_test_device_is_routed_to_the_boot_cpu ... ok",
         "--expect-line=[info] test_ioapic: test the_test_devices_interrupts_arrive ... ok"]),
@@ -803,13 +809,13 @@ TESTS = [
     ("switches between fibers", 0, ["--command-line=test_exit test_fibers",
                                     "--expect-line=[info] test_fibers: 2 tests: 2 passed, 0 failed"]),
     ("shares fiber pools between CPUs", 0, ["--command-line=test_exit test_pool",
-        "--expect-line=[info] test_pool: 1 tests: 1 passed, 0 failed", "--", "-smp", "6"]),
+        "--expect-line=[info] test_pool: 1 test: 1 passed, 0 failed", "--", "-smp", "6"]),
 ]
 
 # The same, on the kernel built with morestack
 MORESTACK_TESTS = [
     ("grows a fiber's stack onto segments", 0, ["--command-line=test_exit test_segments",
-        "--expect-line=[info] test_segments: 1 tests: 1 passed, 0 failed"]),
+        "--expect-line=[info] test_segments: 1 test: 1 passed, 0 failed"]),
 ]
 
 

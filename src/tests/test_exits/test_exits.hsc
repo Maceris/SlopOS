@@ -81,7 +81,7 @@ a_copy_missing_a_grant_ends_with_126_and_a_refused_launch_gives_back #test :: fn
         os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = WATCH_KEY}}) is_error
     after :: testing.require_ok(t, slop_os.memory_budget_info(block.budget), "the program's budget can be read")?
     testing.expect(t, refused, "a launch whose watch asks for a key the port already has bound is refused")
-    testing.expect(t, after.used < before.used + COPY_BUDGET, "a refused launch gives back the copy's budget it made, so the starter isn't charged for it")
+    testing.expect_lt(t, after.used, before.used + COPY_BUDGET, "a refused launch gives back the copy's budget it made, so the starter isn't charged for it")
     _ = slop_os.handle_close(cast[slop_os.Handle](port))
     return .Ok
 }

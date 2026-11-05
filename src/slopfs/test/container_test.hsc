@@ -226,7 +226,7 @@ an_empty_disk_isnt_mounted_and_a_formatted_one_is #test :: fn(t: ptr[mut testing
     after_format :: slopfs.free_blocks(container)
     testing.expect(t, after_format + 4 * slopfs.NODE_BLOCKS + slopfs.FIRST_DATA + 1 >= BLOCKS,
         "only the space map's and owners' nodes, two copies each, are used after formatting")
-    testing.expect(t, after_format < BLOCKS - slopfs.FIRST_DATA - 1, "formatting writes the space map's and owners' nodes")
+    testing.expect_lt(t, after_format, BLOCKS - slopfs.FIRST_DATA - 1, "formatting writes the space map's and owners' nodes")
     return .Ok
 }
 

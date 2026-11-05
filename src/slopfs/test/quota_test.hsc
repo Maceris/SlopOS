@@ -285,7 +285,7 @@ the_reserve_keeps_room_to_delete_and_commit #test :: fn(t: ptr[mut testing.T]) -
     require_commit(t, container, "a container full to its reserve commits")?
     // Full to the reserve, which only a file's bytes keep out of
     reserve :: slopfs.reserve_of(blocks)
-    testing.expect(t, slopfs.free_blocks(container) + 16 >= reserve, "files' bytes don't go into the reserve")
+    testing.expect_ge(t, slopfs.free_blocks(container) + 16, reserve, "files' bytes don't go into the reserve")
     testing.expect(t, slopfs.free_blocks(container) <= reserve + 16 + 2 * slopfs.NODE_BLOCKS * 4,
         "files' bytes take everything but the reserve, a chunk, and the trees' nodes")
     full :: slopfs.free_blocks(container)
@@ -294,6 +294,6 @@ the_reserve_keeps_room_to_delete_and_commit #test :: fn(t: ptr[mut testing.T]) -
     }
     require_commit(t, container, "deletes full to the reserve commit")?
     require_commit(t, container, "a commit after the deletes frees what they gave back")?
-    testing.expect(t, slopfs.free_blocks(container) > full, "deleting full to the reserve frees blocks")
+    testing.expect_gt(t, slopfs.free_blocks(container), full, "deleting full to the reserve frees blocks")
     return .Ok
 }

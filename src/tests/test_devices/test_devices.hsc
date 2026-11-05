@@ -108,7 +108,7 @@ a_driver_takes_its_device_interrupts_through_an_irq #test :: fn(t: ptr[mut testi
     registered :: slop_os.controller_register(hardware, kind, info.registers)
     testing.expect_ok(t, registered, "the device's interrupt controller registers where the firmware tables say it is")
     controller :: registered or_else slop_os.ControllerInfo.{}
-    testing.expect(t, controller.lines > info.line, "the controller registered has the device's line")
+    testing.expect_gt(t, controller.lines, info.line, "the controller registered has the device's line")
     in_ram :: slop_os.controller_register(hardware, kind, info.kernel_ram)
     testing.expect_error(t, in_ram, slop_os.DeviceError.BadAddress, "a controller's registers can't be in RAM the kernel owns")
     // Its IRQ, a second for the same line, and one without the platform capability
@@ -138,7 +138,7 @@ a_driver_takes_its_device_interrupts_through_an_irq #test :: fn(t: ptr[mut testi
         _ = slop_os.irq_ack(irq)
     }
     while taken < INTERRUPTS
-    testing.expect(t, taken >= INTERRUPTS, "the device's interrupts come as packets, each acknowledged, at least INTERRUPTS in two seconds")
+    testing.expect_ge(t, taken, INTERRUPTS, "the device's interrupts come as packets, each acknowledged, at least INTERRUPTS in two seconds")
     testing.expect(t, keys_right, "every packet is an Irq packet under the IRQ's key")
     closed :: slop_os.handle_close(cast[slop_os.Handle](irq))
     testing.expect_ok(t, closed, "the IRQ closes, freeing its line")
