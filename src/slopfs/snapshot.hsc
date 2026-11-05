@@ -180,6 +180,8 @@ take_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], now: u64
     }
     tree_put(&container.nodes, &container.volumes, key_of(id, .Snapshot, number), view_of(cast[ptr[u8]](&snapshot), size_of(SnapshotRecord)))?
     set_floor(&container.space, id, transaction, null)
+    // What this transaction already freed of the volume's, which the snapshot's root may still name
+    hold_freed(&container.space, id, transaction)
     return .Ok(number)
 }
 

@@ -96,6 +96,43 @@ an_encrypted_volumes_snapshots_and_clones_read_as_taken_and_share_its_keys #test
     return check_snapshots_of(t, true)
 }
 
+/*
+ * A snapshot taken while the volume has changes not yet committed holds the volume as it was committed: what the
+ * changes gave back earlier in the transaction, which the snapshot's root still names, isn't freed at the commit.
+ */
+holds_what_the_transaction_freed_before_it #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    device :: formatted(t, SNAPSHOT_BLOCKS, 0x51)?
+    defer free_device(device)
+    mounting :: slopfs.mount(device)
+    container := testing.require_ok(t, mounting, "a formatted disk mounts")?
+    creating :: create_test_volume(container, "origin", false)
+    volume := testing.require_ok(t, creating, "a new container has room for a volume")?
+    root :: slopfs.ROOT_OBJECT
+    making :: slopfs.create(volume, root, "kept.txt", .File)
+    kept :: testing.require_ok(t, making, "a file is made in the root")?
+    writing :: slopfs.write(volume, kept, 0, name_bytes(FIRST_TEXT))
+    require_done(t, writing, "the file is written")?
+    require_commit(t, container, "the file commits")?
+    // Changed, not committed, and only then the snapshot
+    rewriting :: slopfs.write(volume, kept, 0, name_bytes(SECOND_TEXT))
+    require_done(t, rewriting, "the file is overwritten, its old blocks given back")?
+    making_more :: slopfs.create(volume, root, "more.txt", .File)
+    require_done(t, making_more, "another file is made, changing the root's nodes")?
+    taking :: slopfs.take_snapshot(container, volume.id, name_bytes("midway"), 30)
+    require_done(t, taking, "a snapshot is taken with changes not yet committed")?
+    require_commit(t, container, "the changes and the snapshot commit")?
+    verifying :: slopfs.verify(container)
+    testing.expect_ok(t, verifying, "no block is both free and named by the snapshot")
+    opening :: slopfs.open_snapshot(container, volume.id, name_bytes("midway"), null)
+    midway :: testing.require_ok(t, opening, "the snapshot opens")?
+    testing.expect(t, file_holds(midway, "kept.txt", name_bytes(FIRST_TEXT)), "the snapshot reads the file as committed before it")
+    looking :: slopfs.lookup(midway, root, "more.txt")
+    more_in_midway :: testing.require_ok(t, looking, "the snapshot looks up a name")?
+    testing.expect_none(t, more_in_midway, "a file made in the transaction, not yet committed, isn't in the snapshot")
+    slopfs.free_volume(midway)
+    return .Ok
+}
+
 /**
  * Check snapshots and clones: a volume's snapshot reads as the volume did when it was taken, while what the volume
  * gives back that it holds goes on its dead list rather than being freed; deleting a snapshot frees only what no other

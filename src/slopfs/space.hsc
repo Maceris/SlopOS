@@ -502,6 +502,33 @@ space_release :: fn(context: rawptr, start: u64, blocks: u64, owner: u64, birth:
     }
 }
 
+/**
+ * Keep what this transaction already gave back of an owner's that a new snapshot holds: a snapshot taken in a
+ * transaction holds the volume as its last commit left it, which can name blocks freed earlier in the same
+ * transaction, while no snapshot held them. Each such extent, born at or before floor, goes on the dead list, still
+ * its owner's, rather than being freed at the commit.
+ *
+ * @param space The container's space in memory; its changes and later list are changed in place.
+ * @param owner The volume the snapshot is of.
+ * @param floor The snapshot's transaction, its new floor: extents born in it or before are held.
+ */
+hold_freed :: fn(space: ptr[mut Space], owner: u64, floor: u64) {
+    for &change in space.changes {
+        if change.change != .FreedLater || change.owner != owner || change.birth > floor {
+            continue
+        }
+        change.change = .Dead
+        charge(space, owner, change.blocks, true)
+        // No longer freed at the commit
+        for extent, i in space.later {
+            if extent.start == change.start && extent.blocks == change.blocks && extent.owner == owner {
+                runtime.array_remove(&space.later, i)
+                break
+            }
+        }
+    }
+}
+
 /** The owner to give a commit that takes every owner's changes, for a commit of the whole container in one process. */
 ALL_OWNERS : u64 : 0xffffffffffffffff
 
