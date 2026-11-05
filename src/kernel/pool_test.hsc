@@ -4,6 +4,7 @@ import intrinsics from "base"
 import runtime from "base"
 import fiber from "std"
 import concurrency from "std"
+import testing from "std"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -85,41 +86,44 @@ PoolTest :: struct {
 }
 
 /**
- * Run the pool test from the boot CPU: make the pools, spawn their fibers, hand them to the other CPUs, and check
- * what the fibers recorded.
+ * Run test_pool from the boot CPU, reporting it to the kernel's log.
  *
- * Its state comes from the frame allocator and isn't freed; the pools are destroyed only when every check passes. It
- * logs the first failure as an error, or success, and returns either way.
- *
- * @param kernel The kernel, which needs POOL_CPUS online; the test's state is published in its pool_test for the
- *     other CPUs' join_pool_test, and its heap is the fibers' allocator.
+ * @param kernel Not used: the test finds the kernel through per_cpu.
  */
-test_pool :: fn(kernel #escaping : ptr[mut Kernel]) {
-    if kernel.online_cpus < POOL_CPUS {
-        runtime.log_error("test_pool: needs % CPUs online, not %", POOL_CPUS, kernel.online_cpus)
-        return void
-    }
-    test : ptr[mut PoolTest]
-    match allocate_object[PoolTest](&kernel.frames) {
-        case Ok(made) => test = made
-        case Error(error) => {
-            runtime.log_error("test_pool: no memory for the test's state")
-            return void
-        }
-    }
+test_pool :: fn(kernel: ptr[mut Kernel]) {
+    _ = run_tests("test_pool", testing.Test.[.{name = "two_pools_share_five_cpus", run = two_pools_share_five_cpus}])
+}
+
+/**
+ * Check two fiber pools sharing five CPUs, from the boot CPU: make the pools, spawn their fibers, hand them to the
+ * other CPUs, and check what the fibers recorded.
+ *
+ * Its state comes from the frame allocator and isn't freed; the pools are destroyed only when every check passes. The
+ * kernel needs POOL_CPUS online; the test's state is published in its pool_test for the other CPUs' join_pool_test,
+ * and its heap is the fibers' allocator.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if there are too few CPUs, no memory for the test's state, or the other CPUs didn't
+ *     all leave their pools in time.
+ */
+two_pools_share_five_cpus #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    kernel :: per_cpu().kernel
+    require_within(t, cast[i64](kernel.online_cpus), cast[i64](POOL_CPUS), cast[i64](0xffffffff),
+        "the test is booted with the boot CPU and five more to run the pools")?
+    made :: allocate_object[PoolTest](&kernel.frames)
+    test :: testing.require_ok(t, made, "a boot's free frames hold the test's state")?
+    spawned := false
     push_context pooled (allocator = heap_allocator(kernel), user_data = cast[rawptr](test)) {
         test.first = fiber.create_fiber_pool()
         test.second = fiber.create_fiber_pool()
-        spawned := spawn_into(test.first, parent_worker, 1)
+        spawned = spawn_into(test.first, parent_worker, 1)
         spawned = spawned && spawn_into(test.first, first_worker, FIRST_POOL_FIBERS - 1)
         spawned = spawned && spawn_into(test.second, spawner_worker, 1)
         spawned = spawned && spawn_into(test.second, second_worker, SECOND_POOL_FIBERS - 1)
         fiber.close_pool(test.first)
         fiber.close_pool(test.second)
-        if !spawned {
-            runtime.log_error("test_pool: no memory for the fibers")
-        }
     }
+    testing.expect(t, spawned, "the kernel heap has room for every fiber the boot CPU spawns")
     // A thread without a fiber runtime: yielding does nothing
     runtime.fiber_yield()
     // The other CPUs are waiting for this
@@ -129,29 +133,22 @@ test_pool :: fn(kernel #escaping : ptr[mut Kernel]) {
         arch.spin_hint()
     }
     while intrinsics.atomic_load_u64_acquire(&test.carriers_done) < cast[u64](POOL_CPUS - 1) && arch.counter() < deadline
-    if intrinsics.atomic_load_u64_acquire(&test.carriers_done) < cast[u64](POOL_CPUS - 1) {
-        runtime.log_error("test_pool: only % of % CPUs left their pools", test.carriers_done, POOL_CPUS - 1)
-        return void
+    done :: intrinsics.atomic_load_u64_acquire(&test.carriers_done)
+    testing.require_eq(t, done, cast[u64](POOL_CPUS - 1),
+        "every pool CPU runs its pool until its fibers are done, well within POOL_TEST_TIMEOUT_SECONDS, and leaves it")?
+    expect_pool_counts(t, &test.first_counts, FIRST_POOL_FIBERS, FIRST_POOL_CPUS)
+    expect_pool_counts(t, &test.second_counts, SECOND_POOL_FIBERS, SECOND_POOL_CPUS)
+    testing.expect_eq(t, test.counter, cast[u64]((FIRST_POOL_FIBERS + SECOND_POOL_FIBERS) * POOL_TURNS),
+        "every turn adds one with the mutex held across a yield, so none is lost however fibers park and wake")
+    testing.expect_eq(t, test.children, cast[u64](CHILD_FIBERS + 1),
+        "every fiber spawned from a fiber runs, the ones past its CPU's queue taken from the shared queue")
+    if testing.passed(t) {
+        fiber.destroy_fiber_pool(test.first)
+        fiber.destroy_fiber_pool(test.second)
     }
-    first_ok :: pool_counts_ok("first", &test.first_counts, FIRST_POOL_FIBERS, FIRST_POOL_CPUS)
-    second_ok :: pool_counts_ok("second", &test.second_counts, SECOND_POOL_FIBERS, SECOND_POOL_CPUS)
-    if !first_ok || !second_ok {
-        return void
-    }
-    if test.counter != (FIRST_POOL_FIBERS + SECOND_POOL_FIBERS) * POOL_TURNS {
-        runtime.log_error("test_pool: the counter behind the mutex is %, not %", test.counter,
-            (FIRST_POOL_FIBERS + SECOND_POOL_FIBERS) * POOL_TURNS)
-        return void
-    }
-    if test.children != CHILD_FIBERS + 1 {
-        runtime.log_error("test_pool: % fibers spawned from fibers ran, not %", test.children, CHILD_FIBERS + 1)
-        return void
-    }
-    fiber.destroy_fiber_pool(test.first)
-    fiber.destroy_fiber_pool(test.second)
     runtime.log_info("test_pool: fibers moved between CPUs % times in the first pool and % in the second",
         test.first_counts.moves, test.second_counts.moves)
-    runtime.log_info("test_pool: two pools shared five CPUs, each fiber staying on its own pool's")
+    return .Ok
 }
 
 /**
@@ -173,21 +170,19 @@ spawn_into :: fn(pool #escaping : ptr[mut fiber.FiberPool], function: runtime.Th
 }
 
 /**
- * Check what a pool's fibers recorded, logging an error with the counts if it's wrong.
+ * Check what a pool's fibers recorded: every turn taken, all on its own CPUs, every one of those, with a move.
  *
- * @param name The pool's name, for the error: "first" or "second".
+ * @param t The test's state, which each failure is recorded in.
  * @param counts What its fibers recorded.
  * @param fibers How many fibers the boot CPU spawned into it.
  * @param cpus The CPUs it should have run on, every one of them, a bit per CPU index.
- * @return True if its fibers took every turn, all on its own CPUs, every one of those, with at least one move.
+ * @param location Where the test asked, which a failure is recorded at, telling the pools apart: the caller's own.
  */
-pool_counts_ok :: fn(name: string, counts: ptr[PoolCounts], fibers: u64, cpus: u64) -> bool {
-    if counts.turns != fibers * POOL_TURNS || counts.strays != 0 || counts.cpus != cpus || counts.moves == 0 {
-        runtime.log_error("test_pool: the % pool's fibers took % turns (not %), % on other pools' CPUs, on CPUs %{x} (not %{x}), with % moves",
-            name, counts.turns, fibers * POOL_TURNS, counts.strays, counts.cpus, cpus, counts.moves)
-        return false
-    }
-    return true
+expect_pool_counts :: fn(t: ptr[mut testing.T], counts: ptr[PoolCounts], fibers: u64, cpus: u64, location := #caller_location) {
+    testing.expect_eq(t, counts.turns, fibers * POOL_TURNS, "each of the pool's fibers takes its POOL_TURNS turns", location)
+    testing.expect_eq(t, counts.strays, 0, "a pool's fibers run only on its own CPUs, never another pool's", location)
+    testing.expect_eq(t, counts.cpus, cpus, "every CPU of the pool runs some of its fibers, as they wait for each to have", location)
+    testing.expect_ne(t, counts.moves, 0, "a pool's CPUs take fibers from each other, so some fiber moves", location)
 }
 
 /**

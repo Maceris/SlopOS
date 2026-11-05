@@ -18,9 +18,11 @@
  */
 package test_budgets
 
+import compiler from "base"
 import intrinsics from "base"
 import runtime from "base"
 import os from "std"
+import testing from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
@@ -78,46 +80,46 @@ counter #calling_convention(.c) #no_context :: fn(slot: ptr[mut u64]) #never_ret
     }
 }
 
+/** What main was given that the tests use. */
+Given :: struct {
+    /** The debug log, which the counts' shares are logged to. */
+    log : slop_os.DebugLog,
+    /** The process manager, which launches the copies; none if main wasn't given it. */
+    manager : os.Channel[process_manager.ProcessManager]?,
+    /** The test's own module, which the copies are launched from; none if main wasn't given it. */
+    program : slop_os.Memory?,
+    /** The root CPU budget, split for the copies' budgets; none if main wasn't given it. */
+    cpu_budget : slop_os.CpuBudget?,
+}
+
 /**
- * Check that a CPU budget's threads run its time at its priority, and share it alike; or, run as a copy, count.
+ * Check that a CPU budget's threads run its time at its priority, above a rival with more time at a lower priority,
+ * and share it alike: the pair counts 20 to 55 percent of the counts, and the first of it 35 to 65 percent of theirs.
+ * Each share is logged first, as "the pair counted % percent of the counts, the first % percent of theirs".
  *
- * @param log The debug log, writable, where the test says what it found and which check failed.
- * @param platform Not used.
- * @param test_device For a copy, the page it counts in; not used by the test itself. A copy without it ends with 1.
- * @param firmware Not used.
- * @param manager The process manager, which launches the copies; without it the test ends with 101.
- * @param program The test's own module, which the copies are launched from; without it the test ends with 102.
- * @param peer Given only to a copy, by the test that launched it: the channel its role comes on. With it, this is a
- *     copy, which counts until it's killed.
- * @param cpu_budget The root CPU budget, split for the copies' budgets; without it the test ends with 100.
- * @return 0 if both checks passed; 1 if the pair's share of the counts was outside 20 to 55 percent; 2 if the first
- *     of the pair's share of theirs was outside 35 to 65 percent. 103 to 110 if setting up failed: 103 the manager's
- *     port, 104 the memory budget, 105 the pair's CPU budget, 106 the rival's, 107 the page, 108 launching P, 109
- *     launching Q, 110 the port it sleeps on. A copy ends only if it can't start counting: 2 if its port, 3 receiving
- *     its role, 4 mapping the page, 5 its threads' memory budget, 6 starting a thread, 7 the port it sleeps on failed.
+ * @param t The test's state.
+ * @return Ok once it's run; Error if main wasn't given the root budget, the process manager or its module, or the
+ *     manager's port, the memory budget, a CPU budget, the page, a copy or the port it sleeps on couldn't be made.
  */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
-    match peer {
-        case Some(end) => return run_copy(end, test_device or_return 1)
-        case None => {}
-    }
+budgeted_threads_run_their_time_at_their_priority_and_share_it_alike #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
-    root :: cpu_budget or_return 100
-    loader :: manager or_return 101
-    executable :: program or_return 102
-    manager_port :: os.port_for(block.budget, loader.end) or_return 103
-    memory :: slop_os.memory_budget_create(block.budget, 1 << 20) or_return 104
-    pair_budget :: slop_os.cpu_budget_create(root, memory, 10, 100 * MILLISECOND, 30 * MILLISECOND) or_return 105
-    rival_budget :: slop_os.cpu_budget_create(root, memory, 5, 100 * MILLISECOND, 60 * MILLISECOND) or_return 106
-    counts :: slop_os.memory_create(block.budget, PAGE) or_return 107
-    counts_at :: runtime.reserve_addresses(cast[usize](PAGE)) or_return 107
+    root :: testing.require_some(t, given.cpu_budget, "the root task grants the root CPU budget")?
+    loader :: testing.require_some(t, given.manager, "the root task grants the process manager")?
+    executable :: testing.require_some(t, given.program, "the root task grants the program's own module")?
+    manager_port :: testing.require_some(t, os.port_for(block.budget, loader.end), "a port for the process manager's replies")?
+    memory :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a memory budget for the CPU budgets")?
+    pair_budget :: testing.require_ok(t, slop_os.cpu_budget_create(root, memory, 10, 100 * MILLISECOND, 30 * MILLISECOND), "the pair's CPU budget, 30 ms every 100 ms at priority 10")?
+    rival_budget :: testing.require_ok(t, slop_os.cpu_budget_create(root, memory, 5, 100 * MILLISECOND, 60 * MILLISECOND), "the rival's CPU budget, 60 ms every 100 ms at priority 5")?
+    counts :: testing.require_ok(t, slop_os.memory_create(block.budget, PAGE), "the page the copies count in")?
+    counts_at :: testing.require_some(t, runtime.reserve_addresses(cast[usize](PAGE)), "addresses to map the page at")?
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    slop_os.memory_map(counts, block.space, counts_at, 0, PAGE, read_write) or_return 107
-    pair :: launch_copy(log, loader, manager_port, executable, counts, pair_budget, ROLE_PAIR) or_return 108
-    rival :: launch_copy(log, loader, manager_port, executable, counts, rival_budget, ROLE_RIVAL) or_return 109
+    mapped :: slop_os.memory_map(counts, block.space, counts_at, 0, PAGE, read_write)
+    testing.require_ok(t, mapped, "the page is mapped to read the counts")?
+    pair :: testing.require_some(t, launch_copy(given.log, loader, manager_port, executable, counts, pair_budget, ROLE_PAIR), "P, the pair's copy, is launched on its budget")?
+    rival :: testing.require_some(t, launch_copy(given.log, loader, manager_port, executable, counts, rival_budget, ROLE_RIVAL), "Q, the rival's copy, is launched on its budget")?
     // Asleep while they count, so this, on the root budget, takes none of the CPU
-    sleeper :: slop_os.port_create(block.budget) or_return 110
+    sleeper :: testing.require_ok(t, slop_os.port_create(block.budget), "a port to sleep on")?
     packets : slop_os.Packet[1]
     _ = slop_os.port_wait(sleeper, packets, (slop_os.clock_monotonic() or_else 0) + RUN_NANOSECONDS)
     first :: intrinsics.volatile_load_u64(cast[ptr[u64]](counts_at + SLOT_FIRST * 8))
@@ -129,17 +131,35 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     total :: budgeted + other
     share :: if total > 0 { budgeted * 100 / total } else { cast[u64](0) }
     split :: if budgeted > 0 { first * 100 / budgeted } else { cast[u64](0) }
-    log_line.write(log, "%: the pair counted % percent of the counts, the first % percent of theirs", NAME, share, split)
-    if share < 20 || share > 55 {
-        log_line.write(log, "%: % percent is outside 20 to 55", NAME, share)
-        return 1
+    log_line.write(given.log, "%: the pair counted % percent of the counts, the first % percent of theirs", NAME, share, split)
+    testing.expect(t, share >= 20 && share <= 55, "the pair runs its 30 ms first, at its priority, then shares what's left with the rival: about a third of the counts, 20 to 55 percent allowing for ticks")
+    testing.expect(t, split >= 35 && split <= 65, "the pair's threads share its budget alike, one that waited moved up when it comes back: 35 to 65 percent each")
+    return .Ok
+}
+
+/**
+ * Run the tests, reporting to the debug log; or, run as a copy, count.
+ *
+ * @param log The debug log, writable, where each test is reported.
+ * @param platform Not used.
+ * @param test_device For a copy, the page it counts in; not used by the test itself. A copy without it ends with 1.
+ * @param firmware Not used.
+ * @param manager The process manager, which launches the copies; without it the test fails.
+ * @param program The test's own module, which the copies are launched from; without it the test fails.
+ * @param peer Given only to a copy, by the test that launched it: the channel its role comes on. With it, this is a
+ *     copy, which counts until it's killed.
+ * @param cpu_budget The root CPU budget, split for the copies' budgets; without it the test fails.
+ * @return How many tests failed: 0 when every one passed. A copy ends only if it can't start counting: with 1 if it
+ *     wasn't given the page, otherwise what run_copy gives.
+ */
+main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
+    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+    match peer {
+        case Some(end) => return run_copy(end, test_device or_return 1)
+        case None => {}
     }
-    if split < 35 || split > 65 {
-        log_line.write(log, "%: the first's % percent of the pair's counts is outside 35 to 65", NAME, split)
-        return 2
-    }
-    log_line.write(log, "%: the pair had its budget at its priority, and shared it alike, the rival the rest", NAME)
-    return 0
+    given :: Given.{log = log, manager = manager, program = program, cpu_budget = cpu_budget}
+    return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }
 
 /**

@@ -12,12 +12,13 @@
  */
 package test_ports
 
+import compiler from "base"
 import intrinsics from "base"
 import runtime from "base"
 import os from "std"
+import testing from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
-import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */
@@ -41,6 +42,12 @@ TIMER_NANOSECONDS : u64 : 20_000_000
 /** How far off a wait's deadline is set, in nanoseconds: 15 ms. */
 DEADLINE_NANOSECONDS : u64 : 15_000_000
 
+/** What main was given that the tests use. */
+Given :: struct {
+    /** The debug log. */
+    log : slop_os.DebugLog,
+}
+
 /**
  * Wake A through the port, wait for A to have the packet, then wait on the port until it's closed: B.
  *
@@ -62,9 +69,125 @@ helper #calling_convention(.c) #no_context :: fn(shared: ptr[mut u64[8]]) #never
 }
 
 /**
- * Check a port: wake bindings, timers, deadlines, waking from another thread, and closing it under a waiter.
+ * Check that a key's wake binding is made once, that only a bound key can be woken, and that two wakes of a key
+ * before a wait come out as one User packet with both bits; then that closing the port gives back what it charged.
  *
- * @param log The debug log, writable, where the test says what it found and which check failed.
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the budget or the port couldn't be made.
+ */
+wakes_of_a_bound_key_merge_into_one_packet #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    block :: slop_os.startup_block()
+    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for the port")?
+    port :: testing.require_ok(t, slop_os.port_create(budget), "a port is made under the budget")?
+    bound :: slop_os.port_bind_wake(port, PORT_KEY)
+    testing.expect_ok(t, bound, "a key with no binding yet can be bound for wakes")
+    bound_again :: slop_os.port_bind_wake(port, PORT_KEY)
+    testing.expect_error(t, bound_again, slop_os.PortError.KeyInUse, "a key has one binding at a time")
+    unbound :: slop_os.port_wake(port, 99, 1)
+    testing.expect_error(t, unbound, slop_os.PortError.NoSuchKey, "only a key bound for wakes can be woken")
+    _ = slop_os.port_wake(port, PORT_KEY, 1)
+    _ = slop_os.port_wake(port, PORT_KEY, 2)
+    packets : slop_os.Packet[4]
+    woken :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
+    testing.expect_ok(t, woken, "a wait with a packet ready takes it")
+    testing.expect_eq(t, woken or_else 0, 1, "two wakes of one key before a wait are merged into one packet")
+    testing.expect_eq(t, packets[0].key, PORT_KEY, "the packet carries the key it was raised for")
+    testing.expect_eq(t, packets[0].kind, slop_os.PacketKind.User, "a wake raises a User packet")
+    testing.expect_eq(t, packets[0].data[0], 3, "the merged packet's bits are both wakes' bits, or'd")
+    closed :: slop_os.handle_close(cast[slop_os.Handle](port))
+    testing.expect_ok(t, closed, "the port closes")
+    testing.expect(t, test_kit.wait_for_budget(budget, 0, 1_000_000_000), "the budget is back to nothing once the port and its binding are gone")
+    return .Ok
+}
+
+/**
+ * Check that a timer blocks a wait until it fires, not sooner, and gives a Timer packet; that a wait with nothing to
+ * take ends at its deadline with nothing, not sooner; and that a wait for packets into memory the process can't write
+ * is refused.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the budget or the port couldn't be made.
+ */
+timers_and_deadlines_end_waits_no_sooner #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    block :: slop_os.startup_block()
+    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for the port")?
+    port :: testing.require_ok(t, slop_os.port_create(budget), "a port is made under the budget")?
+    packets : slop_os.Packet[4]
+    // A timer
+    set :: test_kit.clock_now()
+    _ = slop_os.port_set_timer(port, TIMER_KEY, set + TIMER_NANOSECONDS)
+    timed :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
+    after_timer :: test_kit.clock_now()
+    testing.expect_eq(t, timed or_else 0, 1, "the timer's firing gives the wait one packet")
+    testing.expect_eq(t, packets[0].kind, slop_os.PacketKind.Timer, "a timer's firing raises a Timer packet")
+    testing.expect(t, after_timer - set >= TIMER_NANOSECONDS, "a timer fires no sooner than its deadline")
+    // A deadline, with nothing to take
+    started :: test_kit.clock_now()
+    nothing :: slop_os.port_wait(port, packets, started + DEADLINE_NANOSECONDS)
+    after_deadline :: test_kit.clock_now()
+    testing.expect_eq(t, nothing or_else 1, 0, "a wait with nothing to take ends at its deadline with no packets")
+    testing.expect(t, after_deadline - started >= DEADLINE_NANOSECONDS, "a wait ends at its deadline, no sooner")
+    // Memory it can't write
+    unwritable :: slop_os.port_wait(port, test_kit.packets_at(0x10, 4), slop_os.NO_DEADLINE)
+    testing.expect_error(t, unwritable, slop_os.PortError.BadBuffer, "packets can't be put in memory the process can't write")
+    closed :: slop_os.handle_close(cast[slop_os.Handle](port))
+    testing.expect_ok(t, closed, "the port closes")
+    testing.expect(t, test_kit.wait_for_budget(budget, 0, 1_000_000_000), "the budget is back to nothing once the port and its timer are gone")
+    return .Ok
+}
+
+/**
+ * Check that another thread, B, wakes A through the port, likely from another CPU; that once A unbinds the key, waking
+ * it is refused; that closing the port under B's wait wakes B with ObjectGone; and that what the port, its bindings
+ * and B charged their budget comes back.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the shared slots, the budget, the port or B couldn't be made.
+ */
+another_thread_wakes_it_and_closing_wakes_waiters #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    block :: slop_os.startup_block()
+    pages, error :: runtime.new_array(u64[8], 1)
+    if error != null || pages.count == 0 {
+        testing.fail(t, "the slots A and B share are allocated")
+        return .Error(.Failed)
+    }
+    shared :: &pages[0]
+    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for the port and B")?
+    port :: testing.require_ok(t, slop_os.port_create(budget), "a port is made under the budget")?
+    intrinsics.volatile_store_u64(&shared^[SHARED_PORT], cast[u64](cast[u32](port)))
+    bound :: slop_os.port_bind_wake(port, PORT_KEY)
+    testing.expect_ok(t, bound, "the key B wakes is bound")
+    packets : slop_os.Packet[4]
+    // B wakes it
+    thread :: testing.require_ok(t, test_kit.start_thread(budget, cast[u64](helper), cast[u64](shared)), "B starts")?
+    from_b :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
+    from_b_bits :: if (from_b or_else 0) == 1 { packets[0].data[0] } else { cast[u64](0) }
+    testing.expect_eq(t, from_b_bits, 0x100, "B's wake reaches A's wait, with B's bits")
+    intrinsics.volatile_store_u64(&shared^[SHARED_A_WOKEN], 1)
+    unbound :: slop_os.port_unbind(port, PORT_KEY)
+    testing.expect_ok(t, unbound, "a bound key unbinds")
+    woken_unbound :: slop_os.port_wake(port, PORT_KEY, 1)
+    testing.expect_error(t, woken_unbound, slop_os.PortError.NoSuchKey, "an unbound key can't be woken")
+    // Once B waits, and a while more, closing the port wakes it
+    _ = test_kit.wait_for(&shared^[SHARED_B_WAITING], 1_000_000_000)
+    while_b :: test_kit.clock_now()
+    _ = slop_os.port_wait(port, packets, while_b + DEADLINE_NANOSECONDS)
+    closed :: slop_os.handle_close(cast[slop_os.Handle](port))
+    testing.expect_ok(t, closed, "the port closes while B waits on it")
+    _ = test_kit.wait_for(&shared^[SHARED_B_DONE], 1_000_000_000)
+    testing.expect_eq(t, intrinsics.volatile_load_u64(&shared^[SHARED_B_GOT]), test_kit.tag(slop_os.PortError.ObjectGone), "closing a port wakes its waiters with ObjectGone")
+    testing.expect_eq(t, intrinsics.volatile_load_u64(&shared^[SHARED_B_DONE]), 1, "B's wait returned once the port was closed")
+    // B, which has ended, and the port, closed: their charges come back
+    _ = slop_os.handle_close(cast[slop_os.Handle](thread))
+    _ = test_kit.wait_for_budget(budget, 0, 1_000_000_000)
+    testing.expect_eq(t, test_kit.used(budget), 0, "the budget is back to nothing once B has ended and the port is closed")
+    return .Ok
+}
+
+/**
+ * Run the tests, reporting to the debug log.
+ *
+ * @param log The debug log, writable, where each test is reported.
  * @param platform Not used.
  * @param test_device Not used.
  * @param firmware Not used.
@@ -72,89 +195,11 @@ helper #calling_convention(.c) #no_context :: fn(shared: ptr[mut u64[8]]) #never
  * @param program Not used.
  * @param peer Not used.
  * @param cpu_budget Not used.
- * @return 0 if every check passed. Otherwise the first that failed, by its result's index plus one: 1 binding the
- *     wake key, or 2 binding it twice not refused with KeyInUse; 3 waking a key with no binding not refused with
- *     NoSuchKey; 4 the wait, or 5 to 8 its one User packet for the key with both bits; 9 and 10 the timer's packet,
- *     or 11 it coming early; 12 a packet before the deadline, or 13 the deadline coming early; 14 packets to memory
- *     A can't write not refused with BadBuffer; 15 B's packet; 16 B not woken with ObjectGone, or 17 not done; 18
- *     unbinding the key, or 19 waking it then not refused with NoSuchKey; 20 closing the port; 21 the budget not
- *     coming back to nothing. 100 if the shared slots, 101 the budget, 102 the port, or 103 B couldn't be made.
+ * @return How many tests failed: 0 when every one passed.
  */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
-    block :: slop_os.startup_block()
-    pages, error :: runtime.new_array(u64[8], 1)
-    if error != null || pages.count == 0 {
-        return 100
-    }
-    shared :: &pages[0]
-    budget :: slop_os.memory_budget_create(block.budget, 1 << 20) or_return 101
-    results : u64[20]
-    packets : slop_os.Packet[4]
-    port :: slop_os.port_create(budget) or_return 102
-    intrinsics.volatile_store_u64(&shared^[SHARED_PORT], cast[u64](cast[u32](port)))
-    results[0] = test_kit.tag_of(slop_os.port_bind_wake(port, PORT_KEY))
-    results[1] = test_kit.tag_of(slop_os.port_bind_wake(port, PORT_KEY))
-    results[2] = test_kit.tag_of(slop_os.port_wake(port, 99, 1))
-    _ = slop_os.port_wake(port, PORT_KEY, 1)
-    _ = slop_os.port_wake(port, PORT_KEY, 2)
-    woken :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
-    results[3] = test_kit.tag_of(woken)
-    results[4] = cast[u64](woken or_else 0)
-    results[5] = packets[0].key
-    results[6] = cast[u64](cast[u32](packets[0].kind))
-    results[7] = packets[0].data[0]
-    // A timer
-    set :: test_kit.clock_now()
-    _ = slop_os.port_set_timer(port, TIMER_KEY, set + TIMER_NANOSECONDS)
-    timed :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
-    after_timer :: test_kit.clock_now()
-    results[8] = cast[u64](timed or_else 0)
-    results[9] = cast[u64](cast[u32](packets[0].kind))
-    results[10] = if after_timer - set >= TIMER_NANOSECONDS { cast[u64](1) } else { cast[u64](0) }
-    // A deadline, with nothing to take
-    started :: test_kit.clock_now()
-    nothing :: slop_os.port_wait(port, packets, started + DEADLINE_NANOSECONDS)
-    after_deadline :: test_kit.clock_now()
-    results[11] = cast[u64](nothing or_else 0)
-    results[12] = if after_deadline - started >= DEADLINE_NANOSECONDS { cast[u64](1) } else { cast[u64](0) }
-    // Memory it can't write
-    results[13] = test_kit.tag_of(slop_os.port_wait(port, test_kit.packets_at(0x10, 4), slop_os.NO_DEADLINE))
-    // B wakes it
-    thread :: test_kit.start_thread(budget, cast[u64](helper), cast[u64](shared)) or_return 103
-    from_b :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
-    results[14] = if (from_b or_else 0) == 1 { packets[0].data[0] } else { cast[u64](0) }
-    intrinsics.volatile_store_u64(&shared^[SHARED_A_WOKEN], 1)
-    results[17] = test_kit.tag_of(slop_os.port_unbind(port, PORT_KEY))
-    results[18] = test_kit.tag_of(slop_os.port_wake(port, PORT_KEY, 1))
-    // Once B waits, and a while more, closing the port wakes it
-    _ = test_kit.wait_for(&shared^[SHARED_B_WAITING], 1_000_000_000)
-    while_b :: test_kit.clock_now()
-    _ = slop_os.port_wait(port, packets, while_b + DEADLINE_NANOSECONDS)
-    results[19] = test_kit.tag_of(slop_os.handle_close(cast[slop_os.Handle](port)))
-    _ = test_kit.wait_for(&shared^[SHARED_B_DONE], 1_000_000_000)
-    results[15] = intrinsics.volatile_load_u64(&shared^[SHARED_B_GOT])
-    results[16] = intrinsics.volatile_load_u64(&shared^[SHARED_B_DONE])
-    // B, which has ended, and the port, closed: their charges come back
-    _ = slop_os.handle_close(cast[slop_os.Handle](thread))
-    emptied :: test_kit.wait_for_budget(budget, 0, 1_000_000_000)
-    expected :: u64.[
-        0, test_kit.tag(slop_os.PortError.KeyInUse), test_kit.tag(slop_os.PortError.NoSuchKey),
-        0, 1, PORT_KEY, test_kit.tag(slop_os.PacketKind.User), 3,
-        1, test_kit.tag(slop_os.PacketKind.Timer), 1,
-        0, 1,
-        test_kit.tag(slop_os.PortError.BadBuffer),
-        0x100,
-        test_kit.tag(slop_os.PortError.ObjectGone), 1,
-        0, test_kit.tag(slop_os.PortError.NoSuchKey), 0,
-    ]
-    failed := test_kit.check(log, NAME, results, expected)
-    if failed == 0 && !emptied {
-        log_line.write(log, "%: its budget still has % bytes charged", NAME, test_kit.used(budget))
-        failed = 21
-    }
-    if failed == 0 {
-        log_line.write(log, "%: wakes, timers, deadlines and other threads woke waiters; closing the port woke the last", NAME)
-    }
-    return failed
+    given :: Given.{log = log}
+    return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }
+

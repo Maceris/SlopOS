@@ -3,17 +3,19 @@ package disk_check
 import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
+import testing from "std"
 import dir from "std/os/slop_os"
 import file from "std/os/slop_os"
 import files from "std/os/slop_os"
 import read_only_dir from "std/os/slop_os"
 import read_only_file from "std/os/slop_os"
+import test_kit from "../../test_kit"
 
 /*
  * The system volume (decisions/0089): a SlopOS container's, served by a volume server through a container service.
  * The check reads a module from it and compares it with the copy on the EFI system partition, boot/modules, which the
  * test disk keeps beside the generation's objects; writes a file of its own, syncs it, which commits it, and reads it
- * back; and moves it into a directory it makes. Checks from 40.
+ * back; and moves it into a directory it makes; and checks typed files.
  */
 
 /** The module the check reads from the system volume, relative to its root. */
@@ -81,63 +83,70 @@ window_of :: fn(buffer: ptr[Buffer]) -> mut u8[] {
 }
 
 /**
- * Check the system volume: read a module and compare it with the EFI system partition's copy; write a file of its
- * own, sync it and read it back, logging how long making and syncing it took as a benchmark (decisions/0112); move
- * it into a directory it makes and sync that; then check typed files and transactions.
+ * Find the buffer the tests share for file connections, making it the first time.
  *
- * @param to The debug log, passed on to the transactions' check.
- * @param system The system volume's root.
- * @param esp The EFI system partition's root, to compare the module with; without it, the module isn't compared.
- * @return 0 if all of it held; 40 if the buffer couldn't be made, 41 if a port couldn't be, 42 if the module couldn't
- *     be read or is empty, 43 to 45 if the ESP's copy couldn't be read or differs, 46 if the file couldn't be written
- *     and synced, 47 if it didn't read back as written, 48 if the directory couldn't be made, 49 if the move failed,
- *     50 if the sync failed; and check_typed's, then check_transactions', numbers.
+ * @param t The test's state, which a failure is recorded in if it can't be made.
+ * @param given What main was given, whose buffer is made and kept, for every test after, if it wasn't.
+ * @param location Where the test asked; the caller's own.
+ * @return The buffer, in given, good while the tests run; Error(Failed), recorded, if memory or addresses
+ *     couldn't be had for it, or it couldn't be mapped.
  */
-check_system :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], esp: os.Channel[dir.Dir]?) -> int {
-    buffer := new_buffer() or_return 40
+buffer_of :: fn(t: ptr[mut testing.T], given: ptr[mut Given], location := #caller_location) -> Result[ptr[Buffer], testing.Stopped] {
+    if !given.has_buffer {
+        made :: new_buffer()
+        given.buffer = testing.require_some(t, made, "the budget has room for a buffer for file connections, mapped here", location)?
+        given.has_buffer = true
+    }
+    return .Ok(&given.buffer)
+}
+
+/**
+ * Check the system volume: read a module and compare it with the EFI system partition's copy; write a file of its
+ * own, sync it and read it back, logging how long making and syncing it took as a benchmark (decisions/0112); and move
+ * it into a directory it makes and sync that.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the buffer or a port couldn't be made, the module couldn't be read, or the file
+ *     couldn't be written, its directory made, or it moved.
+ */
+the_system_volume_reads_writes_and_moves_files #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    system :: system_of(t, given)?
+    buffer :: buffer_of(t, given)?
     budget :: slop_os.startup_block().budget
-    system_port :: os.port_for(budget, system.end) or_return 41
+    bound :: os.port_for(budget, system.end)
+    system_port :: testing.require_some(t, bound, "the budget has room for a port")?
     from_volume : u8[..]
     defer runtime.array_free(&from_volume)
-    if !read_whole(system.end, system_port, MODULE_ON_VOLUME, &buffer, &from_volume) || from_volume.count == 0 {
-        return 42
-    }
+    testing.require(t, read_whole(system.end, system_port, MODULE_ON_VOLUME, buffer, &from_volume),
+        "the image builder put hello's module on the system volume")?
+    testing.require_ne(t, from_volume.count, 0, "hello's module isn't empty")?
     // The same bytes as the copy on the ESP
-    match esp {
+    match given.working_directory {
         case Some(partition) => {
-            esp_port :: os.port_for(budget, partition.end) or_return 43
+            esp_bound :: os.port_for(budget, partition.end)
+            esp_port :: testing.require_some(t, esp_bound, "the budget has room for a port")?
             from_esp : u8[..]
             defer runtime.array_free(&from_esp)
-            if !read_whole(partition.end, esp_port, MODULE_ON_ESP, &buffer, &from_esp) {
-                return 44
-            }
-            if from_esp.count != from_volume.count {
-                return 45
-            }
+            testing.require(t, read_whole(partition.end, esp_port, MODULE_ON_ESP, buffer, &from_esp),
+                "the test disk keeps the generation's modules on the EFI system partition too")?
+            testing.expect_eq(t, from_esp.count, from_volume.count, "both copies of hello's module are the same size")
+            differs : usize? = null
             for byte, i in from_esp {
-                if i < from_volume.count && from_volume[i] != byte {
-                    return 45
+                if (differs is_none) && i < from_volume.count && from_volume[i] != byte {
+                    differs = i
                 }
             }
+            testing.expect_none(t, differs, "both copies of hello's module have the same bytes, the system volume's read whole through its server")
         }
         case None => {}
     }
     // A file of its own, written, synced and read back; how long making and syncing it took is a benchmark (decisions/0112)
     started :: slop_os.clock_monotonic() or_else 0
-    if !write_new(system.end, system_port, SYSTEM_FILE, SYSTEM_TEXT, &buffer) {
-        return 46
-    }
+    testing.require(t, write_new(system.end, system_port, SYSTEM_FILE, SYSTEM_TEXT, buffer),
+        "the system volume takes a new file, written and synced")?
     runtime.log_info("perf: file_create_sync %", (slop_os.clock_monotonic() or_else 0) - started)
-    back : u8[..]
-    defer runtime.array_free(&back)
-    if !read_whole(system.end, system_port, SYSTEM_FILE, &buffer, &back) || back.count != SYSTEM_TEXT.count {
-        return 47
-    }
-    for character, i in SYSTEM_TEXT {
-        if i < back.count && back[i] != cast[u8](character) {
-            return 47
-        }
-    }
+    testing.expect(t, holds(system.end, system_port, SYSTEM_FILE, SYSTEM_TEXT, buffer), "the file reads back as written, once synced")
     // Moved into a directory it makes, and synced
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -145,29 +154,23 @@ check_system :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], esp: os.Ch
     making^ = .OpenDirectory(dir.OpenDirectory.{path = bytes_of(&out, "made by the guest"), create = true})
     match ask_dir(system.end, system_port, &out, &into) {
         case OpenedDirectory(made) => _ = slop_os.handle_close(cast[slop_os.Handle](made.end))
-        case _ => return 48
+        case _ => return stopped(t, "the system volume makes a directory when asked")
     }
     out = os.Outgoing.{}
     renaming :: os.begin[dir.Request](&out)
     renaming^ = .Rename(dir.Rename.{from = bytes_of(&out, SYSTEM_FILE), to = bytes_of(&out, "made by the guest/moved.txt")})
     match ask_dir(system.end, system_port, &out, &into) {
         case Done => {}
-        case _ => return 49
+        case _ => return stopped(t, "a file moves into a directory beside it")
     }
     out = os.Outgoing.{}
     syncing :: os.begin[dir.Request](&out)
     syncing^ = .Sync
     match ask_dir(system.end, system_port, &out, &into) {
         case Done => {}
-        case _ => return 50
+        case _ => testing.fail(t, "the system volume syncs the move, committing it")
     }
-    runtime.log_info("on the system volume, read % as the EFI system partition has it, wrote, synced and read back its own file, and moved it",
-        MODULE_ON_VOLUME)
-    typed :: check_typed(system, system_port, esp)
-    if typed != 0 {
-        return typed
-    }
-    return check_transactions(to, system, &buffer)
+    return .Ok
 }
 
 /** A typed file's value (decisions/0046, 0108), as the system check writes it and reads it back. */
@@ -196,70 +199,62 @@ TYPED_TEXT :: "kept with its type"
  * OtherNote, and a value that isn't a CheckedNote refused; and on the EFI system partition, whose FAT keeps no types,
  * a typed file refused.
  *
- * @param system The system volume's root, which a second connection is made to.
- * @param port A port bound to system's end.
- * @param esp The EFI system partition's root; without it, that part isn't checked.
- * @return 0 if all of it held; 51 if a second connection couldn't be made, 52 if the note couldn't be written, 53 if
- *     it couldn't be read back, 54 if it read back wrong, 55 if opening it as an OtherNote wasn't refused as
- *     WrongType, 56 if a value that isn't a note wasn't refused as WrongType, 57 if the ESP couldn't be connected to,
- *     and 58 if a typed file on it wasn't refused as WrongType.
+ * @param t The test's state.
+ * @return Ok once it's run; Error if a port or a second connection couldn't be made, or the note couldn't be written
+ *     or read back.
  */
-check_typed :: fn(system: os.Channel[dir.Dir], port: slop_os.Port, esp: os.Channel[dir.Dir]?) -> int {
-    directory :: second_connection(system, port) or_return 51
+typed_files_keep_their_type #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    system :: system_of(t, given)?
+    bound :: os.port_for(slop_os.startup_block().budget, system.end)
+    port :: testing.require_some(t, bound, "the budget has room for a port")?
+    connected :: second_connection(system, port)
+    directory :: testing.require_some(t, connected, "the system volume takes a second connection to its root")?
     defer os.close_directory(directory)
     out := os.Outgoing.{}
     note :: os.begin[CheckedNote](&out)
     note.mark = 0x51ed
     note.kept = true
     note.text = os.append(&out, string_bytes(TYPED_TEXT))
-    if os.write_typed_in[CheckedNote](directory, TYPED_FILE, os.value_bytes(&out)) != null {
-        return 52
-    }
-    back :: os.read_typed_in[CheckedNote](directory, TYPED_FILE) or_return 53
+    written :: os.write_typed_in[CheckedNote](directory, TYPED_FILE, os.value_bytes(&out))
+    testing.require_none(t, written, "the system volume takes a typed file, its value a CheckedNote")?
+    read_back :: os.read_typed_in[CheckedNote](directory, TYPED_FILE)
+    back :: testing.require_ok(t, read_back, "a typed file reads back as its own type")?
     defer runtime.free_array(back)
     read :: os.typed_value[CheckedNote](back)
     text :: os.items_of(back, read.text)
-    if read.mark != 0x51ed || !read.kept || text.count != TYPED_TEXT.count {
-        return 54
-    }
-    for byte, i in text {
-        if i < TYPED_TEXT.count && byte != cast[u8](TYPED_TEXT[i]) {
-            return 54
-        }
-    }
+    testing.expect_eq(t, read.mark, 0x51ed, "a typed file's value reads back as written")
+    testing.expect(t, read.kept, "a typed file's value reads back as written")
+    testing.expect(t, same_text(text, TYPED_TEXT), "a typed file's value's text reads back as written, inside it")
     // Of another type: refused, opened or read
     match os.open_typed_in[OtherNote](directory, TYPED_FILE, .READ) {
         case Ok(file) => {
             os.close(file)
-            return 55
+            testing.fail(t, "a typed file isn't opened as another type")
         }
-        case Error(error) => {
-            if error != .WrongType {
-                return 55
-            }
-        }
+        case Error(error) => testing.expect_eq(t, error, OsError.WrongType, "a typed file isn't opened as another type")
     }
     // A value that isn't a CheckedNote isn't written as one: a bool that's 2
     bad := os.Outgoing.{}
     wrong :: os.begin[CheckedNote](&bad)
     wrong.mark = 1
     cast[ptr[mut u8]](&wrong.kept)^ = 2
-    if os.write_typed_in[CheckedNote](directory, "Not a note", os.value_bytes(&bad)) != OsError.WrongType {
-        return 56
-    }
-    match esp {
+    refused :: os.write_typed_in[CheckedNote](directory, "Not a note", os.value_bytes(&bad))
+    wrong_type : OsError? = OsError.WrongType
+    testing.expect_eq(t, refused, wrong_type, "a value that isn't a CheckedNote, a bool in it 2, isn't written as one")
+    match given.working_directory {
         case Some(partition) => {
-            esp_port :: os.port_for(slop_os.startup_block().budget, partition.end) or_return 57
-            fat :: second_connection(partition, esp_port) or_return 57
+            esp_bound :: os.port_for(slop_os.startup_block().budget, partition.end)
+            esp_port :: testing.require_some(t, esp_bound, "the budget has room for a port")?
+            fat_connected :: second_connection(partition, esp_port)
+            fat :: testing.require_some(t, fat_connected, "the EFI system partition takes a second connection to its root")?
             defer os.close_directory(fat)
-            if os.write_typed_in[CheckedNote](fat, "A typed note.bin", os.value_bytes(&out)) != OsError.WrongType {
-                return 58
-            }
+            on_fat :: os.write_typed_in[CheckedNote](fat, "A typed note.bin", os.value_bytes(&out))
+            testing.expect_eq(t, on_fat, wrong_type, "FAT keeps no types, so it takes no typed file")
         }
         case None => {}
     }
-    runtime.log_info("a typed file written, read back checked, and refused as another type; a value that isn't one refused")
-    return 0
+    return .Ok
 }
 
 /**

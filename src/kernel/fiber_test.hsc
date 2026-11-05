@@ -2,8 +2,8 @@ package kernel
 
 import intrinsics from "base"
 import runtime from "base"
-import boot_info from "../boot_info"
 import frames from "frames"
+import testing from "std"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -49,27 +49,65 @@ FiberTest :: struct {
 EXPECTED_MARKS :: "ababAB"
 
 /**
- * Run test_fibers on the calling CPU, the boot CPU, logging whether it passed.
+ * Run test_fibers on the calling CPU, the boot CPU, reporting it to the kernel's log.
+ *
+ * @param kernel Not used: the tests find the kernel through per_cpu.
+ */
+test_fibers :: fn(kernel: ptr[mut Kernel]) {
+    _ = run_tests("test_fibers", testing.Test.[
+        .{name = "two_fibers_take_turns", run = two_fibers_take_turns},
+        .{name = "stack_traces_follow_suspended_and_resumed_fibers", run = stack_traces_follow_suspended_and_resumed_fibers}])
+}
+
+/**
+ * Check that two fibers taking turns on this CPU each suspend and resume with their frames, locals and return values
+ * intact: what they mark comes in the order taking turns gives, with the sums their calls return right.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if there was no memory for the fibers.
+ */
+two_fibers_take_turns #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    test :: run_fibers(t)?
+    testing.expect_eq(t, string_of(&test.marks[0], test.count), EXPECTED_MARKS,
+        "each fiber marks at each suspension and, its calls' sums right, once it ends, the two taking turns")
+    return .Ok
+}
+
+/**
+ * Check that stack traces follow fibers: the trace a fiber takes before it suspends is the one it takes once resumed,
+ * and the one taken of it from outside, while it's suspended, ends with it.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if there was no memory for the fibers.
+ */
+stack_traces_follow_suspended_and_resumed_fibers #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    test :: run_fibers(t)?
+    // descend(1) to (3), fiber_a, fiber_run and fiber_entry, which ends the chain
+    expect_traces_agree(t, test, 6)
+    return .Ok
+}
+
+/**
+ * Run test_fibers' two fibers on the calling CPU, the boot CPU, until both have finished, each taking turns.
  *
  * Interrupts are masked while the fibers run, since a resumed fiber's frames sit above the stack pointer; they're left
  * as they were found. The test's state and the fibers' frames are never freed.
  *
- * @param kernel The kernel, whose frame allocator gives the test's state and the fibers' blocks; kept by the fibers.
+ * @param t The test's state, which a failure is recorded in.
+ * @return The fibers' state, what they marked and traced, from the frame allocator; Error if there was no memory for
+ *     it or a fiber, or the fibers didn't both finish within eight turns each.
  */
-test_fibers :: fn(kernel #escaping : ptr[mut Kernel]) {
-    test : ptr[mut FiberTest]
-    match allocate_object[FiberTest](&kernel.frames) {
-        case Ok(made) => test = made
-        case Error(error) => {
-            runtime.log_error("test_fibers: no memory for the test's state")
-            return void
-        }
-    }
-    first :: make_fiber(kernel, test, fiber_a) or_return void
-    second :: make_fiber(kernel, test, fiber_b) or_return void
-    // Round and round: start each, then resume each until both have finished
-    // While a fiber resumes, its stack holds frames above the stack pointer, which an interrupt would overwrite
-    // Masked as they were found after (boot runs with them masked; unmasking them left it running unmasked, decisions/0106)
+run_fibers :: fn(t: ptr[mut testing.T]) -> Result[ptr[mut FiberTest], testing.Stopped] {
+    kernel :: per_cpu().kernel
+    made :: allocate_object[FiberTest](&kernel.frames)
+    test :: testing.require_ok(t, made, "a boot's free frames hold the test's state")?
+    first :: make_fiber(t, kernel, test, fiber_a)?
+    second :: make_fiber(t, kernel, test, fiber_b)?
+    /*
+     * Round and round: start each, then resume each until both have finished. While a fiber resumes, its stack holds
+     * frames above the stack pointer, which an interrupt would overwrite, so interrupts are masked, and left as they
+     * were found after (boot runs with them masked; unmasking them left it running unmasked, decisions/0106).
+     */
     unmasked :: arch.interrupts_enabled()
     arch.mask_interrupts()
     defer if unmasked {
@@ -100,37 +138,25 @@ test_fibers :: fn(kernel #escaping : ptr[mut Kernel]) {
             }
         }
     }
-    if !finished[0] || !finished[1] || string_of(&test.marks[0], test.count) != EXPECTED_MARKS {
-        runtime.log_error("test_fibers: the fibers wrote %, not %", string_of(&test.marks[0], test.count), EXPECTED_MARKS)
-        return void
-    }
-    runtime.log_info("test_fibers: two fibers took turns")
-    // descend(1) to (3), fiber_a, fiber_run and fiber_entry, which ends the chain
-    if !traces_agree(test, 6) {
-        return void
-    }
-    runtime.log_info("test_fibers: stack traces follow suspended and resumed fibers")
+    testing.require_eq(t, finished, bool.[true, true], "each fiber suspends three times at most, so both finish within eight turns")?
+    return .Ok(test)
 }
 
 /**
  * Make a fiber in a frame of its own, not yet started, running a function with a copy of the caller's context whose
  * user_data points at the test.
  *
+ * @param t The test's state, which a failure is recorded in.
  * @param kernel The kernel, whose frame allocator gives the fiber's frame.
  * @param test The test's state, which the fiber reads through its context; it has to outlive the fiber.
  * @param function What the fiber runs, with an empty any as its data.
- * @return The fiber, in the direct map, its frame never freed; null if there was no frame, which is logged.
+ * @return The fiber, in the direct map, its frame never freed; Error, recorded, if there was no frame.
  */
-make_fiber :: fn(kernel: ptr[mut Kernel], test #escaping : ptr[mut FiberTest], function: runtime.ThreadFunction) -> ptr[mut runtime.Fiber]? {
+make_fiber :: fn(t: ptr[mut testing.T], kernel: ptr[mut Kernel], test #escaping : ptr[mut FiberTest], function: runtime.ThreadFunction)
+    -> Result[ptr[mut runtime.Fiber], testing.Stopped] {
     runtime.assert(cast[u64](runtime.FIBER_BLOCK_SIZE) <= frames.FRAME_SIZE, "a fiber's block fits in a frame")
-    address : boot_info.PhysicalAddress
-    match frames.allocate_zeroed(&kernel.frames, 0) {
-        case Ok(allocated) => address = allocated
-        case Error(error) => {
-            runtime.log_error("test_fibers: no memory for a fiber")
-            return null
-        }
-    }
+    allocated :: frames.allocate_zeroed(&kernel.frames, 0)
+    address :: testing.require_ok(t, allocated, "a boot's free frames hold a fiber's block")?
     fiber :: cast[ptr[mut runtime.Fiber]](frames.virtual_of(&kernel.frames, address))
     fiber.function = function
     // No data: an empty any
@@ -140,7 +166,7 @@ make_fiber :: fn(kernel: ptr[mut Kernel], test #escaping : ptr[mut FiberTest], f
     fiber.context.user_data = cast[rawptr](test)
     fiber.state = .NotStarted
     fiber.next = null
-    return fiber
+    return .Ok(fiber)
 }
 
 /**
@@ -230,43 +256,42 @@ SEGMENT_COUNT :: 4
 DEEP_SUM : u64 : 2080
 
 /**
- * Run test_segments, in a kernel built with morestack (the build package's stack_check setting): a fiber
- * whose calls go far past its first segment, onto segments from the carrier's cache, suspending at
- * the bottom; resumed, it returns up through them, and they all go back to the carrier.
+ * Run test_segments, in a kernel built with morestack (the build package's stack_check setting), on the calling CPU,
+ * the boot CPU, reporting it to the kernel's log.
  *
- * Runs on the calling CPU, the boot CPU, logging whether it passed. Interrupts are masked while the fiber runs, and
- * left as they were found. The segments stay in the carrier's cache; the test's state and the fiber's frame are never
- * freed.
- *
- * @param kernel The kernel, whose frame allocator gives the test's state, the segments and the fiber's block.
+ * @param kernel Not used: the test finds the kernel through per_cpu.
  */
-test_segments :: fn(kernel #escaping : ptr[mut Kernel]) {
-    test : ptr[mut FiberTest]
-    match allocate_object[FiberTest](&kernel.frames) {
-        case Ok(made) => test = made
-        case Error(error) => {
-            runtime.log_error("test_segments: no memory for the test's state")
-            return void
-        }
-    }
+test_segments :: fn(kernel: ptr[mut Kernel]) {
+    _ = run_tests("test_segments", testing.Test.[.{name = "a_fiber_grows_onto_segments_and_back", run = a_fiber_grows_onto_segments_and_back}])
+}
+
+/**
+ * Check a fiber whose calls go far past its first segment, onto segments from the carrier's cache, suspending at the
+ * bottom; resumed, it returns up through them, and they all go back to the carrier. Its stack traces leave out
+ * morestack's frames, across segments.
+ *
+ * Interrupts are masked while the fiber runs, and left as they were found. The segments stay in the carrier's cache;
+ * the test's state and the fiber's frame are never freed.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if there was no memory for the test's state, a segment or the fiber.
+ */
+a_fiber_grows_onto_segments_and_back #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    kernel :: per_cpu().kernel
+    made :: allocate_object[FiberTest](&kernel.frames)
+    test :: testing.require_ok(t, made, "a boot's free frames hold the test's state")?
     // Segments for the carrier's cache, a frame each
     carrier :: intrinsics.carrier()
     for i in 0..<cast[usize](SEGMENT_COUNT) {
-        address : boot_info.PhysicalAddress
-        match frames.allocate_zeroed(&kernel.frames, 0) {
-            case Ok(allocated) => address = allocated
-            case Error(error) => {
-                runtime.log_error("test_segments: no memory for a segment")
-                return void
-            }
-        }
+        allocated :: frames.allocate_zeroed(&kernel.frames, 0)
+        address :: testing.require_ok(t, allocated, "a boot's free frames hold the segments")?
         segment :: cast[ptr[mut runtime.StackSegment]](frames.virtual_of(&kernel.frames, address))
         segment.size = cast[u32](frames.FRAME_SIZE)
         segment.next_free = carrier.segment_cache
         carrier.segment_cache = segment
         carrier.segment_cache_count += 1
     }
-    fiber :: make_fiber(kernel, test, fiber_deep) or_return void
+    fiber :: make_fiber(t, kernel, test, fiber_deep)?
     // Masked as they were found after (boot runs with them masked; unmasking them left it running unmasked, decisions/0106)
     unmasked :: arch.interrupts_enabled()
     arch.mask_interrupts()
@@ -278,22 +303,16 @@ test_segments :: fn(kernel #escaping : ptr[mut Kernel]) {
         test.outside_count = intrinsics.capture_fiber_stack_trace(fiber, test.outside)
         exit = intrinsics.fiber_resume(fiber)
     }
+    testing.expect_eq(t, exit, runtime.FiberExit.Finished, "the fiber suspends once, at the bottom, so it finishes once resumed")
+    testing.expect_eq(t, string_of(&test.marks[0], test.count), "dD",
+        "the fiber marks at the bottom, and again once its 64 calls' sum comes back right through the segments")
     // All of them back: in the cache, or kept as the spare
     returned :: carrier.segment_cache_count + (if carrier.spare_segment is_some { cast[u32](1) } else { cast[u32](0) })
-    if exit != .Finished || string_of(&test.marks[0], test.count) != "dD" || returned != SEGMENT_COUNT {
-        runtime.log_error("test_segments: the fiber wrote %, and % of % segments came back", string_of(&test.marks[0], test.count),
-            returned, SEGMENT_COUNT)
-        return void
-    }
-    runtime.log_info("test_segments: a fiber grew past its first segment and back, and every segment came back")
+    testing.expect_eq(t, returned, cast[u32](SEGMENT_COUNT), "every segment the fiber grew onto goes back to the carrier as it returns")
     // climb(1) to (64), fiber_deep, fiber_run and fiber_entry: none of morestack's frames, nor .grow's
-    if test.before_count != 67 {
-        runtime.log_error("test_segments: the trace from the bottom has % frames, not 67", test.before_count)
-        return void
-    }
-    if traces_agree(test, 67) {
-        runtime.log_info("test_segments: stack traces leave out morestack, across segments")
-    }
+    testing.expect_eq(t, test.before_count, 67, "the trace from the bottom has climb's 64 frames and the fiber's 3, leaving out morestack's")
+    expect_traces_agree(t, test, 67)
+    return .Ok
 }
 
 /**
@@ -344,30 +363,35 @@ first_nonzero :: fn(values: u64[]) -> u64 {
 }
 
 /**
- * Tell whether a fiber test's traces agree: the one before suspending has at least least frames, the one after
- * resuming is the same, and the suspended fiber's own, taken from outside, ends with it.
+ * Check that a fiber test's traces agree: the one before suspending has at least least frames, the one after resuming
+ * is the same, and the suspended fiber's own, taken from outside, ends with it.
  *
- * @param test The test's state, with its three traces captured.
+ * @param t The test's state, which each disagreement is recorded in.
+ * @param test The fiber test's state, with its three traces captured.
  * @param least The fewest frames the trace before suspending may have.
- * @return True if they agree; false if not, with an error logged saying how.
+ * @param location Where the test asked, which a failure is recorded at: the caller's own.
  */
-traces_agree :: fn(test: ptr[FiberTest], least: usize) -> bool {
+expect_traces_agree :: fn(t: ptr[mut testing.T], test: ptr[FiberTest], least: usize, location := #caller_location) {
     before :: test.before
     after :: test.after
     outside :: test.outside
     count :: test.before_count
-    if count < least || count > before.count || test.after_count != count || test.outside_count < count
-        || test.outside_count > outside.count {
-        runtime.log_error("test_fibers: traces of %, % and % frames", count, test.after_count, test.outside_count)
-        return false
+    expect_within(t, cast[i64](count), cast[i64](least), cast[i64](before.count),
+        "the trace before suspending has every frame of the fiber's calls, and they fit in it", location)
+    testing.expect_eq(t, test.after_count, count, "the trace once resumed has as many frames as before, the resume loop having re-entered them", location)
+    expect_within(t, cast[i64](test.outside_count), cast[i64](count), cast[i64](outside.count),
+        "the trace from outside has the suspended fiber's frames, and those of what suspended it", location)
+    if count > before.count || test.outside_count < count || test.outside_count > outside.count {
+        return void
     }
     shift :: test.outside_count - count
+    differs : usize? = null
     for i in 0..<count {
         at :: shift + i
         if at >= outside.count || before[i] != after[i] || before[i] != outside[at] {
-            runtime.log_error("test_fibers: the traces differ at frame %", i)
-            return false
+            differs = i
+            break
         }
     }
-    return true
+    testing.expect_none(t, differs, "the three traces have the same return addresses, frame for frame, from the bottom", location)
 }

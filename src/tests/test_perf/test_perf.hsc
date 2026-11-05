@@ -12,9 +12,11 @@
  */
 package test_perf
 
+import compiler from "base"
 import intrinsics from "base"
 import runtime from "base"
 import os from "std"
+import testing from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
@@ -96,33 +98,188 @@ ends #calling_convention(.c) #no_context :: fn(argument: u64) #never_returns {
     slop_os.thread_exit()
 }
 
+/** What main was given that the tests use. */
+Given :: struct {
+    /** The debug log, where the numbers go. */
+    log : slop_os.DebugLog,
+    /** The process manager, which launches the copies process_create measures; none if main wasn't given it. */
+    manager : os.Channel[process_manager.ProcessManager]?,
+    /** The test's own module, which the copies run; none if main wasn't given it. */
+    program : slop_os.Memory?,
+}
+
 /**
- * Measure the kernel's benchmarks, and log each as "perf: <name> <nanoseconds>".
+ * Measure round trips to a thread of the program's own that echoes, and log it as "perf: ipc_round_trip <nanoseconds>".
  *
- * @param log The debug log, writable, where the numbers go.
+ * @param t The test's state.
+ * @return Ok once it's measured and logged; Error if setting up failed or a round trip did, or an answer wasn't what
+ *     was sent.
+ */
+ipc_round_trip_is_measured #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
+    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 8 << 20), "a budget for what's measured")?
+    pair :: testing.require_ok(t, slop_os.channel_create(budget, 0, 0), "a channel to the echoing thread")?
+    echoing :: runtime.new(Echo)
+    echoing.end = pair.b
+    echoing.port = testing.require_ok(t, slop_os.port_create(budget), "a port for the echoing thread")?
+    testing.require_ok(t, slop_os.port_bind(echoing.port, cast[slop_os.Handle](pair.b), slop_os.SIGNAL_READABLE, ECHO_KEY, .Persistent), "the echoing thread's end wakes its port")?
+    port :: testing.require_ok(t, slop_os.port_create(budget), "a port for the answers")?
+    testing.require_ok(t, slop_os.port_bind(port, cast[slop_os.Handle](pair.a), slop_os.SIGNAL_READABLE, ANSWER_KEY, .Persistent), "the measuring end wakes its port")?
+    thread :: testing.require_ok(t, test_kit.start_thread(budget, cast[u64](echo), cast[u64](echoing)), "the echoing thread starts")?
+    for i in cast[u64](0)..<WARM_UP {
+        round_trip(t, pair.a, port, i)?
+    }
+    start :: test_kit.clock_now()
+    for i in cast[u64](0)..<ROUNDS {
+        round_trip(t, pair.a, port, i)?
+    }
+    took :: test_kit.clock_now() - start
+    _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
+    _ = slop_os.handle_close(cast[slop_os.Handle](thread))
+    _ = slop_os.handle_close(cast[slop_os.Handle](port))
+    _ = slop_os.handle_close(cast[slop_os.Handle](budget))
+    report(given.log, "ipc_round_trip", took / ROUNDS)
+    return .Ok
+}
+
+/**
+ * Send a value to the echoing thread, and wait for its answer.
+ *
+ * @param t The test's state, which a failed round trip is recorded in.
+ * @param end The measuring thread's end.
+ * @param port The port end is bound to for Readable.
+ * @param value Any value, sent as one 8-byte message; the round's index, so an echo of an earlier round doesn't
+ *     match.
+ * @return Ok once the answer came back as value; Error(Failed), recorded, if writing failed, reading failed other than
+ *     finding nothing, or the answer wasn't value.
+ */
+round_trip :: fn(t: ptr[mut testing.T], end: slop_os.Channel, port: slop_os.Port, value: u64) -> testing.Outcome {
+    sent : u64[1]
+    sent[0] = value
+    testing.require_ok(t, slop_os.channel_write(end, view_of(cast[ptr[u8]](&sent[0]), 8), slop_os.NO_BATCH), "a message is written to the echoing thread")?
+    answer : u64[1]
+    loop {
+        read :: slop_os.channel_read(end, view_of(cast[ptr[mut u8]](&answer[0]), 8), cast[ptr[mut u32]](0))
+        if read is_ok {
+            return testing.require_eq(t, answer[0], value, "the echoing thread answers each message with itself, in order")
+        }
+        testing.require_error(t, read, slop_os.ChannelError.Empty, "reading the answer fails only by finding nothing yet")?
+        packets : slop_os.Packet[1]
+        _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
+    }
+}
+
+/**
+ * Measure touching pages of anonymous memory for the first time, and log it as "perf: page_fault <nanoseconds>".
+ *
+ * @param t The test's state.
+ * @return Ok once it's measured and logged; Error if the budget or the memory couldn't be made or mapped.
+ */
+page_fault_is_measured #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
+    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 8 << 20), "a budget for what's measured")?
+    memory :: testing.require_ok(t, slop_os.memory_create(budget, PAGES * PAGE), "anonymous memory to touch")?
+    address :: testing.require_some(t, runtime.reserve_addresses(cast[usize](PAGES * PAGE)), "addresses to map it at")?
+    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
+    testing.require_ok(t, slop_os.memory_map(memory, block.space, address, 0, PAGES * PAGE, read_write), "the memory is mapped to write")?
+    start :: test_kit.clock_now()
+    for page in cast[u64](0)..<PAGES {
+        intrinsics.volatile_store_u8(cast[ptr[mut u8]](address + page * PAGE), 1)
+    }
+    took :: test_kit.clock_now() - start
+    _ = slop_os.memory_unmap(block.space, address)
+    _ = slop_os.handle_close(cast[slop_os.Handle](memory))
+    _ = slop_os.handle_close(cast[slop_os.Handle](budget))
+    report(given.log, "page_fault", took / PAGES)
+    return .Ok
+}
+
+/**
+ * Measure making threads, starting them, and seeing them end, and log it as "perf: thread_create <nanoseconds>".
+ *
+ * @param t The test's state.
+ * @return Ok once it's measured and logged; Error if the budget, the port or a thread couldn't be made, or a thread
+ *     couldn't be watched.
+ */
+thread_create_is_measured #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
+    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 8 << 20), "a budget for what's measured")?
+    port :: testing.require_ok(t, slop_os.port_create(budget), "a port to watch the threads end on")?
+    start :: test_kit.clock_now()
+    for i in cast[u64](0)..<THREADS {
+        thread :: testing.require_ok(t, test_kit.start_thread(budget, cast[u64](ends), 0), "each thread starts")?
+        // A key of its own, a fired Once binding keeping its key; gone already, it ended before it could be watched
+        watched :: slop_os.port_bind(port, cast[slop_os.Handle](thread), slop_os.SIGNAL_TERMINATED, ENDED_KEY + i, .Once)
+        if watched is_ok {
+            packets : slop_os.Packet[1]
+            _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
+        }
+        else {
+            testing.require_error(t, watched, slop_os.PortError.ObjectGone, "a thread's end is watched, unless it has ended already")?
+        }
+        _ = slop_os.handle_close(cast[slop_os.Handle](thread))
+    }
+    took :: test_kit.clock_now() - start
+    _ = slop_os.handle_close(cast[slop_os.Handle](port))
+    _ = slop_os.handle_close(cast[slop_os.Handle](budget))
+    report(given.log, "thread_create", took / THREADS)
+    return .Ok
+}
+
+/**
+ * Measure launching copies of the program through the manager, each ending at once, given nothing, and seen to, and
+ * log it as "perf: process_create <nanoseconds>".
+ *
+ * Each copy's budget is waited for, up to a second, to come back to nothing before the next, and that's in the time.
+ *
+ * @param t The test's state.
+ * @return Ok once it's measured and logged; Error if main wasn't given the process manager or its module, or a port
+ *     or a launch failed.
+ */
+process_create_is_measured #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
+    loader :: testing.require_some(t, given.manager, "the root task grants the process manager")?
+    executable :: testing.require_some(t, given.program, "the root task grants the program's own module")?
+    manager_port :: testing.require_some(t, os.port_for(block.budget, loader.end), "a port for the process manager's replies")?
+    port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port to watch the copies end on")?
+    start :: test_kit.clock_now()
+    for i in cast[u64](0)..<PROCESSES {
+        launch :: os.launch(loader, manager_port, "test_perf copy", executable, COPY_BUDGET, takes_nothing, NoGrants.{},
+            os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = ENDED_KEY + i}})
+        launched :: testing.require_ok(t, launch, "the process manager launches each copy")?
+        packets : slop_os.Packet[1]
+        _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
+        _ = slop_os.handle_close(cast[slop_os.Handle](launched.process))
+        _ = test_kit.wait_for_budget(launched.budget, 0, 1_000_000_000)
+        _ = slop_os.handle_close(cast[slop_os.Handle](launched.budget))
+    }
+    took :: test_kit.clock_now() - start
+    _ = slop_os.handle_close(cast[slop_os.Handle](port))
+    report(given.log, "process_create", took / PROCESSES)
+    return .Ok
+}
+
+/**
+ * Run the benchmarks, each a test, reporting to the debug log, where each logs its number.
+ *
+ * @param log The debug log, writable, where the numbers and the tests' report go.
  * @param platform Not used.
  * @param test_device Not used.
  * @param firmware Not used.
- * @param manager The process manager, which launches the copies process_create measures; without it the test ends
- *     with 104, after the other benchmarks.
- * @param program The test's own module, which the copies run; without it the test ends with 104.
+ * @param manager The process manager, which launches the copies process_create measures; without it that test fails.
+ * @param program The test's own module, which the copies run; without it process_create's test fails.
  * @param peer Not used.
  * @param cpu_budget Not used.
- * @return 0 once every benchmark is measured and logged; it holds them to nothing itself. 100 if the memory budget
- *     couldn't be made; 101 if ipc_round_trip, 102 page_fault, 103 thread_create, or 105 process_create couldn't
- *     be measured.
+ * @return How many tests failed: 0 when every benchmark was measured and logged; it holds them to nothing itself.
  */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
-    block :: slop_os.startup_block()
-    budget :: slop_os.memory_budget_create(block.budget, 8 << 20) or_return 100
-    report(log, "ipc_round_trip", ipc_round_trip(budget) or_return 101)
-    report(log, "page_fault", page_fault(budget) or_return 102)
-    report(log, "thread_create", thread_create(budget) or_return 103)
-    report(log, "process_create", process_create(manager or_return 104, program or_return 104) or_return 105)
-    _ = slop_os.handle_close(cast[slop_os.Handle](budget))
-    log_line.write(log, "%: measured ipc_round_trip, page_fault, thread_create and process_create", NAME)
-    return 0
+    given :: Given.{log = log, manager = manager, program = program}
+    return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }
 
 /**
@@ -134,149 +291,4 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
  */
 report :: fn(log: slop_os.DebugLog, name: string, nanoseconds: u64) {
     log_line.write(log, "%: perf: % %", NAME, name, nanoseconds)
-}
-
-/**
- * Measure round trips to a thread that echoes.
- *
- * @param budget The memory budget the channel, ports and thread are charged to.
- * @return The time of one round trip, in nanoseconds, averaged over ROUNDS; or null if setting up failed or a round
- *     trip did, or an answer wasn't what was sent.
- */
-ipc_round_trip :: fn(budget: slop_os.MemoryBudget) -> u64? {
-    block :: slop_os.startup_block()
-    pair :: slop_os.channel_create(budget, 0, 0) or_return null
-    echoing :: runtime.new(Echo)
-    echoing.end = pair.b
-    echoing.port = slop_os.port_create(budget) or_return null
-    slop_os.port_bind(echoing.port, cast[slop_os.Handle](pair.b), slop_os.SIGNAL_READABLE, ECHO_KEY, .Persistent) or_return null
-    port :: slop_os.port_create(budget) or_return null
-    slop_os.port_bind(port, cast[slop_os.Handle](pair.a), slop_os.SIGNAL_READABLE, ANSWER_KEY, .Persistent) or_return null
-    thread :: test_kit.start_thread(budget, cast[u64](echo), cast[u64](echoing)) or_return null
-    for i in cast[u64](0)..<WARM_UP {
-        echoed :: round_trip(pair.a, port, i) or_return null
-        if !echoed {
-            return null
-        }
-    }
-    start :: test_kit.clock_now()
-    for i in cast[u64](0)..<ROUNDS {
-        echoed :: round_trip(pair.a, port, i) or_return null
-        if !echoed {
-            return null
-        }
-    }
-    took :: test_kit.clock_now() - start
-    _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
-    _ = slop_os.handle_close(cast[slop_os.Handle](thread))
-    _ = slop_os.handle_close(cast[slop_os.Handle](port))
-    return took / ROUNDS
-}
-
-/**
- * Send a value to the echoing thread, and wait for its answer.
- *
- * @param end The measuring thread's end.
- * @param port The port end is bound to for Readable.
- * @param value Any value, sent as one 8-byte message; the round's index, so an echo of an earlier round doesn't
- *     match.
- * @return Whether the answer was value; or null if writing failed, or reading failed other than finding nothing.
- */
-round_trip :: fn(end: slop_os.Channel, port: slop_os.Port, value: u64) -> bool? {
-    sent : u64[1]
-    sent[0] = value
-    slop_os.channel_write(end, view_of(cast[ptr[u8]](&sent[0]), 8), slop_os.NO_BATCH) or_return null
-    answer : u64[1]
-    loop {
-        match slop_os.channel_read(end, view_of(cast[ptr[mut u8]](&answer[0]), 8), cast[ptr[mut u32]](0)) {
-            case Ok(info) => return answer[0] == value
-            case Error(error) => {
-                if error != .Empty {
-                    return null
-                }
-                packets : slop_os.Packet[1]
-                _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
-            }
-        }
-    }
-}
-
-/**
- * Measure touching pages of anonymous memory for the first time.
- *
- * @param budget The memory budget the memory is charged to.
- * @return The time of one touch, in nanoseconds, averaged over PAGES; or null if the memory couldn't be made or
- *     mapped.
- */
-page_fault :: fn(budget: slop_os.MemoryBudget) -> u64? {
-    block :: slop_os.startup_block()
-    memory :: slop_os.memory_create(budget, PAGES * PAGE) or_return null
-    address :: runtime.reserve_addresses(cast[usize](PAGES * PAGE)) or_return null
-    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    slop_os.memory_map(memory, block.space, address, 0, PAGES * PAGE, read_write) or_return null
-    start :: test_kit.clock_now()
-    for page in cast[u64](0)..<PAGES {
-        intrinsics.volatile_store_u8(cast[ptr[mut u8]](address + page * PAGE), 1)
-    }
-    took :: test_kit.clock_now() - start
-    _ = slop_os.memory_unmap(block.space, address)
-    _ = slop_os.handle_close(cast[slop_os.Handle](memory))
-    return took / PAGES
-}
-
-/**
- * Measure making threads, starting them, and seeing them end.
- *
- * @param budget The memory budget the threads and the port are charged to.
- * @return The time of one thread, in nanoseconds, averaged over THREADS; or null if the port or a thread couldn't be
- *     made, or a thread couldn't be watched.
- */
-thread_create :: fn(budget: slop_os.MemoryBudget) -> u64? {
-    port :: slop_os.port_create(budget) or_return null
-    start :: test_kit.clock_now()
-    for i in cast[u64](0)..<THREADS {
-        thread :: test_kit.start_thread(budget, cast[u64](ends), 0) or_return null
-        // A key of its own, a fired Once binding keeping its key; gone already, it ended before it could be watched
-        match slop_os.port_bind(port, cast[slop_os.Handle](thread), slop_os.SIGNAL_TERMINATED, ENDED_KEY + i, .Once) {
-            case Ok => {
-                packets : slop_os.Packet[1]
-                _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
-            }
-            case Error(error) => if error != .ObjectGone {
-                return null
-            }
-        }
-        _ = slop_os.handle_close(cast[slop_os.Handle](thread))
-    }
-    took :: test_kit.clock_now() - start
-    _ = slop_os.handle_close(cast[slop_os.Handle](port))
-    return took / THREADS
-}
-
-/**
- * Measure launching copies of the program through the manager, each ending at once, given nothing, and seen to.
- *
- * Each copy's budget is waited for, up to a second, to come back to nothing before the next, and that's in the time.
- *
- * @param loader The process manager connection.
- * @param executable The test's own module, which the copies run.
- * @return The time of one process, in nanoseconds, averaged over PROCESSES; or null if a port or a launch failed.
- */
-process_create :: fn(loader: os.Channel[process_manager.ProcessManager], executable: slop_os.Memory) -> u64? {
-    block :: slop_os.startup_block()
-    manager_port :: os.port_for(block.budget, loader.end) or_return null
-    port :: slop_os.port_create(block.budget) or_return null
-    start :: test_kit.clock_now()
-    for i in cast[u64](0)..<PROCESSES {
-        launched :: os.launch(loader, manager_port, "test_perf copy", executable, COPY_BUDGET, takes_nothing, NoGrants.{},
-            os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = ENDED_KEY + i}}) or_return null
-        packets : slop_os.Packet[1]
-        _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
-        _ = slop_os.handle_close(cast[slop_os.Handle](launched.process))
-        _ = test_kit.wait_for_budget(launched.budget, 0, 1_000_000_000)
-        _ = slop_os.handle_close(cast[slop_os.Handle](launched.budget))
-    }
-    took :: test_kit.clock_now() - start
-    _ = slop_os.handle_close(cast[slop_os.Handle](port))
-    return took / PROCESSES
 }

@@ -2,13 +2,14 @@ package slopfs_test
 
 import runtime from "base"
 import maps from "std"
+import testing from "std"
 import slopfs from ".."
 
 /*
  * Volumes apart from their container, as volume servers hold them (decisions/0089): each with nodes of its own,
  * allocating from the container's space as its own owner, and committing alone. A commit takes only that volume's
  * changes and the container's own: after a crash, the other's uncommitted writes are gone without leaking a block,
- * and what it freed but hasn't committed is still its own, unused by anyone. Checks from 700.
+ * and what it freed but hasn't committed is still its own, unused by anyone.
  */
 
 /** A volume's side of its container: what a volume server's requests to the container service carry. */
@@ -128,42 +129,36 @@ volume_id :: fn(container: ptr[mut slopfs.Container], name: string) -> u64 {
     }
 }
 
-/**
- * Check volumes apart from their container, as volume servers hold them: two volumes commit alone, one freeing a file
- * it committed and writing another without committing, while the other commits twice from where the freed blocks are.
- * As a crash would leave the disk then, the first volume's committed file is whole, its uncommitted one never there,
- * the second's files all there, and the container checks out with nothing leaked; committed, it checks out too.
- *
- * @return 0 if every check passed, or the number of the first that failed, 700 to 733.
- */
-check_apart :: fn() -> int {
-    device :: new_device() or_return 700
+volumes_apart_commit_alone_and_a_crash_keeps_each_ones_last_commit_leaking_nothing #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    device :: formatted(t, BLOCKS, 0)?
     defer free_device(device)
     disk :: cast[ptr[mut Disk]](device.context)
-    id : u8[16]
-    slopfs.format(device, id) or_return 701
-    container := slopfs.mount(device) or_return 702
-    slopfs.create_volume(container, "a", key_of_volume(), 1) or_return 703
-    slopfs.create_volume(container, "b", key_of_volume(), 1) or_return 704
-    if commit_failed(container) {
-        return 705
-    }
-    a :: apart(container, volume_id(container, "a")) or_return 706
-    b :: apart(container, volume_id(container, "b")) or_return 707
+    mounting :: slopfs.mount(device)
+    container :: testing.require_ok(t, mounting, "a formatted disk mounts")?
+    making_a :: slopfs.create_volume(container, "a", key_of_volume(), 1)
+    require_done(t, making_a, "a new container has room for a volume")?
+    making_b :: slopfs.create_volume(container, "b", key_of_volume(), 1)
+    require_done(t, making_b, "a new container has room for a second volume")?
+    require_commit(t, container, "the new volumes commit")?
+    a :: testing.require_some(t, apart(container, volume_id(container, "a")), "a committed volume is taken apart")?
+    b :: testing.require_some(t, apart(container, volume_id(container, "b")), "a second committed volume is taken apart")?
     data := runtime.new(Data)
     defer runtime.free(data)
     pattern(data.bytes, 7)
 
     // b's old file, committed, then removed without committing that
-    old :: slopfs.create(b.volume, slopfs.ROOT_OBJECT, "old", .File) or_return 710
-    slopfs.write(b.volume, old, 0, data.bytes[0..<200000]) or_return 711
-    if !commit_apart(b) {
-        return 712
-    }
-    slopfs.remove(b.volume, slopfs.ROOT_OBJECT, "old") or_return 713
+    making_old :: slopfs.create(b.volume, slopfs.ROOT_OBJECT, "old", .File)
+    old :: testing.require_ok(t, making_old, "a volume apart makes a file")?
+    writing_old :: slopfs.write(b.volume, old, 0, data.bytes[0..<200000])
+    require_done(t, writing_old, "a volume apart writes a file from the container's space")?
+    testing.require(t, commit_apart(b), "a volume apart commits alone")?
+    removing_old :: slopfs.remove(b.volume, slopfs.ROOT_OBJECT, "old")
+    require_done(t, removing_old, "a volume apart removes a committed file")?
     // b writes more, uncommitted; a writes a lot and commits twice, so freed blocks would be reused if they were free
-    pending :: slopfs.create(b.volume, slopfs.ROOT_OBJECT, "pending", .File) or_return 714
-    slopfs.write(b.volume, pending, 0, data.bytes[0..<100000]) or_return 715
+    making_pending :: slopfs.create(b.volume, slopfs.ROOT_OBJECT, "pending", .File)
+    pending :: testing.require_ok(t, making_pending, "a volume apart makes a second file")?
+    writing_pending :: slopfs.write(b.volume, pending, 0, data.bytes[0..<100000])
+    require_done(t, writing_pending, "a volume apart writes a second file")?
     for round in 0..<2 {
         // From the disk's start, where b's freed blocks are, which a would take if they were free
         container.space.rotor = 0
@@ -171,59 +166,58 @@ check_apart :: fn() -> int {
         for i in 0..<12 {
             text : u8[16]
             length :: name_of_number(text, round * 100 + i)
-            file :: slopfs.create(a.volume, slopfs.ROOT_OBJECT, string_of(&text[0], length), .File) or_return 716
-            slopfs.write(a.volume, file, 0, data.bytes[0..<300000]) or_return 717
+            making :: slopfs.create(a.volume, slopfs.ROOT_OBJECT, string_of(&text[0], length), .File)
+            file :: testing.require_ok(t, making, "the other volume apart makes a file")?
+            writing :: slopfs.write(a.volume, file, 0, data.bytes[0..<300000])
+            require_done(t, writing, "the other volume apart writes a file, the disk having room for 24 of them")?
         }
-        if !commit_apart(a) {
-            return 718
-        }
+        testing.require(t, commit_apart(a), "the other volume apart commits alone, b's changes left out")?
     }
     // The disk as a crash now would leave it
     saved, error :: runtime.new_array(u8, disk.bytes.count)
-    if error != null {
-        return 719
-    }
+    testing.require(t, error == null, "a copy of the disk as a crash would leave it is allocated")?
     defer runtime.free_array(saved)
     copy_into(saved, disk.bytes)
 
     // Committed, b's removal and its new file are durable too, and everything checks out
-    if !commit_apart(b) {
-        return 720
-    }
+    testing.expect(t, commit_apart(b), "a volume apart commits what it removed and wrote since")
     free_apart(a)
     free_apart(b)
-    if !verified(container) {
-        return 721
-    }
+    checks_out(t, container, "both volumes apart committed, nothing's leaked or used twice")
     slopfs.unmount(container)
 
     // After the crash: a's two files, b's old one whole, b's pending one never there, and nothing leaked
     copy_into(disk.bytes, saved)
-    after := slopfs.mount(device) or_return 722
+    mounting_after :: slopfs.mount(device)
+    after :: testing.require_ok(t, mounting_after, "the disk as the crash left it mounts")?
     defer slopfs.unmount(after)
-    if !verified(after) {
-        return 723
-    }
-    va :: slopfs.open_volume(after, volume_id(after, "a")) or_return 724
-    vb :: slopfs.open_volume(after, volume_id(after, "b")) or_return 725
+    checks_out(t, after, "after the crash, b's uncommitted blocks aren't leaked, and what it freed uncommitted isn't used twice")
+    opening_a :: slopfs.open_volume(after, volume_id(after, "a"))
+    va :: testing.require_ok(t, opening_a, "a opens after the crash")?
+    opening_b :: slopfs.open_volume(after, volume_id(after, "b"))
+    vb :: testing.require_ok(t, opening_b, "b opens after the crash")?
     back := runtime.new(Data)
     defer runtime.free(back)
     for number in 0..<24 {
         text : u8[16]
         length :: name_of_number(text, number / 12 * 100 + number % 12)
-        file :: slopfs.lookup(va, slopfs.ROOT_OBJECT, string_of(&text[0], length)) or_return 726
-        read :: slopfs.read(va, file or_else 0, 0, back.bytes[0..<300000]) or_return 727
-        if read != 300000 || !same(back.bytes[0..<300000], data.bytes[0..<300000]) {
-            return 728
-        }
+        looking :: slopfs.lookup(va, slopfs.ROOT_OBJECT, string_of(&text[0], length))
+        file :: testing.require_ok(t, looking, "each of a's files is looked up")?
+        reading :: slopfs.read(va, file or_else 0, 0, back.bytes[0..<300000])
+        read :: testing.require_ok(t, reading, "each of a's committed files is there and reads")?
+        testing.expect_eq(t, read, 300000, "each of a's committed files is whole")
+        testing.expect_none(t, difference(back.bytes[0..<300000], data.bytes[0..<300000]),
+            "each of a's committed files holds what was written, none of its blocks taken by b's")
     }
-    kept :: slopfs.lookup(vb, slopfs.ROOT_OBJECT, "old") or_return 729
-    read :: slopfs.read(vb, kept or_else 0, 0, back.bytes[0..<200000]) or_return 730
-    if read != 200000 || !same(back.bytes[0..<200000], data.bytes[0..<200000]) {
-        return 731
-    }
-    if (slopfs.lookup(vb, slopfs.ROOT_OBJECT, "pending") or_return 732) is_some {
-        return 733
-    }
-    return 0
+    looking_old :: slopfs.lookup(vb, slopfs.ROOT_OBJECT, "old")
+    kept :: testing.require_ok(t, looking_old, "b's old file is looked up")?
+    reading_old :: slopfs.read(vb, kept or_else 0, 0, back.bytes[0..<200000])
+    read :: testing.require_ok(t, reading_old, "b's removal wasn't committed, so its old file is there and reads")?
+    testing.expect_eq(t, read, 200000, "b's old file is whole")
+    testing.expect_none(t, difference(back.bytes[0..<200000], data.bytes[0..<200000]),
+        "b's old file holds what was written: what b freed uncommitted wasn't given to a")
+    looking_pending :: slopfs.lookup(vb, slopfs.ROOT_OBJECT, "pending")
+    pending_after :: testing.require_ok(t, looking_pending, "b's pending file is looked up")?
+    testing.expect_none(t, pending_after, "b's uncommitted file was never there")
+    return .Ok
 }

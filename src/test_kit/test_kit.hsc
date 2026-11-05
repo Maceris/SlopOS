@@ -140,7 +140,10 @@ run :: fn[G](log: slop_os.DebugLog, name: string, tests: testing.Test[], state: 
  * @return It; Error(Failed), recorded, when the test wasn't run by run with a G.
  */
 given :: fn[G](t: ptr[mut testing.T], G: type, location := #caller_location) -> Result[ptr[mut G], testing.Stopped] {
-    return testing.require_some(t, runtime.get_extension(G), "the test was run by test_kit.run with what main was given", location)
+    found :: runtime.get_extension(G)
+    held :: testing.require_some(t, found, "the test was run by test_kit.run with what main was given", location)?
+    // run's own heap copy, which the tests may change for those after them
+    return .Ok(cast[ptr[mut G]](held))
 }
 
 /**

@@ -1,11 +1,11 @@
 /**
- * library_interface's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the
- * number of the first check that failed. Libraries are made here, the least ELF that has a record: its header, one
- * loadable segment of the whole file at address 0, and the record at its entry, its pointers written in place.
+ * library_interface's tests, a test program (tools/unit_tests.py, decisions/0175). Libraries are made here, the least
+ * ELF that has a record: its header, one loadable segment of the whole file at address 0, and the record at its entry,
+ * its pointers written in place.
  */
 package library_interface_test
 
-import runtime from "base"
+import testing from "std"
 import library_interface from ".."
 
 // Where the made library's parts are
@@ -26,47 +26,48 @@ Made :: struct {
     type : u8,
 }
 
-/**
- * Run the checks: libraries that can and can't stand in for one, bytes that aren't a library, and a file's length.
- *
- * @return 0 if every check passed, or the number of the first that failed, 1 to 7.
- */
-main :: fn() -> int {
+an_interface_the_same_or_with_more_exports_stands_in #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     old : u8[SIZE]
     new : u8[SIZE]
     make(&old, 1, Made.[Made.{name = "add", type = 1}, Made.{name = "has_word", type = 2}])
-    // The same, and one export more, stand in
     make(&new, 1, Made.[Made.{name = "add", type = 1}, Made.{name = "has_word", type = 2}])
-    if library_interface.check(old, new) is_some {
-        return 1
-    }
+    testing.expect_none(t, library_interface.check(old, new), "the same exports of the same types")
     make(&new, 1, Made.[Made.{name = "has_word", type = 2}, Made.{name = "build_name", type = 3}, Made.{name = "add", type = 1}])
-    if library_interface.check(old, new) is_some {
-        return 2
-    }
-    // One export fewer, or of another type, or another convention, doesn't
+    testing.expect_none(t, library_interface.check(old, new), "an export more, and the old ones in another order")
+    return .Ok
+}
+
+an_interface_with_an_export_lost_or_changed_does_not_stand_in #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    old : u8[SIZE]
+    new : u8[SIZE]
+    make(&old, 1, Made.[Made.{name = "add", type = 1}, Made.{name = "has_word", type = 2}])
     make(&new, 1, Made.[Made.{name = "add", type = 1}])
-    if (library_interface.check(old, new) or_else "") != "an export isn't there any more" {
-        return 3
-    }
+    fewer :: library_interface.check(old, new) or_else ""
+    testing.expect_eq(t, fewer, "an export isn't there any more", "has_word is gone, and a program may call it")
     make(&new, 1, Made.[Made.{name = "add", type = 9}, Made.{name = "has_word", type = 2}])
-    if (library_interface.check(old, new) or_else "") != "an export's type changed" {
-        return 4
-    }
+    retyped :: library_interface.check(old, new) or_else ""
+    testing.expect_eq(t, retyped, "an export's type changed", "add's type hash differs, so its callers would pass the wrong things")
     make(&new, 2, Made.[Made.{name = "add", type = 1}, Made.{name = "has_word", type = 2}])
-    if (library_interface.check(old, new) or_else "") != "it's built for another calling convention or Context" {
-        return 5
-    }
-    // Bytes that aren't a library aren't read
+    reconvened :: library_interface.check(old, new) or_else ""
+    testing.expect_eq(t, reconvened, "it's built for another calling convention or Context",
+        "convention 2 isn't 1, so no call into it would work")
+    return .Ok
+}
+
+bytes_that_are_not_a_library_are_not_read #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    old : u8[SIZE]
+    make(&old, 1, Made.[Made.{name = "add", type = 1}, Made.{name = "has_word", type = 2}])
     garbage : u8[SIZE]
-    if (library_interface.check(old, garbage) is_none) || library_interface.file_size(garbage) != 0 {
-        return 6
-    }
-    // A file's length from its headers, in memory longer than it
-    if library_interface.file_size(old) != SIZE - 64 {
-        return 7
-    }
-    return 0
+    testing.expect_some(t, library_interface.check(old, garbage), "zeros have no ELF header, so can't stand in")
+    testing.expect_eq(t, library_interface.file_size(garbage), 0, "zeros have no headers to give a length")
+    return .Ok
+}
+
+a_files_length_comes_from_its_headers #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    old : u8[SIZE]
+    make(&old, 1, Made.[Made.{name = "add", type = 1}, Made.{name = "has_word", type = 2}])
+    testing.expect_eq(t, library_interface.file_size(old), SIZE - 64, "it ends where its section headers do, before its memory does")
+    return .Ok
 }
 
 /**

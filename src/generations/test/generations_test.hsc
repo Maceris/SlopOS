@@ -1,87 +1,75 @@
 /**
- * The generations package's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or
- * the number of the first check that failed. A generation's record is checked, refused when it's broken, read back from
- * its bytes, and a tentative one's tries left checked.
+ * The generations package's tests, a test program (tools/unit_tests.py, decisions/0175). A generation's record is
+ * checked, refused when it's broken, read back from its bytes, and a tentative one's tries left checked.
  */
 package generations_test
 
+import testing from "std"
 import bundle from "../../bundle"
 import generations from ".."
 
-/**
- * Run the checks: a good record is accepted, broken ones are refused, and a record is read back from its bytes.
- *
- * @return 0 if every check passed, or the number of the first that failed, 1 to 13.
- */
-main :: fn() -> int {
+a_good_record_is_accepted #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     made := generation(7, generations.STATE_PERMANENT)
-    if generations.check(&made) is_some {
-        return 1
-    }
-    // Each of these is refused
-    broken := made
-    broken.magic = 0
-    if generations.check(&broken) is_none {
-        return 2
-    }
-    broken = made
-    broken.state = 9
-    if generations.check(&broken) is_none {
-        return 3
-    }
-    broken = made
-    broken.file_count = generations.MAX_BOOT_FILES + 1
-    if generations.check(&broken) is_none {
-        return 4
-    }
+    testing.expect_none(t, generations.check(&made), "a permanent generation of a kernel and two boot files")
     // A kernel alone, with no boot set, is one (decisions/0135)
     alone := made
     alone.file_count = 0
-    if generations.check(&alone) is_some {
-        return 4
-    }
+    testing.expect_none(t, generations.check(&alone), "a kernel alone, with no boot set, is a generation")
+    return .Ok
+}
+
+broken_records_are_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := generation(7, generations.STATE_PERMANENT)
+    broken := made
+    broken.magic = 0
+    testing.expect_some(t, generations.check(&broken), "without its magic, it isn't a generation's record")
+    broken = made
+    broken.state = 9
+    testing.expect_some(t, generations.check(&broken), "9 isn't a state")
+    broken = made
+    broken.file_count = generations.MAX_BOOT_FILES + 1
+    testing.expect_some(t, generations.check(&broken), "more boot files than the record has room for")
     broken = made
     _ = generations.set_name(&broken.files[0].name, "supervisor.elf")
-    if generations.check(&broken) is_none {
-        return 5
-    }
+    testing.expect_some(t, generations.check(&broken), "the first boot file has to be the root task")
     broken = made
     for i in 0..<broken.command_line.count {
         broken.command_line[i] = 65
     }
-    if generations.check(&broken) is_none {
-        return 6
-    }
-    // Only the recovery generation is numbered as it, and it's numbered so
-    broken = made
+    testing.expect_some(t, generations.check(&broken), "a command line filling its bytes has no end")
+    return .Ok
+}
+
+only_the_recovery_generation_is_numbered_as_it #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := generation(7, generations.STATE_PERMANENT)
+    broken := made
     broken.number = generations.RECOVERY_NUMBER
-    if generations.check(&broken) is_none {
-        return 12
-    }
+    testing.expect_some(t, generations.check(&broken), "a permanent generation can't take the recovery number")
     broken = made
     broken.state = generations.STATE_RECOVERY
-    if generations.check(&broken) is_none {
-        return 13
-    }
-    // Read back from its bytes, and not from bytes of another size
-    back :: generations.generation_of(generations.bytes_of(&made)) or_return 7
-    if back.number != 7 || generations.text_of(&back.files[1].name) != "system.records" {
-        return 8
-    }
-    if generations.generation_of(view_of(cast[ptr[u8]](&made), 100)) is_some {
-        return 9
-    }
+    testing.expect_some(t, generations.check(&broken), "the recovery state goes only with the recovery number")
+    return .Ok
+}
+
+a_record_reads_back_from_its_bytes #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := generation(7, generations.STATE_PERMANENT)
+    read :: generations.generation_of(generations.bytes_of(&made))
+    back :: testing.require_some(t, read, "a record's own bytes read back")?
+    testing.expect_eq(t, back.number, 7, "the number made")
+    testing.expect_eq(t, generations.text_of(&back.files[1].name), "system.records", "the second boot file's name")
+    testing.expect(t, generations.generation_of(view_of(cast[ptr[u8]](&made), 100)) is_none,
+        "100 bytes aren't a record's size")
+    return .Ok
+}
+
+a_tentative_generation_has_at_most_tries_tries #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     // A tentative generation's tries, up to TRIES (decisions/0134)
     tentative := generation(8, generations.STATE_TENTATIVE)
     tentative.tries_left = generations.TRIES
-    if generations.check(&tentative) is_some {
-        return 10
-    }
+    testing.expect_none(t, generations.check(&tentative), "a tentative generation starts with TRIES tries")
     tentative.tries_left = generations.TRIES + 1
-    if generations.check(&tentative) is_none {
-        return 11
-    }
-    return 0
+    testing.expect_some(t, generations.check(&tentative), "it never has more than TRIES")
+    return .Ok
 }
 
 /**

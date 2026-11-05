@@ -1,14 +1,16 @@
 /**
- * The FAT package's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the
- * number of the first check that failed. A volume formatted in a buffer standing in for a disk is mounted; files and
- * directories are made with short and long names, written across clusters, read back, resized, renamed and removed;
- * a buffer that isn't FAT isn't mounted; a write the disk fails is remembered, its sectors refused to reads until
- * they're written again and the volume failed for good (decisions/0112); and the volume, damaged many ways, is used
- * without crashing (fuzz_test.hsc).
+ * The FAT package's tests, as a hosted program (tools/unit_tests.py, decisions/0175): main runs them and returns how
+ * many failed. A volume formatted in a buffer standing in for a disk is mounted; files and directories are made with
+ * short and long names, written across clusters, read back, resized, renamed and removed; a buffer that isn't FAT
+ * isn't mounted; a write the disk fails is remembered, its sectors refused to reads until they're written again and
+ * the volume failed for good (decisions/0112); and the volume, damaged many ways, is used without crashing
+ * (fuzz_test.hsc).
  */
 package fat_test
 
+import compiler from "base"
 import runtime from "base"
+import testing from "std"
 import fat from ".."
 import hosted_faults from "../../robustness/hosted"
 
@@ -40,278 +42,436 @@ Undo :: struct {
     at : usize,
 }
 
-/**
- * Run the checks in order, stopping at the first that fails.
- *
- * They check that an empty buffer doesn't mount and a formatted one does, with FSInfo's free count; that 8.3 and long
- * names are made, found in any case, and given aliases; that refused names and paths are refused; that a file is
- * written across clusters, read back whole and from its middle, cut and grown with zeros; that entries are renamed
- * and removed, and a directory with something in it isn't; that a file renamed over another replaces it, a rename
- * that changes only case is allowed, and a write past the end reads zeros in the gap; that it all, and FSInfo's
- * count, is there mounted again; then check_failed_writes and check_fuzz.
- *
- * @return 0 if every check passed, or the number of the first that failed: 1 to 53 here, 60 to 69 from
- *     check_failed_writes, 100 and up from check_fuzz.
- */
-checks :: fn() -> int {
-    bytes, error :: runtime.new_array(u8, cast[usize](SECTORS * fat.SECTOR_BYTES))
-    if error != null {
-        return 1
-    }
-    defer runtime.free_array(bytes)
-    image := Image.{bytes = bytes}
-    device := fat.Device.{context = cast[rawptr](&image), sector_count = SECTORS, read = read_sectors, write = write_sectors}
+/** The year of the stamp the tests' volumes write with, which is 2026-10-30 12:34:56. */
+STAMP_YEAR :: 2026
 
-    // Nothing there yet
-    if fat.mount(device) is_ok {
-        return 2
-    }
-    if fat.format(device, SECTORS, 1, "slopos test") is_some {
-        return 3
-    }
-    volume := fat.mount(device) or_return 4
-    root :: fat.root_of(&volume)
-    if next_name(&volume, root, 0) != "" {
-        return 5
-    }
-    // Formatted, every cluster but the root's is free, as FSInfo says
-    formatted_free :: fat.free_clusters(&volume) or_return 40
-    if formatted_free != volume.cluster_count - 1 {
-        return 41
-    }
-    // Made and written to with a stamp, it has it
-    stamp :: fat.stamp_of(2026, 10, 30, 12, 34, 56)
-    volume.stamp = stamp
-
-    // An 8.3 name in lower case, kept by its case flags, found in any case
-    readme := fat.create(&volume, root, "readme.txt", false) or_return 6
-    if readme.place.long_entries != 0 || !written(&volume, &readme, 0, "hello, FAT") {
-        return 7
-    }
-    found := fat.lookup(&volume, root, "README.TXT") or_return 8
-    if fat.name_of(&found) != "readme.txt" || found.size != 10 || read_back(&volume, &found) != "hello, FAT" {
-        return 9
-    }
-    if found.written != stamp || stamp >> 16 != (46 << 9 | 10 << 5 | 30) || stamp & 0xffff != (12 << 11 | 34 << 5 | 28) {
-        return 42
-    }
-    // A cluster taken for its bytes, counted
-    if (fat.free_clusters(&volume) or_else 0) != formatted_free - 1 {
-        return 43
-    }
-
-    // Long names, and their aliases
-    first := fat.create(&volume, root, "A long file name.text", false) or_return 10
-    second := fat.create(&volume, root, "A long file name, again.text", false) or_return 11
-    if first.place.long_entries == 0 || first.short_name != short("ALONGF~1TEX") || second.short_name != short("ALONGF~2TEX") {
-        return 12
-    }
-    again := fat.lookup(&volume, root, "a LONG file NAME, again.TEXT") or_return 13
-    if fat.name_of(&again) != "A long file name, again.text" {
-        return 14
-    }
-    match fat.create(&volume, root, "A LONG FILE NAME.TEXT", false) {
-        case Ok(made) => return 15
-        case Error(failure) => {
-            if failure != .AlreadyExists {
-                return 15
-            }
-        }
-    }
-    for refused in string.["", "trailing.", "a/b", "star*", "colon:"] {
-        if fat.create(&volume, root, refused, false) is_ok {
-            return 16
-        }
-    }
-
-    // A directory, a file beneath it, and a path to it
-    boot := fat.create(&volume, root, "boot", true) or_return 17
-    boot_cluster :: fat.directory_cluster(&volume, &boot)
-    kernel := fat.create(&volume, boot_cluster, "kernel.elf", false) or_return 18
-    // 3000 bytes: six clusters of 512
-    data : u8[3000]
-    for &byte, i in data {
-        byte^ = cast[u8](i % 251)
-    }
-    if (fat.write(&volume, &kernel, 0, data) or_else 0) != 3000 {
-        return 19
-    }
-    resolved := fat.resolve(&volume, root, "boot/KERNEL.ELF") or_return 20
-    if resolved.size != 3000 {
-        return 21
-    }
-    back : u8[3000]
-    if (fat.read(&volume, &resolved, 0, back) or_else 0) != 3000 || back != data {
-        return 22
-    }
-    // From the middle, across a cluster's end
-    middle : u8[700]
-    if (fat.read(&volume, &resolved, 1000, middle) or_else 0) != 700 || middle[0] != data[1000] || middle[699] != data[1699] {
-        return 23
-    }
-    for refused in string.["boot/../readme.txt", "./readme.txt", "readme.txt/x", "nowhere/x"] {
-        if fat.resolve(&volume, root, refused) is_ok {
-            return 24
-        }
-    }
-
-    // Shorter, then longer, its new bytes zero
-    if !done(fat.set_size(&volume, &resolved, 100)) || !done(fat.set_size(&volume, &resolved, 2000)) {
-        return 25
-    }
-    resized := fat.resolve(&volume, root, "boot/kernel.elf") or_return 26
-    grown : u8[2000]
-    if resized.size != 2000 || (fat.read(&volume, &resized, 0, grown) or_else 0) != 2000 || grown[99] != data[99] || grown[100] != 0
-        || grown[1999] != 0 {
-        return 27
-    }
-
-    // Renamed into the directory, over nothing; then removed; a directory with something in it isn't
-    _ = fat.rename(&volume, &first, boot_cluster, "moved.text") or_return 28
-    if fat.lookup(&volume, root, "A long file name.text") is_ok {
-        return 29
-    }
-    in_boot := fat.lookup(&volume, boot_cluster, "moved.text") or_return 30
-    match fat.remove(&volume, &boot) {
-        case Ok => return 31
-        case Error(failure) => {
-            if failure != .DirectoryNotEmpty {
-                return 31
-            }
-        }
-    }
-    if !done(fat.remove(&volume, &in_boot)) || !done(fat.remove(&volume, &resized)) || !done(fat.remove(&volume, &boot)) {
-        return 32
-    }
-    if fat.lookup(&volume, root, "boot") is_ok {
-        return 33
-    }
-
-    // Renamed over another file, it replaces it, the other's cluster freed
-    old_file := fat.create(&volume, root, "old.txt", false) or_return 48
-    new_file := fat.create(&volume, root, "new.txt", false) or_return 48
-    if !written(&volume, &old_file, 0, "the old one") || !written(&volume, &new_file, 0, "the new one") {
-        return 48
-    }
-    free_before_replacing :: fat.free_clusters(&volume) or_return 48
-    replacing := fat.rename(&volume, &new_file, root, "old.txt") or_return 49
-    if (fat.lookup(&volume, root, "new.txt") is_ok) || read_back(&volume, &replacing) != "the new one" {
-        return 49
-    }
-    replaced := fat.lookup(&volume, root, "old.txt") or_return 50
-    if read_back(&volume, &replaced) != "the new one" || (fat.free_clusters(&volume) or_else 0) != free_before_replacing + 1 {
-        return 50
-    }
-    // Renamed to the same name in another case, it's renamed, not refused
-    recased := fat.rename(&volume, &replaced, root, "OLD.txt") or_return 51
-    looked := fat.lookup(&volume, root, "old.txt") or_return 51
-    if fat.name_of(&recased) != "OLD.txt" || fat.name_of(&looked) != "OLD.txt" || read_back(&volume, &looked) != "the new one" {
-        return 51
-    }
-    // Cut short, its cluster keeps the old bytes past the cut; a write past the end reads zeros there all the same
-    if !done(fat.set_size(&volume, &looked, 3)) || !written(&volume, &looked, 20, "x") {
-        return 52
-    }
-    gapped : u8[21]
-    if (fat.read(&volume, &looked, 0, gapped) or_else 0) != 21 || gapped[0] != cast[u8]('t') || gapped[20] != cast[u8]('x') {
-        return 53
-    }
-    for i in cast[usize](3)..<20 {
-        if gapped[i] != 0 {
-            return 53
-        }
-    }
-    if !done(fat.remove(&volume, &looked)) {
-        return 53
-    }
-
-    // Mounted again, it's all as it was left, FSInfo's count with it once it's written
-    free_before :: fat.free_clusters(&volume) or_return 44
-    if fat.write_info(&volume) is_some {
-        return 45
-    }
-    remounted := fat.mount(device) or_return 34
-    still := fat.lookup(&remounted, fat.root_of(&remounted), "readme.txt") or_return 35
-    if read_back(&remounted, &still) != "hello, FAT" || still.written != stamp {
-        return 36
-    }
-    if remounted.free_count != free_before {
-        return 46
-    }
-    // Counted through the FAT, the same
-    remounted.free_count = fat.UNKNOWN_FREE
-    if (fat.free_clusters(&remounted) or_else 0) != free_before {
-        return 47
-    }
-    failed :: check_failed_writes(&image, device)
-    if failed != 0 {
-        return failed
-    }
-    return check_fuzz(&image, device)
+/** A stand-in disk, and a volume formatted on it and mounted, as most tests start from it. */
+Formatted :: struct #scoped {
+    /** The disk, from runtime.new, with its bytes; freed by free_formatted. */
+    image : ptr[mut Image],
+    /** The device over image. */
+    device : fat.Device,
+    /** The volume, mounted, writing entries with the stamp of 2026-10-30 12:34:56. */
+    volume : fat.Volume,
 }
 
 /**
- * Check what a write the disk fails does (decisions/0112): it's refused, the volume is failed from then on, and what
- * it was to change is refused to reads rather than given as it was, while other files read; written whole again, it
- * reads again, the volume still failed. A volume mounted afresh starts whole.
+ * Make a stand-in disk of SECTORS sectors, nothing on it.
  *
- * @param image The stand-in disk, its failing set and cleared here.
- * @param device The device over the image, formatted.
- * @return 0 if every check passed, or the number of the first that failed, 60 to 69.
+ * @param t The test's state, which a failure is recorded in.
+ * @return The disk, from runtime.new, the caller's to free with free_image; Error if its bytes couldn't be had, the
+ *     failure recorded.
  */
-check_failed_writes :: fn(image: ptr[mut Image], device: fat.Device) -> int {
-    volume := fat.mount(device) or_return 60
+new_image :: fn(t: ptr[mut testing.T]) -> Result[ptr[mut Image], testing.Stopped] {
+    bytes, error :: runtime.new_array(u8, cast[usize](SECTORS * fat.SECTOR_BYTES))
+    testing.require(t, error == null, "the stand-in disk's bytes are allocated")?
+    image := runtime.new(Image)
+    image^ = Image.{bytes = bytes}
+    return .Ok(image)
+}
+
+/**
+ * Give back a stand-in disk new_image made: its bytes, what it saved to undo, and itself.
+ *
+ * @param image The disk, which isn't used after.
+ */
+free_image :: fn(image: ptr[mut Image]) {
+    runtime.free_array(image.bytes)
+    runtime.array_free(&image.undo)
+    runtime.array_free(&image.saved)
+    runtime.free(image)
+}
+
+/**
+ * Make a device over a stand-in disk.
+ *
+ * @param image The disk, which has to outlive the device.
+ * @return The device, of SECTORS sectors.
+ */
+device_of :: fn(image: ptr[mut Image]) -> fat.Device {
+    return fat.Device.{context = cast[rawptr](image), sector_count = SECTORS, read = read_sectors, write = write_sectors}
+}
+
+/**
+ * Make a stand-in disk, format a volume of a sector a cluster on it, and mount it, writing with the tests' stamp.
+ *
+ * @param t The test's state, which a failure is recorded in.
+ * @return The volume, the caller's to free with free_formatted; Error if any of it failed, the failure recorded and
+ *     nothing left to free.
+ */
+formatted :: fn(t: ptr[mut testing.T]) -> Result[Formatted, testing.Stopped] {
+    image :: new_image(t)?
+    device :: device_of(image)
+    formatting :: fat.format(device, SECTORS, 1, "slopos test")
+    if !testing.expect_none(t, formatting, "a stand-in disk takes a FAT32 volume") {
+        free_image(image)
+        return .Error(.Failed)
+    }
+    mounting :: fat.mount(device)
+    match mounting {
+        case Ok(volume) => {
+            made := Formatted.{image = image, device = device, volume = volume}
+            made.volume.stamp = fat.stamp_of(STAMP_YEAR, 10, 30, 12, 34, 56)
+            return .Ok(made)
+        }
+        case Error(failure) => {
+            _ = testing.expect_ok(t, mounting, "a formatted volume mounts")
+            free_image(image)
+            return .Error(.Failed)
+        }
+    }
+}
+
+/**
+ * Give back what formatted made.
+ *
+ * @param made The volume and its disk, which aren't used after.
+ */
+free_formatted :: fn(made: ptr[mut Formatted]) {
+    free_image(made.image)
+}
+
+/**
+ * Require a result to be Ok, as expect_ok checks, ending the test with ? if it isn't; unlike testing.require_ok, for a
+ * result of any value, void too, which is dropped.
+ *
+ * @param t The test's state, which a failure is recorded in.
+ * @param result The result, of any Result type.
+ * @param message Why it should succeed, for whoever reads a failure.
+ * @param location Where the check is; the caller's own.
+ * @return Ok if it was Ok; Error(Failed), the failure recorded with the error, if it was an Error.
+ */
+require_done :: fn[V, E](t: ptr[mut testing.T], result: Result[V, E], message: string, location := #caller_location) -> testing.Outcome {
+    return testing.outcome_of(testing.expect_ok(t, result, message, location))
+}
+
+/** The bytes the kernel file is written with: byte i is i % 251, across six clusters of 512. */
+KERNEL_BYTES :: 3000
+
+/** A directory, "boot", and a file of KERNEL_BYTES beneath it, "kernel.elf", as made_kernel makes them. */
+Kernel :: struct {
+    /** The directory's entry, in the root. */
+    boot : fat.Entry,
+    /** The directory's first cluster. */
+    boot_cluster : u32,
+    /** The file's entry, in boot. */
+    kernel : fat.Entry,
+}
+
+/**
+ * Fill the kernel file's bytes.
+ *
+ * @return KERNEL_BYTES bytes, byte i being i % 251.
+ */
+kernel_bytes :: fn() -> u8[KERNEL_BYTES] {
+    data : u8[KERNEL_BYTES]
+    for &byte, i in data {
+        byte^ = cast[u8](i % 251)
+    }
+    return data
+}
+
+/**
+ * Make a directory, "boot", in a volume's root, and a file beneath it, "kernel.elf", written with kernel_bytes.
+ *
+ * @param t The test's state, which a failure is recorded in.
+ * @param volume The volume, mounted.
+ * @return The directory and file; Error if either couldn't be made or written, the failure recorded.
+ */
+made_kernel :: fn(t: ptr[mut testing.T], volume: ptr[mut fat.Volume]) -> Result[Kernel, testing.Stopped] {
+    making_boot :: fat.create(volume, fat.root_of(volume), "boot", true)
+    made := Kernel.{boot = testing.require_ok(t, making_boot, "a directory is made in the root")?}
+    made.boot_cluster = fat.directory_cluster(volume, &made.boot)
+    making_kernel :: fat.create(volume, made.boot_cluster, "kernel.elf", false)
+    made.kernel = testing.require_ok(t, making_kernel, "a file is made beneath a directory")?
+    data :: kernel_bytes()
+    writing :: fat.write(volume, &made.kernel, 0, data)
+    written_count :: testing.require_ok(t, writing, "a file is written across clusters")?
+    testing.require_eq(t, written_count, KERNEL_BYTES, "a write across six clusters writes it all")?
+    return .Ok(made)
+}
+
+an_empty_disk_isnt_mounted_and_a_formatted_one_is_with_every_cluster_free #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    image :: new_image(t)?
+    defer free_image(image)
+    device :: device_of(image)
+    empty :: fat.mount(device)
+    testing.expect(t, empty is_error, "zeros aren't a FAT volume")
+    formatting :: fat.format(device, SECTORS, 1, "slopos test")
+    testing.require_none(t, formatting, "a stand-in disk takes a FAT32 volume")?
+    mounting :: fat.mount(device)
+    volume := testing.require_ok(t, mounting, "a formatted volume mounts")?
+    testing.expect_eq(t, next_name(&volume, fat.root_of(&volume), 0), "", "a new volume's root has no entries")
+    counting :: fat.free_clusters(&volume)
+    formatted_free :: testing.require_ok(t, counting, "a new volume's free clusters are counted")?
+    testing.expect_eq(t, formatted_free, volume.cluster_count - 1, "formatted, every cluster but the root's is free, as FSInfo says")
+    return .Ok
+}
+
+a_short_name_is_kept_in_its_case_found_in_any_case_and_stamped #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := formatted(t)?
+    defer free_formatted(&made)
+    volume :: &made.volume
+    root :: fat.root_of(volume)
+    counting :: fat.free_clusters(volume)
+    formatted_free :: testing.require_ok(t, counting, "a new volume's free clusters are counted")?
+    creating :: fat.create(volume, root, "readme.txt", false)
+    readme := testing.require_ok(t, creating, "a file of an 8.3 name in lower case is made")?
+    testing.expect_eq(t, readme.place.long_entries, 0, "an 8.3 name in one case needs no long entries, its case in the flags")
+    testing.expect(t, written(volume, &readme, 0, "hello, FAT"), "a file of an 8.3 name is written")
+    looking :: fat.lookup(volume, root, "README.TXT")
+    found := testing.require_ok(t, looking, "a short name is found in another case")?
+    testing.expect_eq(t, fat.name_of(&found), "readme.txt", "a short name keeps the case it was made in")
+    testing.expect_eq(t, found.size, 10, "a file is as long as was written")
+    testing.expect_eq(t, read_back(volume, &found), "hello, FAT", "a file reads as written")
+    stamp :: volume.stamp
+    testing.expect_eq(t, found.written, stamp, "a file written has the volume's stamp")
+    testing.expect_eq(t, stamp >> 16, 46 << 9 | 10 << 5 | 30, "a stamp's date: years from 1980, month and day")
+    testing.expect_eq(t, stamp & 0xffff, 12 << 11 | 34 << 5 | 28, "a stamp's time: hours, minutes and two-second units")
+    testing.expect_eq(t, fat.free_clusters(volume) or_else 0, formatted_free - 1, "the cluster a file's bytes took is counted")
+    return .Ok
+}
+
+long_names_are_found_in_any_case_and_given_aliases #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := formatted(t)?
+    defer free_formatted(&made)
+    volume :: &made.volume
+    root :: fat.root_of(volume)
+    making_first :: fat.create(volume, root, "A long file name.text", false)
+    first :: testing.require_ok(t, making_first, "a file of a long name is made")?
+    making_second :: fat.create(volume, root, "A long file name, again.text", false)
+    second :: testing.require_ok(t, making_second, "a second file of a long name is made")?
+    testing.expect_ne(t, first.place.long_entries, 0, "a long name is kept in long entries")
+    testing.expect(t, first.short_name == short("ALONGF~1TEX"), "a long name's alias is its first six letters, ~1 and its extension")
+    testing.expect(t, second.short_name == short("ALONGF~2TEX"), "a second long name with the same start takes ~2")
+    looking :: fat.lookup(volume, root, "a LONG file NAME, again.TEXT")
+    again := testing.require_ok(t, looking, "a long name is found in another case")?
+    testing.expect_eq(t, fat.name_of(&again), "A long file name, again.text", "a long name keeps the case it was made in")
+    same_name :: fat.create(volume, root, "A LONG FILE NAME.TEXT", false)
+    testing.expect_error(t, same_name, .AlreadyExists, "names differing only in case are the same name")
+    return .Ok
+}
+
+names_and_paths_that_arent_names_are_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := formatted(t)?
+    defer free_formatted(&made)
+    volume :: &made.volume
+    root :: fat.root_of(volume)
+    for refused in string.["", "trailing.", "a/b", "star*", "colon:"] {
+        creating :: fat.create(volume, root, refused, false)
+        testing.expect(t, creating is_error, "nothing, a trailing dot, a slash, a star and a colon aren't in a FAT name")
+    }
+    making_readme :: fat.create(volume, root, "readme.txt", false)
+    require_done(t, making_readme, "a file is made in the root")?
+    made_kernel(t, volume)?
+    for refused in string.["boot/../readme.txt", "./readme.txt", "readme.txt/x", "nowhere/x"] {
+        resolving :: fat.resolve(volume, root, refused)
+        testing.expect(t, resolving is_error, "paths through dots, through a file, or through nothing don't resolve")
+    }
+    return .Ok
+}
+
+a_file_is_written_across_clusters_and_read_whole_and_from_its_middle #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := formatted(t)?
+    defer free_formatted(&made)
+    volume :: &made.volume
+    made_kernel(t, volume)?
+    data :: kernel_bytes()
+    resolving :: fat.resolve(volume, fat.root_of(volume), "boot/KERNEL.ELF")
+    resolved := testing.require_ok(t, resolving, "a path resolves, in any case")?
+    testing.expect_eq(t, resolved.size, KERNEL_BYTES, "a file is as long as was written")
+    back : u8[KERNEL_BYTES]
+    testing.expect_eq(t, fat.read(volume, &resolved, 0, back) or_else 0, KERNEL_BYTES, "a file across clusters reads whole")
+    testing.expect(t, back == data, "a file across clusters reads as written")
+    // From the middle, across a cluster's end
+    middle : u8[700]
+    testing.expect_eq(t, fat.read(volume, &resolved, 1000, middle) or_else 0, 700, "700 bytes within the file read whole")
+    testing.expect_eq(t, middle[0], data[1000], "a read from the middle starts where it's asked to")
+    testing.expect_eq(t, middle[699], data[1699], "a read from the middle goes on across a cluster's end")
+    return .Ok
+}
+
+a_file_cut_and_grown_reads_zeros_where_it_grew #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := formatted(t)?
+    defer free_formatted(&made)
+    volume :: &made.volume
+    made_kernel(t, volume)?
+    data :: kernel_bytes()
+    resolving :: fat.resolve(volume, fat.root_of(volume), "boot/KERNEL.ELF")
+    resolved := testing.require_ok(t, resolving, "a path resolves")?
+    cutting :: fat.set_size(volume, &resolved, 100)
+    require_done(t, cutting, "a file is cut")?
+    growing :: fat.set_size(volume, &resolved, 2000)
+    require_done(t, growing, "a cut file is grown")?
+    resolving_again :: fat.resolve(volume, fat.root_of(volume), "boot/kernel.elf")
+    resized := testing.require_ok(t, resolving_again, "a resized file's path resolves")?
+    testing.expect_eq(t, resized.size, 2000, "a file grown is its new size")
+    grown : u8[2000]
+    testing.expect_eq(t, fat.read(volume, &resized, 0, grown) or_else 0, 2000, "a grown file reads whole")
+    testing.expect_eq(t, grown[99], data[99], "what the cut kept is as it was")
+    testing.expect_eq(t, grown[100], 0, "what was cut reads as zero once grown")
+    testing.expect_eq(t, grown[1999], 0, "what was grown reads as zero to its end")
+    return .Ok
+}
+
+entries_are_renamed_and_removed_but_not_a_directory_with_something_in_it #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := formatted(t)?
+    defer free_formatted(&made)
+    volume :: &made.volume
+    root :: fat.root_of(volume)
+    making :: fat.create(volume, root, "A long file name.text", false)
+    first := testing.require_ok(t, making, "a file of a long name is made")?
+    kernel := made_kernel(t, volume)?
+    // Renamed into the directory, over nothing
+    renaming :: fat.rename(volume, &first, kernel.boot_cluster, "moved.text")
+    require_done(t, renaming, "a file is renamed into a directory")?
+    old_name :: fat.lookup(volume, root, "A long file name.text")
+    testing.expect(t, old_name is_error, "a renamed file's old name is gone")
+    looking :: fat.lookup(volume, kernel.boot_cluster, "moved.text")
+    in_boot := testing.require_ok(t, looking, "a renamed file is found by its new name, where it went")?
+    removing_boot :: fat.remove(volume, &kernel.boot)
+    testing.expect_error(t, removing_boot, .DirectoryNotEmpty, "a directory with something in it isn't removed")
+    removing_moved :: fat.remove(volume, &in_boot)
+    testing.expect_ok(t, removing_moved, "a file renamed is removed by its new entry")
+    removing_kernel :: fat.remove(volume, &kernel.kernel)
+    testing.expect_ok(t, removing_kernel, "a file is removed")
+    removing_empty :: fat.remove(volume, &kernel.boot)
+    testing.expect_ok(t, removing_empty, "a directory emptied is removed")
+    gone :: fat.lookup(volume, root, "boot")
+    testing.expect(t, gone is_error, "a directory removed is gone")
+    return .Ok
+}
+
+a_file_renamed_over_another_replaces_it_and_frees_its_cluster #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := formatted(t)?
+    defer free_formatted(&made)
+    volume :: &made.volume
+    root :: fat.root_of(volume)
+    making_old :: fat.create(volume, root, "old.txt", false)
+    old_file := testing.require_ok(t, making_old, "a file is made")?
+    making_new :: fat.create(volume, root, "new.txt", false)
+    new_file := testing.require_ok(t, making_new, "a second file is made")?
+    testing.require(t, written(volume, &old_file, 0, "the old one"), "a file is written")?
+    testing.require(t, written(volume, &new_file, 0, "the new one"), "a second file is written")?
+    counting :: fat.free_clusters(volume)
+    free_before_replacing :: testing.require_ok(t, counting, "free clusters are counted")?
+    renaming :: fat.rename(volume, &new_file, root, "old.txt")
+    replacing := testing.require_ok(t, renaming, "a file is renamed over another")?
+    gone :: fat.lookup(volume, root, "new.txt")
+    testing.expect(t, gone is_error, "a file renamed over another isn't under its old name")
+    testing.expect_eq(t, read_back(volume, &replacing), "the new one", "the entry a rename gives reads as the file renamed")
+    looking :: fat.lookup(volume, root, "old.txt")
+    replaced := testing.require_ok(t, looking, "the name renamed over is found")?
+    testing.expect_eq(t, read_back(volume, &replaced), "the new one", "a name renamed over names the file renamed")
+    testing.expect_eq(t, fat.free_clusters(volume) or_else 0, free_before_replacing + 1, "the file replaced has its cluster freed")
+    return .Ok
+}
+
+a_rename_changing_only_case_is_allowed #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := formatted(t)?
+    defer free_formatted(&made)
+    volume :: &made.volume
+    root :: fat.root_of(volume)
+    making :: fat.create(volume, root, "old.txt", false)
+    file := testing.require_ok(t, making, "a file is made")?
+    testing.require(t, written(volume, &file, 0, "the new one"), "a file is written")?
+    renaming :: fat.rename(volume, &file, root, "OLD.txt")
+    recased := testing.require_ok(t, renaming, "a file renamed to its own name in another case is renamed, not refused")?
+    looking :: fat.lookup(volume, root, "old.txt")
+    looked := testing.require_ok(t, looking, "a file renamed in case is still found in any case")?
+    testing.expect_eq(t, fat.name_of(&recased), "OLD.txt", "the entry a rename gives has the new case")
+    testing.expect_eq(t, fat.name_of(&looked), "OLD.txt", "a file renamed in case keeps the new case")
+    testing.expect_eq(t, read_back(volume, &looked), "the new one", "a file renamed in case reads as it did")
+    return .Ok
+}
+
+a_write_past_the_end_reads_zeros_in_the_gap #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := formatted(t)?
+    defer free_formatted(&made)
+    volume :: &made.volume
+    root :: fat.root_of(volume)
+    making :: fat.create(volume, root, "old.txt", false)
+    file := testing.require_ok(t, making, "a file is made")?
+    testing.require(t, written(volume, &file, 0, "the new one"), "a file is written")?
+    // Cut short, its cluster keeps the old bytes past the cut; a write past the end reads zeros there all the same
+    cutting :: fat.set_size(volume, &file, 3)
+    require_done(t, cutting, "a file is cut")?
+    testing.require(t, written(volume, &file, 20, "x"), "a file is written past its end")?
+    gapped : u8[21]
+    testing.expect_eq(t, fat.read(volume, &file, 0, gapped) or_else 0, 21, "a file written past its end grows to the write's end")
+    testing.expect_eq(t, gapped[0], cast[u8]('t'), "what the cut kept is as it was")
+    testing.expect_eq(t, gapped[20], cast[u8]('x'), "what was written past the end is there")
+    for i in cast[usize](3)..<20 {
+        testing.expect_eq(t, gapped[i], 0, "the gap a write past the end leaves reads as zeros, not the bytes cut")
+    }
+    removing :: fat.remove(volume, &file)
+    testing.expect_ok(t, removing, "a file with a gap is removed")
+    return .Ok
+}
+
+everything_is_as_it_was_mounted_again_with_fsinfos_count #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := formatted(t)?
+    defer free_formatted(&made)
+    volume :: &made.volume
+    root :: fat.root_of(volume)
+    creating :: fat.create(volume, root, "readme.txt", false)
+    readme := testing.require_ok(t, creating, "a file is made")?
+    testing.require(t, written(volume, &readme, 0, "hello, FAT"), "a file is written")?
+    made_kernel(t, volume)?
+    counting :: fat.free_clusters(volume)
+    free_before :: testing.require_ok(t, counting, "free clusters are counted")?
+    testing.require_none(t, fat.write_info(volume), "FSInfo is written")?
+    mounting :: fat.mount(made.device)
+    remounted := testing.require_ok(t, mounting, "a volume mounts again")?
+    looking :: fat.lookup(&remounted, fat.root_of(&remounted), "readme.txt")
+    still := testing.require_ok(t, looking, "a file is there mounted again")?
+    testing.expect_eq(t, read_back(&remounted, &still), "hello, FAT", "a file reads as written mounted again")
+    testing.expect_eq(t, still.written, volume.stamp, "a file's stamp is kept mounted again")
+    testing.expect_eq(t, remounted.free_count, free_before, "FSInfo's free count, once written, is what was counted")
+    // Counted through the FAT, the same
+    remounted.free_count = fat.UNKNOWN_FREE
+    testing.expect_eq(t, fat.free_clusters(&remounted) or_else 0, free_before, "the FAT, counted, agrees with FSInfo")
+    return .Ok
+}
+
+a_failed_write_fails_the_volume_and_refuses_what_it_was_to_change #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := formatted(t)?
+    defer free_formatted(&made)
+    image :: made.image
+    mounting :: fat.mount(made.device)
+    volume := testing.require_ok(t, mounting, "a formatted volume mounts")?
     root :: fat.root_of(&volume)
-    kept := fat.create(&volume, root, "kept.txt", false) or_return 61
-    lost := fat.create(&volume, root, "lost.txt", false) or_return 61
-    if !written(&volume, &kept, 0, "kept") || !written(&volume, &lost, 0, "before") || volume.failed {
-        return 62
-    }
+    making_kept :: fat.create(&volume, root, "kept.txt", false)
+    kept := testing.require_ok(t, making_kept, "a file is made")?
+    making_lost :: fat.create(&volume, root, "lost.txt", false)
+    lost := testing.require_ok(t, making_lost, "a second file is made")?
+    testing.require(t, written(&volume, &kept, 0, "kept"), "a file is written")?
+    testing.require(t, written(&volume, &lost, 0, "before"), "a second file is written")?
+    testing.require(t, !volume.failed, "a volume whose writes all worked isn't failed")?
     image.failing = true
-    if written(&volume, &lost, 0, "after!") || !volume.failed {
-        image.failing = false
-        return 63
-    }
+    refused :: written(&volume, &lost, 0, "after!")
     image.failing = false
+    testing.expect(t, !refused, "a write the disk fails is refused")
+    testing.expect(t, volume.failed, "a write the disk fails fails the volume")
     // Neither the old bytes nor the new: refused
     buffer : u8[16]
-    if fat.read(&volume, &lost, 0, buffer) is_ok {
-        return 64
-    }
-    if read_back(&volume, &kept) != "kept" {
-        return 65
-    }
-    // Part of it can't be written, which would need what's there; written whole again, it reads, and the volume stays
-    // failed, so every Sync after the failure fails
-    if written(&volume, &lost, 0, "again!") {
-        return 66
-    }
+    reading :: fat.read(&volume, &lost, 0, buffer)
+    testing.expect(t, reading is_error, "what a failed write was to change is refused to reads, being neither old nor new")
+    testing.expect_eq(t, read_back(&volume, &kept), "kept", "a file the failed write wasn't for still reads")
+    // Part of it can't be written, which would need what's there; written whole again, it reads, and the volume stays failed
+    testing.expect(t, !written(&volume, &lost, 0, "again!"), "part of a refused sector can't be written, as the rest of it isn't known")
     whole : u8[512]
     for i in 0..<whole.count {
         whole[i] = cast[u8]('w')
     }
-    if (fat.write(&volume, &lost, 0, whole) or_else 0) != 512 || !(read_back(&volume, &lost) == "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww") || !volume.failed {
-        return 69
-    }
-    remounted := fat.mount(device) or_return 67
-    if remounted.failed {
-        return 68
-    }
-    return 0
-}
-
-/**
- * Tell whether an operation succeeded.
- *
- * @param result What a fat operation with no value gave back, such as set_size's or remove's; its error, if any, is
- *     dropped, not reported.
- * @return True if it's Ok.
- */
-done :: fn(result: Result[void, fat.FatError]) -> bool {
-    match result {
-        case Ok => return true
-        case Error(failure) => return false
-    }
+    testing.expect_eq(t, fat.write(&volume, &lost, 0, whole) or_else 0, 512, "a refused sector written whole is written")
+    testing.expect_eq(t, read_back(&volume, &lost), "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+        "a refused sector written whole reads again")
+    testing.expect(t, volume.failed, "a volume stays failed, so every Sync after the failure fails")
+    mounting_again :: fat.mount(made.device)
+    remounted :: testing.require_ok(t, mounting_again, "the volume mounts afresh")?
+    testing.expect(t, !remounted.failed, "a volume mounted afresh starts whole")
+    return .Ok
 }
 
 /**
@@ -436,10 +596,19 @@ write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool
 }
 
 /**
- * Run the checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness).
+ * Run the tests, reporting to standard output.
  *
- * @return 0 if every check passed, or the number of the first that failed.
+ * @return How many failed: 0 when every one passed.
+ */
+run_tests :: fn() -> int {
+    return cast[int](testing.run(#insert testing.tests_of(compiler.load_package(".")), testing.STANDARD_OUTPUT))
+}
+
+/**
+ * Run the tests, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness).
+ *
+ * @return How many tests failed: 0 when every one passed.
  */
 main :: fn() -> int {
-    return hosted_faults.run(checks)
+    return hosted_faults.run(run_tests)
 }

@@ -2,6 +2,7 @@ package slopfs_test
 
 import runtime from "base"
 import crypto from "std"
+import testing from "std"
 import slopfs from ".."
 
 /*
@@ -10,11 +11,11 @@ import slopfs from ".."
  * writes, at random subsets of the writes between two flushes (which a disk may make durable in any order), and with
  * each write torn halfway. Every one must mount, check out whole, take another commit, and hold the state after the
  * last acknowledged commit, or the one being made: a prefix of what was acknowledged (decisions/0085). A snapshot is
- * taken partway and deleted later, so its record and the dead list are in the commits checked too. Checks from 500.
+ * taken partway and deleted later, so its record and the dead list are in the commits checked too.
  *
  * Failed writes beside torn ones (decisions/0096's R4, 0112): a write the disk refuses is refused, the chunk it was for
  * refused to reads rather than given as it was, while other files read; every commit after it fails, not only the
- * first; and the disk, mounted again, holds the last acknowledged commit. Checks from 560.
+ * first; and the disk, mounted again, holds the last acknowledged commit.
  */
 
 /** The size of the crash tests' disk, in blocks: 4 MiB. */
@@ -32,62 +33,68 @@ Acknowledged :: struct {
     log_end : usize,
 }
 
+a_crash_leaves_the_last_acknowledged_commit_or_the_one_being_made #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    return check_crashes(t, false)
+}
+
+a_crash_leaves_an_encrypted_volume_at_the_last_acknowledged_commit_or_the_one_being_made #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    return check_crashes(t, true)
+}
+
+a_failed_write_is_refused_and_leaves_the_last_acknowledged_commit #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    return check_failed_writes(t, false)
+}
+
+a_failed_write_to_an_encrypted_volume_is_refused_and_leaves_the_last_acknowledged_commit #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    return check_failed_writes(t, true)
+}
+
 /**
  * Check crashes: a workload of commits run on a disk that records every write and flush, with a snapshot taken
  * partway and deleted later, then every image a crash could leave replayed (replay).
  *
+ * @param t The test's state, which a failure is recorded in.
  * @param sealed Whether the volume is encrypted.
- * @return 0 if every check passed, or the number of the first that failed: 500 to 514 here (511 to 514 a workload
- *     step's), or replay's.
+ * @return Ok once every image is checked, whatever was found; Error(Failed), the failure recorded, if the workload
+ *     couldn't be run.
  */
-check_crashes :: fn(sealed: bool) -> int {
-    device :: new_device_of(CRASH_BLOCKS) or_return 500
+check_crashes :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome {
+    device :: formatted(t, CRASH_BLOCKS, 0xc0)?
     defer free_device(device)
     disk :: cast[ptr[mut Disk]](device.context)
-    id : u8[16]
-    for i in 0..<id.count {
-        id[i] = cast[u8](0xc0 + i)
-    }
-    slopfs.format(device, id) or_return 501
-    container := slopfs.mount(device) or_return 502
-    volume := create_test_volume(container, "crash", sealed) or_return 503
-    if commit_failed(container) {
-        return 504
-    }
+    mounting :: slopfs.mount(device)
+    container :: testing.require_ok(t, mounting, "a formatted disk mounts")?
+    creating :: create_test_volume(container, "crash", sealed)
+    volume :: testing.require_ok(t, creating, "a new container has room for a volume")?
+    require_commit(t, container, "a new volume commits")?
     base, error :: runtime.new_array(u8, disk.bytes.count)
-    if error != null {
-        return 505
-    }
+    testing.require(t, error == null, "a copy of the disk before the log is allocated")?
     defer runtime.free_array(base)
     copy_into(base, disk.bytes)
     acknowledged : Acknowledged[..]
     defer runtime.array_free(&acknowledged)
-    runtime.array_add(&acknowledged, Acknowledged.{digest = state_digest(volume) or_return 506, log_end = 0})
+    before :: testing.require_some(t, state_digest(volume), "a new volume's state is hashed")?
+    runtime.array_add(&acknowledged, Acknowledged.{digest = before, log_end = 0})
     disk.recording = true
     for step in 0..<STEPS {
         // Taken with the commit that shrinks a file, so what it gives back goes on the dead list; deleted later
         if step == 5 {
-            if slopfs.take_snapshot(container, volume.id, name_bytes("crash"), 1) is_error {
-                return 509
-            }
+            taking :: slopfs.take_snapshot(container, volume.id, name_bytes("crash"), 1)
+            require_done(t, taking, "a volume takes a snapshot")?
         }
         else if step == 10 {
-            if slopfs.delete_snapshot(container, volume.id, name_bytes("crash"), null) is_error {
-                return 509
-            }
+            deleting :: slopfs.delete_snapshot(container, volume.id, name_bytes("crash"), null)
+            require_done(t, deleting, "a snapshot without clones is deleted")?
         }
-        failed :: workload(volume, step)
-        if failed != 0 {
-            return 510 + failed
-        }
-        if slopfs.commit(container) is_error {
-            return 507
-        }
-        runtime.array_add(&acknowledged, Acknowledged.{digest = state_digest(volume) or_return 508, log_end = disk.log.count})
+        workload(t, volume, step)?
+        committing :: slopfs.commit(container)
+        require_done(t, committing, "each step of the workload commits")?
+        after :: testing.require_some(t, state_digest(volume), "the volume's state is hashed after each commit")?
+        runtime.array_add(&acknowledged, Acknowledged.{digest = after, log_end = disk.log.count})
     }
     disk.recording = false
     slopfs.unmount(container)
-    return replay(base, disk, acknowledged, sealed)
+    return replay(t, base, disk, acknowledged, sealed)
 }
 
 /**
@@ -107,90 +114,113 @@ copy_into :: fn(into: mut u8[], from: u8[]) {
 /**
  * Run one step of the workload: files made, written, overwritten, renamed, cut and removed, without committing.
  *
- * @param volume The volume under test, open.
+ * @param t The test's state, which a failure is recorded in.
+ * @param volume The volume under test, open, with what the steps before this one did in it.
  * @param step The step, 0 to STEPS - 1, each doing its own part.
- * @return 0 if it ran, or the number of what failed in it, 1 to 4.
+ * @return Ok if it ran; Error(Failed), the failure recorded, if any of it failed.
  */
-workload :: fn(volume: ptr[mut slopfs.Volume], step: int) -> int {
+workload :: fn(t: ptr[mut testing.T], volume: ptr[mut slopfs.Volume], step: int) -> testing.Outcome {
     data := runtime.new(Data)
     defer runtime.free(data)
     pattern(data.bytes, cast[u64](step) + 100)
     root :: slopfs.ROOT_OBJECT
     text : u8[16]
     if step == 0 {
-        file :: slopfs.create(volume, root, "a.txt", .File) or_return 1
-        slopfs.write(volume, file, 0, data.bytes[0..<100]) or_return 2
+        creating :: slopfs.create(volume, root, "a.txt", .File)
+        file :: testing.require_ok(t, creating, "a file is made in the root")?
+        writing :: slopfs.write(volume, file, 0, data.bytes[0..<100])
+        require_done(t, writing, "100 bytes are written inline")?
     }
     else if step == 1 {
-        file :: slopfs.create(volume, root, "big.bin", .File) or_return 1
-        slopfs.write(volume, file, 0, data.bytes[0..<150000]) or_return 2
+        creating :: slopfs.create(volume, root, "big.bin", .File)
+        file :: testing.require_ok(t, creating, "a second file is made in the root")?
+        writing :: slopfs.write(volume, file, 0, data.bytes[0..<150000])
+        require_done(t, writing, "150000 bytes are written across chunks")?
     }
     else if step == 2 {
-        file :: found(volume, root, "big.bin") or_return 1
-        slopfs.write(volume, file, 70000, data.bytes[0..<5000]) or_return 2
+        file :: testing.require_some(t, found(volume, root, "big.bin"), "big.bin was made")?
+        writing :: slopfs.write(volume, file, 70000, data.bytes[0..<5000])
+        require_done(t, writing, "a file is overwritten in its middle")?
     }
     else if step == 3 {
-        directory :: slopfs.create(volume, root, "dir", .Directory) or_return 1
+        creating :: slopfs.create(volume, root, "dir", .Directory)
+        directory :: testing.require_ok(t, creating, "a directory is made in the root")?
         for i in 0..<40 {
             length :: name_of_number(text, i)
-            file :: slopfs.create(volume, directory, string_of(&text[0], length), .File) or_return 2
-            slopfs.write(volume, file, 0, data.bytes[0..<200]) or_return 3
+            making :: slopfs.create(volume, directory, string_of(&text[0], length), .File)
+            file :: testing.require_ok(t, making, "40 files are made in a directory")?
+            writing :: slopfs.write(volume, file, 0, data.bytes[0..<200])
+            require_done(t, writing, "each of the 40 files is written")?
         }
     }
     else if step == 4 {
-        directory :: found(volume, root, "dir") or_return 1
-        slopfs.rename(volume, root, "a.txt", directory, "a.txt") or_return 2
+        directory :: testing.require_some(t, found(volume, root, "dir"), "dir was made")?
+        renaming :: slopfs.rename(volume, root, "a.txt", directory, "a.txt")
+        require_done(t, renaming, "a file is moved into a directory")?
     }
     else if step == 5 {
-        file :: found(volume, root, "big.bin") or_return 1
-        slopfs.set_size(volume, file, 30000) or_return 2
+        file :: testing.require_some(t, found(volume, root, "big.bin"), "big.bin was made")?
+        cutting :: slopfs.set_size(volume, file, 30000)
+        require_done(t, cutting, "a file is cut")?
     }
     else if step == 6 {
-        directory :: found(volume, root, "dir") or_return 1
+        directory :: testing.require_some(t, found(volume, root, "dir"), "dir was made")?
         for i in 0..<20 {
             length :: name_of_number(text, i * 2)
-            slopfs.remove(volume, directory, string_of(&text[0], length)) or_return 2
+            removing :: slopfs.remove(volume, directory, string_of(&text[0], length))
+            require_done(t, removing, "every other file in the directory is removed")?
         }
     }
     else if step == 7 {
-        directory :: found(volume, root, "dir") or_return 1
-        file :: found(volume, directory, "a.txt") or_return 2
-        slopfs.write(volume, file, 0, data.bytes[0..<5000]) or_return 3
+        directory :: testing.require_some(t, found(volume, root, "dir"), "dir was made")?
+        file :: testing.require_some(t, found(volume, directory, "a.txt"), "a.txt was moved into dir")?
+        writing :: slopfs.write(volume, file, 0, data.bytes[0..<5000])
+        require_done(t, writing, "an inline file is grown past inline")?
     }
     else if step == 8 {
-        directory :: found(volume, root, "dir") or_return 1
-        slopfs.rename(volume, root, "big.bin", directory, "file-25") or_return 2
+        directory :: testing.require_some(t, found(volume, root, "dir"), "dir was made")?
+        renaming :: slopfs.rename(volume, root, "big.bin", directory, "file-25")
+        require_done(t, renaming, "a file is moved into a directory under a name its removal freed")?
     }
     else if step == 9 {
-        file :: slopfs.create(volume, root, "b.bin", .File) or_return 1
-        slopfs.write(volume, file, 0, data.bytes[0..<100000]) or_return 2
+        creating :: slopfs.create(volume, root, "b.bin", .File)
+        file :: testing.require_ok(t, creating, "a file is made in the root")?
+        writing :: slopfs.write(volume, file, 0, data.bytes[0..<100000])
+        require_done(t, writing, "100000 bytes are written across chunks")?
     }
     else if step == 10 {
-        slopfs.remove(volume, root, "b.bin") or_return 1
+        removing :: slopfs.remove(volume, root, "b.bin")
+        require_done(t, removing, "a file written in the step before is removed")?
     }
     else if step == 11 {
-        directory :: found(volume, root, "dir") or_return 1
-        file :: found(volume, directory, "a.txt") or_return 2
-        slopfs.set_size(volume, file, 0) or_return 3
+        directory :: testing.require_some(t, found(volume, root, "dir"), "dir was made")?
+        file :: testing.require_some(t, found(volume, directory, "a.txt"), "a.txt was moved into dir")?
+        cutting :: slopfs.set_size(volume, file, 0)
+        require_done(t, cutting, "a file is cut to nothing")?
     }
     else if step == 12 {
         for i in 0..<30 {
             length :: name_of_number(text, i + 100)
-            file :: slopfs.create(volume, root, string_of(&text[0], length), .File) or_return 1
-            slopfs.write(volume, file, 0, data.bytes[0..<3000]) or_return 2
+            creating :: slopfs.create(volume, root, string_of(&text[0], length), .File)
+            file :: testing.require_ok(t, creating, "30 files are made in the root")?
+            writing :: slopfs.write(volume, file, 0, data.bytes[0..<3000])
+            require_done(t, writing, "each of the 30 files is written")?
         }
     }
     else {
-        directory :: found(volume, root, "dir") or_return 1
+        directory :: testing.require_some(t, found(volume, root, "dir"), "dir was made")?
         name : u8[255]
         loop {
-            listed :: slopfs.list(volume, directory, 0, name) or_return 2
+            listing :: slopfs.list(volume, directory, 0, name)
+            listed :: testing.require_ok(t, listing, "a directory being emptied lists")?
             entry :: listed or_break
-            slopfs.remove(volume, directory, string_of(&name[0], entry.name_bytes)) or_return 3
+            removing :: slopfs.remove(volume, directory, string_of(&name[0], entry.name_bytes))
+            require_done(t, removing, "each name listed is removed")?
         }
-        slopfs.remove(volume, root, "dir") or_return 4
+        removing :: slopfs.remove(volume, root, "dir")
+        require_done(t, removing, "a directory emptied is removed")?
     }
-    return 0
+    return .Ok
 }
 
 /**
@@ -291,41 +321,86 @@ Replayed :: struct {
     newer : u64,
 }
 
+/** How an image a crash could leave was made from the log. */
+Way :: enum {
+    /** The log's first entries applied, all of them: `at` is how many. */
+    Prefix,
+    /** A random subset of the writes between two flushes applied: `at` is the flush's entry, `subset` which subset. */
+    Subset,
+    /** The writes between two flushes applied up to one, torn halfway: `at` is the torn write's entry. */
+    Torn,
+}
+
+/** What checking an image a crash could leave found: Held if it's all as it should be, or the first thing that wasn't. */
+Found :: enum {
+    /** It mounted, checked out whole, held an acknowledged state, and took another commit if asked to. */
+    Held,
+    /** It didn't mount. */
+    NotMounted,
+    /** It mounted, but verify found a problem. */
+    NotWhole,
+    /** Its volume didn't open. */
+    NotOpened,
+    /** Its volume's state couldn't be listed or read whole. */
+    NotRead,
+    /** No acknowledged state goes with how much of the log it has, which only a broken log would make. */
+    Unacknowledged,
+    /** Its volume held neither the last acknowledged commit nor the one being made. */
+    NeitherState,
+    /** A file couldn't be made in it after the crash. */
+    NotMade,
+    /** A file made after the crash couldn't be written. */
+    NotWritten,
+    /** A commit after the crash failed, or didn't check out whole. */
+    NotCommitted,
+}
+
+/** An image a crash could leave, and what checking it found, as a failure reports it. */
+Crash :: struct {
+    /** How it was made. */
+    way : Way,
+    /** Which entry of the log it was made at, as way says. */
+    at : usize,
+    /** Which random subset it is, 0 to SUBSETS - 1, for a Subset; 0 otherwise. */
+    subset : int,
+    /** What checking it found. */
+    found : Found,
+}
+
 /**
  * Check every image a crash could leave, from the disk before the log and the log: prefixes as the log goes, and at
- * each flush, the interval before it in random subsets and with each write torn.
+ * each flush, the interval before it in random subsets and with each write torn. An image that isn't as it should be
+ * is recorded as a failure saying which it was, and the rest are still checked.
  *
+ * @param t The test's state, which a failure is recorded in.
  * @param base The disk's bytes before the log.
  * @param recorded The disk that recorded the log.
  * @param acknowledged The states after each acknowledged commit, the first the one before the log.
  * @param sealed Whether the volume is encrypted.
- * @return 0 if every image checked out, or the number of the first check that failed: 520 or 521 here, or
- *     check_image's.
+ * @return Ok once every image is checked, whatever was found; Error(Failed), the failure recorded, if the memory to
+ *     check them couldn't be had.
  */
-replay :: fn(base: u8[], recorded: ptr[mut Disk], acknowledged: Acknowledged[], sealed: bool) -> int {
-    image :: new_device_of(CRASH_BLOCKS) or_return 520
+replay :: fn(t: ptr[mut testing.T], base: u8[], recorded: ptr[mut Disk], acknowledged: Acknowledged[], sealed: bool) -> testing.Outcome {
+    image :: testing.require_some(t, new_device_of(CRASH_BLOCKS), "the disk the images are made on is allocated")?
     defer free_device(image)
     scratch :: cast[ptr[mut Disk]](image.context)
     running, running_error :: runtime.new_array(u8, base.count)
-    snapshot, snapshot_error :: runtime.new_array(u8, base.count)
-    if running_error != null || snapshot_error != null {
-        return 521
-    }
+    testing.require(t, running_error == null, "the disk as the log goes is allocated")?
     defer runtime.free_array(running)
+    snapshot, snapshot_error :: runtime.new_array(u8, base.count)
+    testing.require(t, snapshot_error == null, "the disk at the last flush is allocated")?
     defer runtime.free_array(snapshot)
     copy_into(running, base)
     copy_into(snapshot, base)
     random := Random.{state = 0x5eed5eed5eed5eed}
     replayed := Replayed.{}
     interval_start : usize = 0
+    WHOLE :: "an image a crash could leave mounts, checks out whole, holds the last acknowledged commit or the one being made, and takes another commit"
     for at in 0..<recorded.log.count + 1 {
         // The log up to here, applied
         copy_into(scratch.bytes, running)
-        failed := check_image(&image, acknowledged, at, at % 8 == 0, &replayed, sealed)
-        if failed != 0 {
-            runtime.log_error("crash: prefix of % entries: check %", at, failed)
-            return failed
-        }
+        prefix :: check_image(&image, acknowledged, at, at % 8 == 0, &replayed, sealed)
+        testing.expect_eq(t, Crash.{way = .Prefix, at = at, found = prefix}, Crash.{way = .Prefix, at = at, found = .Held}, WHOLE)
         if at >= recorded.log.count {
             break
         }
@@ -343,11 +418,9 @@ replay :: fn(base: u8[], recorded: ptr[mut Disk], acknowledged: Acknowledged[], 
                     apply(scratch.bytes, recorded, recorded.log[i], false)
                 }
             }
-            failed = check_image(&image, acknowledged, interval_start, true, &replayed, sealed)
-            if failed != 0 {
-                runtime.log_error("crash: subset % of the writes from % to %: check %", subset, interval_start, at, failed)
-                return failed
-            }
+            found_in_subset :: check_image(&image, acknowledged, interval_start, true, &replayed, sealed)
+            testing.expect_eq(t, Crash.{way = .Subset, at = at, subset = subset, found = found_in_subset},
+                Crash.{way = .Subset, at = at, subset = subset, found = .Held}, WHOLE)
         }
         for torn in interval_start..<at {
             copy_into(scratch.bytes, snapshot)
@@ -356,17 +429,14 @@ replay :: fn(base: u8[], recorded: ptr[mut Disk], acknowledged: Acknowledged[], 
                     apply(scratch.bytes, recorded, recorded.log[i], i == torn)
                 }
             }
-            failed = check_image(&image, acknowledged, interval_start, false, &replayed, sealed)
-            if failed != 0 {
-                runtime.log_error("crash: the write at % torn: check %", torn, failed)
-                return failed
-            }
+            found_torn :: check_image(&image, acknowledged, interval_start, false, &replayed, sealed)
+            testing.expect_eq(t, Crash.{way = .Torn, at = torn, found = found_torn}, Crash.{way = .Torn, at = torn, found = .Held}, WHOLE)
         }
         copy_into(snapshot, running)
         interval_start = at + 1
     }
     runtime.log_info("crash%: % images checked, % of them holding the commit being made", if sealed { " (sealed)" } else { "" }, replayed.images, replayed.newer)
-    return 0
+    return .Ok
 }
 
 /**
@@ -404,10 +474,10 @@ apply :: fn(image: mut u8[], recorded: ptr[mut Disk], entry: Recorded, torn: boo
  * @param usable Whether to make a file and commit after the crash too.
  * @param replayed The counts, updated.
  * @param sealed Whether the volume is encrypted.
- * @return 0 if it checked out, or the number of the first check that failed, 530 to 538.
+ * @return Held if it checked out; otherwise the first thing that didn't.
  */
 check_image :: fn(device: ptr[slopfs.Device], acknowledged: Acknowledged[], durable: usize, usable: bool, replayed: ptr[mut Replayed],
-    sealed: bool) -> int {
+    sealed: bool) -> Found {
 
     replayed.images += 1
     last : usize = 0
@@ -416,32 +486,32 @@ check_image :: fn(device: ptr[slopfs.Device], acknowledged: Acknowledged[], dura
             last = i
         }
     }
-    container :: slopfs.mount(device^) or_return 530
+    container :: slopfs.mount(device^) or_return .NotMounted
     defer slopfs.unmount(container)
-    if !verified(container) {
-        return 531
+    if slopfs.verify(container) is_error {
+        return .NotWhole
     }
-    volume :: open_test_volume(container, sealed) or_return 532
-    digest :: state_digest(volume) or_return 533
+    volume :: open_test_volume(container, sealed) or_return .NotOpened
+    digest :: state_digest(volume) or_return .NotRead
     if last >= acknowledged.count {
-        return 534
+        return .Unacknowledged
     }
     if digest != acknowledged[last].digest {
         next :: last + 1
         if next >= acknowledged.count || digest != acknowledged[next].digest {
-            return 535
+            return .NeitherState
         }
         replayed.newer += 1
     }
     if usable {
-        file :: slopfs.create(volume, slopfs.ROOT_OBJECT, "after the crash", .File) or_return 536
+        file :: slopfs.create(volume, slopfs.ROOT_OBJECT, "after the crash", .File) or_return .NotMade
         bytes : u8[3000]
-        slopfs.write(volume, file, 0, bytes) or_return 537
+        slopfs.write(volume, file, 0, bytes) or_return .NotWritten
         if commit_failed(container) {
-            return 538
+            return .NotCommitted
         }
     }
-    return 0
+    return .Held
 }
 
 /** The bytes a failed write is tried with: big enough to be written as blocks, not inline in its record. */
@@ -452,56 +522,55 @@ FAILED_BYTES :: 8192
  * was for refused to reads rather than given as it was, while other files read; every commit after it fails, not only
  * the first; and the disk, mounted again, holds the last acknowledged commit.
  *
+ * @param t The test's state, which a failure is recorded in.
  * @param sealed Whether the volume is encrypted.
- * @return 0 if every check passed, or the number of the first that failed, 560 to 574.
+ * @return Ok once it's all checked, whatever was found; Error(Failed), the failure recorded, if what's checked couldn't
+ *     be set up.
  */
-check_failed_writes :: fn(sealed: bool) -> int {
-    device :: new_device_of(CRASH_BLOCKS) or_return 560
+check_failed_writes :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome {
+    device :: formatted(t, CRASH_BLOCKS, 0xd0)?
     defer free_device(device)
     disk :: cast[ptr[mut Disk]](device.context)
-    id : u8[16]
-    for i in 0..<id.count {
-        id[i] = cast[u8](0xd0 + i)
-    }
-    slopfs.format(device, id) or_return 561
-    container :: slopfs.mount(device) or_return 562
+    mounting :: slopfs.mount(device)
+    container :: testing.require_ok(t, mounting, "a formatted disk mounts")?
     defer slopfs.unmount(container)
-    volume := create_test_volume(container, "failing", sealed) or_return 563
+    creating :: create_test_volume(container, "failing", sealed)
+    volume :: testing.require_ok(t, creating, "a new container has room for a volume")?
     data := runtime.new(Data)
     defer runtime.free(data)
     fill(data.bytes, 1, FAILED_BYTES)
-    kept :: slopfs.create(volume, slopfs.ROOT_OBJECT, "kept", .File) or_return 564
-    lost :: slopfs.create(volume, slopfs.ROOT_OBJECT, "lost", .File) or_return 564
-    if (slopfs.write(volume, kept, 0, data.bytes[0..<FAILED_BYTES]) is_error) || (slopfs.write(volume, lost, 0, data.bytes[0..<FAILED_BYTES]) is_error)
-        || commit_failed(container) {
-        return 565
-    }
-    acknowledged :: state_digest(volume) or_return 566
+    making_kept :: slopfs.create(volume, slopfs.ROOT_OBJECT, "kept", .File)
+    kept :: testing.require_ok(t, making_kept, "a file is made in the root")?
+    making_lost :: slopfs.create(volume, slopfs.ROOT_OBJECT, "lost", .File)
+    lost :: testing.require_ok(t, making_lost, "a second file is made in the root")?
+    writing_kept :: slopfs.write(volume, kept, 0, data.bytes[0..<FAILED_BYTES])
+    require_done(t, writing_kept, "a file is written as blocks")?
+    writing_lost :: slopfs.write(volume, lost, 0, data.bytes[0..<FAILED_BYTES])
+    require_done(t, writing_lost, "a second file is written as blocks")?
+    require_commit(t, container, "the files commit")?
+    acknowledged :: testing.require_some(t, state_digest(volume), "the committed state is hashed")?
     // The disk refuses the next write: refused, and the chunk it was for refused to reads, the other file's read
     fill(data.bytes, 2, FAILED_BYTES)
     disk.read_only = true
-    refused :: slopfs.write(volume, lost, 0, data.bytes[0..<FAILED_BYTES]) is_error
+    refused :: slopfs.write(volume, lost, 0, data.bytes[0..<FAILED_BYTES])
     disk.read_only = false
-    if !refused {
-        return 567
-    }
-    if slopfs.read(volume, lost, 0, data.bytes[0..<FAILED_BYTES]) is_ok {
-        return 568
-    }
-    if slopfs.read(volume, kept, 0, data.bytes[0..<FAILED_BYTES]) is_error {
-        return 569
-    }
+    testing.expect(t, refused is_error, "a write the disk refuses is refused")
+    reading_lost :: slopfs.read(volume, lost, 0, data.bytes[0..<FAILED_BYTES])
+    testing.expect(t, reading_lost is_error, "a chunk whose write failed is refused to reads, being neither what it was nor what was written")
+    reading_kept :: slopfs.read(volume, kept, 0, data.bytes[0..<FAILED_BYTES])
+    testing.expect_ok(t, reading_kept, "a file the failed write wasn't for still reads")
     // Every commit after it fails, the second as the first
-    if (slopfs.commit(container) is_ok) || (slopfs.commit(container) is_ok) {
-        return 570
-    }
+    first :: slopfs.commit(container)
+    testing.expect(t, first is_error, "a commit after a failed write fails, as what it would commit isn't on the disk")
+    second :: slopfs.commit(container)
+    testing.expect(t, second is_error, "a second commit after a failed write fails as the first did")
     // Mounted again, the disk holds the last acknowledged commit
-    again :: slopfs.mount(device) or_return 571
+    mounting_again :: slopfs.mount(device)
+    again :: testing.require_ok(t, mounting_again, "the disk mounts again after the failed write")?
     defer slopfs.unmount(again)
-    reopened :: open_test_volume(again, sealed) or_return 572
-    if (state_digest(reopened) or_return 573) != acknowledged {
-        return 574
-    }
-    return 0
+    reopening :: open_test_volume(again, sealed)
+    reopened :: testing.require_ok(t, reopening, "the volume opens again after the failed write")?
+    now :: testing.require_some(t, state_digest(reopened), "the volume's state is hashed after the failed write")?
+    testing.expect_eq(t, now, acknowledged, "the disk holds the last acknowledged commit, nothing of the failed write")
+    return .Ok
 }
-

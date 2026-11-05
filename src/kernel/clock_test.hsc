@@ -1,6 +1,6 @@
 package kernel
 
-import runtime from "base"
+import testing from "std"
 import time from "std"
 
 #if TARGET_ARCH == .x86_64 {
@@ -23,13 +23,23 @@ CLOCK_TEST_NANOSECONDS : i64 : 10_000_000
 CLOCK_TEST_SLACK : i64 : 1_000_000
 
 /**
- * Check that 10 ms by the counter is 10 ms by the kernel's monotonic clock, spinning on this CPU for those 10 ms.
+ * Run test_clock on the calling CPU, reporting it to the kernel's log; never stops the kernel.
  *
- * Logs whether it was, with the time the clock measured when it wasn't; never stops the kernel.
- *
- * @param kernel The kernel, whose counter_frequency must be set (the timer started).
+ * @param kernel Not used: the test finds the kernel through per_cpu, whose counter_frequency has to be set (the timer
+ *     started).
  */
 test_clock :: fn(kernel: ptr[Kernel]) {
+    _ = run_tests("test_clock", testing.Test.[.{name = "ten_ms_by_the_counter_is_ten_ms_by_the_clock", run = ten_ms_by_the_counter_is_ten_ms_by_the_clock}])
+}
+
+/**
+ * Check that 10 ms by the counter is 10 ms by the kernel's monotonic clock, spinning on this CPU for those 10 ms.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run.
+ */
+ten_ms_by_the_counter_is_ten_ms_by_the_clock #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    kernel :: per_cpu().kernel
     start :: time.monotonic()
     counter_start :: arch.counter()
     loop {
@@ -37,9 +47,7 @@ test_clock :: fn(kernel: ptr[Kernel]) {
     }
     while arch.counter() - counter_start < kernel.counter_frequency / 100
     elapsed :: cast[i64](time.monotonic()) - cast[i64](start)
-    if elapsed < CLOCK_TEST_NANOSECONDS || elapsed > CLOCK_TEST_NANOSECONDS + CLOCK_TEST_SLACK {
-        runtime.log_error("test_clock: 10 ms by the counter was % ns by the clock", elapsed)
-        return void
-    }
-    runtime.log_info("test_clock: 10 ms by the counter is 10 ms by the clock")
+    expect_within(t, elapsed, CLOCK_TEST_NANOSECONDS, CLOCK_TEST_NANOSECONDS + CLOCK_TEST_SLACK,
+        "the clock counts the counter's ticks, so 10 ms by the counter is 10 ms by it, give or take reading the two apart")
+    return .Ok
 }

@@ -1,10 +1,11 @@
 package kernel
 
 import intrinsics from "base"
-import runtime from "base"
 import arch_interface from "../arch_interface"
 import concurrency from "std"
 import frames from "frames"
+import testing from "std"
+import text_buffer from "std"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -42,58 +43,63 @@ ShootdownTest :: struct {
 }
 
 /**
- * Test TLB shootdown: every other CPU reads a page in the kernel window, the page is pointed at another frame with a
- * shootdown, and every CPU then has to read the new frame.
+ * Run test_shootdown on the boot CPU at boot, reporting it to the kernel's log.
  *
- * Runs on the boot CPU at boot, with 2 to SHOOTDOWN_TEST_CPUS CPUs online, and logs whether it passed. Running out of
- * memory for the test stops the kernel. On a failure, what it allocated and mapped is left as it is, and once the page
- * is mapped, kernel.shootdown_test stays set; only a pass gives the frames and mapping back. Its ShootdownTest is
- * never freed.
- *
- * @param kernel The kernel, whose frames, window and page table it uses.
+ * @param kernel Not used: the test finds the kernel through per_cpu.
  */
 test_shootdown :: fn(kernel: ptr[mut Kernel]) {
-    if kernel.online_cpus < 2 || cast[usize](kernel.online_cpus) > SHOOTDOWN_TEST_CPUS {
-        runtime.log_error("test_shootdown: needs 2 to % CPUs online, not %", SHOOTDOWN_TEST_CPUS, kernel.online_cpus)
-        return void
-    }
-    test :: allocate_object[ShootdownTest](&kernel.frames) or_else out_of_memory(&kernel.options, "test_shootdown: no memory")
-    old :: frames.allocate(&kernel.frames, 0) or_else out_of_memory(&kernel.options, "test_shootdown: no memory")
-    new :: frames.allocate(&kernel.frames, 0) or_else out_of_memory(&kernel.options, "test_shootdown: no memory")
+    _ = run_tests("test_shootdown", testing.Test.[.{name = "every_cpu_reads_the_new_page_after_a_shootdown",
+        run = every_cpu_reads_the_new_page_after_a_shootdown}])
+}
+
+/**
+ * Check TLB shootdown: every other CPU reads a page in the kernel window, the page is pointed at another frame with a
+ * shootdown, and every CPU then has to read the new frame.
+ *
+ * Runs on the boot CPU, with 2 to SHOOTDOWN_TEST_CPUS CPUs online. On a failure, what it allocated and mapped is left
+ * as it is, and once the page is mapped, kernel.shootdown_test stays set; only a pass gives the frames and mapping
+ * back. Its ShootdownTest is never freed.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the CPUs online are too few or too many, there was no memory or window for the
+ *     page, or a CPU didn't read the old frame before the shootdown.
+ */
+every_cpu_reads_the_new_page_after_a_shootdown #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    kernel :: per_cpu().kernel
+    require_within(t, cast[i64](kernel.online_cpus), 2, SHOOTDOWN_TEST_CPUS,
+        "the test is booted with other CPUs to read the page, and no more than ShootdownTest.seen keeps")?
+    made :: allocate_object[ShootdownTest](&kernel.frames)
+    test :: testing.require_ok(t, made, "a boot's free frames hold the test's state")?
+    old_frame :: frames.allocate(&kernel.frames, 0)
+    old :: testing.require_ok(t, old_frame, "a boot's free frames hold the page's first frame")?
+    new_frame :: frames.allocate(&kernel.frames, 0)
+    new :: testing.require_ok(t, new_frame, "a boot's free frames hold the page's second frame")?
     cast[ptr[mut u64]](frames.virtual_of(&kernel.frames, old))^ = OLD_PAGE_VALUE
     cast[ptr[mut u64]](frames.virtual_of(&kernel.frames, new))^ = NEW_PAGE_VALUE
-    match map_in_window(kernel, cast[u64](old), frames.FRAME_SIZE, TEST_PAGE_MAPPING) {
-        case Ok(address) => test.address = address
-        case Error(error) => {
-            runtime.log_error("test_shootdown: the kernel window couldn't map a page")
-            return void
-        }
-    }
+    mapped :: map_in_window(kernel, cast[u64](old), frames.FRAME_SIZE, TEST_PAGE_MAPPING)
+    test.address = testing.require_ok(t, mapped, "the kernel window has room for a page at boot")?
     intrinsics.atomic_store_u64_release(&kernel.shootdown_test, cast[u64](test))
-    if !every_cpu_reads(kernel, test, OLD_PAGE_VALUE) {
-        return void
-    }
+    every_cpu_reads(t, kernel, test, OLD_PAGE_VALUE)?
 
     // The same address, another frame
     flush : arch_interface.TlbBatch
     freed : arch_interface.FreedTables
     lock_at(&kernel.page_table_lock, .PageTable)
-    _ = arch.unmap(&kernel.page_table, cast[arch_interface.VirtualAddress](test.address), .Size4K, &freed, &flush)
+    unmapped :: arch.unmap(&kernel.page_table, cast[arch_interface.VirtualAddress](test.address), .Size4K, &freed, &flush)
     unlock_at(&kernel.page_table_lock, .PageTable)
+    testing.require_ok(t, unmapped, "the page the test mapped is there to unmap")?
     shootdown(kernel, &flush)
     free_tables(kernel, &freed)
     mapper : Mapper
     map_page(kernel, test.address, cast[u64](new), .Size4K, TEST_PAGE_MAPPING, &mapper)
     give_back_tables(kernel, &mapper.tables)
-    if !every_cpu_reads(kernel, test, NEW_PAGE_VALUE) {
-        return void
-    }
+    every_cpu_reads(t, kernel, test, NEW_PAGE_VALUE)?
 
     intrinsics.atomic_store_u64_release(&kernel.shootdown_test, 0)
     unmap_from_window(kernel, test.address, frames.FRAME_SIZE)
     frames.free(&kernel.frames, old, 0)
     frames.free(&kernel.frames, new, 0)
-    runtime.log_info("test_shootdown: every CPU read the new page after the shootdown")
+    return .Ok
 }
 
 /**
@@ -102,13 +108,14 @@ test_shootdown :: fn(kernel: ptr[mut Kernel]) {
  * Each CPU's own reading is waited for, up to SHOOTDOWN_TEST_TIMEOUT_MS, not a count of answers: a CPU another
  * reschedule IPI wakes reads twice, which a count would take for two CPUs.
  *
+ * @param t The test's state, which a failure is recorded in for each CPU that didn't read value, naming it.
  * @param kernel The kernel, whose online CPUs are asked.
  * @param test The test's state, whose seen is cleared first.
  * @param value What every CPU should read.
- * @return True if every other online CPU read value in time; false, with an error logged for the first that didn't,
- *     otherwise.
+ * @param location Where the test asked, which a failure is recorded at: the caller's own.
+ * @return Ok if every other online CPU read value in time; Error, each that didn't recorded, otherwise.
  */
-every_cpu_reads :: fn(kernel: ptr[Kernel], test: ptr[mut ShootdownTest], value: u64) -> bool {
+every_cpu_reads :: fn(t: ptr[mut testing.T], kernel: ptr[Kernel], test: ptr[mut ShootdownTest], value: u64, location := #caller_location) -> testing.Outcome {
     for index in 0..<SHOOTDOWN_TEST_CPUS {
         intrinsics.volatile_store_u64(&test.seen[index], 0)
     }
@@ -124,16 +131,18 @@ every_cpu_reads :: fn(kernel: ptr[Kernel], test: ptr[mut ShootdownTest], value: 
         arch.spin_hint()
     }
     while !all_read(kernel, test, value) && arch.counter() < deadline
+    all := true
     for index in 1..<cast[usize](kernel.online_cpus) {
         if index < SHOOTDOWN_TEST_CPUS {
             seen :: intrinsics.volatile_load_u64(&test.seen[index])
-            if seen != value {
-                runtime.log_error("test_shootdown: CPU % read %{x}, not %{x}", index, seen, value)
-                return false
-            }
+            storage : u8[testing.TEXT_BYTES]
+            message := text_buffer.make(storage)
+            text_buffer.append_format(&message, "CPU % reads the page's current frame when asked, its TLB entry for the old one shot down", index)
+            said :: text_buffer.as_string(&message)
+            all = testing.expect_eq(t, seen, value, said, location) && all
         }
     }
-    return true
+    return testing.outcome_of(all)
 }
 
 /**

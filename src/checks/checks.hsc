@@ -1075,8 +1075,6 @@ DISCARDED_RESULTS :: string.[
     "arch_aarch64.init_kernel_page_table",
     // Cleaning up after a failure, whose own error is the one given
     "kernel.sys_channel_create",
-    // A test's unmap of a page it mapped
-    "kernel.test_shootdown",
 ]
 
 /**

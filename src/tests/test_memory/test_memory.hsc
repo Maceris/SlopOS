@@ -14,9 +14,11 @@
  */
 package test_memory
 
+import compiler from "base"
 import intrinsics from "base"
 import runtime from "base"
 import os from "std"
+import testing from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
@@ -60,68 +62,76 @@ writer #calling_convention(.c) #no_context :: fn(shared: ptr[mut u64[4]]) #never
     slop_os.thread_exit()
 }
 
+/** What main was given that the tests use. */
+Given :: struct {
+    /** The debug log, which what large pages cost is logged to if they don't save page tables. */
+    log : slop_os.DebugLog,
+}
+
 /**
- * Check memory budgets and memory objects: splitting and closing budgets, making, mapping and touching memory, and a
- * thread stopped by a write it may not make; then that large pages are used where they can be.
+ * Check that a budget split off another has the limit asked for, nothing charged, and can't pay for memory bigger than
+ * its limit, nor make memory of a size that isn't whole pages; and that its parent is back to nothing once it's closed.
  *
- * @param log The debug log, writable, where the test says what it found and which check failed.
- * @param platform Not used.
- * @param test_device Not used.
- * @param firmware Not used.
- * @param manager Not used.
- * @param program Not used.
- * @param peer Not used.
- * @param cpu_budget Not used.
- * @return 0 if every check passed. Otherwise the first that failed, by its result's index plus one: 1 reading the
- *     test budget, or 2 its limit not TEST_LIMIT; 3 making the child, or 4 and 5 its limit and use not CHILD_LIMIT
- *     and 0; 6 memory past the child's limit not refused with BudgetExceeded, or 7 memory of 1000 bytes not refused
- *     with InvalidSize; 8 making the memory, or 9 mapping it; mapping it 10 over itself, 11 past its end, or 12
- *     writable and executable not refused with BadAddress, InvalidSize and BadProtection; 13 a page not reading as
- *     zeros; 14 mapping it again read-only, or 15 that not showing what was written; 16 starting B, 17 B going on
- *     past its write, or 18 its handle still reaching it; 19 unmapping the second mapping, or 20 unmapping it again
- *     not refused with NotMapped. 30 if closing the child didn't give the parent what it should, or the memory was
- *     gone; 31 if the test budget didn't come back to nothing; 32 if the large memory couldn't be made or mapped; 34
- *     if 4 MiB mapped 2 MiB-aligned didn't take less in page tables than mapped a page off. 100 to 102 if setting up
- *     failed: 100 the shared slots, 101 reserving addresses, 102 the test budget.
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the test budget or its child couldn't be made.
  */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+a_child_budget_pays_only_within_its_limit #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    block :: slop_os.startup_block()
+    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, TEST_LIMIT), "a test budget split off the process's")?
+    given_info :: slop_os.memory_budget_info(budget)
+    testing.expect_ok(t, given_info, "a budget can be read")
+    testing.expect_eq(t, (given_info or_else slop_os.BudgetInfo.{}).limit, TEST_LIMIT, "a budget has the limit it was made with")
+    child :: testing.require_ok(t, slop_os.memory_budget_create(budget, CHILD_LIMIT), "a child budget split off the test budget")?
+    fresh :: slop_os.memory_budget_info(child) or_else slop_os.BudgetInfo.{}
+    testing.expect_eq(t, fresh.limit, CHILD_LIMIT, "a child has the limit it was made with")
+    testing.expect_eq(t, fresh.used, 0, "a new budget has nothing charged")
+    too_big :: slop_os.memory_create(child, 2 * CHILD_LIMIT)
+    testing.expect_error(t, too_big, slop_os.MemoryError.BudgetExceeded, "a budget can't pay for memory bigger than its limit")
+    not_pages :: slop_os.memory_create(child, 1000)
+    testing.expect_error(t, not_pages, slop_os.MemoryError.InvalidSize, "memory is made in whole pages")
+    _ = slop_os.handle_close(cast[slop_os.Handle](child))
+    testing.expect(t, test_kit.wait_for_budget(budget, 0, 1_000_000_000), "the test budget is back to nothing once its child is closed")
+    return .Ok
+}
+
+/**
+ * Check memory objects, A being this thread and B a writer: memory maps read/write, but not over itself, past its end,
+ * or writable and executable; each page reads as zeros, then holds what A wrote; mapped again read-only, the same
+ * frames show it; B writing to the read-only mapping is stopped, its handle reaching nothing; the second mapping
+ * unmaps once; closing the child that paid for the memory gives the parent the memory to pay for and the rest of the
+ * child's limit back, the memory still there; and once the memory is closed, the test budget is back to nothing.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the shared slots, the addresses, the test budget, its child or the memory
+ *     couldn't be made, or the memory mapped.
+ */
+memory_fills_as_touched_and_shares_its_frames #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()
     space :: block.space
     pages, error :: runtime.new_array(u64[4], 1)
     if error != null || pages.count == 0 {
-        return 100
+        testing.fail(t, "the slots A and B share are allocated")
+        return .Error(.Failed)
     }
     shared :: &pages[0]
-    at :: runtime.reserve_addresses(cast[usize](MEMORY_SIZE)) or_return 101
-    again :: runtime.reserve_addresses(cast[usize](MEMORY_SIZE)) or_return 101
+    at :: testing.require_some(t, runtime.reserve_addresses(cast[usize](MEMORY_SIZE)), "addresses to map the memory at")?
+    again :: testing.require_some(t, runtime.reserve_addresses(cast[usize](MEMORY_SIZE)), "addresses to map it at again")?
     intrinsics.volatile_store_u64(&shared^[SHARED_TARGET], again)
-    budget :: slop_os.memory_budget_create(block.budget, TEST_LIMIT) or_return 102
+    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, TEST_LIMIT), "a test budget split off the process's")?
+    child :: testing.require_ok(t, slop_os.memory_budget_create(budget, CHILD_LIMIT), "a child budget split off the test budget")?
     read :: slop_os.PROTECTION_READ
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     write_execute :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_WRITE) | cast[u32](slop_os.PROTECTION_EXECUTE))
-    results : u64[20]
-    given :: slop_os.memory_budget_info(budget)
-    results[0] = test_kit.tag_of(given)
-    given_info :: given or_else slop_os.BudgetInfo.{}
-    results[1] = given_info.limit
-    // A child budget, too small for some memory, and memory of no whole number of pages
-    made_child :: slop_os.memory_budget_create(budget, CHILD_LIMIT)
-    results[2] = test_kit.tag_of(made_child)
-    child :: made_child or_else test_kit.handle_at[slop_os.MemoryBudget](0)
-    fresh :: slop_os.memory_budget_info(child) or_else slop_os.BudgetInfo.{}
-    results[3] = fresh.limit
-    results[4] = fresh.used
-    results[5] = test_kit.tag_of(slop_os.memory_create(child, 2 * CHILD_LIMIT))
-    results[6] = test_kit.tag_of(slop_os.memory_create(child, 1000))
-    made :: slop_os.memory_create(child, MEMORY_SIZE)
-    results[7] = test_kit.tag_of(made)
-    memory :: made or_else test_kit.handle_at[slop_os.Memory](0)
+    memory :: testing.require_ok(t, slop_os.memory_create(child, MEMORY_SIZE), "memory within the child's limit is made")?
     // Mapped, then over itself, past its end, and writable and executable
-    results[8] = test_kit.tag_of(slop_os.memory_map(memory, space, at, 0, MEMORY_SIZE, read_write))
-    results[9] = test_kit.tag_of(slop_os.memory_map(memory, space, at + PAGE, 0, PAGE, read))
-    results[10] = test_kit.tag_of(slop_os.memory_map(memory, space, again, PAGE, MEMORY_SIZE, read))
-    results[11] = test_kit.tag_of(slop_os.memory_map(memory, space, again, 0, PAGE, write_execute))
+    mapped :: slop_os.memory_map(memory, space, at, 0, MEMORY_SIZE, read_write)
+    testing.require_ok(t, mapped, "memory maps read/write")?
+    over :: slop_os.memory_map(memory, space, at + PAGE, 0, PAGE, read)
+    testing.expect_error(t, over, slop_os.MemoryError.BadAddress, "a mapping can't go over another")
+    past :: slop_os.memory_map(memory, space, again, PAGE, MEMORY_SIZE, read)
+    testing.expect_error(t, past, slop_os.MemoryError.InvalidSize, "a mapping can't run past its memory's end")
+    writable_executable :: slop_os.memory_map(memory, space, again, 0, PAGE, write_execute)
+    testing.expect_error(t, writable_executable, slop_os.MemoryError.BadProtection, "memory is never mapped writable and executable at once")
     // Each page, untouched, reads as zeros, then holds what's written
     zeros := cast[u64](0)
     for i in 0..<MEMORY_PAGES {
@@ -131,63 +141,83 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
         }
         intrinsics.volatile_store_u64(cast[ptr[mut u64]](page), 1000 + cast[u64](i))
     }
-    results[12] = zeros
+    testing.expect_eq(t, zeros, MEMORY_PAGES, "each page of new memory reads as zeros when first touched")
     // The second page again, read-only, shows the same frame
-    results[13] = test_kit.tag_of(slop_os.memory_map(memory, space, again, PAGE, PAGE, read))
-    results[14] = intrinsics.volatile_load_u64(cast[ptr[u64]](again))
+    shared_mapping :: slop_os.memory_map(memory, space, again, PAGE, PAGE, read)
+    testing.expect_ok(t, shared_mapping, "memory maps again, read-only, elsewhere")
+    if shared_mapping is_ok {
+        testing.expect_eq(t, intrinsics.volatile_load_u64(cast[ptr[u64]](again)), 1001, "a second mapping shows the same frames, with what was written through the first")
+    }
     // B writes to it, and is stopped
-    started_writer :: test_kit.start_thread(budget, cast[u64](writer), cast[u64](shared))
-    results[15] = test_kit.tag_of(started_writer)
+    started_writer :: testing.require_ok(t, test_kit.start_thread(budget, cast[u64](writer), cast[u64](shared)), "B starts")?
     _ = test_kit.wait_for(&shared^[SHARED_B_STARTED], 1_000_000_000)
     test_kit.wait_nanoseconds(STOP_NANOSECONDS)
-    results[16] = intrinsics.volatile_load_u64(&shared^[SHARED_B_AFTER])
-    results[17] = test_kit.tag_of(slop_os.handle_info(cast[slop_os.Handle](started_writer or_else test_kit.handle_at[slop_os.Thread](0))))
-    results[18] = test_kit.tag_of(slop_os.memory_unmap(space, again))
-    results[19] = test_kit.tag_of(slop_os.memory_unmap(space, again))
+    testing.expect_eq(t, intrinsics.volatile_load_u64(&shared^[SHARED_B_AFTER]), 0, "a write to a read-only mapping stops the thread making it before it goes on")
+    writer_info :: slop_os.handle_info(cast[slop_os.Handle](started_writer))
+    testing.expect_error(t, writer_info, slop_os.HandleError.ObjectGone, "a thread stopped by a fault is destroyed, so its handle reaches nothing")
+    unmapped :: slop_os.memory_unmap(space, again)
+    testing.expect_ok(t, unmapped, "the second mapping unmaps")
+    unmapped_again :: slop_os.memory_unmap(space, again)
+    testing.expect_error(t, unmapped_again, slop_os.MemoryError.NotMapped, "an unmapped mapping is gone, so it can't be unmapped again")
     // Closing the child: the parent pays for the memory, and gets back the rest of the limit
     child_used :: test_kit.used(child)
     with_child :: test_kit.used(budget)
-    closed_child :: test_kit.tag_of(slop_os.handle_close(cast[slop_os.Handle](child)))
+    closed_child :: slop_os.handle_close(cast[slop_os.Handle](child))
     after :: test_kit.used(budget)
     still_there :: intrinsics.volatile_load_u64(cast[ptr[u64]](at + 3 * PAGE))
-    closed_memory :: test_kit.tag_of(slop_os.handle_close(cast[slop_os.Handle](memory)))
-    expected :: u64.[
-        0, TEST_LIMIT,
-        0, CHILD_LIMIT, 0,
-        test_kit.tag(slop_os.MemoryError.BudgetExceeded), test_kit.tag(slop_os.MemoryError.InvalidSize), 0,
-        0, test_kit.tag(slop_os.MemoryError.BadAddress), test_kit.tag(slop_os.MemoryError.InvalidSize),
-        test_kit.tag(slop_os.MemoryError.BadProtection),
-        MEMORY_PAGES, 0, 1001,
-        0, 0, test_kit.tag(slop_os.HandleError.ObjectGone), 0, test_kit.tag(slop_os.MemoryError.NotMapped),
-    ]
-    failed := test_kit.check(log, NAME, results, expected)
-    if failed != 0 {
-        return failed
-    }
+    closed_memory :: slop_os.handle_close(cast[slop_os.Handle](memory))
+    testing.expect(t, child_used >= MEMORY_SIZE && child_used <= CHILD_LIMIT, "the child paid for all of the memory, within its limit")
+    testing.expect_ok(t, closed_child, "the child budget closes with memory it paid for still there")
     /*
-     * The child paid for the memory, at least all of it; closing it gave the parent back the limit less that,
-     * and the child's own slot too if its grace period is over already
+     * Closing the child gave the parent back the limit less what the child paid for the memory, and the child's own
+     * slot too if its grace period is over already
      */
-    if child_used < MEMORY_SIZE || child_used > CHILD_LIMIT || closed_child != 0 || with_child - after < CHILD_LIMIT - child_used
-        || after < child_used
-        || still_there != 1003 || closed_memory != 0 {
-        log_line.write(log, "%: the child had % charged; closing it took the parent from % to %; the memory read % after", NAME,
-            child_used, with_child, after, still_there)
-        return 30
-    }
-    if !test_kit.wait_for_budget(budget, 0, 1_000_000_000) {
-        log_line.write(log, "%: its budget still has % bytes charged", NAME, test_kit.used(budget))
-        return 31
-    }
+    testing.expect(t, with_child - after >= CHILD_LIMIT - child_used, "closing a child gives its parent back the rest of its limit")
+    testing.expect(t, after >= child_used, "closing a child leaves its parent paying for the memory the child paid for")
+    testing.expect_eq(t, still_there, 1003, "memory outlives the budget that paid for it, with what was written")
+    testing.expect_ok(t, closed_memory, "the memory closes")
+    _ = test_kit.wait_for_budget(budget, 0, 1_000_000_000)
+    testing.expect_eq(t, test_kit.used(budget), 0, "the test budget is back to nothing once the memory and B are gone")
+    return .Ok
+}
+
+/**
+ * Check that 4 MiB mapped on a 2 MiB boundary is mapped with large pages, so touching it takes at least two pages less
+ * in page tables than mapped a page off one. What each took is logged if it didn't.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the memory couldn't be made or mapped.
+ */
+memory_on_a_large_page_boundary_maps_with_large_pages #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
     // 4 MiB mapped 2 MiB-aligned takes two large pages, so none of the tables of 4 KiB pages it takes mapped a page off
-    costs :: page_tables_touching(block) or_return 32
-    if costs.aligned + 2 * PAGE > costs.unaligned {
-        log_line.write(log, "%: 4 MiB took % bytes of page tables mapped 2 MiB-aligned, and % mapped a page off", NAME, costs.aligned,
+    costs :: testing.require_some(t, page_tables_touching(block), "two objects of 4 MiB are made and mapped")?
+    saved :: testing.expect(t, costs.aligned + 2 * PAGE <= costs.unaligned, "4 MiB mapped 2 MiB-aligned takes large pages, not the tables of 4 KiB pages it takes mapped a page off")
+    if !saved {
+        log_line.write(given.log, "%: 4 MiB took % bytes of page tables mapped 2 MiB-aligned, and % mapped a page off", NAME, costs.aligned,
             costs.unaligned)
-        return 34
     }
-    log_line.write(log, "%: budgets split and closed, memory filled as it was touched and shared between mappings, a write it didn't allow stopped the thread, and 4 MiB mapped with large pages", NAME)
-    return 0
+    return .Ok
+}
+
+/**
+ * Run the tests, reporting to the debug log.
+ *
+ * @param log The debug log, writable, where each test is reported.
+ * @param platform Not used.
+ * @param test_device Not used.
+ * @param firmware Not used.
+ * @param manager Not used.
+ * @param program Not used.
+ * @param peer Not used.
+ * @param cpu_budget Not used.
+ * @return How many tests failed: 0 when every one passed.
+ */
+main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
+    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+    given :: Given.{log = log}
+    return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }
 
 /** What touching 4 MiB cost in page tables, mapped on a 2 MiB boundary and a page past one. */

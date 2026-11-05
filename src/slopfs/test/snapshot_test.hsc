@@ -1,6 +1,7 @@
 package slopfs_test
 
 import runtime from "base"
+import testing from "std"
 import slopfs from ".."
 
 /*
@@ -9,7 +10,7 @@ import slopfs from ".."
  * snapshot frees only what no other one holds; a clone starts as a snapshot, changes apart from its origin, and gives
  * back nothing of its origin's; a snapshot with a clone can't be deleted; everything holds across a mount, and the
  * container checks out whole at every step. Then the same for an encrypted volume, whose clone unlocks with its
- * origin's passphrase and shares its key generations. Checks from 900.
+ * origin's passphrase and shares its key generations.
  */
 
 /** The size of the snapshot test's disk, in blocks: 8 MiB. */
@@ -87,18 +88,12 @@ dead_count :: fn(container: ptr[mut slopfs.Container], id: u64) -> u64 {
     }
 }
 
-/**
- * Check snapshots and clones on a volume that isn't encrypted, then on one that is.
- *
- * @return 0 if every check passed, or the number of the first that failed: 900 to 949, or 950 to 999 for the
- *     encrypted volume.
- */
-check_snapshots :: fn() -> int {
-    failed := check_snapshots_of(false, 900)
-    if failed != 0 {
-        return failed
-    }
-    return check_snapshots_of(true, 950)
+snapshots_and_clones_read_as_taken_and_free_only_what_nothing_holds #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    return check_snapshots_of(t, false)
+}
+
+an_encrypted_volumes_snapshots_and_clones_read_as_taken_and_share_its_keys #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    return check_snapshots_of(t, true)
 }
 
 /**
@@ -108,186 +103,158 @@ check_snapshots :: fn() -> int {
  * snapshot with a clone can't be deleted; everything holds across a mount, and the container checks out whole at
  * every step. An encrypted volume's clone unlocks with its origin's passphrase and shares its key generations.
  *
+ * @param t The test's state, which a failure is recorded in.
  * @param sealed Whether the volume is encrypted.
- * @param base The number of the first check, the rest numbered after it.
- * @return 0 if every check passed, or the number of the first that failed, base to base + 49.
+ * @return Ok once it's all checked, whatever was found; Error(Failed), the failure recorded, if what follows couldn't
+ *     go on.
  */
-check_snapshots_of :: fn(sealed: bool, base: int) -> int {
-    device :: new_device_of(SNAPSHOT_BLOCKS) or_return base
+check_snapshots_of :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome {
+    device :: formatted(t, SNAPSHOT_BLOCKS, 0x50)?
     defer free_device(device)
-    id : u8[16]
-    for i in 0..<id.count {
-        id[i] = cast[u8](0x50 + i)
-    }
-    slopfs.format(device, id) or_return base + 1
-    container := slopfs.mount(device) or_return base + 2
-    volume := create_test_volume(container, "origin", sealed) or_return base + 3
+    mounting :: slopfs.mount(device)
+    container := testing.require_ok(t, mounting, "a formatted disk mounts")?
+    creating :: create_test_volume(container, "origin", sealed)
+    volume := testing.require_ok(t, creating, "a new container has room for a volume")?
     root :: slopfs.ROOT_OBJECT
     data := runtime.new(Data)
     defer runtime.free(data)
     back := runtime.new(Data)
     defer runtime.free(back)
-    small :: slopfs.create(volume, root, "small.txt", .File) or_return base + 4
-    slopfs.write(volume, small, 0, name_bytes(FIRST_TEXT)) or_return base + 4
-    large :: slopfs.create(volume, root, "large.bin", .File) or_return base + 5
+    making_small :: slopfs.create(volume, root, "small.txt", .File)
+    small :: testing.require_ok(t, making_small, "a file is made in the root")?
+    writing_small :: slopfs.write(volume, small, 0, name_bytes(FIRST_TEXT))
+    require_done(t, writing_small, "a file is written inline")?
+    making_large :: slopfs.create(volume, root, "large.bin", .File)
+    large :: testing.require_ok(t, making_large, "a second file is made in the root")?
     pattern(data.bytes[0..<200000], 11)
-    slopfs.write(volume, large, 0, data.bytes[0..<200000]) or_return base + 5
-    if commit_failed(container) {
-        return base + 6
-    }
+    writing_large :: slopfs.write(volume, large, 0, data.bytes[0..<200000])
+    require_done(t, writing_large, "a file is written across chunks")?
+    require_commit(t, container, "the files commit")?
     origin_id :: volume.id
 
     // A snapshot, then the volume changed: what it gives back that the snapshot holds goes on the dead list
-    slopfs.take_snapshot(container, origin_id, name_bytes("one"), 10) or_return base + 7
-    if commit_failed(container) {
-        return base + 8
-    }
+    taking_one :: slopfs.take_snapshot(container, origin_id, name_bytes("one"), 10)
+    require_done(t, taking_one, "a volume takes a snapshot")?
+    require_commit(t, container, "the snapshot commits")?
     before_changes :: slopfs.free_blocks(container)
-    slopfs.write(volume, small, 0, name_bytes(SECOND_TEXT)) or_return base + 9
-    slopfs.set_size(volume, small, cast[u64](SECOND_TEXT.count)) or_return base + 9
+    rewriting_small :: slopfs.write(volume, small, 0, name_bytes(SECOND_TEXT))
+    require_done(t, rewriting_small, "a file the snapshot holds is overwritten")?
+    cutting_small :: slopfs.set_size(volume, small, cast[u64](SECOND_TEXT.count))
+    require_done(t, cutting_small, "a file the snapshot holds is cut")?
     pattern(data.bytes[0..<200000], 12)
-    slopfs.write(volume, large, 0, data.bytes[0..<200000]) or_return base + 10
-    later :: slopfs.create(volume, root, "later.txt", .File) or_return base + 11
-    slopfs.write(volume, later, 0, name_bytes(SECOND_TEXT)) or_return base + 11
-    if commit_failed(container) {
-        return base + 12
-    }
-    if dead_count(container, origin_id) == 0 || dead_count(container, origin_id) == 0xffffffff {
-        return base + 13
-    }
-    // Nothing the snapshot holds was freed: the rewrite took more space, it didn't swap it
-    if slopfs.free_blocks(container) >= before_changes {
-        return base + 14
-    }
+    rewriting_large :: slopfs.write(volume, large, 0, data.bytes[0..<200000])
+    require_done(t, rewriting_large, "a file the snapshot holds is rewritten across its chunks")?
+    making_later :: slopfs.create(volume, root, "later.txt", .File)
+    later :: testing.require_ok(t, making_later, "a file is made after the snapshot")?
+    writing_later :: slopfs.write(volume, later, 0, name_bytes(SECOND_TEXT))
+    require_done(t, writing_later, "a file made after the snapshot is written")?
+    require_commit(t, container, "the changes after the snapshot commit")?
+    dead :: dead_count(container, origin_id)
+    testing.expect_ne(t, dead, 0xffffffff, "the volume's dead list reads")
+    testing.expect_ne(t, dead, 0, "what the volume gave back that the snapshot holds goes on its dead list")
+    testing.expect(t, slopfs.free_blocks(container) < before_changes,
+        "nothing the snapshot holds was freed: the rewrite took more space, it didn't swap it")
 
     // The snapshot reads as the volume did
     keys :: if sealed { unlocked_keys(container, origin_id) } else { null }
-    if sealed && (keys is_none) {
-        return base + 15
-    }
-    one := slopfs.open_snapshot(container, origin_id, name_bytes("one"), keys) or_return base + 16
-    if !file_holds(one, "small.txt", name_bytes(FIRST_TEXT)) || !large_holds(one, "large.bin", 11, 200000, data, back) {
-        return base + 17
-    }
-    match slopfs.lookup(one, root, "later.txt") {
-        case Ok(found) => {
-            if found is_some {
-                return base + 18
-            }
-        }
-        case Error(error) => return base + 18
-    }
+    testing.require(t, !sealed || (keys is_some), "an encrypted volume's keys unlock with its passphrase, for its snapshot")?
+    opening_one :: slopfs.open_snapshot(container, origin_id, name_bytes("one"), keys)
+    one :: testing.require_ok(t, opening_one, "a snapshot opens")?
+    testing.expect(t, file_holds(one, "small.txt", name_bytes(FIRST_TEXT)), "a snapshot reads a file as it was when taken")
+    testing.expect(t, large_holds(one, "large.bin", 11, 200000, data, back), "a snapshot reads a file across chunks as it was when taken")
+    looking_later :: slopfs.lookup(one, root, "later.txt")
+    later_in_one :: testing.require_ok(t, looking_later, "a snapshot looks up a name")?
+    testing.expect_none(t, later_in_one, "a file made after a snapshot isn't in it")
     slopfs.free_volume(one)
-    if !file_holds(volume, "small.txt", name_bytes(SECOND_TEXT)) || !large_holds(volume, "large.bin", 12, 200000, data, back) {
-        return base + 19
-    }
+    testing.expect(t, file_holds(volume, "small.txt", name_bytes(SECOND_TEXT)), "the volume reads a file as changed after the snapshot")
+    testing.expect(t, large_holds(volume, "large.bin", 12, 200000, data, back), "the volume reads a file across chunks as changed after the snapshot")
 
     // A second snapshot and a clone of it, changed apart
-    slopfs.take_snapshot(container, origin_id, name_bytes("two"), 20) or_return base + 20
-    if commit_failed(container) {
-        return base + 21
-    }
-    clone_id :: slopfs.clone_snapshot(container, origin_id, name_bytes("two"), name_bytes("copy"), 30) or_return base + 22
-    if commit_failed(container) {
-        return base + 23
-    }
-    copy := open_test_volume_id(container, clone_id, sealed) or_return base + 24
-    if !file_holds(copy, "small.txt", name_bytes(SECOND_TEXT)) || !large_holds(copy, "large.bin", 12, 200000, data, back) {
-        return base + 25
-    }
+    taking_two :: slopfs.take_snapshot(container, origin_id, name_bytes("two"), 20)
+    require_done(t, taking_two, "a volume takes a second snapshot")?
+    require_commit(t, container, "the second snapshot commits")?
+    cloning :: slopfs.clone_snapshot(container, origin_id, name_bytes("two"), name_bytes("copy"), 30)
+    clone_id :: testing.require_ok(t, cloning, "a snapshot is cloned")?
+    require_commit(t, container, "the clone commits")?
+    opening_copy :: open_test_volume_id(container, clone_id, sealed)
+    copy := testing.require_ok(t, opening_copy, "a clone opens, an encrypted one with its origin's passphrase")?
+    testing.expect(t, file_holds(copy, "small.txt", name_bytes(SECOND_TEXT)), "a clone starts as the snapshot it's of")
+    testing.expect(t, large_holds(copy, "large.bin", 12, 200000, data, back), "a clone starts as the snapshot it's of, across chunks")
     // Its own writes, and one of its origin's files given back, which stays its origin's
-    own :: slopfs.create(copy, root, "own.txt", .File) or_return base + 26
-    slopfs.write(copy, own, 0, name_bytes(FIRST_TEXT)) or_return base + 26
-    slopfs.remove(copy, root, "later.txt") or_return base + 27
+    making_own :: slopfs.create(copy, root, "own.txt", .File)
+    own :: testing.require_ok(t, making_own, "a clone makes a file of its own")?
+    writing_own :: slopfs.write(copy, own, 0, name_bytes(FIRST_TEXT))
+    require_done(t, writing_own, "a clone writes a file of its own")?
+    removing_later :: slopfs.remove(copy, root, "later.txt")
+    require_done(t, removing_later, "a clone removes a file it shares with its origin")?
     pattern(data.bytes[0..<100000], 13)
-    slopfs.write(copy, found(copy, root, "large.bin") or_return base + 28, 0, data.bytes[0..<100000]) or_return base + 28
-    if commit_failed(container) {
-        return base + 29
-    }
-    if !file_holds(volume, "later.txt", name_bytes(SECOND_TEXT)) || !large_holds(volume, "large.bin", 12, 200000, data, back) {
-        return base + 30
-    }
-    match slopfs.lookup(volume, root, "own.txt") {
-        case Ok(found) => {
-            if found is_some {
-                return base + 31
-            }
-        }
-        case Error(error) => return base + 31
-    }
+    copy_large :: testing.require_some(t, found(copy, root, "large.bin"), "a clone has its origin's files")?
+    rewriting_copy :: slopfs.write(copy, copy_large, 0, data.bytes[0..<100000])
+    require_done(t, rewriting_copy, "a clone overwrites a file it shares with its origin")?
+    require_commit(t, container, "the clone's changes commit")?
+    testing.expect(t, file_holds(volume, "later.txt", name_bytes(SECOND_TEXT)), "a file a clone removed is still its origin's")
+    testing.expect(t, large_holds(volume, "large.bin", 12, 200000, data, back), "a file a clone overwrote is as it was in its origin")
+    looking_own :: slopfs.lookup(volume, root, "own.txt")
+    own_in_origin :: testing.require_ok(t, looking_own, "the origin looks up a name")?
+    testing.expect_none(t, own_in_origin, "a clone's own file isn't its origin's")
     // Not while its clone is there
-    match slopfs.delete_snapshot(container, origin_id, name_bytes("two"), null) {
-        case Ok => return base + 32
-        case Error(error) => {
-            if error != .InUse {
-                return base + 33
-            }
-        }
-    }
+    deleting_two :: slopfs.delete_snapshot(container, origin_id, name_bytes("two"), null)
+    testing.expect_error(t, deleting_two, .InUse, "a snapshot with a clone isn't deleted, as the clone is made from it")
 
     // Deleting the first frees what only it held
     before_delete :: slopfs.free_blocks(container)
-    slopfs.delete_snapshot(container, origin_id, name_bytes("one"), null) or_return base + 34
-    if commit_failed(container) {
-        return base + 35
-    }
-    if slopfs.free_blocks(container) <= before_delete {
-        return base + 36
-    }
+    deleting_one :: slopfs.delete_snapshot(container, origin_id, name_bytes("one"), null)
+    require_done(t, deleting_one, "a snapshot without a clone is deleted")?
+    require_commit(t, container, "the deletion commits")?
+    testing.expect(t, slopfs.free_blocks(container) > before_delete, "deleting a snapshot frees what only it held")
 
     // All of it across a mount
     slopfs.unmount(container)
-    container = slopfs.mount(device) or_return base + 37
-    if !verified(container) {
-        return base + 38
-    }
-    volume = open_test_volume_id(container, origin_id, sealed) or_return base + 39
-    copy = open_test_volume_id(container, clone_id, sealed) or_return base + 40
-    if !file_holds(copy, "own.txt", name_bytes(FIRST_TEXT)) || !large_holds(copy, "large.bin", 13, 100000, data, back)
-        || !file_holds(volume, "later.txt", name_bytes(SECOND_TEXT)) {
-        return base + 41
-    }
-    if slopfs.open_snapshot(container, origin_id, name_bytes("one"), null) is_ok {
-        return base + 42
-    }
+    mounting_again :: slopfs.mount(device)
+    container = testing.require_ok(t, mounting_again, "the container mounts again")?
+    checks_out(t, container, "snapshots, a clone and dead lists check out after a mount")
+    reopening :: open_test_volume_id(container, origin_id, sealed)
+    volume = testing.require_ok(t, reopening, "the origin opens after a mount")?
+    reopening_copy :: open_test_volume_id(container, clone_id, sealed)
+    copy = testing.require_ok(t, reopening_copy, "the clone opens after a mount")?
+    testing.expect(t, file_holds(copy, "own.txt", name_bytes(FIRST_TEXT)), "a clone's own file is kept across a mount")
+    testing.expect(t, large_holds(copy, "large.bin", 13, 100000, data, back), "a clone's overwrite is kept across a mount")
+    testing.expect(t, file_holds(volume, "later.txt", name_bytes(SECOND_TEXT)), "the origin's file the clone removed is kept across a mount")
+    gone :: slopfs.open_snapshot(container, origin_id, name_bytes("one"), null)
+    testing.expect(t, gone is_error, "a deleted snapshot is gone after a mount")
     // Still holding what its clone shares: a change to the origin now, and the clone reads as it did
     pattern(data.bytes[0..<200000], 14)
-    slopfs.write(volume, found(volume, root, "large.bin") or_return base + 43, 0, data.bytes[0..<200000]) or_return base + 43
-    slopfs.remove(volume, root, "small.txt") or_return base + 44
-    if commit_failed(container) {
-        return base + 45
-    }
-    if !file_holds(copy, "small.txt", name_bytes(SECOND_TEXT)) || !large_holds(copy, "large.bin", 13, 100000, data, back) {
-        return base + 46
-    }
+    origin_large :: testing.require_some(t, found(volume, root, "large.bin"), "the origin still has its file")?
+    rewriting_origin :: slopfs.write(volume, origin_large, 0, data.bytes[0..<200000])
+    require_done(t, rewriting_origin, "the origin overwrites a file its clone shares")?
+    removing_small :: slopfs.remove(volume, root, "small.txt")
+    require_done(t, removing_small, "the origin removes a file its clone shares")?
+    require_commit(t, container, "the origin's changes commit")?
+    testing.expect(t, file_holds(copy, "small.txt", name_bytes(SECOND_TEXT)), "a file its origin removed is still the clone's")
+    testing.expect(t, large_holds(copy, "large.bin", 13, 100000, data, back), "a file its origin overwrote is as the clone had it")
     if sealed {
         // A clone's generations are its origin's key records'
-        generation :: slopfs.rotate(container, copy) or_return base + 47
-        if generation != 2 {
-            return base + 48
-        }
-        after :: slopfs.create(copy, root, "after.txt", .File) or_return base + 49
-        slopfs.write(copy, after, 0, name_bytes(SECOND_TEXT)) or_return base + 49
-        if commit_failed(container) {
-            return base + 49
-        }
+        rotating :: slopfs.rotate(container, copy)
+        generation :: testing.require_ok(t, rotating, "an encrypted clone takes a new key generation")?
+        testing.expect_eq(t, generation, 2, "a clone's generations follow its origin's")
+        making_after :: slopfs.create(copy, root, "after.txt", .File)
+        after :: testing.require_ok(t, making_after, "an encrypted clone makes a file with its new generation")?
+        writing_after :: slopfs.write(copy, after, 0, name_bytes(SECOND_TEXT))
+        require_done(t, writing_after, "an encrypted clone writes a file with its new generation")?
+        require_commit(t, container, "the clone's new generation commits")?
         slopfs.unmount(container)
-        container = slopfs.mount(device) or_return base + 37
-        copy = open_test_volume_id(container, clone_id, sealed) or_return base + 40
-        if !file_holds(copy, "after.txt", name_bytes(SECOND_TEXT)) || !file_holds(copy, "own.txt", name_bytes(FIRST_TEXT)) {
-            return base + 49
-        }
-        match slopfs.newest_generation(container, origin_id) {
-            case Ok(newest) => {
-                if newest != 2 {
-                    return base + 49
-                }
-            }
-            case Error(error) => return base + 49
-        }
+        mounting_last :: slopfs.mount(device)
+        container = testing.require_ok(t, mounting_last, "the container mounts again")?
+        reopening_last :: open_test_volume_id(container, clone_id, sealed)
+        copy = testing.require_ok(t, reopening_last, "the clone opens again with its origin's passphrase")?
+        testing.expect(t, file_holds(copy, "after.txt", name_bytes(SECOND_TEXT)), "a file sealed with a clone's new generation reads after a mount")
+        testing.expect(t, file_holds(copy, "own.txt", name_bytes(FIRST_TEXT)), "a file sealed with the first generation still reads")
+        reading_newest :: slopfs.newest_generation(container, origin_id)
+        newest :: testing.require_ok(t, reading_newest, "the origin's key records read")?
+        testing.expect_eq(t, newest, 2, "a clone's new generation is in its origin's key records, which it shares")
     }
     slopfs.unmount(container)
-    return 0
+    return .Ok
 }
 
 /**

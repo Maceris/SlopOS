@@ -10,10 +10,11 @@
  */
 package test_io_ports
 
+import compiler from "base"
 import os from "std"
+import testing from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
-import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */
@@ -23,59 +24,65 @@ RTC_PORTS : u32 : 0x70
 /** The index of the RTC's status register A, written to the index port to read it through the data port. */
 RTC_STATUS_A : u32 : 0x0a
 
+/** What main was given that the tests use. */
+Given :: struct {
+    /** The debug log. */
+    log : slop_os.DebugLog,
+    /** The platform capability, which makes port ranges; none if main wasn't given it. */
+    platform : slop_os.Platform?,
+}
+
 /**
- * Check ranges of I/O ports: reading the RTC through one, and what's refused.
+ * Check ranges of I/O ports: on x86-64, the RTC read through one, and ports and widths outside it refused, as is a
+ * range past the last port; on AArch64, every range refused. Then what the ranges charged their budget comes back.
  *
- * @param log The debug log, writable, where the test says what it found and which check failed.
- * @param platform The platform capability, which makes port ranges; without it the test ends with 100.
+ * @param t The test's state.
+ * @return Ok once it's run; Error if main wasn't given the platform capability, or the budget couldn't be made.
+ */
+port_ranges_reach_only_their_ports #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
+    hardware :: testing.require_some(t, given.platform, "the root task grants the platform capability, which makes port ranges")?
+    memory :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for the ranges")?
+    #if TARGET_ARCH == .x86_64 {
+        rtc :: testing.require_ok(t, slop_os.io_ports_create(hardware, memory, RTC_PORTS, 2), "the platform capability makes a range of the RTC's two ports")?
+        // Register A, its divider in bits 4 to 6
+        selected :: slop_os.io_port_write(rtc, 0, 1, RTC_STATUS_A)
+        testing.expect_ok(t, selected, "the range's first port, the RTC's index register, can be written")
+        status :: slop_os.io_port_read(rtc, 1, 1)
+        testing.expect_ok(t, status, "the range's second port, the RTC's data register, can be read")
+        testing.expect_eq(t, (status or_else 0) & 0x70, 0x20, "register A's divider is 010, running the RTC's 32.768 kHz clock, so the read reached the RTC")
+        past :: slop_os.io_port_read(rtc, 2, 1)
+        testing.expect_error(t, past, slop_os.DeviceError.InvalidArgument, "a port past the range's end is outside it")
+        odd_width :: slop_os.io_port_read(rtc, 0, 3)
+        testing.expect_error(t, odd_width, slop_os.DeviceError.InvalidArgument, "a port is read 1, 2 or 4 bytes wide, never 3")
+        past_last :: slop_os.io_ports_create(hardware, memory, 0xffff, 2)
+        testing.expect_error(t, past_last, slop_os.DeviceError.InvalidArgument, "a range can't run past the last port, 0xffff")
+        _ = slop_os.handle_close(cast[slop_os.Handle](rtc))
+    }
+    #else {
+        refused :: slop_os.io_ports_create(hardware, memory, RTC_PORTS, 2)
+        testing.expect_error(t, refused, slop_os.DeviceError.InvalidArgument, "AArch64 has no I/O ports, so every range is refused")
+    }
+    testing.expect(t, test_kit.wait_for_budget(memory, 0, 1_000_000_000), "the budget is back to nothing once the ranges are closed")
+    return .Ok
+}
+
+/**
+ * Run the tests, reporting to the debug log.
+ *
+ * @param log The debug log, writable, where each test is reported.
+ * @param platform The platform capability, which makes port ranges; without it the test fails.
  * @param test_device Not used.
  * @param firmware Not used.
  * @param manager Not used.
  * @param program Not used.
  * @param peer Not used.
  * @param cpu_budget Not used.
- * @return 0 if every check passed. Otherwise the first that failed. On x86-64: 1 making the RTC's range; 2 writing
- *     its index port, or 3 reading its data port; 4 register A's divider not 010; 5 a port past the range, 6 a width
- *     of 3, or 7 a range past the last port not refused with InvalidArgument; 8 the budget not coming back to
- *     nothing. On AArch64: 1 a range not refused with InvalidArgument; 2 the budget not coming back. 101 if the
- *     memory budget couldn't be made.
+ * @return How many tests failed: 0 when every one passed.
  */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
-    block :: slop_os.startup_block()
-    hardware :: platform or_return 100
-    memory :: slop_os.memory_budget_create(block.budget, 1 << 20) or_return 101
-    invalid :: test_kit.tag(slop_os.DeviceError.InvalidArgument)
-    #if TARGET_ARCH == .x86_64 {
-        results : u64[8]
-        ports :: slop_os.io_ports_create(hardware, memory, RTC_PORTS, 2)
-        results[0] = test_kit.tag_of(ports)
-        rtc :: ports or_else test_kit.handle_at[slop_os.IoPortRange](0)
-        // Register A, its divider in bits 4 to 6
-        results[1] = test_kit.tag_of(slop_os.io_port_write(rtc, 0, 1, RTC_STATUS_A))
-        status :: slop_os.io_port_read(rtc, 1, 1)
-        results[2] = test_kit.tag_of(status)
-        results[3] = cast[u64]((status or_else 0) & 0x70)
-        results[4] = test_kit.tag_of(slop_os.io_port_read(rtc, 2, 1))
-        results[5] = test_kit.tag_of(slop_os.io_port_read(rtc, 0, 3))
-        results[6] = test_kit.tag_of(slop_os.io_ports_create(hardware, memory, 0xffff, 2))
-        _ = slop_os.handle_close(cast[slop_os.Handle](rtc))
-        results[7] = if test_kit.wait_for_budget(memory, 0, 1_000_000_000) { cast[u64](1) } else { cast[u64](0) }
-        expected :: u64.[0, 0, 0, 0x20, invalid, invalid, invalid, 1]
-        failed :: test_kit.check(log, NAME, results, expected)
-        if failed == 0 {
-            log_line.write(log, "%: the RTC's status read through its ports, and ports outside them refused", NAME)
-        }
-        return failed
-    }
-    #else {
-        results : u64[2]
-        results[0] = test_kit.tag_of(slop_os.io_ports_create(hardware, memory, RTC_PORTS, 2))
-        results[1] = if test_kit.wait_for_budget(memory, 0, 1_000_000_000) { cast[u64](1) } else { cast[u64](0) }
-        failed :: test_kit.check(log, NAME, results, u64.[invalid, 1])
-        if failed == 0 {
-            log_line.write(log, "%: no ports here, and every range refused", NAME)
-        }
-        return failed
-    }
+    given :: Given.{log = log, platform = platform}
+    return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }

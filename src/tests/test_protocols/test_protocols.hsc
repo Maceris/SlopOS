@@ -12,11 +12,12 @@
  */
 package test_protocols
 
+import compiler from "base"
 import intrinsics from "base"
 import os from "std"
+import testing from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
-import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */
@@ -83,45 +84,86 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 
 #insert os.protocol_code(Request, Response)
 
-/**
- * Check the code os.protocol_code generates: a whole message through, broken ones refused, an unknown variant, a
- * channel of another protocol, and a short message.
- *
- * @param log The debug log, writable, where the test says what it found and which check failed.
- * @param platform Not used.
- * @param test_device Not used.
- * @param firmware Not used.
- * @param manager Not used.
- * @param program Not used.
- * @param peer Not used.
- * @param cpu_budget Not used.
- * @return 0 if every check passed. Otherwise the first that failed, by its result's index plus one: 1 sending the
- *     whole message, or 2 receiving it; 3 its bytes, 4 its plain fields, 5 its memory or 6 its channel not arriving
- *     as they were sent; a message refused as Invalid 7 with no tag, 8 with an enum, 9 a bool, that can't be, 10 a
- *     handle index past the batch, 11 a Relative past the message's end, 12 over its fixed part, or 13 misaligned,
- *     not refused; 14 an unknown variant not Unsupported; 15 a channel of another protocol not WrongProtocol; 16 a
- *     short Ping not read as Ping(0). 100 to 104 if setting up failed: 100 the channel, 101 its ports, 102 the
- *     memory, 103 the other channel, 104 the stranger channel.
- */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
-    block :: slop_os.startup_block()
-    pair :: os.channel_for[Probe](block.budget, 8192) or_return 100
-    port :: os.port_for(block.budget, pair.b) or_return 101
-    sender_port :: os.port_for(block.budget, pair.a) or_return 101
-    results : u64[16]
-    into := os.Incoming.{}
+/** What main was given that the tests use. */
+Given :: struct {
+    /** The debug log. */
+    log : slop_os.DebugLog,
+}
 
-    // A whole message, through
-    memory :: slop_os.memory_create(block.budget, 4096) or_return 102
-    other :: os.channel_for[Probe](block.budget, 0) or_return 103
+/** A Probe channel the test holds both ends of, with a port for each. */
+Probes :: struct {
+    /** The end requests are sent on. */
+    a : slop_os.Channel,
+    /** The end requests are received on. */
+    b : slop_os.Channel,
+    /** A port b is bound to for Readable, waited on until a message arrives. */
+    port : slop_os.Port,
+    /** A port a is bound to, which a send waits on if the ring is full. */
+    sender_port : slop_os.Port,
+}
+
+/** What a receive gave, by its variant alone, so it can be compared and reported by name. */
+Arrived :: enum {
+    /** A message, now in the Incoming it was received into. */
+    Received,
+    /** Nothing to receive. */
+    Empty,
+    /** A variant this side doesn't know. */
+    Unsupported,
+    /** A message that breaks the rules, refused. */
+    Invalid,
+    /** A channel of another protocol where a typed one goes. */
+    WrongProtocol,
+    /** The receive failed. */
+    Failed,
+}
+
+/**
+ * Make a Probe channel the test holds both ends of, with a port for each.
+ *
+ * @param t The test's state, which a failure is recorded in.
+ * @return The channel's ends and their ports, which the test closes; Error(Failed), recorded, if any couldn't be made.
+ */
+probes :: fn(t: ptr[mut testing.T]) -> Result[Probes, testing.Stopped] {
+    block :: slop_os.startup_block()
+    pair :: testing.require_ok(t, os.channel_for[Probe](block.budget, 8192), "a Probe channel is made")?
+    port :: testing.require_some(t, os.port_for(block.budget, pair.b), "a port for the receiving end")?
+    sender_port :: testing.require_some(t, os.port_for(block.budget, pair.a), "a port for the sending end")?
+    return .Ok(Probes.{a = pair.a, b = pair.b, port = port, sender_port = sender_port})
+}
+
+/**
+ * Close a Probe channel's ends and their ports.
+ *
+ * @param probes What probes made, each handle closed.
+ */
+close_probes :: fn(probes: Probes) {
+    _ = slop_os.handle_close(cast[slop_os.Handle](probes.a))
+    _ = slop_os.handle_close(cast[slop_os.Handle](probes.b))
+    _ = slop_os.handle_close(cast[slop_os.Handle](probes.port))
+    _ = slop_os.handle_close(cast[slop_os.Handle](probes.sender_port))
+}
+
+/**
+ * Check that a message with a bool, an enum, a handle, a Relative of bytes and a typed channel goes through: the handle
+ * and the channel arrive in place, and the bytes read back.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the channel, the memory or the other channel couldn't be made.
+ */
+a_whole_message_arrives_with_its_handles_and_data #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    block :: slop_os.startup_block()
+    probe :: probes(t)?
+    into := os.Incoming.{}
+    memory :: testing.require_ok(t, slop_os.memory_create(block.budget, 4096), "memory to send")?
+    other :: testing.require_ok(t, os.channel_for[Probe](block.budget, 0), "a Probe channel to send an end of")?
     numbers :: u64.[3, 1, 4, 1, 5]
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
     request^ = .Carry(Everything.{flag = true, shade = .Dark, count = 9, memory = memory, data = os.append(&out, numbers[0..<5]),
         peer = os.Channel[Probe].{end = other.a}})
-    results[0] = if send_request(pair.a, sender_port, &out) == null { cast[u64](0) } else { cast[u64](1) }
-    results[1] = arrival_code(receive_request(pair.b, port, &into, true))
+    testing.expect(t, send_request(probe.a, probe.sender_port, &out) == null, "a whole message is sent")
+    testing.expect_eq(t, arrival_code(receive_request(probe.b, probe.port, &into, true)), Arrived.Received, "a whole message is received")
     match os.message_of[Request](&into)^ {
         case Carry(carried) => {
             got :: os.items(&into, carried.data)
@@ -129,76 +171,138 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
             for value in got {
                 sum += value
             }
-            results[2] = sum
-            results[3] = if carried.flag && carried.shade == .Dark && carried.count == 9 { cast[u64](1) } else { cast[u64](0) }
+            testing.expect_eq(t, sum, 14, "a Relative's u64s read back as they were sent: 3, 1, 4, 1 and 5")
+            testing.expect(t, carried.flag && carried.shade == .Dark && carried.count == 9, "a message's plain fields arrive as they were sent")
             // The memory and the channel are handles of this process's again, and the channel speaks Probe
-            results[4] = cast[u64](test_kit.tag_of(slop_os.memory_size(carried.memory)))
-            results[5] = if os.speaks[Probe](carried.peer.end) { cast[u64](1) } else { cast[u64](0) }
+            size :: slop_os.memory_size(carried.memory)
+            testing.expect_ok(t, size, "a handle sent arrives in place, as a handle of the receiver's")
+            testing.expect(t, os.speaks[Probe](carried.peer.end), "a typed channel sent arrives in place, speaking its protocol")
         }
-        case _ => {}
+        case _ => testing.fail(t, "a Carry sent arrives as a Carry")
     }
-
-    // Broken messages, each refused
-    results[6] = refused(pair.a, sender_port, pair.b, port, &into, 0, 0, 0)
-    results[7] = refused(pair.a, sender_port, pair.b, port, &into, offset_of_field(.Shade), 7, 1)
-    results[8] = refused(pair.a, sender_port, pair.b, port, &into, offset_of_field(.Flag), 2, 1)
-    results[9] = refused(pair.a, sender_port, pair.b, port, &into, offset_of_field(.Memory), 5, 4)
-    // A Relative past the end, over the fixed part, and misaligned
-    results[10] = refused_relative(pair.a, sender_port, pair.b, port, &into, 4096, 1)
-    results[11] = refused_relative(pair.a, sender_port, pair.b, port, &into, 8, 1)
-    results[12] = refused_relative(pair.a, sender_port, pair.b, port, &into, cast[u32](size_of(Request)) + 3, 1)
-
-    // A variant this side doesn't know
-    unknown : u64[4]
-    unknown[0] = 7
-    none : slop_os.Handle[1]
-    _ = os.send(pair.a, sender_port, view_of(cast[ptr[u8]](&unknown[0]), 32), view_of(&none[0], 0))
-    results[13] = arrival_code(receive_request(pair.b, port, &into, true))
-
-    // A channel of another protocol where a Channel[Probe] goes
-    stranger :: slop_os.channel_create(block.budget, 0, 12345) or_return 104
-    wrong := os.Outgoing.{}
-    carried :: os.begin[Request](&wrong)
-    carried^ = .Carry(Everything.{flag = false, shade = .Light, peer = os.Channel[Probe].{end = stranger.a}})
-    _ = send_request(pair.a, sender_port, &wrong)
-    results[14] = arrival_code(receive_request(pair.b, port, &into, true))
-
-    // A short message, as an older sender's: Ping with nothing after its tag reads as Ping(0)
-    short : u8[1]
-    short[0] = 0
-    _ = os.send(pair.a, sender_port, short, view_of(&none[0], 0))
-    results[15] = arrival_code(receive_request(pair.b, port, &into, true))
-    match os.message_of[Request](&into)^ {
-        case Ping(value) => {
-            if value != 0 {
-                results[15] = 99
-            }
-        }
-        case _ => results[15] = 98
-    }
-    // RECEIVED 0, UNSUPPORTED 2, INVALID 3, WRONG_PROTOCOL 4
-    expected :: u64.[0, 0, 14, 1, 0, 1, 3, 3, 3, 3, 3, 3, 3, 2, 4, 0]
-    failed :: test_kit.check(log, NAME, results, expected)
-    if failed == 0 {
-        log_line.write(log, "%: messages went through with their handles and data, and broken, unknown and mistyped ones were refused", NAME)
-    }
-    return failed
+    close_probes(probe)
+    return .Ok
 }
 
 /**
- * Give what a receive gave as a number, for a result.
+ * Check that messages made by hand that break the rules are refused as Invalid: too short for a tag, an enum or a
+ * bool that can't be, a handle index past the batch, and a Relative past the message's end, over its fixed part, or
+ * misaligned.
  *
- * @param arrival What the receive gave.
- * @return 0 Received, 1 Empty, 2 Unsupported, 3 Invalid, 4 WrongProtocol, 5 Failed.
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the channel couldn't be made.
  */
-arrival_code :: fn(arrival: os.Arrival) -> u64 {
+broken_messages_are_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    probe :: probes(t)?
+    into := os.Incoming.{}
+    a :: probe.a
+    b :: probe.b
+    testing.expect_eq(t, refused(a, probe.sender_port, b, probe.port, &into, 0, 0, 0), Arrived.Invalid, "a message too short for its tag is refused")
+    testing.expect_eq(t, refused(a, probe.sender_port, b, probe.port, &into, offset_of_field(.Shade), 7, 1), Arrived.Invalid, "an enum that's no member is refused")
+    testing.expect_eq(t, refused(a, probe.sender_port, b, probe.port, &into, offset_of_field(.Flag), 2, 1), Arrived.Invalid, "a bool that's neither 0 nor 1 is refused")
+    testing.expect_eq(t, refused(a, probe.sender_port, b, probe.port, &into, offset_of_field(.Memory), 5, 4), Arrived.Invalid, "a handle index past the message's batch is refused")
+    // A Relative past the end, over the fixed part, and misaligned
+    testing.expect_eq(t, refused_relative(a, probe.sender_port, b, probe.port, &into, 4096, 1), Arrived.Invalid, "a Relative past the message's end is refused")
+    testing.expect_eq(t, refused_relative(a, probe.sender_port, b, probe.port, &into, 8, 1), Arrived.Invalid, "a Relative over the message's fixed part is refused")
+    testing.expect_eq(t, refused_relative(a, probe.sender_port, b, probe.port, &into, cast[u32](size_of(Request)) + 3, 1), Arrived.Invalid, "a Relative misaligned for its items is refused")
+    close_probes(probe)
+    return .Ok
+}
+
+/**
+ * Check that a variant this side doesn't know arrives as Unsupported, for answer_unsupported to answer.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the channel couldn't be made.
+ */
+an_unknown_variant_is_unsupported #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    probe :: probes(t)?
+    into := os.Incoming.{}
+    unknown : u64[4]
+    unknown[0] = 7
+    none : slop_os.Handle[1]
+    _ = os.send(probe.a, probe.sender_port, view_of(cast[ptr[u8]](&unknown[0]), 32), view_of(&none[0], 0))
+    testing.expect_eq(t, arrival_code(receive_request(probe.b, probe.port, &into, true)), Arrived.Unsupported, "a variant tag this side doesn't know is Unsupported")
+    close_probes(probe)
+    return .Ok
+}
+
+/**
+ * Check that a channel of another protocol, where a Channel[Probe] goes, arrives as WrongProtocol.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the channel or the stranger channel couldn't be made.
+ */
+a_channel_of_another_protocol_is_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    block :: slop_os.startup_block()
+    probe :: probes(t)?
+    into := os.Incoming.{}
+    stranger :: testing.require_ok(t, slop_os.channel_create(block.budget, 0, 12345), "a channel of another protocol")?
+    wrong := os.Outgoing.{}
+    carried :: os.begin[Request](&wrong)
+    carried^ = .Carry(Everything.{flag = false, shade = .Light, peer = os.Channel[Probe].{end = stranger.a}})
+    _ = send_request(probe.a, probe.sender_port, &wrong)
+    testing.expect_eq(t, arrival_code(receive_request(probe.b, probe.port, &into, true)), Arrived.WrongProtocol, "a channel whose tag isn't Probe's can't arrive as a Channel[Probe]")
+    close_probes(probe)
+    return .Ok
+}
+
+/**
+ * Check that a message shorter than the type, as an older sender's, reads its missing fields as zeros: Ping with
+ * nothing after its tag reads as Ping(0).
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the channel couldn't be made.
+ */
+a_short_message_reads_its_missing_fields_as_zeros #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    probe :: probes(t)?
+    into := os.Incoming.{}
+    short : u8[1]
+    short[0] = 0
+    none : slop_os.Handle[1]
+    _ = os.send(probe.a, probe.sender_port, short, view_of(&none[0], 0))
+    testing.expect_eq(t, arrival_code(receive_request(probe.b, probe.port, &into, true)), Arrived.Received, "a message shorter than its type is received")
+    match os.message_of[Request](&into)^ {
+        case Ping(value) => testing.expect_eq(t, value, 0, "a field past a short message's end reads as zero")
+        case _ => testing.fail(t, "a message of only Ping's tag arrives as a Ping")
+    }
+    close_probes(probe)
+    return .Ok
+}
+
+/**
+ * Run the tests, reporting to the debug log.
+ *
+ * @param log The debug log, writable, where each test is reported.
+ * @param platform Not used.
+ * @param test_device Not used.
+ * @param firmware Not used.
+ * @param manager Not used.
+ * @param program Not used.
+ * @param peer Not used.
+ * @param cpu_budget Not used.
+ * @return How many tests failed: 0 when every one passed.
+ */
+main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
+    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+    given :: Given.{log = log}
+    return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
+}
+
+/**
+ * Give what a receive gave by its variant alone.
+ *
+ * @param arrival What the receive gave; a Failed's error is dropped.
+ * @return Its variant, as an Arrived.
+ */
+arrival_code :: fn(arrival: os.Arrival) -> Arrived {
     return match arrival {
-        case Received => cast[u64](0)
-        case Empty => cast[u64](1)
-        case Unsupported => cast[u64](2)
-        case Invalid => cast[u64](3)
-        case WrongProtocol => cast[u64](4)
-        case Failed(error) => cast[u64](5)
+        case Received => Arrived.Received
+        case Empty => Arrived.Empty
+        case Unsupported => Arrived.Unsupported
+        case Invalid => Arrived.Invalid
+        case WrongProtocol => Arrived.WrongProtocol
+        case Failed(error) => Arrived.Failed
     }
 }
 
@@ -260,7 +364,7 @@ payload_offset :: fn() -> usize {
  * @return What receiving it gave, as arrival_code gives it.
  */
 refused :: fn(end: slop_os.Channel, sender_port: slop_os.Port, reader: slop_os.Channel, port: slop_os.Port, into: ptr[mut os.Incoming],
-    offset: usize, value: u64, size: usize) -> u64 {
+    offset: usize, value: u64, size: usize) -> Arrived {
     message : u64[64]
     bytes :: view_of(cast[ptr[mut u8]](&message[0]), size_of(Request))
     none : slop_os.Handle[1]
@@ -301,7 +405,7 @@ refused :: fn(end: slop_os.Channel, sender_port: slop_os.Port, reader: slop_os.C
  * @return What receiving it gave, as arrival_code gives it.
  */
 refused_relative :: fn(end: slop_os.Channel, sender_port: slop_os.Port, reader: slop_os.Channel, port: slop_os.Port,
-    into: ptr[mut os.Incoming], start: u32, count: u32) -> u64 {
+    into: ptr[mut os.Incoming], start: u32, count: u32) -> Arrived {
     data_at :: offset_of_field(.Data)
     message : u64[64]
     bytes :: view_of(cast[ptr[mut u8]](&message[0]), size_of(Request) + 64)

@@ -1,10 +1,11 @@
 package disk_check
 
-import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
+import testing from "std"
 import dir from "std/os/slop_os"
 import storage from "../../protocols/storage"
+import test_kit from "../../test_kit"
 
 /*
  * An encrypted volume (roadmap 8e), which tools/boot.py has the image builder make in the system volume's container:
@@ -13,7 +14,7 @@ import storage from "../../protocols/storage"
  * reads it back, has a new key generation started, writes another, reads all three, and is refused the wrong passphrase
  * again once it's served. What the files hold is in capitals, made here: the disk check's own bytes are on the disk
  * in the clear, so what it writes to the sealed volume, which tools/boot_tests.py finds nowhere on the disk, isn't
- * among them. Checks from 60.
+ * among them.
  */
 
 /** The encrypted volume's name in the system volume's container. */
@@ -36,24 +37,21 @@ AFTER_TEXT :: "Written to the sealed volume with its second key generation"
 CONTAINER_TYPE :: u8.[0x53, 0x4c, 0x4f, 0x50, 0x4f, 0x53, 0x20, 0x43, 0x4f, 0x4e, 0x54, 0x41, 0x49, 0x4e, 0x45, 0x52]
 
 /**
- * Check the encrypted volume in the system volume's container, through the storage manager, then links, snapshots,
- * quotas and volumes made, in turn.
+ * Check the encrypted volume in the system volume's container, through the storage manager: refused locked and with
+ * the wrong passphrase, opened with its own, its file read, one written, a new key generation started, another
+ * written, all three read, and, served, refused the wrong passphrase again and opened with its own.
  *
- * @param to The debug log, passed on.
- * @param manager The connection to the storage manager.
- * @param port A port bound to manager.
- * @param system The system volume's root.
- * @return 0 if all of it held; 200 if no container was found among the first 64 partitions, 201 and 202 if it wasn't
- *     refused as Locked without a passphrase or as WrongKey with the wrong one, 203 if it couldn't be opened with its
- *     own, 204 if the buffer or a port couldn't be made, 205 if the image builder's file didn't read as it should, 206
- *     if the check's file couldn't be written or read back, 207 and 208 if a new key generation, the second, wasn't
- *     started, 209 and 210 if writing after it, or reading all three, failed, and 211 and 212 if, served, it wasn't
- *     refused the wrong passphrase or opened again with its own; and check_links', then check_snapshots', numbers.
+ * @param t The test's state.
+ * @return Ok once it's run, the container's index and the volume's root kept in Given for the tests after;
+ *     Error if the container wasn't found, the volume couldn't be opened, the buffer or a port made, a file written,
+ *     or a key generation started.
  */
-check_sealed :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.Port, system: os.Channel[dir.Dir]) -> int {
+the_sealed_volume_opens_only_with_its_passphrase #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    manager :: manager_of(t, given)?
     container := cast[u32](0xffffffff)
-    for index in 0..<cast[u32](64) {
-        match ask(manager, port, .Describe(index)) {
+    for index in 0..<MOST_PARTITIONS {
+        match ask(manager.end, manager.port, .Describe(index)) {
             case Described(described) => {
                 if described.info.type_guid == CONTAINER_TYPE {
                     container = index
@@ -63,74 +61,61 @@ check_sealed :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os
             case _ => break
         }
     }
-    if container == 0xffffffff {
-        return 200
-    }
+    testing.require_ne(t, container, cast[u32](0xffffffff), "the test disk's system volume is in a SlopOS container, which the storage manager describes")?
+    given.container = container
     // Refused without its passphrase, and with the wrong one
-    match open_volume(manager, port, container, "") {
+    match open_volume(manager.end, manager.port, container, "") {
         case Locked => {}
-        case _ => return 201
+        case _ => testing.fail(t, "an encrypted volume isn't opened without a passphrase, but refused as locked")
     }
-    match open_volume(manager, port, container, "not its passphrase") {
+    match open_volume(manager.end, manager.port, container, "not its passphrase") {
         case WrongKey => {}
-        case _ => return 202
+        case _ => testing.fail(t, "an encrypted volume isn't opened with the wrong passphrase, which unwraps no key")
     }
     sealed := os.Channel[dir.Dir].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
-    match open_volume(manager, port, container, SEALED_PASSPHRASE) {
+    match open_volume(manager.end, manager.port, container, SEALED_PASSPHRASE) {
         case OpenedFiles(root) => sealed = root
-        case _ => return 203
+        case _ => return stopped(t, "an encrypted volume opens with the passphrase the image builder sealed it with")
     }
-    buffer := new_buffer() or_return 204
-    budget :: slop_os.startup_block().budget
-    sealed_port :: os.port_for(budget, sealed.end) or_return 204
+    given.sealed = sealed
+    buffer :: buffer_of(t, given)?
+    bound :: os.port_for(slop_os.startup_block().budget, sealed.end)
+    sealed_port :: testing.require_some(t, bound, "the budget has room for a port")?
     sealed_storage : u8[64]
     sealed_text :: capitals(SEALED_TEXT, sealed_storage)
     before_storage : u8[64]
     before_text :: capitals(BEFORE_TEXT, before_storage)
     after_storage : u8[64]
     after_text :: capitals(AFTER_TEXT, after_storage)
-    if !holds(sealed.end, sealed_port, SEALED_FILE, sealed_text, &buffer) {
-        return 205
-    }
-    if !write_new(sealed.end, sealed_port, BEFORE_FILE, before_text, &buffer) || !holds(sealed.end, sealed_port, BEFORE_FILE, before_text, &buffer) {
-        return 206
-    }
+    testing.expect(t, holds(sealed.end, sealed_port, SEALED_FILE, sealed_text, buffer),
+        "the file the image builder put in the encrypted volume reads back, decrypted, as it wrote it")
+    testing.require(t, write_new(sealed.end, sealed_port, BEFORE_FILE, before_text, buffer), "the encrypted volume takes a new file")?
+    testing.expect(t, holds(sealed.end, sealed_port, BEFORE_FILE, before_text, buffer), "a file written to the encrypted volume reads back")
     // A new key generation, sealing what's written from now on
     generation := cast[u32](0)
     out := os.Outgoing.{}
     rotating :: os.begin[storage.Request](&out)
     rotating^ = .Rotate(storage.VolumeNamed.{partition = container, name = bytes_of(&out, SEALED_VOLUME)})
-    match ask_storage(manager, port, &out) {
+    match ask_storage(manager.end, manager.port, &out) {
         case Rotated(made) => generation = made
-        case _ => return 207
+        case _ => return stopped(t, "the storage manager starts a new key generation for a volume it serves")
     }
-    if generation != 2 {
-        return 208
-    }
-    if !write_new(sealed.end, sealed_port, AFTER_FILE, after_text, &buffer) {
-        return 209
-    }
-    if !holds(sealed.end, sealed_port, SEALED_FILE, sealed_text, &buffer) || !holds(sealed.end, sealed_port, BEFORE_FILE, before_text, &buffer)
-        || !holds(sealed.end, sealed_port, AFTER_FILE, after_text, &buffer) {
-        return 210
-    }
+    testing.expect_eq(t, generation, 2, "the image builder sealed the volume with key generation 1, so the next is 2")
+    testing.require(t, write_new(sealed.end, sealed_port, AFTER_FILE, after_text, buffer),
+        "the encrypted volume takes a new file, sealed with the new key generation")?
+    testing.expect(t, holds(sealed.end, sealed_port, SEALED_FILE, sealed_text, buffer), "a file sealed before the image was made still reads")
+    testing.expect(t, holds(sealed.end, sealed_port, BEFORE_FILE, before_text, buffer), "a file sealed with the old key generation still reads")
+    testing.expect(t, holds(sealed.end, sealed_port, AFTER_FILE, after_text, buffer), "a file sealed with the new key generation reads")
     // Served now, it's opened again only with its passphrase
-    match open_volume(manager, port, container, "not its passphrase") {
+    match open_volume(manager.end, manager.port, container, "not its passphrase") {
         case WrongKey => {}
-        case _ => return 211
+        case _ => testing.fail(t, "an encrypted volume being served still isn't opened with the wrong passphrase")
     }
-    match open_volume(manager, port, container, SEALED_PASSPHRASE) {
+    match open_volume(manager.end, manager.port, container, SEALED_PASSPHRASE) {
         case OpenedFiles(again) => _ = slop_os.handle_close(cast[slop_os.Handle](again.end))
-        case _ => return 212
+        case _ => testing.fail(t, "an encrypted volume being served opens again with its passphrase")
     }
-    runtime.log_info("on the sealed volume, was refused locked and with a wrong passphrase, unlocked it, read its file, wrote one, started key generation %, wrote another and read all three",
-        generation)
-    // Stored links between it and the system volume, while it's served
-    failed :: check_links(to, manager, port, system, sealed, container)
-    if failed != 0 {
-        return failed
-    }
-    return check_snapshots(to, manager, port, system, container)
+    return .Ok
 }
 
 /**

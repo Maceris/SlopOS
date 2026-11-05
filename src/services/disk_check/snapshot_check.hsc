@@ -3,15 +3,17 @@ package disk_check
 import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
+import testing from "std"
 import dir from "std/os/slop_os"
 import read_only_dir from "std/os/slop_os"
 import storage from "../../protocols/storage"
+import test_kit from "../../test_kit"
 
 /*
  * Snapshots and clones (roadmap 8e), through the storage manager: a snapshot of the system volume, which reads as the
  * volume did after a file is written to the volume, given as a read-only directory; found among the volume's
  * snapshots; a clone of it, written to apart from the volume; the snapshot refused deletion while its clone is there;
- * and a snapshot of the encrypted volume, opened with its passphrase. Checks from 80.
+ * and a snapshot of the encrypted volume, opened with its passphrase.
  */
 
 /** The system volume's name in its container. */
@@ -30,125 +32,126 @@ CLONE_FILE :: "Written to the clone.txt"
 CLONE_TEXT :: "Written to a clone of the system volume's snapshot"
 
 /**
- * Check snapshots and clones through the storage manager, then quotas and volumes made.
+ * Check snapshots and clones through the storage manager.
  *
- * @param to The debug log, passed on.
- * @param manager The connection to the storage manager.
- * @param port A port bound to manager.
- * @param system The system volume's root.
- * @param container The container's index among the storage manager's partitions.
- * @return 0 if all of it held; 80 if the buffer or a port couldn't be made, 81 if the snapshot couldn't be taken, 82
- *     if the file after it couldn't be written, 83 to 85 if the snapshot couldn't be opened read-only, didn't read the
- *     module, or had the file written after it, 87 and 88 if it wasn't first among the volume's snapshots, 89 to 93 if
- *     the clone couldn't be made, opened, read, or written apart from the volume, 94 if deleting the snapshot wasn't
- *     refused as InUse, and 95 and 96 if a snapshot of the encrypted volume couldn't be taken or read; and
- *     check_quotas' numbers.
+ * @param t The test's state.
+ * @return Ok once it's run, the clone's root kept in Given for the quota's test; Error if the container wasn't
+ *     found, the buffer or a port couldn't be made, or a step the rest builds on failed: taking or opening the
+ *     snapshot, writing after it, reading its module, or making or opening the clone.
  */
-check_snapshots :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.Port, system: os.Channel[dir.Dir], container: u32) -> int {
-    buffer := new_buffer() or_return 80
+snapshots_read_as_the_volume_was_and_clone #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    system :: system_of(t, given)?
+    manager :: manager_of(t, given)?
+    container :: testing.require_some(t, given.container, "the sealed volume's test, run before, found the container")?
+    buffer :: buffer_of(t, given)?
     budget :: slop_os.startup_block().budget
-    system_port :: os.port_for(budget, system.end) or_return 80
-    match volume_request(manager, port, container, SYSTEM_VOLUME, SNAPSHOT, .Take) {
+    system_bound :: os.port_for(budget, system.end)
+    system_port :: testing.require_some(t, system_bound, "the budget has room for a port")?
+    match volume_request(manager.end, manager.port, container, SYSTEM_VOLUME, SNAPSHOT, .Take) {
         case Done => {}
-        case _ => return 81
+        case _ => return stopped(t, "the storage manager takes a snapshot of a volume it serves")
     }
-    if !write_new(system.end, system_port, AFTER_SNAPSHOT_FILE, AFTER_SNAPSHOT_TEXT, &buffer) {
-        return 82
-    }
+    testing.require(t, write_new(system.end, system_port, AFTER_SNAPSHOT_FILE, AFTER_SNAPSHOT_TEXT, buffer),
+        "the system volume takes a new file after its snapshot")?
     // The snapshot reads as the volume did, its modules and not what was written after, and only reads
     snapshot := os.Channel[read_only_dir.ReadOnlyDir].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
-    match open_named(manager, port, container, "system@before", "") {
+    match open_named(manager.end, manager.port, container, "system@before", "") {
         case OpenedReadOnlyFiles(root) => snapshot = root
-        case _ => return 83
+        case _ => return stopped(t, "a snapshot opens by its volume's name and its own, read only")
     }
-    snapshot_port :: os.port_for(budget, snapshot.end) or_return 83
+    snapshot_bound :: os.port_for(budget, snapshot.end)
+    snapshot_port :: testing.require_some(t, snapshot_bound, "the budget has room for a port")?
     module : u8[..]
     defer runtime.array_free(&module)
-    if !read_whole_read_only(snapshot.end, snapshot_port, MODULE_ON_VOLUME, &buffer, &module) || module.count == 0 {
-        return 84
-    }
+    testing.require(t, read_whole_read_only(snapshot.end, snapshot_port, MODULE_ON_VOLUME, buffer, &module),
+        "a snapshot has the files its volume had when it was taken")?
+    testing.require_ne(t, module.count, 0, "hello's module isn't empty in the snapshot")?
     missing : u8[..]
     defer runtime.array_free(&missing)
-    if read_whole_read_only(snapshot.end, snapshot_port, AFTER_SNAPSHOT_FILE, &buffer, &missing) {
-        return 85
-    }
+    testing.expect(t, !read_whole_read_only(snapshot.end, snapshot_port, AFTER_SNAPSHOT_FILE, buffer, &missing),
+        "a snapshot hasn't what its volume was given after it was taken")
     // Among the volume's snapshots
     out := os.Outgoing.{}
     listing :: os.begin[storage.Request](&out)
     listing^ = .SnapshotAt(storage.SnapshotIndexOf.{partition = container, volume = bytes_of(&out, SYSTEM_VOLUME), index = 0})
     into := os.Incoming.{}
-    if storage.send_request(manager, port, &out) is_some {
-        return 87
-    }
-    loop {
-        match storage.receive_response(manager, port, &into, true) {
-            case Received => break
-            case Failed(error) => return 87
-            case _ => continue
-        }
-    }
-    match os.message_of[storage.Response](&into)^ {
-        case Snapshot(info) => {
-            name :: os.items(&into, info.name)
-            if !same_text(name, SNAPSHOT) {
-                return 88
+    sent :: storage.send_request(manager.end, manager.port, &out)
+    received := sent is_none
+    if received {
+        loop {
+            match storage.receive_response(manager.end, manager.port, &into, true) {
+                case Received => break
+                case Failed(error) => {
+                    received = false
+                    break
+                }
+                case _ => continue
             }
         }
-        case _ => return 88
+    }
+    if !received {
+        testing.fail(t, "the storage manager answers what a volume's first snapshot is")
+    }
+    else {
+        match os.message_of[storage.Response](&into)^ {
+            case Snapshot(info) => {
+                name :: os.items(&into, info.name)
+                testing.expect(t, same_text(name, SNAPSHOT), "the system volume's first snapshot is the one just taken, its only one")
+            }
+            case _ => testing.fail(t, "the system volume has a snapshot, its first the one just taken")
+        }
     }
     // A clone, written to apart from the volume
     out = os.Outgoing.{}
     cloning :: os.begin[storage.Request](&out)
     cloning^ = .Clone(storage.CloneOf.{partition = container, volume = bytes_of(&out, SYSTEM_VOLUME), snapshot = bytes_of(&out, SNAPSHOT),
         name = bytes_of(&out, CLONE)})
-    match ask_storage(manager, port, &out) {
+    match ask_storage(manager.end, manager.port, &out) {
         case Done => {}
-        case _ => return 89
+        case _ => return stopped(t, "the storage manager clones a snapshot as a volume of its own")
     }
     clone := os.Channel[dir.Dir].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
-    match open_named(manager, port, container, CLONE, "") {
+    match open_named(manager.end, manager.port, container, CLONE, "") {
         case OpenedFiles(root) => clone = root
-        case _ => return 90
+        case _ => return stopped(t, "a clone opens by its name, to write")
     }
-    clone_port :: os.port_for(budget, clone.end) or_return 90
+    given.clone = clone
+    clone_bound :: os.port_for(budget, clone.end)
+    clone_port :: testing.require_some(t, clone_bound, "the budget has room for a port")?
     from_clone : u8[..]
     defer runtime.array_free(&from_clone)
-    if !read_whole(clone.end, clone_port, MODULE_ON_VOLUME, &buffer, &from_clone) || from_clone.count != module.count {
-        return 91
-    }
-    if !write_new(clone.end, clone_port, CLONE_FILE, CLONE_TEXT, &buffer) || !holds(clone.end, clone_port, CLONE_FILE, CLONE_TEXT, &buffer) {
-        return 92
-    }
+    testing.expect(t, read_whole(clone.end, clone_port, MODULE_ON_VOLUME, buffer, &from_clone), "a clone has its snapshot's files")
+    testing.expect_eq(t, from_clone.count, module.count, "a clone's files are its snapshot's")
+    testing.expect(t, write_new(clone.end, clone_port, CLONE_FILE, CLONE_TEXT, buffer) && holds(clone.end, clone_port, CLONE_FILE, CLONE_TEXT, buffer),
+        "a clone takes a new file, and reads it back")
     not_there : u8[..]
     defer runtime.array_free(&not_there)
-    if read_whole(system.end, system_port, CLONE_FILE, &buffer, &not_there) {
-        return 93
-    }
+    testing.expect(t, !read_whole(system.end, system_port, CLONE_FILE, buffer, &not_there), "what's written to a clone isn't in its volume")
     // The snapshot stays while its clone is there
-    match volume_request(manager, port, container, SYSTEM_VOLUME, SNAPSHOT, .Delete) {
+    match volume_request(manager.end, manager.port, container, SYSTEM_VOLUME, SNAPSHOT, .Delete) {
         case InUse => {}
-        case _ => return 94
+        case _ => testing.fail(t, "a snapshot isn't deleted while a clone of it is there, but refused as in use")
     }
     // A snapshot of the encrypted volume, opened with its passphrase
-    match volume_request(manager, port, container, SEALED_VOLUME, "first", .Take) {
+    match volume_request(manager.end, manager.port, container, SEALED_VOLUME, "first", .Take) {
         case Done => {}
-        case _ => return 95
+        case _ => return stopped(t, "the storage manager takes a snapshot of the encrypted volume it serves")
     }
-    match open_named(manager, port, container, "sealed@first", SEALED_PASSPHRASE) {
+    match open_named(manager.end, manager.port, container, "sealed@first", SEALED_PASSPHRASE) {
         case OpenedReadOnlyFiles(root) => {
-            sealed_port :: os.port_for(budget, root.end) or_return 96
+            sealed_bound :: os.port_for(budget, root.end)
+            sealed_port :: testing.require_some(t, sealed_bound, "the budget has room for a port")?
             text_storage : u8[64]
             text :: capitals(SEALED_TEXT, text_storage)
             back : u8[..]
             defer runtime.array_free(&back)
-            if !read_whole_read_only(root.end, sealed_port, SEALED_FILE, &buffer, &back) || !same_text(back, text) {
-                return 96
-            }
+            testing.expect(t, read_whole_read_only(root.end, sealed_port, SEALED_FILE, buffer, &back) && same_text(back, text),
+                "a snapshot of an encrypted volume reads, decrypted, as the volume did")
         }
-        case _ => return 96
+        case _ => testing.fail(t, "a snapshot of an encrypted volume opens with the volume's passphrase")
     }
-    runtime.log_info("snapshots: read one of the system volume as it was, read only, wrote to its clone, couldn't delete it while cloned, and read one of the sealed volume")
-    return check_quotas(to, manager, port, clone, container)
+    return .Ok
 }
 
 /** What volume_request asks of a snapshot. */

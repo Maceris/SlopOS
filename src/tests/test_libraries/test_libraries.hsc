@@ -6,22 +6,44 @@
  */
 package test_libraries
 
+import compiler from "base"
 import os from "std"
+import testing from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
-import log_line from "../../log_line"
 import greeting from "../../libraries/greeting"
+import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */
 NAME :: "test_libraries"
 
+/** What main was given that the tests use. */
+Given :: struct {
+    /** The debug log. */
+    log : slop_os.DebugLog,
+}
+
 /**
- * Check that the greeting library is bound before main, and its exports work.
+ * Check that the greeting library, bound by the runtime before main, gives what its exports should.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run.
+ */
+a_library_bound_before_main_gives_what_its_exports_should #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    testing.expect_eq(t, greeting.add(40, 2), 42, "add's sum is computed in the library and returned across the call")
+    repeated :: greeting.repeat("ab", 3)
+    testing.expect_eq(t, repeated, "ababab", "repeat makes its text with this program's context, which it's handed")
+    testing.expect_eq(t, greeting.greeting(), "hello from a library", "greeting's string is in the library's own data, which was mapped with it")
+    return .Ok
+}
+
+/**
+ * Run the tests, reporting to the debug log.
  *
  * The library is bound by the runtime before main runs, from the grant library:greeting.library; given one whose
  * export's type changed, main never runs, and the program ends with 1.
  *
- * @param log The debug log, writable, where the test says what it found.
+ * @param log The debug log, writable, where each test is reported.
  * @param platform Not used.
  * @param test_device Not used.
  * @param firmware Not used.
@@ -29,20 +51,10 @@ NAME :: "test_libraries"
  * @param program Not used.
  * @param peer Not used.
  * @param cpu_budget Not used.
- * @return 0 if every export gave what it should; 101 if add's sum, 102 if repeat's text made with this program's
- *     context, 103 if greeting's string from the library's data was wrong.
+ * @return How many tests failed: 0 when every one passed.
  */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
-    if greeting.add(40, 2) != 42 {
-        return 1 + 100
-    }
-    if greeting.repeat("ab", 3) != "ababab" {
-        return 2 + 100
-    }
-    if greeting.greeting() != "hello from a library" {
-        return 3 + 100
-    }
-    log_line.write(log, "%: bound greeting, and called its exports", NAME)
-    return 0
+    given :: Given.{log = log}
+    return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }

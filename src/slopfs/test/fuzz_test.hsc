@@ -3,6 +3,7 @@ package slopfs_test
 import runtime from "base"
 import crypto from "std"
 import os from "std"
+import testing from "std"
 import slopfs from ".."
 
 /*
@@ -11,7 +12,7 @@ import slopfs from ".."
  * are expected. Damage comes three ways: bytes flipped anywhere, blocks copied over others or zeroed, and nodes
  * changed somewhere down a tree with every seal from there to the checkpoint made again, as someone who can compute
  * BLAKE3 could, so what's behind the seals is fuzzed too. SLOPOS_FUZZ_ROUNDS asks for more rounds than the
- * default. Checks from 600.
+ * default.
  */
 
 /** The size of the fuzzer's disk, in blocks: 4 MiB. */
@@ -33,6 +34,14 @@ Survived :: struct {
     committed : u64,
 }
 
+an_image_damaged_many_ways_is_used_as_far_as_it_goes_without_crashing #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    return check_fuzz(t, false)
+}
+
+an_encrypted_image_damaged_many_ways_is_used_as_far_as_it_goes_without_crashing #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    return check_fuzz(t, true)
+}
+
 /**
  * Check that an image damaged in many ways can be mounted and used as far as it goes without crashing or hanging.
  *
@@ -40,31 +49,26 @@ Survived :: struct {
  * three ways in turn (bytes flipped anywhere, a block copied over another or zeroed, or a node changed and every seal
  * above it made again) and runs exercise on it. Errors from the volume are expected and ignored.
  *
+ * @param t The test's state, which a failure is recorded in.
  * @param sealed Whether the volume is encrypted.
- * @return 0 if the rounds ran to their end with at least one image mounted, or the number of the first check that
- *     failed, 600 to 606.
+ * @return Ok once the rounds have run, whatever was found; Error(Failed), the failure recorded, if the volume to damage
+ *     couldn't be set up.
  */
-check_fuzz :: fn(sealed: bool) -> int {
-    device :: new_device_of(FUZZ_BLOCKS) or_return 600
+check_fuzz :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome {
+    device :: formatted(t, FUZZ_BLOCKS, 0xf0)?
     defer free_device(device)
     disk :: cast[ptr[mut Disk]](device.context)
-    id : u8[16]
-    for i in 0..<id.count {
-        id[i] = cast[u8](0xf0 + i)
-    }
-    slopfs.format(device, id) or_return 601
-    container := slopfs.mount(device) or_return 602
-    volume := create_test_volume(container, "fuzz", sealed) or_return 603
+    mounting :: slopfs.mount(device)
+    container :: testing.require_ok(t, mounting, "a formatted disk mounts")?
+    creating :: create_test_volume(container, "fuzz", sealed)
+    volume :: testing.require_ok(t, creating, "a new container has room for a volume")?
     for step in 0..<STEPS - 1 {
-        if workload(volume, step) != 0 || commit_failed(container) {
-            return 604
-        }
+        workload(t, volume, step)?
+        require_commit(t, container, "each step of the workload commits")?
     }
     slopfs.unmount(container)
     base, error :: runtime.new_array(u8, disk.bytes.count)
-    if error != null {
-        return 605
-    }
+    testing.require(t, error == null, "a copy of the undamaged image is allocated")?
     defer runtime.free_array(base)
     copy_into(base, disk.bytes)
     rounds : u64 = FUZZ_ROUNDS
@@ -107,11 +111,8 @@ check_fuzz :: fn(sealed: bool) -> int {
     }
     runtime.log_info("fuzz%: % rounds: % refused at mount, % mounted, % of those checked out whole, % committed after", if sealed { " (sealed)" } else { "" },
         survived.rounds, survived.refused, survived.mounted, survived.verified, survived.committed)
-    // The sealed rounds, at least, mostly mount: their damage is behind the seals
-    if survived.mounted == 0 {
-        return 606
-    }
-    return 0
+    testing.expect(t, survived.mounted > 0, "some damage, most of all behind the seals, still mounts")
+    return .Ok
 }
 
 /**

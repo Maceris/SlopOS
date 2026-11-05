@@ -398,8 +398,8 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
 
 The root task gives every test its log, a connection to the manager and its own module, and `test_devices` and
 `test_msi_dma` the platform capability, the `test_device` grant and the firmware tables. A test that needs other processes launches copies of itself,
-giving each a `peer` channel to tell it its part. Each test says what worked in its debug log and ends with 0, or
-the number of the first check that failed (`src/test_kit`).
+giving each a `peer` channel to tell it its part. Each test's checks are `#test` functions it runs with
+`test_kit.run`, reporting each to its debug log, and it ends with how many failed (`src/test_kit`, decisions/0175).
 
 ## The Runtime
 

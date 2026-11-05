@@ -1,11 +1,12 @@
 /**
- * The system configuration's records' tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything
- * worked, or the number of the first check that failed. Records of three services stand in for the build's: a server
- * with a listener, a client with a channel to it and an optional Config, and the config store's listener.
+ * The system configuration's records' tests, a test program (tools/unit_tests.py, decisions/0175). Records of three
+ * services stand in for the build's: a server with a listener, a client with a channel to it and an optional Config,
+ * and the config store's listener.
  */
 package system_records_test
 
 import runtime from "base"
+import testing from "std"
 import system_records from ".."
 
 /** The tag of the protocol the test's server serves and its client takes a channel to; any value but 0 would do. */
@@ -14,126 +15,124 @@ SERVED_TAG : u64 : 0x1234
 CONFIG_TAG : u64 : 0x5678
 
 /**
- * Run the system records' tests: check and apply on records of three services, each change that should be refused
- * refused, and the protocol tag's hash.
+ * Make the test's records on the heap, as records makes them; they're too big for a test's stack beside a changed copy.
  *
- * @return 0 if every check passed; otherwise the number of the first that failed, 1 to 20, or 99 if there wasn't the
- *     memory for the records.
+ * @param t The test's state, which a failure is recorded in.
+ * @return The records, from the context's allocator, which the caller frees with runtime.free; Error if there wasn't
+ *     the memory for them, the failure recorded.
  */
-main :: fn() -> int {
+made_records :: fn(t: ptr[mut testing.T]) -> Result[ptr[mut system_records.SystemRecords], testing.Stopped] {
     made, error :: runtime.new_aligned(system_records.SystemRecords, align_of(system_records.SystemRecords))
-    if error != null {
-        return 99
-    }
-    defer runtime.free(made)
+    testing.require(t, error == null, "there's the memory for the records")?
     made^ = records()
-    // Records as the build makes them are taken
-    if system_records.check(made) is_some {
-        return 1
-    }
-    // Each of these is refused
+    return .Ok(made)
+}
+
+records_as_the_build_makes_them_are_taken #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made :: made_records(t)?
+    defer runtime.free(made)
+    testing.expect_none(t, system_records.check(made), "three well-formed services, each parameter's protocol served")
+    return .Ok
+}
+
+broken_records_are_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made :: made_records(t)?
+    defer runtime.free(made)
     changed := made^
     changed.magic = 0
-    if system_records.check(&changed) is_none {
-        return 2
-    }
+    testing.expect_some(t, system_records.check(&changed), "without their magic, they aren't system records")
     changed = made^
     changed.parameters[2].tag = 0x9999
-    if system_records.check(&changed) is_none {
-        return 3
-    }
+    testing.expect_some(t, system_records.check(&changed), "a Config, even an optional one, of a protocol no service serves")
     changed = made^
     changed.services[1].budget = 0
-    if system_records.check(&changed) is_none {
-        return 4
-    }
+    testing.expect_some(t, system_records.check(&changed), "a service with no budget can't be started")
     changed = made^
     changed.services[1].cpu = system_records.CpuRecord.{has = 1, priority = 1, period_ns = 10, time_ns = 11}
-    if system_records.check(&changed) is_none {
-        return 5
-    }
+    testing.expect_some(t, system_records.check(&changed), "a CPU share of more time than its period")
     changed = made^
     changed.services[1].name[0] = 32
-    if system_records.check(&changed) is_none {
-        return 6
-    }
+    testing.expect_some(t, system_records.check(&changed), "a name starting with a space isn't a service's")
     changed = made^
     _ = system_records.set_name(&changed.services[1].name, "server")
-    if system_records.check(&changed) is_none {
-        return 7
-    }
+    testing.expect_some(t, system_records.check(&changed), "two services of one name")
     changed = made^
     changed.services[0].parameter_count = 200
-    if system_records.check(&changed) is_none {
-        return 8
-    }
+    testing.expect_some(t, system_records.check(&changed), "parameters past the records' own")
     changed = made^
     changed.services[1].starter = 7
-    if system_records.check(&changed) is_none {
-        return 9
-    }
-    // An override's tunables are applied, and checked
+    testing.expect_some(t, system_records.check(&changed), "7 isn't a starter")
+    return .Ok
+}
+
+an_overrides_tunables_are_applied #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made :: made_records(t)?
+    defer runtime.free(made)
     overrides := system_records.SystemOverrides.{count = 1}
     overrides.tuned[0] = system_records.Tunables.{set = system_records.TUNE_BUDGET | system_records.TUNE_RESTART, budget = 4096,
         not_restarted = 1}
     _ = system_records.set_name(&overrides.tuned[0].name, "client")
-    changed = made^
-    if (system_records.apply(&changed, &overrides) is_some) || changed.services[1].budget != 4096 || changed.services[1].not_restarted != 1 {
-        return 10
-    }
-    // One that leaves a budget of 0, names a service there isn't, or tunes what it can't, is refused, and changes nothing
-    overrides.tuned[0].budget = 0
-    changed = made^
-    if (system_records.apply(&changed, &overrides) is_none) || changed.services[1].budget != made.services[1].budget {
-        return 11
-    }
+    changed := made^
+    testing.expect_none(t, system_records.apply(&changed, &overrides), "a budget and a restart policy for a service there is")
+    testing.expect_eq(t, changed.services[1].budget, 4096, "the client's budget is the override's")
+    testing.expect_eq(t, changed.services[1].not_restarted, 1, "and so is whether it's restarted")
+    return .Ok
+}
+
+overrides_that_cannot_apply_are_refused_and_change_nothing #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made :: made_records(t)?
+    defer runtime.free(made)
+    overrides := system_records.SystemOverrides.{count = 1}
+    overrides.tuned[0] = system_records.Tunables.{set = system_records.TUNE_BUDGET | system_records.TUNE_RESTART, budget = 0,
+        not_restarted = 1}
+    _ = system_records.set_name(&overrides.tuned[0].name, "client")
+    changed := made^
+    testing.expect_some(t, system_records.apply(&changed, &overrides), "a budget of 0 would leave the client unstartable")
+    testing.expect_eq(t, changed.services[1].budget, made.services[1].budget, "a refused override changes nothing")
     overrides.tuned[0].budget = 4096
     _ = system_records.set_name(&overrides.tuned[0].name, "nothing")
-    if system_records.apply(&changed, &overrides) is_none {
-        return 12
-    }
+    testing.expect_some(t, system_records.apply(&changed, &overrides), "there's no service named nothing to tune")
     _ = system_records.set_name(&overrides.tuned[0].name, "client")
     overrides.tuned[0].set = 16
-    if system_records.apply(&changed, &overrides) is_none {
-        return 13
-    }
+    testing.expect_some(t, system_records.apply(&changed, &overrides), "16 isn't a tunable an override can set")
     overrides.count = system_records.MAX_TUNED + 1
-    if system_records.apply(&changed, &overrides) is_none {
-        return 14
-    }
-    // What the system needs can't require what only a late service serves
-    changed = made^
+    testing.expect_some(t, system_records.apply(&changed, &overrides), "more tuned services than the overrides hold")
+    return .Ok
+}
+
+what_the_system_needs_cannot_require_what_only_a_late_service_serves #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made :: made_records(t)?
+    defer runtime.free(made)
+    changed := made^
     changed.services[0].late = 1
-    if system_records.check(&changed) is_none {
-        return 16
-    }
+    testing.expect_some(t, system_records.check(&changed), "the client, started with the system, needs the late server")
     changed.services[1].late = 1
-    if system_records.check(&changed) is_some {
-        return 17
-    }
-    // Installations: named, with programs, no two of one name, within their array
-    changed = made^
+    testing.expect_none(t, system_records.check(&changed), "a late client may need a late server")
+    return .Ok
+}
+
+installations_are_named_with_programs_and_no_two_of_one_name #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made :: made_records(t)?
+    defer runtime.free(made)
+    changed := made^
     changed.installations.count = 2
     _ = system_records.set_name(&changed.installations.entries[0].name, "counter")
     _ = system_records.set_name(&changed.installations.entries[0].program, "counter")
     _ = system_records.set_name(&changed.installations.entries[1].name, "other")
     _ = system_records.set_name(&changed.installations.entries[1].program, "counter")
-    if system_records.check(&changed) is_some {
-        return 18
-    }
+    testing.expect_none(t, system_records.check(&changed), "two installations of one program, named differently")
     _ = system_records.set_name(&changed.installations.entries[1].name, "counter")
-    if system_records.check(&changed) is_none {
-        return 19
-    }
+    testing.expect_some(t, system_records.check(&changed), "two installations of one name")
     changed.installations.count = system_records.MAX_INSTALLATIONS + 1
-    if system_records.installations_check(&changed.installations) is_none {
-        return 20
-    }
-    // A protocol's tag is std/os's: FNV-1a of its name
-    if system_records.tag_of("") != 0xcbf29ce484222325 || system_records.tag_of("a") != 0xaf63dc4c8601ec8c {
-        return 15
-    }
-    return 0
+    testing.expect_some(t, system_records.installations_check(&changed.installations), "more installations than their array holds")
+    return .Ok
+}
+
+a_protocols_tag_is_the_fnv_1a_of_its_name #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    // As std/os makes it
+    testing.expect_eq(t, system_records.tag_of(""), 0xcbf29ce484222325, "FNV-1a's offset basis, for no bytes")
+    testing.expect_eq(t, system_records.tag_of("a"), 0xaf63dc4c8601ec8c, "FNV-1a's published hash of a")
+    return .Ok
 }
 
 /**

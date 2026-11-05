@@ -1,11 +1,14 @@
 package supervisor
 
+import compiler from "base"
 import runtime from "base"
 import os from "std"
+import testing from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
 import log_line from "../../log_line"
 import accounts from "../../protocols/accounts"
+import test_kit from "../../test_kit"
 
 /*
  * test_accounts (decisions/0141): the account service, on a disk with no accounts yet, refuses a common password and a
@@ -33,86 +36,157 @@ TEST_WAIT : u64 : 1500000000
  */
 ANSWER_POLL : u64 : 10000000
 
+/** The name the tests' lines in the supervisor's log start with, after which the report's own follow. */
+ACCOUNTS_TEST_NAME :: "supervisor: test_accounts"
+
 /**
- * Run test_accounts, logging whether it passed or where it failed.
- *
- * @param supervisor The supervisor, which needs a running account service on a disk with no accounts yet.
+ * What test_accounts' tests share, which each reaches through test_kit.given: the supervisor, and the connection to
+ * the account service and the recovery code, which the first test makes for those after it.
  */
-check_accounts :: fn(supervisor: ptr[mut Supervisor]) {
-    match accounts_failure(supervisor) {
-        case Some(what) => log_line.write(supervisor.log, "supervisor: test_accounts: failed at %", what)
-        case None => log_line.write(supervisor.log, "supervisor: test_accounts: made the administrator alone, limited wrong passwords, opened its home, recovered it")
-    }
+AccountsGiven :: struct {
+    /**
+     * The supervisor's address, as a word rather than a pointer: test_kit.run keeps this struct on the heap, which
+     * mayn't hold a pointer it can't tell isn't into the stack. The supervisor outlives the tests, which run inside
+     * check_accounts.
+     */
+    supervisor_at : u64,
+    /** A connection to the account service, the supervisor's own; NO_HANDLE until the first test has made it. */
+    end : slop_os.Channel,
+    /** The port end's answers wake; NO_HANDLE until the first test has made it. */
+    port : slop_os.Port,
+    /** The administrator's recovery code, as the account service showed it, valid once has_code is set. */
+    code : u8[accounts.RECOVERY_TEXT_BYTES],
+    /** Whether the first test made the administrator and kept its code. */
+    has_code : bool,
 }
 
 /**
- * Run test_accounts' steps in order, stopping at the first that fails.
+ * Run test_accounts' tests in order, reporting each to the supervisor's log as "supervisor: test_accounts: <line>".
  *
  * The account service is asked through a connection of the supervisor's own; meanwhile the supervisor handles what
- * else arrives, as the account service dials the storage manager through a connector it serves. The test makes the
- * administrator, so it changes the disk for good.
+ * else arrives, as the account service dials the storage manager through a connector it serves. The tests make the
+ * administrator, so they change the disk for good.
  *
  * @param supervisor The supervisor, which needs a running account service on a disk with no accounts yet; its port is
  *     handled while each answer is waited for, and its budget pays for the connection, which is left open.
- * @return What failed, in words, as "connecting" or "a wrong password"; null if every step passed.
  */
-accounts_failure :: fn(supervisor: ptr[mut Supervisor]) -> string? {
-    connection :: accounts_connection(supervisor) or_return "connecting"
-    port :: os.port_for(supervisor.block.budget, connection.end) or_return "connecting"
+check_accounts :: fn(supervisor: ptr[mut Supervisor]) {
+    shared :: AccountsGiven.{supervisor_at = cast[u64](supervisor), end = cast[slop_os.Channel](slop_os.NO_HANDLE),
+        port = cast[slop_os.Port](slop_os.NO_HANDLE)}
+    _ = test_kit.run(supervisor.log, ACCOUNTS_TEST_NAME, #insert testing.tests_of(compiler.load_package(".")), shared)
+}
+
+/**
+ * Find the supervisor from what test_accounts' tests share.
+ *
+ * @param shared What the tests share, from test_kit.given.
+ * @return The supervisor, which check_accounts was given, good while the tests run.
+ */
+supervisor_of :: fn(shared: ptr[AccountsGiven]) -> ptr[mut Supervisor] {
+    return cast[ptr[mut Supervisor]](shared.supervisor_at)
+}
+
+/**
+ * Check that the account service, with no accounts yet, refuses a common password and a name an account can't have,
+ * makes the administrator, showing its recovery code, and refuses a second account.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run, the connection and the recovery code kept for the tests after; Error if the account
+ *     service couldn't be connected to or described, or didn't make the administrator.
+ */
+makes_the_administrator_alone #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    shared :: test_kit.given(t, AccountsGiven)?
+    supervisor :: supervisor_of(shared)
+    connected :: accounts_connection(supervisor)
+    connection :: testing.require_some(t, connected, "the account service is running, and takes a connection through its listener")?
+    bound :: os.port_for(supervisor.block.budget, connection.end)
+    port :: testing.require_some(t, bound, "the supervisor's budget has room for a port")?
+    shared.end = connection.end
+    shared.port = port
     end :: connection.end
     match ask_accounts(supervisor, end, port, .Describe) {
-        case Described(status) => {
-            if status.accounts != 0 {
-                return "an account already there"
-            }
-        }
-        case _ => return "Describe"
+        case Described(status) => testing.require_eq(t, status.accounts, 0, "the test boots a disk with no accounts yet")?
+        case _ => return failed_step(t, "the account service describes itself when asked")
     }
     match create(supervisor, end, port, TEST_NAME, "password") {
-        case PasswordRefused(problem) => {
-            if problem != 3 {
-                return "a common password, refused as something else"
-            }
-        }
-        case _ => return "a common password"
+        case PasswordRefused(problem) => testing.expect_eq(t, problem, 3, "a common password is refused as common, problem 3")
+        case _ => testing.fail(t, "an account isn't made with a common password")
     }
     match create(supervisor, end, port, "Admin", TEST_PASSWORD) {
         case NameRefused => {}
-        case _ => return "a capitalized name"
+        case _ => testing.fail(t, "an account isn't made with a name with a capital letter, which no account name has")
     }
-    code : u8[accounts.RECOVERY_TEXT_BYTES]
     match create(supervisor, end, port, TEST_NAME, TEST_PASSWORD) {
-        case Created(shown) => code = shown.text
-        case _ => return "making the administrator"
+        case Created(shown) => shared.code = shown.text
+        case _ => return failed_step(t, "the first account is made, the administrator, with a valid name and a long, uncommon password")
     }
-    if code[5] != cast[u8]('-') || code[23] != cast[u8]('-') {
-        return "the recovery code's form"
-    }
+    shared.has_code = true
+    testing.expect_eq(t, shared.code[5], cast[u8]('-'), "a recovery code is shown in groups, a dash after the fifth character")
+    testing.expect_eq(t, shared.code[23], cast[u8]('-'), "a recovery code is shown in groups, a dash after the 23rd character")
     match create(supervisor, end, port, "second", TEST_PASSWORD) {
         case Refused => {}
-        case _ => return "a second account"
+        case _ => testing.fail(t, "a second account isn't made at first-boot setup: only the administrator, alone")
     }
-    // Three wrong passwords, then a wait
+    return .Ok
+}
+
+/**
+ * Check that the account service refuses a wrong password, and after three hears the next only after a wait.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the first test made no connection.
+ */
+limits_wrong_passwords #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    shared :: test_kit.given(t, AccountsGiven)?
+    supervisor :: supervisor_of(shared)
+    testing.require_ne(t, shared.end, cast[slop_os.Channel](slop_os.NO_HANDLE), "the first test connected to the account service")?
     for i in 0..<3 {
-        match open_home(supervisor, end, port, TEST_NAME, "not the password at all") {
+        match open_home(supervisor, shared.end, shared.port, TEST_NAME, "not the password at all") {
             case WrongCredentials => {}
-            case _ => return "a wrong password"
+            case _ => testing.fail(t, "a wrong password opens nothing, refused as wrong credentials")
         }
     }
-    match open_home(supervisor, end, port, TEST_NAME, TEST_PASSWORD) {
+    match open_home(supervisor, shared.end, shared.port, TEST_NAME, TEST_PASSWORD) {
         case RateLimited(wait) => {}
-        case _ => return "the attempt after three wrong ones"
+        case _ => testing.fail(t, "after three wrong passwords, even the right one isn't heard until a wait is over")
     }
     pause(supervisor, TEST_WAIT)
-    home := match open_home(supervisor, end, port, TEST_NAME, TEST_PASSWORD) {
-        case OpenedHome(root) => root
-        case _ => return "opening the home volume"
+    return .Ok
+}
+
+/**
+ * Check that the administrator's home volume opens with its password, once the wait is over, and takes a file.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the first test made no connection, or the home volume didn't open.
+ */
+opens_the_administrators_home #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    shared :: test_kit.given(t, AccountsGiven)?
+    supervisor :: supervisor_of(shared)
+    testing.require_ne(t, shared.end, cast[slop_os.Channel](slop_os.NO_HANDLE), "the first test connected to the account service")?
+    home := os.Channel[dir.Dir].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
+    match open_home(supervisor, shared.end, shared.port, TEST_NAME, TEST_PASSWORD) {
+        case OpenedHome(root) => home = root
+        case _ => return failed_step(t, "the administrator's home volume opens with its password, the wait for wrong ones over")
     }
-    if !write_file(home, TEST_FILE, TEST_TEXT) {
-        return "writing to the home volume"
-    }
+    testing.expect(t, write_file(home, TEST_FILE, TEST_TEXT), "the administrator's home volume takes a file")
     _ = slop_os.handle_close(cast[slop_os.Handle](home.end))
+    return .Ok
+}
+
+/**
+ * Check that the recovery code, typed in lowercase, replaces the administrator's password, after which the old one is
+ * refused and the new one opens the home volume, the file still there.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the first test kept no recovery code, or the new password opened nothing.
+ */
+recovers_the_administrator_with_its_recovery_code #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    shared :: test_kit.given(t, AccountsGiven)?
+    supervisor :: supervisor_of(shared)
+    testing.require(t, shared.has_code, "the first test made the administrator and kept its recovery code")?
     // The recovery code, typed in lowercase, replaces the password
+    code := shared.code
     for byte, i in code {
         if byte >= cast[u8]('A') && byte <= cast[u8]('Z') {
             code[i] = byte + 32
@@ -122,23 +196,35 @@ accounts_failure :: fn(supervisor: ptr[mut Supervisor]) -> string? {
     recovering :: os.begin[accounts.Request](&out)
     recovering^ = .Recover(accounts.Recovery.{name = bytes_of(&out, TEST_NAME), code = os.append(&out, code[0..<accounts.RECOVERY_TEXT_BYTES]),
         new_password = bytes_of(&out, TEST_NEW_PASSWORD)})
-    match send_accounts(supervisor, end, port, &out) {
+    match send_accounts(supervisor, shared.end, shared.port, &out) {
         case Done => {}
-        case _ => return "recovering with the recovery code"
+        case _ => return failed_step(t, "the recovery code, typed in lowercase, replaces the password: it's read ignoring case")
     }
-    match open_home(supervisor, end, port, TEST_NAME, TEST_PASSWORD) {
+    match open_home(supervisor, shared.end, shared.port, TEST_NAME, TEST_PASSWORD) {
         case WrongCredentials => {}
-        case _ => return "the password the recovery code replaced"
+        case _ => testing.fail(t, "the password the recovery code replaced opens nothing")
     }
-    home_again := match open_home(supervisor, end, port, TEST_NAME, TEST_NEW_PASSWORD) {
-        case OpenedHome(root) => root
-        case _ => return "opening the home volume with the new password"
+    home := os.Channel[dir.Dir].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
+    match open_home(supervisor, shared.end, shared.port, TEST_NAME, TEST_NEW_PASSWORD) {
+        case OpenedHome(root) => home = root
+        case _ => return failed_step(t, "the new password the recovery code set opens the home volume")
     }
-    if !holds_file(home_again, TEST_FILE, TEST_TEXT) {
-        return "the home volume's file"
-    }
-    _ = slop_os.handle_close(cast[slop_os.Handle](home_again.end))
-    return null
+    testing.expect(t, holds_file(home, TEST_FILE, TEST_TEXT), "recovering an account keeps its home volume, the file written to it still there")
+    _ = slop_os.handle_close(cast[slop_os.Handle](home.end))
+    return .Ok
+}
+
+/**
+ * Record a failure for a step whose answer wasn't the one it should have been, and stop the test there.
+ *
+ * @param t The test's state, which the failure is recorded in.
+ * @param message What the step should have done, and why it should have.
+ * @param location Where the step is; the caller's own.
+ * @return Error(Failed), for the test to return.
+ */
+failed_step :: fn(t: ptr[mut testing.T], message: string, location := #caller_location) -> testing.Outcome {
+    testing.fail(t, message, location)
+    return .Error(.Failed)
 }
 
 /**

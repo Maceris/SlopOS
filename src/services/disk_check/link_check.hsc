@@ -1,11 +1,12 @@
 package disk_check
 
-import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
+import testing from "std"
 import dir from "std/os/slop_os"
 import files from "std/os/slop_os"
 import grant from "std/os/slop_os"
+import test_kit from "../../test_kit"
 
 /*
  * Stored links (roadmap 8f): the encrypted volume grants a directory, to write, and a file in it, to read, and the
@@ -14,7 +15,7 @@ import grant from "std/os/slop_os"
  * links; the file's link refuses writing, and lists as a link. A directory opened through a link grants nothing and
  * lists no links: what it reached isn't the holder's to share. The encrypted volume lists what it issued, and revokes
  * the file's link, which then opens nothing; and a grant kept in its own volume is followed as any other
- * (decisions/0158). Removing a link removes only the link. Checks from 120.
+ * (decisions/0158). Removing a link removes only the link.
  */
 
 /** The directory the encrypted volume makes and grants, to write, kept as the system volume's link "linked". */
@@ -31,71 +32,60 @@ THROUGH_TEXT :: "Written through a link in the system volume"
 LANDED_FILE :: "shared/from the system volume.txt"
 
 /**
- * Check stored links between the system volume and the encrypted one beside it.
+ * Check stored links between the system volume and the encrypted one beside it, which the sealed volume's test
+ * unlocked.
  *
- * @param to The debug log; unused, as what's found is logged through runtime.
- * @param manager The connection to the storage manager; unused.
- * @param port A port bound to manager; unused.
- * @param system The system volume's root.
- * @param sealed The encrypted volume's root, unlocked.
- * @param container The container's partition index; unused.
- * @return 0 if all of it held; 120 if the buffer or a port couldn't be made, 121 to 123 if the encrypted volume's
- *     directory and file couldn't be made or granted, 124 to 126 if they couldn't be kept as links, 127 and 128 if
- *     writing or reading through them failed, 129 if the file's link didn't refuse writing as ReadOnly, 130 if the
- *     directory's link didn't list as one, 131 to 134 if a directory opened through a link granted or listed links,
- *     135 if the encrypted volume didn't list the two links it issued, 136 to 138 if revoking the file's link didn't
- *     work, or touched the other, 139 and 140 if a grant kept in its own volume couldn't be followed, and 141 and 142
- *     if removing a link failed or removed what it reached.
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the encrypted volume wasn't unlocked, the buffer or a port couldn't be made, or a
+ *     step the rest builds on failed: making or granting what's shared, keeping it as links, opening what a link
+ *     reached, or listing the links issued.
  */
-check_links :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.Port, system: os.Channel[dir.Dir], sealed: os.Channel[dir.Dir],
-    container: u32) -> int {
-    buffer := new_buffer() or_return 120
+links_reach_another_volume_and_grant_nothing_further #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    system :: system_of(t, given)?
+    sealed :: testing.require_some(t, given.sealed, "the sealed volume's test, run before, unlocked the encrypted volume")?
+    buffer :: buffer_of(t, given)?
     budget :: slop_os.startup_block().budget
-    system_port :: os.port_for(budget, system.end) or_return 120
-    sealed_port :: os.port_for(budget, sealed.end) or_return 120
+    system_bound :: os.port_for(budget, system.end)
+    system_port :: testing.require_some(t, system_bound, "the budget has room for a port")?
+    sealed_bound :: os.port_for(budget, sealed.end)
+    sealed_port :: testing.require_some(t, sealed_bound, "the budget has room for a port")?
     into := os.Incoming.{}
 
     // What the sealed volume shares, granted
-    if !made_directory(sealed.end, sealed_port, SHARED_DIRECTORY) || !write_new(sealed.end, sealed_port, SHARED_FILE, SHARED_TEXT, &buffer) {
-        return 121
-    }
-    whole :: granted(sealed.end, sealed_port, SHARED_DIRECTORY, true) or_return 122
-    note :: granted(sealed.end, sealed_port, SHARED_FILE, false) or_return 123
+    testing.require(t, made_directory(sealed.end, sealed_port, SHARED_DIRECTORY), "the encrypted volume makes a directory")?
+    testing.require(t, write_new(sealed.end, sealed_port, SHARED_FILE, SHARED_TEXT, buffer), "the encrypted volume takes a new file")?
+    granted_directory :: granted(sealed.end, sealed_port, SHARED_DIRECTORY, true)
+    whole :: testing.require_some(t, granted_directory, "a volume grants a directory of its own, to write")?
+    granted_file :: granted(sealed.end, sealed_port, SHARED_FILE, false)
+    note :: testing.require_some(t, granted_file, "a volume grants a file of its own, to read")?
 
     // Kept as links in the system volume
-    if !made_directory(system.end, system_port, "links") {
-        return 124
-    }
+    testing.require(t, made_directory(system.end, system_port, "links"), "the system volume makes a directory")?
     match linked(system.end, system_port, "linked", whole) {
         case Done => {}
-        case _ => return 125
+        case _ => return stopped(t, "a volume keeps another's grant as a link")
     }
     match linked(system.end, system_port, "links/note", note) {
         case Done => {}
-        case _ => return 126
+        case _ => return stopped(t, "a volume keeps another's grant as a link, in a directory of its own")
     }
 
     // Written and read through them
-    if !write_new(system.end, system_port, THROUGH_FILE, THROUGH_TEXT, &buffer) || !holds(sealed.end, sealed_port, LANDED_FILE, THROUGH_TEXT, &buffer) {
-        return 127
-    }
-    if !holds(system.end, system_port, "linked/note.txt", SHARED_TEXT, &buffer) || !holds(system.end, system_port, "links/note", SHARED_TEXT, &buffer) {
-        return 128
-    }
+    testing.expect(t, write_new(system.end, system_port, THROUGH_FILE, THROUGH_TEXT, buffer),
+        "a file is written through a link to a directory granted to write")
+    testing.expect(t, holds(sealed.end, sealed_port, LANDED_FILE, THROUGH_TEXT, buffer),
+        "a file written through a link lands in the volume that granted it")
+    testing.expect(t, holds(system.end, system_port, "linked/note.txt", SHARED_TEXT, buffer), "a file reads through a link to its directory")
+    testing.expect(t, holds(system.end, system_port, "links/note", SHARED_TEXT, buffer), "a file reads through a link to it")
     out := os.Outgoing.{}
     writing :: os.begin[dir.Request](&out)
     writing^ = .OpenFile(dir.OpenFile.{path = bytes_of(&out, "links/note"), creation = .Existing})
     match ask_dir(system.end, system_port, &out, &into) {
-        case Failed(error) => {
-            if error != .ReadOnly {
-                return 129
-            }
-        }
-        case _ => return 129
+        case Failed(error) => testing.expect_eq(t, error, .ReadOnly, "a link to a file granted to read opens nothing to write")
+        case _ => testing.fail(t, "a link to a file granted to read opens nothing to write")
     }
-    if !lists_link(system.end, system_port, "linked") {
-        return 130
-    }
+    testing.expect(t, lists_link(system.end, system_port, "linked"), "a link lists as a link in its directory")
 
     // What a link reached isn't its holder's to share
     out = os.Outgoing.{}
@@ -104,37 +94,28 @@ check_links :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.
     reached := os.Channel[dir.Dir].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     match ask_dir(system.end, system_port, &out, &into) {
         case OpenedDirectory(made) => reached = made
-        case _ => return 131
+        case _ => return stopped(t, "a link to a directory opens as a directory")
     }
-    reached_port :: os.port_for(budget, reached.end) or_return 131
-    if !holds(reached.end, reached_port, "note.txt", SHARED_TEXT, &buffer) {
-        return 132
-    }
+    reached_bound :: os.port_for(budget, reached.end)
+    reached_port :: testing.require_some(t, reached_bound, "the budget has room for a port")?
+    testing.expect(t, holds(reached.end, reached_port, "note.txt", SHARED_TEXT, buffer), "a directory opened through a link reads its files")
     out = os.Outgoing.{}
     regranting :: os.begin[dir.Request](&out)
     regranting^ = .Grant(dir.GrantOf.{path = bytes_of(&out, "note.txt"), write = false})
     match ask_dir(reached.end, reached_port, &out, &into) {
-        case Failed(error) => {
-            if error != .ReadOnly {
-                return 133
-            }
-        }
+        case Failed(error) => testing.expect_eq(t, error, .ReadOnly, "what a link reached grants nothing: it isn't the holder's to share")
         case Granted(made) => {
             _ = slop_os.handle_close(cast[slop_os.Handle](made.end))
-            return 133
+            testing.fail(t, "what a link reached grants nothing: it isn't the holder's to share")
         }
-        case _ => return 133
+        case _ => testing.fail(t, "what a link reached grants nothing: it isn't the holder's to share")
     }
     out = os.Outgoing.{}
     listing :: os.begin[dir.Request](&out)
     listing^ = .Links(0)
     match ask_dir(reached.end, reached_port, &out, &into) {
-        case Failed(error) => {
-            if error != .ReadOnly {
-                return 134
-            }
-        }
-        case _ => return 134
+        case Failed(error) => testing.expect_eq(t, error, .ReadOnly, "what a link reached lists no links: they're its volume's, not the holder's")
+        case _ => testing.fail(t, "what a link reached lists no links: they're its volume's, not the holder's")
     }
     _ = slop_os.handle_close(cast[slop_os.Handle](reached_port))
     _ = slop_os.handle_close(cast[slop_os.Handle](reached.end))
@@ -150,20 +131,16 @@ check_links :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.
             case Issued(link) => {
                 path :: os.items(&into, link.path)
                 expected :: if i == 0 { SHARED_DIRECTORY } else { SHARED_FILE }
-                if i >= 2 || !same_text(path, expected) || link.write != (i == 0) {
-                    return 135
-                }
+                testing.require(t, i < 2, "the encrypted volume issued two links, so it lists two")?
+                testing.expect(t, same_text(path, expected), "a volume lists the links it issued in the order it issued them, by path")
+                testing.expect_eq(t, link.write, i == 0, "a volume lists whether each link it issued may write: the directory's, not the file's")
                 if i < numbers.count {
                     numbers[i] = link.number
                 }
                 cursor = link.next
             }
-            case End => {
-                if i != 2 {
-                    return 135
-                }
-            }
-            case _ => return 135
+            case End => testing.expect_eq(t, i, 2, "the encrypted volume issued two links, so it lists two")
+            case _ => return stopped(t, "a volume lists the links it issued")
         }
     }
     out = os.Outgoing.{}
@@ -171,35 +148,30 @@ check_links :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.
     revoking^ = .Revoke(numbers[1])
     match ask_dir(sealed.end, sealed_port, &out, &into) {
         case Done => {}
-        case _ => return 136
+        case _ => testing.fail(t, "a volume revokes a link it issued, by its number")
     }
     out = os.Outgoing.{}
     reopening :: os.begin[dir.Request](&out)
     reopening^ = .OpenReadOnlyFile(bytes_of(&out, "links/note"))
     match ask_dir(system.end, system_port, &out, &into) {
-        case Failed(error) => {
-            if error != .Revoked {
-                return 137
-            }
-        }
-        case _ => return 137
+        case Failed(error) => testing.expect_eq(t, error, .Revoked, "a link revoked opens nothing")
+        case _ => testing.fail(t, "a link revoked opens nothing")
     }
-    if !holds(system.end, system_port, "linked/note.txt", SHARED_TEXT, &buffer) {
-        return 138
-    }
+    testing.expect(t, holds(system.end, system_port, "linked/note.txt", SHARED_TEXT, buffer), "revoking one link leaves the others working")
 
     // A grant kept in its own volume, followed as any other
-    own :: granted(system.end, system_port, "modules/hello.elf", false) or_return 139
+    granted_own :: granted(system.end, system_port, "modules/hello.elf", false)
+    own :: testing.require_some(t, granted_own, "a volume grants a file of its own, to read")?
     match linked(system.end, system_port, "links/itself", own) {
         case Done => {}
-        case _ => return 140
+        case _ => return stopped(t, "a volume keeps a grant of its own as a link")
     }
     out = os.Outgoing.{}
     following :: os.begin[dir.Request](&out)
     following^ = .OpenReadOnlyFile(bytes_of(&out, "links/itself"))
     match ask_dir(system.end, system_port, &out, &into) {
         case OpenedReadOnlyFile(made) => _ = slop_os.handle_close(cast[slop_os.Handle](made.end))
-        case _ => return 140
+        case _ => testing.fail(t, "a link a volume keeps to itself is followed as any other")
     }
 
     // Removing a link removes only the link
@@ -208,15 +180,12 @@ check_links :: fn(to: slop_os.DebugLog, manager: slop_os.Channel, port: slop_os.
     removing^ = .Remove(bytes_of(&out, "links/note"))
     match ask_dir(system.end, system_port, &out, &into) {
         case Done => {}
-        case _ => return 141
+        case _ => testing.fail(t, "a link is removed as a file is")
     }
-    if !holds(sealed.end, sealed_port, SHARED_FILE, SHARED_TEXT, &buffer) {
-        return 142
-    }
+    testing.expect(t, holds(sealed.end, sealed_port, SHARED_FILE, SHARED_TEXT, buffer), "removing a link leaves what it reached")
     _ = slop_os.handle_close(cast[slop_os.Handle](system_port))
     _ = slop_os.handle_close(cast[slop_os.Handle](sealed_port))
-    runtime.log_info("links: the system volume wrote and read through two from the sealed one; what one reached granted nothing; one revoked opened nothing; one into itself opened")
-    return 0
+    return .Ok
 }
 
 /**

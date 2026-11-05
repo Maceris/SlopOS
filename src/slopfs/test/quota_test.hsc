@@ -1,13 +1,14 @@
 package slopfs_test
 
 import runtime from "base"
+import testing from "std"
 import slopfs from ".."
 
 /*
  * Quotas and the reserve (roadmap 8e, slopfs/space.hsc): a volume's files written until its quota refuses more, and a
  * file deleted at its quota, which makes room; a snapshot's blocks kept charged to its volume, so deleting files under
  * it frees nothing until the snapshot goes; a container filled to its reserve, where deleting and committing still
- * work; and a volume's count of its blocks, which always matches the owners tree, across a mount. Checks from 1100.
+ * work; and a volume's count of its blocks, which always matches the owners tree, across a mount.
  */
 
 /** The size of the quota test's disk, in blocks: 8 MiB. */
@@ -91,119 +92,182 @@ remove_file :: fn(volume: ptr[mut slopfs.Volume], number: int) -> bool {
     }
 }
 
-/**
- * Check quotas: a volume's files written until its quota refuses more, and a file deleted at its quota, which makes
- * room; a snapshot's blocks kept charged to its volume, so deleting files under it frees nothing until the snapshot
- * goes; a volume's count of its blocks, which always matches the owners tree, and its quota, across a mount; then
- * check_reserve.
- *
- * @return 0 if every check passed, or the number of the first that failed: 1100 to 1122, or check_reserve's.
- */
-check_quotas :: fn() -> int {
-    device :: new_device_of(QUOTA_BLOCKS) or_return 1100
-    defer free_device(device)
-    id : u8[16]
-    for i in 0..<id.count {
-        id[i] = cast[u8](0x90 + i)
-    }
-    slopfs.format(device, id) or_return 1101
-    container := slopfs.mount(device) or_return 1102
-    volume := slopfs.create_volume(container, "limited", key_of_volume(), 1) or_return 1103
-    data := runtime.new(Data)
-    defer runtime.free(data)
-    pattern(data.bytes[0..<CHUNK], 5)
-    if commit_failed(container) {
-        return 1104
-    }
-    volume_id :: volume.id
-    // Five chunks' worth, and room for the tree
-    quota :: 5 * 16 + 16
-    slopfs.set_quota(container, volume_id, quota) or_return 1105
-    if commit_failed(container) || !counted(container, volume_id) {
-        return 1106
-    }
+/** A volume with a quota, as the quota tests start from it. */
+Limited :: struct {
+    /** The disk, of QUOTA_BLOCKS blocks, freed by free_limited. */
+    device : slopfs.Device,
+    /** The container, mounted while mounted is true. */
+    container : ptr[mut slopfs.Container],
+    /** Whether container is mounted, so free_limited unmounts it. */
+    mounted : bool,
+    /** The volume "limited", open in container, empty. */
+    volume : ptr[mut slopfs.Volume],
+    /** volume's ID. */
+    id : u64,
+    /** volume's quota in blocks: QUOTA. */
+    quota : u64,
+    /** A chunk of pattern 5 to write, from runtime.new, freed by free_limited. */
+    data : ptr[mut Data],
+}
 
-    // Written until the quota refuses more
+/** The quota the quota tests' volume has, in blocks: five chunks' worth, and room for the tree. */
+QUOTA : u64 : 5 * 16 + 16
+
+/**
+ * Format a container of QUOTA_BLOCKS blocks, make a volume, "limited", in it, and give it a quota of QUOTA blocks, all
+ * committed; checking the volume's count of its blocks is what the owners tree says.
+ *
+ * @param t The test's state, which a failure is recorded in.
+ * @return The volume, the caller's to free with free_limited; Error if any of it failed, the failure recorded and
+ *     nothing left to free.
+ */
+limited :: fn(t: ptr[mut testing.T]) -> Result[Limited, testing.Stopped] {
+    device :: formatted(t, QUOTA_BLOCKS, 0x90)?
+    made := Limited.{device = device, quota = QUOTA, data = runtime.new(Data)}
+    pattern(made.data.bytes[0..<CHUNK], 5)
+    if limit(t, &made) is_error {
+        free_limited(&made)
+        return .Error(.Failed)
+    }
+    return .Ok(made)
+}
+
+/**
+ * Do limited's work on its formatted disk.
+ *
+ * @param t The test's state, which a failure is recorded in.
+ * @param made The disk, formatted; the rest is set here.
+ * @return Ok if it's all done; Error(Failed), the failure recorded, if not.
+ */
+limit :: fn(t: ptr[mut testing.T], made: ptr[mut Limited]) -> testing.Outcome {
+    mounting :: slopfs.mount(made.device)
+    made.container = testing.require_ok(t, mounting, "a formatted disk mounts")?
+    made.mounted = true
+    creating :: slopfs.create_volume(made.container, "limited", key_of_volume(), 1)
+    made.volume = testing.require_ok(t, creating, "a new container has room for a volume")?
+    made.id = made.volume.id
+    require_commit(t, made.container, "a new volume commits")?
+    setting :: slopfs.set_quota(made.container, made.id, made.quota)
+    require_done(t, setting, "a volume takes a quota")?
+    require_commit(t, made.container, "a quota commits")?
+    testing.expect(t, counted(made.container, made.id), "a volume's count of its blocks is the owners tree's, once committed")
+    return .Ok
+}
+
+/**
+ * Give back what limited made: the container unmounted if it's mounted, the disk and data freed.
+ *
+ * @param made What limited made, which isn't used after.
+ */
+free_limited :: fn(made: ptr[mut Limited]) {
+    if made.mounted {
+        slopfs.unmount(made.container)
+    }
+    runtime.free(made.data)
+    free_device(made.device)
+}
+
+/**
+ * Write files of a chunk each, numbered from 0, until the quota refuses one, and commit them, checking they stop near
+ * the quota and the counts still match.
+ *
+ * @param t The test's state, which a failure is recorded in.
+ * @param made The volume with a quota, empty.
+ * @return How many files were written, numbered 0 on; Error(Failed), the failure recorded, if they didn't commit.
+ */
+fill_to_quota :: fn(t: ptr[mut testing.T], made: ptr[mut Limited]) -> Result[int, testing.Stopped] {
     written := 0
     for number in 0..<20 {
-        if !write_file(volume, number, data) {
+        if !write_file(made.volume, number, made.data) {
             break
         }
         written += 1
     }
-    if written < 4 || written > 6 {
-        return 1107
-    }
-    if commit_failed(container) || !counted(container, volume_id) || slopfs.usage_of(container, volume_id).used > quota + 16 {
-        return 1108
-    }
-    // Deleting at the quota works, and makes room
-    if !remove_file(volume, 0) || commit_failed(container) {
-        return 1109
-    }
-    if !write_file(volume, 100, data) || commit_failed(container) || !counted(container, volume_id) {
-        return 1110
-    }
-
-    // A snapshot keeps what it holds charged: deleting under it frees nothing, until it goes
-    slopfs.take_snapshot(container, volume_id, name_bytes("held"), 2) or_return 1111
-    if commit_failed(container) {
-        return 1112
-    }
-    before :: slopfs.usage_of(container, volume_id).used
-    for number in 1..<written {
-        _ = remove_file(volume, number)
-    }
-    _ = remove_file(volume, 100)
-    if commit_failed(container) || !counted(container, volume_id) {
-        return 1113
-    }
-    if slopfs.usage_of(container, volume_id).used + 8 < before {
-        return 1114
-    }
-    if write_file(volume, 200, data) {
-        return 1115
-    }
-    slopfs.delete_snapshot(container, volume_id, name_bytes("held"), null) or_return 1116
-    if commit_failed(container) || !counted(container, volume_id) {
-        return 1117
-    }
-    if slopfs.usage_of(container, volume_id).used >= before || !write_file(volume, 200, data) || commit_failed(container) {
-        return 1118
-    }
-
-    // Across a mount: the quota, and every count
-    slopfs.unmount(container)
-    container = slopfs.mount(device) or_return 1119
-    if !counted(container, volume_id) || slopfs.usage_of(container, volume_id).quota != quota {
-        return 1120
-    }
-    volume = slopfs.open_volume(container, volume_id) or_return 1121
-    if write_file(volume, 300, data) && write_file(volume, 301, data) && write_file(volume, 302, data) && write_file(volume, 303, data)
-        && write_file(volume, 304, data) && write_file(volume, 305, data) {
-        return 1122
-    }
-    slopfs.unmount(container)
-    return check_reserve()
+    testing.expect(t, written >= 4 && written <= 6, "a quota of five chunks and room for the tree takes about five chunks")
+    require_commit(t, made.container, "what was written within the quota commits")?
+    testing.expect(t, counted(made.container, made.id), "a volume's count of its blocks is the owners tree's, once committed")
+    testing.expect(t, slopfs.usage_of(made.container, made.id).used <= made.quota + 16, "a volume uses at most its quota and a chunk")
+    return .Ok(written)
 }
 
-/**
- * Check the reserve: a container filled to it, with no quota, keeps it free of files' bytes, and deleting and
- * committing still work, freeing blocks.
- *
- * @return 0 if every check passed, or the number of the first that failed, 1130 to 1138.
- */
-check_reserve :: fn() -> int {
-    blocks : u64 = 512
-    device :: new_device_of(blocks) or_return 1130
-    defer free_device(device)
-    id : u8[16]
-    for i in 0..<id.count {
-        id[i] = cast[u8](0xa0 + i)
+writes_stop_at_the_quota_and_a_delete_makes_room #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := limited(t)?
+    defer free_limited(&made)
+    fill_to_quota(t, &made)?
+    testing.expect(t, remove_file(made.volume, 0), "deleting works at the quota, though it rewrites the tree")
+    require_commit(t, made.container, "a delete at the quota commits")?
+    testing.expect(t, write_file(made.volume, 100, made.data), "a delete at the quota makes room for another file")
+    require_commit(t, made.container, "a file written in the room made commits")?
+    testing.expect(t, counted(made.container, made.id), "a volume's count of its blocks is the owners tree's, once committed")
+    return .Ok
+}
+
+a_snapshot_keeps_its_blocks_charged_until_it_goes #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := limited(t)?
+    defer free_limited(&made)
+    container :: made.container
+    written :: fill_to_quota(t, &made)?
+    taking :: slopfs.take_snapshot(container, made.id, name_bytes("held"), 2)
+    require_done(t, taking, "a volume at its quota takes a snapshot, which takes no blocks of its own")?
+    require_commit(t, container, "the snapshot commits")?
+    before :: slopfs.usage_of(container, made.id).used
+    for number in 0..<written {
+        _ = remove_file(made.volume, number)
     }
-    slopfs.format(device, id) or_return 1131
-    container := slopfs.mount(device) or_return 1132
-    volume := slopfs.create_volume(container, "full", key_of_volume(), 1) or_return 1133
+    require_commit(t, container, "removing the files commits")?
+    testing.expect(t, counted(container, made.id), "a volume's count of its blocks is the owners tree's with a snapshot")
+    testing.expect(t, slopfs.usage_of(container, made.id).used + 8 >= before,
+        "files deleted under a snapshot free nothing: the snapshot holds their blocks, charged to the volume")
+    testing.expect(t, !write_file(made.volume, 200, made.data), "with the snapshot's blocks charged, the volume is still at its quota")
+    deleting :: slopfs.delete_snapshot(container, made.id, name_bytes("held"), null)
+    require_done(t, deleting, "a snapshot without clones is deleted")?
+    require_commit(t, container, "the snapshot's deletion commits")?
+    testing.expect(t, counted(container, made.id), "a volume's count of its blocks is the owners tree's once its snapshot goes")
+    testing.expect(t, slopfs.usage_of(container, made.id).used < before, "deleting the snapshot frees the blocks only it held")
+    testing.expect(t, write_file(made.volume, 200, made.data), "with the snapshot gone, there's room under the quota")
+    _ = commits(t, container, "a file written once the snapshot went commits")
+    return .Ok
+}
+
+the_quota_and_every_count_last_across_a_mount #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := limited(t)?
+    defer free_limited(&made)
+    written :: fill_to_quota(t, &made)?
+    // All but one removed, so some more fit, but not six
+    for number in 1..<written {
+        testing.expect(t, remove_file(made.volume, number), "each file written is removed")
+    }
+    require_commit(t, made.container, "the removals commit")?
+    require_commit(t, made.container, "a commit after the removals frees what they gave back")?
+    slopfs.unmount(made.container)
+    made.mounted = false
+    mounting :: slopfs.mount(made.device)
+    made.container = testing.require_ok(t, mounting, "the container mounts again")?
+    made.mounted = true
+    testing.expect(t, counted(made.container, made.id), "a volume's count of its blocks is the owners tree's after a mount")
+    testing.expect_eq(t, slopfs.usage_of(made.container, made.id).quota, made.quota, "a volume's quota is kept across a mount")
+    opening :: slopfs.open_volume(made.container, made.id)
+    made.volume = testing.require_ok(t, opening, "the volume opens again")?
+    all_six := true
+    for number in 300..<306 {
+        if !write_file(made.volume, number, made.data) {
+            all_six = false
+            break
+        }
+    }
+    testing.expect(t, !all_six, "six more chunks don't fit a quota of five beside the one kept: it holds after a mount")
+    return .Ok
+}
+
+the_reserve_keeps_room_to_delete_and_commit #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    blocks : u64 = 512
+    device :: formatted(t, blocks, 0xa0)?
+    defer free_device(device)
+    mounting :: slopfs.mount(device)
+    container :: testing.require_ok(t, mounting, "a formatted disk mounts")?
+    defer slopfs.unmount(container)
+    creating :: slopfs.create_volume(container, "full", key_of_volume(), 1)
+    volume :: testing.require_ok(t, creating, "a new container has room for a volume")?
     data := runtime.new(Data)
     defer runtime.free(data)
     pattern(data.bytes[0..<CHUNK], 6)
@@ -213,27 +277,23 @@ check_reserve :: fn() -> int {
             break
         }
         written += 1
-        if number % 4 == 3 && commit_failed(container) {
-            return 1134
+        if number % 4 == 3 {
+            require_commit(t, container, "every fourth file written commits")?
         }
     }
-    if written == 0 || commit_failed(container) {
-        return 1135
-    }
+    testing.expect_ne(t, written, 0, "an empty container has room for a file")
+    require_commit(t, container, "a container full to its reserve commits")?
     // Full to the reserve, which only a file's bytes keep out of
     reserve :: slopfs.reserve_of(blocks)
-    if slopfs.free_blocks(container) + 16 < reserve || slopfs.free_blocks(container) > reserve + 16 + 2 * slopfs.NODE_BLOCKS * 4 {
-        return 1136
-    }
+    testing.expect(t, slopfs.free_blocks(container) + 16 >= reserve, "files' bytes don't go into the reserve")
+    testing.expect(t, slopfs.free_blocks(container) <= reserve + 16 + 2 * slopfs.NODE_BLOCKS * 4,
+        "files' bytes take everything but the reserve, a chunk, and the trees' nodes")
     full :: slopfs.free_blocks(container)
     for number in 0..<written {
-        if !remove_file(volume, number) {
-            return 1137
-        }
+        testing.expect(t, remove_file(volume, number), "deleting works full to the reserve, the tree's rewrite taken from it")
     }
-    if commit_failed(container) || commit_failed(container) || slopfs.free_blocks(container) <= full {
-        return 1138
-    }
-    slopfs.unmount(container)
-    return 0
+    require_commit(t, container, "deletes full to the reserve commit")?
+    require_commit(t, container, "a commit after the deletes frees what they gave back")?
+    testing.expect(t, slopfs.free_blocks(container) > full, "deleting full to the reserve frees blocks")
+    return .Ok
 }

@@ -12,10 +12,11 @@
  */
 package test_cpu_budgets
 
+import compiler from "base"
 import os from "std"
+import testing from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
-import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */
@@ -23,74 +24,104 @@ NAME :: "test_cpu_budgets"
 /** A millisecond, in nanoseconds, for budgets' periods and times. */
 MILLISECOND : u64 : 1_000_000
 
+/** What main was given that the tests use. */
+Given :: struct {
+    /** The debug log. */
+    log : slop_os.DebugLog,
+    /** The root CPU budget, which may be split but not set; none if main wasn't given it. */
+    cpu_budget : slop_os.CpuBudget?,
+}
+
+
 /**
- * Check CPU budgets as objects: splitting, setting, refusing and destroying them.
+ * Check that the root budget is every CPU's whole time at the top priority, with nothing split off it yet.
  *
  * Shares are in millionths of a CPU: a time of 5 ms every 10 ms is 500,000.
  *
- * @param log The debug log, writable, where the test says what it found and which check failed.
+ * @param t The test's state.
+ * @return Ok once it's run; Error if main wasn't given the root budget, or it couldn't be described.
+ */
+the_root_budget_is_every_cpu_s_whole_time #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    root :: testing.require_some(t, given.cpu_budget, "the root task grants the root CPU budget")?
+    whole :: testing.require_some(t, slop_os.cpu_budget_describe(root), "the root budget can be described")?
+    testing.expect_eq(t, whole.priority, 255, "the root budget has the top priority, which every other is under")
+    // Its CPUs are any there may be, but its share counts those online, which the test isn't told
+    testing.expect_eq(t, whole.share % 1_000_000, 0, "the root budget's share is the whole of each CPU it has")
+    testing.expect(t, whole.share >= 1_000_000, "the root budget has at least the boot CPU's whole time")
+    testing.expect_eq(t, whole.children_share, 0, "nothing has been split off the root budget before the test")
+    return .Ok
+}
+
+/**
+ * Check that budgets split off their parents' shares and are refused past them, above their parents' priorities, or
+ * with no period; that a budget can't be set below what its children have, but can to another period and time, its
+ * share changing in its parent's count; that the root can't be set; that what ran on a destroyed budget goes to its
+ * parent, and the root has its whole time back once every budget split off it is gone; and that what the budgets
+ * charged their memory budget comes back.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if main wasn't given the root budget, or the memory budget, the child or the
+ *     process couldn't be made, or the root couldn't be described.
+ */
+budgets_split_off_their_parents_and_give_back_on_going #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
+    root :: testing.require_some(t, given.cpu_budget, "the root task grants the root CPU budget")?
+    memory :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a memory budget for the CPU budgets")?
+    whole :: testing.require_some(t, slop_os.cpu_budget_describe(root), "the root budget can be described")?
+    // A child, and what's refused
+    child_budget :: testing.require_ok(t, slop_os.cpu_budget_create(root, memory, 100, 10 * MILLISECOND, 5 * MILLISECOND), "a child of 5 ms every 10 ms fits in the root's share")?
+    with_child :: testing.require_some(t, slop_os.cpu_budget_describe(root), "the root budget can be described")?
+    testing.expect_eq(t, with_child.children_share, 500_000, "the child's half a CPU is split off the root's share")
+    too_much :: slop_os.cpu_budget_create(root, memory, 100, 10 * MILLISECOND, (whole.share / 1_000_000 + 1) * 10 * MILLISECOND)
+    testing.expect_error(t, too_much, slop_os.HandleError.BudgetExceeded, "a child can't have more than its parent's whole share")
+    too_high :: slop_os.cpu_budget_create(child_budget, memory, 200, 10 * MILLISECOND, MILLISECOND)
+    testing.expect_error(t, too_high, slop_os.HandleError.BudgetExceeded, "a child's priority can't be above its parent's")
+    no_period :: slop_os.cpu_budget_create(root, memory, 100, 0, MILLISECOND)
+    testing.expect_error(t, no_period, slop_os.HandleError.InvalidArgument, "a budget's period has to be more than 0")
+    // A grandchild, and the child set around it
+    grandchild :: slop_os.cpu_budget_create(child_budget, memory, 50, 10 * MILLISECOND, 2 * MILLISECOND)
+    testing.expect_ok(t, grandchild, "a grandchild of 2 ms every 10 ms fits in the child's share")
+    below :: slop_os.cpu_budget_set(child_budget, 100, 10 * MILLISECOND, MILLISECOND)
+    testing.expect_error(t, below, slop_os.HandleError.BudgetExceeded, "a budget can't be set below what its children have split off it")
+    reset :: slop_os.cpu_budget_set(child_budget, 100, 20 * MILLISECOND, 8 * MILLISECOND)
+    testing.expect_ok(t, reset, "a budget can be set to another period and time that still holds its children")
+    with_reset :: testing.require_some(t, slop_os.cpu_budget_describe(root), "the root budget can be described")?
+    testing.expect_eq(t, with_reset.children_share, 400_000, "the child's new share, 8 ms every 20 ms, is what's split off the root")
+    root_set :: slop_os.cpu_budget_set(root, 255, 10 * MILLISECOND, 10 * MILLISECOND)
+    testing.expect_error(t, root_set, slop_os.HandleError.MissingRight, "the root budget's handle hasn't the right to set it")
+    // A process on the child, which then goes, and the grandchild after it
+    process :: testing.require_ok(t, slop_os.process_create(memory), "a process is made to run on the child")?
+    put :: slop_os.process_set_cpu_budget(process, child_budget)
+    testing.expect_ok(t, put, "a process can be put on a budget split off its parent's")
+    _ = slop_os.handle_close(cast[slop_os.Handle](child_budget))
+    test_kit.wait_nanoseconds(20 * MILLISECOND)
+    without_child :: testing.require_some(t, slop_os.cpu_budget_describe(root), "the root budget can be described")?
+    testing.expect_eq(t, without_child.children_share, 200_000, "once the child is destroyed, its grandchild and process go to the root, with the grandchild's share")
+    _ = slop_os.handle_close(cast[slop_os.Handle](grandchild or_else test_kit.handle_at[slop_os.CpuBudget](0)))
+    _ = slop_os.handle_close(cast[slop_os.Handle](process))
+    emptied :: testing.require_some(t, slop_os.cpu_budget_describe(root), "the root budget can be described")?
+    testing.expect_eq(t, emptied.children_share, 0, "once the grandchild is destroyed too, the root has its whole time back")
+    testing.expect(t, test_kit.wait_for_budget(memory, 0, 1_000_000_000), "what the budgets charged their memory budget is back to nothing once they're gone")
+    return .Ok
+}
+
+/**
+ * Run the tests, reporting to the debug log.
+ *
+ * @param log The debug log, writable, where each test is reported.
  * @param platform Not used.
  * @param test_device Not used.
  * @param firmware Not used.
  * @param manager Not used.
  * @param program Not used.
  * @param peer Not used.
- * @param cpu_budget The root CPU budget, which may be split but not set; without it the test ends with 100.
- * @return 0 if every check passed. Otherwise the first that failed: 1 to 3 if the root budget isn't priority 255,
- *     its whole share, with nothing split off; 4 if a child couldn't be made, or 5 the root's children's share isn't
- *     then 500,000; 6 if a child past the root's share, 7 one above its parent's priority, or 8 one with a period of
- *     0 wasn't refused; 9 if a grandchild couldn't be made; 10 if setting the child below its grandchild's share
- *     wasn't refused, or 11 setting it to another period and time was; 12 if the root's children's share isn't then
- *     400,000; 13 if setting the root wasn't refused for its missing right; 14 if a process couldn't be put on the
- *     child; 15 if, the child destroyed, the root's children's share isn't the grandchild's 200,000, or 16 isn't 0
- *     once the grandchild is too; 17 if what the budgets charged their memory budget didn't come back in a second.
- *     101 to 107 if setting up failed: 101 the memory budget, 102 to 106 describing the root, 107 the process.
+ * @param cpu_budget The root CPU budget, which may be split but not set; without it the tests fail.
+ * @return How many tests failed: 0 when every one passed.
  */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
-    block :: slop_os.startup_block()
-    root :: cpu_budget or_return 100
-    memory :: slop_os.memory_budget_create(block.budget, 1 << 20) or_return 101
-    results : u64[17]
-    whole :: slop_os.cpu_budget_describe(root) or_return 102
-    results[0] = whole.priority
-    results[1] = whole.share
-    results[2] = whole.children_share
-    // A child, and what's refused
-    child :: slop_os.cpu_budget_create(root, memory, 100, 10 * MILLISECOND, 5 * MILLISECOND)
-    results[3] = test_kit.tag_of(child)
-    child_budget :: child or_else test_kit.handle_at[slop_os.CpuBudget](0)
-    results[4] = (slop_os.cpu_budget_describe(root) or_return 103).children_share
-    results[5] = test_kit.tag_of(slop_os.cpu_budget_create(root, memory, 100, 10 * MILLISECOND, (whole.share / 1_000_000 + 1) * 10 * MILLISECOND))
-    results[6] = test_kit.tag_of(slop_os.cpu_budget_create(child_budget, memory, 200, 10 * MILLISECOND, MILLISECOND))
-    results[7] = test_kit.tag_of(slop_os.cpu_budget_create(root, memory, 100, 0, MILLISECOND))
-    // A grandchild, and the child set around it
-    grandchild :: slop_os.cpu_budget_create(child_budget, memory, 50, 10 * MILLISECOND, 2 * MILLISECOND)
-    results[8] = test_kit.tag_of(grandchild)
-    results[9] = test_kit.tag_of(slop_os.cpu_budget_set(child_budget, 100, 10 * MILLISECOND, MILLISECOND))
-    results[10] = test_kit.tag_of(slop_os.cpu_budget_set(child_budget, 100, 20 * MILLISECOND, 8 * MILLISECOND))
-    results[11] = (slop_os.cpu_budget_describe(root) or_return 104).children_share
-    results[12] = test_kit.tag_of(slop_os.cpu_budget_set(root, 255, 10 * MILLISECOND, 10 * MILLISECOND))
-    // A process on the child, which then goes, and the grandchild after it
-    process :: slop_os.process_create(memory) or_return 107
-    results[13] = test_kit.tag_of(slop_os.process_set_cpu_budget(process, child_budget))
-    _ = slop_os.handle_close(cast[slop_os.Handle](child_budget))
-    test_kit.wait_nanoseconds(20 * MILLISECOND)
-    results[14] = (slop_os.cpu_budget_describe(root) or_return 105).children_share
-    _ = slop_os.handle_close(cast[slop_os.Handle](grandchild or_else test_kit.handle_at[slop_os.CpuBudget](0)))
-    _ = slop_os.handle_close(cast[slop_os.Handle](process))
-    results[15] = (slop_os.cpu_budget_describe(root) or_return 106).children_share
-    results[16] = if test_kit.wait_for_budget(memory, 0, 1_000_000_000) { cast[u64](1) } else { cast[u64](0) }
-    expected :: u64.[
-        255, whole.share, 0,
-        0, 500_000, test_kit.tag(slop_os.HandleError.BudgetExceeded), test_kit.tag(slop_os.HandleError.BudgetExceeded),
-        test_kit.tag(slop_os.HandleError.InvalidArgument),
-        0, test_kit.tag(slop_os.HandleError.BudgetExceeded), 0, 400_000, test_kit.tag(slop_os.HandleError.MissingRight),
-        0, 200_000, 0, 1,
-    ]
-    failed :: test_kit.check(log, NAME, results, expected)
-    if failed == 0 {
-        log_line.write(log, "%: budgets split off the root's share and refused past it, set, and destroyed, what ran on them going to their parent", NAME)
-    }
-    return failed
+    given :: Given.{log = log, cpu_budget = cpu_budget}
+    return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }

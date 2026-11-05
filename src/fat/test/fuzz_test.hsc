@@ -2,6 +2,7 @@ package fat_test
 
 import runtime from "base"
 import os from "std"
+import testing from "std"
 import fat from ".."
 
 /*
@@ -9,11 +10,17 @@ import fat from ".."
  * structure is, in its boot sectors, its FATs and its directories, each round mounted and used as far as it goes:
  * every directory walked and every file read, a file made, written, cut, renamed and removed. Nothing may crash or
  * hang; errors are expected. Each round's damage and writes are put back before the next. SLOPOS_FUZZ_ROUNDS asks for
- * more rounds than the default. Checks from 100.
+ * more rounds than the default.
  */
 
 /** How many rounds of damage the fuzzer runs unless SLOPOS_FUZZ_ROUNDS asks for another number. */
 FUZZ_ROUNDS :: 400
+
+a_volume_damaged_where_its_structure_is_is_used_as_far_as_it_goes_without_crashing #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := formatted(t)?
+    defer free_formatted(&made)
+    return check_fuzz(t, made.image, made.device)
+}
 
 /**
  * Check that a volume damaged where its structure is can be mounted and used without crashing or hanging.
@@ -22,25 +29,29 @@ FUZZ_ROUNDS :: 400
  * sectors, the start of each FAT, or the first data clusters, runs exercise, and puts every sector the round changed
  * back. Errors from the volume are expected and ignored; only setting it up can fail.
  *
+ * @param t The test's state, which a failure is recorded in.
  * @param image The stand-in disk, formatted; its undoing is set during the rounds and cleared after.
  * @param device The device over the image.
- * @return 0 if the rounds ran to their end, or 100 to 105 if the volume to damage couldn't be set up.
+ * @return Ok once the rounds have run; Error(Failed), the failure recorded, if the volume to damage couldn't be set
+ *     up.
  */
-check_fuzz :: fn(image: ptr[mut Image], device: fat.Device) -> int {
-    volume := fat.mount(device) or_return 100
+check_fuzz :: fn(t: ptr[mut testing.T], image: ptr[mut Image], device: fat.Device) -> testing.Outcome {
+    mounting :: fat.mount(device)
+    volume := testing.require_ok(t, mounting, "a formatted volume mounts")?
     root :: fat.root_of(&volume)
-    efi := fat.create(&volume, root, "EFI", true) or_return 101
-    boot := fat.create(&volume, fat.directory_cluster(&volume, &efi), "BOOT", true) or_return 102
+    making_efi :: fat.create(&volume, root, "EFI", true)
+    efi := testing.require_ok(t, making_efi, "a directory is made in the root")?
+    making_boot :: fat.create(&volume, fat.directory_cluster(&volume, &efi), "BOOT", true)
+    boot := testing.require_ok(t, making_boot, "a directory is made beneath it")?
     boot_cluster :: fat.directory_cluster(&volume, &boot)
     data : u8[40000]
     for i in 0..<data.count {
         data[i] = cast[u8](i % 253)
     }
     for name in string.["BOOTX64.EFI", "A long name for a loader.efi", "config.txt", "Another long one, with spaces.conf"] {
-        file := fat.create(&volume, boot_cluster, name, false) or_return 103
-        if (fat.write(&volume, &file, 0, data) or_else 0) != 40000 {
-            return 104
-        }
+        making :: fat.create(&volume, boot_cluster, name, false)
+        file := testing.require_ok(t, making, "files of short and long names are made beneath it")?
+        testing.require_eq(t, fat.write(&volume, &file, 0, data) or_else 0, 40000, "each is written across 79 clusters")?
     }
     for i in 0..<30 {
         name : u8[12]
@@ -52,7 +63,8 @@ check_fuzz :: fn(image: ptr[mut Image], device: fat.Device) -> int {
         }
         name[5] = cast[u8]('a') + cast[u8](i % 26)
         name[6] = cast[u8]('a') + cast[u8](i / 26)
-        file := fat.create(&volume, root, string_of(&name[0], 7), false) or_return 105
+        making :: fat.create(&volume, root, string_of(&name[0], 7), false)
+        file := testing.require_ok(t, making, "30 files are made in the root")?
         _ = fat.write(&volume, &file, 0, data[0..<700])
     }
     rounds : u64 = FUZZ_ROUNDS
@@ -60,8 +72,10 @@ check_fuzz :: fn(image: ptr[mut Image], device: fat.Device) -> int {
         case Ok(text) => rounds = number_of(text) or_else rounds
         case Error(failure) => {}
     }
-    // Where the structure is: the boot sector, the start of each FAT, where the clusters in use are, and the first
-    // data clusters, where the directories and the files' first clusters are
+    /*
+     * Where the structure is: the boot sector, the start of each FAT, where the clusters in use are, and the first
+     * data clusters, where the directories and the files' first clusters are
+     */
     fat_sectors :: volume.fat_sectors
     regions := u64.[0, 1, 32, 2, 32 + fat_sectors, 2, volume.first_data_sector, 120]
     random := Random.{state = 0xfa7fa7fa7fa7fa7f}
@@ -90,7 +104,7 @@ check_fuzz :: fn(image: ptr[mut Image], device: fat.Device) -> int {
     }
     image.undoing = false
     runtime.log_info("fuzz: % rounds, % mounted", rounds, mounted)
-    return 0
+    return .Ok
 }
 
 /**

@@ -1,12 +1,12 @@
 /**
- * The VT adapter's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the number
- * of the first check that failed. Styles, moves, scrolling and links become the sequences xterm reads; typed bytes
- * become keys with their modifiers, a bracketed paste one Paste, Ctrl-C an Interrupt, and a sequence cut between two
- * reads is finished by the next. Hemera's strings have no escapes for ESC or other bytes, so here ` stands for ESC and
- * ^ before a letter for that letter's control code (^? for DEL).
+ * The VT adapter's tests, a test program (tools/unit_tests.py, decisions/0175). Styles, moves, scrolling and links
+ * become the sequences xterm reads; typed bytes become keys with their modifiers, a bracketed paste one Paste, Ctrl-C an
+ * Interrupt, and a sequence cut between two reads is finished by the next. Hemera's strings have no escapes for ESC or
+ * other bytes, so here ` stands for ESC and ^ before a letter for that letter's control code (^? for DEL).
  */
 package vt_test
 
+import testing from "std"
 import text_buffer from "std"
 import terminal from "std/os/slop_os"
 import vt from ".."
@@ -61,118 +61,130 @@ view :: fn(made: ptr[Bytes]) -> u8[] {
 }
 
 /**
- * Tell whether a text buffer holds the bytes a test string stands for.
+ * Check that a text buffer holds the bytes a test string stands for, reporting both if it doesn't.
  *
+ * @param t The test's state, which a failure is recorded in.
  * @param out The text buffer, only read: its whole contents are compared, not just its start.
  * @param text The test string, as bytes_of reads it.
- * @return True if out holds exactly those bytes.
+ * @param message Why out should hold them, for whoever reads a failure.
+ * @param location Where the check is; the caller's own.
  */
-same :: fn(out: ptr[text_buffer.TextBuffer], text: string) -> bool {
+expect_same :: fn(t: ptr[mut testing.T], out: ptr[text_buffer.TextBuffer], text: string, message: string, location := #caller_location) {
     expected := bytes_of(text)
-    return text_buffer.as_string(out) == string_of(&expected.bytes[0], expected.count)
+    wanted :: string_of(&expected.bytes[0], expected.count)
+    written :: text_buffer.as_string(out)
+    testing.expect_eq(t, written, wanted, message, location)
 }
 
-/**
- * Run the VT adapter's tests.
- *
- * @return 0 if every check passed, or the number of the first check that failed.
- */
-main :: fn() -> int {
+styles_become_sgr_sequences #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     storage : u8[256]
     out := text_buffer.make(storage)
-
-    // Bold red on a 256-colour background, then RGB on a bright one
     vt.append_style(&out, terminal.Style.{attributes = terminal.BOLD, foreground = terminal.palette(1),
         background = terminal.palette(200)})
-    if !same(&out, "`[0;1;31;48;5;200m") {
-        return 1
-    }
+    expect_same(t, &out, "`[0;1;31;48;5;200m", "bold, red from the 8 colours, and a 256-colour background, after a reset")
     text_buffer.clear(&out)
     vt.append_style(&out, terminal.Style.{foreground = terminal.rgb(1, 2, 3),
         background = terminal.palette(9)})
-    if !same(&out, "`[0;38;2;1;2;3;101m") {
-        return 2
-    }
-    text_buffer.clear(&out)
+    expect_same(t, &out, "`[0;38;2;1;2;3;101m", "an RGB foreground, and bright red's own background code")
+    return .Ok
+}
+
+moves_and_scrolling_become_their_sequences #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    storage : u8[256]
+    out := text_buffer.make(storage)
     vt.append_move(&out, 0, 4)
     vt.append_scroll(&out, 1, 23, -2)
-    if !same(&out, "`[1;5H`[2;24r`[2T") {
-        return 3
-    }
-    // A link's target keeps only printable ASCII, so it can't end the sequence
-    text_buffer.clear(&out)
+    expect_same(t, &out, "`[1;5H`[2;24r`[2T", "CUP and DECSTBM count from 1; scrolling down two is SD 2")
+    return .Ok
+}
+
+a_links_target_keeps_only_printable_ascii #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    storage : u8[256]
+    out := text_buffer.make(storage)
     target := bytes_of("https://a.b/`]c d")
     vt.append_link(&out, view(&target))
-    if !same(&out, "`]8;;https://a.b/]cd`\\") {
-        return 4
-    }
+    expect_same(t, &out, "`]8;;https://a.b/]cd`\\", "ESC and space are dropped, so the target can't end the OSC 8 early")
+    return .Ok
+}
 
+typed_bytes_become_keys_with_their_modifiers #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     // Typing: letters, Enter as CR LF once, Backspace, an arrow with Ctrl, F5, Alt-x, Ctrl-A, and Ctrl-C
     decoder := vt.Decoder.{}
     decoded := vt.Decoded.{}
     typed := bytes_of("hi\r\n^?`[1;5A`[15~`xa^A^C")
     vt.feed(&decoder, view(&typed), &decoded)
     vt.finish(&decoder, &decoded)
-    if decoded.count != 10 {
-        return 10
-    }
-    if !is_key(&decoded, 0, 0x0b, 0, "h") || !is_key(&decoded, 1, 0x0c, 0, "i") || !is_key(&decoded, 2, vt.USAGE_ENTER, 0, "\n") {
-        return 11
-    }
-    if !is_key(&decoded, 3, vt.USAGE_BACKSPACE, 0, "") || !is_key(&decoded, 4, vt.USAGE_UP, terminal.CONTROL, "")
-        || !is_key(&decoded, 5, vt.USAGE_F5, 0, "") {
-        return 12
-    }
-    if !is_key(&decoded, 6, 0x1b, terminal.ALT, "x") || !is_key(&decoded, 7, 0x04, 0, "a")
-        || !is_key(&decoded, 8, vt.USAGE_A, terminal.CONTROL, "") || decoded.events[9].kind != cast[u8](terminal.EventKind.Interrupt) {
-        return 13
-    }
+    testing.require_eq(t, decoded.count, 10, "two letters, Enter, Backspace, Ctrl-Up, F5, Alt-x, a, Ctrl-A and Ctrl-C")?
+    expect_key(t, &decoded, 0, 0x0b, 0, "h", "h is usage 0x0b")
+    expect_key(t, &decoded, 1, 0x0c, 0, "i", "i is usage 0x0c")
+    expect_key(t, &decoded, 2, vt.USAGE_ENTER, 0, "\n", "CR LF is one Enter, typing a newline")
+    expect_key(t, &decoded, 3, vt.USAGE_BACKSPACE, 0, "", "DEL is Backspace")
+    expect_key(t, &decoded, 4, vt.USAGE_UP, terminal.CONTROL, "", "CSI 1;5A is Up with modifier 5, Ctrl")
+    expect_key(t, &decoded, 5, vt.USAGE_F5, 0, "", "CSI 15~ is F5")
+    expect_key(t, &decoded, 6, 0x1b, terminal.ALT, "x", "ESC before a letter is Alt with it")
+    expect_key(t, &decoded, 7, 0x04, 0, "a", "a is usage 0x04")
+    expect_key(t, &decoded, 8, vt.USAGE_A, terminal.CONTROL, "", "0x01 is Ctrl-A")
+    testing.expect_eq(t, decoded.events[9].kind, cast[u8](terminal.EventKind.Interrupt), "Ctrl-C interrupts, not a key")
+    return .Ok
+}
 
+a_bracketed_paste_is_one_event #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     // A paste is one event, with no keys inside it; a lone ESC at the end is Escape
-    vt.reset(&decoder, &decoded)
+    decoder := vt.Decoder.{}
+    decoded := vt.Decoded.{}
     pasted := bytes_of("`[200~ls\r^C`[201~`")
     vt.feed(&decoder, view(&pasted), &decoded)
     vt.finish(&decoder, &decoded)
-    if decoded.count != 2 || decoded.events[0].kind != cast[u8](terminal.EventKind.Paste) || text_of(&decoded, 0) != "ls\r"
-        || !is_key(&decoded, 1, vt.USAGE_ESCAPE, 0, "") {
-        return 20
+    testing.require_eq(t, decoded.count, 2, "the paste, and the ESC after it")?
+    testing.expect_eq(t, decoded.events[0].kind, cast[u8](terminal.EventKind.Paste), "what's between 200~ and 201~ is pasted")
+    testing.expect_eq(t, text_of(&decoded, 0), "ls\r", "its text as it was, CR and all")
+    expect_key(t, &decoded, 1, vt.USAGE_ESCAPE, 0, "", "a lone ESC at the end, with nothing to follow, is Escape")
+    if decoded.text_count < 4 {
+        testing.fail(t, "the paste's text holds its Ctrl-C, its fourth byte")
+        return .Ok
     }
-    if decoded.text_count < 4 || decoded.text[3] != 0x03 {
-        return 21
-    }
+    testing.expect_eq(t, decoded.text[3], 0x03, "Ctrl-C inside a paste is text, not an interrupt")
+    return .Ok
+}
 
-    // A code point and a sequence cut between two reads
-    vt.reset(&decoder, &decoded)
+a_sequence_cut_between_reads_is_finished_by_the_next #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    decoder := vt.Decoder.{}
+    decoded := vt.Decoded.{}
     vt.feed(&decoder, u8.[0xe4, 0xb8], &decoded)
-    if decoded.count != 0 {
-        return 30
-    }
+    testing.expect_eq(t, decoded.count, 0, "two bytes of a three-byte code point are no event yet")
     vt.feed(&decoder, u8.[0xad, 0x1b], &decoded)
     right := bytes_of("[C")
     vt.feed(&decoder, view(&right), &decoded)
     vt.finish(&decoder, &decoded)
-    if decoded.count != 2 || text_of(&decoded, 0) != "中" || !is_key(&decoded, 1, vt.USAGE_RIGHT, 0, "") {
-        return 31
-    }
-    return 0
+    testing.require_eq(t, decoded.count, 2, "the code point, and the arrow cut after its ESC")?
+    testing.expect_eq(t, text_of(&decoded, 0), "中", "the code point's last byte finishes it")
+    expect_key(t, &decoded, 1, vt.USAGE_RIGHT, 0, "", "ESC, then [C in the next read, is Right")
+    return .Ok
 }
 
 /**
- * Tell whether an event is a key with the given usage, modifiers and text.
+ * Check that an event is a key with the given usage, modifiers and text, reporting what differs if it isn't.
  *
+ * @param t The test's state, which a failure is recorded in.
  * @param decoded The events and their text, only read; only the first count events are looked at.
- * @param index The event's index, from 0.
+ * @param index The event's index, from 0; past the events, it's a failure.
  * @param code The key's HID usage expected, or 0 for one known by its text.
  * @param modifiers The modifiers expected, as terminal.SHIFT, ALT, CONTROL and META's bits; they have to match exactly.
  * @param text The text expected; only its first three bytes are compared (text_of).
- * @return True if the event's there and is that key; false for an index past the events.
+ * @param message Why it should be that key, for whoever reads a failure.
+ * @param location Where the check is; the caller's own.
  */
-is_key :: fn(decoded: ptr[vt.Decoded], index: usize, code: u16, modifiers: u8, text: string) -> bool {
+expect_key :: fn(t: ptr[mut testing.T], decoded: ptr[vt.Decoded], index: usize, code: u16, modifiers: u8, text: string, message: string,
+        location := #caller_location) {
     if index >= decoded.count || index >= decoded.events.count {
-        return false
+        testing.record(t, message, "the event isn't there", location)
+        return void
     }
     found :: decoded.events[index]
-    return found.kind == cast[u8](terminal.EventKind.Key) && found.code == code && found.modifiers == modifiers && text_of(decoded, index) == text
+    testing.expect_eq(t, found.kind, cast[u8](terminal.EventKind.Key), message, location)
+    testing.expect_eq(t, found.code, code, message, location)
+    testing.expect_eq(t, found.modifiers, modifiers, message, location)
+    testing.expect_eq(t, text_of(decoded, index), text, message, location)
 }
 
 /**

@@ -101,9 +101,6 @@ def program_test(name: str, program: str, line, words: str = "", qemu: list = []
 X86_IOMMU_LINE = "[info] IOMMU 0: VT-d, 4 KiB of registers at 0x00000000fed90000, version 1.0, 48-bit I/O addresses"
 AARCH64_IOMMU_LINE = "[info] IOMMU 0: SMMUv3, 128 KiB of registers at 0x0000000009050000, version 3.1, 44-bit I/O addresses"
 # How it translates (src/kernel/translation.hsc): VT-d remapping interrupts too, and signalling its faults; SMMUv3 not
-# What test_io_ports says: x86-64 has ports, AArch64 none
-X86_PORTS_LINE = "[user] test_io_ports: the RTC's status read through its ports, and ports outside them refused"
-AARCH64_PORTS_LINE = "[user] test_io_ports: no ports here, and every range refused"
 # The real-time clock the platform service finds: the MC146818 on x86-64, and the device tree's PL031 on AArch64
 X86_CLOCK_LINE = "[user] platform: the real-time clock (Mc146818) claimed"
 AARCH64_CLOCK_LINE = "[user] platform: the real-time clock (Pl031) claimed"
@@ -158,21 +155,11 @@ BOOT_DISK_BASE = [
 # What the disk check says, and writes, which the tests of booting a disk itself check
 DISK_CHECK_LINES = [
     "--expect-line=[user] supervisor: disk_check from the bundle store",
-    "--expect-line=[user] disk_check: on the EFI system partition, read the host's files, wrote, moved and read back its own, listed 3, and was refused a path above it",
-    "--expect-line=[user] disk_check: narrowed EFI/SlopOS to read only, selected 2 of its files by *.TXT, and was refused a file made in the set",
-    "--expect-line=[user] disk_check: on the system volume, read modules/hello.elf as the EFI system partition has it, wrote, synced and read back its own file, and moved it",
-    "--expect-line=[user] disk_check: a typed file written, read back checked, and refused as another type; a value that isn't one refused",
-    "--expect-line=[user] disk_check: on the system volume, replaced an open file, committed a transaction, was refused a conflicting one, had a failing one leave nothing, and followed every change",
     "--expect-line=[user] storage_manager: started a volume server for the sealed volume, encrypted",
     "--expect-line=[user] volume_server: volume 2 unlocked",
     "--expect-line=[user] volume_server: volume 2 sealing with key generation 2",
-    "--expect-line=[user] disk_check: on the sealed volume, was refused locked and with a wrong passphrase, unlocked it, read its file, wrote one, started key generation 2, wrote another and read all three",
-    "--expect-line=[user] disk_check: links: the system volume wrote and read through two from the sealed one; what one reached granted nothing; one revoked opened nothing; one into itself opened",
-    "--expect-line=[user] disk_check: zones: from the system volume's zoneinfo, London is GMT in January and BST in July, Sydney AEDT and AEST",
-    "--expect-line=[user] disk_check: snapshots: read one of the system volume as it was, read only, wrote to its clone, couldn't delete it while cloned, and read one of the sealed volume",
-    "--expect-line=[user] disk_check: quotas: its clone's refused a file past it and took a small one, and its usage says so",
     "--expect-line=[user] storage_manager: made the made sealed volume",
-    "--expect-line=[user] disk_check: made: a volume and a sealed one at run time, wrote and read back a file on each, was refused either again, and opened the sealed one only with its passphrase",
+    f"--expect-line={tests_passed('disk_check', 13)}",
     "--expect-disk-block=2049=SlopOS disk check: from the guest",
     "--expect-disk-text=Written by the guest, through std's files",
     "--expect-disk-text=Written to the system volume by the guest, and synced",
@@ -323,12 +310,7 @@ TESTS = [
         "--expect-line=[user] storage_manager: disk 0 partition 2: EFI system partition, 69632 blocks from 6144",
         "--expect-line=[user] storage_manager: started a FAT server for disk 0 partition 2",
         "--expect-line=[user] fat_server: serving a FAT32 volume of 68512 clusters of 512 bytes",
-        "--expect-line=[user] disk_check: in SlopOS check, 2048 blocks from 2048 of disk 0, read the host's mark, wrote, flushed and "
-        "read back block 1, read 8 blocks at once, and was refused the block past its end",
-        "--expect-line=[user] disk_check: on the EFI system partition, read the host's files, wrote, moved and read back its own, "
-        "listed 3, and was refused a path above it",
-        "--expect-line=[user] disk_check: narrowed EFI/SlopOS to read only, selected 2 of its files by *.TXT, and was refused a "
-        "file made in the set",
+        f"--expect-line={tests_passed('disk_check', 4)}",
         "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # Booted from a disk the image builder made rather than the ISO: the bootloader read from its EFI system partition,
@@ -636,8 +618,7 @@ TESTS = [
         "--expect-line=[user] storage_manager: made the home-admin volume",
         "--expect-line=[user] account_service: made the account admin, the administrator",
         "--expect-line=[user] account_service: admin recovered with its recovery code",
-        "--expect-line=[user] supervisor: test_accounts: made the administrator alone, limited wrong passwords, opened its home, "
-        "recovered it"])),
+        f"--expect-line={tests_passed('supervisor: test_accounts', 4)}"])),
     ("keeps every program's log records on the system volume once it's there", 7, with_before_qemu(
         [argument.replace("test_services", "test_services test_events") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] events: serving",
@@ -780,76 +761,55 @@ TESTS = [
     ("keeps the kernel's code read-only", 1, ["--command-line=test_exit test_write_code",
                                               "--expect-line=[info] test_write_code: writing to the kernel's code"]),
     ("allocates from the kernel heap", 0, ["--command-line=test_exit test_heap",
-        "--expect-line=[info] test_heap: 200 blocks kept their contents, grown, shrunk and freed"]),
+        "--expect-line=[info] test_heap: 2 tests: 2 passed, 0 failed"]),
     ("keeps time with the counter", 0, ["--command-line=test_exit test_clock",
-        "--expect-line=[info] test_clock: 10 ms by the counter is 10 ms by the clock"]),
+        "--expect-line=[info] test_clock: 1 tests: 1 passed, 0 failed"]),
     ("lets idle CPUs other than the boot CPU stop ticking", 0, ["--command-line=test_exit test_tickless",
-        "--expect-line=[info] test_tickless: the other 3 CPUs took no timer interrupts over 50 ticks", "--", "-smp", "4"]),
+        "--expect-line=[info] test_tickless: 1 tests: 1 passed, 0 failed", "--", "-smp", "4"]),
     ("shoots down TLB entries on every CPU", 0, ["--command-line=test_exit test_shootdown",
-        "--expect-line=[info] test_shootdown: every CPU read the new page after the shootdown", "--", "-smp", "4"]),
+        "--expect-line=[info] test_shootdown: 1 tests: 1 passed, 0 failed", "--", "-smp", "4"]),
     ("routes a device's interrupts through the I/O APIC", 0, ["--command-line=test_exit test_ioapic",
-        "--expect-line=[info] test_ioapic: 10 interrupts arrived from the test device"]),
+        "--expect-line=[info] test_ioapic: test the_test_device_is_routed_to_the_boot_cpu ... ok",
+        "--expect-line=[info] test_ioapic: test the_test_devices_interrupts_arrive ... ok"]),
     ("gives a thread its CPU budget", 7, [WITH_PROGRAMS, "--command-line=test_exit test_program=test_budgets",
-        "--expect-line=[user] test_budgets: the pair had its budget at its priority, and shared it alike, the rival the rest",
+        f"--expect-line={tests_passed('test_budgets', 1)}",
         "--expect-line=[user] root task: test_budgets ended with 0, and its budget is back to nothing", "--", "-smp", "1"]),
     ("runs a CPU budget's threads on its CPUs", 7, [WITH_PROGRAMS, "--command-line=test_exit test_program=test_affinity",
-        "--expect-line=[user] test_affinity: its budget's threads ran only on its CPUs, and CPUs outside its parent's or under its children's were refused",
+        f"--expect-line={tests_passed('test_affinity', 2)}",
         "--expect-line=[user] root task: test_affinity ended with 0, and its budget is back to nothing", "--", "-smp", "2"]),
     program_test("runs threads of its own, each preempted and with its own vector state", "test_threads", 1),
-    program_test("takes system calls on handles", "test_syscalls",
-        "handles were looked up, copied, refused, closed and went stale; threads and processes made and destroyed"),
-    program_test("waits on ports, wakes them and sets their timers", "test_ports",
-        "wakes, timers, deadlines and other threads woke waiters; closing the port woke the last"),
-    program_test("passes handles and messages over channels", "test_channels",
-        "handles moved, messages went through the kernel and the rings, doorbells and Once bindings woke the right waiters, "
-        "and closing an end reached the other"),
-    program_test("maps memory objects, paid for by budgets", "test_memory",
-        "budgets split and closed, memory filled as it was touched and shared between mappings, a write it didn't allow "
-        "stopped the thread, and 4 MiB mapped with large pages"),
-    program_test("splits, sets and destroys CPU budgets", "test_cpu_budgets",
-        "budgets split off the root's share and refused past it, set, and destroyed, what ran on them going to their parent"),
-    program_test("reads I/O ports through a range of them", "test_io_ports",
-        "the RTC's status read through its ports, and ports outside them refused"),
-    program_test("ends a program missing a grant, or told another ABI version, as its starter sees", "test_exits",
-        "a copy missing a grant it requires ended with 126, one told another ABI version with 125, and a refused launch gave its "
-        "budget back"),
-    program_test("gives an entry's parameters that aren't handles as values", "test_values",
-        "a copy was given a number, a string, a list, an enum's member and a record, and read each"),
-    program_test("streams typed records and bytes between programs, with backpressure", "test_streams",
-        "read 3000 records and 300 bytes from a copy through two streams, more than the ring holds at once"),
-    program_test("supplies paged memory's pages from a pager in user mode", "test_pager",
-        "2 pages supplied as they were touched, read at two addresses, and writing them refused"),
-    program_test("measures the kernel's benchmarks", "test_perf", "measured ipc_round_trip, page_fault, thread_create and process_create"),
-    program_test("charges paged memory a page at a time, raises pressure at a threshold, and gives pages back", "test_pager",
-        "pages charged as they're supplied, touches reported, pressure raised at the threshold, and a page given back read again"),
-    program_test("drives a device from user mode with the platform capability", "test_devices",
-        "a driver registered a controller, took an IRQ's interrupts through its port, read device memory, and lost a window "
-        "with its memory; IOMMUs that aren't were refused", "test_device"),
+    program_test("takes system calls on handles", "test_syscalls", 3),
+    program_test("waits on ports, wakes them and sets their timers", "test_ports", 3),
+    program_test("passes handles and messages over channels", "test_channels", 3),
+    program_test("maps memory objects, paid for by budgets", "test_memory", 3),
+    program_test("splits, sets and destroys CPU budgets", "test_cpu_budgets", 2),
+    program_test("reads I/O ports through a range of them", "test_io_ports", 1),
+    program_test("ends a program missing a grant, or told another ABI version, as its starter sees", "test_exits", 2),
+    program_test("gives an entry's parameters that aren't handles as values", "test_values", 1),
+    program_test("streams typed records and bytes between programs, with backpressure", "test_streams", 1),
+    program_test("supplies paged memory's pages from a pager in user mode", "test_pager", 2),
+    program_test("measures the kernel's benchmarks", "test_perf", 4),
+    program_test("drives a device from user mode with the platform capability", "test_devices", 3, "test_device"),
     # QEMU's edu device, its DMA reaching all of memory, which starts at 1 GiB on virt
-    program_test("drives a PCIe device's MSI and DMA from user mode", "test_msi_dma",
-        "edu took its MSI and copied a page through DMA memory, and its device took its IRQs with it",
+    program_test("drives a PCIe device's MSI and DMA from user mode", "test_msi_dma", 2,
         qemu=["-device", "edu,dma_mask=0xffffffffff"]),
-    program_test("sends and checks messages with generated protocol code", "test_protocols",
-        "messages went through with their handles and data, and broken, unknown and mistyped ones were refused"),
-    program_test("binds a typed library from its grant, and calls its exports", "test_libraries",
-        "bound greeting, and called its exports"),
+    program_test("sends and checks messages with generated protocol code", "test_protocols", 5),
+    program_test("binds a typed library from its grant, and calls its exports", "test_libraries", 1),
     ("refuses a typed library whose export's type changed", 7, [WITH_PROGRAMS, "--command-line=test_exit test_changed_library test_program=test_libraries",
         "--expect-line=[user] root task: test_libraries ended with 1, and its budget is back to nothing",
         "--expect-line=[info] objects left: only the kernel's own", "--", "-smp", "2"]),
-    program_test("controls a process from a debugger in user mode", "test_control",
-        "a debugger skipped and changed calls, fixed a fault, read and wrote memory, suspended, resumed and started threads, "
-        "gave a handle and killed its target; an exit's code came with its end"),
+    program_test("controls a process from a debugger in user mode", "test_control", 2),
     ("resumes after an NMI", 0, ["--command-line=test_exit test_nmi", "--expect-line=[info] test_nmi: back from the NMI"]),
     ("switches between fibers", 0, ["--command-line=test_exit test_fibers",
-                                    "--expect-line=[info] test_fibers: stack traces follow suspended and resumed fibers"]),
+                                    "--expect-line=[info] test_fibers: 2 tests: 2 passed, 0 failed"]),
     ("shares fiber pools between CPUs", 0, ["--command-line=test_exit test_pool",
-        "--expect-line=[info] test_pool: two pools shared five CPUs, each fiber staying on its own pool's", "--", "-smp", "6"]),
+        "--expect-line=[info] test_pool: 1 tests: 1 passed, 0 failed", "--", "-smp", "6"]),
 ]
 
 # The same, on the kernel built with morestack
 MORESTACK_TESTS = [
     ("grows a fiber's stack onto segments", 0, ["--command-line=test_exit test_segments",
-        "--expect-line=[info] test_segments: stack traces leave out morestack, across segments"]),
+        "--expect-line=[info] test_segments: 1 tests: 1 passed, 0 failed"]),
 ]
 
 
@@ -865,7 +825,6 @@ def aarch64_tests(tests: list) -> list:
     """The tests for AArch64, named so, with AArch64's own baseline check and IOMMU among them."""
     lines = {f"--expect-line={X86_IOMMU_LINE}": f"--expect-line={AARCH64_IOMMU_LINE}",
              f"--expect-line={X86_TRANSLATING_LINE}": f"--expect-line={AARCH64_TRANSLATING_LINE}",
-             f"--expect-line={X86_PORTS_LINE}": f"--expect-line={AARCH64_PORTS_LINE}",
              f"--expect-line={X86_CLOCK_LINE}": f"--expect-line={AARCH64_CLOCK_LINE}"}
     adapted = [(f"AArch64: {AARCH64_NAMES.get(name, name)}", expected, [lines.get(argument, argument) for argument in arguments])
                for name, expected, arguments in tests if name not in AARCH64_LEFT_OUT]
@@ -1123,7 +1082,7 @@ SWEEP_TIMEOUT_SECONDS = 150
 SWEEP_TESTS = [
     ("the kernel boots alone", "test_exit", []),
     *[(f"{program}", f"test_exit test_deadline={TEST_DEADLINE_SECONDS} test_program={program}", [WITH_PROGRAMS, "--", "-smp", "2"])
-      for program in ["test_channels", "test_memory", "test_threads", "test_control", "test_exits"]],
+      for program in ["test_channels", 3, "test_threads", "test_control", "test_exits"]],
 ]
 
 

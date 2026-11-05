@@ -20,12 +20,13 @@
  */
 package test_control
 
+import compiler from "base"
 import intrinsics from "base"
 import runtime from "base"
 import os from "std"
+import testing from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
-import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */
@@ -126,18 +127,28 @@ counter #calling_convention(.c) #no_context :: fn(page: ptr[mut u64[16]]) #never
     }
 }
 
+/** What main was given that the tests use. */
+Given :: struct {
+    /** The debug log, duplicated for the copies. */
+    log : slop_os.DebugLog,
+    /** The process manager, which launches T and E; none if main wasn't given it. */
+    manager : os.Channel[process_manager.ProcessManager]?,
+    /** The test's own module, which T and E are launched from; none if main wasn't given it. */
+    program : slop_os.Memory?,
+}
+
 /**
- * Check what a debugger can do to processes in its subtree; or, run as T or E, be one of them.
+ * Run the tests as D, reporting to the debug log; or, run as T or E, be one of the processes D controls.
  *
- * @param log The debug log, writable, where the test says what it found and which check failed.
+ * @param log The debug log, writable, where each test is reported.
  * @param platform Not used.
  * @param test_device Not used.
  * @param firmware Not used.
- * @param manager The process manager, which launches T and E; without it the test ends with 100.
- * @param program The test's own module, which T and E are launched from; without it the test ends with 100.
+ * @param manager The process manager, which launches T and E; without it the tests fail.
+ * @param program The test's own module, which T and E are launched from; without it the tests fail.
  * @param peer Given only to T and E, by D: the channel their role comes on. With it, this runs as a copy.
  * @param cpu_budget Not used.
- * @return What run_debugger gives for D, or run_copy for T or E.
+ * @return How many tests failed, 0 when every one passed; as T or E, what run_copy gives.
  */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
@@ -145,9 +156,8 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
         case Some(end) => return run_copy(end)
         case None => {}
     }
-    connection :: manager or_return 100
-    executable :: program or_return 100
-    return run_debugger(log, connection, executable)
+    given :: Given.{log = log, manager = manager, program = program}
+    return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }
 
 /**
@@ -280,137 +290,135 @@ read_target :: fn(target: slop_os.Process, space: slop_os.AddressSpace, page: u6
 }
 
 /**
- * Run as D: launch T and E, control them, and check what each call did.
+ * Check what a debugger, D, can do to a target in its subtree, T: intercept its calls and faults, once; skip a call,
+ * answering it, and change a call's result at its exit; map memory where it faulted and let it retry; read and write
+ * its memory; suspend, read and resume a thread; start a thread in it, but not in a space outside its subtree; give it
+ * a handle, but not a process its own owning handle, nor a handle without RIGHT_TRANSFER; kill it, and see it end,
+ * killed. Then that what D made and T charged their budgets comes back.
  *
- * @param log The debug log, duplicated for the copies.
- * @param manager The process manager connection the copies are launched through.
- * @param program The test's own module, which the copies run.
- * @return 0 if every check passed. Otherwise the first that failed, by its result's index plus one: 1 T not having
- *     two threads; 2 intercepting T, 3 intercepting it twice not refused with AlreadyIntercepted, or 4 watching for
- *     its end; 5 starting T1; 6 and 7 T1's first stop not ClockMonotonic's entry; 8 reading T1's registers, or 9
- *     their call number not ClockMonotonic's; 10 writing them, or 11 skipping the call; 12 the second call not
- *     stopping at its entry, or 13 at its exit; 14 skipping a call at its exit not refused with NotStopped; 15 the
- *     fault not stopping, 16 not at fault_at, or 17 mapping memory there; 18 to 20 what T1 got not SKIPPED_VALUE,
- *     CHANGED_VALUE and FAULT_VALUE; 21 suspending T2, 22 its count not standing still, 23 reading its registers, 24
- *     resuming it, 25 its count not going on, or 26 reading its registers while it runs not refused with NotStopped;
- *     27 killing T, or 28 its end not seen as killed; 29 watching E, 30 telling it to end, or 31 its code not
- *     EXIT_VALUE; 32 a thread in a space outside T's subtree not refused with BadAddress, or 33 one in T's not
- *     started; 34 giving T the memory, or 35 the memory's handle still D's; 36 giving a process its own owning
- *     handle not refused with NotTransferable; 37 memory_size wrong; 38 giving a handle without RIGHT_TRANSFER not
- *     refused with MissingRight. 90 if D's, T's or E's budget didn't come back to nothing. 101 to 110 if setting up
- *     failed: 101 the memory budget, 102 the manager's port, 103 launching T or E, 104 their reports, 105 the ports,
- *     107 the memory, 108 the other address space, 109 the child process, 110 the sized memory.
+ * @param t The test's state.
+ * @return Ok once it's run; Error if main wasn't given the process manager or its module, or the memory budget, the
+ *     manager's port, T, its report, the port, the intercept, the memory, the other address space, the child process
+ *     or the sized memory couldn't be made.
  */
-run_debugger :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessManager], program: slop_os.Memory) -> int {
+a_debugger_controls_a_process_in_its_subtree #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
-    budget :: slop_os.memory_budget_create(block.budget, 1 << 20) or_return 101
-    manager_port :: os.port_for(block.budget, manager.end) or_return 102
-    t :: launch_copy(log, manager, manager_port, program, "test_control T", ROLE_TARGET) or_return 103
-    e :: launch_copy(log, manager, manager_port, program, "test_control E", ROLE_EXITING) or_return 103
-    target :: t.launched.process
-    exiting :: e.launched.process
-    // Where T's things are, and its space; and E's page
+    manager :: testing.require_some(t, given.manager, "the root task grants the process manager")?
+    program :: testing.require_some(t, given.program, "the root task grants the program's own module")?
+    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for what D makes")?
+    manager_port :: testing.require_some(t, os.port_for(block.budget, manager.end), "a port for the process manager's replies")?
+    copy :: testing.require_some(t, launch_copy(given.log, manager, manager_port, program, "test_control T", ROLE_TARGET), "T is launched and told its role")?
+    target :: copy.launched.process
+    // Where T's things are, and its space
     found := TargetReport.{}
     space_handles : slop_os.Handle[1]
-    _ = os.receive(t.end, t.port, os.mut_bytes_of(&found), space_handles) or_return 104
+    testing.require_ok(t, os.receive(copy.end, copy.port, os.mut_bytes_of(&found), space_handles), "T reports where its things are, with its address space")?
     target_space :: cast[slop_os.AddressSpace](space_handles[0])
-    exiting_found := TargetReport.{}
-    exiting_space_handles : slop_os.Handle[1]
-    _ = os.receive(e.end, e.port, os.mut_bytes_of(&exiting_found), exiting_space_handles) or_return 104
-    exiting_space :: cast[slop_os.AddressSpace](exiting_space_handles[0])
     one : u64 = 1
-    results : u64[38]
     stop := slop_os.StopInfo.{}
     registers : u64[slop_os.THREAD_REGISTERS]
-    port :: slop_os.port_create(budget) or_return 105
+    port :: testing.require_ok(t, slop_os.port_create(budget), "a port for T's stops and end")?
     // T's threads, an intercept, a second refused, and a watch for its end
     ids : u64[4]
-    results[0] = cast[u64](slop_os.process_threads(target, ids) or_else 0)
+    testing.expect_eq(t, slop_os.process_threads(target, ids) or_else 0, 2, "T's subtree has its two threads, T1 and T2")
     points :: slop_os.STOP_SYSCALL_ENTRY | slop_os.STOP_SYSCALL_EXIT | slop_os.STOP_FAULT
     calls :: slop_os.syscall_bit(slop_os.SYSCALL_CLOCK_MONOTONIC)
-    attached :: slop_os.intercept_attach(target, port, CONTROL_KEY, calls, points)
-    results[1] = test_kit.tag_of(attached)
-    intercept :: attached or_else test_kit.handle_at[slop_os.Intercept](0)
-    results[2] = test_kit.tag_of(slop_os.intercept_attach(target, port, CONTROL_KEY + 100, calls, points))
-    results[3] = test_kit.tag_of(slop_os.port_bind(port, cast[slop_os.Handle](target), slop_os.SIGNAL_TERMINATED, WATCH_KEY, .Persistent))
-    // E ends itself once told to, watched on a port of its own, which is looked at last
-    exit_port :: slop_os.port_create(budget) or_return 105
-    results[28] = test_kit.tag_of(slop_os.port_bind(exit_port, cast[slop_os.Handle](exiting), slop_os.SIGNAL_TERMINATED, EXIT_WATCH_KEY, .Once))
-    results[29] = test_kit.tag_of(slop_os.process_write_memory(exiting, exiting_space, exiting_found.page + SLOT_GO * 8, os.bytes_of(&one)))
+    intercept :: testing.require_ok(t, slop_os.intercept_attach(target, port, CONTROL_KEY, calls, points), "D intercepts T's ClockMonotonic calls and faults")?
+    twice :: slop_os.intercept_attach(target, port, CONTROL_KEY + 100, calls, points)
+    testing.expect_error(t, twice, slop_os.ControlError.AlreadyIntercepted, "a process is intercepted by one debugger at a time")
+    watched :: slop_os.port_bind(port, cast[slop_os.Handle](target), slop_os.SIGNAL_TERMINATED, WATCH_KEY, .Persistent)
+    testing.expect_ok(t, watched, "D watches for T's end")
     // T1 goes, by a write to T's memory
-    results[4] = test_kit.tag_of(slop_os.process_write_memory(target, target_space, found.page + SLOT_GO * 8, os.bytes_of(&one)))
+    went :: slop_os.process_write_memory(target, target_space, found.page + SLOT_GO * 8, os.bytes_of(&one))
+    testing.expect_ok(t, went, "D writes T's memory, starting T1")
     // The first call, at its entry: answered, and skipped
     next_stop(port, intercept, &stop)
     t1 :: stop.thread
     t2 :: if ids[0] == t1 { ids[1] } else { ids[0] }
     clock :: cast[u64](slop_os.SYSCALL_CLOCK_MONOTONIC)
-    results[5] = cast[u64](cast[u32](stop.point))
-    results[6] = cast[u64](stop.number)
-    results[7] = test_kit.tag_of(slop_os.thread_read_registers(target, t1, registers))
-    results[8] = registers[REGISTER_NUMBER]
+    testing.expect_eq(t, stop.point, slop_os.StopPoint.SyscallEntry, "an intercepted call stops at its entry")
+    testing.expect_eq(t, cast[u64](stop.number), clock, "the stop says which call it is: ClockMonotonic")
+    read :: slop_os.thread_read_registers(target, t1, registers)
+    testing.expect_ok(t, read, "a stopped thread's registers can be read")
+    testing.expect_eq(t, registers[REGISTER_NUMBER], clock, "a thread stopped at a call's entry has the call's number in its registers")
     registers[REGISTER_TAG] = 0
     registers[REGISTER_FIRST] = SKIPPED_VALUE
-    results[9] = test_kit.tag_of(slop_os.thread_write_registers(target, t1, registers))
-    results[10] = test_kit.tag_of(slop_os.intercept_resume(intercept, t1, .Skip))
+    written :: slop_os.thread_write_registers(target, t1, registers)
+    testing.expect_ok(t, written, "a stopped thread's registers can be written, here with the call's result")
+    skipped :: slop_os.intercept_resume(intercept, t1, .Skip)
+    testing.expect_ok(t, skipped, "a call stopped at its entry can be skipped")
     // The second runs, and its result is changed at its exit
     next_stop(port, intercept, &stop)
-    results[11] = cast[u64](cast[u32](stop.point))
+    testing.expect_eq(t, stop.point, slop_os.StopPoint.SyscallEntry, "the second intercepted call stops at its entry")
     _ = slop_os.intercept_resume(intercept, t1, .Continue)
     next_stop(port, intercept, &stop)
-    results[12] = cast[u64](cast[u32](stop.point))
+    testing.expect_eq(t, stop.point, slop_os.StopPoint.SyscallExit, "a call continued from its entry stops at its exit")
     _ = slop_os.thread_read_registers(target, t1, registers)
     registers[REGISTER_FIRST] = CHANGED_VALUE
     _ = slop_os.thread_write_registers(target, t1, registers)
-    results[13] = test_kit.tag_of(slop_os.intercept_resume(intercept, t1, .Skip))
+    skipped_at_exit :: slop_os.intercept_resume(intercept, t1, .Skip)
+    testing.expect_error(t, skipped_at_exit, slop_os.ControlError.NotStopped, "a call stopped at its exit has run, so it can't be skipped")
     _ = slop_os.intercept_resume(intercept, t1, .Continue)
     // The fault: memory mapped where it wrote, and it tries again
     next_stop(port, intercept, &stop)
-    results[14] = cast[u64](cast[u32](stop.point))
-    results[15] = if stop.address == found.fault_at { cast[u64](1) } else { cast[u64](0) }
-    memory :: slop_os.memory_create(budget, PAGE) or_return 107
+    testing.expect_eq(t, stop.point, slop_os.StopPoint.Fault, "an intercepted fault stops the thread")
+    testing.expect_eq(t, stop.address, found.fault_at, "a fault's stop says the address faulted on")
+    memory :: testing.require_ok(t, slop_os.memory_create(budget, PAGE), "memory to map where T1 faulted")?
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    results[16] = test_kit.tag_of(slop_os.memory_map(memory, target_space, found.fault_at, 0, PAGE, read_write))
+    mapped :: slop_os.memory_map(memory, target_space, found.fault_at, 0, PAGE, read_write)
+    testing.expect_ok(t, mapped, "D maps memory in T's space where it faulted")
     _ = slop_os.intercept_resume(intercept, t1, .Continue)
     started :: test_kit.clock_now()
     loop {
         intrinsics.spin_hint()
     }
     while read_target(target, target_space, found.page, SLOT_DONE) == 0 && test_kit.clock_now() - started < 2_000_000_000
-    results[17] = read_target(target, target_space, found.page, SLOT_RESULTS)
-    results[18] = read_target(target, target_space, found.page, SLOT_RESULTS + 1)
-    results[19] = read_target(target, target_space, found.page, SLOT_RESULTS + 2)
+    testing.expect_eq(t, read_target(target, target_space, found.page, SLOT_RESULTS), SKIPPED_VALUE, "a skipped call gives what D wrote in its registers")
+    testing.expect_eq(t, read_target(target, target_space, found.page, SLOT_RESULTS + 1), CHANGED_VALUE, "a call's result changed at its exit is what the thread gets")
+    testing.expect_eq(t, read_target(target, target_space, found.page, SLOT_RESULTS + 2), FAULT_VALUE, "a faulted write retried once memory is mapped there works")
     // T2, suspended: its count stands still, and its registers can be read; resumed, it counts, and they can't
-    results[20] = test_kit.tag_of(slop_os.thread_suspend(target, t2))
+    suspended :: slop_os.thread_suspend(target, t2)
+    testing.expect_ok(t, suspended, "D suspends T2")
     test_kit.wait_nanoseconds(COUNTING_NANOSECONDS)
     before :: read_target(target, target_space, found.page, SLOT_COUNTER)
     test_kit.wait_nanoseconds(COUNTING_NANOSECONDS)
-    results[21] = if read_target(target, target_space, found.page, SLOT_COUNTER) == before { cast[u64](1) } else { cast[u64](0) }
-    results[22] = test_kit.tag_of(slop_os.thread_read_registers(target, t2, registers))
-    results[23] = test_kit.tag_of(slop_os.thread_resume(target, t2))
+    testing.expect_eq(t, read_target(target, target_space, found.page, SLOT_COUNTER), before, "a suspended thread doesn't run, so its count stands still")
+    suspended_read :: slop_os.thread_read_registers(target, t2, registers)
+    testing.expect_ok(t, suspended_read, "a suspended thread's registers can be read")
+    resumed_ok :: slop_os.thread_resume(target, t2)
+    testing.expect_ok(t, resumed_ok, "D resumes T2")
     // Threads busy on every CPU, preempted at ticks: it runs again within a few
     resumed :: test_kit.clock_now()
     loop {
         intrinsics.spin_hint()
     }
     while read_target(target, target_space, found.page, SLOT_COUNTER) == before && test_kit.clock_now() - resumed < RESUME_NANOSECONDS
-    results[24] = if read_target(target, target_space, found.page, SLOT_COUNTER) > before { cast[u64](1) } else { cast[u64](0) }
-    results[25] = test_kit.tag_of(slop_os.thread_read_registers(target, t2, registers))
+    testing.expect(t, read_target(target, target_space, found.page, SLOT_COUNTER) > before, "a resumed thread runs again, so it counts on")
+    running_read :: slop_os.thread_read_registers(target, t2, registers)
+    testing.expect_error(t, running_read, slop_os.ControlError.NotStopped, "a running thread's registers can't be read")
     // Building into T: a thread in its own space starts, one in a space outside its subtree doesn't
-    other_space :: slop_os.address_space_create(budget) or_return 108
-    results[31] = test_kit.tag_of(slop_os.thread_create_in(target, budget, other_space, found.counter_entry, found.stack_top, found.page))
+    other_space :: testing.require_ok(t, slop_os.address_space_create(budget), "an address space outside T's subtree")?
+    outside :: slop_os.thread_create_in(target, budget, other_space, found.counter_entry, found.stack_top, found.page)
+    testing.expect_error(t, outside, slop_os.ControlError.BadAddress, "a thread can't be started in a space outside its process's subtree")
     created :: slop_os.thread_create_in(target, budget, target_space, found.counter_entry, found.stack_top, found.page)
-    results[32] = if test_kit.tag_of(created) == 0 && (created or_else 0) != 0 { cast[u64](1) } else { cast[u64](0) }
+    testing.expect_ok(t, created, "D starts a thread in T's own space")
+    testing.expect_ne(t, created or_else 0, 0, "the thread started in T has an ID")
     // The memory T1 faulted on goes to T, and isn't D's any more
-    given : slop_os.Handle[4]
-    results[33] = test_kit.tag_of(slop_os.process_give_handles(target, slop_os.Handle.[cast[slop_os.Handle](memory)], given))
-    results[34] = test_kit.tag_of(slop_os.memory_size(memory))
+    handed : slop_os.Handle[4]
+    gave :: slop_os.process_give_handles(target, slop_os.Handle.[cast[slop_os.Handle](memory)], handed)
+    testing.expect_ok(t, gave, "D gives T the memory T1 faulted on")
+    gone :: slop_os.memory_size(memory)
+    testing.expect_error(t, gone, slop_os.HandleError.InvalidHandle, "a handle given away is no longer the giver's")
     // A process can't be given its own owning handle, nor a handle without RIGHT_TRANSFER
-    child :: slop_os.process_create(budget) or_return 109
-    results[35] = test_kit.tag_of(slop_os.process_give_handles(child, slop_os.Handle.[cast[slop_os.Handle](child)], given))
-    sized :: slop_os.memory_create(budget, 2 * PAGE) or_return 110
-    results[36] = if (slop_os.memory_size(sized) or_else 0) == 2 * PAGE { cast[u64](1) } else { cast[u64](0) }
+    child :: testing.require_ok(t, slop_os.process_create(budget), "a process to give its own handle")?
+    own :: slop_os.process_give_handles(child, slop_os.Handle.[cast[slop_os.Handle](child)], handed)
+    testing.expect_error(t, own, slop_os.ControlError.NotTransferable, "a process can't be given its own owning handle")
+    sized :: testing.require_ok(t, slop_os.memory_create(budget, 2 * PAGE), "memory of two pages")?
+    testing.expect_eq(t, slop_os.memory_size(sized) or_else 0, 2 * PAGE, "memory_size says how big memory is")
     readable :: slop_os.handle_duplicate(cast[slop_os.Handle](sized), slop_os.RIGHT_MEMORY_READ) or_else slop_os.NO_HANDLE
-    results[37] = test_kit.tag_of(slop_os.process_give_handles(target, slop_os.Handle.[readable], given))
+    untransferable :: slop_os.process_give_handles(target, slop_os.Handle.[readable], handed)
+    testing.expect_error(t, untransferable, slop_os.ControlError.MissingRight, "a handle without RIGHT_TRANSFER can't be given")
     // T killed, and its end seen, once the stops' packet is out of the way
     packets : slop_os.Packet[1]
     loop {
@@ -418,42 +426,58 @@ run_debugger :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.Pr
             break
         }
     }
-    results[26] = test_kit.tag_of(slop_os.process_kill(target))
+    killed :: slop_os.process_kill(target)
+    testing.expect_ok(t, killed, "D kills T")
     ended :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_else 0
-    results[27] = if ended == 1 && packets[0].key == WATCH_KEY && packets[0].data[0] & cast[u64](cast[u32](slop_os.SIGNAL_TERMINATED)) != 0
-        && packets[0].data[1] == slop_os.EXIT_KILLED { cast[u64](1) } else { cast[u64](0) }
-    // E's end, which says with what
-    exited :: slop_os.port_wait(exit_port, packets, slop_os.NO_DEADLINE) or_else 0
-    results[30] = if exited == 1 && packets[0].key == EXIT_WATCH_KEY && packets[0].data[1] == EXIT_VALUE { cast[u64](1) } else { cast[u64](0) }
-    expected :: u64.[
-        2, 0, test_kit.tag(slop_os.ControlError.AlreadyIntercepted), 0, 0,
-        test_kit.tag(slop_os.StopPoint.SyscallEntry), clock, 0, clock, 0, 0,
-        test_kit.tag(slop_os.StopPoint.SyscallEntry), test_kit.tag(slop_os.StopPoint.SyscallExit), test_kit.tag(slop_os.ControlError.NotStopped),
-        test_kit.tag(slop_os.StopPoint.Fault), 1, 0,
-        SKIPPED_VALUE, CHANGED_VALUE, FAULT_VALUE,
-        0, 1, 0, 0, 1, test_kit.tag(slop_os.ControlError.NotStopped),
-        0, 1,
-        0, 0, 1,
-        test_kit.tag(slop_os.ControlError.BadAddress), 1, 0, test_kit.tag(slop_os.HandleError.InvalidHandle),
-        test_kit.tag(slop_os.ControlError.NotTransferable), 1, test_kit.tag(slop_os.ControlError.MissingRight),
-    ]
-    failed := test_kit.check(log, NAME, results, expected)
-    if failed != 0 {
-        return failed
-    }
-    // What D made goes, and T's and E's budgets come back to nothing
+    testing.expect(t, ended == 1 && packets[0].key == WATCH_KEY && packets[0].data[0] & cast[u64](cast[u32](slop_os.SIGNAL_TERMINATED)) != 0,
+        "D's watch sees T end")
+    testing.expect_eq(t, packets[0].data[1], slop_os.EXIT_KILLED, "a killed process's end says it was killed")
+    // What D made goes, and T's budget comes back to nothing
     _ = slop_os.handle_close(cast[slop_os.Handle](intercept))
     _ = slop_os.handle_close(cast[slop_os.Handle](port))
-    _ = slop_os.handle_close(cast[slop_os.Handle](exit_port))
     _ = slop_os.handle_close(cast[slop_os.Handle](other_space))
     _ = slop_os.handle_close(cast[slop_os.Handle](child))
     _ = slop_os.handle_close(cast[slop_os.Handle](sized))
-    if !test_kit.wait_for_budget(budget, 0, 2_000_000_000) || !test_kit.wait_for_budget(t.launched.budget, 0, 2_000_000_000)
-        || !test_kit.wait_for_budget(e.launched.budget, 0, 2_000_000_000) {
-        log_line.write(log, "%: budgets still charged: D's %, T's %, E's %", NAME, test_kit.used(budget), test_kit.used(t.launched.budget),
-            test_kit.used(e.launched.budget))
-        return 90
-    }
-    log_line.write(log, "%: a debugger skipped and changed calls, fixed a fault, read and wrote memory, suspended, resumed and started threads, gave a handle and killed its target; an exit's code came with its end", NAME)
-    return 0
+    _ = test_kit.wait_for_budget(budget, 0, 2_000_000_000)
+    testing.expect_eq(t, test_kit.used(budget), 0, "D's budget is back to nothing once what it made is closed")
+    _ = test_kit.wait_for_budget(copy.launched.budget, 0, 2_000_000_000)
+    testing.expect_eq(t, test_kit.used(copy.launched.budget), 0, "T's budget is back to nothing once it's killed")
+    return .Ok
+}
+
+/**
+ * Check that a process in D's subtree, E, ending itself with process_exit once D writes to its memory, gives a port
+ * of D's its code; and that its budget comes back to nothing.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if main wasn't given the process manager or its module, or the manager's port, E,
+ *     its report or the port couldn't be made.
+ */
+a_process_ending_itself_gives_its_code #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
+    manager :: testing.require_some(t, given.manager, "the root task grants the process manager")?
+    program :: testing.require_some(t, given.program, "the root task grants the program's own module")?
+    manager_port :: testing.require_some(t, os.port_for(block.budget, manager.end), "a port for the process manager's replies")?
+    copy :: testing.require_some(t, launch_copy(given.log, manager, manager_port, program, "test_control E", ROLE_EXITING), "E is launched and told its role")?
+    exiting :: copy.launched.process
+    exiting_found := TargetReport.{}
+    exiting_space_handles : slop_os.Handle[1]
+    testing.require_ok(t, os.receive(copy.end, copy.port, os.mut_bytes_of(&exiting_found), exiting_space_handles), "E reports where its page is, with its address space")?
+    exiting_space :: cast[slop_os.AddressSpace](exiting_space_handles[0])
+    one : u64 = 1
+    // E ends itself once told to, watched on a port of its own
+    exit_port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for E's end")?
+    watched :: slop_os.port_bind(exit_port, cast[slop_os.Handle](exiting), slop_os.SIGNAL_TERMINATED, EXIT_WATCH_KEY, .Once)
+    testing.expect_ok(t, watched, "D watches for E's end")
+    told :: slop_os.process_write_memory(exiting, exiting_space, exiting_found.page + SLOT_GO * 8, os.bytes_of(&one))
+    testing.expect_ok(t, told, "D writes E's memory, telling it to end")
+    packets : slop_os.Packet[1]
+    exited :: slop_os.port_wait(exit_port, packets, slop_os.NO_DEADLINE) or_else 0
+    testing.expect(t, exited == 1 && packets[0].key == EXIT_WATCH_KEY, "D's watch sees E end")
+    testing.expect_eq(t, packets[0].data[1], EXIT_VALUE, "a process's end gives the code it ended itself with")
+    _ = slop_os.handle_close(cast[slop_os.Handle](exit_port))
+    _ = test_kit.wait_for_budget(copy.launched.budget, 0, 2_000_000_000)
+    testing.expect_eq(t, test_kit.used(copy.launched.budget), 0, "E's budget is back to nothing once it has ended")
+    return .Ok
 }

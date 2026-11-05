@@ -3,17 +3,18 @@ package disk_check
 import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
+import testing from "std"
 import dir from "std/os/slop_os"
 import file from "std/os/slop_os"
 import files from "std/os/slop_os"
 import read_only_file from "std/os/slop_os"
+import test_kit from "../../test_kit"
 
 /*
  * Replace, transactions and change cursors on the system volume (decisions/0089): a file replaced whole while it's
  * open, the reader keeping the old contents; a transaction of two new files, which nothing sees before it commits;
  * one refused with Conflict once the file it wrote is changed outside it; one that fails partway through being
  * applied, leaving nothing of itself; and every change followed with a cursor.
- * Checks from 60.
  */
 
 /** The size of the memory a transaction keeps its log in, given with Begin, in bytes. */
@@ -22,18 +23,17 @@ TRANSACTION_LOG_BYTES : u64 : 65536
 /**
  * Check replacing, transactions and change cursors on the system volume.
  *
- * @param to The debug log; unused, as what's found is logged through runtime.
- * @param system The system volume's root.
- * @param buffer The buffer file connections read and write through.
- * @return 0 if all of it held; 170 if a port couldn't be made, 171 if the first cursor couldn't be had, 172 to 177 if
- *     replacing an open file failed or the reader didn't keep the old contents, 178 to 183 if the transaction of two
- *     new files failed or its files were seen before it committed, 184 to 187 if a conflicting transaction wasn't
- *     refused with Conflict or changed something, 191 to 195 if a transaction failing partway through left something of
- *     itself or the volume didn't go on after it, and 188 to 190 if following the changes failed or missed some.
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the buffer, a port or the first cursor couldn't be had, or a step the rest builds
+ *     on failed: writing or replacing a file, beginning, writing in or committing a transaction.
  */
-check_transactions :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], buffer: ptr[Buffer]) -> int {
+transactions_replace_commit_conflict_and_undo #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    system :: system_of(t, given)?
+    buffer :: buffer_of(t, given)?
     budget :: slop_os.startup_block().budget
-    port :: os.port_for(budget, system.end) or_return 170
+    bound :: os.port_for(budget, system.end)
+    port :: testing.require_some(t, bound, "the budget has room for a port")?
     into := os.Incoming.{}
     out := os.Outgoing.{}
     // The cursor to follow from: anything older resyncs
@@ -43,115 +43,91 @@ check_transactions :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], buff
     asking^ = .Changes(0)
     match ask_dir(system.end, port, &out, &into) {
         case Resync(next) => cursor = next
-        case _ => return 171
+        case _ => return stopped(t, "asked for changes since cursor 0, older than the volume keeps, the volume says to resync from now")
     }
 
     // Replaced whole, while a reader has the old one open
-    if !write_file(system.end, port, "replace me.txt", .New, "the old contents", buffer) {
-        return 172
-    }
-    old :: open_read_only(system.end, port, "replace me.txt", buffer) or_return 173
+    testing.require(t, write_file(system.end, port, "replace me.txt", .New, "the old contents", buffer),
+        "the system volume takes a new file, written and synced")?
+    opened_old :: open_read_only(system.end, port, "replace me.txt", buffer)
+    old :: testing.require_some(t, opened_old, "a file just written opens to read")?
     defer slop_os.handle_close(cast[slop_os.Handle](old.end))
-    old_port :: os.port_for(budget, old.end) or_return 173
+    old_bound :: os.port_for(budget, old.end)
+    old_port :: testing.require_some(t, old_bound, "the budget has room for a port")?
     out = os.Outgoing.{}
     replacing :: os.begin[dir.Request](&out)
     replacing^ = .Replace(bytes_of(&out, "replace me.txt"))
     replacement := os.Channel[file.File].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     match ask_dir(system.end, port, &out, &into) {
         case OpenedFile(made) => replacement = made
-        case _ => return 174
+        case _ => return stopped(t, "a file that's there, open or not, can be replaced: a new file to install in its place")
     }
-    if !write_through(replacement.end, "the new contents", buffer, true) {
-        return 175
-    }
+    testing.require(t, write_through(replacement.end, "the new contents", buffer, true), "a replacement is written and installed")?
     _ = slop_os.handle_close(cast[slop_os.Handle](replacement.end))
-    if !holds(system.end, port, "replace me.txt", "the new contents", buffer) {
-        return 176
-    }
-    if !connection_holds(old.end, old_port, "the old contents", buffer) {
-        return 177
-    }
+    testing.expect(t, holds(system.end, port, "replace me.txt", "the new contents", buffer), "a file installed in another's place is what its path opens")
+    testing.expect(t, connection_holds(old.end, old_port, "the old contents", buffer),
+        "a reader that had the file open before it was replaced keeps reading the old contents")
 
     // A transaction of two new files: not there until it commits, then both
-    memory :: slop_os.memory_create(budget, TRANSACTION_LOG_BYTES) or_return 178
+    created :: slop_os.memory_create(budget, TRANSACTION_LOG_BYTES)
+    memory :: testing.require_ok(t, created, "the budget has room for a transaction's log")?
     out = os.Outgoing.{}
     beginning :: os.begin[dir.Request](&out)
     beginning^ = .Begin(memory)
     transaction := os.Channel[dir.Dir].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     match ask_dir(system.end, port, &out, &into) {
         case Began(made) => transaction = made
-        case _ => return 179
+        case _ => return stopped(t, "the system volume begins a transaction, given memory for its log")
     }
     defer slop_os.handle_close(cast[slop_os.Handle](transaction.end))
-    transaction_port :: os.port_for(budget, transaction.end) or_return 179
+    transaction_bound :: os.port_for(budget, transaction.end)
+    transaction_port :: testing.require_some(t, transaction_bound, "the budget has room for a port")?
     for name in string.["transacted one.txt", "transacted two.txt"] {
-        if !write_file(transaction.end, transaction_port, name, .New, name, buffer) {
-            return 180
-        }
+        testing.require(t, write_file(transaction.end, transaction_port, name, .New, name, buffer), "a transaction takes new files")?
     }
-    if open_read_only(system.end, port, "transacted one.txt", buffer) is_some {
-        return 181
-    }
-    if !committed(transaction.end, transaction_port) {
-        return 182
-    }
+    early :: open_read_only(system.end, port, "transacted one.txt", buffer)
+    testing.expect(t, early is_none, "nothing a transaction writes is seen outside it before it commits")
+    testing.require(t, committed(transaction.end, transaction_port), "a transaction nothing else touched commits")?
     for name in string.["transacted one.txt", "transacted two.txt"] {
-        if !holds(system.end, port, name, name, buffer) {
-            return 183
-        }
+        testing.expect(t, holds(system.end, port, name, name, buffer), "every file a transaction wrote is there once it commits")
     }
 
     // A transaction that writes a file someone else changes meanwhile is refused, and changes nothing
-    if !write_file(transaction.end, transaction_port, "transacted one.txt", .Existing, "from the transaction", buffer) {
-        return 184
-    }
-    if !write_file(system.end, port, "transacted one.txt", .Truncate, "from outside", buffer) {
-        return 185
-    }
+    testing.require(t, write_file(transaction.end, transaction_port, "transacted one.txt", .Existing, "from the transaction", buffer),
+        "a transaction, committed, goes on, writing a file it made")?
+    testing.require(t, write_file(system.end, port, "transacted one.txt", .Truncate, "from outside", buffer),
+        "the same file is written outside the transaction meanwhile")?
     out = os.Outgoing.{}
     committing :: os.begin[dir.Request](&out)
     committing^ = .Commit
     match ask_dir(transaction.end, transaction_port, &out, &into) {
-        case Failed(error) => {
-            if error != .Conflict {
-                return 186
-            }
-        }
-        case _ => return 186
+        case Failed(error) => testing.expect_eq(t, error, .Conflict, "a transaction whose file was changed outside it since it read it is refused")
+        case _ => testing.fail(t, "a transaction whose file was changed outside it since it read it is refused")
     }
-    if !holds(system.end, port, "transacted one.txt", "from outside", buffer) {
-        return 187
-    }
+    testing.expect(t, holds(system.end, port, "transacted one.txt", "from outside", buffer), "a transaction refused changes nothing")
 
     // A transaction that fails partway through being applied leaves nothing of itself: its first file isn't there
-    if !write_file(transaction.end, transaction_port, "half done.txt", .New, "never there", buffer) {
-        return 191
-    }
+    testing.require(t, write_file(transaction.end, transaction_port, "half done.txt", .New, "never there", buffer),
+        "a transaction, refused, goes on, taking a new file")?
     out = os.Outgoing.{}
     removing :: os.begin[dir.Request](&out)
     removing^ = .Remove(bytes_of(&out, "not there.txt"))
     match ask_dir(transaction.end, transaction_port, &out, &into) {
         case Done => {}
-        case _ => return 192
+        case _ => return stopped(t, "a transaction takes a removal, checked only as it's applied")
     }
     out = os.Outgoing.{}
     failing :: os.begin[dir.Request](&out)
     failing^ = .Commit
     match ask_dir(transaction.end, transaction_port, &out, &into) {
-        case Failed(error) => {
-            if error != .NotFound {
-                return 193
-            }
-        }
-        case _ => return 193
+        case Failed(error) => testing.expect_eq(t, error, .NotFound, "a transaction removing a file that isn't there fails as it's applied")
+        case _ => testing.fail(t, "a transaction removing a file that isn't there fails as it's applied")
     }
-    if open_read_only(system.end, port, "half done.txt", buffer) is_some {
-        return 194
-    }
+    half :: open_read_only(system.end, port, "half done.txt", buffer)
+    testing.expect(t, half is_none, "a transaction that failed partway through being applied leaves nothing of itself")
     // And the volume goes on: a file written and synced after it
-    if !write_file(system.end, port, "after the undo.txt", .New, "after the undo", buffer) || !holds(system.end, port, "after the undo.txt", "after the undo", buffer) {
-        return 195
-    }
+    testing.expect(t, write_file(system.end, port, "after the undo.txt", .New, "after the undo", buffer)
+        && holds(system.end, port, "after the undo.txt", "after the undo", buffer), "the volume goes on after a transaction is undone")
 
     // Everything since the cursor, followed to the end: the replacement and the transaction's two files among it
     followed := 0
@@ -174,17 +150,15 @@ check_transactions :: fn(to: slop_os.DebugLog, system: os.Channel[dir.Dir], buff
                 }
             }
             case UpToDate(next) => break
-            case _ => return 188
+            case _ => return stopped(t, "a cursor the volume gave is followed, change by change, to the end")
         }
         if followed > 1000 {
-            return 189
+            return stopped(t, "the changes since the first cursor come to an end, the check having made a few dozen")
         }
     }
-    if !saw_replaced || saw_created < 2 {
-        return 190
-    }
-    runtime.log_info("on the system volume, replaced an open file, committed a transaction, was refused a conflicting one, had a failing one leave nothing, and followed every change")
-    return 0
+    testing.expect(t, saw_replaced, "following the changes finds the file replaced")
+    testing.expect(t, saw_created >= 2, "following the changes finds both files the transaction made")
+    return .Ok
 }
 
 /**

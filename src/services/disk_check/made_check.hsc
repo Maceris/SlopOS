@@ -1,16 +1,16 @@
 package disk_check
 
-import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
-import dir from "std/os/slop_os"
+import testing from "std"
 import storage from "../../protocols/storage"
 import slopfs from "../../slopfs"
+import test_kit from "../../test_kit"
 
 /*
  * Volumes made at run time (decisions/0141), through the storage manager: a plain one and a sealed one, each opened as
  * it's made, written and read back; the same name refused again; the sealed one refused with the wrong passphrase and
- * opened again with its own. Checks from 160.
+ * opened again with its own.
  */
 
 /** The name of the plain volume the check makes in the container. */
@@ -29,50 +29,48 @@ MADE_TEXT :: "Written to a volume made at run time"
  * a file written and read back, and the same name refused again; then the sealed one refused with the wrong
  * passphrase and opened again with its own.
  *
- * @param manager The connection to the storage manager.
- * @param port A port bound to manager.
- * @param container The index, among the storage manager's partitions, of the container the volumes are made in.
- * @param buffer The buffer file connections read and write through.
- * @return 0 if all of it held; 160 if a volume couldn't be made, 161 if a port couldn't be, 162 if its file couldn't be
- *     written or read back, 163 if making it again wasn't refused with AlreadyExists, 164 if the wrong passphrase
- *     wasn't refused with WrongKey, and 165 to 167 if the sealed one couldn't be opened again and read.
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the container wasn't found, the buffer or a port couldn't be made, or a volume
+ *     couldn't be made.
  */
-check_made :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, buffer: ptr[Buffer]) -> int {
+volumes_are_made_at_run_time #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    manager :: manager_of(t, given)?
+    container :: testing.require_some(t, given.container, "the sealed volume's test, run before, found the container")?
+    buffer :: buffer_of(t, given)?
     budget :: slop_os.startup_block().budget
     for name, i in string.[MADE_PLAIN, MADE_SEALED] {
         sealed :: i == 1
-        root :: match create(manager, port, container, name, if sealed { MADE_PASSPHRASE } else { "" }) {
+        root :: match create(manager.end, manager.port, container, name, if sealed { MADE_PASSPHRASE } else { "" }) {
             case OpenedFiles(opened) => opened
-            case _ => return 160
+            case _ => return stopped(t, "the storage manager makes a new volume in the container, plain or sealed, and opens it")
         }
-        root_port :: os.port_for(budget, root.end) or_return 161
-        if !write_new(root.end, root_port, MADE_FILE, MADE_TEXT, buffer) || !holds(root.end, root_port, MADE_FILE, MADE_TEXT, buffer) {
-            return 162
-        }
+        bound :: os.port_for(budget, root.end)
+        root_port :: testing.require_some(t, bound, "the budget has room for a port")?
+        testing.expect(t, write_new(root.end, root_port, MADE_FILE, MADE_TEXT, buffer) && holds(root.end, root_port, MADE_FILE, MADE_TEXT, buffer),
+            "a volume made at run time takes a file, which reads back")
         _ = slop_os.handle_close(cast[slop_os.Handle](root_port))
         _ = slop_os.handle_close(cast[slop_os.Handle](root.end))
-        match create(manager, port, container, name, if sealed { MADE_PASSPHRASE } else { "" }) {
+        match create(manager.end, manager.port, container, name, if sealed { MADE_PASSPHRASE } else { "" }) {
             case AlreadyExists => {}
-            case _ => return 163
+            case _ => testing.fail(t, "a volume isn't made with a name another in the container has, but refused")
         }
     }
-    match open_named(manager, port, container, MADE_SEALED, "not its passphrase") {
+    match open_named(manager.end, manager.port, container, MADE_SEALED, "not its passphrase") {
         case WrongKey => {}
-        case _ => return 164
+        case _ => testing.fail(t, "a sealed volume made at run time isn't opened with the wrong passphrase")
     }
-    match open_named(manager, port, container, MADE_SEALED, MADE_PASSPHRASE) {
+    match open_named(manager.end, manager.port, container, MADE_SEALED, MADE_PASSPHRASE) {
         case OpenedFiles(again) => {
-            again_port :: os.port_for(budget, again.end) or_return 165
-            if !holds(again.end, again_port, MADE_FILE, MADE_TEXT, buffer) {
-                return 166
-            }
+            again_bound :: os.port_for(budget, again.end)
+            again_port :: testing.require_some(t, again_bound, "the budget has room for a port")?
+            testing.expect(t, holds(again.end, again_port, MADE_FILE, MADE_TEXT, buffer), "a sealed volume opened again has the file written to it")
             _ = slop_os.handle_close(cast[slop_os.Handle](again_port))
             _ = slop_os.handle_close(cast[slop_os.Handle](again.end))
         }
-        case _ => return 167
+        case _ => testing.fail(t, "a sealed volume made at run time opens again with its passphrase")
     }
-    runtime.log_info("made: a volume and a sealed one at run time, wrote and read back a file on each, was refused either again, and opened the sealed one only with its passphrase")
-    return 0
+    return .Ok
 }
 
 /**

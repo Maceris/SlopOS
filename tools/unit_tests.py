@@ -83,7 +83,7 @@ SWEPT = ["frames_test", "slab_test", "gpt_test", "fat_test", "elf_loader_test", 
 SWEEP_BOUND = 64
 SWEEP_BEYOND = 64
 SWEEP_WORKERS = 12
-# A run's code is a check's number; anything this big or more is a crash, not a check
+# A run's code is how many of its tests failed; anything this big or more is a crash, not a count
 LARGEST_CHECK = 999
 
 
@@ -114,8 +114,9 @@ def run_failing(test: Path, programs: Path, fail: str) -> tuple:
         if "faults: allocations " in line:
             allocations, live = line.split("faults: allocations ", 1)[1].split(", live ")
             said["allocations"], said["live"] = int(allocations), int(live)
+        # Each test has a frame allocator of its own, and says its own count: the sweep goes as far as the largest
         if "faults: points " in line:
-            said["points"] = int(line.split("faults: points ", 1)[1])
+            said["points"] = max(said.get("points", 0), int(line.split("faults: points ", 1)[1]))
     return result.returncode, said
 
 
@@ -162,7 +163,7 @@ def robustness() -> int:
                         problem = None
                     elif code < 0 or code > LARGEST_CHECK or "live" not in said:
                         problem = f"it crashed ({code})"
-                    # A test that stopped at a failed check skipped its own cleanup; one that finished must have freed as much
+                    # A run whose tests failed may have skipped their cleanup; one that passed must have freed as much
                     elif code == 0 and said["live"] > counted["live"]:
                         problem = f"it left {said['live'] - counted['live']} more blocks allocated"
                     if problem is not None:

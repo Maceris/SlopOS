@@ -15,9 +15,11 @@
  */
 package test_msi_dma
 
+import compiler from "base"
 import intrinsics from "base"
 import runtime from "base"
 import os from "std"
+import testing from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
 import log_line from "../../log_line"
@@ -85,61 +87,95 @@ IRQ_KEY : u64 : 3
 /** The limit DMA memory is made below: 4 GiB, below which both machines' RAM is. */
 DMA_LIMIT : u64 : 1 << 32
 
+/** What main was given that the tests use. */
+Given :: struct {
+    /** The debug log, which the tables' count and ECAM's address are logged to. */
+    log : slop_os.DebugLog,
+    /** The platform capability, which makes devices, device memory and DMA domains; none if main wasn't given it. */
+    platform : slop_os.Platform?,
+    /** The firmware tables' read-only copy, which says where ECAM is; none if main wasn't given it. */
+    firmware : slop_os.Memory?,
+}
+
+/** The firmware tables' copy, mapped read-only, as map_tables maps it. */
+Tables :: struct {
+    /** Where it's mapped, starting with its slop_os.FirmwareTables header. */
+    at : u64,
+    /** Its size, in bytes. */
+    size : u64,
+}
+
 /**
- * Check a driver's view of a PCIe function: the firmware tables' copy, its configuration space, a Device, MSIs and
- * DMA through a domain, with QEMU's edu device.
+ * Map the firmware tables' copy read-only, at addresses reserved for it, which it stays mapped at.
  *
- * @param log The debug log, writable, where the test says what it found and which check failed.
- * @param platform The platform capability, which makes devices, device memory and DMA domains; without it the test
- *     ends with 100.
- * @param test_device Not used.
- * @param firmware The firmware tables' read-only copy, which says where ECAM is; without it the test ends with 100.
- * @param manager Not used.
- * @param program Not used.
- * @param peer Not used.
- * @param cpu_budget Not used.
- * @return 0 if every check passed. Otherwise the first that failed, by its result's index plus one: 1 the tables'
- *     copy mapped writable not refused with MissingRight, 2 its header's magic, or 3 its tables wrong; 4 edu's ID,
- *     or 5 its liveness register, wrong; 6 making its Device, 7 a second at its address not refused with
- *     DeviceExists, or 8 one without the platform capability not refused with WrongKind; 9 making its MSI, 10 its
- *     message having no address, 11 edu having no MSI capability, 12 binding the IRQ, or 13 the interrupt not
- *     arriving; 14 fewer than 31 more MSIs, or 15 one more not refused with TooManyVectors; 16 attaching the device
- *     to the domain; 17 DMA memory whose limit is below its size not refused with InvalidSize, 18 making DMA memory,
- *     19 its device address out of place, or 20 ordinary memory having one; 21 edu's DMA into its buffer not
- *     finishing, 22 its MSI on the way back not arriving, 23 its status not saying DMA, or 24 the page not copied;
- *     25 closing the device, 26 its IRQ not gone with it, 27 closing the domain, or 28 its memory still having a
- *     device address; 29 configuration space not on a page not refused with BadAddress; 30 bus mastering still on
- *     once the device is closed; 33 moving the MSI to CPU 1, 34 it not arriving there, or 35 CPU 64 not refused with
- *     InvalidArgument. 102 to 109 if setting up failed: 102 the memory budget, 103 mapping the tables, 104 finding or
- *     mapping ECAM, 105 edu not on bus 0 or without an address for its registers, 106 mapping its registers, 107 the
- *     port, 108 the domain, 109 mapping the DMA memory. 110 if the budget didn't come back to nothing after.
+ * @param t The test's state, which a failure is recorded in.
+ * @param memory The copy's memory, from the firmware grant.
+ * @return Where it's mapped, and its size; Error(Failed), recorded, if its size couldn't be read, no addresses were
+ *     left, or it couldn't be mapped.
  */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+map_tables :: fn(t: ptr[mut testing.T], memory: slop_os.Memory) -> Result[Tables, testing.Stopped] {
+    block :: slop_os.startup_block()
+    size :: testing.require_ok(t, slop_os.memory_size(memory), "the tables' copy's size can be read")?
+    at :: testing.require_some(t, runtime.reserve_addresses(cast[usize](size)), "addresses to map the tables at")?
+    testing.require_ok(t, slop_os.memory_map(memory, block.space, at, 0, size, slop_os.PROTECTION_READ), "the tables' copy maps read-only")?
+    return .Ok(Tables.{at = at, size = size})
+}
+
+/**
+ * Check that the firmware tables' copy can't be mapped writable, starts with its header, and has the tables this
+ * machine's firmware gives: ACPI's RSDP, FADT, DSDT and MCFG on x86-64, the device tree on AArch64.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if main wasn't given the copy, or it couldn't be mapped read-only.
+ */
+the_firmware_tables_copy_is_read_only_and_whole #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
+    tables_memory :: testing.require_some(t, given.firmware, "the root task grants the firmware tables' copy")?
+    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
+    size :: slop_os.memory_size(tables_memory) or_else 0
+    writable_at :: runtime.reserve_addresses(cast[usize](size)) or_else 0
+    writable :: slop_os.memory_map(tables_memory, block.space, writable_at, 0, size, read_write)
+    testing.expect_error(t, writable, slop_os.MemoryError.MissingRight, "the firmware tables' copy is given read-only, so it can't be mapped writable")
+    tables :: map_tables(t, tables_memory)?
+    header :: cast[ptr[slop_os.FirmwareTables]](tables.at)
+    testing.expect_eq(t, header.magic, slop_os.FIRMWARE_MAGIC, "the copy starts with its header, whose magic says what it is")
+    testing.expect(t, tables_right(tables.at), "the copy has the tables this machine's firmware gives, and no others")
+    return .Ok
+}
+
+/**
+ * Check a driver's view of QEMU's edu device, a PCIe function: its configuration space through ECAM, where the tables
+ * say, has edu on bus 0; a Device for it, but not a second at its address, nor one without the platform capability,
+ * nor one whose configuration space isn't on a page; an MSI, programmed into edu, which edu raises and whose packet
+ * arrives, moved to the other CPU and arriving again, but not to a CPU that isn't one; 31 more MSIs, and no more; DMA
+ * memory in a domain the device is attached to, below a limit, which edu copies a page of through its buffer, saying
+ * it's done with its MSI, while ordinary memory has no device address; closing the device destroys its IRQs and turns
+ * its bus mastering off, and closing the domain leaves its memory without a device address; and what it all charged
+ * its budget comes back. The tables' count and ECAM's address are logged, as "% firmware tables, ECAM at %".
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if main wasn't given the platform capability or the tables' copy, or the budget,
+ *     the tables' mapping, ECAM, edu's registers, the device, its MSI, the port, the domain or the DMA memory couldn't
+ *     be found, made or mapped.
+ */
+edu_takes_its_msi_and_copies_a_page_through_dma #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
     space :: block.space
-    hardware :: platform or_return 100
-    tables_memory :: firmware or_return 100
-    budget :: slop_os.memory_budget_create(block.budget, 4 << 20) or_return 102
-    read :: slop_os.PROTECTION_READ
+    hardware :: testing.require_some(t, given.platform, "the root task grants the platform capability")?
+    tables_memory :: testing.require_some(t, given.firmware, "the root task grants the firmware tables' copy")?
+    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 4 << 20), "a budget for the driver's objects")?
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    results : u64[35]
-
-    // The firmware tables' copy: read-only, its header, its tables
-    tables_size :: slop_os.memory_size(tables_memory) or_return 103
-    tables_at :: runtime.reserve_addresses(cast[usize](tables_size)) or_return 103
-    results[0] = test_kit.tag_of(slop_os.memory_map(tables_memory, space, tables_at, 0, tables_size, read_write))
-    slop_os.memory_map(tables_memory, space, tables_at, 0, tables_size, read) or_return 103
-    header :: cast[ptr[slop_os.FirmwareTables]](tables_at)
-    results[1] = if header.magic == slop_os.FIRMWARE_MAGIC { cast[u64](1) } else { cast[u64](0) }
-    results[2] = if tables_right(tables_at) { cast[u64](1) } else { cast[u64](0) }
-    host := pci.find_host(tables_at, tables_size) or_return 104
-    log_line.write(log, "%: % firmware tables, ECAM at %{#018x}", NAME, header.count, host.ecam)
+    tables :: map_tables(t, tables_memory)?
+    header :: cast[ptr[slop_os.FirmwareTables]](tables.at)
+    host := testing.require_some(t, pci.find_host(tables.at, tables.size), "the tables say where ECAM is")?
+    log_line.write(given.log, "%: % firmware tables, ECAM at %{#018x}", NAME, header.count, host.ecam)
 
     // edu, on bus 0
-    config_memory :: slop_os.memory_create_physical(hardware, budget, host.ecam, BUS_BYTES, .Device) or_return 104
-    config_at :: runtime.reserve_addresses(cast[usize](BUS_BYTES)) or_return 104
-    slop_os.memory_map(config_memory, space, config_at, 0, BUS_BYTES, read_write) or_return 104
+    config_memory :: testing.require_ok(t, slop_os.memory_create_physical(hardware, budget, host.ecam, BUS_BYTES, .Device), "device memory over bus 0's configuration space")?
+    config_at :: testing.require_some(t, runtime.reserve_addresses(cast[usize](BUS_BYTES)), "addresses to map bus 0's configuration space at")?
+    testing.require_ok(t, slop_os.memory_map(config_memory, space, config_at, 0, BUS_BYTES, read_write), "bus 0's configuration space maps")?
     slot := cast[u64](32)
     for device in 0..<32 {
         if intrinsics.volatile_load_u32(cast[ptr[u32]](config_at + cast[u64](device) << 15)) == EDU_ID {
@@ -147,89 +183,83 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
             break
         }
     }
-    if slot == 32 {
-        log_line.write(log, "%: no edu device on bus 0", NAME)
-        return 105
-    }
+    testing.require(t, slot != 32, "edu, added to QEMU's command line, is on bus 0")?
     config :: config_at + slot << 15
     bar :: cast[u64](intrinsics.volatile_load_u32(cast[ptr[u32]](config + CONFIG_BAR0))) & ~cast[u64](0xf)
-    if bar == 0 {
-        log_line.write(log, "%: edu's registers weren't given an address", NAME)
-        return 105
-    }
+    testing.require(t, bar != 0, "the firmware gave edu's registers an address")?
     command :: cast[ptr[mut u16]](config + CONFIG_COMMAND)
     intrinsics.volatile_store_u16(command, intrinsics.volatile_load_u16(command) | COMMAND_MEMORY | COMMAND_BUS_MASTER)
-    registers_memory :: slop_os.memory_create_physical(hardware, budget, bar, EDU_REGISTERS, .Device) or_return 106
-    edu :: runtime.reserve_addresses(cast[usize](EDU_REGISTERS)) or_return 106
-    slop_os.memory_map(registers_memory, space, edu, 0, EDU_REGISTERS, read_write) or_return 106
-    results[3] = cast[u64](read_edu(edu, EDU_IDENTIFICATION) & 0xff)
+    registers_memory :: testing.require_ok(t, slop_os.memory_create_physical(hardware, budget, bar, EDU_REGISTERS, .Device), "device memory over edu's registers")?
+    edu :: testing.require_some(t, runtime.reserve_addresses(cast[usize](EDU_REGISTERS)), "addresses to map edu's registers at")?
+    testing.require_ok(t, slop_os.memory_map(registers_memory, space, edu, 0, EDU_REGISTERS, read_write), "edu's registers map")?
+    testing.expect_eq(t, read_edu(edu, EDU_IDENTIFICATION) & 0xff, 0xed, "edu's identification register says it's edu")
     write_edu(edu, EDU_LIVENESS, 0x12345678)
-    results[4] = cast[u64](read_edu(edu, EDU_LIVENESS))
+    testing.expect_eq(t, read_edu(edu, EDU_LIVENESS), ~cast[u32](0x12345678), "edu's liveness register reads back the inverse of what was written")
 
     // Its Device, a second at its address, and one without the platform capability
     address :: slop_os.device_address(0, 0, cast[u8](slot), 0)
     config_physical :: host.ecam + slot << 15
-    made :: slop_os.device_create(hardware, budget, address, pci.msi_source(&host, address), config_physical)
-    results[5] = test_kit.tag_of(made)
-    device :: made or_else test_kit.handle_at[slop_os.Device](0)
-    results[6] = test_kit.tag_of(slop_os.device_create(hardware, budget, address, pci.msi_source(&host, address), config_physical))
+    device :: testing.require_ok(t, slop_os.device_create(hardware, budget, address, pci.msi_source(&host, address), config_physical), "a Device is made for edu")?
+    second :: slop_os.device_create(hardware, budget, address, pci.msi_source(&host, address), config_physical)
+    testing.expect_error(t, second, slop_os.DeviceError.DeviceExists, "a function has one Device at a time")
     not_platform :: test_kit.handle_at[slop_os.Platform](cast[u64](cast[u32](budget)))
-    results[7] = test_kit.tag_of(slop_os.device_create(not_platform, budget, slop_os.device_address(0, 0, 31, 7), 0xffff,
-        config_physical))
+    without :: slop_os.device_create(not_platform, budget, slop_os.device_address(0, 0, 31, 7), 0xffff, config_physical)
+    testing.expect_error(t, without, slop_os.DeviceError.WrongKind, "only the platform capability makes Devices")
     // Configuration space not on a page
-    results[28] = test_kit.tag_of(slop_os.device_create(hardware, budget, slop_os.device_address(0, 0, 31, 7), 0xffff,
-        config_physical + 4))
+    off_page :: slop_os.device_create(hardware, budget, slop_os.device_address(0, 0, 31, 7), 0xffff, config_physical + 4)
+    testing.expect_error(t, off_page, slop_os.DeviceError.BadAddress, "a function's configuration space is on a page of its own")
 
     // Its MSI: the message into edu's MSI capability, then edu raises it
-    irq_made :: slop_os.irq_create_msi(device, budget)
-    results[8] = test_kit.tag_of(irq_made)
-    irq :: irq_made or_else test_kit.handle_at[slop_os.Irq](0)
+    irq :: testing.require_ok(t, slop_os.irq_create_msi(device, budget), "an MSI is made for edu's Device")?
     message :: slop_os.irq_message(irq) or_else slop_os.MsiMessage.{}
-    results[9] = if message.address != 0 { cast[u64](1) } else { cast[u64](0) }
-    results[10] = if program_msi(config, message) { cast[u64](1) } else { cast[u64](0) }
-    port :: slop_os.port_create(budget) or_return 107
-    results[11] = test_kit.tag_of(slop_os.port_bind(port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent))
+    testing.expect_ne(t, message.address, 0, "an MSI's message says where the device writes to raise it")
+    testing.expect(t, program_msi(config, message), "edu has an MSI capability, which the message is programmed into")
+    port :: testing.require_ok(t, slop_os.port_create(budget), "a port for the MSI's packets")?
+    bound :: slop_os.port_bind(port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent)
+    testing.expect_ok(t, bound, "the MSI binds to the port")
     write_edu(edu, EDU_INTERRUPT_RAISE, 1)
-    results[12] = if wait_for_interrupt(port) { cast[u64](1) } else { cast[u64](0) }
+    testing.expect(t, wait_for_interrupt(port), "edu raising its MSI queues an Irq packet within a second")
     write_edu(edu, EDU_INTERRUPT_ACK, 1)
     // Moved to the other CPU, then raised again; and to a CPU that isn't one
-    results[32] = test_kit.tag_of(slop_os.irq_set_cpu(irq, 1))
+    moved_ok :: slop_os.irq_set_cpu(irq, 1)
+    testing.expect_ok(t, moved_ok, "an MSI can be moved to another CPU")
     moved :: slop_os.irq_message(irq) or_else slop_os.MsiMessage.{}
     _ = program_msi(config, moved)
     write_edu(edu, EDU_INTERRUPT_RAISE, 1)
-    results[33] = if wait_for_interrupt(port) { cast[u64](1) } else { cast[u64](0) }
+    testing.expect(t, wait_for_interrupt(port), "an MSI moved to another CPU, its message programmed again, arrives there")
     write_edu(edu, EDU_INTERRUPT_ACK, 1)
-    results[34] = test_kit.tag_of(slop_os.irq_set_cpu(irq, 64))
+    no_cpu :: slop_os.irq_set_cpu(irq, 64)
+    testing.expect_error(t, no_cpu, slop_os.DeviceError.InvalidArgument, "an MSI can't be moved to a CPU that isn't one")
     // 31 more, and no more
     more : slop_os.Irq[31]
     fitted := cast[u64](0)
     for &extra in more {
-        match slop_os.irq_create_msi(device, budget) {
-            case Ok(made_one) => {
-                extra^ = made_one
-                fitted += 1
-            }
-            case Error(error) => {}
+        made_one :: slop_os.irq_create_msi(device, budget)
+        if made_one is_ok {
+            extra^ = made_one or_else test_kit.handle_at[slop_os.Irq](0)
+            fitted += 1
         }
     }
-    results[13] = fitted
-    results[14] = test_kit.tag_of(slop_os.irq_create_msi(device, budget))
+    testing.expect_eq(t, fitted, 31, "a device has 32 MSI vectors, so 31 more fit")
+    too_many :: slop_os.irq_create_msi(device, budget)
+    testing.expect_error(t, too_many, slop_os.DeviceError.TooManyVectors, "a device's MSIs stop at 32")
     for extra in more {
         _ = slop_os.handle_close(cast[slop_os.Handle](extra))
     }
 
     // DMA: a domain the device is attached to, memory in it below the limit, and none whose limit is below its size
-    domain :: slop_os.dma_domain_create(hardware, budget, slop_os.DMA_DOMAIN_TRUSTED) or_return 108
-    results[15] = test_kit.tag_of(slop_os.device_attach(hardware, device, domain))
-    results[16] = test_kit.tag_of(slop_os.dma_memory_create(domain, budget, 2 * PAGE, PAGE))
-    dma_made :: slop_os.dma_memory_create(domain, budget, 2 * PAGE, DMA_LIMIT)
-    results[17] = test_kit.tag_of(dma_made)
-    dma :: dma_made or_else test_kit.handle_at[slop_os.Memory](0)
+    domain :: testing.require_ok(t, slop_os.dma_domain_create(hardware, budget, slop_os.DMA_DOMAIN_TRUSTED), "a DMA domain")?
+    attached :: slop_os.device_attach(hardware, device, domain)
+    testing.expect_ok(t, attached, "the device attaches to the domain")
+    below_size :: slop_os.dma_memory_create(domain, budget, 2 * PAGE, PAGE)
+    testing.expect_error(t, below_size, slop_os.DeviceError.InvalidSize, "DMA memory can't be made below a limit smaller than itself")
+    dma :: testing.require_ok(t, slop_os.dma_memory_create(domain, budget, 2 * PAGE, DMA_LIMIT), "DMA memory is made in the domain, below the limit")?
     device_address :: slop_os.memory_device_address(dma) or_else 0
-    results[18] = if device_address != 0 && device_address + 2 * PAGE <= DMA_LIMIT && device_address % PAGE == 0 { cast[u64](1) } else { cast[u64](0) }
-    results[19] = test_kit.tag_of(slop_os.memory_device_address(registers_memory))
-    dma_at :: runtime.reserve_addresses(cast[usize](2 * PAGE)) or_return 109
-    slop_os.memory_map(dma, space, dma_at, 0, 2 * PAGE, read_write) or_return 109
+    testing.expect(t, device_address != 0 && device_address + 2 * PAGE <= DMA_LIMIT && device_address % PAGE == 0, "DMA memory has a page-aligned device address, below its limit")
+    ordinary :: slop_os.memory_device_address(registers_memory)
+    testing.expect_error(t, ordinary, slop_os.DeviceError.NotDmaMemory, "memory that isn't DMA memory has no device address")
+    dma_at :: testing.require_some(t, runtime.reserve_addresses(cast[usize](2 * PAGE)), "addresses to map the DMA memory at")?
+    testing.require_ok(t, slop_os.memory_map(dma, space, dma_at, 0, 2 * PAGE, read_write), "the DMA memory maps")?
     for i in 0..<PAGE / 8 {
         intrinsics.volatile_store_u64(cast[ptr[mut u64]](dma_at + i * 8), 0x0101010101010101 * (i % 251) + i)
     }
@@ -238,47 +268,36 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     write_edu_u64(edu, EDU_DMA_DESTINATION, EDU_BUFFER)
     write_edu_u64(edu, EDU_DMA_COUNT, PAGE)
     write_edu_u64(edu, EDU_DMA_COMMAND, DMA_START)
-    results[20] = if wait_for_dma(edu) { cast[u64](1) } else { cast[u64](0) }
+    testing.expect(t, wait_for_dma(edu), "edu's DMA from the DMA memory into its buffer finishes within a second")
     write_edu_u64(edu, EDU_DMA_SOURCE, EDU_BUFFER)
     write_edu_u64(edu, EDU_DMA_DESTINATION, device_address + PAGE)
     write_edu_u64(edu, EDU_DMA_COUNT, PAGE)
     write_edu_u64(edu, EDU_DMA_COMMAND, DMA_START | DMA_TO_RAM | DMA_INTERRUPT)
-    results[21] = if wait_for_interrupt(port) { cast[u64](1) } else { cast[u64](0) }
-    results[22] = if read_edu(edu, 0x24) & DMA_DONE_STATUS != 0 { cast[u64](1) } else { cast[u64](0) }
+    testing.expect(t, wait_for_interrupt(port), "edu's DMA back into the next page says it's done with its MSI")
+    testing.expect(t, read_edu(edu, 0x24) & DMA_DONE_STATUS != 0, "edu's interrupt status says it was the DMA")
     write_edu(edu, EDU_INTERRUPT_ACK, DMA_DONE_STATUS)
-    same := cast[u64](1)
+    same := true
     for i in 0..<PAGE / 8 {
         if intrinsics.volatile_load_u64(cast[ptr[u64]](dma_at + PAGE + i * 8)) != intrinsics.volatile_load_u64(cast[ptr[u64]](dma_at + i * 8)) {
-            same = 0
+            same = false
         }
     }
-    results[23] = same
+    testing.expect(t, same, "the page edu copied there and back reads as the first")
 
     /*
      * edu quiet again; closing the device destroys its IRQ and turns its DMA off, and closing the domain takes its
      * memory's device address
      */
     stop_msi(config)
-    results[24] = test_kit.tag_of(slop_os.handle_close(cast[slop_os.Handle](device)))
-    results[29] = if intrinsics.volatile_load_u16(command) & COMMAND_BUS_MASTER == 0 { cast[u64](1) } else { cast[u64](2) }
-    results[25] = test_kit.tag_of(slop_os.handle_info(cast[slop_os.Handle](irq)))
-    results[26] = test_kit.tag_of(slop_os.handle_close(cast[slop_os.Handle](domain)))
-    results[27] = test_kit.tag_of(slop_os.memory_device_address(dma))
-    expected :: u64.[
-        test_kit.tag(slop_os.MemoryError.MissingRight), 1, 1,
-        0xed, ~cast[u64](0x12345678) & 0xffffffff,
-        0, test_kit.tag(slop_os.DeviceError.DeviceExists), test_kit.tag(slop_os.DeviceError.WrongKind),
-        0, 1, 1, 0, 1, 31, test_kit.tag(slop_os.DeviceError.TooManyVectors),
-        0, test_kit.tag(slop_os.DeviceError.InvalidSize), 0, 1, test_kit.tag(slop_os.DeviceError.NotDmaMemory),
-        1, 1, 1, 1,
-        0, test_kit.tag(slop_os.HandleError.ObjectGone), 0, test_kit.tag(slop_os.DeviceError.NotDmaMemory),
-        test_kit.tag(slop_os.DeviceError.BadAddress), 1, 0, 0,
-        0, 1, test_kit.tag(slop_os.DeviceError.InvalidArgument),
-    ]
-    failed := test_kit.check(log, NAME, results, expected)
-    if failed != 0 {
-        return failed
-    }
+    device_closed :: slop_os.handle_close(cast[slop_os.Handle](device))
+    testing.expect_ok(t, device_closed, "the device closes")
+    testing.expect_eq(t, intrinsics.volatile_load_u16(command) & COMMAND_BUS_MASTER, 0, "closing a device turns its bus mastering off, so it can't do DMA")
+    irq_gone :: slop_os.handle_info(cast[slop_os.Handle](irq))
+    testing.expect_error(t, irq_gone, slop_os.HandleError.ObjectGone, "closing a device destroys its IRQs")
+    domain_closed :: slop_os.handle_close(cast[slop_os.Handle](domain))
+    testing.expect_ok(t, domain_closed, "the domain closes")
+    address_gone :: slop_os.memory_device_address(dma)
+    testing.expect_error(t, address_gone, slop_os.DeviceError.NotDmaMemory, "closing a domain leaves its memory without a device address")
     _ = slop_os.memory_unmap(space, dma_at)
     _ = slop_os.handle_close(cast[slop_os.Handle](dma))
     _ = slop_os.memory_unmap(space, edu)
@@ -287,12 +306,29 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     _ = slop_os.handle_close(cast[slop_os.Handle](config_memory))
     _ = slop_os.handle_close(cast[slop_os.Handle](irq))
     _ = slop_os.handle_close(cast[slop_os.Handle](port))
-    if !test_kit.wait_for_budget(budget, 0, 1_000_000_000) {
-        log_line.write(log, "%: its budget still has % bytes charged", NAME, test_kit.used(budget))
-        return 110
-    }
-    log_line.write(log, "%: edu took its MSI and copied a page through DMA memory, and its device took its IRQs with it", NAME)
-    return 0
+    _ = test_kit.wait_for_budget(budget, 0, 1_000_000_000)
+    testing.expect_eq(t, test_kit.used(budget), 0, "the budget is back to nothing once the driver's objects are closed")
+    return .Ok
+}
+
+/**
+ * Run the tests, reporting to the debug log.
+ *
+ * @param log The debug log, writable, where each test is reported.
+ * @param platform The platform capability, which makes devices, device memory and DMA domains; without it the tests
+ *     that need it fail.
+ * @param test_device Not used.
+ * @param firmware The firmware tables' read-only copy, which says where ECAM is; without it the tests fail.
+ * @param manager Not used.
+ * @param program Not used.
+ * @param peer Not used.
+ * @param cpu_budget Not used.
+ * @return How many tests failed: 0 when every one passed.
+ */
+main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
+    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+    given :: Given.{log = log, platform = platform, firmware = firmware}
+    return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }
 
 /**

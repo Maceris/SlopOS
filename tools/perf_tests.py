@@ -42,8 +42,8 @@ def boots(kernel: Path, programs: Path, image_builder: Path, more: list) -> list
     """The boots that measure: test_perf alone, on one CPU, and a boot from the image builder's disk."""
     return [
         [f"--kernel={kernel}", f"--programs={programs}", "--timeout=600", "--expect=7",
-         "--command-line=test_exit test_program=test_perf", "--expect-line=[user] test_perf: measured ipc_round_trip, page_fault, "
-         "thread_create and process_create", *more],
+         "--command-line=test_exit test_program=test_perf", "--expect-line=[user] test_perf: 4 tests: 4 passed, 0 failed",
+         *more],
         [f"--kernel={kernel}", f"--programs={programs}", f"--image-builder={image_builder}", "--boot-disk", "--timeout=900", "--expect=7",
          "--command-line=test_exit test_services", "--disk=SlopOS disk check: from the host", *more],
     ]

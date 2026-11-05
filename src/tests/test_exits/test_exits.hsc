@@ -10,11 +10,12 @@
  */
 package test_exits
 
+import compiler from "base"
 import runtime from "base"
 import os from "std"
+import testing from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
-import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 import process_builder from "../../process_builder"
 import random_stream from "../../random_stream"
@@ -40,77 +41,108 @@ takes_nothing :: fn() -> int {
 /** The grants of an entry that takes nothing: none. */
 NoGrants :: struct {}
 
+/** What main was given that the tests use. */
+Given :: struct {
+    /** The debug log. */
+    log : slop_os.DebugLog,
+    /** The process manager, which launches the first copy; none if main wasn't given it. */
+    manager : os.Channel[process_manager.ProcessManager]?,
+    /** The test's own module, which both copies run; none if main wasn't given it. */
+    program : slop_os.Memory?,
+}
+
 /**
- * Check how a copy of the program ends when it can't start, and that a refused launch gives back what it made.
+ * Check that a copy launched without a grant its entry requires ends with EXIT_MISSING_GRANT, and its budget comes back
+ * to nothing; then that a launch refused, its watch's key still the first copy's, gives back what it made for the
+ * copy, so its starter's budget is charged no more than before.
  *
- * @param log The debug log, writable, where the test says what it found and which check failed.
- * @param platform Not used.
- * @param test_device Not used.
- * @param firmware Not used.
- * @param manager The process manager, which launches the first copy; without it the test ends with 101.
- * @param program The test's own module, which both copies run; without it the test ends with 100.
- * @param peer Not used: the copies never get as far as their entry.
- * @param cpu_budget Not used.
- * @return 0 if every check passed. Otherwise the first that failed: 1 if the copy without grants didn't end with
- *     EXIT_MISSING_GRANT, or 2 its budget didn't come back to nothing; 3 if the copy told another ABI version didn't
- *     end with EXIT_WRONG_ABI, or 4 its budget didn't come back; 5 if the launch asking for a key in use wasn't
- *     refused, or 6 it left a copy's budget charged. 102 to 111 if setting up failed: 102 and 103 the ports, 104 the
- *     first launch, 105 to 110 building the second copy, 111 reading the budget.
+ * @param t The test's state.
+ * @return Ok once it's run; Error if main wasn't given the process manager or its module, or a port or the first
+ *     launch couldn't be made, or the budget couldn't be read.
  */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+a_copy_missing_a_grant_ends_with_126_and_a_refused_launch_gives_back #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
-    executable :: program or_return 100
-    loader :: manager or_return 101
-    manager_port :: os.port_for(block.budget, loader.end) or_return 102
-    port :: slop_os.port_create(block.budget) or_return 103
-    results : u64[6]
-
+    executable :: testing.require_some(t, given.program, "the root task grants the program's own module")?
+    loader :: testing.require_some(t, given.manager, "the root task grants the process manager")?
+    manager_port :: testing.require_some(t, os.port_for(block.budget, loader.end), "a port for the process manager's replies")?
+    port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for the copies' watches")?
     // Launched with nothing, though its entry requires its log
-    launched :: os.launch(loader, manager_port, "test_exits without grants", executable, COPY_BUDGET, takes_nothing, NoGrants.{},
-        os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = WATCH_KEY}}) or_return 104
-    results[0] = ended_with(port)
+    launch :: os.launch(loader, manager_port, "test_exits without grants", executable, COPY_BUDGET, takes_nothing, NoGrants.{},
+        os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = WATCH_KEY}})
+    launched :: testing.require_ok(t, launch, "the process manager launches a copy as if its entry took nothing")?
+    testing.expect_eq(t, ended_with(port), cast[u64](slop_os.EXIT_MISSING_GRANT), "a copy whose entry requires its debug log, given none, ends with EXIT_MISSING_GRANT before its entry runs")
     _ = slop_os.handle_close(cast[slop_os.Handle](launched.process))
-    results[1] = if test_kit.wait_for_budget(launched.budget, 0, 1_000_000_000) { cast[u64](1) } else { cast[u64](0) }
+    testing.expect(t, test_kit.wait_for_budget(launched.budget, 0, 1_000_000_000), "the copy's budget is back to nothing once it has ended")
     _ = slop_os.handle_close(cast[slop_os.Handle](launched.budget))
-
     // Refused: the first copy's binding keeps WATCH_KEY after it fired
-    before :: (slop_os.memory_budget_info(block.budget) or_return 111).used
+    before :: testing.require_ok(t, slop_os.memory_budget_info(block.budget), "the program's budget can be read")?
     refused :: os.launch(loader, manager_port, "test_exits refused", executable, COPY_BUDGET, takes_nothing, NoGrants.{},
         os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = WATCH_KEY}}) is_error
-    after :: (slop_os.memory_budget_info(block.budget) or_return 111).used
-    results[4] = if refused { cast[u64](1) } else { cast[u64](0) }
-    results[5] = if after < before + COPY_BUDGET { cast[u64](1) } else { cast[u64](0) }
+    after :: testing.require_ok(t, slop_os.memory_budget_info(block.budget), "the program's budget can be read")?
+    testing.expect(t, refused, "a launch whose watch asks for a key the port already has bound is refused")
+    testing.expect(t, after.used < before.used + COPY_BUDGET, "a refused launch gives back the copy's budget it made, so the starter isn't charged for it")
+    _ = slop_os.handle_close(cast[slop_os.Handle](port))
+    return .Ok
+}
 
-    // Built here, its startup block saying another ABI version
-    budget :: slop_os.memory_budget_create(block.budget, COPY_BUDGET) or_return 105
-    process :: slop_os.process_create(budget) or_return 106
-    space :: slop_os.address_space_create(budget) or_return 107
-    slop_os.port_bind(port, cast[slop_os.Handle](process), slop_os.SIGNAL_TERMINATED, BUILT_KEY, .Once) or_return 108
-    size :: slop_os.memory_size(executable) or_return 109
-    address :: runtime.reserve_addresses(cast[usize](size)) or_return 109
-    slop_os.memory_map(executable, block.space, address, 0, size, slop_os.PROTECTION_READ) or_return 109
+/**
+ * Check that a copy built here with the process builder, its startup block saying an ABI version that isn't the
+ * kernel's, ends with EXIT_WRONG_ABI before its entry runs, and that what it had comes back to its budget.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if main wasn't given its module, or the port, the copy's budget, process or address
+ *     space, its watch, or the module's mapping couldn't be made, or the copy couldn't be built.
+ */
+a_copy_told_another_abi_version_ends_with_125 #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
+    executable :: testing.require_some(t, given.program, "the root task grants the program's own module")?
+    port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for the copy's watch")?
+    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, COPY_BUDGET), "a budget for the copy")?
+    process :: testing.require_ok(t, slop_os.process_create(budget), "a process for the copy")?
+    space :: testing.require_ok(t, slop_os.address_space_create(budget), "an address space for the copy")?
+    watched :: slop_os.port_bind(port, cast[slop_os.Handle](process), slop_os.SIGNAL_TERMINATED, BUILT_KEY, .Once)
+    testing.require_ok(t, watched, "the copy's end is watched")?
+    size :: testing.require_ok(t, slop_os.memory_size(executable), "the module's size can be read")?
+    address :: testing.require_some(t, runtime.reserve_addresses(cast[usize](size)), "addresses to map the module at")?
+    mapped :: slop_os.memory_map(executable, block.space, address, 0, size, slop_os.PROTECTION_READ)
+    testing.require_ok(t, mapped, "the module is mapped to be read")?
     file :: view_of(cast[ptr[u8]](address), cast[usize](size))
     stream := random_stream.make(block.seed)
     seed : u8[32]
     random_stream.fill(&stream, seed)
     target :: process_builder.Target.{process = process, space = space, budget = budget}
     no_grants : process_builder.Grant[1]
-    thread :: process_builder.build(target, file, view_of(&no_grants[0], 0), seed, &stream, null, slop_os.ABI_VERSION + 1)
-        or_return 110
-    results[2] = ended_with(port)
+    built :: process_builder.build(target, file, view_of(&no_grants[0], 0), seed, &stream, null, slop_os.ABI_VERSION + 1)
+    testing.require_ok(t, built, "the process builder builds the copy, its startup block saying another ABI version")?
+    testing.expect_eq(t, ended_with(port), cast[u64](slop_os.EXIT_WRONG_ABI), "a copy told an ABI version that isn't the kernel's ends with EXIT_WRONG_ABI before its entry runs")
     _ = slop_os.memory_unmap(block.space, address)
-    // thread is the copy's thread's ID in its own process, not a handle of this one's, so there's nothing to close
+    // The build gave the copy's thread's ID in its own process, not a handle of this one's, so there's nothing to close
     _ = slop_os.handle_close(cast[slop_os.Handle](process))
-    results[3] = if test_kit.wait_for_budget(budget, 0, 1_000_000_000) { cast[u64](1) } else { cast[u64](0) }
+    testing.expect(t, test_kit.wait_for_budget(budget, 0, 1_000_000_000), "the copy's budget is back to nothing once it has ended")
     _ = slop_os.handle_close(cast[slop_os.Handle](budget))
+    _ = slop_os.handle_close(cast[slop_os.Handle](port))
+    return .Ok
+}
 
-    expected :: u64.[cast[u64](slop_os.EXIT_MISSING_GRANT), 1, cast[u64](slop_os.EXIT_WRONG_ABI), 1, 1, 1]
-    failed :: test_kit.check(log, NAME, results, expected)
-    if failed == 0 {
-        log_line.write(log, "%: a copy missing a grant it requires ended with 126, one told another ABI version with 125, and a refused launch gave its budget back", NAME)
-    }
-    return failed
+/**
+ * Run the tests, reporting to the debug log.
+ *
+ * @param log The debug log, writable, where each test is reported.
+ * @param platform Not used.
+ * @param test_device Not used.
+ * @param firmware Not used.
+ * @param manager The process manager, which launches the first copy; without it the tests fail.
+ * @param program The test's own module, which both copies run; without it the tests fail.
+ * @param peer Not used: the copies never get as far as their entry.
+ * @param cpu_budget Not used.
+ * @return How many tests failed: 0 when every one passed.
+ */
+main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
+    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+    given :: Given.{log = log, manager = manager, program = program}
+    return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }
 
 /**

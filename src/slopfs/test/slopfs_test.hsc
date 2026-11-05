@@ -1,12 +1,16 @@
 /**
- * slopfs's tests, as a hosted program (tools/unit_tests.py): main returns 0 if everything worked, or the number of
- * the first check that failed. Over a buffer standing in for a disk: the B+tree against a model, through splits,
- * merges and commits; and the container and its volumes (container_test.hsc).
+ * slopfs's tests, as a hosted program (tools/unit_tests.py, decisions/0175): main runs them and returns how many
+ * failed. Over a buffer standing in for a disk: the B+tree against a model, through splits, merges and commits; the
+ * container and its volumes (container_test.hsc), volumes apart, history, encryption, snapshots, quotas, links and
+ * volumes made at run time; then the crash-state tester, failed writes and the fuzzer, on a volume that isn't
+ * encrypted and on one that is.
  */
 package slopfs_test
 
+import compiler from "base"
 import runtime from "base"
 import maps from "std"
+import testing from "std"
 import slopfs from ".."
 import hosted_faults from "../../robustness/hosted"
 
@@ -184,69 +188,6 @@ next_random :: fn(random: ptr[mut Random]) -> u64 {
 }
 
 /**
- * Run every check in order, stopping at the first that fails: the tree, the container and its volumes, volumes
- * apart, history, encryption, snapshots, quotas, links and volumes made at run time; then the crash-state tester, the
- * failed-write checks and the fuzzer, on a volume that isn't encrypted and on one that is.
- *
- * @return 0 if every check passed, or the number of the first that failed: each group's numbers are its own, as its
- *     function says.
- */
-checks :: fn() -> int {
-    failed := check_tree()
-    if failed != 0 {
-        return failed
-    }
-    failed = check_container()
-    if failed != 0 {
-        return failed
-    }
-    failed = check_apart()
-    if failed != 0 {
-        return failed
-    }
-    failed = check_history()
-    if failed != 0 {
-        return failed
-    }
-    failed = check_sealed()
-    if failed != 0 {
-        return failed
-    }
-    failed = check_snapshots()
-    if failed != 0 {
-        return failed
-    }
-    failed = check_quotas()
-    if failed != 0 {
-        return failed
-    }
-    failed = check_links()
-    if failed != 0 {
-        return failed
-    }
-    failed = check_made()
-    if failed != 0 {
-        return failed
-    }
-    // The crash-state tester and the fuzzer, on a volume that isn't encrypted and on one that is
-    for sealed in bool.[false, true] {
-        failed = check_crashes(sealed)
-        if failed != 0 {
-            return failed
-        }
-        failed = check_failed_writes(sealed)
-        if failed != 0 {
-            return failed
-        }
-        failed = check_fuzz(sealed)
-        if failed != 0 {
-            return failed
-        }
-    }
-    return 0
-}
-
-/**
  * Open the test volume, 1: as it is, or unlocked with the tests' passphrase.
  *
  * @param container The container, which keeps the volume among its open ones.
@@ -320,144 +261,264 @@ free_device :: fn(device: slopfs.Device) {
 }
 
 /**
- * Check the tree against a model: a map from each key's object to the value written for it. Thousands of puts,
- * replacing and deleting at random, with values of many lengths, committed every so often, then every key read back,
- * and the records walked in order both ways.
+ * Make a disk in memory and format a container on it, for a test that mounts it.
  *
- * @return 0 if every check passed, or the number of the first that failed, 1 to 25.
+ * @param t The test's state, which a failure is recorded in.
+ * @param blocks The disk's size in blocks, enough for a container (BLOCKS, or a test's own smaller size).
+ * @param first The container ID's first byte, each byte after it one more, so each test's container is its own.
+ * @return The device, the caller's to free with free_device; Error if it couldn't be had or formatted, the failure
+ *     recorded and nothing left to free.
  */
-check_tree :: fn() -> int {
-    device :: new_device() or_return 1
-    defer free_device(device)
+formatted :: fn(t: ptr[mut testing.T], blocks: u64, first: u8) -> Result[slopfs.Device, testing.Stopped] {
+    device :: testing.require_some(t, new_device_of(blocks), "the disk's bytes are allocated")?
+    id : u8[16]
+    for i in 0..<id.count {
+        id[i] = first + cast[u8](i)
+    }
+    formatting :: slopfs.format(device, id)
+    if !testing.expect_ok(t, formatting, "a zeroed disk takes a container") {
+        free_device(device)
+        return .Error(.Failed)
+    }
+    return .Ok(device)
+}
+
+/**
+ * Require a result to be Ok, as expect_ok checks, ending the test with ? if it isn't; unlike testing.require_ok, for a
+ * result of any value, void too, which is dropped.
+ *
+ * @param t The test's state, which a failure is recorded in.
+ * @param result The result, of any Result type.
+ * @param message Why it should succeed, for whoever reads a failure.
+ * @param location Where the check is; the caller's own.
+ * @return Ok if it was Ok; Error(Failed), the failure recorded with the error, if it was an Error.
+ */
+require_done :: fn[V, E](t: ptr[mut testing.T], result: Result[V, E], message: string, location := #caller_location) -> testing.Outcome {
+    return testing.outcome_of(testing.expect_ok(t, result, message, location))
+}
+
+/**
+ * Commit a container, checking that the commit succeeds and that what it left checks out whole.
+ *
+ * @param t The test's state, which a failure is recorded in.
+ * @param container The container under test, mounted.
+ * @param message Why the commit should succeed, for whoever reads a failure.
+ * @param location Where the check is; the caller's own.
+ * @return True if it committed and verify found nothing wrong; false, the failure (the commit's error, or the problem
+ *     verify found) recorded, if not.
+ */
+commits :: fn(t: ptr[mut testing.T], container: ptr[mut slopfs.Container], message: string, location := #caller_location) -> bool {
+    committed :: slopfs.commit(container)
+    if !testing.expect_ok(t, committed, message, location) {
+        return false
+    }
+    return checks_out(t, container, message, location)
+}
+
+/**
+ * Commit a container, as commits checks, ending the test with ? if it doesn't commit or check out.
+ *
+ * @param t The test's state, which a failure is recorded in.
+ * @param container The container under test, mounted.
+ * @param message Why the commit should succeed, for whoever reads a failure.
+ * @param location Where the check is; the caller's own.
+ * @return Ok if it committed and checked out; Error(Failed), the failure recorded, if not.
+ */
+require_commit :: fn(t: ptr[mut testing.T], container: ptr[mut slopfs.Container], message: string, location := #caller_location) -> testing.Outcome {
+    return testing.outcome_of(commits(t, container, message, location))
+}
+
+/**
+ * Check that a container checks out whole: verify finds no problem.
+ *
+ * @param t The test's state, which a failure, with the problem verify found, is recorded in.
+ * @param container The container under test, mounted.
+ * @param message Why it should check out, for whoever reads a failure.
+ * @param location Where the check is; the caller's own.
+ * @return True if verify found no problem; false, the failure recorded, if it did.
+ */
+checks_out :: fn(t: ptr[mut testing.T], container: ptr[mut slopfs.Container], message: string, location := #caller_location) -> bool {
+    verified :: slopfs.verify(container)
+    return testing.expect_ok(t, verified, message, location)
+}
+
+/**
+ * Commit a container, and tell whether the commit failed, or what it left doesn't check out whole, for code that
+ * only counts or names what went wrong rather than asserting it (the crash images).
+ *
+ * @param container The container under test, mounted.
+ * @return True if the commit failed or verify found a problem; false if all's well.
+ */
+commit_failed :: fn(container: ptr[mut slopfs.Container]) -> bool {
+    match slopfs.commit(container) {
+        case Ok => return slopfs.verify(container) is_error
+        case Error(error) => return true
+    }
+}
+
+/** The tree test's tree, grown against its model: what each of the tree tests checks. */
+Grown :: struct {
+    /** The disk the tree's nodes are written to, freed with free_grown. */
+    device : slopfs.Device,
+    /** Where the tree's blocks come from, from runtime.new, freed with free_grown. */
+    bump : ptr[mut Bump],
+    /** The tree's nodes, half of them written and half still dirty. */
+    nodes : slopfs.Nodes,
+    /** The tree, of kind Volume and owner 7. */
+    tree : slopfs.Tree,
+    /** Each key's object, mapped to the seed of the value last put for it; a key deleted isn't there. */
+    model : maps.HashMap[u64, u64, maps.hash_integer[u64]],
+}
+
+/** How many objects the tree test's keys are drawn from. */
+TREE_KEYS :: 3000
+/** The most bytes a value in the tree test has. */
+TREE_VALUE_BYTES :: 600
+
+/**
+ * Grow a tree against a model, a map from each key's object to the value written for it: 20000 puts, replacing and
+ * deleting at random, with values of 0 to 599 bytes, committed every 997 steps, checking that each delete finds what
+ * the model has and each write leaves nothing dirty.
+ *
+ * @param t The test's state, which a failure is recorded in.
+ * @return The tree, the caller's to free with free_grown; Error if the disk couldn't be had or the tree refused a put,
+ *     delete or write, the failure recorded and nothing left to free.
+ */
+grown :: fn(t: ptr[mut testing.T]) -> Result[Grown, testing.Stopped] {
+    device :: testing.require_some(t, new_device(), "the disk's bytes are allocated")?
     bump := runtime.new(Bump)
-    defer runtime.free(bump)
     bump^ = Bump.{next = slopfs.FIRST_DATA}
-    nodes := slopfs.Nodes.{device = device, transaction = 1, space = cast[rawptr](bump), allocate = bump_allocate,
+    made := Grown.{device = device, bump = bump, tree = slopfs.Tree.{kind = .Volume, owner = 7}}
+    made.nodes = slopfs.Nodes.{device = device, transaction = 1, space = cast[rawptr](bump), allocate = bump_allocate,
         release = bump_release}
-    tree := slopfs.Tree.{kind = .Volume, owner = 7}
-    model : maps.HashMap[u64, u64, maps.hash_integer[u64]]
-    defer maps.map_free(&model)
+    if grow(t, &made) is_error {
+        free_grown(&made)
+        return .Error(.Failed)
+    }
+    return .Ok(made)
+}
+
+/**
+ * Do grown's puts, deletes and commits on a tree made for them.
+ *
+ * @param t The test's state, which a failure is recorded in.
+ * @param made The tree, empty, with its nodes and model; grown in place.
+ * @return Ok once every step is done; Error(Failed), the failure recorded, if the tree refused one.
+ */
+grow :: fn(t: ptr[mut testing.T], made: ptr[mut Grown]) -> testing.Outcome {
     random := Random.{state = 0x9e3779b97f4a7c15}
-    value : u8[600]
-    read_back : u8[600]
-    KEYS :: 3000
+    value : u8[TREE_VALUE_BYTES]
     for step in 0..<20000 {
-        object :: next_random(&random) % KEYS
+        object :: next_random(&random) % TREE_KEYS
         choice :: next_random(&random) % 4
+        key :: slopfs.key_of(object, .Object, 0)
         if choice == 0 {
-            match slopfs.tree_delete(&nodes, &tree, slopfs.key_of(object, .Object, 0)) {
-                case Ok(was_there) => {
-                    if was_there != maps.map_has(&model, object) {
-                        return 10
-                    }
-                }
-                case Error(failure) => return 11
-            }
-            _ = maps.map_remove(&model, object)
+            deleted :: slopfs.tree_delete(&made.nodes, &made.tree, key)
+            was_there :: testing.require_ok(t, deleted, "a delete works whether or not the key is there")?
+            testing.expect_eq(t, was_there, maps.map_has(&made.model, object), "a delete finds the key just when the model has it")
+            _ = maps.map_remove(&made.model, object)
         }
         else {
             seed :: next_random(&random)
-            length :: cast[usize](seed % 600)
+            length :: cast[usize](seed % TREE_VALUE_BYTES)
             fill(value, seed, length)
-            if slopfs.tree_put(&nodes, &tree, slopfs.key_of(object, .Object, 0), value[0..<length]) is_error {
-                return 12
-            }
-            maps.map_put(&model, object, seed)
+            put :: slopfs.tree_put(&made.nodes, &made.tree, key, value[0..<length])
+            require_done(t, put, "a put of up to 599 bytes fits a leaf, and the disk has room")?
+            maps.map_put(&made.model, object, seed)
         }
         if step % 997 == 996 {
-            if slopfs.tree_write(&nodes, &tree) is_error {
-                return 13
-            }
-            if nodes.dirty.count != 0 {
-                return 14
-            }
-            nodes.transaction += 1
+            written :: slopfs.tree_write(&made.nodes, &made.tree)
+            require_done(t, written, "the tree's dirty nodes are written")?
+            testing.expect_eq(t, made.nodes.dirty.count, 0, "a written tree has no dirty nodes left")
+            made.nodes.transaction += 1
         }
     }
-    // Grown past one leaf, so splits and merges were taken
-    root :: slopfs.load(&nodes, &tree, &tree.root) or_return 24
+    return .Ok
+}
+
+/**
+ * Give back a tree grown made.
+ *
+ * @param made The tree, whose model, allocator and disk aren't used after.
+ */
+free_grown :: fn(made: ptr[mut Grown]) {
+    maps.map_free(&made.model)
+    runtime.free(made.bump)
+    free_device(made.device)
+}
+
+a_tree_grows_past_one_leaf_through_puts_and_deletes #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := grown(t)?
+    defer free_grown(&made)
+    loaded :: slopfs.load(&made.nodes, &made.tree, &made.tree.root)
+    root :: testing.require_ok(t, loaded, "the tree's root loads")?
     level :: slopfs.level_of(root)
     slopfs.done(root)
-    if level == 0 {
-        return 25
-    }
-    // Every key, read back from the tree as it's left, half of it written and half still dirty
-    for object in 0..<cast[u64](KEYS) {
-        match slopfs.tree_get(&nodes, &tree, slopfs.key_of(object, .Object, 0), read_back) {
-            case Ok(found) => {
-                match maps.map_get(&model, object) {
-                    case Some(seed) => {
-                        length :: cast[usize](seed % 600)
-                        fill(value, seed, length)
-                        if found != length || !same(read_back[0..<length], value[0..<length]) {
-                            return 15
-                        }
-                    }
-                    case None => {
-                        if found is_some {
-                            return 16
-                        }
-                    }
-                }
+    testing.expect_ne(t, level, 0, "thousands of keys don't fit one leaf, so splits and merges were taken")
+    return .Ok
+}
+
+every_key_reads_back_as_the_model_has_it #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := grown(t)?
+    defer free_grown(&made)
+    value : u8[TREE_VALUE_BYTES]
+    read_back : u8[TREE_VALUE_BYTES]
+    // Half of it written and half still dirty
+    for object in 0..<cast[u64](TREE_KEYS) {
+        got :: slopfs.tree_get(&made.nodes, &made.tree, slopfs.key_of(object, .Object, 0), read_back)
+        found :: testing.require_ok(t, got, "a key reads whether or not it's there")?
+        match maps.map_get(&made.model, object) {
+            case Some(seed) => {
+                length :: cast[usize](seed % TREE_VALUE_BYTES)
+                fill(value, seed, length)
+                expected : usize? = length
+                testing.expect_eq(t, found, expected, "a key the model has is found, as long as the value last put")
+                testing.expect_none(t, difference(read_back[0..<length], value[0..<length]), "a key reads as the value last put")
             }
-            case Error(failure) => return 17
+            case None => testing.expect_none(t, found, "a key the model hasn't, never put or deleted, isn't found")
         }
     }
-    // In order, forward and back, as many as the model has
+    return .Ok
+}
+
+walking_forward_finds_every_key_in_order #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := grown(t)?
+    defer free_grown(&made)
+    read_back : u8[TREE_VALUE_BYTES]
     count : u64 = 0
     at := slopfs.Key.{}
-    walking := true
     loop {
-        match slopfs.tree_next(&nodes, &tree, at, read_back) {
-            case Ok(found) => {
-                match found {
-                    case Some(record) => {
-                        if !maps.map_has(&model, record.key.object) || compare_after(record.key, at) {
-                            return 18
-                        }
-                        count += 1
-                        at = slopfs.Key.{object = record.key.object, kind = record.key.kind, offset = record.key.offset + 1}
-                    }
-                    case None => walking = false
-                }
-            }
-            case Error(failure) => return 19
-        }
+        next :: slopfs.tree_next(&made.nodes, &made.tree, at, read_back)
+        found :: testing.require_ok(t, next, "the next record reads")?
+        record :: found or_break
+        testing.expect(t, maps.map_has(&made.model, record.key.object), "every record walked to is a key the model has")
+        testing.expect(t, !compare_after(record.key, at), "the next record is at or after the key searched from")
+        count += 1
+        at = slopfs.Key.{object = record.key.object, kind = record.key.kind, offset = record.key.offset + 1}
     }
-    while walking
-    if count != cast[u64](model.count) {
-        return 20
-    }
-    count = 0
-    at = slopfs.Key.{object = 0xffffffffffffffff, kind = 0xff, offset = 0xffffffffffffffff}
-    walking = true
+    testing.expect_eq(t, count, cast[u64](made.model.count), "walking forward finds each of the model's keys once")
+    return .Ok
+}
+
+walking_back_finds_every_key #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    made := grown(t)?
+    defer free_grown(&made)
+    read_back : u8[TREE_VALUE_BYTES]
+    count : u64 = 0
+    at := slopfs.Key.{object = 0xffffffffffffffff, kind = 0xff, offset = 0xffffffffffffffff}
     loop {
-        match slopfs.tree_previous(&nodes, &tree, at, read_back) {
-            case Ok(found) => {
-                match found {
-                    case Some(record) => {
-                        if !maps.map_has(&model, record.key.object) {
-                            return 21
-                        }
-                        count += 1
-                        if record.key.object == 0 {
-                            walking = false
-                        }
-                        else {
-                            at = slopfs.Key.{object = record.key.object - 1, kind = 0xff, offset = 0xffffffffffffffff}
-                        }
-                    }
-                    case None => walking = false
-                }
-            }
-            case Error(failure) => return 22
+        previous :: slopfs.tree_previous(&made.nodes, &made.tree, at, read_back)
+        found :: testing.require_ok(t, previous, "the previous record reads")?
+        record :: found or_break
+        testing.expect(t, maps.map_has(&made.model, record.key.object), "every record walked to is a key the model has")
+        count += 1
+        if record.key.object == 0 {
+            break
         }
+        at = slopfs.Key.{object = record.key.object - 1, kind = 0xff, offset = 0xffffffffffffffff}
     }
-    while walking
-    if count != cast[u64](model.count) {
-        return 23
-    }
-    return 0
+    testing.expect_eq(t, count, cast[u64](made.model.count), "walking back finds each of the model's keys once")
+    return .Ok
 }
 
 /**
@@ -494,22 +555,43 @@ fill :: fn(into: mut u8[], seed: u64, length: usize) {
  * @return True if they're the same length and byte for byte alike.
  */
 same :: fn(a: u8[], b: u8[]) -> bool {
-    if a.count != b.count {
-        return false
-    }
-    for byte, i in a {
-        if i < b.count && b[i] != byte {
-            return false
-        }
-    }
-    return true
+    return difference(a, b) is_none
 }
 
 /**
- * Run the checks, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness).
+ * Find where two byte strings first differ, for an assertion to report.
  *
- * @return 0 if every check passed, or the number of the first that failed.
+ * @param a A byte string, of any length: what was read.
+ * @param b The other byte string, of any length: what it should be.
+ * @return The offset of the first byte that differs, or the shorter one's length if one is a prefix of the other;
+ *     null if they're the same length and byte for byte alike.
+ */
+difference :: fn(a: u8[], b: u8[]) -> usize? {
+    for byte, i in a {
+        if i >= b.count || b[i] != byte {
+            return i
+        }
+    }
+    if a.count != b.count {
+        return a.count
+    }
+    return null
+}
+
+/**
+ * Run the tests, reporting to standard output.
+ *
+ * @return How many failed: 0 when every one passed.
+ */
+run_tests :: fn() -> int {
+    return cast[int](testing.run(#insert testing.tests_of(compiler.load_package(".")), testing.STANDARD_OUTPUT))
+}
+
+/**
+ * Run the tests, with fault injection as SLOPOS_FAIL asks (robustness/hosted, tools/unit_tests.py --robustness).
+ *
+ * @return How many tests failed: 0 when every one passed.
  */
 main :: fn() -> int {
-    return hosted_faults.run(checks)
+    return hosted_faults.run(run_tests)
 }
