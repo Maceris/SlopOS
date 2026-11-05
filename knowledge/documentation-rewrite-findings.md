@@ -94,7 +94,7 @@ confirmed against the code before it was fixed; what each became is marked on it
   *Fixed.*
 - **Hemera compiler reflection**: `FunctionInfo.generic_bindings` is never filled in, `FunctionParameter.default_value`
   is always None, and `BuildOptions.configuration`, `TargetOptions.linker` and `max_frame_size` aren't read.
-  *Open: these are features to build, not slips; the documentation says they aren't read or filled in yet.*
+  *Fixed in Hemera (765727d): each is filled in or read, max_frame_size as a compile error for a larger frame.*
 - **PCI**: configuration space is read in the CPU's byte order (right only on little-endian targets).
   *Fixed: configuration space is read and written little-endian.*
 - **Virtio**: `start` spins forever if the device never finishes resetting; `offer_chain` with no parts offers an index
