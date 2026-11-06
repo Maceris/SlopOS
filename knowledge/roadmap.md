@@ -372,8 +372,11 @@ streams, records decoded by manifests, the built-in stages, and tables. Before t
 documentation comments, kept and checked by Hemera's compiler, both codebases rewritten in them, done 2026-11-04. 11d
 done 2026-11-05 (`0176`): programs' documentation in their bundles, `help`, completion with summaries, history in the
 user's home, jobs with `&`, `jobs`, `wait` and `stop`, Ctrl-C and `Progress` over the lifecycle channel, the shell as
-every session's first program, and the language a library tested on the host. This is the first usable system
-(above).
+every session's first program, and the language a library tested on the host. After it (`0177`): a message that
+breaks its protocol ends its connection, in every service and client; a job's output read as it's written; and Ctrl-C
+seen behind type-ahead. Then memory that says when no one else holds it, so the bundle store closes executables no one
+holds when it needs room, done 2026-11-06 (`0178`). This
+is the first usable system (above).
 
 Stresses: an interpreter in Hemera (tagged unions, arenas), reflection-driven parsing and rendering, Unicode and
 regex tables generated at compile time, the typed-entry machinery from the caller's side.

@@ -226,7 +226,7 @@ call :: fn(end: slop_os.Channel, port: slop_os.Port, request: block.Request) -> 
         match block.receive_response(end, port, &into, true) {
             case Received => return os.message_of[block.Response](&into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }
@@ -702,9 +702,7 @@ serve_container :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.In
                 _ = container.answer_unsupported(end, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 drop(server, index)
                 return void
             }
@@ -1218,9 +1216,7 @@ serve_blocks :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incom
                 _ = block.answer_unsupported(connection.end, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 drop(server, index)
                 return void
             }
@@ -1296,11 +1292,10 @@ pass_back :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
         match block.receive_response(connection.driver, server.port, into, false) {
             case Received => {}
             case Empty => return void
-            case Failed(error) => {
+            case _ => {
                 drop(server, index)
                 return void
             }
-            case _ => continue
         }
         answer(connection.end, server.port, os.message_of[block.Response](into)^)
     }

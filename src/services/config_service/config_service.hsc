@@ -197,9 +197,7 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
                 _ = config.answer_unsupported(end, service.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(&service.connected, index)
                 client^ = Client.{value = NOWHERE}
                 return void

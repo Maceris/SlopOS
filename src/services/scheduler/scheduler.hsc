@@ -161,9 +161,7 @@ serve :: fn(service: ptr[mut Scheduler], connected: ptr[mut service_kit.Clients]
                 _ = protocol.answer_unsupported(end, service.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(connected, index)
                 return void
             }

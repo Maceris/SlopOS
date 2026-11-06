@@ -143,6 +143,14 @@ a line it returned in the middle of, and `interrupted`, Ctrl-C without waiting; 
 `os.begin(&out)^ = .Variant(os.append(&out, ...))` the right side runs first, so the append lands before the message
 and its relative is off, and the server drops the request as invalid; binding begin's pointer first is right, as the
 rest of the code does.
+Then after 11d (2026-11-05, `0177`): the generated `receive_request` and `receive_response` log a message that isn't
+the protocol (`os.report_broken`, naming the package's `PROTOCOL`), which ends its connection, and a response of an
+unknown variant is one; the stream's `answer` and `take_request` give null for one rather than skipping it; and the
+terminal client keeps its events and text in growing arrays, each Input added after what's still to be read, so
+`interrupted` sees Ctrl-C behind type-ahead.
+Then for `0178` (2026-11-06), in `std/os/slop_os`'s system ABI: `SIGNAL_UNHELD` and the `memory_holders` call. And
+`terminal.write_line` writes a line and its break together, as another client's text could land between them, which
+a boot test of the shell caught as a program's line joined to the shell's table.
 
 ## 4. Features That Look Like a Strong Fit
 

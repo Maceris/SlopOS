@@ -168,7 +168,7 @@ serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
                 _ = powerbox.answer_unsupported(end, box.port)
                 continue
             }
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(&box.clients, index)
                 // Its request, if one's waiting, is answered by no one
                 if box.has_waiting && box.waiting.client == index {
@@ -176,7 +176,6 @@ serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
                 }
                 return void
             }
-            case _ => continue
         }
         out := os.Outgoing.{}
         response :: os.begin[powerbox.Response](&out)
@@ -648,7 +647,7 @@ ask_dir_with :: fn(box: ptr[mut Box], end: slop_os.Channel, port: slop_os.Port, 
         match dir.receive_response(end, port, &into, true) {
             case Received => return os.message_of[dir.Response](&into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }

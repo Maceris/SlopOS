@@ -203,7 +203,7 @@ ask_home :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoin
         match dir.receive_response(end, port, into, true) {
             case Received => return os.message_of[dir.Response](into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }

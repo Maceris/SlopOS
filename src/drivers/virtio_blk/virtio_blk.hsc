@@ -230,7 +230,7 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
                 _ = block.answer_unsupported(end, driver.port)
                 continue
             }
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(&driver.clients, index)
                 // Its buffer goes with it, windows and all, so a client taking its place never sees what it held: now,
                 // or once the device has finished what it was asked for with it
@@ -242,7 +242,6 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
                 }
                 return void
             }
-            case _ => continue
         }
         match os.message_of[block.Request](into)^ {
             case Read(transfer) => answer(driver, end, start(driver, index, transfer, false))

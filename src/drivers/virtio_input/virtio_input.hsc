@@ -227,14 +227,13 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
                 _ = input.answer_unsupported(end, driver.port)
                 continue
             }
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(&driver.clients, index)
                 if index < driver.held.count {
                     driver.held[index] = 0
                 }
                 return void
             }
-            case _ => continue
         }
         match os.message_of[input.Request](into)^ {
             case Read(most) => {

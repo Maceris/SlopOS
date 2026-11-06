@@ -245,7 +245,7 @@ call :: fn(server: ptr[mut Server], request: block.Request) -> block.Response {
         match block.receive_response(server.disk, server.disk_port, &into, true) {
             case Received => return os.message_of[block.Response](&into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }
@@ -776,9 +776,7 @@ serve_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usi
                 _ = dir.answer_unsupported(end, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 drop(server, index)
                 return void
             }
@@ -973,9 +971,7 @@ serve_read_only_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], 
                 _ = read_only_dir.answer_unsupported(end, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 drop(server, index)
                 return void
             }
@@ -1059,9 +1055,7 @@ serve_file_set :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index
                 _ = file_set.answer_unsupported(end, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 drop(server, index)
                 return void
             }
@@ -1250,9 +1244,7 @@ serve_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: us
                 _ = file.answer_unsupported(end, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 drop(server, index)
                 return void
             }
@@ -1344,9 +1336,7 @@ serve_read_only_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume],
                 _ = read_only_file.answer_unsupported(end, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 drop(server, index)
                 return void
             }

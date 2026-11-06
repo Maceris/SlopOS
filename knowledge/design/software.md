@@ -30,8 +30,9 @@ system configuration), `0045` (content-addressed libraries), `0040` (schemas), `
   is a mark from the roots and a sweep, run in the background.
 - **Reading** returns a read-only memory object: through a pager-backed memory object (the kernel feature planned for
   M9, `storage.md` §7), so a program's pages are read when touched, and objects shared by hash are mapped from one
-  memory object into every process using them. Such an object stays open while the store runs, so small ones, records,
-  manifests and documentation, are read as copies of the reader's own instead (Read, `0176`), which keep nothing open.
+  memory object into every process using them. Small ones, records, manifests and documentation, are read as copies
+  of the reader's own instead (Read, `0176`), which keep nothing open. The store keeps at most 64 open; when it needs
+  room, it closes the one given out longest ago that no one holds any more, as the kernel counts (`0178`).
 - **Putting** is a stream of the object's bytes and its expected hash; it's committed only if they match.
 - The store lives on the system volume. Its protocol is held by the process manager (to read), by the update and
   installation services (to put and to add roots), and by nothing else.

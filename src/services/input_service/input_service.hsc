@@ -265,7 +265,7 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                 _ = seat.answer_unsupported(end, service.port)
                 continue
             }
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(connected, index)
                 match service.reader {
                     case Some(reader) => {
@@ -278,7 +278,6 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                 }
                 return void
             }
-            case _ => continue
         }
         match os.message_of[seat.Request](into)^ {
             case Read(most) => {
@@ -334,7 +333,7 @@ take_keys :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incomi
         match input.receive_response(keyboard.end, service.port, into, false) {
             case Received => {}
             case Empty => return void
-            case Failed(error) => {
+            case _ => {
                 _ = slop_os.handle_close(cast[slop_os.Handle](keyboard.end))
                 keyboard.end = NONE
                 runtime.log_info("keyboard % went; dialing again", index)
@@ -344,7 +343,6 @@ take_keys :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incomi
                 }
                 continue
             }
-            case _ => continue
         }
         match os.message_of[input.Response](into)^ {
             case Events(given) => {

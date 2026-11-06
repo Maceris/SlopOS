@@ -291,9 +291,7 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                 _ = accounts.answer_unsupported(end, service.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(connected, index)
                 if index < service.clients.count {
                     service.clients[index] = Failures.{}
@@ -825,7 +823,7 @@ ask_directory :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Ou
         match dir.receive_response(end, port, &into, true) {
             case Received => return os.message_of[dir.Response](&into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }
@@ -1400,7 +1398,7 @@ ask_storage :: fn(service: ptr[mut Service], out: ptr[mut os.Outgoing]) -> stora
         match storage.receive_response(service.manager, service.manager_port, &into, true) {
             case Received => return os.message_of[storage.Response](&into)^
             case Failed(error) => return .Failed
-            case _ => continue
+            case _ => return .Failed
         }
     }
 }
@@ -1477,7 +1475,7 @@ write_record :: fn(service: ptr[mut Service], record: ptr[account_records.Accoun
         match dir.receive_response(service.store_end, service.store_port, &into, true) {
             case Received => return os.message_of[dir.Response](&into)^ == .Done
             case Failed(error) => return false
-            case _ => continue
+            case _ => return false
         }
     }
 }

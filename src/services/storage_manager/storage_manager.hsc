@@ -738,9 +738,7 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
                 _ = storage.answer_unsupported(end, state.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(&state.clients, index)
                 return void
             }
@@ -1238,7 +1236,7 @@ ask_volume :: fn(served: ptr[Served], out: ptr[mut os.Outgoing]) -> volume_proto
         match volume_protocol.receive_response(served.control.end, served.control.port, &into, true) {
             case Received => return os.message_of[volume_protocol.Response](&into)^
             case Failed(error) => return .Failed
-            case _ => continue
+            case _ => return .Failed
         }
     }
 }
@@ -1290,7 +1288,7 @@ ask_container :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Ou
         match container.receive_response(end, port, &into, true) {
             case Received => return os.message_of[container.Response](&into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }
@@ -1320,7 +1318,7 @@ ask :: fn(state: ptr[mut Manager], disk: usize, request: partitions.Request) -> 
         match partitions.receive_response(server.end, server.port, &into, true) {
             case Received => return os.message_of[partitions.Response](&into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }
@@ -1428,7 +1426,7 @@ to_container :: fn(state: ptr[mut Manager], index: usize, out: ptr[mut os.Outgoi
         match container.receive_response(service.end, service.port, &into, true) {
             case Received => break
             case Failed(error) => return .Failed
-            case _ => continue
+            case _ => return .Failed
         }
     }
     return match os.message_of[container.Response](&into)^ {
@@ -1476,9 +1474,7 @@ serve_links :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incomi
                 _ = links.answer_unsupported(end, state.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 _ = slop_os.handle_close(cast[slop_os.Handle](end))
                 state.served[index].links = cast[slop_os.Channel](slop_os.NO_HANDLE)
                 return void

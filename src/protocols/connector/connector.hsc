@@ -108,7 +108,7 @@ dial_raw :: fn(end: slop_os.Channel, port: slop_os.Port) -> slop_os.Channel? {
             match receive_response(end, port, &into, true) {
                 case Received => break
                 case Failed(error) => return null
-                case _ => continue
+                case _ => return null
             }
         }
         match os.message_of[Response](&into)^ {

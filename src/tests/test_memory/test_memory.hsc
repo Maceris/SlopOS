@@ -181,6 +181,131 @@ memory_fills_as_touched_and_shares_its_frames #test :: fn(t: ptr[mut testing.T])
     return .Ok
 }
 
+/** The key a memory object's SIGNAL_UNHELD is bound under, on the tests' ports. */
+UNHELD_KEY : u64 : 7
+
+/**
+ * Wait for a memory object's watcher to hear SIGNAL_UNHELD, up to a second.
+ *
+ * @param port The port the memory is bound to under UNHELD_KEY.
+ * @return True if the packet came; false if the second ran out first, or the wait failed.
+ */
+heard_unheld :: fn(port: slop_os.Port) -> bool {
+    deadline :: (slop_os.clock_monotonic() or_else 0) + 1_000_000_000
+    loop {
+        packets : slop_os.Packet[4]
+        taken :: slop_os.port_wait(port, packets, deadline) or_return false
+        if taken == 0 {
+            return false
+        }
+        for packet, i in packets {
+            if i < cast[usize](taken) && packet.key == UNHELD_KEY && packet.kind == .Signal {
+                return true
+            }
+        }
+    }
+}
+
+/**
+ * A memory object counts who holds it besides its owner (decisions/0178): a duplicate, a mapping and a window each
+ * hold it until they go; a handle moved over a channel holds it on its way and in the taker's table; only the owning
+ * handle asks, or watches; and its watcher hears SIGNAL_UNHELD once no one holds it.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the memory, the port, the channel or the addresses couldn't be made.
+ */
+memory_counts_who_holds_it #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    block :: slop_os.startup_block()
+    memory :: testing.require_ok(t, slop_os.memory_create(block.budget, PAGE), "memory is made")?
+    defer slop_os.handle_close(cast[slop_os.Handle](memory))
+    port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port is made")?
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    testing.require_ok(t, slop_os.port_bind(port, cast[slop_os.Handle](memory), slop_os.SIGNAL_UNHELD, UNHELD_KEY, .Persistent),
+        "its owner watches it")?
+    testing.expect_eq(t, slop_os.memory_holders(memory) or_else 99, 0, "no one holds new memory but its owner")
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER) | cast[u32](slop_os.RIGHT_DUPLICATE))
+    copy :: cast[slop_os.Memory](testing.require_ok(t, slop_os.handle_duplicate(cast[slop_os.Handle](memory), rights), "it's duplicated")?)
+    testing.expect_eq(t, slop_os.memory_holders(memory) or_else 99, 1, "a duplicate holds it")
+    testing.expect_error(t, slop_os.memory_holders(copy), slop_os.MemoryError.MissingRight, "only the owning handle asks")
+    testing.expect_error(t, slop_os.port_bind(port, cast[slop_os.Handle](copy), slop_os.SIGNAL_UNHELD, UNHELD_KEY + 1, .Persistent),
+        slop_os.PortError.MissingRight, "only the owning handle watches")
+    // A mapping, and a window
+    at :: testing.require_some(t, runtime.reserve_addresses(cast[usize](PAGE)), "addresses to map it at")?
+    testing.require_ok(t, slop_os.memory_map(memory, block.space, at, 0, PAGE, slop_os.PROTECTION_READ), "it's mapped")?
+    testing.expect_eq(t, slop_os.memory_holders(memory) or_else 99, 2, "a mapping holds it")
+    _ = slop_os.memory_unmap(block.space, at)
+    testing.expect_eq(t, slop_os.memory_holders(memory) or_else 99, 1, "an unmapped mapping doesn't")
+    window :: testing.require_ok(t, slop_os.memory_create_window(memory, block.budget, 0, PAGE), "a window onto it is made")?
+    testing.expect_eq(t, slop_os.memory_holders(memory) or_else 99, 2, "a window holds it")
+    _ = slop_os.handle_close(cast[slop_os.Handle](window))
+    testing.expect_eq(t, slop_os.memory_holders(memory) or_else 99, 1, "a closed window doesn't")
+    // The duplicate moved over a channel: held on its way, and once it's taken
+    pair :: testing.require_ok(t, slop_os.channel_create(block.budget, 0, 0), "a channel is made")?
+    defer slop_os.handle_close(cast[slop_os.Handle](pair.a))
+    defer slop_os.handle_close(cast[slop_os.Handle](pair.b))
+    sender_port :: testing.require_some(t, os.port_for(block.budget, pair.a), "a port for its sending end")?
+    defer slop_os.handle_close(cast[slop_os.Handle](sender_port))
+    moving :: slop_os.Handle.[cast[slop_os.Handle](copy)]
+    byte : u8[1]
+    testing.require(t, os.send(pair.a, sender_port, view_of(&byte[0], 1), moving[0..<1]) is_none, "the duplicate's sent")?
+    testing.expect_eq(t, slop_os.memory_holders(memory) or_else 99, 1, "a handle on its way holds it")
+    buffer : u8[8]
+    taken : slop_os.Handle[1]
+    testing.require_ok(t, os.try_receive(pair.b, buffer[0..<8], taken[0..<1]), "it's received")?
+    testing.expect_eq(t, slop_os.memory_holders(memory) or_else 99, 1, "the taker's handle holds it")
+    testing.expect(t, !heard_unheld_now(port), "nothing's heard while it's held")
+    _ = slop_os.handle_close(taken[0])
+    testing.expect_eq(t, slop_os.memory_holders(memory) or_else 99, 0, "no one holds it once the taker closes it")
+    testing.expect(t, heard_unheld(port), "its owner hears it")
+    return .Ok
+}
+
+/**
+ * Tell whether a memory object's watcher has heard SIGNAL_UNHELD already, without waiting.
+ *
+ * @param port The port the memory is bound to under UNHELD_KEY; a packet taken is gone.
+ * @return True if the packet's there.
+ */
+heard_unheld_now :: fn(port: slop_os.Port) -> bool {
+    packets : slop_os.Packet[4]
+    taken :: slop_os.port_wait(port, packets, 0) or_else 0
+    for packet, i in packets {
+        if i < cast[usize](taken) && packet.key == UNHELD_KEY && packet.kind == .Signal {
+            return true
+        }
+    }
+    return false
+}
+
+/**
+ * A handle given to a process holds memory until the process is gone (decisions/0178): its table's let go of with it.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the memory, the port or the process couldn't be made, or the handle given.
+ */
+memory_held_by_a_process_is_let_go_with_it #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    block :: slop_os.startup_block()
+    memory :: testing.require_ok(t, slop_os.memory_create(block.budget, PAGE), "memory is made")?
+    defer slop_os.handle_close(cast[slop_os.Handle](memory))
+    port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port is made")?
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    testing.require_ok(t, slop_os.port_bind(port, cast[slop_os.Handle](memory), slop_os.SIGNAL_UNHELD, UNHELD_KEY, .Persistent),
+        "its owner watches it")?
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+    copy :: testing.require_ok(t, slop_os.handle_duplicate(cast[slop_os.Handle](memory), rights), "it's duplicated")?
+    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for the process")?
+    defer slop_os.handle_close(cast[slop_os.Handle](budget))
+    process :: testing.require_ok(t, slop_os.process_create(budget), "a process is made")?
+    moving :: slop_os.Handle.[copy]
+    given : slop_os.Handle[1]
+    testing.require_ok(t, slop_os.process_give_handles(process, moving[0..<1], given[0..<1]), "the duplicate's given to it")?
+    testing.expect_eq(t, slop_os.memory_holders(memory) or_else 99, 1, "the process's handle holds it")
+    _ = slop_os.handle_close(cast[slop_os.Handle](process))
+    testing.expect(t, heard_unheld(port), "its owner hears no one holds it, once the process is gone")
+    testing.expect_eq(t, slop_os.memory_holders(memory) or_else 99, 0, "and no one does")
+    return .Ok
+}
+
 /**
  * Check that 4 MiB mapped on a 2 MiB boundary is mapped with large pages, so touching it takes at least two pages less
  * in page tables than mapped a page off one. What each took is logged if it didn't.

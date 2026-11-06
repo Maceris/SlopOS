@@ -1,6 +1,6 @@
 # 0176: 11d, the Interactive Shell, as Built
 
-Status: accepted
+Status: accepted; its first three consequences answered by `0177`, its last by a proposal, `0178`
 Date: 2026-11-05
 Related: `0162` (M11's plan), `0169` to `0172` (the shell so far), `0174` (11d's plan), `0175` (testing),
 `../design/shell.md` §6, `../design/software.md` §2

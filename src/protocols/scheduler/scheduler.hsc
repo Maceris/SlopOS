@@ -92,7 +92,8 @@ connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBu
 /**
  * Ask the scheduler service for the budget of a service, and wait for its answer.
  *
- * Responses that aren't one, unknown or invalid, are skipped while it waits.
+ * A response that isn't the protocol, unknown or invalid, ends the wait as the connection's going does
+ * (decisions/0177).
  *
  * @param end A connection to the scheduler service, kept by the caller.
  * @param port A port bound to end, waited on for the answer.
@@ -113,7 +114,7 @@ budget_for :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> slop
         match receive_response(end, port, &into, true) {
             case Received => break
             case Failed(error) => return null
-            case _ => continue
+            case _ => return null
         }
     }
     return match os.message_of[Response](&into)^ {

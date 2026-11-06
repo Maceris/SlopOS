@@ -460,7 +460,7 @@ ask_read_only_file :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut 
         match read_only_file.receive_response(end, port, into, true) {
             case Received => return os.message_of[read_only_file.Response](into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }
@@ -482,7 +482,7 @@ ask_file :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoin
         match file.receive_response(end, port, into, true) {
             case Received => return os.message_of[file.Response](into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }

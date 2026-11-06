@@ -320,9 +320,7 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
                 _ = events.answer_unsupported(end, service.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(&service.connected, index)
                 for i in cast[usize](0)..<MAX_WAITING {
                     if service.waiting[i].client == index {

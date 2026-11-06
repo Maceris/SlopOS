@@ -152,9 +152,7 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
                 _ = update.answer_unsupported(end, service.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(&service.connected, index)
                 return void
             }
@@ -788,7 +786,7 @@ room_of :: fn(service: ptr[mut Service]) -> files.Room? {
         match dir.receive_response(service.esp_raw, service.esp_port, &into, true) {
             case Received => break
             case Failed(error) => return null
-            case _ => continue
+            case _ => return null
         }
     }
     return match os.message_of[dir.Response](&into)^ {

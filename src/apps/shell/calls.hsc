@@ -361,7 +361,7 @@ find_program :: fn(shell: ptr[mut Shell], name: string) -> programs.Program? {
         match programs.receive_response(connection.end, shell.programs_port, &into, true) {
             case Received => break
             case Failed(error) => return null
-            case _ => continue
+            case _ => return null
         }
     }
     return match os.message_of[programs.Response](&into)^ {
@@ -776,7 +776,7 @@ opened_beneath_home :: fn(shell: ptr[mut Shell], given #escaping : string, givin
         match dir.receive_response(home.end, shell.home_port, &into, true) {
             case Received => break
             case Failed(error) => return .Error("its directory is gone")
-            case _ => continue
+            case _ => return .Error("its directory is gone")
         }
     }
     return match os.message_of[dir.Response](&into)^ {

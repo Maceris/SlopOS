@@ -114,9 +114,7 @@ serve :: fn(manager: ptr[mut Manager], index: usize, into: ptr[mut os.Incoming])
                 _ = protocol.answer_unsupported(end, manager.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(&manager.clients, index)
                 return void
             }

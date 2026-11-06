@@ -30,8 +30,9 @@ import bundle from "../../bundle"
 import bundle_store from "../../protocols/bundle_store"
 
 /**
- * The most objects open at once: given out by Get, each a slot of Store's objects. An open object stays open while the
- * store runs, so a Get for another object past this many is answered with Missing.
+ * The most objects open at once: given out by Get, each a slot of Store's objects. When they're all open, a Get for
+ * another closes the one given out longest ago that no one holds any more (decisions/0178), and answers Missing only if
+ * every one is held.
  */
 MAX_OBJECTS :: 64
 /** The keys open objects' pager bindings are bound to the port with, PAGER_KEY plus the slot, after the clients'. */
@@ -50,8 +51,10 @@ NOWHERE : usize : 0xffffffffffffffff
 
 /** An object given out: its paged memory, which it supplies, its file's connection, and the page that's read into. */
 Open :: struct {
-    /** Whether the slot holds an open object; once set, it stays set while the store runs. */
+    /** Whether the slot holds an open object; cleared when it's closed to make room (close_slot). */
     used : bool,
+    /** When it was last given out, by the store's count of what it's given (Store's given); 0 for never. */
+    given_at : u64,
     /** The object's BLAKE3-256 hash, its file's name in hex under objects/. */
     hash : bundle.Hash,
     /** The paged memory, the store's own, supplied by it; each Get gives a duplicate to read and execute. */
@@ -92,6 +95,15 @@ Store :: struct {
     hand : usize,
     /** Pages given back since it started, as Evictions answers. */
     evicted : u64,
+    /** How many times it's given out an object, which marks each open one's given_at. */
+    given : u64,
+    /** Objects closed to make room for others, since it started. */
+    closed : u64,
+    /**
+     * How many objects it keeps open, from the first slot: MAX_OBJECTS, or fewer with store_objects=N on the kernel's
+     * command line, so a test can open more than it keeps without as many programs.
+     */
+    limit : usize,
     /** What its budget had charged that isn't pages, in bytes, when its threshold was last set from a cache limit. */
     cache_base : u64,
     /** The cache limit in bytes, as CacheLimit last set it; 0 for three quarters of its budget's limit. */
@@ -113,11 +125,13 @@ Unread :: struct {
  *
  * @param store The directory on the system volume the objects, the boot root and the pins are kept in.
  * @param clients The listener clients' connections arrive on; more arrive as Connects on those.
+ * @param command_line The kernel's command line, read for store_objects=N: how many objects it keeps open, 1 to
+ *     MAX_OBJECTS, for tests. Without it, or the word, MAX_OBJECTS.
  * @return 99 without the memory for its state, 1 if its port couldn't be made or bound to its budget's pressure, 2 if
  *     a port for store couldn't be made, 3 if a second connection to store couldn't be made, 4 if that couldn't be
  *     opened as a directory, and 5 if clients couldn't be added as a client. It doesn't return otherwise.
  */
-main :: fn(store: os.Channel[dir.Dir], clients: os.Listener[bundle_store.BundleStore]) -> int {
+main :: fn(store: os.Channel[dir.Dir], clients: os.Listener[bundle_store.BundleStore], command_line: slop_os.Memory?) -> int {
     // Its state; without the memory for it, it ends with 99 (decisions/0104)
     service_made, service_error :: runtime.new_aligned(Store, align_of(Store))
     if service_error != null {
@@ -125,6 +139,17 @@ main :: fn(store: os.Channel[dir.Dir], clients: os.Listener[bundle_store.BundleS
     }
     service :: service_made
     service.block = slop_os.startup_block()
+    service.limit = MAX_OBJECTS
+    match command_line {
+        case Some(memory) => {
+            text :: service_kit.text_of(service.block, memory) or_else ""
+            wanted :: service_kit.number_of(service_kit.word_after(text, "store_objects=") or_else "") or_else 0
+            if wanted > 0 && wanted < cast[u64](MAX_OBJECTS) {
+                service.limit = cast[usize](wanted)
+            }
+        }
+        case None => {}
+    }
     service.port = slop_os.port_create(service.block.budget) or_return 1
     // Pressure on its budget, which its pages bring it to, wakes it to give some back
     slop_os.port_bind(service.port, cast[slop_os.Handle](service.block.budget), slop_os.SIGNAL_PRESSURE, PRESSURE_KEY, .Persistent) or_return 1
@@ -196,9 +221,7 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
                 _ = bundle_store.answer_unsupported(end, service.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(&service.connected, index)
                 return void
             }
@@ -301,19 +324,25 @@ read_copy :: fn(service: ptr[mut Store], hash: bundle.Hash) -> bundle_store.Obje
  *     bytes, which Put checked before it kept them. A hash with no such file gives null.
  * @return The object: a new handle to its memory, to read and execute, which the caller owns and passes on, and its
  *     size in bytes. Null if there's no such object, its file couldn't be opened or set up, MAX_OBJECTS are open
- *     already, or the handle couldn't be duplicated.
+ *     already and every one is held (unheld_slot), or the handle couldn't be duplicated.
  */
 get :: fn(service: ptr[mut Store], hash: bundle.Hash) -> bundle_store.Object? {
     slot := NOWHERE
-    for i in cast[usize](0)..<MAX_OBJECTS {
-        if service.objects[i].used && bundle.same(service.objects[i].hash, hash) {
+    for open, i in service.objects {
+        if i >= service.limit {
+            break
+        }
+        if open.used && bundle.same(open.hash, hash) {
             return hand_out(service, i)
         }
-        if !service.objects[i].used && slot == NOWHERE {
+        if !open.used && slot == NOWHERE {
             slot = i
         }
     }
-    if slot >= MAX_OBJECTS {
+    if slot >= service.limit {
+        slot = unheld_slot(service) or_return null
+    }
+    if slot >= service.objects.count {
         return null
     }
     hex_storage : u8[64]
@@ -392,20 +421,92 @@ set_up :: fn(service: ptr[mut Store], open: ptr[mut Open], slot: usize) -> bool 
 }
 
 /**
- * Give out a new handle to an open object's memory.
+ * Give out a new handle to an open object's memory, marking when.
  *
- * @param service The store's state, only read: the slot's memory is duplicated, and nothing in the store changes. The
+ * @param service The store's state: the slot's memory is duplicated, and its given_at set from the store's given. The
  *     slot isn't checked to be used; callers give one that is.
  * @param slot The object's slot, taken modulo MAX_OBJECTS.
  * @return The object: a handle to its memory with the rights to read, execute, duplicate and transfer it, which the
  *     caller owns, and its size in bytes; null if the handle couldn't be duplicated.
  */
-hand_out :: fn(service: ptr[Store], slot: usize) -> bundle_store.Object? {
-    open :: service.objects[slot % MAX_OBJECTS]
+hand_out :: fn(service: ptr[mut Store], slot: usize) -> bundle_store.Object? {
+    open :: &service.objects[slot % MAX_OBJECTS]
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_EXECUTE) | cast[u32](slop_os.RIGHT_DUPLICATE)
         | cast[u32](slop_os.RIGHT_TRANSFER))
     copy :: slop_os.handle_duplicate(cast[slop_os.Handle](open.memory), rights) or_return null
+    service.given += 1
+    open.given_at = service.given
     return bundle_store.Object.{memory = cast[slop_os.Memory](copy), size = open.size}
+}
+
+/**
+ * Find a slot to open another object in, when every one is used: the object given out longest ago that no one holds
+ * now (decisions/0178), closed to make room.
+ *
+ * Who holds each is asked just now (memory_holders), not taken from a signal that could be older than a Get since.
+ * Only the store gives its objects out, on this one thread, so none becomes held between the asking and the closing.
+ *
+ * @param service The store's state, whose open objects are asked about; the one closed is taken out (close_slot).
+ * @return The slot, empty now; null if every open object is held, or none could be asked about.
+ */
+unheld_slot :: fn(service: ptr[mut Store]) -> usize? {
+    chosen := NOWHERE
+    oldest := ~cast[u64](0)
+    for open, i in service.objects {
+        if !open.used || open.given_at >= oldest {
+            continue
+        }
+        holders :: slop_os.memory_holders(open.memory) or_else 1
+        if holders == 0 {
+            chosen = i
+            oldest = open.given_at
+        }
+    }
+    if chosen >= MAX_OBJECTS {
+        return null
+    }
+    close_slot(service, chosen)
+    return chosen
+}
+
+/**
+ * Close an open object no one holds, to make room: its paged memory destroyed, its pager's binding and its file let go
+ * of, and its pages forgotten, both those supplied and those waiting to be read.
+ *
+ * @param service The store's state: the slot's no longer used, and its pages are taken off resident and unread, so
+ *     the next object in the slot isn't given them.
+ * @param slot The slot, used; one past MAX_OBJECTS, or not used, is left alone.
+ */
+close_slot :: fn(service: ptr[mut Store], slot: usize) {
+    if slot >= MAX_OBJECTS || !service.objects[slot].used {
+        return void
+    }
+    open :: &service.objects[slot]
+    _ = slop_os.handle_close(cast[slop_os.Handle](open.memory))
+    _ = slop_os.port_unbind(service.port, PAGER_KEY + cast[u64](slot))
+    close_open(service, open)
+    open^ = Open.{}
+    service.closed += 1
+    for list in u8.[0, 1] {
+        pages :: if list == 0 { &service.resident } else { &service.unread }
+        i := cast[usize](0)
+        loop {
+            current :: pages^
+            if i >= current.count {
+                break
+            }
+            if current[i].slot == slot {
+                runtime.array_remove(pages, i)
+            }
+            else {
+                i += 1
+            }
+        }
+    }
+    if service.hand > service.resident.count {
+        service.hand = 0
+    }
+    runtime.log_info("closed an object no one held, to make room: % closed so far", service.closed)
 }
 
 /**
@@ -1035,7 +1136,7 @@ ask_dir :: fn(service: ptr[Store], out: ptr[mut os.Outgoing], into: ptr[mut os.I
         match dir.receive_response(service.raw, service.raw_port, into, true) {
             case Received => break
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
     return os.message_of[dir.Response](into)^
@@ -1059,7 +1160,7 @@ ask_file :: fn(open: ptr[Open], out: ptr[mut os.Outgoing], into: ptr[mut os.Inco
         match read_only_file.receive_response(open.file, open.file_port, into, true) {
             case Received => break
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
     return os.message_of[read_only_file.Response](into)^

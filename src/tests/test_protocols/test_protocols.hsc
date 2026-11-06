@@ -88,6 +88,8 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 Given :: struct {
     /** The debug log. */
     log : slop_os.DebugLog,
+    /** A connection to the process manager, a real server to send a broken request to; null without one. */
+    manager : os.Channel[process_manager.ProcessManager]?,
 }
 
 /** A Probe channel the test holds both ends of, with a port for each. */
@@ -285,8 +287,39 @@ a_short_message_reads_its_missing_fields_as_zeros #test :: fn(t: ptr[mut testing
  */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
-    given :: Given.{log = log}
+    given :: Given.{log = log, manager = manager}
     return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
+}
+
+/**
+ * A request that isn't the protocol ends its connection (decisions/0177): the process manager, given a message too short
+ * to have a tag on a connection of its own, closes it, so the client's wait for an answer ends with the peer closed
+ * rather than going on for good; and it serves its other clients still.
+ */
+a_broken_request_ends_its_connection #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    manager :: testing.require_some(t, given.manager, "the test is given the process manager")?
+    budget :: slop_os.startup_block().budget
+    manager_port :: testing.require_some(t, os.port_for(budget, manager.end), "a port for the manager's connection is made")?
+    defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
+    connection :: testing.require_some(t, process_manager.connect(manager.end, manager_port, budget), "another connection is made")?
+    defer slop_os.handle_close(cast[slop_os.Handle](connection.end))
+    port :: testing.require_some(t, os.port_for(budget, connection.end), "a port for it is made")?
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    empty : u8[1]
+    none : slop_os.Handle[1]
+    _ = os.send(connection.end, port, view_of(&empty[0], 0), view_of(&none[0], 0))
+    into := os.Incoming.{}
+    testing.expect_eq(t, arrival_code(process_manager.receive_response(connection.end, port, &into, true)), Arrived.Failed,
+        "the wait for an answer ends, the connection closed")
+    // The first connection's still served: another can be made through it
+    again :: process_manager.connect(manager.end, manager_port, budget)
+    testing.expect(t, again is_some, "the manager still serves its other clients")
+    match again {
+        case Some(made) => _ = slop_os.handle_close(cast[slop_os.Handle](made.end))
+        case None => {}
+    }
+    return .Ok
 }
 
 /**

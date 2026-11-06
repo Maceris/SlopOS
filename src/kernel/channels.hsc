@@ -1225,6 +1225,9 @@ drop_batch :: fn(kernel: ptr[mut Kernel], batch: ptr[mut HandleBatch]) {
             if entry.owning {
                 destroy_later(kernel, entry.object, entry.generation)
             }
+            else if entry.kind == .Memory {
+                let_go_of_memory(kernel, entry.object, entry.generation)
+            }
         }
     }
     free_batch(kernel, cast[u64](batch))
@@ -1348,6 +1351,9 @@ take_one :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], entry: Resolv
         case Error(error) => {
             if entry.owning {
                 destroy_later(kernel, entry.object, entry.generation)
+            }
+            else if entry.kind == .Memory {
+                let_go_of_memory(kernel, entry.object, entry.generation)
             }
             return slop_os.NO_HANDLE
         }

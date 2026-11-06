@@ -450,7 +450,7 @@ ask :: fn(end: slop_os.Channel, port: slop_os.Port, request: storage.Request) ->
         match storage.receive_response(end, port, &into, true) {
             case Received => return os.message_of[storage.Response](&into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }
@@ -482,7 +482,7 @@ receive :: fn(disk: ptr[Disk]) -> block.Response {
         match block.receive_response(disk.end, disk.port, &into, true) {
             case Received => return os.message_of[block.Response](&into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }
@@ -640,7 +640,7 @@ ask_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing
         match dir.receive_response(end, port, into, true) {
             case Received => return os.message_of[dir.Response](into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }
@@ -663,7 +663,7 @@ ask_read_only_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut o
         match read_only_dir.receive_response(end, port, into, true) {
             case Received => return os.message_of[read_only_dir.Response](into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }
@@ -686,7 +686,7 @@ ask_file_set :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Out
         match file_set.receive_response(end, port, into, true) {
             case Received => return os.message_of[file_set.Response](into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }

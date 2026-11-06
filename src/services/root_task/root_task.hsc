@@ -571,7 +571,13 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
                     root.supervision = cast[slop_os.Channel](slop_os.NO_HANDLE)
                     break
                 }
-                case _ => continue
+                // A message that breaks the protocol's rules ends the channel, as its going would (decisions/0177)
+                case _ => {
+                    log_line.write(root.log, "root task: the supervisor sent what isn't the protocol, so its channel's closed")
+                    _ = slop_os.handle_close(cast[slop_os.Handle](root.supervision))
+                    root.supervision = cast[slop_os.Channel](slop_os.NO_HANDLE)
+                    break
+                }
             }
             match os.message_of[supervision.Request](&into)^ {
                 case Started(report) => {
@@ -1221,7 +1227,7 @@ serve_connectors :: fn(root: ptr[mut Root]) {
                     _ = connector.answer_unsupported(record.end, root.connector_port)
                     continue
                 }
-                case Failed(error) => {
+                case _ => {
                     _ = slop_os.port_unbind(root.connector_port, CONNECTOR_KEY + cast[u64](i))
                     _ = slop_os.handle_close(cast[slop_os.Handle](record.end))
                     concurrency.lock(&root.connectors_lock)
@@ -1231,7 +1237,6 @@ serve_connectors :: fn(root: ptr[mut Root]) {
                     concurrency.unlock(&root.connectors_lock)
                     break
                 }
-                case _ => continue
             }
             out := os.Outgoing.{}
             response :: os.begin[connector.Response](&out)

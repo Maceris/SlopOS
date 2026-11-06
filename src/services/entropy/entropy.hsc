@@ -133,9 +133,7 @@ serve :: fn(service: ptr[mut Entropy], connected: ptr[mut service_kit.Clients], 
                 _ = protocol.answer_unsupported(end, service.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(connected, index)
                 return void
             }
@@ -242,14 +240,13 @@ take_bytes :: fn(service: ptr[mut Entropy], index: usize, into: ptr[mut os.Incom
         match rng.receive_response(end, service.port, into, false) {
             case Received => {}
             case Empty => return void
-            case Failed(error) => {
+            case _ => {
                 // Its slot and key free for the next source added
                 _ = slop_os.port_unbind(service.port, SOURCE_KEY + cast[u64](index))
                 _ = slop_os.handle_close(cast[slop_os.Handle](end))
                 service.sources[index] = cast[slop_os.Channel](slop_os.NO_HANDLE)
                 return void
             }
-            case _ => continue
         }
         match os.message_of[rng.Response](into)^ {
             case Bytes(given) => {

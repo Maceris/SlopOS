@@ -528,7 +528,12 @@ test_device_page :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> sl
 handle_for :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], object: u64, kind: slop_os.ObjectKind, owning: bool) -> slop_os.Handle? {
     header :: cast[ptr[ObjectHeader]](object)
     match install(kernel, &process.table, object, header.generation, kind, slop_os.RIGHTS_ALL, owning) {
-        case Ok(handle) => return handle
+        case Ok(handle) => {
+            if kind == .Memory && !owning {
+                hold_memory(object, header.generation)
+            }
+            return handle
+        }
         case Error(error) => return null
     }
 }

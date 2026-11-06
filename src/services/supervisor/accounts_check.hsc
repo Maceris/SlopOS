@@ -325,7 +325,7 @@ send_accounts :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, port:
             case Received => return os.message_of[accounts.Response](&into)^
             case Failed(error) => return .Failed
             case Empty => wait_and_handle_until(supervisor, (slop_os.clock_monotonic() or_else 0) + ANSWER_POLL)
-            case _ => continue
+            case _ => return .Failed
         }
     }
 }

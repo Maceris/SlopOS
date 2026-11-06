@@ -233,6 +233,8 @@ StoreGrants :: struct {
     store : os.Channel[dir.Dir],
     /** The listener for its clients; the supervisor keeps its other end. */
     clients : os.Listener[bundle_store.BundleStore],
+    /** A copy of the kernel's command line, for its test's store_objects=N; null without one. */
+    command_line : slop_os.Memory?,
 }
 
 /** What the config store is given (config_service.main); its handles move to the store at its launch. */
@@ -2472,7 +2474,8 @@ start_store :: fn(supervisor: ptr[mut Supervisor], again: usize) {
         supervisor.store_end = NONE
     }
     pair :: os.channel_for[bundle_store.BundleStore](supervisor.block.budget, 0) or_return void
-    grants := StoreGrants.{store = directory, clients = os.Listener[bundle_store.BundleStore].{end = pair.a}}
+    grants := StoreGrants.{store = directory, clients = os.Listener[bundle_store.BundleStore].{end = pair.a},
+        command_line = command_line_copy(supervisor)}
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
         bundle_store_service.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => {
@@ -2868,7 +2871,7 @@ lend :: fn(supervisor: ptr[mut Supervisor], directory: os.Channel[dir.Dir], budg
         match dir.receive_response(directory.end, port, &into, true) {
             case Received => break
             case Failed(error) => return false
-            case _ => continue
+            case _ => return false
         }
     }
     return match os.message_of[dir.Response](&into)^ {
@@ -3056,7 +3059,7 @@ lending_attempt :: fn(supervisor: ptr[mut Supervisor]) -> LendingOutcome? {
             match dir.receive_response(lows[i], low_ports[i], &into, true) {
                 case Received => answered[i] += 1
                 case Failed(error) => break
-                case _ => continue
+                case _ => break
             }
         }
     }
@@ -3093,7 +3096,7 @@ system_directory :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.Chan
         match dir.receive_response(supervisor.system, supervisor.system_port, &into, true) {
             case Received => break
             case Failed(error) => return null
-            case _ => continue
+            case _ => return null
         }
     }
     return match os.message_of[dir.Response](&into)^ {
@@ -3309,7 +3312,7 @@ store_events :: fn(supervisor: ptr[mut Supervisor]) {
         match dir.receive_response(supervisor.system, supervisor.system_port, &into, true) {
             case Received => break
             case Failed(error) => return void
-            case _ => continue
+            case _ => return void
         }
     }
     directory :: match os.message_of[dir.Response](&into)^ {
@@ -3377,7 +3380,7 @@ check_events :: fn(supervisor: ptr[mut Supervisor], waiting: Waiting) {
             match events.receive_response(waiting.end, waiting.port, &into, true) {
                 case Received => break
                 case Failed(error) => break
-                case _ => continue
+                case _ => break
             }
         }
         match os.message_of[events.Response](&into)^ {
@@ -3774,7 +3777,7 @@ ask_system_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.O
         match dir.receive_response(end, port, into, true) {
             case Received => return os.message_of[dir.Response](into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }
@@ -3796,7 +3799,7 @@ ask_system_file :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.
         match read_only_file.receive_response(end, port, into, true) {
             case Received => return os.message_of[read_only_file.Response](into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }
@@ -4320,12 +4323,11 @@ serve_connector :: fn(supervisor: ptr[mut Supervisor], index: usize) {
                 _ = connector.answer_unsupported(record.end, supervisor.port)
                 continue
             }
-            case Failed(error) => {
+            case _ => {
                 _ = slop_os.handle_close(cast[slop_os.Handle](record.end))
                 supervisor.connectors[index].end = NONE
                 return void
             }
-            case _ => continue
         }
         out := os.Outgoing.{}
         response :: os.begin[connector.Response](&out)
@@ -4443,7 +4445,7 @@ request_clock :: fn(supervisor: ptr[mut Supervisor]) -> platform.RealTimeClock? 
         match platform.receive_response(supervisor.platform_end, supervisor.platform_port, &into, true) {
             case Received => break
             case Failed(error) => return null
-            case _ => continue
+            case _ => return null
         }
     }
     return match os.message_of[platform.Response](&into)^ {
@@ -4487,7 +4489,7 @@ request_framebuffer :: fn(supervisor: ptr[mut Supervisor]) -> platform.Framebuff
         match platform.receive_response(supervisor.platform_end, supervisor.platform_port, &into, true) {
             case Received => break
             case Failed(error) => return null
-            case _ => continue
+            case _ => return null
         }
     }
     return match os.message_of[platform.Response](&into)^ {
@@ -4519,7 +4521,7 @@ request_device :: fn(supervisor: ptr[mut Supervisor], request: platform.Request)
         match platform.receive_response(supervisor.platform_end, supervisor.platform_port, &into, true) {
             case Received => break
             case Failed(error) => return null
-            case _ => continue
+            case _ => return null
         }
     }
     return match os.message_of[platform.Response](&into)^ {

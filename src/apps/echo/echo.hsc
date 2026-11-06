@@ -430,11 +430,10 @@ ask_box :: fn(echo: ptr[mut Echo], out: ptr[mut os.Outgoing], into: ptr[mut os.I
     loop {
         match powerbox_protocol.receive_response(echo.box_end, echo.box_port, into, true) {
             case Received => return true
-            case Failed(error) => {
+            case _ => {
                 refused(echo)
                 return false
             }
-            case _ => continue
         }
     }
 }

@@ -82,11 +82,10 @@ snapshots_read_as_the_volume_was_and_clone #test :: fn(t: ptr[mut testing.T]) ->
         loop {
             match storage.receive_response(manager.end, manager.port, &into, true) {
                 case Received => break
-                case Failed(error) => {
+                case _ => {
                     received = false
                     break
                 }
-                case _ => continue
             }
         }
     }

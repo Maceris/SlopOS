@@ -138,16 +138,16 @@ take_prompts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
         }
         match prompt.receive_request(each.prompt_end, service.port, into, false) {
             case Received => {}
+            case Empty => continue
             case Unsupported => {
                 _ = prompt.answer_unsupported(each.prompt_end, service.port)
                 continue
             }
-            case Failed(error) => {
+            case _ => {
                 _ = slop_os.handle_close(cast[slop_os.Handle](each.prompt_end))
                 each.prompt_end = NONE
                 continue
             }
-            case _ => continue
         }
         match os.message_of[prompt.Request](into)^ {
             case Ask(asked) => {
@@ -479,7 +479,7 @@ ask_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Ou
         match read_only_dir.receive_response(end, port, into, true) {
             case Received => return os.message_of[read_only_dir.Response](into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }

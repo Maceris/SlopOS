@@ -144,7 +144,7 @@ serve :: fn(driver: ptr[mut Driver], end: slop_os.Channel) {
                 continue
             }
             case Failed(error) => return void
-            case _ => continue
+            case _ => return void
         }
         match os.message_of[rng.Request](&into)^ {
             case Read(count) => {

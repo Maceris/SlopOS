@@ -628,7 +628,7 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                 _ = terminal.answer_unsupported(end, service.port)
                 continue
             }
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(connected, index)
                 use_view_of(service, index)
                 match view(service).owner {
@@ -649,7 +649,6 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                 }
                 return void
             }
-            case _ => continue
         }
         // Served in its own session's view, which is shown only if it's the active one
         use_view_of(service, index)
@@ -1338,7 +1337,7 @@ ask_session :: fn(service: ptr[mut Service], request: session.Request) -> os.Inc
         match session.receive_response(service.session_end, service.session_port, &into, true) {
             case Received => return into
             case Failed(error) => return null
-            case _ => continue
+            case _ => return null
         }
     }
 }
@@ -1590,7 +1589,7 @@ take_serial :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
         match serial.receive_response(service.line_end, service.port, into, false) {
             case Received => {}
             case Empty => return void
-            case Failed(error) => {
+            case _ => {
                 _ = slop_os.handle_close(cast[slop_os.Handle](service.line_end))
                 service.line_end = NONE
                 service.line_reading = false
@@ -1602,7 +1601,6 @@ take_serial :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 }
                 continue
             }
-            case _ => continue
         }
         match os.message_of[serial.Response](into)^ {
             case Written(_) => {
@@ -1776,7 +1774,7 @@ take_seat :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
         match seat.receive_response(service.seat_end, service.port, into, false) {
             case Received => {}
             case Empty => return void
-            case Failed(error) => {
+            case _ => {
                 _ = slop_os.handle_close(cast[slop_os.Handle](service.seat_end))
                 service.seat_end = NONE
                 service.seat_reading = false
@@ -1787,7 +1785,6 @@ take_seat :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 }
                 continue
             }
-            case _ => continue
         }
         match os.message_of[seat.Response](into)^ {
             case Input(given) => {
@@ -2060,7 +2057,7 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
         match accounts.receive_response(service.accounts_end, service.port, into, false) {
             case Received => {}
             case Empty => return void
-            case Failed(error) => {
+            case _ => {
                 _ = slop_os.port_unbind(service.port, ACCOUNTS_KEY)
                 _ = slop_os.handle_close(cast[slop_os.Handle](service.accounts_end))
                 service.accounts_end = NONE
@@ -2084,7 +2081,6 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 }
                 continue
             }
-            case _ => continue
         }
         // The share form's answers
         if service.sharing && service.setup == .Sharing {
@@ -2334,7 +2330,7 @@ start_session :: fn(service: ptr[mut Service], home: os.Channel[dir.Dir]?) -> bo
         match session.receive_response(service.session_end, service.session_port, &into, true) {
             case Received => break
             case Failed(error) => return false
-            case _ => continue
+            case _ => return false
         }
     }
     started :: match os.message_of[session.Response](&into)^ {

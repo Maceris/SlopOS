@@ -268,7 +268,7 @@ finish_programs :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) -> Resul
     result := Value.Null
     first_error : EvalError? = null
     for call, k in running.calls {
-        if k + 1 == running.calls.count && running.from != NO_END {
+        if k + 1 == running.calls.count && (parameter_giving(call, .Output) is_some) {
             match read_output(shell, running, call) {
                 case Ok(value) => result = value
                 case Error(error) => first_error = error
@@ -315,6 +315,14 @@ Running :: struct {
      * slop_os.NO_DEADLINE once they've been killed.
      */
     stop_by : u64,
+    /** The reader open on from, once the last program's opened its output; null before, and once it's closed. */
+    reader : stream.Reader[stream.Untyped]?,
+    /** What the last program has written so far, as values; null until its output's first read. */
+    collected : ptr[mut ValueList]?,
+    /** Whether the last program's output is read to its end, or couldn't be read; output_error says which. */
+    output_done : bool,
+    /** Why its output couldn't be read; null if it could, or hasn't been tried. */
+    output_error : EvalError?,
 }
 
 /**
@@ -337,7 +345,16 @@ end_running :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) {
         }
     }
     if running.from != NO_END {
+        _ = slop_os.port_unbind(watch_port(shell), running.first_key + OUTPUT_KEY)
         _ = slop_os.handle_close(cast[slop_os.Handle](running.from))
+    }
+    match running.reader {
+        case Some(reader) => {
+            _ = slop_os.port_unbind(watch_port(shell), running.first_key + OUTPUT_KEY)
+            open := reader
+            stream.close_reader(&open)
+        }
+        case None => {}
     }
     for call in running.calls {
         _ = wait_call(shell, call, running)
@@ -454,33 +471,87 @@ write_given :: fn(running: ptr[mut Running], call: ptr[mut Call], given #escapin
  * @return The records, a list, empty if it wrote nothing.
  */
 read_output :: fn(shell: ptr[mut Shell], running: ptr[mut Running], call: ptr[mut Call]) -> Result[Value, EvalError] {
-    writes :: parameter_giving(call, .Output) or_return error_at(call.tree.at, "it has no output")
-    end :: running.from
-    running.from = NO_END
-    made :: new_list()
     // Opening waits for the program to open its end, which it may do late: Ctrl-C's seen to meanwhile
-    wait_readable(shell, running, end)
-    reader := match stream.untyped_reader_on(end, schema.hash_rooted(&call.manifest, writes.records)) {
-        case Ok(opened) => opened
-        // One that ended without writing anything wrote nothing
-        case Error(error) => {
-            if error == .Gone {
-                _ = slop_os.handle_close(cast[slop_os.Handle](end))
-                return .Ok(.List(made))
-            }
-            _ = slop_os.handle_close(cast[slop_os.Handle](end))
-            return error_at(call.tree.at, message("%'s output couldn't be read: %", call.tree.text, error))
-        }
+    if (running.reader is_none) && running.from != NO_END {
+        wait_readable(shell, running, running.from)
     }
-    defer stream.close_reader(&reader)
     loop {
-        match stream.next_bytes_before(&reader, (slop_os.clock_monotonic() or_else 0) + ATTEND_EVERY) {
-            case Record(bytes) => runtime.array_add(&made.items, decode(&call.manifest, writes.records, bytes, 0, 0))
-            case End => break
-            case Waiting => attend(shell, running)
+        if read_some(running, call, (slop_os.clock_monotonic() or_else 0) + ATTEND_EVERY) {
+            break
+        }
+        attend(shell, running)
+    }
+    match running.output_error {
+        case Some(error) => return .Error(error)
+        case None => {}
+    }
+    return .Ok(.List(running.collected or_else new_list()))
+}
+
+/**
+ * Read what the last program has written, up to a deadline, into the running's collected: its output opened first if
+ * it isn't, which waits for the program to open its end.
+ *
+ * @param running The programs, whose from moves into its reader once it's open, and whose collected, output_done and
+ *     output_error change; its reader is closed once its output's read to the end, or can't be.
+ * @param call The last program's call, started, whose manifest decodes the records.
+ * @param deadline When to stop waiting for more, in the monotonic clock's nanoseconds; one past already reads only
+ *     what's there.
+ * @return True once the output's read to its end, or couldn't be read; false if more may come.
+ */
+read_some :: fn(running: ptr[mut Running], call: ptr[mut Call], deadline: u64) -> bool {
+    if running.output_done {
+        return true
+    }
+    made :: running.collected or_else new_list()
+    running.collected = made
+    writes :: match parameter_giving(call, .Output) {
+        case Some(found) => found
+        case None => {
+            running.output_done = true
+            return true
         }
     }
-    return .Ok(.List(made))
+    if running.reader is_none {
+        end :: running.from
+        if end == NO_END {
+            running.output_done = true
+            return true
+        }
+        running.from = NO_END
+        match stream.untyped_reader_on(end, schema.hash_rooted(&call.manifest, writes.records)) {
+            case Ok(opened) => running.reader = opened
+            // One that ended without writing anything wrote nothing
+            case Error(error) => {
+                _ = slop_os.handle_close(cast[slop_os.Handle](end))
+                if error != .Gone {
+                    running.output_error = EvalError.{message = message("%'s output couldn't be read: %", call.tree.text, error), at = call.tree.at}
+                }
+                running.output_done = true
+                return true
+            }
+        }
+    }
+    reader := running.reader or_return true
+    defer {
+        if running.output_done {
+            stream.close_reader(&reader)
+            running.reader = null
+        }
+        else {
+            running.reader = reader
+        }
+    }
+    loop {
+        match stream.next_bytes_before(&reader, deadline) {
+            case Record(bytes) => runtime.array_add(&made.items, decode(&call.manifest, writes.records, bytes, 0, 0))
+            case End => {
+                running.output_done = true
+                return true
+            }
+            case Waiting => return false
+        }
+    }
 }
 
 // ---- The built-in stages

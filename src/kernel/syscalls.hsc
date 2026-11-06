@@ -188,6 +188,9 @@ sys_handle_close :: fn(thread: ptr[mut Thread], handle: slop_os.Handle) -> Resul
     if removed.owning && is_live(removed.object, removed.generation) {
         _ = destroy_object(per_cpu().kernel, removed.object)
     }
+    else if removed.kind == .Memory {
+        let_go_of_memory(per_cpu().kernel, removed.object, removed.generation)
+    }
     return .Ok
 }
 
@@ -214,6 +217,9 @@ sys_handle_duplicate :: fn(thread: ptr[mut Thread], handle: slop_os.Handle, righ
         return .Error(.MissingRight)
     }
     made :: install(per_cpu().kernel, &process.table, found.object, found.generation, found.kind, rights, false)?
+    if found.kind == .Memory {
+        hold_memory(found.object, found.generation)
+    }
     return .Ok(made)
 }
 
@@ -661,14 +667,16 @@ wait_result :: fn[E](outcome: WaitOutcome) -> Result[u32, E] {
  *     where the handles are looked up.
  * @param port The port, which needs RIGHT_PORT_BIND.
  * @param object What to watch: a channel end, a process (which needs RIGHT_PROCESS_INSPECT), a thread, an IRQ, a
- *     Device, or a memory budget (which needs RIGHT_BUDGET_CHARGE); the others need no right.
+ *     Device, a memory budget (which needs RIGHT_BUDGET_CHARGE), or a memory object, through its owning handle, for
+ *     SIGNAL_UNHELD (decisions/0178); the others need no right.
  * @param signals The slop_os.SIGNAL_ bits to see; ignored for an IRQ.
  * @param key The binding's key, which its packets carry: one not bound on the port, or one bound to this same object.
  * @param mode Once, disarmed once its packet is queued; any other value is Persistent.
  * @error InvalidHandle The port or the object isn't a handle in the caller's table.
  * @error ObjectGone The port or the object was destroyed, or is being.
  * @error WrongKind The port isn't a port's handle, or the object is one no port can watch.
- * @error MissingRight The port lacks RIGHT_PORT_BIND, or the object the right its kind needs.
+ * @error MissingRight The port lacks RIGHT_PORT_BIND, or the object the right its kind needs, or for memory, isn't its
+ *     owning handle.
  * @error KeyInUse The key is bound to something else.
  * @error TooManyBindings The object has as many bindings as it takes.
  * @error BudgetExceeded The port's budget can't pay for the binding.
@@ -705,6 +713,14 @@ sys_port_bind :: fn(thread: ptr[mut Thread], port: slop_os.Port, object: slop_os
             return .Error(.MissingRight)
         }
         watched :: cast[ptr[mut MemoryBudget]](found.object)
+        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.watch_lock, .Watchers, signals, key, once))
+    }
+    // Its owner watches it for no one else holding it (decisions/0178)
+    if found.kind == .Memory {
+        if !found.owning {
+            return .Error(.MissingRight)
+        }
+        watched :: cast[ptr[mut Memory]](found.object)
         return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.watch_lock, .Watchers, signals, key, once))
     }
     if found.kind != .Channel {
@@ -1331,6 +1347,30 @@ sys_memory_evict :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: 
 sys_memory_page_accessed :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u64) -> Result[u64, slop_os.MemoryError] {
     found :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_WRITE)?
     return page_accessed(per_cpu().kernel, cast[ptr[mut Memory]](found), offset)
+}
+
+/**
+ * Count who holds a memory object besides its owner (decisions/0178): handles to it that aren't the owning one, in any
+ * table or on their way in a channel's batch, its mappings, and its windows.
+ *
+ * @param thread The calling thread, the CPU's current one, which doesn't block here: its process's handle table is
+ *     where the handle is looked up.
+ * @param memory The memory, its owning handle.
+ * @return How many hold it, read atomically: a moment's count, which a holder made or let go of later changes.
+ * @error InvalidHandle Not a handle in the caller's table.
+ * @error ObjectGone The memory was destroyed.
+ * @error WrongKind Not a memory object's handle.
+ * @error MissingRight Not the owning handle: only its owner asks.
+ */
+sys_memory_holders :: fn(thread: ptr[mut Thread], memory: slop_os.Memory) -> Result[u64, slop_os.MemoryError] {
+    found :: found_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory))?
+    if found.kind != .Memory {
+        return .Error(.WrongKind)
+    }
+    if !found.owning {
+        return .Error(.MissingRight)
+    }
+    return .Ok(intrinsics.atomic_load_u64(&cast[ptr[mut Memory]](found.object).held))
 }
 
 /**

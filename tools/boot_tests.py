@@ -640,25 +640,47 @@ TESTS = [
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell", "--console-input-after=  Log in",
         "--console-input-after=SlopOS shell",
         "--expect-console-line=remembered", "--expect-console-line=remembered again", "--expect-console-line=error: exit takes nothing"])),
-    # Jobs (decisions/0174): a program run in the background with &, without the terminal, finished with wait, which
-    # gives its records; Ctrl-C stopping one in the foreground over its lifecycle
-    # channel, and killing a stubborn one after the grace period; stop ending a job; and jobs listing them
+    # Jobs (decisions/0174, 0176): a program run in the background with &, without the terminal, its records read as
+    # it writes them, said to have ended at the prompt and finished with wait, which gives them; Ctrl-C stopping one in
+    # the foreground over its lifecycle channel, behind what's typed ahead too, and killing a stubborn one after the
+    # grace period; stop ending a job; and jobs listing them
     ("runs jobs in the background, and stops them with Ctrl-C and stop", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
         "\\wtest_shell_calls 2 bg --sleep 1s &\\r\\p\\p\\p\\pwait 1\\r\\p\\p"
         "test_shell_calls 1 fg --sleep 20s\\r\\p\\p\\x03\\p\\p"
+        "test_shell_calls 1 ta --sleep 20s\\r\\p\\ptyped ahead\\p\\x03\\p\\p"
         "test_shell_calls 1 st --sleep 20s --stubborn\\r\\p\\p\\x03\\p\\p\\p\\p"
         "test_shell_calls 1 sj --sleep 20s &\\r\\p\\pjobs\\r\\pstop\\r\\p\\p\\p\\pjobs\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
-        "--expect-console-line=[1] started",
+        "--expect-console-line=[1] started", "--expect-console-line=[1] ended: wait 1 for what it gave",
+        "--refuse-console-line=called with ta, 1, loud false, speed none, wait none, tags none, place none",
         "--expect-console-line=1   bg1   Slow", "--expect-console-line=2   bg2   Fast",
         "--expect-console-line=error: test_shell_calls ended with 10",
         "--expect-console-line=error: test_shell_calls was ended",
         "--expect-line=[user] shell: test_shell_calls didn't stop in time, so it's killed",
         "--expect-console-line=[2] started", "--expect-console-line=[2] stopped", "--expect-console-line=no jobs"])),
+    # The bundle store's objects (decisions/0178): kept to 16 open, it's asked for more programs than that, one after
+    # another, help taking each's executable and letting it go; it closes those no one holds to make room, and every
+    # one is still found
+    ("closes objects no one holds to make room for others in the bundle store", 7,
+     with_before_qemu([argument.replace("test_services", "test_services store_objects=16 test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\w" + "".join(f"help {name}\\r\\p" for name in [
+            "test_affinity", "test_budgets", "test_channels", "test_control", "test_cpu_budgets", "test_devices", "test_exits",
+            "test_io_ports", "test_libraries", "test_memory", "test_msi_dma", "test_pager", "test_perf", "test_ports",
+            "test_protocols", "test_streams", "test_syscalls", "test_threads", "test_values", "test_affinity"])
+        + "test_shell_calls 1 still\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-line=[user] bundle_store: closed an object no one held, to make room: 1 closed so far",
+        "--expect-console-line=test_values:  Run the tests, reporting to the debug log: as the program the root task ran, or, given "
+        "count, as the copy, its lines started with COPY_NAME.",
+        "--expect-console-line=called with still, 1, loud false, speed none, wait none, tags none, place none",
+        "--refuse-console-line=error: there's no command named test_affinity"])),
     # Memory pressure (decisions/0153): with two sessions, the session manager's budget charged to its threshold, it asks
     # the idle installation, the counter of the session not shown, to stop, and leaves the shown session's running
     ("stops the idle installations of sessions not shown under memory pressure", 7,
@@ -748,8 +770,10 @@ TESTS = [
         "--expect-boot-line=5:[user] root task: booted generation 1",
         "--expect-boot-line=5:[user] update: generation 2 never came up healthy in its tries, and is rolled back"])),
     # Without the normal boot's lines, which the recovery generation's doesn't have
+    # A few seconds' settling, for the terminal, which serves once the session with no user has started its shell
     ("boots the recovery generation by its key: the boot set, the drivers and the console", 7, with_before_qemu(
-        [argument for argument in BOOT_DISK_BASE if not argument.startswith("--expect-line=") or argument == HEALTHY_LINE], [
+        [argument.replace("test_services", "test_services test_settle=5") for argument in BOOT_DISK_BASE
+         if not argument.startswith("--expect-line=") or argument == HEALTHY_LINE], [
         "--recovery-key", "--expect-line=[info] bootloader: the recovery generation, as a key asks",
         "--expect-line=[user] root task: booted the recovery generation",
         "--expect-line=[user] supervisor: recovery: the boot set, the drivers and the console only",
@@ -842,7 +866,8 @@ TESTS = [
     program_test("takes system calls on handles", "test_syscalls", 3),
     program_test("waits on ports, wakes them and sets their timers", "test_ports", 3),
     program_test("passes handles and messages over channels", "test_channels", 3),
-    program_test("maps memory objects, paid for by budgets", "test_memory", 3),
+    # And counts who holds a memory object, and says when no one does (decisions/0178)
+    program_test("maps memory objects, paid for by budgets, and counts who holds them", "test_memory", 5),
     program_test("splits, sets and destroys CPU budgets", "test_cpu_budgets", 2),
     program_test("reads I/O ports through a range of them", "test_io_ports", 1),
     program_test("ends a program missing a grant, or told another ABI version, as its starter sees", "test_exits", 2),
@@ -854,7 +879,9 @@ TESTS = [
     # QEMU's edu device, its DMA reaching all of memory, which starts at 1 GiB on virt
     program_test("drives a PCIe device's MSI and DMA from user mode", "test_msi_dma", 2,
         qemu=["-device", "edu,dma_mask=0xffffffffff"]),
-    program_test("sends and checks messages with generated protocol code", "test_protocols", 5),
+    # A request that isn't the protocol ends its connection, at the process manager (decisions/0177)
+    program_test("sends and checks messages with generated protocol code, and ends a connection a broken request comes on",
+                 "test_protocols", 6),
     program_test("binds a typed library from its grant, and calls its exports", "test_libraries", 1),
     ("refuses a typed library whose export's type changed", 7, [WITH_PROGRAMS, "--command-line=test_exit test_changed_library test_program=test_libraries",
         "--expect-line=[user] root task: test_libraries ended with 1, and its budget is back to nothing",

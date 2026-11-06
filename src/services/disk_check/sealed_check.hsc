@@ -178,7 +178,7 @@ ask_storage :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outg
         match storage.receive_response(end, port, &into, true) {
             case Received => return os.message_of[storage.Response](&into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }

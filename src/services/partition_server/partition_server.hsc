@@ -272,9 +272,7 @@ serve_client :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incom
                 _ = partitions.answer_unsupported(end, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(&server.clients, index)
                 return void
             }
@@ -427,9 +425,7 @@ serve_narrowed :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inc
                 _ = block.answer_unsupported(narrowed.client, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 close_narrowed(narrowed)
                 return void
             }
@@ -513,11 +509,10 @@ pass_back :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
         match block.receive_response(narrowed.driver, server.port, into, false) {
             case Received => {}
             case Empty => return void
-            case Failed(error) => {
+            case _ => {
                 close_narrowed(narrowed)
                 return void
             }
-            case _ => continue
         }
         response := os.message_of[block.Response](into)^
         match response {
@@ -655,7 +650,7 @@ call :: fn(end: slop_os.Channel, port: slop_os.Port, request: block.Request) -> 
         match block.receive_response(end, port, &into, true) {
             case Received => return os.message_of[block.Response](&into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }

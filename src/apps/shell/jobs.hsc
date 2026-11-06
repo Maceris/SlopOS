@@ -16,7 +16,8 @@ import lifecycle from "std/os/slop_os"
  * input line while it runs in the foreground, and in jobs.
  *
  * Everything is watched on the terminal client's port, so one wait sees input, programs' ends and their lifecycle
- * channels: a program's end under its key, from FIRST_KEY on, its lifecycle channel under its key plus LIFECYCLE_KEY.
+ * channels: a program's end under its key, from FIRST_KEY on, its lifecycle channel under its key plus LIFECYCLE_KEY,
+ * and a job's output under its first key plus OUTPUT_KEY, read as it's written.
  */
 
 /** The first key programs are watched under: the terminal client keeps 0 and its STOP_KEY for itself. */
@@ -25,6 +26,11 @@ FIRST_KEY : u64 : 1 << 16
 MAX_PROGRAMS :: 64
 /** Added to a program's key for its lifecycle channel's binding, which wakes the shell when it says something. */
 LIFECYCLE_KEY : u64 : 1 << 40
+/**
+ * Added to a job's first key for its last program's output's binding, which wakes the shell when it writes, so a job's
+ * output is read as it comes rather than held up until wait.
+ */
+OUTPUT_KEY : u64 : 1 << 41
 /** How long programs asked to stop, by Ctrl-C or stop, have to end before they're killed, in nanoseconds: 2 s. */
 STOP_GRACE : u64 : 2_000_000_000
 /** How long a read of a foreground pipeline's output waits before the shell looks for Ctrl-C again: 50 ms. */
@@ -55,7 +61,8 @@ watch_port :: fn(shell: ptr[Shell]) -> slop_os.Port {
  * Take the packets a wait on the shell's port brought that are its own: a program's end, kept in ended for its turn,
  * or its lifecycle channel saying something, whose Progress is read.
  *
- * @param shell The shell, whose ended grows, and whose jobs' and foreground's calls' progress is read.
+ * @param shell The shell, whose ended grows, whose jobs' and foreground's calls' progress is read, and whose jobs'
+ *     output is read as it comes.
  * @param packets The packets; the terminal client's own, under keys below FIRST_KEY, are skipped.
  * @param taken How many of packets the wait filled in, from the first.
  */
@@ -64,11 +71,33 @@ take_packets :: fn(shell: ptr[mut Shell], packets: slop_os.Packet[], taken: usiz
         if i >= taken || packet.kind != .Signal || packet.key < FIRST_KEY {
             continue
         }
+        if packet.key >= OUTPUT_KEY {
+            read_job_output(shell, packet.key - OUTPUT_KEY)
+            continue
+        }
         if packet.key >= LIFECYCLE_KEY {
             read_progress(shell, packet.key - LIFECYCLE_KEY)
             continue
         }
         runtime.array_add(&shell.ended, EndedProgram.{key = packet.key, code = packet.data[1]})
+    }
+}
+
+/**
+ * Read what a job's last program has written so far, without waiting, into the job's collected values.
+ *
+ * @param shell The shell, whose jobs are looked in.
+ * @param first_key The job's first key; nothing's read for one no job has.
+ */
+read_job_output :: fn(shell: ptr[mut Shell], first_key: u64) {
+    for job in shell.jobs {
+        if job.running.first_key != first_key || job.running.calls.count == 0 {
+            continue
+        }
+        last :: job.running.calls[job.running.calls.count - 1]
+        if read_some(job.running, last, 0) {
+            _ = slop_os.port_unbind(watch_port(shell), first_key + OUTPUT_KEY)
+        }
     }
 }
 
@@ -306,7 +335,7 @@ take_while_reading :: fn(shell: ptr[mut Shell], packet: slop_os.Packet) {
  * Start a line's programs in the background, for pipeline &: a numbered job, which jobs, wait and stop work on.
  *
  * Only programs run in the background: a call of one, or a pipeline of them. None is given the terminal; one that needs
- * it can't run there. What the last writes waits for wait, and a program writing more than its stream holds waits too.
+ * it can't run there. What the last writes is read as it's written, and kept for wait.
  *
  * @param shell The shell, which starts the programs and keeps the job.
  * @param tree The Background node, its child the call or pipeline.
@@ -330,6 +359,11 @@ start_job :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Val
         }
     }
     running :: start_programs(shell, trees, null, true)?
+    // Its output read as it's written, so it never waits for wait
+    if running.from != NO_END {
+        signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+        _ = slop_os.port_bind(watch_port(shell), cast[slop_os.Handle](running.from), signals, running.first_key + OUTPUT_KEY, .Persistent)
+    }
     shell.last_job += 1
     runtime.array_add(&shell.jobs, Job.{number = shell.last_job, running = running})
     say(shell, message("[%] started", shell.last_job))

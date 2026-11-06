@@ -191,9 +191,7 @@ serve :: fn(service: ptr[mut Clock], connected: ptr[mut service_kit.Clients], in
                 _ = clock_setting.answer_unsupported(end, port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(connected, index)
                 return void
             }

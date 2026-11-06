@@ -132,7 +132,7 @@ serve_links :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomi
         match links.receive_response(server.links, server.port, into, false) {
             case Received => {}
             case Empty => return void
-            case Failed(error) => {
+            case _ => {
                 // The storage manager is gone: nothing asked will be answered
                 loop {
                     if server.asked_count == 0 {
@@ -145,7 +145,6 @@ serve_links :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomi
                 server.links = cast[slop_os.Channel](slop_os.NO_HANDLE)
                 return void
             }
-            case _ => continue
         }
         if server.asked_count == 0 {
             close_opened(os.message_of[links.Response](into)^)
@@ -349,11 +348,10 @@ serve_claim :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomi
         match grant.receive_response(end, server.port, into, false) {
             case Received => break
             case Empty => return void
-            case Failed(error) => {
+            case _ => {
                 end_claim(server, index, files.FileError.NotFound)
                 return void
             }
-            case _ => continue
         }
     }
     match os.message_of[grant.Response](into)^ {
@@ -461,9 +459,7 @@ serve_grant :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomi
                 _ = grant.answer_unsupported(end, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 drop(server, index)
                 return void
             }

@@ -101,6 +101,52 @@ Memory :: struct #align(16) {
     page_lock : concurrency.SpinLock,
     /** The first thread waiting for a page to be supplied, linked through wait_next, under page_lock; 0 for none. */
     fault_waiters : u64,
+    /**
+     * How many hold it besides its owner (decisions/0178): handles to it that aren't the owning one, in a table or in
+     * a channel's batch on the way, its mappings, and its windows. Changed atomically (hold_memory, let_go_of_memory);
+     * SIGNAL_UNHELD is raised for its watchers when it falls to 0.
+     */
+    held : u64,
+    /** Guards watchers, at LockRank Watchers. */
+    watch_lock : concurrency.SpinLock,
+    /** Bindings watching for SIGNAL_UNHELD, under watch_lock; an empty slot's binding is 0. */
+    watchers : EndBinding[2],
+}
+
+/**
+ * Count one more holder of a memory object: a handle that isn't its owning one, made by a duplicate or a grant, a
+ * mapping, or a window.
+ *
+ * @param object The memory object, as an address.
+ * @param generation The generation the holder was made at; a memory object since destroyed isn't counted, as its
+ *     count goes with it.
+ */
+hold_memory :: fn(object: u64, generation: u32) {
+    if is_live(object, generation) {
+        _ = intrinsics.interlocked_increment_u64(&cast[ptr[mut Memory]](object).held)
+    }
+}
+
+/**
+ * Count one holder fewer of a memory object, raising SIGNAL_UNHELD for its watchers when none is left.
+ *
+ * The object's slot isn't used again until every CPU passes a quiescent point, which the caller's doesn't during the
+ * call, so one destroyed after it's checked is only its old self, whose count no one reads again.
+ *
+ * Takes the watchers' lock, then their ports', when it raises: the caller holds no lock of the memory's.
+ *
+ * @param kernel The kernel, whose ports' queues the signal goes on.
+ * @param object The memory object, as an address.
+ * @param generation The generation the holder was made at; a memory object since destroyed is passed by.
+ */
+let_go_of_memory :: fn(kernel: ptr[mut Kernel], object: u64, generation: u32) {
+    if !is_live(object, generation) {
+        return void
+    }
+    memory :: cast[ptr[mut Memory]](object)
+    if intrinsics.interlocked_decrement_u64(&memory.held) == 1 {
+        raise_watchers(kernel, &memory.watchers, &memory.watch_lock, .Watchers, cast[u32](slop_os.SIGNAL_UNHELD), 0)
+    }
 }
 
 /** A range of a memory object, mapped in an address space. */
@@ -348,6 +394,8 @@ create_window :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, parent: pt
         release_object(kernel, object)
         return .Error(.ObjectGone)
     }
+    // A window holds its parent until it's destroyed itself
+    _ = intrinsics.interlocked_increment_u64(&parent.held)
     match adopt(owner, object) {
         case Ok => {}
         case Error(error) => {
@@ -502,8 +550,14 @@ destroy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
     if memory.parent != 0 {
         parent :: cast[ptr[mut Memory]](memory.parent)
         lock_at(&parent.lock, .MemoryParent)
+        // Still on its parent's list, so the parent's alive, and this window held it
+        holding :: memory.in_parent
+        parent_generation :: parent.header.generation
         unlink_window(parent, memory)
         unlock_at(&parent.lock, .MemoryParent)
+        if holding {
+            let_go_of_memory(kernel, cast[u64](parent), parent_generation)
+        }
     }
     loop {
         lock_at(&memory.lock, .Memory)
@@ -769,6 +823,7 @@ memory_map :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], space: ptr[mu
     else {
         link_to_space(space, mapping)
         link_to_memory(memory, mapping)
+        _ = intrinsics.interlocked_increment_u64(&memory.held)
     }
     unlock_at(&space.lock, .Space)
     unlock_at(&memory.lock, .Memory)
@@ -888,6 +943,7 @@ take_down :: fn(kernel: ptr[mut Kernel], mapping: ptr[mut MemoryMapping]) {
     lock_at(&memory.lock, .Memory)
     unlink_from_memory(memory, mapping)
     unlock_at(&memory.lock, .Memory)
+    let_go_of_memory(kernel, cast[u64](memory), memory.header.generation)
     generation :: mapping.space_generation
     slab.free(&kernel.pools.mappings, &kernel.frames, cast[u64](mapping))
     uncharge(cast[u64](space), generation, kernel.pools.mappings.object_size)

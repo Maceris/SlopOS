@@ -86,7 +86,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 20 | `channel_send_handles` | end, handles (a slice), batch | nothing: the handles (up to 64) moved out of the caller's table into batch (0 to 15) on the other end. Each needs `RIGHT_TRANSFER` |
 | 21 | `channel_take_handles` | end, batch, handles (a slice), count (a pointer, or null) | how many: the batch's handles, in the caller's table, written into handles, and how many there are at count too, also when handles is too small; `NO_HANDLE` for any whose object is gone |
 | 22 | `channel_notify_and_wait` | end, signals, port, packets (a slice), deadline | as `channel_notify`, then `port_wait`; a thread the notify wakes is made ready on the caller's CPU |
-| 23 | `port_bind` | port, object, signals, key, mode | nothing: a `Signal` packet for key when the object, a channel end, a process (with `RIGHT_PROCESS_INSPECT`), a thread or a Device, raises any of signals, or for an IRQ an `Irq` packet for its interrupts, signals unused; needs `RIGHT_PORT_BIND`. A process, a thread or a Device can be watched by 2 bindings, an end by 4. Mode `Once` (1) disarms it once its packet is queued, and binding the same key to the same object arms it again; `Persistent` (2) doesn't |
+| 23 | `port_bind` | port, object, signals, key, mode | nothing: a `Signal` packet for key when the object, a channel end, a process (with `RIGHT_PROCESS_INSPECT`), a thread, a Device, a memory budget (with `RIGHT_BUDGET_CHARGE`) or a memory object (its owning handle), raises any of signals, or for an IRQ an `Irq` packet for its interrupts, signals unused; needs `RIGHT_PORT_BIND`. A process, a thread, a Device, a memory budget or a memory object can be watched by 2 bindings, an end by 4. Mode `Once` (1) disarms it once its packet is queued, and binding the same key to the same object arms it again; `Persistent` (2) doesn't |
 | 24 | `memory_budget_create` | budget, limit | an owning handle to a child budget of limit bytes, charged to the budget |
 | 25 | `memory_budget_info` | budget | its limit, and how much of it is charged, in bytes |
 | 26 | `memory_create` | budget, size | an owning handle to a new memory object of size bytes, a whole number of pages up to `MAX_MEMORY_SIZE` (1 GiB), charged for all of it |
@@ -140,6 +140,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 74 | `memory_evict` | memory, offset | nothing: the supplied page at offset of paged memory given back, unmapped everywhere, freed and uncharged; `RIGHT_MEMORY_WRITE` (`0111`) |
 | 75 | `memory_page_accessed` | memory, offset | 1 if any mapping touched the page at offset of paged memory since this last asked, 0 if not, the marks cleared; always 0 where the hardware doesn't keep them; `RIGHT_MEMORY_WRITE` (`0111`) |
 | 76 | `thread_use_cpu_budget` | budget | the calling thread runs on the budget from now on, as a server does for a connection whose client lent it the budget, or on its process's again with `NO_HANDLE`; `RIGHT_CPU_BUDGET_BIND` (`0130`) |
+| 77 | `memory_holders` | memory | how many hold the memory besides its owner: handles to it that aren't the owning one, in any process or on their way in a channel, its mappings, and its windows; only the owning handle asks, else `MissingRight` (`0178`) |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the
@@ -281,6 +282,10 @@ rflags' status flags and DF.
 **Pressure**: a memory budget raises `SIGNAL_PRESSURE` (bit 5) when what it has charged reaches the threshold its
 holder set (`memory_budget_set_threshold`), and again only once it has fallen below it and reached it again; a
 handle with `RIGHT_BUDGET_CHARGE` binds it (`0111`). Its `Signal` packet's `data[1]` is what the budget had charged.
+
+**Unheld**: a memory object raises `SIGNAL_UNHELD` (bit 6) each time its count of holders (`memory_holders`) falls to
+0; only its owning handle binds it (`0178`). A pager that gives its memory out, like the bundle store, closes what no
+one holds.
 
 **Ends**: a process or a thread raises `SIGNAL_TERMINATED` when it's destroyed, which stays raised. A
 process's `Signal` packet for it says how it ended in `data[1]`: the code it gave `process_exit`, or

@@ -356,11 +356,30 @@ free_table :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) {
     for page_index in 0..<TABLE_PAGES {
         page :: cast[ptr[u64]](table.directory + cast[u64](page_index) * 8)^
         if page != 0 {
+            let_go_of_page(kernel, page)
             give_frame_at(kernel, page)
         }
     }
     give_frame_at(kernel, table.directory)
     table.directory = 0
+}
+
+/**
+ * Let go of what a freed table's page of entries held: each handle to memory that wasn't its owning one counts one
+ * holder fewer (decisions/0178). Owning handles' objects were destroyed with their process.
+ *
+ * @param kernel The kernel, which raises SIGNAL_UNHELD for memory no one holds now.
+ * @param page A page of the table's entries, by its address in the direct map; free entries are passed by.
+ */
+let_go_of_page :: fn(kernel: ptr[mut Kernel], page: u64) {
+    for i in cast[u64](0)..<(frames.FRAME_SIZE / cast[u64](size_of(HandleEntry))) {
+        entry :: cast[ptr[HandleEntry]](page + i * cast[u64](size_of(HandleEntry)))
+        tag :: intrinsics.atomic_load_u64(&entry.tag)
+        kind :: cast[slop_os.ObjectKind](cast[u8](tag >> 32))
+        if tag & TAG_VALID != 0 && tag & TAG_OWNING == 0 && kind == .Memory {
+            let_go_of_memory(kernel, entry.object, entry.generation)
+        }
+    }
 }
 
 /**

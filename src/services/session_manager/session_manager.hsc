@@ -480,11 +480,10 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
                 _ = session.answer_unsupported(end, sessions.port)
                 continue
             }
-            case Failed(error) => {
+            case _ => {
                 service_kit.drop_client(connected, index)
                 return void
             }
-            case _ => continue
         }
         out := os.Outgoing.{}
         response :: os.begin[session.Response](&out)
@@ -766,13 +765,12 @@ serve_programs :: fn(sessions: ptr[mut Manager], into: ptr[mut os.Incoming]) {
                     _ = programs.answer_unsupported(made.programs_end, sessions.port)
                     continue
                 }
-                case Failed(error) => {
+                case _ => {
                     _ = slop_os.port_unbind(sessions.port, PROGRAMS_KEY + cast[u64](number))
                     _ = slop_os.handle_close(cast[slop_os.Handle](made.programs_end))
                     made.programs_end = NONE
                     break
                 }
-                case _ => continue
             }
             out := os.Outgoing.{}
             response :: os.begin[programs.Response](&out)
@@ -1764,7 +1762,7 @@ opened_directory :: fn(end: slop_os.Channel, name: string, create: bool) -> slop
         match dir.receive_response(end, port, &into, true) {
             case Received => break
             case Failed(error) => return null
-            case _ => continue
+            case _ => return null
         }
     }
     return match os.message_of[dir.Response](&into)^ {

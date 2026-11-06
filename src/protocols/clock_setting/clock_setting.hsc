@@ -63,7 +63,8 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 /**
  * Set the time through the clock service, and wait for its answer.
  *
- * Responses that aren't one, unknown or invalid, are skipped while it waits.
+ * A response that isn't the protocol, unknown or invalid, ends the wait as the connection's going does
+ * (decisions/0177).
  *
  * @param end A connection to the clock service, kept by the caller.
  * @param port A port bound to end, waited on for the answer and while end's ring is full.
@@ -83,7 +84,7 @@ set :: fn(end: slop_os.Channel, port: slop_os.Port, utc: i64) -> bool {
         match receive_response(end, port, &into, true) {
             case Received => break
             case Failed(error) => return false
-            case _ => continue
+            case _ => return false
         }
     }
     return match os.message_of[Response](&into)^ {

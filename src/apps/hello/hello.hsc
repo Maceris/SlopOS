@@ -175,7 +175,7 @@ entropy_bytes :: fn(end: slop_os.Channel) -> usize {
         match entropy.receive_response(end, port, &into, true) {
             case Received => break
             case Failed(error) => return 0
-            case _ => continue
+            case _ => return 0
         }
     }
     return match os.message_of[entropy.Response](&into)^ {

@@ -117,13 +117,15 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 /**
  * Send a request to the update service and wait for its answer.
  *
- * Responses that aren't one, unknown or invalid, are skipped while it waits.
+ * A response that isn't the protocol, unknown or invalid, ends the wait as the connection's going does
+ * (decisions/0177).
  *
  * @param end The connection to the update service, kept by the caller.
  * @param port A port bound to end, waited on for the answer and while end's ring is full.
  * @param out The request, begun with os.begin; sent as it is.
  * @param into Where the answer is received, with any handles it brought, which are the caller's from then on.
- * @return The answer, copied out of into; Unsupported if the request couldn't be sent or the connection's gone.
+ * @return The answer, copied out of into; Unsupported if the request couldn't be sent, the connection's gone, or its
+ *     answer isn't the protocol.
  */
 ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> Response {
     if send_request(end, port, out) is_some {
@@ -133,7 +135,7 @@ ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], i
         match receive_response(end, port, into, true) {
             case Received => break
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
     return os.message_of[Response](into)^

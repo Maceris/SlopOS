@@ -331,7 +331,7 @@ ask :: fn(server: ptr[mut Server], request: container.Request) -> container.Resp
         match container.receive_response(server.container, server.container_port, &into, true) {
             case Received => return os.message_of[container.Response](&into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }
@@ -423,7 +423,7 @@ call :: fn(server: ptr[mut Server], request: block.Request) -> block.Response {
         match block.receive_response(server.blocks, server.blocks_port, &into, true) {
             case Received => return os.message_of[block.Response](&into)^
             case Failed(error) => return .Unsupported
-            case _ => continue
+            case _ => return .Unsupported
         }
     }
 }
@@ -1091,9 +1091,7 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
                 _ = dir.answer_unsupported(end, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 drop(server, index)
                 return void
             }
@@ -1382,9 +1380,7 @@ serve_read_only_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut o
                 _ = read_only_dir.answer_unsupported(end, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 drop(server, index)
                 return void
             }
@@ -1494,9 +1490,7 @@ serve_file_set :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inc
                 _ = file_set.answer_unsupported(end, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 drop(server, index)
                 return void
             }
@@ -1709,9 +1703,7 @@ serve_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomin
                 _ = file.answer_unsupported(end, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 drop(server, index)
                 return void
             }
@@ -1831,9 +1823,7 @@ serve_read_only_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut 
                 _ = read_only_file.answer_unsupported(end, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 drop(server, index)
                 return void
             }
@@ -1894,7 +1884,7 @@ wait_for_unlock :: fn(server: ptr[mut Server], end: slop_os.Channel) -> ptr[mut 
                 continue
             }
             case Failed(error) => return null
-            case _ => continue
+            case _ => return null
         }
         response : volume_protocol.Response = .Failed
         keys :: slopfs.new_keys(.None) or_return null
@@ -2026,9 +2016,7 @@ serve_control :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inco
                 _ = volume_protocol.answer_unsupported(end, server.port)
                 continue
             }
-            case Invalid => continue
-            case WrongProtocol => continue
-            case Failed(error) => {
+            case _ => {
                 drop(server, index)
                 return void
             }

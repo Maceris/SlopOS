@@ -34,6 +34,10 @@ package.
    checks every relative pointer's bounds (inside the message, properly aligned, not overlapping
    the fixed part), every union tag and enum value, and every `bool`.
 3. Only then does `std` hand out a typed view of the message. There is no separate decoding step.
+4. A message that fails, or holds a channel of another protocol, or is a response of a variant the client doesn't
+   know, **ends the connection** (`../decisions/0177`): `std` logs it, and the side that got it closes its end, as when
+   the connection fails, so the other side finds the end gone rather than waiting for an answer that won't come. A
+   request of a variant the server doesn't know is evolution (§2), not a break, and is answered `Unsupported`.
 
 Validators, like all ring parsing, live in one `std` package and are fuzzed.
 
