@@ -1,8 +1,9 @@
 /**
- * test_shell_calls (decisions/0170, 0172): a program the shell calls through its manifest, taking a connection to
+ * test_shell_calls (decisions/0170, 0172, 0174): a program the shell calls through its manifest, taking a connection to
  * the shell's terminal, values of several types, some optional, and a directory beneath the shell's home. It writes
  * what it was given on one line, and ends with 0, or, given the label "fail", with its count. In a pipeline: given an
- * output, it writes count rows, or with an input, each row it reads with its id times ten.
+ * output, it writes count rows, or with an input, each row it reads with its id times ten. Given a time to sleep, it
+ * sleeps first, saying its progress, and ends early when it's asked to stop, unless it's stubborn.
  */
 package test_shell_calls
 
@@ -11,6 +12,8 @@ import strings from "std"
 import terminal from "std"
 import text_buffer from "std"
 import time from "std"
+import slop_os from "std/os"
+import lifecycle from "std/os/slop_os"
 import dir from "std/os/slop_os"
 import stream from "std/os/slop_os"
 import terminal as protocol from "std/os/slop_os"
@@ -36,7 +39,8 @@ Row :: struct {
 /**
  * Write what the shell gave on one line of the terminal, or, in a pipeline, write rows.
  *
- * @param session_terminal A connection to the shell's terminal, which the line is written on.
+ * @param session_terminal A connection to the shell's terminal, which the line is written on. Without it, as in the
+ *     background, no line is written.
  * @param count A number, written on the line; with an output and no input, how many rows are made; with the label
  *     "fail", the exit code.
  * @param label A word, written on the line, and starting each row's name made; "fail" makes the program end with
@@ -50,12 +54,28 @@ Row :: struct {
  *     the program ends with 9. Without it, nothing is read.
  * @param output Where rows go, in a pipeline: those read from input, or, without one, count rows made after the line
  *     is written. Without it, no rows are written.
+ * @param sleep How long to sleep before anything else, in ten steps, saying its progress after each. Asked to stop
+ *     meanwhile, it ends at once. Without it, it doesn't sleep.
+ * @param stubborn Whether to keep sleeping when it's asked to stop, so it has to be killed.
  * @return 0, or count with the label "fail", once the line or the rows are written. 2 if the terminal couldn't be
- *     opened; 3 if the line couldn't be made; 9 if there's an input but no output; otherwise what write_rows gives.
+ *     opened; 3 if the line couldn't be made; 9 if there's an input but no output; 10 if it was asked to stop while it
+ *     slept; otherwise what write_rows gives.
  */
-main :: fn(session_terminal: os.Channel[protocol.Terminal], count: u64, label: string, loud: bool, speed: Speed?, wait: time.Duration?,
-    tags: string[]?, place: os.Channel[dir.Dir]?, input: os.Stream[Row]?, output: os.Sink[Row]?) -> int {
-    console := terminal.open(session_terminal) or_return 2
+main :: fn(session_terminal: os.Channel[protocol.Terminal]?, count: u64, label: string, loud: bool, speed: Speed?, wait: time.Duration?,
+    tags: string[]?, place: os.Channel[dir.Dir]?, input: os.Stream[Row]?, output: os.Sink[Row]?, sleep: time.Duration?, stubborn: bool) -> int {
+    match sleep {
+        case Some(given) => {
+            if !slept(given.seconds * 1000000000 + cast[i64](given.nanos), stubborn) {
+                return 10
+            }
+        }
+        case None => {}
+    }
+    console : terminal.Terminal? = null
+    match session_terminal {
+        case Some(given) => console = terminal.open(given) or_return 2
+        case None => {}
+    }
     match input {
         case Some(source) => match output {
             case Some(sink) => return write_rows(sink, input, count, label)
@@ -92,7 +112,13 @@ main :: fn(session_terminal: os.Channel[protocol.Terminal], count: u64, label: s
     }
     line :: strings.format("called with %, %, loud %, speed %, wait %, tags %, place %", label, count, loud, speed_text, wait_text, tags_text,
         place_text) or_return 3
-    _ = terminal.write_line(&console, line)
+    match console {
+        case Some(opened) => {
+            shown := opened
+            _ = terminal.write_line(&shown, line)
+        }
+        case None => {}
+    }
     match output {
         case Some(sink) => return write_rows(sink, null, count, label)
         case None => {}
@@ -101,6 +127,37 @@ main :: fn(session_terminal: os.Channel[protocol.Terminal], count: u64, label: s
         return cast[int](count)
     }
     return 0
+}
+
+/**
+ * Sleep in ten steps, saying its progress on its lifecycle channel after each (lifecycle.report_progress).
+ *
+ * @param nanoseconds How long, in all; 0 or less doesn't sleep, but still says it's done.
+ * @param stubborn Whether to sleep on when it's asked to stop; if not, a stop wakes it and ends the sleep.
+ * @return True once it's slept; false if it was asked to stop first, and wasn't stubborn.
+ */
+slept :: fn(nanoseconds: i64, stubborn: bool) -> bool {
+    port :: slop_os.port_create(slop_os.startup_block().budget) or_return true
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    if !stubborn {
+        _ = lifecycle.on_stop(port, 1)
+    }
+    step :: if nanoseconds > 0 { cast[u64](nanoseconds) / 10 } else { cast[u64](0) }
+    for i in cast[u64](0)..<10 {
+        deadline :: (slop_os.clock_monotonic() or_else 0) + step
+        loop {
+            if !stubborn && lifecycle.stop_requested() {
+                return false
+            }
+            if (slop_os.clock_monotonic() or_else 0) >= deadline {
+                break
+            }
+            packets : slop_os.Packet[1]
+            _ = slop_os.port_wait(port, packets, deadline)
+        }
+        _ = lifecycle.report_progress(i + 1, 10)
+    }
+    return true
 }
 
 /**

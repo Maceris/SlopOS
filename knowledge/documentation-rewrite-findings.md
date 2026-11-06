@@ -121,6 +121,12 @@ confirmed against the code before it was fixed; what each became is marked on it
   when a launch fails; `write_given` keeps a stale writer after a failed put; `encode` takes a list's start before
   aligning; grouping by a field named `count` or `items` collides; `append_signed` overflows on the smallest i64; table
   widths count bytes, not columns; arithmetic doesn't check for overflow; `interpolate` stops names at `-`.
+  *Fixed with 11d, all of them: each line freed once it's run; a failed wait an error; a failed launch closes both
+  lifecycle ends and the clock and locale copies; the writer kept as it is after its last put; a list's items start
+  after aligning; grouping by count or items names the value key; the smallest i64 shown as itself; widths in the
+  columns text takes; arithmetic and number literals past 64 bits an error; `$file-name` filled in whole. The language
+  itself moved to `src/shell_language`, so its parser, arithmetic, records and stages are tested on the host, by property
+  tests among others.*
 
 ## Leaks on error paths
 

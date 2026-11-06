@@ -787,6 +787,7 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], bootloader: P
             renamed.mkdir(parents=True, exist_ok=True)
             shutil.copy(staged_next, renamed / "hello.elf")
             shutil.copy(staged_next.with_suffix(".manifest"), renamed / "hello.manifest")
+            shutil.copy(staged_next.with_suffix(".docs"), renamed / "hello.docs")
             stored = subprocess.run([str(store_builder), str(system / "store")] + [
                 str(renamed / "hello.elf") if program.stem == "hello" else str(program) for program in programs
                 if program.stem not in BOOT_SET and program.suffix == ".elf"], capture_output=True, text=True)

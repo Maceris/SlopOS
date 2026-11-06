@@ -29,6 +29,10 @@ Severity: **blocker** / **friction** / **nice**.
 Known limits, each an error rather than wrong code. Severity: nice.
 
 - A generic function declared inside a function (E4024); a generic type declared there works.
+- No checked arithmetic: integer overflow wraps, and nothing in `base` or `std` says when it would have. The shell's
+  language (11d, `src/shell_language/arithmetic.hsc`) checks its own with the sign tricks (`added`, `subtracted`,
+  `multiplied`); intrinsics over LLVM's `llvm.sadd.with.overflow` and its kin would be one instruction and a branch.
+  Marked `//STD(missing)`.
 
 ### Targets and runtime
 
@@ -129,6 +133,16 @@ allocation for fault injection's hosted sweeps (`0096`, `0104`); base's `array_t
 Then from 9e and 9f (2026-10-31): typed libraries on SlopOS, `base`'s loader binding them from grants (`0120`), and a
 library's `base` sharing the program's process state, found when `service_kit` couldn't reserve addresses (`0121`,
 `0124`).
+Then from 11d (2026-11-05, `0176`), all in `std` and `base`: `schema.read_value[T]`, a value read back as another
+program's is, checked, so code outside the RAW_POINTERS packages needn't cast; `terminal.set_completer[D]`, a
+completer over data of the program's own type, and completions with descriptions, listed beside them, and a space
+after a lone one; the terminal client giving back packets under keys not its own (`Other`), `read_line` going on with
+a line it returned in the middle of, and `interrupted`, Ctrl-C without waiting; the stream reader's
+`next_bytes_before`, a record or nothing by a deadline; and a lifecycle message from the program, Progress
+(`lifecycle.report_progress`, base's `SLOP_OS_LIFECYCLE_PROGRESS`). One thing was easy to get wrong: in
+`os.begin(&out)^ = .Variant(os.append(&out, ...))` the right side runs first, so the append lands before the message
+and its relative is off, and the server drops the request as invalid; binding begin's pointer first is right, as the
+rest of the code does.
 
 ## 4. Features That Look Like a Strong Fit
 

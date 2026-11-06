@@ -7,7 +7,8 @@
  *     store_builder <store folder> <program>...
  *
  * A bundle's manifest is the program's <name>.manifest beside it, which the build writes (the schema of its entry's
- * type, decisions/0044), put as an object of its own; all zeros if there's none.
+ * type, decisions/0044), and its documentation <name>.docs (decisions/0174), each put as an object of its own; all
+ * zeros if there's none.
  */
 package store_builder
 
@@ -19,7 +20,7 @@ import bundle from "../../bundle"
  * Write a bundle store's directory on the host from programs the build made.
  *
  * Its arguments are the store's folder, made if it isn't there, then the programs' paths, each an object with a
- * bundle, and its <name>.manifest beside it an object too when it's there. Objects already in the folder are written
+ * bundle, and its <name>.manifest and <name>.docs beside it objects too when they're there. Objects already in the folder are written
  * again; root is replaced.
  *
  * @return 0 once the store is written; 1 for too few arguments, 2 if the folder or its objects/ couldn't be made, 3 if
@@ -59,6 +60,12 @@ main :: fn() -> int {
         manifest_path :: joined(without_extension(path), ".manifest", &manifest_storage)
         match os.read_entire_file(manifest_path) {
             case Ok(manifest) => made.manifest = put(objects, bit_cast[u8[]](manifest)) or_return 4
+            case Error(error) => {}
+        }
+        documentation_storage : u8[1024]
+        documentation_path :: joined(without_extension(path), ".docs", &documentation_storage)
+        match os.read_entire_file(documentation_path) {
+            case Ok(documentation) => made.documentation = put(objects, bit_cast[u8[]](documentation)) or_return 4
             case Error(error) => {}
         }
         record : u8[..]

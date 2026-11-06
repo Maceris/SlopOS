@@ -369,8 +369,11 @@ linear-time regular expressions. 11b done 2026-11-02 (`0169` to `0171`): the she
 calls through manifests with arguments read by type and grants made from types, shell functions, errors handled
 with `or`, `try` and `?`, and `cd`; the shell is the session's first program with `use_shell`. 11c done 2026-11-03 (`0172`): pipelines over typed
 streams, records decoded by manifests, the built-in stages, and tables. Before the rest of 11d, a phase of its own (`0174`): Doxygen-style
-documentation comments, kept and checked by Hemera's compiler, both codebases rewritten in them, and programs'
-documentation beside their manifests for `help`. This is the first usable system (above).
+documentation comments, kept and checked by Hemera's compiler, both codebases rewritten in them, done 2026-11-04. 11d
+done 2026-11-05 (`0176`): programs' documentation in their bundles, `help`, completion with summaries, history in the
+user's home, jobs with `&`, `jobs`, `wait` and `stop`, Ctrl-C and `Progress` over the lifecycle channel, the shell as
+every session's first program, and the language a library tested on the host. This is the first usable system
+(above).
 
 Stresses: an interpreter in Hemera (tagged unions, arenas), reflection-driven parsing and rendering, Unicode and
 regex tables generated at compile time, the typed-entry machinery from the caller's side.

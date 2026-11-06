@@ -212,6 +212,12 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
                     case None => response^ = .Missing
                 }
             }
+            case Read(hash) => {
+                match read_copy(service, hash) {
+                    case Some(object) => response^ = .Got(object)
+                    case None => response^ = .Missing
+                }
+            }
             case Put(put) => response^ = if store_object(service, put) { .Done } else { .Refused }
             case Pin(pin) => {
                 name :: as_text(os.items(into, pin.name))
@@ -249,6 +255,37 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
         }
         _ = bundle_store.send_response(end, service.port, &out)
     }
+}
+
+/**
+ * Give a copy of a small object, for Read: its file's bytes read through the store's directory and written to new
+ * memory, charged to the store's budget until its owning handle moves to the client. Nothing stays open.
+ *
+ * @param service The store's state, whose directory and budget are used; its open objects aren't touched.
+ * @param hash The object's hash, naming the file objects/<hex>, which isn't checked against its bytes, as Get doesn't.
+ * @return The copy: its memory, whole pages with zeros past the object, its owning handle the caller's to give away,
+ *     and the object's size in bytes. Null if there's no such object, it's empty or past bundle_store.MAX_READ bytes,
+ *     or there wasn't the memory for it.
+ */
+read_copy :: fn(service: ptr[mut Store], hash: bundle.Hash) -> bundle_store.Object? {
+    hex_storage : u8[64]
+    path_storage : u8[80]
+    read :: match os.read_entire_file_in(service.directory, path_in("objects/", bundle.hex(hash, &hex_storage), &path_storage)) {
+        case Ok(contents) => contents
+        case Error(error) => return null
+    }
+    defer runtime.free_array(bit_cast[u8[]](read))
+    bytes :: bit_cast[u8[]](read)
+    size :: cast[u64](bytes.count)
+    if size == 0 || size > bundle_store.MAX_READ {
+        return null
+    }
+    memory :: slop_os.memory_create(service.block.budget, (size + 4095) & ~cast[u64](4095)) or_return null
+    if slop_os.memory_write(memory, 0, bytes) is_error {
+        _ = slop_os.handle_close(cast[slop_os.Handle](memory))
+        return null
+    }
+    return bundle_store.Object.{memory = memory, size = size}
 }
 
 /**

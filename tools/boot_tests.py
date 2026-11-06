@@ -360,7 +360,7 @@ TESTS = [
     # refused, the administrator made, and the recovery code shown once, until Enter. Then the login screen (0150): F2
     # changes the layout, a wrong password is refused, and the right one makes the session, whose echo has the home
     ("sets up the administrator's account at first boot, then logs in to a session with its home", 7,
-     with_before_qemu([argument.replace("test_services", "test_services test_settle=30") for argument in BOOT_DISK_BASE], [
+     with_before_qemu([argument.replace("test_services", "test_services use_echo test_settle=30") for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rpassword\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r"
         "\\w\\eOQadmin\\rnot the password\\r\\wadmin\\rcorrect horse battery staple\\r\\wfrom the session",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
@@ -388,7 +388,7 @@ TESTS = [
     # key's screen (N), the first switched back to (S), the console locked (L) and unlocked with the password, and the
     # first logged out (O), which leaves the second shown
     ("keeps several sessions, switches between them, locks the console, and logs one out", 7,
-     with_before_qemu([argument.replace("test_services", "test_services test_settle=45") for argument in BOOT_DISK_BASE], [
+     with_before_qemu([argument.replace("test_services", "test_services use_echo test_settle=45") for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r\\wfirst line\\r\\w\\e[3;7~\\pn\\wadmin\\rcorrect horse battery staple\\r\\wsecond line\\r\\w\\e[3;7~\\ps\\pthird line\\r\\w\\e[3;7~\\pl\\wcorrect horse battery staple\\r\\wfourth line\\r\\w\\e[3;7~\\po\\p\\pfifth line",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
@@ -412,7 +412,7 @@ TESTS = [
     # chooser, which offers the name echo suggested as a new file; then for a file to read, narrowed by typing; then for
     # a directory, the home chosen; and once more, refused
     ("asks the user for files and directories through the powerbox's chooser on the trusted path", 7,
-     with_before_qemu([argument.replace("test_services", "test_services test_settle=90").replace("--timeout=120", "--timeout=180")
+     with_before_qemu([argument.replace("test_services", "test_services use_echo test_settle=90").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
         "\\wsave hello from the powerbox\\r\\w\\p\\e[3;7~\\w\\r"
@@ -443,7 +443,7 @@ TESTS = [
     # opens it again without asking; the grants view (G on the secure attention key's screen) revokes it, and reopen then
     # gets nothing
     ("keeps a grant the user ticks, reopens it, and revokes it from the grants view", 7,
-     with_before_qemu([argument.replace("test_services", "test_services test_settle=90").replace("--timeout=120", "--timeout=180")
+     with_before_qemu([argument.replace("test_services", "test_services use_echo test_settle=90").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
         "\\wsave kept line\\r\\w\\p\\e[3;7~\\w\\t\\r"
@@ -464,7 +464,7 @@ TESTS = [
     # elevation screen, which refuses a wrong administrator's password, then makes bob's account with the right one, its
     # recovery code shown once; logged out, bob logs in
     ("makes another account when the administrator allows it on the trusted path, and its user logs in", 7,
-     with_before_qemu([argument.replace("test_services", "test_services test_settle=150").replace("--timeout=120", "--timeout=240")
+     with_before_qemu([argument.replace("test_services", "test_services use_echo test_settle=150").replace("--timeout=120", "--timeout=240")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
         "\\wadduser\\r\\w\\p\\e[3;7~"
@@ -494,7 +494,7 @@ TESTS = [
     # session, finds it in theirs; back in the administrator's, bob is taken out, every link into team revoked and its
     # next key generation started
     ("shares a volume with another user, who finds it at login, and takes them out of it", 7,
-     with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=270")
+     with_before_qemu([argument.replace("test_services", "test_services use_echo test_settle=180").replace("--timeout=120", "--timeout=270")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
         "\\wadduser\\r\\w\\p\\e[3;7~"
@@ -518,26 +518,27 @@ TESTS = [
         "--expect-line=[user] account_service: took bob out of team, revoked 2 links into it, and started its next key generation",
         "--expect-line=[user] terminal: took a member out of team, linked shared/team in the owner's home",
         "--refuse-console-line=correct horse battery staple", "--refuse-console-line=another good passphrase"])),
-    # The shell's language (decisions/0169), the session's first program with use_shell: let, sizes and their
+    # The shell's language (decisions/0169), the session's first program: let, sizes and their
     # arithmetic, a string with a variable in it, lists, records, and errors that say where they are
     ("evaluates the shell language: values, names, lists, records and errors", 7,
-     with_before_qemu([argument.replace("test_services", "test_services use_shell test_settle=60").replace("--timeout=120", "--timeout=180")
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
         "\\wlet x = 4MiB + 512KiB\\r\\p$x\\r\\pprint \"size: $x\"\\r\\p[1, 2, 3][1] * 10\\r\\p{name: \"a\", n: 3}.n\\r\\p"
-        "nope --now\\r\\p1 + \\r\\p250ms * 4 == 1s",
+        "nope --now\\r\\p1 + \\r\\p250ms * 4 == 1s\\r\\p9223372036854775807 + 1\\r\\plet file-name = \"notes\"; print \"$file-name.txt\"",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-line=[user] shell: reading commands",
         "--expect-console-line=4.5 MiB", "--expect-console-line=size: 4.5 MiB", "--expect-console-line=20",
         "--expect-console-line=3", "--expect-console-line=error: there's no command named nope",
-        "--expect-console-line=error: something's missing at the end", "--expect-console-line=true"])),
+        "--expect-console-line=error: something's missing at the end", "--expect-console-line=true",
+        "--expect-console-line=error: that's too big: past what a 64-bit number holds", "--expect-console-line=notes.txt"])),
     # Calls through manifests (decisions/0170): test_shell_calls given values by position and by --name, a bool alone, an
     # enum's member, a duration, a list, a directory beneath the home and the terminal unasked; then its exit code as an
     # error, and errors found before anything starts: a value missing, a word that isn't a number, a member that isn't
     # one, and a grant the shell can't make
     ("calls programs through their manifests: arguments, values, grants and errors", 7,
-     with_before_qemu([argument.replace("test_services", "test_services use_shell test_settle=60").replace("--timeout=120", "--timeout=180")
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
         "\\wtest_shell_calls 3 hello --loud --speed Fast --wait 250ms\\r\\p\\p"
@@ -559,7 +560,7 @@ TESTS = [
     # their types, try/catch with the error as a record, ? passing a function's error to its caller where one without
     # is fatal, return, and cd beneath the home
     ("runs shell functions, handles errors with try, or and ?, and changes directory", 7,
-     with_before_qemu([argument.replace("test_services", "test_services use_shell test_settle=60").replace("--timeout=120", "--timeout=180")
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
         "\\wfn twice(n: int) { $n * 2 }\\r\\ptwice 21\\r\\ptwice --n 5\\r\\ptwice x\\r\\p"
@@ -579,7 +580,7 @@ TESTS = [
     # Pipelines (decisions/0172): a program's records shown as a table, the built-in stages on them, two programs
     # connected straight, a list written into a program, and the errors found before anything starts
     ("runs pipelines: programs' records as tables, the built-in stages, and programs connected", 7,
-     with_before_qemu([argument.replace("test_services", "test_services use_shell test_settle=60").replace("--timeout=120", "--timeout=180")
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
         "\\wtest_shell_calls 3 row\\r\\p\\p"
@@ -588,6 +589,7 @@ TESTS = [
         "[{id: 7, name: \"seven\", kind: \"Fast\"}] | test_shell_calls 0 x\\r\\p\\p"
         "test_shell_calls 4 s | sort id --descending | take 1 | map name\\r\\p\\p"
         "test_shell_calls 4 g | group kind | map kind\\r\\p\\p"
+        "[{count: 5}, {count: 5}] | group count | map it.key * 10 + it.count\\r\\p\\p"
         "test_shell_calls 1 a | print\\r\\p\\p"
         "[1, 2] | test_shell_calls 0 x\\r\\p\\p"
         "where id > 1\\r\\p"
@@ -599,15 +601,68 @@ TESTS = [
         "--expect-console-line=10  a1    Slow", "--expect-console-line=20  a2    Fast",
         "--expect-console-line=70  seven  Fast",
         "--expect-console-line=\"s4\"", "--refuse-console-line=\"s3\"",
-        "--expect-console-line=\"Slow\"", "--expect-console-line=\"Fast\"",
+        "--expect-console-line=\"Slow\"", "--expect-console-line=\"Fast\"", "--expect-console-line=52",
         "--expect-console-line=error: only a program or a stage takes what comes before it in a pipeline",
         "--expect-console-line=error: item 1 of what's given to test_shell_calls: it takes a record of Row's fields, not an integer",
         "--expect-console-line=error: where works on what comes before it in a pipeline",
         "--expect-console-line=error: where needs true or false, not a string"])),
+    # Help and completion (decisions/0174): help alone lists the built-ins; help on a program shows its documentation,
+    # from its bundle, and its parameters' types, from its manifest; Tab completes a program's name, its --name and an
+    # enum's member, and lists the programs a prefix starts with, each with its summary
+    ("helps with the built-ins and programs, and completes commands, parameters and members", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\whelp\\r\\phelp test_shell_calls\\r\\p\\p"
+        "test_shell_c\\t\\p3 tabbed\\r\\p\\p"
+        "test_shell_calls 2 named --spe\\t\\pFa\\t\\p\\r\\p\\p"
+        "test_\\t\\p\\p\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-console-line=print   Write its arguments on a line, separated by spaces.",
+        "--expect-console-line=test_shell_calls:  Write what the shell gave on one line of the terminal, or, in a pipeline, write rows.",
+        "--expect-console-line=  --count (count)  A number, written on the line; with an output and no input, how many rows are made; "
+        "with the label \"fail\", the exit code.",
+        "--expect-console-line=  --session_terminal (the shell's terminal, given without asking)  A connection to the shell's terminal, "
+        "which the line is written on. Without it, as in the background, no line is written.",
+        "--expect-console-line=called with tabbed, 3, loud false, speed none, wait none, tags none, place none",
+        "--expect-console-line=called with named, 2, loud false, speed Fast, wait none, tags none, place none",
+        "--expect-console-line=test_shell_calls  Write what the shell gave on one line of the terminal, or, in a pipeline, write rows.",
+        "--expect-console-line=error: there's no command named test_"])),
+    # History (design/shell.md §6): a line entered in one session comes back with Up in the next, from the shell's data
+    # directory in the user's home
+    ("keeps the shell's history from one session to the next", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wprint \"remembered\"\\r\\pexit\\r\\wadmin\\rcorrect horse battery staple\\r\\w\\e[A\\p\\e[A\\p \"again\"\\r\\pexit now\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell", "--console-input-after=  Log in",
+        "--console-input-after=SlopOS shell",
+        "--expect-console-line=remembered", "--expect-console-line=remembered again", "--expect-console-line=error: exit takes nothing"])),
+    # Jobs (decisions/0174): a program run in the background with &, without the terminal, finished with wait, which
+    # gives its records; Ctrl-C stopping one in the foreground over its lifecycle
+    # channel, and killing a stubborn one after the grace period; stop ending a job; and jobs listing them
+    ("runs jobs in the background, and stops them with Ctrl-C and stop", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wtest_shell_calls 2 bg --sleep 1s &\\r\\p\\p\\p\\pwait 1\\r\\p\\p"
+        "test_shell_calls 1 fg --sleep 20s\\r\\p\\p\\x03\\p\\p"
+        "test_shell_calls 1 st --sleep 20s --stubborn\\r\\p\\p\\x03\\p\\p\\p\\p"
+        "test_shell_calls 1 sj --sleep 20s &\\r\\p\\pjobs\\r\\pstop\\r\\p\\p\\p\\pjobs\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-console-line=[1] started",
+        "--expect-console-line=1   bg1   Slow", "--expect-console-line=2   bg2   Fast",
+        "--expect-console-line=error: test_shell_calls ended with 10",
+        "--expect-console-line=error: test_shell_calls was ended",
+        "--expect-line=[user] shell: test_shell_calls didn't stop in time, so it's killed",
+        "--expect-console-line=[2] started", "--expect-console-line=[2] stopped", "--expect-console-line=no jobs"])),
     # Memory pressure (decisions/0153): with two sessions, the session manager's budget charged to its threshold, it asks
     # the idle installation, the counter of the session not shown, to stop, and leaves the shown session's running
     ("stops the idle installations of sessions not shown under memory pressure", 7,
-     with_before_qemu([argument.replace("test_services", "test_services test_pressure test_settle=45") for argument in BOOT_DISK_BASE], [
+     with_before_qemu([argument.replace("test_services", "test_services use_echo test_pressure test_settle=45") for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r\\wfirst line\\r\\w\\e[3;7~\\pn\\wadmin\\rcorrect horse battery staple\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
@@ -747,7 +802,7 @@ TESTS = [
         "--expect-boot-line=2:[user] update: generation 2 made permanent"])),
     # On one CPU, where requests wait for the volume server rather than it waiting for them
     ("serves a volume's clients by the priority of the CPU budgets they lend it", 7, with_before_qemu(
-        one_cpu([argument.replace("test_services", "test_services test_lending") for argument in BOOT_DISK_BASE]), [
+        one_cpu([argument.replace("test_services", "test_services use_echo test_lending") for argument in BOOT_DISK_BASE]), [
         "--expect-line=[user] supervisor: test_lending: a request lent echo's budget was answered ahead of the backlogs lent hello's"])),
     ("starts a disk's partition server again when it's killed, and serves its volumes through the new one", 7, with_before_qemu(
         [argument.replace("test_services", "test_services test_storage_restart") for argument in BOOT_DISK_BASE], [

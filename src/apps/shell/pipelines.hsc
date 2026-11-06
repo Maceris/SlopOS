@@ -1,9 +1,9 @@
 package shell
 
 import runtime from "base"
+import language from "../../shell_language"
 import os from "std"
 import schema from "std"
-import strings from "std"
 import slop_os from "std/os"
 import stream from "std/os/slop_os"
 
@@ -37,15 +37,15 @@ is_stage :: fn(tree: ptr[Node]) -> bool {
 }
 
 /**
- * Tell whether a pipeline's element is a program's call: a call that isn't a variable, a built-in, a stage or a
- * function.
+ * Tell whether a pipeline's element is a program's call: a call that isn't a variable, a built-in (BUILTINS, the stages
+ * among them) or a function.
  *
  * @param shell The shell, whose names and functions are looked in.
  * @param tree One of a Pipeline node's children, of any kind; anything but a Call isn't a program's.
  * @return True if it's a program's call; whether there's such a program isn't asked.
  */
 is_program :: fn(shell: ptr[Shell], tree: ptr[Node]) -> bool {
-    if tree.kind != .Call || is_stage(tree) || tree.text == "print" || tree.text == "exit" || tree.text == "cd" {
+    if tree.kind != .Call || (builtin_named(tree.text) is_some) {
         return false
     }
     return (lookup(shell.scope, tree.text) is_none) && (function_named(shell, tree.text) is_none)
@@ -101,29 +101,66 @@ pipeline :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Valu
 // ---- Programs
 
 /**
- * Run programs together, each one's output to the next one's input, given what comes before the first, if anything.
- *
- * Each is prepared, and their inputs and outputs checked, before any starts; then they're started in order, each
- * watched under CALL_KEY and the keys after it, what's given is written, what the last writes read, and each waited
- * for. Everything they held is given back before this returns.
- *
- * It fails if a program can't be prepared or started, one reads from a pipeline and has nothing before it or takes
- * nothing and has, one before another writes nothing, two next to each other write and read different types, what's
- * given can't be written, or the last one's output can't be read; or with the first program's error, by exit code.
+ * Run programs together in the foreground, each one's output to the next one's input, given what comes before the
+ * first, if anything: started (start_programs), then finished (finish_programs), Ctrl-C stopping them meanwhile.
+ * Everything they held is given back before this returns.
  *
  * @param shell The shell, whose process manager, home and programs connection the programs are prepared and started
  *     through, and whose port their ends are watched on; it waits on that port until every one has ended.
  * @param trees The programs' Call nodes, in order, at least one.
  * @param given What comes before the first, written to its input; null if nothing does.
- * @return What the last one writes, a list of its records as values; Null if it has no output.
+ * @return What the last one writes, a list of its records as values; Null if it has no output; or why they couldn't
+ *     run, or the first program's error, as start_programs and finish_programs say.
  */
 run_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping : Value?) -> Result[Value, EvalError] {
+    running :: start_programs(shell, trees, given, false)?
+    shell.foreground = running
+    defer {
+        shell.foreground = null
+        end_running(shell, running)
+    }
+    return finish_programs(shell, running)
+}
+
+/**
+ * Start programs together, each one's output to the next one's input, and write what's given for the first.
+ *
+ * Each is prepared, and their inputs and outputs checked, before any starts; then they're started in order, each
+ * watched under keys of their own, from the shell's next_key, and what's given is written, without waiting for it to
+ * be read.
+ *
+ * It fails, giving back what it made and waiting for any that started, if there are more than MAX_PROGRAMS, a program
+ * can't be prepared or started, one reads from a pipeline and has nothing before it or takes nothing and has, one
+ * before another writes nothing, two next to each other write and read different types, or what's given can't be
+ * written.
+ *
+ * @param shell The shell, whose process manager, home and programs connection the programs are prepared and started
+ *     through, and whose port their ends are watched on.
+ * @param trees The programs' Call nodes, in order, at least one.
+ * @param given What comes before the first, written to its input; null if nothing does.
+ * @param background Whether they run in the background, where none is given the terminal.
+ * @return The programs, on the heap, the caller's to finish and then end with end_running.
+ */
+start_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping : Value?, background: bool) -> Result[ptr[mut Running], EvalError] {
+    if trees.count > MAX_PROGRAMS {
+        return .Error(EvalError.{message = message("a pipeline runs at most % programs", MAX_PROGRAMS), at = 0})
+    }
     running := runtime.new(Running)
     running.into = NO_END
     running.from = NO_END
-    defer end_running(shell, running)
+    running.first_key = shell.next_key
+    shell.next_key += MAX_PROGRAMS
+    started := false
+    defer {
+        if !started {
+            end_running(shell, running)
+        }
+    }
     for tree in trees {
-        runtime.array_add(&running.calls, prepare_call(shell, tree)?)
+        match prepare_call(shell, tree, background) {
+            case Ok(call) => runtime.array_add(&running.calls, call)
+            case Error(error) => return .Error(error)
+        }
     }
     // What each one reads and writes, checked before any starts
     previous : ptr[mut Call]? = null
@@ -134,24 +171,24 @@ run_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping : 
         match input {
             case Some(parameter) => {
                 if !reads && !parameter.optional {
-                    return error_at(call.tree.at, message("% reads what comes before it in a pipeline: something | %", call.tree.text, call.tree.text))
+                    return failed_at(call.tree.at, message("% reads what comes before it in a pipeline: something | %", call.tree.text, call.tree.text))
                 }
             }
             case None => {
                 if reads {
-                    return error_at(call.tree.at, message("% takes nothing from a pipeline", call.tree.text))
+                    return failed_at(call.tree.at, message("% takes nothing from a pipeline", call.tree.text))
                 }
             }
         }
         if k + 1 < running.calls.count && (output is_none) {
-            return error_at(call.tree.at, message("% writes nothing for what comes after it", call.tree.text))
+            return failed_at(call.tree.at, message("% writes nothing for what comes after it", call.tree.text))
         }
         match previous {
             case Some(before) => {
-                writes :: parameter_giving(before, .Output) or_return error_at(call.tree.at, "it has no output")
-                reading :: input or_return error_at(call.tree.at, "it has no input")
+                writes :: parameter_giving(before, .Output) or_return failed_at(call.tree.at, "it has no output")
+                reading :: input or_return failed_at(call.tree.at, "it has no input")
                 if !same_hash(schema.hash_rooted(&before.manifest, writes.records), schema.hash_rooted(&call.manifest, reading.records)) {
-                    return error_at(call.tree.at, message("% writes %, and % reads %", before.tree.text, type_text(&before.manifest, writes.records),
+                    return failed_at(call.tree.at, message("% writes %, and % reads %", before.tree.text, type_text(&before.manifest, writes.records),
                         call.tree.text, type_text(&call.manifest, reading.records)))
                 }
             }
@@ -163,7 +200,7 @@ run_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping : 
     budget :: slop_os.startup_block().budget
     for call, k in running.calls {
         if k > 0 {
-            ends :: stream_ends(budget) or_return error_at(call.tree.at, "there's no memory for its input")
+            ends :: stream_ends(budget) or_return failed_at(call.tree.at, "there's no memory for its input")
             for before, j in running.calls {
                 if j + 1 == k {
                     runtime.array_add(&before.grants, os.NamedGrant.{label = "output", handle = cast[slop_os.Handle](ends.a)})
@@ -172,39 +209,67 @@ run_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping : 
             runtime.array_add(&call.grants, os.NamedGrant.{label = "input", handle = cast[slop_os.Handle](ends.b)})
         }
         else if (given is_some) && (parameter_giving(call, .Input) is_some) {
-            ends :: stream_ends(budget) or_return error_at(call.tree.at, "there's no memory for its input")
+            ends :: stream_ends(budget) or_return failed_at(call.tree.at, "there's no memory for its input")
             running.into = ends.a
             runtime.array_add(&call.grants, os.NamedGrant.{label = "input", handle = cast[slop_os.Handle](ends.b)})
         }
         if k + 1 == running.calls.count && (parameter_giving(call, .Output) is_some) {
-            ends :: stream_ends(budget) or_return error_at(call.tree.at, "there's no memory for its output")
+            ends :: stream_ends(budget) or_return failed_at(call.tree.at, "there's no memory for its output")
             runtime.array_add(&call.grants, os.NamedGrant.{label = "output", handle = cast[slop_os.Handle](ends.a)})
             running.from = ends.b
         }
     }
     // Started in order, each watched under a key of its own
     for call, k in running.calls {
-        match start_call(shell, call, CALL_KEY + cast[u64](k)) {
+        match start_call(shell, call, running.first_key + cast[u64](k)) {
             case Some(error) => return .Error(error)
             case None => {}
         }
     }
-    // What's given written for the first, all of it, without waiting for it to be read; what the last writes, read
+    // What's given written for the first, all of it, without waiting for it to be read
     match given {
         case Some(value) => {
             for call, k in running.calls {
                 if k == 0 {
-                    write_given(running, call, value)?
+                    match write_given(running, call, value) {
+                        case Ok(_) => {}
+                        case Error(error) => return .Error(error)
+                    }
                 }
             }
         }
         case None => {}
     }
+    started = true
+    return .Ok(running)
+}
+
+/**
+ * Make a start's error result.
+ *
+ * @param at Where in the line, in bytes from 0.
+ * @param message What went wrong, kept by the error.
+ * @return The error, as start_programs's result.
+ */
+failed_at :: fn(at: usize, message #escaping : string) -> Result[ptr[mut Running], EvalError] {
+    return .Error(EvalError.{message = message, at = at})
+}
+
+/**
+ * Finish programs started together: what the last writes read, and each waited for, Ctrl-C stopping them meanwhile.
+ *
+ * It fails if the last one's output can't be read, or with the first program's error, by exit code.
+ *
+ * @param shell The shell, whose port the programs' ends are waited on until every one has ended.
+ * @param running The programs, started; its stream from the last is taken.
+ * @return What the last one writes, a list of its records as values; Null if it has no output.
+ */
+finish_programs :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) -> Result[Value, EvalError] {
     result := Value.Null
     first_error : EvalError? = null
     for call, k in running.calls {
         if k + 1 == running.calls.count && running.from != NO_END {
-            match read_output(running, call) {
+            match read_output(shell, running, call) {
                 case Ok(value) => result = value
                 case Error(error) => first_error = error
             }
@@ -212,7 +277,7 @@ run_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping : 
     }
     // Each waited for; the first that failed is the pipeline's error
     for call in running.calls {
-        match wait_call(shell, call) {
+        match wait_call(shell, call, running) {
             case Some(error) => {
                 if first_error is_none {
                     first_error = error
@@ -231,8 +296,8 @@ run_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping : 
 NO_END :: cast[slop_os.Channel](slop_os.NO_HANDLE)
 
 /**
- * Programs running together, on the heap: their calls, and the shell's ends of the streams into the first and from
- * the last.
+ * Programs running together, on the heap: their calls, the shell's ends of the streams into the first and from the
+ * last, and whether they've been asked to stop.
  */
 Running :: struct {
     /** The programs' calls, in order, each the Running's to end. */
@@ -243,11 +308,18 @@ Running :: struct {
     from : slop_os.Channel,
     /** The writer open on into, once what's given is being written; null until then. */
     writer : stream.Writer[stream.Untyped]?,
+    /** The key the first program's end is watched under; the next ones' are after it. */
+    first_key : u64,
+    /**
+     * When the programs asked to stop are killed, in the monotonic clock's nanoseconds; 0 until they're asked, and
+     * slop_os.NO_DEADLINE once they've been killed.
+     */
+    stop_by : u64,
 }
 
 /**
  * Give back what programs running together held: the stream ends and writer closed, then each call waited for, if it
- * started, and ended.
+ * started, Ctrl-C stopping them meanwhile, and ended.
  *
  * @param shell The shell, whose port the programs' ends are waited on.
  * @param running The programs, freed: it can't be used after.
@@ -268,7 +340,9 @@ end_running :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) {
         _ = slop_os.handle_close(cast[slop_os.Handle](running.from))
     }
     for call in running.calls {
-        _ = wait_call(shell, call)
+        _ = wait_call(shell, call, running)
+    }
+    for call in running.calls {
         end_call(call)
     }
     runtime.array_free(&running.calls)
@@ -352,7 +426,8 @@ write_given :: fn(running: ptr[mut Running], call: ptr[mut Call], given #escapin
         case Ok(opened) => opened
         case Error(error) => return error_at(call.tree.at, message("% didn't take what's given to it: %", call.tree.text, error))
     }
-    running.writer = writer
+    // The writer as it is after the last put, however this returns, for end_running to close
+    defer running.writer = writer
     for each in encoded {
         match stream.put(&writer, each) {
             case Some(error) => return error_at(call.tree.at, message("% didn't take what's given to it: %", call.tree.text, error))
@@ -363,25 +438,28 @@ write_given :: fn(running: ptr[mut Running], call: ptr[mut Call], given #escapin
         case Some(error) => return error_at(call.tree.at, message("% didn't take what's given to it: %", call.tree.text, error))
         case None => {}
     }
-    running.writer = writer
     return .Ok(.Null)
 }
 
 /**
- * Read what the last program writes, until it ends: a list of its records as values, by its manifest.
+ * Read what the last program writes, until it ends: a list of its records as values, by its manifest. While the
+ * program's slow to open its output or to write, the shell sees to Ctrl-C and progress every ATTEND_EVERY (attend).
  *
  * It fails if the program writes another type than its manifest says, or the stream can't be opened. A program that
  * ended without opening its output wrote nothing.
  *
- * @param running The programs, whose from is taken, and closed once it's read.
+ * @param shell The shell, which attends to its terminal while it reads.
+ * @param running The programs, whose from is taken, and closed once it's read; Ctrl-C stops them.
  * @param call The last program's call, started.
  * @return The records, a list, empty if it wrote nothing.
  */
-read_output :: fn(running: ptr[mut Running], call: ptr[mut Call]) -> Result[Value, EvalError] {
+read_output :: fn(shell: ptr[mut Shell], running: ptr[mut Running], call: ptr[mut Call]) -> Result[Value, EvalError] {
     writes :: parameter_giving(call, .Output) or_return error_at(call.tree.at, "it has no output")
     end :: running.from
     running.from = NO_END
     made :: new_list()
+    // Opening waits for the program to open its end, which it may do late: Ctrl-C's seen to meanwhile
+    wait_readable(shell, running, end)
     reader := match stream.untyped_reader_on(end, schema.hash_rooted(&call.manifest, writes.records)) {
         case Ok(opened) => opened
         // One that ended without writing anything wrote nothing
@@ -396,171 +474,13 @@ read_output :: fn(running: ptr[mut Running], call: ptr[mut Call]) -> Result[Valu
     }
     defer stream.close_reader(&reader)
     loop {
-        bytes :: stream.next_bytes(&reader) or_break
-        runtime.array_add(&made.items, decode(&call.manifest, writes.records, bytes, 0, 0))
+        match stream.next_bytes_before(&reader, (slop_os.clock_monotonic() or_else 0) + ATTEND_EVERY) {
+            case Record(bytes) => runtime.array_add(&made.items, decode(&call.manifest, writes.records, bytes, 0, 0))
+            case End => break
+            case Waiting => attend(shell, running)
+        }
     }
     return .Ok(.List(made))
-}
-
-// ---- Records as values
-
-/**
- * Read a value of the type at a place, at an offset in a record's bytes (as std/schema's write_value writes one), as
- * the shell's: integers, bools, text, an enum's member's name, a duration, a record of a struct's fields, an
- * optional's value or null, a union's variant as a record of it, and a list of an array's items.
- *
- * Bytes that aren't there read as 0, so a cut-short record gives zeros and empty text, never a fault.
- *
- * @param manifest The program's manifest, whose types the record's are; only read.
- * @param place The type's place among the manifest's types, an alias's followed to what it names.
- * @param bytes The record's bytes, the stream's, which nothing's kept of: text and names are copied to the heap.
- * @param at Where the value starts in bytes.
- * @param depth How deeply nested it is, from 0; past 16 it's Null, so a looping type can't recurse forever.
- * @return The value; Null for a type the shell doesn't read, or one not in the manifest. An enum's value without a
- *     member is an Int.
- */
-decode :: fn(manifest: ptr[schema.Schema], place: usize, bytes: u8[], at: usize, depth: usize) -> Value {
-    type :: schema.type_in(manifest, schema.unaliased_place(manifest, place)) or_return Value.Null
-    size :: cast[usize](type.size)
-    if depth > 16 {
-        return .Null
-    }
-    if type.kind == .Integer {
-        bits :: number_in(bytes, at, size)
-        if type.is_signed && size < 8 && size > 0 {
-            shift :: 64 - 8 * cast[u64](size)
-            return .Int(cast[i64](bits << shift) >> shift)
-        }
-        return .Int(cast[i64](bits))
-    }
-    if type.kind == .Boolean {
-        return .Bool(number_in(bytes, at, size) != 0)
-    }
-    if type.kind == .String && !type.is_raw {
-        count :: cast[usize](number_in(bytes, at, 8))
-        distance :: cast[usize](number_in(bytes, at + 8, 8))
-        return .Text(text_in(bytes, distance, count))
-    }
-    if type.kind == .Enum {
-        value :: number_in(bytes, at, size)
-        for constant in type.constants {
-            if constant.value == value {
-                return .Text(strings.clone(constant.name) or_else "")
-            }
-        }
-        return .Int(cast[i64](value))
-    }
-    if type.kind == .Struct && type.name == "Duration" {
-        nanoseconds := cast[i64](0)
-        for member in type.members {
-            if member.name == "seconds" {
-                nanoseconds += cast[i64](number_in(bytes, at + cast[usize](member.offset), 8)) * 1000000000
-            }
-            else if member.name == "nanos" {
-                nanoseconds += cast[i64](number_in(bytes, at + cast[usize](member.offset), 4))
-            }
-        }
-        return .Duration(nanoseconds)
-    }
-    if type.kind == .Struct && !type.is_union {
-        made :: new_record()
-        for member in type.members {
-            member_type :: schema.type_in(manifest, member.type) or_continue
-            if member_type.size == 0 {
-                continue
-            }
-            set_field(made, strings.clone(member.name) or_else "", decode(manifest, member.type, bytes, at + cast[usize](member.offset), depth + 1))
-        }
-        return .Record(made)
-    }
-    if type.kind == .Union {
-        tag_size :: match schema.type_in(manifest, type.tag) {
-            case Some(tag) => cast[usize](tag.size)
-            case None => cast[usize](0)
-        }
-        tag :: cast[usize](number_in(bytes, at, tag_size))
-        for variant, index in type.variants {
-            if index != tag {
-                continue
-            }
-            if variant.name == "None" {
-                return .Null
-            }
-            for held in variant.held {
-                inner :: decode(manifest, held.type, bytes, at + cast[usize](held.offset), depth + 1)
-                if variant.name == "Some" {
-                    return inner
-                }
-                made :: new_record()
-                set_field(made, strings.clone(variant.name) or_else "", inner)
-                return .Record(made)
-            }
-            return .Text(strings.clone(variant.name) or_else "")
-        }
-        return .Null
-    }
-    if type.kind == .Array && type.dimensions.count == 1 {
-        element :: schema.type_in(manifest, type.base) or_return Value.Null
-        element_size :: cast[usize](element.size)
-        made :: new_list()
-        for dimension in type.dimensions {
-            count := cast[usize](dimension.count)
-            start := at
-            if dimension.kind != .Static {
-                count = cast[usize](number_in(bytes, at, 8))
-                start = cast[usize](number_in(bytes, at + 8, 8))
-            }
-            if element_size == 0 || count > bytes.count / element_size {
-                return .List(made)
-            }
-            for i in 0..<count {
-                runtime.array_add(&made.items, decode(manifest, type.base, bytes, start + i * element_size, depth + 1))
-            }
-        }
-        return .List(made)
-    }
-    if type.kind == .Pointer {
-        distance :: cast[usize](number_in(bytes, at, 8))
-        if distance == 0 || type.base == schema.NOWHERE {
-            return .Null
-        }
-        return decode(manifest, type.base, bytes, distance, depth + 1)
-    }
-    return .Null
-}
-
-/**
- * Read a little-endian number.
- *
- * @param bytes The bytes read from, a record's; only read.
- * @param at Where it starts, in bytes.
- * @param count How many bytes it is, at most 8.
- * @return The number; 0 if the bytes aren't all there, or count is past 8.
- */
-number_in :: fn(bytes: u8[], at: usize, count: usize) -> u64 {
-    if count > 8 || at > bytes.count || count > bytes.count - at {
-        return 0
-    }
-    result : u64 = 0
-    for i in 0..<count {
-        result |= cast[u64](bytes[(at + i) % bytes.count]) << (8 * cast[u64](i))
-    }
-    return result
-}
-
-/**
- * Copy bytes as text of the shell's own.
- *
- * @param bytes The bytes the text is copied from, a record's; nothing of them is kept.
- * @param at Where the text starts, in bytes.
- * @param count How many bytes it is.
- * @return The text, on the heap, never freed; "" if the bytes aren't all there, there are none, or there's no memory.
- */
-text_in :: fn(bytes: u8[], at: usize, count: usize) -> string {
-    if count == 0 || at >= bytes.count || count > bytes.count - at {
-        return ""
-    }
-    return strings.clone(string_of(&bytes[at], count)) or_else ""
 }
 
 // ---- The built-in stages
@@ -702,23 +622,6 @@ stage_field :: fn(stage: ptr[Node]) -> (field : string, descending : bool) {
 }
 
 /**
- * Find what an item is sorted or grouped by: a field of it, or itself.
- *
- * @param item The item, of any kind; what's given back shares any list or record in it.
- * @param name The field's name; "" for the item itself.
- * @return The field's value, or the item; Null for an item that isn't a record, or hasn't the field.
- */
-key_of :: fn(item: Value, name: string) -> Value {
-    if name.count == 0 {
-        return item
-    }
-    match item {
-        case Record(record) => return field(record, name) or_else Value.Null
-        case _ => return .Null
-    }
-}
-
-/**
  * Sort items, for sort [field] [--descending]: in order by the field, or by themselves, those that don't compare
  * staying in the order they came. Equal ones keep their order too.
  *
@@ -729,39 +632,15 @@ key_of :: fn(item: Value, name: string) -> Value {
  */
 sorted :: fn(shell: ptr[mut Shell], stage: ptr[Node], items #escaping : Value[]) -> Result[Value, EvalError] {
     field, descending :: stage_field(stage)
-    made :: new_list()
-    for item in items {
-        // Insertion: after every item it doesn't come before
-        position := made.items.count
-        for placed, i in made.items {
-            order :: compare(key_of(item, field), key_of(placed, field)) or_else 0
-            if (if descending { order > 0 } else { order < 0 }) {
-                position = i
-                break
-            }
-        }
-        // The list again, with it in its place
-        next : Value[..]
-        for placed, i in made.items {
-            if i == position {
-                runtime.array_add(&next, item)
-            }
-            runtime.array_add(&next, placed)
-        }
-        if position >= made.items.count {
-            runtime.array_add(&next, item)
-        }
-        runtime.array_free(&made.items)
-        made.items = next
-    }
-    return .Ok(.List(made))
+    return .Ok(.List(language.sort_items(items, field, descending)))
 }
 
 /**
  * Group items, for group field: a record for each of the field's values, in the order they first come, of the value
  * (named as the field), count, how many, and items, the items with it.
  *
- * A field named count or items is overwritten by the group's own. It fails without a field.
+ * Grouped by a field named count or items, the value is named key instead, so the group's own fields don't take its
+ * place. It fails without a field.
  *
  * @param shell The shell; not used, since group evaluates nothing.
  * @param stage group's Call node.
@@ -773,45 +652,5 @@ grouped :: fn(shell: ptr[mut Shell], stage: ptr[Node], items #escaping : Value[]
     if name.count == 0 {
         return error_at(stage.at, "group needs the field to group by")
     }
-    keys : Value[..]
-    defer runtime.array_free(&keys)
-    made :: new_list()
-    for item in items {
-        key :: key_of(item, name)
-        found := made.items.count
-        for each, i in keys {
-            if (compare(each, key) or_else 1) == 0 {
-                found = i
-            }
-        }
-        if found >= made.items.count {
-            group :: new_record()
-            set_field(group, name, key)
-            set_field(group, "count", .Int(0))
-            set_field(group, "items", .List(new_list()))
-            runtime.array_add(&keys, key)
-            runtime.array_add(&made.items, Value.Record(group))
-            found = made.items.count - 1
-        }
-        match made.items[found % made.items.count] {
-            case Record(group) => {
-                match field(group, "items") {
-                    case Some(list) => match list {
-                        case List(held) => runtime.array_add(&held.items, item)
-                        case _ => {}
-                    }
-                    case None => {}
-                }
-                match field(group, "count") {
-                    case Some(count) => match count {
-                        case Int(number) => set_field(group, "count", .Int(number + 1))
-                        case _ => {}
-                    }
-                    case None => {}
-                }
-            }
-            case _ => {}
-        }
-    }
-    return .Ok(.List(made))
+    return .Ok(.List(language.group_items(items, name)))
 }

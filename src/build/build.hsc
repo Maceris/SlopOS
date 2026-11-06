@@ -9,9 +9,9 @@
  * - targets: all (the default), kernel, programs, tests, or tools.
  * - kernel_output: the kernel's ELF, kernel.elf by default.
  * - programs_output: the folder programs go in, each <name>.elf, the current folder by default, each with its manifest
- *   beside it, <name>.manifest: the schema of its entry's type (decisions/0044), which the store builder puts in its
- *   bundle (decisions/0094); and beside the root task, system.records, the system configuration as data
- *   (decisions/0110).
+ *   beside it, <name>.manifest: the schema of its entry's type (decisions/0044), and <name>.docs, its documentation
+ *   (decisions/0174), which the store builder puts in its bundle (decisions/0094); and beside the root task,
+ *   system.records, the system configuration as data (decisions/0110).
  * - tests_output: the folder test programs go in, the current folder by default.
  * - tools_output: the folder tools go in, the current folder by default.
  * - stack_check: what the kernel's prologue checks do without room, trap (the default) or morestack,
@@ -28,6 +28,7 @@ import runtime from "base"
 import os from "std"
 import schema from "std"
 import text_buffer from "std"
+import bundle from "../bundle"
 import checks from "../checks"
 
 /**
@@ -133,6 +134,80 @@ write_manifest :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.P
     text_buffer.append(&path, string_of(cast[ptr[u8]](target.output_path.data), target.output_path.count - 4))
     text_buffer.append(&path, ".manifest")
     written :: if bytes.count > 0 { string_of(cast[ptr[u8]](bytes.data), bytes.count) } else { "" }
+    if os.write_entire_file(text_buffer.as_string(&path), written) != null {
+        compiler.report_error(program.root.location, "couldn't write %", text_buffer.as_string(&path))
+        return false
+    }
+    return write_documentation(target, program, main)
+}
+
+/**
+ * Join a documentation comment's text's lines back into its paragraphs, for a terminal to wrap as wide as it is: a
+ * line break alone becomes a space, and a blank line between paragraphs stays one.
+ *
+ * @param text The text, its lines' margins already taken off.
+ * @return The text unwrapped, from context's allocator at compile time, never freed; text itself when it has no line
+ *     break.
+ */
+unwrapped :: fn(text: string) -> string {
+    bytes :: string_bytes(text)
+    made : u8[..]
+    for byte, i in bytes {
+        alone :: byte == 10 && (i == 0 || bytes[i - 1] != 10) && (i + 1 >= bytes.count || bytes[i + 1] != 10)
+        runtime.array_add(&made, if alone { cast[u8](' ') } else { byte })
+    }
+    return if made.count > 0 { string_of(&made[0], made.count) } else { text }
+}
+
+/**
+ * Write a SlopOS program's documentation (decisions/0174) beside its manifest, as <name>.docs: a record of a
+ * bundle.Documentation made from its main's documentation comment, which its bundle refers to, for help and completion.
+ *
+ * @param target The target being built, a SlopOS program whose output ends in .elf.
+ * @param program The target's program, for where an error is reported.
+ * @param main The program's main, whose documentation comment and parameters' documentation are written; one without
+ *     a comment writes a Documentation with nothing in it.
+ * @return True once it's written; false, with an error reported, if the file couldn't be.
+ */
+write_documentation :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo], main: compiler.FunctionInfo) -> bool {
+    parameters : bundle.Described[..]
+    defer runtime.array_free(&parameters)
+    for parameter in main.parameters {
+        if parameter.documentation.count > 0 {
+            runtime.array_add(&parameters, bundle.Described.{name = parameter.name, text = unwrapped(parameter.documentation)})
+        }
+    }
+    results : string[..]
+    defer runtime.array_free(&results)
+    errors : bundle.Described[..]
+    defer runtime.array_free(&errors)
+    others : bundle.Described[..]
+    defer runtime.array_free(&others)
+    for tag in main.documentation.tags {
+        if tag.tag == "return" {
+            runtime.array_add(&results, unwrapped(tag.text))
+        }
+        else if tag.tag == "error" {
+            runtime.array_add(&errors, bundle.Described.{name = tag.name, text = unwrapped(tag.text)})
+        }
+        else if tag.tag == "example" {
+            runtime.array_add(&others, bundle.Described.{name = tag.tag, text = tag.text})
+        }
+        else if tag.tag != "param" && tag.tag != "tparam" {
+            runtime.array_add(&others, bundle.Described.{name = tag.tag, text = unwrapped(tag.text)})
+        }
+    }
+    made :: bundle.Documentation.{summary = unwrapped(main.documentation.brief), details = unwrapped(main.documentation.details),
+        parameters = parameters[0..<parameters.count], results = results[0..<results.count], errors = errors[0..<errors.count],
+        others = others[0..<others.count]}
+    record : u8[..]
+    defer runtime.array_free(&record)
+    bundle.write(made, &record)
+    path_storage : u8[512]
+    path := text_buffer.make(path_storage)
+    text_buffer.append(&path, string_of(cast[ptr[u8]](target.output_path.data), target.output_path.count - 4))
+    text_buffer.append(&path, ".docs")
+    written :: if record.count > 0 { string_of(cast[ptr[u8]](record.data), record.count) } else { "" }
     if os.write_entire_file(text_buffer.as_string(&path), written) != null {
         compiler.report_error(program.root.location, "couldn't write %", text_buffer.as_string(&path))
         return false

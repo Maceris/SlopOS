@@ -92,8 +92,7 @@ SessionSettings :: struct {
 }
 
 /**
- * What the shell is given (shell.main), as each session's first program in echo's place with use_shell
- * (decisions/0169).
+ * What the shell is given (shell.main), as each session's first program (decisions/0169, 0174).
  */
 ShellGrants :: struct {
     /** A copy of the session manager's debug log, or null without one. */
@@ -106,7 +105,18 @@ ShellGrants :: struct {
     manager : os.Channel[process_manager.ProcessManager]?,
     /** Its programs connection (decisions/0170), to find programs in the bundle store; null if one couldn't be made. */
     programs : os.Channel[programs.Programs]?,
+    /**
+     * Its data directory, SHELL_DATA in the session's apps directory, made if it isn't there, where it keeps its
+     * history; null for a session without an apps directory.
+     */
+    data : installations.AppData?,
 }
+
+/**
+ * The shell's data directory's name in a session's apps directory: begun with a dot, which an installation's name
+ * can't have (system_records.valid_name), so it's never an installation's.
+ */
+SHELL_DATA :: ".shell"
 
 /** What echo is given (echo.main): the session's terminal, its home volume's root if it has one, and its powerbox. */
 EchoGrants :: struct {
@@ -266,8 +276,11 @@ Manager :: struct {
     showings : u64,
     /** Whether test_pressure is still to come, once two sessions are. */
     test_pressure : bool,
-    /** Whether use_shell makes the shell each session's first program, in echo's place, from the bundle store. */
-    use_shell : bool,
+    /**
+     * Whether use_echo makes echo each session's first program, in the shell's place, as tests of the terminal and the
+     * powerbox drive it.
+     */
+    use_echo : bool,
     /** The budget test_pressure charges its own with to bring on pressure, until it's relieved; NO_HANDLE for none. */
     ballast : slop_os.MemoryBudget,
     /** The sessions, by number. */
@@ -283,23 +296,24 @@ Manager :: struct {
  *
  * It serves the session protocol on its listener until the system ends: Start and StartWithoutUser make a session and
  * start its first program, List gives a session's programs, End and EndSession end a program or a whole session, and
- * Shown says which session the console shows. Its command line's words test_installations, test_pressure and
- * use_shell turn on its tests, and the shell in echo's place.
+ * Shown says which session the console shows. A session's first program is the shell, from the bundle store, or echo
+ * without one. Its command line's words test_installations and test_pressure turn on its tests, and use_echo starts
+ * echo in the shell's place.
  *
  * @param log The kernel's debug log, which every program it starts is given a copy of. Without it, they're given none.
  * @param manager The connector to the process manager, dialed for the connection programs are launched through.
- * @param echo_module echo's program, each session's first program unless use_shell. Without it, a session can't
- *     start (without use_shell), and Start is refused.
+ * @param echo_module echo's program, a session's first program with use_echo, or without a shell in the bundle store.
+ *     Without either, a session can't start, and Start is refused.
  * @param events_service The events service, which opens a log records' ring for each program and reads what's left in
  *     it once it's ended. Without it, programs log to no ring.
  * @param settings The config store's connection for users' values: each user's locale, and installations' settings.
  *     Without it, each session's locale is the one its keyboard layout suggests, and installations have no settings.
  * @param store The bundle store, where the shell, each session's powerbox and the installations' programs come from.
- *     Without it, there's no powerbox, no installation and, with use_shell, no session.
+ *     Without it, there's no powerbox, no installation, and no shell: echo's started instead.
  * @param apps The system volume's apps directory, the installations' data directories' parent for a session with no
  *     user. Without it, such a session runs no installations.
  * @param installation_list The system's list of installations in the config store. Without it, sessions run none.
- * @param command_line The kernel's command line, read for test_installations, test_pressure and use_shell. Without it,
+ * @param command_line The kernel's command line, read for test_installations, test_pressure and use_echo. Without it,
  *     none of them is on.
  * @param clients Where connections from the session protocol's clients, the trusted path, arrive; more come through
  *     Connect.
@@ -359,7 +373,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], ech
             text :: service_kit.text_of(block, memory) or_else ""
             sessions.test_installations = service_kit.has_word(text, "test_installations")
             sessions.test_pressure = service_kit.has_word(text, "test_pressure")
-            sessions.use_shell = service_kit.has_word(text, "use_shell")
+            sessions.use_echo = service_kit.has_word(text, "use_echo")
         }
         case None => {}
     }
@@ -563,13 +577,13 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
     else {
         runtime.log_info("a session for %, in %", string_of(&user[0], user.count), locale_of(&sessions.sessions[number]))
     }
-    // Its apps directory and its powerbox, before its home is echo's
+    // Its apps directory and its powerbox, before its home is its first program's
     sessions.sessions[number].apps = apps_of(sessions, home)
     match prompts {
         case Some(given) => _ = launch_powerbox(sessions, cast[u32](number), home, given)
         case None => {}
     }
-    if !launch_echo(sessions, cast[u32](number), given_terminal, home) {
+    if !launch_first(sessions, cast[u32](number), given_terminal, home) {
         close_session(sessions, cast[u32](number))
         return .Refused
     }
@@ -635,8 +649,8 @@ close_session :: fn(sessions: ptr[mut Manager], number: u32) {
 }
 
 /**
- * Start the session's first program, echo, or with use_shell the shell, its end watched and its lifecycle channel
- * kept.
+ * Start the session's first program, its end watched and its lifecycle channel kept: the shell, or echo with use_echo or
+ * when the shell can't start, as without a bundle store.
  *
  * @param sessions The session manager, which launches through its process manager connection and keeps the
  *     program in its programs; echo's program it holds is duplicated, not given away.
@@ -644,11 +658,13 @@ close_session :: fn(sessions: ptr[mut Manager], number: u32) {
  *     powerbox.
  * @param given_terminal The session's terminal connection, given to the program.
  * @param home The session's home volume's root, given to the program; null for none.
- * @return Whether it started; not without echo's program, without room for another program, or if the launch failed.
+ * @return Whether it started; not without the shell or echo's program, without room for another program, or if the
+ *     launch failed.
  */
-launch_echo :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?) -> bool {
-    if sessions.use_shell {
-        return launch_shell(sessions, number, given_terminal, home)
+launch_first :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?) -> bool {
+    // The terminal stays the caller's when the shell doesn't start, so echo can have it
+    if !sessions.use_echo && launch_shell(sessions, number, given_terminal, home) {
+        return true
     }
     module :: sessions.echo_module or_return false
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
@@ -689,6 +705,12 @@ launch_shell :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.C
     // Its own connection to the process manager, to launch what it calls, and its programs connection
     grants.manager = process_manager.connect(sessions.manager.end, sessions.manager_port, slop_os.startup_block().budget)
     grants.programs = programs_connection(sessions, number)
+    if cast[usize](number) < sessions.sessions.count && sessions.sessions[cast[usize](number)].apps != NONE {
+        match opened_directory(sessions.sessions[cast[usize](number)].apps, SHELL_DATA, true) {
+            case Some(end) => grants.data = installations.AppData.{end = end}
+            case None => runtime.log_info("no data directory for the shell")
+        }
+    }
     return placed(sessions, number, "shell", prepared, os.launch(sessions.manager, sessions.manager_port, "shell", program, SHELL_BUDGET,
         shell.main, grants, prepared.options), false)
 }
@@ -756,6 +778,8 @@ serve_programs :: fn(sessions: ptr[mut Manager], into: ptr[mut os.Incoming]) {
             response :: os.begin[programs.Response](&out)
             match os.message_of[programs.Request](into)^ {
                 case Find(name) => response^ = find_program(sessions, os.items(into, name))
+                case List(index) => response^ = program_at(sessions, index, &out)
+                case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
             }
             _ = programs.send_response(made.programs_end, sessions.port, &out)
         }
@@ -785,7 +809,7 @@ find_program :: fn(sessions: ptr[mut Manager], name: u8[]) -> programs.Response 
     if !read || referred.count < 2 {
         return .Missing
     }
-    manifest :: match store_request(sessions, .Get(referred[1 % referred.count])) {
+    manifest :: match store_request(sessions, .Read(referred[1 % referred.count])) {
         case Got(object) => object
         case _ => return .Missing
     }
@@ -795,6 +819,70 @@ find_program :: fn(sessions: ptr[mut Manager], name: u8[]) -> programs.Response 
             _ = slop_os.handle_close(cast[slop_os.Handle](manifest.memory))
             return .Missing
         }
+    }
+}
+
+/**
+ * Name the bundle store's boot root's program at an index, for a shell's List.
+ *
+ * @param sessions The session manager, whose bundle store is asked for its root, which is mapped, read and unmapped.
+ * @param index The program's index among the root's entries, from 0, in the root's order.
+ * @param out The response being made, which the name's bytes are appended to, copied before the root's unmapped.
+ * @return Named with the name; End past the root's last entry, for a name empty or longer than programs.MAX_NAME,
+ *     without a store, or if the root couldn't be read.
+ */
+program_at :: fn(sessions: ptr[mut Manager], index: u32, out: ptr[mut os.Outgoing]) -> programs.Response {
+    root :: match store_request(sessions, .Root) {
+        case Rooted(hash) => hash
+        case _ => return .End
+    }
+    root_object :: mapped_object(sessions, root) or_return .End
+    defer unmap_object(root_object)
+    names : string[..]
+    defer runtime.array_free(&names)
+    bundles : bundle.Hash[..]
+    defer runtime.array_free(&bundles)
+    if !(bundle.root_entries(root_object.bytes, &names, &bundles) or_else false) {
+        return .End
+    }
+    for name, i in names {
+        if i == cast[usize](index) && name.count > 0 && name.count <= programs.MAX_NAME {
+            return .Named(os.append(out, string_bytes(name)))
+        }
+    }
+    return .End
+}
+
+/**
+ * Find the documentation of a program the bundle store's boot root names, for a shell's Describe.
+ *
+ * @param sessions The session manager, whose bundle store is asked for the root, the bundle and the documentation,
+ *     waiting for each answer.
+ * @param name The program's name, from 1 to programs.MAX_NAME bytes.
+ * @return Documented with the record's memory, a new handle for the shell to own, and its size in bytes; Missing for a
+ *     name out of range, one the root doesn't name, a bundle without documentation (its hash all zeros), or an object
+ *     the store didn't give.
+ */
+program_documentation :: fn(sessions: ptr[mut Manager], name: u8[]) -> programs.Response {
+    if name.count == 0 || name.count > programs.MAX_NAME {
+        return .Missing
+    }
+    found :: bundle_named(sessions, string_of(&name[0], name.count)) or_return .Missing
+    record :: mapped_object(sessions, found) or_return .Missing
+    referred : bundle.Hash[..]
+    defer runtime.array_free(&referred)
+    read :: bundle.bundle_refers(record.bytes, &referred) or_else false
+    unmap_object(record)
+    if !read || referred.count < 3 {
+        return .Missing
+    }
+    documentation :: referred[2]
+    if bundle.same(documentation, bundle.Hash.{}) {
+        return .Missing
+    }
+    match store_request(sessions, .Read(documentation)) {
+        case Got(object) => return .Documented(programs.ProgramDocumentation.{record = object.memory, size = object.size})
+        case _ => return .Missing
     }
 }
 
@@ -1587,16 +1675,17 @@ store_request :: fn(sessions: ptr[mut Manager], request: bundle_store.Request) -
 }
 
 /**
- * Get an object from the bundle store and map it to read.
+ * Get a copy of a small object from the bundle store, a root or a bundle's record, and map it to read.
  *
- * @param sessions The session manager, whose bundle store gives the object; it's mapped into the session
- *     manager's own address space.
- * @param hash The hash of the object wanted, sent to the store in a Get; a hash it doesn't have gives null.
+ * @param sessions The session manager, whose bundle store gives the copy, so nothing stays open in the store; it's
+ *     mapped into the session manager's own address space.
+ * @param hash The hash of the object wanted, sent to the store in a Read; a hash it doesn't have, or an object past
+ *     bundle_store.MAX_READ bytes, gives null.
  * @return The object, mapped, for the caller to give to unmap_object; null if the store didn't give it, or it couldn't
  *     be mapped.
  */
 mapped_object :: fn(sessions: ptr[mut Manager], hash: bundle.Hash) -> MappedObject? {
-    object :: match store_request(sessions, .Get(hash)) {
+    object :: match store_request(sessions, .Read(hash)) {
         case Got(got) => got
         case _ => return null
     }

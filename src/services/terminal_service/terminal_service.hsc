@@ -356,6 +356,11 @@ View :: struct {
     logged_in : bool,
     /** The session manager's number for the session, valid while logged_in. */
     session : u32,
+    /**
+     * The index of the client its session was started with, the connection its first program was given; null without
+     * a session. When it goes, its first program has ended, and the session ends with it (session_left).
+     */
+    first_client : usize?,
     /** Its powerbox's prompt connection, bound under PROMPT_KEY plus the view's index; NONE without one. */
     prompt_end : slop_os.Channel,
     /** Whether a request from the powerbox is waiting on the user, in ask. */
@@ -637,6 +642,7 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                     }
                     case None => {}
                 }
+                session_left(service, index)
                 use_active(service)
                 if index < service.client_view.count {
                     service.client_view[index] = NO_VIEW
@@ -2334,6 +2340,7 @@ start_session :: fn(service: ptr[mut Service], home: os.Channel[dir.Dir]?) -> bo
     started :: match os.message_of[session.Response](&into)^ {
         case Started(number) => {
             view(service).session = number
+            view(service).first_client = client
             true
         }
         case _ => false
@@ -3240,7 +3247,8 @@ unlocked :: fn(service: ptr[mut Service]) {
  * Another session is shown if there is one; otherwise the view is opened again with the login screen up. Nothing
  * happens if no one's logged in to the view.
  *
- * @param service The service, its secure attention key's screen up.
+ * @param service The service, the view in use the active one: its secure attention key's screen up, or its session's
+ *     first program just ended (session_left).
  */
 log_out :: fn(service: ptr[mut Service]) {
     if !view(service).logged_in {
@@ -3248,6 +3256,48 @@ log_out :: fn(service: ptr[mut Service]) {
     }
     service.attention = false
     screen.show_panel(&view(service).screen, false)
+    gone :: service.active
+    end_view(service)
+    next :: another_session(service)
+    if next != NO_VIEW {
+        switch_to(service, next)
+        return void
+    }
+    open_view(service, gone)
+    service.viewing = gone
+    tell_shown(service)
+    enter_login(service)
+}
+
+/**
+ * End the session in the view in use as log_out does when its first program has ended, its client gone (decisions/
+ * 0176): logged out, the login screen shown in its place if it's the one shown, or its view let go if it isn't.
+ *
+ * @param service The service's state, the view in use the gone client's.
+ * @param index The gone client's index; nothing happens unless it's the view's first client and a user's session runs
+ *     there. The session with no user, of a boot with no accounts, has no login to go back to, so it stays.
+ */
+session_left :: fn(service: ptr[mut Service], index: usize) {
+    first :: view(service).first_client or_return void
+    if first != index || !view(service).logged_in || view(service).user_count == 0 {
+        return void
+    }
+    runtime.log_info("its session's first program ended")
+    if service.viewing == service.active {
+        log_out(service)
+        return void
+    }
+    end_view(service)
+}
+
+/**
+ * End the view in use's session: have the session manager end it and its programs (EndSession, waited for), drop its
+ * clients, drop its powerbox's request, close its prompt and home connections, and let the view go; what's shown next
+ * is the caller's.
+ *
+ * @param service The service's state, its view in use one a session runs in.
+ */
+end_view :: fn(service: ptr[mut Service]) {
     _ = ask_session(service, .EndSession(view(service).session))
     for i in 0..<service.client_view.count {
         if service.client_view[i] == service.viewing {
@@ -3255,7 +3305,6 @@ log_out :: fn(service: ptr[mut Service]) {
             service.client_view[i] = NO_VIEW
         }
     }
-    gone :: service.active
     runtime.log_info("logged out")
     drop_ask(view(service))
     if view(service).prompt_end != NONE {
@@ -3266,14 +3315,7 @@ log_out :: fn(service: ptr[mut Service]) {
         _ = slop_os.handle_close(cast[slop_os.Handle](view(service).home_end))
         view(service).home_end = NONE
     }
+    view(service).logged_in = false
+    view(service).first_client = null
     view(service).in_use = false
-    next :: another_session(service)
-    if next != NO_VIEW {
-        switch_to(service, next)
-        return void
-    }
-    open_view(service, gone)
-    service.viewing = gone
-    tell_shown(service)
-    enter_login(service)
 }

@@ -1,10 +1,9 @@
 package shell
 
 import runtime from "base"
+import language from "../../shell_language"
 import os from "std"
 import schema from "std"
-import strings from "std"
-import text_buffer from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
 import lifecycle from "std/os/slop_os"
@@ -24,11 +23,6 @@ import programs from "../../protocols/programs"
 
 /** The memory a program the shell runs is given to run on, in bytes, split off the shell's budget: 4 MiB. */
 PROGRAM_BUDGET : u64 : 4 * 1024 * 1024
-/**
- * The key the first program of a call or a pipeline has its end watched under, on the shell's port; the next ones
- * have the keys after it.
- */
-CALL_KEY : u64 : 1
 
 /** What a parameter is given: a value written for it, or a grant of one of the kinds the shell can make. */
 Giving :: enum {
@@ -95,9 +89,11 @@ run_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[V
  *
  * @param shell The shell, whose functions evaluate the arguments and whose home grants are opened in.
  * @param tree The Call node, kept by the call.
+ * @param background Whether it runs in the background, where it isn't given the terminal: a program that needs it
+ *     can't, and one for which it's optional goes without.
  * @return The call, on the heap, the caller's to start and then end with end_call.
  */
-prepare_call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[ptr[mut Call], EvalError] {
+prepare_call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], background: bool) -> Result[ptr[mut Call], EvalError] {
     found :: find_program(shell, tree.text) or_return .Error(EvalError.{message = message("there's no command named %", tree.text), at = tree.at})
     call := runtime.new(Call)
     call.tree = tree
@@ -135,7 +131,7 @@ prepare_call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[
             }
         }
         else if parameter.giving != .Input && parameter.giving != .Output {
-            match grant_for(shell, tree, parameter)? {
+            match grant_for(shell, tree, parameter, background)? {
                 case Some(handle) => runtime.array_add(&call.grants, os.NamedGrant.{label = parameter.name, handle = handle})
                 case None => {}
             }
@@ -177,6 +173,10 @@ Call :: struct {
     launched : os.Launched,
     /** Once it's started: the shell's end of its lifecycle channel, closed by end_call. */
     lifecycle : slop_os.Channel,
+    /** The newest progress it's said on its lifecycle channel, in thousandths, once reporting. */
+    progress : u32,
+    /** Whether it's said its progress, so it's shown. */
+    reporting : bool,
 }
 
 /**
@@ -226,23 +226,25 @@ end_call :: fn(call: ptr[mut Call]) {
 }
 
 /**
- * Launch a call's program, through the process manager, in a process of the shell's, its end watched under a key.
+ * Launch a call's program, through the process manager, in a process of the shell's, its end watched under a key, and
+ * its lifecycle channel under the key plus LIFECYCLE_KEY, for what it says of its progress.
  *
  * It's given the call's grants and values, PROGRAM_BUDGET, a lifecycle channel, and copies of the shell's clock and
  * locale grants. Once it's started, its grants are its.
  *
- * @param shell The shell, whose process manager launches it and whose port watches its end.
+ * @param shell The shell, whose process manager launches it and whose port (watch_port) watches its end.
  * @param call The call, prepared; its launched, lifecycle and key are set once it's started.
- * @param key The key its end is watched under, on the shell's port.
+ * @param key The key its end is watched under, on the shell's port: FIRST_KEY or above, below LIFECYCLE_KEY.
  * @return Null once it's started; why it didn't otherwise: no process manager, no memory for its lifecycle channel, or
- *     the launch's error.
+ *     the launch's error. A launch that fails leaves the lifecycle channel and the grants' copies the shell's, and
+ *     they're closed.
  */
 start_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], key: u64) -> EvalError? {
     tree :: call.tree
     manager :: shell.manager or_return EvalError.{message = "the shell can't start programs: it has no process manager", at = tree.at}
     block :: slop_os.startup_block()
     ends :: lifecycle.make(block.budget) or_return EvalError.{message = "there's no memory to start it", at = tree.at}
-    options := os.LaunchOptions.{watch = os.LaunchWatch.{port = shell.port, key = key}, lifecycle = ends.b}
+    options := os.LaunchOptions.{watch = os.LaunchWatch.{port = watch_port(shell), key = key}, lifecycle = ends.b}
     options.clock = copy_of_grant("clock")
     options.locale = copy_of_grant("locale")
     match os.launch_named(manager, shell.manager_port, tree.text, call.executable, PROGRAM_BUDGET, call.grants, call.values, options) {
@@ -251,30 +253,40 @@ start_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], key: u64) -> EvalEr
             call.launched = made
             call.lifecycle = ends.a
             call.key = key
+            // Its lifecycle channel wakes the shell when it says its progress; without the binding, it's read anyway
+            _ = slop_os.port_bind(watch_port(shell), cast[slop_os.Handle](ends.a), slop_os.SIGNAL_READABLE, key + LIFECYCLE_KEY, .Persistent)
             return null
         }
         case Error(error) => {
-            _ = slop_os.handle_close(cast[slop_os.Handle](ends.a))
+            for handle in slop_os.Handle.[cast[slop_os.Handle](ends.a), cast[slop_os.Handle](ends.b)] {
+                _ = slop_os.handle_close(handle)
+            }
+            close_copy(options.clock)
+            close_copy(options.locale)
             return EvalError.{message = message("% didn't start: %", tree.text, error), at = tree.at}
         }
     }
 }
 
 /**
- * Wait for a started call's program to end, and stop watching for its end.
+ * Wait for a started call's program to end, seeing to Ctrl-C meanwhile (wait_for), and stop watching it.
  *
  * @param shell The shell, whose port it waits on.
  * @param call The call; one not started, or already waited for, isn't waited for again.
- * @return Null if it ended with 0, or wasn't waited for; an error saying it was ended, or with what code, if not.
+ * @param running The programs it runs among, which Ctrl-C stops.
+ * @return Null if it ended with 0, or wasn't waited for; an error saying it was ended, or with what code, if not, or
+ *     that the shell's port couldn't be waited on, when its end's never seen.
  */
-wait_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call]) -> EvalError? {
+wait_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], running: ptr[mut Running]) -> EvalError? {
     if !call.started || call.waited {
         return null
     }
-    ended :: wait_for(shell, call.key)
-    call.waited = true
-    _ = slop_os.port_unbind(shell.port, call.key)
     tree :: call.tree
+    waited :: wait_for(shell, call.key, running)
+    call.waited = true
+    _ = slop_os.port_unbind(watch_port(shell), call.key)
+    _ = slop_os.port_unbind(watch_port(shell), call.key + LIFECYCLE_KEY)
+    ended :: waited or_return EvalError.{message = message("the shell couldn't wait for % to end", tree.text), at = tree.at}
     if ended == 0 {
         return null
     }
@@ -290,35 +302,6 @@ EndedProgram :: struct {
     key : u64,
     /** Its exit code: 0 for success, slop_os.EXIT_KILLED if it was ended, anything else its own. */
     code : u64,
-}
-
-/**
- * Wait for the program watched under a key to end; the ends of others seen meanwhile are kept, in the shell's ended,
- * for their turn.
- *
- * It waits with no deadline, so a program that never ends keeps the shell waiting.
- *
- * @param shell The shell, whose port it waits on.
- * @param key The key the program's end is watched under.
- * @return The program's exit code.
- */
-wait_for :: fn(shell: ptr[mut Shell], key: u64) -> u64 {
-    loop {
-        for each, i in shell.ended {
-            if each.key == key {
-                code :: each.code
-                runtime.array_remove(&shell.ended, i)
-                return code
-            }
-        }
-        packets : slop_os.Packet[4]
-        taken :: slop_os.port_wait(shell.port, packets, slop_os.NO_DEADLINE) or_else 0
-        for packet, i in packets {
-            if i < cast[usize](taken) && packet.kind == .Signal {
-                runtime.array_add(&shell.ended, EndedProgram.{key = packet.key, code = packet.data[1]})
-            }
-        }
-    }
 }
 
 /**
@@ -339,6 +322,18 @@ copy_of_grant :: fn(label: string) -> slop_os.Memory? {
         }
     }
     return null
+}
+
+/**
+ * Close a copy of a grant a launch didn't take.
+ *
+ * @param copy The copy, as copy_of_grant made it, closed; null for none, when nothing is.
+ */
+close_copy :: fn(copy: slop_os.Memory?) {
+    match copy {
+        case Some(memory) => _ = slop_os.handle_close(cast[slop_os.Handle](memory))
+        case None => {}
+    }
 }
 
 /**
@@ -469,8 +464,8 @@ giving_of :: fn(manifest: ptr[schema.Schema], place: usize) -> Giving {
     inner := ""
     for character, i in type.name {
         if character == '[' {
-            kind = slice(type.name, 0, i)
-            inner = slice(type.name, i + 1, type.name.count - 1)
+            kind = language.slice(type.name, 0, i)
+            inner = language.slice(type.name, i + 1, type.name.count - 1)
             break
         }
     }
@@ -480,7 +475,7 @@ giving_of :: fn(manifest: ptr[schema.Schema], place: usize) -> Giving {
     // The protocol's own name, without its package
     for character, i in inner {
         if character == '.' {
-            inner = slice(inner, i + 1, inner.count)
+            inner = language.slice(inner, i + 1, inner.count)
         }
     }
     if kind == "Stream" {
@@ -675,318 +670,6 @@ value_for :: fn(shell: ptr[mut Shell], manifest: ptr[schema.Schema], tree: ptr[N
     }
 }
 
-/**
- * Write a value at an offset in out as a value of the type at a place is laid out, with what it points to added after
- * everything (std/schema's write_value: a string's bytes, a list's items, at their distance from the start).
- *
- * The shell writes integers, bools, strings, enums, durations, structs from records, optionals' Some, and views of
- * lists; a bare word is read by the type: a number, a member's name, a duration, or text.
- *
- * @param manifest The program's manifest, only read.
- * @param place The type's place among the manifest's types; an alias is followed to what it names.
- * @param given The value written, of any kind; which kinds a type takes is said above, and a Text is read by the type
- *     only when bare. A list's items and a record's fields are written in turn.
- * @param bare Whether the value is a bare word's text, so a number or duration is read from it.
- * @param out The value's bytes, grown with what it points to; the bytes at offset have to be there already.
- * @param offset Where the value goes in out, in bytes.
- * @return Null once it's written; why it can't be otherwise, a sentence for a person: the wrong kind of value, a number
- *     out of the type's range, an enum member it hasn't, a record missing a field, or a type the shell can't give.
- */
-encode :: fn(manifest: ptr[schema.Schema], place: usize, given: Value, bare: bool, out: ptr[mut u8[..]], offset: usize) -> string? {
-    unaliased :: schema.unaliased_place(manifest, place)
-    type :: schema.type_in(manifest, unaliased) or_return "its manifest is cut short"
-    size :: cast[usize](type.size)
-    if type.kind == .Integer {
-        number := cast[i64](0)
-        match given {
-            case Int(value) => number = value
-            case Size(value) => number = cast[i64](value)
-            case Text(text) => {
-                if !bare {
-                    return message("% isn't a number", type_text(manifest, place))
-                }
-                number = integer_of(text) or_return message("% isn't a number", text)
-            }
-            case _ => return message("it takes a number, not %", type_name(given))
-        }
-        if !type.is_signed && number < 0 {
-            return message("% can't be below 0", number)
-        }
-        if size < 8 {
-            bits :: 8 * cast[u64](size)
-            limit :: if type.is_signed { cast[i64](1) << (bits - 1) } else { cast[i64](1) << bits }
-            low :: if type.is_signed { 0 - limit } else { cast[i64](0) }
-            if number >= limit || number < low {
-                return message("% is too big for it", number)
-            }
-        }
-        put(out, offset, cast[u64](number), size)
-        return null
-    }
-    if type.kind == .Boolean {
-        match given {
-            case Bool(value) => put(out, offset, if value { cast[u64](1) } else { cast[u64](0) }, size)
-            case Text(text) => {
-                if !bare || (text != "true" && text != "false") {
-                    return message("it takes true or false, not %", text)
-                }
-                put(out, offset, if text == "true" { cast[u64](1) } else { cast[u64](0) }, size)
-            }
-            case _ => return message("it takes true or false, not %", type_name(given))
-        }
-        return null
-    }
-    if type.kind == .String && !type.is_raw {
-        text :: match given {
-            case Text(value) => value
-            case Path(value) => value
-            case _ => return message("it takes text, not %", type_name(given))
-        }
-        put(out, offset, cast[u64](text.count), 8)
-        put(out, offset + 8, cast[u64](tail(out, string_bytes(text))), 8)
-        return null
-    }
-    if type.kind == .Enum {
-        name :: match given {
-            case Text(value) => value
-            case _ => return message("it takes one of %'s members, not %", type.name, type_name(given))
-        }
-        for constant in type.constants {
-            if constant.name == name {
-                put(out, offset, constant.value, size)
-                return null
-            }
-        }
-        return message("% isn't one of %", name, members_text(type))
-    }
-    if type.kind == .Struct && type.name == "Duration" {
-        nanoseconds := cast[i64](0)
-        match given {
-            case Duration(value) => nanoseconds = value
-            case Text(text) => {
-                if !bare {
-                    return message("% isn't a duration, like 5s", text)
-                }
-                nanoseconds = duration_of(text) or_return message("% isn't a duration, like 5s", text)
-            }
-            case _ => return message("it takes a duration, like 5s, not %", type_name(given))
-        }
-        for member in type.members {
-            if member.name == "seconds" {
-                put(out, offset + cast[usize](member.offset), cast[u64](nanoseconds / 1000000000), 8)
-            }
-            else if member.name == "nanos" {
-                put(out, offset + cast[usize](member.offset), cast[u64](nanoseconds % 1000000000), 4)
-            }
-        }
-        return null
-    }
-    if type.kind == .Struct && !type.is_union {
-        record :: match given {
-            case Record(value) => value
-            case _ => return message("it takes a record of %'s fields, not %", type.name, type_name(given))
-        }
-        for member in type.members {
-            value :: field(record, member.name) or_return message("the record has no field %", member.name)
-            problem :: encode(manifest, member.type, value, false, out, offset + cast[usize](member.offset))
-            if problem is_some {
-                return problem
-            }
-        }
-        return null
-    }
-    if type.kind == .Union {
-        // An optional's Some, written with its tag
-        for variant, index in type.variants {
-            if variant.name != "Some" || variant.held.count != 1 {
-                continue
-            }
-            for held in variant.held {
-                tag_size :: match schema.type_in(manifest, type.tag) {
-                    case Some(tag) => cast[usize](tag.size)
-                    case None => cast[usize](0)
-                }
-                put(out, offset, cast[u64](index), tag_size)
-                return encode(manifest, held.type, given, bare, out, offset + cast[usize](held.offset))
-            }
-        }
-        return message("the shell can't give a %", type_text(manifest, place))
-    }
-    if type.kind == .Array && type.dimensions.count == 1 {
-        for dimension in type.dimensions {
-            if dimension.kind != .View {
-                break
-            }
-            list :: match given {
-                case List(value) => value
-                case _ => return message("it takes a list, not %", type_name(given))
-            }
-            element :: schema.type_in(manifest, type.base) or_return "its manifest is cut short"
-            element_size :: cast[usize](element.size)
-            start :: out.count
-            zero(out, element_size * list.items.count)
-            align(out)
-            put(out, offset, cast[u64](list.items.count), 8)
-            put(out, offset + 8, cast[u64](start), 8)
-            for item, i in list.items {
-                problem :: encode(manifest, type.base, item, false, out, start + i * element_size)
-                if problem is_some {
-                    return problem
-                }
-            }
-            return null
-        }
-    }
-    return message("the shell can't give a %", type_text(manifest, place))
-}
-
-/**
- * Write a number's low bytes, little-endian, in place; bytes past out's end aren't written.
- *
- * @param out The bytes written in.
- * @param offset Where the number's lowest byte goes in out, in bytes from its start.
- * @param value The number, of which only the low count bytes are written; any above are dropped.
- * @param count How many of its bytes, at most 8.
- */
-put :: fn(out: ptr[mut u8[..]], offset: usize, value: u64, count: usize) {
-    target : mut u8[] = out^
-    for i in cast[usize](0)..<count {
-        at :: offset + i
-        if at < target.count && i < 8 {
-            target[at] = cast[u8]((value >> (8 * cast[u64](i))) & 0xff)
-        }
-    }
-}
-
-/**
- * Add bytes after everything in out, at 8 bytes' alignment, out padded to 8 after them too.
- *
- * @param out The bytes added to.
- * @param bytes The bytes, copied.
- * @return Where they start in out, in bytes.
- */
-tail :: fn(out: ptr[mut u8[..]], bytes: u8[]) -> usize {
-    align(out)
-    start :: out.count
-    for byte in bytes {
-        runtime.array_add(out, byte)
-    }
-    align(out)
-    return start
-}
-
-/**
- * Add zero bytes after everything in out.
- *
- * @param out The bytes added to.
- * @param count How many zero bytes are added; 0 adds none.
- */
-zero :: fn(out: ptr[mut u8[..]], count: usize) {
-    for i in cast[usize](0)..<count {
-        runtime.array_add(out, cast[u8](0))
-    }
-}
-
-/**
- * Pad out with zero bytes to a multiple of 8 bytes.
- *
- * @param out The bytes, grown by 0 to 7 zero bytes; nothing's added when its count is a multiple of 8 already.
- */
-align :: fn(out: ptr[mut u8[..]]) {
-    loop {
-        if out.count % 8 == 0 {
-            break
-        }
-        runtime.array_add(out, cast[u8](0))
-    }
-}
-
-/**
- * Read a word as a whole number, in decimal, with a - if it's negative.
- *
- * @param text The word, as written: an optional - then decimal digits, nothing else, not even spaces.
- * @return The number; null if it's empty, has anything but digits after the sign, or more than 18 digits.
- */
-integer_of :: fn(text: string) -> i64? {
-    if text.count == 0 {
-        return null
-    }
-    negative :: slice(text, 0, 1) == "-"
-    digits :: if negative { slice(text, 1, text.count) } else { text }
-    if digits.count == 0 || digits.count > 18 {
-        return null
-    }
-    result := cast[i64](0)
-    for character in digits {
-        if character < '0' || character > '9' {
-            return null
-        }
-        result = result * 10 + cast[i64](cast[u8](character) - cast[u8]('0'))
-    }
-    return if negative { 0 - result } else { result }
-}
-
-/**
- * Read a word as a duration: a number then its unit (5s, 250ms), as unit_value names them.
- *
- * @param text The word; one starting with - isn't read.
- * @return The duration, in nanoseconds; null if it isn't one, or has a size's unit or none.
- */
-duration_of :: fn(text: string) -> i64? {
-    for character, i in text {
-        if character < '0' || character > '9' {
-            number :: integer_of(slice(text, 0, i)) or_return null
-            unit :: unit_value(slice(text, i, text.count)) or_return null
-            if unit.size {
-                return null
-            }
-            return number * cast[i64](unit.scale)
-        }
-    }
-    return null
-}
-
-/**
- * Name a type as a person reads it: its name, or its kind.
- *
- * @param manifest The program's manifest, only read.
- * @param place The type's place among the manifest's types, taken as it is: an alias is named as itself.
- * @return Its name, a view of the manifest's text; or its kind, a literal; "value" for a place not in the manifest.
- */
-type_text :: fn(manifest: ptr[schema.Schema], place: usize) -> string {
-    type :: schema.type_in(manifest, place) or_return "value"
-    if type.name.count > 0 {
-        return type.name
-    }
-    return match type.kind {
-        case .Integer => if type.is_signed { "whole number" } else { "count" }
-        case .Boolean => "bool"
-        case .String => "string"
-        case .Array => "list"
-        case .Union => "choice"
-        case _ => "value"
-    }
-}
-
-/**
- * List an enum's members, to read: a, b or c.
- *
- * @param type The enum's type in a manifest, whose constants are listed in their order; only read. One without
- *     constants gives "".
- * @return The list, on the heap, never freed, cut at 256 bytes; the enum's name if it couldn't be copied.
- */
-members_text :: fn(type: ptr[schema.Type]) -> string {
-    storage : u8[256]
-    out := text_buffer.make(storage)
-    for constant, i in type.constants {
-        if i > 0 {
-            text_buffer.append(&out, if i + 1 == type.constants.count { " or " } else { ", " })
-        }
-        text_buffer.append(&out, constant.name)
-    }
-    return strings.clone(text_buffer.as_string(&out)) or_else type.name
-}
-
 // ---- Grants
 
 /**
@@ -999,10 +682,19 @@ members_text :: fn(type: ptr[schema.Type]) -> string {
  * @param shell The shell, whose terminal and home the grants come from.
  * @param tree The Call node, for errors.
  * @param parameter The parameter, a grant's, matched.
- * @return The grant's handle, the caller's, which a launch gives the program; null for an optional one given nothing.
+ * @param background Whether the program runs in the background, where it isn't given the terminal.
+ * @return The grant's handle, the caller's, which a launch gives the program; null for an optional one given nothing,
+ *     and for an optional terminal in the background. A terminal it needs there is an error.
  */
-grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter]) -> Result[slop_os.Handle?, EvalError] {
+grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter], background: bool) -> Result[slop_os.Handle?, EvalError] {
     budget :: slop_os.startup_block().budget
+    if parameter.giving == .Terminal && background {
+        if parameter.optional {
+            return .Ok(null)
+        }
+        return .Error(EvalError.{message = message("% needs the terminal, which a job in the background hasn't: run it without &", tree.text),
+            at = tree.at})
+    }
     if parameter.giving == .Terminal {
         made :: protocol.connect(shell.console.end, shell.console.port, budget) or_return .Error(EvalError.{
             message = "there's no memory for its terminal connection", at = tree.at})

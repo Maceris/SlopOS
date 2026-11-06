@@ -1,7 +1,8 @@
-package shell
+package shell_language
 
 import runtime from "base"
 import text_buffer from "std"
+import unicode from "std"
 
 /*
  * The shell's values (design/shell.md §2): typed, never re-parsed as text. Sizes are bytes and durations nanoseconds;
@@ -205,16 +206,24 @@ render :: fn(out: ptr[mut text_buffer.TextBuffer], value: Value, nested: bool = 
  * Append a signed number in decimal, with a '-' when it's negative.
  *
  * @param out The text appended to.
- * @param number The number. The smallest i64 has no positive counterpart, so it isn't written right.
+ * @param number The number, any i64, the smallest included.
  */
 append_signed :: fn(out: ptr[mut text_buffer.TextBuffer], number: i64) {
     if number < 0 {
         text_buffer.append(out, "-")
-        text_buffer.append_unsigned(out, cast[u64](0 - number))
     }
-    else {
-        text_buffer.append_unsigned(out, cast[u64](number))
-    }
+    text_buffer.append_unsigned(out, magnitude_of(number))
+}
+
+/**
+ * Find a number's distance from 0, as a u64, which holds every i64's, the smallest's included.
+ *
+ * @param number The number, any i64.
+ * @return Its magnitude: 2^63 for the smallest i64, which has no positive i64.
+ */
+magnitude_of :: fn(number: i64) -> u64 {
+    // Negated as a u64, which wraps where an i64 would overflow
+    return if number < 0 { 0 - cast[u64](number) } else { cast[u64](number) }
 }
 
 /** The units a size is shown in, each 1024 of the one before. */
@@ -258,7 +267,7 @@ append_duration :: fn(out: ptr[mut text_buffer.TextBuffer], nanos: i64) {
     if nanos < 0 {
         text_buffer.append(out, "-")
     }
-    magnitude :: cast[u64](if nanos < 0 { 0 - nanos } else { nanos })
+    magnitude :: magnitude_of(nanos)
     units :: u64.[3_600_000_000_000, 60_000_000_000, 1_000_000_000, 1_000_000, 1_000, 1]
     names :: string.["h", "m", "s", "ms", "us", "ns"]
     for unit, i in units {
@@ -293,7 +302,7 @@ is_table :: fn(list: ptr[ValueList]) -> bool {
  * Append a list of records as a table: a column for each field, in the order they're first met, headed by its name,
  * each as wide as its widest cell, two spaces apart; a record without a field leaves its cell blank.
  *
- * Widths are counted in bytes, so text that isn't ASCII can leave its columns out of line.
+ * Widths are the columns text takes on a terminal (unicode.text_width), so wide characters and accents line up.
  *
  * @param out The text appended to: the heading line, then a line for each record, without a line break at the end.
  * @param list The list, every item a record (is_table); an item that isn't is a blank row.
@@ -313,7 +322,7 @@ render_table :: fn(out: ptr[mut text_buffer.TextBuffer], list: ptr[ValueList]) {
                     }
                     if !known {
                         runtime.array_add(&columns, name)
-                        runtime.array_add(&widths, name.count)
+                        runtime.array_add(&widths, width_of(name))
                     }
                 }
             }
@@ -329,24 +338,34 @@ render_table :: fn(out: ptr[mut text_buffer.TextBuffer], list: ptr[ValueList]) {
         }
     }
     for column, i in columns {
-        last :: i + 1 == columns.count
+        wide :: if i < widths.count { widths[i] } else { 0 }
         text_buffer.append(out, column)
-        if !last && i < widths.count {
-            pad(out, widths[i] - column.count + 2)
+        if i + 1 < columns.count {
+            written :: width_of(column)
+            pad(out, (if wide > written { wide - written } else { 0 }) + 2)
         }
     }
     for item in list.items {
         text_buffer.append(out, "\n")
         for column, i in columns {
-            last :: i + 1 == columns.count
-            start :: out.count
+            wide :: if i < widths.count { widths[i] } else { 0 }
+            written :: cell_width(item, column)
             render_cell(out, item, column)
-            if !last && i < widths.count {
-                written :: out.count - start
-                pad(out, (if widths[i] > written { widths[i] - written } else { 0 }) + 2)
+            if i + 1 < columns.count {
+                pad(out, (if wide > written { wide - written } else { 0 }) + 2)
             }
         }
     }
+}
+
+/**
+ * Measure text as a terminal shows it.
+ *
+ * @param text The text, UTF-8 or not, only read.
+ * @return The columns it takes (unicode.text_width): wide characters 2, accents 0, a byte that isn't UTF-8 1.
+ */
+width_of :: fn(text: string) -> usize {
+    return unicode.text_width(string_bytes(text))
 }
 
 /**
@@ -374,13 +393,13 @@ render_cell :: fn(out: ptr[mut text_buffer.TextBuffer], item: Value, column: str
  *
  * @param item The row's record; anything else is a cell 0 wide.
  * @param column The field's name; 0 if the record hasn't the field.
- * @return The cell's width, in bytes, at most 256: a wider cell is counted as 256.
+ * @return The columns the cell takes (width_of), of its first 256 bytes: what's past them isn't counted.
  */
 cell_width :: fn(item: Value, column: string) -> usize {
     storage : u8[256]
     out := text_buffer.make(storage)
     render_cell(&out, item, column)
-    return out.count
+    return width_of(text_buffer.as_string(&out))
 }
 
 /**

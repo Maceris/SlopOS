@@ -1,4 +1,4 @@
-package shell
+package shell_language
 
 import runtime from "base"
 import strings from "std"
@@ -7,7 +7,7 @@ import strings from "std"
  * The shell language's syntax (design/shell.md §2, decisions/0162, 0169), parsed straight from a line to a tree:
  *
  *     statements  statement, separated by line breaks or ;, a # to the line's end a comment
- *     statement   let name = pipeline | pipeline
+ *     statement   let name = pipeline | pipeline, then & to run it in the background
  *     pipeline    element (| element)*, then ? or `or { statements }`
  *     element     a call: a bare word in command position, then its arguments, words read by the parameter's type
  *                 later, or $name, "text", (expression), [list] or --name; or an expression, anything else
@@ -64,6 +64,8 @@ NodeKind :: enum {
     Return,
     /** try { ... } catch name { ... }: the tried block, then the handler; text the name the error's bound to. */
     TryCatch,
+    /** pipeline &: the one child the pipeline, run as a job in the background (design/shell.md §6). */
+    Background,
 }
 
 /** A node of a parsed line's tree, on the heap, never freed. */
@@ -117,6 +119,38 @@ parse :: fn(line: string) -> Result[ptr[mut Node], SyntaxError] {
         case None => {}
     }
     return .Ok(made)
+}
+
+/**
+ * Find a node's first child.
+ *
+ * @param tree The node, of any kind, only read.
+ * @return The child, the node's own, not a copy; null if it has none.
+ */
+first_child :: fn(tree: ptr[Node]) -> ptr[mut Node]? {
+    return child(tree, 0)
+}
+
+/**
+ * Find a node's child.
+ *
+ * @param tree The node, of any kind, only read; what its children mean is by its kind.
+ * @param index The child's index, from 0.
+ * @return The child; null past the node's children.
+ */
+child :: fn(tree: ptr[Node], index: usize) -> ptr[mut Node]? {
+    return if index < tree.children.count { tree.children[index] } else { null }
+}
+
+/**
+ * Find a list's item.
+ *
+ * @param list The list, only read.
+ * @param index The item's index, from 0.
+ * @return The item; null past the list's items.
+ */
+item :: fn(list: ptr[ValueList], index: usize) -> Value? {
+    return if index < list.items.count { list.items[index] } else { null }
 }
 
 /**
@@ -303,7 +337,7 @@ parse_statements :: fn(parser: ptr[mut Parser], in_block: bool) -> ptr[mut Node]
 }
 
 /**
- * Parse one statement: fn, return, try and catch, let, or a pipeline.
+ * Parse one statement: fn, return, try and catch, let, or a pipeline, which & after it makes a background job's.
  *
  * @param parser The parser, moved past it.
  * @return The statement's node; as far as it got if there's an error.
@@ -359,7 +393,15 @@ parse_statement :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
         add(made, parse_pipeline(parser))
         return made
     }
-    return parse_pipeline(parser)
+    made :: parse_pipeline(parser)
+    skip_spaces(parser)
+    if peek(parser) != cast[u8]('&') {
+        return made
+    }
+    parser.at += 1
+    background :: node(.Background, made.at)
+    add(background, made)
+    return background
 }
 
 /**
@@ -510,7 +552,7 @@ parse_element :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
 }
 
 /**
- * Parse a call: its name, then arguments up to | ; ) } or ? or `or`, or the line's end.
+ * Parse a call: its name, then arguments up to | ; ) } ? & or `or`, or the line's end.
  *
  * where and map take one expression, of each item's fields, in place of arguments.
  *
@@ -533,7 +575,7 @@ parse_call :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
         skip_spaces(parser)
         byte :: peek(parser)
         if (parser.error is_some) || parser.at >= parser.text.count || byte == 10 || byte == cast[u8]('|') || byte == cast[u8](';')
-            || byte == cast[u8](')') || byte == cast[u8]('}') || byte == cast[u8]('?') || at_keyword(parser, "or") {
+            || byte == cast[u8](')') || byte == cast[u8]('}') || byte == cast[u8]('?') || byte == cast[u8]('&') || at_keyword(parser, "or") {
             break
         }
         add(made, parse_argument(parser))
@@ -544,7 +586,7 @@ parse_call :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
 /**
  * Parse one argument: --name, $name, "text", (expression), [list], or a bare word.
  *
- * A bare word runs to a space, tab, line break, | ; ) } " or (, and is kept as written: what it is, its parameter's
+ * A bare word runs to a space, tab, line break, | ; ) } " ( or &, and is kept as written: what it is, its parameter's
  * type says.
  *
  * @param parser The parser, moved past it.
@@ -566,7 +608,7 @@ parse_argument :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     loop {
         next :: peek(parser)
         if parser.at >= parser.text.count || next == cast[u8](' ') || next == 9 || next == 10 || next == cast[u8]('|') || next == cast[u8](';')
-            || next == cast[u8](')') || next == cast[u8]('}') || next == cast[u8]('"') || next == cast[u8]('(') {
+            || next == cast[u8](')') || next == cast[u8]('}') || next == cast[u8]('"') || next == cast[u8]('(') || next == cast[u8]('&') {
             break
         }
         parser.at += 1
@@ -903,15 +945,15 @@ parse_quoted :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
 /**
  * Parse a number, its digits maybe separated by _, with a size's or a duration's unit after it if it has one.
  *
- * Overflow isn't checked: a number past 64 bits, or a size or duration past them once scaled, wraps.
- *
  * @param parser The parser, at the first digit, moved past the unit.
  * @return A Literal: an Int, or with a unit a Size in bytes or a Duration in nanoseconds; with an error if a name after
- *     the digits isn't a unit.
+ *     the digits isn't a unit, or the number is past what its value holds: 2^63 - 1 for an integer or a duration's
+ *     nanoseconds, 2^64 - 1 for a size's bytes.
  */
 parse_number :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     start :: parser.at
     value := cast[u64](0)
+    fits := true
     loop {
         byte :: peek(parser)
         if !is_digit(byte) {
@@ -921,21 +963,33 @@ parse_number :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
             }
             break
         }
-        value = value * 10 + cast[u64](byte - cast[u8]('0'))
+        next :: added_sizes(multiplied_sizes(value, 10) or_else 0, cast[u64](byte - cast[u8]('0')))
+        fits = fits && (multiplied_sizes(value, 10) is_some) && (next is_some)
+        value = next or_else 0
         parser.at += 1
     }
     made :: node(.Literal, start)
     unit_start :: parser.at
     unit :: parse_name(parser)
+    largest_signed :: cast[u64](SMALLEST) - 1
     made.value = .Int(cast[i64](value))
     match unit_value(unit) {
-        case Some(found) => made.value = if found.size { Value.Size(value * found.scale) } else { Value.Duration(cast[i64](value * found.scale)) }
+        case Some(found) => {
+            scaled :: multiplied_sizes(value, found.scale)
+            fits = fits && (scaled is_some) && (found.size || (scaled or_else 0) <= largest_signed)
+            made.value = if found.size { Value.Size(scaled or_else 0) } else { Value.Duration(cast[i64](scaled or_else 0)) }
+        }
         case None => {
             if unit.count > 0 {
                 parser.at = unit_start
                 fail(parser, "that isn't a size's or a duration's unit")
             }
+            fits = fits && value <= largest_signed
         }
+    }
+    if !fits {
+        parser.at = start
+        fail(parser, "that number's too big: past what a 64-bit number holds")
     }
     return made
 }

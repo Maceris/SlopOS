@@ -26,6 +26,11 @@ Bundle :: struct {
     program : Hash,
     /** Its manifest: the schema of its entry's type (decisions/0044). */
     manifest : Hash,
+    /**
+     * Its documentation (decisions/0174): a record of a Documentation, from its main's documentation comment; all
+     * zeros for a program without one.
+     */
+    documentation : Hash,
     /** The typed libraries it's linked against. */
     libraries : Hash[],
     /** Its resources, other objects it's given. */
@@ -69,10 +74,52 @@ Substitutions :: struct {
     entries : Substitution[MAX_SUBSTITUTIONS],
 }
 
+/**
+ * A program's documentation, as its bundle keeps it (decisions/0174): its main's documentation comment, which help
+ * shows and completion summarizes. Every text is as the comment has it, its lines' margins taken off.
+ */
+Documentation :: struct {
+    /** What it does, in a sentence: the comment's @brief, or its first sentence; empty without a comment. */
+    summary : string,
+    /** The rest of the comment's text, its paragraphs separated by blank lines; empty for none. */
+    details : string,
+    /** Each parameter that has an @param, in main's order: its name, and what it's given. */
+    parameters : Described[],
+    /** Each @return's text, in order: what main gives back. */
+    results : string[],
+    /** Each @error's variant and text, in order. */
+    errors : Described[],
+    /** Each @note's, @see's, @example's, @deprecated's and @since's tag and text, in order, a tag as its name. */
+    others : Described[],
+}
+
+/** Something documented by its name, and what's said of it. */
+Described :: struct {
+    /** Its name: a parameter's, an error variant's, or for others a tag's, without the @. */
+    name : string,
+    /** What's said of it, its lines' margins taken off. */
+    text : string,
+}
+
 /** Bundle's schema hash, which a bundle's record starts with. */
 BUNDLE_SCHEMA :: #run schema.hash(type_info_of(Bundle))
 /** Root's schema hash, which a root's record starts with. */
 ROOT_SCHEMA :: #run schema.hash(type_info_of(Root))
+/** Documentation's schema hash, which a program's documentation's record starts with. */
+DOCUMENTATION_SCHEMA :: #run schema.hash(type_info_of(Documentation))
+
+/**
+ * Read a program's documentation from its record, as one from another program is read: checked, its strings and lists
+ * pointing into a copy of its own.
+ *
+ * @param record The record's bytes, as the store keeps them: Documentation's schema hash, then the value; only read.
+ * @return The documentation, its text in a copy from context's allocator that's never freed; null if the record isn't
+ *     a Documentation's, or its value doesn't read (schema.read_value), or there isn't the memory for it.
+ */
+documentation_of :: fn(record: u8[]) -> Documentation? {
+    value :: value_of(record, DOCUMENTATION_SCHEMA) or_return null
+    return schema.read_value[Documentation](value)
+}
 
 /**
  * Hash bytes, as the store names an object.
@@ -190,7 +237,8 @@ value_of :: fn(record: u8[], expected: u8[32]) -> u8[]? {
 }
 
 /**
- * List each hash a bundle refers to: its program's, its manifest's, its libraries' and its resources', in that order.
+ * List each hash a bundle refers to: its program's, its manifest's, its documentation's, its libraries' and its
+ * resources', in that order, so a bundle always gives at least three.
  *
  * @param record The bundle's record, as the store keeps it.
  * @param each Where the hashes are added, after what it holds, with context's allocator; on false or an error it may
@@ -203,7 +251,7 @@ bundle_refers :: fn(record: u8[], each: ptr[mut Hash[..]]) -> Result[bool, runti
     if value.count < size_of(Bundle) {
         return .Ok(false)
     }
-    for first in usize.[0, 32] {
+    for first in usize.[offset_of(Bundle, program), offset_of(Bundle, manifest), offset_of(Bundle, documentation)] {
         if runtime.array_try_add(each, hash_at(value, first)) != null {
             return .Error(.OutOfMemory)
         }

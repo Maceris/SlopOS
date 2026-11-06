@@ -8,7 +8,8 @@ import bundle from "../../bundle"
 /*
  * The bundle store's protocol (roadmap 9b, decisions/0094, design/software.md §2): objects by their BLAKE3-256 hashes.
  * Get gives an object as paged memory, read-only, which the store pages in as it's touched, one memory object per
- * object however many ask for it; Put takes one from memory given, kept only if its bytes have the hash given. Roots
+ * object however many ask for it, which stays open while the store runs; Read gives a small one, a record, a manifest
+ * or a program's documentation, as a copy of its own, keeping nothing open; Put takes one from memory given, kept only if its bytes have the hash given. Roots
  * keep objects, and what bundles and roots they are refer to, from Collect, which removes everything else: the boot
  * root, and pins by name. Connections arrive on its listener, and as Connects. The pages it has supplied are a cache
  * it gives back under pressure on its budget (decisions/0111): CacheLimit sets how much of them it keeps, and
@@ -45,11 +46,12 @@ PinOf :: struct {
     hash : bundle.Hash,
 }
 
-/** An object: read-only paged memory, and how many of its bytes are the object's. */
+/** An object: its memory, and how many of its bytes are the object's. */
 Object :: struct {
     /**
-     * The object's memory, paged in by the store as it's touched, read-only and executable, whole pages; the handle
-     * moves to the client, and the memory object is the same one however many ask for it.
+     * The object's memory, whole pages. For Get, paged in by the store as it's touched, read-only and executable, and
+     * the same memory object however many ask for it; the handle moves to the client. For Read, a copy of its own,
+     * whose owning handle moves to the client, which destroys it by closing it.
      */
     memory : slop_os.Memory,
     /** How many bytes from memory's start are the object's. */
@@ -95,7 +97,16 @@ Request :: union {
      * Ask how many pages the store has given back in all, under pressure or past its limit. Answered with Collected.
      */
     Evictions,
+    /**
+     * Ask for a copy of a small object, by its hash: its bytes in new memory of the client's own, so nothing stays open
+     * in the store, as Get's objects do. Answered with Got, or Missing for an object it hasn't, one past MAX_READ
+     * bytes, an empty one, or one it couldn't copy.
+     */
+    Read(bundle.Hash),
 }
+
+/** The most bytes an object Read copies: 1 MiB. Anything larger is given by Get. */
+MAX_READ : u64 : 1 << 20
 
 /** What the bundle store answers. */
 Response :: union {

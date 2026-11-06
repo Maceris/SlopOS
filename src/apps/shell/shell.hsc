@@ -6,14 +6,17 @@
 package shell
 
 import runtime from "base"
+import language from "../../shell_language"
 import os from "std"
 import text_buffer from "std"
 import terminal from "std"
+import unicode from "std"
 import slop_os from "std/os"
 import terminal as protocol from "std/os/slop_os"
 import dir from "std/os/slop_os"
 import process_manager from "std/os/slop_os"
 import programs as finding from "../../protocols/programs"
+import installations from "../../installations"
 
 /** The prompt in the shell's home; elsewhere it's the directory, then "> ". */
 PROMPT :: "> "
@@ -48,8 +51,20 @@ Shell :: struct {
     programs : os.Channel[finding.Programs]?,
     /** A port bound to programs' end; unset without one. */
     programs_port : slop_os.Port,
-    /** Its own port, where the ends of the programs it starts are seen, each under its call's key. */
-    port : slop_os.Port,
+    /** The names of the programs it can run, once program_names has asked for them, each its own; for completion. */
+    names : string[..],
+    /** Whether names has been asked for, so it's asked once. */
+    names_listed : bool,
+    /** Its data directory, where its history's kept; null without one. */
+    data : os.Directory?,
+    /** The programs running in the foreground, which Ctrl-C stops; null while none are. */
+    foreground : ptr[mut Running]?,
+    /** Its jobs in the background, oldest first. */
+    jobs : Job[..],
+    /** The number the newest job was given; 0 before any. */
+    last_job : u32,
+    /** The key the next programs started together have their ends watched under, from FIRST_KEY. */
+    next_key : u64,
 }
 
 /**
@@ -70,16 +85,18 @@ Shell :: struct {
  * @param manager The process manager programs are started through. Without it, a call of a program fails.
  * @param programs The session manager's connection that finds programs by their names (decisions/0170). Without it,
  *     no program is found.
+ * @param data The shell's own data directory, where its history is kept, read when it starts and written after each
+ *     line. Without it, history lasts only as long as the shell.
  * @return 0 after exit, or when it's asked to stop on its lifecycle channel; 2 if the terminal couldn't be opened or
  *     a port couldn't be made; 3 when its terminal goes.
  */
 main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Terminal], home: os.Channel[dir.Dir]?,
-    manager: os.Channel[process_manager.ProcessManager]?, programs: os.Channel[finding.Programs]?) -> int {
+    manager: os.Channel[process_manager.ProcessManager]?, programs: os.Channel[finding.Programs]?, data: installations.AppData?) -> int {
     block :: slop_os.startup_block()
     shell := runtime.new(Shell)
     shell.scope = runtime.new(Scope)
     shell.console = terminal.open(session_terminal) or_return 2
-    shell.port = slop_os.port_create(block.budget) or_return 2
+    shell.next_key = FIRST_KEY
     shell.home = home
     match home {
         case Some(given) => shell.home_port = os.port_for(block.budget, given.end) or_return 2
@@ -98,13 +115,30 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Termina
     say(shell, "SlopOS shell")
     runtime.log_info("reading commands")
     editor := terminal.LineEditor.{}
+    terminal.set_completer(&editor, complete_line, shell)
+    match data {
+        case Some(given) => {
+            directory, error :: os.directory_on(given.end)
+            if error == null {
+                shell.data = directory
+                load_history(shell, &editor)
+            }
+        }
+        case None => {}
+    }
     loop {
         if shell.exiting {
             return 0
         }
         match terminal.read_line(&editor, &shell.console, prompt_of(shell)) {
-            case Line(line) => run_line(shell, line)
+            case Line(line) => {
+                // The parse copies it, so nothing run keeps it
+                run_line(shell, line)
+                runtime.free_array(bit_cast[u8[]](line))
+                save_history(shell, &editor)
+            }
             case Interrupted => {}
+            case Other(packet) => take_while_reading(shell, packet)
             case HangUp => {
                 runtime.log_info("its terminal went")
                 return 3
@@ -179,8 +213,8 @@ prompt_of :: fn(shell: ptr[Shell]) -> string {
  * @param shell The shell, whose terminal it's shown on.
  * @param line The line the error is in, written as it is under the message; with the two spaces before it, what
  *     doesn't fit 512 bytes is cut.
- * @param at Where the error is in the line, in bytes from 0; past the line's end, the ^ is at its end. Columns are
- *     counted as bytes, so the ^ is off under text that isn't ASCII.
+ * @param at Where the error is in the line, in bytes from 0; past the line's end, the ^ is at its end. The ^ goes as
+ *     many columns along as the line's text before it takes on the terminal (unicode.text_width).
  * @param message What's wrong; each line is cut at 512 bytes.
  */
 show_error :: fn(shell: ptr[mut Shell], line: string, at: usize, message: string) {
@@ -195,9 +229,8 @@ show_error :: fn(shell: ptr[mut Shell], line: string, at: usize, message: string
     say(shell, text_buffer.as_string(&pointer))
     pointer = text_buffer.make(storage)
     text_buffer.append(&pointer, "  ")
-    for i in 0..<(if at < line.count { at } else { line.count }) {
-        text_buffer.append(&pointer, " ")
-    }
+    before :: language.slice(line, 0, if at < line.count { at } else { line.count })
+    language.pad(&pointer, unicode.text_width(string_bytes(before)))
     text_buffer.append(&pointer, "^")
     say(shell, text_buffer.as_string(&pointer))
     runtime.log_info("error: %", message)

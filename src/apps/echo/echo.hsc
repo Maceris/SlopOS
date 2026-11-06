@@ -89,6 +89,7 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Termina
                 answer(&echo, line)
             }
             case Interrupted => {}
+            case Other(packet) => {}
             case HangUp => {
                 runtime.log_info("its terminal went")
                 return 3

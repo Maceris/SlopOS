@@ -22,14 +22,16 @@ system configuration), `0045` (content-addressed libraries), `0040` (schemas), `
 
 - **Objects** are blobs keyed by BLAKE3-256 of their contents: built programs, libraries, schemas (`0040`), and the
   data files a program ships with. The store checks the hash of everything put into it.
-- **A bundle** is a record of its own: the program's hash, its manifest (the entry signature, `0044`, with its
-  documentation comments for the shell's help), the libraries and schemas it references, and its resources. A
+- **A bundle** is a record of its own: the program's hash, its manifest (the entry signature, `0044`), its
+  documentation (its `main`'s documentation comment as a record, for the shell's help, `0174`), the libraries and
+  schemas it references, and its resources. A
   bundle's hash covers all of it, so it names exactly one build.
 - **Roots** keep objects alive: system generations (§5), installations (§6), and pins a developer makes. Collection
   is a mark from the roots and a sweep, run in the background.
 - **Reading** returns a read-only memory object: through a pager-backed memory object (the kernel feature planned for
   M9, `storage.md` §7), so a program's pages are read when touched, and objects shared by hash are mapped from one
-  memory object into every process using them.
+  memory object into every process using them. Such an object stays open while the store runs, so small ones, records,
+  manifests and documentation, are read as copies of the reader's own instead (Read, `0176`), which keep nothing open.
 - **Putting** is a stream of the object's bytes and its expected hash; it's committed only if they match.
 - The store lives on the system volume. Its protocol is held by the process manager (to read), by the update and
   installation services (to put and to add roots), and by nothing else.
