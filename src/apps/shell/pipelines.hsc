@@ -276,14 +276,19 @@ finish_programs :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) -> Resul
         }
     }
     // Each waited for; the first that failed is the pipeline's error
-    for call in running.calls {
+    for call, k in running.calls {
         match wait_call(shell, call, running) {
             case Some(error) => {
                 if first_error is_none {
                     first_error = error
                 }
             }
-            case None => {}
+            case None => {
+                // A last program without an output gives what its entry gave back, if it gave something
+                if k + 1 == running.calls.count && (parameter_giving(call, .Output) is_none) {
+                    result = call.returned
+                }
+            }
         }
     }
     match first_error {

@@ -81,6 +81,13 @@ an optional of one, which is `None` without its grant. A `Channel[P]` or `Listen
 ends before `main` with `slop_os.EXIT_MISSING_GRANT` (126). Other grants, like boot
 modules, are still found by label.
 
+**The entry's result** (`0179`): an integer is the exit code. Any other type `main` gives back, most usefully a
+`Result`, is written for the launcher in the memory it gave as the grant `result` (`os.LaunchOptions.result`), and
+read back once the program has ended (`os.entry_result`); the exit code is 1 for a `Result`'s `Error` and 0 otherwise,
+with the grant or without. The shell gives the grant to every program whose manifest says its entry gives back a
+value, 64 KiB, and shows an `Error` by its variant, the parameter it names (a field of type `os.ParameterName` in the
+variant's payload) and the `@error` line documenting it.
+
 **Typed libraries** (`0120`, `0121`): a program built calling a Hemera typed library is given it as a grant labeled
 `library:<file>`, `Memory` holding the library's file. Before `main`, `base`'s runtime binds every library its import
 table names from those grants: the library's unwritten segments mapped straight from the memory (so every process

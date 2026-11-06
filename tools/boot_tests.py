@@ -197,7 +197,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 61 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 62 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 5 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -627,7 +627,8 @@ TESTS = [
         "which the line is written on. Without it, as in the background, no line is written.",
         "--expect-console-line=called with tabbed, 3, loud false, speed none, wait none, tags none, place none",
         "--expect-console-line=called with named, 2, loud false, speed Fast, wait none, tags none, place none",
-        "--expect-console-line=test_shell_calls  Write what the shell gave on one line of the terminal, or, in a pipeline, write rows.",
+        "--expect-console-line=test_shell_calls    Write what the shell gave on one line of the terminal, or, in a pipeline, write rows.",
+        "--expect-console-line=test_shell_results  Give back what it's asked to: a summary of what it was given, or an error.",
         "--expect-console-line=error: there's no command named test_"])),
     # History (design/shell.md §6): a line entered in one session comes back with Up in the next, from the shell's data
     # directory in the user's home
@@ -681,6 +682,22 @@ TESTS = [
         "count, as the copy, its lines started with COPY_NAME.",
         "--expect-console-line=called with still, 1, loud false, speed none, wait none, tags none, place none",
         "--refuse-console-line=error: there's no command named test_affinity"])),
+    # Entry results (decisions/0179): a program's main gives back a Result; the shell shows an Ok's value, and an Error
+    # by its variant, the parameter it names and the hint its documentation gives, which try catches
+    ("shows what a program's entry gives back: a value, or an error with its parameter and hint", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wtest_shell_results 3 abc\\r\\p\\p"
+        "test_shell_results 1 x --asked Plain\\r\\p\\p"
+        "test_shell_results 1 x --asked Refused\\r\\p\\p"
+        "try { test_shell_results 1 x --asked Plain } catch e { print \"caught\" $e.message }\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-console-line=count: 3", "--expect-console-line=label: \"abc\"",
+        "--expect-console-line=error: test_shell_results: Plain: Something went wrong that says nothing more.",
+        "--expect-console-line=error: test_shell_results --label: Refused: The label isn't one it takes.",
+        "--expect-console-line=caught test_shell_results: Plain: Something went wrong that says nothing more."])),
     # Memory pressure (decisions/0153): with two sessions, the session manager's budget charged to its threshold, it asks
     # the idle installation, the counter of the session not shown, to stop, and leaves the shown session's running
     ("stops the idle installations of sessions not shown under memory pressure", 7,

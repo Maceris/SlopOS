@@ -151,6 +151,14 @@ terminal client keeps its events and text in growing arrays, each Input added af
 Then for `0178` (2026-11-06), in `std/os/slop_os`'s system ABI: `SIGNAL_UNHELD` and the `memory_holders` call. And
 `terminal.write_line` writes a line and its break together, as another client's text could land between them, which
 a boot test of the shell caught as a program's line joined to the shell's table.
+Then for 11e1 (2026-11-06, `0179`): what a SlopOS program's entry gives back, when it isn't an exit code, written for
+its launcher (Hemera's `docs/compilation.md`, Entry Results): the generated entry hands it to base's
+`runtime.os_entry_result`, which writes `SlopOsResultHeader` and the value in the grant `"result"` and makes the exit
+code 1 for a `Result`'s `Error`; `std/os` gained `LaunchOptions.result`, `entry_result` to read it back, and
+`ParameterName`, which an error holds to name the parameter it came from. The first build of a `main` giving back a
+`Result` stopped at E5002, "a constant's value needs memory": the entry made the slot a large result comes back
+through with the helper ordinary functions use, which needs a function state the entry doesn't have. It makes the
+slot itself now, and a freestanding test builds such a program.
 
 ## 4. Features That Look Like a Strong Fit
 

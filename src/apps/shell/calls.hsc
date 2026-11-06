@@ -177,6 +177,12 @@ Call :: struct {
     progress : u32,
     /** Whether it's said its progress, so it's shown. */
     reporting : bool,
+    /** The memory its program writes what its entry gives back in, the call's, closed by end_call; with has_result. */
+    result : slop_os.Memory,
+    /** Whether result was made, for an entry that gives back more than an exit code (result_grant). */
+    has_result : bool,
+    /** What its program's entry gave back as an Ok, once it's ended (read_result); Null for nothing. */
+    returned : Value,
 }
 
 /**
@@ -214,6 +220,9 @@ end_call :: fn(call: ptr[mut Call]) {
         }
     }
     _ = slop_os.handle_close(cast[slop_os.Handle](call.executable))
+    if call.has_result {
+        _ = slop_os.handle_close(cast[slop_os.Handle](call.result))
+    }
     for &each in call.written {
         runtime.array_free(each)
     }
@@ -247,6 +256,7 @@ start_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], key: u64) -> EvalEr
     options := os.LaunchOptions.{watch = os.LaunchWatch.{port = watch_port(shell), key = key}, lifecycle = ends.b}
     options.clock = copy_of_grant("clock")
     options.locale = copy_of_grant("locale")
+    options.result = result_grant(call)
     match os.launch_named(manager, shell.manager_port, tree.text, call.executable, PROGRAM_BUDGET, call.grants, call.values, options) {
         case Ok(made) => {
             call.started = true
@@ -263,6 +273,7 @@ start_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], key: u64) -> EvalEr
             }
             close_copy(options.clock)
             close_copy(options.locale)
+            close_copy(options.result)
             return EvalError.{message = message("% didn't start: %", tree.text, error), at = tree.at}
         }
     }
@@ -274,8 +285,9 @@ start_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], key: u64) -> EvalEr
  * @param shell The shell, whose port it waits on.
  * @param call The call; one not started, or already waited for, isn't waited for again.
  * @param running The programs it runs among, which Ctrl-C stops.
- * @return Null if it ended with 0, or wasn't waited for; an error saying it was ended, or with what code, if not, or
- *     that the shell's port couldn't be waited on, when its end's never seen.
+ * @return Null if it ended with 0, or wasn't waited for; the error its entry gave back, if it gave one (read_result);
+ *     an error saying it was ended, or with what code, if not, or that the shell's port couldn't be waited on, when
+ *     its end's never seen.
  */
 wait_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], running: ptr[mut Running]) -> EvalError? {
     if !call.started || call.waited {
@@ -287,6 +299,11 @@ wait_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], running: ptr[mut Run
     _ = slop_os.port_unbind(watch_port(shell), call.key)
     _ = slop_os.port_unbind(watch_port(shell), call.key + LIFECYCLE_KEY)
     ended :: waited or_return EvalError.{message = message("the shell couldn't wait for % to end", tree.text), at = tree.at}
+    // What its entry gave back, which an Error makes its error
+    match read_result(shell, call, ended) {
+        case Some(error) => return error
+        case None => {}
+    }
     if ended == 0 {
         return null
     }
