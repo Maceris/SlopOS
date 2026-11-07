@@ -83,10 +83,10 @@ generation, `AppData` and `Config[T]`, and Hemera's typed linking and reproducib
 
 ## Console and sessions
 
-- **A shared volume after a member leaves** (`decisions/0161`): a new key generation's key is wrapped by the volume key,
-  which the share's secret unwraps and which doesn't change, so it doesn't protect new data from a member who kept the
-  secret and gets the disk. Should taking a member out give the volume a new volume key, wrapped by a new secret sealed
-  to those left, and is that a new SlopFS operation, or a clone?
+- Nothing open. **A shared volume after a member leaves** (`decisions/0161`) was answered 2026-11-07 (`decisions/0181`,
+  F5): taking a member out gives the volume a new volume key, wrapping the new key generation, under a new secret
+  sealed to those left; then its older blocks are sealed again in the background, and the old generations' keys
+  deleted.
 
 Answered 2026-11-01 (`decisions/0136`): the typed terminal protocol, one powerbox per session, elevation by
 re-authentication on the trusted path, and Ctrl+Alt+Delete or a serial BREAK as the secure attention key, which the

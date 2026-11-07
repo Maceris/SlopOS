@@ -10,7 +10,7 @@ Layer references (L0–L6) are from `../docs/architecture/layers.md`.
 
 ## M0 — Foundations (no hardware needed)
 
-Pure code that everything else depends on, and that can be tested on a host.
+Done 2026-10-17. Pure code that everything else depends on, and that can be tested on a host.
 
 - **Build package** for the targets: kernel (`OS == .None`), user space (`OS == .SlopOS`),
   host (tests). Hemera has no build system, so this is a Hemera program registering targets
@@ -20,7 +20,7 @@ Pure code that everything else depends on, and that can be tested on a host.
   work without an allocator (intrusive lists, fixed-capacity arrays, bitmaps, ring buffers)
   and formatting into a fixed buffer; fix `SharedPtr` to use atomics.
 - **Boot protocol types**: the portable `BootInfo` type (`../docs/specs/boot_info.md`) and the
-  Limine protocol structures.
+  Limine protocol structures (Limine since replaced by SlopOS's own bootloader, B).
 - **Arch interface** (L1 ↔ L2): the `arch_interface` package of `---` declarations that
   `arch/x86_64` must implement (`../docs/specs/arch_interface.md`).
 - **House-rule checks**: arch interface conformance and `std` tier
@@ -32,8 +32,8 @@ system in Hemera, compile-time reflection over packages (house-rule checks), tes
 
 ## M1 — Boot to Console (L0, L1)
 
-Building it needs the compiler work in `compiler-plan.md` (Phases 0–6).
-
+Done 2026-10-15 (`compiler-plan.md` Phase 6). Building it needed the compiler work in `compiler-plan.md` (Phases 0–6).
+Limine, which it booted through, was replaced by SlopOS's own bootloader in B.
 
 - Kernel entry from Limine; convert responses to `BootInfo`.
 - `CPUID` check for x86-64-v3; refuse to boot otherwise, with a message.
@@ -53,6 +53,8 @@ the carrier block and prologue stack check in a freestanding build.
 
 ## M2 — Memory (L1, L2)
 
+Done 2026-10-22 (`decisions/0048`).
+
 - Physical frame allocator: buddy allocator over the boot memory map, SMP-safe.
 - 4-level paging: map/unmap/protect, W^X enforced, NX, global pages, PCID.
 - Kernel address-space layout (direct map, kernel image, per-CPU areas), KASLR-ready.
@@ -63,6 +65,8 @@ Stresses: the `Allocator` interface for real, bit-packed page table entries, ato
 `Result` error handling, where state lives without globals.
 
 ## M3 — Interrupts, Time, SMP (L1, L2)
+
+Done 2026-10-22 (`decisions/0049`).
 
 - Interrupt controllers registered with the kernel (the platform service reads the MADT, `decisions/0039`;
   the kernel parses no ACPI, `0031`), the I/O APIC, IRQ routing to (later) driver messages.
@@ -76,6 +80,8 @@ Stresses: atomics and fences, the per-CPU `context.user_data` approach, volatile
 
 ## M4 — Threads and Scheduling (L2)
 
+Done 2026-10-22 (`decisions/0050`).
+
 - Thread objects (≤ 1 KiB target), XSAVE state, context switch.
 - One kernel stack per CPU ("run to completion or record a continuation").
 - Per-CPU run queues, CPU budgets (`design/scheduling.md`), idle and preemption.
@@ -86,6 +92,10 @@ switching, IST stacks and the carrier block's `stack_limit`, how `std`'s thread 
 sets up the carrier register (`decisions/0026`).
 
 ## M5 — Capabilities and IPC (L2)
+
+Done 2026-10-23 (`decisions/0051` to `0057`), in four stages: the system call path, objects, handles and reclamation;
+ports; channels; then memory budgets and memory objects, the platform capability, process control and intercepts, and
+the syscall table generated from the ABI package.
 
 - Per-process handle tables, rights, revocation.
 - Kernel objects: address space, thread, memory object, channel/endpoint, IRQ, I/O port
@@ -117,10 +127,10 @@ registers, `TARGET_ARCH` branching.
 - Syscall library, and the start of the `std` port (`OS == .SlopOS`).
 - A debug-log capability, so programs can report before M7's console.
 
-In five stages (`decisions/0058`, with 6d split in `0068`): 6a user programs as executables (`base`'s SlopOS
-runtime, the build package's user targets, the startup block); 6b the kernel starts the root task; 6c the
-root task and the process manager, with the early entropy source; 6d the start of `std`'s SlopOS port, with
-typed entry points; 6e the user-mode boot tests as programs of their own.
+Done 2026-10-24 (`decisions/0058` to `0060`, `0067` to `0069`), in five stages (`0058`, with 6d split in `0068`): 6a
+user programs as executables (`base`'s SlopOS runtime, the build package's user targets, the startup block); 6b the
+kernel starts the root task; 6c the root task and the process manager, with the early entropy source; 6d the start of
+`std`'s SlopOS port, with typed entry points; 6e the user-mode boot tests as programs of their own.
 
 Specs: ELF-64, System V x86-64 relocations.
 Stresses: `std` design, the system ABI, the context register at process start.
@@ -285,61 +295,19 @@ Design: `design/console-and-sessions.md`.
   and the user's view of what they've granted, to revoke it. Elevation is the powerbox asking for re-authentication
   on the trusted path and granting one capability, never a `sudo`.
 
-Planned 2026-11-01 (`decisions/0136`), with the owner: the typed terminal protocol; Ctrl+Alt+Delete and a serial BREAK
-as the secure attention key; Ctrl-C an `Interrupt` to the terminal's owner; and every item `design/lessons.md` §3
-proposed (a recovery code, new keyboards accepted by a code, NIST's password rules, visible substitutes for
-bidirectional and invisible characters, the layout on the status line, `Locale`). In four stages:
-- **10a** the terminal and input services and the trusted path, in four parts: **10a1** the terminal protocol, the
-  terminal service and the VT adapter, Unicode widths and visible substitutes; **10a2** the input service, keymaps,
-  new keyboards, the secure attention key, the status line and the framebuffer back end; **10a3** the lifecycle channel
-  with `Stop` and `Ping`, the secure attention key's menu, the trusted path's reserved budget, the last panic record
-  shown; **10a4** the root task's services restarted and logging to the events service, interrupt controllers
-  unregistered when the platform service restarts.
-- **10b** accounts: the account service and its volume, Argon2id, wrapped keys, the password rules, `Secret[T]`,
-  first-boot setup and the recovery code.
-- **10c** login and sessions: console login, the session manager, several sessions, ending one, `Locale`, idle
-  installations stopped under memory pressure.
-- **10d** the powerbox and sharing: runtime requests, persistent grants listed and revoked, elevation, shared volumes.
-
-10a1 done 2026-11-01 (`decisions/0137`): the terminal protocol in `std`, Hemera's `std/unicode` (UAX #29 and widths from
-Unicode 17), the terminal service in the console service's place, the VT adapter, visible substitutes, and `echo` as the
-console's reader until sessions.
-10a2 done 2026-11-01 (`decisions/0138`): the screen model and status line, the secure attention key's screen, the input
-service with keymaps and new keyboards accepted by a code, and the console drawn on the framebuffer too.
-10a3 done 2026-11-01 (`decisions/0139`): Hemera's runtime threads on SlopOS, the lifecycle channel served by the runtime
-with `Ping` and `Stop`, the secure attention key's screen listing the console's programs and ending them, the trusted
-path's CPU share, and the boot before's panic shown.
-10a4 done 2026-11-01 (`decisions/0140`): the root task's services started again, reached through connectors it serves
-on a thread of its own, and registering a platform service's controllers again answered with those already there.
-10a done.
-10b planned 2026-11-01 (`decisions/0141`), in four parts: **10b1** Hemera's `#secret` kept out of `any`s, formatted as
-`<secret>`; **10b2** volumes made at run time, plain by the container service and sealed by a volume server; **10b3** the
-account service, its volume, Argon2id, wrapped keys, the password rules and rate limits; **10b4** first-boot setup on
-the trusted path, with the recovery code. 10b1 done 2026-11-01 (Hemera's `docs/memory.md`, *Secrets*). 10b2 done
-2026-11-01 (`decisions/0142`): `CreateVolume`, a sealed volume's keys made by its volume server, the container service
-given only the wrapped records. 10b3 done 2026-11-01 (`decisions/0143`): the account service, its records with
-Argon2id at 64 MiB, the password rules and the common list, rate limits, and the recovery code; boot tests run with 512
-MiB. 10b4 done 2026-11-02 (`decisions/0148`): first-boot setup on the terminal service's own screen, the administrator
-made and the recovery code shown once. 10b done.
-10c planned 2026-11-02 (`decisions/0149`), in four parts: **10c1** console login and one session, the session manager
-starting echo in it with its home directory; **10c2** several sessions, a screen each in the terminal service, the
-secure attention key's menu (switch, log in another, lock, log out); **10c3** `Locale`; **10c4** idle installations
-stopped under memory pressure. 10c1 done 2026-11-02 (`decisions/0150`): the login screen with the keyboard layout on
-the status line (US and UK, F2), the session manager, and echo started in the session with its home directory.
-10c2 done 2026-11-02 (`decisions/0151`): a view per session in the terminal service, and the secure attention key's
-screen switching sessions, logging in another, locking the console and logging out. 10c3 done 2026-11-02
-(`decisions/0152`): Hemera's `std/locale`, the user's locale in the config store, given to each program of the session.
-10c4 done 2026-11-02 (`decisions/0153` to `0155`): the system's installations run in each session, with their data in
-the user's home, and under memory pressure the session manager stops the installations of the sessions not shown.
-10d planned 2026-11-02 (`decisions/0156`), in four parts: **10d1** the powerbox and its chooser; **10d2** persistent
-grants; **10d3** elevation; **10d4** shared volumes. 10d1 done 2026-11-02 (`decisions/0157`): a powerbox per session,
-`RequestFile` and `RequestDirectory` answered through the chooser the secure attention key opens. Chosen for the rest
-2026-11-02 (`decisions/0158`). 10d2 done 2026-11-02 (`decisions/0159`): grants kept as stored links, into their own
-volume too, when the user ticks "keep for next time", and the grants view revoking them. 10d3 done 2026-11-02
-(`decisions/0160`): another account made when the administrator allows it on the trusted path, its password typed there.
-10d4 done 2026-11-02 (`decisions/0161`): volumes shared between users, their secret sealed to each member's X25519 key,
-shared from the secure attention key's screen, a member taken out with every link revoked and a new key generation.
-M10 done 2026-11-02.
+Done 2026-11-02 (`decisions/0136` to `0161`), planned with the owner (`0136`): the typed terminal protocol;
+Ctrl+Alt+Delete and a serial BREAK as the secure attention key; Ctrl-C an `Interrupt` to the terminal's owner; and
+everything `design/lessons.md` §3 proposed. In four stages:
+- **10a** the terminal and input services and the trusted path (`0137` to `0140`): the terminal protocol and service,
+  the VT adapter, Unicode widths and visible substitutes; the input service, keymaps and new keyboards accepted by a
+  code; the status line, the secure attention key's screen and the framebuffer; the lifecycle channel; and the root
+  task's services started again when they end.
+- **10b** accounts (`0141` to `0148`): `#secret`, volumes made at run time, the account service with Argon2id, wrapped
+  keys, the password rules and rate limits, and first-boot setup with the recovery code.
+- **10c** login and sessions (`0149` to `0155`): console login, several sessions, `Locale`, installations run in each
+  session, and idle ones stopped under memory pressure.
+- **10d** the powerbox and sharing (`0156` to `0161`): requests answered through the chooser, grants kept as stored
+  links and revoked, elevation, and volumes shared between users.
 
 Specs: RFC 9106 (Argon2), RFC 3394 or the AEAD for key wrapping, ECMA-48 (for the VT adapter only), the Unicode
 standard's East Asian Width and UAX #29 for terminal widths.
@@ -361,30 +329,33 @@ Design: `design/shell.md`.
 - **Tools**: listing, copying, moving and removing files; search; a viewer and pager for any typed value; the process
   tree; snapshots; grants; installing; a text editor.
 
-In five stages: **11a** the `std` port (`Stream[T]`, terminal client, line editor); **11b** the language and calls
-through manifests; **11c** pipelines and rendering; **11d** interactive use; **11e** the tools and scripts as
-programs. Planned 2026-11-02 (`decisions/0162`, `0164`). 11a done 2026-11-02 (`0163`, `0165` to `0168`): entries
-taking typed values, `Stream[T]` and `Sink[T]`, `std/terminal`'s client and line editor, time zones from TZif, and
-linear-time regular expressions. 11b done 2026-11-02 (`0169` to `0171`): the shell's language with typed values,
-calls through manifests with arguments read by type and grants made from types, shell functions, errors handled
-with `or`, `try` and `?`, and `cd`; the shell is the session's first program with `use_shell`. 11c done 2026-11-03 (`0172`): pipelines over typed
-streams, records decoded by manifests, the built-in stages, and tables. Before the rest of 11d, a phase of its own (`0174`): Doxygen-style
-documentation comments, kept and checked by Hemera's compiler, both codebases rewritten in them, done 2026-11-04. 11d
-done 2026-11-05 (`0176`): programs' documentation in their bundles, `help`, completion with summaries, history in the
-user's home, jobs with `&`, `jobs`, `wait` and `stop`, Ctrl-C and `Progress` over the lifecycle channel, the shell as
-every session's first program, and the language a library tested on the host. After it (`0177`): a message that
-breaks its protocol ends its connection, in every service and client; a job's output read as it's written; and Ctrl-C
-seen behind type-ahead. Then memory that says when no one else holds it, so the bundle store closes executables no one
-holds when it needs room, done 2026-11-06 (`0178`). 11e planned 2026-11-06 in six parts (`0179`): 11e1 what a
-program's entry gives back, a `Result` whose error the shell shows with its parameter and hint, done 2026-11-06;
-11e2 files, with snapshots through `dir` and automatic ones, and recovering, done 2026-11-06, and with it the
-system shut down from the secure attention key's screen, which the boot tests end with when they're done (`0180`);
-11e3 search, and the shell's `view` and pager, reading a typed file by its type from the programs' manifests, done
-2026-11-06; 11e4 the session's processes, kept grants, and a user's own installations, done 2026-11-06; 11e5 the editor, done 2026-11-06; 11e6 scripts with `param` lines, done 2026-11-06, which ends M11. This
-is the first usable system (above).
+Done 2026-11-06 (`decisions/0162` to `0180`), planned 2026-11-02 (`0162`, `0164`), in five stages; with it, the
+first usable system (above):
+- **11a** the `std` port (`0163`, `0165` to `0168`): entries taking typed values, `Stream[T]` and `Sink[T]`, the
+  terminal client and line editor, time zones from TZif, and linear-time regular expressions.
+- **11b** the language and calls through manifests (`0169` to `0171`): typed values, arguments read by type and grants
+  made from types, shell functions, errors handled with `or`, `try` and `?`, and `cd`.
+- **11c** pipelines over typed streams, records decoded by manifests, the built-in stages and tables (`0172`).
+- **11d** interactive use (`0174` to `0178`): documentation comments kept and checked by the compiler, `help`,
+  completion, history, jobs, Ctrl-C and `Progress`, and the shell as every session's first program; and a message that
+  breaks its protocol ending its connection, and memory that says when no one else holds it.
+- **11e** the tools and scripts (`0179`, `0180`): what a program's entry gives back; listing, copying, moving,
+  removing and recovering files, with snapshots; search, `view` and a pager; the session's processes, kept grants and a
+  user's own installations; the editor; scripts with `param` lines, each in a shell of its own; and shutting down from
+  the secure attention key's screen.
 
 Stresses: an interpreter in Hemera (tagged unions, arenas), reflection-driven parsing and rendering, Unicode and
 regex tables generated at compile time, the typed-entry machinery from the caller's side.
+
+## Before P — What M10 and M11 Left
+
+Planned 2026-11-07 (`decisions/0181`), with the owner: what M10, M11, R and B left for later that comes before P, in
+seven parts: **F1** the shell's background jobs read as they write and said to end, values rendered by their types,
+and tables cut to the terminal's width; **F2** Unicode normalization and case folding in `std`, for "did you mean";
+**F3** installing any program, given what any installation gets, its other parameters optional, and installations
+stopped under pressure started again when their session's shown; **F4** kept grants listed and revoked from the shell,
+end to end; **F5** a shared volume given a new volume key when a member's taken out, and its old blocks sealed again; **F6** R5's chaos tests; **F7**
+a development generation's command line edited before it boots.
 
 ## P — Power (L3)
 
@@ -399,7 +370,8 @@ regex tables generated at compile time, the typed-entry machinery from the calle
 
 Specs: ACPI 6.5 (AML), Arm PSCI (DEN 0022).
 Stresses: an interpreter of an untrusted bytecode, kept in its own process.
-Before M11 ends, so the first usable system shuts down properly.
+Meant to come before M11 ended, so the first usable system shuts down properly; until it does, the secure attention
+key's screen commits the volumes and ends the root task (`decisions/0180`). Next after what M10 and M11 left (above, `decisions/0181`).
 
 ## M12 — Observability and Debugging (L4, L6)
 
@@ -519,6 +491,7 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | Perf | done 2026-10-31 (`decisions/0097`, `0112`, `0127` to `0130`): benchmarks held to baselines, tickless idle, large pages, CPU loans in the storage servers |
 | R | planned 2026-10-29 (`decisions/0096`): R1 to R4 done 2026-10-30 (`0104` to `0106`, `0112`); R5 and R6 not started |
 | B | done 2026-10-31 (`decisions/0131` to `0135`): Hemera's UEFI target, SlopOS's bootloader, boot counting and recovery, ISOs through it, Limine and BIOS boot removed |
-| M10 | planned 2026-11-01 (`decisions/0136`), in four stages, 10a done (`0137` to `0140`), 10b done (`0141` to `0148`), 10c done (`0149` to `0155`), 10d done (`0156` to `0161`); done 2026-11-02 |
-| M11 | planned 2026-11-02 (`decisions/0162`), in five stages, 11a to 11e done (`0163` to `0180`): the shell, its language, calls through manifests, pipelines, interactive use, and the tools and scripts; done 2026-11-06 |
+| M10 | done 2026-11-02 (`decisions/0136` to `0161`): the terminal and input services and the trusted path, accounts, login and sessions, the powerbox and sharing |
+| M11 | done 2026-11-06 (`decisions/0162` to `0180`): the shell, its language, calls through manifests, pipelines, interactive use, and the tools and scripts |
+| Before P | planned 2026-11-07 (`decisions/0181`), in seven parts, F1 to F7: what M10, M11, R and B left; not started |
 | M12–M16, P, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
