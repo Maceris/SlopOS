@@ -8,6 +8,11 @@ import slop_os from "std/os"
  * name, its executable, which the shell launches itself, and its manifest, the schema of its entry's type, which says
  * what it takes; the root's programs' names, and a program's documentation (decisions/0174), for help and completion.
  * Nothing else of the store's: the shell can't put, pin, root or collect.
+ *
+ * And its own session (decisions/0179, 11e4): the session's programs running, an installation of it ended, and the
+ * session's user's own installations, which run beside the system's in each of the user's sessions: installed,
+ * uninstalled (a snapshot of the home taken first, so its data can be recovered) and listed with the system's. What a
+ * shell asks is only ever of its own session and user.
  */
 
 /**
@@ -59,6 +64,32 @@ Request :: union {
      * Missing, as for Find, and for a program without documentation.
      */
     Describe(slop_os.Relative[u8]),
+    /**
+     * Ask for the session's programs running, each pinged on its lifecycle channel and given a short while to answer.
+     * Answered with Running.
+     */
+    Running,
+    /**
+     * End an installation running in the session, by its name: asked to stop, killed after a grace period if it hasn't.
+     * It starts again with the session's next start. Answered with Done, or Refused (NotInstalled).
+     */
+    EndInstallation(slop_os.Relative[u8]),
+    /**
+     * Add an installation to the user's list, and start it in each of the user's sessions. Answered with Done, or
+     * Refused.
+     */
+    Install(Installing),
+    /**
+     * Remove an installation of the user's, by its name: a snapshot of the home taken, then it's stopped in each of the
+     * user's sessions, taken off the list, its data directory deleted and its settings forgotten. Answered with Done,
+     * or Refused.
+     */
+    Uninstall(slop_os.Relative[u8]),
+    /**
+     * Ask for an installation the session runs, by an index from 0: the system's, then the user's. Answered with
+     * Listed, or End past the last.
+     */
+    Installation(u32),
 }
 
 /** A program's documentation, as the bundle store keeps it. */
@@ -70,6 +101,70 @@ ProgramDocumentation :: struct {
     record : slop_os.Memory,
     /** How many bytes from record's start are the record's. */
     size : u64,
+}
+
+/** The most bytes of an installation's name: 31, letters, digits and _, as the system's records take them. */
+MAX_INSTALLATION_NAME :: 31
+
+/** The most programs one Running lists: 16. */
+MAX_RUNNING :: 16
+
+/** A program of the session's, running, as Running gives it: plain data, as a Relative's elements are. */
+RunningProgram :: struct {
+    /** Its name, as UTF-8, in the first name_bytes bytes: "shell", "powerbox", or an installation's. */
+    name : u8[32],
+    /** How many of name's bytes are the name, 0 to 32. */
+    name_bytes : u8,
+    /** 1 if it answered a Ping on its lifecycle channel in time, 0 if it didn't. */
+    responding : u8,
+    /** 1 if it's an installation, which EndInstallation can end; 0 for the session's own programs. */
+    installation : u8,
+    /** Its memory budget's bytes in use; 0 if the budget couldn't be read. */
+    memory : u64,
+    /** Its memory budget's limit, in bytes; 0 if the budget couldn't be read. */
+    memory_limit : u64,
+}
+
+/** An installation to make: its name, and the program it runs, from the boot root. */
+Installing :: struct {
+    /** Its name, 1 to MAX_INSTALLATION_NAME letters, digits and _: its data directory's and its settings' too. */
+    name : slop_os.Relative[u8],
+    /** The program's name in the boot root, 1 to MAX_INSTALLATION_NAME bytes. */
+    program : slop_os.Relative[u8],
+}
+
+/** An installation, as Installation lists it. */
+Installed :: struct {
+    /** Its name. */
+    name : slop_os.Relative[u8],
+    /** The program it runs. */
+    program : slop_os.Relative[u8],
+    /** Whether it's the user's own, which Uninstall removes; false for the system's, which every session runs. */
+    users : bool,
+    /** The index to ask Installation for next. */
+    next : u32,
+}
+
+/** Why an installation couldn't be made, removed or ended. */
+InstallProblem :: enum #backed_by(u8) {
+    /** The session has no user, so no list of its own. */
+    NoUser = 1,
+    /** The name isn't 1 to MAX_INSTALLATION_NAME letters, digits and _. */
+    BadName = 2,
+    /** The boot root has no program of that name. */
+    NoSuchProgram = 3,
+    /** The program's entry isn't the one installations are started with. */
+    NotInstallable = 4,
+    /** An installation of the system's or the user's has the name already. */
+    NameTaken = 5,
+    /** The user's list has no room for another. */
+    Full = 6,
+    /** No installation of the user's has the name; one that isn't running, for EndInstallation. */
+    NotInstalled = 7,
+    /** It's the system's installation, which a user can't remove. */
+    Systems = 8,
+    /** The config store or the home couldn't be reached, or refused. */
+    Failed = 9,
 }
 
 /** What the session manager answers. */
@@ -90,16 +185,29 @@ Response :: union {
     End,
     /** The answer to Describe when the program has documentation: its record, whose handle moves to the shell. */
     Documented(ProgramDocumentation),
+    /** The answer to Running: the session's programs, at most MAX_RUNNING. */
+    RunningPrograms(slop_os.Relative[RunningProgram]),
+    /** The answer to EndInstallation, Install and Uninstall once it's done. */
+    Done,
+    /** The answer to EndInstallation, Install and Uninstall when it isn't done, and why. */
+    Refused(InstallProblem),
+    /** The answer to Installation: the installation at the index. */
+    Listed(Installed),
 }
 
 /**
  * Tell whether a request may be sent again, after a reconnect, without doing more than sending it once did.
  *
  * @param request The request, which isn't changed.
- * @return True for every request: finding, listing and describing again change nothing.
+ * @return False for Install and Uninstall, which change the user's list; true for the rest: finding, listing,
+ *     describing, ending what's ended again change nothing more.
  */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
-    return true
+    return match request^ {
+        case Install(_) => false
+        case Uninstall(_) => false
+        case _ => true
+    }
 }
 
 #insert os.protocol_code(Request, Response)

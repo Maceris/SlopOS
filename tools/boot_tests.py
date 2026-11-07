@@ -756,6 +756,39 @@ TESTS = [
         "--expect-console-line=lines 39-60 of 60: Space and b page, Up and Down scroll, q quits",
         "--expect-console-line=lines 38-59 of 60: Space and b page, Up and Down scroll, q quits",
         "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
+    # The system as a session sees it (decisions/0179, 11e4): the user's own installations installed, listed, seen
+    # running, ended and uninstalled, their data recoverable after; the refusals; and the kept grants, of which there
+    # are none
+    ("installs and uninstalls a user's own installations, lists the session's processes, and its kept grants", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=330")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\winstallations\\r\\p"
+        "install counter --as tally\\r\\p\\p"
+        "installations\\r\\p"
+        "processes | where name == \"tally\" | map state\\r\\p\\p"
+        "install hello\\r\\p"
+        "install counter --as tally\\r\\p"
+        "end tally\\r\\p\\p\\p"
+        "processes\\r\\p\\p"
+        "uninstall tally\\r\\p\\p\\p"
+        "installations\\r\\p"
+        "cd apps\\r\\p"
+        "recover\\r\\p\\p\\p"
+        "grants\\r\\p"
+        "grants --revoke 7\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-console-line=counter  counter  system", "--expect-console-line=tally    counter  yours",
+        "--expect-console-line=\"running\"",
+        "--expect-console-line=error: hello: that program isn't one an installation can run: its entry takes other things",
+        "--expect-console-line=error: tally: an installation has that name already; give another with --as",
+        "--expect-console-line=name   directory  snapshot", "--expect-console-line=no kept grants",
+        "--expect-console-line=error: there's no kept grant 7",
+        "--expect-line=[user] sessions: installed tally (counter) for admin",
+        "--expect-line=[user] sessions: ending tally as its session's shell asked",
+        "--expect-line=[user] sessions: uninstalled tally for admin",
+        "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
     # Automatic snapshots (decisions/0179): every 2 seconds with test_snapshot_seconds=2, kept 20, of the two volumes
     # served, so after a while two are taken and two deleted each time
     ("takes automatic snapshots of the volumes it serves, and deletes the old ones", 7,

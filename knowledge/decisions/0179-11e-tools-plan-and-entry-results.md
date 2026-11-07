@@ -1,6 +1,6 @@
 # 0179: 11e, the Tools and Scripts, and What a Program's Entry Gives Back
 
-Status: accepted; 11e1, 11e2 and 11e3 built (below)
+Status: accepted; 11e1 to 11e4 built (below)
 Date: 2026-11-06
 Related: `0162` (M11's plan), `0169` to `0172` (the shell, calls through manifests), `0176` (11d, documentation),
 `../design/shell.md`, Hemera's `docs/compilation.md` (Entry Parameters, Entry Results)
@@ -80,6 +80,23 @@ need that first, so it's 11e's first part.
   pager's own, a line under it saying where it is and which keys move it. A value that fits is written as any other.
   It's the shell's because the shell is what reads any type: a program would need a stream of one type.
 
+**The system, as a session sees it** (11e4, chosen with the project's owner: the session's own processes, kept grants
+listed and revoked, a user's own list of installations):
+- **`processes`**: the session's programs (the shell, the powerbox, its installations), from the session manager,
+  each with its budget's use and limit and whether it answered a ping, and the shell's jobs' programs beneath the
+  shell. Nothing of other sessions or the system's services; `end name` ends one of the session's installations, which
+  starts again with the session's next start.
+- **A user's own installations**: `install program --as name` adds to a list of the user's, the config store's value
+  "installations" of their owner, of the system list's type, which each of the user's sessions runs beside the
+  system's; it starts at once in each. A name is unique across both lists. `uninstall name` takes a snapshot of the
+  home first, so `recover` brings `apps/name` back, then stops it, takes it off the list and removes its data and
+  settings; the system's can't be. `installations` lists both. A program installs only if its entry is the one
+  installations are started with (a data directory and settings), as for the system's.
+- **`grants`**: the links the home has issued, the grants kept through the powerbox, as the trusted path's G view
+  lists them; `grants --revoke n` revokes one. Revoking takes authority away, never gives it, so the shell may.
+- **Built-ins**, as `view` and `page` are: the process tree needs the shell's jobs, which only it knows, and the rest
+  ask the session manager on the shell's own connection, which a program would need granted.
+
 ## Alternatives
 - **A removed area in the file system**, kept for a day: simpler, but a recycle bin rather than snapshots, and no view
   of the past for anything else.
@@ -99,6 +116,13 @@ need that first, so it's 11e's first part.
   unless programs could read streams of any type.
 - **A schema store in the bundle store**, every schema published by its hash when a program is installed, as
   `../design/protocols.md` §5 sketches: new records and a request, for what the manifests already hold.
+- **Every process on the system**, services too, through a new listing of the kernel's or the process manager's: more
+  like `top`, but it needs a rule for who may see and stop what; a session's are its user's.
+- **Installing into the system's list**: every user would run it, so it needs the administrator, on the trusted path.
+- **Kept grants listed but revoked only on the trusted path**: safer against a program revoking one, but revoking
+  never gives authority, and the user at the shell is the one who kept them.
+- **The system tools as programs**, given a connection of the session manager's: the process tree would miss the
+  shell's jobs.
 
 ## Consequences
 - Tools give back `Result`s and the shell shows their errors with no code of their own for it.
@@ -159,3 +183,26 @@ need that first, so it's 11e's first part.
   affected, as a snapshot's is listed on its own connection. And `search` made 65 programs, past a generation's boot
   set of 64 files (`0135`), so the image couldn't be built: `MAX_BOOT_FILES` is 128 now, as `MAX_MODULES` and
   `MAX_ROOT_GRANTS` are (`0180`), which makes a generation's record larger, a format change no stored record survives.
+
+## As Built, 11e4 (2026-11-06)
+- **The programs protocol** gains, for the asking shell's own session: `Running` (`RunningPrograms`, each with its
+  name, budget's use and limit, whether it answered a ping, and whether it's an installation), `EndInstallation`,
+  `Install`, `Uninstall` and `Installation` (`Listed`, the system's then the user's), answered `Done`, or `Refused`
+  with an `InstallProblem`.
+- **The session manager** (`users_installations.hsc`): a user's list is the config store's "installations" of
+  `user:<name>`, declared, of the system list's type, so 8 at most; it's started after the system's at each session's
+  start. `install` checks the name across both lists and that the program's manifest is the installations' entry, then
+  starts it in each of the user's sessions; `uninstall` takes a `Snapshot` through the session's apps directory's
+  connection first, then stops it in each session and removes its data and settings, as the system's uninstall does
+  (`remove_installation_data`, split out of it).
+- **The shell** (`system.hsc`): `processes`, a list of records (name, parent, state, memory, limit), the session's
+  programs then the jobs' programs beneath the shell; `end`, `install` (`--as`), `uninstall`, `installations`; and
+  `grants`, the home's `Links`, or `--revoke n` its `Revoke`.
+- **Test**: a boot test lists the installations, installs the counter as `tally` and sees it listed and running, gets
+  both refusals (a program that isn't installable, a name that's taken), ends it, uninstalls it, recovers its data
+  directory from `apps`, and lists kept grants, of which there are none, and revokes one that isn't there; on both
+  architectures. Revoking a kept grant is the trusted path's test's.
+- **Left**: an installation runs only the installations' entry, a data directory and settings; any entry, given what
+  its manifest asks for, is for later, with the shell's grants for a guide. The session manager's log lines after it
+  ends a program didn't reach the serial line in the test (a line was repeated once instead), though what it did was
+  done: a separate question, for the events service's rings.

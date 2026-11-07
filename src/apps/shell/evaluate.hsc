@@ -303,8 +303,9 @@ arithmetic :: fn(at: usize, operator: string, left: Value, right: Value) -> Resu
 
 /**
  * Evaluate a call: a name bound by let, alone, is its value; print writes its arguments, exit ends the shell, cd
- * changes its directory, help says what a command does, view gives a file as a value (viewing.hsc), and jobs, wait
- * and stop work on jobs in the background; a
+ * changes its directory, help says what a command does, view gives a file as a value (viewing.hsc), jobs, wait and
+ * stop work on jobs in the background, and processes, end, install, uninstall, installations and grants on the
+ * session (system.hsc); a
  * shell function's name calls it; anything else is a program, through its manifest
  * (decisions/0170).
  *
@@ -363,6 +364,25 @@ call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, E
     }
     if tree.text == "view" {
         return view_file(shell, tree)
+    }
+    // The system, as the session sees it (system.hsc)
+    if tree.text == "processes" {
+        return list_processes(shell, tree)
+    }
+    if tree.text == "end" {
+        return end_installation(shell, tree)
+    }
+    if tree.text == "install" {
+        return install_program(shell, tree)
+    }
+    if tree.text == "uninstall" {
+        return uninstall_installation(shell, tree)
+    }
+    if tree.text == "installations" {
+        return list_installations(shell, tree)
+    }
+    if tree.text == "grants" {
+        return kept_grants(shell, tree)
     }
     if is_stage(tree) {
         return error_at(tree.at, message("% works on what comes before it in a pipeline", tree.text))

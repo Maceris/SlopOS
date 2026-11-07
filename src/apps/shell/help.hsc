@@ -41,6 +41,12 @@ BUILTINS :: Builtin.[
     Builtin.{name = "group", summary = "Group the items by a field, with their count, in a pipeline: group kind."},
     Builtin.{name = "view", summary = "Give a file as a value: a typed file's, a text file's text, or other bytes in hex: view notes.txt."},
     Builtin.{name = "page", summary = "Show what comes before it a screen at a time, in a pipeline: view notes.txt | page; q quits."},
+    Builtin.{name = "processes", summary = "List the session's programs and the shell's jobs, with their memory and state."},
+    Builtin.{name = "end", summary = "End an installation running in the session, until the session starts again: end tally."},
+    Builtin.{name = "install", summary = "Install a program for you, in each of your sessions: install counter --as tally."},
+    Builtin.{name = "uninstall", summary = "Remove an installation of yours and its data, after a snapshot recover can use: uninstall tally."},
+    Builtin.{name = "installations", summary = "List the installations your sessions run: the system's and yours."},
+    Builtin.{name = "grants", summary = "List the grants kept through the powerbox, or revoke one: grants --revoke 3."},
 ]
 
 /**

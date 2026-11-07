@@ -778,6 +778,8 @@ serve_programs :: fn(sessions: ptr[mut Manager], into: ptr[mut os.Incoming]) {
                 case Find(name) => response^ = find_program(sessions, os.items(into, name))
                 case List(index) => response^ = program_at(sessions, index, &out)
                 case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
+                // Its own session's (users_installations.hsc)
+                case _ => response^ = own_session_answer(sessions, cast[u32](number), os.message_of[programs.Request](into)^, into, &out)
             }
             _ = programs.send_response(made.programs_end, sessions.port, &out)
         }
@@ -1422,8 +1424,8 @@ relieve :: fn(sessions: ptr[mut Manager]) {
 // Installations (decisions/0153)
 
 /**
- * Start the system's installations in a session, each as start_installation does; one that can't start is logged
- * and skipped.
+ * Start the system's installations in a session, then its user's own (users_installations.hsc), each as
+ * start_installation does; one that can't start is logged and skipped.
  *
  * @param sessions The session manager, whose list of installations is read from the config store, and which
  *     starts and keeps each installation.
@@ -1436,6 +1438,7 @@ start_installations :: fn(sessions: ptr[mut Manager], number: u32) {
             _ = start_installation(sessions, number, list.entries[i])
         }
     }
+    start_user_installations(sessions, number)
 }
 
 /**
@@ -1841,7 +1844,24 @@ uninstall :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> bool {
             }
         }
     }
-    whole := write_installations(sessions, kept)
+    written :: write_installations(sessions, kept)
+    return remove_installation_data(sessions, number, name) && written
+}
+
+/**
+ * Remove an installation's data and settings, by a session: its data directory in the session's apps directory
+ * deleted, and its settings forgotten.
+ *
+ * Only the files directly in its data directory are deleted, so a directory in it keeps the data directory too.
+ *
+ * @param sessions The session manager: its data is deleted and its settings forgotten, waiting for each.
+ * @param number The session's number, whose apps directory and user's settings it's removed from.
+ * @param name The installation's name, which names the data directory and the settings' owner.
+ * @return Whether all of it went; false if any part didn't, or the session has no apps directory or there's no config
+ *     store, though what could go has.
+ */
+remove_installation_data :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> bool {
+    whole := true
     if cast[usize](number) >= sessions.sessions.count {
         return false
     }
