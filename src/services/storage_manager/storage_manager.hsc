@@ -17,11 +17,16 @@
  * to the volume server that asked. A link leads only into a volume being served, unlocked; into its own too, as the
  * powerbox keeps a grant of a file in the home it's kept in (decisions/0158), which the volume server answers while it
  * waits, as it does any other.
+ *
+ * Automatic snapshots (decisions/0179): every hour, each writable volume served, unlocked, gets a snapshot, and those
+ * older than a day, its automatic ones and those a dir's Snapshot took, are deleted (automatic_snapshots).
  */
 package storage_manager
 
 import runtime from "base"
 import log_line from "../../log_line"
+import strings from "std"
+import time from "std"
 import os from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
@@ -40,6 +45,15 @@ import container_service from "../container_service"
 import fat_server from "../fat_server"
 import partition_server from "../partition_server"
 import volume_server from "../volume_server"
+
+/** How often each writable volume served gets an automatic snapshot, in nanoseconds: an hour (decisions/0179). */
+SNAPSHOT_EVERY : u64 : 3600 * 1000000000
+/** How long automatic snapshots, and those a dir's Snapshot took, are kept, in nanoseconds: a day. */
+SNAPSHOTS_KEPT : u64 : 24 * SNAPSHOT_EVERY
+/** The start of an automatic snapshot's name, before the seconds since 1970 it was taken at. */
+AUTOMATIC_PREFIX :: "auto-"
+/** The start of the name of a snapshot a dir's Snapshot took (volume_server's ASKED_PREFIX), deleted on the same terms. */
+ASKED_PREFIX :: "asked-"
 
 /** The most disks it holds: one connector each, disk0 to disk3. */
 MAX_DISKS :: 4
@@ -258,6 +272,12 @@ Manager :: struct {
     partition_server_starts : u64,
     /** Whether a wait took the port's packets meant for the main loop, whose clients are read again before it waits. */
     serve_again : bool,
+    /** How often automatic snapshots are taken, in nanoseconds: SNAPSHOT_EVERY, or test_snapshot_seconds's. */
+    snapshot_every : u64,
+    /** How long they're kept, in nanoseconds: SNAPSHOTS_KEPT, or ten times test_snapshot_seconds's. */
+    snapshots_kept : u64,
+    /** When the next automatic snapshots are taken, in nanoseconds of the monotonic clock. */
+    next_snapshots : u64,
 }
 
 /**
@@ -293,13 +313,23 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], par
     state := Manager.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE), manager_connector = manager.end, fat_server_module = fat_server_module,
         container_service_module = container_service_module, volume_server_module = volume_server_module,
         partition_server_module = partition_server_module}
+    state.snapshot_every = SNAPSHOT_EVERY
+    state.snapshots_kept = SNAPSHOTS_KEPT
     match command_line {
         case Some(memory) => {
-            state.test_restart = service_kit.has_word(service_kit.text_of(startup, memory) or_else "", "test_storage_restart")
+            words :: service_kit.text_of(startup, memory) or_else ""
+            state.test_restart = service_kit.has_word(words, "test_storage_restart")
+            // test_snapshot_seconds=N: automatic snapshots every N seconds, kept 10 N, for tests
+            seconds :: service_kit.number_of(service_kit.word_after(words, "test_snapshot_seconds=") or_else "") or_else 0
+            if seconds > 0 {
+                state.snapshot_every = seconds * 1000000000
+                state.snapshots_kept = 10 * state.snapshot_every
+            }
             state.command_line = memory
         }
         case None => {}
     }
+    state.next_snapshots = (slop_os.clock_monotonic() or_else 0) + state.snapshot_every
     state.port = slop_os.port_create(startup.budget) or_return 1
     state.connector_port = os.port_for(startup.budget, state.manager_connector) or_return 1
     if !dial_manager(&state) {
@@ -348,8 +378,14 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], par
             state.serve_again = false
             continue
         }
+        // Automatic snapshots, and those too old let go of (decisions/0179)
+        if (slop_os.clock_monotonic() or_else 0) >= state.next_snapshots {
+            automatic_snapshots(&state)
+            state.next_snapshots = (slop_os.clock_monotonic() or_else 0) + state.snapshot_every
+            continue
+        }
         packets : slop_os.Packet[8]
-        taken :: slop_os.port_wait(state.port, packets, slop_os.NO_DEADLINE) or_else 0
+        taken :: slop_os.port_wait(state.port, packets, state.next_snapshots) or_else 0
         for packet, i in packets {
             if i < cast[usize](taken) && packet.kind == .Signal && packet.key >= PARTITION_SERVER_KEY {
                 ended(&state, packet.key)
@@ -849,6 +885,7 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
                     response = .Done
                 }
             }
+            case CommitAll => response = if committed_all(state) { storage.Response.Done } else { storage.Response.Failed }
         }
         made^ = response
         _ = storage.send_response(end, state.port, &reply)
@@ -1403,6 +1440,144 @@ take_snapshot :: fn(state: ptr[mut Manager], index: usize, volume: u8[], snapsho
     request :: os.begin[container.Request](&out)
     request^ = .TakeSnapshot(container.SnapshotNamed.{volume = os.append(&out, volume), snapshot = os.append(&out, snapshot), now = now})
     return to_container(state, index, &out, null)
+}
+
+/**
+ * Have every writable volume being served, unlocked, commit what's changed, as before a shutdown (decisions/0180).
+ *
+ * @param state The storage manager's state, whose served volumes' servers are each asked, and waited for.
+ * @return Whether each committed; false if any couldn't, the rest asked all the same.
+ */
+committed_all :: fn(state: ptr[mut Manager]) -> bool {
+    all := true
+    for i in 0..<state.served_count {
+        if i >= state.served.count {
+            break
+        }
+        served :: &state.served[i]
+        if served.gone || served.read_only || (served.encrypted && !served.unlocked) {
+            continue
+        }
+        out := os.Outgoing.{}
+        request :: os.begin[volume_protocol.Request](&out)
+        request^ = .Commit
+        match ask_volume(served, &out) {
+            case Committed => {}
+            case _ => all = false
+        }
+    }
+    return all
+}
+
+/**
+ * Take an automatic snapshot of each writable volume served, unlocked, named auto- and the seconds since 1970, and
+ * delete its automatic snapshots, and those a dir's Snapshot took, older than snapshots_kept (decisions/0179). Others,
+ * an administrator's or an update's, are left. Without a wall clock nothing's done, as their ages couldn't be told.
+ *
+ * A snapshot a volume server is serving through OpenSnapshot when it's deleted reads nothing more from then on.
+ *
+ * @param state The storage manager's state, whose served volumes are snapshotted, each committed first.
+ */
+automatic_snapshots :: fn(state: ptr[mut Manager]) {
+    now :: match time.now() {
+        case Ok(instant) => cast[u64](instant.seconds) * 1000000000 + cast[u64](instant.nanos)
+        case Error(error) => return void
+    }
+    taken : u32 = 0
+    deleted : u32 = 0
+    for i in 0..<state.served_count {
+        if i >= state.served.count {
+            break
+        }
+        served :: state.served[i]
+        if served.gone || served.read_only || (served.encrypted && !served.unlocked) || served.name_bytes == 0 || served.name_bytes > served.name.count {
+            continue
+        }
+        volume :: served.name[0..<served.name_bytes]
+        name :: strings.format("%1%2", AUTOMATIC_PREFIX, now / 1000000000) or_continue
+        if take_snapshot(state, served.partition, volume, string_bytes(name), now) == .Done {
+            taken += 1
+        }
+        strings.free_string(name)
+        deleted += delete_old_snapshots(state, served.partition, volume, now)
+    }
+    if taken > 0 || deleted > 0 {
+        runtime.log_info("automatic snapshots: % taken, % deleted", taken, deleted)
+    }
+}
+
+/**
+ * Delete a volume's automatic snapshots, and those a dir's Snapshot took, taken before snapshots_kept ago.
+ *
+ * @param state The storage manager's state, whose container service is asked.
+ * @param index The container's partition's index.
+ * @param volume The volume's name.
+ * @param now The wall clock's time, in nanoseconds since 1970.
+ * @return How many were deleted; those the container wouldn't delete, as one a clone keeps, are left.
+ */
+delete_old_snapshots :: fn(state: ptr[mut Manager], index: usize, volume: u8[], now: u64) -> u32 {
+    service :: container_of(state, index) or_return 0
+    // Their names first, oldest first, as deleting one moves the others' places
+    old : string[..]
+    defer {
+        for each in old {
+            strings.free_string(each)
+        }
+        runtime.array_free(&old)
+    }
+    place := cast[u64](0)
+    loop {
+        out := os.Outgoing.{}
+        request :: os.begin[container.Request](&out)
+        request^ = .SnapshotAt(container.SnapshotIndex.{volume = os.append(&out, volume), index = place})
+        if container.send_request(service.end, service.port, &out) is_some {
+            break
+        }
+        into := os.Incoming.{}
+        match container.receive_response(service.end, service.port, &into, true) {
+            case Received => {}
+            case _ => break
+        }
+        info :: match os.message_of[container.Response](&into)^ {
+            case Snapshot(found) => found
+            case _ => break
+        }
+        place += 1
+        name :: os.items(&into, info.name)
+        if info.created + state.snapshots_kept < now && (has_prefix(name, AUTOMATIC_PREFIX) || has_prefix(name, ASKED_PREFIX)) && name.count > 0 {
+            copy :: strings.clone(string_of(&name[0], name.count)) or_continue
+            runtime.array_add(&old, copy)
+        }
+    }
+    deleted : u32 = 0
+    for each in old {
+        out := os.Outgoing.{}
+        request :: os.begin[container.Request](&out)
+        request^ = .DeleteSnapshot(container.SnapshotNamed.{volume = os.append(&out, volume), snapshot = os.append(&out, string_bytes(each))})
+        if to_container(state, index, &out, null) == .Done {
+            deleted += 1
+        }
+    }
+    return deleted
+}
+
+/**
+ * Tell whether a name starts with a prefix.
+ *
+ * @param name The name's bytes.
+ * @param prefix The prefix, compared byte for byte.
+ * @return Whether name is at least as long, and its first bytes are prefix's.
+ */
+has_prefix :: fn(name: u8[], prefix: string) -> bool {
+    if name.count < prefix.count {
+        return false
+    }
+    for byte, i in string_bytes(prefix) {
+        if i < name.count && name[i] != byte {
+            return false
+        }
+    }
+    return true
 }
 
 /**

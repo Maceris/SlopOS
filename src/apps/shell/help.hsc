@@ -312,6 +312,7 @@ given_text :: fn(manifest: ptr[schema.Schema], parameter: Parameter) -> string {
         case .Value => message("%1%2", type_text(manifest, parameter.held), optional)
         case .Terminal => "the shell's terminal, given without asking"
         case .Dir => message("a directory, by its path%", optional)
+        case .Here => "the shell's directory, given without asking, or another by its path"
         case .File => message("a file to read and write, by its path%", optional)
         case .ReadOnlyFile => message("a file to read, by its path%", optional)
         case .Input => "what comes before it in a pipeline"

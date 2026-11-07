@@ -26,7 +26,7 @@ MAX_SEGMENTS :: 8
  * The most boot modules the handoff carries: a generation's boot set, as many as an ISO carries, and the
  * bootloader's own, last_panic.
  */
-MAX_MODULES :: 72
+MAX_MODULES :: 128
 /** The most CPUs the handoff carries, the boot CPU included; the bootloader starts no more than this many. */
 MAX_CPUS :: 64
 /** The bytes of a module's name, which is cut off at this length; a shorter one is followed by zeros. */

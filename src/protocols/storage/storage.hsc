@@ -198,6 +198,11 @@ Request :: union {
      * (decisions/0098). Answered with Done, or NoPartition when it couldn't be.
      */
     TestRestart(u32),
+    /**
+     * Have every writable volume being served commit what's changed, as before the system shuts down (decisions/0180).
+     * Answered with Done once each has, or Failed if any couldn't.
+     */
+    CommitAll,
 }
 
 /** What the storage manager answers. */
@@ -276,6 +281,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Usage(_) => true
         case Connect(_) => true
         case TestRestart(_) => false
+        case CommitAll => true
     }
 }
 

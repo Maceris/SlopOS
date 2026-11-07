@@ -32,6 +32,11 @@ Giving :: enum {
     Terminal,
     /** A directory beneath the shell's home, from a path. */
     Dir,
+    /**
+     * The shell's directory, without an argument, for a Dir named here (decisions/0179); or, from --here, a directory
+     * beneath its home, as Dir is.
+     */
+    Here,
     /** A file to read and write beneath the shell's home, from a path; made if it isn't there. */
     File,
     /** A file only to read beneath the shell's home, from a path. */
@@ -428,6 +433,10 @@ parameter_of :: fn(manifest: ptr[schema.Schema], input: schema.Input) -> Paramet
         case None => {}
     }
     made.giving = giving_of(manifest, made.held)
+    // A directory named here is the shell's own, given without asking (decisions/0179)
+    if made.giving == .Dir && made.name == "here" {
+        made.giving = .Here
+    }
     if made.giving == .Input || made.giving == .Output {
         made.records = records_of(manifest, made.held)
         // Only the parameters named so are a pipeline's; others of their types are grants the shell doesn't make
@@ -690,11 +699,12 @@ value_for :: fn(shell: ptr[mut Shell], manifest: ptr[schema.Schema], tree: ptr[N
 // ---- Grants
 
 /**
- * Make a parameter's grant: a connection to the shell's terminal, or a directory or file beneath its home from a path
- * given.
+ * Make a parameter's grant: a connection to the shell's terminal, the shell's directory for here given nothing, or a
+ * directory or file beneath its home from a path given.
  *
  * It fails for one that's needed and given nothing, a grant the shell can't make, an argument that isn't a path, or a
- * path that can't be opened.
+ * path that can't be opened; a path with nothing there, whose name matches an entry's but for case or spaces at its
+ * ends, says so (meant_path).
  *
  * @param shell The shell, whose terminal and home the grants come from.
  * @param tree The Call node, for errors.
@@ -720,6 +730,13 @@ grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter
     argument :: match parameter.argument {
         case Some(given) => given
         case None => {
+            if parameter.giving == .Here {
+                made :: opened_beneath_home(shell, ".", .Dir)
+                return match made {
+                    case Ok(handle) => .Ok(handle)
+                    case Error(problem) => .Error(EvalError.{message = message("its directory: %", problem), at = tree.at})
+                }
+            }
             if parameter.optional {
                 return .Ok(null)
             }
@@ -741,10 +758,19 @@ grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter
             case _ => return .Error(EvalError.{message = message("--% takes a path, not %", parameter.name, type_name(got)), at = argument.at})
         }
     }
-    made :: opened_beneath_home(shell, path, parameter.giving)
-    return match made {
-        case Ok(handle) => .Ok(handle)
-        case Error(problem) => .Error(EvalError.{message = message("%: %", path, problem), at = argument.at})
+    made :: opened_beneath_home(shell, path, if parameter.giving == .Here { Giving.Dir } else { parameter.giving })
+    match made {
+        case Ok(handle) => return .Ok(handle)
+        case Error(problem) => {
+            // Nothing there, but a name that looks the same: said (paths.hsc)
+            if problem == file_problem(.NotFound) && parameter.giving != .File {
+                match meant_path(shell, path) {
+                    case Some(meant) => return .Error(EvalError.{message = message("%1: %2; did you mean %3?", path, problem, meant), at = argument.at})
+                    case None => {}
+                }
+            }
+            return .Error(EvalError.{message = message("%: %", path, problem), at = argument.at})
+        }
     }
 }
 

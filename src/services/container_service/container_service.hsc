@@ -681,8 +681,10 @@ serve :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
  * Answer a container connection's requests, until it has none, or it's gone.
  *
  * Requests on the listener's connections, OpenVolume, snapshots, clones, quotas, usage and new volumes, are answered
- * on any container connection; the rest only on a volume's, NotAVolume on another. Connect adds a connection, with no
- * answer. A connection whose end fails is dropped.
+ * on a connection that isn't a volume's: one names a volume, so on a volume's it's NotYours (decisions/0179), as a
+ * volume server reaches only its own. The rest are a volume's, NotAVolume on another: its own snapshots taken, listed
+ * and opened (TakeOwnSnapshot, OwnSnapshotAt, OpenOwnSnapshot), NotYours on a snapshot's. Connect adds a connection,
+ * with no answer, and on a volume's is closed. A connection whose end fails is dropped.
  *
  * @param server The container service's state: answers go out on the slot's end, Connect adds a slot, setting added,
  *     and a failed end drops the slot.
@@ -713,6 +715,18 @@ serve_container :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.In
         response :: os.begin[container.Response](&out)
         response^ = .Unsupported
         request :: os.message_of[container.Request](into)^
+        // A volume's connection reaches its own volume, and only that: what names a volume, or Connect, isn't its
+        if connection.kind == .Volume && is_listeners(request) {
+            match request {
+                case Connect(other) => {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](other.end))
+                    continue
+                }
+                case _ => response^ = .NotYours
+            }
+            _ = container.send_response(end, server.port, &out)
+            continue
+        }
         match request {
             case OpenVolume(at) => {
                 name :: os.items(into, at)
@@ -745,6 +759,19 @@ serve_container :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.In
                 _ = add(server, .Unbound, other.end, NONE, 0)
                 continue
             }
+            // A volume's own snapshots (decisions/0179), from its live connection only
+            case TakeOwnSnapshot(own) => {
+                response^ = if connection.kind != .Volume { container.Response.NotAVolume } else if connection.snapshot != 0 {
+                    container.Response.NotYours } else { snapshot_taken(server, volume, os.items(into, own.snapshot), own.now) }
+            }
+            case OwnSnapshotAt(index) => {
+                response^ = if connection.kind != .Volume { container.Response.NotAVolume } else if connection.snapshot != 0 {
+                    container.Response.NotYours } else { snapshot_found(server, volume, index, &out) }
+            }
+            case OpenOwnSnapshot(named) => {
+                response^ = if connection.kind != .Volume { container.Response.NotAVolume } else if connection.snapshot != 0 {
+                    container.Response.NotYours } else { volume_opened(server, volume, os.items(into, named), true) }
+            }
             case _ => {
                 if connection.kind != .Volume {
                     response^ = .NotAVolume
@@ -771,6 +798,29 @@ at_of :: fn(name: u8[]) -> usize {
         }
     }
     return name.count
+}
+
+/**
+ * Tell whether a request is one of the listener's: one that names a volume, or Connect, which a volume's own connection
+ * may not ask (decisions/0179).
+ *
+ * @param request The request, only read.
+ * @return True for OpenVolume, TakeSnapshot, DeleteSnapshot, SnapshotAt, Clone, SetQuota, Usage, CreateVolume and
+ *     Connect; false for a volume's own requests.
+ */
+is_listeners :: fn(request: container.Request) -> bool {
+    return match request {
+        case OpenVolume(_) => true
+        case TakeSnapshot(_) => true
+        case DeleteSnapshot(_) => true
+        case SnapshotAt(_) => true
+        case Clone(_) => true
+        case SetQuota(_) => true
+        case Usage(_) => true
+        case CreateVolume(_) => true
+        case Connect(_) => true
+        case _ => false
+    }
 }
 
 /**
@@ -804,12 +854,32 @@ open_volume :: fn(server: ptr[mut Server], name: u8[]) -> container.Response {
         return .NoVolume
     }
     id :: volume_named(server, name[0..<split]) or_return .NoVolume
+    after :: split + 1
+    if split < name.count && after <= name.count {
+        return volume_opened(server, id, name[after..<name.count], true)
+    }
+    return volume_opened(server, id, u8.[], false)
+}
+
+/**
+ * Make a connection for a volume by its ID, or for a snapshot of it, read only: OpenVolume's, and a volume's
+ * OpenOwnSnapshot. Each knows who wrote a clone's older blocks, for its reads.
+ *
+ * @param server The container service's state: a Volume slot is added, with the volume's lineage and the snapshot's
+ *     transaction, or 0.
+ * @param id The volume's ID.
+ * @param name The snapshot's name, if one's asked for.
+ * @param of_snapshot Whether a snapshot's asked for, by name, rather than the volume.
+ * @return OpenedVolume with the connection's other end, which the caller owns; NoVolume for no such volume, NoSnapshot
+ *     for no such snapshot, NoSpace if a channel or a slot couldn't be had, or Failed if the container couldn't be
+ *     read.
+ */
+volume_opened :: fn(server: ptr[mut Server], id: u64, name: u8[], of_snapshot: bool) -> container.Response {
     record := slopfs.volume_record(server.container, id) or_return .NoVolume
     lineage :: slopfs.lineage_of(server.container, &record) or_return .Failed
     snapshot : u64 = 0
-    after :: split + 1
-    if split < name.count && after <= name.count {
-        found :: match slopfs.find_snapshot(server.container, id, name[after..<name.count]) {
+    if of_snapshot {
+        found :: match slopfs.find_snapshot(server.container, id, name) {
             case Ok(maybe) => maybe or_return .NoSnapshot
             case Error(error) => return .Failed
         }
@@ -839,6 +909,20 @@ open_volume :: fn(server: ptr[mut Server], name: u8[]) -> container.Response {
  */
 take_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[], now: u64) -> container.Response {
     id :: volume_named(server, volume) or_return .NoVolume
+    return snapshot_taken(server, id, name, now)
+}
+
+/**
+ * Take a snapshot of a volume by its ID, of what its last commit left, durable at once with a commit of the container's
+ * own: TakeSnapshot's, and a volume's TakeOwnSnapshot.
+ *
+ * @param server The container service's state, whose container takes the snapshot and commits it.
+ * @param id The volume's ID.
+ * @param name The snapshot's name, as the request gave it; one the volume has already is AlreadyExists.
+ * @param now When it's taken, as the taker says.
+ * @return Done once it's durable; AlreadyExists for a name taken, or Failed if it couldn't be taken or committed.
+ */
+snapshot_taken :: fn(server: ptr[mut Server], id: u64, name: u8[], now: u64) -> container.Response {
     match slopfs.take_snapshot(server.container, id, name, now) {
         case Ok(number) => {}
         case Error(error) => return if error == .AlreadyExists { .AlreadyExists } else { .Failed }
@@ -884,6 +968,21 @@ delete_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[]) -> cont
  */
 snapshot_at :: fn(server: ptr[mut Server], volume: u8[], index: u64, out: ptr[mut os.Outgoing]) -> container.Response {
     id :: volume_named(server, volume) or_return .NoVolume
+    return snapshot_found(server, id, index, out)
+}
+
+/**
+ * Find a volume's snapshot by the volume's ID and the snapshot's place among them, oldest first: SnapshotAt's, and a
+ * volume's OwnSnapshotAt.
+ *
+ * @param server The container service's state, whose container's snapshot records are read and not changed.
+ * @param id The volume's ID.
+ * @param index Its place, from 0.
+ * @param out The answer being built, which the snapshot's name is appended to.
+ * @return Snapshot with its name, transaction and when it was taken; NoMore past the last, or Failed if they couldn't
+ *     be read.
+ */
+snapshot_found :: fn(server: ptr[mut Server], id: u64, index: u64, out: ptr[mut os.Outgoing]) -> container.Response {
     snapshots : slopfs.NumberedSnapshot[..]
     defer runtime.array_free(&snapshots)
     if slopfs.snapshot_records(server.container, id, &snapshots) is_error {

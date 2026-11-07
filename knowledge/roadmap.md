@@ -377,7 +377,9 @@ breaks its protocol ends its connection, in every service and client; a job's ou
 seen behind type-ahead. Then memory that says when no one else holds it, so the bundle store closes executables no one
 holds when it needs room, done 2026-11-06 (`0178`). 11e planned 2026-11-06 in six parts (`0179`): 11e1 what a
 program's entry gives back, a `Result` whose error the shell shows with its parameter and hint, done 2026-11-06;
-11e2 files, with snapshots and recovering; 11e3 search, a viewer and pager; 11e4 the process tree, grants and
+11e2 files, with snapshots through `dir` and automatic ones, and recovering, done 2026-11-06, and with it the
+system shut down from the secure attention key's screen, which the boot tests end with when they're done (`0180`);
+11e3 search, a viewer and pager; 11e4 the process tree, grants and
 installing; 11e5 the editor; 11e6 scripts with `param` lines. This
 is the first usable system (above).
 

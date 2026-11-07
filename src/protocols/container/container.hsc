@@ -15,7 +15,9 @@ import block from "../block"
  *
  * Snapshots and clones (roadmap 8e): on the listener's connections, a volume's snapshots are taken, listed and
  * deleted, and a clone made from one, each durable at once. OpenVolume with "volume@snapshot" gives a snapshot's
- * connection, read only: its block connections read only what the snapshot holds.
+ * connection, read only: its block connections read only what the snapshot holds. On a volume's own connection, its
+ * snapshots are taken, listed and opened too (decisions/0179), and only its: the listener's requests, which name a
+ * volume, are NotYours there.
  */
 
 /**
@@ -126,6 +128,14 @@ SnapshotIndex :: struct {
     volume : slop_os.Relative[u8],
     /** The snapshot's place, oldest first, from 0. */
     index : u64,
+}
+
+/** A snapshot of the asking volume, by name, and when it's taken, as its taker says (decisions/0179). */
+OwnSnapshot :: struct {
+    /** The snapshot's name, as UTF-8, unique among the volume's. */
+    snapshot : slop_os.Relative[u8],
+    /** When it's taken, as its taker says, in nanoseconds since 1970. */
+    now : u64,
 }
 
 /** A snapshot: its name, the transaction it holds, and when it was taken. */
@@ -243,6 +253,22 @@ Request :: union {
     CreateVolume(VolumeCreation),
     /** Have the service serve another client, on the end given, which moves to it. Answered with nothing. */
     Connect(os.Channel[Container]),
+    /**
+     * On a volume's connection (decisions/0179): take a snapshot of what the volume's last commit left, durable at
+     * once, as TakeSnapshot does. Answered with Done, AlreadyExists, NotYours on a snapshot's connection, or Failed.
+     */
+    TakeOwnSnapshot(OwnSnapshot),
+    /**
+     * On a volume's connection: ask for one of the volume's snapshots by its place, oldest first, from 0. Answered with
+     * Snapshot, NoMore past the last, NotYours on a snapshot's connection, or Failed.
+     */
+    OwnSnapshotAt(u64),
+    /**
+     * On a volume's connection: ask for a snapshot of the volume by its name, read only, on a new connection of its
+     * own, as OpenVolume gives "volume@snapshot". Answered with OpenedVolume, NoSnapshot, NotYours on a snapshot's
+     * connection, NoSpace, or Failed.
+     */
+    OpenOwnSnapshot(slop_os.Relative[u8]),
 }
 
 /** What a container service answers. */
@@ -325,6 +351,9 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Usage(_) => true
         case CreateVolume(_) => false
         case Connect(_) => true
+        case TakeOwnSnapshot(_) => false
+        case OwnSnapshotAt(_) => true
+        case OpenOwnSnapshot(_) => true
     }
 }
 

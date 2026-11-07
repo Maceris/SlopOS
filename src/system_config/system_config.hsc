@@ -46,6 +46,7 @@ import links from "../protocols/links"
 import platform_protocol from "../protocols/platform"
 import supervision from "../protocols/supervision"
 import session from "../protocols/session"
+import power from "../protocols/power"
 import powerbox from "../protocols/powerbox"
 import test_channels from "../tests/test_channels"
 import test_control from "../tests/test_control"
@@ -323,9 +324,10 @@ ROOT_TASK_SERVES :: type.[os.Listener[supervision.Supervision]]
 
 /**
  * What the supervisor serves itself: connectors, which dial what it started (decisions/0077), and the session of the
- * console's programs, to the terminal service (decisions/0139).
+ * console's programs, to the terminal service (decisions/0139); and power, which the terminal service asks to shut
+ * down on (decisions/0180).
  */
-SUPERVISOR_SERVES :: type.[os.Listener[connector.Connector], os.Listener[session.Session]]
+SUPERVISOR_SERVES :: type.[os.Listener[connector.Connector], os.Listener[session.Session], os.Listener[power.Power]]
 
 /**
  * What the storage manager serves itself: each volume server's stored links, on a connection it makes for each

@@ -364,9 +364,17 @@ class ConsoleLink:
     """
 
     def __init__(self, typed: list[str], keyed: list[str], keyboard: "Keyboard | None", screen_after: str | None = None,
-                 screenshot: Path | None = None, typed_after: list[str] | None = None):
+                 screenshot: Path | None = None, typed_after: list[str] | None = None, done_when: list[str] | None = None,
+                 serial_done: Path | None = None, serial_done_when: list[str] | None = None):
         self.port = free_port()
         self.typed = typed
+        # With --shut-down-when-done, the lines whose showing, once the first line's typed, has it shut the system down;
+        # None without it
+        self.done_when = done_when
+        # And the serial output's file, and the lines it has to have first: the expected ones but those of a run's end
+        self.serial_done = serial_done
+        self.serial_done_when = serial_done_when or []
+        self.typed_first = threading.Event()
         # The first line is typed once the console shows the first of these too, so what's typed doesn't land in the middle
         # of it; or, with \\w in it, from the banner, each \\w waiting for the next of them
         self.typed_after = typed_after or []
@@ -416,6 +424,12 @@ class ConsoleLink:
                         threading.Thread(target=target, args=(connection,), daemon=True).start()
                     elif banners < len(self.typed):
                         type_into(connection, self.typed[banners])
+                        if banners == 0:
+                            self.typed_first.set()
+                    if banners == 0 and not self.typed:
+                        self.typed_first.set()
+                    if banners == 0 and self.done_when is not None:
+                        threading.Thread(target=self.shut_down_when_done, args=(connection,), daemon=True).start()
                     if banners == 0 and self.keyboard is not None and (self.keyed or self.screen_after):
                         threading.Thread(target=self.type_keys, daemon=True).start()
                     banners += 1
@@ -427,11 +441,35 @@ class ConsoleLink:
             type_into(connection, self.typed[0])
         except OSError:
             pass
+        self.typed_first.set()
 
     def type_waiting(self, connection: socket.socket) -> None:
         """The first line, typed now, waiting where it has \\w until the console shows typed_after."""
         try:
             type_into(connection, self.typed[0], self.wait_for_after)
+        except OSError:
+            pass
+        self.typed_first.set()
+
+    def shut_down_when_done(self, connection: socket.socket) -> None:
+        """
+        Once the first line's typed, every line of done_when is shown, and every line of serial_done_when is in the serial
+        output, the secure attention key and P, which shuts the system down (decisions/0180): a second apart, as the
+        terminal service takes the key apart from what follows it.
+        """
+        self.typed_first.wait()
+        while True:
+            shown = self.lines()
+            written = self.serial_done.read_text(errors="replace").splitlines() \
+                if self.serial_done is not None and self.serial_done.exists() else []
+            if all(line in shown for line in self.done_when) and all(line in written for line in self.serial_done_when):
+                break
+            time.sleep(0.2)
+        try:
+            time.sleep(1)
+            connection.sendall(b"\x1b[3;7~")
+            time.sleep(1)
+            connection.sendall(b"p")
         except OSError:
             pass
 
@@ -516,6 +554,10 @@ def console_drawn(screenshot: Path) -> str | None:
         return "nothing drawn below the status line"
     return None
 
+
+# The starts of the serial lines a run says only as it ends, which --shut-down-when-done doesn't wait for, as they come
+# after the shutdown it brings
+RUN_END_LINES = ("[info] root task ended", "[info] objects left", "[user] root task: shutting down", "[user] supervisor: the console asked")
 
 # What the status line says while a new keyboard waits for its code
 KEYBOARD_CODE = re.compile("a new keyboard: type ([0-9]+) and Enter")
@@ -857,6 +899,9 @@ def main() -> int:
                         "with --expect; adds a virtio keyboard for the machine protocol, and on AArch64 a ramfb framebuffer")
     parser.add_argument("--refuse-console-line", action="append", default=[],
                         help="a line the virtio console mustn't show, with --expect; may be repeated")
+    parser.add_argument("--shut-down-when-done", action="store_true",
+                        help="once every --expect-console-line is shown and every --console-input typed, type the secure "
+                        "attention key and P, which shuts the system down (decisions/0180), rather than waiting out its settle")
     parser.add_argument("--keyboard-input", action="append", default=[],
                         help="a line to type on a virtio keyboard, which this adds with a virtio console, once the console "
                              "shows its banner; may be repeated")
@@ -972,7 +1017,9 @@ def main() -> int:
         if arguments.console_input or arguments.expect_console_line or arguments.keyboard_input or arguments.refuse_console_line \
                 or arguments.screen_after:
             console = ConsoleLink(arguments.console_input, arguments.keyboard_input, keyboard, arguments.screen_after, screenshot,
-                              arguments.console_input_after)
+                              arguments.console_input_after,
+                              arguments.expect_console_line if arguments.shut_down_when_done else None, serial,
+                              [line for line in arguments.expect_line if not line.startswith(RUN_END_LINES)])
             extra += console.qemu_arguments()
             console.thread.start()
         booting_started = time.monotonic()

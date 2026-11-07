@@ -30,7 +30,8 @@
  * powerbox asks the user through it (chooser.hsc, decisions/0156): the request's on the status line, and the secure
  * attention key opens the chooser instead of this screen, and G there shows what its user has let programs keep
  * (grants_view.hsc, decisions/0158); a request for another account opens the elevation screen instead (elevation.hsc),
- * and H there shares a volume with another user (share_form.hsc).
+ * and H there shares a volume with another user (share_form.hsc). P on it shuts the system down, for whoever's at the
+ * console (decisions/0180), through the supervisor.
  *
  * The serial line and the input service are reached through connectors, dialed again when they go, with the banner
  * shown on each new serial line. Without a serial line it keeps the model and shows nothing.
@@ -51,6 +52,7 @@ import dir from "std/os/slop_os"
 import connector from "../../protocols/connector"
 import seat from "../../protocols/seat"
 import session from "../../protocols/session"
+import power_protocol from "../../protocols/power"
 import prompt from "../../protocols/prompt"
 import serial from "../../protocols/serial"
 import service_kit from "../../libraries/service_kit"
@@ -112,6 +114,8 @@ USAGE_N : u16 : 0x11
 USAGE_O : u16 : 0x12
 /** The USB HID usage of S, which switches to the next session from the secure attention key's screen. */
 USAGE_S : u16 : 0x16
+/** The USB HID usage of P, which shuts the system down from the secure attention key's screen (decisions/0180). */
+USAGE_P : u16 : 0x13
 /** The USB HID usage of Enter. */
 USAGE_ENTER : u16 : 0x28
 /** The USB HID usage of Escape. */
@@ -263,6 +267,13 @@ Service :: struct {
     accounts_connector : slop_os.Channel,
     /** The account service's connection, bound under ACCOUNTS_KEY; NONE while there's none. */
     accounts_end : slop_os.Channel,
+    /**
+     * The supervisor's power connection, which P on the secure attention key's screen asks to shut down on
+     * (decisions/0180); null without one. Nothing's waited for on it.
+     */
+    power : os.Channel[power_protocol.Power]?,
+    /** Whether a shutdown's been asked for, which the secure attention key's screen then says. */
+    shutting_down : bool,
     /** The step of the trusted path's own screen: setup, login, elevation or sharing; Off for none. */
     setup : SetupStep,
     /** The field being typed, the first field_count bytes; zeroed whenever a step changes. */
@@ -393,16 +404,20 @@ View :: struct {
  *     is shown on the secure attention key's screen and pointed to from the status line. Without one, nothing is.
  * @param accounts_service A connector to the account service, for first-boot setup, login, locking, elevation and
  *     sharing. Without one, a boot with no accounts, the session with no user is made at once.
+ * @param power A connection to the supervisor, which P on the secure attention key's screen asks to shut the system
+ *     down on (decisions/0180). Without one, the screen offers no P.
  * @param clients The terminal protocol's listener, which programs connect through; their Connects bring more clients.
  * @return 2 if its port couldn't be made, or 3 if the listener couldn't be added as a client; it doesn't return
  *     otherwise.
  */
 main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?, input: os.Channel[connector.Connector]?,
     framebuffer: slop_os.Memory?, framebuffer_layout: slop_os.Memory?, programs: os.Channel[session.Session]?,
-    last_panic: slop_os.Memory?, accounts_service: os.Channel[connector.Connector]?, clients: os.Listener[terminal.Terminal]) -> int {
+    last_panic: slop_os.Memory?, accounts_service: os.Channel[connector.Connector]?, power: os.Channel[power_protocol.Power]?,
+    clients: os.Listener[terminal.Terminal]) -> int {
     startup :: slop_os.startup_block()
     service := runtime.new(Service)
     service.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
+    service.power = power
     service.serial_connector = NONE
     service.seat_connector = NONE
     service.line_end = NONE
@@ -1263,7 +1278,36 @@ draw_panel :: fn(service: ptr[mut Service]) {
         screen.write_at(panel, help + 1, 2, if another_session(service) != NO_VIEW { "S switches session, N logs in another, L locks, O logs out." }
             else { "N logs in another session, L locks, O logs out." }, plain)
     }
+    // Shutting down, for whoever's at the console (decisions/0180)
+    if service.power is_some {
+        screen.write_at(panel, help + 3, 2, if service.shutting_down { "Shutting down." } else { "P shuts the system down." }, plain)
+    }
     redraw(service)
+}
+
+/**
+ * Ask the supervisor to shut the system down, for P on the secure attention key's screen (decisions/0180), and say so
+ * on it. The answer isn't waited for: the system ends with the root task, and the terminal service with it.
+ *
+ * @param service The service, its secure attention key's screen up; its shutting_down is set once it's asked. Without
+ *     a power connection, or once it's asked, nothing's done.
+ */
+shut_down :: fn(service: ptr[mut Service]) {
+    connection :: service.power or_return void
+    if service.shutting_down {
+        return void
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[power_protocol.Request](&out)
+    request^ = .ShutDown
+    port :: os.port_for(slop_os.startup_block().budget, connection.end) or_return void
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    if power_protocol.send_request(connection.end, port, &out) is_some {
+        return void
+    }
+    service.shutting_down = true
+    runtime.log_info("shutting down")
+    draw_panel(service)
 }
 
 /**
@@ -1709,6 +1753,9 @@ screen_keys :: fn(service: ptr[mut Service], first: usize) {
         }
         else if event.code == USAGE_H && event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 {
             enter_share_form(service)
+        }
+        else if event.code == USAGE_P && event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 {
+            shut_down(service)
         }
         else if event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 && session_key(service, event.code) {
             // A session's key: the screen it brought up takes what comes after

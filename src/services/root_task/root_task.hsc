@@ -3,7 +3,8 @@
  * splits its budget and starts the services the system configuration gives it: the entropy service and the process
  * manager with its own loader (src/process_builder), since the manager needs both, then the supervisor
  * through the manager, with std/os's launch. It owns each, serves the supervisor's reports, and watches
- * them. A working system's root task never ends; restarting the supervisor comes later.
+ * them. A working system's root task ends only when the person at the console asks for it to shut down, which the
+ * supervisor passes on (decisions/0180), ending everything; restarting the supervisor comes later.
  *
  * The system configuration is the boot set's system.records, which the build wrote from system_config
  * (decisions/0110): the root task checks it as the build did, and ends with 30 if it isn't one, before it starts
@@ -11,7 +12,8 @@
  * it to write.
  *
  * Words on the kernel's command line are for boot tests, and end it with 0 if what they test works:
- * - test_services, once the supervisor has started all of its services, and a second more, or test_settle=<seconds>;
+ * - test_services, once the supervisor has started all of its services, and a second more, or test_settle=<seconds>,
+ *   or sooner if a shutdown's asked for meanwhile;
  * - test_outlive_manager, which kills the process manager once the supervisor reports hello started, and
  *   ends once hello has, after it said it's still running;
  * - test_deadline=<seconds>, with test_program: how long the test program has to end before the root task kills it
@@ -556,6 +558,8 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         return 15
     }
     into := os.Incoming.{}
+    // With test_services, when it ends once the supervisor's started everything; 0 until then, and without it
+    settle_at := cast[u64](0)
     loop {
         loop {
             if cast[slop_os.Handle](root.supervision) == slop_os.NO_HANDLE {
@@ -621,21 +625,21 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
                         return 16
                     }
                     if test_services {
-                        // Drivers come up by themselves once they've started
-                        settle :: (slop_os.clock_monotonic() or_else 0) + settle_nanoseconds
-                        loop {
-                            waited : slop_os.Packet[1]
-                            if (slop_os.port_wait(port, waited, settle) or_else 0) == 0 {
-                                break
-                            }
-                        }
-                        return 0
+                        // Drivers come up by themselves once they've started; a shutdown asked for ends it sooner
+                        settle_at = (slop_os.clock_monotonic() or_else 0) + settle_nanoseconds
                     }
+                }
+                case ShutDown => {
+                    log_line.write(root.log, "root task: shutting down, as the console asked")
+                    return 0
                 }
             }
         }
+        if settle_at != 0 && (slop_os.clock_monotonic() or_else 0) >= settle_at {
+            return 0
+        }
         packets : slop_os.Packet[8]
-        taken :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_else 0
+        taken :: slop_os.port_wait(port, packets, if settle_at != 0 { settle_at } else { slop_os.NO_DEADLINE }) or_else 0
         for packet, i in packets {
             if i >= cast[usize](taken) {
                 break

@@ -55,7 +55,7 @@ Followed :: union {
  *
  * @param server The server, whose volume's tree is walked; through a link, the storage manager is asked on its links
  *     connection, and not waited for.
- * @param index The client's connection's slot; a linked connection follows no links.
+ * @param index The client's connection's slot; a linked connection, or a snapshot's, follows no links.
  * @param directory The directory object the path is beneath.
  * @param path The path; "" stays Local.
  * @param opening How what it leads to is opened.
@@ -64,7 +64,7 @@ Followed :: union {
  *     asked (Unavailable).
  */
 follow :: fn(server: ptr[mut Server], index: usize, directory: u64, path: string, opening: links.Opening) -> Followed {
-    if index >= server.connections.count || server.connections[index].linked || path.count == 0 {
+    if index >= server.connections.count || server.connections[index].linked || server.connections[index].past != 0 || path.count == 0 {
         return .Local
     }
     walked := slopfs.Walked.{}

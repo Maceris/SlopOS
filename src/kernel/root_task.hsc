@@ -40,7 +40,7 @@ ROOT_STACK_SIZE : u64 : 256 * 1024
 /** The bytes of the free range the root task's runtime maps its own memory in: 1 TiB. */
 ROOT_FREE_SIZE : u64 : 1 << 40
 /** The most grants the root task is given: its own, and one for every boot module after the first. */
-MAX_ROOT_GRANTS :: 64
+MAX_ROOT_GRANTS :: 128
 /** A page's bytes, a frame's: 4 KiB. */
 PAGE : u64 : frames.FRAME_SIZE
 

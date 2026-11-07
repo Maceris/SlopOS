@@ -159,6 +159,12 @@ code 1 for a `Result`'s `Error`; `std/os` gained `LaunchOptions.result`, `entry_
 `Result` stopped at E5002, "a constant's value needs memory": the entry made the slot a large result comes back
 through with the helper ordinary functions use, which needs a function state the entry doesn't have. It makes the
 slot itself now, and a freestanding test builds such a program.
+Then for 11e2 (2026-11-06, `0179`): `std`'s `dir` gained `Snapshot`, `Snapshots` and `OpenSnapshot`, and `files`
+a `Snapshot`. The `os.begin(&out)^ = .Variant(os.append(&out, ...))` mistake of 11d was made four more times in the
+file tools, each a request the server couldn't read; the compiler now warns of it (W4003): an assignment whose right
+side calls something given `&x`, as a call on its left is, since the right side runs first (Hemera's
+`docs/operators.md`). Once, too, the compiler crashed with an illegal instruction building every program for a boot
+run, and didn't again when built alone or run again; not chased further.
 
 ## 4. Features That Look Like a Strong Fit
 

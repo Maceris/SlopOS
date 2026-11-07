@@ -88,6 +88,11 @@ with the grant or without. The shell gives the grant to every program whose mani
 value, 64 KiB, and shows an `Error` by its variant, the parameter it names (a field of type `os.ParameterName` in the
 variant's payload) and the `@error` line documenting it.
 
+**The shell's directory** (`0179`): a `dir` parameter named `here` is given the shell's directory without asking, or
+another with `--here path`; the file tools (`list`, `copy`, `move`, `remove`, `recover`) take paths beneath it. A path
+the shell can't find, whose name matches an entry of its directory without case or spaces at its ends, is answered
+"did you mean" that entry.
+
 **Typed libraries** (`0120`, `0121`): a program built calling a Hemera typed library is given it as a grant labeled
 `library:<file>`, `Memory` holding the library's file. Before `main`, `base`'s runtime binds every library its import
 table names from those grants: the library's unwritten segments mapped straight from the memory (so every process

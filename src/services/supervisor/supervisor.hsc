@@ -74,6 +74,7 @@ import clock_setting from "../../protocols/clock_setting"
 import events from "../../protocols/events"
 import bundle_store from "../../protocols/bundle_store"
 import config_protocol from "../../protocols/config"
+import power_protocol from "../../protocols/power"
 import bundle from "../../bundle"
 import schema from "std"
 import service_kit from "../../libraries/service_kit"
@@ -139,6 +140,8 @@ SYSTEM_KEY : u64 : 4000
 SYSTEM_GENERATIONS : u64 : 1000
 /** The port key of the timer that tries again to open a lost system volume. */
 SYSTEM_RETRY_KEY : u64 : 5000
+/** The port key of the supervisor's end of the terminal service's power connection (decisions/0180). */
+POWER_KEY : u64 : 6000
 /** How long after a failed try to open a lost system volume again the next is made, in nanoseconds: 100 ms. */
 SYSTEM_RETRY : u64 : 100_000_000
 /**
@@ -319,6 +322,8 @@ TerminalGrants :: struct {
     last_panic : slop_os.Memory?,
     /** A connector to the account service, for first-boot setup (decisions/0148); null without one. */
     accounts_service : os.Channel[connector.Connector]?,
+    /** A connection to the supervisor, to ask for the system to shut down (decisions/0180); null if none could be made. */
+    power : os.Channel[power_protocol.Power]?,
     /** The listener for its clients; the supervisor keeps its other end, and dials it for connectors to it. */
     clients : os.Listener[terminal.Terminal],
 }
@@ -688,6 +693,13 @@ Supervisor :: struct {
     system_generation : u64,
     /** Whether the system volume's connection closed, and it's to be opened again. */
     system_lost : bool,
+    /**
+     * Its end of the terminal service's power connection (decisions/0180), bound under POWER_KEY, replaced each time the
+     * terminal service starts; null before it has, or once the terminal service's end is gone.
+     */
+    power : slop_os.Channel?,
+    /** Whether a shutdown's been asked for, so it's done once. */
+    shutting_down : bool,
     /** Whether the system volume is being opened, which handles what arrives on the port meanwhile. */
     system_opening : bool,
     /** The kernel's command line, to give on to services that read their test words; null without one. */
@@ -1205,6 +1217,7 @@ wait_and_handle_until :: fn(supervisor: ptr[mut Supervisor], deadline: u64) {
             dma_fault(supervisor, faulted, packet.data[1])
         }
     }
+    serve_power(supervisor)
     for i in 0..<supervisor.connector_count {
         serve_connector(supervisor, i)
     }
@@ -3897,6 +3910,7 @@ start_terminal :: fn(supervisor: ptr[mut Supervisor], again: usize) {
         clients = os.Listener[terminal.Terminal].{end = pair.a}}
     // A connection to the session manager (decisions/0150), and the boot before's panic record
     grants.programs = session_connection(supervisor)
+    grants.power = power_connection(supervisor)
     match supervisor.last_panic {
         case Some(record) => {
             rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
@@ -4294,6 +4308,89 @@ connector_to :: fn(supervisor: ptr[mut Supervisor], target: usize) -> os.Channel
     supervisor.connector_count = index + 1
     serve_connector(supervisor, index)
     return os.Channel[connector.Connector].{end = pair.a}
+}
+
+/**
+ * Make the terminal service's power connection (decisions/0180): the supervisor's end, in place of the last one's,
+ * bound under POWER_KEY.
+ *
+ * @param supervisor The supervisor, whose power end is replaced, the one before closed.
+ * @return The terminal service's end, which moves to it at its launch; null if the channel or binding couldn't be had,
+ *     and then the supervisor has none.
+ */
+power_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[power_protocol.Power]? {
+    match supervisor.power {
+        case Some(old) => {
+            _ = slop_os.port_unbind(supervisor.port, POWER_KEY)
+            _ = slop_os.handle_close(cast[slop_os.Handle](old))
+            supervisor.power = null
+        }
+        case None => {}
+    }
+    pair :: os.channel_for[power_protocol.Power](supervisor.block.budget, 0) or_return null
+    signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+    if slop_os.port_bind(supervisor.port, cast[slop_os.Handle](pair.b), signals, POWER_KEY, .Persistent) is_error {
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        return null
+    }
+    supervisor.power = pair.b
+    return os.Channel[power_protocol.Power].{end = pair.a}
+}
+
+/**
+ * Answer what the terminal service asks on its power connection, until it's empty: ShutDown has the storage manager
+ * commit every volume, then is passed on to the root task, and answered Done, or Refused if it couldn't be; asked
+ * again, it's Done. A connection whose channel failed is closed.
+ *
+ * @param supervisor The supervisor, whose power end is read, and closed and set to null once it's gone.
+ */
+serve_power :: fn(supervisor: ptr[mut Supervisor]) {
+    end :: supervisor.power or_return void
+    into := os.Incoming.{}
+    loop {
+        match power_protocol.receive_request(end, supervisor.port, &into, false) {
+            case Received => {}
+            case Empty => return void
+            case Unsupported => {
+                _ = power_protocol.answer_unsupported(end, supervisor.port)
+                continue
+            }
+            case _ => {
+                _ = slop_os.port_unbind(supervisor.port, POWER_KEY)
+                _ = slop_os.handle_close(cast[slop_os.Handle](end))
+                supervisor.power = null
+                return void
+            }
+        }
+        out := os.Outgoing.{}
+        response :: os.begin[power_protocol.Response](&out)
+        match os.message_of[power_protocol.Request](&into)^ {
+            case ShutDown => {
+                // Once: committing waits, handling the port, which can read this connection again
+                if supervisor.shutting_down {
+                    response^ = .Done
+                    _ = power_protocol.send_response(end, supervisor.port, &out)
+                    continue
+                }
+                supervisor.shutting_down = true
+                log_line.write(supervisor.log, "supervisor: the console asked to shut down")
+                // What the volumes have changed committed first, so nothing done before it's lost
+                if is_running(supervisor, supervisor.storage_slot) {
+                    match ask_storage_once(supervisor, supervisor.storage_slot, .CommitAll) {
+                        case Done => {}
+                        case _ => log_line.write(supervisor.log, "supervisor: the volumes couldn't all be committed before shutting down")
+                    }
+                }
+                asking := os.Outgoing.{}
+                report :: os.begin[supervision.Request](&asking)
+                report^ = .ShutDown
+                told :: supervision.send_request(supervisor.root, supervisor.root_port, &asking) is_none
+                response^ = if told { power_protocol.Response.Done } else { power_protocol.Response.Refused }
+            }
+        }
+        _ = power_protocol.send_response(end, supervisor.port, &out)
+    }
 }
 
 /**

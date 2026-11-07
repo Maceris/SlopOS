@@ -262,7 +262,8 @@ failed_at :: fn(at: usize, message #escaping : string) -> Result[ptr[mut Running
  *
  * @param shell The shell, whose port the programs' ends are waited on until every one has ended.
  * @param running The programs, started; its stream from the last is taken.
- * @return What the last one writes, a list of its records as values; Null if it has no output.
+ * @return What the last one writes, a list of its records as values; what its entry gave back, if it gave something,
+ *     when it has no output or wrote nothing to it; Null otherwise.
  */
 finish_programs :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) -> Result[Value, EvalError] {
     result := Value.Null
@@ -284,8 +285,11 @@ finish_programs :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) -> Resul
                 }
             }
             case None => {
-                // A last program without an output gives what its entry gave back, if it gave something
-                if k + 1 == running.calls.count && (parameter_giving(call, .Output) is_none) {
+                /*
+                 * A last program without an output gives what its entry gave back, if it gave something; so does one
+                 * with an output it wrote nothing to, as recover with a name, which brings something back
+                 */
+                if k + 1 == running.calls.count && ((parameter_giving(call, .Output) is_none) || (wrote_nothing(result) && call.returned != .Null)) {
                     result = call.returned
                 }
             }
@@ -294,6 +298,19 @@ finish_programs :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) -> Resul
     match first_error {
         case Some(error) => return .Error(error)
         case None => return .Ok(result)
+    }
+}
+
+/**
+ * Tell whether what a program's output gave is no records at all.
+ *
+ * @param output What read_output gave: a list of the records.
+ * @return True for an empty list; false for anything else.
+ */
+wrote_nothing :: fn(output: Value) -> bool {
+    return match output {
+        case List(list) => list.items.count == 0
+        case _ => false
     }
 }
 

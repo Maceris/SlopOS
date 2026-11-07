@@ -1,6 +1,6 @@
 # 0179: 11e, the Tools and Scripts, and What a Program's Entry Gives Back
 
-Status: accepted; 11e1 built (below)
+Status: accepted; 11e1 and 11e2 built (below)
 Date: 2026-11-06
 Related: `0162` (M11's plan), `0169` to `0172` (the shell, calls through manifests), `0176` (11d, documentation),
 `../design/shell.md`, Hemera's `docs/compilation.md` (Entry Parameters, Entry Results)
@@ -39,7 +39,44 @@ need that first, so it's 11e's first part.
   the parameter's name. The message is `name --parameter: Variant: hint`, the hint from the `@error` line for the
   variant in the program's documentation; each part left out when it isn't there.
 
+**Files and recovering them** (11e2, chosen with the project's owner: snapshots through `dir`, as
+`../design/storage.md` §6 sketches them):
+- **`dir` gains `Snapshot`, `Snapshots` and `OpenSnapshot`**: a snapshot of the whole volume taken now, durable, which
+  any writable connection may ask for; the volume's snapshots listed, by name and when they were taken; and a
+  `read_only_dir` onto the same directory in a snapshot, so what's seen of the past is only what's beneath the handle.
+  `Features.snapshots` says a server has them. A connection reached through a stored link has none of them
+  (`ReadOnly`), as it has no grants or links.
+- **By the volume server itself**, which holds the volume's keys: a user's home is encrypted (`0090`), and the
+  storage manager, which never holds a passphrase, couldn't open its snapshots. The container protocol gains a
+  volume's own requests, on its own connection, which reach only its snapshots: `TakeOwnSnapshot` (the volume commits
+  first; named `asked-<nanoseconds>`), `OwnSnapshotAt` and `OpenOwnSnapshot`, a connection that reads only what the
+  snapshot holds. The volume server attaches the snapshot's tree beside the live one, with the live one's keys, and
+  serves the asker's directory by its object, whose number a snapshot shares with the volume.
+- **A volume's connection reaches only its volume**: the container service answered the listener's requests, which
+  name a volume, on any connection, so a volume server could open another volume's; they're `NotYours` there now, and
+  a `Connect` on one is closed.
+- **Automatic snapshots**: every hour the storage manager takes `auto-<seconds>` of each writable volume it serves,
+  and deletes the `auto-` and `asked-` snapshots older than a day, stopping a read-only server on one first. Others,
+  an administrator's or an update's, are left alone. The kernel command line's `test_snapshot_seconds=N` makes the hour
+  N seconds and the day 10 N, for tests.
+- **The tools**, programs each, taking the shell's directory as `here`, which the shell gives without asking, and
+  paths beneath it: `list`, its entries as records; `copy` and `move` (a file or a tree, with `Progress`); `remove`,
+  which takes a snapshot first; and `recover`, which looks for what's in a recent snapshot and not here now, newest
+  first, and copies it back. So no record of removals is kept: `recover` finds what any removal took, if a snapshot
+  has it, which `remove`'s own does, and sees only beneath the directory it's given. Errors are `Result`s naming the
+  parameter (11e1).
+- **"Did you mean"**: a path the shell can't find, whose name matches an entry of its directory once both are
+  compared without case and with spaces at their ends dropped, is answered with that entry's name. Unicode
+  normalization waits for `std` to have it.
+
 ## Alternatives
+- **A removed area in the file system**, kept for a day: simpler, but a recycle bin rather than snapshots, and no view
+  of the past for anything else.
+- **Records of removals in the session's data** (`../design/lessons.md` §4.1): a file the tools would need granted,
+  and a record that could disagree with what a snapshot has; `recover` looking finds the truth.
+- **A read-only volume server per snapshot, through the storage manager**, as `volume@snapshot` is served now: the
+  first plan, with the volume protocol's `OpenObject`; it can't open an encrypted volume's snapshot without the
+  passphrase, and each snapshot looked in would start a process.
 - **Errors as log lines**: the shell would parse text, and nothing would check that a program's errors are what its
   documentation says.
 - **A typed result over the lifecycle channel**: needs the program to keep its channel open to the end, and a message
@@ -62,3 +99,29 @@ need that first, so it's 11e's first part.
   `parameter_named`); a call keeps the memory and closes it at its end, and a failed launch closes the grant's copy.
 - **Test**: `test_shell_results`, a `main` giving back `Result[Summary, ResultsError]`, one error holding an
   `os.ParameterName`; a boot test runs it fine, with each error, and inside `try`, on both architectures.
+
+## As Built, 11e2 (2026-11-06)
+- **std (Hemera)**: `dir`'s `Snapshot`, `Snapshots(cursor)` and `OpenSnapshot(name)`, answered `Snapshotted`,
+  `SnapshotListed` and `Narrowed`, appended to the unions; `files.Snapshot`.
+- **The container service**: `TakeOwnSnapshot`, `OwnSnapshotAt` and `OpenOwnSnapshot` on a volume's live connection,
+  sharing the listener's code by the volume's ID; the listener's requests and `Connect` refused on a volume's.
+- **The volume server** (`snapshots.hsc`): a `Reach` (container connection, block connection, buffer) for the live tree
+  and each snapshot's, up to `MAX_PASTS`, 4, attached on `OpenSnapshot` with the live keys lent, and let go of with the
+  last connection open in it, or when a slot's needed and nothing has one open. A snapshot's connections are
+  `ReadOnlyDir` and `ReadOnlyFile` with a `past`; they follow no links, and list no changes or sets. `Features` says
+  snapshots.
+- **The storage manager**: `automatic_snapshots`, every `SNAPSHOT_EVERY` (an hour; `test_snapshot_seconds=N` makes it
+  N seconds and the day 10 N), deleting `auto-` and `asked-` snapshots older than `SNAPSHOTS_KEPT`, a day; nothing
+  without a wall clock. A snapshot a volume server is serving when it's deleted reads nothing more.
+- **The shell**: a `dir` parameter named `here` is the shell's directory, given without asking (`Giving.Here`); "did
+  you mean" in `paths.hsc`, for a grant's path with nothing there; a last program with an output it wrote nothing to
+  gives what its entry gave back, as `recover` with a name does.
+- **The tools**: `list`, `copy`, `move`, `remove` (`--forever` without a snapshot) and `recover` in `src/apps`, sharing
+  `src/file_tools` (snapshots through `dir`, and a tree copied from a directory or a snapshot's, with `Progress`).
+  `recover` looks in the 8 newest snapshots.
+- **Tests**: `test_file_tree` makes files to work on; a boot test lists, copies, moves, removes, lists what's
+  recoverable, recovers and lists it again, and gets "did you mean"; another sees automatic snapshots taken and
+  deleted; both on both architectures.
+- **Found on the way**: `os.begin(&out)^ = .Variant(os.append(&out, ...))` struck again, in four places; Hemera now
+  warns of it (W4003, an assignment whose right side's call is given `&x` as its left side's is). And `test_settle` has
+  to outlast the typing: each character waits for its echo.

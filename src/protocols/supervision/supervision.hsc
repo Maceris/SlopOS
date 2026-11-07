@@ -7,8 +7,8 @@ import events from "../events"
 /*
  * The supervisor's reports to the root task (decisions/0067, 0071, 0074), one way: as each service or driver starts,
  * ends, or doesn't start, and once it has started all it will; and a connection to the events service, once it's up and
- * each time it's started again, for the services the root task starts again to log through (decisions/0140). The root
- * task answers none of them.
+ * each time it's started again, for the services the root task starts again to log through (decisions/0140); and that
+ * the person at the console asked for the system to shut down (decisions/0180). The root task answers none of them.
  */
 
 /**
@@ -57,6 +57,11 @@ Request :: union {
      * closes, the one before.
      */
     EventsService(os.Channel[events.Events]),
+    /**
+     * The person at the console asked for the system to shut down, on the secure attention key's screen
+     * (decisions/0180): the root task ends, with 0, which ends everything.
+     */
+    ShutDown,
 }
 
 /** What the root task answers: nothing, but every protocol has a response. */
@@ -80,6 +85,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Healthy => true
         case Degraded(_) => true
         case EventsService(_) => true
+        case ShutDown => true
     }
 }
 
