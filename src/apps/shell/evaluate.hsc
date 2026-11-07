@@ -303,7 +303,8 @@ arithmetic :: fn(at: usize, operator: string, left: Value, right: Value) -> Resu
 
 /**
  * Evaluate a call: a name bound by let, alone, is its value; print writes its arguments, exit ends the shell, cd
- * changes its directory, help says what a command does, and jobs, wait and stop work on jobs in the background; a
+ * changes its directory, help says what a command does, view gives a file as a value (viewing.hsc), and jobs, wait
+ * and stop work on jobs in the background; a
  * shell function's name calls it; anything else is a program, through its manifest
  * (decisions/0170).
  *
@@ -359,6 +360,9 @@ call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, E
     }
     if tree.text == "stop" {
         return stop_job(shell, tree)
+    }
+    if tree.text == "view" {
+        return view_file(shell, tree)
     }
     if is_stage(tree) {
         return error_at(tree.at, message("% works on what comes before it in a pipeline", tree.text))

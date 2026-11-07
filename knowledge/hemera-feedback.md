@@ -165,6 +165,9 @@ file tools, each a request the server couldn't read; the compiler now warns of i
 side calls something given `&x`, as a call on its left is, since the right side runs first (Hemera's
 `docs/operators.md`). Once, too, the compiler crashed with an illegal instruction building every program for a boot
 run, and didn't again when built alone or run again; not chased further.
+Then for 11e3 (2026-11-06, `0179`): nothing new in Hemera. What cost time was what has before: `x is_some || y`
+needing its parentheses, and an index guarded by `n == 0 || ...` in an `if` before it not proven in bounds, where a
+separate `if n == 0 { return }` is.
 
 ## 4. Features That Look Like a Strong Fit
 

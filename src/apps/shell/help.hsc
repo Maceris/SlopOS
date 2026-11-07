@@ -39,6 +39,8 @@ BUILTINS :: Builtin.[
     Builtin.{name = "sort", summary = "Sort the items by a field, or by themselves, in a pipeline: sort size --descending."},
     Builtin.{name = "take", summary = "Keep the first n items, in a pipeline: take 10."},
     Builtin.{name = "group", summary = "Group the items by a field, with their count, in a pipeline: group kind."},
+    Builtin.{name = "view", summary = "Give a file as a value: a typed file's, a text file's text, or other bytes in hex: view notes.txt."},
+    Builtin.{name = "page", summary = "Show what comes before it a screen at a time, in a pipeline: view notes.txt | page; q quits."},
 ]
 
 /**

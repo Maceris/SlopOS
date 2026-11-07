@@ -197,7 +197,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 68 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 69 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 5 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -725,6 +725,36 @@ TESTS = [
         "--expect-console-line=error: photos: there's nothing there; did you mean Photos?",
         "--expect-console-line=error: remove --path: NotFound: There's nothing at that path to remove.",
         # Done once it's all shown: P on the secure attention key's screen shuts it down (decisions/0180)
+        "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
+    # Reading values (decisions/0179, 11e3): search over the files, view of a text, a binary and a typed file, and
+    # the pager, a screen at a time: a screen on with Space, to the end with G, a line back with k, and x, which it
+    # doesn't know, drawing it again before q quits, so the last status line isn't the prompt's line too
+    ("searches files, views text, bytes and typed files, and pages a long value", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=330")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wtest_file_tree --reading\\r\\p\\p"
+        "search TODO\\r\\p\\p"
+        "search LONG --names --ignore-case\\r\\p\\p"
+        "search \"(\"\\r\\p"
+        "view reading/todo.txt\\r\\p"
+        "view reading/bytes.bin\\r\\p"
+        "view reading/made.value\\r\\p\\p"
+        "view reading/long.txt | page\\r\\p\\p \\p\\pG\\p\\pk\\p\\px\\p\\pq\\p"
+        "view reading/todo.txt | page\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-console-line=files: 7", "--expect-console-line=reading/todo.txt  2     TODO: water the plants",
+        "--expect-console-line=reading/long.txt  0     ",
+        "--expect-console-line=error: search --pattern: BadPattern: The pattern isn't a regular expression; check its parentheses, "
+        "brackets and repetitions.",
+        "--expect-console-line=first", "--expect-console-line=last",
+        "--expect-console-line=00000010  10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f  |................|",
+        "--expect-console-line=files: 3", "--expect-console-line=directories: 1",
+        "--expect-console-line=lines 1-22 of 60: Space and b page, Up and Down scroll, q quits",
+        "--expect-console-line=lines 23-44 of 60: Space and b page, Up and Down scroll, q quits",
+        "--expect-console-line=lines 39-60 of 60: Space and b page, Up and Down scroll, q quits",
+        "--expect-console-line=lines 38-59 of 60: Space and b page, Up and Down scroll, q quits",
         "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
     # Automatic snapshots (decisions/0179): every 2 seconds with test_snapshot_seconds=2, kept 20, of the two volumes
     # served, so after a while two are taken and two deleted each time

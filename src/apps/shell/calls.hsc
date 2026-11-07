@@ -598,16 +598,56 @@ match_arguments :: fn(tree: ptr[Node], parameters: ptr[mut Parameter[..]]) -> Re
  *
  * @param parameters The program's parameters, searched in order; the one found can be changed through what's given
  *     back.
- * @param name The name, compared exactly.
+ * @param name The name, as typed after --: compared exactly, but that a - in it matches a _ in the parameter's, as
+ *     Hemera's names have no -, so --ignore-case names ignore_case.
  * @return The parameter, in parameters; null if none has the name.
  */
 named_parameter :: fn(parameters: ptr[mut Parameter[..]], name: string) -> ptr[mut Parameter]? {
     for &parameter in parameters^ {
-        if parameter.name == name {
+        if same_option(parameter.name, name) {
             return parameter
         }
     }
     return null
+}
+
+/**
+ * Tell whether a name typed after -- names a parameter: the same bytes, but that a - typed matches a _ in the name.
+ *
+ * @param parameter The parameter's name, as its manifest has it.
+ * @param typed The name typed, without its --.
+ * @return True if they match.
+ */
+same_option :: fn(parameter: string, typed: string) -> bool {
+    named :: string_bytes(parameter)
+    given :: string_bytes(typed)
+    if named.count != given.count {
+        return false
+    }
+    for byte, i in given {
+        if i < named.count && byte != named[i] && !(byte == cast[u8]('-') && named[i] == cast[u8]('_')) {
+            return false
+        }
+    }
+    return true
+}
+
+/**
+ * Give a parameter's name as it's typed after --: with a - for each _, as same_option matches it.
+ *
+ * @param name The parameter's name.
+ * @return The name typed, on the heap, never freed; the name itself when it has no _.
+ */
+option_name :: fn(name: string) -> string {
+    bytes :: string_bytes(name)
+    changed : u8[..]
+    for byte in bytes {
+        runtime.array_add(&changed, if byte == cast[u8]('_') { cast[u8]('-') } else { byte })
+    }
+    if changed.count == 0 {
+        return name
+    }
+    return string_of(&changed[0], changed.count)
 }
 
 /**

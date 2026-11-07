@@ -322,7 +322,7 @@ past_file :: fn(source: Source, path: string) -> slop_os.Channel? {
  */
 names_at :: fn(source: Source, path: string, names: ptr[mut os.DirectoryEntry[..]]) -> os.OsError? {
     if cast[slop_os.Handle](source.past) == slop_os.NO_HANDLE {
-        match os.list_directory_in(source.live, if path.count == 0 { "." } else { path }) {
+        match os.list_directory_in(source.live, path) {
             case Ok(listed) => {
                 for each in listed {
                     runtime.array_add(names, os.DirectoryEntry.{name = strings.clone(each.name) or_continue, is_directory = each.is_directory})

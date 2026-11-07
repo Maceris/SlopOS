@@ -1,6 +1,6 @@
 # 0179: 11e, the Tools and Scripts, and What a Program's Entry Gives Back
 
-Status: accepted; 11e1 and 11e2 built (below)
+Status: accepted; 11e1, 11e2 and 11e3 built (below)
 Date: 2026-11-06
 Related: `0162` (M11's plan), `0169` to `0172` (the shell, calls through manifests), `0176` (11d, documentation),
 `../design/shell.md`, Hemera's `docs/compilation.md` (Entry Parameters, Entry Results)
@@ -69,6 +69,17 @@ need that first, so it's 11e's first part.
   compared without case and with spaces at their ends dropped, is answered with that entry's name. Unicode
   normalization waits for `std` to have it.
 
+**Reading values** (11e3, chosen with the project's owner: the pager in the shell, schemas from manifests):
+- **`search`**, a program: the lines of the text files beneath a directory (or in a file) that a regular expression
+  matches, as records of their path, line number and text; with `--names`, the names that match instead. A typed
+  file, a file with a 0 byte, and what's past a file's first 4 MiB aren't searched.
+- **`view`, the shell's**: a file as a value. A typed file's value is read by its type's schema, found by its schema
+  hash among the types of the manifests of the programs the shell can run: any typed file a program writes is of a
+  type its manifest has, so nothing new is stored. A text file is its text; anything else its bytes in hexadecimal.
+- **`page`, a built-in stage**: what comes before it, as the shell writes it, a screen at a time on a screen of the
+  pager's own, a line under it saying where it is and which keys move it. A value that fits is written as any other.
+  It's the shell's because the shell is what reads any type: a program would need a stream of one type.
+
 ## Alternatives
 - **A removed area in the file system**, kept for a day: simpler, but a recycle bin rather than snapshots, and no view
   of the past for anything else.
@@ -84,6 +95,10 @@ need that first, so it's 11e's first part.
 - **Exit codes mapped through the documentation**: numbers, without what the error holds.
 - **The parameter's name as a string field by convention**: any `string` would do, so nothing tells a name from a
   message; a type of its own says it's a parameter.
+- **A pager program** taking the terminal and a stream: isolated, but it could page only the type it was built for,
+  unless programs could read streams of any type.
+- **A schema store in the bundle store**, every schema published by its hash when a program is installed, as
+  `../design/protocols.md` §5 sketches: new records and a request, for what the manifests already hold.
 
 ## Consequences
 - Tools give back `Result`s and the shell shows their errors with no code of their own for it.
@@ -125,3 +140,22 @@ need that first, so it's 11e's first part.
 - **Found on the way**: `os.begin(&out)^ = .Variant(os.append(&out, ...))` struck again, in four places; Hemera now
   warns of it (W4003, an assignment whose right side's call is given `&x` as its left side's is). And `test_settle` has
   to outlast the typing: each character waits for its echo.
+
+## As Built, 11e3 (2026-11-06)
+- **`search`** (`src/apps/search`): `pattern`, `path`, `--ignore-case`, `--names`, and an output of `Found` records
+  (path beneath `here`, line from 1 or 0 for a name, the line cut at 200 bytes); a `BadPattern` error names `pattern`
+  and where it's wrong. Directories are gone into 32 deep at most.
+- **The shell** (`viewing.hsc`): `view`, a built-in giving a typed file's value (`typed_value`, each program's manifest
+  read and each of its types hashed until one matches), a text file's text, or a hex dump of the first 64 KiB of
+  another, of the file's first 1 MiB; `page`, a built-in stage on a `Screen` of its own, sized by `Describe` and
+  `Resize`, drawing a line at a time and an inverse status line, with Space, f, Page Down, b, Page Up, Enter, j, Down,
+  k, Up, g, Home, G and End, and q, Escape or Ctrl-C to leave; a value shorter than the screen is written as usual.
+  A `--name` typed with `-` names a parameter with `_` (`--ignore-case`, `ignore_case`), and completion offers it so.
+- **Tests**: `test_file_tree --reading` makes a long file, one with a TODO, 32 bytes and a typed file of its own
+  `Made`; a boot test searches lines and names, gets a pattern's error, views the three kinds of file, and pages the
+  long one on, to its end and back a line; on both architectures.
+- **Found on the way**: `file_tools.names_at` listed a directory itself as `"."`, which `os.list_directory_in` refuses
+  (it takes `""`), so a walk from `here` itself found nothing; `copy`'s and `recover`'s from a snapshot weren't
+  affected, as a snapshot's is listed on its own connection. And `search` made 65 programs, past a generation's boot
+  set of 64 files (`0135`), so the image couldn't be built: `MAX_BOOT_FILES` is 128 now, as `MAX_MODULES` and
+  `MAX_ROOT_GRANTS` are (`0180`), which makes a generation's record larger, a format change no stored record survives.

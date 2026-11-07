@@ -93,6 +93,10 @@ another with `--here path`; the file tools (`list`, `copy`, `move`, `remove`, `r
 the shell can't find, whose name matches an entry of its directory without case or spaces at its ends, is answered
 "did you mean" that entry.
 
+**Typed files in the shell** (`0179`): the shell's `view` reads a typed file's value by the type whose schema hash the
+file has, found among the types of the manifests of the programs the shell can run. A program whose files should be
+viewable writes them as a type its entry's signature has, a parameter's, a record's or its result's.
+
 **Typed libraries** (`0120`, `0121`): a program built calling a Hemera typed library is given it as a grant labeled
 `library:<file>`, `Memory` holding the library's file. Before `main`, `base`'s runtime binds every library its import
 table names from those grants: the library's unwritten segments mapped straight from the memory (so every process

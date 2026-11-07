@@ -16,7 +16,7 @@ import stream from "std/os/slop_os"
  */
 
 /** The built-in stages. */
-STAGES :: string.["where", "map", "sort", "take", "group"]
+STAGES :: string.["where", "map", "sort", "take", "group", "page"]
 
 /**
  * Tell whether a pipeline's element is a built-in stage.
@@ -580,17 +580,21 @@ read_some :: fn(running: ptr[mut Running], call: ptr[mut Call], deadline: u64) -
 
 /**
  * Run a built-in stage on what came before it: where keeps the items its expression is true for, map makes each
- * item its expression's value, take keeps the first n, sort orders them, and group groups them by a field.
+ * item its expression's value, take keeps the first n, sort orders them, group groups them by a field, and page shows
+ * what came before it a screen at a time (viewing.hsc).
  *
  * It fails for where or map without an expression, an expression's error, where's expression not a bool, or take's,
- * sort's or group's errors.
+ * sort's, group's or page's errors.
  *
- * @param shell The shell, in whose scope the expressions are evaluated.
+ * @param shell The shell, in whose scope the expressions are evaluated, and on whose terminal page shows its value.
  * @param stage The stage's Call node.
  * @param given What came before it: a list's items, nothing for Null, or a value alone.
- * @return A new list; given's own isn't changed.
+ * @return A new list, given's own not changed; Null for page.
  */
 run_stage :: fn(shell: ptr[mut Shell], stage #escaping : ptr[Node], given #escaping : Value) -> Result[Value, EvalError] {
+    if stage.text == "page" {
+        return page(shell, stage, given)
+    }
     items :: items_of(given).items
     made :: new_list()
     if stage.text == "where" || stage.text == "map" {

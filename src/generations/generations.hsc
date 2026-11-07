@@ -22,7 +22,7 @@ MAGIC : u64 : 0x314e4547504f4c53
  * The most files a generation's boot set may have. Every program an ISO boots with is in its generation's boot set
  * (decisions/0135), so this bounds what an ISO can boot with.
  */
-MAX_BOOT_FILES :: 64
+MAX_BOOT_FILES :: 128
 /** The bytes a boot-set file's name takes in a record, its terminating zero included: names are 31 bytes at most. */
 NAME_BYTES :: 32
 /** The bytes a kernel's command line takes in a record, its terminating zero included: 511 bytes of text at most. */
