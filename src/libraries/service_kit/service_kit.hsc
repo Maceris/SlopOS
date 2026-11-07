@@ -286,3 +286,39 @@ is_word_at :: fn(text: string, start: usize, end: usize, word: string) -> bool {
     }
     return text[start..<end] == word
 }
+
+/** A page, in bytes: how much read_pages reads at a time. */
+READ_PIECE : u64 : 4096
+
+/**
+ * Read memory another process owns into bytes of this one's, a page at a time, through memory_read (decisions/0098):
+ * its owner gone is a failure, never a fault.
+ *
+ * A page at a time, so paged memory read under pressure gets on: memory_read waits for each page its pager hasn't
+ * supplied and is made again from its start, and a read of many pages whose first ones are given back meanwhile could
+ * wait for ever.
+ *
+ * @param memory The memory, which needs RIGHT_MEMORY_READ; any kind memory_read reads.
+ * @param offset Where in it to start, in bytes.
+ * @param into Where the bytes go, all of it filled, from offset on; what was read before a failure stays.
+ * @return True once into is filled; false if a read failed: the memory gone, its pager gone, or the range past its end.
+ */
+read_pages :: fn(memory: slop_os.Memory, offset: u64, into: mut u8[]) -> bool {
+    done := cast[usize](0)
+    loop {
+        if done >= into.count {
+            return true
+        }
+        at :: offset + cast[u64](done)
+        // To the next page's start, so each read is one page of the memory
+        room :: cast[usize](READ_PIECE - at % READ_PIECE)
+        end :: if into.count - done < room { into.count } else { done + room }
+        if done > end || end > into.count {
+            return false
+        }
+        if slop_os.memory_read(memory, at, into[done..<end]) is_error {
+            return false
+        }
+        done = end
+    }
+}

@@ -100,11 +100,13 @@ Connection :: struct {
     name : u8[files.PATH_BYTES],
     /** How many of name's bytes are its. */
     name_length : u32,
-    /** Where a file's buffer, its client's memory, is mapped here; 0 before UseBuffer. */
-    buffer : u64,
-    /** The buffer's size in bytes, at most MAX_BUFFER_BYTES. */
+    /** The size in bytes of a file's buffer, its client's memory, at most MAX_BUFFER_BYTES; 0 before UseBuffer. */
     buffer_bytes : u64,
-    /** The buffer's memory, the server's handle to it, closed when it's let go of. */
+    /**
+     * The buffer's memory, the server's handle to it, read and written through memory_read and memory_write, never
+     * mapped, so its client ending meanwhile fails a transfer rather than the server (decisions/0098, 0181's F6);
+     * closed when it's let go of. Meaningless while buffer_bytes is 0.
+     */
     buffer_memory : slop_os.Memory,
     /** A transaction's index, for one in a transaction. */
     transaction : usize,
@@ -149,14 +151,12 @@ Reach :: struct {
     blocks : slop_os.Channel,
     /** A port bound to blocks, waited on for its answers. */
     blocks_port : slop_os.Port,
-    /**
-     * Where the block connection's buffer is mapped, readable and writable, in the process's address space; 0 before
-     * it is. Its addresses stay reserved once it's unmapped.
-     */
-    buffer : u64,
-    /** The buffer's size in bytes. */
+    /** The block connection's buffer's size in bytes; 0 before it's had. */
     buffer_bytes : u64,
-    /** The buffer's memory, the block connection's, kept while it's mapped. */
+    /**
+     * The buffer's memory, its block driver's, written and read through memory_write and memory_read, never mapped, so
+     * the driver ending meanwhile fails a transfer rather than the server (decisions/0098, 0181's F6).
+     */
     window : slop_os.Memory,
     /** How many 4 KiB blocks the container's partition has, for a Device. */
     block_count : u64,
@@ -310,14 +310,14 @@ main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clie
 
 /**
  * Reach a volume's blocks, or a snapshot's, through its connection to the container service: described, a block
- * connection opened, and its buffer mapped here.
+ * connection opened, and its buffer's memory had.
  *
  * @param into Where it's kept: its container end, block connection, ports and buffer; what's made before a failure is
  *     left there, for the caller to close (let_go_of_reach).
  * @param end The connection to the container service for the volume or snapshot, which into takes over.
  * @return What the container service says of it; on failure, main's exit code for it: 1 if a port couldn't be made, 2
  *     if it couldn't be described, 3 if no block connection could be had, 4 if the block connection's description or
- *     buffer couldn't be had or mapped.
+ *     buffer couldn't be had.
  */
 reach :: fn(into: ptr[mut Reach], end: slop_os.Channel) -> Result[container.Described, u32] {
     startup :: slop_os.startup_block()
@@ -343,27 +343,17 @@ reach :: fn(into: ptr[mut Reach], end: slop_os.Channel) -> Result[container.Desc
         case Buffer(memory) => into.window = memory
         case _ => return .Error(4)
     }
-    address :: runtime.reserve_addresses(cast[usize](info.buffer_bytes)) or_return .Error(4)
-    if slop_os.memory_map(into.window, startup.space, address, 0, info.buffer_bytes, read_write()) is_error {
-        return .Error(4)
-    }
-    into.buffer = address
     into.buffer_bytes = info.buffer_bytes
     into.block_count = info.block_count / SECTORS_PER_BLOCK
     return .Ok(described)
 }
 
 /**
- * Let go of what reaches a tree's blocks: its buffer unmapped, and its connections, ports and buffer's memory closed.
+ * Let go of what reaches a tree's blocks: its connections, ports and buffer's memory closed.
  *
- * @param reached What reach made, or began to; each part not made is NO_HANDLE, or 0 for the buffer, and left. It's
- *     left with nothing.
+ * @param reached What reach made, or began to; each part not made is NO_HANDLE, and left. It's left with nothing.
  */
 let_go_of_reach :: fn(reached: ptr[mut Reach]) {
-    startup :: slop_os.startup_block()
-    if reached.buffer != 0 {
-        _ = slop_os.memory_unmap(startup.space, reached.buffer)
-    }
     for handle in slop_os.Handle.[cast[slop_os.Handle](reached.window), cast[slop_os.Handle](reached.blocks_port),
         cast[slop_os.Handle](reached.blocks), cast[slop_os.Handle](reached.container_port), cast[slop_os.Handle](reached.container)] {
         if handle != slop_os.NO_HANDLE && handle != 0 {
@@ -373,15 +363,6 @@ let_go_of_reach :: fn(reached: ptr[mut Reach]) {
     reached^ = Reach.{container = cast[slop_os.Channel](slop_os.NO_HANDLE), container_port = cast[slop_os.Port](slop_os.NO_HANDLE),
         blocks = cast[slop_os.Channel](slop_os.NO_HANDLE), blocks_port = cast[slop_os.Port](slop_os.NO_HANDLE),
         window = cast[slop_os.Memory](slop_os.NO_HANDLE)}
-}
-
-/**
- * Give the protection to map memory readable and writable.
- *
- * @return PROTECTION_READ and PROTECTION_WRITE.
- */
-read_write :: fn() -> slop_os.Protection {
-    return cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
 }
 
 // The container service, a request at a time
@@ -588,17 +569,19 @@ no_flush :: fn(context: rawptr) -> bool {
 }
 
 /**
- * Move 4 KiB blocks through the buffer, as many at a time as it holds: read into bytes, or written from them. Each
- * transfer is a whole extent's blocks, or part of one, as the container service checks.
+ * Move 4 KiB blocks through the block connection's buffer, as many at a time as it holds: read into bytes, or written
+ * from them. Each transfer is a whole extent's blocks, or part of one, as the container service checks. The buffer is
+ * its driver's memory, copied into before a write and out of after a read through the kernel, so a driver that ended
+ * fails the move.
  *
- * @param reached How the tree's blocks are reached, whose buffer is overwritten by each transfer, at most buffer_bytes of it at a time,
- *     each waited for.
+ * @param reached How the tree's blocks are reached, whose buffer is overwritten by each transfer, at most buffer_bytes
+ *     of it at a time, each waited for.
  * @param first The first block in the container.
  * @param count How many blocks.
  * @param bytes Where they're read to, or written from; at least count blocks long.
  * @param writing Whether they're written, or read.
- * @return Whether all of them moved; false if bytes is too short, the buffer holds no block, or a transfer failed,
- *     what was moved before it moved.
+ * @return Whether all of them moved; false if bytes is too short, the buffer holds no block, a copy through the buffer
+ *     failed, or a transfer did, what was moved before it moved.
  */
 move :: fn(reached: ptr[Reach], first: u64, count: u64, bytes: mut u8[], writing: bool) -> bool {
     per :: reached.buffer_bytes / slopfs.BLOCK_BYTES
@@ -611,27 +594,22 @@ move :: fn(reached: ptr[Reach], first: u64, count: u64, bytes: mut u8[], writing
             return true
         }
         now :: if count - moved < per { count - moved } else { per }
-        window :: view_of(cast[ptr[mut u8]](reached.buffer), cast[usize](now * slopfs.BLOCK_BYTES))
         base :: cast[usize](moved * slopfs.BLOCK_BYTES)
-        if writing {
-            for &byte, i in window {
-                at :: base + i
-                if at < bytes.count {
-                    byte^ = bytes[at]
-                }
-            }
+        end :: base + cast[usize](now * slopfs.BLOCK_BYTES)
+        available :: bytes.count
+        if base > end || end > available {
+            return false
+        }
+        part :: bytes[base..<end]
+        if writing && (slop_os.memory_write(reached.window, 0, part) is_error) {
+            return false
         }
         transfer :: block.Transfer.{tag = 1, first = (first + moved) * SECTORS_PER_BLOCK, count = cast[u32](now * SECTORS_PER_BLOCK), offset = 0}
         if !done(call(reached, if writing { block.Request.Write(transfer) } else { block.Request.Read(transfer) })) {
             return false
         }
-        if !writing {
-            for byte, i in window {
-                at :: base + i
-                if at < bytes.count {
-                    bytes[at] = byte
-                }
-            }
+        if !writing && (slop_os.memory_read(reached.window, 0, part) is_error) {
+            return false
         }
         moved += now
     }
@@ -771,17 +749,14 @@ drop :: fn(server: ptr[mut Server], index: usize) {
 }
 
 /**
- * Let go of a file connection's buffer: unmap it and close its memory, if it has one.
+ * Let go of a file connection's buffer: close its memory, if it has one.
  *
- * @param connection The connection, whose buffer, if one's mapped, is unmapped and its memory closed, buffer and
- *     buffer_bytes left 0; one without a buffer is left alone.
+ * @param connection The connection, whose buffer's memory, if it has one, is closed, buffer_bytes left 0; one without
+ *     a buffer is left alone.
  */
 release_buffer :: fn(connection: ptr[mut Connection]) {
-    if connection.buffer != 0 {
-        startup :: slop_os.startup_block()
-        _ = slop_os.memory_unmap(startup.space, connection.buffer)
+    if connection.buffer_bytes != 0 {
         _ = slop_os.handle_close(cast[slop_os.Handle](connection.buffer_memory))
-        connection.buffer = 0
         connection.buffer_bytes = 0
     }
 }
@@ -1729,12 +1704,12 @@ in_set :: fn(pattern: string, name: string) -> bool {
 // Files
 
 /**
- * Take a file connection's buffer: its client's memory, mapped here, readable and writable, in place of any before.
+ * Take a file connection's buffer: its client's memory, kept to copy through, in place of any before. It's never
+ * mapped, so the client ending, or taking it back, fails a transfer rather than the server (decisions/0098, 0181's F6).
  *
  * @param connection The file connection, whose buffer before, if any, is let go of first, even when memory is refused.
- * @param memory The memory, which the server takes over: kept, or closed when it's refused; but if addresses can't be
- *     reserved for it, it isn't closed.
- * @return Null once it's mapped; NoBuffer if it's empty, larger than MAX_BUFFER_BYTES, or couldn't be mapped.
+ * @param memory The memory, which the server takes over: kept, or closed when it's refused.
+ * @return Null once it's kept; NoBuffer if it's empty, its size can't be had, or it's larger than MAX_BUFFER_BYTES.
  */
 use_buffer :: fn(connection: ptr[mut Connection], memory: slop_os.Memory) -> files.FileError? {
     release_buffer(connection)
@@ -1743,16 +1718,6 @@ use_buffer :: fn(connection: ptr[mut Connection], memory: slop_os.Memory) -> fil
         _ = slop_os.handle_close(cast[slop_os.Handle](memory))
         return files.FileError.NoBuffer
     }
-    startup :: slop_os.startup_block()
-    address :: runtime.reserve_addresses(cast[usize](size)) or_return files.FileError.NoBuffer
-    match slop_os.memory_map(memory, startup.space, address, 0, size, read_write()) {
-        case Ok => {}
-        case Error(error) => {
-            _ = slop_os.handle_close(cast[slop_os.Handle](memory))
-            return files.FileError.NoBuffer
-        }
-    }
-    connection.buffer = address
     connection.buffer_bytes = size
     connection.buffer_memory = memory
     return null
@@ -1767,29 +1732,42 @@ use_buffer :: fn(connection: ptr[mut Connection], memory: slop_os.Memory) -> fil
  * @return Whether it has a buffer and the transfer's offset and count, in bytes, are inside it.
  */
 fits :: fn(connection: ptr[Connection], transfer: files.Transfer) -> bool {
-    return connection.buffer != 0 && cast[u64](transfer.buffer_offset) + cast[u64](transfer.count) <= connection.buffer_bytes
+    return connection.buffer_bytes != 0 && cast[u64](transfer.buffer_offset) + cast[u64](transfer.count) <= connection.buffer_bytes
 }
 
 /**
- * Give where a transfer's bytes are in a connection's buffer.
+ * Copy a transfer's bytes out of a connection's buffer, onto the heap, as the client has them now.
  *
- * @param connection The connection, whose buffer is mapped.
+ * @param connection The connection, whose buffer is read through memory_read.
  * @param transfer The transfer, which fits.
- * @return A view of the buffer, good while it's mapped; the client may change it meanwhile.
+ * @return The bytes, transfer.count of them, which the caller gives back with runtime.free_array; empty for a count of
+ *     0.
+ * @error NoMemory The server hadn't the memory for them.
+ * @error NoBuffer The buffer couldn't be read: its client ended, or the memory's gone.
  */
-buffer_of :: fn(connection: ptr[Connection], transfer: files.Transfer) -> mut u8[] {
-    return view_of(cast[ptr[mut u8]](connection.buffer + cast[u64](transfer.buffer_offset)), cast[usize](transfer.count))
+client_bytes :: fn(connection: ptr[Connection], transfer: files.Transfer) -> Result[mut u8[], files.FileError] {
+    bytes, error :: runtime.new_array(u8, cast[usize](transfer.count))
+    if error != null {
+        return .Error(.NoMemory)
+    }
+    if slop_os.memory_read(connection.buffer_memory, cast[u64](transfer.buffer_offset), bytes) is_error {
+        runtime.free_array(bytes)
+        return .Error(.NoBuffer)
+    }
+    return .Ok(bytes)
 }
 
 /**
- * Read a file into its connection's buffer.
+ * Read a file into its connection's buffer: onto the heap, then copied into the buffer through memory_write.
  *
  * @param server The server, whose volume is read; nothing's changed.
  * @param connection The file's connection, read only: its object is read into its buffer, which must hold the
  *     transfer, or it's NoBuffer.
  * @param transfer Where to read from in the file and to in the buffer, and how many bytes.
  * @return How many bytes were read: fewer than asked only at the file's end, 0 past it.
- * @error NoBuffer The connection has no buffer, or the transfer doesn't fit in it.
+ * @error NoBuffer The connection has no buffer, the transfer doesn't fit in it, or it couldn't be written: its client
+ *     ended, or the memory's gone.
+ * @error NoMemory The server hadn't the memory to read it into.
  * @error NotFound The file is gone.
  * @error DeviceError A block couldn't be read.
  * @error Corrupt The tree, or the file's chunk, couldn't be read as one.
@@ -1798,10 +1776,24 @@ read_file :: fn(server: ptr[mut Server], connection: ptr[Connection], transfer: 
     if !fits(connection, transfer) {
         return .Error(.NoBuffer)
     }
-    match slopfs.read(volume_of_past(server, connection.past), connection.object, transfer.offset, buffer_of(connection, transfer)) {
-        case Ok(count) => return .Ok(cast[u32](count))
-        case Error(error) => return .Error(file_error(error))
+    bytes, error :: runtime.new_array(u8, cast[usize](transfer.count))
+    if error != null {
+        return .Error(.NoMemory)
     }
+    defer runtime.free_array(bytes)
+    count := cast[usize](0)
+    match slopfs.read(volume_of_past(server, connection.past), connection.object, transfer.offset, bytes) {
+        case Ok(read) => count = read
+        case Error(failure) => return .Error(file_error(failure))
+    }
+    available :: bytes.count
+    if count > available {
+        return .Error(.Corrupt)
+    }
+    if slop_os.memory_write(connection.buffer_memory, cast[u64](transfer.buffer_offset), bytes[0..<count]) is_error {
+        return .Error(.NoBuffer)
+    }
+    return .Ok(cast[u32](count))
 }
 
 /**
@@ -1884,14 +1876,26 @@ serve_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomin
                 if !fits(connection, transfer) {
                     response^ = .Failed(.NoBuffer)
                 }
-                else if logged {
-                    response^ = if log_op(server, connection.transaction, .Write, 0, transfer.offset, name_of(connection), "",
-                        buffer_of(connection, transfer)) { file.Response.Transferred(transfer.count) } else { file.Response.Failed(.NoSpace) }
-                }
                 else {
-                    match slopfs.write(server.volume, connection.object, transfer.offset, buffer_of(connection, transfer)) {
-                        case Ok => response^ = .Transferred(transfer.count)
-                        case Error(error) => response^ = .Failed(file_error(error))
+                    match client_bytes(connection, transfer) {
+                        case Error(error) => response^ = .Failed(error)
+                        case Ok(bytes) => {
+                            defer runtime.free_array(bytes)
+                            if logged {
+                                response^ = if log_op(server, connection.transaction, .Write, 0, transfer.offset, name_of(connection), "", bytes) {
+                                    file.Response.Transferred(transfer.count)
+                                }
+                                else {
+                                    file.Response.Failed(.NoSpace)
+                                }
+                            }
+                            else {
+                                match slopfs.write(server.volume, connection.object, transfer.offset, bytes) {
+                                    case Ok => response^ = .Transferred(transfer.count)
+                                    case Error(error) => response^ = .Failed(file_error(error))
+                                }
+                            }
+                        }
                     }
                 }
             }

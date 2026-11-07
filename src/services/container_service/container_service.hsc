@@ -99,8 +99,11 @@ Server :: struct {
     disk : slop_os.Channel,
     /** A port bound to disk, waited on for its answers. */
     disk_port : slop_os.Port,
-    /** Where disk's buffer is mapped, readable and writable, in the process's address space. */
-    buffer : u64,
+    /**
+     * disk's buffer, its driver's memory, written and read through memory_write and memory_read and never mapped, so
+     * the driver ending is a failed transfer, not a fault (decisions/0098, 0181's F6).
+     */
+    window : slop_os.Memory,
     /** The buffer's size in bytes. */
     buffer_bytes : u64,
     /** The partition's size in 512-byte sectors. */
@@ -128,7 +131,7 @@ Server :: struct {
  * @param clients The listener the storage manager's connections arrive on, for volumes, snapshots, quotas and new
  *     volumes.
  * @return 99 without the memory for its state, 1 if its ports couldn't be made, 2 if the partition didn't describe
- *     itself, 3 if it didn't give its buffer, 4 if the buffer couldn't be mapped, 5 if there's no container on it, 6
+ *     itself, 3 if it didn't give its buffer, 5 if there's no container on it, 6
  *     if the container's owners couldn't be read, and 7 if clients couldn't be added. It doesn't return otherwise.
  */
 main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: os.Listener[container.Container]) -> int {
@@ -147,15 +150,12 @@ main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: 
         case Described(described) => info = described
         case _ => return 2
     }
-    window := cast[slop_os.Memory](slop_os.NO_HANDLE)
     match call(server.disk, server.disk_port, .GetBuffer) {
-        case Buffer(memory) => window = memory
+        case Buffer(memory) => server.window = memory
         case _ => return 3
     }
     server.buffer_bytes = info.buffer_bytes
     server.sector_count = info.block_count
-    server.buffer = runtime.reserve_addresses(cast[usize](info.buffer_bytes)) or_return 4
-    slop_os.memory_map(window, startup.space, server.buffer, 0, info.buffer_bytes, read_write()) or_return 4
     device :: slopfs.Device.{context = cast[rawptr](server), block_count = info.block_count / SECTORS_PER_BLOCK, read = read_blocks,
         write = write_blocks, flush = flush}
     match slopfs.mount(device) {
@@ -191,15 +191,6 @@ main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: 
         packets : slop_os.Packet[8]
         _ = slop_os.port_wait(server.port, packets, slop_os.NO_DEADLINE)
     }
-}
-
-/**
- * Give the protection to map memory readable and writable.
- *
- * @return PROTECTION_READ and PROTECTION_WRITE.
- */
-read_write :: fn() -> slop_os.Protection {
-    return cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
 }
 
 // The container's own blocks, through its connection to the partition
@@ -247,8 +238,8 @@ done :: fn(response: block.Response) -> bool {
 /**
  * Read the container's own blocks, for slopfs's Device.
  *
- * @param context The Server main gave the Device, cast back; its disk, port and mapped buffer are used, and nothing
- *     else changes.
+ * @param context The Server main gave the Device, cast back; its disk, port and buffer are used, and nothing else
+ *     changes.
  * @param first The first 4 KiB block in the partition.
  * @param count How many 4 KiB blocks.
  * @param into Where they go, at least count blocks long.
@@ -262,8 +253,8 @@ read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bo
 /**
  * Write the container's own blocks, for slopfs's Device; durable only once flush is.
  *
- * @param context The Server main gave the Device, cast back; its disk, port and mapped buffer are used, and nothing
- *     else changes.
+ * @param context The Server main gave the Device, cast back; its disk, port and buffer are used, and nothing else
+ *     changes.
  * @param first The first 4 KiB block in the partition.
  * @param count How many 4 KiB blocks.
  * @param from What's written, at least count blocks long.
@@ -288,14 +279,15 @@ flush :: fn(context: rawptr) -> bool {
 /**
  * Move sectors through the partition's buffer, as much at a time as it holds: read into bytes, or written from them.
  *
- * @param server The container service's state: its disk connection is used, waiting on each transfer, and its mapped
- *     buffer, of buffer_bytes, is overwritten.
+ * @param server The container service's state: its disk connection is used, waiting on each transfer, and its
+ *     buffer, of buffer_bytes, is overwritten, copied into with memory_write before a write and out of with
+ *     memory_read after a read.
  * @param first The first 512-byte sector in the partition.
  * @param count How many 512-byte sectors, moved in pieces of as many as the buffer holds.
  * @param bytes Where they're read to, or written from; at least count sectors long.
  * @param writing Whether they're written, or read.
- * @return Whether all of them moved; false if bytes is too short, the buffer holds no sector, or a transfer failed,
- *     what was moved before it moved.
+ * @return Whether all of them moved; false if bytes is too short, the buffer holds no sector, a transfer failed, or
+ *     the buffer couldn't be copied, its driver gone; what was moved before it moved.
  */
 move :: fn(server: ptr[mut Server], first: u64, count: u64, bytes: mut u8[], writing: bool) -> bool {
     per :: server.buffer_bytes / block.BLOCK_BYTES
@@ -308,27 +300,20 @@ move :: fn(server: ptr[mut Server], first: u64, count: u64, bytes: mut u8[], wri
             return true
         }
         now :: if count - moved < per { count - moved } else { per }
-        window :: view_of(cast[ptr[mut u8]](server.buffer), cast[usize](now * block.BLOCK_BYTES))
-        base :: cast[usize](moved * block.BLOCK_BYTES)
-        if writing {
-            for &byte, i in window {
-                at :: base + i
-                if at < bytes.count {
-                    byte^ = bytes[at]
-                }
-            }
+        start :: cast[usize](moved * block.BLOCK_BYTES)
+        end :: start + cast[usize](now * block.BLOCK_BYTES)
+        if start > end || end > bytes.count {
+            return false
+        }
+        if writing && (slop_os.memory_write(server.window, 0, bytes[start..<end]) is_error) {
+            return false
         }
         transfer :: block.Transfer.{tag = 1, first = first + moved, count = cast[u32](now), offset = 0}
         if !done(call(server.disk, server.disk_port, if writing { block.Request.Write(transfer) } else { block.Request.Read(transfer) })) {
             return false
         }
-        if !writing {
-            for byte, i in window {
-                at :: base + i
-                if at < bytes.count {
-                    bytes[at] = byte
-                }
-            }
+        if !writing && (slop_os.memory_read(server.window, 0, bytes[start..<end]) is_error) {
+            return false
         }
         moved += now
     }

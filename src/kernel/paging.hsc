@@ -146,6 +146,28 @@ resolve_paged_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], spac
             case None => FaultOutcome.Mapped
         }
     }
+    return want_page_locked(kernel, thread, memory, slot, held, false)
+}
+
+/**
+ * Block a thread on paged memory until its pager supplies a page that isn't there: a fault's, or memory_read's.
+ *
+ * A page wanted for the first time is marked PAGE_WANTED and the pager's wake binding is raised. The blocked thread is
+ * on the memory's waiters until a supply wakes it. Takes the pager port's lock; if the thread is running on this CPU,
+ * its time is accounted and vector state saved.
+ *
+ * @param kernel The kernel: the pager's binding is queued on its port.
+ * @param thread The thread, running on this CPU or not; when it blocks, its state, fault_memory and wait links are set,
+ *     under the memory's page lock.
+ * @param memory The paged memory, not a window, whose page_lock the caller holds; it's released before this returns.
+ * @param slot The page's slot in memory, which holds no frame: 0, PAGE_WANTED or PAGE_REPORTED.
+ * @param held What slot held when the caller read it, under the lock.
+ * @param restart Whether the thread is in a system call that's made again once it's woken (arch.restart_syscall), as
+ *     memory_read is; moved back before it's on the waiters, where a supply could wake it on another CPU.
+ * @return Blocked if the thread now waits for the pager; Failed, with nothing changed, if the pager's binding is gone.
+ */
+want_page_locked :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], memory: ptr[mut Memory], slot: ptr[mut u64], held: u64,
+    restart: bool) -> FaultOutcome {
     port :: match lock_bound_port(cast[ptr[Binding]](memory.pager_binding), memory.pager_generation) {
         case Some(locked) => locked
         case None => {
@@ -160,6 +182,9 @@ resolve_paged_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], spac
         queue_binding(kernel, port, binding)
     }
     unlock_at(&port.lock, .Port)
+    if restart {
+        arch.restart_syscall(&thread.registers)
+    }
     // Saved first, then where supply finds it, as a port's waiter is
     cpu :: per_cpu()
     if cpu.current == cast[u64](thread) {

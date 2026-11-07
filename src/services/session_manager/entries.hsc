@@ -48,17 +48,17 @@ EntryProblem :: union {
  * @return The plan, its program the caller's; Unreadable, or Needs with the first parameter that can't be given.
  */
 entry_plan :: fn(sessions: ptr[mut Manager], bundle_hash: bundle.Hash) -> Result[EntryPlan, EntryProblem] {
-    record :: mapped_object(sessions, bundle_hash) or_return .Error(.Unreadable)
+    record :: stored_object(sessions, bundle_hash) or_return .Error(.Unreadable)
     referred : bundle.Hash[..]
     defer runtime.array_free(&referred)
     read :: bundle.bundle_refers(record.bytes, &referred) or_else false
-    unmap_object(record)
+    let_go_of_object(record)
     if !read || referred.count < 2 {
         return .Error(.Unreadable)
     }
-    manifest_object :: mapped_object(sessions, referred[1 % referred.count]) or_return .Error(.Unreadable)
+    manifest_object :: stored_object(sessions, referred[1 % referred.count]) or_return .Error(.Unreadable)
     parsed := schema.parse(manifest_object.bytes)
-    unmap_object(manifest_object)
+    let_go_of_object(manifest_object)
     manifest := parsed or_return .Error(.Unreadable)
     defer schema.free(&manifest)
     entry :: schema.type_in(&manifest, 0) or_return .Error(.Unreadable)

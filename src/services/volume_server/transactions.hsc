@@ -75,10 +75,12 @@ Transaction :: struct {
     active : bool,
     /** The directory object it's beneath, which its paths are relative to. */
     directory : u64,
-    /** The log's memory, its client's, the server's handle to it, closed when the transaction ends. */
+    /**
+     * The log's memory, its client's, the server's handle to it, closed when the transaction ends. Written and read
+     * through memory_write and memory_read, never mapped, so its client ending fails the transaction rather than the
+     * server (decisions/0098, 0181's F6).
+     */
     memory : slop_os.Memory,
-    /** Where the log is mapped, readable and writable, in the process's address space. */
-    log : u64,
     /** The log's size in bytes, at most MAX_BUFFER_BYTES. */
     log_bytes : u64,
     /** How many of the log's bytes are logged changes. */
@@ -92,14 +94,14 @@ Transaction :: struct {
 }
 
 /**
- * Begin a transaction beneath a directory, its log in memory its client gives, mapped here, so the log is charged to
- * the client and capped by what it gives.
+ * Begin a transaction beneath a directory, its log in memory its client gives, kept to copy through, so the log is
+ * charged to the client and capped by what it gives.
  *
  * @param server The server, whose first free transaction slot is taken; directory isn't checked here.
  * @param directory The directory object it's beneath.
  * @param memory The log's memory, kept by the transaction once it's begun; the caller closes it when it isn't.
- * @return The transaction's index; null if MAX_TRANSACTIONS are open, the memory is smaller than a LogHead or larger
- *     than MAX_BUFFER_BYTES, or it couldn't be mapped.
+ * @return The transaction's index; null if MAX_TRANSACTIONS are open, or the memory's size can't be had, or is smaller
+ *     than a LogHead or larger than MAX_BUFFER_BYTES.
  */
 begin :: fn(server: ptr[mut Server], directory: u64, memory: slop_os.Memory) -> usize? {
     for transaction, i in server.transactions {
@@ -110,13 +112,8 @@ begin :: fn(server: ptr[mut Server], directory: u64, memory: slop_os.Memory) -> 
         if size < cast[u64](size_of(LogHead)) || size > MAX_BUFFER_BYTES {
             return null
         }
-        startup :: slop_os.startup_block()
-        address :: runtime.reserve_addresses(cast[usize](size)) or_return null
-        if slop_os.memory_map(memory, startup.space, address, 0, size, read_write()) is_error {
-            return null
-        }
         if i < server.transactions.count {
-            server.transactions[i] = Transaction.{active = true, directory = directory, memory = memory, log = address, log_bytes = size}
+            server.transactions[i] = Transaction.{active = true, directory = directory, memory = memory, log_bytes = size}
         }
         return i
     }
@@ -124,10 +121,9 @@ begin :: fn(server: ptr[mut Server], directory: u64, memory: slop_os.Memory) -> 
 }
 
 /**
- * End a transaction, aborting what it logged: unmap its log and close its memory, freeing its slot.
+ * End a transaction, aborting what it logged: close its log's memory, freeing its slot.
  *
- * @param server The server, whose transaction slot is emptied: its log unmapped and its memory closed, nothing logged
- *     applied.
+ * @param server The server, whose transaction slot is emptied: its log's memory closed, nothing logged applied.
  * @param index The transaction's index; one not open is left alone.
  */
 end_transaction :: fn(server: ptr[mut Server], index: usize) {
@@ -135,8 +131,6 @@ end_transaction :: fn(server: ptr[mut Server], index: usize) {
         return void
     }
     transaction :: server.transactions[index]
-    startup :: slop_os.startup_block()
-    _ = slop_os.memory_unmap(startup.space, transaction.log)
     _ = slop_os.handle_close(cast[slop_os.Handle](transaction.memory))
     server.transactions[index] = Transaction.{}
 }
@@ -159,8 +153,8 @@ reset :: fn(server: ptr[mut Server], index: usize) {
 /**
  * Log a change at the end of a transaction's log.
  *
- * @param server The server, whose transaction's log, in its client's memory, is written at its end and its used counted
- *     up.
+ * @param server The server, whose transaction's log, in its client's memory, is written at its end through
+ *     memory_write and its used counted up.
  * @param index The transaction's slot in server's transactions, as begin gave it; one past them logs nothing. An
  *     inactive slot has no log, so it has no room.
  * @param op What change it is, written as its value.
@@ -169,7 +163,8 @@ reset :: fn(server: ptr[mut Server], index: usize) {
  * @param path Its path, relative to the transaction's directory, at most 0xffff bytes.
  * @param to A rename's to path, at most 0xffff bytes; "" otherwise.
  * @param data A write's bytes; none otherwise.
- * @return Whether it was logged; false if the log hasn't the room, a path is too long, or there's no such transaction.
+ * @return Whether it was logged; false if the log hasn't the room, a path is too long, there's no such transaction, or
+ *     the log couldn't be written: its client ended, or the memory's gone. What failed to be written isn't counted.
  */
 log_op :: fn(server: ptr[mut Server], index: usize, op: Op, creation: u32, number: u64, path: string, to: string, data: u8[]) -> bool {
     if index >= server.transactions.count {
@@ -180,34 +175,31 @@ log_op :: fn(server: ptr[mut Server], index: usize, op: Op, creation: u32, numbe
     if transaction.used + length > transaction.log_bytes || path.count > 0xffff || to.count > 0xffff {
         return false
     }
-    log :: view_of(cast[ptr[mut u8]](transaction.log), cast[usize](transaction.log_bytes))
     head := LogHead.{op = cast[u32le](cast[u32](op)), creation = cast[u32le](creation), number = cast[u64le](number),
         data_bytes = cast[u32le](cast[u32](data.count)), path_bytes = cast[u16le](cast[u16](path.count)), to_bytes = cast[u16le](cast[u16](to.count))}
-    at := cast[usize](transaction.used)
-    at = put_bytes(log, at, view_of(cast[ptr[u8]](&head), size_of(LogHead)))
-    at = put_bytes(log, at, string_bytes(path))
-    at = put_bytes(log, at, string_bytes(to))
-    at = put_bytes(log, at, data)
+    at := transaction.used
+    if !log_part(transaction.memory, &at, view_of(cast[ptr[u8]](&head), size_of(LogHead))) || !log_part(transaction.memory, &at, string_bytes(path))
+        || !log_part(transaction.memory, &at, string_bytes(to)) || !log_part(transaction.memory, &at, data) {
+        return false
+    }
     transaction.used += length
     return true
 }
 
 /**
- * Put bytes in the log, as far as they fit.
+ * Write part of a logged change into a transaction's log, its client's memory, through memory_write.
  *
- * @param log The log's bytes, written to; what falls past their end is dropped.
- * @param at Where they go, in bytes.
- * @param bytes What's put, copied; not kept.
- * @return Where the next go: at plus bytes' count, whether or not all fit.
+ * @param memory The log's memory.
+ * @param at Where in the log it goes, in bytes; moved past it once it's written.
+ * @param part The bytes; none writes nothing.
+ * @return Whether it was written; false if the memory couldn't be: its client ended, or it's gone.
  */
-put_bytes :: fn(log: mut u8[], at: usize, bytes: u8[]) -> usize {
-    for byte, i in bytes {
-        j :: at + i
-        if j < log.count {
-            log[j] = byte
-        }
+log_part :: fn(memory: slop_os.Memory, at: ptr[mut u64], part: u8[]) -> bool {
+    if part.count > 0 && (slop_os.memory_write(memory, at^, part) is_error) {
+        return false
     }
-    return at + bytes.count
+    at^ += cast[u64](part.count)
+    return true
 }
 
 /**
@@ -282,7 +274,7 @@ note_versions :: fn(server: ptr[mut Server], index: usize, path: string) -> bool
     return true
 }
 
-/** A logged change, read back from the log, which its client could have changed, so it's checked as it's read. */
+/** A logged change, read back from a copy of the log, which its client wrote, so it's checked as it's read. */
 Logged :: struct {
     /** Op's value, unchecked; apply refuses one that isn't an Op. */
     op : u32,
@@ -290,11 +282,11 @@ Logged :: struct {
     creation : u32,
     /** A write's offset or a size, in bytes. */
     number : u64,
-    /** Its path, a view into the log, which its client may change meanwhile. */
+    /** Its path, a view into the log's copy. */
     path : string,
-    /** A rename's to path, a view into the log. */
+    /** A rename's to path, a view into the log's copy. */
     to : string,
-    /** A write's bytes, a view into the log. */
+    /** A write's bytes, a view into the log's copy. */
     data : u8[],
     /** Where the next change starts in the log, in bytes. */
     next : u64,
@@ -303,7 +295,8 @@ Logged :: struct {
 /**
  * Read a logged change back from the log, checked to lie within what's used.
  *
- * @param log The log's bytes, which its client may change at any time; read, and the change's views point into them.
+ * @param log The log's bytes, copied from its client's memory, whatever it wrote; read, and the change's views point
+ *     into them.
  * @param at Where it starts, in bytes.
  * @param used How many of the log's bytes are logged changes.
  * @return The change, its paths and data views into the log; null if its head or its bytes reach past what's used.
@@ -343,16 +336,18 @@ creation_of :: fn(number: u32) -> files.Creation {
  * all in one transaction of the volume.
  *
  * What's waiting is committed first, so applying starts from a commit to go back to; if applying fails partway, the
- * volume goes back to that commit, the container service undoing its allocations, so nothing of it is left. Its log
- * is emptied either way, to begin again.
+ * volume goes back to that commit, the container service undoing its allocations, so nothing of it is left. What's
+ * logged is copied out of its client's memory first, so the client can't change it while it's applied. Its log is
+ * emptied either way, to begin again.
  *
  * @param server The server, whose volume is committed before and after the log is applied, or put back at its last
  *     commit if applying fails.
  * @param index The transaction's slot in server's transactions, as begin gave it; one past them gives InvalidPath.
  *     Its log and versions are reset afterwards whatever happens.
  * @return Done once it's durable; Failed with Conflict if a version changed, an object's gone or it overflowed,
- *     DeviceError if a commit failed, InvalidPath for a log that can't be read or no such transaction, or why a change
- *     couldn't be applied.
+ *     DeviceError if a commit failed, NoMemory if there wasn't the memory to copy the log, NoBuffer if it couldn't be
+ *     read (its client ended, or the memory's gone), InvalidPath for a log that doesn't hold together or no such
+ *     transaction, or why a change couldn't be applied.
  */
 commit_transaction :: fn(server: ptr[mut Server], index: usize) -> dir.Response {
     defer reset(server, index)
@@ -381,8 +376,19 @@ commit_transaction :: fn(server: ptr[mut Server], index: usize) -> dir.Response 
             return .Failed(.Conflict)
         }
     }
+    // What's logged, copied out of the client's memory, as it is now
+    if transaction.used > transaction.log_bytes {
+        return .Failed(.InvalidPath)
+    }
+    log, error :: runtime.new_array(u8, cast[usize](transaction.used))
+    if error != null {
+        return .Failed(.NoMemory)
+    }
+    defer runtime.free_array(log)
+    if log.count > 0 && (slop_os.memory_read(transaction.memory, 0, log) is_error) {
+        return .Failed(.NoBuffer)
+    }
     committed :: slopfs.record_of(volume)
-    log :: view_of(cast[ptr[u8]](transaction.log), cast[usize](transaction.log_bytes))
     at : u64 = 0
     loop {
         if at >= transaction.used {
@@ -416,7 +422,7 @@ commit_transaction :: fn(server: ptr[mut Server], index: usize) -> dir.Response 
  *
  * @param server The server, whose volume the change is made to, durable only with its next commit.
  * @param directory The transaction's directory object.
- * @param logged The change, as logged_at read it; its paths and data are views into the client's log.
+ * @param logged The change, as logged_at read it; its paths and data are views into the copy of the client's log.
  * @return Null once it's applied; why not, otherwise, InvalidPath for an op that isn't one.
  */
 apply :: fn(server: ptr[mut Server], directory: u64, logged: ptr[Logged]) -> files.FileError? {

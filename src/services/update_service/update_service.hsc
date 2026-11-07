@@ -727,14 +727,15 @@ on_esp :: fn(service: ptr[mut Service], hash: bundle.Hash) -> bool {
 /**
  * Read an object from the bundle store, and check its bytes have its hash.
  *
- * The store's memory is mapped read-only, copied, and let go of.
+ * The store's memory is copied through memory_read, never mapped, so the store ending meanwhile only fails the read
+ * (decisions/0098, 0181's F6), and let go of.
  *
  * @param service The service's state: Get is sent on store and its answer waited for on store_port, and the memory got
- *     is mapped read-only in its block's address space, then unmapped and closed.
+ *     is read, then closed.
  * @param hash The object's hash, asked for with Get and checked against the bytes got; bytes that don't have it give
  *     null.
  * @return Its bytes, from the context's allocator, which the caller frees; null if the store hasn't it, it's empty,
- *     it couldn't be mapped or copied, or its bytes don't have its hash.
+ *     it couldn't be read or copied, or its bytes don't have its hash.
  */
 object_of :: fn(service: ptr[mut Service], hash: bundle.Hash) -> u8[]? {
     out := os.Outgoing.{}
@@ -745,21 +746,16 @@ object_of :: fn(service: ptr[mut Service], hash: bundle.Hash) -> u8[]? {
         case _ => return null
     }
     defer slop_os.handle_close(cast[slop_os.Handle](object.memory))
-    size :: (object.size + 4095) & ~cast[u64](4095)
-    if size == 0 {
+    if object.size == 0 {
         return null
     }
-    address :: runtime.reserve_addresses(cast[usize](size)) or_return null
-    if slop_os.memory_map(object.memory, service.block.space, address, 0, size, slop_os.PROTECTION_READ) is_error {
-        return null
-    }
-    defer slop_os.memory_unmap(service.block.space, address)
     copy, error :: runtime.new_array(u8, cast[usize](object.size))
     if error != null {
         return null
     }
-    for i in 0..<copy.count {
-        copy[i] = cast[ptr[u8]](address + cast[u64](i))^
+    if !service_kit.read_pages(object.memory, 0, copy) {
+        runtime.free_array(copy)
+        return null
     }
     if !bundle.same(bundle.hash_of(copy), hash) {
         runtime.free_array(copy)

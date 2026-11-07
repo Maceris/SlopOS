@@ -127,3 +127,33 @@ Seven parts, before P, each with an as-built record:
 - **Tests**: `boot.py` gains `--release-generation` and `--bootloader-edit TEXT`, which presses E until the bootloader
   answers, then types the text and Enter; a boot test adds `test_clock` to a development generation's command line and
   sees its clock test run, and another sees a release generation refuse; on both architectures.
+
+## As Built, F6 (2026-11-07)
+- **The chaos test** (`supervisor/chaos.hsc`): `test_chaos=N` has the supervisor, once everything has started and the
+  root task is told so, kill N services and drivers it starts again, one at a time, chosen from a seed it logs
+  (`test_chaos_seed=S` repeats one); each has to be running again within 10 seconds and, a service, answer a lifecycle
+  Ping within 10 more (a driver has no lifecycle channel, so running again is its answer), and the supervisor's budget
+  has to end no more than 256 KiB above where it was. A boot test kills 6, on both architectures.
+- **What it found, fixed**:
+  - **A thread's unresolved fault ends its process** (decided with the project's owner): with no debugger stopping
+    it, the process is destroyed, killed, not only the thread. A service whose code the bundle store paged, killed
+    with the store, lost the threads that ran and lingered with the rest, never started again (`0104` only ended a
+    process with its last thread). `test_memory`'s writer that faults is a copy of the test now, whose end it watches.
+  - **Programs from the bundle store are got again** once the store is started again (`forget_stored`): the
+    supervisor kept the old store's memory, gone with it, and couldn't launch them (BadGrants).
+  - **No service maps memory another process owns** (decided with the project's owner, extending `0098`): a client
+    or a driver that ended took down the server touching its memory (killing the events service ended the system
+    volume's server, which was writing its records from a buffer the events service lent it). `memory_read` reads any
+    memory but device memory now: DMA, contiguous and boot module memory, windows, and paged memory, whose pages not
+    there are waited for from the pager, the call made again once one's supplied (`want_page_locked`, with
+    `restart_syscall`); `memory_write` writes anonymous, DMA and contiguous memory and writable windows. The volume
+    server, its transactions, the FAT server, the partition server, the container service and the disk check copy
+    through the driver's buffer and their clients' buffers; the process manager reads the executable it loads, and the
+    supervisor, the session manager and the update service the store's objects, into the heap (`service_kit.read_pages`,
+    a page at a time, so a read under pressure isn't started over for ever); the bundle store reads a Put's memory in
+    64 KiB pieces; and `std`'s stream reader copies each record out of its writer's ring, so a writer that ends ends
+    its stream, not its reader. A program's own code, mapped from the store, and the terminal's framebuffer, from the
+    platform service, are still mapped: the first ends with the store, as `0094` says, and the second is drawn on too
+    often to copy.
+- **Tests**: `test_pager` reads paged memory across two pages not yet supplied, is refused writing it, and once its
+  pager's port is gone reads `ObjectGone`; `test_memory` sees the faulting writer's process end killed.

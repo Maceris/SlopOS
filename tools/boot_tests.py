@@ -862,6 +862,13 @@ TESTS = [
         "--expect-line=[user] powerbox: couldn't reopen kept for test_kept_grant",
         "--expect-console-line=error: test_kept_grant --powerbox: Refused: The powerbox gave nothing; for reopen, nothing's kept under the key, or it was revoked.",
         "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
+    # Chaos (decisions/0096's R5, 0181's F6): once everything's started, six services and drivers the supervisor starts
+    # again, chosen at random from a logged seed, killed one at a time; each started again and answering, and the
+    # supervisor's budget back where it was
+    ("kills services and drivers at random, and each comes back and answers, with no memory lost", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_chaos=6 test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE if not argument.startswith("--expect-line=") or argument == HEALTHY_LINE], [
+        "--expect-line=[user] supervisor: test_chaos: every service killed was started again and answered, and the budgets are as they were"])),
     # Automatic snapshots (decisions/0179): every 2 seconds with test_snapshot_seconds=2, kept 20, of the two volumes
     # served, so after a while two are taken and two deleted each time
     ("takes automatic snapshots of the volumes it serves, and deletes the old ones", 7,
@@ -1073,13 +1080,13 @@ TESTS = [
     program_test("waits on ports, wakes them and sets their timers", "test_ports", 3),
     program_test("passes handles and messages over channels", "test_channels", 3),
     # And counts who holds a memory object, and says when no one does (decisions/0178)
-    program_test("maps memory objects, paid for by budgets, and counts who holds them", "test_memory", 5),
+    program_test("maps memory objects, paid for by budgets, and counts who holds them", "test_memory", 6),
     program_test("splits, sets and destroys CPU budgets", "test_cpu_budgets", 2),
     program_test("reads I/O ports through a range of them", "test_io_ports", 1),
     program_test("ends a program missing a grant, or told another ABI version, as its starter sees", "test_exits", 2),
     program_test("gives an entry's parameters that aren't handles as values", "test_values", 1),
     program_test("streams typed records and bytes between programs, with backpressure", "test_streams", 1),
-    program_test("supplies paged memory's pages from a pager in user mode", "test_pager", 2),
+    program_test("supplies paged memory's pages from a pager in user mode", "test_pager", 3),
     program_test("measures the kernel's benchmarks", "test_perf", 4),
     program_test("drives a device from user mode with the platform capability", "test_devices", 3, "test_device"),
     # QEMU's edu device, its DMA reaching all of memory, which starts at 1 GiB on virt

@@ -116,7 +116,16 @@ handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interfac
             if !is_dying(cast[u64](thread)) && (owner == 0 || !is_dying(owner)) {
                 runtime.log_info("thread % stopped by a fault: %", thread.id, fault)
             }
+            /*
+             * Its process ends with it, killed, as if it were its last thread (decisions/0181's F6): the others share
+             * what faulted, code whose pager ended or memory whose owner did, and a process left with some of its
+             * threads would go on half done, with nobody watching it told.
+             */
+            generation :: if owner != 0 { intrinsics.atomic_load_u32_acquire(&cast[ptr[ObjectHeader]](owner).generation) } else { 0 }
             _ = destroy_object(kernel, cast[u64](thread))
+            if owner != 0 {
+                destroy_later(kernel, owner, generation)
+            }
         }
     }
     schedule(false)
@@ -1374,15 +1383,18 @@ sys_memory_holders :: fn(thread: ptr[mut Thread], memory: slop_os.Memory) -> Res
 }
 
 /**
- * Copy bytes of anonymous memory into the caller's buffer, through the kernel, with no mapping (decisions/0098).
+ * Copy bytes of memory into the caller's buffer, through the kernel, with no mapping (decisions/0098), so memory
+ * another process owns ends only as ObjectGone, never a fault: anonymous, DMA, contiguous, boot module or paged memory,
+ * or a window onto one. A page of paged memory that isn't there is waited for from its pager, the thread blocked and
+ * the call made again once it's supplied (decisions/0181's F6).
  *
- * @param thread The calling thread, into whose memory they're copied.
+ * @param thread The calling thread, into whose memory they're copied; it may block for a pager.
  * @param memory The memory, which needs RIGHT_MEMORY_READ.
  * @param offset Where in it to start, in bytes; any offset.
  * @param buffer Where the bytes go in the caller's memory; it's filled.
  * @error InvalidHandle Not a handle in the caller's table.
- * @error ObjectGone The memory was destroyed.
- * @error WrongKind Not a memory object's handle, or not anonymous memory: device, paged, DMA memory, or a window.
+ * @error ObjectGone The memory was destroyed, or its pager is gone.
+ * @error WrongKind Not a memory object's handle, or device memory.
  * @error MissingRight The handle lacks RIGHT_MEMORY_READ.
  * @error InvalidSize The range runs past the memory's end.
  * @error OutOfMemory No frame for a page of the memory not yet touched.
@@ -1391,11 +1403,17 @@ sys_memory_holders :: fn(thread: ptr[mut Thread], memory: slop_os.Memory) -> Res
 sys_memory_read :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u64, buffer: slop_os.UserBuffer)
     -> Result[void, slop_os.MemoryError] {
     found :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_READ)?
-    return memory_done(copy_memory(per_cpu().kernel, cast[ptr[Memory]](found), offset, thread.space, buffer.address, buffer.count, true))
+    error, blocked :: copy_memory(per_cpu().kernel, cast[ptr[Memory]](found), offset, thread, buffer.address, buffer.count, true)
+    if blocked {
+        // Made again from the start once its page is supplied; this result isn't written
+        leave_cpu(per_cpu())
+    }
+    return memory_done(error)
 }
 
 /**
- * Copy bytes from the caller's memory into anonymous memory, through the kernel, with no mapping.
+ * Copy bytes from the caller's memory into memory, through the kernel, with no mapping (decisions/0098): anonymous, DMA
+ * or contiguous memory, or a window onto one its parent's handle allowed writing.
  *
  * @param thread The calling thread, from whose memory they're copied.
  * @param memory The memory, which needs RIGHT_MEMORY_WRITE.
@@ -1403,7 +1421,7 @@ sys_memory_read :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u
  * @param bytes The bytes to write, in the caller's memory.
  * @error InvalidHandle Not a handle in the caller's table.
  * @error ObjectGone The memory was destroyed.
- * @error WrongKind Not a memory object's handle, or not anonymous memory: device, paged, DMA memory, or a window.
+ * @error WrongKind Not a memory object's handle; device, paged or boot module memory; or a window not writable.
  * @error MissingRight The handle lacks RIGHT_MEMORY_WRITE.
  * @error InvalidSize The range runs past the memory's end.
  * @error OutOfMemory No frame for a page of the memory not yet touched.
@@ -1412,7 +1430,8 @@ sys_memory_read :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u
 sys_memory_write :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u64, bytes: slop_os.UserBuffer)
     -> Result[void, slop_os.MemoryError] {
     found :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_WRITE)?
-    return memory_done(copy_memory(per_cpu().kernel, cast[ptr[Memory]](found), offset, thread.space, bytes.address, bytes.count, false))
+    error, blocked :: copy_memory(per_cpu().kernel, cast[ptr[Memory]](found), offset, thread, bytes.address, bytes.count, false)
+    return memory_done(error)
 }
 
 /**

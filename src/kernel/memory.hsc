@@ -477,33 +477,41 @@ frame_for :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], page: u64) -> u64 
 }
 
 /**
- * Copy bytes between anonymous memory and a user buffer, without mapping the memory (decisions/0098).
+ * Copy bytes between memory and a user buffer, without mapping the memory (decisions/0098).
  *
- * A page at a time through the direct map, giving pages nothing touched yet zeroed frames. Not device memory, DMA
- * memory, paged memory or a window, whose pages aren't the kernel's to fill. A failure partway leaves what was copied
- * before it.
+ * A page at a time through the direct map: anonymous memory's pages nothing touched yet get zeroed frames, and paged
+ * memory's that aren't there are waited for from its pager, the thread blocked and the call made again from its start
+ * once a supply wakes it (decisions/0181's F6), so memory another process owns is read and written whichever kind it
+ * is, and its owner's end is only ObjectGone, never a fault. Not device memory, which isn't RAM, nor writes to paged
+ * memory, a boot module, or a window whose parent's handle didn't allow writing. A failure partway leaves what was
+ * copied before it.
  *
  * @param kernel The kernel: pages nothing touched yet get zeroed frames from this CPU's frame cache, and the user
  *     buffer is reached through the direct map.
- * @param memory Plain anonymous memory, not device, DMA, paged, contiguous or boot module memory, nor a window; the
- *     caller keeps it alive (a handle or a reference) for the call.
+ * @param memory The memory, of any kind but device memory, or a window; the caller keeps it alive (a handle or a
+ *     reference) for the call.
  * @param offset Where in the memory to start, in bytes, any alignment.
- * @param space The address space the user buffer is in; its lock is taken for each page.
+ * @param thread The calling thread, in a system call: its address space holds the user buffer, whose lock is taken
+ *     for each page, and it's what blocks for a pager.
  * @param address The user buffer's virtual address, any alignment.
  * @param count How many bytes; offset plus count is at most the memory's size.
  * @param to_user True to copy from the memory to the buffer, which has to be writable; false the other way.
- * @return Null once every byte is copied; WrongKind for memory that isn't plain anonymous memory, InvalidSize for a
- *     range past its end, OutOfMemory if a page needed a frame and there were none, BadAddress if the user buffer
- *     isn't mapped for user mode (or, copying to it, writable) all the way.
+ * @return Null once every byte is copied, or the thread blocked; WrongKind for device memory or a write it can't take,
+ *     InvalidSize for a range past its end, OutOfMemory if a page needed a frame and there were none, ObjectGone if
+ *     paged memory's pager is gone, BadAddress if the user buffer isn't mapped for user mode (or, copying to it,
+ *     writable) all the way.
+ * @return True if the thread blocked for a pager: its call is to be made again, and no result is written.
  */
-copy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], offset: u64, space: ptr[mut AddressSpace], address: u64, count: u64,
-    to_user: bool) -> slop_os.MemoryError? {
-    if memory.physical != 0 || memory.pager_binding != 0 || memory.domain != 0 || memory.parent != 0 {
-        return .WrongKind
-    }
+copy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], offset: u64, thread: ptr[mut Thread], address: u64, count: u64,
+    to_user: bool) -> (slop_os.MemoryError?, bool) {
     if offset > memory.size || count > memory.size - offset {
-        return .InvalidSize
+        return slop_os.MemoryError.InvalidSize, false
     }
+    root, first :: paged_root(memory, 0)
+    if !to_user && (root.pager_binding != 0 || root.boot_module || (memory.allowed & cast[u32](slop_os.PROTECTION_WRITE)) == 0) {
+        return slop_os.MemoryError.WrongKind, false
+    }
+    space :: thread.space
     done : u64 = 0
     loop {
         if done >= count {
@@ -512,18 +520,41 @@ copy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], offset: u64, spa
         at :: offset + done
         within :: at % frames.FRAME_SIZE
         part :: min_u64(frames.FRAME_SIZE - within, count - done)
-        frame :: frame_for(kernel, memory, at / frames.FRAME_SIZE)
-        if frame == 0 {
-            return .OutOfMemory
+        page :: at / frames.FRAME_SIZE
+        frame := cast[u64](0)
+        if root.pager_binding != 0 {
+            lock_at(&root.page_lock, .MemoryPages)
+            slot :: page_slot(root, first + page)
+            held :: intrinsics.atomic_load_u64_acquire(slot)
+            if held < frames.FRAME_SIZE {
+                // Its pager's, waited for; once it's supplied, the call's made again from the start
+                outcome :: want_page_locked(kernel, thread, root, slot, held, true)
+                if outcome == .Blocked {
+                    return null, true
+                }
+                return slop_os.MemoryError.ObjectGone, false
+            }
+            // Evicted meanwhile, it's freed only once every CPU passes a quiescent point, which this one doesn't here
+            unlock_at(&root.page_lock, .MemoryPages)
+            frame = held
         }
-        page :: cast[u64](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](frame))) + within
-        copied :: if to_user { copy_to_user(kernel, space, address + done, page, part) } else { copy_from_user(kernel, space, address + done, page, part) }
+        else {
+            frame = frame_for(kernel, memory, page)
+            if frame == 0 {
+                return slop_os.MemoryError.OutOfMemory, false
+            }
+            if root.physical != 0 && !reachable_in_direct_map(kernel, frame, memory.cache) {
+                return slop_os.MemoryError.WrongKind, false
+            }
+        }
+        bytes :: cast[u64](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](frame))) + within
+        copied :: if to_user { copy_to_user(kernel, space, address + done, bytes, part) } else { copy_from_user(kernel, space, address + done, bytes, part) }
         if !copied {
-            return .BadAddress
+            return slop_os.MemoryError.BadAddress, false
         }
         done += part
     }
-    return null
+    return null, false
 }
 
 /**

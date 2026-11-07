@@ -1,13 +1,14 @@
 /**
  * test_memory (decisions/0069, from the kernel's test of 0054): memory budgets and memory objects, used by
- * the program's first thread, A, and a writer, B:
+ * the program's first thread, A, and a writer, B, a copy of the test A launches:
  * - A splits a child budget off its test budget, which can't pay for memory bigger than its limit, nor make
  *   memory of a size that isn't whole pages;
  * - A makes memory with the child, and maps it read/write; mapping it over itself, past its end, or
  *   writable and executable is refused;
  * - A touches each page, which reads as zeros, then holds what A wrote; mapped again read-only elsewhere,
  *   the same frames show what A wrote;
- * - B writes to the read-only mapping, and is stopped: its handle reaches nothing;
+ * - B maps the memory read-only and writes to it, and is stopped: its process ends, killed, and the memory still
+ *   holds what A wrote (decisions/0181's F6: a thread's unresolved fault ends its process);
  * - A unmaps the second mapping (and can't again), then closes the child budget: the parent takes over
  *   what the child paid for and gets back the rest of its limit, and the memory is still there;
  * - once the memory is closed, the test budget is back to nothing.
@@ -40,32 +41,61 @@ CHILD_LIMIT : u64 : 65536
 LARGE : u64 : 2 * 1024 * 1024
 /** The size of each object whose page tables are measured: two large pages. */
 LARGE_MEMORY : u64 : 2 * LARGE
-/** How long A gives B to be stopped, in nanoseconds: 20 ms. */
-STOP_NANOSECONDS : u64 : 20_000_000
-/** The slot, a u64 by index, of what A and B share, that B sets once it's started. */
-SHARED_B_STARTED :: 0
-/** The slot B would set after its write, if it weren't stopped. */
-SHARED_B_AFTER :: 1
-/** The slot holding where B writes: the read-only mapping's address. */
-SHARED_TARGET :: 2
+/** How long A waits for B's process to end, in nanoseconds: 2 seconds. */
+WRITER_DEADLINE : u64 : 2_000_000_000
+/** The key A's watch for B's end queues under. */
+WRITER_WATCH_KEY : u64 : 31
+/** What B writes where it may only read. */
+WRITTEN : u64 : 7
 
 /**
- * Write where the thread may only read, which stops it: B.
+ * Run as B: take the memory A sends on the peer channel, map it read-only, and write to its second page, which stops
+ * B and ends its process.
  *
- * @param shared What A and B share: B sets SHARED_B_STARTED, writes 7 at SHARED_TARGET's address, and would set
- *     SHARED_B_AFTER if the write didn't stop it.
+ * @param peer B's end of its peer channel to A, on which the memory comes, with only RIGHT_MEMORY_READ.
+ * @return Never, as the write ends B's process; 1 if no port could be made for peer, 2 if the memory didn't come, 3
+ *     if no addresses were left to map it at, 4 if it couldn't be mapped, and 0 if the write went on, which A sees.
  */
-writer #calling_convention(.c) #no_context :: fn(shared: ptr[mut u64[4]]) #never_returns {
-    intrinsics.volatile_store_u64(&shared^[SHARED_B_STARTED], 1)
-    intrinsics.volatile_store_u64(cast[ptr[mut u64]](intrinsics.volatile_load_u64(&shared^[SHARED_TARGET])), 7)
-    intrinsics.volatile_store_u64(&shared^[SHARED_B_AFTER], 1)
-    slop_os.thread_exit()
+run_writer :: fn(peer: slop_os.Channel) -> int {
+    block :: slop_os.startup_block()
+    port :: os.port_for(block.budget, peer) or_return 1
+    nothing : u64 = 0
+    handles : slop_os.Handle[1]
+    _ = os.receive(peer, port, os.mut_bytes_of(&nothing), handles) or_return 2
+    at :: runtime.reserve_addresses(cast[usize](MEMORY_SIZE)) or_return 3
+    slop_os.memory_map(cast[slop_os.Memory](handles[0]), block.space, at, 0, MEMORY_SIZE, slop_os.PROTECTION_READ) or_return 4
+    intrinsics.volatile_store_u64(cast[ptr[mut u64]](at + PAGE), WRITTEN)
+    return 0
+}
+
+/** What B is given (main): its log, and its peer channel to A. */
+WriterGrants :: struct {
+    /** A copy of A's debug log, writable. */
+    log : slop_os.DebugLog,
+    /** Not given. */
+    platform : slop_os.Platform?,
+    /** Not given. */
+    test_device : slop_os.Memory?,
+    /** Not given. */
+    firmware : slop_os.Memory?,
+    /** Not given. */
+    manager : os.Channel[process_manager.ProcessManager]?,
+    /** Not given. */
+    program : slop_os.Memory?,
+    /** B's end of its peer channel to A, which makes main run as B. */
+    peer : slop_os.Channel?,
+    /** Not given. */
+    cpu_budget : slop_os.CpuBudget?,
 }
 
 /** What main was given that the tests use. */
 Given :: struct {
-    /** The debug log, which what large pages cost is logged to if they don't save page tables. */
+    /** The debug log, which what large pages cost is logged to if they don't save page tables, duplicated for B. */
     log : slop_os.DebugLog,
+    /** The process manager, which launches B; none if main wasn't given it. */
+    manager : os.Channel[process_manager.ProcessManager]?,
+    /** The test's own module, which B is launched from; none if main wasn't given it. */
+    program : slop_os.Memory?,
 }
 
 /**
@@ -97,26 +127,19 @@ a_child_budget_pays_only_within_its_limit #test :: fn(t: ptr[mut testing.T]) -> 
 /**
  * Check memory objects, A being this thread and B a writer: memory maps read/write, but not over itself, past its end,
  * or writable and executable; each page reads as zeros, then holds what A wrote; mapped again read-only, the same
- * frames show it; B writing to the read-only mapping is stopped, its handle reaching nothing; the second mapping
+ * frames show it; the second mapping
  * unmaps once; closing the child that paid for the memory gives the parent the memory to pay for and the rest of the
  * child's limit back, the memory still there; and once the memory is closed, the test budget is back to nothing.
  *
  * @param t The test's state.
- * @return Ok once it's run; Error if the shared slots, the addresses, the test budget, its child or the memory
- *     couldn't be made, or the memory mapped.
+ * @return Ok once it's run; Error if the addresses, the test budget, its child or the memory couldn't be made, or the
+ *     memory mapped.
  */
 memory_fills_as_touched_and_shares_its_frames #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()
     space :: block.space
-    pages, error :: runtime.new_array(u64[4], 1)
-    if error != null || pages.count == 0 {
-        testing.fail(t, "the slots A and B share are allocated")
-        return .Error(.Failed)
-    }
-    shared :: &pages[0]
     at :: testing.require_some(t, runtime.reserve_addresses(cast[usize](MEMORY_SIZE)), "addresses to map the memory at")?
     again :: testing.require_some(t, runtime.reserve_addresses(cast[usize](MEMORY_SIZE)), "addresses to map it at again")?
-    intrinsics.volatile_store_u64(&shared^[SHARED_TARGET], again)
     budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, TEST_LIMIT), "a test budget split off the process's")?
     child :: testing.require_ok(t, slop_os.memory_budget_create(budget, CHILD_LIMIT), "a child budget split off the test budget")?
     read :: slop_os.PROTECTION_READ
@@ -148,13 +171,6 @@ memory_fills_as_touched_and_shares_its_frames #test :: fn(t: ptr[mut testing.T])
     if shared_mapping is_ok {
         testing.expect_eq(t, intrinsics.volatile_load_u64(cast[ptr[u64]](again)), 1001, "a second mapping shows the same frames, with what was written through the first")
     }
-    // B writes to it, and is stopped
-    started_writer :: testing.require_ok(t, test_kit.start_thread(budget, cast[u64](writer), cast[u64](shared)), "B starts")?
-    _ = test_kit.wait_for(&shared^[SHARED_B_STARTED], 1_000_000_000)
-    test_kit.wait_nanoseconds(STOP_NANOSECONDS)
-    testing.expect_eq(t, intrinsics.volatile_load_u64(&shared^[SHARED_B_AFTER]), 0, "a write to a read-only mapping stops the thread making it before it goes on")
-    writer_info :: slop_os.handle_info(cast[slop_os.Handle](started_writer))
-    testing.expect_error(t, writer_info, slop_os.HandleError.ObjectGone, "a thread stopped by a fault is destroyed, so its handle reaches nothing")
     unmapped :: slop_os.memory_unmap(space, again)
     testing.expect_ok(t, unmapped, "the second mapping unmaps")
     unmapped_again :: slop_os.memory_unmap(space, again)
@@ -327,21 +343,78 @@ memory_on_a_large_page_boundary_maps_with_large_pages #test :: fn(t: ptr[mut tes
 }
 
 /**
+ * Check that a write where only reading is mapped stops the thread making it and ends its process, killed, the memory
+ * as it was: B, a copy of the test launched with memory A wrote, maps it read-only and writes to it (decisions/0181's
+ * F6). Last, so what B's process gives back as it's destroyed isn't measured by another test.
+ *
+ * @param t The test's state.
+ * @return Ok once B has ended, or the deadline passed; Error if the memory couldn't be made or mapped, or B launched,
+ *     sent the memory or watched.
+ */
+a_write_where_only_reading_is_mapped_ends_the_process #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
+    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
+    memory :: testing.require_ok(t, slop_os.memory_create(block.budget, MEMORY_SIZE), "memory for B to write to")?
+    defer slop_os.handle_close(cast[slop_os.Handle](memory))
+    at :: testing.require_some(t, runtime.reserve_addresses(cast[usize](MEMORY_SIZE)), "addresses to map the memory at")?
+    testing.require_ok(t, slop_os.memory_map(memory, block.space, at, 0, MEMORY_SIZE, read_write), "the memory maps read/write")?
+    defer slop_os.memory_unmap(block.space, at)
+    intrinsics.volatile_store_u64(cast[ptr[mut u64]](at + PAGE), 1001)
+    manager :: testing.require_some(t, given.manager, "the root task grants the process manager")?
+    program :: testing.require_some(t, given.program, "the root task grants the program's own module")?
+    manager_port :: testing.require_some(t, os.port_for(block.budget, manager.end), "a port for the process manager's replies")?
+    pair :: testing.require_ok(t, slop_os.channel_create(block.budget, 0, 0), "a peer channel for B")?
+    log_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    log_copy :: testing.require_ok(t, slop_os.handle_duplicate(cast[slop_os.Handle](given.log), log_rights), "the log duplicated for B")?
+    launched :: testing.require_ok(t, os.launch(manager, manager_port, "test_memory B", program, 4 << 20, main,
+        WriterGrants.{log = cast[slop_os.DebugLog](log_copy), peer = pair.b}), "B is launched")?
+    // Watched before it's sent the memory, so its end can't come first
+    exit_port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for B's end")?
+    defer slop_os.handle_close(cast[slop_os.Handle](exit_port))
+    watched :: slop_os.port_bind(exit_port, cast[slop_os.Handle](launched.process), slop_os.SIGNAL_TERMINATED, WRITER_WATCH_KEY, .Once)
+    testing.require_ok(t, watched, "A watches for B's end")?
+    read_only :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+    readable :: testing.require_ok(t, slop_os.handle_duplicate(cast[slop_os.Handle](memory), read_only), "the memory duplicated for B, read-only")?
+    peer_port :: testing.require_some(t, os.port_for(block.budget, pair.a), "a port for A's end of the peer channel")?
+    nothing : u64 = 0
+    sent :: os.send(pair.a, peer_port, os.bytes_of(&nothing), slop_os.Handle.[readable])
+    testing.require(t, sent == null, "B is sent the memory")?
+    packets : slop_os.Packet[1]
+    deadline :: (slop_os.clock_monotonic() or_else 0) + WRITER_DEADLINE
+    ended :: slop_os.port_wait(exit_port, packets, deadline) or_else 0
+    testing.expect(t, ended == 1 && packets[0].key == WRITER_WATCH_KEY, "B's process ends")
+    testing.expect_eq(t, packets[0].data[1], slop_os.EXIT_KILLED, "a write to a read-only mapping stops the thread making it, and its process ends, killed")
+    // What B's process held given back before the tests after this measure what theirs takes
+    _ = test_kit.wait_for_budget(launched.budget, 0, WRITER_DEADLINE)
+    testing.expect_eq(t, test_kit.used(launched.budget), 0, "B's budget is back to nothing once its process has ended")
+    _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
+    _ = slop_os.handle_close(cast[slop_os.Handle](launched.process))
+    _ = slop_os.handle_close(cast[slop_os.Handle](launched.budget))
+    testing.expect_eq(t, intrinsics.volatile_load_u64(cast[ptr[u64]](at + PAGE)), 1001, "a write to a read-only mapping doesn't reach the memory")
+    return .Ok
+}
+
+/**
  * Run the tests, reporting to the debug log.
  *
  * @param log The debug log, writable, where each test is reported.
  * @param platform Not used.
  * @param test_device Not used.
  * @param firmware Not used.
- * @param manager Not used.
- * @param program Not used.
- * @param peer Not used.
+ * @param manager The process manager, which launches B; without it the read-only write test fails.
+ * @param program The test's own module, which B is launched from; without it that test fails.
+ * @param peer Given only to B, by A: the channel the memory comes on. With it, this runs as B.
  * @param cpu_budget Not used.
- * @return How many tests failed: 0 when every one passed.
+ * @return How many tests failed, 0 when every one passed; as B, what run_writer gives.
  */
 main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
-    given :: Given.{log = log}
+    match peer {
+        case Some(end) => return run_writer(end)
+        case None => {}
+    }
+    given :: Given.{log = log, manager = manager, program = program}
     return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }
 

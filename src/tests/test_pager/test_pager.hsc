@@ -10,7 +10,10 @@
  * - pressure and eviction (decisions/0111): the paged memory is paid for by a budget of its own, which is charged a
  *   page for each page supplied; page 0 was touched, and isn't once that's been asked; with a threshold a page above
  *   what the budget has, touching page 1 raises SIGNAL_PRESSURE; page 0 given back is uncharged and can't be given
- *   back again, and read again is supplied again; and a page never supplied can't be given back.
+ *   back again, and read again is supplied again; and a page never supplied can't be given back;
+ * - memory_read (decisions/0181's F6): bytes across two pages not supplied yet are read without a mapping, the call
+ *   waiting for the pager to supply each; writing paged memory that way is refused; and once the pager's port is gone,
+ *   a page not supplied reads as ObjectGone, not a fault.
  */
 package test_pager
 
@@ -244,4 +247,33 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
     manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
     given :: Given.{log = log}
     return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
+}
+
+/**
+ * Check that paged memory is read through memory_read, with no mapping, the call waiting for its pager to supply each
+ * page it reads; that it can't be written that way; and that a page not supplied, once its pager's port is gone, is
+ * ObjectGone.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the paged memory or its pager couldn't be made.
+ */
+paged_memory_is_read_without_a_mapping #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    paged :: set_up(t)?
+    shared :: paged.shared
+    // The last byte of page 1 and the first of page 2, neither supplied yet
+    across : u8[2]
+    read :: slop_os.memory_read(shared.paged, 2 * PAGE - 1, across)
+    testing.expect_ok(t, read, "paged memory reads through memory_read, waiting for its pager")
+    testing.expect_eq(t, across[0], 0x22, "the read's first byte is page 1's, supplied for it")
+    testing.expect_eq(t, across[1], 0x33, "the read's second byte is page 2's, supplied for it")
+    testing.expect_eq(t, intrinsics.atomic_load_u64(&shared.supplied), 2, "each page the read crossed was supplied once")
+    written :: slop_os.memory_write(shared.paged, 0, across)
+    testing.expect_error(t, written, slop_os.MemoryError.WrongKind, "paged memory isn't written through memory_write, only its pager supplies it")
+    // Its pager gone, a page it never supplied reads as gone
+    stop_pager(paged)
+    _ = slop_os.handle_close(cast[slop_os.Handle](shared.port))
+    last : u8[1]
+    gone :: slop_os.memory_read(shared.paged, 3 * PAGE, last)
+    testing.expect_error(t, gone, slop_os.MemoryError.ObjectGone, "a page its gone pager never supplied reads as ObjectGone, not a fault")
+    return .Ok
 }

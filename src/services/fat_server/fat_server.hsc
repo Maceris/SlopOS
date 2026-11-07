@@ -66,11 +66,13 @@ Connection :: struct {
     name : u8[files.PATH_BYTES],
     /** How many of name's bytes are its. */
     name_length : u32,
-    /** Where a file's buffer, its client's memory, is mapped here; 0 before UseBuffer. */
-    buffer : u64,
-    /** The buffer's size in bytes, at most MAX_BUFFER_BYTES. */
+    /** A file's buffer's size in bytes, at most MAX_BUFFER_BYTES; 0 before UseBuffer. */
     buffer_bytes : u64,
-    /** The buffer's memory, the server's handle to it, closed when it's let go of. */
+    /**
+     * A file's buffer, its client's memory, the server's handle to it, closed when it's let go of: read and written
+     * through memory_read and memory_write and never mapped, so the client ending is NoBuffer, not a fault
+     * (decisions/0098, 0181's F6). Meaningless while buffer_bytes is 0.
+     */
     buffer_memory : slop_os.Memory,
 }
 
@@ -84,8 +86,11 @@ Server :: struct {
     disk : slop_os.Channel,
     /** A port bound to disk, waited on for its answers. */
     disk_port : slop_os.Port,
-    /** Where disk's buffer is mapped, readable and writable, in the process's address space. */
-    disk_buffer : u64,
+    /**
+     * disk's buffer, its driver's memory, written and read through memory_write and memory_read and never mapped, so
+     * the driver ending is a failed transfer, not a fault (decisions/0098, 0181's F6).
+     */
+    disk_window : slop_os.Memory,
     /** The disk's buffer's size in bytes. */
     disk_buffer_bytes : u64,
     /** Whether the partition is read only, as its block connection says: nothing's made or written. */
@@ -110,7 +115,7 @@ Server :: struct {
  * @param partition A block connection narrowed to the FAT32 partition, which it takes the buffer of.
  * @param clients The listener for connections to the volume's root directory.
  * @return 99 without the memory for its state, 1 if its ports couldn't be made, 2 if the partition didn't describe
- *     itself, 3 if it didn't give its buffer, 4 if the buffer couldn't be mapped, 5 if there's no FAT32 volume on it,
+ *     itself, 3 if it didn't give its buffer, 5 if there's no FAT32 volume on it,
  *     and 6 if clients couldn't be added. It doesn't return otherwise.
  */
 main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: os.Listener[dir.Dir]) -> int {
@@ -130,15 +135,12 @@ main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: 
         case Described(described) => info = described
         case _ => return 2
     }
-    window := cast[slop_os.Memory](slop_os.NO_HANDLE)
     match call(server, .GetBuffer) {
-        case Buffer(memory) => window = memory
+        case Buffer(memory) => server.disk_window = memory
         case _ => return 3
     }
     server.disk_buffer_bytes = info.buffer_bytes
     server.read_only = info.read_only
-    server.disk_buffer = runtime.reserve_addresses(cast[usize](info.buffer_bytes)) or_return 4
-    slop_os.memory_map(window, startup.space, server.disk_buffer, 0, info.buffer_bytes, read_write()) or_return 4
     device :: fat.Device.{context = cast[rawptr](server), sector_count = info.block_count, read = read_sectors, write = write_sectors,
         read_only = info.read_only}
     volume := fat.Volume.{}
@@ -212,15 +214,6 @@ stamp_now :: fn() -> u32 {
     }
 }
 
-/**
- * Give the protection to map memory readable and writable.
- *
- * @return PROTECTION_READ and PROTECTION_WRITE.
- */
-read_write :: fn() -> slop_os.Protection {
-    return cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-}
-
 // The disk, a request at a time
 
 /**
@@ -266,12 +259,13 @@ done :: fn(response: block.Response) -> bool {
 /**
  * Read sectors of the partition through its buffer, as many at a time as it holds, for fat's Device.
  *
- * @param context The Server main gave the Device, cast back; its disk is read through its mapped buffer, which is
- *     overwritten.
+ * @param context The Server main gave the Device, cast back; its disk is read through its buffer, which is
+ *     overwritten, each piece copied out of it with memory_read.
  * @param first The first 512-byte sector in the partition.
  * @param count How many 512-byte sectors, read in pieces of as many as the buffer holds.
  * @param into Where they go, at least count sectors long.
- * @return Whether they were all read; false if into is too short, the buffer holds no sector, or a read failed.
+ * @return Whether they were all read; false if into is too short, the buffer holds no sector, a read failed, or the
+ *     buffer couldn't be read, its driver gone.
  */
 read_sectors :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
     server :: cast[ptr[mut Server]](context)
@@ -288,11 +282,13 @@ read_sectors :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> b
         if !done(call(server, .Read(block.Transfer.{tag = 1, first = first + moved, count = cast[u32](now), offset = 0}))) {
             return false
         }
-        for byte, i in view_of(cast[ptr[u8]](server.disk_buffer), cast[usize](now * block.BLOCK_BYTES)) {
-            at :: cast[usize](moved * block.BLOCK_BYTES) + i
-            if at < into.count {
-                into[at] = byte
-            }
+        start :: cast[usize](moved * block.BLOCK_BYTES)
+        end :: start + cast[usize](now * block.BLOCK_BYTES)
+        if start > end || end > into.count {
+            return false
+        }
+        if slop_os.memory_read(server.disk_window, 0, into[start..<end]) is_error {
+            return false
         }
         moved += now
     }
@@ -302,13 +298,13 @@ read_sectors :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> b
  * Write sectors of the partition through its buffer, as many at a time as it holds, for fat's Device; each write
  * goes to the disk at once, durable once a Flush is.
  *
- * @param context The Server main gave the Device, cast back; its mapped disk buffer is overwritten and written to the
- *     disk.
+ * @param context The Server main gave the Device, cast back; its disk buffer is overwritten, each piece copied into
+ *     it with memory_write, and written to the disk.
  * @param first The first 512-byte sector in the partition.
  * @param count How many 512-byte sectors, written in pieces of as many as the buffer holds.
  * @param from What's written, at least count sectors long.
- * @return Whether they were all written; false if from is too short, the buffer holds no sector, or a write failed,
- *     what was written before it written.
+ * @return Whether they were all written; false if from is too short, the buffer holds no sector, a write failed, or
+ *     the buffer couldn't be written, its driver gone; what was written before it written.
  */
 write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool {
     server :: cast[ptr[mut Server]](context)
@@ -322,11 +318,13 @@ write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool
             return true
         }
         now :: if count - moved < per { count - moved } else { per }
-        for &byte, i in view_of(cast[ptr[mut u8]](server.disk_buffer), cast[usize](now * block.BLOCK_BYTES)) {
-            at :: cast[usize](moved * block.BLOCK_BYTES) + i
-            if at < from.count {
-                byte^ = from[at]
-            }
+        start :: cast[usize](moved * block.BLOCK_BYTES)
+        end :: start + cast[usize](now * block.BLOCK_BYTES)
+        if start > end || end > from.count {
+            return false
+        }
+        if slop_os.memory_write(server.disk_window, 0, from[start..<end]) is_error {
+            return false
         }
         if !done(call(server, .Write(block.Transfer.{tag = 2, first = first + moved, count = cast[u32](now), offset = 0}))) {
             return false
@@ -427,17 +425,14 @@ drop :: fn(server: ptr[mut Server], index: usize) {
 }
 
 /**
- * Let go of a file connection's buffer: unmap it and close its memory, if it has one.
+ * Let go of a file connection's buffer: close its memory, if it has one.
  *
- * @param connection A connection's slot; its buffer, if mapped, is unmapped from this process and its memory handle
- *     closed, and buffer and buffer_bytes set to 0. One without a buffer is left as it is.
+ * @param connection A connection's slot; its buffer's memory handle, if it has a buffer, is closed, and buffer_bytes
+ *     set to 0. One without a buffer is left as it is.
  */
 release_buffer :: fn(connection: ptr[mut Connection]) {
-    if connection.buffer != 0 {
-        startup :: slop_os.startup_block()
-        _ = slop_os.memory_unmap(startup.space, connection.buffer)
+    if connection.buffer_bytes != 0 {
         _ = slop_os.handle_close(cast[slop_os.Handle](connection.buffer_memory))
-        connection.buffer = 0
         connection.buffer_bytes = 0
     }
 }
@@ -1139,13 +1134,13 @@ in_set :: fn(pattern: string, name: string) -> bool {
 // Files
 
 /**
- * Take a file connection's buffer: its client's memory, mapped here, readable and writable, in place of any before.
+ * Take a file connection's buffer: its client's memory, kept as a handle and copied through, never mapped, in place
+ * of any before.
  *
  * @param connection A file connection's slot: its buffer before is let go of first, whether or not the new one's taken;
- *     once mapped, buffer, buffer_bytes and buffer_memory are set.
- * @param memory The memory, which the server takes over: kept, or closed when it's refused; but if addresses
- *     can't be reserved for it, it isn't closed.
- * @return Null once it's mapped; NoBuffer if it's empty, larger than MAX_BUFFER_BYTES, or couldn't be mapped.
+ *     once taken, buffer_bytes and buffer_memory are set.
+ * @param memory The memory, which the server takes over: kept, or closed when it's refused.
+ * @return Null once it's taken; NoBuffer if it's empty or larger than MAX_BUFFER_BYTES.
  */
 use_buffer :: fn(connection: ptr[mut Connection], memory: slop_os.Memory) -> files.FileError? {
     release_buffer(connection)
@@ -1154,16 +1149,6 @@ use_buffer :: fn(connection: ptr[mut Connection], memory: slop_os.Memory) -> fil
         _ = slop_os.handle_close(cast[slop_os.Handle](memory))
         return files.FileError.NoBuffer
     }
-    startup :: slop_os.startup_block()
-    address :: runtime.reserve_addresses(cast[usize](size)) or_return files.FileError.NoBuffer
-    match slop_os.memory_map(memory, startup.space, address, 0, size, read_write()) {
-        case Ok => {}
-        case Error(error) => {
-            _ = slop_os.handle_close(cast[slop_os.Handle](memory))
-            return files.FileError.NoBuffer
-        }
-    }
-    connection.buffer = address
     connection.buffer_bytes = size
     connection.buffer_memory = memory
     return null
@@ -1178,18 +1163,69 @@ use_buffer :: fn(connection: ptr[mut Connection], memory: slop_os.Memory) -> fil
  * @return Whether it has a buffer and the transfer's offset and count, in bytes, are inside it.
  */
 fits :: fn(connection: ptr[Connection], transfer: files.Transfer) -> bool {
-    return connection.buffer != 0 && cast[u64](transfer.buffer_offset) + cast[u64](transfer.count) <= connection.buffer_bytes
+    return connection.buffer_bytes != 0 && cast[u64](transfer.buffer_offset) + cast[u64](transfer.count) <= connection.buffer_bytes
+}
+
+/** The most bytes of a file a transfer moves at a time between the file and its client's buffer: 64 KiB. */
+SCRATCH_BYTES : u64 : 64 * 1024
+
+/**
+ * Give the size of the scratch a transfer moves its bytes through, a piece at a time.
+ *
+ * @param transfer The transfer, whose count bounds it.
+ * @return Its count, at most SCRATCH_BYTES and at least 1, in bytes.
+ */
+scratch_size :: fn(transfer: files.Transfer) -> usize {
+    size :: if cast[u64](transfer.count) < SCRATCH_BYTES { cast[u64](transfer.count) } else { SCRATCH_BYTES }
+    return cast[usize](if size == 0 { cast[u64](1) } else { size })
 }
 
 /**
- * Give where a transfer's bytes are in a connection's buffer.
+ * Write a file from its connection's buffer, a piece at a time through a scratch, each copied out of the client's
+ * memory with memory_read.
  *
- * @param connection A file connection's slot, with a buffer mapped.
- * @param transfer The transfer, which fits.
- * @return A view of the buffer, good while it's mapped; the client may change it meanwhile.
+ * @param volume The mounted volume, main's: the file is written to the disk at once.
+ * @param connection A file connection's slot, whose buffer the transfer fits.
+ * @param entry The file's entry, as fat.entry_at found it, updated as it's written.
+ * @param transfer Where to write in the file and from in the buffer, and how many bytes.
+ * @return How many bytes were written: fewer than asked only if the volume's full.
+ * @error NoBuffer The buffer couldn't be read, its client gone, or no scratch could be had.
+ * @error DeviceError The disk refused a write, as fat.write gives it.
+ * @error Corrupt The file's clusters couldn't be followed.
+ * @error NoSpace The volume has no cluster left for what's written past the file's end.
  */
-buffer_of :: fn(connection: ptr[Connection], transfer: files.Transfer) -> mut u8[] {
-    return view_of(cast[ptr[mut u8]](connection.buffer + cast[u64](transfer.buffer_offset)), cast[usize](transfer.count))
+write_from_buffer :: fn(volume: ptr[mut fat.Volume], connection: ptr[Connection], entry: ptr[mut fat.Entry], transfer: files.Transfer)
+    -> Result[u32, files.FileError] {
+    scratch, error :: runtime.new_array(u8, scratch_size(transfer))
+    if error != null {
+        return .Error(.NoBuffer)
+    }
+    defer runtime.free_array(scratch)
+    total :: cast[u64](transfer.count)
+    done := cast[u64](0)
+    loop {
+        if done >= total {
+            break
+        }
+        piece :: if total - done < cast[u64](scratch.count) { total - done } else { cast[u64](scratch.count) }
+        if piece > cast[u64](scratch.count) {
+            break
+        }
+        part :: scratch[0..<cast[usize](piece)]
+        if slop_os.memory_read(connection.buffer_memory, cast[u64](transfer.buffer_offset) + done, part) is_error {
+            return .Error(.NoBuffer)
+        }
+        match fat.write(volume, entry, transfer.offset + done, part) {
+            case Ok(count) => {
+                done += count
+                if count < piece {
+                    break
+                }
+            }
+            case Error(error) => return .Error(file_error(error))
+        }
+    }
+    return .Ok(cast[u32](done))
 }
 
 /**
@@ -1198,10 +1234,11 @@ buffer_of :: fn(connection: ptr[Connection], transfer: files.Transfer) -> mut u8
  * @param server Unused.
  * @param volume The mounted volume, main's, only read: nothing on it is written.
  * @param connection A file or read-only file connection's slot: its place and name find the entry afresh, and its
- *     buffer is read into.
+ *     buffer is written, a piece at a time through a scratch, with memory_write.
  * @param transfer Where to read from in the file and to in the buffer, and how many bytes.
  * @return How many bytes were read: fewer than asked only at the file's end, 0 past it.
- * @error NoBuffer The connection has no buffer, or the transfer doesn't fit in it.
+ * @error NoBuffer The connection has no buffer, the transfer doesn't fit in it, its client's memory couldn't be
+ *     written, the client gone, or no scratch could be had.
  * @error NotFound The file's entry isn't there any more.
  * @error DeviceError The disk refused a read.
  * @error Corrupt The file's clusters couldn't be followed.
@@ -1210,12 +1247,40 @@ read_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], connection
     if !fits(connection, transfer) {
         return .Error(.NoBuffer)
     }
-    into :: buffer_of(connection, transfer)
     entry := fat.entry_at(volume, connection.place, name_of(connection)) or_return .Error(.NotFound)
-    match fat.read(volume, &entry, transfer.offset, into) {
-        case Ok(count) => return .Ok(cast[u32](count))
-        case Error(error) => return .Error(file_error(error))
+    // A piece at a time through a scratch, each copied into the client's memory
+    scratch, error :: runtime.new_array(u8, scratch_size(transfer))
+    if error != null {
+        return .Error(.NoBuffer)
     }
+    defer runtime.free_array(scratch)
+    total :: cast[u64](transfer.count)
+    done := cast[u64](0)
+    loop {
+        if done >= total {
+            break
+        }
+        piece :: if total - done < cast[u64](scratch.count) { total - done } else { cast[u64](scratch.count) }
+        if piece > cast[u64](scratch.count) {
+            break
+        }
+        part :: scratch[0..<cast[usize](piece)]
+        count :: match fat.read(volume, &entry, transfer.offset + done, part) {
+            case Ok(read) => read
+            case Error(error) => return .Error(file_error(error))
+        }
+        if count > piece {
+            break
+        }
+        if count > 0 && (slop_os.memory_write(connection.buffer_memory, cast[u64](transfer.buffer_offset) + done, part[0..<cast[usize](count)]) is_error) {
+            return .Error(.NoBuffer)
+        }
+        done += count
+        if count < piece {
+            break
+        }
+    }
+    return .Ok(cast[u32](done))
 }
 
 /**
@@ -1269,9 +1334,9 @@ serve_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: us
                     match fat.entry_at(volume, connection.place, name_of(connection)) {
                         case Ok(found) => {
                             entry := found
-                            match fat.write(volume, &entry, transfer.offset, buffer_of(connection, transfer)) {
-                                case Ok(count) => response^ = .Transferred(cast[u32](count))
-                                case Error(error) => response^ = .Failed(file_error(error))
+                            match write_from_buffer(volume, connection, &entry, transfer) {
+                                case Ok(count) => response^ = .Transferred(count)
+                                case Error(error) => response^ = .Failed(error)
                             }
                         }
                         case Error(error) => response^ = .Failed(file_error(error))

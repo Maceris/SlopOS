@@ -802,18 +802,23 @@ forget :: fn(service: ptr[mut Store], index: usize) {
     }
 }
 
+/** How many bytes of a Put's memory are read at a time, hashed and written: 64 KiB. */
+PUT_CHUNK : u64 : 64 * 1024
+
 /**
  * Keep an object put, if its bytes have its hash.
  *
- * Its bytes are written to objects/<hex>.part and renamed to objects/<hex> once whole, so a crash leaves no object
- * file that's partly written, only a .part file, which Collect removes.
+ * Its bytes are read from put's memory PUT_CHUNK at a time, through memory_read, never mapped, so the client ending
+ * meanwhile only fails the put (decisions/0098, 0181's F6); each chunk is hashed and written to objects/<hex>.part,
+ * which is renamed to objects/<hex> once whole and its hash checked, so a crash leaves no object file that's partly
+ * written, only a .part file, which Collect removes. A .part file whose bytes don't have the hash is deleted.
  *
- * @param service The store's state: the object's file is written in its directory, and its address space maps put's
- *     memory while the bytes are hashed and written.
+ * @param service The store's state: the object's file is written in its directory, and its heap holds a chunk while
+ *     it's read.
  * @param put The object: its hash, and the memory holding its bytes, the first size bytes of it, which is closed
  *     here whatever happens.
  * @return Whether it's kept, or was already; false if size is past the memory's, the bytes don't have the hash, the
- *     memory couldn't be mapped, or the file couldn't be written or renamed.
+ *     memory couldn't be read (its owner gone) or a chunk's room had, or the file couldn't be written or renamed.
  */
 store_object :: fn(service: ptr[mut Store], put: bundle_store.PutOf) -> bool {
     defer slop_os.handle_close(cast[slop_os.Handle](put.data))
@@ -824,22 +829,44 @@ store_object :: fn(service: ptr[mut Store], put: bundle_store.PutOf) -> bool {
     if has_object(service, put.hash) {
         return true
     }
-    block :: service.block
-    mapped_size :: if available == 0 { PAGE } else { available }
-    address :: runtime.reserve_addresses(cast[usize](mapped_size)) or_return false
-    slop_os.memory_map(put.data, block.space, address, 0, mapped_size, slop_os.PROTECTION_READ) or_return false
-    defer slop_os.memory_unmap(block.space, address)
-    bytes :: view_of(cast[ptr[u8]](address), cast[usize](put.size))
-    if !bundle.same(bundle.hash_of(bytes), put.hash) {
-        return false
-    }
     hex_storage : u8[64]
     hex :: bundle.hex(put.hash, &hex_storage)
     part_storage : u8[80]
     final_storage : u8[80]
     part :: joined("objects/", hex, ".part", &part_storage)
     final :: joined("objects/", hex, "", &final_storage)
-    if os.write_entire_file_in(service.directory, part, as_text(bytes)) != null {
+    chunk, made :: runtime.new_array(u8, cast[usize](PUT_CHUNK))
+    if made != null {
+        return false
+    }
+    defer runtime.free_array(chunk)
+    file :: os.open_in(service.directory, part, .WRITE) or_return false
+    hasher := crypto.blake3_start()
+    whole := true
+    done := cast[u64](0)
+    loop {
+        if done >= put.size {
+            break
+        }
+        now :: if put.size - done < PUT_CHUNK { put.size - done } else { PUT_CHUNK }
+        length :: cast[usize](now)
+        if length > chunk.count {
+            whole = false
+            break
+        }
+        piece :: chunk[0..<length]
+        if (slop_os.memory_read(put.data, done, piece) is_error) || os.write(file, as_text(piece)) != null {
+            whole = false
+            break
+        }
+        crypto.blake3_update(&hasher, piece)
+        done += now
+    }
+    os.close(file)
+    got := bundle.Hash.{}
+    crypto.blake3_finish(&hasher, got.bytes)
+    if !whole || !bundle.same(got, put.hash) {
+        _ = os.delete_file_in(service.directory, part)
         return false
     }
     return os.rename_in(service.directory, part, final) == null

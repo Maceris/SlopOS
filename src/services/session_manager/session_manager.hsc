@@ -224,13 +224,12 @@ Prepared :: struct {
     ring : slop_os.Memory,
 }
 
-/** An object from the bundle store, mapped to read. */
-MappedObject :: struct {
-    /** The object's memory, the session manager's handle, closed by unmap_object. */
-    memory : slop_os.Memory,
-    /** Where it's mapped, in the session manager's address space. */
-    address : u64,
-    /** The object's bytes, a view of the mapping, good until unmap_object. */
+/**
+ * An object from the bundle store, copied to the session manager's heap to read, never mapped, so the store ending
+ * meanwhile only fails the read (decisions/0098, 0181's F6).
+ */
+StoredObject :: struct {
+    /** The object's bytes, from the context's allocator, freed by let_go_of_object. */
     bytes : u8[],
 }
 
@@ -837,11 +836,11 @@ find_program :: fn(sessions: ptr[mut Manager], name: u8[]) -> programs.Response 
         return .Missing
     }
     found :: bundle_named(sessions, string_of(&name[0], name.count)) or_return .Missing
-    record :: mapped_object(sessions, found) or_return .Missing
+    record :: stored_object(sessions, found) or_return .Missing
     referred : bundle.Hash[..]
     defer runtime.array_free(&referred)
     read :: bundle.bundle_refers(record.bytes, &referred) or_else false
-    unmap_object(record)
+    let_go_of_object(record)
     if !read || referred.count < 2 {
         return .Missing
     }
@@ -861,9 +860,9 @@ find_program :: fn(sessions: ptr[mut Manager], name: u8[]) -> programs.Response 
 /**
  * Name the bundle store's boot root's program at an index, for a shell's List.
  *
- * @param sessions The session manager, whose bundle store is asked for its root, which is mapped, read and unmapped.
+ * @param sessions The session manager, whose bundle store is asked for its root, which is read into the heap and freed.
  * @param index The program's index among the root's entries, from 0, in the root's order.
- * @param out The response being made, which the name's bytes are appended to, copied before the root's unmapped.
+ * @param out The response being made, which the name's bytes are appended to, copied before the root's freed.
  * @return Named with the name; End past the root's last entry, for a name empty or longer than programs.MAX_NAME,
  *     without a store, or if the root couldn't be read.
  */
@@ -872,8 +871,8 @@ program_at :: fn(sessions: ptr[mut Manager], index: u32, out: ptr[mut os.Outgoin
         case Rooted(hash) => hash
         case _ => return .End
     }
-    root_object :: mapped_object(sessions, root) or_return .End
-    defer unmap_object(root_object)
+    root_object :: stored_object(sessions, root) or_return .End
+    defer let_go_of_object(root_object)
     names : string[..]
     defer runtime.array_free(&names)
     bundles : bundle.Hash[..]
@@ -904,11 +903,11 @@ program_documentation :: fn(sessions: ptr[mut Manager], name: u8[]) -> programs.
         return .Missing
     }
     found :: bundle_named(sessions, string_of(&name[0], name.count)) or_return .Missing
-    record :: mapped_object(sessions, found) or_return .Missing
+    record :: stored_object(sessions, found) or_return .Missing
     referred : bundle.Hash[..]
     defer runtime.array_free(&referred)
     read :: bundle.bundle_refers(record.bytes, &referred) or_else false
-    unmap_object(record)
+    let_go_of_object(record)
     if !read || referred.count < 3 {
         return .Missing
     }
@@ -1608,7 +1607,7 @@ installation_bundle :: fn(sessions: ptr[mut Manager], entry: system_records.Inst
 /**
  * Find the bundle the bundle store's boot root names by a name.
  *
- * @param sessions The session manager, whose bundle store is asked for its root, which is mapped, read and unmapped.
+ * @param sessions The session manager, whose bundle store is asked for its root, which is read into the heap and freed.
  * @param name The name, like "shell" or an installation's program's.
  * @return The bundle's hash; null without the store, if the root couldn't be read, or if it doesn't name it.
  */
@@ -1617,8 +1616,8 @@ bundle_named :: fn(sessions: ptr[mut Manager], name: string) -> bundle.Hash? {
         case Rooted(hash) => hash
         case _ => return null
     }
-    root_object :: mapped_object(sessions, root) or_return null
-    defer unmap_object(root_object)
+    root_object :: stored_object(sessions, root) or_return null
+    defer let_go_of_object(root_object)
     names : string[..]
     defer runtime.array_free(&names)
     bundles : bundle.Hash[..]
@@ -1639,18 +1638,18 @@ bundle_named :: fn(sessions: ptr[mut Manager], name: string) -> bundle.Hash? {
  *
  * A bundle refers to its program first and its manifest second.
  *
- * @param sessions The session manager, whose bundle store gives the bundle, mapped and unmapped, and its program.
+ * @param sessions The session manager, whose bundle store gives the bundle, read into the heap and freed, and its program.
  * @param bundle_hash The bundle's hash in the bundle store; one it doesn't have gives null.
  * @param expected The manifest's hash expected: the schema hash of the entry it's launched with.
  * @return The program's memory, the caller's; null for another manifest, a bundle that can't be read or refers to
  *     fewer than two objects, or a program the store doesn't give.
  */
 program_of :: fn(sessions: ptr[mut Manager], bundle_hash: bundle.Hash, expected: bundle.Hash) -> slop_os.Memory? {
-    record :: mapped_object(sessions, bundle_hash) or_return null
+    record :: stored_object(sessions, bundle_hash) or_return null
     referred : bundle.Hash[..]
     defer runtime.array_free(&referred)
     read :: bundle.bundle_refers(record.bytes, &referred) or_else false
-    unmap_object(record)
+    let_go_of_object(record)
     if !read || referred.count < 2 {
         return null
     }
@@ -1684,55 +1683,44 @@ store_request :: fn(sessions: ptr[mut Manager], request: bundle_store.Request) -
 }
 
 /**
- * Get a copy of a small object from the bundle store, a root or a bundle's record, and map it to read.
+ * Get a copy of a small object from the bundle store, a root or a bundle's record, read into the heap.
  *
- * @param sessions The session manager, whose bundle store gives the copy, so nothing stays open in the store; it's
- *     mapped into the session manager's own address space.
+ * The store's memory is read through memory_read and closed, so nothing stays open in the store, and its ending
+ * meanwhile gives null rather than a fault.
+ *
+ * @param sessions The session manager, whose bundle store gives the copy.
  * @param hash The hash of the object wanted, sent to the store in a Read; a hash it doesn't have, or an object past
  *     bundle_store.MAX_READ bytes, gives null.
- * @return The object, mapped, for the caller to give to unmap_object; null if the store didn't give it, or it couldn't
- *     be mapped.
+ * @return The object, its bytes on the heap, for the caller to give to let_go_of_object; null if the store didn't give
+ *     it, it's empty, the heap couldn't hold it, or it couldn't be read.
  */
-mapped_object :: fn(sessions: ptr[mut Manager], hash: bundle.Hash) -> MappedObject? {
+stored_object :: fn(sessions: ptr[mut Manager], hash: bundle.Hash) -> StoredObject? {
     object :: match store_request(sessions, .Read(hash)) {
         case Got(got) => got
         case _ => return null
     }
-    address :: map_in(object.memory, (object.size + 4095) & ~cast[u64](4095))
-    if address == 0 {
-        _ = slop_os.handle_close(cast[slop_os.Handle](object.memory))
+    defer slop_os.handle_close(cast[slop_os.Handle](object.memory))
+    if object.size == 0 || object.size > bundle_store.MAX_READ {
         return null
     }
-    return MappedObject.{memory = object.memory, address = address, bytes = view_of(cast[ptr[u8]](address), cast[usize](object.size))}
+    bytes, made :: runtime.new_array(u8, cast[usize](object.size))
+    if made != null {
+        return null
+    }
+    if !service_kit.read_pages(object.memory, 0, bytes) {
+        runtime.free_array(bytes)
+        return null
+    }
+    return StoredObject.{bytes = bytes}
 }
 
 /**
- * Map memory to read, at addresses reserved for it.
- *
- * @param memory The memory object, which stays the caller's.
- * @param size The bytes mapped, a multiple of 4096.
- * @return Where it's mapped; 0 for a size of 0, or if it can't be. Addresses reserved for a failed mapping aren't
- *     given back.
- */
-map_in :: fn(memory: slop_os.Memory, size: u64) -> u64 {
-    if size == 0 {
-        return 0
-    }
-    address :: runtime.reserve_addresses(cast[usize](size)) or_return 0
-    if slop_os.memory_map(memory, slop_os.startup_block().space, address, 0, size, slop_os.PROTECTION_READ) is_error {
-        return 0
-    }
-    return address
-}
-
-/**
- * Unmap an object mapped by mapped_object, and close its memory.
+ * Let go of an object stored_object read: free its bytes.
  *
  * @param object The object; its bytes are gone after this.
  */
-unmap_object :: fn(object: MappedObject) {
-    _ = slop_os.memory_unmap(slop_os.startup_block().space, object.address)
-    _ = slop_os.handle_close(cast[slop_os.Handle](object.memory))
+let_go_of_object :: fn(object: StoredObject) {
+    runtime.free_array(object.bytes)
 }
 
 /**

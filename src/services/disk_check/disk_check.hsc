@@ -132,8 +132,11 @@ Disk :: struct {
     end : slop_os.Channel,
     /** A port bound to end, waited on for its answers. */
     port : slop_os.Port,
-    /** Where the connection's buffer is mapped, readable and writable, in the process's address space. */
-    buffer : u64,
+    /**
+     * The connection's buffer, its driver's memory, written and read through memory_write and memory_read and never
+     * mapped (decisions/0098, 0181's F6).
+     */
+    window : slop_os.Memory,
 }
 
 /**
@@ -319,16 +322,10 @@ the_checked_partition_reads_writes_and_refuses_past_its_end #test :: fn(t: ptr[m
         case _ => return stopped(t, "a block connection describes its device when asked")
     }
     send(&checked, .GetBuffer)
-    window := cast[slop_os.Memory](slop_os.NO_HANDLE)
     match receive(&checked) {
-        case Buffer(memory) => window = memory
+        case Buffer(memory) => checked.window = memory
         case _ => return stopped(t, "a block connection gives its buffer when asked")
     }
-    reserved :: runtime.reserve_addresses(cast[usize](info.buffer_bytes))
-    checked.buffer = testing.require_some(t, reserved, "the process has addresses free for the block buffer")?
-    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    mapped :: slop_os.memory_map(window, block_of_startup.space, checked.buffer, 0, info.buffer_bytes, read_write)
-    testing.require_ok(t, mapped, "the block buffer maps read/write at addresses reserved for it")?
     testing.require_ge(t, info.block_count, 10, "tools/boot.py makes the partition 2048 blocks, past the 10 the check uses")?
 
     // The host's mark, in block 0
@@ -491,7 +488,7 @@ receive :: fn(disk: ptr[Disk]) -> block.Response {
  * Send one request on the block connection, and wait for how it finished.
  *
  * @param disk The block connection, with no other request in flight, so the next answer is this one's.
- * @param request The request sent, copied whole: a Read or Write uses the connection's buffer, which disk.buffer maps.
+ * @param request The request sent, copied whole: a Read or Write uses the connection's buffer, disk.window.
  * @return Its completion's status; DeviceError if the answer wasn't a completion, as when the connection's gone.
  */
 run :: fn(disk: ptr[Disk], request: block.Request) -> block.Status {
@@ -505,27 +502,36 @@ run :: fn(disk: ptr[Disk], request: block.Request) -> block.Status {
 /**
  * Put text at the start of a block in the buffer, the rest of the block zeros.
  *
- * @param disk The block connection, with its buffer mapped.
+ * @param disk The block connection, whose buffer is written with memory_write; a write that fails leaves it as it was,
+ *     which the check's read back then finds.
  * @param offset Where in the buffer the block starts, in bytes; it and a block after it must be in the buffer.
  * @param text The text, at most block.BLOCK_BYTES bytes; what's past them is dropped.
  */
 put :: fn(disk: ptr[Disk], offset: u32, text: string) {
-    bytes :: view_of(cast[ptr[mut u8]](disk.buffer + cast[u64](offset)), cast[usize](block.BLOCK_BYTES))
+    bytes : u8[block.BLOCK_BYTES]
     for &byte, i in bytes {
         byte^ = if i < text.count { cast[u8](text[i]) } else { cast[u8](0) }
     }
+    _ = slop_os.memory_write(disk.window, cast[u64](offset), bytes)
 }
 
 /**
  * Tell whether the buffer holds text at an offset.
  *
- * @param disk The block connection, with its buffer mapped.
+ * @param disk The block connection, whose buffer is read with memory_read.
  * @param offset Where in the buffer to look, in bytes; it and text's bytes after it must be in the buffer.
- * @param text The bytes looked for, compared exactly; empty is always there.
- * @return Whether the bytes there are text's.
+ * @param text The bytes looked for, compared exactly, at most block.BLOCK_BYTES of them; empty is always there.
+ * @return Whether the bytes there are text's; false if the buffer couldn't be read, or text is longer than a block.
  */
 starts_with :: fn(disk: ptr[Disk], offset: u32, text: string) -> bool {
-    bytes :: view_of(cast[ptr[u8]](disk.buffer + cast[u64](offset)), text.count)
+    if cast[u64](text.count) > block.BLOCK_BYTES {
+        return false
+    }
+    read : u8[block.BLOCK_BYTES]
+    bytes :: read[0..<text.count]
+    if slop_os.memory_read(disk.window, cast[u64](offset), bytes) is_error {
+        return false
+    }
     for character, i in text {
         if i >= bytes.count || bytes[i] != cast[u8](character) {
             return false

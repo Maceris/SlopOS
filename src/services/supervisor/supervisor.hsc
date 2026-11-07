@@ -872,6 +872,11 @@ Loaded :: struct {
      * update has replaced it.
      */
     module : slop_os.Memory?,
+    /**
+     * Whether module came from the bundle store, as its paged memory, which ends with the store: so it's read again
+     * once the store is started again (forget_stored).
+     */
+    from_store : bool,
 }
 
 /** The most services whose programs the supervisor keeps read, by their places in the system configuration. */
@@ -992,6 +997,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     test_clock := false
     test_events := false
     test_restart_services := false
+    test_chaos := cast[u64](0)
+    test_chaos_seed := cast[u64](0)
     test_store := false
     test_system_config := false
     test_degraded := false
@@ -1012,6 +1019,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
             test_clock = service_kit.has_word(text, "test_clock")
             test_events = service_kit.has_word(text, "test_events")
             test_restart_services = service_kit.has_word(text, "test_restart_services")
+            // test_chaos=N: N services and drivers killed at random once everything's started (chaos.hsc)
+            test_chaos = service_kit.number_of(service_kit.word_after(text, "test_chaos=") or_else "") or_else 0
+            test_chaos_seed = service_kit.number_of(service_kit.word_after(text, "test_chaos_seed=") or_else "") or_else 0
             test_store = service_kit.has_word(text, "test_store")
             test_system_config = service_kit.has_word(text, "test_system_config")
             test_degraded = service_kit.has_word(text, "test_degraded")
@@ -1161,6 +1171,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
         _ = ask_substitute(&supervisor, read_substitutions(&supervisor))
     }
     tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))
+    // Chaos once everything has started, so sessions run and programs work meanwhile (chaos.hsc)
+    if test_chaos > 0 {
+        run_chaos(&supervisor, test_chaos, test_chaos_seed)
+    }
     loop {
         wait_and_handle(&supervisor)
     }
@@ -1884,10 +1898,10 @@ restart_services :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
             manifest_read := false
             match stored_hash(supervisor, "hello", 1) {
                 case Some(manifest) => {
-                    match mapped_object(supervisor, manifest) {
+                    match stored_object(supervisor, manifest) {
                         case Some(object) => {
                             manifest_read = object.bytes.count >= 4 && object.bytes[0] == 0x48 && object.bytes[1] == 0x53
-                            unmap_object(supervisor, object)
+                            let_go_of_object(object)
                         }
                         case None => {}
                     }
@@ -2486,6 +2500,9 @@ start_store :: fn(supervisor: ptr[mut Supervisor], again: usize) {
         _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.store_port))
         supervisor.store_end = NONE
     }
+    if again != NOWHERE {
+        forget_stored(supervisor)
+    }
     pair :: os.channel_for[bundle_store.BundleStore](supervisor.block.budget, 0) or_return void
     grants := StoreGrants.{store = directory, clients = os.Listener[bundle_store.BundleStore].{end = pair.a},
         command_line = command_line_copy(supervisor)}
@@ -2499,6 +2516,24 @@ start_store :: fn(supervisor: ptr[mut Supervisor], again: usize) {
         case Error(error) => {
             failed(supervisor, service.name, error)
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        }
+    }
+}
+
+/**
+ * Let go of every program got from the bundle store, which ended with the store that gave it (decisions/0094), so
+ * each is got again from the one started again when its service is next launched (decisions/0181's F6).
+ *
+ * @param supervisor The supervisor, whose loaded entries from the store are closed and emptied; the rest stay.
+ */
+forget_stored :: fn(supervisor: ptr[mut Supervisor]) {
+    for &each in supervisor.loaded {
+        if each.from_store {
+            match each.module {
+                case Some(module) => _ = slop_os.handle_close(cast[slop_os.Handle](module))
+                case None => {}
+            }
+            each^ = Loaded.{}
         }
     }
 }
@@ -3136,12 +3171,14 @@ check_store :: fn(supervisor: ptr[mut Supervisor]) {
     }
     module :: module_of(supervisor, "hello")
     size :: slop_os.memory_size(module) or_else 0
-    address :: map_in(supervisor, module, size, slop_os.PROTECTION_READ)
-    if address == 0 {
-        log_line.write(supervisor.log, "supervisor: test_store: hello's program couldn't be read")
-        return void
+    program :: match read_copy(module, size) {
+        case Some(copy) => copy
+        case None => {
+            log_line.write(supervisor.log, "supervisor: test_store: hello's program couldn't be read")
+            return void
+        }
     }
-    program :: view_of(cast[ptr[u8]](address), cast[usize](size))
+    defer runtime.free_array(program)
     hash :: bundle.hash_of(program)
     put :: put_object(supervisor, hash, program)
     wrong := hash
@@ -3158,7 +3195,6 @@ check_store :: fn(supervisor: ptr[mut Supervisor]) {
         case _ => cast[u64](0)
     }
     _ = store_request(supervisor, .CacheLimit(0))
-    _ = slop_os.memory_unmap(supervisor.block.space, address)
     // Another object, never read, kept while it's pinned and collected once it isn't
     other :: "an object only a pin keeps"
     other_bytes :: string_bytes(other)
@@ -3194,30 +3230,33 @@ check_store :: fn(supervisor: ptr[mut Supervisor]) {
 CACHE_TEST_BYTES : u64 : 64 * 1024
 
 /**
- * Get an object from the bundle store, map it, and compare it with bytes, byte for byte.
+ * Get an object from the bundle store, read it, every page through its pager, and compare it with bytes, byte for
+ * byte.
  *
- * @param supervisor The supervisor, which needs a bundle store; the object is mapped in its address space and let go
- *     of before it returns.
+ * @param supervisor The supervisor, which needs a bundle store; the object's copy is freed and its memory closed
+ *     before it returns.
  * @param hash The object's hash, as the store knows it.
  * @param program The bytes it should hold, which stay the caller's.
- * @return True if the store gave it, it could be mapped, and it's program exactly; false otherwise.
+ * @return True if the store gave it, it could be read, and it's program exactly; false otherwise.
  */
 read_whole :: fn(supervisor: ptr[mut Supervisor], hash: bundle.Hash, program: u8[]) -> bool {
     read_back := false
     match store_request(supervisor, .Get(hash)) {
         case Got(object) => {
-            mapped :: map_in(supervisor, object.memory, (object.size + 4095) & ~cast[u64](4095), slop_os.PROTECTION_READ)
-            if mapped != 0 && object.size == cast[u64](program.count) {
-                read_back = true
-                for byte, i in program {
-                    if cast[ptr[u8]](mapped + cast[u64](i))^ != byte {
-                        read_back = false
-                        break
+            if object.size == cast[u64](program.count) {
+                match read_copy(object.memory, object.size) {
+                    case Some(copy) => {
+                        read_back = true
+                        for byte, i in program {
+                            if i >= copy.count || copy[i] != byte {
+                                read_back = false
+                                break
+                            }
+                        }
+                        runtime.free_array(copy)
                     }
+                    case None => {}
                 }
-            }
-            if mapped != 0 {
-                _ = slop_os.memory_unmap(supervisor.block.space, mapped)
             }
             _ = slop_os.handle_close(cast[slop_os.Handle](object.memory))
         }
@@ -3239,24 +3278,31 @@ collected :: fn(supervisor: ptr[mut Supervisor]) -> u64 {
     }
 }
 
+/** The most bytes read_copy copies: 4 MiB, more than any program or record the supervisor reads from the store. */
+MAX_COPIED : u64 : 4 << 20
+
 /**
- * Map memory into the supervisor's address space, at addresses reserved for it.
+ * Copy memory's first bytes to the heap, through memory_read, never mapping it: for memory another process owns, the
+ * bundle store's above all, whose ending meanwhile only fails the read (decisions/0098, 0181's F6).
  *
- * @param supervisor The supervisor, whose address space it's mapped in.
  * @param memory The memory, which stays the caller's.
- * @param size How many bytes to map from its start, a multiple of 4096.
- * @param protection What the mapping allows, read or read and write, no more than memory's rights allow.
- * @return Where it's mapped, unmapped by the caller with memory_unmap; 0 if size is 0, or it couldn't be mapped.
+ * @param size How many bytes to copy from its start; 0, or more than MAX_COPIED, gives null.
+ * @return The bytes, from the context's allocator, which the caller frees; null if size is out of bounds, the heap
+ *     couldn't hold them, or the memory couldn't be read (gone, or its pager gone).
  */
-map_in :: fn(supervisor: ptr[mut Supervisor], memory: slop_os.Memory, size: u64, protection: slop_os.Protection) -> u64 {
-    if size == 0 {
-        return 0
+read_copy :: fn(memory: slop_os.Memory, size: u64) -> u8[]? {
+    if size == 0 || size > MAX_COPIED {
+        return null
     }
-    address :: runtime.reserve_addresses(cast[usize](size)) or_return 0
-    if slop_os.memory_map(memory, supervisor.block.space, address, 0, size, protection) is_error {
-        return 0
+    bytes, made :: runtime.new_array(u8, cast[usize](size))
+    if made != null {
+        return null
     }
-    return address
+    if !service_kit.read_pages(memory, 0, bytes) {
+        runtime.free_array(bytes)
+        return null
+    }
+    return bytes
 }
 
 /**
@@ -3271,16 +3317,10 @@ map_in :: fn(supervisor: ptr[mut Supervisor], memory: slop_os.Memory, size: u64,
 put_object :: fn(supervisor: ptr[mut Supervisor], hash: bundle.Hash, bytes: u8[]) -> bool {
     size :: (cast[u64](bytes.count) + 4095) & ~cast[u64](4095)
     data :: slop_os.memory_create(supervisor.block.budget, if size == 0 { cast[u64](4096) } else { size }) or_return false
-    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    address :: map_in(supervisor, data, size, read_write)
-    if address == 0 {
+    if slop_os.memory_write(data, 0, bytes) is_error {
         _ = slop_os.handle_close(cast[slop_os.Handle](data))
         return false
     }
-    for byte, i in bytes {
-        cast[ptr[mut u8]](address + cast[u64](i))^ = byte
-    }
-    _ = slop_os.memory_unmap(supervisor.block.space, address)
     return match store_request(supervisor, .Put(bundle_store.PutOf.{hash = hash, size = cast[u64](bytes.count), data = data})) {
         case Done => true
         case _ => false
@@ -3579,7 +3619,7 @@ loaded_module :: fn(supervisor: ptr[mut Supervisor], service: Service) -> slop_o
     from_store :: stored_program(supervisor, service.module)
     module :: from_store or_else (read_module(supervisor, service.module) or_return null)
     if place < loaded.count {
-        loaded[place] = Loaded.{module = module}
+        loaded[place] = Loaded.{module = module, from_store = from_store is_some}
     }
     log_line.write(supervisor.log, "supervisor: % from the %", service.name, if from_store is_some { "bundle store" } else { "system volume" })
     return module
@@ -3614,7 +3654,7 @@ stored_program :: fn(supervisor: ptr[mut Supervisor], module: string) -> slop_os
  * The root is the booted generation's, boot_root, or without one, the store's own.
  *
  * @param supervisor The supervisor, whose bundle store is asked, waiting without handling its port; the root and
- *     bundle mapped are let go of before it returns.
+ *     bundle copied are let go of before it returns.
  * @param name The bundle's name in the root.
  * @param which The place of what's wanted in the bundle's references: 0 its program, 1 its manifest.
  * @return Its hash; null without a store, a root, a bundle of that name, or a reference at which.
@@ -3634,7 +3674,7 @@ stored_hash :: fn(supervisor: ptr[mut Supervisor], name: string, which: usize) -
     }
     found := bundle.Hash.{}
     have := false
-    root_object :: mapped_object(supervisor, root) or_return null
+    root_object :: stored_object(supervisor, root) or_return null
     names : string[..]
     defer runtime.array_free(&names)
     bundles : bundle.Hash[..]
@@ -3642,7 +3682,7 @@ stored_hash :: fn(supervisor: ptr[mut Supervisor], name: string, which: usize) -
     if bundle.root_entries(root_object.bytes, &names, &bundles) or_else false {
         for entry_name, i in names {
             if entry_name == name && i < bundles.count {
-                match mapped_object(supervisor, bundles[i]) {
+                match stored_object(supervisor, bundles[i]) {
                     case Some(record) => {
                         referred : bundle.Hash[..]
                         if (bundle.bundle_refers(record.bytes, &referred) or_else false) && which < referred.count {
@@ -3650,7 +3690,7 @@ stored_hash :: fn(supervisor: ptr[mut Supervisor], name: string, which: usize) -
                             have = true
                         }
                         runtime.array_free(&referred)
-                        unmap_object(supervisor, record)
+                        let_go_of_object(record)
                     }
                     case None => {}
                 }
@@ -3658,50 +3698,42 @@ stored_hash :: fn(supervisor: ptr[mut Supervisor], name: string, which: usize) -
             }
         }
     }
-    unmap_object(supervisor, root_object)
+    let_go_of_object(root_object)
     return if have { found } else { null }
 }
 
-/** An object of the bundle store's, mapped to read: its memory, where, and its bytes; let go of with unmap_object. */
-MappedObject :: struct {
-    /** The object's memory, the supervisor's handle. */
-    memory : slop_os.Memory,
-    /** Where it's mapped in the supervisor's address space. */
-    address : u64,
-    /** Its bytes, its size of them, a view of the mapping, good until unmap_object. */
+/** An object of the bundle store's, copied to the supervisor's heap to read; let go of with let_go_of_object. */
+StoredObject :: struct {
+    /** Its bytes, its size of them, from the context's allocator, good until let_go_of_object. */
     bytes : u8[],
 }
 
 /**
- * Get an object from the bundle store and map it to read.
+ * Get an object from the bundle store and copy it to the heap, never mapping it, so the store ending meanwhile gives
+ * null rather than a fault (decisions/0098, 0181's F6). The store's memory is closed before it returns.
  *
- * @param supervisor The supervisor, which needs a bundle store, and in whose address space the object is mapped.
+ * @param supervisor The supervisor, which needs a bundle store.
  * @param hash The object's hash, as the store knows it.
- * @return The object, mapped, which the caller lets go of with unmap_object; null if the store didn't give it or it
- *     couldn't be mapped.
+ * @return The object, which the caller lets go of with let_go_of_object; null if the store didn't give it, or it
+ *     couldn't be read (read_copy).
  */
-mapped_object :: fn(supervisor: ptr[mut Supervisor], hash: bundle.Hash) -> MappedObject? {
+stored_object :: fn(supervisor: ptr[mut Supervisor], hash: bundle.Hash) -> StoredObject? {
     object :: match store_request(supervisor, .Get(hash)) {
         case Got(got) => got
         case _ => return null
     }
-    address :: map_in(supervisor, object.memory, (object.size + 4095) & ~cast[u64](4095), slop_os.PROTECTION_READ)
-    if address == 0 {
-        _ = slop_os.handle_close(cast[slop_os.Handle](object.memory))
-        return null
-    }
-    return MappedObject.{memory = object.memory, address = address, bytes = view_of(cast[ptr[u8]](address), cast[usize](object.size))}
+    defer slop_os.handle_close(cast[slop_os.Handle](object.memory))
+    bytes :: read_copy(object.memory, object.size) or_return null
+    return StoredObject.{bytes = bytes}
 }
 
 /**
- * Let go of an object mapped_object gave: unmap it and close its memory.
+ * Let go of an object stored_object gave: free its bytes.
  *
- * @param supervisor The supervisor, in whose address space mapped_object mapped it.
  * @param object The object, whose bytes aren't to be read after.
  */
-unmap_object :: fn(supervisor: ptr[mut Supervisor], object: MappedObject) {
-    _ = slop_os.memory_unmap(supervisor.block.space, object.address)
-    _ = slop_os.handle_close(cast[slop_os.Handle](object.memory))
+let_go_of_object :: fn(object: StoredObject) {
+    runtime.free_array(object.bytes)
 }
 
 /**

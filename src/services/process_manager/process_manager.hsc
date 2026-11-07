@@ -136,19 +136,23 @@ serve :: fn(manager: ptr[mut Manager], index: usize, into: ptr[mut os.Incoming])
     }
 }
 
+/** The largest executable the manager copies to build from, in bytes: 4 MiB, half its budget. */
+MAX_EXECUTABLE : u64 : 4 << 20
+
 /**
  * Build a Load's program into the requester's process and start its first thread.
  *
  * 64 bytes are drawn from the entropy service: the first 32 the program's seed, for its startup block, the rest the
- * seed of the stream that places its parts. The executable is mapped read-only while it's built from, and unmapped
- * after. Whatever happens, the request's handles leave this process: to the program, or closed; when it fails, the
+ * seed of the stream that places its parts. The executable is copied to the manager's heap, through memory_read, to
+ * be built from, and freed after; only the new process maps it. Whatever happens, the request's handles leave this process: to the program, or closed; when it fails, the
  * process, space and budget are the requester's to destroy.
  *
  * @param manager The manager, whose entropy connection may be dialed again.
  * @param request The Load, whose handles are all gone from this process when it returns.
  * @return Loaded with the first thread's ID; or NotLoaded with BadRequest for more than MAX_GRANTS grants or an
- *     executable that can't be mapped, NoRandom when the entropy service doesn't answer even when dialed again,
- *     NoMemory when there are no addresses to map the executable at or the build ran out, NotAProgram when it isn't an
+ *     executable that's empty, larger than MAX_EXECUTABLE, or can't be read (its memory gone), NoRandom when the
+ *     entropy service doesn't answer even when dialed again, NoMemory when the heap can't hold its copy or the build
+ *     ran out, NotAProgram when it isn't an
  *     executable the loader takes, and Failed for any other failure building it.
  */
 load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.Response {
@@ -175,14 +179,22 @@ load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.R
         }
     }
     stream := random_stream.make(layout_seed)
-    // The executable, mapped where the manager can read it
+    /*
+     * The executable, copied for the manager to read (decisions/0098, 0181's F6): it's the requester's, or the bundle
+     * store's paged memory, either of which may end meanwhile, which a copy makes BadRequest, not the manager's fault
+     */
     size :: slop_os.memory_size(request.executable) or_return .NotLoaded(.BadRequest)
-    address :: runtime.reserve_addresses(cast[usize](size)) or_return .NotLoaded(.NoMemory)
-    if slop_os.memory_map(request.executable, manager.block.space, address, 0, size, slop_os.PROTECTION_READ) is_error {
+    if size == 0 || size > MAX_EXECUTABLE {
         return .NotLoaded(.BadRequest)
     }
-    defer _ = slop_os.memory_unmap(manager.block.space, address)
-    file :: view_of(cast[ptr[u8]](address), cast[usize](size))
+    file, made :: runtime.new_array(u8, cast[usize](size))
+    if made != null {
+        return .NotLoaded(.NoMemory)
+    }
+    defer runtime.free_array(file)
+    if !service_kit.read_pages(request.executable, 0, file) {
+        return .NotLoaded(.BadRequest)
+    }
     grants : process_builder.Grant[protocol.MAX_GRANTS]
     for i in 0..<grant_count {
         if i < grants.count && i < request.labels.count && i < request.grants.count {

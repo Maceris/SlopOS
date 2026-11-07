@@ -94,8 +94,11 @@ Server :: struct {
     disk : slop_os.Channel,
     /** A port bound to disk, waited on for its answers. */
     disk_port : slop_os.Port,
-    /** Where disk's buffer is mapped, readable and writable, in the process's address space. */
-    buffer : u64,
+    /**
+     * disk's buffer, its driver's memory, read through memory_read and never mapped, so the driver ending is a failed
+     * read, not a fault (decisions/0098, 0181's F6).
+     */
+    window : slop_os.Memory,
     /** The buffer's size in bytes. */
     buffer_bytes : u64,
     /** The disk's size in blocks. */
@@ -124,7 +127,7 @@ Server :: struct {
  * @param command_line The kernel's command line, read for faulty_block when built with robustness=on; without it, or
  *     without robustness=on, nothing fails on purpose.
  * @return 99 without the memory for its state, 1 if its ports couldn't be made, 2 if the disk didn't describe itself,
- *     3 if it didn't give its buffer, 4 if the buffer couldn't be mapped, 5 without the memory to read the table, and
+ *     3 if it didn't give its buffer, 5 without the memory to read the table, and
  *     6 if clients couldn't be added. It doesn't return otherwise.
  */
 main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Listener[partitions.Partitions], command_line: slop_os.Memory?)
@@ -155,14 +158,10 @@ main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Li
     }
     server.block_count = info.block_count
     server.buffer_bytes = info.buffer_bytes
-    window := cast[slop_os.Memory](slop_os.NO_HANDLE)
     match call(server.disk, server.disk_port, .GetBuffer) {
-        case Buffer(memory) => window = memory
+        case Buffer(memory) => server.window = memory
         case _ => return 3
     }
-    server.buffer = runtime.reserve_addresses(cast[usize](info.buffer_bytes)) or_return 4
-    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    slop_os.memory_map(window, startup.space, server.buffer, 0, info.buffer_bytes, read_write) or_return 4
     entries, error :: runtime.new_array(u8, cast[usize](gpt.ENTRY_BLOCKS * gpt.BLOCK_BYTES))
     if error != null {
         return 5
@@ -205,11 +204,12 @@ main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Li
  * Read blocks of the disk through its buffer, as many at a time as the buffer has room for, for gpt's Disk.
  *
  * @param context The partition server, a ptr[mut Server] passed as gpt's Disk context; its disk connection is asked,
- *     one read at a time, and its buffer overwritten.
+ *     one read at a time, its buffer overwritten, and each read copied out of the buffer with memory_read.
  * @param first The first block on the disk.
  * @param count How many blocks.
  * @param into Where they go, at least count blocks long.
- * @return Whether they were all read; false if into is too short, the buffer holds no block, or a read failed.
+ * @return Whether they were all read; false if into is too short, the buffer holds no block, a read failed, or the
+ *     buffer couldn't be read, its driver gone.
  */
 read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
     server :: cast[ptr[mut Server]](context)
@@ -232,12 +232,13 @@ read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bo
             }
             case _ => return false
         }
-        source :: view_of(cast[ptr[u8]](server.buffer), cast[usize](now * block.BLOCK_BYTES))
-        for byte, i in source {
-            at :: cast[usize](done * block.BLOCK_BYTES) + i
-            if at < into.count {
-                into[at] = byte
-            }
+        start :: cast[usize](done * block.BLOCK_BYTES)
+        end :: start + cast[usize](now * block.BLOCK_BYTES)
+        if start > end || end > into.count {
+            return false
+        }
+        if slop_os.memory_read(server.window, 0, into[start..<end]) is_error {
+            return false
         }
         done += now
     }
