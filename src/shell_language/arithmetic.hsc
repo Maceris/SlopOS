@@ -122,6 +122,10 @@ compare :: fn(left: Value, right: Value) -> int? {
             case Duration(b) => return if a < b { -1 } else if a > b { 1 } else { 0 }
             case _ => return null
         }
+        case Instant(a) => match right {
+            case Instant(b) => return if a < b { -1 } else if a > b { 1 } else { 0 }
+            case _ => return null
+        }
         case Text(a) => match right {
             case Text(b) => return text_order(a, b)
             case _ => return null

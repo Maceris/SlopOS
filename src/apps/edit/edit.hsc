@@ -5,6 +5,7 @@
 package edit
 
 import runtime from "base"
+import memory from "std"
 import os from "std"
 import strings from "std"
 import terminal from "std"
@@ -42,7 +43,7 @@ Edited :: struct {
     /** How many lines the text had when it ended. */
     lines : u64,
     /** How many bytes. */
-    bytes : u64,
+    bytes : memory.ByteCount,
 }
 
 /** An error naming the parameter it came from. */
@@ -181,7 +182,7 @@ main :: fn(console: os.Channel[protocol.Terminal], file: os.Channel[file.File]) 
             case _ => break
         }
     }
-    return .Ok(Edited.{saved = editor.saved, lines = cast[u64](editor.starts.count), bytes = cast[u64](editor.text.count)})
+    return .Ok(Edited.{saved = editor.saved, lines = cast[u64](editor.starts.count), bytes = cast[memory.ByteCount](editor.text.count)})
 }
 
 // ---- Reading and saving

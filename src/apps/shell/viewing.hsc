@@ -484,6 +484,20 @@ split_lines :: fn(into: ptr[mut string[..]], text #escaping : string) {
 }
 
 /**
+ * Find how wide a value may be written, as a table: the terminal's width now, asked only for a list, which may be one.
+ *
+ * @param shell The shell, whose terminal is asked.
+ * @param value The value to be written.
+ * @return The terminal's columns for a list; 0, no limit, for anything else.
+ */
+table_columns :: fn(shell: ptr[mut Shell], value: Value) -> usize {
+    return match value {
+        case List(_) => cast[usize](describe(shell).columns)
+        case _ => 0
+    }
+}
+
+/**
  * Ask the terminal what it can show, and its size, keeping what input comes meanwhile for the shell to read after.
  *
  * @param shell The shell, whose terminal is asked; a Read held is answered in turn, and its events kept.

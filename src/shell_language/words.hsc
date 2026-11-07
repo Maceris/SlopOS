@@ -54,6 +54,7 @@ of_type :: fn(type: string, value: Value) -> bool {
         case Int(_) => type == "" || type == "int"
         case Size(_) => type == "" || type == "size"
         case Duration(_) => type == "" || type == "duration"
+        case Instant(_) => type == ""
         case Text(_) => type == "" || type == "string" || type == "path"
         case Path(_) => type == "" || type == "path" || type == "string"
         case List(_) => type == "" || type == "list"

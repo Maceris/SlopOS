@@ -6,6 +6,7 @@
 package recover
 
 import runtime from "base"
+import memory from "std"
 import os from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
@@ -34,7 +35,7 @@ Recovered :: struct {
     /** How many files it wrote back. */
     files : u64,
     /** Their bytes. */
-    bytes : u64,
+    bytes : memory.ByteCount,
 }
 
 /** An error naming the parameter it came from. */

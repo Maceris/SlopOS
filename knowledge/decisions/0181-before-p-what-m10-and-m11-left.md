@@ -69,3 +69,18 @@ Seven parts, before P, each with an as-built record:
 ## Consequences
 - `../open-questions.md`'s question on shared volumes is answered by F5.
 - P follows F7.
+
+## As Built, F1 (2026-11-07)
+- **Jobs**: `0177` had already read a background job's output as it's written and said its end at the prompt, so
+  what was left was its limit: a job's records are kept up to `MAX_JOB_RECORDS`, 10,000, the rest read and dropped
+  and counted, and its end says how many it wrote: `[1] ended, with 2 records: wait 1 for them`.
+- **Types**: Hemera's `std/memory` gains `ByteCount`, a distinct alias of `u64` its schema keeps by name; the shell
+  reads a field of it as a size, and a word given for one as a size too (`4MiB`), and `std`'s `time.Instant` as a new
+  value, an instant, shown in UTC to the second (`2026-11-07T02:23:03Z`) and ordered by `sort`. An enum's member was
+  already shown by its name. `list`'s sizes, `edit`'s, `recover`'s and the copies' bytes are `ByteCount`s, so `17 B`.
+- **Tables**: `render` takes how wide a table may be; one wider has its widest column narrowed a column at a time,
+  down to 4, and what doesn't fit cut, ending in `…`. The shell asks its terminal's width for each list it shows, so
+  a resize is followed.
+- **Tests**: the shell language's host tests show instants, cut a table to 10 columns, and read a `ByteCount` and an
+  `Instant` back as a size and an instant; the boot tests expecting bare sizes and the old line for a job's end now
+  expect `17 B` and its count of records.

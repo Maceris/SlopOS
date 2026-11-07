@@ -165,7 +165,7 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Termina
  * Run a line: parse it, then evaluate each statement in turn, showing its value unless it's Null; the first error is
  * shown, and the rest of the line left.
  *
- * A value is shown as render writes it, cut at 8 KiB.
+ * A value is shown as render writes it, cut at 8 KiB, a table to the terminal's width (table_columns).
  *
  * @param shell The shell: its scope, functions and programs are used and changed as the statements run, and the
  *     values and errors are written on its terminal.
@@ -187,7 +187,7 @@ run_line :: fn(shell: ptr[mut Shell], line: string) {
                     case _ => {
                         storage : u8[8192]
                         out := text_buffer.make(storage)
-                        render(&out, value)
+                        render(&out, value, false, table_columns(shell, value))
                         say(shell, text_buffer.as_string(&out))
                     }
                 }

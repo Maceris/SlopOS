@@ -6,6 +6,7 @@
 package file_tools
 
 import runtime from "base"
+import memory from "std"
 import os from "std"
 import strings from "std"
 import slop_os from "std/os"
@@ -53,7 +54,7 @@ Copied :: struct {
     /** The files copied. */
     files : u64,
     /** Their bytes. */
-    bytes : u64,
+    bytes : memory.ByteCount,
     /** The directories made. */
     directories : u64,
 }
@@ -504,7 +505,7 @@ copy_file :: fn(source: Source, from: string, into: os.Directory, to: string, to
             case Some(error) => return stopped(to, error)
             case None => {}
         }
-        copied.bytes += cast[u64](count)
+        copied.bytes += cast[memory.ByteCount](count)
     }
     copied.files += 1
     if total > 0 {

@@ -326,9 +326,33 @@ take_while_reading :: fn(shell: ptr[mut Shell], packet: slop_os.Packet) {
         }
         if finished {
             job.announced = true
-            say(shell, message("[%] ended: wait % for what it gave", job.number, job.number))
+            say(shell, ended_text(job^))
         }
     }
+}
+
+/** The most records of what a job's last program writes that the shell keeps for wait; past them, they're dropped. */
+MAX_JOB_RECORDS :: 10000
+
+/**
+ * Say that a job has ended: how many records it wrote, if any, and how many of them were dropped past MAX_JOB_RECORDS.
+ *
+ * @param job The job, its programs ended.
+ * @return The line, on the heap, never freed.
+ */
+ended_text :: fn(job: Job) -> string {
+    kept :: match job.running.collected {
+        case Some(list) => list.items.count
+        case None => cast[usize](0)
+    }
+    if kept == 0 && job.running.dropped == 0 {
+        return message("[%1] ended: wait %1 for what it gave", job.number)
+    }
+    if job.running.dropped == 0 {
+        return message("[%1] ended, with %2 records: wait %1 for them", job.number, kept)
+    }
+    return message("[%1] ended, with %2 records, the first %3 kept: wait %1 for them", job.number,
+        cast[u64](kept) + job.running.dropped, kept)
 }
 
 // ---- Jobs in the background
@@ -361,6 +385,7 @@ start_job :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Val
         }
     }
     running :: start_programs(shell, trees, null, true)?
+    running.keep_at_most = MAX_JOB_RECORDS
     // Its output read as it's written, so it never waits for wait
     if running.from != NO_END {
         signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))

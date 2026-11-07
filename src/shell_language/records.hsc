@@ -40,7 +40,18 @@ encode :: fn(manifest: ptr[schema.Schema], place: usize, given: Value, bare: boo
                 if !bare {
                     return message("% isn't a number", type_text(manifest, place))
                 }
-                number = integer_of(text) or_return message("% isn't a number", text)
+                if is_byte_count(manifest, place) {
+                    match word_as("size", text) {
+                        case Some(read) => match read {
+                            case Size(count) => number = cast[i64](count)
+                            case _ => return message("% isn't a size, like 4MiB", text)
+                        }
+                        case None => return message("% isn't a size, like 4MiB", text)
+                    }
+                }
+                else {
+                    number = integer_of(text) or_return message("% isn't a number", text)
+                }
             }
             case _ => return message("it takes a number, not %", type_name(given))
         }
@@ -93,6 +104,22 @@ encode :: fn(manifest: ptr[schema.Schema], place: usize, given: Value, bare: boo
             }
         }
         return message("% isn't one of %", name, members_text(type))
+    }
+    if type.kind == .Struct && type.name == "Instant" {
+        nanoseconds :: match given {
+            case Instant(value) => value
+            case _ => return message("it takes an instant, not %", type_name(given))
+        }
+        seconds :: if nanoseconds >= 0 { nanoseconds / 1000000000 } else { (nanoseconds - 999999999) / 1000000000 }
+        for member in type.members {
+            if member.name == "seconds" {
+                put(out, offset + cast[usize](member.offset), cast[u64](seconds), 8)
+            }
+            else if member.name == "nanos" {
+                put(out, offset + cast[usize](member.offset), cast[u64](nanoseconds - seconds * 1000000000), 4)
+            }
+        }
+        return null
     }
     if type.kind == .Struct && type.name == "Duration" {
         nanoseconds := cast[i64](0)
@@ -344,6 +371,23 @@ decode :: fn(manifest: ptr[schema.Schema], place: usize, bytes: u8[], at: usize,
     if depth > 16 {
         return .Null
     }
+    // A number of bytes, by the type it's written as (std's memory.ByteCount), is a size (decisions/0181, F1)
+    if is_byte_count(manifest, place) && type.kind == .Integer {
+        return .Size(number_in(bytes, at, size))
+    }
+    if type.kind == .Struct && type.name == "Instant" {
+        seconds := cast[i64](0)
+        nanos := cast[i64](0)
+        for member in type.members {
+            if member.name == "seconds" {
+                seconds = cast[i64](number_in(bytes, at + cast[usize](member.offset), 8))
+            }
+            else if member.name == "nanos" {
+                nanos = cast[i64](number_in(bytes, at + cast[usize](member.offset), 4))
+            }
+        }
+        return .Instant(seconds * 1000000000 + nanos)
+    }
     if type.kind == .Integer {
         bits :: number_in(bytes, at, size)
         if type.is_signed && size < 8 && size > 0 {
@@ -446,6 +490,29 @@ decode :: fn(manifest: ptr[schema.Schema], place: usize, bytes: u8[], at: usize,
         return decode(manifest, type.base, bytes, distance, depth + 1)
     }
     return .Null
+}
+
+/**
+ * Tell whether a type is a number of bytes: std's memory.ByteCount, a distinct alias the schema keeps by its name,
+ * through any plain aliases before it.
+ *
+ * @param manifest The manifest whose type it is.
+ * @param place The type's place, before its aliases are followed.
+ * @return True if it, or an alias it names on the way to its integer, is named ByteCount.
+ */
+is_byte_count :: fn(manifest: ptr[schema.Schema], place: usize) -> bool {
+    at := place
+    for step in 0..<8 {
+        type :: schema.type_in(manifest, at) or_return false
+        if type.kind != .Alias {
+            return false
+        }
+        if type.name == "ByteCount" {
+            return true
+        }
+        at = type.base
+    }
+    return false
 }
 
 /**

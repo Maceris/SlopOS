@@ -528,7 +528,7 @@ run_script :: fn(shell: ptr[mut Shell], script: os.Channel[read_only_file.ReadOn
                     case _ => {
                         storage : u8[8192]
                         out := text_buffer.make(storage)
-                        language.render(&out, value)
+                        language.render(&out, value, false, table_columns(shell, value))
                         say(shell, text_buffer.as_string(&out))
                     }
                 }

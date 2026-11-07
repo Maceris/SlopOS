@@ -6,7 +6,9 @@
 package shell_language_test
 
 import runtime from "base"
+import memory from "std"
 import schema from "std"
+import time from "std"
 import testing from "std"
 import text_buffer from "std"
 import language from ".."
@@ -368,5 +370,67 @@ tables_line_up_by_columns #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome 
         runtime.array_add(&rows.items, language.Value.Record(row))
     }
     testing.expect_eq(t, rendered(.List(rows), false), "name  n\n日本  0\nab    1\né     2", "the n column starts at column 6 on every line")
+    return .Ok
+}
+
+// ---- Types shown by their types (decisions/0181, F1)
+
+/** An instant is shown as its date and time in UTC, to the second, before the epoch and on a leap day too. */
+instants_show_as_utc_dates #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    testing.expect_eq(t, rendered(.Instant(0)), "1970-01-01T00:00:00Z", "the epoch")
+    testing.expect_eq(t, rendered(.Instant(-1)), "1969-12-31T23:59:59Z", "a nanosecond before it is the second before")
+    testing.expect_eq(t, rendered(.Instant(951782400 * 1000000000)), "2000-02-29T00:00:00Z", "a leap day")
+    testing.expect_eq(t, rendered(.Instant(1794018183403018064)), "2026-11-07T02:23:03Z", "a time of day, its nanoseconds cut")
+    return .Ok
+}
+
+/** A table wider than the terminal has its widest column narrowed, and what doesn't fit cut, ending in …. */
+tables_fit_the_terminal #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    rows :: language.new_list()
+    for name, i in string.["abcdefghijkl", "ab"] {
+        row :: language.new_record()
+        language.set_field(row, "name", .Text(name))
+        language.set_field(row, "n", .Int(cast[i64](i)))
+        runtime.array_add(&rows.items, language.Value.Record(row))
+    }
+    storage : u8[512]
+    out := text_buffer.make(storage)
+    language.render(&out, .List(rows), false, 10)
+    testing.expect_eq(t, language.joined(text_buffer.as_string(&out), ""), "name     n\nabcdef…  0\nab       1",
+        "the name column narrowed to 7, so each line is 10 columns at most")
+    wide := text_buffer.make(storage)
+    language.render(&wide, .List(rows), false, 80)
+    testing.expect_eq(t, language.joined(text_buffer.as_string(&wide), ""), "name          n\nabcdefghijkl  0\nab            1",
+        "a table that fits is as it was")
+    return .Ok
+}
+
+/** What a record holds of std's ByteCount and Instant. */
+Stamped :: struct {
+    /** A number of bytes. */
+    size : memory.ByteCount,
+    /** When. */
+    taken : time.Instant,
+}
+
+/** A ByteCount reads as a size and an Instant as an instant, and both write back as they read. */
+byte_counts_and_instants_read_by_their_types #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    written : u8[..]
+    defer runtime.array_free(&written)
+    schema.write(type_info_of(Stamped), &written)
+    manifest := testing.require_some(t, schema.parse(written[0..<written.count]), "Stamped's schema reads")?
+    defer schema.free(&manifest)
+    record :: language.new_record()
+    language.set_field(record, "size", .Size(2048))
+    language.set_field(record, "taken", .Instant(951782400 * 1000000000))
+    bytes : u8[..]
+    defer runtime.array_free(&bytes)
+    language.zero(&bytes, size_of(Stamped))
+    match language.encode(&manifest, 0, .Record(record), false, &bytes, 0) {
+        case Some(problem) => return testing.require(t, false, problem)
+        case None => {}
+    }
+    back :: language.decode(&manifest, 0, bytes[0..<bytes.count], 0, 0)
+    testing.expect_eq(t, rendered(back), "{size: 2 KiB, taken: 2000-02-29T00:00:00Z}", "a size and an instant, shown as such")
     return .Ok
 }

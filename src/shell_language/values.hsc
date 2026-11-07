@@ -23,6 +23,8 @@ Value :: union {
     Size(u64),
     /** A duration, in nanoseconds; negative for one backwards. */
     Duration(i64),
+    /** A point in time, in nanoseconds since 1970-01-01T00:00:00Z, UTC; negative before it (decisions/0181, F1). */
+    Instant(i64),
     /** Text, UTF-8, from the heap or the line, never freed. */
     Text(string),
     /** A path, as the text written for it, resolved beneath the shell's directory only when it's used. */
@@ -137,6 +139,7 @@ type_name :: fn(value: Value) -> string {
         case Int(_) => "an integer"
         case Size(_) => "a size"
         case Duration(_) => "a duration"
+        case Instant(_) => "an instant"
         case Text(_) => "a string"
         case Path(_) => "a path"
         case List(_) => "a list"
@@ -160,14 +163,17 @@ type_name :: fn(value: Value) -> string {
  * @param out The text appended to; what doesn't fit its storage is dropped, as text_buffer drops it.
  * @param value What's written, of any kind; a list's items and a record's fields are written in turn, nested.
  * @param nested Whether it's inside a list or record, so it's written on one line; false at the top.
+ * @param columns How wide a table may be, in the terminal's columns (decisions/0181, F1): wider, its widest columns are
+ *     narrowed until it fits, and cells cut, ending in …; 0 for no limit.
  */
-render :: fn(out: ptr[mut text_buffer.TextBuffer], value: Value, nested: bool = false) {
+render :: fn(out: ptr[mut text_buffer.TextBuffer], value: Value, nested: bool = false, columns: usize = 0) {
     match value {
         case Null => text_buffer.append(out, "null")
         case Bool(truth) => text_buffer.append(out, if truth { "true" } else { "false" })
         case Int(number) => append_signed(out, number)
         case Size(bytes) => append_size(out, bytes)
         case Duration(nanos) => append_duration(out, nanos)
+        case Instant(nanos) => append_instant(out, nanos)
         case Text(text) => {
             if nested {
                 text_buffer.append(out, "\"")
@@ -198,7 +204,7 @@ render :: fn(out: ptr[mut text_buffer.TextBuffer], value: Value, nested: bool = 
                 text_buffer.append(out, "]")
             }
             else if is_table(list) {
-                render_table(out, list)
+                render_table(out, list, columns)
             }
             else {
                 for item, i in list.items {
@@ -321,6 +327,53 @@ append_duration :: fn(out: ptr[mut text_buffer.TextBuffer], nanos: i64) {
 }
 
 /**
+ * Append an instant as ISO 8601 in UTC, to the second: 2026-11-07T09:30:00Z.
+ *
+ * @param out The text appended to.
+ * @param nanos Nanoseconds since 1970-01-01T00:00:00Z; negative before it, rounded down to the second.
+ */
+append_instant :: fn(out: ptr[mut text_buffer.TextBuffer], nanos: i64) {
+    seconds :: if nanos >= 0 { nanos / 1000000000 } else { (nanos - 999999999) / 1000000000 }
+    days :: if seconds >= 0 { seconds / 86400 } else { (seconds - 86399) / 86400 }
+    in_day :: seconds - days * 86400
+    // The civil date from days since the epoch (Howard Hinnant's days_from_civil, run backwards)
+    shifted :: days + 719468
+    era :: (if shifted >= 0 { shifted } else { shifted - 146096 }) / 146097
+    day_of_era :: shifted - era * 146097
+    year_of_era :: (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365
+    day_of_year :: day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100)
+    month_index :: (5 * day_of_year + 2) / 153
+    day :: day_of_year - (153 * month_index + 2) / 5 + 1
+    month :: if month_index < 10 { month_index + 3 } else { month_index - 9 }
+    year :: year_of_era + era * 400 + (if month <= 2 { cast[i64](1) } else { cast[i64](0) })
+    append_signed(out, year)
+    for part in i64.[month, day] {
+        text_buffer.append(out, "-")
+        append_two(out, part)
+    }
+    text_buffer.append(out, "T")
+    append_two(out, in_day / 3600)
+    text_buffer.append(out, ":")
+    append_two(out, in_day / 60 % 60)
+    text_buffer.append(out, ":")
+    append_two(out, in_day % 60)
+    text_buffer.append(out, "Z")
+}
+
+/**
+ * Append a number of two digits, with a 0 in front below 10.
+ *
+ * @param out The text appended to.
+ * @param number The number, 0 to 99.
+ */
+append_two :: fn(out: ptr[mut text_buffer.TextBuffer], number: i64) {
+    if number < 10 {
+        text_buffer.append(out, "0")
+    }
+    append_signed(out, number)
+}
+
+/**
  * Tell whether a list is shown as a table.
  *
  * @param list The list looked at, read only.
@@ -338,16 +391,19 @@ is_table :: fn(list: ptr[ValueList]) -> bool {
 
 /**
  * Append a list of records as a table: a column for each field, in the order they're first met, headed by its name,
- * each as wide as its widest cell, two spaces apart; a record without a field leaves its cell blank.
+ * each as wide as its widest cell, two spaces apart; a record without a field leaves its cell blank. A table wider
+ * than columns has its widest column narrowed a column at a time, down to MIN_COLUMN, until it fits, and a cell, or a
+ * heading, wider than its column is cut, ending in … .
  *
  * Widths are the columns text takes on a terminal (unicode.text_width), so wide characters and accents line up.
  *
  * @param out The text appended to: the heading line, then a line for each record, without a line break at the end.
  * @param list The list, every item a record (is_table); an item that isn't is a blank row.
+ * @param columns How wide the table may be, in columns; 0 for no limit.
  */
-render_table :: fn(out: ptr[mut text_buffer.TextBuffer], list: ptr[ValueList]) {
-    columns : string[..]
-    defer runtime.array_free(&columns)
+render_table :: fn(out: ptr[mut text_buffer.TextBuffer], list: ptr[ValueList], columns: usize = 0) {
+    names : string[..]
+    defer runtime.array_free(&names)
     widths : usize[..]
     defer runtime.array_free(&widths)
     for item in list.items {
@@ -355,11 +411,11 @@ render_table :: fn(out: ptr[mut text_buffer.TextBuffer], list: ptr[ValueList]) {
             case Record(record) => {
                 for name in record.names {
                     known := false
-                    for column in columns {
+                    for column in names {
                         known = known || column == name
                     }
                     if !known {
-                        runtime.array_add(&columns, name)
+                        runtime.array_add(&names, name)
                         runtime.array_add(&widths, width_of(name))
                     }
                 }
@@ -368,32 +424,110 @@ render_table :: fn(out: ptr[mut text_buffer.TextBuffer], list: ptr[ValueList]) {
         }
     }
     for item in list.items {
-        for column, i in columns {
+        for column, i in names {
             cell :: cell_width(item, column)
             if i < widths.count && cell > widths[i] {
                 widths[i] = cell
             }
         }
     }
-    for column, i in columns {
+    if columns > 0 {
+        fit_widths(&widths, columns)
+    }
+    for column, i in names {
         wide :: if i < widths.count { widths[i] } else { 0 }
-        text_buffer.append(out, column)
-        if i + 1 < columns.count {
-            written :: width_of(column)
+        written :: append_cut(out, column, wide)
+        if i + 1 < names.count {
             pad(out, (if wide > written { wide - written } else { 0 }) + 2)
         }
     }
     for item in list.items {
         text_buffer.append(out, "\n")
-        for column, i in columns {
+        for column, i in names {
             wide :: if i < widths.count { widths[i] } else { 0 }
-            written :: cell_width(item, column)
-            render_cell(out, item, column)
-            if i + 1 < columns.count {
+            storage : u8[256]
+            cell := text_buffer.make(storage)
+            render_cell(&cell, item, column)
+            written :: append_cut(out, text_buffer.as_string(&cell), wide)
+            if i + 1 < names.count {
                 pad(out, (if wide > written { wide - written } else { 0 }) + 2)
             }
         }
     }
+}
+
+/** The narrowest a column is made to fit a table to the terminal: room for a letter or two and the … . */
+MIN_COLUMN :: 4
+
+/**
+ * Narrow a table's widest columns, a column at a time, until the table fits, or every column is MIN_COLUMN or less.
+ *
+ * @param widths The columns' widths, changed in place.
+ * @param columns How wide the table may be, two spaces between its columns counted.
+ */
+fit_widths :: fn(widths: ptr[mut usize[..]], columns: usize) {
+    loop {
+        total := cast[usize](0)
+        widest := cast[usize](0)
+        widest_at := widths.count
+        for width, i in widths^ {
+            total += width + (if i > 0 { cast[usize](2) } else { cast[usize](0) })
+            if width > widest {
+                widest = width
+                widest_at = i
+            }
+        }
+        if total <= columns || widest <= MIN_COLUMN || widest_at >= widths.count {
+            return void
+        }
+        for &width, i in widths^ {
+            if i == widest_at {
+                width^ = widest - 1
+            }
+        }
+    }
+}
+
+/**
+ * Append text cut to a width: whole if it fits, else as many grapheme clusters as fit with … after them.
+ *
+ * @param out The text appended to.
+ * @param text The text.
+ * @param wide The most columns it may take; 0 appends nothing.
+ * @return How many columns were appended.
+ */
+append_cut :: fn(out: ptr[mut text_buffer.TextBuffer], text: string, wide: usize) -> usize {
+    whole :: width_of(text)
+    if whole <= wide {
+        text_buffer.append(out, text)
+        return whole
+    }
+    if wide == 0 {
+        return 0
+    }
+    bytes :: string_bytes(text)
+    taken := cast[usize](0)
+    end := cast[usize](0)
+    loop {
+        if end >= bytes.count {
+            break
+        }
+        next :: unicode.grapheme_end(bytes, end)
+        if next <= end || next > bytes.count {
+            break
+        }
+        cluster :: unicode.grapheme_width(bytes[end..<next])
+        if taken + cluster > wide - 1 {
+            break
+        }
+        taken += cluster
+        end = next
+    }
+    if end > 0 {
+        text_buffer.append(out, string_of(&bytes[0], end))
+    }
+    text_buffer.append(out, "…")
+    return taken + 1
 }
 
 /**

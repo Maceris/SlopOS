@@ -371,6 +371,10 @@ Running :: struct {
      * gave its input up and leaves Ctrl-C to it.
      */
     terminal : bool,
+    /** The most records kept of what the last writes: MAX_JOB_RECORDS for a job's; 0 for no limit, in the foreground. */
+    keep_at_most : usize,
+    /** How many records it wrote past keep_at_most, read and dropped. */
+    dropped : u64,
 }
 
 /**
@@ -592,7 +596,15 @@ read_some :: fn(running: ptr[mut Running], call: ptr[mut Call], deadline: u64) -
     }
     loop {
         match stream.next_bytes_before(&reader, deadline) {
-            case Record(bytes) => runtime.array_add(&made.items, decode(&call.manifest, writes.records, bytes, 0, 0))
+            case Record(bytes) => {
+                // A job's records are kept up to a limit, as nothing reads them until wait (decisions/0181, F1)
+                if running.keep_at_most > 0 && made.items.count >= running.keep_at_most {
+                    running.dropped += 1
+                }
+                else {
+                    runtime.array_add(&made.items, decode(&call.manifest, writes.records, bytes, 0, 0))
+                }
+            }
             case End => {
                 running.output_done = true
                 return true

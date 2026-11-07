@@ -3,6 +3,7 @@
  */
 package list
 
+import memory from "std"
 import os from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
@@ -27,7 +28,7 @@ Entry :: struct {
     /** What it is. */
     kind : EntryKind,
     /** Its size in bytes; a directory's is 0. */
-    size : u64,
+    size : memory.ByteCount,
 }
 
 /** An error naming the parameter it came from. */
@@ -111,7 +112,7 @@ main :: fn(here: os.Channel[dir.Dir], path: string?, all: bool, output: os.Sink[
                 if first.count == 0 || (!all && first[0] == cast[u8]('.')) {
                     continue
                 }
-                entry :: Entry.{name = name, kind = kind_of(listed.kind), size = listed.size}
+                entry :: Entry.{name = name, kind = kind_of(listed.kind), size = cast[memory.ByteCount](listed.size)}
                 count += 1
                 if writing && (stream.write(&writer, entry) is_some) {
                     return .Error(.Unreadable(problem))
