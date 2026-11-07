@@ -491,8 +491,9 @@ TESTS = [
         "--refuse-console-line=not the password"])),
     # Shared volumes (decisions/0158): the administrator has bob's account made, then shares a volume, team, with bob
     # from the secure attention key's screen (H), which links shared/team in their home; bob, logged in to another
-    # session, finds it in theirs; back in the administrator's, bob is taken out, every link into team revoked and its
-    # next key generation started
+    # session, finds it in theirs; back in the administrator's, bob is taken out, every link into team revoked, and
+    # team given a new volume key (decisions/0181's F5), sealed again with it in the background, and its old key
+    # generation deleted, no snapshot of it needing it
     ("shares a volume with another user, who finds it at login, and takes them out of it", 7,
      with_before_qemu([argument.replace("test_services", "test_services use_echo test_settle=180").replace("--timeout=120", "--timeout=270")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
@@ -515,7 +516,9 @@ TESTS = [
         "--expect-line=[user] account_service: shared team with bob",
         "--expect-line=[user] terminal: shared team, linked shared/team in the owner's home",
         "--expect-line=[user] account_service: bob joined team",
-        "--expect-line=[user] account_service: took bob out of team, revoked 2 links into it, and started its next key generation",
+        "--expect-line=[user] account_service: took bob out of team, revoked 2 links into it, and gave it a new volume key, sealing with key generation 2",
+        "--expect-line=[user] volume_server: volume 6 sealed again with key generation 2",
+        "--expect-line=[user] volume_server: volume 6 deleted its key generations before 2",
         "--expect-line=[user] terminal: took a member out of team, linked shared/team in the owner's home",
         "--refuse-console-line=correct horse battery staple", "--refuse-console-line=another good passphrase"])),
     # The shell's language (decisions/0169), the session's first program: let, sizes and their

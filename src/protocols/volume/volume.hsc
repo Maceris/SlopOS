@@ -74,6 +74,15 @@ Request :: union {
      */
     Rotate,
     /**
+     * Give the volume a new volume key, wrapped by this passphrase, its bytes, in place of every way it was wrapped
+     * before, every generation's key wrapped again by it and a new generation started (decisions/0181's F5); what's
+     * changed is committed first, and the new key is committed before it's answered. What was written before is sealed
+     * again with the new generation in the background, and the generations before it deleted once nothing needs them.
+     * Answered with Rotated and the new generation, NotEncrypted, or Failed, which it is too before the volume's
+     * unlocked, for a read-only volume, and for a clone.
+     */
+    Rekey(slop_os.Relative[u8]),
+    /**
      * Commit what's changed now, as before a snapshot of it is taken. Answered with Committed, nothing to commit or a
      * read-only volume included, or Failed, which it is too before the volume's unlocked.
      */
@@ -142,6 +151,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Unlock(_) => true
         case Rotate => false
+        case Rekey(_) => false
         case Commit => true
         case IssueTo(_) => false
         case OpenIssued(opening) => opening.opening.kind != .File || opening.opening.creation != .New

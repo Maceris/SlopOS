@@ -75,6 +75,21 @@ AddedGeneration :: struct {
     record : slopfs.GenerationRecord,
 }
 
+/**
+ * A volume's keys made again under a new volume key (decisions/0181's F5): its wrap, every generation it had wrapped
+ * again, and the new generation, its floor.
+ */
+Rekeying :: struct {
+    /** The new volume key wrapped by the new passphrase, kept in place of every wrap there was. */
+    wrap : slopfs.WrapRecord,
+    /** Every generation the volume's key records hold, wrapped again by the new volume key; exactly those numbers. */
+    generations : slop_os.Relative[slopfs.NumberedGeneration],
+    /** The new generation's number, the one after the newest. */
+    number : u32,
+    /** The new generation's record. */
+    added : slopfs.GenerationRecord,
+}
+
 /** A new volume (decisions/0141): its name, its cipher (slopfs.Cipher's value, 0 for none), and when it's made. */
 VolumeCreation :: struct {
     /** Its name, as UTF-8. */
@@ -206,6 +221,31 @@ Request :: union {
      */
     GenerationAt(u32),
     /**
+     * On a volume's connection (decisions/0181's F5): ask for the first key generation's record numbered at least
+     * this, across the gaps deleting old generations leaves. Answered with NumberedGeneration, NoMore past the newest,
+     * or Failed.
+     */
+    GenerationFrom(u32),
+    /**
+     * On a volume's connection: keep the volume's keys made again under a new volume key in place of its key records,
+     * its floor Sealing, all durable together with the next commit. Answered with Done, NotYours for a clone, or for
+     * generations that aren't exactly the volume's or a number that isn't the next, or Failed.
+     */
+    Rekey(Rekeying),
+    /** On a volume's connection: ask for the volume's key floor. Answered with Floor, NoMore if it has none, or Failed. */
+    KeyFloor,
+    /**
+     * On a volume's connection: say the volume's live tree is sealed with this floor or later, its last step committed;
+     * durable with the next commit. Answered with Done, NotYours if it isn't the volume's floor still Sealing, or Failed.
+     */
+    SealedAgain(u32),
+    /**
+     * On a volume's connection: delete the key generations before the volume's floor, once it's Sealed and no snapshot
+     * from before that and no clone may need them, the floor with them; durable with the next commit. Answered with
+     * Dropped and the floor, NoMore if they can't go yet or there's no floor, or Failed.
+     */
+    DropOldGenerations,
+    /**
      * On a volume's connection: keep a new key generation's record with the volume, which its record then names;
      * durable with the next commit. Answered with Done, NotYours for a number that isn't the next, or Failed.
      */
@@ -289,6 +329,12 @@ Response :: union {
     Wrap(slopfs.WrapRecord),
     /** GenerationAt's answer: the generation's record. */
     Generation(slopfs.GenerationRecord),
+    /** GenerationFrom's answer: the generation's number and record. */
+    NumberedGeneration(slopfs.NumberedGeneration),
+    /** KeyFloor's answer: the volume's floor. */
+    Floor(slopfs.KeyFloorRecord),
+    /** DropOldGenerations' answer: the floor the generations before were deleted below. */
+    Dropped(u32),
     /** SnapshotAt's answer: the snapshot. */
     Snapshot(SnapshotInfo),
     /** Usage's answer: the volume's blocks used and quota, and the container's blocks free past its reserve. */
@@ -341,6 +387,11 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Abandon => true
         case WrapAt(_) => true
         case GenerationAt(_) => true
+        case GenerationFrom(_) => true
+        case Rekey(_) => false
+        case KeyFloor => true
+        case SealedAgain(_) => true
+        case DropOldGenerations => true
         case AddGeneration(_) => false
         case AddWrap(_) => true
         case TakeSnapshot(_) => false

@@ -665,3 +665,147 @@ drop_generation :: fn(keys: ptr[mut Keys], previous: u32) {
     keys.current = previous
     keys.transaction = 0
 }
+
+/*
+ * A new volume key (decisions/0181's F5): when someone who could open a volume mustn't any more, as a member taken out
+ * of a shared one, the volume is given a new volume key, wrapped by a new passphrase, every generation's key wrapped
+ * again by it, and a new generation started, its floor: from then on what's written is sealed with the floor or a
+ * later generation, and what was written before is sealed again with it, a few blocks at a time (reseal.hsc). Once
+ * nothing the volume reads needs an older generation, those are deleted, and nothing on the disk opens with what the
+ * one taken out had.
+ */
+
+/** How far a volume's blocks are along to being sealed with its floor or later. */
+FloorState :: enum #backed_by(u32) {
+    /** Some of its live tree's blocks may still be sealed with a generation before the floor. */
+    Sealing = 1,
+    /** Every block of its live tree is sealed with the floor or later, since the transaction its record says. */
+    Sealed = 2,
+}
+
+/**
+ * A volume's key floor, keyed (volume, KeyFloor, 0) in the container's volumes tree beside its key records: the
+ * generation its newest volume key began with, and how far its blocks are along to being sealed with it or later.
+ * Little-endian. There's none on a volume that's kept its first volume key, or once the generations before its floor
+ * are deleted.
+ */
+KeyFloorRecord :: struct #packed {
+    /** The generation the newest volume key began with; every older one is to go. */
+    floor : u32le,
+    /** Its FloorState. */
+    state : u32le,
+    /**
+     * Once Sealed, a transaction its volume's live tree had no block sealed before the floor at: a snapshot holding
+     * that transaction or a later one holds none either. 0 while Sealing.
+     */
+    sealed : u64le,
+}
+
+#assert size_of(KeyFloorRecord) == 16
+
+/** A volume's keys made again under a new volume key, before its records are kept and the keys take it (rekey). */
+Rekeyed :: struct {
+    /** The new volume key, secret: zeroed by free_rekeyed. */
+    volume_key : crypto.Key256,
+    /** The new volume key wrapped by the new passphrase, to keep in place of every wrap there was. */
+    wrap : WrapRecord,
+    /** Every generation the volume had, wrapped again by the new volume key, from context's allocator. */
+    generations : NumberedGeneration[..],
+    /** The new generation, the floor, after the newest there was; its key is secret, zeroed by free_rekeyed. */
+    added : GenerationKey,
+    /** The new generation's record, wrapped by the new volume key. */
+    record : GenerationRecord,
+}
+
+/**
+ * Make a volume's keys again under a new volume key: the key made, wrapped by a new passphrase, every generation's key
+ * wrapped again by it, and a new generation made after the newest. Nothing in keys changes until apply_rekey, once
+ * the records are kept.
+ *
+ * @param keys The volume's keys, unlocked: every generation kept names has to be among them; room is made in them for
+ *     the new generation, so apply_rekey can't fail.
+ * @param kept Every generation record the volume's key records hold, oldest first, each one's began kept.
+ * @param passphrase The new passphrase, secret.
+ * @param parameters Argon2id's parameters for it.
+ * @param began The transaction the new generation begins in.
+ * @param container The 16-byte ID of the container the records go in, from its superblock; it's associated data.
+ * @param volume The ID of the volume whose key records they are.
+ * @param into Where it's all made, empty; for free_rekeyed either way.
+ * @return True once it's made; false if a generation in kept isn't in keys, Argon2id couldn't run, a seal failed, or
+ *     there wasn't the memory.
+ */
+rekey #constant_time :: fn(keys: ptr[mut Keys], kept: NumberedGeneration[], passphrase: u8[], parameters: crypto.Argon2Parameters,
+    began: u64, container: u8[16], volume: u64, into: ptr[mut Rekeyed]) -> bool {
+
+    into.volume_key = random_key()
+    into.wrap = wrap_with_passphrase(&into.volume_key, passphrase, parameters, container, volume) or_return false
+    newest := keys.current
+    for each in kept {
+        key :: generation_key(keys, each.number) or_return false
+        generation := GenerationKey.{number = each.number, key = key^}
+        rewrapped :: wrap_generation(&into.volume_key, &generation, cast[u64](each.record.began), container, volume)
+        zero_key(&generation.key)
+        record :: rewrapped or_return false
+        if runtime.array_try_add(&into.generations, NumberedGeneration.{number = each.number, record = record}) != null {
+            return false
+        }
+        if each.number > newest {
+            newest = each.number
+        }
+    }
+    into.added = GenerationKey.{number = newest + 1, key = random_key()}
+    into.record = wrap_generation(&into.volume_key, &into.added, began, container, volume) or_return false
+    return runtime.array_try_reserve(&keys.generations, keys.generations.count + 1) == null
+}
+
+/**
+ * Have a volume's keys take what rekey made, once its records are kept: the new volume key, and the new generation,
+ * current from now on. The generations before stay, to read what's sealed with them until it's sealed again.
+ *
+ * @param keys The keys rekey made room in.
+ * @param made What rekey made; its secrets are copied, and free_rekeyed zeroes them as ever.
+ */
+apply_rekey #constant_time :: fn(keys: ptr[mut Keys], made: ptr[Rekeyed]) {
+    keys.volume_key = made.volume_key
+    // Room was made by rekey
+    _ = runtime.array_try_add(&keys.generations, made.added)
+    keys.current = made.added.number
+    keys.transaction = 0
+}
+
+/**
+ * Give back what rekey made, its secrets zeroed.
+ *
+ * @param made What rekey made, or began to; not used after.
+ */
+free_rekeyed :: fn(made: ptr[mut Rekeyed]) {
+    zero_key(&made.volume_key)
+    zero_key(&made.added.key)
+    runtime.array_free(&made.generations)
+}
+
+/**
+ * Forget the generations before a floor, once their records are deleted, each key zeroed.
+ *
+ * @param keys The volume's keys; those numbered below floor are zeroed and taken out.
+ * @param floor The generation the newest volume key began with.
+ * @return How many were forgotten.
+ */
+forget_generations_below :: fn(keys: ptr[mut Keys], floor: u32) -> u32 {
+    forgotten : u32 = 0
+    loop {
+        found := keys.generations.count
+        for each, i in keys.generations {
+            if each.number < floor {
+                found = i
+                break
+            }
+        }
+        if found >= keys.generations.count {
+            return forgotten
+        }
+        zero_key(&keys.generations[found].key)
+        runtime.array_remove(&keys.generations, found)
+        forgotten += 1
+    }
+}

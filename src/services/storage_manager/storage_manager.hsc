@@ -816,6 +816,11 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
                     response = rotate(state, cast[usize](named.partition), os.items(into, named.name))
                 }
             }
+            case Rekey(rekeyed) => {
+                if cast[usize](rekeyed.partition) < state.partition_count {
+                    response = rekey(state, cast[usize](rekeyed.partition), os.items(into, rekeyed.name), os.items(into, rekeyed.passphrase))
+                }
+            }
             case TakeSnapshot(of) => {
                 if is_container(state, of.partition) {
                     response = take_snapshot(state, cast[usize](of.partition), os.items(into, of.volume), os.items(into, of.snapshot), of.now)
@@ -1299,6 +1304,35 @@ rotate :: fn(state: ptr[mut Manager], index: usize, name: u8[]) -> storage.Respo
     out := os.Outgoing.{}
     request :: os.begin[volume_protocol.Request](&out)
     request^ = .Rotate
+    return match ask_volume(served, &out) {
+        case Rotated(generation) => .Rotated(generation)
+        case NotEncrypted => .NotEncrypted
+        case _ => .Failed
+    }
+}
+
+/**
+ * Give a served, unlocked volume a new volume key, wrapped by a new passphrase (decisions/0181's F5), which its
+ * server commits before it answers; it seals what was written before again in the background.
+ *
+ * @param state The storage manager's state.
+ * @param index The container's partition's index.
+ * @param name The volume's name in the container; matched byte for byte against the volumes being served.
+ * @param passphrase The new passphrase's bytes, copied into the request; not kept.
+ * @return Rotated with the new generation's number, its floor; NoVolume if it isn't served, NotEncrypted, Locked if it
+ *     hasn't been unlocked, or Failed.
+ */
+rekey :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u8[]) -> storage.Response {
+    served :: served_volume(state, index, name) or_return .NoVolume
+    if !served.encrypted {
+        return .NotEncrypted
+    }
+    if !served.unlocked {
+        return .Locked
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[volume_protocol.Request](&out)
+    request^ = .Rekey(os.append(&out, passphrase))
     return match ask_volume(served, &out) {
         case Rotated(generation) => .Rotated(generation)
         case NotEncrypted => .NotEncrypted

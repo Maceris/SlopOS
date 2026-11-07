@@ -84,6 +84,16 @@ VolumeNamed :: struct {
     name : slop_os.Relative[u8],
 }
 
+/** An encrypted volume being served and the new passphrase its new volume key is wrapped by. */
+VolumeRekeyed :: struct {
+    /** The partition the container is on, by its index across every disk, as Describe numbers them. */
+    partition : u32,
+    /** The volume's name, as UTF-8. */
+    name : slop_os.Relative[u8],
+    /** The new passphrase's bytes, secret to whoever keeps it. */
+    passphrase : slop_os.Relative[u8],
+}
+
 /** A volume's snapshot, both by name, and when it's taken, as the asker says. */
 SnapshotOf :: struct {
     /** The partition the container is on, by its index across every disk, as Describe numbers them. */
@@ -163,6 +173,13 @@ Request :: union {
      * (decisions/0042). Answered with Rotated, NotEncrypted, NoVolume for one not being served, or Failed.
      */
     Rotate(VolumeNamed),
+    /**
+     * Give an encrypted volume being served a new volume key, wrapped by a new passphrase (decisions/0181's F5): the
+     * old passphrase opens it no more, and what was written before is sealed again in the background. Answered with
+     * Rotated and the new generation, NotEncrypted, NoVolume for one not being served, Locked before it's unlocked,
+     * or Failed.
+     */
+    Rekey(VolumeRekeyed),
     /**
      * Take a snapshot of what a volume has committed, which a volume being served commits first (roadmap 8e).
      * Answered with Done, NoVolume, AlreadyExists, or Failed.
@@ -273,6 +290,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case OpenVolume(_) => true
         case CreateVolume(_) => false
         case Rotate(_) => false
+        case Rekey(_) => false
         case TakeSnapshot(_) => false
         case DeleteSnapshot(_) => false
         case SnapshotAt(_) => true

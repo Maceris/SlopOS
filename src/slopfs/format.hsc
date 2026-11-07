@@ -143,6 +143,11 @@ RecordKind :: enum #backed_by(u8) {
     Link = 14,
     /** A volume: a link it issued, keyed (0, Issued, number from 1), and the next number at 0. */
     Issued = 15,
+    /**
+     * The volumes: an encrypted volume's key floor (keys.hsc, decisions/0181's F5), after it's been given a new
+     * volume key, keyed (volume, KeyFloor, 0).
+     */
+    KeyFloor = 16,
 }
 
 /** A key as it's stored: ordered by object, then kind, then offset, each compared as an unsigned number. */

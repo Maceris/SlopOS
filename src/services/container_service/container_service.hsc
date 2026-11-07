@@ -757,6 +757,11 @@ serve_container :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.In
                 response^ = if connection.kind != .Volume { container.Response.NotAVolume } else if connection.snapshot != 0 {
                     container.Response.NotYours } else { volume_opened(server, volume, os.items(into, named), true) }
             }
+            // A new volume key (decisions/0181's F5), from its live connection only
+            case Rekey(rekeying) => {
+                response^ = if connection.kind != .Volume { container.Response.NotAVolume } else if connection.snapshot != 0 {
+                    container.Response.NotYours } else { rekeyed(server, volume, rekeying, os.items(into, rekeying.generations)) }
+            }
             case _ => {
                 if connection.kind != .Volume {
                     response^ = .NotAVolume
@@ -916,7 +921,9 @@ snapshot_taken :: fn(server: ptr[mut Server], id: u64, name: u8[], now: u64) -> 
 }
 
 /**
- * Delete a volume's snapshot, and free what only it held, durable at once with a commit of the container's own.
+ * Delete a volume's snapshot, and free what only it held, durable at once with a commit of the container's own. A
+ * volume given a new volume key and sealed again has the key generations before its floor deleted too, once this was
+ * the last snapshot from before (decisions/0181's F5).
  *
  * @param server The container service's state: the container deletes the snapshot and commits, and the extents freed
  *     leave the owned list.
@@ -937,6 +944,14 @@ delete_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[]) -> cont
     }
     for extent in freed {
         forget(server, extent.start)
+    }
+    // The last snapshot from before a new volume key was sealed in may have been all that kept the old generations
+    match slopfs.drop_old_generations(server.container, id) {
+        case Ok(dropped) => match dropped {
+            case Some(floor) => log_line.write(server.log, "container_service: volume %'s key generations before % deleted", id, floor)
+            case None => {}
+        }
+        case Error(error) => {}
     }
     return commit_own(server)
 }
@@ -1052,10 +1067,37 @@ commit_own :: fn(server: ptr[mut Server]) -> container.Response {
 }
 
 /**
+ * Keep a volume's keys made again under a new volume key in place of its key records (decisions/0181's F5), durable
+ * with the next commit.
+ *
+ * @param server The container service's state, whose container keeps the records.
+ * @param volume The volume's ID, its own connection's.
+ * @param rekeying The request: the wrap, the new generation and its number; its generations are given apart.
+ * @param generations Every generation the volume had, wrapped again, as the request's items.
+ * @return Done; NotYours for a clone, or generations or a number that don't match the volume's records; Failed if
+ *     they couldn't be kept.
+ */
+rekeyed :: fn(server: ptr[mut Server], volume: u64, rekeying: container.Rekeying, generations: slopfs.NumberedGeneration[]) -> container.Response {
+    wrap := rekeying.wrap
+    added := rekeying.added
+    match slopfs.replace_keys(server.container, volume, &wrap, generations, rekeying.number, &added) {
+        case Ok => {
+            log_line.write(server.log, "container_service: volume % given a new volume key, its floor generation %", volume, rekeying.number)
+            return .Done
+        }
+        case Error(error) => {
+            log_line.write(server.log, "container_service: volume %'s new volume key refused: %", volume, error)
+            return if error == .NotFound { container.Response.NotYours } else { container.Response.Failed }
+        }
+    }
+}
+
+/**
  * Answer a request on a volume's connection, or a snapshot's: Describe, Allocate, Release, OpenBlocks, Abandon, the
  * keys' requests, and Commit.
  *
- * A snapshot's connection is read only: Describe, OpenBlocks, WrapAt and GenerationAt alone, NotYours for the rest.
+ * A snapshot's connection is read only: Describe, OpenBlocks, WrapAt, GenerationAt, GenerationFrom and KeyFloor
+ * alone, NotYours for the rest.
  * Allocate keeps the extent as the volume's, fresh; Release gives one back, kept on the volume's dead list if a
  * snapshot holds it; Abandon undoes every change since the volume's last commit; Commit makes the volume's record
  * durable, its root checked to be in its own live extents.
@@ -1081,6 +1123,8 @@ for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Reque
             case OpenBlocks => {}
             case WrapAt(_) => {}
             case GenerationAt(_) => {}
+            case GenerationFrom(_) => {}
+            case KeyFloor => {}
             case _ => return .NotYours
         }
     }
@@ -1172,6 +1216,40 @@ for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Reque
                 case Ok(found) => {
                     generation :: found or_return .NoMore
                     return .Generation(generation)
+                }
+                case Error(error) => return .Failed
+            }
+        }
+        case GenerationFrom(number) => {
+            match slopfs.generation_from(server.container, volume, number) {
+                case Ok(found) => {
+                    generation :: found or_return .NoMore
+                    return .NumberedGeneration(generation)
+                }
+                case Error(error) => return .Failed
+            }
+        }
+        case KeyFloor => {
+            match slopfs.key_floor(server.container, volume) {
+                case Ok(found) => {
+                    floor :: found or_return .NoMore
+                    return .Floor(floor)
+                }
+                case Error(error) => return .Failed
+            }
+        }
+        case SealedAgain(floor) => {
+            match slopfs.sealed_again(server.container, volume, floor) {
+                case Ok(marked) => return if marked { container.Response.Done } else { container.Response.NotYours }
+                case Error(error) => return .Failed
+            }
+        }
+        case DropOldGenerations => {
+            match slopfs.drop_old_generations(server.container, volume) {
+                case Ok(dropped) => {
+                    floor :: dropped or_return .NoMore
+                    log_line.write(server.log, "container_service: volume %'s key generations before % deleted", volume, floor)
+                    return .Dropped(floor)
                 }
                 case Error(error) => return .Failed
             }

@@ -1163,6 +1163,88 @@ put_into :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockPoi
 }
 
 /**
+ * Make the path to the leaf holding a key writable, if that leaf was sealed with a generation before a floor, so the
+ * next commit seals it again, and every branch above it, with the current one (decisions/0181's F5).
+ *
+ * Found by reading first, so a leaf already sealed again, or written in this transaction, costs nothing. A branch
+ * sealed before the floor has only leaves sealed before it beneath it, since a child written since would have had its
+ * branch written too, so touching every such leaf seals every such branch again.
+ *
+ * @param nodes The transaction's nodes: those on the key's path are made dirty, copied into their dirty set, with
+ *     blocks from their space and the old ones released, when the leaf is older than floor.
+ * @param tree The tree; its root changes when it's copied.
+ * @param key A key, followed down through the branches to its leaf, whether or not a record of it is there.
+ * @param floor The generation the leaf has to be sealed with, or a later one.
+ * @return True if the path was made writable; false if the leaf was sealed with floor or later, is new in this
+ *     transaction, or the tree is empty.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node's copy.
+ * @error Corrupt A node couldn't be read, didn't check out, or is at the wrong level.
+ */
+tree_touch_older :: fn(nodes: ptr[mut Nodes], tree: ptr[mut Tree], key: Key, floor: u32) -> Result[bool, Error] {
+    if cast[u64](tree.root.address) == 0 {
+        return .Ok(false)
+    }
+    leaf :: leaf_pointer(nodes, tree, &tree.root, NO_PARENT, key)?
+    if cast[u32](leaf.generation) >= floor || cast[u64](leaf.birth) == nodes.transaction {
+        return .Ok(false)
+    }
+    touch_into(nodes, tree, &tree.root, NO_PARENT, key)?
+    return .Ok(true)
+}
+
+/**
+ * Find the pointer of the leaf a key leads to, only reading.
+ *
+ * @param nodes The transaction's nodes, only read.
+ * @param tree The tree the node is in.
+ * @param pointer The node's pointer.
+ * @param above Its parent's level, or NO_PARENT for the root.
+ * @param key The key followed down through the branches.
+ * @return The leaf's pointer, a copy.
+ * @error OutOfMemory No memory to read a node.
+ * @error Corrupt A node couldn't be read, didn't check out, or is at the wrong level.
+ */
+leaf_pointer :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[BlockPointer], above: u16, key: Key) -> Result[BlockPointer, Error] {
+    node :: load(nodes, tree, pointer)?
+    if !level_fits(node, above) {
+        done(node)
+        return .Error(.Corrupt)
+    }
+    level :: level_of(node)
+    if level == 0 {
+        done(node)
+        return .Ok(pointer^)
+    }
+    child := entry_at(node, branch_find(node, key)).child
+    done(node)
+    return leaf_pointer(nodes, tree, &child, level, key)
+}
+
+/**
+ * Make every node on the path to the leaf a key leads to writable, changing nothing in them.
+ *
+ * @param nodes The transaction's nodes: those on the path are made dirty, copied into their dirty set.
+ * @param tree The tree the node is in.
+ * @param pointer The node's pointer, changed if it's copied.
+ * @param above Its parent's level, or NO_PARENT for the root.
+ * @param key The key followed down through the branches.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node's copy.
+ * @error Corrupt A node couldn't be read, didn't check out, or is at the wrong level.
+ */
+touch_into :: fn(nodes: ptr[mut Nodes], tree: ptr[Tree], pointer: ptr[mut BlockPointer], above: u16, key: Key) -> Result[void, Error] {
+    node :: writable(nodes, tree, pointer)?
+    if !level_fits(node, above) {
+        return .Error(.Corrupt)
+    }
+    if level_of(node) == 0 {
+        return .Ok
+    }
+    return touch_into(nodes, tree, &entry_at(node, branch_find(node, key)).child, level_of(node), key)
+}
+
+/**
  * Take a key out of a tree.
  *
  * Nodes left empty are dropped, a node left less than a quarter full is merged into its neighbour where both fit,

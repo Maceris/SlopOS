@@ -2301,3 +2301,227 @@ add_generation :: fn(container: ptr[mut Container], id: u64, number: u32, genera
     put_volume_record(container, id, &record)?
     return .Ok
 }
+
+// A new volume key, its floor and the generations it outlives (keys.hsc, reseal.hsc, decisions/0181's F5)
+
+/**
+ * Read the first of a volume's key generation records numbered at least a number, so its generations are listed
+ * across the gaps deleting old ones leaves.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The ID of the volume whose key records they are.
+ * @param number The least number wanted, from 1.
+ * @return The generation and its number; null if there's none at or past number.
+ * @error Corrupt A record is the wrong size or numbered past a u32, or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory to read a node.
+ */
+generation_from :: fn(container: ptr[mut Container], id: u64, number: u32) -> Result[NumberedGeneration?, Error] {
+    record := GenerationRecord.{}
+    item :: tree_next(&container.nodes, &container.volumes, key_of(id, .KeyGeneration, cast[u64](number)),
+        view_of(cast[ptr[mut u8]](&record), size_of(GenerationRecord)))? or_return .Ok(null)
+    if item.key.object != id || item.key.kind != cast[u8](RecordKind.KeyGeneration) {
+        return .Ok(null)
+    }
+    if item.bytes != size_of(GenerationRecord) || item.key.offset == 0 || item.key.offset > 0xffffffff {
+        return .Error(.Corrupt)
+    }
+    return .Ok(NumberedGeneration.{number = cast[u32](item.key.offset), record = record})
+}
+
+/**
+ * Read a volume's key floor.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The ID of the volume whose key records they are.
+ * @return Its floor; null if it has none: it's kept its first volume key, or deleted what its floor outlived.
+ * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory to read a node.
+ */
+key_floor :: fn(container: ptr[mut Container], id: u64) -> Result[KeyFloorRecord?, Error] {
+    record := KeyFloorRecord.{}
+    bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .KeyFloor, 0),
+        view_of(cast[ptr[mut u8]](&record), size_of(KeyFloorRecord)))? or_return .Ok(null)
+    if bytes != size_of(KeyFloorRecord) {
+        return .Error(.Corrupt)
+    }
+    return .Ok(record)
+}
+
+/**
+ * Keep a volume's keys made again under a new volume key (keys.hsc's rekey) in place of its key records: every wrap
+ * deleted and the new one kept, every generation's record replaced by its new one, the new generation added, named
+ * in the volume's record, and its floor kept, Sealing. All durable together with the next commit, so a crash leaves
+ * the old records or the new, never some of each.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The ID of the volume, an encrypted one whose key records are its own (not a clone).
+ * @param wrap The new volume key's wrap, kept at index 0.
+ * @param generations Every generation the volume's records hold, wrapped again, exactly those numbers.
+ * @param number The new generation's number, the one after the newest.
+ * @param added The new generation's record.
+ * @error NotFound The volume isn't there, isn't encrypted, is a clone, or generations or number don't match its records.
+ * @error Corrupt A record or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory for a list or a node.
+ * @error NoSpace No free extent for a node.
+ */
+replace_keys :: fn(container: ptr[mut Container], id: u64, wrap: ptr[WrapRecord], generations: NumberedGeneration[], number: u32,
+    added: ptr[GenerationRecord]) -> Result[void, Error] {
+
+    record := volume_record(container, id)?
+    if record.cipher == cast[u8](Cipher.None) || key_owner_of(id, &record) != id {
+        return .Error(.NotFound)
+    }
+    // Every generation there is, and only those, so none is left wrapped by the old volume key
+    existing : NumberedGeneration[..]
+    defer runtime.array_free(&existing)
+    volume_generations(container, id, &existing)?
+    if existing.count != generations.count {
+        return .Error(.NotFound)
+    }
+    newest : u32 = 0
+    for each in existing {
+        matched := false
+        for given in generations {
+            if given.number == each.number {
+                matched = true
+            }
+        }
+        if !matched {
+            return .Error(.NotFound)
+        }
+        if each.number > newest {
+            newest = each.number
+        }
+    }
+    if number != newest + 1 {
+        return .Error(.NotFound)
+    }
+    // Every wrap there was goes: none of them opens the new volume key
+    wraps : WrapRecord[..]
+    defer runtime.array_free(&wraps)
+    volume_wraps(container, id, &wraps)?
+    for i in 0..<wraps.count {
+        _ = tree_delete(&container.nodes, &container.volumes, key_of(id, .KeyWrap, cast[u64](i)))?
+    }
+    put_wrap(container, id, 0, wrap)?
+    for each in generations {
+        kept := each.record
+        put_generation(container, id, each.number, &kept)?
+    }
+    put_generation(container, id, number, added)?
+    record.generation = cast[u32le](number)
+    put_volume_record(container, id, &record)?
+    floor := KeyFloorRecord.{floor = cast[u32le](number), state = cast[u32le](cast[u32](FloorState.Sealing))}
+    tree_put(&container.nodes, &container.volumes, key_of(id, .KeyFloor, 0), view_of(cast[ptr[u8]](&floor), size_of(KeyFloorRecord)))?
+    return .Ok
+}
+
+/**
+ * Say a volume's live tree is sealed with its floor or later, as its server's sealing again found once it was
+ * committed: its floor Sealed, as of the container's last durable transaction, durable with the next commit.
+ *
+ * @param container The container, mounted, the volume's last step of sealing again committed.
+ * @param id The ID of the volume whose key records they are.
+ * @param floor The floor it was sealed again to, which has to be its record's, still Sealing.
+ * @return True once it's Sealed; false if it has no floor, another, or one Sealed already.
+ * @error Corrupt A record or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory for a node.
+ * @error NoSpace No free extent for a node.
+ */
+sealed_again :: fn(container: ptr[mut Container], id: u64, floor: u32) -> Result[bool, Error] {
+    record := key_floor(container, id)? or_return .Ok(false)
+    if cast[u32](record.floor) != floor || cast[u32](record.state) != cast[u32](FloorState.Sealing) {
+        return .Ok(false)
+    }
+    record.state = cast[u32le](cast[u32](FloorState.Sealed))
+    // The volume's last commit, durable before this, is at or before the container's last
+    record.sealed = cast[u64le](if container.nodes.transaction > 0 { container.nodes.transaction - 1 } else { cast[u64](0) })
+    tree_put(&container.nodes, &container.volumes, key_of(id, .KeyFloor, 0), view_of(cast[ptr[u8]](&record), size_of(KeyFloorRecord)))?
+    return .Ok(true)
+}
+
+/**
+ * Delete the key generations a volume's floor outlived, once nothing the volume reads can need them: its live tree
+ * sealed again, no snapshot of it older than that, and no clone of it, which reads its blocks as they were. Its floor
+ * goes with them. Durable with the next commit.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param id The ID of the volume whose key records they are.
+ * @return The floor, once the generations before it are deleted, for the volume's keys to forget them too; null if
+ *     there's no floor, it isn't Sealed, or a snapshot or a clone may still need them, nothing changed.
+ * @error Corrupt A record or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory for a list or a node.
+ * @error NoSpace No free extent for a node.
+ */
+drop_old_generations :: fn(container: ptr[mut Container], id: u64) -> Result[u32?, Error] {
+    floor :: key_floor(container, id)? or_return .Ok(null)
+    if cast[u32](floor.state) != cast[u32](FloorState.Sealed) {
+        return .Ok(null)
+    }
+    // A snapshot taken before the tree was sealed again may hold blocks sealed with what would go
+    snapshots : NumberedSnapshot[..]
+    defer runtime.array_free(&snapshots)
+    snapshot_records(container, id, &snapshots)?
+    for each in snapshots {
+        if cast[u64](each.record.transaction) < cast[u64](floor.sealed) {
+            return .Ok(null)
+        }
+    }
+    // A clone reads its origin's blocks as they were when it was made
+    at := cast[u64](1)
+    loop {
+        other :: next_volume_id(container, at)? or_break
+        if other != id {
+            match volume_record(container, other) {
+                case Ok(record) => if cast[u64](record.key_owner) == id {
+                    return .Ok(null)
+                }
+                case Error(error) => {}
+            }
+        }
+        at = other + 1
+    }
+    generations : NumberedGeneration[..]
+    defer runtime.array_free(&generations)
+    volume_generations(container, id, &generations)?
+    for each in generations {
+        if each.number < cast[u32](floor.floor) {
+            _ = tree_delete(&container.nodes, &container.volumes, key_of(id, .KeyGeneration, cast[u64](each.number)))?
+        }
+    }
+    _ = tree_delete(&container.nodes, &container.volumes, key_of(id, .KeyFloor, 0))?
+    return .Ok(cast[u32](floor.floor))
+}
+
+/**
+ * Give an encrypted volume open in the container's own process a new volume key, wrapped by a new passphrase, as its
+ * server does (decisions/0181's F5): its keys made again, its records replaced, and its keys taking them; what's
+ * written from now on is sealed with the new generation, its floor, and what was written before is sealed again by
+ * reseal_step.
+ *
+ * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
+ * @param volume The volume, unlocked, its key records its own; its keys take the new volume key and generation.
+ * @param passphrase The new passphrase, secret; the old one opens it no more once this is committed.
+ * @param parameters Argon2id's parameters for it.
+ * @return The new generation's number, its floor.
+ * @error Locked The volume isn't encrypted.
+ * @error NotFound The volume's record isn't there, or it's a clone.
+ * @error Corrupt The keys couldn't be made again, or a record or a node couldn't be read or didn't check out.
+ * @error OutOfMemory No memory for a list or a node.
+ * @error NoSpace No free extent for a node.
+ */
+rekey_volume :: fn(container: ptr[mut Container], volume: ptr[mut Volume], passphrase: u8[], parameters: crypto.Argon2Parameters) -> Result[u32, Error] {
+    keys :: volume.tree.keys or_return .Error(.Locked)
+    generations : NumberedGeneration[..]
+    defer runtime.array_free(&generations)
+    volume_generations(container, volume.id, &generations)?
+    made := Rekeyed.{}
+    defer free_rekeyed(&made)
+    if !rekey(keys, generations, passphrase, parameters, container.nodes.transaction, container.id, volume.id, &made) {
+        return .Error(.Corrupt)
+    }
+    replace_keys(container, volume.id, &made.wrap, made.generations, made.added.number, &made.record)?
+    apply_rekey(keys, &made)
+    volume.dirty = true
+    return .Ok(made.added.number)
+}

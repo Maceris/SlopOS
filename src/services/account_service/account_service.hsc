@@ -60,6 +60,11 @@ PATH_BYTES :: account_records.MAX_NAME_BYTES + 8
 HOME_NAME_BYTES :: account_records.MAX_NAME_BYTES + 5
 /** What a record's file is first written as, its name before it, then renamed over the last one. */
 NEW_SUFFIX :: ".new"
+/**
+ * What a share's next record's file name ends with (decisions/0181's F5): its members left, sealed a new secret, kept
+ * while its volume is given a new key, then renamed over its record.
+ */
+NEXT_SUFFIX :: ".next"
 /** The partition type of a SlopOS container, "SLOPOS CONTAINER", which the accounts volume is put on. */
 CONTAINER_TYPE :: u8.[0x53, 0x4c, 0x4f, 0x50, 0x4f, 0x53, 0x20, 0x43, 0x4f, 0x4e, 0x54, 0x41, 0x49, 0x4e, 0x45, 0x52]
 
@@ -492,28 +497,96 @@ join_shares #constant_time :: fn(service: ptr[mut Service], record: ptr[mut acco
     defer os.free_directory_listing(listed)
     for entry in listed {
         stem :: share_stem(string_bytes(entry.name)) or_continue
-        share := read_share(service, stem) or_continue
-        for &member, i in share.members {
-            if i >= cast[usize](cast[u32](share.member_count)) {
-                break
+        join_share(service, record, &key, root, stem)
+    }
+}
+
+/**
+ * Join one share an account may be a member of: its secret unsealed from its record, its volume opened and linked in
+ * the account's home, and the secret kept.
+ *
+ * A share whose volume a crash left between two keys (unshare) is settled here: if its record's secret opens it, the
+ * next record kept beside it never took and is dropped; if not, the next record's does, and it's put in place.
+ *
+ * @param service The service: the share's records are read, and the next one put in place or dropped, on its
+ *     accounts volume; its volume opened through its storage manager; its secret kept.
+ * @param record The account's record, with keys.
+ * @param key The account's secret key, read only.
+ * @param root The home volume's root, which stays the caller's; the link is made in it.
+ * @param name The share's name, from its record's file name.
+ */
+join_share #constant_time :: fn(service: ptr[mut Service], record: ptr[account_records.AccountRecord], key: ptr[crypto.X25519SecretKey],
+    root: slop_os.Channel, name: u8[]) {
+
+    share := read_share(service, name) or_return void
+    who :: account_records.name_of(record)
+    secret := member_secret(&share, who, key, record) or_return void
+    defer account_records.zero_key(&secret)
+    match open_shared(service, name, &secret) {
+        case OpenedFiles(shared) => {
+            // A new key never given before a crash: the next record kept for it goes
+            if read_share_from(service, name, NEXT_SUFFIX) is_some {
+                drop_next(service, name)
             }
-            if !same(account_records.member_name(member), name) {
-                continue
+            keep_secret(service, name, &secret)
+            linked(service, root, name, who, shared.end)
+            return void
+        }
+        case _ => {}
+    }
+    // A new key given before a crash, its record not in place yet: the next record's secret opens it
+    next := read_share_from(service, name, NEXT_SUFFIX) or_return void
+    next_secret := member_secret(&next, who, key, record) or_return void
+    defer account_records.zero_key(&next_secret)
+    match open_shared(service, name, &next_secret) {
+        case OpenedFiles(shared) => {
+            if promote_next(service, name) {
+                log_line.write(service.log, "account_service: % has its new volume key's record in place", text_of(name))
             }
-            secret := account_records.open_share(&key, record.public_key, &member.sealed, account_records.share_name(&share)) or_break
-            defer account_records.zero_key(&secret)
-            keep_secret(service, account_records.share_name(&share), &secret)
-            match open_shared(service, account_records.share_name(&share), &secret) {
-                case OpenedFiles(shared) => {
-                    if link_share(root, account_records.share_name(&share), shared.end) {
-                        log_line.write(service.log, "account_service: % joined %", text_of(name), text_of(account_records.share_name(&share)))
-                    }
-                    _ = slop_os.handle_close(cast[slop_os.Handle](shared.end))
-                }
-                case _ => {}
-            }
+            keep_secret(service, name, &next_secret)
+            linked(service, root, name, who, shared.end)
+        }
+        case _ => {}
+    }
+}
+
+/**
+ * Unseal a share's secret for one of its members.
+ *
+ * @param share The share's record, only read.
+ * @param name The member's account name.
+ * @param key The member's secret key, read only.
+ * @param record The member's account record, whose public key the secret was sealed to.
+ * @return The secret, for the caller to wipe; null if they aren't a member, or it doesn't unseal.
+ */
+member_secret #constant_time :: fn(share: ptr[account_records.ShareRecord], name: u8[], key: ptr[crypto.X25519SecretKey],
+    record: ptr[account_records.AccountRecord]) -> crypto.Key256? {
+
+    for &member, i in share.members {
+        if i >= cast[usize](cast[u32](share.member_count)) {
+            break
+        }
+        if same(account_records.member_name(member), name) {
+            return account_records.open_share(key, record.public_key, &member.sealed, account_records.share_name(share))
         }
     }
+    return null
+}
+
+/**
+ * Link a share's volume into a member's home, and log it.
+ *
+ * @param service The service, which logs.
+ * @param root The home volume's root, which stays the caller's.
+ * @param name The share's name, the link's.
+ * @param who The member's account name, for the log.
+ * @param shared The share's volume's root, closed here.
+ */
+linked :: fn(service: ptr[mut Service], root: slop_os.Channel, name: u8[], who: u8[], shared: slop_os.Channel) {
+    if link_share(root, name, shared) {
+        log_line.write(service.log, "account_service: % joined %", text_of(who), text_of(name))
+    }
+    _ = slop_os.handle_close(cast[slop_os.Handle](shared))
 }
 
 /**
@@ -588,28 +661,33 @@ share :: fn(service: ptr[mut Service], owner: u8[], name: u8[], member: u8[]) ->
 }
 
 /**
- * Take a member out of a shared volume, for its owner: their sealed secret dropped, every link into the volume
- * revoked, and its next key generation started, sealing what's written from now on.
+ * Take a member out of a shared volume, for its owner (decisions/0181's F5): the members left sealed a new secret, the
+ * volume given a new volume key wrapped by it, every link into it revoked, and what was written before sealed again
+ * with the new key in the background, so nothing on the disk opens with what the member had once it's done.
  *
- * The owner isn't authenticated here, as with share. The other members' links are made again at their next login. The
- * volume's secret stays the same, so what the member could read before the new generation stays readable to them if
- * they kept it.
+ * In an order a crash can't break: the members left's record is written beside the share's and synced, then the
+ * volume's key changed, which its server commits, then the record renamed over the share's and synced. A crash
+ * between leaves the old record opening the volume and the next one dropped, or the next one opening it and put in
+ * place, by the next member to log in (join_share). The owner isn't authenticated here, as with share. The other
+ * members' links are made again at their next login.
  *
- * @param service The service: the share's record is rewritten on its accounts volume, its kept secret opens the
- *     volume, and Rotate is sent to its storage manager.
+ * @param service The service: the share's records are written on its accounts volume, Rekey sent to its storage
+ *     manager, and the new secret kept.
  * @param owner The owner's account name, which has to be the share's first member's; it isn't authenticated.
  * @param name The share's name; Refused if it has no record.
  * @param member The member's account name; the owner can't be taken out.
  * @return Shared with a grant of the volume's root, to write, for the owner's link; Refused if there's no such share,
- *     it's someone else's, or its secret isn't kept; NoSuchAccount if the member isn't one; Failed if the record
- *     couldn't be written or the volume opened. A next generation that couldn't be started is only logged.
+ *     it's someone else's, or its secret isn't kept; NoSuchAccount if the member isn't one; Failed if a member left
+ *     has no key pair, a record couldn't be written or synced, or the volume couldn't take a new key or be opened,
+ *     the member then still in it.
  */
-unshare :: fn(service: ptr[mut Service], owner: u8[], name: u8[], member: u8[]) -> accounts.Response {
+unshare #constant_time :: fn(service: ptr[mut Service], owner: u8[], name: u8[], member: u8[]) -> accounts.Response {
     record := read_share(service, name) or_return .Refused
     count :: cast[usize](cast[u32](record.member_count))
     if count == 0 || !same(account_records.member_name(&record.members[0]), owner) {
         return .Refused
     }
+    // Its owner's opened it since the service started
     secret : crypto.Key256
     defer account_records.zero_key(&secret)
     if !kept_secret(service, name, &secret) {
@@ -621,37 +699,60 @@ unshare :: fn(service: ptr[mut Service], owner: u8[], name: u8[], member: u8[]) 
             found = i
         }
     }
-    if found >= count || found >= record.members.count {
+    if found >= count {
         return .NoSuchAccount
     }
-    for i in found..<(count - 1) {
-        next :: i + 1
-        if i < record.members.count && next < record.members.count {
-            record.members[i] = record.members[next]
+    // The members left, each sealed the new secret
+    next_secret := account_records.random_key()
+    defer account_records.zero_key(&next_secret)
+    next := account_records.ShareRecord.{version = record.version, name_bytes = record.name_bytes, name = record.name}
+    for &each, i in record.members {
+        if i >= count || i == found {
+            continue
+        }
+        left := read_record(service, account_records.member_name(each)) or_return .Failed
+        if !account_records.has_keys(&left) || !add_member(&next, account_records.member_name(each), &left, &next_secret) {
+            return .Failed
         }
     }
-    record.member_count = cast[u32le](cast[u32](count - 1))
-    if !write_share(service, &record) {
+    // Durable before the volume's key changes
+    if !write_share_as(service, &next, NEXT_SUFFIX) || !sync_store(service) {
+        return .Failed
+    }
+    out := os.Outgoing.{}
+    rekeying :: os.begin[storage.Request](&out)
+    passphrase := compiler.declassify(next_secret)
+    rekeying^ = .Rekey(storage.VolumeRekeyed.{partition = service.container, name = shared_name(&out, name),
+        passphrase = os.append(&out, passphrase[0..<32])})
+    for i in cast[usize](0)..<32 {
+        passphrase[i] = 0
+    }
+    answered :: ask_storage(service, &out)
+    wipe_out(&out)
+    generation := cast[u32](0)
+    match answered {
+        case Rotated(floor) => generation = floor
+        case _ => {
+            drop_next(service, name)
+            log_line.write(service.log, "account_service: % couldn't be given a new volume key, so % is still in it", text_of(name), text_of(member))
+            return .Failed
+        }
+    }
+    keep_secret(service, name, &next_secret)
+    if !promote_next(service, name) {
         return .Failed
     }
     revoked := cast[u64](0)
-    match open_shared(service, name, &secret) {
+    match open_shared(service, name, &next_secret) {
         case OpenedFiles(root) => {
             revoked = revoke_all(root.end)
             _ = slop_os.handle_close(cast[slop_os.Handle](root.end))
         }
         case _ => return .Failed
     }
-    out := os.Outgoing.{}
-    rotating :: os.begin[storage.Request](&out)
-    rotating^ = .Rotate(storage.VolumeNamed.{partition = service.container, name = shared_name(&out, name)})
-    rotated :: match ask_storage(service, &out) {
-        case Rotated(generation) => true
-        case _ => false
-    }
-    log_line.write(service.log, "account_service: took % out of %, revoked % links into it, and % its next key generation", text_of(member), text_of(name),
-        revoked, if rotated { "started" } else { "couldn't start" })
-    return root_grant(service, name, &secret)
+    log_line.write(service.log, "account_service: took % out of %, revoked % links into it, and gave it a new volume key, sealing with key generation %",
+        text_of(member), text_of(name), revoked, generation)
+    return root_grant(service, name, &next_secret)
 }
 
 /**
@@ -996,11 +1097,24 @@ shared_name :: fn(out: ptr[mut os.Outgoing], name: u8[]) -> slop_os.Relative[u8]
  *     of this name, with at most MAX_MEMBERS members.
  */
 read_share :: fn(service: ptr[mut Service], name: u8[]) -> account_records.ShareRecord? {
+    return read_share_from(service, name, SHARE_SUFFIX)
+}
+
+/**
+ * Read a share's record from a file of its name and a suffix.
+ *
+ * @param service The service, from whose accounts volume the file, <name><suffix>, is read.
+ * @param name The share's name, which the record read has to have too.
+ * @param suffix SHARE_SUFFIX for its record, or NEXT_SUFFIX for the next one, kept while its volume takes a new key.
+ * @return The record; null for a name that isn't valid_name's, no file, or one that isn't a record of this version,
+ *     of this name, with at most MAX_MEMBERS members.
+ */
+read_share_from :: fn(service: ptr[mut Service], name: u8[], suffix: string) -> account_records.ShareRecord? {
     if !account_records.valid_name(name) {
         return null
     }
     path : u8[PATH_BYTES]
-    text :: path_of(name, SHARE_SUFFIX, &path)
+    text :: path_of(name, suffix, &path)
     contents :: os.read_entire_file_in(service.store, text) or_return null
     defer runtime.free_array(bit_cast[u8[]](contents))
     if contents.count != size_of(account_records.ShareRecord) {
@@ -1030,16 +1144,57 @@ read_share :: fn(service: ptr[mut Service], name: u8[]) -> account_records.Share
  * @return True once it's in place.
  */
 write_share :: fn(service: ptr[mut Service], record: ptr[account_records.ShareRecord]) -> bool {
+    return write_share_as(service, record, SHARE_SUFFIX)
+}
+
+/**
+ * Write a share's record as a file of its name and a suffix: to a new file, then moved over the last, so a write that
+ * stops leaves the old one whole. Not synced.
+ *
+ * @param service The service, on whose accounts volume <name>.new is written, then renamed over <name><suffix>.
+ * @param record The share's record, read only; its name names the file, and all of it is written as it's laid out.
+ * @param suffix SHARE_SUFFIX for its record, or NEXT_SUFFIX for the next one.
+ * @return True once it's in place.
+ */
+write_share_as :: fn(service: ptr[mut Service], record: ptr[account_records.ShareRecord], suffix: string) -> bool {
     name :: account_records.share_name(record)
     fresh : u8[PATH_BYTES]
     kept : u8[PATH_BYTES]
     fresh_path :: path_of(name, NEW_SUFFIX, &fresh)
-    kept_path :: path_of(name, SHARE_SUFFIX, &kept)
+    kept_path :: path_of(name, suffix, &kept)
     contents :: string_of(cast[ptr[u8]](record), size_of(account_records.ShareRecord))
     if os.write_entire_file_in(service.store, fresh_path, contents) is_some {
         return false
     }
     return os.rename_in(service.store, fresh_path, kept_path) is_none
+}
+
+/**
+ * Put a share's next record in place of its record, once its volume's taken the new key the next one's secret is,
+ * and sync it.
+ *
+ * @param service The service, on whose accounts volume <name>.next is renamed over <name>.share, and synced.
+ * @param name The share's name.
+ * @return True once it's in place and synced.
+ */
+promote_next :: fn(service: ptr[mut Service], name: u8[]) -> bool {
+    next : u8[PATH_BYTES]
+    kept : u8[PATH_BYTES]
+    if os.rename_in(service.store, path_of(name, NEXT_SUFFIX, &next), path_of(name, SHARE_SUFFIX, &kept)) is_some {
+        return false
+    }
+    return sync_store(service)
+}
+
+/**
+ * Delete a share's next record, its volume not given the key the next one's secret is.
+ *
+ * @param service The service, on whose accounts volume <name>.next is deleted, if it's there.
+ * @param name The share's name.
+ */
+drop_next :: fn(service: ptr[mut Service], name: u8[]) {
+    next : u8[PATH_BYTES]
+    _ = os.remove_in(service.store, path_of(name, NEXT_SUFFIX, &next), false)
 }
 
 /**
@@ -1464,6 +1619,16 @@ write_record :: fn(service: ptr[mut Service], record: ptr[account_records.Accoun
     if os.rename_in(service.store, fresh_path, kept_path) is_some {
         return false
     }
+    return sync_store(service)
+}
+
+/**
+ * Make what's been written on the accounts volume durable: a Sync on its root's own connection.
+ *
+ * @param service The service, whose accounts volume's root is asked, the answer waited for.
+ * @return True once it's synced; false if it couldn't be asked, or didn't answer Done.
+ */
+sync_store :: fn(service: ptr[mut Service]) -> bool {
     out := os.Outgoing.{}
     syncing :: os.begin[dir.Request](&out)
     syncing^ = .Sync

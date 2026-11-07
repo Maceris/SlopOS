@@ -53,6 +53,11 @@ LOAN_RIGHTS :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_CPU_BUDGET_BIND) | c
 MAX_BUFFER_BYTES : u64 : 16 << 20
 /** 512-byte sectors in a 4 KiB block. */
 SECTORS_PER_BLOCK : u64 : 8
+/** How many blocks a step of sealing again after a new volume key seals (decisions/0181's F5). */
+RESEAL_BLOCKS : u64 : 16
+/** How long the server waits for a client between steps of sealing again, in nanoseconds: 2 ms. */
+RESEAL_PAUSE : u64 : 2_000_000
+
 /** How long after a change it's committed without a Sync, in nanoseconds: a second. */
 COMMIT_NANOSECONDS : u64 : 1000000000
 
@@ -208,6 +213,13 @@ Server :: struct {
     on_loan : bool,
     /** Where the next search for a request starts, among connections of the same priority. */
     next_first : usize,
+    /**
+     * The floor its blocks are being sealed again to after a new volume key (decisions/0181's F5), a step at a time
+     * while it's otherwise idle; 0 when they aren't.
+     */
+    resealing : u32,
+    /** Where the next step of sealing again walks from. */
+    reseal_from : slopfs.Key,
 }
 
 /**
@@ -274,6 +286,10 @@ main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clie
             _ = commit(server)
         }
     }
+    if !described.read_only && (server.volume.tree.keys is_some) {
+        // A new volume key's sealing again, gone on with, or its old generations deleted if nothing needs them now
+        resume_floor(server)
+    }
     name :: string_of(&described.record.name[0], cast[usize](cast[u16](described.record.name_bytes)))
     log_line.write(server.log, "volume_server: serving volume % (%), from transaction %", described.id, name, described.transaction)
     // The listener is a connection to the root, as any client's Connect on it gives another
@@ -303,8 +319,16 @@ main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clie
             _ = commit(server)
             continue
         }
+        // Sealing again goes on a step at a time, clients' requests served between each
+        if server.resealing != 0 {
+            reseal_some(server)
+        }
+        until := if server.commit_at != 0 { server.commit_at } else { slop_os.NO_DEADLINE }
+        if server.resealing != 0 && now + RESEAL_PAUSE < until {
+            until = now + RESEAL_PAUSE
+        }
         packets : slop_os.Packet[8]
-        _ = slop_os.port_wait(server.port, packets, if server.commit_at != 0 { server.commit_at } else { slop_os.NO_DEADLINE })
+        _ = slop_os.port_wait(server.port, packets, until)
     }
 }
 
@@ -2055,6 +2079,7 @@ wait_for_unlock :: fn(server: ptr[mut Server], end: slop_os.Channel) -> ptr[mut 
                 response = if unlocked { .Unlocked } else { .WrongKey }
             }
             case Rotate => response = .Failed
+            case Rekey(_) => response = .Failed
             case Commit => response = .Failed
             case IssueTo(_) => response = .Refused(.Unavailable)
             case OpenIssued(_) => response = .Refused(.Unavailable)
@@ -2126,18 +2151,8 @@ unlock_keys :: fn(server: ptr[mut Server], passphrase: u8[], keys: ptr[mut slopf
     }
     generations : slopfs.NumberedGeneration[..]
     defer runtime.array_free(&generations)
-    number : u32 = 1
-    loop {
-        match ask(server, .GenerationAt(number)) {
-            case Generation(record) => {
-                if runtime.array_try_add(&generations, slopfs.NumberedGeneration.{number = number, record = record}) != null {
-                    return false
-                }
-            }
-            case NoMore => break
-            case _ => return false
-        }
-        number += 1
+    if !listed_generations(server, &generations) {
+        return false
     }
     match slopfs.unlock(server.described.container, key_owner(server), server.described.record, wraps, generations, passphrase, keys) {
         case Ok => return true
@@ -2196,6 +2211,7 @@ serve_control :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inco
                 }
             }
             case Rotate => response = rotate(server)
+            case Rekey(given) => response = rekey(server, os.items(into, given))
             case Commit => {
                 response = if server.described.read_only || !server.volume.dirty || commit(server) { .Committed } else { .Failed }
             }
@@ -2238,11 +2254,15 @@ rotate :: fn(server: ptr[mut Server]) -> volume_protocol.Response {
     }
     previous :: keys.current
     // Numbered after the newest of the key records', which a clone shares with its origin
+    generations : slopfs.NumberedGeneration[..]
+    defer runtime.array_free(&generations)
+    if !listed_generations(server, &generations) {
+        return .Failed
+    }
     newest : u32 = 0
-    loop {
-        match ask(server, .GenerationAt(newest + 1)) {
-            case Generation(record) => newest += 1
-            case _ => break
+    for each in generations {
+        if each.number > newest {
+            newest = each.number
         }
     }
     keys.current = newest
@@ -2257,12 +2277,172 @@ rotate :: fn(server: ptr[mut Server]) -> volume_protocol.Response {
     match ask(server, .AddGeneration(container.AddedGeneration.{number = keys.current, record = record})) {
         case Done => {
             log_line.write(server.log, "volume_server: volume % sealing with key generation %", server.described.id, keys.current)
+            server.described.record.generation = cast[u32le](keys.current)
             return .Rotated(keys.current)
         }
         case _ => {
             slopfs.drop_generation(keys, previous)
             return .Failed
         }
+    }
+}
+
+/**
+ * List every key generation record the volume's key records hold, oldest first, across the gaps deleting old ones
+ * leaves.
+ *
+ * @param server The server, whose container service is asked, one generation at a time.
+ * @param found Where they're added, with context's allocator; the caller's to free either way.
+ * @return Whether they were all listed; false if one couldn't be read or kept.
+ */
+listed_generations :: fn(server: ptr[mut Server], found: ptr[mut slopfs.NumberedGeneration[..]]) -> bool {
+    number : u32 = 1
+    loop {
+        match ask(server, .GenerationFrom(number)) {
+            case NumberedGeneration(each) => {
+                if runtime.array_try_add(found, each) != null || each.number == 0xffffffff {
+                    return false
+                }
+                number = each.number + 1
+            }
+            case NoMore => return true
+            case _ => return false
+        }
+    }
+}
+
+/**
+ * Give the volume a new volume key, wrapped by a new passphrase (decisions/0181's F5): what's changed committed first,
+ * every generation's key wrapped again and a new generation made here, kept by the container service in place of the
+ * key records there were, and committed before it's answered, so the old passphrase opens it no more once it says so.
+ * Then what was written before is sealed again with the new generation, a step at a time (reseal_some).
+ *
+ * @param server The server, whose volume is served: what's dirty is committed, its keys take the new volume key and
+ *     generation, and it starts sealing again.
+ * @param passphrase The new passphrase's bytes, as Rekey gave them; read, not kept.
+ * @return Rotated with the new generation, the floor; NotEncrypted for a plain volume; Failed for a snapshot, a
+ *     clone, a commit that failed, or keys that couldn't be made again or kept, the old ones still opening it.
+ */
+rekey :: fn(server: ptr[mut Server], passphrase: u8[]) -> volume_protocol.Response {
+    keys :: server.volume.tree.keys or_return .NotEncrypted
+    if server.described.read_only || key_owner(server) != server.described.id {
+        return .Failed
+    }
+    if server.volume.dirty && !commit(server) {
+        return .Failed
+    }
+    generations : slopfs.NumberedGeneration[..]
+    defer runtime.array_free(&generations)
+    if !listed_generations(server, &generations) {
+        return .Failed
+    }
+    made := slopfs.Rekeyed.{}
+    defer slopfs.free_rekeyed(&made)
+    if !slopfs.rekey(keys, generations, passphrase, slopfs.MADE_PASSPHRASE, server.nodes.transaction, server.described.container,
+        server.described.id, &made) {
+        log_line.write(server.log, "volume_server: volume %'s keys couldn't be made again", server.described.id)
+        return .Failed
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[container.Request](&out)
+    request^ = .Rekey(container.Rekeying.{wrap = made.wrap, generations = os.append(&out, made.generations[0..<made.generations.count]),
+        number = made.added.number, added = made.record})
+    into := os.Incoming.{}
+    match ask_built(&server.own, &out, &into) {
+        case Done => {}
+        case _ => return .Failed
+    }
+    slopfs.apply_rekey(keys, &made)
+    // Committed now, the new records with it, so the old passphrase opens nothing once this is answered
+    server.volume.dirty = true
+    if !commit(server) {
+        return .Failed
+    }
+    // Its record names the new generation now, which a passphrase checked again is checked against
+    server.described.record.generation = cast[u32le](made.added.number)
+    server.resealing = made.added.number
+    server.reseal_from = slopfs.Key.{}
+    log_line.write(server.log, "volume_server: volume % given a new volume key, sealing with key generation %", server.described.id, made.added.number)
+    return .Rotated(made.added.number)
+}
+
+/**
+ * Go on with a new volume key's work on starting: sealing again, if its floor is still Sealing, from the start, which
+ * only reads what's done already; or deleting the generations before it, if it's Sealed and nothing needs them now.
+ *
+ * @param server The server, whose volume is served, writable and unlocked; its resealing is set from its floor.
+ */
+resume_floor :: fn(server: ptr[mut Server]) {
+    match ask(server, .KeyFloor) {
+        case Floor(floor) => {
+            if cast[u32](floor.state) == cast[u32](slopfs.FloorState.Sealing) {
+                server.resealing = cast[u32](floor.floor)
+                server.reseal_from = slopfs.Key.{}
+                log_line.write(server.log, "volume_server: volume % goes on sealing again with key generation %", server.described.id, server.resealing)
+            }
+            else {
+                drop_old(server)
+            }
+        }
+        case _ => {}
+    }
+}
+
+/**
+ * Take a step of sealing the volume again with its floor, RESEAL_BLOCKS blocks, and commit it. Once the walk is done,
+ * the floor is Sealed, and the generations before it deleted if nothing needs them.
+ *
+ * @param server The server, sealing again: its reseal_from advances, and its resealing is 0 once it's done or failed,
+ *     which is logged.
+ */
+reseal_some :: fn(server: ptr[mut Server]) {
+    floor :: server.resealing
+    match slopfs.reseal_step(server.volume, floor, server.reseal_from, RESEAL_BLOCKS) {
+        case Ok(next) => {
+            if server.volume.dirty && !commit(server) {
+                server.resealing = 0
+                return void
+            }
+            match next {
+                case Some(key) => server.reseal_from = key
+                case None => {
+                    server.resealing = 0
+                    match ask(server, .SealedAgain(floor)) {
+                        case Done => {
+                            log_line.write(server.log, "volume_server: volume % sealed again with key generation %", server.described.id, floor)
+                            drop_old(server)
+                        }
+                        case _ => log_line.write(server.log, "volume_server: volume % sealed again, but its floor wasn't kept", server.described.id)
+                    }
+                }
+            }
+        }
+        case Error(error) => {
+            server.resealing = 0
+            log_line.write(server.log, "volume_server: volume % couldn't be sealed again: %", server.described.id, error)
+        }
+    }
+}
+
+/**
+ * Delete the key generations before the volume's floor, if nothing needs them now, and have its keys forget them;
+ * committed. Snapshots from before keep them until they're deleted, which deletes them then (the container service).
+ *
+ * @param server The server, whose volume is served, unlocked.
+ */
+drop_old :: fn(server: ptr[mut Server]) {
+    match ask(server, .DropOldGenerations) {
+        case Dropped(floor) => {
+            match server.volume.tree.keys {
+                case Some(keys) => _ = slopfs.forget_generations_below(keys, floor)
+                case None => {}
+            }
+            server.volume.dirty = true
+            _ = commit(server)
+            log_line.write(server.log, "volume_server: volume % deleted its key generations before %", server.described.id, floor)
+        }
+        case _ => log_line.write(server.log, "volume_server: volume % keeps its key generations before its floor while a snapshot from before may need them",
+            server.described.id)
     }
 }
 

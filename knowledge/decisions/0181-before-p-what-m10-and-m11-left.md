@@ -157,3 +157,43 @@ Seven parts, before P, each with an as-built record:
     often to copy.
 - **Tests**: `test_pager` reads paged memory across two pages not yet supplied, is refused writing it, and once its
   pager's port is gone reads `ObjectGone`; `test_memory` sees the faulting writer's process end killed.
+
+## As Built, F5 (2026-11-07)
+- **Snapshots let expire, not sealed again** (chosen with the project's owner, in place of sealing snapshots again as
+  planned): only the live tree is sealed again; the generations before the floor are kept while a snapshot from
+  before may hold blocks sealed with them, and deleted once it's gone. The automatic and asked snapshots go within a
+  day (`0179`), so they're deleted then; a snapshot named otherwise keeps them until it's deleted, and a clone of the
+  volume keeps them for as long as it's there.
+- **slopfs** (`keys.hsc`, `volume.hsc`, `tree.hsc`, `reseal.hsc`): `rekey` makes a new volume key, wraps it by a new
+  passphrase, wraps every generation's key again by it, and makes the next generation, the floor; `replace_keys`
+  keeps all of it in place of the volume's key records, every old wrap deleted, with a new record, the key floor
+  (`RecordKind.KeyFloor`, `KeyFloorRecord`: the floor, Sealing or Sealed, and the transaction it was Sealed at), all
+  durable with one commit, so a crash leaves the old records or the new. `reseal_step` walks the live tree in key order
+  from where the last step stopped, a few blocks at a time: a leaf sealed before the floor is made writable with the
+  branches above it (`tree_touch_older`, which reads first, so what's done costs only reads), and a chunk sealed
+  before it is read and written anew; a branch sealed before the floor has only such leaves beneath it, so touching
+  them seals it again too. `sealed_again` marks the floor Sealed; `drop_old_generations` deletes the generations before
+  it, and the floor, once it's Sealed, no snapshot is older than that, and no volume is a clone of it.
+  `generation_from` lists generations across the gaps that leaves. `rekey_volume` does it all in the container's own
+  process, for the hosted tests.
+- **The container protocol** gains `GenerationFrom`, `Rekey`, `KeyFloor`, `SealedAgain` and `DropOldGenerations`; the
+  container service deletes the old generations after a snapshot's deletion too, so the last snapshot from before
+  expiring is what lets them go.
+- **The volume server**: `Rekey`, on the volume protocol and the storage manager's (`storage.Rekey`), commits what's
+  changed, makes the keys again, has the container service keep them, takes them, and commits before it answers;
+  then, between clients' requests, it seals a step of 16 blocks again every 2 ms or so, each step committed, goes on
+  from the start after a restart (`resume_floor`), and once done marks the floor Sealed and deletes the old
+  generations if nothing needs them, its keys forgetting them. Its unlocking and rotating list generations across
+  gaps, and its own copy of the volume's record names the newest generation, which a passphrase checked again is
+  checked against.
+- **The account service's `unshare`**: the members left are sealed a new secret in the share's next record,
+  `<name>.next`, written and synced; the volume is given a new key wrapped by that secret (Rekey); then the next
+  record is renamed over the share's and synced, the secret kept, and every link into the volume revoked. A crash
+  between leaves the old record opening the volume, whose next record the next member to log in drops, or the next
+  record opening it, which that login puts in place (`join_share`). A member taken out has nothing that opens the
+  volume once its old generations are deleted.
+- **Tests**: hosted, a volume given a new key opens with the new passphrase and not the old, a new key not committed
+  leaves the old passphrase opening it, a step of sealing again not committed loses nothing, sealing again takes many
+  steps and leaves every chunk sealed with the floor, and with the old generation's record deleted the volume opens and
+  reads whole; a snapshot from before keeps the old generations until it's deleted. The sharing boot test sees bob
+  taken out, the volume sealed again and its old generation deleted, on both architectures.

@@ -357,6 +357,12 @@ stopped under pressure started again when their session's shown; **F4** kept gra
 end to end; **F5** a shared volume given a new volume key when a member's taken out, and its old blocks sealed again; **F6** R5's chaos tests; **F7**
 a development generation's command line edited before it boots.
 
+Done 2026-11-07, each part's As Built in `0181`. The chaos tests found more than they were planned to: a thread's
+fault now ends its process, and no service maps memory another process owns (`memory_read` reads every kind but
+device memory, paged memory waited for from its pager), so a client or driver that ends is an error to its server,
+not a fault. A shared volume's snapshots from before a member's taken out are let expire rather than sealed again,
+keeping the old generations until they go.
+
 ## P — Power (L3)
 
 - The ACPI service (`0039`, `services.md`): an AML interpreter, scoped to what the platform needs: the namespace,
@@ -489,9 +495,9 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | M9 | done 2026-10-31 (`decisions/0092` to `0126`): the scheduler, clock and events services, the bundle store and paged memory, the config store, generations and updates, installations, shared libraries and substitution, and 9f's follow-ups |
 | Catch-up | done 2026-10-30, in four parts (`decisions/0098` to `0101`): what M5 to M9 planned and hadn't built, the house-rule checks, and deferred items done or placed in M10, M12 and P |
 | Perf | done 2026-10-31 (`decisions/0097`, `0112`, `0127` to `0130`): benchmarks held to baselines, tickless idle, large pages, CPU loans in the storage servers |
-| R | planned 2026-10-29 (`decisions/0096`): R1 to R4 done 2026-10-30 (`0104` to `0106`, `0112`); R5 and R6 not started |
+| R | planned 2026-10-29 (`decisions/0096`): R1 to R4 done 2026-10-30 (`0104` to `0106`, `0112`); R5 done 2026-11-07 (`0181`'s F6); R6 not started |
 | B | done 2026-10-31 (`decisions/0131` to `0135`): Hemera's UEFI target, SlopOS's bootloader, boot counting and recovery, ISOs through it, Limine and BIOS boot removed |
 | M10 | done 2026-11-02 (`decisions/0136` to `0161`): the terminal and input services and the trusted path, accounts, login and sessions, the powerbox and sharing |
 | M11 | done 2026-11-06 (`decisions/0162` to `0180`): the shell, its language, calls through manifests, pipelines, interactive use, and the tools and scripts |
-| Before P | planned 2026-11-07 (`decisions/0181`), in seven parts, F1 to F7: what M10, M11, R and B left; not started |
+| Before P | done 2026-11-07 (`decisions/0181`), in seven parts, F1 to F7: what M10, M11, R and B left, with what the chaos tests found fixed |
 | M12–M16, P, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
