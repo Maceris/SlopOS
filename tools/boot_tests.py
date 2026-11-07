@@ -1018,6 +1018,10 @@ TESTS = [
     # A binding slot read without a lock while it's made anew, as one kept after its port let it go is (decisions/0052)
     ("reads a binding slot whole on other CPUs while it's made anew", 0, ["--command-line=test_exit test_binding_reuse",
         "--expect-line=[info] test_binding_reuse: 1 test: 1 passed, 0 failed", "--", "-smp", "2"]),
+    # An object moved to another owner, as take_one moves an owning handle, while it's destroyed (decisions/0051)
+    ("moves an object to another owner on one CPU while another destroys it, and leaves it on neither list", 0, [
+        "--command-line=test_exit test_ownership_race",
+        "--expect-line=[info] test_ownership_race: 1 test: 1 passed, 0 failed", "--", "-smp", "2"]),
     ("routes a device's interrupts through the I/O APIC", 0, ["--command-line=test_exit test_ioapic",
         "--expect-line=[info] test_ioapic: test the_test_device_is_routed_to_the_boot_cpu ... ok",
         "--expect-line=[info] test_ioapic: test the_test_devices_interrupts_arrive ... ok"]),

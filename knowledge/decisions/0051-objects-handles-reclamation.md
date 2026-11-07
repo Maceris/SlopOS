@@ -54,3 +54,21 @@ system calls. Building them settled what `0008` left to the implementation.
   object being made. Found with `0052`'s binding fault, which had the same cause.
 - **What it does now**: `new_object` zeroes everything but the generation (`zero_but_generation`), so the generation's
   bytes aren't written at all while the slot is made anew.
+
+## Found later: an object moved between owners while it's destroyed (2026-11-07)
+- **What was wrong**: `take_one` moves an owning handle's object from the sender's owned list to the taker's:
+  `disown`, then `adopt`. `disown` read the object's owner without a lock to find its list; `adopt` set the owner
+  before it took the new list's lock, set the object linked under that lock, and didn't refuse an object being
+  destroyed. So a destroy on another CPU, whose `disown` read the old owner, could lock the old list, see the object
+  linked (on the new list) and unlink it by the new list's links, tearing both; or it could find the object on no
+  list before the move linked it, and leave it, freed, on the new owner's list.
+- **What it does now**: an object's `owned_by` names the process whose list it's on, 0 for none, and only the holder
+  of that list's lock changes it. `disown` reads it, takes that list's lock, and unlinks only if it still names that
+  list, else looks again. `adopt` links the object and sets `owned_by` under the new list's lock, then, after a full
+  fence, reads whether the object's dying: `destroy_object` marks it dying with a full barrier before its `disown`, so
+  either `adopt` sees it and unlinks it again (`ObjectGone`), or the destroy's `disown` finds it on the new list and
+  waits for the lock. The owner field is written atomically, for the walks up the owner chain that read it unlocked.
+- **Test**: `test_ownership_race` (`src/kernel/ownership_race_test.hsc`, with `-smp 2`): another CPU moves 4,000
+  ports from one process to another while the boot CPU destroys each, at a different moment each round; then neither
+  process owns anything. On the old code it failed on both architectures (79 rounds of 4,000 left a list torn or holding
+  the destroyed port on x86-64, 3,907 on AArch64).

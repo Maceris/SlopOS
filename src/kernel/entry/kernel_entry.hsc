@@ -77,7 +77,8 @@ user_fault #never_returns :: fn(registers: ptr[mut arch.UserRegisters], fault: a
  * What it interrupted in user mode is kept in the CPU's current thread; a CPU leaving idle records the epoch first
  * (decisions/0128). Then: a timer interrupt fires the deadlines due, and at a tick the next thread runs round robin;
  * a Stop IPI halts this CPU for good; a TlbFlush IPI flushes for the shootdown waiting on this CPU; a Reschedule IPI
- * only brings the CPU here (and serves test_shootdown and test_binding_reuse); a device interrupt is routed
+ * only brings the CPU here (and serves test_shootdown, test_binding_reuse and test_ownership_race); a device interrupt
+ * is routed
  * (handle_device_interrupt).
  * Otherwise a thread that should run before the current one runs, or the current one goes on. Runs on the CPU's
  * kernel stack, interrupts disabled.
@@ -104,6 +105,7 @@ interrupt #never_returns :: fn(from: Interrupted, source: InterruptSource) {
             if kind == .Reschedule {
                 kernel.read_for_shootdown_test()
                 kernel.read_for_binding_reuse_test()
+                kernel.move_for_ownership_race_test()
             }
         }
         case Device(id) => kernel.handle_device_interrupt(id)

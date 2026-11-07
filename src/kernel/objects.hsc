@@ -35,14 +35,21 @@ ObjectHeader :: struct {
     kind : slop_os.ObjectKind,
     /** 1 once its destruction starts: lookups fail from then on, and it's destroyed only once. */
     dying : u32,
-    /** The Process that owns it, as an address, 0 for one owned by the kernel itself. */
+    /**
+     * The Process that owns it, as an address, 0 for one owned by the kernel itself. Written atomically, under the new
+     * owner's OwnedList lock when it's adopted, so a reader without a lock sees one owner or the other, whole.
+     */
     owner : u64,
     /** The next object its owner owns, as an address, 0 at the list's end; under the owner's OwnedList lock. */
     owned_next : u64,
     /** The previous object its owner owns, as an address, 0 at the list's start; under the owner's OwnedList lock. */
     owned_previous : u64,
-    /** Whether it's linked on its owner's list; under the owner's OwnedList lock. */
-    owned : bool,
+    /**
+     * The Process whose list it's linked on, as an address, 0 for none: written atomically, only by the holder of that
+     * list's lock, from 0 to the owner by adopt, and back by disown or take_owned. disown reads it without a lock to
+     * find the list, then again under its lock, so it never unlinks from a list it isn't on.
+     */
+    owned_by : u64,
     /** The next object on its CPU's limbo list once it's destroyed, as an address, 0 at the list's end. */
     limbo_next : u64,
     /** The epoch it was destroyed in: it's freed once every online CPU has passed a quiescent point after it. */
@@ -76,6 +83,8 @@ ObjectError :: enum {
     OutOfMemory,
     /** The owner it would belong to is being destroyed. */
     OwnerGone,
+    /** The object itself is being destroyed, as a handle to it is taken by its new owner. */
+    ObjectGone,
     /** The budget paying for it can't (memory_budgets.hsc). */
     BudgetExceeded,
 }
@@ -337,26 +346,32 @@ zero_but_generation :: fn(address: u64, size: u64, generation_at: u64) {
 }
 
 /**
- * Give an object to its owner, unless the owner is being destroyed, when the object would outlive it.
+ * Give an object to its owner, unless the owner or the object is being destroyed, when the object would outlive it, or
+ * be left on a list once it's gone.
  *
- * Takes the owner's OwnedList lock, at rank ObjectList. The object's owner field is set even when this fails, so the
- * caller destroys it (disown then finds it isn't on the list).
+ * Takes the owner's OwnedList lock, at rank ObjectList. The object's linked first, and its owned_by set, then whether
+ * it's dying is read, with a full fence between: destroy_object marks it dying, with a full barrier, before it disowns
+ * it, so either this sees it dying and unlinks it again, or disown sees it on this list and waits for the lock to
+ * unlink it (decisions/0051's "Found later"). The object's owner field is set even when this fails, so the caller
+ * destroys it.
  *
  * @param owner The Process that owns it from now on, as an address, or 0 for the kernel, which keeps no list.
  * @param object The object, as an address: one not on any owner's list.
  * @return Nothing; the object is on the owner's list, and destroyed with it.
  * @error OwnerGone The owner is being destroyed; the object isn't on its list.
+ * @error ObjectGone The object is being destroyed; it isn't on the owner's list.
  */
 adopt :: fn(owner: u64, object: u64) -> Result[void, ObjectError] {
     header :: cast[ptr[mut ObjectHeader]](object)
-    header.owner = owner
     if owner == 0 {
+        intrinsics.atomic_store_u64_release(&header.owner, 0)
         return .Ok
     }
     process :: cast[ptr[mut Process]](owner)
     list :: &process.owned
     lock_at(&list.lock, .ObjectList)
     defer unlock_at(&list.lock, .ObjectList)
+    intrinsics.atomic_store_u64_release(&header.owner, owner)
     // Under the lock, so destroying the owner either sees it, or this sees the owner dying
     if intrinsics.atomic_load_u32_acquire(&process.header.dying) != 0 {
         return .Error(.OwnerGone)
@@ -367,29 +382,51 @@ adopt :: fn(owner: u64, object: u64) -> Result[void, ObjectError] {
         cast[ptr[mut ObjectHeader]](list.first).owned_previous = object
     }
     list.first = object
-    header.owned = true
+    intrinsics.atomic_store_u64_release(&header.owned_by, owner)
+    // Linked, then dying read: a destroy that marked it first is seen here, and one that marks it after finds it here
+    intrinsics.fence_sequentially_consistent()
+    if intrinsics.atomic_load_u32_acquire(&header.dying) != 0 {
+        unlink_owned(list, object)
+        return .Error(.ObjectGone)
+    }
     return .Ok
 }
 
 /**
- * Take an object off its owner's list, if it's on it; its owner field stays as it was.
+ * Take an object off whichever owner's list it's on, if any; its owner field stays as it was.
  *
- * Takes the owner's OwnedList lock, at rank ObjectList.
+ * Its owned_by is read to find the list, that list's lock taken, and owned_by read again: if it's moved meanwhile, to
+ * another list or none, the lock's let go and it's looked for again, so it's unlinked only from the list it's on, by
+ * the holder of that list's lock.
  *
- * @param object The object, as an address; one owned by the kernel (owner 0) is left alone.
+ * @param object The object, as an address; one on no list, as one owned by the kernel (owner 0) is, is left alone.
  */
 disown :: fn(object: u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
-    if header.owner == 0 {
-        return void
+    loop {
+        owned_by :: intrinsics.atomic_load_u64_acquire(&header.owned_by)
+        if owned_by == 0 {
+            return void
+        }
+        list :: &cast[ptr[mut Process]](owned_by).owned
+        lock_at(&list.lock, .ObjectList)
+        if intrinsics.atomic_load_u64_acquire(&header.owned_by) == owned_by {
+            unlink_owned(list, object)
+            unlock_at(&list.lock, .ObjectList)
+            return void
+        }
+        unlock_at(&list.lock, .ObjectList)
     }
-    owner :: cast[ptr[mut Process]](header.owner)
-    list :: &owner.owned
-    lock_at(&list.lock, .ObjectList)
-    defer unlock_at(&list.lock, .ObjectList)
-    if !header.owned {
-        return void
-    }
+}
+
+/**
+ * Unlink an object from the list it's on, and mark it on none.
+ *
+ * @param list The list, its lock held, which the object is on (its owned_by is the list's process).
+ * @param object The object, as an address.
+ */
+unlink_owned :: fn(list: ptr[mut OwnedList], object: u64) {
+    header :: cast[ptr[mut ObjectHeader]](object)
     if header.owned_previous != 0 {
         cast[ptr[mut ObjectHeader]](header.owned_previous).owned_next = header.owned_next
     }
@@ -399,7 +436,9 @@ disown :: fn(object: u64) {
     if header.owned_next != 0 {
         cast[ptr[mut ObjectHeader]](header.owned_next).owned_previous = header.owned_previous
     }
-    header.owned = false
+    header.owned_previous = 0
+    header.owned_next = 0
+    intrinsics.atomic_store_u64_release(&header.owned_by, 0)
 }
 
 /**
@@ -418,12 +457,7 @@ take_owned :: fn(list: ptr[mut OwnedList]) -> u64 {
     if first == 0 {
         return 0
     }
-    header :: cast[ptr[mut ObjectHeader]](first)
-    list.first = header.owned_next
-    if header.owned_next != 0 {
-        cast[ptr[mut ObjectHeader]](header.owned_next).owned_previous = 0
-    }
-    header.owned = false
+    unlink_owned(list, first)
     return first
 }
 

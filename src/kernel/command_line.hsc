@@ -50,6 +50,11 @@ Options :: struct {
      */
     test_binding_reuse : bool,
     /**
+     * test_ownership_race: once booted, move objects from one process's owned list to another's while another CPU
+     * destroys them, and check they end on neither list, and the lists whole.
+     */
+    test_ownership_race : bool,
+    /**
      * test_tickless: once booted, count the timer interrupts of the CPUs other than the boot CPU, idle
      * (decisions/0128).
      */
@@ -170,6 +175,9 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_binding_reuse" {
         options.test_binding_reuse = true
+    }
+    if word == "test_ownership_race" {
+        options.test_ownership_race = true
     }
     if word == "test_tickless" {
         options.test_tickless = true

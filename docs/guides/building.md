@@ -118,6 +118,7 @@ Words separated by spaces; unknown words are ignored.
 | `test_clock` | Check the monotonic clock against the counter |
 | `test_shootdown` | Change a mapping every CPU has used, and check they all see the change (2 CPUs or more) |
 | `test_binding_reuse` | Unbind and bind one binding slot again and again while the other CPUs read it without a lock, and check every read is whole (2 CPUs or more) |
+| `test_ownership_race` | Move objects from one process's owned list to another's on one CPU while the boot CPU destroys them, and check they end on neither list and the lists are whole (2 CPUs or more) |
 | `test_ioapic` | Route the emulator's PIT through its I/O APIC, and count its interrupts |
 | `test_budgets` | Run a thread with a CPU budget against one without, on 1 CPU |
 | `test_device` | Grant the root task what the firmware tables say of the emulator's test device, and run the device while an IRQ for its line exists, for `test_devices` |
