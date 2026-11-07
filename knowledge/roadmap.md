@@ -374,6 +374,12 @@ keeping the old generations until they go.
 - From the catch-up (`decisions/0101`), with the AML interpreter: x86-64's PCI windows from the host bridge's `_CRS`
   (`0074`), rather than from what the firmware left programmed.
 
+Planned 2026-11-07 (`decisions/0182`), with the project's owner: an AML interpreter that runs methods, bounded; the
+power button shutting down cleanly; the console, or an administrator's shell through elevation, shutting down or
+restarting. In five parts: **P1** the kernel's `PowerControl`; **P2** the AML interpreter, hosted; **P3** the ACPI
+service, `\_S5`, `_CRS`'s windows and the power button (a PL061 `gpio-keys` driver on AArch64); **P4** a graceful
+shutdown, `Stop` in reverse start order with deadlines, and restarting; **P5** the `i6300esb` watchdog.
+
 Specs: ACPI 6.5 (AML), Arm PSCI (DEN 0022).
 Stresses: an interpreter of an untrusted bytecode, kept in its own process.
 Meant to come before M11 ended, so the first usable system shuts down properly; until it does, the secure attention
@@ -500,4 +506,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | M10 | done 2026-11-02 (`decisions/0136` to `0161`): the terminal and input services and the trusted path, accounts, login and sessions, the powerbox and sharing |
 | M11 | done 2026-11-06 (`decisions/0162` to `0180`): the shell, its language, calls through manifests, pipelines, interactive use, and the tools and scripts |
 | Before P | done 2026-11-07 (`decisions/0181`), in seven parts, F1 to F7: what M10, M11, R and B left, with what the chaos tests found fixed |
-| M12–M16, P, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
+| P | planned 2026-11-07 (`decisions/0182`), in five parts, P1 to P5; not started |
+| M12–M16, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
