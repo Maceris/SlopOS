@@ -56,7 +56,10 @@ FILE_BYTES : u64 : 256 * 1024
 TEXT_LIMIT :: 1024
 /** No index: a free ring's source, a free waiting query's client, or a source or record not found. */
 NOWHERE : usize : 0xffffffffffffffff
-/** How often adopted rings, without doorbells, are read, in nanoseconds: 20 ms. */
+/**
+ * How often adopted rings, without doorbells, are read, and rings whose entries were left for want of memory read
+ * again, in nanoseconds: 20 ms.
+ */
 ADOPTED_POLL : u64 : 20_000_000
 
 // What's stored beside the ring's entries: where a boot's records start, numbering them, and which ring they're from
@@ -217,7 +220,7 @@ Scan :: struct {
  * log, store them once given a directory, and answer queries for them.
  *
  * It serves for good, reading each ring when its doorbell rings, and adopted rings, which have none, every
- * ADOPTED_POLL.
+ * ADOPTED_POLL; a ring whose entries it hadn't the memory to read is read again then too, not at once.
  *
  * @param log The debug log records are shown on as they're read, each after its source's name; without one they're
  *     only kept.
@@ -252,8 +255,9 @@ main :: fn(log: slop_os.DebugLog?, clients: os.Listener[events.Events]) -> int {
         for i in cast[usize](0)..<service.connected.count {
             serve(service, i, &into)
         }
+        short := false
         for i in cast[usize](0)..<MAX_RINGS {
-            drain(service, i)
+            short = !drain(service, i) || short
         }
         answer_waiting(service)
         // Waiting from here: each ring's writer rings its doorbell once it's written, unless it already has
@@ -270,12 +274,16 @@ main :: fn(log: slop_os.DebugLog?, clients: os.Listener[events.Events]) -> int {
                 }
             }
         }
-        if written {
+        /*
+         * What was written since is read at once; but entries left for want of memory are read again after
+         * ADOPTED_POLL, as reading them at once, over and over, would only spin
+         */
+        if written && !short {
             continue
         }
         deadline := slop_os.NO_DEADLINE
         for i in cast[usize](0)..<MAX_RINGS {
-            if service.rings[i].source != NOWHERE && cast[slop_os.Handle](service.rings[i].doorbell) == slop_os.NO_HANDLE {
+            if short || (service.rings[i].source != NOWHERE && cast[slop_os.Handle](service.rings[i].doorbell) == slop_os.NO_HANDLE) {
                 deadline = (slop_os.clock_monotonic() or_else 0) + ADOPTED_POLL
             }
         }
@@ -366,7 +374,7 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
             case Retire(ring) => {
                 // Whichever ring it is, every ring's records read first, so its last ones are kept
                 for i in cast[usize](0)..<MAX_RINGS {
-                    drain(service, i)
+                    _ = drain(service, i)
                 }
                 _ = slop_os.handle_close(cast[slop_os.Handle](ring))
                 out := os.Outgoing.{}
@@ -657,8 +665,11 @@ ring_doorbell :: fn(service: ptr[mut Service], slot: usize) {
             case Ok(info) => continue
             case Error(error) => {
                 if error == .PeerClosed || error == .ObjectGone {
-                    drain(service, slot)
-                    release(service, slot)
+                    // Its last records read first; a ring drain finds gone is let go there already
+                    _ = drain(service, slot)
+                    if service.rings[slot].source != NOWHERE {
+                        release(service, slot)
+                    }
                 }
                 return void
             }
@@ -692,10 +703,12 @@ release :: fn(service: ptr[mut Service], slot: usize) {
  *
  * @param service The events service's state.
  * @param slot The ring, by its slot in rings; one past them, or a free one, does nothing.
+ * @return False if entries were left in the ring for want of memory, to be read again later; true otherwise, read,
+ *     with nothing to read, or let go.
  */
-drain :: fn(service: ptr[mut Service], slot: usize) {
+drain :: fn(service: ptr[mut Service], slot: usize) -> bool {
     if slot >= MAX_RINGS || service.rings[slot].source == NOWHERE {
-        return void
+        return true
     }
     ring :: service.rings[slot]
     source :: &service.sources[ring.source % MAX_SOURCES]
@@ -703,18 +716,18 @@ drain :: fn(service: ptr[mut Service], slot: usize) {
         case Some(found) => found
         case None => {
             release(service, slot)
-            return void
+            return true
         }
     }
     size :: header.size
     read := header.read
     written :: header.written
     if read == written {
-        return void
+        return true
     }
     // Its entries, copied out whole: what's published, and nothing past it, as written is read first
     if size == 0 || size + cast[u64](size_of(runtime.SlopOsEventsRing)) > RING_BYTES {
-        return void
+        return true
     }
     copied : u8[..]
     defer runtime.array_free(&copied)
@@ -725,14 +738,14 @@ drain :: fn(service: ptr[mut Service], slot: usize) {
      * ring for a later drain, and a ring that fills says what it dropped, so nothing goes missing unsaid
      */
     if !room_to_drain(service, source, cast[usize](size), &copied, &fresh) {
-        return void
+        return false
     }
     for i in cast[u64](0)..<size {
         runtime.array_add(&copied, cast[u8](0))
     }
     if slop_os.memory_read(ring.memory, cast[u64](size_of(runtime.SlopOsEventsRing)), copied) is_error {
         release(service, slot)
-        return void
+        return true
     }
     data :: cast[u64](cast[uintptr](copied.data))
     add_instance(&fresh, ring.instance)
@@ -788,6 +801,7 @@ drain :: fn(service: ptr[mut Service], slot: usize) {
         view_of(cast[ptr[u8]](&read), size_of(u64)))
     show(service, source, fresh)
     keep(service, source, fresh, first)
+    return true
 }
 
 /**
@@ -890,7 +904,10 @@ keep :: fn(service: ptr[mut Service], source: ptr[mut Source], entries: u8[], fi
  * Reserve room in everything draining a ring of size bytes may grow, copied and fresh among them, so it can't run out
  * of memory partway (decisions/0104).
  *
- * Each list gets as much as entries that size could add to it, and the pending bytes all they may hold.
+ * Each list gets as much as entries that size could add to it, and the pending bytes all they may hold: at most
+ * PENDING_BYTES, or a file header alone if it's more, as add_pending takes nothing past PENDING_BYTES. The bounds are the
+ * entries' own, each format string's and schema's entry at least its header, as what's reserved stays for the source's
+ * life, and every source's comes from the one budget (decisions/0104).
  *
  * @param service The events service's state, whose schemas may grow.
  * @param source The ring's source, whose format strings, schemas used and pending entries may grow.
@@ -901,15 +918,19 @@ keep :: fn(service: ptr[mut Service], source: ptr[mut Source], entries: u8[], fi
  */
 room_to_drain :: fn(service: ptr[mut Service], source: ptr[mut Source], size: usize, copied: ptr[mut u8[..]], fresh: ptr[mut u8[..]])
     -> bool {
-    entries :: size / 8 + 1
-    return runtime.array_try_reserve(copied, size) == null
+    formats :: size / size_of(runtime.SlopOsEventsFormat) + 1
+    schemas :: size / size_of(runtime.SlopOsEventsSchema) + 1
+    if !(runtime.array_try_reserve(copied, size) == null
         && runtime.array_try_reserve(fresh, size + size_of(StoredInstance) + 8) == null
         && runtime.array_try_reserve(&source.texts, source.texts.count + size) == null
-        && runtime.array_try_reserve(&source.formats, source.formats.count + entries) == null
-        && runtime.array_try_reserve(&source.used, source.used.count + entries) == null
+        && runtime.array_try_reserve(&source.formats, source.formats.count + formats) == null
+        && runtime.array_try_reserve(&source.used, source.used.count + schemas) == null
         && runtime.array_try_reserve(&service.schema_bytes, service.schema_bytes.count + size) == null
-        && runtime.array_try_reserve(&service.schemas, service.schemas.count + entries) == null
-        && runtime.array_try_reserve(&source.pending, PENDING_BYTES + header_bound(service, source) + size) == null
+        && runtime.array_try_reserve(&service.schemas, service.schemas.count + schemas) == null) {
+        return false
+    }
+    header :: header_bound(service, source)
+    return runtime.array_try_reserve(&source.pending, if header > PENDING_BYTES { header } else { PENDING_BYTES }) == null
 }
 
 /**

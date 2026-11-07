@@ -66,7 +66,7 @@ and the sweeps found what they're for: error paths that had never run.
     allocated: lost until the container is checked, never given out while something may still name them. `verify`
     says `OutOfMemory` rather than calling a walk it couldn't finish a leak.
   - The events service reserves what a ring's entries can add before reading them; without it, they wait in the ring,
-    whose drops are counted as ever.
+    whose drops are counted as ever. (Its bounds were too wide at first; see *Found later*.)
   - Every service and driver ends with 99 when there's no memory for its own state, rather than asserting.
   - A root task that couldn't start left its process and everything made for it, and the firmware tables kept for it:
     the process is destroyed now, which destroys the rest, and the tables with it.
@@ -84,3 +84,24 @@ and the sweeps found what they're for: error paths that had never run.
   then waits for it.
 - Sweeps take about half an hour each, so they run on their own (`--robustness`), not with every change.
 - R2 is next.
+
+## Found later: the events service's reservations ran its budget out (2026-11-06)
+11e4's boot test logs in, installs `counter` as `tally`, ends it and uninstalls it. The shell showed every step
+working, but nothing the session manager logged after `ending tally` reached serial. On x86-64 that line was shown
+twice; the twice wasn't seen again while this was looked into, so its cause isn't known. Neither the session manager
+nor the rings' handles were at fault. The events service had run out of its 8 MiB budget, so it couldn't read any
+ring with something in it: the shell's from about when tally started, then the session manager's, then config's.
+- **What was wrong**: `room_to_drain` reserved room for what a full 16 KiB ring could add, and a reservation stays for
+  the source's life. It counted one format string and one schema for every 8 bytes, about 2,000 each, when each
+  entry's header alone is 24 or 48 bytes. On top of that, pending got PENDING_BYTES, plus a file header bound built
+  from those inflated capacities, plus the ring's size. That came to about 400 KiB per source. Around the 16th
+  source, tally's, the budget was gone.
+- **What it does now**: a ring's entries can hold at most `size / size_of(SlopOsEventsFormat)` format strings and
+  `size / size_of(SlopOsEventsSchema)` schemas. Pending gets the larger of PENDING_BYTES and the file header bound,
+  since `add_pending` takes nothing past PENDING_BYTES. That's about 120 KiB per source, so `MAX_SOURCES`' 32 fit
+  with room to spare.
+- **And the loop**: a ring whose entries were left for want of memory still looked written, so the service went
+  round again at once, for good, and never waited. It's read again after `ADOPTED_POLL` now. A doorbell whose writer
+  had gone could also release its ring twice, if `drain` had already let it go; it's released only if it's still held.
+- 11e4's test expects `uninstalled tally for admin` on serial now. It passes on both architectures in about 40 s;
+  before, it took about 190 s, its 180 s settle time, without the console's shutdown ever being logged.
