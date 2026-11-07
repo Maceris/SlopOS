@@ -1,6 +1,6 @@
 # 0179: 11e, the Tools and Scripts, and What a Program's Entry Gives Back
 
-Status: accepted; 11e1 to 11e4 built (below)
+Status: accepted; 11e1 to 11e5 built (below)
 Date: 2026-11-06
 Related: `0162` (M11's plan), `0169` to `0172` (the shell, calls through manifests), `0176` (11d, documentation),
 `../design/shell.md`, Hemera's `docs/compilation.md` (Entry Parameters, Entry Results)
@@ -96,6 +96,19 @@ listed and revoked, a user's own list of installations):
   lists them; `grants --revoke n` revokes one. Revoking takes authority away, never gives it, so the shell may.
 - **Built-ins**, as `view` and `page` are: the process tree needs the shell's jobs, which only it knows, and the rest
   ask the session manager on the shell's own connection, which a program would need granted.
+
+**The editor** (11e5, as `0162` has it: small but real, full screen on the `Terminal` it's given, a `File` to edit):
+- **`edit`**, a program: the arrows, Home, End, Page Up and Page Down move; typing inserts, Enter a line break, Tab
+  four spaces; Backspace and Delete delete; Ctrl-Z undoes, typing undone a run at a time; Ctrl-F finds text from the
+  cursor on, wrapping; Ctrl-S saves; Ctrl-Q quits, twice with changes unsaved, as Ctrl-C does. It edits text: a typed
+  file, one with a 0 byte, or one past 4 MiB is refused. It gives back whether it saved, and its lines and bytes.
+- **The input passes to it**: the terminal's input is the first reader's until its connection goes, which left a
+  program the shell starts on the terminal without a key while the shell watched for Ctrl-C. The terminal protocol
+  gains `ReleaseInput`, from the owner, a Read it holds answered empty; the shell sends it before it starts a program
+  in the foreground that can't run without the terminal (its parameter isn't optional), and doesn't watch for Ctrl-C
+  until it's ended, so Ctrl-C is the program's, and the shell's next Read owns the input again. A program whose
+  terminal is optional only writes to it, and Ctrl-C stays the shell's, to stop it. An interactive program that
+  ignores Ctrl-C can't be stopped from the shell; it's one the user chose to give the terminal to.
 
 ## Alternatives
 - **A removed area in the file system**, kept for a day: simpler, but a recycle bin rather than snapshots, and no view
@@ -203,6 +216,23 @@ listed and revoked, a user's own list of installations):
   directory from `apps`, and lists kept grants, of which there are none, and revokes one that isn't there; on both
   architectures. Revoking a kept grant is the trusted path's test's.
 - **Left**: an installation runs only the installations' entry, a data directory and settings; any entry, given what
-  its manifest asks for, is for later, with the shell's grants for a guide. The session manager's log lines after it
-  ends a program didn't reach the serial line in the test (a line was repeated once instead), though what it did was
-  done: a separate question, for the events service's rings.
+  its manifest asks for, is for later, with the shell's grants for a guide.
+- **Found later**: the session manager's log lines after it ended a program didn't reach the serial line in the test,
+  though what it did was done. The events service had run out of budget, its reservations per source far larger
+  than a ring's entries need (`0104`'s "Found later"); fixed, the test expects `uninstalled tally for admin` too.
+
+## As Built, 11e5 (2026-11-06)
+- **std (Hemera)**: the terminal protocol's `ReleaseInput` and `terminal.release_input`; `os.file_seek` and
+  `os.file_set_size` (the file protocol's `SetSize`), SlopOS's, for writing a file over from its start.
+- **The terminal service**: `ReleaseInput` from the input's owner takes its line away, answers a Read it holds with no
+  events, and leaves the input to the next client to read.
+- **The shell**: `Running.terminal`, set when a foreground program can't go without the terminal; then the input's
+  released before it starts, and `attend` doesn't ask for Ctrl-C. Found by the jobs' test, whose `test_shell_calls`
+  takes the terminal as optional and is stopped with Ctrl-C: giving every program on the terminal its input broke it.
+- **`edit`** (`src/apps/edit`): the text a flat buffer, its lines' starts found again after each change, which is
+  plenty for files of the size it takes; undo a stack of changes, a typing change joined by the next character typed
+  after it; the screen drawn whole after each key, a line at a time, cut to the terminal's width and scrolled to keep
+  the cursor in sight, with an inverse status line.
+- **Test**: a boot test edits `notes.txt`: a line typed on the empty last line, another taken back with Ctrl-Z,
+  "second" found, saved (3 lines, 29 bytes), a change refused at the first Ctrl-Q and dropped at the second; the shell
+  shows what it gave back, and `view` shows the file as saved; on both architectures.

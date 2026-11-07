@@ -613,9 +613,10 @@ dial_seat :: fn(service: ptr[mut Service]) {
  *
  * Writes, cursor moves, clears and scrolls go into the view's screen model, and onto the serial line if the view is
  * shown and nothing of the trusted path's is up; the line being typed is taken away first and drawn again after. A
- * Read makes the client the input's owner if there's none (it holds until the owner goes); an InputLine from the
- * owner replaces the line. Describe is answered at once; requests it doesn't know are answered Unsupported. A Connect's
- * new connection is added as a client, or closed if there's no room.
+ * Read makes the client the input's owner if there's none: it holds until the owner goes, or gives it up with
+ * ReleaseInput, when a Read it holds is answered empty. An InputLine from the owner replaces the line. Describe is
+ * answered at once; requests it doesn't know are answered Unsupported. A Connect's new connection is added as a client,
+ * or closed if there's no room.
  *
  * A client whose connection fails is dropped, and, if it owned its view's input, the input's freed and its line
  * forgotten.
@@ -735,6 +736,23 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
             case Connect(connection) => {
                 if !service_kit.add_client(connected, service.port, connection.end) {
                     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
+                }
+            }
+            // The owner gives the input up (decisions/0179, 11e5): its line taken away, a Read it holds answered empty
+            case ReleaseInput => {
+                if is_owner(service, index) {
+                    hide_input(service)
+                    view(service).input_count = 0
+                    if view(service).held > 0 {
+                        none : terminal.Event[1]
+                        no_text : u8[1]
+                        out := os.Outgoing.{}
+                        answer :: os.begin[terminal.Response](&out)
+                        answer^ = .Input(terminal.Events.{events = os.append(&out, none[0..<0]), text = os.append(&out, no_text[0..<0])})
+                        _ = terminal.send_response(end, service.port, &out)
+                    }
+                    view(service).owner = null
+                    view(service).held = 0
                 }
             }
         }

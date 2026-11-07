@@ -166,14 +166,16 @@ has_ended :: fn(shell: ptr[Shell], call: ptr[Call]) -> bool {
 }
 
 /**
- * See to what the shell does while it waits for programs: Ctrl-C, which asks them to stop; programs that haven't after
- * STOP_GRACE, which are killed; and their progress, shown in the input line.
+ * See to what the shell does while it waits for programs: Ctrl-C, which asks them to stop, unless one has the terminal,
+ * whose Ctrl-C is its own; programs that haven't stopped after STOP_GRACE, which are killed; and their progress, shown
+ * in the input line.
  *
  * @param shell The shell, whose terminal is asked for an Interrupt without waiting, and shows the progress.
  * @param running The programs waited for, which Ctrl-C stops.
  */
 attend :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) {
-    if running.stop_by == 0 && terminal.interrupted(&shell.console) {
+    // A program on the terminal has the input, Ctrl-C with it
+    if !running.terminal && running.stop_by == 0 && terminal.interrupted(&shell.console) {
         _ = terminal.write_line(&shell.console, "^C")
         stop_running(shell, running)
     }

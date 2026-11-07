@@ -6,6 +6,7 @@ import os from "std"
 import schema from "std"
 import slop_os from "std/os"
 import stream from "std/os/slop_os"
+import terminal from "std"
 
 /*
  * Pipelines (design/shell.md §4, decisions/0172): a | b | c. Programs next to each other are connected straight:
@@ -219,6 +220,24 @@ start_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping 
             running.from = ends.b
         }
     }
+    /*
+     * A program that can't run without the terminal reads it itself (decisions/0179, 11e5): the shell gives its input
+     * up meanwhile, so the program's first Read owns it, and Ctrl-C is the program's; the shell's next Read, once it's
+     * ended, owns it again. One that can, its terminal optional, only writes to it, and the shell keeps Ctrl-C
+     */
+    if !background {
+        for call in running.calls {
+            match parameter_giving(call, .Terminal) {
+                case Some(parameter) => if !parameter.optional {
+                    running.terminal = true
+                }
+                case None => {}
+            }
+        }
+    }
+    if running.terminal {
+        _ = terminal.release_input(&shell.console)
+    }
     // Started in order, each watched under a key of its own
     for call, k in running.calls {
         match start_call(shell, call, running.first_key + cast[u64](k)) {
@@ -345,6 +364,11 @@ Running :: struct {
     output_done : bool,
     /** Why its output couldn't be read; null if it could, or hasn't been tried. */
     output_error : EvalError?,
+    /**
+     * Whether a program of them, in the foreground, takes the terminal as a parameter it can't go without, so the shell
+     * gave its input up and leaves Ctrl-C to it.
+     */
+    terminal : bool,
 }
 
 /**

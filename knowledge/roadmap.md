@@ -380,7 +380,7 @@ program's entry gives back, a `Result` whose error the shell shows with its para
 11e2 files, with snapshots through `dir` and automatic ones, and recovering, done 2026-11-06, and with it the
 system shut down from the secure attention key's screen, which the boot tests end with when they're done (`0180`);
 11e3 search, and the shell's `view` and pager, reading a typed file by its type from the programs' manifests, done
-2026-11-06; 11e4 the session's processes, kept grants, and a user's own installations, done 2026-11-06; 11e5 the editor; 11e6 scripts with `param` lines. This
+2026-11-06; 11e4 the session's processes, kept grants, and a user's own installations, done 2026-11-06; 11e5 the editor, done 2026-11-06; 11e6 scripts with `param` lines. This
 is the first usable system (above).
 
 Stresses: an interpreter in Hemera (tagged unions, arenas), reflection-driven parsing and rendering, Unicode and

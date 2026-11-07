@@ -197,7 +197,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 69 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 70 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 5 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -788,6 +788,27 @@ TESTS = [
         "--expect-line=[user] sessions: installed tally (counter) for admin",
         "--expect-line=[user] sessions: ending tally as its session's shell asked",
         "--expect-line=[user] sessions: uninstalled tally for admin",
+        "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
+    # The editor (decisions/0162, 0179, 11e5): on the terminal the shell gives it, notes.txt edited: a line added on
+    # the empty last line, another after it taken back with Ctrl-Z, "second" found with Ctrl-F, saved with Ctrl-S; then
+    # a change, and Ctrl-Q twice to quit without it; what it gives back shown, and the file viewed as saved
+    ("edits a file on the terminal: types, undoes, finds, saves, and asks before quitting with changes", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=330")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wtest_file_tree\\r\\p\\p"
+        "edit notes.txt\\r\\p\\p"
+        "\\e[Bsecond line\\r\\pthird\\p\\x1a\\p"
+        "\\x06second\\r\\p\\x13\\p\\p"
+        "x\\p\\x11\\p\\x11\\p\\p"
+        "view notes.txt\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-console-line=line 1 of 2, column 1  ^S saves  ^Q quits  ^F finds  ^Z undoes",
+        "--expect-console-line=find: second", "--expect-console-line=saved: 3 lines, 29 bytes",
+        "--expect-console-line=the changes aren't saved: Ctrl-Q again quits without them, Ctrl-S saves",
+        "--expect-console-line=saved: true", "--expect-console-line=lines: 3", "--expect-console-line=bytes: 30",
+        "--expect-console-line=a line in a file", "--expect-console-line=second line",
         "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
     # Automatic snapshots (decisions/0179): every 2 seconds with test_snapshot_seconds=2, kept 20, of the two volumes
     # served, so after a while two are taken and two deleted each time
