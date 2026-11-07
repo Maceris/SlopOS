@@ -45,3 +45,29 @@ The sketch there left some calls and the mechanics open.
 ## Consequences
 - A server binds once per connection and waits on one port; idle connections cost a binding each.
 - Bindings aren't yet charged to a memory budget (M5, budgets).
+
+## Found later: a binding's port read as half an address (2026-11-06)
+A full boot-test run once failed "rolls a staged generation back when it boots degraded, and boots the one before",
+which passed booted again alone. Its second boot faulted writing to `0xffff813d00000070`, 0x70 past that boot's direct
+map base, which is physical address 0. The write was in `destroy_object`, at `kernel+0x49a0c`: `destroy_channel`
+letting go of an end's bindings, `drop_end_binding` calling `lock_bound_port`, which took the lock at 0x70 in what the
+binding's port read as.
+- **What was wrong**: `lock_bound_port` reads a binding's port without a lock, through a binding an end kept after
+  its port freed it, counting on the slot to read as the old port, 0 or the new one. `new_binding` made the slot anew
+  with `binding^ = Binding.{}`, which compiles to the kernel's `memset`, and that writes a byte at a time, lowest
+  first. Partway, the port's low bytes were zero and its high ones still the old port's. The direct map's base has its
+  low 32 bits clear and ports are below 4 GiB, so with four bytes zeroed the port read as the direct map's base, and
+  its lock as 0x70 on, where nothing is mapped. With fewer bytes zeroed it would have read as RAM that isn't a port,
+  and locked that. Bindings are freed and made again all the time when the root task ends and every process is torn
+  down while the other CPU still runs, which is when the run hit it. The generation, zeroed and written back, could
+  likewise be read part zeroed, and so taken for an older generation.
+- **What it does now**: `new_binding` sets the port to 0 in one atomic store and fences, zeroes the rest of the slot
+  but its generation (`zero_but_generation`), and stores the new port in one atomic store at the end. `free_binding`
+  changes the generation in one atomic store. A reader sees the old port, 0 or the new one, and a generation that only
+  goes up. `new_object` zeroes a slot around its generation the same way, since `is_live` reads it through stale
+  handles (`0051`).
+- **Checked by `test_binding_reuse`** (`binding_reuse_test.hsc`): the boot CPU unbinds one binding and binds it again
+  on two ports in turn 20,000 times, while the other CPUs read its port and generation without a lock. With
+  `new_binding` as it was, the x86-64 boot failed both times it ran, reading that boot's direct map base as the
+  port, as the fault had. The AArch64 boot failed once among the other tests and passed alone, so it's the weaker
+  check.

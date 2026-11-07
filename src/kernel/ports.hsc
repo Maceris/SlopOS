@@ -709,7 +709,9 @@ binding_of :: fn(port: ptr[mut Port], key: u64, kind: BindingKind) -> ptr[mut Bi
  * binding with generation and its port isn't dying.
  *
  * Bindings are type-stable, so one its port freed is still a Binding, its generation changed; but while new_binding
- * makes the slot anew, for any port, its port reads 0 for a moment, and it isn't this binding then either.
+ * makes the slot anew, for any port, its port reads 0 for a moment, and it isn't this binding then either. Its port
+ * reads whole, as the old port, 0 or the new one, since new_binding writes it only in single stores; one read as part
+ * of an address would be locked here (decisions/0052).
  *
  * @param binding The binding's address, as it was kept; its slot may have been freed or reused since.
  * @param generation The binding's generation when it was kept.
@@ -736,6 +738,11 @@ lock_bound_port :: fn(binding: ptr[Binding], generation: u32) -> ptr[mut Port]? 
  * Takes the port's lock as held. The binding is charged to the port's memory budget. It sets short_of_budget, for
  * binding_failure to tell why it failed.
  *
+ * The slot may be read meanwhile without a lock, through a binding kept elsewhere that its port freed: its port by
+ * lock_bound_port, its generation by a binding slot's free check. So its port goes to 0 in one store before the rest is
+ * zeroed, and to the new port in one store at the end, and its generation isn't written at all: neither is ever seen
+ * as some of one value's bytes and some of another's (decisions/0052).
+ *
  * @param kernel The kernel, whose binding pool the slot comes from.
  * @param port The port, not dying.
  * @param key The key, which the caller has checked isn't bound.
@@ -755,13 +762,14 @@ new_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, kind: 
         return null
     }
     binding :: cast[ptr[mut Binding]](address)
-    generation :: binding.generation
-    binding^ = Binding.{}
-    binding.generation = generation
+    intrinsics.atomic_store_u64(&binding.port, 0)
+    // Before any of the zeroing below, which writes a byte at a time
+    intrinsics.fence_sequentially_consistent()
+    zero_but_generation(address, cast[u64](size_of(Binding)), cast[u64](offset_of(Binding, generation)))
     binding.kind = kind
     binding.key = key
-    binding.port = cast[u64](port)
     binding.timer = make_timer()
+    intrinsics.atomic_store_u64_release(&binding.port, cast[u64](port))
     if maps.map_try_put(&port.bindings, key, address) != null {
         slab.free(&kernel.pools.bindings, &kernel.frames, address)
         uncharge(cast[u64](port), port.header.generation, kernel.pools.bindings.object_size)
@@ -784,7 +792,8 @@ new_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, kind: 
 free_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], binding: ptr[mut Binding]) {
     unqueue(port, binding)
     _ = cancel_timer(kernel, &binding.timer)
-    binding.generation += 1
+    // In one store: it's read without a lock (lock_bound_port, a binding slot's free check)
+    intrinsics.atomic_store_u32(&binding.generation, binding.generation + 1)
     slab.free(&kernel.pools.bindings, &kernel.frames, cast[u64](binding))
     uncharge(cast[u64](port), port.header.generation, kernel.pools.bindings.object_size)
 }

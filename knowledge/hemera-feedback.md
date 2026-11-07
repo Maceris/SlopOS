@@ -95,6 +95,11 @@ Context for the open items, and choices SlopOS relies on.
 - **Cryptography** (its proposal, done 2026-10-21, is in Hemera's `docs/memory.md`, *Secrets*, and `std/crypto`):
   value barriers beyond `intrinsics.select`'s own mask weren't added; the machine code is checked under
   Valgrind (`--valgrind-secrets`) instead.
+- **Zeroing memory others read without a lock** (2026-11-06, `decisions/0052`). `mem_zero`, and an assignment like
+  `x^ = T.{}` that becomes one, write a byte at a time in the freestanding kernel, whose `memset` is a byte loop; the
+  docs promise nothing wider. A field another CPU reads without a lock then goes through values it never held: a
+  binding's port, read as half an address, faulted the kernel. Code that remakes such memory stores those fields with
+  atomics and zeroes around them. Not a bug in Hemera, but easy to miss; a word-wide `memset` would also be faster.
 
 ## 3. Resolved
 

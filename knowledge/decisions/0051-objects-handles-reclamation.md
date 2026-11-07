@@ -46,3 +46,11 @@ system calls. Building them settled what `0008` left to the implementation.
   numerous keeps that memory.
 - Stage 2 (ports) blocks threads on these objects, keeping `(address, generation)` across waits, as
   `0008` says.
+
+## Found later: a slot's generation read part zeroed (2026-11-06)
+- **What was wrong**: `new_object` zeroed a slot whole with `mem_zero`, then wrote its generation back. The
+  kernel's `mem_zero` writes a byte at a time, so meanwhile `is_live`, through a stale handle, could read the
+  generation part zeroed. That value could equal the older generation the handle kept, so the handle passed for the
+  object being made. Found with `0052`'s binding fault, which had the same cause.
+- **What it does now**: `new_object` zeroes everything but the generation (`zero_but_generation`), so the generation's
+  bytes aren't written at all while the slot is made anew.

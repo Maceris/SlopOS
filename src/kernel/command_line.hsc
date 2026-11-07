@@ -45,6 +45,11 @@ Options :: struct {
     /** test_shootdown: once booted, change a mapping every CPU has used, and check they all see the change. */
     test_shootdown : bool,
     /**
+     * test_binding_reuse: once booted, unbind and bind one binding slot again and again while the other CPUs read it
+     * without a lock, and check every read is whole.
+     */
+    test_binding_reuse : bool,
+    /**
      * test_tickless: once booted, count the timer interrupts of the CPUs other than the boot CPU, idle
      * (decisions/0128).
      */
@@ -162,6 +167,9 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_shootdown" {
         options.test_shootdown = true
+    }
+    if word == "test_binding_reuse" {
+        options.test_binding_reuse = true
     }
     if word == "test_tickless" {
         options.test_tickless = true

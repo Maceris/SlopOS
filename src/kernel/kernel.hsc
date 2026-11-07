@@ -117,6 +117,8 @@ Kernel :: struct {
     iommus_polled : u32,
     /** test_shootdown's state, as an address, while CPUs are asked to read its page (shootdown_test.hsc), else 0. */
     shootdown_test : u64,
+    /** test_binding_reuse's state, as an address, while CPUs read its slot (binding_reuse_test.hsc), else 0. */
+    binding_reuse_test : u64,
     /** How many interrupts test_ioapic's device has raised so far (device_test.hsc). */
     test_device_count : u64,
     /** The index of the interrupt controller test_ioapic routes through (device_test.hsc). */
@@ -393,6 +395,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         }
         if kernel.options.test_shootdown {
             test_shootdown(kernel)
+        }
+        if kernel.options.test_binding_reuse {
+            test_binding_reuse(kernel)
         }
         if kernel.options.test_tickless {
             start_tickless_test(kernel)

@@ -293,7 +293,8 @@ log_objects_left :: fn(kernel: ptr[mut Kernel]) {
  * Make a zeroed object of a kind from its pool.
  *
  * It keeps the generation its slot had, so handles to whatever was there before stay stale. It's owned by nobody
- * yet: the caller gives it to its owner with adopt, or lets it go with release_object.
+ * yet: the caller gives it to its owner with adopt, or lets it go with release_object. The generation isn't written,
+ * so is_live, through a stale handle meanwhile, never reads it part zeroed, as an older generation it might match.
  *
  * @param kernel The kernel, whose pools and frames it comes from.
  * @param kind The kind of object, which says its pool and its size.
@@ -308,15 +309,31 @@ new_object :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind, budget: u64,
     pool :: pool_of(kernel, kind)
     address :: slab.allocate(pool, &kernel.frames) or_return .Error(.OutOfMemory)
     header :: cast[ptr[mut ObjectHeader]](address)
-    generation :: header.generation
-    intrinsics.mem_zero(cast[mut rawptr](address), cast[usize](pool.object_size))
-    header.generation = generation
+    zero_but_generation(address, pool.object_size, cast[u64](offset_of(ObjectHeader, generation)))
     header.kind = kind
     if !charge_new(budget, address, pool.object_size + extra) {
         slab.free(pool, &kernel.frames, address)
         return .Error(.BudgetExceeded)
     }
     return .Ok(address)
+}
+
+/**
+ * Zero a type-stable slot being made anew, all but its generation, whose bytes aren't written.
+ *
+ * Its generation is read without a lock through what kept the slot's address, as is_live and lock_bound_port read
+ * it. Zeroing it and writing it back would let them see it part zeroed meanwhile, since mem_zero may write a byte at a
+ * time: a value it never had, which could be an older generation they kept (decisions/0052).
+ *
+ * @param address The slot's address, in the direct map.
+ * @param size The slot's bytes, all of which but the generation's are zeroed.
+ * @param generation_at The generation's offset in the slot, in bytes: a u32 that ends within size.
+ */
+zero_but_generation :: fn(address: u64, size: u64, generation_at: u64) {
+    after :: generation_at + cast[u64](size_of(u32))
+    runtime.assert(after <= size, "a slot's generation is within it")
+    intrinsics.mem_zero(cast[mut rawptr](address), cast[usize](generation_at))
+    intrinsics.mem_zero(cast[mut rawptr](address + after), cast[usize](size - after))
 }
 
 /**
