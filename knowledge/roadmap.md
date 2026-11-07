@@ -380,7 +380,7 @@ program's entry gives back, a `Result` whose error the shell shows with its para
 11e2 files, with snapshots through `dir` and automatic ones, and recovering, done 2026-11-06, and with it the
 system shut down from the secure attention key's screen, which the boot tests end with when they're done (`0180`);
 11e3 search, and the shell's `view` and pager, reading a typed file by its type from the programs' manifests, done
-2026-11-06; 11e4 the session's processes, kept grants, and a user's own installations, done 2026-11-06; 11e5 the editor, done 2026-11-06; 11e6 scripts with `param` lines. This
+2026-11-06; 11e4 the session's processes, kept grants, and a user's own installations, done 2026-11-06; 11e5 the editor, done 2026-11-06; 11e6 scripts with `param` lines, done 2026-11-06, which ends M11. This
 is the first usable system (above).
 
 Stresses: an interpreter in Hemera (tagged unions, arenas), reflection-driven parsing and rendering, Unicode and
@@ -520,4 +520,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | R | planned 2026-10-29 (`decisions/0096`): R1 to R4 done 2026-10-30 (`0104` to `0106`, `0112`); R5 and R6 not started |
 | B | done 2026-10-31 (`decisions/0131` to `0135`): Hemera's UEFI target, SlopOS's bootloader, boot counting and recovery, ISOs through it, Limine and BIOS boot removed |
 | M10 | planned 2026-11-01 (`decisions/0136`), in four stages, 10a done (`0137` to `0140`), 10b done (`0141` to `0148`), 10c done (`0149` to `0155`), 10d done (`0156` to `0161`); done 2026-11-02 |
-| M11–M16, P, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
+| M11 | planned 2026-11-02 (`decisions/0162`), in five stages, 11a to 11e done (`0163` to `0180`): the shell, its language, calls through manifests, pipelines, interactive use, and the tools and scripts; done 2026-11-06 |
+| M12–M16, P, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |

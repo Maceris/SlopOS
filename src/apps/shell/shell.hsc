@@ -14,6 +14,7 @@ import unicode from "std"
 import slop_os from "std/os"
 import terminal as protocol from "std/os/slop_os"
 import dir from "std/os/slop_os"
+import read_only_file from "std/os/slop_os"
 import process_manager from "std/os/slop_os"
 import programs as finding from "../../protocols/programs"
 import installations from "../../installations"
@@ -87,11 +88,16 @@ Shell :: struct {
  *     no program is found.
  * @param data The shell's own data directory, where its history is kept, read when it starts and written after each
  *     line. Without it, history lasts only as long as the shell.
+ * @param script A script to run (decisions/0179, 11e6), instead of reading lines: its parameters bound to the grants
+ *     and values of their names, then its statements run in turn, its home its here. Without it, the shell reads lines
+ *     on its terminal.
  * @return 0 after exit, or when it's asked to stop on its lifecycle channel; 2 if the terminal couldn't be opened or
- *     a port couldn't be made; 3 when its terminal goes.
+ *     a port couldn't be made; 3 when its terminal goes. For a script: 0 once it's run to its end, 1 for its error, 2
+ *     if it couldn't be read.
  */
 main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Terminal], home: os.Channel[dir.Dir]?,
-    manager: os.Channel[process_manager.ProcessManager]?, programs: os.Channel[finding.Programs]?, data: installations.AppData?) -> int {
+    manager: os.Channel[process_manager.ProcessManager]?, programs: os.Channel[finding.Programs]?, data: installations.AppData?,
+    script: os.Channel[read_only_file.ReadOnlyFile]?) -> int {
     block :: slop_os.startup_block()
     shell := runtime.new(Shell)
     shell.scope = runtime.new(Scope)
@@ -110,6 +116,10 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Termina
     shell.programs = programs
     match programs {
         case Some(given) => shell.programs_port = os.port_for(block.budget, given.end) or_return 2
+        case None => {}
+    }
+    match script {
+        case Some(given) => return run_script(shell, given)
         case None => {}
     }
     say(shell, "SlopOS shell")

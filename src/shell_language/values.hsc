@@ -3,6 +3,7 @@ package shell_language
 import runtime from "base"
 import text_buffer from "std"
 import unicode from "std"
+import slop_os from "std/os"
 
 /*
  * The shell's values (design/shell.md §2): typed, never re-parsed as text. Sizes are bytes and durations nanoseconds;
@@ -30,6 +31,31 @@ Value :: union {
     List(ptr[mut ValueList]),
     /** A record of named values, on the heap, shared by every copy of the value. */
     Record(ptr[mut RecordValue]),
+    /**
+     * A directory or file a script was given (decisions/0179, 11e6), on the heap, shared by every copy of the value: a
+     * program's parameter of its kind is given another connection to it.
+     */
+    Handle(ptr[mut HandleValue]),
+}
+
+/** What a handle is a connection to. */
+HandleKind :: enum {
+    /** A directory, speaking dir. */
+    Dir,
+    /** A file to read and write, speaking file. */
+    File,
+    /** A file only to read, speaking read_only_file. */
+    ReadOnlyFile,
+}
+
+/** A handle a script was given: what it reaches, its connection, and the name it was given by. */
+HandleValue :: struct {
+    /** What it's a connection to. */
+    kind : HandleKind,
+    /** The connection, the script's, never closed while it runs. */
+    end : slop_os.Channel,
+    /** The parameter it was given as, which it's shown by. */
+    name : string,
 }
 
 /** A list's items. */
@@ -115,6 +141,11 @@ type_name :: fn(value: Value) -> string {
         case Path(_) => "a path"
         case List(_) => "a list"
         case Record(_) => "a record"
+        case Handle(handle) => match handle.kind {
+            case .Dir => "a directory"
+            case .File => "a file"
+            case .ReadOnlyFile => "a file to read"
+        }
     }
 }
 
@@ -148,6 +179,13 @@ render :: fn(out: ptr[mut text_buffer.TextBuffer], value: Value, nested: bool = 
             }
         }
         case Path(text) => text_buffer.append(out, text)
+        case Handle(handle) => {
+            text_buffer.append(out, "<")
+            text_buffer.append(out, type_name(Value.Handle(handle)))
+            text_buffer.append(out, " ")
+            text_buffer.append(out, handle.name)
+            text_buffer.append(out, ">")
+        }
         case List(list) => {
             if nested {
                 text_buffer.append(out, "[")

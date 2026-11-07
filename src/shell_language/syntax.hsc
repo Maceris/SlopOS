@@ -7,7 +7,8 @@ import strings from "std"
  * The shell language's syntax (design/shell.md §2, decisions/0162, 0169), parsed straight from a line to a tree:
  *
  *     statements  statement, separated by line breaks or ;, a # to the line's end a comment
- *     statement   let name = pipeline | pipeline, then & to run it in the background
+ *     statement   let name = pipeline | pipeline, then & to run it in the background | param parameters, a script's
+ *                 first (name: type = default, separated by commas, each name with -- before it or not)
  *     pipeline    element (| element)*, then ? or `or { statements }`
  *     element     a call: a bare word in command position, then its arguments, words read by the parameter's type
  *                 later, or $name, "text", (expression), [list] or --name; or an expression, anything else
@@ -66,6 +67,8 @@ NodeKind :: enum {
     TryCatch,
     /** pipeline &: the one child the pipeline, run as a job in the background (design/shell.md §6). */
     Background,
+    /** param a: type = default, ...: a script's parameters (decisions/0179, 11e6), each a Parameter child. */
+    Param,
 }
 
 /** A node of a parsed line's tree, on the heap, never freed. */
@@ -337,7 +340,7 @@ parse_statements :: fn(parser: ptr[mut Parser], in_block: bool) -> ptr[mut Node]
 }
 
 /**
- * Parse one statement: fn, return, try and catch, let, or a pipeline, which & after it makes a background job's.
+ * Parse one statement: fn, param, return, try and catch, let, or a pipeline, which & after it makes a background job's.
  *
  * @param parser The parser, moved past it.
  * @return The statement's node; as far as it got if there's an error.
@@ -345,6 +348,9 @@ parse_statements :: fn(parser: ptr[mut Parser], in_block: bool) -> ptr[mut Node]
 parse_statement :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     if at_keyword(parser, "fn") {
         return parse_function(parser)
+    }
+    if at_keyword(parser, "param") {
+        return parse_param(parser)
     }
     if at_keyword(parser, "return") {
         made :: node(.Return, parser.at)
@@ -425,16 +431,56 @@ parse_function :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
         return made
     }
     parser.at += 1
+    parse_parameters(parser, made, true)
+    if parser.error is_some {
+        return made
+    }
+    parser.at += 1
+    skip_spaces(parser)
+    add(made, parse_block(parser))
+    return made
+}
+
+/**
+ * Parse a script's parameters: param a: type = default, ... to the statement's end.
+ *
+ * @param parser The parser, at param, moved past the parameters.
+ * @return The Param node; as far as it got if there's an error.
+ */
+parse_param :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+    made :: node(.Param, parser.at)
+    parser.at += 5
+    parse_parameters(parser, made, false)
+    return made
+}
+
+/**
+ * Parse parameters, each a name, then : and its type's name, then = and its default, each but the name left out or
+ * not, separated by commas: a function's, to its ), or a script's, to its statement's end, where a name may have -- in
+ * front of it, as a call writes it.
+ *
+ * @param parser The parser, after fn's ( or param; moved to the ) for a function's, or to the statement's end.
+ * @param made The node the Parameters are added to.
+ * @param in_parentheses Whether they end with ), a function's; or at a line break, ; or the text's end, a script's.
+ */
+parse_parameters :: fn(parser: ptr[mut Parser], made: ptr[mut Node], in_parentheses: bool) {
     loop {
         skip_spaces(parser)
-        if (parser.error is_some) || peek(parser) == cast[u8](')') {
+        byte :: peek(parser)
+        if (parser.error is_some) || (in_parentheses && byte == cast[u8](')')) {
             break
+        }
+        if !in_parentheses && (parser.at >= parser.text.count || byte == 10 || byte == cast[u8](';')) {
+            break
+        }
+        if !in_parentheses && byte == cast[u8]('-') && char_at(parser, parser.at + 1) == cast[u8]('-') {
+            parser.at += 2
         }
         parameter :: node(.Parameter, parser.at)
         parameter.text = parse_name(parser)
         if parameter.text.count == 0 {
             fail(parser, "a parameter needs a name")
-            return made
+            return void
         }
         skip_spaces(parser)
         if peek(parser) == cast[u8](':') {
@@ -443,7 +489,7 @@ parse_function :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
             type :: parse_name(parser)
             if type.count == 0 {
                 fail(parser, "a parameter's type needs a name after :")
-                return made
+                return void
             }
             parameter.value = .Text(type)
             skip_spaces(parser)
@@ -454,19 +500,20 @@ parse_function :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
             skip_spaces(parser)
         }
         add(made, parameter)
-        if peek(parser) == cast[u8](',') {
+        after :: peek(parser)
+        if after == cast[u8](',') {
             parser.at += 1
             continue
         }
-        if peek(parser) != cast[u8](')') {
+        if in_parentheses && after != cast[u8](')') {
             fail(parser, "parameters are separated by , and end with )")
-            return made
+            return void
+        }
+        if !in_parentheses && !(parser.at >= parser.text.count || after == 10 || after == cast[u8](';')) {
+            fail(parser, "parameters are separated by , and end with the line")
+            return void
         }
     }
-    parser.at += 1
-    skip_spaces(parser)
-    add(made, parse_block(parser))
-    return made
 }
 
 /**
@@ -552,7 +599,7 @@ parse_element :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
 }
 
 /**
- * Parse a call: its name, then arguments up to | ; ) } ? & or `or`, or the line's end.
+ * Parse a call: its name, a word or a path (a script's), then arguments up to | ; ) } ? & or `or`, or the line's end.
  *
  * where and map take one expression, of each item's fields, in place of arguments.
  *
@@ -561,7 +608,19 @@ parse_element :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
  */
 parse_call :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     made :: node(.Call, parser.at)
+    start :: parser.at
     made.text = parse_name(parser)
+    // A path as the name, a script's (decisions/0179, 11e6): on through . and / to the word's end
+    if peek(parser) == cast[u8]('.') || peek(parser) == cast[u8]('/') {
+        loop {
+            byte :: peek(parser)
+            if !is_letter(byte) && !is_digit(byte) && byte != cast[u8]('-') && byte != cast[u8]('.') && byte != cast[u8]('/') {
+                break
+            }
+            parser.at += 1
+        }
+        made.text = slice(parser.text, start, parser.at)
+    }
     // A pipeline's where and map take an expression, of each item's fields
     if made.text == "where" || made.text == "map" {
         skip_spaces(parser)

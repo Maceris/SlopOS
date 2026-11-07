@@ -10,6 +10,21 @@ import schema from "std"
 import strings from "std"
 import dir from "std/os/slop_os"
 
+/** A script it makes: its name and its text. */
+Script :: struct {
+    /** Its name. */
+    name : string,
+    /** Its text. */
+    text : string,
+}
+
+/** The scripts it makes with --scripts. */
+SCRIPTS :: Script.[
+    Script.{name = "report.shell", text = "# Says what it's given, lists here, and searches it\nparam here: Dir, pattern: string, --count = 1\nprint \"looking for $pattern, $count times\"\nlist\nsearch $pattern\n"},
+    Script.{name = "into.shell", text = "param here: Dir, into: Dir\nlist --here $into\n"},
+    Script.{name = "escape.shell", text = "param here: Dir\nprint \"in here\"\nview ../notes.txt\nprint \"not reached\"\n"},
+]
+
 /** What it made. */
 Made :: struct {
     /** How many files. */
@@ -39,10 +54,13 @@ TreeError :: union {
  * @param reading Whether reading is made too: long.txt, of 60 lines, "line 1" to "line 60"; todo.txt, of three, the
  *     second "TODO: water the plants"; bytes.bin, the 32 bytes 0 to 31; and made.value, a typed file of this program's
  *     Made, of 3 files and 1 directory.
+ * @param scripts Whether three scripts are made too (decisions/0179, 11e6): report.shell, which takes here, a pattern and
+ *     a count, says them, lists here and searches it; into.shell, which takes here and into, two directories, and lists
+ *     into; and escape.shell, which takes here and tries to view ../notes.txt, beyond it.
  * @return How many files and directories it made.
  * @error Unwritable Something couldn't be written there.
  */
-main :: fn(here: os.Channel[dir.Dir], reading: bool) -> Result[Made, TreeError] {
+main :: fn(here: os.Channel[dir.Dir], reading: bool, scripts: bool) -> Result[Made, TreeError] {
     problem :: Problem.{parameter = os.ParameterName.{name = "here"}}
     directory, opened :: os.directory_on(here.end)
     if opened is_some {
@@ -69,6 +87,14 @@ main :: fn(here: os.Channel[dir.Dir], reading: bool) -> Result[Made, TreeError] 
         }
         made.files += 4
         made.directories += 1
+    }
+    if scripts {
+        for script in SCRIPTS {
+            if os.write_entire_file_in(directory, script.name, script.text) is_some {
+                return .Error(.Unwritable(problem))
+            }
+        }
+        made.files += cast[u64](SCRIPTS.count)
     }
     return .Ok(made)
 }

@@ -442,3 +442,85 @@ text_from :: fn(bytes: u8[]) -> string {
     }
     return string_of(&bytes[0], bytes.count)
 }
+
+// ---- Finding connections (programs.Request.Connect)
+
+/**
+ * Take another connection to a session that only finds programs, bound to the session manager's port.
+ *
+ * @param sessions The session manager, whose finders take it.
+ * @param number The session's number.
+ * @param end The connection's end, which moves to the session manager; closed if there's no room, or it can't be bound.
+ */
+add_finder :: fn(sessions: ptr[mut Manager], number: u32, end: slop_os.Channel) {
+    for &finder, i in sessions.finders {
+        if finder.in_use {
+            continue
+        }
+        signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+        if slop_os.port_bind(sessions.port, cast[slop_os.Handle](end), signals, FINDER_KEY + cast[u64](i), .Persistent) is_error {
+            break
+        }
+        finder^ = Finder.{in_use = true, session = number, end = end}
+        return void
+    }
+    _ = slop_os.handle_close(cast[slop_os.Handle](end))
+}
+
+/**
+ * Let a finding connection go: unbound and closed.
+ *
+ * @param sessions The session manager.
+ * @param index Its index among the finders; one not in use is left as it is.
+ */
+drop_finder :: fn(sessions: ptr[mut Manager], index: usize) {
+    if index >= sessions.finders.count || !sessions.finders[index].in_use {
+        return void
+    }
+    _ = slop_os.port_unbind(sessions.port, FINDER_KEY + cast[u64](index))
+    _ = slop_os.handle_close(cast[slop_os.Handle](sessions.finders[index].end))
+    sessions.finders[index] = Finder.{}
+}
+
+/**
+ * Answer what each finding connection has asked, until it's asked nothing more: Find, List and Describe as a shell's
+ * programs connection answers them, Connect with another finder, and Unsupported to the rest. One that's gone is let go.
+ *
+ * @param sessions The session manager.
+ * @param into Where each request is received, reused.
+ */
+serve_finders :: fn(sessions: ptr[mut Manager], into: ptr[mut os.Incoming]) {
+    for i in 0..<sessions.finders.count {
+        loop {
+            if i >= sessions.finders.count || !sessions.finders[i].in_use {
+                break
+            }
+            end :: sessions.finders[i].end
+            match programs.receive_request(end, sessions.port, into, false) {
+                case Received => {}
+                case Empty => break
+                case Unsupported => {
+                    _ = programs.answer_unsupported(end, sessions.port)
+                    continue
+                }
+                case _ => {
+                    drop_finder(sessions, i)
+                    break
+                }
+            }
+            out := os.Outgoing.{}
+            response :: os.begin[programs.Response](&out)
+            match os.message_of[programs.Request](into)^ {
+                case Find(name) => response^ = find_program(sessions, os.items(into, name))
+                case List(index) => response^ = program_at(sessions, index, &out)
+                case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
+                case Connect(connection) => {
+                    add_finder(sessions, sessions.finders[i].session, connection.end)
+                    continue
+                }
+                case _ => response^ = .Unsupported
+            }
+            _ = programs.send_response(end, sessions.port, &out)
+        }
+    }
+}

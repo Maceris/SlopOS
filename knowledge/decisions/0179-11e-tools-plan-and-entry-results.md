@@ -1,6 +1,6 @@
 # 0179: 11e, the Tools and Scripts, and What a Program's Entry Gives Back
 
-Status: accepted; 11e1 to 11e5 built (below)
+Status: accepted; 11e1 to 11e6 built (below): 11e, and M11, done
 Date: 2026-11-06
 Related: `0162` (M11's plan), `0169` to `0172` (the shell, calls through manifests), `0176` (11d, documentation),
 `../design/shell.md`, Hemera's `docs/compilation.md` (Entry Parameters, Entry Results)
@@ -110,6 +110,21 @@ listed and revoked, a user's own list of installations):
   terminal is optional only writes to it, and Ctrl-C stays the shell's, to stop it. An interactive program that
   ignores Ctrl-C can't be stopped from the shell; it's one the user chose to give the terminal to.
 
+**Scripts** (11e6, chosen with the project's owner: `here` and handle values; a path as a command):
+- **A script** is a file whose name ends in `.shell`, run as a command beneath the shell's directory: `report.shell
+  TODO --count 2`. Its first line may be `param` and its parameters, written as a function's are (a name may have `--`
+  in front of it), which its call's arguments are matched to, by position or `--name`, before anything runs; `help`
+  and completion read them too.
+- **It runs in a shell of its own**, a new process given only what its parameters say, never the calling shell's
+  home: a `Dir`, `File` or `ReadOnlyFile` parameter is a grant, opened from the path it's given; anything else is a
+  value, written by its type. A `Dir` named `here` is the script's directory, its paths beneath it and `cd` within it,
+  the calling shell's directory when it isn't given. Besides, the script's shell has the terminal, a process manager
+  connection and a connection to its session that only finds programs (`programs`' `Connect`), so it runs programs,
+  giving them only what it was given; it can't see or change the session's installations.
+- **Its other handles are values**, `$into`, shown as `<a directory into>`, which a program's parameter of their kind
+  is given another connection to; a path written in the script is always beneath `here`.
+- **Errors**: a script's first error is shown with its line's number and the line, and ends it, with exit code 1.
+
 ## Alternatives
 - **A removed area in the file system**, kept for a day: simpler, but a recycle bin rather than snapshots, and no view
   of the past for anything else.
@@ -136,6 +151,11 @@ listed and revoked, a user's own list of installations):
   never gives authority, and the user at the shell is the one who kept them.
 - **The system tools as programs**, given a connection of the session manager's: the process tree would miss the
   shell's jobs.
+- **Paths beneath any `Dir` value** in a script (`$into/2024/a.jpg`): more expressive, but every path would need a
+  handle to resolve against, and values and resolution would change throughout the shell; `here` and whole handles
+  cover what tools take now.
+- **A `run` built-in, or scripts installed by name**: explicit, or like programs, but neither is needed for a script to
+  be called and checked as a program is; installing them waits for installations to take any entry.
 
 ## Consequences
 - Tools give back `Result`s and the shell shows their errors with no code of their own for it.
@@ -236,3 +256,22 @@ listed and revoked, a user's own list of installations):
 - **Test**: a boot test edits `notes.txt`: a line typed on the empty last line, another taken back with Ctrl-Z,
   "second" found, saved (3 lines, 29 bytes), a change refused at the first Ctrl-Q and dropped at the second; the shell
   shows what it gave back, and `view` shows the file as saved; on both architectures.
+
+## As Built, 11e6 (2026-11-06)
+- **The language**: `param`, a statement of Parameter nodes (`parse_parameters`, shared with `fn`), a name with `--`
+  in front of it or not; anywhere but a script's first line it's an error. A call's name runs on through `.` and `/`,
+  so a script's path is a command. Values gain `Handle` (a `HandleValue`: its kind, connection and name).
+- **The calling shell** (`scripts.hsc`): `prepare_script_call` makes a `Call` of the shell's own program with
+  `SCRIPT_BUDGET`, 10 MiB: grants `session_terminal` (a parameter it can't go without, so the input's the script's
+  while it runs, as for `edit`), `manager`, `programs` (a finding connection) and `script`, the file; then each of the
+  script's parameters: a handle's grant labeled by its name (`here`'s as `home`), opened from a path or another
+  connection to a handle, or a value written by its type (`i64`, `u64`, `bool` or `string`). Arguments are matched as
+  a function's are; a positional argument skips `here`. A parameter named as one of the shell's own grants is refused.
+- **The script's shell**: `shell`'s entry takes `script`; with it, `run_script` binds each parameter (a handle from
+  the grant of its name, found in the startup block; `here` another connection to its home; a value through
+  `slop_os_argument`, or its default, evaluated there) and runs the rest, an error shown with its line ending it.
+- **The session manager**: `programs`' `Connect` makes a finder, up to 8, which answers only Find, List, Describe and
+  Connect, closed with its session.
+- **Test**: `test_file_tree --scripts` writes three; a boot test runs one given a pattern and a count, which lists its
+  here and searches it, one given a second directory, which lists it, and one that can't view beyond its here and
+  ends at that line; a missing argument's refused, and `help` says what one takes; on both architectures.

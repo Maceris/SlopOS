@@ -24,6 +24,7 @@ import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
+import read_only_file from "std/os/slop_os"
 import lifecycle from "std/os/slop_os"
 import process_manager from "std/os/slop_os"
 import terminal from "std/os/slop_os"
@@ -54,6 +55,10 @@ PROGRAM_KEY : u64 : 1000
 PRESSURE_KEY : u64 : 900
 /** The port key a session's shell's programs connection is bound under, plus the session's number. */
 PROGRAMS_KEY : u64 : 800
+/** The port key a finding connection's bound under, plus its index among the finders (decisions/0179, 11e6). */
+FINDER_KEY : u64 : 850
+/** The most finding connections, scripts' shells', open at once, across the sessions. */
+MAX_FINDERS :: 8
 /** The percentage of its budget's limit at which the session manager's under memory pressure. */
 PRESSURE_PERCENT : u64 : 80
 /** The percentage of its budget's limit it stops idle installations until it's under. */
@@ -110,6 +115,8 @@ ShellGrants :: struct {
      * history; null for a session without an apps directory.
      */
     data : installations.AppData?,
+    /** A script to run instead of reading lines (decisions/0179, 11e6): never one for a session's first program. */
+    script : os.Channel[read_only_file.ReadOnlyFile]?,
 }
 
 /**
@@ -236,6 +243,16 @@ MappedObject :: struct {
     bytes : u8[],
 }
 
+/** A finding connection: a session's, which only finds programs (programs.Request.Connect). */
+Finder :: struct {
+    /** Whether this place holds one. */
+    in_use : bool,
+    /** Its session's number. */
+    session : u32,
+    /** The session manager's end, bound to its port under FINDER_KEY and the finder's index. */
+    end : slop_os.Channel,
+}
+
 /** The session manager's state: its connections, its sessions and their programs, and its tests' progress. */
 Manager :: struct {
     /** Its debug log, which programs it starts are given copies of; NO_HANDLE without one. */
@@ -287,6 +304,8 @@ Manager :: struct {
     sessions : Session[MAX_SESSIONS],
     /** Every session's programs, the first count of them in use or once used. */
     programs : Program[MAX_PROGRAMS],
+    /** The finding connections, scripts' shells' (decisions/0179, 11e6). */
+    finders : Finder[MAX_FINDERS],
     /** How many of programs have been used: those after it never have. */
     count : usize,
 }
@@ -403,6 +422,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], ech
         }
         while i < connected.count
         serve_programs(sessions, &into)
+        serve_finders(sessions, &into)
         // test_installations, once the session it's for has been answered for
         if sessions.checking != NOWHERE {
             check_installations(sessions, cast[u32](sessions.checking))
@@ -644,6 +664,11 @@ close_session :: fn(sessions: ptr[mut Manager], number: u32) {
         _ = slop_os.port_unbind(sessions.port, PROGRAMS_KEY + cast[u64](number))
         _ = slop_os.handle_close(cast[slop_os.Handle](made.programs_end))
     }
+    for &finder, i in sessions.finders {
+        if finder.in_use && finder.session == number {
+            drop_finder(sessions, i)
+        }
+    }
     made^ = Session.{locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE), apps = NONE, powerbox_end = NONE, programs_end = NONE}
 }
 
@@ -778,6 +803,10 @@ serve_programs :: fn(sessions: ptr[mut Manager], into: ptr[mut os.Incoming]) {
                 case Find(name) => response^ = find_program(sessions, os.items(into, name))
                 case List(index) => response^ = program_at(sessions, index, &out)
                 case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
+                case Connect(connection) => {
+                    add_finder(sessions, cast[u32](number), connection.end)
+                    continue
+                }
                 // Its own session's (users_installations.hsc)
                 case _ => response^ = own_session_answer(sessions, cast[u32](number), os.message_of[programs.Request](into)^, into, &out)
             }

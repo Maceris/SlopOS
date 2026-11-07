@@ -300,6 +300,17 @@ complete_parameters :: fn(shell: ptr[mut Shell], command: string, prefix: string
     if (builtin_named(command) is_some) {
         return void
     }
+    // A script's, from its param line (scripts.hsc)
+    if is_script(command) {
+        parameters :: script_parameters_at(shell, message("%", command)) or_return void
+        for parameter in parameters {
+            if starts_with(parameter.text, typed) {
+                type :: type_of_parameter(parameter)
+                offer(into, message("--%", parameter.text), if type.count > 0 { type } else { "any type" })
+            }
+        }
+        return void
+    }
     manifest := program_manifest(shell, command) or_return void
     defer schema.free(&manifest)
     entry :: schema.type_in(&manifest, 0) or_return void

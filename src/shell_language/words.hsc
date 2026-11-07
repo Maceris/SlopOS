@@ -58,6 +58,21 @@ of_type :: fn(type: string, value: Value) -> bool {
         case Path(_) => type == "" || type == "path" || type == "string"
         case List(_) => type == "" || type == "list"
         case Record(_) => type == "" || type == "record"
+        case Handle(handle) => type == "" || type == handle_type(handle.kind)
+    }
+}
+
+/**
+ * Name a handle's kind as a script's parameter's type is written.
+ *
+ * @param kind The kind.
+ * @return "Dir", "File" or "ReadOnlyFile".
+ */
+handle_type :: fn(kind: HandleKind) -> string {
+    return match kind {
+        case .Dir => "Dir"
+        case .File => "File"
+        case .ReadOnlyFile => "ReadOnlyFile"
     }
 }
 
@@ -77,11 +92,13 @@ as_path :: fn(value: Value) -> Value {
 /**
  * Name what a parameter's type takes, as errors say it.
  *
- * @param type The type's name, one of TYPE_NAMES or "" for any; any other name is said as "text".
+ * @param type The type's name, one of TYPE_NAMES or a script's handle's (Dir, File, ReadOnlyFile), or "" for any; any
+ *     other name is said as "text".
  * @return Its name with an article, like "an integer"; "text" for string, any or an unknown name.
  */
 type_article :: fn(type: string) -> string {
     return if type == "int" { "an integer" } else if type == "size" { "a size" } else if type == "duration" { "a duration" }
         else if type == "bool" { "true or false" } else if type == "path" { "a path" } else if type == "list" { "a list" }
-        else if type == "record" { "a record" } else { "text" }
+        else if type == "record" { "a record" } else if type == "Dir" { "a directory" } else if type == "File" { "a file" }
+        else if type == "ReadOnlyFile" { "a file to read" } else { "text" }
 }

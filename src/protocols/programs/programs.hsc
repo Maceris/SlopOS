@@ -13,6 +13,10 @@ import slop_os from "std/os"
  * session's user's own installations, which run beside the system's in each of the user's sessions: installed,
  * uninstalled (a snapshot of the home taken first, so its data can be recovered) and listed with the system's. What a
  * shell asks is only ever of its own session and user.
+ *
+ * Connect makes another connection to the same session that only finds programs (Find, List, Describe, and Connect
+ * again), as a script's shell is given (decisions/0179, 11e6): a script runs programs, but doesn't see or change its
+ * session's.
  */
 
 /**
@@ -90,6 +94,12 @@ Request :: union {
      * Listed, or End past the last.
      */
     Installation(u32),
+    /**
+     * Have the session manager serve another connection to this session, on the end given, which moves to it: one that
+     * answers only Find, List, Describe and Connect, and Unsupported to the rest. It's closed if there's no room for
+     * another. Answered with nothing.
+     */
+    Connect(os.Channel[Programs]),
 }
 
 /** A program's documentation, as the bundle store keeps it. */

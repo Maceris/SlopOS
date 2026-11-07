@@ -119,6 +119,8 @@ evaluate :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Valu
         case .Function => return define(shell, tree)
         case .Background => return start_job(shell, tree)
         case .Parameter => return error_at(tree.at, "a parameter is a function's")
+        // A script's first statement, which running it binds (scripts.hsc); anywhere else, it's out of place
+        case .Param => return error_at(tree.at, "param is a script's first line: name.shell, run as a command, takes what it says")
         case .Return => {
             shell.returned = .Null
             match first_child(tree) {

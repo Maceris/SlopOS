@@ -217,10 +217,35 @@ show_help :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalErr
         }
         case None => {}
     }
+    if is_script(name) {
+        parameters :: script_parameters_at(shell, name) or_return error_at(named.at, message("% can't be read, or doesn't parse", name))
+        help_script(shell, name, parameters)
+        return .Ok(.Null)
+    }
     manifest := program_manifest(shell, name) or_return error_at(named.at, message("there's no command named %", name))
     defer schema.free(&manifest)
     help_program(shell, name, &manifest, program_documentation(shell, name))
     return .Ok(.Null)
+}
+
+/**
+ * Write a script's help: that it's a script, and what its param line says it takes.
+ *
+ * @param shell The shell, whose terminal it's written on.
+ * @param name The script's path.
+ * @param parameters Its Parameter nodes.
+ */
+help_script :: fn(shell: ptr[mut Shell], name: string, parameters: ptr[Node][]) {
+    say(shell, message("% is a script, run in a shell of its own with only what it's given. It takes:", name))
+    for parameter in parameters {
+        type :: type_of_parameter(parameter)
+        default :: if parameter.children.count > 0 { ", with a default" } else if type == "bool" { ", false if not given" }
+            else if parameter.text == "here" && type == "Dir" { ", the shell's directory if not given" } else { "" }
+        say(shell, message("  --%1 (%2%3)", parameter.text, if type.count > 0 { type } else { "any type" }, default))
+    }
+    if parameters.count == 0 {
+        say(shell, "  nothing")
+    }
 }
 
 /**

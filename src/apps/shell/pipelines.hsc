@@ -158,7 +158,9 @@ start_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping 
         }
     }
     for tree in trees {
-        match prepare_call(shell, tree, background) {
+        // A script runs in a shell of its own (scripts.hsc)
+        prepared :: if is_script(tree.text) { prepare_script_call(shell, tree, background) } else { prepare_call(shell, tree, background) }
+        match prepared {
             case Ok(call) => runtime.array_add(&running.calls, call)
             case Error(error) => return .Error(error)
         }

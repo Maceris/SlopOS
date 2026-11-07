@@ -810,6 +810,32 @@ TESTS = [
         "--expect-console-line=saved: true", "--expect-console-line=lines: 3", "--expect-console-line=bytes: 30",
         "--expect-console-line=a line in a file", "--expect-console-line=second line",
         "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
+    # Scripts (decisions/0179, 11e6): each run in a shell of its own, given only what its param line says. report.shell
+    # is given a pattern and a count, lists its here and searches it; into.shell lists a second directory it's given as
+    # a handle; escape.shell can't view what's beyond its here, and ends at that line; a missing argument is refused
+    # before anything runs; help says what a script takes
+    ("runs scripts with only what their param lines give them", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=330")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wtest_file_tree --reading --scripts\\r\\p\\p"
+        "report.shell TODO --count 2\\r\\p\\p\\p"
+        "into.shell reading\\r\\p\\p\\p"
+        "escape.shell --here pictures\\r\\p\\p\\p"
+        "report.shell\\r\\p"
+        "help report.shell\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-console-line=files: 10", "--expect-console-line=looking for TODO, 2 times",
+        "--expect-console-line=reading/todo.txt  2     TODO: water the plants",
+        "--expect-console-line=made.value  File  16", "--expect-console-line=in here",
+        "--expect-console-line=error: line 3: ../notes.txt: that's above your home",
+        "--expect-console-line=error: escape.shell ended with 1",
+        "--expect-console-line=error: report.shell needs its pattern",
+        "--expect-console-line=report.shell is a script, run in a shell of its own with only what it's given. It takes:",
+        "--expect-console-line=  --pattern (string)",
+        "--refuse-console-line=not reached",
+        "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
     # Automatic snapshots (decisions/0179): every 2 seconds with test_snapshot_seconds=2, kept 20, of the two volumes
     # served, so after a while two are taken and two deleted each time
     ("takes automatic snapshots of the volumes it serves, and deletes the old ones", 7,

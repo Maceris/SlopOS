@@ -188,6 +188,8 @@ Call :: struct {
     has_result : bool,
     /** What its program's entry gave back as an Ok, once it's ended (read_result); Null for nothing. */
     returned : Value,
+    /** The memory it's given to run on, in bytes; 0 for PROGRAM_BUDGET, a program's, and SCRIPT_BUDGET for a script's. */
+    budget : u64,
 }
 
 /**
@@ -262,7 +264,8 @@ start_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], key: u64) -> EvalEr
     options.clock = copy_of_grant("clock")
     options.locale = copy_of_grant("locale")
     options.result = result_grant(call)
-    match os.launch_named(manager, shell.manager_port, tree.text, call.executable, PROGRAM_BUDGET, call.grants, call.values, options) {
+    budget :: if call.budget == 0 { PROGRAM_BUDGET } else { call.budget }
+    match os.launch_named(manager, shell.manager_port, tree.text, call.executable, budget, call.grants, call.values, options) {
         case Ok(made) => {
             call.started = true
             call.launched = made
@@ -795,6 +798,11 @@ grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter
         match got {
             case Path(text) => path = text
             case Text(text) => path = text
+            // A script's directory or file, passed on (scripts.hsc)
+            case Handle(held) => return match another_connection(shell, held, parameter.giving, argument.at) {
+                case Ok(handle) => .Ok(handle)
+                case Error(error) => .Error(error)
+            }
             case _ => return .Error(EvalError.{message = message("--% takes a path, not %", parameter.name, type_name(got)), at = argument.at})
         }
     }

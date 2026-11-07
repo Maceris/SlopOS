@@ -93,6 +93,13 @@ another with `--here path`; the file tools (`list`, `copy`, `move`, `remove`, `r
 the shell can't find, whose name matches an entry of its directory without case or spaces at its ends, is answered
 "did you mean" that entry.
 
+**Scripts** (`0179`): a `.shell` file run as a command starts the `shell` program again, given the grant `script`,
+the file, and only what its `param` line asks for: a grant of each `Dir`, `File` or `ReadOnlyFile` parameter by its
+name (`here`'s as `home`), and a value of each other, of type `i64`, `u64`, `bool` or `string`, by its name, which
+the script's shell reads with `slop_os_argument`. It's also given `session_terminal`, `manager`, and a `programs`
+connection that only finds programs. A program the shell starts that can't run without the terminal is given its
+input, and Ctrl-C with it, until it ends (the terminal protocol's `ReleaseInput`).
+
 **Typed files in the shell** (`0179`): the shell's `view` reads a typed file's value by the type whose schema hash the
 file has, found among the types of the manifests of the programs the shell can run. A program whose files should be
 viewable writes them as a type its entry's signature has, a parameter's, a record's or its result's.
