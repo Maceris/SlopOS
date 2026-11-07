@@ -115,3 +115,15 @@ Seven parts, before P, each with an as-built record:
 - **Test**: `test_kept_grant` asks for a file to keep and writes a line in it, or reopens it; a boot test keeps it
   through the chooser (Tab, Enter), reopens it, lists and revokes it with `grants`, and is refused reopening it after;
   on both architectures.
+
+## As Built, F7 (2026-11-07)
+- **A generation says whether it's for development**: `generations.Generation` gains `development` (0 or 1, from a
+  byte of what was its padding), which `generation_builder --development` sets; a generation without it is a release
+  one.
+- **The bootloader** (`bootloader.hsc`): E pressed as it starts (as R asks for recovery) edits the chosen generation's
+  command line, a development one's only: it's shown, keys typed are added and Backspace takes them away, Enter boots
+  with it, for that boot only, and Escape keeps it as built. Keys pressed before the editor shows are dropped for half a
+  second, so the E held down isn't typed. A release generation's isn't edited, and that's said.
+- **Tests**: `boot.py` gains `--release-generation` and `--bootloader-edit TEXT`, which presses E until the bootloader
+  answers, then types the text and Enter; a boot test adds `test_clock` to a development generation's command line and
+  sees its clock test run, and another sees a release generation refuse; on both architectures.

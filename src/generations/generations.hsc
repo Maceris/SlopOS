@@ -77,8 +77,14 @@ Generation :: struct {
      * booted again, the one before it booted instead; 0 for a permanent one, which never runs out.
      */
     tries_left : u8,
+    /**
+     * Whether it was built for development (decisions/0181, F7, design/lessons.md §1.5): 1 if so, when the bootloader
+     * lets its command line be edited before it boots; 0 if not, when it boots only with the command line it was built
+     * with.
+     */
+    development : u8,
     /** Zeros, keeping kernel 8-byte aligned; not checked. */
-    padding : u8[5],
+    padding : u8[4],
     /** The kernel's BLAKE3-256 hash, which names its object on the ESP (object_path). */
     kernel : bundle.Hash,
     /** The hash of the bundle store's root the generation boots with. */
@@ -122,7 +128,7 @@ check :: fn(generation: ptr[Generation]) -> string? {
     if generation.number == 0 {
         return "has no number"
     }
-    if generation.state > STATE_RECOVERY || generation.kaslr > 1 || generation.tries_left > TRIES {
+    if generation.state > STATE_RECOVERY || generation.kaslr > 1 || generation.tries_left > TRIES || generation.development > 1 {
         return "has a state or a flag that isn't one"
     }
     if (generation.state == STATE_RECOVERY) != (generation.number == RECOVERY_NUMBER) {

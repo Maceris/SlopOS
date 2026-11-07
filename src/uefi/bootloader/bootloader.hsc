@@ -26,6 +26,13 @@ import boot_protocol from "../../boot_protocol"
 
 /** The key that boots the recovery generation, held or pressed as the machine starts; its capital does too. */
 RECOVERY_KEY :: 'r'
+/**
+ * The key that, typed as the bootloader starts, lets a development generation's command line be edited before it
+ * boots (decisions/0181, F7).
+ */
+EDIT_KEY :: 'e'
+/** How long the command line's editor lets what was typed before it go, in steps of KEY_WINDOW_STEP_MICROSECONDS. */
+EDIT_SETTLE_STEPS :: 50
 // How long the bootloader looks for it: 100 ms, in steps
 /** How many steps the bootloader looks for RECOVERY_KEY in, ended early by the first key it sees. */
 KEY_WINDOW_STEPS :: 10
@@ -89,7 +96,11 @@ main :: fn() -> int {
     // The firmware's watchdog off, which would reset the machine after five minutes in the bootloader
     _ = services.set_watchdog_timer(0, 0, 0, null)
     root :: esp_root() or_return fail("the ESP can't be opened")
-    generation := choose_generation(root) or_return fail("there's no generation on the ESP to boot")
+    asked :: key_asked()
+    generation := choose_generation(root, asked == .Recovery) or_return fail("there's no generation on the ESP to boot")
+    if asked == .Edit {
+        edit_command_line(&generation)
+    }
     runtime.log_info("bootloader: booting generation %", generation.number)
     handoff_address :: allocate_pages(LOADER_DATA, cast[u64](size_of(boot_protocol.Handoff))) or_return fail("no memory for the handoff")
     handoff :: cast[ptr[mut boot_protocol.Handoff]](cast[rawptr](handoff_address))
@@ -190,8 +201,8 @@ fail :: fn(why: string) -> int {
  *     the records folder can't be listed and no key asked for recovery, or the recovery generation is needed but
  *     missing or doesn't check out.
  */
-choose_generation :: fn(root: ptr[uefi.File]) -> generations.Generation? {
-    if recovery_asked() {
+choose_generation :: fn(root: ptr[uefi.File], recovery: bool) -> generations.Generation? {
+    if recovery {
         runtime.log_info("bootloader: the recovery generation, as a key asks")
         return read_generation(root, generations.RECOVERY_NUMBER)
     }
@@ -248,27 +259,40 @@ read_generation :: fn(root: ptr[uefi.File], number: u64) -> generations.Generati
     return generations.generation_of(view_of(cast[ptr[u8]](cast[rawptr](pages.address)), cast[usize](pages.size)))
 }
 
+/** What a key typed as the bootloader starts asks for. */
+KeyAsked :: enum {
+    /** Nothing: no key, or one that isn't RECOVERY_KEY or EDIT_KEY. */
+    None,
+    /** The recovery generation (RECOVERY_KEY). */
+    Recovery,
+    /** The command line edited, for a development generation (EDIT_KEY). */
+    Edit,
+}
+
 /**
- * Tell whether RECOVERY_KEY, or its capital, is typed on the console as the bootloader starts.
+ * Tell whether RECOVERY_KEY or EDIT_KEY, or its capital, is typed on the console as the bootloader starts.
  *
  * Looks for up to KEY_WINDOW_STEPS steps of KEY_WINDOW_STEP_MICROSECONDS; the first step that finds any key ends the
  * look, and takes up to 64 keys waiting, so they don't reach the kernel.
  *
- * @return True if a key seen in that step was RECOVERY_KEY or its capital; false if none was, no key came within the
- *     window, or boot services are gone.
+ * @return Recovery if a key seen in that step was RECOVERY_KEY or its capital; Edit if one was EDIT_KEY or its
+ *     capital, and none RECOVERY_KEY; None if neither was, no key came within the window, or boot services are gone.
  */
-recovery_asked :: fn() -> bool {
-    services :: uefi.boot_services() or_return false
+key_asked :: fn() -> KeyAsked {
+    services :: uefi.boot_services() or_return KeyAsked.None
     // A firmware's console may take what's typed a moment to see, so a short window, ended by the first key
     for wait in 0..<KEY_WINDOW_STEPS {
         found := false
-        asked := false
+        asked := KeyAsked.None
         for i in 0..<64 {
             match uefi.key_waiting() {
                 case Some(key) => {
                     found = true
                     if key.unicode == cast[u16](RECOVERY_KEY) || key.unicode == cast[u16](RECOVERY_KEY) - 32 {
-                        asked = true
+                        asked = .Recovery
+                    }
+                    else if asked == .None && (key.unicode == cast[u16](EDIT_KEY) || key.unicode == cast[u16](EDIT_KEY) - 32) {
+                        asked = .Edit
                     }
                 }
                 case None => break
@@ -279,7 +303,92 @@ recovery_asked :: fn() -> bool {
         }
         _ = services.stall(KEY_WINDOW_STEP_MICROSECONDS)
     }
-    return false
+    return .None
+}
+
+/**
+ * Let the command line of the generation about to boot be edited on the console, for this boot only, if it was built
+ * for development (decisions/0181, F7, design/lessons.md §1.5): its line shown after "bootloader: > ", printable ASCII
+ * typed added to its end, Backspace taking the last back, Enter booting with it, Escape keeping it as it was. One not
+ * built for development boots as it was built, and that's said.
+ *
+ * What's typed for half a second first is let go, as the key that asked may still be arriving.
+ *
+ * @param generation The generation, its command_line changed in place when Enter's pressed; its record on the ESP
+ *     isn't.
+ */
+edit_command_line :: fn(generation: ptr[mut generations.Generation]) {
+    if generation.development != 1 {
+        runtime.log_info("bootloader: generation % isn't built for development, so its command line can't be edited", generation.number)
+        return void
+    }
+    services :: uefi.boot_services() or_return void
+    // Said first, so what's still pressing the key that asked stops, and what it pressed meanwhile is let go
+    runtime.log_info("bootloader: editing the command line: Enter boots with it, Escape keeps it as it was")
+    for step in 0..<EDIT_SETTLE_STEPS {
+        loop {
+            _ = uefi.key_waiting() or_break
+        }
+        _ = services.stall(KEY_WINDOW_STEP_MICROSECONDS)
+    }
+    line : u8[..]
+    defer runtime.array_free(&line)
+    append(&line, generations.line_of(&generation.command_line))
+    show("bootloader: > ")
+    if line.count > 0 {
+        show(string_of(&line[0], line.count))
+    }
+    loop {
+        key :: uefi.key_waiting() or_else uefi.InputKey.{}
+        if key.unicode == 0 && key.scan_code == 0 {
+            _ = services.stall(KEY_WINDOW_STEP_MICROSECONDS)
+            continue
+        }
+        if key.unicode == 0x0d {
+            show("\n")
+            text :: if line.count > 0 { string_of(&line[0], line.count) } else { "" }
+            if !generations.set_line(&generation.command_line, text) {
+                runtime.log_info("bootloader: the command line is too long, so it's kept as it was")
+                return void
+            }
+            runtime.log_info("bootloader: booting with the command line edited")
+            return void
+        }
+        if key.scan_code == ESCAPE_SCAN_CODE {
+            show("\n")
+            runtime.log_info("bootloader: the command line kept as it was")
+            return void
+        }
+        if key.unicode == 0x08 {
+            if line.count > 0 {
+                runtime.array_remove(&line, line.count - 1)
+                show("\x08 \x08")
+            }
+            continue
+        }
+        if key.unicode >= 0x20 && key.unicode < 0x7f && line.count + 1 < generations.COMMAND_LINE_BYTES {
+            character :: cast[u8](key.unicode)
+            runtime.array_add(&line, character)
+            typed : u8[1]
+            typed[0] = character
+            show(string_of(&typed[0], 1))
+        }
+    }
+}
+
+/** The UEFI scan code of the Escape key. */
+ESCAPE_SCAN_CODE : u16 : 0x17
+
+/**
+ * Write text on the firmware's console as it is, without a line break.
+ *
+ * @param text The text, UTF-8.
+ */
+show :: fn(text: string) {
+    if text.count == 0 {
+        return void
+    }
+    runtime.os_write(runtime.OutputStream.OUTPUT, cast[rawptr](string_bytes(text).data), text.count)
 }
 
 /**

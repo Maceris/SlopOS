@@ -1039,6 +1039,15 @@ TESTS = [
         "--expect-line=[info] test_heap: 2 tests: 2 passed, 0 failed"]),
     ("keeps time with the counter", 0, ["--command-line=test_exit test_clock",
         "--expect-line=[info] test_clock: 1 test: 1 passed, 0 failed"]),
+    # A development generation's command line edited in the bootloader (decisions/0181, F7): e pressed as it starts,
+    # test_clock typed after the line it shows, then Enter, so the kernel runs its clock test; a release generation's
+    # isn't edited, and that's said
+    ("edits a development generation's command line in the bootloader, for that boot", 0, ["--command-line=test_exit",
+        "--bootloader-edit= test_clock", "--expect-line=[info] bootloader: booting with the command line edited",
+        "--expect-line=[info] test_clock: 1 test: 1 passed, 0 failed"]),
+    ("won't edit a release generation's command line in the bootloader", 0, ["--command-line=test_exit", "--release-generation",
+        "--bootloader-edit= test_clock",
+        "--expect-line=[info] bootloader: generation 1 isn't built for development, so its command line can't be edited"]),
     ("lets idle CPUs other than the boot CPU stop ticking", 0, ["--command-line=test_exit test_tickless",
         "--expect-line=[info] test_tickless: 1 test: 1 passed, 0 failed", "--", "-smp", "4"]),
     ("shoots down TLB entries on every CPU", 0, ["--command-line=test_exit test_shootdown",

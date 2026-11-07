@@ -125,7 +125,7 @@ ISO_FAT_SECTORS = 69632
 
 
 def make_image(kernel: Path, programs: list[Path], bootloader: Path, image_builder: Path, xorriso: Path, folder: Path,
-               command_line: str, kaslr: bool) -> Path:
+               command_line: str, kaslr: bool, development: bool = True) -> Path:
     """
     An ISO that boots kernel by UEFI through SlopOS's bootloader (decisions/0135): its El Torito EFI image a FAT volume
     with the bootloader as the default boot file and generation 1, of the kernel and every program, written by the
@@ -139,7 +139,8 @@ def make_image(kernel: Path, programs: list[Path], bootloader: Path, image_build
     store = folder / "iso_store"
     (store / "objects").mkdir(parents=True)
     generation_builder = next(image_builder.parent.glob("generation_builder*"))
-    generated = subprocess.run([str(generation_builder), str(esp), str(store), "1", "yes" if kaslr else "no", command_line, str(kernel)]
+    generated = subprocess.run([str(generation_builder), *(["--development"] if development else []), str(esp), str(store), "1",
+                                "yes" if kaslr else "no", command_line, str(kernel)]
                                + [str(program) for program in programs], capture_output=True, text=True)
     if generated.returncode != 0:
         sys.exit(f"boot.py: the generation builder failed:\n{generated.stdout}{generated.stderr}")
@@ -224,10 +225,12 @@ class SerialKeys:
     sends the key over and over until the bootloader says what it boots, and keeps the output in the serial file.
     """
 
-    def __init__(self, serial: Path, key: str):
+    def __init__(self, serial: Path, key: str, then: str = ""):
         self.port = free_port()
         self.serial = serial
         self.key = key.encode()
+        # Typed once the bootloader's command line editor shows its prompt (--bootloader-edit)
+        self.then = then.encode()
         self.thread = threading.Thread(target=self.talk, daemon=True)
 
     def qemu_arguments(self) -> list[str]:
@@ -245,12 +248,18 @@ class SerialKeys:
             return
         connection.settimeout(0.1)
         shown = b""
+        typed = False
         with connection, self.serial.open("wb") as out:
             while True:
-                held = b"bootloader: booting generation" not in shown
+                answered = b"bootloader: booting generation" in shown or b"bootloader: editing the command line" in shown \
+                    or b"isn't built for development" in shown
+                held = not answered
                 try:
                     if held:
                         connection.sendall(self.key)
+                    elif self.then and not typed and b"bootloader: > " in shown:
+                        connection.sendall(self.then)
+                        typed = True
                     data = connection.recv(4096)
                 except socket.timeout:
                     continue
@@ -781,7 +790,8 @@ SEALED_PASSPHRASE = "slopos test passphrase"
 
 
 def make_boot_disk(path: Path, kernel: Path, programs: list[Path], bootloader: Path, image_builder: Path, folder: Path,
-                   command_line: str, kaslr: bool, mark: str, staged: str | None = None, staged_next: Path | None = None) -> None:
+                   command_line: str, kaslr: bool, mark: str, staged: str | None = None, staged_next: Path | None = None,
+                   development: bool = True) -> None:
     """
     A disk that boots kernel through SlopOS's bootloader, made by the image builder: the bootloader, generation 1 and
     the programs on its EFI system partition, as make_image puts them on the ISO, but only the boot set in the generation,
@@ -816,7 +826,8 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], bootloader: P
     boot_set = [program for program in programs if program.stem in BOOT_SET or program.name == SYSTEM_RECORDS or program.suffix == ".library"]
     generation_builder = next(image_builder.parent.glob("generation_builder*"))
     # The recovery generation beside it, of the same boot set (decisions/0118), which the recovery key boots
-    generated = subprocess.run([str(generation_builder), "--recovery", str(esp), str(system / "store"), "1", "yes" if kaslr else "no",
+    generated = subprocess.run([str(generation_builder), "--recovery", *(["--development"] if development else []), str(esp),
+                                str(system / "store"), "1", "yes" if kaslr else "no",
                                 command_line, str(kernel)] + [str(program) for program in boot_set], capture_output=True, text=True)
     if generated.returncode != 0:
         sys.exit(f"boot.py: the generation builder failed:\n{generated.stdout}{generated.stderr}")
@@ -931,6 +942,12 @@ def main() -> int:
                              "bundle, so it changes only a service, which the supervisor applies live (decisions/0126)")
     parser.add_argument("--kernel-alone", action="store_true",
                         help="boot the kernel with no modules, its generation's boot set empty; --programs still gives the bootloader")
+    parser.add_argument("--release-generation", action="store_true",
+                        help="build the generation as a release one, not for development, so the bootloader won't let its "
+                             "command line be edited (decisions/0181, F7)")
+    parser.add_argument("--bootloader-edit",
+                        help="press the bootloader's edit key, e, as the machine starts, and type this after the command line it "
+                             "shows, then Enter (decisions/0181, F7); the first boot only")
     parser.add_argument("--recovery-key", action="store_true",
                         help="hold the bootloader's recovery key, r, on the serial console as the machine starts, "
                              "the first boot only (roadmap B3)")
@@ -988,7 +1005,7 @@ def main() -> int:
         image = None
         if not arguments.boot_disk:
             image = make_image(kernel.resolve(), [program.resolve() for program in programs], bootloader, image_builder, xorriso, folder,
-                               command_line, not arguments.no_kaslr)
+                               command_line, not arguments.no_kaslr, not arguments.release_generation)
         serial = folder / "serial.txt"
         extra = (X86_IOMMU if not aarch64 and not arguments.no_iommu else []) + list(arguments.qemu_arguments)
         console = None
@@ -999,7 +1016,8 @@ def main() -> int:
         if arguments.boot_disk:
             make_boot_disk(disk, kernel.resolve(), [program.resolve() for program in programs], bootloader, image_builder, folder,
                            command_line, not arguments.no_kaslr, arguments.disk or "", arguments.stage_generation,
-                           (programs_folder / "hello_next.elf").resolve() if arguments.stage_next_hello else None)
+                           (programs_folder / "hello_next.elf").resolve() if arguments.stage_next_hello else None,
+                           development=not arguments.release_generation)
             extra += ["-drive", f"file={disk},if=none,id=disk,format=raw",
                       "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on,bootindex=0"]
             phases.append(("making the disk", time.monotonic() - phase_started))
@@ -1024,6 +1042,8 @@ def main() -> int:
             console.thread.start()
         booting_started = time.monotonic()
         keys = SerialKeys(serial, "r") if arguments.recovery_key else None
+        if arguments.bootloader_edit is not None:
+            keys = SerialKeys(serial, "e", arguments.bootloader_edit + "\r")
         if aarch64:
             code = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra, not arguments.no_iommu, keys,
                                arguments.allow_reboot)

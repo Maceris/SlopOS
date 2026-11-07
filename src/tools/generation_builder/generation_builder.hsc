@@ -44,11 +44,25 @@ main :: fn() -> int {
     if argument(arguments, 1) == "--stage" {
         return stage(arguments)
     }
-    // The flags first, then the arguments from base
-    recovery :: argument(arguments, 1) == "--recovery"
-    base :: if recovery { cast[usize](2) } else { cast[usize](1) }
+    // The flags first, in any order, then the arguments from base
+    recovery := false
+    development := false
+    base := cast[usize](1)
+    loop {
+        flag :: argument(arguments, base)
+        if flag == "--recovery" {
+            recovery = true
+        }
+        else if flag == "--development" {
+            development = true
+        }
+        else {
+            break
+        }
+        base += 1
+    }
     if arguments.count < base + 6 {
-        runtime.log_error("usage: generation_builder [--recovery] <esp folder> <store folder> <number> <yes|no> <command line> <kernel> <file>...")
+        runtime.log_error("usage: generation_builder [--recovery] [--development] <esp folder> <store folder> <number> <yes|no> <command line> <kernel> <file>...")
         return 1
     }
     esp :: argument(arguments, base)
@@ -63,6 +77,7 @@ main :: fn() -> int {
     made := generations.Generation.{magic = generations.MAGIC, state = generations.STATE_PERMANENT}
     made.number = number_of(argument(arguments, base + 2)) or_return 3
     made.kaslr = if argument(arguments, base + 3) == "yes" { 1 } else { 0 }
+    made.development = if development { cast[u8](1) } else { cast[u8](0) }
     if !generations.set_line(&made.command_line, argument(arguments, base + 4)) {
         runtime.log_error("generation_builder: the command line is too long")
         return 3
