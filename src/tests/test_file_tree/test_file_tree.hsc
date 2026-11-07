@@ -52,8 +52,9 @@ TreeError :: union {
  *
  * @param here The shell's directory, given without asking, which they're made beneath.
  * @param reading Whether reading is made too: long.txt, of 60 lines, "line 1" to "line 60"; todo.txt, of three, the
- *     second "TODO: water the plants"; bytes.bin, the 32 bytes 0 to 31; and made.value, a typed file of this program's
- *     Made, of 3 files and 1 directory.
+ *     second "TODO: water the plants"; bytes.bin, the 32 bytes 0 to 31; made.value, a typed file of this program's
+ *     Made, of 3 files and 1 directory; and Café.txt, its é one code point, for "did you mean" to find from a name
+ *     typed in capitals with a combining accent.
  * @param scripts Whether three scripts are made too (decisions/0179, 11e6): report.shell, which takes here, a pattern and
  *     a count, says them, lists here and searches it; into.shell, which takes here and into, two directories, and lists
  *     into; and escape.shell, which takes here and tries to view ../notes.txt, beyond it.
@@ -85,7 +86,7 @@ main :: fn(here: os.Channel[dir.Dir], reading: bool, scripts: bool) -> Result[Ma
         if !make_reading(directory) {
             return .Error(.Unwritable(problem))
         }
-        made.files += 4
+        made.files += 5
         made.directories += 1
     }
     if scripts {
@@ -111,6 +112,9 @@ make_reading :: fn(directory: os.Directory) -> bool {
             return false
         }
         case None => {}
+    }
+    if os.write_entire_file_in(directory, "reading/Café.txt", "a café\n") is_some {
+        return false
     }
     long : u8[..]
     defer runtime.array_free(&long)

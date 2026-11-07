@@ -344,6 +344,8 @@ session_done :: fn(shell: ptr[mut Shell], tree: ptr[Node], out: ptr[mut os.Outgo
     return match os.message_of[programs.Response](&into)^ {
         case Done => .Ok(.Null)
         case Refused(problem) => error_at(tree.at, message("%1: %2", name, install_problem(problem)))
+        case NeedsParameter(parameter) => error_at(tree.at, message("%1: its program needs its %2, which an installation isn't given: only a data directory, settings, the clock and the locale",
+            name, copied(os.items(&into, parameter))))
         case _ => error_at(tree.at, "the session manager couldn't be asked")
     }
 }
@@ -359,7 +361,7 @@ install_problem :: fn(problem: programs.InstallProblem) -> string {
         case .NoUser => "this session has no user, so no installations of its own"
         case .BadName => "an installation's name is 1 to 31 letters, digits and _"
         case .NoSuchProgram => "there's no program of that name"
-        case .NotInstallable => "that program isn't one an installation can run: its entry takes other things"
+        case .NotInstallable => "that program's bundle couldn't be read"
         case .NameTaken => "an installation has that name already; give another with --as"
         case .Full => "there's no room for another installation"
         case .NotInstalled => "there's no installation of yours by that name running or installed"
@@ -448,4 +450,26 @@ copied_first :: fn(bytes: u8[], count: usize) -> string {
         return ""
     }
     return string_of(&kept[0], kept.count)
+}
+
+/**
+ * Ask the session manager for a connection to the session's powerbox, for a program the shell starts (decisions/0181,
+ * F4).
+ *
+ * @param shell The shell, whose session is asked.
+ * @param program The program's name, which the powerbox shows the user when it asks.
+ * @return The connection's end, the caller's to give; null without a session manager, or a session without a powerbox.
+ */
+powerbox_connection :: fn(shell: ptr[mut Shell], program: string) -> slop_os.Channel? {
+    out := os.Outgoing.{}
+    request :: os.begin[programs.Request](&out)
+    request^ = .Powerbox(os.append(&out, string_bytes(program)))
+    into := os.Incoming.{}
+    if !ask_session(shell, &out, &into) {
+        return null
+    }
+    return match os.message_of[programs.Response](&into)^ {
+        case PowerboxGiven(given) => given.end
+        case _ => null
+    }
 }

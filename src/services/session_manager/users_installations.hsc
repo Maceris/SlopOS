@@ -153,9 +153,10 @@ own_session_answer :: fn(sessions: ptr[mut Manager], number: u32, request: progr
     return match request {
         case Running => running_programs(sessions, number, out)
         case EndInstallation(name) => end_installation(sessions, number, text_from(os.items(into, name)))
-        case Install(installing) => install(sessions, number, text_from(os.items(into, installing.name)), text_from(os.items(into, installing.program)))
+        case Install(installing) => install(sessions, number, text_from(os.items(into, installing.name)), text_from(os.items(into, installing.program)), out)
         case Uninstall(name) => uninstall_users(sessions, number, text_from(os.items(into, name)))
         case Installation(index) => installation_at(sessions, number, index, out)
+        case Powerbox(name) => powerbox_answer(sessions, number, text_from(os.items(into, name)))
         case _ => programs.Response.Unsupported
     }
 }
@@ -214,10 +215,13 @@ end_installation :: fn(sessions: ptr[mut Manager], number: u32, name: string) ->
  * @param sessions The session manager.
  * @param number The session's number, whose user it's for.
  * @param name The installation's name: 1 to MAX_INSTALLATION_NAME letters, digits and _, and no installation's yet.
- * @param program The program's name in the boot root, whose entry has to be the installations'.
- * @return Done once it's listed, started where it can be; Refused with why otherwise.
+ * @param program The program's name in the boot root, whose entry may take only what an installation is given, and
+ *     what it can go without (entries.hsc).
+ * @param out The answer's message, a parameter's name appended to it for NeedsParameter.
+ * @return Done once it's listed, started where it can be; NeedsParameter with a parameter it can't go without that an
+ *     installation isn't given; Refused with why otherwise.
  */
-install :: fn(sessions: ptr[mut Manager], number: u32, name: string, program: string) -> programs.Response {
+install :: fn(sessions: ptr[mut Manager], number: u32, name: string, program: string, out: ptr[mut os.Outgoing]) -> programs.Response {
     if cast[usize](number) >= sessions.sessions.count || sessions.sessions[cast[usize](number)].user_bytes == 0 {
         return .Refused(.NoUser)
     }
@@ -237,8 +241,13 @@ install :: fn(sessions: ptr[mut Manager], number: u32, name: string, program: st
         return .Refused(.Full)
     }
     found :: bundle_named(sessions, program) or_return .Refused(.NoSuchProgram)
-    executable :: installation_program(sessions, found) or_return .Refused(.NotInstallable)
-    _ = slop_os.handle_close(cast[slop_os.Handle](executable))
+    match entry_plan(sessions, found) {
+        case Ok(plan) => _ = slop_os.handle_close(cast[slop_os.Handle](plan.program))
+        case Error(problem) => match problem {
+            case Needs(parameter) => return .NeedsParameter(os.append(out, string_bytes(parameter)))
+            case Unreadable => return .Refused(.NotInstallable)
+        }
+    }
     users.entries[at] = entry
     users.count += 1
     if !write_user_installations(sessions, number, users) {
@@ -518,9 +527,85 @@ serve_finders :: fn(sessions: ptr[mut Manager], into: ptr[mut os.Incoming]) {
                     add_finder(sessions, sessions.finders[i].session, connection.end)
                     continue
                 }
+                case Powerbox(name) => response^ = powerbox_answer(sessions, sessions.finders[i].session, text_from(os.items(into, name)))
                 case _ => response^ = .Unsupported
             }
             _ = programs.send_response(end, sessions.port, &out)
         }
+    }
+}
+
+// ---- Installations stopped under memory pressure (decisions/0181, F3)
+
+/**
+ * Remember an installation stopped under memory pressure, to start it again when its session's next shown.
+ *
+ * @param sessions The session manager.
+ * @param number Its session's number.
+ * @param name Its name, as its program's.
+ * @param name_bytes How many of name's bytes are its.
+ */
+remember_pressed :: fn(sessions: ptr[mut Manager], number: u32, name: u8[session.NAME_BYTES], name_bytes: u8) {
+    for &pressed in sessions.pressed {
+        if !pressed.in_use {
+            pressed^ = Pressed.{in_use = true, session = number, name = name, name_bytes = name_bytes}
+            return void
+        }
+    }
+    runtime.log_info("memory pressure: no room to remember an installation stopped, to start it again")
+}
+
+/**
+ * Start again a session's installations stopped under memory pressure, now that it's shown, each by its record in the
+ * system's list or its user's.
+ *
+ * @param sessions The session manager.
+ * @param number The session shown; NO_SESSION starts none.
+ */
+restart_pressed :: fn(sessions: ptr[mut Manager], number: u32) {
+    for &pressed in sessions.pressed {
+        if !pressed.in_use || pressed.session != number {
+            continue
+        }
+        pressed.in_use = false
+        name :: text_from(first_bytes(pressed.name[0..<pressed.name.count], cast[usize](pressed.name_bytes)))
+        for list in system_records.Installations.[read_installations(sessions), read_user_installations(sessions, number)] {
+            for i in cast[usize](0)..<list.entries.count {
+                if i < cast[usize](list.count) && system_records.text_of(&list.entries[i].name) == name {
+                    runtime.log_info("starting % again in session %, stopped under memory pressure", name, number)
+                    _ = start_installation(sessions, number, list.entries[i])
+                }
+            }
+        }
+    }
+}
+
+/**
+ * See the first bytes of a fixed field.
+ *
+ * @param bytes The field.
+ * @param count How many of its bytes are used; past its end, all of them.
+ * @return A view of them.
+ */
+first_bytes :: fn(bytes: u8[], count: usize) -> u8[] {
+    if count > bytes.count {
+        return bytes
+    }
+    return bytes[0..<count]
+}
+
+/**
+ * Give a program the shell starts a connection to its session's powerbox, under its name (decisions/0181, F4).
+ *
+ * @param sessions The session manager, which asks the session's powerbox to serve another connection.
+ * @param number The session's number.
+ * @param name The program's name, as the powerbox shows it.
+ * @return PowerboxGiven with the connection's end, the shell's; Refused(Failed) for a session without a powerbox, or
+ *     if it couldn't be made.
+ */
+powerbox_answer :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> programs.Response {
+    return match powerbox_for(sessions, number, name) {
+        case Some(made) => programs.Response.PowerboxGiven(made)
+        case None => programs.Response.Refused(.Failed)
     }
 }

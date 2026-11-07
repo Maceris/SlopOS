@@ -57,6 +57,8 @@ PRESSURE_KEY : u64 : 900
 PROGRAMS_KEY : u64 : 800
 /** The port key a finding connection's bound under, plus its index among the finders (decisions/0179, 11e6). */
 FINDER_KEY : u64 : 850
+/** The most installations remembered as stopped under memory pressure, to start again when their session's shown. */
+MAX_PRESSED :: 16
 /** The most finding connections, scripts' shells', open at once, across the sessions. */
 MAX_FINDERS :: 8
 /** The percentage of its budget's limit at which the session manager's under memory pressure. */
@@ -150,17 +152,6 @@ PowerboxGrants :: struct {
     manager : os.Channel[powerbox.Powerbox],
 }
 
-/**
- * What an installation is given (counter.main, the entry installations are launched with): its data directory and its
- * settings.
- */
-InstallationGrants :: struct {
-    /** Its data directory, apps/<name> in the session's apps directory, which moves to it. */
-    data : installations.AppData,
-    /** A connection to its settings in the config store; null without the store. */
-    settings : config.Config[counter_app.CounterSettings]?,
-}
-
 /** A session: whether it's one now, and its user's name, empty for a boot with no accounts. */
 Session :: struct {
     /** Whether this place holds a session now. */
@@ -243,6 +234,20 @@ MappedObject :: struct {
     bytes : u8[],
 }
 
+/**
+ * An installation stopped under memory pressure (decisions/0181, F3), started again when its session's next shown.
+ */
+Pressed :: struct {
+    /** Whether this place holds one. */
+    in_use : bool,
+    /** Its session's number. */
+    session : u32,
+    /** Its name, the first name_bytes of it. */
+    name : u8[session.NAME_BYTES],
+    /** How many bytes its name has. */
+    name_bytes : u8,
+}
+
 /** A finding connection: a session's, which only finds programs (programs.Request.Connect). */
 Finder :: struct {
     /** Whether this place holds one. */
@@ -306,6 +311,8 @@ Manager :: struct {
     programs : Program[MAX_PROGRAMS],
     /** The finding connections, scripts' shells' (decisions/0179, 11e6). */
     finders : Finder[MAX_FINDERS],
+    /** The installations stopped under memory pressure, to start again when their sessions are shown. */
+    pressed : Pressed[MAX_PRESSED],
     /** How many of programs have been used: those after it never have. */
     count : usize,
 }
@@ -1383,6 +1390,7 @@ shown :: fn(sessions: ptr[mut Manager], number: u32) {
     if cast[usize](number) < sessions.sessions.count {
         sessions.sessions[cast[usize](number)].shown_at = sessions.showings
     }
+    restart_pressed(sessions, number)
     if !sessions.test_pressure || number == session.NO_SESSION {
         return void
     }
@@ -1440,6 +1448,7 @@ relieve :: fn(sessions: ptr[mut Manager]) {
             break
         }
         runtime.log_info("memory pressure: asking % in session % to stop", name_of(&sessions.programs[idle]), sessions.programs[idle].session)
+        remember_pressed(sessions, sessions.programs[idle].session, sessions.programs[idle].name, sessions.programs[idle].name_bytes)
         _ = end_program(sessions, idle, "under memory pressure")
         stopped += 1
     }
@@ -1519,17 +1528,17 @@ write_installations :: fn(sessions: ptr[mut Manager], list: system_records.Insta
 
 /**
  * Start an installation in a session: its bundle's program (the bundle it names, or the one the store's boot root
- * names after its program), if the bundle's manifest is the entry installations are launched with; its data directory,
- * apps/<name> in the session's apps directory, made if it isn't there; and its settings, the config store's value
- * "settings" of its owner (owner_of).
+ * names after its program), given what its entry asks that an installation is given (entries.hsc, decisions/0181's
+ * F3): its data directory, apps/<name> in the session's apps directory, made if it isn't there; its settings, of its
+ * owner (owner_of); the clock and the locale.
  *
  * @param sessions The session manager, which finds the program in its bundle store, opens its settings through
  *     its config store, launches it, and keeps it.
  * @param number The session's number; past MAX_SESSIONS, or a session without an apps directory, it has no data
- *     directory, so it isn't started.
+ *     directory, so one that asks for it isn't started.
  * @param entry The installation's record: its name, its program's name and the bundle it names, if any.
- * @return Whether it started; not without its bundle, for a bundle of another entry, without a data directory,
- *     without room for another program, or if the launch failed. Each is logged.
+ * @return Whether it started; not without its bundle, for one whose entry takes what an installation isn't given,
+ *     without a data directory it asks for, without room for another program, or if the launch failed. Each is logged.
  */
 start_installation :: fn(sessions: ptr[mut Manager], number: u32, entry: system_records.InstallationRecord) -> bool {
     name :: system_records.text_of(&entry.name)
@@ -1540,34 +1549,17 @@ start_installation :: fn(sessions: ptr[mut Manager], number: u32, entry: system_
             return false
         }
     }
-    program :: match installation_program(sessions, bundle_hash) {
-        case Some(found) => found
-        case None => {
-            runtime.log_info("installation %: its bundle isn't one an installation can run", name)
+    plan :: match entry_plan(sessions, bundle_hash) {
+        case Ok(made) => made
+        case Error(problem) => {
+            match problem {
+                case Needs(parameter) => runtime.log_info("installation %: its program needs %, which an installation isn't given", name, parameter)
+                case Unreadable => runtime.log_info("installation %: its bundle couldn't be read", name)
+            }
             return false
         }
     }
-    data := NONE
-    if cast[usize](number) < sessions.sessions.count && sessions.sessions[cast[usize](number)].apps != NONE {
-        data = opened_directory(sessions.sessions[cast[usize](number)].apps, name, true) or_else NONE
-    }
-    if data == NONE {
-        runtime.log_info("installation %: no data directory for it", name)
-        _ = slop_os.handle_close(cast[slop_os.Handle](program))
-        return false
-    }
-    grants := InstallationGrants.{data = installations.AppData.{end = data}}
-    grants.settings = settings_for[counter_app.CounterSettings](sessions, number, name)
-    prepared :: match prepare(sessions, number, name) {
-        case Some(made) => made
-        case None => {
-            _ = slop_os.handle_close(cast[slop_os.Handle](program))
-            _ = slop_os.handle_close(cast[slop_os.Handle](data))
-            return false
-        }
-    }
-    return placed(sessions, number, name, prepared, os.launch(sessions.manager, sessions.manager_port, name, program, INSTALLATION_BUDGET,
-        counter.main, grants, prepared.options), true)
+    return launch_installation(sessions, number, name, plan)
 }
 
 /**
@@ -1640,19 +1632,6 @@ bundle_named :: fn(sessions: ptr[mut Manager], name: string) -> bundle.Hash? {
         }
     }
     return null
-}
-
-/**
- * Find a bundle's program, as paged memory from the store, if its manifest is the entry installations are launched
- * with (counter_app's, the schema of counter.main's type).
- *
- * @param sessions The session manager, whose bundle store gives the bundle and its program.
- * @param bundle_hash The bundle's hash in the bundle store; all zeros, or one it doesn't have, gives null.
- * @return The program's memory, the caller's; null for a bundle of another entry, which can't be given what it takes,
- *     or one the store doesn't give.
- */
-installation_program :: fn(sessions: ptr[mut Manager], bundle_hash: bundle.Hash) -> slop_os.Memory? {
-    return program_of(sessions, bundle_hash, bundle.Hash.{bytes = schema.hash(type_info_of(type_of(counter.main)))})
 }
 
 /**
@@ -1972,9 +1951,18 @@ check_installations :: fn(sessions: ptr[mut Manager], number: u32) {
         runtime.log_info("test_installations: no installations")
         return void
     }
-    // An update to a bundle of another entry is refused before it's written
-    hello_bundle :: bundle_named(sessions, "hello") or_else bundle.Hash.{}
-    refused :: installation_program(sessions, hello_bundle) is_none
+    // An update to a bundle whose entry needs what an installation isn't given (list's here) is refused before it's written
+    list_bundle :: bundle_named(sessions, "list") or_else bundle.Hash.{}
+    refused :: match entry_plan(sessions, list_bundle) {
+        case Ok(plan) => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](plan.program))
+            false
+        }
+        case Error(problem) => match problem {
+            case Needs(parameter) => parameter == "here"
+            case _ => false
+        }
+    }
     // Updated: stopped, then started from the bundle it runs now, its data kept
     stop_installation(sessions, number, "counter")
     next :: bundle_named(sessions, "counter_next") or_else bundle.Hash.{}
@@ -1990,7 +1978,7 @@ check_installations :: fn(sessions: ptr[mut Manager], number: u32) {
         again.count += 1
     }
     reinstalled :: write_installations(sessions, again) && start_installation(sessions, number, entry) && counted(sessions, number, "counter", 1)
-    runtime.log_info("test_installations: an update to hello's bundle %, updated to counter_next %, uninstalled %, installed again %",
+    runtime.log_info("test_installations: an update to list's bundle %, updated to counter_next %, uninstalled %, installed again %",
         if refused { "refused" } else { "taken" }, if updated { "and run" } else { "not run" }, if removed { "whole" } else { "not whole" },
         if reinstalled { "and run" } else { "not run" })
 }

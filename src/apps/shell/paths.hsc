@@ -4,14 +4,15 @@ import runtime from "base"
 import language from "../../shell_language"
 import os from "std"
 import strings from "std"
+import unicode from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
 
 /*
- * "Did you mean" (decisions/0179, design/lessons.md §4): a path that isn't there, whose last name matches an entry
- * of its directory once both are compared without ASCII case and with spaces at their ends dropped, is answered with
- * that entry's name, the bytes it's stored with, as a name typed from a Mac's NFD or with a trailing space looks the
- * same and isn't. Unicode normalization and case folding wait for std to have them.
+ * "Did you mean" (decisions/0179, 0181's F2, design/lessons.md §4): a path that isn't there, whose last name matches
+ * an entry of its directory once both are compared without case, however their accents were written, and with spaces
+ * at their ends dropped, is answered with that entry's name, the bytes it's stored with, as a name typed from a Mac's
+ * NFD, in other case or with a trailing space looks the same and isn't.
  */
 
 /**
@@ -78,26 +79,58 @@ meant_path :: fn(shell: ptr[mut Shell], given: string) -> string? {
 }
 
 /**
- * Tell whether two names are the same once folded: ASCII letters compared without case, and spaces at either end
- * dropped.
+ * Tell whether two names are the same once folded: spaces at either end dropped, then compared by canonical caseless
+ * matching (the Unicode Standard, 3.13: NFD, full case folding, NFD again), so case doesn't count, and neither does
+ * whether an accent was written composed or after its letter.
  *
  * @param a One name, UTF-8.
  * @param b The other.
- * @return Whether what's left of them has the same bytes, but for ASCII case; false if either is only spaces.
+ * @return Whether their keys (caseless_key) have the same bytes; false if either is only spaces, or too long to fold
+ *     (past MAX_FOLDED bytes).
  */
 folded_same :: fn(a: string, b: string) -> bool {
     left :: trimmed(a)
     right :: trimmed(b)
-    if left.count != right.count || left.count == 0 {
+    if left.count == 0 || right.count == 0 {
         return false
     }
-    others :: string_bytes(right)
-    for character, i in string_bytes(left) {
-        if i < others.count && lower(character) != lower(others[i]) {
-            return false
-        }
+    left_key :: caseless_key(left) or_return false
+    right_key :: caseless_key(right) or_return false
+    return left_key == right_key
+}
+
+/** The most bytes of a name folded for "did you mean"; a longer one isn't compared. */
+MAX_FOLDED :: 128
+
+/**
+ * Make a name's canonical caseless key: NFD, full case folding, NFD again.
+ *
+ * @param name The name, UTF-8, at most MAX_FOLDED bytes.
+ * @return The key, on the heap, never freed; null for a longer name.
+ */
+caseless_key :: fn(name: string) -> string? {
+    bytes :: string_bytes(name)
+    if bytes.count > MAX_FOLDED {
+        return null
     }
-    return true
+    // Each step at most triples the bytes, so room for the last is 27 times the name
+    scratch : u32[MAX_FOLDED * 9 * unicode.SCRATCH_PER_BYTE]
+    first : u8[MAX_FOLDED * 3]
+    second : u8[MAX_FOLDED * 9]
+    last : u8[MAX_FOLDED * 27]
+    a :: unicode.normalize(bytes, .NFD, scratch[0..<scratch.count], first[0..<first.count]) or_return null
+    if a > first.count {
+        return null
+    }
+    b :: unicode.case_fold(first[0..<a], scratch[0..<scratch.count], second[0..<second.count]) or_return null
+    if b > second.count {
+        return null
+    }
+    c :: unicode.normalize(second[0..<b], .NFD, scratch[0..<scratch.count], last[0..<last.count]) or_return null
+    if c > last.count || c == 0 {
+        return ""
+    }
+    return strings.clone(string_of(&last[0], c)) or_return null
 }
 
 /**
@@ -122,14 +155,4 @@ trimmed :: fn(name: string) -> string {
         end -= 1
     }
     return slice_of(name, start, end)
-}
-
-/**
- * Give an ASCII letter in lower case.
- *
- * @param byte A byte of UTF-8.
- * @return It in lower case for A to Z; itself otherwise.
- */
-lower :: fn(byte: u8) -> u8 {
-    return if byte >= cast[u8]('A') && byte <= cast[u8]('Z') { byte + 32 } else { byte }
 }

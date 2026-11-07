@@ -2,6 +2,7 @@ package programs
 
 import os from "std"
 import slop_os from "std/os"
+import powerbox from "../powerbox"
 
 /*
  * What a session's shell asks the session manager for (decisions/0170): a program of the bundle store's boot root, by
@@ -100,6 +101,12 @@ Request :: union {
      * another. Answered with nothing.
      */
     Connect(os.Channel[Programs]),
+    /**
+     * Ask for a connection to the session's powerbox for a program the shell starts, by the program's name, which the
+     * powerbox shows the user when it asks (decisions/0181, F4). Answered with PowerboxGiven, or Refused(Failed) for a
+     * session without a powerbox. A finding connection may ask too: what the program's given, the user chooses.
+     */
+    Powerbox(slop_os.Relative[u8]),
 }
 
 /** A program's documentation, as the bundle store keeps it. */
@@ -163,7 +170,7 @@ InstallProblem :: enum #backed_by(u8) {
     BadName = 2,
     /** The boot root has no program of that name. */
     NoSuchProgram = 3,
-    /** The program's entry isn't the one installations are started with. */
+    /** The program's bundle or manifest couldn't be read. */
     NotInstallable = 4,
     /** An installation of the system's or the user's has the name already. */
     NameTaken = 5,
@@ -203,19 +210,27 @@ Response :: union {
     Refused(InstallProblem),
     /** The answer to Installation: the installation at the index. */
     Listed(Installed),
+    /**
+     * The answer to Install for a program whose entry needs, without being optional, what an installation isn't given:
+     * that parameter's name (decisions/0181, F3).
+     */
+    NeedsParameter(slop_os.Relative[u8]),
+    /** The answer to Powerbox: the program's connection to the session's powerbox, which moves to the shell. */
+    PowerboxGiven(os.Channel[powerbox.Powerbox]),
 }
 
 /**
  * Tell whether a request may be sent again, after a reconnect, without doing more than sending it once did.
  *
  * @param request The request, which isn't changed.
- * @return False for Install and Uninstall, which change the user's list; true for the rest: finding, listing,
- *     describing, ending what's ended again change nothing more.
+ * @return False for Install and Uninstall, which change the user's list, and Powerbox, which makes a connection each
+ *     time; true for the rest: finding, listing, describing, ending what's ended again change nothing more.
  */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Install(_) => false
         case Uninstall(_) => false
+        case Powerbox(_) => false
         case _ => true
     }
 }

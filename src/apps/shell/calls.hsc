@@ -45,6 +45,11 @@ Giving :: enum {
     Input,
     /** A pipeline's records: the Sink[T] named output, which writes for what comes after it, or for the shell. */
     Output,
+    /**
+     * A connection to the session's powerbox, without an argument, made by the session manager under the program's
+     * name (decisions/0181, F4): what it's given through it, the user chooses on the trusted path.
+     */
+    Powerbox,
     /** A grant the shell doesn't make: a parameter that's optional goes without it. */
     Other,
 }
@@ -526,6 +531,9 @@ giving_of :: fn(manifest: ptr[schema.Schema], place: usize) -> Giving {
         if inner == "ReadOnlyFile" {
             return .ReadOnlyFile
         }
+        if inner == "Powerbox" {
+            return .Powerbox
+        }
     }
     return .Other
 }
@@ -573,6 +581,9 @@ match_arguments :: fn(tree: ptr[Node], parameters: ptr[mut Parameter[..]]) -> Re
             }
             if parameter.giving == .Terminal {
                 return error_at(argument.at, message("--% is the shell's terminal, which it's given without asking", argument.text))
+            }
+            if parameter.giving == .Powerbox {
+                return error_at(argument.at, message("--% is the session's powerbox, which it's given without asking", argument.text))
             }
             if parameter.giving == .Input || parameter.giving == .Output {
                 return error_at(argument.at, message("--% is a pipeline's, given by |", argument.text))
@@ -769,6 +780,17 @@ grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter
         made :: protocol.connect(shell.console.end, shell.console.port, budget) or_return .Error(EvalError.{
             message = "there's no memory for its terminal connection", at = tree.at})
         return .Ok(cast[slop_os.Handle](made.end))
+    }
+    if parameter.giving == .Powerbox {
+        match powerbox_connection(shell, tree.text) {
+            case Some(made) => return .Ok(cast[slop_os.Handle](made))
+            case None => {
+                if parameter.optional {
+                    return .Ok(null)
+                }
+                return .Error(EvalError.{message = message("% needs the session's powerbox, which this session hasn't", tree.text), at = tree.at})
+            }
+        }
     }
     argument :: match parameter.argument {
         case Some(given) => given

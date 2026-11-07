@@ -197,7 +197,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 70 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 71 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 5 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -741,10 +741,13 @@ TESTS = [
         "view reading/bytes.bin\\r\\p"
         "view reading/made.value\\r\\p\\p"
         "view reading/long.txt | page\\r\\p\\p \\p\\pG\\p\\pk\\p\\px\\p\\pq\\p"
-        "view reading/todo.txt | page\\r",
+        "view reading/todo.txt | page\\r\\p"
+        "view reading/CAFE\\u0301.txt\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
-        "--expect-console-line=files: 7", "--expect-console-line=reading/todo.txt  2     TODO: water the plants",
+        "--expect-console-line=files: 8", "--expect-console-line=reading/todo.txt  2     TODO: water the plants",
+        # CAFÉ, written with E and a combining acute, is Café once both are normalized and case folded
+        "--expect-console-line=error: reading/CAFE\u0301.txt: there's nothing there; did you mean reading/Café.txt?",
         "--expect-console-line=reading/long.txt  0     ",
         "--expect-console-line=error: search --pattern: BadPattern: The pattern isn't a regular expression; check its parentheses, "
         "brackets and repetitions.",
@@ -767,7 +770,7 @@ TESTS = [
         "install counter --as tally\\r\\p\\p"
         "installations\\r\\p"
         "processes | where name == \"tally\" | map state\\r\\p\\p"
-        "install hello\\r\\p"
+        "install list\\r\\p"
         "install counter --as tally\\r\\p"
         "end tally\\r\\p\\p\\p"
         "processes\\r\\p\\p"
@@ -781,7 +784,7 @@ TESTS = [
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-console-line=counter  counter  system", "--expect-console-line=tally    counter  yours",
         "--expect-console-line=\"running\"",
-        "--expect-console-line=error: hello: that program isn't one an installation can run: its entry takes other things",
+        "--expect-console-line=error: list: its program needs its here, which an installation isn't given: only a data directory, settings, the clock and the locale",
         "--expect-console-line=error: tally: an installation has that name already; give another with --as",
         "--expect-console-line=name   directory  snapshot", "--expect-console-line=no kept grants",
         "--expect-console-line=error: there's no kept grant 7",
@@ -826,7 +829,7 @@ TESTS = [
         "help report.shell\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
-        "--expect-console-line=files: 10", "--expect-console-line=looking for TODO, 2 times",
+        "--expect-console-line=files: 11", "--expect-console-line=looking for TODO, 2 times",
         "--expect-console-line=reading/todo.txt  2     TODO: water the plants",
         "--expect-console-line=made.value  File  16 B", "--expect-console-line=in here",
         "--expect-console-line=error: line 3: ../notes.txt: that's above your home",
@@ -835,6 +838,29 @@ TESTS = [
         "--expect-console-line=report.shell is a script, run in a shell of its own with only what it's given. It takes:",
         "--expect-console-line=  --pattern (string)",
         "--refuse-console-line=not reached",
+        "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
+    # Kept grants from the shell, end to end (decisions/0181, F4): a program the shell starts asks its powerbox for a file
+    # to keep, which the user ticks (Tab) in the chooser; it opens it again by its key; grants lists it and revokes it;
+    # opened again after, it's refused
+    ("keeps a grant a program in the shell asks for, lists it with grants, and revokes it", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=330")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wtest_kept_grant\\r\\w\\p\\e[3;7~\\w\\t\\r"
+        "\\w\\ptest_kept_grant --reopen\\r\\p\\p"
+        "grants\\r\\p"
+        "grants --revoke 1\\r\\p"
+        "grants\\r\\p"
+        "test_kept_grant --reopen\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--console-input-after=Asked the powerbox; Ctrl+Alt+Delete shows what it asks.", "--console-input-after=  Choose a file",
+        "--console-input-after=line: a kept line",
+        "--expect-line=[user] powerbox: kept kept.txt for test_kept_grant",
+        "--expect-line=[user] powerbox: reopened kept for test_kept_grant",
+        "--expect-console-line=grant 1 revoked", "--expect-console-line=no kept grants",
+        "--expect-line=[user] powerbox: couldn't reopen kept for test_kept_grant",
+        "--expect-console-line=error: test_kept_grant --powerbox: Refused: The powerbox gave nothing; for reopen, nothing's kept under the key, or it was revoked.",
         "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
     # Automatic snapshots (decisions/0179): every 2 seconds with test_snapshot_seconds=2, kept 20, of the two volumes
     # served, so after a while two are taken and two deleted each time
@@ -847,14 +873,16 @@ TESTS = [
     # the idle installation, the counter of the session not shown, to stop, and leaves the shown session's running
     ("stops the idle installations of sessions not shown under memory pressure", 7,
      with_before_qemu([argument.replace("test_services", "test_services use_echo test_pressure test_settle=45") for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
-        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r\\wfirst line\\r\\w\\e[3;7~\\pn\\wadmin\\rcorrect horse battery staple\\r",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r\\wfirst line\\r\\w\\e[3;7~\\pn\\wadmin\\rcorrect horse battery staple\\r\\p\\p\\p\\p\\p\\p\\p\\p\\e[3;7~\\ps",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
         "--console-input-after=echo: first line", "--console-input-after=  Log in",
         "--expect-line=[user] terminal: login: another session",
         "--expect-line=[user] sessions: memory pressure: asking counter in session 0 to stop",
         "--expect-line=[user] sessions: ending counter under memory pressure",
-        "--expect-line=[user] sessions: test_pressure: idle installations stopped: 1; the shown session's left running"])),
+        "--expect-line=[user] sessions: test_pressure: idle installations stopped: 1; the shown session's left running",
+        # Shown again, its installation stopped under pressure is started again (decisions/0181, F3)
+        "--expect-line=[user] sessions: starting counter again in session 0, stopped under memory pressure"])),
     ("makes the administrator's account and home volume, limits wrong passwords, and recovers it with its recovery code", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_accounts") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] storage_manager: made the accounts volume",
@@ -912,7 +940,7 @@ TESTS = [
         "--expect-line=[user] counter: run 1, version 1",
         "--expect-line=[user] counter: run 2, version 2",
         "--expect-line=[user] config: forgot user:admin:counter's values",
-        "--expect-line=[user] sessions: test_installations: an update to hello's bundle refused, updated to counter_next and run, "
+        "--expect-line=[user] sessions: test_installations: an update to list's bundle refused, updated to counter_next and run, "
         "uninstalled whole, installed again and run"])),
     # SlopOS's own bootloader (roadmap B2, decisions/0133), which starts the other CPUs
     ("boots a disk through SlopOS's own bootloader, every CPU started", 7, with_before_qemu(BOOT_DISK_BASE, [

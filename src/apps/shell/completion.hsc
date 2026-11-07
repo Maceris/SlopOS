@@ -317,7 +317,8 @@ complete_parameters :: fn(shell: ptr[mut Shell], command: string, prefix: string
     documentation :: program_documentation(shell, command) or_else bundle.Documentation.{}
     for input in entry.inputs {
         parameter :: parameter_of(&manifest, input)
-        if parameter.giving == .Terminal || parameter.giving == .Input || parameter.giving == .Output || !starts_with(option_name(parameter.name), typed) {
+        if parameter.giving == .Terminal || parameter.giving == .Powerbox || parameter.giving == .Input || parameter.giving == .Output
+            || !starts_with(option_name(parameter.name), typed) {
             continue
         }
         text := given_text(&manifest, parameter)

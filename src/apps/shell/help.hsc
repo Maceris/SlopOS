@@ -344,6 +344,7 @@ given_text :: fn(manifest: ptr[schema.Schema], parameter: Parameter) -> string {
     return match parameter.giving {
         case .Value => message("%1%2", type_text(manifest, parameter.held), optional)
         case .Terminal => "the shell's terminal, given without asking"
+        case .Powerbox => "the session's powerbox, given without asking: what it gives, you choose"
         case .Dir => message("a directory, by its path%", optional)
         case .Here => "the shell's directory, given without asking, or another by its path"
         case .File => message("a file to read and write, by its path%", optional)

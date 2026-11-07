@@ -84,3 +84,34 @@ Seven parts, before P, each with an as-built record:
 - **Tests**: the shell language's host tests show instants, cut a table to 10 columns, and read a `ByteCount` and an
   `Instant` back as a size and an instant; the boot tests expecting bare sizes and the old line for a job's end now
   expect `17 B` and its count of records.
+
+## As Built, F2 (2026-11-07)
+- **Hemera's `std/unicode`**: `normalize` (NFD, NFC), `case_fold` (CaseFolding.txt's C and F), and `decompose`,
+  `compose`, `fold` and `combining_class` beneath them, from tables a second generator writes
+  (`_generator/generate_normalization.py`, from UnicodeData.txt, DerivedNormalizationProps.txt and CaseFolding.txt of
+  Unicode 17.0.0): 2,081 decompositions, whole; 961 compositions, without those excluded; 1,585 foldings; Hangul's
+  worked out. Nothing allocates: the caller gives a code point scratch and an output, sized by `SCRATCH_PER_BYTE` (4)
+  and `OUTPUT_PER_BYTE` (3). Hemera's unicode scenario checks NFC and NFD against NormalizationTest.txt's parts 0 and 2
+  to 5 and a line in ten of part 1, kept beside the tables, and case folding and canonical caseless matching.
+- **"Did you mean"**: two names match when their canonical caseless keys do (NFD, case folded, NFD again), spaces at
+  their ends dropped, up to 128 bytes each. The reading boot test types `view reading/CAFE` with a combining accent and
+  is offered `reading/Café.txt`, its é one code point.
+
+## As Built, F3 (2026-11-07)
+- **The session manager** (`entries.hsc`): a bundle's manifest read for its entry's parameters: an `AppData` given the
+  installation's data directory, a `Config[T]` its value of the parameter's name, an optional anything else nothing,
+  and any other refused, by its name (`programs`' new answer `NeedsParameter`, which the shell shows: `list: its program
+  needs its here, which an installation isn't given`). Installations are launched by name with those grants, as the
+  shell launches programs; the fixed counter entry, `InstallationGrants` and `installation_program` are gone, and
+  `test_installations` checks `list` is refused, as `hello`, all optional now, would be taken.
+- **After memory pressure**: an installation stopped under pressure is remembered (up to 16), and started again when its
+  session's next shown; the pressure boot test switches back to the first session (the secure attention key, then S)
+  and sees its counter started again.
+
+## As Built, F4 (2026-11-07)
+- **The shell gives the powerbox**: a parameter of `Channel[Powerbox]` is given a connection the session manager makes
+  for it, under the program's name, which the powerbox shows (`programs`' new request `Powerbox`, from the shell's
+  connection or a script's finding one). Before, programs in the shell's sessions couldn't reach the powerbox at all.
+- **Test**: `test_kept_grant` asks for a file to keep and writes a line in it, or reopens it; a boot test keeps it
+  through the chooser (Tab, Enter), reopens it, lists and revokes it with `grants`, and is refused reopening it after;
+  on both architectures.
