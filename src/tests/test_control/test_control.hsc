@@ -528,7 +528,7 @@ a_launch_reports_faults_and_ends_a_program_left_stopped #test :: fn(t: ptr[mut t
     testing.expect_eq(t, stop.number, slop_os.FAULT_WRITE, "it's a write fault")
     testing.expect_eq(t, stop.address, FAULTING_ADDRESS, "at the address F wrote")
     report :: crash_reports.make(copy.launched.process, faults.space, copy.launched.image, "test_control F", stop)
-    testing.expect(t, report.frame_count >= 1, "a report of the fault has at least its faulting frame")
+    testing.expect(t, report.frame_count >= 2, "a report of the fault has its faulting frame and its caller's")
     testing.expect(t, report.frames[0] >= copy.launched.image, "the faulting instruction is in F's image")
     // Not let go: F ends within the limit, as if nothing intercepted it
     deadline :: (slop_os.clock_monotonic() or_else 0) + FAULTING_END_NANOSECONDS

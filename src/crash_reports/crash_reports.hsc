@@ -192,13 +192,17 @@ log :: fn(report: CrashReport) {
  * @param report The report.
  * @param into Where the text's added, at the end: lines separated by newlines, none after the last; cut off where
  *     it's full.
+ * @param frames Whether its frames are written, a line each; otherwise only the program, the fault and the thread.
  */
-describe :: fn(report: ptr[CrashReport], into: ptr[mut text_buffer.TextBuffer]) {
+describe :: fn(report: ptr[CrashReport], into: ptr[mut text_buffer.TextBuffer], frames: bool = true) {
     text_buffer.append_format(into, "%: %", report.program, slop_os.fault_name(report.fault))
     if report.fault <= slop_os.FAULT_EXECUTE {
         text_buffer.append_format(into, " at %{#x}", report.address)
     }
     text_buffer.append_format(into, "\n  in thread %", report.thread)
+    if !frames {
+        return void
+    }
     count :: if report.frame_count <= MAX_FRAMES { report.frame_count } else { MAX_FRAMES }
     for i in cast[u32](0)..<count {
         if cast[usize](i) >= report.frames.count {

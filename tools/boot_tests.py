@@ -641,7 +641,7 @@ TESTS = [
         "--expect-console-line=error: --speed: Medium isn't one of Slow or Fast",
         "--expect-console-line=error: test_values needs a log, which the shell can't give"])),
     # Crash reports (decisions/0183, 12a): a program the shell started traps, so the shell's intercept of its faults
-    # reports it, logs the report, and ends it; crashes shows the report, and the shell goes on
+    # reports it, logs the report, and ends it; crashes shows the report, its frames named, and the shell goes on
     ("reports a program's crash from the shell, and shows it with crashes", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
@@ -653,6 +653,8 @@ TESTS = [
         "--expect-console-line=called with crash, 2, loud false, speed none, wait none, tags none, place none",
         f"--expect-console-line={CRASH_LINE}",
         f"--expect-console-line={CRASH_REPORT_LINE}",
+        # Its frames named by the symbols program: the trap in main, called from the entry Hemera made for it
+        "--expect-console-start=  #0 test_shell_calls.main+0x", "--expect-console-start=  #1 hemera_entry+0x",
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
     # Shell functions, errors and the shell's directory (decisions/0171): a function's parameters matched and read by
     # their types, try/catch with the error as a record, ? passing a function's error to its caller where one without
