@@ -1,6 +1,6 @@
 # 0185: What M12 Left, Planned
 
-Status: accepted, chosen with the project's owner
+Status: accepted, chosen with the project's owner; built, 12e
 Date: 2026-11-08
 Related: `0011` (memory budgets), `0017` and `0056` (process control and intercepts), `0026` (the carrier register),
 `0037` (scheduling and lending), `0041` (the per-thread page), `0134` (the panic record), `0160` (elevation), `0182`
@@ -124,3 +124,44 @@ In four stages, each with an as-built record here:
 - `std`'s fiber pool keeps a list of every fiber, one pointer pair per fiber.
 - AArch64's interrupt masking moves to the priority mask, which every interrupt path depends on.
 - M12 ends with 12h, and the roadmap's M12 has nothing left for later.
+
+## As Built: 12e
+- **Hemera's DWARF.** With `--debug`, each local and parameter is a DWARF variable at a stack slot of its own, which
+  the optimizer may still move, its location then a list of ranges. Its type is described in full: base types, structs,
+  `#union` structs, tagged unions as a struct of the tag and each variant's values overlapping, an optional that's a
+  pointer as that pointer, enums as their backing integer by name (MLIR has no enumerators), pointers, arrays, and
+  strings, views and dynamic arrays as their structs. A pointer to a struct or union points to its declaration alone,
+  which a debugger finds by name, so no description refers back to itself. gdb on the Linux VM shows them. It's DWARF 4,
+  LLVM's default, which is simpler to read than 5.
+- **The debug file.** A SlopOS program with debug info is linked twice: with its DWARF, into `<name>.debug`, after
+  `"HDBG"` and its size, then the debug table, and without, as the program. The table names each local's type as a
+  schema, written by the compiler itself (`write_schema`, the bytes `runtime.schema_try_write` gives), since compile-time
+  code can't be relied on to run there: the functions it would call may never have been checked. A vendor attribute in
+  the DWARF was planned for the link, but MLIR can't add one, so the table is keyed by the function's linkage name, the
+  local's name and its line, which the DWARF has too. Every SlopOS program is built with debug info now; the program
+  stays the size it was (14 MB of programs became 15), as Hemera leaves the runtime's table of functions' names out
+  when the debug file names them. That table names every function, so none could be dropped after inlining: it made
+  the programs twice their size at first.
+- **Size.** The debug files are 61 MB beside 15 MB of programs, 40 MB of it for the bundle store's programs. A copy of
+  each program's code is in its debug file's ELF, which `objcopy --only-keep-debug` would drop, but that takes LLVM's
+  objcopy library in the compiler; left. So the store builder puts them in only with `--debug-files`, which `boot.py`
+  passes with its own `--debug-files`, on a disk 48 MB larger; the tests that debug ask for them.
+- **The bundle** gains `debug`, the debug file's hash, after `documentation`, and the programs protocol `Debug(name)`,
+  answered with `DebugFile`, the file, as `Describe` is with documentation.
+- **`symbols`** reads a debug file as well as a program: the ELF after its header, its `.symtab` as before, and its DWARF
+  (`dwarf.hsc`): `line <offset>` gives `file:line` from `.debug_line`, `where <file>:<line>` the line's lowest address,
+  and `locals <offset>` the innermost function holding the offset, an inlined call's if it's in one, with each local's
+  name, line and place: in memory at a register plus an offset (the frame base's, or another's), in a register, at an
+  address, a constant, or in pieces of those, from its location list's entry for the offset. Line 0, code no line is
+  for, like a trap the compiler shares between bounds checks, is said as unknown.
+- **The debugger.** `break file:line`; `where` with each frame's line; and `print name`, which asks `symbols` for the
+  locals at the stopped thread's program counter, gathers the value's bytes from its pieces, and shows it through its
+  schema from the table, reading what its strings and views point to in the program: `Point{x = 3, y = -4, label =
+  "corner"}`, `Some(7)`, `Box(2, 5)`, `[10, 20, 30]`. Only the stopped frame's locals; one the optimizer keeps nowhere
+  is said to be so. Crash reports, in `crashes`, give each frame's line when the program has a debug file.
+- **Tests.** Hemera's `SplitsSlopOSDebugInfo` checks the program has no DWARF and its debug file has it, and the table
+  has `main`'s parameters with their schemas. A boot test debugs `test_debug`, whose locals are each read through
+  volatile loads so they're all in memory at the line it breaks at: a breakpoint by file and line, its stack with
+  lines, its struct, optional, union and view printed, a name that isn't a local, and a crash's report naming its line.
+  On both architectures. `boot.py` gains `--expect-console-end`, for a line whose start changes.
+

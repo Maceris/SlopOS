@@ -523,6 +523,7 @@ serve_finders :: fn(sessions: ptr[mut Manager], into: ptr[mut os.Incoming]) {
                 case Find(name) => response^ = find_program(sessions, os.items(into, name))
                 case List(index) => response^ = program_at(sessions, index, &out)
                 case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
+                case Debug(name) => response^ = program_debug_file(sessions, os.items(into, name))
                 case Connect(connection) => {
                     add_finder(sessions, sessions.finders[i].session, connection.end)
                     continue

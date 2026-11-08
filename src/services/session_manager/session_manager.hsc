@@ -864,6 +864,7 @@ serve_programs :: fn(sessions: ptr[mut Manager], into: ptr[mut os.Incoming]) {
                 case Find(name) => response^ = find_program(sessions, os.items(into, name))
                 case List(index) => response^ = program_at(sessions, index, &out)
                 case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
+                case Debug(name) => response^ = program_debug_file(sessions, os.items(into, name))
                 case Connect(connection) => {
                     add_finder(sessions, cast[u32](number), connection.end)
                     continue
@@ -972,6 +973,37 @@ program_documentation :: fn(sessions: ptr[mut Manager], name: u8[]) -> programs.
     }
     match store_request(sessions, .Read(documentation)) {
         case Got(object) => return .Documented(programs.ProgramDocumentation.{record = object.memory, size = object.size})
+        case _ => return .Missing
+    }
+}
+
+/**
+ * Find a program's debug file in the boot root (decisions/0185), for a shell's Debug.
+ *
+ * @param sessions The session manager, whose bundle store connection is asked.
+ * @param name The program's name's bytes, 1 to programs.MAX_NAME of them.
+ * @return DebugFile with a copy of it, whose handle moves to the shell; Missing for a name that's too short or long, no
+ *     such program, a bundle that doesn't read, or one without a debug file.
+ */
+program_debug_file :: fn(sessions: ptr[mut Manager], name: u8[]) -> programs.Response {
+    if name.count == 0 || name.count > programs.MAX_NAME {
+        return .Missing
+    }
+    found :: bundle_named(sessions, string_of(&name[0], name.count)) or_return .Missing
+    record :: stored_object(sessions, found) or_return .Missing
+    referred : bundle.Hash[..]
+    defer runtime.array_free(&referred)
+    read :: bundle.bundle_refers(record.bytes, &referred) or_else false
+    let_go_of_object(record)
+    if !read || referred.count < 4 {
+        return .Missing
+    }
+    debug :: referred[3]
+    if bundle.same(debug, bundle.Hash.{}) {
+        return .Missing
+    }
+    match store_request(sessions, .Read(debug)) {
+        case Got(object) => return .DebugFile(programs.ProgramDocumentation.{record = object.memory, size = object.size})
         case _ => return .Missing
     }
 }

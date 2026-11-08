@@ -3,6 +3,7 @@ package shell
 import runtime from "base"
 import language from "../../shell_language"
 import os from "std"
+import schema from "std"
 import terminal from "std"
 import text_buffer from "std"
 import slop_os from "std/os"
@@ -16,6 +17,10 @@ import crash_reports from "../../crash_reports"
  * watchpoints by address (watch), set in the stopped thread's debug registers (thread_set_debug); step, continue,
  * where, registers, threads, print and quit. A stop at a breakpoint or watchpoint is stepped past, its slots off for
  * the one instruction, before it goes on.
+ *
+ * With the program's debug file (decisions/0185, 12e), which a system built with debug files has: break takes a file
+ * and line too, where says each frame's line, and print takes a local's name, shown as a Hemera value through its
+ * type's schema from the file's table, where the symbols program finds it in the DWARF.
  */
 
 /** The key the debugged program's stops come under, on the debugger's own port. */
@@ -47,6 +52,8 @@ Debugging :: struct #scoped {
     debug : slop_os.ThreadDebug,
     /** Whether it's gone on since its first stop, so the intercept stops only at faults. */
     going : bool,
+    /** The program's debug file, mapped, debug_program's; none for a system built without them. */
+    file : ptr[DebugFile]?,
 }
 
 /**
@@ -82,6 +89,23 @@ debug_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result
     }
     faults :: call.launched.faults or_return error_at(tree.at, "it started without its intercept")
     session := Debugging.{shell = shell, call = call, port = port, faults = faults}
+    file := DebugFile.{}
+    has_file := false
+    match find_debug_file(shell, inner.text) {
+        case Some(found) => {
+            file = found
+            has_file = true
+        }
+        case None => {}
+    }
+    defer {
+        if has_file {
+            free_debug_file(&file)
+        }
+    }
+    if has_file {
+        session.file = &file
+    }
     if !wait_debugged(&session) {
         say(shell, message("% ended with % before it stopped", inner.text, session.code))
         return .Ok(.Null)
@@ -194,7 +218,7 @@ run_debug_line :: fn(session: ptr[mut Debugging], line #escaping : string) {
     command :: words[0]
     shell :: session.shell
     if command == "help" {
-        say(shell, "break function, watch address [size], delete n, step, continue, where, registers, threads, print address, quit")
+        say(shell, "break function or file:line, watch address [size], delete n, step, continue, where, registers, threads, print address or local, quit")
     }
     else if command == "break" && count == 2 {
         set_breakpoint(session, words[1])
@@ -233,7 +257,10 @@ run_debug_line :: fn(session: ptr[mut Debugging], line #escaping : string) {
         say_threads(session)
     }
     else if command == "print" && count == 2 {
-        say_memory(session, number_of(words[1]) or_else 0)
+        match number_of(words[1]) {
+            case Some(address) => say_memory(session, address)
+            case None => say_local(session, words[1])
+        }
     }
     else if command == "quit" {
         end_debugged(session)
@@ -317,7 +344,7 @@ name_of_address :: fn(session: ptr[mut Debugging], address: u64) -> string {
     if address >= image {
         offsets :: u64.[address - image]
         answer : u8[DEBUG_ANSWER_BYTES]
-        count :: ask_symbols(session.shell, session.call.executable, offsets, null, answer)
+        count :: ask_symbols(session.shell, symbols_source(session), offsets, null, null, answer)
         at : usize = 0
         name :: next_line(answer, count, &at)
         if name != "" && name != "?" {
@@ -335,15 +362,21 @@ name_of_address :: fn(session: ptr[mut Debugging], address: u64) -> string {
  */
 set_breakpoint :: fn(session: ptr[mut Debugging], name: string) {
     offsets : u64[1]
-    // On the heap, with its newline, as the symbols program takes names
-    names :: message("%\n", name)
+    // A file and line, from the debug file; or a function, by name, with its newline, as the symbols program takes names
+    by_line :: contains_colon(name)
+    if by_line && session.file == null {
+        say(session.shell, "there's no debug file for the program, so no lines; break takes a function")
+        return void
+    }
+    names : string? = if by_line { null } else { message("%\n", name) }
+    queries : string? = if by_line { message("where %\n", name) } else { null }
     answer : u8[DEBUG_ANSWER_BYTES]
-    count :: ask_symbols(session.shell, session.call.executable, offsets[0..<0], names, answer)
+    count :: ask_symbols(session.shell, symbols_source(session), offsets[0..<0], names, queries, answer)
     at : usize = 0
     line :: next_line(answer, count, &at)
     found :: number_of(line) or_else 0
     if found == 0 {
-        say(session.shell, message("there's no function named %", name))
+        say(session.shell, if by_line { message("there's no code on %", name) } else { message("there's no function named %", name) })
         return void
     }
     slot :: free_slot(session) or_return void
@@ -403,9 +436,33 @@ say_where :: fn(session: ptr[mut Debugging]) {
     launched :: session.call.launched
     report :: crash_reports.make(launched.process, session.faults.space, launched.image, session.call.tree.text, session.stop)
     count :: if report.frame_count <= crash_reports.MAX_FRAMES { report.frame_count } else { crash_reports.MAX_FRAMES }
+    // The frames' lines, from the debug file, after their names
+    offsets : u64[crash_reports.MAX_FRAMES]
+    for i in cast[usize](0)..<cast[usize](count) {
+        if i < offsets.count && i < report.frames.count {
+            offsets[i] = if report.frames[i] >= launched.image { report.frames[i] - launched.image } else { 0 }
+        }
+    }
+    answer : u8[DEBUG_ANSWER_BYTES]
+    queries : string? = if session.file != null { line_queries(view_of(&offsets[0], cast[usize](count))) } else { null }
+    named :: ask_symbols(session.shell, symbols_source(session), view_of(&offsets[0], cast[usize](count)), null, queries, answer)
+    at : usize = 0
+    lines_at := at
     for i in cast[u32](0)..<count {
-        if cast[usize](i) < report.frames.count {
-            say(session.shell, message("  #% %", i, name_of_address(session, report.frames[cast[usize](i)])))
+        _ = next_line(answer, named, &lines_at)
+    }
+    for i in cast[u32](0)..<count {
+        if cast[usize](i) >= report.frames.count {
+            break
+        }
+        name :: next_line(answer, named, &at)
+        source :: if queries != null { next_line(answer, named, &lines_at) } else { "" }
+        shown :: if name == "" || name == "?" { message("%{#x}", report.frames[cast[usize](i)]) } else { message("%", name) }
+        if source != "" && source != "?" {
+            say(session.shell, message("  #% % at %", i, shown, source))
+        }
+        else {
+            say(session.shell, message("  #% %", i, shown))
         }
     }
 }
@@ -537,4 +594,348 @@ number_of :: fn(text: string) -> u64? {
         value = value * base + digit
     }
     return value
+}
+
+/**
+ * The file the symbols program reads for the debugged program: its debug file when there is one, its own otherwise.
+ *
+ * @param session The session.
+ * @return The file's handle, still the session's.
+ */
+symbols_source :: fn(session: ptr[Debugging]) -> slop_os.Memory {
+    match session.file {
+        case Some(file) => return file.memory
+        case None => return session.call.executable
+    }
+}
+
+/**
+ * Whether text has a colon, as a file and line has.
+ *
+ * @param text The text.
+ * @return True if it has one.
+ */
+contains_colon :: fn(text: string) -> bool {
+    for byte in string_bytes(text) {
+        if byte == 0x3a {
+            return true
+        }
+    }
+    return false
+}
+
+/**
+ * Say a local of the stopped thread's function, by its name, as a Hemera value: found in the debug file's DWARF by the
+ * symbols program, at the thread's program counter, its type's schema in the file's table, and its bytes read from
+ * where the DWARF says it is then.
+ *
+ * @param session The session, stopped.
+ * @param name The local's name.
+ */
+say_local :: fn(session: ptr[mut Debugging], name: string) {
+    shell :: session.shell
+    file :: session.file or_return say(shell, "there's no debug file for the program, so no locals; print takes an address")
+    registers : u64[slop_os.THREAD_REGISTERS]
+    if session.thread == 0 || !(slop_os.thread_read_registers(session.call.launched.process, session.thread, registers) is_ok) {
+        say(shell, "nothing's stopped")
+        return void
+    }
+    image :: session.call.launched.image
+    pc :: registers[crash_reports.PC_REGISTER]
+    if pc < image {
+        say(shell, "the thread isn't in the program's code")
+        return void
+    }
+    answer : u8[DEBUG_ANSWER_BYTES]
+    offsets : u64[1]
+    count :: ask_symbols(shell, file.memory, offsets[0..<0], null, message("locals %{#x}\n", pc - image), answer)
+    // "function <symbol>", "frame <register>", then "local <name> <line> <where...>" for each, then "end"
+    at : usize = 0
+    function := ""
+    frame_register : u64? = null
+    found : string[6]
+    have := false
+    loop {
+        line :: next_line(answer, count, &at)
+        if line == "" || line == "end" || line == "?" {
+            break
+        }
+        words : string[6]
+        // On the heap, as the words outlast the answer's buffer
+        taken :: split_all(message("%", line), &words)
+        if taken == 2 && words[0] == "function" {
+            function = words[1]
+        }
+        else if taken == 2 && words[0] == "frame" {
+            frame_register = number_of(words[1])
+        }
+        else if taken >= 4 && words[0] == "local" && words[1] == name {
+            // The last one of the name is the innermost
+            found = words
+            have = true
+        }
+    }
+    if !have {
+        say(shell, message("there's no local named % here", name))
+        return void
+    }
+    line :: number_of(found[2]) or_else 0
+    bytes :: local_schema(file, function, name, line) or_return say(shell, message("there's no type for % in the debug file", name))
+    types := schema.parse(bytes) or_return say(shell, message("%'s type doesn't read", name))
+    defer schema.free(&types)
+    if types.types.count == 0 {
+        return void
+    }
+    size :: types.types[0].size
+    value : u8[..]
+    defer runtime.array_free(&value)
+    process :: session.call.launched.process
+    showing := Showing.{process = process, space = session.faults.space, types = &types, into = &value}
+    // Where it is, as the symbols program says it: one place, or pieces
+    held : u8[..]
+    defer runtime.array_free(&held)
+    place := ValuePlace.{showing = &showing, registers = registers[0..<registers.count], frame = frame_register, image = image}
+    where :: found[3]
+    where_bytes :: string_bytes(where)
+    gathered := false
+    if starts_with(where, "p:") && where_bytes.count > 2 {
+        gathered = gather_pieces(&place, string_of(&where_bytes[2], where_bytes.count - 2), &held)
+    }
+    else {
+        gathered = gather_place(&place, where, size, &held)
+    }
+    if !gathered || cast[u64](held.count) < size {
+        say(shell, message("% isn't all kept here: the optimizer has some of it elsewhere, or nowhere", name))
+        return void
+    }
+    show_value(&showing, 0, held[0..<held.count], SHOW_DEPTH)
+    shown :: if value.count > 0 { string_of(&value[0], value.count) } else { "" }
+    say(shell, message("% = %", name, shown))
+}
+
+/**
+ * A register's value, by DWARF's number for it.
+ *
+ * @param registers The thread's registers, in thread_read_registers' order.
+ * @param dwarf DWARF's number: x86-64's rax, rdx, rcx, rbx, rsi, rdi, rbp, rsp, r8 to r15, then the return address;
+ *     AArch64's x0 to x30, then sp.
+ * @return Its value; null for a number not known.
+ */
+register_value :: fn(registers: u64[], dwarf: u64) -> u64? {
+    // x86-64's order differs from DWARF's in rdx and rbx; AArch64's is the same
+    index : u64 = dwarf
+    if crash_reports.PC_REGISTER != 32 {
+        if dwarf == 1 {
+            index = 3
+        }
+        else if dwarf == 3 {
+            index = 1
+        }
+        else if dwarf > 16 {
+            return null
+        }
+    }
+    else if dwarf > 31 {
+        return null
+    }
+    if index >= cast[u64](registers.count) {
+        return null
+    }
+    return registers[cast[usize](index)]
+}
+
+/**
+ * Read a number that may be negative, in decimal.
+ *
+ * @param text The number, like "-24".
+ * @return Its value; 0 if it isn't one.
+ */
+signed_number :: fn(text: string) -> i64 {
+    bytes :: string_bytes(text)
+    if bytes.count > 1 && bytes[0] == 0x2d {
+        return 0 - cast[i64](number_of(string_of(&bytes[1], bytes.count - 1)) or_else 0)
+    }
+    return cast[i64](number_of(text) or_else 0)
+}
+
+/**
+ * Split a line into its words, at spaces, up to six.
+ *
+ * @param line The line.
+ * @param words Where the words go, views of the line.
+ * @return How many there are, at most six.
+ */
+split_all :: fn(line #escaping : string, words: ptr[mut string[6]]) -> usize {
+    bytes :: string_bytes(line)
+    count : usize = 0
+    start : usize = 0
+    for i in cast[usize](0)..<(bytes.count + 1) {
+        if i < bytes.count && bytes[i] != 0x20 {
+            continue
+        }
+        if i > start && start < bytes.count && count < words.count {
+            words^[count] = string_of(&bytes[start], i - start)
+            count += 1
+        }
+        start = i + 1
+    }
+    return count
+}
+
+/** What a local's places are read with: the process, its registers, and where its image and frame are. */
+ValuePlace :: struct #scoped {
+    showing : ptr[mut Showing],
+    registers : u64[],
+    /** The frame base's register, DWARF's number; none if the function hasn't one. */
+    frame : u64?,
+    image : u64,
+}
+
+/**
+ * Gather a value in pieces, "<bytes>=<where>" each, joined by commas, each piece's bytes after the last's.
+ *
+ * @param place What the places are read with.
+ * @param pieces The pieces.
+ * @param into Where the value's bytes go.
+ * @return True once every piece is read; false if one isn't kept, or can't be read.
+ */
+gather_pieces :: fn(place: ptr[mut ValuePlace], pieces: string, into: ptr[mut u8[..]]) -> bool {
+    bytes :: string_bytes(pieces)
+    start : usize = 0
+    for i in cast[usize](0)..<(bytes.count + 1) {
+        if i < bytes.count && bytes[i] != 0x2c {
+            continue
+        }
+        if i <= start || start >= bytes.count {
+            return false
+        }
+        piece :: string_of(&bytes[start], i - start)
+        piece_bytes :: string_bytes(piece)
+        equals :: index_of_byte(piece, 0x3d) or_return false
+        after :: equals + 1
+        if equals == 0 || piece_bytes.count == 0 || after >= piece_bytes.count {
+            return false
+        }
+        count :: number_of(string_of(&piece_bytes[0], equals)) or_return false
+        if !gather_place(place, string_of(&piece_bytes[after], piece_bytes.count - after), count, into) {
+            return false
+        }
+        start = i + 1
+    }
+    return true
+}
+
+/**
+ * Gather the bytes of one place: "m:<register>:<offset>" (the register "f" for the frame base), "r:<register>",
+ * "a:<address>" or "c:<value>"; "n" isn't kept.
+ *
+ * @param place What the places are read with.
+ * @param where The place.
+ * @param count How many bytes it has.
+ * @param into Where they go, after what's there.
+ * @return True once they're read.
+ */
+gather_place :: fn(place: ptr[mut ValuePlace], where: string, count: u64, into: ptr[mut u8[..]]) -> bool {
+    parts : string[3]
+    taken :: split_at_colons(message("%", where), &parts)
+    if taken == 0 {
+        return false
+    }
+    kind :: parts[0]
+    if kind == "c" && taken == 2 {
+        value :: number_of(parts[1]) or_return false
+        add_low_bytes(into, value, count)
+        return true
+    }
+    if kind == "r" && taken == 2 {
+        register :: number_of(parts[1]) or_return false
+        value :: register_value(place.registers, register) or_return false
+        if count > 8 {
+            return false
+        }
+        add_low_bytes(into, value, count)
+        return true
+    }
+    address := cast[u64](0)
+    if kind == "a" && taken == 2 {
+        offset :: number_of(parts[1]) or_return false
+        address = place.image + offset
+    }
+    else if kind == "m" && taken == 3 {
+        register := cast[u64](0)
+        if parts[1] == "f" {
+            register = place.frame or_return false
+        }
+        else {
+            register = number_of(parts[1]) or_return false
+        }
+        base :: register_value(place.registers, register) or_return false
+        address = cast[u64](cast[i64](base) + signed_number(parts[2]))
+    }
+    else {
+        return false
+    }
+    read : u8[..]
+    defer runtime.array_free(&read)
+    if !read_remote(place.showing, address, count, &read) {
+        return false
+    }
+    for byte in read {
+        runtime.array_add(into, byte)
+    }
+    return true
+}
+
+/**
+ * Add a number's low bytes, little-endian, past 8 as zeros.
+ *
+ * @param into Where they go.
+ * @param value The number.
+ * @param count How many bytes.
+ */
+add_low_bytes :: fn(into: ptr[mut u8[..]], value: u64, count: u64) {
+    for i in cast[u64](0)..<count {
+        runtime.array_add(into, if i < 8 { cast[u8]((value >> (8 * i)) & 0xff) } else { cast[u8](0) })
+    }
+}
+
+/**
+ * Split text at its colons, into up to three parts.
+ *
+ * @param text The text.
+ * @param parts Where the parts go, views of the text.
+ * @return How many parts there are; 0 if there are more than three.
+ */
+split_at_colons :: fn(text #escaping : string, parts: ptr[mut string[3]]) -> usize {
+    bytes :: string_bytes(text)
+    count : usize = 0
+    start : usize = 0
+    for i in cast[usize](0)..<(bytes.count + 1) {
+        if i < bytes.count && bytes[i] != 0x3a {
+            continue
+        }
+        if count >= parts.count {
+            return 0
+        }
+        parts^[count] = if i > start && start < bytes.count { string_of(&bytes[start], i - start) } else { "" }
+        count += 1
+        start = i + 1
+    }
+    return count
+}
+
+/**
+ * Find a byte in text.
+ *
+ * @param text The text.
+ * @param byte The byte.
+ * @return Where it first is; null if it isn't there.
+ */
+index_of_byte :: fn(text: string, byte: u8) -> usize? {
+    for each, i in string_bytes(text) {
+        if each == byte {
+            return i
+        }
+    }
+    return null
 }

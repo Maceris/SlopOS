@@ -107,6 +107,12 @@ Request :: union {
      * session without a powerbox. A finding connection may ask too: what the program's given, the user chooses.
      */
     Powerbox(slop_os.Relative[u8]),
+    /**
+     * Ask for a program's debug file (decisions/0185, 12e), by its name's bytes, 1 to MAX_NAME of them: the program
+     * linked with its DWARF and its debug table, for the debugger and crash reports' lines. Answered with DebugFile, or
+     * Missing, as for Find, and for a program whose bundle has none. A finding connection may ask too.
+     */
+    Debug(slop_os.Relative[u8]),
 }
 
 /** A program's documentation, as the bundle store keeps it. */
@@ -202,6 +208,11 @@ Response :: union {
     End,
     /** The answer to Describe when the program has documentation: its record, whose handle moves to the shell. */
     Documented(ProgramDocumentation),
+    /**
+     * The answer to Debug when the program has a debug file: the file, whose handle moves to the shell, in record, and
+     * its size.
+     */
+    DebugFile(ProgramDocumentation),
     /** The answer to Running: the session's programs, at most MAX_RUNNING. */
     RunningPrograms(slop_os.Relative[RunningProgram]),
     /** The answer to EndInstallation, Install and Uninstall once it's done. */

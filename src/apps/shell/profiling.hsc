@@ -184,7 +184,7 @@ say_hot :: fn(shell: ptr[mut Shell], call: ptr[Call], places: ptr[mut Place[..]]
         count += 1
     }
     answer : u8[8192]
-    named :: ask_symbols(shell, call.executable, view_of(&offsets[0], count), null, answer)
+    named :: ask_symbols(shell, call.executable, view_of(&offsets[0], count), null, null, answer)
     // Each place's function, its offset into it dropped, its samples added to the function's
     hot : Hot[..]
     defer runtime.array_free(&hot)

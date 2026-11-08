@@ -31,6 +31,11 @@ Bundle :: struct {
      * zeros for a program without one.
      */
     documentation : Hash,
+    /**
+     * Its debug file (decisions/0185, 12e): "HDBG", the program linked with its DWARF, then the debug table that names
+     * its locals' types as schemas (Hemera's docs/compilation.md, Debug Info); all zeros for a program without one.
+     */
+    debug : Hash,
     /** The typed libraries it's linked against. */
     libraries : Hash[],
     /** Its resources, other objects it's given. */
@@ -237,8 +242,8 @@ value_of :: fn(record: u8[], expected: u8[32]) -> u8[]? {
 }
 
 /**
- * List each hash a bundle refers to: its program's, its manifest's, its documentation's, its libraries' and its
- * resources', in that order, so a bundle always gives at least three.
+ * List each hash a bundle refers to: its program's, its manifest's, its documentation's, its debug file's, its
+ * libraries' and its resources', in that order, so a bundle always gives at least four.
  *
  * @param record The bundle's record, as the store keeps it.
  * @param each Where the hashes are added, after what it holds, with context's allocator; on false or an error it may
@@ -251,7 +256,7 @@ bundle_refers :: fn(record: u8[], each: ptr[mut Hash[..]]) -> Result[bool, runti
     if value.count < size_of(Bundle) {
         return .Ok(false)
     }
-    for first in usize.[offset_of(Bundle, program), offset_of(Bundle, manifest), offset_of(Bundle, documentation)] {
+    for first in usize.[offset_of(Bundle, program), offset_of(Bundle, manifest), offset_of(Bundle, documentation), offset_of(Bundle, debug)] {
         if runtime.array_try_add(each, hash_at(value, first)) != null {
             return .Error(.OutOfMemory)
         }

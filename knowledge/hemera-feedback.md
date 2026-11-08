@@ -177,6 +177,14 @@ Then for `0184` (2026-11-08), in `std/os/slop_os`'s system ABI: `PortError.Buffe
 gives for empty packets rather than returning 0 at once, and `channel_notify_and_wait` too, as `ChannelError`'s;
 `port_wait`'s doc says so and how to pause instead. An empty wait reading as a pause cost a 12c test a stall that
 looked like a hung `port_wait`.
+Then for 12e (2026-11-08, `0185`), in the compiler: `--debug` describes locals and parameters with DWARF variables and
+full types, each local in a stack slot of its own; a SlopOS program's debug info goes in `<name>.debug`, the program
+linked with its DWARF and a table naming each local's type as a schema, written by a C++ port of base's schema writer
+(`middle_end/schema_writer.cpp`), as compile-time code calling `runtime.schema_try_write` can't be relied on there; and
+such a program has no table of functions' names, which kept every function alive after inlining and made programs
+twice their size. MLIR's debug attributes have no enumerators and no vendor attributes, so enums are their backing
+integers by name and the table is keyed by linkage name, local name and line. Optimized code puts locals in pieces
+(`DW_OP_piece`) unless all of a value is read through memory, so the test reads each value through volatile loads.
 
 ## 4. Features That Look Like a Strong Fit
 

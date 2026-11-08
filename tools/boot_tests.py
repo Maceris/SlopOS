@@ -166,6 +166,14 @@ BOOT_DISK_BASE = [
     "-smp",
     "2",
 ]
+# The line of test_debug.hsc whose write crashes it, which a crash report with lines names
+TEST_DEBUG_CRASH_LINE = 84
+# The line of test_debug.hsc the debugger breaks at, where its values are all made and kept in memory
+TEST_DEBUG_BREAK_LINE = 60
+# BOOT_DISK_BASE with the programs' debug files in the store (decisions/0185), on a disk boot.py makes bigger for them
+WITH_DEBUG_FILES = [argument.replace("serving 206848 blocks", "serving 305152 blocks")
+                    .replace("partitions on a disk of 206848 blocks", "partitions on a disk of 305152 blocks")
+                    .replace("SlopOS system, 65536 blocks", "SlopOS system, 163840 blocks") for argument in BOOT_DISK_BASE]
 
 # What the disk check says, and writes, which the tests of booting a disk itself check
 DISK_CHECK_LINES = [
@@ -206,7 +214,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 77 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 78 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 5 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -675,6 +683,30 @@ TESTS = [
         "--expect-console-line=deleted 1",
         "--expect-console-line=called with debugged, 2, loud false, speed none, wait none, tags none, place none",
         "--expect-console-line=test_shell_calls ended with 0",
+        "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
+    # The debugger with debug files (decisions/0185, 12e): a breakpoint by file and line in test_debug, its stack with
+    # lines, and its locals shown as Hemera values through their schemas: a struct, an optional, a union and a view
+    ("debugs a program by its lines, and shows its values through their types", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in WITH_DEBUG_FILES], ["--shut-down-when-done", "--debug-files",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        f"\\wdebug test_debug\\r\\p\\pbreak test_debug.hsc:{TEST_DEBUG_BREAK_LINE}\\r\\p\\pcontinue\\r\\p\\pwhere\\r\\p\\p"
+        "print point\\r\\p\\pprint maybe\\r\\p\\pprint shape\\r\\p\\pprint view\\r\\p\\pprint nothing\\r\\p\\p"
+        "delete 1\\r\\p\\pcontinue\\r\\p\\ptest_debug 1\\r\\p\\pcrashes\\r\\p\\ptest_shell_calls 3 after\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-line=[user] shell: reading commands",
+        f"--expect-console-line=breakpoint 1 at test_debug.hsc:{TEST_DEBUG_BREAK_LINE}",
+        "--expect-console-start=stopped at test_debug.main+0x",
+        "--expect-console-start=  #0 test_debug.main+0x", f"--expect-console-end=at test_debug.hsc:{TEST_DEBUG_BREAK_LINE}",
+        "--expect-console-line=point = Point{x = 3, y = -4, label = \"corner\"}",
+        "--expect-console-line=maybe = Some(7)",
+        "--expect-console-line=shape = Box(2, 5)",
+        "--expect-console-line=view = [10, 20, 30]",
+        "--expect-console-line=there's no local named nothing here",
+        "--expect-console-line=test_debug ended with 0",
+        # A crash's report, its frame's line from the debug file: the write through a bad pointer
+        f"--expect-console-end=at test_debug.hsc:{TEST_DEBUG_CRASH_LINE}",
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
     # Record and replay (decisions/0183, 12c): test_replay's threads, recorded one at a time, replayed exactly from
     # the recording with its seeds; and replayed with another count, which diverges, where it's said

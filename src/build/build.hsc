@@ -281,6 +281,11 @@ add_programs :: fn(folder: string) {
         }
         program.target_options.relocation_model = .Default
         program.target_options.startup_code = true
+        /*
+         * Every program has debug info, which Hemera puts in <name>.debug beside it rather than in the program, for the
+         * debugger and crash reports (decisions/0185, 12e); the program itself is built as it was
+         */
+        program.backend_options.debug_info = true
         // Built apart from the program, which holds its output's storage
         linked : compiler.LinkedLibrary[..]
         // Every program's calls to service_kit go through its library, which none that doesn't call it is given

@@ -791,6 +791,8 @@ BOOT_SET = ["root_task", "entropy", "process_manager", "scheduler", "platform", 
 SYSTEM_RECORDS = "system.records"
 BOOT_ESP_SECTORS = 131072
 BOOT_SYSTEM_SECTORS = 65536
+# With --debug-files, the system volume and the disk grow by this much for the programs' debug files (decisions/0185)
+DEBUG_FILES_SECTORS = 98304
 
 
 # The encrypted volume the image builder makes beside the system volume, and its passphrase, which the disk check
@@ -825,7 +827,7 @@ SEALED_PASSPHRASE = "slopos test passphrase"
 
 def make_boot_disk(path: Path, kernel: Path, programs: list[Path], bootloader: Path, image_builder: Path, folder: Path,
                    command_line: str, kaslr: bool, mark: str, staged: str | None = None, staged_next: Path | None = None,
-                   development: bool = True) -> None:
+                   development: bool = True, debug_files: bool = False) -> None:
     """
     A disk that boots kernel through SlopOS's bootloader, made by the image builder: the bootloader, generation 1 and
     the programs on its EFI system partition, as make_image puts them on the ISO, but only the boot set in the generation,
@@ -848,9 +850,11 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], bootloader: P
     for program in programs:
         shutil.copy(program, system / "modules" / program.name)
     copy_zones(system / "zoneinfo")
-    # The bundle store, with a bundle for every program outside the boot set, which the supervisor loads from it
+    # The bundle store, with a bundle for every program outside the boot set, which the supervisor loads from it, and
+    # with debug_files each one's debug file too (decisions/0185), which a test that debugs asks for
     store_builder = next(image_builder.parent.glob("store_builder*"))
-    stored = subprocess.run([str(store_builder), str(system / "store")] + [str(program) for program in programs
+    with_debug = ["--debug-files"] if debug_files else []
+    stored = subprocess.run([str(store_builder), *with_debug, str(system / "store")] + [str(program) for program in programs
                                                                            if program.stem not in BOOT_SET and program.suffix == ".elf"],
                             capture_output=True, text=True)
     if stored.returncode != 0:
@@ -875,7 +879,7 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], bootloader: P
             shutil.copy(staged_next, renamed / "hello.elf")
             shutil.copy(staged_next.with_suffix(".manifest"), renamed / "hello.manifest")
             shutil.copy(staged_next.with_suffix(".docs"), renamed / "hello.docs")
-            stored = subprocess.run([str(store_builder), str(system / "store")] + [
+            stored = subprocess.run([str(store_builder), *with_debug, str(system / "store")] + [
                 str(renamed / "hello.elf") if program.stem == "hello" else str(program) for program in programs
                 if program.stem not in BOOT_SET and program.suffix == ".elf"], capture_output=True, text=True)
             if stored.returncode != 0:
@@ -884,10 +888,11 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], bootloader: P
                                   staged, str(kernel)] + [str(program) for program in boot_set], capture_output=True, text=True)
         if staging.returncode != 0:
             sys.exit(f"boot.py: the generation builder couldn't stage generation 2:\n{staging.stdout}{staging.stderr}")
-    built = subprocess.run([str(image_builder), str(path), str(BOOT_DISK_SECTORS), f"--sealed={SEALED_VOLUME}:{SEALED_PASSPHRASE}",
+    more = DEBUG_FILES_SECTORS if debug_files else 0
+    built = subprocess.run([str(image_builder), str(path), str(BOOT_DISK_SECTORS + more), f"--sealed={SEALED_VOLUME}:{SEALED_PASSPHRASE}",
                             f"test,{PARTITIONS[0][0]},{PARTITIONS[0][2]}",
                             f"test,{PARTITIONS[1][0]},{PARTITIONS[1][2]}",
-                            f"esp,EFI system partition,{BOOT_ESP_SECTORS},{esp}", f"slopfs,SlopOS system,{BOOT_SYSTEM_SECTORS},{system}"],
+                            f"esp,EFI system partition,{BOOT_ESP_SECTORS},{esp}", f"slopfs,SlopOS system,{BOOT_SYSTEM_SECTORS + more},{system}"],
                            capture_output=True, text=True)
     if built.returncode != 0:
         sys.exit(f"boot.py: the image builder failed:\n{built.stdout}{built.stderr}")
@@ -945,6 +950,9 @@ def main() -> int:
     parser.add_argument("--expect-console-start", action="append", default=[],
                         help="the start of a line the virtio console should show, for a line part of which changes from boot "
                         "to boot, with --expect; may be repeated. Unlike --expect-console-line, it isn't waited for")
+    parser.add_argument("--expect-console-end", action="append", default=[],
+                        help="the end of a line the virtio console should show, for a line whose start changes from boot to "
+                        "boot, with --expect; may be repeated, and isn't waited for")
     parser.add_argument("--refuse-console-line", action="append", default=[],
                         help="a line the virtio console mustn't show, with --expect; may be repeated")
     parser.add_argument("--shut-down-when-done", action="store_true",
@@ -985,6 +993,9 @@ def main() -> int:
                              "bundle, so it changes only a service, which the supervisor applies live (decisions/0126)")
     parser.add_argument("--kernel-alone", action="store_true",
                         help="boot the kernel with no modules, its generation's boot set empty; --programs still gives the bootloader")
+    parser.add_argument("--debug-files", action="store_true",
+                        help="with --boot-disk: put each program's debug file in the bundle store, for the debugger and "
+                             "crash reports' lines (decisions/0185)")
     parser.add_argument("--release-generation", action="store_true",
                         help="build the generation as a release one, not for development, so the bootloader won't let its "
                              "command line be edited (decisions/0181, F7)")
@@ -1060,7 +1071,7 @@ def main() -> int:
             make_boot_disk(disk, kernel.resolve(), [program.resolve() for program in programs], bootloader, image_builder, folder,
                            command_line, not arguments.no_kaslr, arguments.disk or "", arguments.stage_generation,
                            (programs_folder / "hello_next.elf").resolve() if arguments.stage_next_hello else None,
-                           development=not arguments.release_generation)
+                           development=not arguments.release_generation, debug_files=arguments.debug_files)
             extra += ["-drive", f"file={disk},if=none,id=disk,format=raw",
                       "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on,bootindex=0"]
             phases.append(("making the disk", time.monotonic() - phase_started))
@@ -1080,7 +1091,7 @@ def main() -> int:
             # virt has no display of its own; AAVMF gives a framebuffer on QEMU's ramfb
             extra += ["-device", "ramfb"]
         if arguments.console_input or arguments.expect_console_line or arguments.keyboard_input or arguments.refuse_console_line \
-                or arguments.expect_console_start \
+                or arguments.expect_console_start or arguments.expect_console_end \
                 or arguments.screen_after:
             console = ConsoleLink(arguments.console_input, arguments.keyboard_input, keyboard, arguments.screen_after, screenshot,
                               arguments.console_input_after,
@@ -1152,6 +1163,10 @@ def main() -> int:
             if not any(line.startswith(start) for line in shown):
                 print(f"boot.py: the virtio console showed no line starting {start!r}", file=sys.stderr)
                 missing_shown.append(start)
+        for end in arguments.expect_console_end:
+            if not any(line.endswith(end) for line in shown):
+                print(f"boot.py: the virtio console showed no line ending {end!r}", file=sys.stderr)
+                missing_shown.append(end)
         if screen_wrong is not None:
             print(f"boot.py: the framebuffer: {screen_wrong}", file=sys.stderr)
             missing_shown.append(screen_wrong)

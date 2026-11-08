@@ -79,6 +79,8 @@ Crash :: struct {
     heading : string,
     /** The program's file, a handle the shell keeps to read it; NO_HANDLE if it couldn't be kept. */
     executable : slop_os.Memory,
+    /** The program's debug file (decisions/0185), for its lines; NO_HANDLE without one. */
+    debug : slop_os.Memory,
     /** Where the program's image was. */
     image : u64,
     /** The stack, innermost first, as the report's frames. */
@@ -101,8 +103,9 @@ keep_crash :: fn(shell: ptr[mut Shell], report: ptr[crash_reports.CrashReport], 
     heading :: strings.clone(text_buffer.as_string(&text)) or_return void
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     kept :: slop_os.handle_duplicate(cast[slop_os.Handle](executable), rights) or_else slop_os.NO_HANDLE
-    crash := Crash.{heading = heading, executable = cast[slop_os.Memory](kept), image = report.image, frames = report.frames,
-        count = report.frame_count}
+    debug :: debug_memory(shell, report.program) or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
+    crash := Crash.{heading = heading, executable = cast[slop_os.Memory](kept), debug = debug, image = report.image,
+        frames = report.frames, count = report.frame_count}
     if shell.crashes.count >= MAX_CRASHES {
         forget_crash(&shell.crashes[0])
         runtime.array_remove(&shell.crashes, 0)
@@ -117,8 +120,10 @@ keep_crash :: fn(shell: ptr[mut Shell], report: ptr[crash_reports.CrashReport], 
  */
 forget_crash :: fn(crash: ptr[mut Crash]) {
     strings.free_string(crash.heading)
-    if cast[slop_os.Handle](crash.executable) != slop_os.NO_HANDLE {
-        _ = slop_os.handle_close(cast[slop_os.Handle](crash.executable))
+    for handle in slop_os.Handle.[cast[slop_os.Handle](crash.executable), cast[slop_os.Handle](crash.debug)] {
+        if handle != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(handle)
+        }
     }
 }
 
@@ -143,12 +148,18 @@ show_crashes :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, Eval
         named :: name_frames(shell, crash, names)
         at : usize = 0
         count :: if crash.count <= crash_reports.MAX_FRAMES { crash.count } else { crash_reports.MAX_FRAMES }
+        // The lines come after the names, from the debug file
+        lines_at := at
+        for i in cast[u32](0)..<count {
+            _ = next_line(names, named, &lines_at)
+        }
         for i in cast[u32](0)..<count {
             if cast[usize](i) >= crash.frames.count {
                 break
             }
             address :: crash.frames[cast[usize](i)]
             name :: next_line(names, named, &at)
+            source :: if cast[slop_os.Handle](crash.debug) != slop_os.NO_HANDLE { next_line(names, named, &lines_at) } else { "" }
             storage : u8[256]
             line := text_buffer.make(storage)
             if address < crash.image {
@@ -160,6 +171,9 @@ show_crashes :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, Eval
             else {
                 text_buffer.append_format(&line, "  #% % (image+%{#x})", i, name, address - crash.image)
             }
+            if source != "" && source != "?" {
+                text_buffer.append_format(&line, " at %", source)
+            }
             say(shell, text_buffer.as_string(&line))
         }
     }
@@ -168,8 +182,10 @@ show_crashes :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, Eval
 
 /** The most bytes of the names the symbols program sends for one crash. */
 NAMES_BYTES :: 8192
-/** The memory the symbols program runs with: 8 MiB, room for the program file it reads whole. */
+/** The memory the symbols program runs with besides twice the file it reads whole: 8 MiB. */
 SYMBOLS_BUDGET : u64 : 8 << 20
+/** The largest file the symbols program is given room for: 32 MiB. */
+MAX_SYMBOLS_FILE : u64 : 32 << 20
 
 /** What the symbols program's entry takes: its log, the crashed program's file, its reply channel and the offsets. */
 SymbolsGrants :: struct {
@@ -183,6 +199,8 @@ SymbolsGrants :: struct {
     offsets : u64[],
     /** Functions to find the offsets of, each ending in a newline, after the offsets' names; none for none. */
     names : string?,
+    /** Queries of a debug file's DWARF (decisions/0185), each ending in a newline, after the names; none for none. */
+    queries : string?,
 }
 
 /**
@@ -204,7 +222,11 @@ name_frames :: fn(shell: ptr[mut Shell], crash: ptr[Crash], into: mut u8[]) -> u
             offsets[i] = if crash.frames[i] >= crash.image { crash.frames[i] - crash.image } else { 0 }
         }
     }
-    return ask_symbols(shell, crash.executable, view_of(&offsets[0], count), null, into)
+    if cast[slop_os.Handle](crash.debug) == slop_os.NO_HANDLE {
+        return ask_symbols(shell, crash.executable, view_of(&offsets[0], count), null, null, into)
+    }
+    // With the debug file, each frame's line too: the first where it faulted, the rest in their calls
+    return ask_symbols(shell, crash.debug, view_of(&offsets[0], count), null, line_queries(view_of(&offsets[0], count)), into)
 }
 
 /**
@@ -220,7 +242,7 @@ name_frames :: fn(shell: ptr[mut Shell], crash: ptr[Crash], into: mut u8[]) -> u
  * @return How many bytes of into are the answer; 0 if there's no symbols program, or it couldn't be started or didn't
  *     answer.
  */
-ask_symbols :: fn(shell: ptr[mut Shell], executable: slop_os.Memory, offsets: u64[], names: string?, into: mut u8[]) -> usize {
+ask_symbols :: fn(shell: ptr[mut Shell], executable: slop_os.Memory, offsets: u64[], names: string?, queries: string?, into: mut u8[]) -> usize {
     manager :: shell.manager or_return 0
     found :: find_program(shell, "symbols") or_return 0
     defer {
@@ -242,8 +264,11 @@ ask_symbols :: fn(shell: ptr[mut Shell], executable: slop_os.Memory, offsets: u6
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         return 0
     }
-    grants :: SymbolsGrants.{program = cast[slop_os.Memory](program), reply = pair.b, offsets = offsets, names = names}
-    launched :: match os.launch(manager, shell.manager_port, "symbols", found.executable, SYMBOLS_BUDGET, symbols.main, grants) {
+    grants :: SymbolsGrants.{program = cast[slop_os.Memory](program), reply = pair.b, offsets = offsets, names = names, queries = queries}
+    // Room for the file it reads whole, twice over for what it makes reading it, within reason
+    file_size :: slop_os.memory_size(executable) or_else 0
+    budget :: if file_size > MAX_SYMBOLS_FILE { SYMBOLS_BUDGET + 2 * MAX_SYMBOLS_FILE } else { SYMBOLS_BUDGET + 2 * file_size }
+    launched :: match os.launch(manager, shell.manager_port, "symbols", found.executable, budget, symbols.main, grants) {
         case Ok(made) => made
         case Error(error) => {
             _ = slop_os.handle_close(program)

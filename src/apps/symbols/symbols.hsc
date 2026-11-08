@@ -5,6 +5,11 @@
  * reply channel, as the function's name and the offset into it, "main+0x1c", or "?" for an offset no function holds.
  * Given functions' names too, for a debugger's breakpoints (12b), it sends a line for each after them: the function's
  * offset in the image, as "0x1c40", or "?" for a name no function has.
+ *
+ * Given the program's debug file instead (decisions/0185, 12e: "HDBG", then the program linked with its DWARF, then the
+ * debug table), it reads the ELF in it the same way, and answers queries from its DWARF after the names (dwarf.hsc):
+ * "line <offset>" with "file:line", "where <file>:<line>" with the line's lowest offset, and "locals <offset>" with the
+ * function there and its locals, each as describe_locals says them.
  */
 package symbols
 
@@ -39,10 +44,13 @@ SYMBOL_SIZE : u64 : 24
  *     MAX_OFFSETS are named.
  * @param names Functions' names, as the symbol table has them ("program.main"), each ending in a newline, each
  *     answered with its offset after the offsets' lines; at most MAX_OFFSETS. None for none.
+ * @param queries Queries of the debug file's DWARF, each ending in a newline, answered after the names' lines, in
+ *     order: "line <offset>", "where <file>:<line>" and "locals <offset>", offsets in hex with 0x or in decimal; at most
+ *     MAX_OFFSETS. Each is answered "?" without DWARF, as from a program's file. None for none.
  * @return 0 once the names are sent; 1 if the file couldn't be read, 2 if it isn't an ELF64 file with a symbol table,
  *     3 if the reply couldn't be sent.
  */
-main :: fn(log: slop_os.DebugLog?, program: slop_os.Memory, reply: slop_os.Channel, offsets: u64[], names: string?) -> int {
+main :: fn(log: slop_os.DebugLog?, program: slop_os.Memory, reply: slop_os.Channel, offsets: u64[], names: string?, queries: string?) -> int {
     size :: slop_os.memory_size(program) or_return 1
     if size == 0 || size > MAX_FILE {
         return 1
@@ -53,14 +61,15 @@ main :: fn(log: slop_os.DebugLog?, program: slop_os.Memory, reply: slop_os.Chann
     }
     defer runtime.free_array(file)
     slop_os.memory_read(program, 0, file) or_return 1
-    table :: symbol_table(file) or_return 2
+    elf :: inner_elf(file)
+    table :: symbol_table(elf) or_return 2
     storage : u8[REPLY_BYTES]
     text := text_buffer.make(storage)
     for offset, i in offsets {
         if i >= MAX_OFFSETS {
             break
         }
-        name_at(file, table, offset, &text)
+        name_at(elf, table, offset, &text)
         text_buffer.append(&text, "\n")
     }
     // Each name, up to its newline
@@ -72,7 +81,7 @@ main :: fn(log: slop_os.DebugLog?, program: slop_os.Memory, reply: slop_os.Chann
             continue
         }
         if i > start && start < bytes.count && asked < MAX_OFFSETS {
-            match offset_of(file, table, string_of(&bytes[start], i - start)) {
+            match offset_of(elf, table, string_of(&bytes[start], i - start)) {
                 case Some(offset) => text_buffer.append_format(&text, "%{#x}\n", offset)
                 case None => text_buffer.append(&text, "?\n")
             }
@@ -80,12 +89,143 @@ main :: fn(log: slop_os.DebugLog?, program: slop_os.Memory, reply: slop_os.Chann
         }
         start = i + 1
     }
+    answer_queries(elf, queries or_else "", &text)
     port :: os.port_for(slop_os.startup_block().budget, reply) or_return 3
     none : slop_os.Handle[1]
     match os.send(reply, port, string_bytes(text_buffer.as_string(&text)), view_of(&none[0], 0)) {
         case Some(error) => return 3
         case None => return 0
     }
+}
+
+/**
+ * The ELF a file is: the file itself, or a debug file's program, after its header.
+ *
+ * @param file The whole file.
+ * @return The ELF's bytes, a view of file; the file itself unless it starts "HDBG" and holds all of the ELF it says.
+ */
+inner_elf :: fn(file: u8[]) -> u8[] {
+    if file.count < 16 || file[0] != 0x48 || file[1] != 0x44 || file[2] != 0x42 || file[3] != 0x47 {
+        return file
+    }
+    size :: word(file, 8, 8)
+    first : usize = 16
+    if size == 0 || !fits(file, 16, size) || first >= file.count {
+        return file
+    }
+    return view_of(&file[first], cast[usize](size))
+}
+
+/**
+ * Answer each query, a line each, or the lines describe_locals gives.
+ *
+ * @param elf The ELF, whose DWARF answers.
+ * @param queries The queries, each ending in a newline.
+ * @param into Where the answers go.
+ */
+answer_queries :: fn(elf: u8[], queries: string, into: ptr[mut text_buffer.TextBuffer]) {
+    found :: find_dwarf(elf)
+    bytes :: string_bytes(queries)
+    start : usize = 0
+    asked : usize = 0
+    for i in cast[usize](0)..<bytes.count {
+        if bytes[i] != 0x0a {
+            continue
+        }
+        if i > start && start < bytes.count && asked < MAX_OFFSETS {
+            query :: string_of(&bytes[start], i - start)
+            match found {
+                case Some(dwarf) => answer_query(elf, dwarf, query, into)
+                case None => text_buffer.append(into, "?\n")
+            }
+            asked += 1
+        }
+        start = i + 1
+    }
+}
+
+/**
+ * Answer one query.
+ *
+ * @param elf The ELF.
+ * @param dwarf Its DWARF.
+ * @param query "line <offset>", "where <file>:<line>" or "locals <offset>".
+ * @param into Where the answer goes: "?" for a query not known.
+ */
+answer_query :: fn(elf: u8[], dwarf: Dwarf, query: string, into: ptr[mut text_buffer.TextBuffer]) {
+    bytes :: string_bytes(query)
+    space : usize = bytes.count
+    for byte, i in bytes {
+        if byte == 0x20 {
+            space = i
+            break
+        }
+    }
+    if space == 0 || space + 1 >= bytes.count {
+        text_buffer.append(into, "?\n")
+        return void
+    }
+    command :: string_of(&bytes[0], space)
+    argument :: string_of(&bytes[space + 1], bytes.count - space - 1)
+    if command == "line" {
+        describe_line(elf, dwarf, number_in(argument) or_else ~cast[u64](0), into)
+    }
+    else if command == "locals" {
+        describe_locals(elf, dwarf, number_in(argument) or_else ~cast[u64](0), into)
+    }
+    else if command == "where" {
+        // The file, then the line after the last colon
+        given :: string_bytes(argument)
+        colon : usize = given.count
+        for byte, i in given {
+            if byte == 0x3a {
+                colon = i
+            }
+        }
+        if colon == 0 || colon + 1 >= given.count {
+            text_buffer.append(into, "?\n")
+            return void
+        }
+        line :: number_in(string_of(&given[colon + 1], given.count - colon - 1)) or_else 0
+        describe_address(elf, dwarf, string_of(&given[0], colon), line, into)
+    }
+    else {
+        text_buffer.append(into, "?\n")
+    }
+}
+
+/**
+ * Read a number, in hex after 0x or in decimal.
+ *
+ * @param text The number's text.
+ * @return Its value; null if it isn't one, or is empty.
+ */
+number_in :: fn(text: string) -> u64? {
+    bytes :: string_bytes(text)
+    hex :: bytes.count > 2 && bytes[0] == 0x30 && (bytes[1] == 0x78 || bytes[1] == 0x58)
+    first : usize = if hex { 2 } else { 0 }
+    if first >= bytes.count {
+        return null
+    }
+    value : u64 = 0
+    for i in first..<bytes.count {
+        byte :: bytes[i]
+        digit : u64 = 0
+        if byte >= 0x30 && byte <= 0x39 {
+            digit = cast[u64](byte - 0x30)
+        }
+        else if hex && byte >= 0x61 && byte <= 0x66 {
+            digit = cast[u64](byte - 0x61 + 10)
+        }
+        else if hex && byte >= 0x41 && byte <= 0x46 {
+            digit = cast[u64](byte - 0x41 + 10)
+        }
+        else {
+            return null
+        }
+        value = value * (if hex { cast[u64](16) } else { cast[u64](10) }) + digit
+    }
+    return value
 }
 
 /** Where a file's symbol table and its names are, in bytes from the file's start. */

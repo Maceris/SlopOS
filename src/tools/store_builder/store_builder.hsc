@@ -4,11 +4,12 @@
  * object, named by its BLAKE3-256 hash in hex under objects/, with a bundle naming it, and a boot root naming each
  * bundle by the program's file name without its extension, whose hash is in root. tools/boot.py runs it.
  *
- *     store_builder <store folder> <program>...
+ *     store_builder [--debug-files] <store folder> <program>...
  *
  * A bundle's manifest is the program's <name>.manifest beside it, which the build writes (the schema of its entry's
  * type, decisions/0044), and its documentation <name>.docs (decisions/0174), each put as an object of its own; all
- * zeros if there's none.
+ * zeros if there's none. With --debug-files, its debug file <name>.debug too (decisions/0185), which is several times
+ * the program's size, so a test system that doesn't debug leaves it out.
  */
 package store_builder
 
@@ -28,11 +29,13 @@ import bundle from "../../bundle"
  */
 main :: fn() -> int {
     arguments :: os.arguments()
-    if arguments.count < 2 {
-        runtime.log_error("usage: store_builder <store folder> <program>...")
+    with_debug :: arguments.count > 1 && arguments[1] == "--debug-files"
+    first : usize = if with_debug { 2 } else { 1 }
+    if first >= arguments.count {
+        runtime.log_error("usage: store_builder [--debug-files] <store folder> <program>...")
         return 1
     }
-    store :: arguments[1]
+    store :: arguments[first]
     objects_storage : u8[1024]
     objects :: joined(store, "/objects", &objects_storage)
     for folder in string.[store, objects] {
@@ -43,7 +46,7 @@ main :: fn() -> int {
     }
     entries : bundle.RootEntry[..]
     defer runtime.array_free(&entries)
-    for i in cast[usize](2)..<arguments.count {
+    for i in (first + 1)..<arguments.count {
         path :: arguments[i]
         program :: match os.read_entire_file(path) {
             case Ok(read) => read
@@ -67,6 +70,13 @@ main :: fn() -> int {
         match os.read_entire_file(documentation_path) {
             case Ok(documentation) => made.documentation = put(objects, bit_cast[u8[]](documentation)) or_return 4
             case Error(error) => {}
+        }
+        if with_debug {
+            debug_storage : u8[1024]
+            match os.read_entire_file(joined(without_extension(path), ".debug", &debug_storage)) {
+                case Ok(debug) => made.debug = put(objects, bit_cast[u8[]](debug)) or_return 4
+                case Error(error) => {}
+            }
         }
         record : u8[..]
         bundle.write(made, &record)
