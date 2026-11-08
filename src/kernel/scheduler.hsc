@@ -353,7 +353,8 @@ go_idle :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu]) #never_returns {
 
 /**
  * Leave idle, as an interrupt wakes the calling CPU: one that wasn't ticking records the epoch now, before anything
- * it runs could reach an object, and ticks again from now, its next tick a tick's time away.
+ * it runs could reach an object, renews its heartbeat for lockup detection (lockups.hsc), and ticks again from now,
+ * its next tick a tick's time away.
  *
  * Called at an interrupt's entry, on the CPU's kernel stack; a CPU that was ticking is left as it was.
  */
@@ -363,9 +364,12 @@ leave_idle :: fn() {
         return void
     }
     intrinsics.atomic_store_u64(&cpu.quiescent_epoch, intrinsics.atomic_load_u64(&cpu.kernel.epoch))
+    now :: arch.counter()
+    // Its heartbeat is from before it idled: renewed before it counts as ticking again, so no other CPU sees it stale
+    intrinsics.atomic_store_u64_release(&cpu.heartbeat, now)
     intrinsics.fence_sequentially_consistent()
     intrinsics.atomic_store_u32_release(&cpu.tickless, 0)
-    cpu.next_tick = arch.counter() + cpu.kernel.counter_frequency / TICKS_PER_SECOND
+    cpu.next_tick = now + cpu.kernel.counter_frequency / TICKS_PER_SECOND
     program_deadline(cpu)
 }
 

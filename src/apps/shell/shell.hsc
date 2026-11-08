@@ -66,6 +66,8 @@ Shell :: struct {
     last_job : u32,
     /** The key the next programs started together have their ends watched under, from FIRST_KEY. */
     next_key : u64,
+    /** The crash reports of the programs it's started, as text, oldest first, at most MAX_CRASHES; each its own. */
+    crashes : string[..],
 }
 
 /**

@@ -1,12 +1,14 @@
 /**
  * test_shell_calls (decisions/0170, 0172, 0174): a program the shell calls through its manifest, taking a connection to
  * the shell's terminal, values of several types, some optional, and a directory beneath the shell's home. It writes
- * what it was given on one line, and ends with 0, or, given the label "fail", with its count. In a pipeline: given an
+ * what it was given on one line, and ends with 0, or, given the label "fail", with its count; given "crash", it then
+ * traps, for the shell's crash reports (decisions/0183). In a pipeline: given an
  * output, it writes count rows, or with an input, each row it reads with its id times ten. Given a time to sleep, it
  * sleeps first, saying its progress, and ends early when it's asked to stop, unless it's stubborn.
  */
 package test_shell_calls
 
+import intrinsics from "base"
 import os from "std"
 import strings from "std"
 import terminal from "std"
@@ -44,7 +46,7 @@ Row :: struct {
  * @param count A number, written on the line; with an output and no input, how many rows are made; with the label
  *     "fail", the exit code.
  * @param label A word, written on the line, and starting each row's name made; "fail" makes the program end with
- *     count instead of 0.
+ *     count instead of 0, and "crash" makes it trap once the line's written.
  * @param loud A flag, written on the line.
  * @param speed A choice, written on the line by name, or "none" without it.
  * @param wait A duration, written on the line in milliseconds, or "none" without it.
@@ -118,6 +120,9 @@ main :: fn(session_terminal: os.Channel[protocol.Terminal]?, count: u64, label: 
             _ = terminal.write_line(&shown, line)
         }
         case None => {}
+    }
+    if label == "crash" {
+        intrinsics.trap()
     }
     match output {
         case Some(sink) => return write_rows(sink, null, count, label)

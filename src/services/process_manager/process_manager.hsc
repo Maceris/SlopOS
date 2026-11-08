@@ -149,7 +149,7 @@ MAX_EXECUTABLE : u64 : 4 << 20
  *
  * @param manager The manager, whose entropy connection may be dialed again.
  * @param request The Load, whose handles are all gone from this process when it returns.
- * @return Loaded with the first thread's ID; or NotLoaded with BadRequest for more than MAX_GRANTS grants or an
+ * @return Loaded with the first thread's ID and the image's address; or NotLoaded with BadRequest for more than MAX_GRANTS grants or an
  *     executable that's empty, larger than MAX_EXECUTABLE, or can't be read (its memory gone), NoRandom when the
  *     entropy service doesn't answer even when dialed again, NoMemory when the heap can't hold its copy or the build
  *     ran out, NotAProgram when it isn't an
@@ -204,9 +204,9 @@ load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.R
     target :: process_builder.Target.{process = request.process, space = request.space, budget = request.budget}
     match process_builder.build(target, file, view_of(&grants[0], grant_count), seed, &stream, request.executable, slop_os.ABI_VERSION,
         &manager.staging) {
-        case Ok(thread) => {
+        case Ok(built) => {
             log_line.write(manager.log, "process manager: started %", name)
-            return .Loaded(thread)
+            return .Loaded(protocol.Started.{thread = built.thread, image = built.image})
         }
         case Error(error) => {
             log_line.write(manager.log, "process manager: % didn't start: %", name, error)

@@ -83,7 +83,8 @@ leave_cpu :: fn(cpu: ptr[mut PerCpu]) {
  * process is already being destroyed.
  *
  * @param registers The user registers the entry saved, which are copied into the thread.
- * @param fault What faulted: a page fault's address and access, or another kind, reported to a debugger as access 0xff.
+ * @param fault What faulted: a page fault's address and access, or another kind, reported to a debugger as its
+ *     slop_os.FAULT_ kind, with address 0.
  */
 handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interface.Fault) #never_returns {
     save_user_registers(registers)
@@ -100,7 +101,13 @@ handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interfac
             access = cast[u64](cast[u8](page.access))
             address = cast[u64](page.address)
         }
-        case _ => access = 0xff
+        case InvalidInstruction => access = cast[u64](slop_os.FAULT_INVALID_INSTRUCTION)
+        case Breakpoint => access = cast[u64](slop_os.FAULT_BREAKPOINT)
+        case SingleStep => access = cast[u64](slop_os.FAULT_SINGLE_STEP)
+        case Arithmetic => access = cast[u64](slop_os.FAULT_ARITHMETIC)
+        case Alignment => access = cast[u64](slop_os.FAULT_ALIGNMENT)
+        case Protection => access = cast[u64](slop_os.FAULT_PROTECTION)
+        case FloatingPoint => access = cast[u64](slop_os.FAULT_FLOATING_POINT)
     }
     // Waiting for its pager: it runs again, touching the page again, once it's supplied
     if outcome == .Blocked {

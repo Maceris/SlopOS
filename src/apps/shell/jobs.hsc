@@ -68,6 +68,10 @@ watch_port :: fn(shell: ptr[Shell]) -> slop_os.Port {
  */
 take_packets :: fn(shell: ptr[mut Shell], packets: slop_os.Packet[], taken: usize) {
     for packet, i in packets {
+        if i < taken && packet.kind == .Stop && packet.key >= FAULT_KEY {
+            take_faults(shell, packet.key - FAULT_KEY)
+            continue
+        }
         if i >= taken || packet.kind != .Signal || packet.key < FIRST_KEY {
             continue
         }
@@ -167,8 +171,8 @@ has_ended :: fn(shell: ptr[Shell], call: ptr[Call]) -> bool {
 
 /**
  * See to what the shell does while it waits for programs: Ctrl-C, which asks them to stop, unless one has the terminal,
- * whose Ctrl-C is its own; programs that haven't stopped after STOP_GRACE, which are killed; and their progress, shown
- * in the input line.
+ * whose Ctrl-C is its own; programs that haven't stopped after STOP_GRACE, which are killed; their faults, which end
+ * them (poll_faults); and their progress, shown in the input line.
  *
  * @param shell The shell, whose terminal is asked for an Interrupt without waiting, and shows the progress.
  * @param running The programs waited for, which Ctrl-C stops.
@@ -182,6 +186,7 @@ attend :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) {
     if running.stop_by != 0 && (slop_os.clock_monotonic() or_else 0) >= running.stop_by {
         kill_running(shell, running)
     }
+    poll_faults(shell, running)
     show_progress(shell, running)
 }
 

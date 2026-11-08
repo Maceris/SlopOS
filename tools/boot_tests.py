@@ -109,6 +109,11 @@ AARCH64_IOMMU_LINE = "[info] IOMMU 0: SMMUv3, 128 KiB of registers at 0x00000000
 # How it translates (src/kernel/translation.hsc): VT-d remapping interrupts too, and signalling its faults; SMMUv3 not
 # The real-time clock the platform service finds: the MC146818 on x86-64, and the device tree's PL031 on AArch64
 X86_CLOCK_LINE = "[user] platform: the real-time clock (Mc146818) claimed"
+# What the shell says of a program that ran intrinsics.trap: ud2 on x86-64, brk on AArch64
+CRASH_LINE = "error: test_shell_calls crashed: invalid instruction; crashes shows where"
+AARCH64_CRASH_LINE = "error: test_shell_calls crashed: breakpoint; crashes shows where"
+CRASH_REPORT_LINE = "test_shell_calls: invalid instruction"
+AARCH64_CRASH_REPORT_LINE = "test_shell_calls: breakpoint"
 AARCH64_CLOCK_LINE = "[user] platform: the real-time clock (Pl031) claimed"
 # The host bridge's windows from its _CRS, which the ACPI service gives (decisions/0182, P3); AArch64's are the device
 # tree's ranges, which say nothing, so its test only sees the platform service serve
@@ -635,6 +640,20 @@ TESTS = [
         "--expect-console-line=error: --count: x isn't a number",
         "--expect-console-line=error: --speed: Medium isn't one of Slow or Fast",
         "--expect-console-line=error: test_values needs a log, which the shell can't give"])),
+    # Crash reports (decisions/0183, 12a): a program the shell started traps, so the shell's intercept of its faults
+    # reports it, logs the report, and ends it; crashes shows the report, and the shell goes on
+    ("reports a program's crash from the shell, and shows it with crashes", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wtest_shell_calls 2 crash\\r\\p\\pcrashes\\r\\p\\ptest_shell_calls 3 after\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-line=[user] shell: reading commands",
+        "--expect-console-line=called with crash, 2, loud false, speed none, wait none, tags none, place none",
+        f"--expect-console-line={CRASH_LINE}",
+        f"--expect-console-line={CRASH_REPORT_LINE}",
+        "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
     # Shell functions, errors and the shell's directory (decisions/0171): a function's parameters matched and read by
     # their types, try/catch with the error as a record, ? passing a function's error to its caller where one without
     # is fatal, return, and cd beneath the home
@@ -1209,7 +1228,9 @@ def aarch64_tests(tests: list) -> list:
     lines = {f"--expect-line={X86_IOMMU_LINE}": f"--expect-line={AARCH64_IOMMU_LINE}",
              f"--expect-line={X86_TRANSLATING_LINE}": f"--expect-line={AARCH64_TRANSLATING_LINE}",
              f"--expect-line={X86_CLOCK_LINE}": f"--expect-line={AARCH64_CLOCK_LINE}",
-             f"--expect-line={X86_WINDOWS_LINE}": f"--expect-line={AARCH64_WINDOWS_LINE}"}
+             f"--expect-line={X86_WINDOWS_LINE}": f"--expect-line={AARCH64_WINDOWS_LINE}",
+             f"--expect-console-line={CRASH_LINE}": f"--expect-console-line={AARCH64_CRASH_LINE}",
+             f"--expect-console-line={CRASH_REPORT_LINE}": f"--expect-console-line={AARCH64_CRASH_REPORT_LINE}"}
     adapted = [(f"AArch64: {AARCH64_NAMES.get(name, name)}", expected, [lines.get(argument, argument) for argument in arguments])
                for name, expected, arguments in tests if name not in AARCH64_LEFT_OUT]
     return adapted + [("AArch64: refuses a CPU below ARMv8.2-A with LSE", 2, ["--cpu=cortex-a57"])]

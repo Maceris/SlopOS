@@ -177,6 +177,10 @@ Call :: struct {
     started : bool,
     /** Whether its end's been seen. */
     waited : bool,
+    /** Whether it faulted, so the shell ended it (take_faults). */
+    crashed : bool,
+    /** Its first fault's kind, a slop_os FAULT_ constant, when it crashed. */
+    fault : u32,
     /** Once it's started: the key its end's watched under on the shell's port. */
     key : u64,
     /** Once it's started: its process and budget, the call's handles, closed by end_call. */
@@ -230,6 +234,13 @@ end_call :: fn(call: ptr[mut Call]) {
             cast[slop_os.Handle](call.lifecycle)] {
             _ = slop_os.handle_close(handle)
         }
+        match call.launched.faults {
+            case Some(faults) => {
+                _ = slop_os.handle_close(cast[slop_os.Handle](faults.intercept))
+                _ = slop_os.handle_close(cast[slop_os.Handle](faults.space))
+            }
+            case None => {}
+        }
     }
     _ = slop_os.handle_close(cast[slop_os.Handle](call.executable))
     if call.has_result {
@@ -247,8 +258,9 @@ end_call :: fn(call: ptr[mut Call]) {
 }
 
 /**
- * Launch a call's program, through the process manager, in a process of the shell's, its end watched under a key, and
- * its lifecycle channel under the key plus LIFECYCLE_KEY, for what it says of its progress.
+ * Launch a call's program, through the process manager, in a process of the shell's, its end watched under a key, its
+ * lifecycle channel under the key plus LIFECYCLE_KEY, for what it says of its progress, and its faults under the key
+ * plus FAULT_KEY (take_faults).
  *
  * It's given the call's grants and values, PROGRAM_BUDGET, a lifecycle channel, and copies of the shell's clock and
  * locale grants. Once it's started, its grants are its.
@@ -265,7 +277,8 @@ start_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], key: u64) -> EvalEr
     manager :: shell.manager or_return EvalError.{message = "the shell can't start programs: it has no process manager", at = tree.at}
     block :: slop_os.startup_block()
     ends :: lifecycle.make(block.budget) or_return EvalError.{message = "there's no memory to start it", at = tree.at}
-    options := os.LaunchOptions.{watch = os.LaunchWatch.{port = watch_port(shell), key = key}, lifecycle = ends.b}
+    options := os.LaunchOptions.{watch = os.LaunchWatch.{port = watch_port(shell), key = key}, lifecycle = ends.b,
+        faults = os.LaunchFaults.{port = watch_port(shell), key = key + FAULT_KEY}}
     options.clock = copy_of_grant("clock")
     options.locale = copy_of_grant("locale")
     options.result = result_grant(call)
@@ -319,6 +332,9 @@ wait_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], running: ptr[mut Run
     }
     if ended == 0 {
         return null
+    }
+    if call.crashed {
+        return EvalError.{message = message("% crashed: %; crashes shows where", tree.text, slop_os.fault_name(call.fault)), at = tree.at}
     }
     if ended == slop_os.EXIT_KILLED {
         return EvalError.{message = message("% was ended", tree.text), at = tree.at}

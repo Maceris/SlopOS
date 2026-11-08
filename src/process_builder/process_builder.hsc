@@ -3,7 +3,7 @@
  * system calls: the root task builds its first services with it, and the process manager every program
  * after them. The process, its address space and its budget are the requester's, made before:
  *
- *     thread :: process_builder.build(target, file, grants, seed, &stream)?
+ *     built :: process_builder.build(target, file, grants, seed, &stream)?
  *
  * The image, its stack and its startup block (docs/specs/programs.md) are memory objects charged to the
  * target's budget, each at a random place, and go to the process with its address space, its handles to
@@ -179,7 +179,7 @@ staged :: fn(staging: ptr[mut Staging]?, area: usize, size: u64) -> u64? {
  * @param staging Where the builder stages, kept from build to build by a caller that builds many processes over its
  *     life, so its free range isn't used up; null for a caller that builds few, which takes new addresses each time.
  *     Not safe to share between builds running at once.
- * @return The ID of the process's first thread, not a handle: the caller doesn't own it.
+ * @return The process's first thread's ID, not a handle the caller owns, and where its image is.
  * @error TooManyGrants There are more than MAX_GRANTS grants; nothing is made.
  * @error NotAProgram elf_loader can't read, load or relocate the file.
  * @error NoAddresses The builder's free range has no room left to stage the image or the block.
@@ -188,7 +188,7 @@ staged :: fn(staging: ptr[mut Staging]?, area: usize, size: u64) -> u64? {
  *     go to the process, or the thread couldn't be started.
  */
 build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: ptr[mut random_stream.Stream], source: slop_os.Memory? = null,
-    abi_version: u32 = slop_os.ABI_VERSION, staging: ptr[mut Staging]? = null) -> Result[u64, BuildError] {
+    abi_version: u32 = slop_os.ABI_VERSION, staging: ptr[mut Staging]? = null) -> Result[Built, BuildError] {
     if grants.count > MAX_GRANTS {
         return .Error(.TooManyGrants)
     }
@@ -277,7 +277,15 @@ build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: p
     // As a call leaves it: 8 below a multiple of 16
     thread :: slop_os.thread_create_in(target.process, target.budget, space, layout.image + executable.entry, layout.stack + STACK_SIZE - 8,
         layout.block) or_return .Error(.Failed)
-    return .Ok(thread)
+    return .Ok(Built.{thread = thread, image = layout.image})
+}
+
+/** A process build started. */
+Built :: struct {
+    /** Its first thread's ID in the target process, not a handle. */
+    thread : u64,
+    /** The address its image is at in the target's space, which its relocations were applied for. */
+    image : u64,
 }
 
 /** Handles build made, closed if it fails before they go to the process. */
