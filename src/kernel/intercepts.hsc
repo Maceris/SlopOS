@@ -59,6 +59,10 @@ Intercept :: struct #align(16) {
     first_stopped : u64,
     /** The last thread it stopped, the newest, through their stop_previous; 0 for none. */
     last_stopped : u64,
+    /** 1 while it samples its subtree (tracing.hsc, intercept_sample); read and written atomically. */
+    sampling : u32,
+    /** Its samples, a SampleRing on the kernel heap, as an address; 0 until it first samples. */
+    samples : u64,
 }
 
 /**
@@ -150,6 +154,7 @@ create_intercept :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, process
  * @param intercept The intercept being destroyed, already dying.
  */
 destroy_intercept :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) {
+    free_samples(intercept)
     // Unless the process was destroyed first, when it let go of its intercept itself
     if intercept.process != 0 && is_live(intercept.process, intercept.process_generation) {
         process :: cast[ptr[mut Process]](intercept.process)

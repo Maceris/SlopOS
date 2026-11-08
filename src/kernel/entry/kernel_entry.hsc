@@ -90,16 +90,24 @@ user_fault #never_returns :: fn(registers: ptr[mut arch.UserRegisters], fault: a
  */
 interrupt #never_returns :: fn(from: Interrupted, source: InterruptSource) {
     kernel.left_boot_stack()
+    from_user := false
     match from {
         case User(registers) => {
             arch.debug_off()
             kernel.save_user_registers(registers)
+            from_user = true
         }
         // One idle without ticking records the epoch first (decisions/0128)
         case Idle => kernel.leave_idle()
     }
     match source {
-        case Timer => kernel.schedule(kernel.handle_timer())
+        case Timer => {
+            // A tick in a sampled thread's user code (decisions/0183)
+            if from_user {
+                kernel.take_sample(kernel.per_cpu().kernel)
+            }
+            kernel.schedule(kernel.handle_timer())
+        }
         case Ipi(kind) => {
             if kind == .Stop {
                 arch.halt()

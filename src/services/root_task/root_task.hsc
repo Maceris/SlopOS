@@ -486,7 +486,7 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
     service :: service_of(root, "supervisor") or_return 8
     module :: find_module(block, service.module) or_return 8
     grants := SupervisorGrants.{
-        log = duplicate_log(root),
+        log = tracing_log(root),
         manager = connector_to(root, .ProcessManager) or_return 9,
         root = os.Channel[supervision.Supervision].{end = supervision_pair.b},
         hello_module = module_copy(root, "hello", program_rights),
@@ -1675,6 +1675,23 @@ records_copy :: fn(root: ptr[Root]) -> slop_os.Memory? {
  */
 duplicate_log :: fn(root: ptr[mut Root]) -> slop_os.DebugLog? {
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    match slop_os.handle_duplicate(cast[slop_os.Handle](root.log), rights) {
+        case Ok(handle) => return cast[slop_os.DebugLog](handle)
+        case Error(error) => return null
+    }
+}
+
+/**
+ * Copy the root task's debug log for the supervisor, which may trace with it too (RIGHT_DEBUG_LOG_TRACE,
+ * decisions/0183): the system's tracing is the supervisor's to give, as an administrator asks.
+ *
+ * @param root The root task, which keeps its own handle.
+ * @return The copy, writable, tracing, duplicable and transferable, the caller's to give away; null if it can't be
+ *     copied.
+ */
+tracing_log :: fn(root: ptr[mut Root]) -> slop_os.DebugLog? {
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DEBUG_LOG_TRACE)
+        | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     match slop_os.handle_duplicate(cast[slop_os.Handle](root.log), rights) {
         case Ok(handle) => return cast[slop_os.DebugLog](handle)
         case Error(error) => return null

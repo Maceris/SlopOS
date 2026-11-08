@@ -736,6 +736,10 @@ Supervisor :: struct {
     launched_budget : slop_os.MemoryBudget,
     /** The log ring of the program launched last, from options_for until its entry takes it; NO_HANDLE between. */
     launched_ring : slop_os.Memory,
+    /** Whether test_trace is on, so the trace is drained as each service starts (tracing.hsc). */
+    tracing : bool,
+    /** When each thread first ran, as the trace showed it, for test_trace's boot timeline. */
+    first_runs : FirstRun[..],
     /** The faults' intercept of the program launched last, from kept until its entry takes it; null between. */
     launched_faults : os.LaunchedFaults?,
     /** Where the image of the program launched last is, from kept until its entry takes it. */
@@ -978,7 +982,7 @@ MAX_LOADED :: 32
  * driver and the services that use them, each with what it needs, and starts again whatever ends badly. Words on the
  * kernel's command line turn on its tests (test_restart, test_dma_fault, test_clock, test_events,
  * test_restart_services, test_store, test_system_config, test_degraded, test_substitution, test_lending,
- * test_unassessed, test_accounts, test_crash), skip the disk check (no_disk_check), boot the recovery generation (recovery), and
+ * test_unassessed, test_accounts, test_crash, test_trace), skip the disk check (no_disk_check), boot the recovery generation (recovery), and
  * say the generation booted (generation=, store_root=). Once everything has started it assesses the boot, tells the
  * update service and the root task, and then serves its connectors for good.
  *
@@ -1094,6 +1098,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     test_system_config := false
     test_degraded := false
     test_crash := false
+    test_trace := false
     test_substitution := false
     test_lending := false
     // A boot that never tells the update service how it went, as one that hangs or resets before it's assessed would
@@ -1118,6 +1123,11 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
             test_system_config = service_kit.has_word(text, "test_system_config")
             test_degraded = service_kit.has_word(text, "test_degraded")
             test_crash = service_kit.has_word(text, "test_crash")
+            test_trace = service_kit.has_word(text, "test_trace")
+            if test_trace {
+                // The trace on, if the kernel's trace_boot hasn't already, and drained as each service starts
+                supervisor.tracing = slop_os.trace_set(supervisor.log, true) is_ok
+            }
             test_substitution = service_kit.has_word(text, "test_substitution")
             test_lending = service_kit.has_word(text, "test_lending")
             test_unassessed = service_kit.has_word(text, "test_unassessed")
@@ -1275,6 +1285,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
         _ = ask_substitute(&supervisor, read_substitutions(&supervisor))
     }
     tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))
+    // The boot's timeline and a traced exchange, once everything has started (tracing.hsc)
+    if test_trace {
+        check_trace(&supervisor)
+    }
     // A crash once everything has started, of a service that runs for good (crashes.hsc)
     if test_crash {
         _ = crash_and_wait(&supervisor, "update")
@@ -1648,6 +1662,7 @@ place :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process: s
     entry.image = supervisor.launched_image
     entry.running = true
     entry.done = false
+    drain_trace(supervisor)
     entry.ended_on_request = false
     tell_root(supervisor, .Started(report_of(name, 0)))
     return again
@@ -5103,6 +5118,7 @@ started :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process:
         ring = take_ring(supervisor), lifecycle = take_lifecycle(supervisor), faults = take_faults(supervisor),
         image = supervisor.launched_image}
     supervisor.started_count = index + 1
+    drain_trace(supervisor)
     return index
 }
 

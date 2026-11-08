@@ -1072,6 +1072,13 @@ TESTS = [
         "--expect-line=[user] supervisor: test_crash: crashing update",
         "--expect-line=[user] supervisor: update crashed: execute fault",
         "--expect-line=[user] supervisor: update ended"])),
+    # Tracing (decisions/0183, 12d): the kernel's trace from its start, the supervisor's boot timeline from it, and a
+    # ping of the clock service, which the trace shows woken by it and run
+    ("traces the boot's timeline and a known exchange", 7, with_before_qemu(
+        [argument.replace("test_services", "test_services trace_boot test_trace") for argument in BOOT_DISK_BASE], [
+        "--expect-line=[user] supervisor: test_trace: every running service is in the boot's timeline",
+        "--expect-line=[user] supervisor: test_trace: a ping's exchange is in the trace: the clock service woken by it, and run to "
+        "answer"])),
     ("boots degraded, with a record of why, when a service the system needs ends for good", 7, with_before_qemu(
         # hello's own lines too, which it may not get to before it's killed
         [argument.replace("test_services", "test_services test_degraded") for argument in BOOT_DISK_BASE

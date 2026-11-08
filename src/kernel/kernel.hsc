@@ -169,6 +169,8 @@ Kernel :: struct {
     lockup : u32,
     /** The stuck CPU's index plus one, whose NMI notes where it was; 0 before a lockup (lockups.hsc). */
     lockup_target : u32,
+    /** 1 while the trace is on (tracing.hsc, trace_set); read and written atomically. */
+    tracing : u32,
     /** The counter next_cpu_of turns from, so IRQs are routed to the CPUs in turn (irqs.hsc, devices.hsc). */
     next_irq_cpu : u32,
     /** Held while changing the list of devices from first_device (devices.hsc). */
@@ -252,6 +254,8 @@ PerCpu :: struct #align(64) {
     nmi_count : u32,
     /** When this CPU last ticked, in counter ticks, for lockup detection (lockups.hsc); written atomically. */
     heartbeat : u64,
+    /** This CPU's trace ring (tracing.hsc), as an address on the kernel heap; 0 until tracing's first on. */
+    trace_ring : u64,
     /** Where a lockup's NMI found this CPU: the interrupted program counter (lockups.hsc). */
     lockup_pc : u64,
     /** 1 once lockup_pc is written, read atomically. */
@@ -395,6 +399,10 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         // While the bootloader's memory, which may hold them, is still there
         copy_firmware_tables(kernel, &info.firmware_tables, info.framebuffers, info.direct_map_offset)
         start_cpus(kernel, info)
+        // The trace from here, every CPU online, for a boot's timeline (decisions/0183)
+        if kernel.options.trace_boot && !set_tracing(kernel, true) {
+            runtime.log_error("no memory for the trace's rings")
+        }
         start_msis(kernel)
         leave_boot_stacks(kernel)
         // Of the memory free once boot memory is back

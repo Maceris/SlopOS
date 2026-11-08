@@ -83,6 +83,8 @@ LockRank :: enum #backed_by(u32) {
     ObjectList = 290,
     /** The kernel's console_lock, held while a line is written out (log.hsc). */
     Console = 300,
+    /** A CPU's trace ring's lock, taken in the scheduler's paths under any other (tracing.hsc). */
+    Trace = 310,
 }
 
 /**

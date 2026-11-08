@@ -2802,3 +2802,79 @@ sys_process_set_traps :: fn(thread: ptr[mut Thread], process: slop_os.Process, t
     intrinsics.atomic_store_u32_release(&target.traps, traps)
     return .Ok
 }
+
+/**
+ * Turn the kernel's trace on or off (tracing.hsc).
+ *
+ * @param thread The calling thread.
+ * @param log The kernel's debug log, with RIGHT_DEBUG_LOG_TRACE.
+ * @param on Whether it traces from now.
+ * @error InvalidHandle The log isn't a handle in the caller's table.
+ * @error ObjectGone The log was destroyed.
+ * @error WrongKind Not the debug log's handle.
+ * @error MissingRight The handle lacks RIGHT_DEBUG_LOG_TRACE.
+ * @error OutOfMemory A CPU's ring couldn't be made.
+ */
+sys_trace_set :: fn(thread: ptr[mut Thread], log: slop_os.DebugLog, on: bool) -> Result[void, slop_os.DeviceError] {
+    _ = object_of[slop_os.DeviceError](process_of(thread), cast[slop_os.Handle](log), .DebugLog, slop_os.RIGHT_DEBUG_LOG_TRACE)?
+    if !set_tracing(per_cpu().kernel, on) {
+        return .Error(.OutOfMemory)
+    }
+    return .Ok
+}
+
+/**
+ * Take the trace's events not yet taken (tracing.hsc).
+ *
+ * @param thread The calling thread, into whose memory they're written.
+ * @param log The kernel's debug log, with RIGHT_DEBUG_LOG_TRACE.
+ * @param events Where they go.
+ * @return How many were written.
+ * @error InvalidHandle The log isn't a handle in the caller's table.
+ * @error ObjectGone The log was destroyed.
+ * @error WrongKind Not the debug log's handle.
+ * @error MissingRight The handle lacks RIGHT_DEBUG_LOG_TRACE.
+ * @error BadAddress events isn't writable user memory.
+ */
+sys_trace_read :: fn(thread: ptr[mut Thread], log: slop_os.DebugLog, events: slop_os.UserBuffer) -> Result[u32, slop_os.DeviceError] {
+    _ = object_of[slop_os.DeviceError](process_of(thread), cast[slop_os.Handle](log), .DebugLog, slop_os.RIGHT_DEBUG_LOG_TRACE)?
+    count :: read_trace(per_cpu().kernel, thread.space, events.address, events.count) or_return .Error(.BadAddress)
+    return .Ok(count)
+}
+
+/**
+ * Sample an intercept's subtree, or stop (tracing.hsc).
+ *
+ * @param thread The calling thread.
+ * @param intercept The intercept; no right is needed.
+ * @param on Whether it samples from now.
+ * @error InvalidHandle The intercept isn't a handle in the caller's table.
+ * @error ObjectGone The intercept was destroyed.
+ * @error WrongKind Not an intercept's handle.
+ * @error OutOfMemory Its ring couldn't be made.
+ */
+sys_intercept_sample :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept, on: bool) -> Result[void, slop_os.ControlError] {
+    found :: intercept_of_handle(thread, intercept)?
+    if !set_sampling(found, on) {
+        return .Error(.OutOfMemory)
+    }
+    return .Ok
+}
+
+/**
+ * Take an intercept's samples not yet taken (tracing.hsc).
+ *
+ * @param thread The calling thread, into whose memory they're written.
+ * @param intercept The intercept.
+ * @param samples Where they go.
+ * @return How many were written.
+ * @error InvalidHandle The intercept isn't a handle in the caller's table.
+ * @error ObjectGone The intercept was destroyed.
+ * @error WrongKind Not an intercept's handle.
+ * @error BadBuffer samples isn't writable user memory.
+ */
+sys_intercept_samples :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept, samples: slop_os.UserBuffer) -> Result[u32, slop_os.ControlError] {
+    found :: intercept_of_handle(thread, intercept)?
+    count :: read_samples(per_cpu().kernel, found, thread.space, samples.address, samples.count) or_return .Error(.BadBuffer)
+    return .Ok(count)
+}

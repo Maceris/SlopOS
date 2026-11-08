@@ -100,6 +100,7 @@ make_ready :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], asked: u32) {
     target :: cast[ptr[mut PerCpu]](per_cpus[cpu_index])
     level :: level_of(thread, arch.counter())
     thread.state = .Ready
+    trace_event(kernel, .Wake, thread.id, cast[u64](cpu_index))
     lock_at(&target.run_queue.lock, .RunQueue)
     intrinsics.atomic_store_u32_release(&thread.cpu, cpu_index)
     enqueue(&target.run_queue, thread, level)
@@ -291,6 +292,7 @@ run :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Thread]
     }
     pass_quiescent(kernel, cpu, epoch)
     thread.state = .Running
+    trace_event(kernel, .Switch, thread.id, 0)
     intrinsics.atomic_store_u32_release(&thread.cpu, cpu.index)
     cpu.current = cast[u64](thread)
     intrinsics.atomic_store_u32_release(&cpu.current_level, thread.level)

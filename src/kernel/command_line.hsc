@@ -23,6 +23,8 @@ Options :: struct {
     test_nmi : bool,
     /** test_lockup: CPU 1 spins with interrupts off once booted, which lockup detection catches (decisions/0183). */
     test_lockup : bool,
+    /** trace_boot: the trace is on from the kernel's start, for a boot's timeline (decisions/0183, tracing.hsc). */
+    trace_boot : bool,
     /** test_fibers: once booted, run two fibers taking turns, to check fibers suspend and resume. */
     test_fibers : bool,
     /** test_segments: once booted, run a fiber that grows onto more stack segments (a morestack kernel). */
@@ -149,6 +151,9 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_lockup" {
         options.test_lockup = true
+    }
+    if word == "trace_boot" {
+        options.trace_boot = true
     }
     if word == "test_fibers" {
         options.test_fibers = true
