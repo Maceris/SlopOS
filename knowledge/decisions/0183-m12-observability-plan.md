@@ -1,6 +1,6 @@
 # 0183: M12, Observability and Debugging, Planned
 
-Status: accepted, chosen with the project's owner; 12a built
+Status: accepted, chosen with the project's owner; 12a and 12b built
 Date: 2026-11-08
 Related: `0009` (replay through system calls), `0017` and `0056` (process control and intercepts), `0024` (replay is
 opt-in), `0041` (the per-thread page), `0053` (kernel-copied channel access), `0093` (the events service), `0134` (the
@@ -143,3 +143,32 @@ Four parts, each with an as-built record:
   `test_installations` crashes the counter last; `test_control` checks a launch's intercept, a report's frames and
   `STOP_FAULT_LIMITED`; `test_lockup` spins CPU 1 with interrupts off; `test_events` drops a source's oldest records
   past the smallest budget. On both architectures.
+
+## As Built: 12b
+- **The kernel.** `thread_set_debug` sets a parked thread's debugging state, a `ThreadDebug`: whether it single-steps,
+  and up to four hardware breakpoints (`Execute`) and watchpoints (`Write`, `ReadWrite`, of 1, 2, 4 or 8 bytes).
+  x86-64 uses DR0 to DR3, DR7 and RFLAGS.TF, decoding a debug exception by DR6; AArch64 the breakpoint and watchpoint
+  registers for EL0 alone, after unlocking the OS lock, and software step (MDSCR_EL1.SS, SPSR.SS). The state is loaded
+  as the thread returns to user mode and turned off at every entry, since x86-64's breakpoints would otherwise fire on
+  the kernel's own accesses to user memory, and the debug exception's entry can't return to the kernel. A hit is a
+  fault stop: `FAULT_BREAKPOINT`, `FAULT_SINGLE_STEP`, or a new `FAULT_WATCHPOINT` with the address. Hardware
+  breakpoints, not written ones: a program's code is shared, read-only, from the bundle store.
+- **Also the kernel.** `intercept_set` changes where an intercept stops. A thread suspended while it waits has its
+  registers read, as it began the wait; they aren't written, as the wait's end writes its results there. Pages nothing
+  has touched were already brought in for a debugger's reads (`present_user_page`); code the bundle store hasn't
+  supplied yet still can't be read.
+- **Hemera.** `read_dr` and `write_dr` intrinsics, lowered as the control registers are; `LaunchFaults.debugging`, an
+  intercept from the start that stops at every call's entry and at faults without a limit.
+- **The program.** `debug name arguments`, a shell built-in, runs a program stopped at its first system call, before
+  its main, and reads commands at a `(debug)` prompt: `break` by function, its offset found by name through `symbols`;
+  `watch` by address; `delete`, `step`, `continue`, `where`, `registers`, `threads`, `print`, `quit`. A stop at a
+  breakpoint or watchpoint is stepped past with the slots off, which also covers x86-64's breakpoints being faults and
+  AArch64's watchpoints stopping before the access.
+- **Not yet.** Lines from DWARF and values through Hemera's schemas: programs aren't built with debug info, and the
+  bundle store doesn't keep it; `print` shows 8 bytes as a number. Fibers aren't listed, only threads. Breakpoints are
+  given to the stopped thread, not to every thread. Attaching to a process the shell didn't start, through the
+  powerbox, isn't built: `debug` debugs what it starts. Each stays for a later stage.
+- **Found on the way.** An entry value that's an empty string or list reads as missing, ending the program with 126:
+  `symbols`' names are optional, and a lookup sends one offset more than it needs, until Hemera's fixed.
+- **Tests.** `test_control` drives a thread through a hardware breakpoint, a step and a watchpoint on both
+  architectures; a boot test debugs `test_shell_calls`: a breakpoint on its main, a step, its stack, and its end.
