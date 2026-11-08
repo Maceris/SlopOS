@@ -338,3 +338,50 @@ decode_debug :: fn() -> arch_interface.Fault {
     }
     return .SingleStep
 }
+
+/** CR4.TSD (bit 2): RDTSC and RDTSCP outside ring 0 raise #GP. */
+CR4_TIME_STAMP_DISABLE : u64 : 1 << 2
+/** IA32_TSC_AUX, which RDTSCP puts in ecx. */
+TSC_AUX_MSR : u32 : 0xc0000103
+
+/**
+ * Trap user mode's RDTSC and RDTSCP, or let them run (arch_interface.set_counter_trap), by CR4.TSD.
+ *
+ * @param trapped Whether they trap.
+ */
+set_counter_trap :: fn(trapped: bool) {
+    cpu :: current_cpu()
+    if cpu.counter_trapped == trapped {
+        return void
+    }
+    cr4 :: x86_64.read_cr4()
+    x86_64.write_cr4(if trapped { cr4 | CR4_TIME_STAMP_DISABLE } else { cr4 & ~CR4_TIME_STAMP_DISABLE })
+    cpu.counter_trapped = trapped
+}
+
+/**
+ * Run a trapped RDTSC (0f 31) or RDTSCP (0f 01 f9) for a thread (arch_interface.emulate_counter_read): edx:eax the
+ * counter, and for RDTSCP ecx IA32_TSC_AUX, the thread past it.
+ *
+ * @param registers The thread's saved registers, at the instruction.
+ * @param instruction Its first bytes, little-endian.
+ * @return The counter; null for any other instruction.
+ */
+emulate_counter_read :: fn(registers: ptr[mut UserRegisters], instruction: u32) -> u64? {
+    length : u64 = 0
+    if instruction & 0xffff == 0x310f {
+        length = 2
+    }
+    else if instruction & 0xffffff == 0xf9010f {
+        length = 3
+        registers.frame.rcx = x86_64.rdmsr(TSC_AUX_MSR) & 0xffffffff
+    }
+    else {
+        return null
+    }
+    value :: x86_64.rdtsc()
+    registers.frame.rax = value & 0xffffffff
+    registers.frame.rdx = value >> 32
+    registers.frame.rip += length
+    return value
+}

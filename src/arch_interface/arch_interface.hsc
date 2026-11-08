@@ -825,6 +825,25 @@ set_debug : fn(debug: ptr[mut DebugRegisters], registers: ptr[mut UserRegisters]
 debug_on : fn(debug: ptr[DebugRegisters], registers: ptr[mut UserRegisters]) : ---
 
 /**
+ * Have the calling CPU trap user mode's reads of its counter, or let them run, for the thread about to return to user
+ * mode (slop_os.TRAP_COUNTER, decisions/0183); a CPU changes only when it's asked for the other.
+ *
+ * @param trapped Whether they trap.
+ */
+set_counter_trap : fn(trapped: bool) : ---
+
+/**
+ * Run a trapped read of the counter, if that's what a thread's instruction is: its value put where the instruction
+ * puts it, and the thread moved past it.
+ *
+ * @param registers The thread's saved registers, at the instruction that trapped.
+ * @param instruction The instruction's first four bytes, little-endian, read from the thread's memory; 0 if they
+ *     couldn't be.
+ * @return The value read; null if the instruction isn't a counter read, with the registers left as they were.
+ */
+emulate_counter_read : fn(registers: ptr[mut UserRegisters], instruction: u32) -> u64? : ---
+
+/**
  * Turn the calling CPU's breakpoints and watchpoints off, if a thread's are loaded, as it enters the kernel from user
  * mode: so the kernel's own accesses to user memory don't hit them, and the next thread doesn't have them.
  */

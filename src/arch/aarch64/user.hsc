@@ -357,3 +357,53 @@ write_watchpoint :: fn(n: usize, value: u64, control: u64) {
         }
     }
 }
+
+/** CNTKCTL_EL1's EL0PCTEN (bit 0) and EL0VCTEN (bit 1): EL0 reads CNTPCT_EL0 and CNTVCT_EL0. */
+CNTKCTL_EL0_COUNTERS : u64 : 3
+/** MRS Xt, CNTVCT_EL0, Xt in the low five bits. */
+MRS_CNTVCT : u32 : 0xd53be040
+/** MRS Xt, CNTPCT_EL0, Xt in the low five bits. */
+MRS_CNTPCT : u32 : 0xd53be020
+
+/**
+ * Trap EL0's counter reads, or let them run (arch_interface.set_counter_trap), by CNTKCTL_EL1.
+ *
+ * @param trapped Whether they trap.
+ */
+set_counter_trap :: fn(trapped: bool) {
+    cpu :: current_cpu()
+    if cpu.counter_trapped == trapped {
+        return void
+    }
+    aarch64.write_system_register(.CNTKCTL_EL1, if trapped { cast[u64](0) } else { CNTKCTL_EL0_COUNTERS })
+    aarch64.isb()
+    cpu.counter_trapped = trapped
+}
+
+/**
+ * Run a trapped MRS of CNTVCT_EL0 or CNTPCT_EL0 for a thread (arch_interface.emulate_counter_read): its register the
+ * counter, unless it's xzr, the thread past it.
+ *
+ * @param registers The thread's saved registers, at the instruction.
+ * @param instruction The instruction.
+ * @return The counter; null for any other instruction.
+ */
+emulate_counter_read :: fn(registers: ptr[mut UserRegisters], instruction: u32) -> u64? {
+    encoding :: instruction & ~cast[u32](0x1f)
+    value : u64 = 0
+    if encoding == MRS_CNTVCT {
+        value = aarch64.read_system_register(.CNTVCT_EL0)
+    }
+    else if encoding == MRS_CNTPCT {
+        value = aarch64.read_system_register(.CNTPCT_EL0)
+    }
+    else {
+        return null
+    }
+    target :: cast[usize](instruction & 0x1f)
+    if target < registers.frame.x.count {
+        registers.frame.x[target] = value
+    }
+    registers.frame.elr += 4
+    return value
+}

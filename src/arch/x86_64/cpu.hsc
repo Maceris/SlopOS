@@ -128,6 +128,8 @@ ArchCpu :: struct #align(64) {
     xsaveopt : bool,
     /** Whether a thread's breakpoints are in the debug registers (debug_on), so an entry turns them off. */
     debug_loaded : bool,
+    /** Whether CR4.TSD is set, so user mode's RDTSC traps (set_counter_trap). */
+    counter_trapped : bool,
 }
 
 /** State shared by every CPU (arch_interface.ArchSystem): the IDT. Must not move after init_system. */

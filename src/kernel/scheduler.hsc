@@ -1,6 +1,7 @@
 package kernel
 
 import intrinsics from "base"
+import slop_os from "std/os"
 import runtime from "base"
 import concurrency from "std"
 
@@ -295,7 +296,7 @@ run :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Thread]
     intrinsics.atomic_store_u32_release(&cpu.current_level, thread.level)
     cpu.run_start = now
     arch.restore_vector_state(cast[ptr[arch.VectorState]](thread.vector))
-    arch.debug_on(&thread.debug, &thread.registers)
+    prepare_return(thread)
     arch.return_to_user(&thread.registers)
 }
 
@@ -318,7 +319,7 @@ go_on :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Threa
     pass_quiescent(kernel, cpu, epoch)
     thread.level = level
     intrinsics.atomic_store_u32_release(&cpu.current_level, level)
-    arch.debug_on(&thread.debug, &thread.registers)
+    prepare_return(thread)
     arch.return_to_user(&thread.registers)
 }
 
@@ -613,4 +614,17 @@ unlink :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread]) {
     thread.previous = 0
     thread.queued = false
     intrinsics.atomic_store_u32_release(&queue.count, queue.count - 1)
+}
+
+/**
+ * Set the calling CPU up for a thread about to return to user mode: its debugging state loaded, and its process's
+ * counter reads trapped or not.
+ *
+ * @param thread The thread.
+ */
+prepare_return :: fn(thread: ptr[mut Thread]) {
+    arch.debug_on(&thread.debug, &thread.registers)
+    owner :: thread.header.owner
+    traps :: if owner != 0 { intrinsics.atomic_load_u32_acquire(&cast[ptr[mut Process]](owner).traps) } else { 0 }
+    arch.set_counter_trap(traps & slop_os.TRAP_COUNTER != 0)
 }

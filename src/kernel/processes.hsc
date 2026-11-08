@@ -22,6 +22,8 @@ Process :: struct #align(16) {
     owned : OwnedList,
     /** The intercept of its subtree, as an address, 0 if it has none (intercepts.hsc). */
     intercept : u64,
+    /** What its threads trap on, slop_os.TRAP_ bits (process_set_traps); 0 at first. Read and written atomically. */
+    traps : u32,
     /** Held, at rank Watchers, while watchers is read or changed. */
     watch_lock : concurrency.SpinLock,
     /** Bindings watching for it to end, raised with SIGNAL_TERMINATED and its exit code; empty slots are 0. */

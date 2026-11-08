@@ -1231,7 +1231,7 @@ TESTS = [
         "--expect-line=[user] root task: test_libraries ended with 1, and its budget is back to nothing",
         "--expect-line=[info] objects left: only the kernel's own", "--", "-smp", "2"]),
     program_test("controls a process from a debugger in user mode, with breakpoints, steps and watchpoints, and a launch's intercept of its faults",
-                 "test_control", 4),
+                 "test_control", 5),
     ("resumes after an NMI", 0, ["--command-line=test_exit test_nmi", "--expect-line=[info] test_nmi: back from the NMI"]),
     # A CPU spinning with interrupts off is caught by another's tick, and the kernel stops with Lockup (decisions/0183)
     ("catches a CPU that stops making progress", 8, ["--command-line=test_exit test_lockup",

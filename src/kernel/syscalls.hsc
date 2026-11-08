@@ -95,6 +95,16 @@ handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interfac
     outcome := FaultOutcome.Failed
     access := cast[u64](0)
     address := cast[u64](0)
+    // A trapped counter read (TRAP_COUNTER), run here, then a stop for a recording's intercept
+    match counter_read(kernel, thread, fault) {
+        case Some(value) => {
+            if stop_thread(kernel, thread, .Fault, cast[u64](slop_os.FAULT_COUNTER), value, true) {
+                leave_cpu(cpu)
+            }
+            schedule(false)
+        }
+        case None => {}
+    }
     match fault {
         case Page(page) => {
             outcome = resolve_fault(kernel, thread, page)
@@ -2747,5 +2757,48 @@ sys_thread_set_debug :: fn(thread: ptr[mut Thread], process: slop_os.Process, id
 sys_intercept_set :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept, calls: u64, points: u32) -> Result[void, slop_os.ControlError] {
     found :: intercept_of_handle(thread, intercept)?
     set_intercept(found, calls, points)
+    return .Ok
+}
+
+/**
+ * Run a thread's trapped read of the counter, if its process traps them (TRAP_COUNTER) and the fault is one.
+ *
+ * @param kernel The kernel, for reading the instruction from the thread's memory.
+ * @param thread The faulting thread, its registers saved, which the read changes.
+ * @param fault The fault: a protection fault on x86-64 (#GP), a trapped system instruction on AArch64.
+ * @return The value read, the thread past the instruction; null if it isn't a trapped counter read.
+ */
+counter_read :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arch_interface.Fault) -> u64? {
+    match fault {
+        case Protection => {}
+        case _ => return null
+    }
+    owner :: thread.header.owner
+    if owner == 0 || intrinsics.atomic_load_u32_acquire(&cast[ptr[mut Process]](owner).traps) & slop_os.TRAP_COUNTER == 0 {
+        return null
+    }
+    pc :: cast[u64](arch.instruction_pointer(&thread.registers))
+    instruction : u32 = 0
+    // Four bytes, or for an instruction at a page's end, the two RDTSC has
+    if !copy_from_user(kernel, thread.space, pc, cast[u64](&instruction), 4) && !copy_from_user(kernel, thread.space, pc, cast[u64](&instruction), 2) {
+        return null
+    }
+    return arch.emulate_counter_read(&thread.registers, instruction)
+}
+
+/**
+ * Set what a process's threads trap on (process_set_traps).
+ *
+ * @param thread The calling thread, whose handle table the process is looked up in.
+ * @param process The process, which needs RIGHT_PROCESS_WRITE_STATE.
+ * @param traps slop_os.TRAP_ bits.
+ * @error InvalidHandle The process isn't a handle in the caller's table.
+ * @error ObjectGone The process was destroyed.
+ * @error WrongKind Not a process's handle.
+ * @error MissingRight The handle lacks RIGHT_PROCESS_WRITE_STATE.
+ */
+sys_process_set_traps :: fn(thread: ptr[mut Thread], process: slop_os.Process, traps: u32) -> Result[void, slop_os.ControlError] {
+    target :: target_of(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE)?
+    intrinsics.atomic_store_u32_release(&target.traps, traps)
     return .Ok
 }

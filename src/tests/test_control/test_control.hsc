@@ -29,6 +29,12 @@ import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
 import test_kit from "../../test_kit"
 import crash_reports from "../../crash_reports"
+#if TARGET_ARCH == .x86_64 {
+    import x86_64 from "base/intrinsics"
+}
+#else_if TARGET_ARCH == .arm64 {
+    import aarch64 from "base/intrinsics"
+}
 
 /** The test's name, which starts each line it logs. */
 NAME :: "test_control"
@@ -66,6 +72,10 @@ FAULTS_KEY : u64 : 24
 FAULTING_WATCH_KEY : u64 : 25
 /** How long D waits at most for F to end once its fault stop isn't let go, in nanoseconds: 5 s. */
 FAULTING_END_NANOSECONDS : u64 : 5_000_000_000
+/** What D tells C, in the first message on its peer channel: read the counter once told, store it, and spin until killed. */
+ROLE_COUNTING : u64 : 4
+/** What D puts in C's register in place of the counter it read. */
+GIVEN_COUNTER : u64 : 0x1234_5678_9abc
 /** The slot of a copy's page, a u64 by index, D writes to start it. */
 SLOT_GO :: 0
 /** The slot T2, and the thread D starts in T, count in. */
@@ -192,6 +202,20 @@ run_copy :: fn(peer: slop_os.Channel) -> int {
         return 3
     }
     page :: &pages[0]
+    if role == ROLE_COUNTING {
+        report := TargetReport.{page = cast[u64](page)}
+        counting_space :: slop_os.handle_duplicate(cast[slop_os.Handle](block.space), slop_os.RIGHTS_ALL) or_return 7
+        _ = os.send(peer, port, os.bytes_of(&report), slop_os.Handle.[counting_space])
+        loop {
+            intrinsics.spin_hint()
+        }
+        while intrinsics.volatile_load_u64(&page^[SLOT_GO]) == 0
+        intrinsics.volatile_store_u64(&page^[SLOT_RESULTS], read_counter())
+        // Kept for D to read, until D kills it
+        loop {
+            intrinsics.spin_hint()
+        }
+    }
     if role == ROLE_FAULTING {
         intrinsics.volatile_store_u64(cast[ptr[mut u64]](FAULTING_ADDRESS), 1)
         slop_os.process_exit(0)
@@ -325,6 +349,8 @@ a_debugger_controls_a_process_in_its_subtree #test :: fn(t: ptr[mut testing.T]) 
     program :: testing.require_some(t, given.program, "the root task grants the program's own module")?
     budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for what D makes")?
     manager_port :: testing.require_some(t, os.port_for(block.budget, manager.end), "a port for the process manager's replies")?
+    // Closed, as a channel end has room for two bindings, and every test binds one to the manager's
+    defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
     copy :: testing.require_some(t, launch_copy(given.log, manager, manager_port, program, "test_control T", ROLE_TARGET), "T is launched and told its role")?
     target :: copy.launched.process
     // Where T's things are, and its space
@@ -476,6 +502,8 @@ a_process_ending_itself_gives_its_code #test :: fn(t: ptr[mut testing.T]) -> tes
     manager :: testing.require_some(t, given.manager, "the root task grants the process manager")?
     program :: testing.require_some(t, given.program, "the root task grants the program's own module")?
     manager_port :: testing.require_some(t, os.port_for(block.budget, manager.end), "a port for the process manager's replies")?
+    // Closed, as a channel end has room for two bindings, and every test binds one to the manager's
+    defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
     copy :: testing.require_some(t, launch_copy(given.log, manager, manager_port, program, "test_control E", ROLE_EXITING), "E is launched and told its role")?
     exiting :: copy.launched.process
     exiting_found := TargetReport.{}
@@ -515,6 +543,8 @@ a_launch_reports_faults_and_ends_a_program_left_stopped #test :: fn(t: ptr[mut t
     manager :: testing.require_some(t, given.manager, "the root task grants the process manager")?
     program :: testing.require_some(t, given.program, "the root task grants the program's own module")?
     manager_port :: testing.require_some(t, os.port_for(block.budget, manager.end), "a port for the process manager's replies")?
+    // Closed, as a channel end has room for two bindings, and every test binds one to the manager's
+    defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
     port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for F's stops and end")?
     options := os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = FAULTING_WATCH_KEY},
         faults = os.LaunchFaults.{port = port, key = FAULTS_KEY}}
@@ -575,6 +605,8 @@ a_debugger_breaks_steps_and_watches #test :: fn(t: ptr[mut testing.T]) -> testin
     manager :: testing.require_some(t, given.manager, "the root task grants the process manager")?
     program :: testing.require_some(t, given.program, "the root task grants the program's own module")?
     manager_port :: testing.require_some(t, os.port_for(block.budget, manager.end), "a port for the process manager's replies")?
+    // Closed, as a channel end has room for two bindings, and every test binds one to the manager's
+    defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
     copy :: testing.require_some(t, launch_copy(given.log, manager, manager_port, program, "test_control E", ROLE_EXITING), "E is launched and told its role")?
     target :: copy.launched.process
     found := TargetReport.{}
@@ -596,8 +628,7 @@ a_debugger_breaks_steps_and_watches #test :: fn(t: ptr[mut testing.T]) -> testin
             read = true
             break
         }
-        pause : slop_os.Packet[1]
-        _ = slop_os.port_wait(port, pause[0..<0], (slop_os.clock_monotonic() or_else 0) + 1_000_000)
+        pause_for(1_000_000)
     }
     testing.require(t, read, "E's thread is suspended, and its registers read")?
     spinning_at :: registers[crash_reports.PC_REGISTER]
@@ -652,4 +683,101 @@ a_debugger_breaks_steps_and_watches #test :: fn(t: ptr[mut testing.T]) -> testin
     }
     testing.expect(t, test_kit.wait_for_budget(copy.launched.budget, 0, 2_000_000_000), "E's budget is back to nothing once it has ended")
     return .Ok
+}
+
+/**
+ * Read the CPU's counter directly, as a program that doesn't ask the kernel for the time might.
+ *
+ * @return The counter: x86-64's time-stamp counter, AArch64's CNTVCT_EL0.
+ */
+read_counter :: fn() -> u64 {
+    #if TARGET_ARCH == .x86_64 {
+        return x86_64.rdtsc()
+    }
+    #else {
+        return aarch64.read_system_register(.CNTVCT_EL0)
+    }
+}
+
+/**
+ * Check a process's counter reads trapped (process_set_traps, decisions/0183's 12c): C reads the counter once told,
+ * which stops it at FAULT_COUNTER with the value read in its register; D puts another there, and C stores that one.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if main wasn't given the process manager or its module, or C, its report, the port
+ *     or the intercept couldn't be had.
+ */
+a_recorder_traps_counter_reads #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
+    manager :: testing.require_some(t, given.manager, "the root task grants the process manager")?
+    program :: testing.require_some(t, given.program, "the root task grants the program's own module")?
+    manager_port :: testing.require_some(t, os.port_for(block.budget, manager.end), "a port for the process manager's replies")?
+    // Closed, as a channel end has room for two bindings, and every test binds one to the manager's
+    defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
+    copy :: testing.require_some(t, launch_copy(given.log, manager, manager_port, program, "test_control C", ROLE_COUNTING), "C is launched and told its role")?
+    target :: copy.launched.process
+    found := TargetReport.{}
+    space_handles : slop_os.Handle[1]
+    testing.require_ok(t, os.receive(copy.end, copy.port, os.mut_bytes_of(&found), space_handles), "C reports where its page is, with its address space")?
+    space :: cast[slop_os.AddressSpace](space_handles[0])
+    port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for C's stops")?
+    intercept :: testing.require_ok(t, slop_os.intercept_attach(target, port, CONTROL_KEY, 0, slop_os.STOP_FAULT), "D intercepts C's faults")?
+    testing.expect_ok(t, slop_os.process_set_traps(target, slop_os.TRAP_COUNTER), "D traps C's counter reads")
+    // Trapped from its thread's next return from the kernel, which a tick or two gives it
+    pause_for(50_000_000)
+    one : u64 = 1
+    testing.expect_ok(t, slop_os.process_write_memory(target, space, found.page + SLOT_GO * 8, os.bytes_of(&one)), "D tells C to read the counter")
+    stop := slop_os.StopInfo.{}
+    next_stop(port, intercept, &stop)
+    testing.expect_eq(t, stop.number, slop_os.FAULT_COUNTER, "C stops at its counter read")
+    registers : u64[slop_os.THREAD_REGISTERS]
+    testing.require_ok(t, slop_os.thread_read_registers(target, stop.thread, registers), "D reads C's registers")?
+    // The register the value went to: edx:eax on x86-64; on AArch64, the one holding it
+    target_register := cast[usize](0)
+    #if TARGET_ARCH == .arm64 {
+        for value, i in registers {
+            if i < 31 && value == stop.address {
+                target_register = i
+                break
+            }
+        }
+    }
+    testing.expect_eq(t, registers[target_register] & 0xffffffff, stop.address & 0xffffffff, "the value read is in its register already")
+    registers[target_register] = GIVEN_COUNTER
+    #if TARGET_ARCH == .x86_64 {
+        registers[target_register] = GIVEN_COUNTER & 0xffffffff
+        // rdx, the high half
+        registers[3] = GIVEN_COUNTER >> 32
+    }
+    testing.expect_ok(t, slop_os.thread_write_registers(target, stop.thread, registers), "D puts another value there")
+    testing.expect_ok(t, slop_os.intercept_resume(intercept, stop.thread, .Continue), "D lets C go on")
+    // C ends once it's stored it
+    stored : u64 = 0
+    for attempt in 0..<200 {
+        _ = slop_os.process_read_memory(target, space, found.page + SLOT_RESULTS * 8, os.mut_bytes_of(&stored))
+        if stored != 0 {
+            break
+        }
+        pause_for(5_000_000)
+    }
+    testing.expect_eq(t, stored, GIVEN_COUNTER, "C stores the value D gave as the counter")
+    for handle in slop_os.Handle.[cast[slop_os.Handle](intercept), cast[slop_os.Handle](space), cast[slop_os.Handle](port)] {
+        _ = slop_os.handle_close(handle)
+    }
+    _ = slop_os.process_kill(target)
+    testing.expect(t, test_kit.wait_for_budget(copy.launched.budget, 0, 2_000_000_000), "C's budget is back to nothing once it has ended")
+    return .Ok
+}
+
+/**
+ * Wait a while, on a port of its own with nothing bound to it.
+ *
+ * @param nanoseconds How long.
+ */
+pause_for :: fn(nanoseconds: u64) {
+    waiter :: slop_os.port_create(slop_os.startup_block().budget) or_return void
+    defer slop_os.handle_close(cast[slop_os.Handle](waiter))
+    packets : slop_os.Packet[1]
+    _ = slop_os.port_wait(waiter, packets, (slop_os.clock_monotonic() or_else 0) + nanoseconds)
 }

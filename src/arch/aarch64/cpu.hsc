@@ -50,6 +50,8 @@ ArchCpu :: struct #align(64) {
     bootloader_tables : bool,
     /** Whether a thread's breakpoints or stepping are in the debug registers (debug_on), so an entry turns them off. */
     debug_loaded : bool,
+    /** Whether EL0's counter reads trap, CNTKCTL_EL1's EL0VCTEN and EL0PCTEN clear (set_counter_trap). */
+    counter_trapped : bool,
 }
 
 /**
@@ -312,5 +314,7 @@ init_cpu :: fn(
     init_paging(system)
     init_cpu_interface(system, cpu)
     init_debug()
+    // EL0 reads the counters, until a recorded process's thread runs (set_counter_trap)
+    aarch64.write_system_register(.CNTKCTL_EL1, CNTKCTL_EL0_COUNTERS)
     aarch64.isb()
 }

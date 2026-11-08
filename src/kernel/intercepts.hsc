@@ -343,12 +343,14 @@ fire_fault_stop :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
 /**
  * Tell whether an intercept stops at a system call.
  *
- * @param intercept The intercept, whose calls are read without its lock; they never change once it's made.
- * @param number The system call's number, from the stopping thread's registers; any value, and one of 64 or more never
- *     stops.
- * @return True if number is below 64 and its bit is in the intercept's calls.
+ * @param intercept The intercept, whose calls and points are read without its lock (set_intercept).
+ * @param number The system call's number, from the stopping thread's registers; any value.
+ * @return True with STOP_ALL_CALLS among its points; otherwise if number is below 64 and its bit is in its calls.
  */
 wants_call :: fn(intercept: ptr[Intercept], number: u64) -> bool {
+    if intercept.points & slop_os.STOP_ALL_CALLS != 0 {
+        return true
+    }
     return number < 64 && intercept.calls & (cast[u64](1) << number) != 0
 }
 
