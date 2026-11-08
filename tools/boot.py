@@ -374,7 +374,7 @@ class ConsoleLink:
 
     def __init__(self, typed: list[str], keyed: list[str], keyboard: "Keyboard | None", screen_after: str | None = None,
                  screenshot: Path | None = None, typed_after: list[str] | None = None, done_when: list[str] | None = None,
-                 serial_done: Path | None = None, serial_done_when: list[str] | None = None):
+                 serial_done: Path | None = None, serial_done_when: list[str] | None = None, done_key: bytes = b"p"):
         self.port = free_port()
         self.typed = typed
         # With --shut-down-when-done, the lines whose showing, once the first line's typed, has it shut the system down;
@@ -383,6 +383,8 @@ class ConsoleLink:
         # And the serial output's file, and the lines it has to have first: the expected ones but those of a run's end
         self.serial_done = serial_done
         self.serial_done_when = serial_done_when or []
+        # The key typed after the secure attention key once it's done: P shuts down, R restarts (decisions/0182)
+        self.done_key = done_key
         self.typed_first = threading.Event()
         # The first line is typed once the console shows the first of these too, so what's typed doesn't land in the middle
         # of it; or, with \\w in it, from the banner, each \\w waiting for the next of them
@@ -463,8 +465,8 @@ class ConsoleLink:
     def shut_down_when_done(self, connection: socket.socket) -> None:
         """
         Once the first line's typed, every line of done_when is shown, and every line of serial_done_when is in the serial
-        output, the secure attention key and P, which shuts the system down (decisions/0180): a second apart, as the
-        terminal service takes the key apart from what follows it.
+        output, the secure attention key and done_key, P, which shuts the system down (decisions/0180), or R, which
+        restarts it (decisions/0182): a second apart, as the terminal service takes the key apart from what follows it.
         """
         self.typed_first.wait()
         while True:
@@ -478,7 +480,7 @@ class ConsoleLink:
             time.sleep(1)
             connection.sendall(b"\x1b[3;7~")
             time.sleep(1)
-            connection.sendall(b"p")
+            connection.sendall(self.done_key)
         except OSError:
             pass
 
@@ -566,7 +568,9 @@ def console_drawn(screenshot: Path) -> str | None:
 
 # The starts of the serial lines a run says only as it ends, which --shut-down-when-done doesn't wait for, as they come
 # after the shutdown it brings
-RUN_END_LINES = ("[info] root task ended", "[info] objects left", "[user] root task: shutting down", "[user] supervisor: the console asked")
+RUN_END_LINES = ("[info] root task ended", "[info] objects left", "[user] root task: shutting down", "[user] supervisor: the console asked",
+                 "[user] root task: restarting", "[user] root task: the machine can't", "[info] turning the machine off",
+                 "[info] restarting the machine")
 
 # What the status line says while a new keyboard waits for its code
 KEYBOARD_CODE = re.compile("a new keyboard: type ([0-9]+) and Enter")
@@ -913,6 +917,9 @@ def main() -> int:
     parser.add_argument("--shut-down-when-done", action="store_true",
                         help="once every --expect-console-line is shown and every --console-input typed, type the secure "
                         "attention key and P, which shuts the system down (decisions/0180), rather than waiting out its settle")
+    parser.add_argument("--restart-when-done", action="store_true",
+                        help="as --shut-down-when-done, but R, which restarts the system (decisions/0182); with test_power on "
+                        "the command line the machine resets, which QEMU, without --allow-reboot, takes as its end")
     parser.add_argument("--keyboard-input", action="append", default=[],
                         help="a line to type on a virtio keyboard, which this adds with a virtio console, once the console "
                              "shows its banner; may be repeated")
@@ -1036,8 +1043,9 @@ def main() -> int:
                 or arguments.screen_after:
             console = ConsoleLink(arguments.console_input, arguments.keyboard_input, keyboard, arguments.screen_after, screenshot,
                               arguments.console_input_after,
-                              arguments.expect_console_line if arguments.shut_down_when_done else None, serial,
-                              [line for line in arguments.expect_line if not line.startswith(RUN_END_LINES)])
+                              arguments.expect_console_line if arguments.shut_down_when_done or arguments.restart_when_done else None,
+                              serial, [line for line in arguments.expect_line if not line.startswith(RUN_END_LINES)],
+                              b"r" if arguments.restart_when_done else b"p")
             extra += console.qemu_arguments()
             console.thread.start()
         booting_started = time.monotonic()

@@ -72,6 +72,11 @@ Options :: struct {
      */
     panic_reset : bool,
     /**
+     * test_power: when the root task ends with a power action asked for (power_end_with), do it even under test_exit,
+     * rather than asking the emulator to exit, so a test sees the machine turned off or reset (decisions/0182).
+     */
+    test_power : bool,
+    /**
      * test_panic_once: once booted, fail an assertion, unless the bootloader handed over the record of the last one.
      */
     test_panic_once : bool,
@@ -157,6 +162,9 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "panic_reset" {
         options.panic_reset = true
+    }
+    if word == "test_power" {
+        options.test_power = true
     }
     if word == "test_panic_once" {
         options.test_panic_once = true

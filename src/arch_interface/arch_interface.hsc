@@ -933,6 +933,38 @@ early_console_write : fn(text: string) : ---
 test_exit : fn(code: u32) : ---
 
 /**
+ * Choose how the machine resets and turns off, for reset and power_off to use later. Called once, at boot.
+ *
+ * @param firmware The firmware's tables, which may say how (AArch64's devicetree names PSCI's conduit).
+ * @param direct_map_offset Where physical address 0 is in the bootloader's direct map; 0 means there's none.
+ * @return The architecture's method, opaque to L2, which only passes it back; 0 where it found none.
+ */
+reset_method : fn(firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) -> u8 : ---
+
+/**
+ * Reset the machine, warm, keeping RAM where the hardware does, so the next boot can read the panic record.
+ *
+ * @param method What reset_method chose. Returns only if the machine didn't reset, as without a method.
+ */
+reset : fn(method: u8) : ---
+
+/**
+ * Tell whether power_off turns the machine off by itself, without what the firmware's tables say (decisions/0182).
+ *
+ * @param method What reset_method chose.
+ * @return True where the architecture's own means turn it off (AArch64's PSCI); false where L2 has to be told how
+ *     (x86-64's ACPI, power_set_off) or there's no way.
+ */
+can_power_off : fn(method: u8) -> bool : ---
+
+/**
+ * Turn the machine off by the architecture's own means, as can_power_off says there are.
+ *
+ * @param method What reset_method chose. Returns only if the machine didn't turn off.
+ */
+power_off : fn(method: u8) : ---
+
+/**
  * Raise an NMI on the calling CPU, for tests of the critical-event entry that resumes what it
  * interrupted. Only called when the command line asks for it (test_nmi).
  */

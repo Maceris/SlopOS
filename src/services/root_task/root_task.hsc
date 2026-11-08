@@ -631,6 +631,16 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
                 }
                 case ShutDown => {
                     log_line.write(root.log, "root task: shutting down, as the console asked")
+                    // Turned off once it's ended (decisions/0182); where the kernel can't yet, it halts, as before
+                    match slop_os.power_end_with(root.platform, .Off) {
+                        case Error(.NoPowerOff) => log_line.write(root.log, "root task: the machine can't be turned off yet, so it halts")
+                        case _ => {}
+                    }
+                    return 0
+                }
+                case Restart => {
+                    log_line.write(root.log, "root task: restarting, as the console asked")
+                    _ = slop_os.power_end_with(root.platform, .Restart)
                     return 0
                 }
             }

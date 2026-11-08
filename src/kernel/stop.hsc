@@ -46,8 +46,9 @@ StopReason :: enum #backed_by(u8) {
  * Callable from any context on any CPU, interrupts on or off. Before this CPU has the kernel's state (its carrier's
  * program_data is null) it just halts the calling CPU. Otherwise it sends a Stop IPI to every other online CPU, logs
  * the fault injection report, and, for any reason but Halted and RootTaskEnded, seals the panic record with the reason
- * (decisions/0134) and, with panic_reset on the command line, resets the machine so the next boot keeps it. Then it
- * stops as stop_with does.
+ * (decisions/0134) and, with panic_reset on the command line, resets the machine so the next boot keeps it. For
+ * RootTaskEnded it turns the machine off or restarts it, if the root task asked (power_end_with, decisions/0182). Then
+ * it stops as stop_with does.
  *
  * @param reason Why the kernel stopped: the code given to the emulator with test_exit, and the reason sealed in the
  *     panic record for a fault.
@@ -65,8 +66,11 @@ stop :: fn(reason: StopReason) #never_returns {
         boot_info.panic_record_seal(cast[ptr[mut boot_info.PanicRecord]](kernel.panic_record), cast[u64](reason))
         if kernel.options.panic_reset {
             runtime.log_info("resetting, the panic record kept")
-            arch.reset(kernel.reset_method)
+            reset_machine(kernel)
         }
+    }
+    if reason == .RootTaskEnded {
+        end_power(kernel)
     }
     stop_with(&kernel.options, reason)
 }

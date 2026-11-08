@@ -178,8 +178,10 @@ Kernel :: struct {
     firmware : u64,
     /** The panic record's page, as its address in the direct map, 0 without one (boot_info.PanicRecord, stop.hsc). */
     panic_record : u64,
-    /** How the machine is reset, as arch.reset_method says, for panic_reset. */
+    /** How the machine is reset and turned off, as arch.reset_method says, for panic_reset and power.hsc. */
     reset_method : u8,
+    /** How the machine turns off and resets as the firmware says, and what the root task's end does (power.hsc). */
+    power : PowerSettings,
     /** Held while changing the list of threads from first_thread (control.hsc). */
     threads_lock : concurrency.SpinLock,
     /** The first Thread on the kernel's list of every thread, as an address, 0 for none: for finding one by ID. */

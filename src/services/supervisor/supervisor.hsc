@@ -4371,9 +4371,9 @@ power_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[power_prot
 }
 
 /**
- * Answer what the terminal service asks on its power connection, until it's empty: ShutDown has the storage manager
- * commit every volume, then is passed on to the root task, and answered Done, or Refused if it couldn't be; asked
- * again, it's Done. A connection whose channel failed is closed.
+ * Answer what the terminal service asks on its power connection, until it's empty: ShutDown and Restart have the
+ * storage manager commit every volume, then are passed on to the root task, and answered Done, or Refused if they
+ * couldn't be; once either's asked, both are Done. A connection whose channel failed is closed.
  *
  * @param supervisor The supervisor, whose power end is read, and closed and set to null once it's gone.
  */
@@ -4397,30 +4397,30 @@ serve_power :: fn(supervisor: ptr[mut Supervisor]) {
         }
         out := os.Outgoing.{}
         response :: os.begin[power_protocol.Response](&out)
-        match os.message_of[power_protocol.Request](&into)^ {
-            case ShutDown => {
-                // Once: committing waits, handling the port, which can read this connection again
-                if supervisor.shutting_down {
-                    response^ = .Done
-                    _ = power_protocol.send_response(end, supervisor.port, &out)
-                    continue
-                }
-                supervisor.shutting_down = true
-                log_line.write(supervisor.log, "supervisor: the console asked to shut down")
-                // What the volumes have changed committed first, so nothing done before it's lost
-                if is_running(supervisor, supervisor.storage_slot) {
-                    match ask_storage_once(supervisor, supervisor.storage_slot, .CommitAll) {
-                        case Done => {}
-                        case _ => log_line.write(supervisor.log, "supervisor: the volumes couldn't all be committed before shutting down")
-                    }
-                }
-                asking := os.Outgoing.{}
-                report :: os.begin[supervision.Request](&asking)
-                report^ = .ShutDown
-                told :: supervision.send_request(supervisor.root, supervisor.root_port, &asking) is_none
-                response^ = if told { power_protocol.Response.Done } else { power_protocol.Response.Refused }
+        restart :: match os.message_of[power_protocol.Request](&into)^ {
+            case ShutDown => false
+            case Restart => true
+        }
+        // Once: committing waits, handling the port, which can read this connection again
+        if supervisor.shutting_down {
+            response^ = .Done
+            _ = power_protocol.send_response(end, supervisor.port, &out)
+            continue
+        }
+        supervisor.shutting_down = true
+        log_line.write(supervisor.log, if restart { "supervisor: the console asked to restart" } else { "supervisor: the console asked to shut down" })
+        // What the volumes have changed committed first, so nothing done before it's lost
+        if is_running(supervisor, supervisor.storage_slot) {
+            match ask_storage_once(supervisor, supervisor.storage_slot, .CommitAll) {
+                case Done => {}
+                case _ => log_line.write(supervisor.log, "supervisor: the volumes couldn't all be committed before shutting down")
             }
         }
+        asking := os.Outgoing.{}
+        report :: os.begin[supervision.Request](&asking)
+        report^ = if restart { supervision.Request.Restart } else { supervision.Request.ShutDown }
+        told :: supervision.send_request(supervisor.root, supervisor.root_port, &asking) is_none
+        response^ = if told { power_protocol.Response.Done } else { power_protocol.Response.Refused }
         _ = power_protocol.send_response(end, supervisor.port, &out)
     }
 }

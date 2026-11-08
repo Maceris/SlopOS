@@ -148,6 +148,24 @@ reset :: fn(method: u8) {
 }
 
 /**
+ * Tell whether power_off can turn the machine off by itself.
+ *
+ * @param method What reset_method chose, not used.
+ * @return False: x86-64 turns off through ACPI's PM1 control registers, which only the firmware's tables and AML
+ *     name, so the kernel is told them (power_set_off) and writes them itself.
+ */
+can_power_off :: fn(method: u8) -> bool {
+    return false
+}
+
+/**
+ * Turn the machine off by the architecture's own means: x86-64 has none, so this returns, having done nothing.
+ *
+ * @param method What reset_method chose, not used.
+ */
+power_off :: fn(method: u8) {}
+
+/**
  * Describe the emulator's test device, QEMU's PIT on line 2 of its first I/O APIC, for test_ioapic.
  *
  * @return An I/O APIC at TEST_IO_APIC, line TEST_PIT_LINE, edge triggered and active high.

@@ -4,9 +4,10 @@ import os from "std"
 import slop_os from "std/os"
 
 /*
- * Asking for the system to shut down (decisions/0180): the supervisor serves it, to the terminal service, whose secure
- * attention key's screen asks it for the person at the console, and passes it on to the root task, which ends, and
- * with it everything. Only who holds a connection can ask.
+ * Asking for the system to shut down or restart (decisions/0180, 0182): the supervisor serves it, to the terminal
+ * service, whose secure attention key's screen asks it for the person at the console, and passes it on to the root
+ * task, which has the kernel turn the machine off or reset it once it ends, and with it everything. Only who holds a
+ * connection can ask.
  */
 
 /**
@@ -24,17 +25,23 @@ PROTOCOL :: slop_os.Protocol.{name = "power", major_version = 1, lending = .Serv
 /** What the terminal service asks the supervisor. */
 Request :: union {
     /**
-     * Shut the system down: the root task is told, and ends, ending everything. Answered with Done once the root task
-     * is told, which may not be seen before the system's gone; Refused if it couldn't be told.
+     * Shut the system down: the root task is told, and ends, ending everything, and the machine is turned off where
+     * the kernel can. Answered with Done once the root task is told, which may not be seen before the system's gone;
+     * Refused if it couldn't be told.
      */
     ShutDown,
+    /**
+     * Restart the system: as ShutDown, but the machine is reset, so it boots again. Answered as ShutDown is; once
+     * either is asked, the other is answered Done and changes nothing.
+     */
+    Restart,
 }
 
 /** What the supervisor answers. */
 Response :: union {
-    /** ShutDown's answer: the root task's been told. */
+    /** ShutDown's and Restart's answer: the root task's been told. */
     Done,
-    /** ShutDown's answer when the root task couldn't be told, as when its channel's gone. */
+    /** ShutDown's or Restart's answer when the root task couldn't be told, as when its channel's gone. */
     Refused,
     /** The answer to a request the supervisor doesn't know, as from a newer client; every protocol has it. */
     Unsupported,
@@ -44,7 +51,7 @@ Response :: union {
  * Tell whether a request may be sent again, after a reconnect, without doing more than sending it once did.
  *
  * @param request The request, which isn't changed.
- * @return True: shutting down again is shutting down.
+ * @return True: shutting down or restarting again changes nothing.
  */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return true

@@ -587,6 +587,24 @@ early_console_write : fn(text: string) : ---
 test_exit : fn(code: u32) : ---
 
 /*
+ * Choose how the machine resets and turns off, once, at boot, from the firmware's tables: a method, opaque to L2,
+ * which passes it back to reset, can_power_off and power_off; 0 where there's none.
+ */
+reset_method : fn(firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) -> u8 : ---
+
+// Reset the machine, warm, keeping RAM where the hardware does; returns only if it didn't reset.
+reset : fn(method: u8) : ---
+
+/*
+ * Whether power_off turns the machine off by itself (decisions/0182); where it doesn't, L2 turns it off through the
+ * registers it's told (power_set_off).
+ */
+can_power_off : fn(method: u8) -> bool : ---
+
+// Turn the machine off by the architecture's own means; returns only if it didn't turn off.
+power_off : fn(method: u8) : ---
+
+/*
  * Raise an NMI on the calling CPU, for tests of the critical-event entry that resumes what it
  * interrupted. Only called when the command line asks for it (test_nmi).
  */
@@ -701,6 +719,8 @@ How `arch/x86_64` meets the interface (`../../knowledge/design/arch-x86-64.md`):
 | `hardware_entropy` | `rdseed` |
 | `early_console_write` | 16550 UART at I/O port `0x3F8`, 115200 baud, 8N1 |
 | `test_exit` | QEMU's `isa-debug-exit` device at I/O port `0xf4` |
+| `reset` | The chipset's reset control register, `0xcf9`; L2 writes the FADT's reset register first, where `power_set_reset` gave it |
+| `power_off` | None: `can_power_off` is false, and L2 writes ACPI's PM1 control registers with `\_S5`'s sleep types, as `power_set_off` gave them |
 | `test_nmi` | An NMI IPI to the CPU's own x2APIC ID |
 | `test_device` | QEMU's I/O APIC at `0xfec00000` (the MP specification's default) and its PIT, ISA IRQ 0, on line 2, edge triggered and active high, as QEMU's MADT says; `test_device_interrupts` runs PIT channel 0 at about 1 kHz, or stops it |
 
@@ -733,6 +753,7 @@ virtual timer's interrupt and the PL011.
 | `hardware_entropy` | `rndrrs`, where the CPU has `FEAT_RNG` |
 | `early_console_write` | The device tree's first PL011, through the direct map: `early_console_init` maps its registers there as a Device block in the bootloader's tables, and `init_kernel_page_table` again in the kernel's, as it does the GIC's, with `kernel_half_frames` (2 for each 2 MiB block) for its tables. Its address is in `TPIDR_EL1` until `init_cpu`, then in the `ArchCpu` |
 | `test_exit` | QEMU's semihosting, `SYS_EXIT` with `(code << 1) \| 1`, so codes read as the debug exit device's do |
+| `reset` and `power_off` | PSCI's `SYSTEM_RESET` and `SYSTEM_OFF`, by HVC or SMC as the device tree's `psci` node's method says; `can_power_off` is true with one |
 | `test_device` | SPI line 100 of the distributor, which nothing on QEMU `virt` uses, edge-triggered; `test_device_interrupts` pends it through `GICD_ISPENDR`, and again each time it's acknowledged and at every timer interrupt, until it's stopped |
 | `msi_doorbell` | The page of the ITS's `GITS_TRANSLATER`, which an SMMU maps into each domain |
 | MSIs | Through the GICv3's ITS, found in the device tree (`arm,gic-v3-its`): `init_msi` gives it flat device and collection tables and a command queue, and every redistributor the one LPI property table and a pending table of its own, with LPIs on; each redistributor is a collection. `add_msi_device` maps a device's translation table (`MAPD`); `route_msi` gives the event an LPI of its own (8192 of them, from 8192), enabled, mapped to the CPU's collection (`MAPTI`, `INV`), and routes it to the kernel's ID as an SPI is. The message is the event's number, to `GITS_TRANSLATER` |

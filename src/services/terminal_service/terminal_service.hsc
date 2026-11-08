@@ -116,6 +116,8 @@ USAGE_O : u16 : 0x12
 USAGE_S : u16 : 0x16
 /** The USB HID usage of P, which shuts the system down from the secure attention key's screen (decisions/0180). */
 USAGE_P : u16 : 0x13
+/** The USB HID usage of R, which restarts the system from the secure attention key's screen (decisions/0182). */
+USAGE_R : u16 : 0x15
 /** The USB HID usage of Enter. */
 USAGE_ENTER : u16 : 0x28
 /** The USB HID usage of Escape. */
@@ -272,8 +274,10 @@ Service :: struct {
      * (decisions/0180); null without one. Nothing's waited for on it.
      */
     power : os.Channel[power_protocol.Power]?,
-    /** Whether a shutdown's been asked for, which the secure attention key's screen then says. */
+    /** Whether a shutdown or a restart's been asked for, which the secure attention key's screen then says. */
     shutting_down : bool,
+    /** Whether what was asked for is a restart rather than a shutdown; meaningful once shutting_down is set. */
+    restarting : bool,
     /** The step of the trusted path's own screen: setup, login, elevation or sharing; Off for none. */
     setup : SetupStep,
     /** The field being typed, the first field_count bytes; zeroed whenever a step changes. */
@@ -1296,35 +1300,41 @@ draw_panel :: fn(service: ptr[mut Service]) {
         screen.write_at(panel, help + 1, 2, if another_session(service) != NO_VIEW { "S switches session, N logs in another, L locks, O logs out." }
             else { "N logs in another session, L locks, O logs out." }, plain)
     }
-    // Shutting down, for whoever's at the console (decisions/0180)
+    // Shutting down and restarting, for whoever's at the console (decisions/0180, 0182)
     if service.power is_some {
-        screen.write_at(panel, help + 3, 2, if service.shutting_down { "Shutting down." } else { "P shuts the system down." }, plain)
+        said :: if !service.shutting_down { "P shuts the system down, R restarts it." }
+            else if service.restarting { "Restarting." }
+            else { "Shutting down." }
+        screen.write_at(panel, help + 3, 2, said, plain)
     }
     redraw(service)
 }
 
 /**
- * Ask the supervisor to shut the system down, for P on the secure attention key's screen (decisions/0180), and say so
- * on it. The answer isn't waited for: the system ends with the root task, and the terminal service with it.
+ * Ask the supervisor to shut the system down, for P on the secure attention key's screen (decisions/0180), or restart
+ * it, for R (decisions/0182), and say so on it. The answer isn't waited for: the system ends with the root task, and
+ * the terminal service with it.
  *
- * @param service The service, its secure attention key's screen up; its shutting_down is set once it's asked. Without
- *     a power connection, or once it's asked, nothing's done.
+ * @param service The service, its secure attention key's screen up; its shutting_down and restarting are set once
+ *     it's asked. Without a power connection, or once either's asked, nothing's done.
+ * @param restart True to restart, false to shut down.
  */
-shut_down :: fn(service: ptr[mut Service]) {
+shut_down :: fn(service: ptr[mut Service], restart: bool) {
     connection :: service.power or_return void
     if service.shutting_down {
         return void
     }
     out := os.Outgoing.{}
     request :: os.begin[power_protocol.Request](&out)
-    request^ = .ShutDown
+    request^ = if restart { power_protocol.Request.Restart } else { power_protocol.Request.ShutDown }
     port :: os.port_for(slop_os.startup_block().budget, connection.end) or_return void
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     if power_protocol.send_request(connection.end, port, &out) is_some {
         return void
     }
     service.shutting_down = true
-    runtime.log_info("shutting down")
+    service.restarting = restart
+    runtime.log_info(if restart { "restarting" } else { "shutting down" })
     draw_panel(service)
 }
 
@@ -1773,7 +1783,10 @@ screen_keys :: fn(service: ptr[mut Service], first: usize) {
             enter_share_form(service)
         }
         else if event.code == USAGE_P && event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 {
-            shut_down(service)
+            shut_down(service, false)
+        }
+        else if event.code == USAGE_R && event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 {
+            shut_down(service, true)
         }
         else if event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 && session_key(service, event.code) {
             // A session's key: the screen it brought up takes what comes after

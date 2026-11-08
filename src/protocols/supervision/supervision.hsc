@@ -59,9 +59,12 @@ Request :: union {
     EventsService(os.Channel[events.Events]),
     /**
      * The person at the console asked for the system to shut down, on the secure attention key's screen
-     * (decisions/0180): the root task ends, with 0, which ends everything.
+     * (decisions/0180): the root task has the kernel turn the machine off once it ends, where it can (decisions/0182),
+     * and ends, with 0, which ends everything.
      */
     ShutDown,
+    /** As ShutDown, but the root task has the kernel reset the machine, so it boots again (decisions/0182). */
+    Restart,
 }
 
 /** What the root task answers: nothing, but every protocol has a response. */
@@ -86,6 +89,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Degraded(_) => true
         case EventsService(_) => true
         case ShutDown => true
+        case Restart => true
     }
 }
 

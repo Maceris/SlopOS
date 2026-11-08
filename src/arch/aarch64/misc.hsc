@@ -168,6 +168,8 @@ test_exit :: fn(code: u32) {
     aarch64.semihosting(SEMIHOSTING_EXIT, cast[rawptr](&block))
 }
 
+/** PSCI's SYSTEM_OFF function ID, an SMC32 fast call. */
+PSCI_SYSTEM_OFF : u64 : 0x84000008
 /** PSCI's SYSTEM_RESET function ID, an SMC32 fast call. */
 PSCI_SYSTEM_RESET : u64 : 0x84000009
 
@@ -205,6 +207,31 @@ reset :: fn(method: u8) {
     }
     if method == 2 {
         _ = aarch64.smc(PSCI_SYSTEM_RESET)
+    }
+}
+
+/**
+ * Tell whether power_off can turn the machine off by itself.
+ *
+ * @param method The conduit, as reset_method gives it.
+ * @return True for HVC or SMC (1 or 2): PSCI turns it off; false without PSCI.
+ */
+can_power_off :: fn(method: u8) -> bool {
+    return method == 1 || method == 2
+}
+
+/**
+ * Turn the machine off by PSCI's SYSTEM_OFF.
+ *
+ * @param method The conduit, as reset_method gives it: 1 for HVC, 2 for SMC; any other value does nothing. Returns
+ *     only if the machine didn't turn off.
+ */
+power_off :: fn(method: u8) {
+    if method == 1 {
+        _ = aarch64.hvc(PSCI_SYSTEM_OFF)
+    }
+    if method == 2 {
+        _ = aarch64.smc(PSCI_SYSTEM_OFF)
     }
 }
 

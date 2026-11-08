@@ -124,3 +124,37 @@ Five parts, each with an as-built record:
 - `0180`'s shutdown, which committed volumes and ended the root task, becomes P4's first step after stopping the
   sessions.
 - Suspend stays after P (`../design/lessons.md` §5).
+
+## As Built, P1 (2026-11-07)
+- **The platform capability, not a new object**: `PowerControl` was planned as a kernel object of its own, but its
+  holders are the platform capability's, the root task and the platform service, so the three new calls take that
+  capability as their authority instead:
+  - `power_set_off` keeps x86-64's PM1a and PM1b control ports and `\_S5`'s sleep types;
+  - `power_set_reset` keeps the FADT's reset register, when it's an I/O port;
+  - `power_end_with` keeps what the root task's end does, a `PowerAction`: `Halt`, `Off` or `Restart`. `Off` is
+    refused with the new error `NoPowerOff` while the kernel can't turn the machine off.
+
+  Each setting is one atomic word in the kernel (`src/kernel/power.hsc`), so no lock is taken. Calls 78 to 80, error
+  47.
+- **The kernel's stop**: for `RootTaskEnded`, after the other CPUs have stopped and the objects left are logged, it
+  turns the machine off or resets it:
+  - **Off:** by PSCI's `SYSTEM_OFF` on AArch64, or on x86-64 by PM1's control registers, each read, its SLP_TYP
+    replaced and SLP_EN set, PM1b before PM1a.
+  - **Restart:** the reset register first where it's known, then the architecture's own reset. A panic's reset
+    (`panic_reset`) uses the same path.
+  - **Under `test_exit`:** QEMU is still asked to exit with the reason's code, unless `test_power` is on the command
+    line too.
+  - **Arch interface:** `reset_method` and `reset` were declared in it at last, beside the new `can_power_off` and
+    `power_off`.
+- **Restart, from P4, early, so P1 could be tested**:
+  - The power protocol's `Restart` and the supervision report's `Restart`; the supervisor commits the volumes for
+    either.
+  - R on the secure attention key's screen, which now says "P shuts the system down, R restarts it."
+  - On `ShutDown` the root task asks for `Off`; refused, it logs that the machine can't be turned off yet, and halts
+    as before. On `Restart` it asks for `Restart`.
+- **The platform service** gives the kernel the FADT's reset register when RESET_REG_SUP says it's there (QEMU's q35:
+  `0xcf9`, written with `0x0f`). `\_S5` waits for P3, so x86-64 can't turn off yet.
+- **Tests**: `boot.py --restart-when-done` types the secure attention key and R, as `--shut-down-when-done` types P.
+  - Restart, on both architectures: QEMU, without `--allow-reboot`, ends at the reset without an exit code (125).
+  - Turning off, on AArch64 alone until P3: PSCI's `SYSTEM_OFF` ends QEMU the same way.
+  - The other shutdown tests, under `test_exit` alone, still end with 7.

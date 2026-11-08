@@ -1906,6 +1906,61 @@ sys_iommu_register :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, ki
     return register_iommu(kernel, known, memory.physical, memory.size, first, count, stream)
 }
 
+/**
+ * Keep how the machine turns off, ACPI's PM1 control registers and S5's sleep types (power.hsc, decisions/0182).
+ *
+ * @param thread The calling thread, the CPU's current one, which doesn't block here.
+ * @param platform The platform capability's handle, of any rights, which is the call's authority.
+ * @param control_a PM1a's control port, 1 to 65535.
+ * @param control_b PM1b's control port, 1 to 65535, or 0 for none.
+ * @param sleep_a PM1a's sleep type for S5, 0 to 7.
+ * @param sleep_b PM1b's sleep type for S5, 0 to 7.
+ * @error InvalidHandle The platform isn't a handle in the caller's table.
+ * @error ObjectGone The platform was destroyed.
+ * @error WrongKind Not the platform's handle.
+ * @error InvalidArgument A value out of its range, or an architecture without I/O ports or that turns off by itself.
+ */
+sys_power_set_off :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, control_a: u32, control_b: u32, sleep_a: u32,
+    sleep_b: u32) -> Result[void, slop_os.DeviceError] {
+    _ = platform_of(thread, platform)?
+    return set_power_off(per_cpu().kernel, control_a, control_b, sleep_a, sleep_b)
+}
+
+/**
+ * Keep how the machine resets, the FADT's reset register when it's an I/O port (power.hsc, decisions/0182).
+ *
+ * @param thread The calling thread, the CPU's current one, which doesn't block here.
+ * @param platform The platform capability's handle, of any rights, which is the call's authority.
+ * @param port The reset register's port, 1 to 65535.
+ * @param value The byte that resets, 0 to 255.
+ * @error InvalidHandle The platform isn't a handle in the caller's table.
+ * @error ObjectGone The platform was destroyed.
+ * @error WrongKind Not the platform's handle.
+ * @error InvalidArgument A value out of its range, or an architecture without I/O ports.
+ */
+sys_power_set_reset :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, port: u32, value: u32) -> Result[void, slop_os.DeviceError] {
+    _ = platform_of(thread, platform)?
+    return set_power_reset(per_cpu().kernel, port, value)
+}
+
+/**
+ * Keep what the kernel does once the root task ends: halt, turn the machine off, or restart it (power.hsc,
+ * decisions/0182).
+ *
+ * @param thread The calling thread, the CPU's current one, which doesn't block here.
+ * @param platform The platform capability's handle, of any rights, which is the call's authority.
+ * @param action What to do.
+ * @error InvalidHandle The platform isn't a handle in the caller's table.
+ * @error ObjectGone The platform was destroyed.
+ * @error WrongKind Not the platform's handle.
+ * @error InvalidArgument Not one of PowerAction's values.
+ * @error NoPowerOff Off, on a machine the kernel can't turn off yet.
+ */
+sys_power_end_with :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, action: slop_os.PowerAction) -> Result[void, slop_os.DeviceError] {
+    _ = platform_of(thread, platform)?
+    return set_power_end(per_cpu().kernel, cast[u32](action))
+}
+
 // ---- Process control (control.hsc, intercepts.hsc): rights on a process cover its subtree (decisions/0017)
 
 /**

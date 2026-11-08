@@ -157,6 +157,7 @@ main :: fn(log: slop_os.DebugLog?, platform: slop_os.Platform, firmware: slop_os
     slop_os.memory_map(firmware, space, tables, 0, tables_size, read) or_return 2
     state.clock = find_clock(tables, tables_size)
     state.framebuffer = find_framebuffer(tables, tables_size)
+    give_reset(to, platform, tables, tables_size)
     match pci.find_host(tables, tables_size) {
         case Some(found) => state.host = found
         case None => {

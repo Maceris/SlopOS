@@ -141,6 +141,9 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 75 | `memory_page_accessed` | memory, offset | 1 if any mapping touched the page at offset of paged memory since this last asked, 0 if not, the marks cleared; always 0 where the hardware doesn't keep them; `RIGHT_MEMORY_WRITE` (`0111`) |
 | 76 | `thread_use_cpu_budget` | budget | the calling thread runs on the budget from now on, as a server does for a connection whose client lent it the budget, or on its process's again with `NO_HANDLE`; `RIGHT_CPU_BUDGET_BIND` (`0130`) |
 | 77 | `memory_holders` | memory | how many hold the memory besides its owner: handles to it that aren't the owning one, in any process or on their way in a channel, its mappings, and its windows; only the owning handle asks, else `MissingRight` (`0178`) |
+| 78 | `power_set_off` | platform, PM1a control, PM1b control, PM1a sleep type, PM1b sleep type | nothing: how x86-64 turns off, ACPI's PM1 control ports (PM1b 0 for none) and `\_S5`'s sleep types, 0 to 7, replacing what was set; `InvalidArgument` on an architecture that turns off by itself, through PSCI (`0182`) |
+| 79 | `power_set_reset` | platform, port, value | nothing: the FADT's reset register, an I/O port, and the byte that resets, replacing what was set; without it x86-64 resets through 0xcf9 (`0182`) |
+| 80 | `power_end_with` | platform, action | nothing: what the kernel does once the root task ends, a `PowerAction`: `Halt`, `Off` or `Restart`, done after every other CPU has stopped and the objects left are logged; under `test_exit`, only with `test_power` too (`0182`) |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the
@@ -448,7 +451,8 @@ Devices, MSIs and DMA memory fail with `slop_os.DeviceError` too:
 | 43 | `TooManyIommus` | `iommu_register`: the kernel has every IOMMU (8) or range of requester IDs (32) it takes |
 | 44 | `WrongIommu` | `device_attach`: the device isn't behind the IOMMU the domain's devices are |
 | 45 | `Untrusted` | `dma_memory_create`: no IOMMU translates the domain, and it wasn't made trusted |
-| 46 | `InvalidArgument` | `io_ports_create`: no ports on this architecture, none asked for, or past the last; `io_port_read` and `io_port_write`: a port outside the range, or a width that isn't 1, 2 or 4 |
+| 46 | `InvalidArgument` | `io_ports_create`: no ports on this architecture, none asked for, or past the last; `io_port_read` and `io_port_write`: a port outside the range, or a width that isn't 1, 2 or 4; `power_set_off`, `power_set_reset` and `power_end_with`: a value out of its range, or an architecture they don't apply to |
+| 47 | `NoPowerOff` | `power_end_with`: `Off` on a machine the kernel can't turn off, x86-64 before `power_set_off` or AArch64 without PSCI |
 
 ## Not Yet
 
