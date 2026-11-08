@@ -173,6 +173,10 @@ run, and didn't again when built alone or run again; not chased further.
 Then for 11e3 (2026-11-06, `0179`): nothing new in Hemera. What cost time was what has before: `x is_some || y`
 needing its parentheses, and an index guarded by `n == 0 || ...` in an `if` before it not proven in bounds, where a
 separate `if n == 0 { return }` is.
+Then for `0184` (2026-11-08), in `std/os/slop_os`'s system ABI: `PortError.BufferTooSmall` (16), which `port_wait`
+gives for empty packets rather than returning 0 at once, and `channel_notify_and_wait` too, as `ChannelError`'s;
+`port_wait`'s doc says so and how to pause instead. An empty wait reading as a pause cost a 12c test a stall that
+looked like a hung `port_wait`.
 
 ## 4. Features That Look Like a Strong Fit
 

@@ -129,7 +129,10 @@ binding_failure :: fn(port: ptr[Port]) -> slop_os.PortError {
 WaitOutcome :: union {
     /** The wait is over: how many packets were written to the caller's buffer, 0 when the deadline passed first. */
     Done(u32),
-    /** The wait failed: ObjectGone if the port was destroyed, BadBuffer if the buffer isn't writable. */
+    /**
+     * The wait failed: ObjectGone if the port was destroyed, BadBuffer if the buffer isn't writable, BufferTooSmall if
+     * it holds no packet.
+     */
     Failed(slop_os.PortError),
     /** The thread left its CPU and waits; its result is written when the wait is over (complete_wait). */
     Blocked,
@@ -294,17 +297,18 @@ port_unbind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64) -> slo
  * @param port The port to wait on, from a handle with RIGHT_PORT_WAIT.
  * @param buffer Where the packets go: a user address in the thread's address space, checked here to be writable for
  *     the packets that fit, and written again when they're taken.
- * @param capacity How many packets fit at buffer; at most slop_os.MAX_PACKETS_PER_WAIT are taken, whatever it says,
- *     and 0 gives Done(0) at once without looking.
+ * @param capacity How many packets fit at buffer; at most slop_os.MAX_PACKETS_PER_WAIT are taken, whatever it says.
+ *     0 is refused, as a wait that could take nothing (decisions/0184).
  * @param deadline When to give up, in counter ticks (ticks_at), or slop_os.NO_DEADLINE to wait for as long as it takes.
- * @return Done with how many packets were written, or 0 when the deadline passed; Failed with BadBuffer if buffer
- *     isn't writable user memory, or ObjectGone if the port is being destroyed; or Blocked if the thread waits.
+ * @return Done with how many packets were written, or 0 when the deadline passed; Failed with BufferTooSmall if
+ *     capacity is 0, BadBuffer if buffer isn't writable user memory, or ObjectGone if the port is being destroyed; or
+ *     Blocked if the thread waits.
  */
 port_wait_begin :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], port: ptr[mut Port], buffer: u64, capacity: u32,
     deadline: u64) -> WaitOutcome {
     count :: if capacity < slop_os.MAX_PACKETS_PER_WAIT { capacity } else { slop_os.MAX_PACKETS_PER_WAIT }
     if count == 0 {
-        return .Done(0)
+        return .Failed(.BufferTooSmall)
     }
     if !is_user_writable(thread.space, buffer, cast[u64](count) * cast[u64](size_of(slop_os.Packet))) {
         return .Failed(.BadBuffer)
