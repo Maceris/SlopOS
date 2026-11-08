@@ -148,6 +148,10 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 82 | `thread_set_debug` | process, thread ID, debug (a pointer) | nothing: a parked thread's debugging state, a `ThreadDebug`: whether it single-steps, and up to `DEBUG_SLOTS` hardware breakpoints (`Execute`) and watchpoints (`Write`, `ReadWrite`, of 1, 2, 4 or 8 bytes), each a fault stop when hit (`FAULT_SINGLE_STEP`, `FAULT_BREAKPOINT`, `FAULT_WATCHPOINT`). Needs `RIGHT_PROCESS_WRITE_STATE`; `BadRegisters` for a slot the CPU can't set (`0183`) |
 | 83 | `intercept_set` | intercept, calls, points | nothing: where the intercept stops threads from now, as `intercept_attach`'s calls and points; threads stopped already stay so (`0183`) |
 | 84 | `process_set_traps` | process, traps | nothing: what the process's threads trap on from their next return from the kernel: `TRAP_COUNTER` for user mode's counter reads, which the kernel runs and then reports as a fault stop, `FAULT_COUNTER`, the value in the instruction's register. Needs `RIGHT_PROCESS_WRITE_STATE` (`0183`) |
+| 85 | `trace_set` | log, on | nothing: the kernel's trace on or off: each CPU's ring of its last `TRACE_EVENTS` scheduler events, a switch or a wake (`TraceEvent`); needs the debug log with `RIGHT_DEBUG_LOG_TRACE`, which the root task gives the supervisor alone (`0183`) |
+| 86 | `trace_read` | log, events (a slice) | how many of the trace's events not yet taken were written, each CPU's in turn; needs `RIGHT_DEBUG_LOG_TRACE` |
+| 87 | `intercept_sample` | intercept, on | nothing: the intercept's subtree sampled at each tick of its user code, or not: the thread, its program counter and its frame pointers' chain (`Sample`), the last `SAMPLES` kept (`0183`) |
+| 88 | `intercept_samples` | intercept, samples (a slice) | how many of the intercept's samples not yet taken were written, oldest first |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the

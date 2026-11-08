@@ -21,7 +21,7 @@ import bundle from "../../bundle"
 /** The most candidates offered, so a directory of thousands, or a long list of programs, stays quick. */
 MAX_CANDIDATES :: 64
 /** The most programs whose summaries are asked for when several are listed: each is a request to the session manager. */
-MAX_SUMMARIES :: 24
+MAX_SUMMARIES :: 32
 
 /**
  * Fill in the completions for the word before the cursor, for the line editor's Tab (terminal.Completer).

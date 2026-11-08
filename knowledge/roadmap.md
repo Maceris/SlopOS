@@ -181,9 +181,9 @@ large pages, and B's panic record are built):
 | Kernel feature | For | Milestone |
 |---|---|---|
 | Power: system off and reset, through a capability (PSCI on AArch64, ACPI's reset register and `\_S5` from the AML service on x86-64) | Shutting down | P |
-| Single-stepping and hardware breakpoints and watchpoints, under `write_state` | The debugger | M12 |
-| A sampling capability over a process subtree (user PC and frame-pointer walk at ticks), a trace ring of scheduler and IPC events | Profiling and tracing | M12 |
-| Pinning a process's threads to one CPU, `RDTSC` trapping per process (`0009`) | Record and replay | M12 |
+| Single-stepping and hardware breakpoints and watchpoints, under `write_state` (built, `thread_set_debug`) | The debugger | M12 |
+| A sampling capability over a process subtree (user PC and frame-pointer walk at ticks), a trace ring of scheduler and IPC events (built: an intercept's sampling, and a ring of switches and wakes) | Profiling and tracing | M12 |
+| `RDTSC` trapping per process (`0009`) (built, `process_set_traps`); one thread at a time, by the recorder, rather than pinning | Record and replay | M12 |
 | The CPU's transient-execution issues logged (`0097`) | The trade `0013` made, made visible | H |
 | Shadow stacks and IBT, PAC, BTI and GCS state in threads, if `H` decides for them | Hardening | H |
 
@@ -405,6 +405,13 @@ and profiling. From the catch-up (`decisions/0101`): in 12b, a debugger reading 
 Planned 2026-11-08 (`decisions/0183`), with the project's owner: DWARF and Hemera's schemas beside it; replay exact
 for several carriers too, through a deterministic mode in Hemera's `std`; the events service keeping a budget per
 source. 12a takes lockup detection and the budgets too; 12d the boot timeline and what was lent to each process.
+
+Built 2026-11-08 (`decisions/0183`'s as-built records): crash reports from the shell, the supervisor and the session
+manager, named by function through a `symbols` decoder; lockup detection; a budget per events source; the shell's
+`debug`, on hardware breakpoints, watchpoints and stepping; `record` and `replay`, exact for several threads, with
+Hemera's deterministic mode; the kernel's trace, the boot timeline, and the shell's `profile`. Left for later: lines
+from DWARF and values through schemas, fibers listed, attaching through the powerbox, a recording kept as a file, an
+administrator's `trace` tool, what was lent to each process, and the per-thread page.
 
 Specs: DWARF 5.
 Stresses: the compiler's debug information, reflection over arbitrary values, fibers seen from outside.

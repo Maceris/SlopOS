@@ -1,6 +1,6 @@
 # 0183: M12, Observability and Debugging, Planned
 
-Status: accepted, chosen with the project's owner; 12a, 12b and 12c built
+Status: accepted, chosen with the project's owner; built, 12a to 12d
 Date: 2026-11-08
 Related: `0009` (replay through system calls), `0017` and `0056` (process control and intercepts), `0024` (replay is
 opt-in), `0041` (the per-thread page), `0053` (kernel-copied channel access), `0093` (the events service), `0134` (the
@@ -205,3 +205,26 @@ Four parts, each with an as-built record:
   port of its own now, and the kernel's behaviour is left to look into.
 - **Tests.** `test_control` traps a counter read and changes its value; a boot test records `test_replay`'s threads,
   replays them exactly, and replays them with another count, which diverges, and says where. On both architectures.
+
+## As Built: 12d
+- **The trace.** Each CPU keeps a ring of its scheduler's last `TRACE_EVENTS` events, a thread switched to and a thread
+  made ready, with the time, under a lock of its own (`LockRank.Trace`, the highest, as the scheduler's paths hold
+  others). `trace_set` turns it on, the kernel's `trace_boot` from the start; `trace_read` drains it. Both take the
+  kernel's debug log with a new right, `RIGHT_DEBUG_LOG_TRACE`, rather than a capability of its own: the root task
+  gives a log with it to the supervisor alone, which gives everything else the log without it. The administrator's
+  `trace` tool, through elevation to the supervisor, isn't built: the right is where it would come from.
+- **The boot timeline.** With `test_trace`, the supervisor drains the trace as it starts each service, keeping each
+  thread's first run, and logs each running service's first run once everything has started.
+- **Sampling** hangs off an intercept rather than a capability of its own: `intercept_sample` samples the intercept's
+  subtree at each tick of a CPU interrupted in its user code, the thread, its program counter and its frame pointers'
+  chain, into a ring of the last `SAMPLES`, which `intercept_samples` drains. The shell holds an intercept of each of its
+  programs already (12a), so profiling its own jobs needs nothing more, as chosen.
+- **The tool.** `profile name arguments` runs a program sampled, takes the samples as it runs, and names their program
+  counters by function through `symbols`, the most sampled first.
+- **Not built.** The process tree showing what services spent on each process's behalf: the kernel doesn't account
+  which process's threads ran on a lent CPU budget, nor which charged a memory budget, and a shell's jobs run on the
+  shell's CPU budget. The per-thread page shared with the kernel (`0041`'s catch-up) isn't built either: nothing in
+  12a to 12d needed it. Both are left for later.
+- **Tests.** A boot traces the boot's timeline and a ping of the clock service, which the trace shows woken by it and
+  run (the supervisor's own wake by the answer is there only when it waited, which it often doesn't); the shell
+  profiles `test_profile`, whose samples are all in its `spin_here`. On both architectures.
