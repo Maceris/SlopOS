@@ -144,8 +144,15 @@ Seven parts, before P, each with an as-built record:
   - **A service the store paged can end before the store's own end is handled**, and then was started again from the
     dead store's memory, BadGrants, the root task ending on the account service not starting: `loaded_module` checks
     a kept program from the store can still be duplicated (`is_alive`) and gets it again, from the system volume if the
-    store isn't back yet. And a restart whose launch fails is tried again 200 ms later (`retry_restarts`), counting as
-    a restart, rather than reported to the root task as not started while it has restarts left.
+    store isn't back yet. And a restart that doesn't leave its service running, its launch failed or what it's
+    started with not there yet (the store's directory while the system volume is opened again), is tried again every
+    250 ms, up to 40 times in a row (`retry_later`, `retry_restarts`), rather than reported to the root task as not
+    started. The tries aren't restarts, which count ends.
+  - **Storage didn't come back from its disk's driver ending**: the partition server stayed up with a dead connection
+    to the driver, which it can't dial again, so the container service and volume servers above it failed every
+    write for good. It ends now once its disk's other end closes (`DRIVER_GONE`, 7), and the storage manager kills
+    what was served from the disk and starts another on the new driver, as for any partition server's end; a driver
+    that can't be dialed yet is tried again every 250 ms, up to 40 times (`restart_disk`).
   - **No service maps memory another process owns** (decided with the project's owner, extending `0098`): a client
     or a driver that ended took down the server touching its memory (killing the events service ended the system
     volume's server, which was writing its records from a buffer the events service lent it). `memory_read` reads any

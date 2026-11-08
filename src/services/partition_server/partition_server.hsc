@@ -36,6 +36,10 @@ MAX_NARROWED :: 16
 CLIENT_KEY : u64 : 100
 /** The key a narrowed connection's driver is bound to the port with, plus its slot. */
 DRIVER_KEY : u64 : 200
+/** The key its own connection to the disk is watched under, for its other end closing: the driver gone. */
+DISK_KEY : u64 : 300
+/** What it ends with once its disk's driver has gone, so the storage manager starts another on the new driver. */
+DRIVER_GONE :: 7
 /** No channel: to open, a connection with no client's end given, for which one is made. */
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 
@@ -119,16 +123,18 @@ Server :: struct {
  * Serve a disk's partitions: read its GPT, describe each partition, and give block connections narrowed to one.
  *
  * Started by the storage manager, one per disk, with nothing but the disk, so a disk from outside is parsed by a
- * process that can reach nothing else. A disk with no GPT that can be read has no partitions. Runs until it's stopped.
+ * process that can reach nothing else. A disk with no GPT that can be read has no partitions. Runs until it's stopped,
+ * or its disk's driver is gone.
  *
  * @param log The debug log it says what it found in; without one, it says nothing.
  * @param disk A block connection to the whole disk, which it takes the buffer of.
  * @param clients The listener the storage manager's connection arrives on.
  * @param command_line The kernel's command line, read for faulty_block when built with robustness=on; without it, or
  *     without robustness=on, nothing fails on purpose.
- * @return 99 without the memory for its state, 1 if its ports couldn't be made, 2 if the disk didn't describe itself,
- *     3 if it didn't give its buffer, 5 without the memory to read the table, and
- *     6 if clients couldn't be added. It doesn't return otherwise.
+ * @return 99 without the memory for its state, 1 if its ports couldn't be made or the disk watched, 2 if the disk
+ *     didn't describe itself, 3 if it didn't give its buffer, 5 without the memory to read the table,
+ *     6 if clients couldn't be added, and DRIVER_GONE, 7, once the disk's other end has closed. It doesn't return
+ *     otherwise.
  */
 main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Listener[partitions.Partitions], command_line: slop_os.Memory?)
     -> int {
@@ -180,6 +186,13 @@ main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Li
     if !service_kit.add_client(&server.clients, server.port, clients.end) {
         return 6
     }
+    /*
+     * Its driver ending ends it (DRIVER_GONE): it can't dial the driver again, and its narrowed connections are dead,
+     * so the storage manager starts another on the new driver, and what was served from the disk again on it.
+     */
+    if slop_os.port_bind(server.port, cast[slop_os.Handle](server.disk), slop_os.SIGNAL_PEER_CLOSED, DISK_KEY, .Once) is_error {
+        return 1
+    }
     into := os.Incoming.{}
     loop {
         // Clients that connect meanwhile are read in the same pass, as a channel wakes its reader only once it's found empty
@@ -196,7 +209,13 @@ main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Li
             pass_back(server, j, &into)
         }
         packets : slop_os.Packet[8]
-        _ = slop_os.port_wait(server.port, packets, slop_os.NO_DEADLINE)
+        taken :: slop_os.port_wait(server.port, packets, slop_os.NO_DEADLINE) or_else 0
+        for packet, i in packets {
+            if i < cast[usize](taken) && packet.kind == .Signal && packet.key == DISK_KEY {
+                log_line.write(server.log, "partition_server: the disk's driver is gone")
+                return DRIVER_GONE
+            }
+        }
     }
 }
 

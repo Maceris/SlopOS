@@ -160,8 +160,14 @@ SYSTEM_RETRY : u64 : 100_000_000
 ROOT_SERVICE_KEY : u64 : 7000
 /** The port key of the timer that tries again to start what ended and didn't start again (retry_restarts). */
 RESTART_RETRY_KEY : u64 : 8000
-/** How long after a restart's launch failed the next try is made, in nanoseconds: 200 ms. */
-RESTART_RETRY : u64 : 200_000_000
+/** How long after a restart's launch failed the next try is made, in nanoseconds: 250 ms. */
+RESTART_RETRY : u64 : 250_000_000
+/**
+ * How many times in a row a restart whose launch fails is tried again (retry_restarts), RESTART_RETRY apart: 10 s of
+ * them, long enough for the storage a program is read from to come back, its disk's driver started again as well as
+ * the bundle store. They aren't restarts, which count a program's ends: none ended.
+ */
+RESTART_RETRIES : u32 : 40
 /**
  * The target of a connector the supervisor serves to the process manager, which it dials through the root task's
  * connector rather than a listener of its own; not an index in Supervisor.started.
@@ -644,6 +650,8 @@ Started :: struct {
      * fires (retry_restarts); cleared as it's tried.
      */
     retry : bool,
+    /** How many times in a row its restart's launch has been tried again, up to RESTART_RETRIES; 0 once it starts. */
+    retries : u32,
 }
 
 /** The most services a boot's assessment notes missing, besides those that ended for good; more aren't noted. */
@@ -1375,10 +1383,11 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
 /**
  * Start an entry that ended again, as it was started, once the supervisor's budget has room for it (wait_for_budget):
  * a driver with its device reissued by the platform service, the clock service and other services as they were
- * started. A launch that fails is tried again later, as failed decides.
+ * started. One that isn't running after is tried again later (retry_later): its launch failed, or what it's started
+ * with couldn't be had yet, as the bundle store's directory while the system volume is opened again.
  *
- * @param supervisor The supervisor, whose entry at index is launched into, relaunching being index meanwhile; its port
- *     isn't handled while it waits for budget.
+ * @param supervisor The supervisor, whose entry at index is launched into, relaunching being index meanwhile, or
+ *     marked to be tried again; its port isn't handled while it waits for budget.
  * @param index Its index in started; out of range does nothing.
  * @param budget The program's budget, in bytes, as the system configuration has it; 0 waits for none.
  */
@@ -1405,25 +1414,59 @@ start_again :: fn(supervisor: ptr[mut Supervisor], index: usize, budget: u64) {
             restart_service(supervisor, index)
         }
         supervisor.relaunching = NOWHERE
-        if entry.running {
-            log_line.write(supervisor.log, "supervisor: restarted %", entry.name)
+    }
+    else {
+        match request_device(supervisor, .Reissue(entry.address)) {
+            case Some(device) => {
+                supervisor.relaunching = index
+                start_driver(supervisor, entry.service, device, index)
+                supervisor.relaunching = NOWHERE
+            }
+            case None => {}
         }
+    }
+    if entry.running {
+        entry.retries = 0
+        log_line.write(supervisor.log, "supervisor: restarted %", entry.name)
         return void
     }
-    device :: request_device(supervisor, .Reissue(entry.address)) or_return void
-    supervisor.relaunching = index
-    start_driver(supervisor, entry.service, device, index)
-    supervisor.relaunching = NOWHERE
-    if entry.running {
-        log_line.write(supervisor.log, "supervisor: restarted %", entry.name)
+    // Not launched, and failed hasn't said why: what it needed wasn't there
+    if entry.retry || entry.done {
+        return void
     }
+    if retry_later(supervisor, index) {
+        log_line.write(supervisor.log, "supervisor: % couldn't be started again yet; trying again", entry.name)
+        return void
+    }
+    log_line.write(supervisor.log, "supervisor: % couldn't be started again, and isn't tried again", entry.name)
+    entry.done = true
+    note_missing(supervisor, entry.name, "didn't start", 0)
+    tell_root(supervisor, .Failed(report_of(entry.name, 0)))
 }
 
 /**
- * Try again to start every entry whose restart's launch failed (Started.retry), as ended would; each try counts as a
- * restart, so failed gives up on one once it's had RESTARTS.
+ * Mark an entry that wasn't started again to be tried again RESTART_RETRY later (retry_restarts), if it hasn't been
+ * RESTART_RETRIES times in a row already.
  *
- * @param supervisor The supervisor, whose entries marked retry are cleared and started again.
+ * @param supervisor The supervisor, whose entry is marked retry and a timer set under RESTART_RETRY_KEY.
+ * @param index Its index in started; out of range does nothing.
+ * @return Whether it'll be tried again; false if index is out of range or it's had its RESTART_RETRIES.
+ */
+retry_later :: fn(supervisor: ptr[mut Supervisor], index: usize) -> bool {
+    if index >= supervisor.started_count || index >= supervisor.started.count || supervisor.started[index].retries >= RESTART_RETRIES {
+        return false
+    }
+    supervisor.started[index].retry = true
+    _ = slop_os.port_set_timer(supervisor.port, RESTART_RETRY_KEY, (slop_os.clock_monotonic() or_else 0) + RESTART_RETRY)
+    return true
+}
+
+/**
+ * Try again to start every entry whose restart's launch failed (Started.retry), as ended would; each try counts in
+ * its retries, so failed gives up on one once it's had RESTART_RETRIES.
+ *
+ * @param supervisor The supervisor, whose entries marked retry are cleared, their retries grown by one, and started
+ *     again.
  */
 retry_restarts :: fn(supervisor: ptr[mut Supervisor]) {
     for i in 0..<supervisor.started_count {
@@ -1440,7 +1483,7 @@ retry_restarts :: fn(supervisor: ptr[mut Supervisor]) {
             case Some(service) => budget = service.budget
             case None => {}
         }
-        entry.restarts += 1
+        entry.retries += 1
         start_again(supervisor, i, budget)
     }
 }
@@ -4972,12 +5015,13 @@ started :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process:
  * Handle a launch that failed: end the watch made for it, log it, and either try again later or note it missing and
  * tell the root task.
  *
- * A restart that fails is tried again RESTART_RETRY later (retry_restarts) while its entry has had fewer than RESTARTS
- * restarts: what it was started with may have ended with something else that hasn't been handled yet, as the program
- * the bundle store gave does with the store (decisions/0181's F6).
+ * A restart that fails is tried again RESTART_RETRY later (retry_restarts), up to RESTART_RETRIES times in a row:
+ * what it's started with may have ended with something else that isn't back yet, as the program the bundle store gave
+ * does with the store, and as the store and the system volume can't give it while their disk's driver is started again
+ * (decisions/0181's F6).
  *
  * @param supervisor The supervisor, whose port's watch under next_slot is ended; the entry being relaunched may be
- *     marked to try again, with a timer set under RESTART_RETRY_KEY, or else its missing may grow by one.
+ *     marked to try again (retry_later), or else is done, and its missing may grow by one.
  * @param name The service's name, as the system configuration has it, for the log, missing and the report.
  * @param error Why the launch failed; plus one, it's the code noted and told.
  */
@@ -4985,11 +5029,13 @@ failed :: fn(supervisor: ptr[mut Supervisor], name: string, error: os.LaunchErro
     // Its end was watched under the key of the entry it didn't get, which the next launch is watched under
     _ = slop_os.port_unbind(supervisor.port, cast[u64](next_slot(supervisor)))
     again :: supervisor.relaunching
-    if again < supervisor.started_count && again < supervisor.started.count && supervisor.started[again].restarts < RESTARTS {
+    if retry_later(supervisor, again) {
         log_line.write(supervisor.log, "supervisor: % didn't start again: %; trying again", name, error)
-        supervisor.started[again].retry = true
-        _ = slop_os.port_set_timer(supervisor.port, RESTART_RETRY_KEY, (slop_os.clock_monotonic() or_else 0) + RESTART_RETRY)
         return void
+    }
+    // A restart given up on is done, so start_again doesn't report it again
+    if again < supervisor.started_count && again < supervisor.started.count {
+        supervisor.started[again].done = true
     }
     log_line.write(supervisor.log, "supervisor: % didn't start: %", name, error)
     note_missing(supervisor, name, "didn't start", cast[u64](error) + 1)

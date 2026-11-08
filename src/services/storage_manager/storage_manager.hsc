@@ -85,6 +85,15 @@ LINKS_KEY : u64 : 1000
 MANAGER_KEY : u64 : 900
 /** The key a partition server is watched under from its launch, plus its disk's index. */
 PARTITION_SERVER_KEY : u64 : 2000
+/** The key of the timer that tries again to start a disk's partition server, plus its disk's index. */
+DISK_RETRY_KEY : u64 : 1900
+/** How long after a partition server couldn't be started again the next try is made, in nanoseconds: 250 ms. */
+DISK_RETRY : u64 : 250_000_000
+/**
+ * How many times in a row a partition server that couldn't be started again is tried, DISK_RETRY apart: 10 s of them,
+ * long enough for its driver, which ended with it, to be started again and dialed.
+ */
+DISK_RETRIES : u32 : 40
 /** The key a FAT server is watched under from its launch, plus its partition's index. */
 FAT_SERVER_KEY : u64 : 3000
 /** The key a container service is watched under from its launch, plus its partition's index. */
@@ -229,6 +238,8 @@ Manager :: struct {
     connectors : Disk[MAX_DISKS],
     /** Each disk's partition server's process. */
     disk_running : Running[MAX_DISKS],
+    /** How many times in a row each disk's partition server has been tried again (restart_disk); 0 once it starts. */
+    disk_retries : u32[MAX_DISKS],
     /** The partition server's module, launched for each disk. */
     partition_server_module : slop_os.Memory,
     /** Each partition's FAT server's process, by partition index. */
@@ -392,6 +403,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], par
             }
             if i < cast[usize](taken) && packet.kind == .Signal && packet.key == MANAGER_KEY {
                 _ = dial_manager(&state)
+            }
+            if i < cast[usize](taken) && packet.key >= DISK_RETRY_KEY && packet.key < DISK_RETRY_KEY + MAX_DISKS {
+                restart_disk(&state, cast[usize](packet.key - DISK_RETRY_KEY))
             }
         }
     }
@@ -582,7 +596,7 @@ may_start :: fn(running: ptr[mut Running]) -> bool {
  * Handle a server it started having ended, by its key.
  *
  * A partition server is started again at once, once everything served from its disk is killed, since each holds a
- * connection it narrowed; a FAT server, a container service or a volume server is let go, and started again the next
+ * connection it narrowed, or tried again shortly if its driver can't be dialed yet (restart_disk); a FAT server, a container service or a volume server is let go, and started again the next
  * time it's asked for. A container service's volume servers go with it, and an encrypted volume served again is
  * locked until its passphrase is given again.
  *
@@ -629,12 +643,37 @@ ended :: fn(state: ptr[mut Manager], key: u64) {
             }
         }
     }
-    if may_start(&state.disk_running[index]) && start_partition_server(state, index) {
-        runtime.log_info("restarted the partition server for disk %", index)
-    }
-    else {
+    if !may_start(&state.disk_running[index]) {
         runtime.log_info("the partition server for disk % isn't started again", index)
+        return void
     }
+    state.disk_retries[index] = 0
+    restart_disk(state, index)
+}
+
+/**
+ * Start a disk's partition server again, its driver dialed again, or try again DISK_RETRY later if it can't be: a
+ * driver that ended is started again by the supervisor, and can't be dialed until it is.
+ *
+ * @param state The storage manager's state, whose disk's partition server is started, and its retries counted, with
+ *     a timer under DISK_RETRY_KEY plus index for the next try, up to DISK_RETRIES in a row.
+ * @param index Which disk; past MAX_DISKS, or one whose server is running, does nothing.
+ */
+restart_disk :: fn(state: ptr[mut Manager], index: usize) {
+    if index >= MAX_DISKS || cast[slop_os.Handle](state.disk_running[index].process) != slop_os.NO_HANDLE {
+        return void
+    }
+    if start_partition_server(state, index) {
+        state.disk_retries[index] = 0
+        runtime.log_info("restarted the partition server for disk %", index)
+        return void
+    }
+    if state.disk_retries[index] >= DISK_RETRIES {
+        runtime.log_info("the partition server for disk % isn't started again", index)
+        return void
+    }
+    state.disk_retries[index] += 1
+    _ = slop_os.port_set_timer(state.port, DISK_RETRY_KEY + cast[u64](index), (slop_os.clock_monotonic() or_else 0) + DISK_RETRY)
 }
 
 /**
