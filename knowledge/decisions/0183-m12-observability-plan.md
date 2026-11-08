@@ -33,6 +33,11 @@ Chosen with the project's owner:
     programs;
   - the oldest dropped first, and no expiry by time;
   - the system configuration raises a service's budget, and a user their programs'.
+- **Attaching the debugger to a process the shell didn't start:** the session's powerbox asks on the trusted path,
+  each time. The shell's own jobs need no asking, as it holds their process control already.
+- **Tracing the whole system takes an administrator**, through elevation, as `shut-down` does (`0182`'s P4): the
+  trace ring shows every process's scheduling and IPC, other users' sessions' too. Profiling one's own jobs needs
+  nothing more.
 
 And decided here, of what `lessons.md` proposed:
 - **DWARF is parsed by a decoder process holding nothing else** (`lessons.md` §9.4), as everything that parses data
