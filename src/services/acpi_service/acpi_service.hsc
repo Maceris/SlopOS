@@ -155,8 +155,13 @@ main :: fn(platform_service: os.Channel[platform.Platform]) -> int {
     }
     initialize(service, interpreter.root)
     runtime.log_info("% devices present, % _INI run, % of them failed", service.present, service.initialized, service.failed)
+    bridge :: host_bridge(service)
+    give_windows(service, bridge)
     give_sleep_types(service)
-    count_routes(service)
+    match bridge {
+        case Some(found) => count_routes(service, found)
+        case None => {}
+    }
     runtime.log_info("serving")
     loop {
         packets : slop_os.Packet[1]
@@ -529,14 +534,14 @@ small_integer :: fn(value: aml.Value) -> u64 {
 }
 
 /**
- * Find the host bridge, the first device beneath \_SB whose _HID is PNP0A08 or PNP0A03, and log how many interrupt
- * routes its _PRT has.
+ * Find the host bridge: the first device beneath \_SB whose _HID is PNP0A08 or PNP0A03.
  *
  * @param service The service.
+ * @return Its node; null if there's none.
  */
-count_routes :: fn(service: ptr[mut Acpi]) {
+host_bridge :: fn(service: ptr[mut Acpi]) -> ptr[mut aml.Node]? {
     interpreter :: service.interpreter
-    bus :: aml.find(interpreter, "\\_SB") or_return void
+    bus :: aml.find(interpreter, "\\_SB") or_return null
     none :: view_of(cast[ptr[aml.Value]](null), 0)
     child := bus.first_child
     loop {
@@ -547,17 +552,134 @@ count_routes :: fn(service: ptr[mut Acpi]) {
             case Some(hid) => number = small_integer(aml.evaluate_node(interpreter, hid, none) or_else aml.Value.Uninitialized)
             case None => {}
         }
-        if number != PCIE_HOST_BRIDGE && number != PCI_HOST_BRIDGE {
+        if number == PCIE_HOST_BRIDGE || number == PCI_HOST_BRIDGE {
+            return inner
+        }
+    }
+    return null
+}
+
+/**
+ * Log how many interrupt routes the host bridge's _PRT has.
+ *
+ * @param service The service.
+ * @param bridge The host bridge.
+ */
+count_routes :: fn(service: ptr[mut Acpi], bridge: ptr[mut aml.Node]) {
+    routes :: aml.child_of(bridge, aml.segment_of("_PRT")) or_return void
+    match aml.evaluate_node(service.interpreter, routes, view_of(cast[ptr[aml.Value]](null), 0)) {
+        case Ok(value) => match value {
+            case Package(package) => runtime.log_info("the host bridge's _PRT routes % interrupts", package.elements.count)
+            case _ => runtime.log_error("the host bridge's _PRT isn't a package")
+        }
+        case Error(failure) => runtime.log_error("the host bridge's _PRT failed: %", failure)
+    }
+}
+
+/** The smallest memory window of the host bridge's given to the platform service: legacy VGA's and the like are left. */
+SMALLEST_WINDOW : u64 : 1 << 20
+
+/**
+ * Give the platform service the host bridge's memory windows, from its _CRS's address space descriptors: those of
+ * memory, of at least SMALLEST_WINDOW bytes, the largest first, as many as BridgeWindows holds. Without a host bridge
+ * or a _CRS, none are given, which tells the platform service to place BARs by the memory map's gaps.
+ *
+ * @param service The service.
+ * @param bridge The host bridge; null for none.
+ */
+give_windows :: fn(service: ptr[mut Acpi], bridge: ptr[mut aml.Node]?) {
+    windows := platform.BridgeWindows.{}
+    match bridge {
+        case Some(found) => {
+            match aml.child_of(found, aml.segment_of("_CRS")) {
+                case Some(resources) => match aml.evaluate_node(service.interpreter, resources, view_of(cast[ptr[aml.Value]](null), 0)) {
+                    case Ok(value) => match value {
+                        case Buffer(bytes) => windows = windows_of(bytes.data)
+                        case _ => runtime.log_error("the host bridge's _CRS isn't a buffer")
+                    }
+                    case Error(failure) => runtime.log_error("the host bridge's _CRS failed: %", failure)
+                }
+                case None => {}
+            }
+        }
+        case None => runtime.log_error("there's no host bridge")
+    }
+    match ask(service, .HostWindows(windows)) {
+        case Some(response) => match response {
+            case Done => runtime.log_info("gave the host bridge's % memory windows", windows.count)
+            case _ => runtime.log_error("the host bridge's windows were refused")
+        }
+        case None => runtime.log_error("the host bridge's windows couldn't be given")
+    }
+}
+
+/**
+ * Read a resource template's memory windows (ACPI 6.5 §6.4): its DWord and QWord address space descriptors of memory,
+ * each of at least SMALLEST_WINDOW bytes, the largest kept when there are more than BridgeWindows holds.
+ *
+ * @param template The template, as _CRS gives it.
+ * @return The windows; none if it has none, or ends early.
+ */
+windows_of :: fn(template: u8[]) -> platform.BridgeWindows {
+    found := platform.BridgeWindows.{}
+    at : u64 = 0
+    total :: cast[u64](template.count)
+    loop {
+        if at >= total {
+            break
+        }
+        lead :: acpi_tables.little(template, at, 1)
+        if lead & 0x80 == 0 {
+            // A small item: its tag, then its length; the end tag ends the template
+            if (lead >> 3) & 15 == 15 {
+                break
+            }
+            at += 1 + (lead & 7)
             continue
         }
-        routes :: aml.child_of(inner, aml.segment_of("_PRT")) or_return void
-        match aml.evaluate_node(interpreter, routes, none) {
-            case Ok(value) => match value {
-                case Package(package) => runtime.log_info("the host bridge's _PRT routes % interrupts", package.elements.count)
-                case _ => runtime.log_error("the host bridge's _PRT isn't a package")
-            }
-            case Error(failure) => runtime.log_error("the host bridge's _PRT failed: %", failure)
+        length :: acpi_tables.little(template, at + 1, 2)
+        data :: at + 3
+        if data + length > total {
+            break
         }
+        name :: lead & 0x7f
+        if (name == 0x07 || name == 0x0a) && acpi_tables.little(template, data, 1) == 0 {
+            // DWord or QWord address space, of memory: its minimum, translation and length
+            wide :: name == 0x0a
+            size : u64 = if wide { 8 } else { 4 }
+            minimum :: acpi_tables.little(template, data + 3 + size, size)
+            translation :: acpi_tables.little(template, data + 3 + 3 * size, size)
+            bytes :: acpi_tables.little(template, data + 3 + 4 * size, size)
+            prefetchable :: (acpi_tables.little(template, data + 2, 1) >> 1) & 3 == 3
+            if bytes >= SMALLEST_WINDOW {
+                add_window(&found, platform.BridgeWindow.{cpu = minimum + translation, pci = minimum, size = bytes, prefetchable = prefetchable})
+            }
+        }
+        at = data + length
+    }
+    return found
+}
+
+/**
+ * Add a window, or, with no room, put it in place of the smallest if it's larger.
+ *
+ * @param windows The windows.
+ * @param window The window.
+ */
+add_window :: fn(windows: ptr[mut platform.BridgeWindows], window: platform.BridgeWindow) {
+    count :: cast[usize](windows.count)
+    if count < windows.windows.count {
+        windows.windows[count] = window
+        windows.count += 1
         return void
+    }
+    smallest : usize = 0
+    for each, i in windows.windows {
+        if each.size < windows.windows[smallest % windows.windows.count].size {
+            smallest = i
+        }
+    }
+    if smallest < windows.windows.count && window.size > windows.windows[smallest].size {
+        windows.windows[smallest] = window
     }
 }

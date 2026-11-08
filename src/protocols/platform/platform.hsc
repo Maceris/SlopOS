@@ -170,6 +170,29 @@ SleepTypes :: struct {
     b : u8,
 }
 
+/** A window of the host bridge's, as its _CRS gives it: memory the platform service places BARs in. */
+BridgeWindow :: struct {
+    /** Where it starts as the CPU sees it, a physical address. */
+    cpu : u64,
+    /** Where it starts as its devices see it, a PCI bus address: cpu less _CRS's translation. */
+    pci : u64,
+    /** Its bytes, at least 1 MiB. */
+    size : u64,
+    /** Whether it's prefetchable, as _CRS's memory attribute says. */
+    prefetchable : bool,
+}
+
+/** The most windows HostWindows gives. */
+MAX_BRIDGE_WINDOWS :: 4
+
+/** The host bridge's memory windows, as its _CRS gives them (decisions/0182, P3). */
+BridgeWindows :: struct {
+    /** The windows, the first count of them. */
+    windows : BridgeWindow[MAX_BRIDGE_WINDOWS],
+    /** How many there are, 0 to MAX_BRIDGE_WINDOWS. */
+    count : u32,
+}
+
 /** What a client, the supervisor or the clock, terminal or ACPI service, asks the platform service. */
 Request :: union {
     /**
@@ -229,6 +252,13 @@ Request :: union {
      * claimed ACPI, a machine without PM1a's control block, or the kernel refusing them.
      */
     GiveSleepTypes(SleepTypes),
+    /**
+     * The host bridge's memory windows, from its _CRS, which BARs are placed in rather than the gaps the memory map
+     * leaves (decisions/0074, 0182). Until the claimer gives them, or a few seconds pass, the platform service places
+     * no BARs, and answers no Claim or Reissue. Answered with Done, or Refused for a client that hasn't claimed ACPI.
+     * Given once the BARs are placed, as by an ACPI service started again, they're kept but don't move what's placed.
+     */
+    HostWindows(BridgeWindows),
 }
 
 /** What the platform service answers. */
@@ -254,7 +284,7 @@ Response :: union {
     GivenMemory(slop_os.Memory),
     /** ConfigRead's answer: what was read, its upper bits 0. */
     ConfigValue(u64),
-    /** ConfigWrite's and GiveSleepTypes' answer: it's done. */
+    /** ConfigWrite's, GiveSleepTypes' and HostWindows' answer: it's done. */
     Done,
     /** The answer to a request of the ACPI service's that's refused, as each says. */
     Refused,
@@ -280,6 +310,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case ConfigRead(_) => true
         case ConfigWrite(_) => true
         case GiveSleepTypes(_) => true
+        case HostWindows(_) => true
     }
 }
 

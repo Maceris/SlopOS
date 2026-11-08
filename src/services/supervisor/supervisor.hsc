@@ -151,6 +151,10 @@ SYSTEM_RETRY : u64 : 100_000_000
  * scheduler service's, by RootService's order; such a close dials the connection again.
  */
 ROOT_SERVICE_KEY : u64 : 7000
+/** The port key of the timer that tries again to start what ended and didn't start again (retry_restarts). */
+RESTART_RETRY_KEY : u64 : 8000
+/** How long after a restart's launch failed the next try is made, in nanoseconds: 200 ms. */
+RESTART_RETRY : u64 : 200_000_000
 /**
  * The target of a connector the supervisor serves to the process manager, which it dials through the root task's
  * connector rather than a listener of its own; not an index in Supervisor.started.
@@ -614,6 +618,11 @@ Started :: struct {
      * it ends; cleared when it's started again. Nothing in the supervisor sets it yet.
      */
     ended_on_request : bool,
+    /**
+     * Whether it was being started again and its launch failed, so it's tried again once RESTART_RETRY_KEY's timer
+     * fires (retry_restarts); cleared as it's tried.
+     */
+    retry : bool,
 }
 
 /** The most services a boot's assessment notes missing, besides those that ended for good; more aren't noted. */
@@ -1210,7 +1219,8 @@ wait_and_handle :: fn(supervisor: ptr[mut Supervisor]) {
  * closing, so it's opened again; one of the root task's services' connections closing, so it's dialed again; a
  * driver's DMA fault, which kills it; and every connector's Dials. Every connector is read until it's empty, as each is
  * once it's made, since only a read that finds nothing has a channel's next message wake the port. A lost system
- * volume is opened again here, or a timer of SYSTEM_RETRY set to try again.
+ * volume is opened again here, or a timer of SYSTEM_RETRY set to try again; and restarts whose launch failed are
+ * tried again once their timer fires (retry_restarts).
  *
  * @param supervisor The supervisor, whose port is waited on; what arrives may let go of, start again or kill its
  *     entries, dial its connections to the root task's services again, open its system volume again, and answer its
@@ -1242,6 +1252,9 @@ wait_and_handle_until :: fn(supervisor: ptr[mut Supervisor], deadline: u64) {
         faulted :: cast[usize](packet.key - FAULT_KEY)
         if packet.kind == .Signal && packet.key >= FAULT_KEY && faulted < supervisor.started_count && faulted < supervisor.started.count {
             dma_fault(supervisor, faulted, packet.data[1])
+        }
+        if packet.key == RESTART_RETRY_KEY {
+            retry_restarts(supervisor)
         }
     }
     serve_power(supervisor)
@@ -1327,6 +1340,21 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
         return void
     }
     entry.restarts += 1
+    start_again(supervisor, index, budget)
+}
+
+/**
+ * Start an entry that ended again, as it was started, once the supervisor's budget has room for it (wait_for_budget):
+ * a driver with its device reissued by the platform service, the clock service and other services as they were
+ * started. A launch that fails is tried again later, as failed decides.
+ *
+ * @param supervisor The supervisor, whose entry at index is launched into, relaunching being index meanwhile; its port
+ *     isn't handled while it waits for budget.
+ * @param index Its index in started, which the caller has checked is in range.
+ * @param budget The program's budget, in bytes, as the system configuration has it; 0 waits for none.
+ */
+start_again :: fn(supervisor: ptr[mut Supervisor], index: usize, budget: u64) {
+    entry :: &supervisor.started[index]
     wait_for_budget(supervisor, budget)
     // The last process's binding still has the key, though it fired: the next is watched under it from its launch
     _ = slop_os.port_unbind(supervisor.port, cast[u64](index))
@@ -1353,6 +1381,32 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
     supervisor.relaunching = NOWHERE
     if entry.running {
         log_line.write(supervisor.log, "supervisor: restarted %", entry.name)
+    }
+}
+
+/**
+ * Try again to start every entry whose restart's launch failed (Started.retry), as ended would; each try counts as a
+ * restart, so failed gives up on one once it's had RESTARTS.
+ *
+ * @param supervisor The supervisor, whose entries marked retry are cleared and started again.
+ */
+retry_restarts :: fn(supervisor: ptr[mut Supervisor]) {
+    for i in 0..<supervisor.started_count {
+        if i >= supervisor.started.count {
+            break
+        }
+        entry :: &supervisor.started[i]
+        if !entry.retry || entry.running || entry.done {
+            continue
+        }
+        entry.retry = false
+        budget : u64 = 0
+        match service_named(supervisor, entry.name) {
+            case Some(service) => budget = service.budget
+            case None => {}
+        }
+        entry.restarts += 1
+        start_again(supervisor, i, budget)
     }
 }
 
@@ -3664,7 +3718,18 @@ loaded_module :: fn(supervisor: ptr[mut Supervisor], service: Service) -> slop_o
         return null
     }
     match loaded[place].module {
-        case Some(module) => return module
+        case Some(module) => {
+            if !loaded[place].from_store || is_alive(module) {
+                return module
+            }
+            /*
+             * Gone with the store that gave it, whose end may not have been handled yet (forget_stored), as when a
+             * service it paged faults first: got again, from the system volume if the store isn't back yet.
+             */
+            log_line.write(supervisor.log, "supervisor: %'s program went with the bundle store; getting it again", service.name)
+            _ = slop_os.handle_close(cast[slop_os.Handle](module))
+            loaded[place] = Loaded.{}
+        }
         case None => {}
     }
     from_store :: stored_program(supervisor, service.module)
@@ -3674,6 +3739,23 @@ loaded_module :: fn(supervisor: ptr[mut Supervisor], service: Service) -> slop_o
     }
     log_line.write(supervisor.log, "supervisor: % from the %", service.name, if from_store is_some { "bundle store" } else { "system volume" })
     return module
+}
+
+/**
+ * Tell whether a program's memory is still there to launch from: the bundle store's paged memory is destroyed with
+ * the store (decisions/0094), and then can't be duplicated, as a launch has to.
+ *
+ * @param module The program, which stays the caller's.
+ * @return Whether a read-only copy of its handle could be made; the copy is closed before it returns.
+ */
+is_alive :: fn(module: slop_os.Memory) -> bool {
+    match slop_os.handle_duplicate(cast[slop_os.Handle](module), slop_os.RIGHT_MEMORY_READ) {
+        case Ok(copy) => {
+            _ = slop_os.handle_close(copy)
+            return true
+        }
+        case Error(error) => return false
+    }
 }
 
 /**
@@ -4761,15 +4843,28 @@ started :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process:
 }
 
 /**
- * Handle a launch that failed: end the watch made for it, log it, note it missing, and tell the root task.
+ * Handle a launch that failed: end the watch made for it, log it, and either try again later or note it missing and
+ * tell the root task.
  *
- * @param supervisor The supervisor, whose port's watch under next_slot is ended, and whose missing may grow by one.
+ * A restart that fails is tried again RESTART_RETRY later (retry_restarts) while its entry has had fewer than RESTARTS
+ * restarts: what it was started with may have ended with something else that hasn't been handled yet, as the program
+ * the bundle store gave does with the store (decisions/0181's F6).
+ *
+ * @param supervisor The supervisor, whose port's watch under next_slot is ended; the entry being relaunched may be
+ *     marked to try again, with a timer set under RESTART_RETRY_KEY, or else its missing may grow by one.
  * @param name The service's name, as the system configuration has it, for the log, missing and the report.
  * @param error Why the launch failed; plus one, it's the code noted and told.
  */
 failed :: fn(supervisor: ptr[mut Supervisor], name: string, error: os.LaunchError) {
     // Its end was watched under the key of the entry it didn't get, which the next launch is watched under
     _ = slop_os.port_unbind(supervisor.port, cast[u64](next_slot(supervisor)))
+    again :: supervisor.relaunching
+    if again < supervisor.started_count && again < supervisor.started.count && supervisor.started[again].restarts < RESTARTS {
+        log_line.write(supervisor.log, "supervisor: % didn't start again: %; trying again", name, error)
+        supervisor.started[again].retry = true
+        _ = slop_os.port_set_timer(supervisor.port, RESTART_RETRY_KEY, (slop_os.clock_monotonic() or_else 0) + RESTART_RETRY)
+        return void
+    }
     log_line.write(supervisor.log, "supervisor: % didn't start: %", name, error)
     note_missing(supervisor, name, "didn't start", cast[u64](error) + 1)
     tell_root(supervisor, .Failed(report_of(name, cast[u64](error) + 1)))

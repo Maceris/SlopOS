@@ -110,6 +110,10 @@ AARCH64_IOMMU_LINE = "[info] IOMMU 0: SMMUv3, 128 KiB of registers at 0x00000000
 # The real-time clock the platform service finds: the MC146818 on x86-64, and the device tree's PL031 on AArch64
 X86_CLOCK_LINE = "[user] platform: the real-time clock (Mc146818) claimed"
 AARCH64_CLOCK_LINE = "[user] platform: the real-time clock (Pl031) claimed"
+# The host bridge's windows from its _CRS, which the ACPI service gives (decisions/0182, P3); AArch64's are the device
+# tree's ranges, which say nothing, so its test only sees the platform service serve
+X86_WINDOWS_LINE = "[user] platform: the host bridge's 3 windows from its _CRS"
+AARCH64_WINDOWS_LINE = "[user] platform: serving"
 X86_TRANSLATING_LINE = "[info] IOMMU 0: translating, 256 interrupts remapped, its faults to CPU 0's interrupt 48"
 AARCH64_TRANSLATING_LINE = "[info] IOMMU 0: translating, 0 interrupts remapped, its faults read at CPU 0's ticks"
 
@@ -326,6 +330,7 @@ TESTS = [
     # Behind a root port, with firmware's bus numbers and BARs taken as unset
     ("numbers buses and places BARs behind a bridge", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services test_reassign", "--expect-line=[user] platform: 1:0.0 (6900 4164) claimed",
+        f"--expect-line={X86_WINDOWS_LINE}",
         "--expect-line=[user] virtio_rng: serving, a source of the entropy service's",
         "--expect-line=[user] entropy: reseeded from a hardware source, 32 bytes", "--expect-line=[info] root task ended with code 0",
         "--", "-smp", "2", "-device", "pcie-root-port,id=bridge,chassis=1,slot=1", "-device", "virtio-rng-pci,bus=bridge,disable-legacy=on,iommu_platform=on"]),
@@ -1151,7 +1156,8 @@ def aarch64_tests(tests: list) -> list:
     """The tests for AArch64, named so, with AArch64's own baseline check and IOMMU among them."""
     lines = {f"--expect-line={X86_IOMMU_LINE}": f"--expect-line={AARCH64_IOMMU_LINE}",
              f"--expect-line={X86_TRANSLATING_LINE}": f"--expect-line={AARCH64_TRANSLATING_LINE}",
-             f"--expect-line={X86_CLOCK_LINE}": f"--expect-line={AARCH64_CLOCK_LINE}"}
+             f"--expect-line={X86_CLOCK_LINE}": f"--expect-line={AARCH64_CLOCK_LINE}",
+             f"--expect-line={X86_WINDOWS_LINE}": f"--expect-line={AARCH64_WINDOWS_LINE}"}
     adapted = [(f"AArch64: {AARCH64_NAMES.get(name, name)}", expected, [lines.get(argument, argument) for argument in arguments])
                for name, expected, arguments in tests if name not in AARCH64_LEFT_OUT]
     return adapted + [("AArch64: refuses a CPU below ARMv8.2-A with LSE", 2, ["--cpu=cortex-a57"])]

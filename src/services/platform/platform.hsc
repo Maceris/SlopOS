@@ -126,7 +126,35 @@ Platform :: struct {
     acpi_claimed : bool,
     /** The client that claimed ACPI last, by its index, whose requests for ports, memory and the like are answered. */
     acpi_claimer : usize,
+    /**
+     * Whether BARs are still to be placed, waiting for the host bridge's windows from the ACPI service (decisions/0182,
+     * P3); Claims and Reissues wait in deferred meanwhile.
+     */
+    placing : bool,
+    /** When placing gives up waiting, and places by the memory map's gaps: the monotonic clock's nanoseconds. */
+    place_by : u64,
+    /** The Claims and Reissues waiting for the BARs to be placed, the first deferred_count of them. */
+    deferred : Deferred[MAX_DEFERRED],
+    /** How many are waiting. */
+    deferred_count : usize,
 }
+
+/** A Claim or Reissue waiting for the BARs to be placed. */
+Deferred :: struct {
+    /** The client that asked, by its index. */
+    client : usize,
+    /** Whether it's a Reissue, of address; a Claim, of wanted, if not. */
+    reissue : bool,
+    /** What a Claim wants. */
+    wanted : protocol.Wanted,
+    /** What a Reissue asks for. */
+    address : u32,
+}
+
+/** The most Claims and Reissues that wait for the BARs to be placed; past them, the BARs are placed at once. */
+MAX_DEFERRED :: 16
+/** How long the BARs wait for the host bridge's windows from the ACPI service, in nanoseconds. */
+WINDOWS_WAIT : u64 : 5_000_000_000
 
 /**
  * Enumerate the PCIe devices and the real-time clock and framebuffer the firmware tables describe, and give each, once,
@@ -192,9 +220,6 @@ main :: fn(log: slop_os.DebugLog?, platform: slop_os.Platform, firmware: slop_os
     for i in 0..<state.count {
         size_bars(state, i)
     }
-    for i in 0..<state.count {
-        place_bars(to, state, i)
-    }
     ranges :: register_iommus(to, platform, state, tables, tables_size)
     if ranges == 0 {
         log_line.write(to, "platform: the firmware tables describe no IOMMU, so devices' DMA reaches all of memory")
@@ -202,9 +227,131 @@ main :: fn(log: slop_os.DebugLog?, platform: slop_os.Platform, firmware: slop_os
     else {
         log_line.write(to, "platform: % ranges of requester IDs registered with their IOMMUs", ranges)
     }
-    log_line.write(to, "platform: % functions on buses % to %, % BARs placed, % left unplaced", state.count, host.first_bus,
-        state.highest_bus, state.placed, state.unplaced)
+    // With ACPI, the windows are the host bridge's _CRS, which the ACPI service gives; until then, nothing's placed
+    if (pci.firmware_table(tables, tables_size, "FACP") is_some) && (pci.firmware_table(tables, tables_size, "DSDT") is_some) {
+        state.placing = true
+        state.place_by = (slop_os.clock_monotonic() or_else 0) + WINDOWS_WAIT
+        log_line.write(to, "platform: % functions on buses % to %, their BARs placed once the ACPI service gives the host bridge's windows",
+            state.count, host.first_bus, state.highest_bus)
+    }
+    else {
+        place_all(to, state)
+    }
     return serve(to, platform, state, clients)
+}
+
+/**
+ * Place every function's BARs, in the host bridge's windows as they are now, and log how many were.
+ *
+ * @param to The debug log.
+ * @param state The platform service's state, whose BARs are placed and placing cleared.
+ */
+place_all :: fn(to: slop_os.DebugLog, state: ptr[mut Platform]) {
+    for i in 0..<state.count {
+        place_bars(to, state, i)
+    }
+    state.placing = false
+    log_line.write(to, "platform: % functions on buses % to %, % BARs placed, % left unplaced", state.count, state.host.first_bus,
+        state.highest_bus, state.placed, state.unplaced)
+}
+
+/**
+ * Place the BARs, if they're waiting, and answer the Claims and Reissues that waited for them.
+ *
+ * @param to The debug log.
+ * @param platform The platform capability.
+ * @param state The platform service's state.
+ * @param connected The clients, whose deferred requests are answered.
+ * @param port The port their ends are bound to.
+ */
+finish_placing :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], connected: ptr[service_kit.Clients],
+    port: slop_os.Port) {
+    if state.placing {
+        place_all(to, state)
+    }
+    for waiting, i in state.deferred {
+        if i >= state.deferred_count {
+            break
+        }
+        if waiting.client >= connected.ends.count {
+            continue
+        }
+        end :: connected.ends[waiting.client]
+        if cast[slop_os.Handle](end) == slop_os.NO_HANDLE {
+            continue
+        }
+        answer(end, port, if waiting.reissue { reissue(to, platform, state, waiting.client, waiting.address) }
+            else { claim(to, platform, state, waiting.client, waiting.wanted) })
+    }
+    state.deferred_count = 0
+}
+
+/**
+ * Keep a Claim or Reissue to answer once the BARs are placed; with no room for it, place them now and answer it.
+ *
+ * @param to The debug log.
+ * @param platform The platform capability.
+ * @param state The platform service's state.
+ * @param connected The clients.
+ * @param port The port their ends are bound to.
+ * @param waiting The request.
+ */
+defer_request :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], connected: ptr[service_kit.Clients],
+    port: slop_os.Port, waiting: Deferred) {
+    at :: state.deferred_count
+    if at < state.deferred.count {
+        state.deferred[at] = waiting
+        state.deferred_count = at + 1
+        return void
+    }
+    log_line.write(to, "platform: too many requests waiting for the host bridge's windows, so BARs are placed by the memory map's gaps")
+    finish_placing(to, platform, state, connected, port)
+    if waiting.client < connected.ends.count {
+        end :: connected.ends[waiting.client]
+        answer(end, port, if waiting.reissue { reissue(to, platform, state, waiting.client, waiting.address) }
+            else { claim(to, platform, state, waiting.client, waiting.wanted) })
+    }
+}
+
+/**
+ * Take the host bridge's windows from the ACPI service's _CRS in place of the memory map's gaps, and place the BARs
+ * that waited for them.
+ *
+ * @param to The debug log.
+ * @param platform The platform capability.
+ * @param state The platform service's state.
+ * @param connected The clients.
+ * @param port The port their ends are bound to.
+ * @param client The client giving them.
+ * @param given The windows.
+ * @return Done; Refused for a client that hasn't claimed ACPI.
+ */
+take_windows :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], connected: ptr[service_kit.Clients],
+    port: slop_os.Port, client: usize, given: protocol.BridgeWindows) -> protocol.Response {
+    if !is_acpi(state, client) {
+        return .Refused
+    }
+    if !state.placing {
+        log_line.write(to, "platform: the host bridge's windows came after the BARs were placed, and don't move them")
+        return .Done
+    }
+    windows : pci.Window[pci.MAX_WINDOWS]
+    count : u32 = 0
+    for window, i in given.windows {
+        if cast[u32](i) >= given.count || cast[usize](count) >= windows.count {
+            break
+        }
+        windows[cast[usize](count)] = pci.Window.{cpu = window.cpu, pci = window.pci, size = window.size,
+            wide = window.pci >= cast[u64](4) << 30, prefetchable = window.prefetchable}
+        count += 1
+    }
+    if count > 0 {
+        state.host.windows = windows
+        state.host.window_count = count
+        log_line.write(to, "platform: the host bridge's % windows from its _CRS", count)
+    }
+    finish_placing(to, platform, state, connected, port)
+    return .Done
 }
 
 /**
@@ -623,7 +770,11 @@ serve :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Pla
         }
         while i < connected.count
         packets : slop_os.Packet[8]
-        _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
+        _ = slop_os.port_wait(port, packets, if state.placing { state.place_by } else { slop_os.NO_DEADLINE })
+        if state.placing && (slop_os.clock_monotonic() or_else 0) >= state.place_by {
+            log_line.write(to, "platform: no windows from the ACPI service in time, so BARs are placed by the memory map's gaps")
+            finish_placing(to, platform, state, &connected, port)
+        }
     }
 }
 
@@ -666,6 +817,10 @@ serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
         }
         match os.message_of[protocol.Request](into)^ {
             case Claim(wanted) => {
+                if state.placing {
+                    defer_request(to, platform, state, connected, port, Deferred.{client = index, wanted = wanted})
+                    continue
+                }
                 out := os.Outgoing.{}
                 response :: os.begin[protocol.Response](&out)
                 response^ = claim(to, platform, state, index, wanted)
@@ -677,6 +832,10 @@ serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
                 }
             }
             case Reissue(address) => {
+                if state.placing {
+                    defer_request(to, platform, state, connected, port, Deferred.{client = index, reissue = true, address = address})
+                    continue
+                }
                 out := os.Outgoing.{}
                 response :: os.begin[protocol.Response](&out)
                 response^ = reissue(to, platform, state, index, address)
@@ -700,6 +859,7 @@ serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
             case ConfigRead(access) => answer(end, port, config_read(state, index, access))
             case ConfigWrite(access) => answer(end, port, config_write(state, index, access))
             case GiveSleepTypes(types) => answer(end, port, give_sleep_types(to, platform, state, index, types, state.tables, state.tables_size))
+            case HostWindows(given) => answer(end, port, take_windows(to, platform, state, connected, port, index, given))
         }
     }
 }

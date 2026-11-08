@@ -238,3 +238,20 @@ Five parts, each with an as-built record:
   ends at S5, where before this it halted.
 - **Found on the way**: the chaos test sometimes fails when it kills the bundle store: the account service can't be
   started again (BadGrants), and the root task ends. It's F6's area, not P3's, and is left for a task of its own.
+
+## As Built, P3b (2026-11-07): the host bridge's windows from _CRS
+- **The platform service waits for them:** where the firmware tables have a FADT and a DSDT, it numbers the buses,
+  sizes the BARs and registers the IOMMUs, but places no BAR until the ACPI service gives the host bridge's windows
+  (`HostWindows`). Meanwhile it serves everyone, and keeps each Claim and Reissue to answer once the BARs are placed,
+  up to 16 of them. If more come, or 5 s pass first, it places them in the memory map's gaps as before (`0074`) and
+  says so.
+  - **Windows given after placing**, as by an ACPI service started again, are kept but move nothing.
+  - **Without ACPI**, as with AArch64's devicetree and its `ranges`, it places at once.
+- **The ACPI service** finds the host bridge, the first device beneath `\_SB` whose `_HID` is PNP0A08 or PNP0A03,
+  after the devices' `_INI`s. From its `_CRS` it takes:
+  - the DWord and QWord address space descriptors of memory of at least 1 MiB, legacy VGA's and the like left out;
+  - the largest four, the CPU's address being the minimum plus the translation.
+
+  It gives them even when there are none, so the platform service needn't wait out its 5 s.
+- **On QEMU's q35:** 3 windows. The bus-numbering test's BARs behind a root port are placed in them, and the claim
+  waiting for them is answered after.
