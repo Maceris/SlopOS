@@ -151,6 +151,7 @@ main :: fn(store: os.Channel[dir.Dir], clients: os.Listener[bundle_store.BundleS
         case None => {}
     }
     service.port = slop_os.port_create(service.block.budget) or_return 1
+    _ = service_kit.watch_stop(service.port)
     // Pressure on its budget, which its pages bring it to, wakes it to give some back
     slop_os.port_bind(service.port, cast[slop_os.Handle](service.block.budget), slop_os.SIGNAL_PRESSURE, PRESSURE_KEY, .Persistent) or_return 1
     set_cache_limit(service, 0)
@@ -175,6 +176,10 @@ main :: fn(store: os.Channel[dir.Dir], clients: os.Listener[bundle_store.BundleS
     loop {
         for i in cast[usize](0)..<service.connected.count {
             serve(service, i, &into)
+        }
+        // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done
+        if service_kit.stopping() {
+            return 0
         }
         packets : slop_os.Packet[8]
         taken :: slop_os.port_wait(service.port, packets, slop_os.NO_DEADLINE) or_else 0

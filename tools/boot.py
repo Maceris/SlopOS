@@ -600,7 +600,7 @@ def console_drawn(screenshot: Path) -> str | None:
 # after the shutdown it brings
 RUN_END_LINES = ("[info] root task ended", "[info] objects left", "[user] root task: shutting down", "[user] supervisor: the console asked",
                  "[user] root task: restarting", "[user] root task: the machine can't", "[info] turning the machine off",
-                 "[info] restarting the machine")
+                 "[info] restarting the machine", "[user] supervisor: stopped", "[user] supervisor: killed")
 
 # What the status line says while a new keyboard waits for its code
 KEYBOARD_CODE = re.compile("a new keyboard: type ([0-9]+) and Enter")

@@ -403,6 +403,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], ech
         case None => {}
     }
     sessions.port = slop_os.port_create(block.budget) or_return 1
+    _ = service_kit.watch_stop(sessions.port)
     // Pressure on its budget, which its sessions' programs' budgets are split off, wakes it to stop idle installations
     slop_os.port_bind(sessions.port, cast[slop_os.Handle](block.budget), slop_os.SIGNAL_PRESSURE, PRESSURE_KEY, .Persistent) or_return 1
     match slop_os.memory_budget_info(block.budget) {
@@ -434,6 +435,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], ech
             check_installations(sessions, cast[u32](sessions.checking))
             sessions.checking = NOWHERE
             continue
+        }
+        // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done
+        if service_kit.stopping() {
+            return 0
         }
         packets : slop_os.Packet[8]
         taken :: slop_os.port_wait(sessions.port, packets, slop_os.NO_DEADLINE) or_else 0

@@ -14,6 +14,7 @@ import intrinsics from "base"
 import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
+import service_kit from "../../libraries/service_kit"
 import text_buffer from "std"
 import aml from "../../aml"
 import acpi_tables from "../../acpi_tables"
@@ -184,6 +185,7 @@ main :: fn(platform_service: os.Channel[platform.Platform], power: os.Channel[po
     }
     // The SCI: the power button's fixed event, and the GPEs with methods, each enabled
     events :: slop_os.port_create(block.budget) or_return 1
+    _ = service_kit.watch_stop(events)
     if cast[slop_os.Handle](service.sci) != slop_os.NO_HANDLE {
         if slop_os.port_bind(events, cast[slop_os.Handle](service.sci), cast[slop_os.Signals](0), SCI_KEY, .Persistent) is_error {
             runtime.log_error("the SCI can't be waited for")
@@ -195,6 +197,10 @@ main :: fn(platform_service: os.Channel[platform.Platform], power: os.Channel[po
     }
     runtime.log_info("serving")
     loop {
+        // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done
+        if service_kit.stopping() {
+            return 0
+        }
         packets : slop_os.Packet[4]
         taken :: slop_os.port_wait(events, packets, slop_os.NO_DEADLINE) or_else 0
         for packet, i in packets {

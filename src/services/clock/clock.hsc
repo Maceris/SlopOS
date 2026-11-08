@@ -142,6 +142,7 @@ main :: fn(rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, cloc
     }
 
     port :: slop_os.port_create(block.budget) or_return 4
+    _ = service_kit.watch_stop(port)
     connected := service_kit.Clients.{}
     if !service_kit.add_client(&connected, port, clients.end) {
         return 5
@@ -157,6 +158,10 @@ main :: fn(rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, cloc
             i += 1
         }
         while i < connected.count
+        // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done
+        if service_kit.stopping() {
+            return 0
+        }
         packets : slop_os.Packet[8]
         _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
     }

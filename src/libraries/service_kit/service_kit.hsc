@@ -10,6 +10,7 @@ package service_kit
 import compiler from "base"
 import runtime from "base"
 import slop_os from "std/os"
+import lifecycle from "std/os/slop_os"
 import system_records from "../../system_records"
 
 /**
@@ -321,4 +322,32 @@ read_pages :: fn(memory: slop_os.Memory, offset: u64, into: mut u8[]) -> bool {
         }
         done = end
     }
+}
+
+// ---- Stopping (decisions/0182, P4)
+
+/**
+ * The port key a program's Stop wakes its port under, once watch_stop has asked: high, so it's no service's own.
+ */
+STOP_KEY : u64 : 0xffff_ffff_ffff_fff0
+
+/**
+ * Have a Stop on the program's lifecycle channel wake a port, with a packet under STOP_KEY, so a service waiting on
+ * it sees stopping and ends: the supervisor asks every service to stop, in turn, when the system shuts down.
+ *
+ * @param port The service's port, which it waits on; it has to stay open for as long as a stop may come.
+ * @return True if a Stop will wake it; false if it can't, as for a program given no lifecycle channel, which then
+ *     ends only when it's killed.
+ */
+watch_stop :: fn(port: slop_os.Port) -> bool {
+    return lifecycle.on_stop(port, STOP_KEY)
+}
+
+/**
+ * Tell whether whoever launched the program has asked it to stop.
+ *
+ * @return True once a Stop has come on its lifecycle channel; false before, and for a program given none.
+ */
+stopping :: fn() -> bool {
+    return lifecycle.stop_requested()
 }

@@ -6,6 +6,7 @@ import os from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
 import programs from "../../protocols/programs"
+import powerbox from "../../protocols/powerbox"
 
 /*
  * The system, as a session sees it (decisions/0179, 11e4): processes, the session's programs and the shell's jobs as a
@@ -450,6 +451,50 @@ copied_first :: fn(bytes: u8[], count: usize) -> string {
         return ""
     }
     return string_of(&kept[0], kept.count)
+}
+
+/**
+ * Shut the system down, or restart it, once an administrator allows it (decisions/0182, P4): the session's powerbox
+ * asks on the trusted path, where the secure attention key brings up a screen for the administrator's name and
+ * password; once they're right, the trusted path has the system shut down. It waits until then.
+ *
+ * @param shell The shell, whose session's powerbox is asked.
+ * @param tree The Call node of shut-down or restart, which takes no arguments.
+ * @param restart Whether it's restart.
+ * @return Null once it's allowed, as the system goes down; an error without a powerbox, for arguments, or if it's
+ *     refused.
+ */
+power_down :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], restart: bool) -> Result[Value, EvalError] {
+    if tree.children.count > 0 {
+        return .Error(EvalError.{message = message("% takes nothing", tree.text), at = tree.at})
+    }
+    end :: powerbox_connection(shell, "shell") or_return .Error(EvalError.{message = message("% needs the session's powerbox, which this session hasn't",
+        tree.text), at = tree.at})
+    defer slop_os.handle_close(cast[slop_os.Handle](end))
+    port :: os.port_for(slop_os.startup_block().budget, end) or_return .Error(EvalError.{message = "the powerbox can't be reached", at = tree.at})
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    out := os.Outgoing.{}
+    request :: os.begin[powerbox.Request](&out)
+    request^ = .RequestPower(powerbox.PowerRequest.{purpose = os.append(&out, string_bytes("as you asked in the shell")), restart = restart})
+    if powerbox.send_request(end, port, &out) != null {
+        return .Error(EvalError.{message = "the powerbox can't be reached", at = tree.at})
+    }
+    say(shell, "Press Ctrl+Alt+Delete: an administrator's name and password allow it.")
+    into := os.Incoming.{}
+    loop {
+        match powerbox.receive_response(end, port, &into, true) {
+            case Received => break
+            case _ => return .Error(EvalError.{message = "the powerbox can't be reached", at = tree.at})
+        }
+    }
+    match os.message_of[powerbox.Response](&into)^ {
+        case Allowed => {
+            say(shell, if restart { "Restarting." } else { "Shutting down." })
+            return .Ok(.Null)
+        }
+        case Busy => return .Error(EvalError.{message = "the powerbox is asking the user something else; try again once that's answered", at = tree.at})
+        case _ => return .Error(EvalError.{message = message("% was refused", tree.text), at = tree.at})
+    }
 }
 
 /**

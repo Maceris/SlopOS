@@ -331,6 +331,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], par
     }
     state.next_snapshots = (slop_os.clock_monotonic() or_else 0) + state.snapshot_every
     state.port = slop_os.port_create(startup.budget) or_return 1
+    _ = service_kit.watch_stop(state.port)
     state.connector_port = os.port_for(startup.budget, state.manager_connector) or_return 1
     if !dial_manager(&state) {
         return 1
@@ -383,6 +384,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], par
             automatic_snapshots(&state)
             state.next_snapshots = (slop_os.clock_monotonic() or_else 0) + state.snapshot_every
             continue
+        }
+        // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done
+        if service_kit.stopping() {
+            return 0
         }
         packets : slop_os.Packet[8]
         taken :: slop_os.port_wait(state.port, packets, state.next_snapshots) or_else 0

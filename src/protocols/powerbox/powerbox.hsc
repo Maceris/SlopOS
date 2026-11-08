@@ -96,6 +96,14 @@ AccountRequest :: struct {
     purpose : slop_os.Relative[u8],
 }
 
+/** The system shut down or restarted, asked for, and why. */
+PowerRequest :: struct {
+    /** Why the program asks, in its own words, as UTF-8, up to PURPOSE_BYTES, shown to the administrator. */
+    purpose : slop_os.Relative[u8],
+    /** Whether it's a restart; a shutdown if not. */
+    restart : bool,
+}
+
 /** A program of the session's, to serve on its end under its name. */
 Served :: struct {
     /** The program's name, as the session manager gave it, as UTF-8; the powerbox keeps up to NAME_BYTES of it. */
@@ -125,6 +133,12 @@ Request :: union {
      */
     RequestAccount(AccountRequest),
     /**
+     * Ask for the system to be shut down or restarted, which the administrator allows on the trusted path
+     * (decisions/0182). Answered with Allowed, once it's under way, which may not be seen before the system's gone; or
+     * Refused; at once with Busy.
+     */
+    RequestPower(PowerRequest),
+    /**
      * The session manager's, on its own connection only: serve another program on its end, under its name. Answered
      * with Done, or Refused when there's no room or it isn't the session manager's, the end then closed.
      */
@@ -149,6 +163,8 @@ Response :: union {
     Done,
     /** RequestAccount's answer: the account made, by its name, as UTF-8. */
     AccountMade(slop_os.Relative[u8]),
+    /** RequestPower's answer: the administrator allowed it, and it's under way. */
+    Allowed,
     /** The answer to a request the powerbox doesn't know, as from a newer program; every protocol has it. */
     Unsupported,
 }
@@ -167,6 +183,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         // A kept grant opened again gives another connection to it
         case Reopen(_) => true
         case RequestAccount(_) => false
+        case RequestPower(_) => false
         case Serve(_) => false
     }
 }

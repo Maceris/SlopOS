@@ -90,6 +90,7 @@ main :: fn(esp: os.Channel[dir.Dir], updates: os.Channel[dir.Dir], store: os.Cha
     service :: made
     service.block = slop_os.startup_block()
     service.port = slop_os.port_create(service.block.budget) or_return 1
+    _ = service_kit.watch_stop(service.port)
     service.esp_raw = esp.end
     service.esp_port = os.port_for(service.block.budget, esp.end) or_return 2
     second :: dir.connect(esp.end, service.esp_port, service.block.budget) or_return 2
@@ -119,6 +120,10 @@ main :: fn(esp: os.Channel[dir.Dir], updates: os.Channel[dir.Dir], store: os.Cha
             i += 1
         }
         while i < service.connected.count
+        // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done
+        if service_kit.stopping() {
+            return 0
+        }
         packets : slop_os.Packet[4]
         _ = slop_os.port_wait(service.port, packets, slop_os.NO_DEADLINE)
     }

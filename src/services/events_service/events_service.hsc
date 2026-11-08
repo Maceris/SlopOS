@@ -246,6 +246,7 @@ main :: fn(log: slop_os.DebugLog?, clients: os.Listener[events.Events]) -> int {
         service.waiting[i].client = NOWHERE
     }
     service.port = slop_os.port_create(service.block.budget) or_return 1
+    _ = service_kit.watch_stop(service.port)
     if !service_kit.add_client(&service.connected, service.port, clients.end) {
         return 2
     }
@@ -286,6 +287,10 @@ main :: fn(log: slop_os.DebugLog?, clients: os.Listener[events.Events]) -> int {
             if short || (service.rings[i].source != NOWHERE && cast[slop_os.Handle](service.rings[i].doorbell) == slop_os.NO_HANDLE) {
                 deadline = (slop_os.clock_monotonic() or_else 0) + ADOPTED_POLL
             }
+        }
+        // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done
+        if service_kit.stopping() {
+            return 0
         }
         packets : slop_os.Packet[8]
         taken :: slop_os.port_wait(service.port, packets, deadline) or_else 0

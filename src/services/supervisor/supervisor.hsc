@@ -774,6 +774,11 @@ Supervisor :: struct {
      * store's own.
      */
     boot_root : bundle.Hash?,
+    /**
+     * test_ignore_stop=NAME: the service a shutdown doesn't ask to stop, as if it ignored the asking, so it's killed
+     * and named (decisions/0182, P4); empty for none.
+     */
+    ignore_stop : string,
     /** The port config_end's answers wake. */
     config_port : slop_os.Port,
     /** The index in started a restart is launching into, whose key its process is watched under; NOWHERE otherwise. */
@@ -1083,6 +1088,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
             // The generation booted, and its store root, as the bootloader says on the command line (decisions/0114, 0116)
             supervisor.generation = service_kit.number_of(service_kit.word_after(text, "generation=") or_else "") or_else 0
             supervisor.boot_root = bundle.from_hex(service_kit.word_after(text, "store_root=") or_else "")
+            supervisor.ignore_stop = service_kit.word_after(text, "test_ignore_stop=") or_else ""
         }
         case None => {}
     }
@@ -4623,9 +4629,10 @@ serve_power :: fn(supervisor: ptr[mut Supervisor]) {
 }
 
 /**
- * Answer what's asked on a power connection, until it's empty: ShutDown, PowerButton and Restart have the storage
- * manager commit every volume, then are passed on to the root task, and answered Done, or Refused if they couldn't
- * be; once any's asked, all are Done. A connection whose channel failed is closed.
+ * Answer what's asked on a power connection, until it's empty: ShutDown, PowerButton and Restart stop every service the
+ * supervisor started, gracefully, the volumes committed (stop_everything), then are passed on to the root task, and
+ * answered Done, or Refused if they couldn't be; once any's asked, all are Done. A connection whose channel failed is
+ * closed.
  *
  * @param supervisor The supervisor, whose end is read, and closed and forgotten once it's gone.
  * @param slot CONSOLE_POWER, ACPI_POWER or GPIO_POWER.
@@ -4668,13 +4675,8 @@ serve_power_on :: fn(supervisor: ptr[mut Supervisor], slot: u32) {
         supervisor.shutting_down = true
         log_line.write(supervisor.log, if pressed { "supervisor: the power button was pressed" } else if restart { "supervisor: the console asked to restart" }
             else { "supervisor: the console asked to shut down" })
-        // What the volumes have changed committed first, so nothing done before it's lost
-        if is_running(supervisor, supervisor.storage_slot) {
-            match ask_storage_once(supervisor, supervisor.storage_slot, .CommitAll) {
-                case Done => {}
-                case _ => log_line.write(supervisor.log, "supervisor: the volumes couldn't all be committed before shutting down")
-            }
-        }
+        // Every service stopped, the last started first, the volumes committed before the storage manager stops
+        stop_everything(supervisor)
         asking := os.Outgoing.{}
         report :: os.begin[supervision.Request](&asking)
         report^ = if restart { supervision.Request.Restart } else { supervision.Request.ShutDown }

@@ -494,6 +494,27 @@ TESTS = [
         "--expect-line=[user] sessions: a session for bob, in en-US",
         "--refuse-console-line=correct horse battery staple", "--refuse-console-line=another good passphrase",
         "--refuse-console-line=not the password"])),
+    # Shutting down from the shell (decisions/0182, P4): shut-down asks the session's powerbox, the secure attention key
+    # brings up the administrator's name and password on the trusted path, a wrong password is refused, and the right
+    # one has the system shut down, gracefully, and the machine turned off; no password shows on the console
+    ("shuts down from the shell once the administrator allows it on the trusted path", 125,
+     with_before_qemu([argument.replace("test_services", "test_services test_power test_settle=90").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wshut-down\\r\\w\\p\\e[3;7~"
+        "\\wadmin\\rnot the password\\r"
+        "\\wadmin\\rcorrect horse battery staple\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--console-input-after=Press Ctrl+Alt+Delete: an administrator's name and password allow it.",
+        "--console-input-after=  Shut the system down",
+        "--console-input-after=  That's not the administrator's name and password. Type them again.",
+        "--expect-line=[user] powerbox: shell asks for a shutdown",
+        "--expect-line=[user] terminal: elevation: shell asks to shut down",
+        "--expect-line=[user] terminal: elevation: the administrator allowed a shutdown",
+        "--expect-line=[user] supervisor: the console asked to shut down",
+        "--expect-line=[user] root task: shutting down, as the console asked", "--expect-line=[info] turning the machine off",
+        "--refuse-console-line=correct horse battery staple", "--refuse-console-line=not the password"])),
     # Shared volumes (decisions/0158): the administrator has bob's account made, then shares a volume, team, with bob
     # from the secure attention key's screen (H), which links shared/team in their home; bob, logged in to another
     # session, finds it in theirs; back in the administrator's, bob is taken out, every link into team revoked, and
@@ -565,11 +586,15 @@ TESTS = [
         "--expect-line=[user] root task: shutting down, as the console asked", "--expect-line=[info] turning the machine off"])),
     # The power button (decisions/0182, P3): pressed through QEMU once the system's healthy, it reaches the supervisor
     # through the ACPI service's SCI on x86-64 or the PL061's driver on AArch64, and shuts the system down, turning the
-    # machine off; which ends QEMU without an exit code
+    # machine off; which ends QEMU without an exit code. The shutdown is graceful (P4): every service asked to stop, the
+    # last started first, but the update service, which test_ignore_stop has the supervisor not ask, as if it didn't
+    # listen, so it's killed and named
     ("shuts down and turns off when the power button's pressed", 125,
-     with_before_qemu([argument.replace("test_services", "test_services test_power test_settle=60").replace("--timeout=120", "--timeout=180")
-                       for argument in BOOT_DISK_BASE], [f"--power-button-after={HEALTHY_LINE.removeprefix('--expect-line=')}",
+     with_before_qemu([argument.replace("test_services", "test_services test_power test_ignore_stop=update test_settle=60")
+                       .replace("--timeout=120", "--timeout=180") for argument in BOOT_DISK_BASE],
+                      [f"--power-button-after={HEALTHY_LINE.removeprefix('--expect-line=')}",
         "--expect-line=[user] supervisor: the power button was pressed",
+        "--expect-line=[user] supervisor: killed update, which didn't stop when asked",
         "--expect-line=[user] root task: shutting down, as the console asked", "--expect-line=[info] turning the machine off"])),
     # Calls through manifests (decisions/0170): test_shell_calls given values by position and by --name, a bool alone, an
     # enum's member, a duration, a list, a directory beneath the home and the terminal unasked; then its exit code as an

@@ -19,7 +19,7 @@ import prompt from "../../protocols/prompt"
 import screen from "../../screen"
 
 /** The status line's text while the elevation screen is up. */
-STATUS_ELEVATING :: " SlopOS │ console │ making an account"
+STATUS_ELEVATING :: " SlopOS │ console │ asking the administrator"
 /**
  * The rows of fields the elevation screen has: the administrator's name and password, then the new account's name, its
  * password and the password again.
@@ -37,11 +37,79 @@ ELEVATION_FIELDS :: 5
 enter_elevation :: fn(service: ptr[mut Service]) {
     service.attention = false
     service.elevating = true
-    runtime.log_info("elevation: % asks for an account", bytes_text(first_of(view(service).ask.requester[0..<view(service).ask.requester.count],
-        view(service).ask.requester_count)))
+    kind :: view(service).ask.kind
+    runtime.log_info("elevation: % asks %", bytes_text(first_of(view(service).ask.requester[0..<view(service).ask.requester.count],
+        view(service).ask.requester_count)), if kind == .ShutDown { "to shut down" } else if kind == .Restart { "to restart" } else { "for an account" })
     say(service, "")
     setup_step(service, .AdminName)
     update_status(service)
+}
+
+/**
+ * Tell whether a request's kind is one the elevation screen takes, rather than the chooser.
+ *
+ * @param kind The kind.
+ * @return True for an account, a shutdown and a restart.
+ */
+is_elevation :: fn(kind: prompt.Kind) -> bool {
+    return kind == .Account || is_power(kind)
+}
+
+/**
+ * Tell whether a request's kind is shutting down or restarting (decisions/0182).
+ *
+ * @param kind The kind.
+ * @return True for ShutDown and Restart.
+ */
+is_power :: fn(kind: prompt.Kind) -> bool {
+    return kind == .ShutDown || kind == .Restart
+}
+
+/**
+ * Ask the account service whether the administrator's name and password typed are right, for a shutdown or a restart
+ * (CheckAdministrator), without waiting for its answer, which comes to take_accounts: Done allows it.
+ *
+ * Once it's sent, or failed to be, the message's words and the password are zeroed. Without the account service, or
+ * if it can't be sent, it says so and asks for the administrator's name again.
+ *
+ * @param service The service, its elevation screen up for a shutdown or a restart, the administrator's password typed.
+ */
+check_administrator :: fn(service: ptr[mut Service]) {
+    if service.accounts_end == NONE || service.admin_count > service.admin.count || service.admin_password_count > service.admin_password.count {
+        say(service, "The account service isn't there.")
+        setup_step(service, .AdminName)
+        return void
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[accounts.Request](&out)
+    request^ = .CheckAdministrator(accounts.Credentials.{name = os.append(&out, service.admin[0..<service.admin_count]),
+        password = os.append(&out, service.admin_password[0..<service.admin_password_count])})
+    sent :: accounts.send_request(service.accounts_end, service.port, &out) == null
+    for i in 0..<out.words.count {
+        out.words[i] = 0
+    }
+    wipe(service.admin_password[0..<service.admin_password.count])
+    service.admin_password_count = 0
+    if !sent {
+        say(service, "The administrator couldn't be checked. Type the name and password again.")
+        setup_step(service, .AdminName)
+        return void
+    }
+    say(service, "Checking.")
+    setup_step(service, .Making)
+}
+
+/**
+ * The administrator's allowed a shutdown or a restart: answer the powerbox, close the elevation screen, and ask the
+ * supervisor for it, as P and R on the secure attention key's screen do.
+ *
+ * @param service The service, its elevation screen up for a shutdown or a restart.
+ */
+power_allowed :: fn(service: ptr[mut Service]) {
+    restart :: view(service).ask.kind == .Restart
+    runtime.log_info("elevation: the administrator allowed a %", if restart { "restart" } else { "shutdown" })
+    end_elevation(service, true)
+    shut_down(service, restart)
 }
 
 /**
@@ -59,7 +127,10 @@ end_elevation :: fn(service: ptr[mut Service], made: bool) {
     shown :: view(service)
     out := os.Outgoing.{}
     response :: os.begin[prompt.Response](&out)
-    if made && service.name_count <= service.name.count {
+    if made && is_power(shown.ask.kind) {
+        response^ = .Allowed
+    }
+    else if made && service.name_count <= service.name.count {
         name :: name_bytes(service)
         response^ = .AccountMade(os.append(&out, name))
         runtime.log_info("elevation: made the account %", bytes_text(name))
@@ -141,6 +212,61 @@ make_account_by :: fn(service: ptr[mut Service]) {
 }
 
 /**
+ * Draw the elevation screen for a shutdown or a restart: who asks and why, the administrator's name and password, what
+ * it last said, and the keys.
+ *
+ * @param service The service, its elevation screen up for one.
+ * @param whole Whether the panel's shown and drawn whole, or only its fields' rows, as draw_elevation's is.
+ * @param restart Whether it's a restart.
+ */
+draw_power_elevation :: fn(service: ptr[mut Service], whole: bool, restart: bool) {
+    panel :: &view(service).screen.panel
+    bold :: terminal.Style.{attributes = terminal.BOLD}
+    plain :: terminal.Style.{}
+    asked :: &view(service).ask
+    screen.write_at(panel, 1, 2, if restart { "Restart the system" } else { "Shut the system down" }, bold)
+    storage : u8[200]
+    line := text_buffer.make(storage)
+    text_buffer.append(&line, bytes_text(first_of(asked.requester[0..<asked.requester.count], asked.requester_count)))
+    text_buffer.append(&line, if restart { " asks to restart the system, " } else { " asks to shut the system down, " })
+    text_buffer.append(&line, bytes_text(first_of(asked.purpose[0..<asked.purpose.count], asked.purpose_count)))
+    text_buffer.append(&line, ".")
+    screen.write_at(panel, 3, 2, text_buffer.as_string(&line), plain)
+    screen.write_at(panel, 4, 2, "The administrator's name and password allow it. Esc refuses.", plain)
+    top :: SETUP_FIELDS_ROW
+    column : u16 = 18
+    screen.write_at(panel, top, 2, "Administrator:", plain)
+    screen.write_at(panel, top + 1, 2, "Their password:", plain)
+    step :: service.setup
+    typed :: field_bytes(service)
+    if step == .AdminName {
+        screen.write_at(panel, top, column, bytes_text(typed), plain)
+    }
+    else {
+        screen.write_at(panel, top, column, bytes_text(first_of(service.admin[0..<service.admin.count], service.admin_count)), plain)
+    }
+    if step == .AdminPassword {
+        dots(panel, top + 1, column, clusters(typed))
+    }
+    else if step != .AdminName {
+        dots(panel, top + 1, column, 8)
+    }
+    if service.message_count > 0 && service.message_count <= service.message.count {
+        screen.write_at(panel, top + 6, 2, string_of(&service.message[0], service.message_count), plain)
+    }
+    screen.write_at(panel, top + 8, 2, "Enter goes on, Backspace takes back what was typed last.", plain)
+    panel.row = if step == .AdminName { top } else { top + 1 }
+    shown :: if step == .AdminName { cast[u16](min_count(typed.count, 40)) } else { cast[u16](min_count(clusters(typed), 40)) }
+    panel.column = column + shown
+    if whole {
+        redraw(service)
+    }
+    else {
+        redraw_rows(service, SETUP_FIELDS_ROW, SETUP_FIELDS_ROW + cast[u16](ELEVATION_FIELDS) + 4)
+    }
+}
+
+/**
  * Draw the elevation screen on the active view's panel: who asks and why, the fields so far, what it last said, and the
  * keys; or, at the Code step, the recovery code.
  *
@@ -163,6 +289,10 @@ draw_elevation :: fn(service: ptr[mut Service], whole: bool) {
     bold :: terminal.Style.{attributes = terminal.BOLD}
     plain :: terminal.Style.{}
     asked :: &view(service).ask
+    if is_power(asked.kind) {
+        draw_power_elevation(service, whole, asked.kind == .Restart)
+        return void
+    }
     screen.write_at(panel, 1, 2, "Make an account", bold)
     if service.setup == .Code {
         screen.write_at(panel, 3, 2, "The account is made. Its recovery code, shown this once:", plain)

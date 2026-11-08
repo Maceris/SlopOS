@@ -134,6 +134,7 @@ main :: fn(log: slop_os.DebugLog?, keyboard0: os.Channel[connector.Connector]?, 
     service := runtime.new(Service)
     service.keymap = keymaps.US
     service.port = slop_os.port_create(startup.budget) or_return 2
+    _ = service_kit.watch_stop(service.port)
     connected := service_kit.Clients.{}
     if !service_kit.add_client(&connected, service.port, clients.end) {
         return 3
@@ -162,6 +163,10 @@ main :: fn(log: slop_os.DebugLog?, keyboard0: os.Channel[connector.Connector]?, 
             take_keys(service, i, &into)
         }
         deliver(service, &connected)
+        // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done
+        if service_kit.stopping() {
+            return 0
+        }
         packets : slop_os.Packet[8]
         _ = slop_os.port_wait(service.port, packets, slop_os.NO_DEADLINE)
     }

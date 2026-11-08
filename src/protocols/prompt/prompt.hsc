@@ -32,6 +32,10 @@ Kind :: enum #backed_by(u32) {
     Directory = 2,
     /** Another account, which elevation makes. */
     Account = 3,
+    /** The system shut down, which elevation allows (decisions/0182). */
+    ShutDown = 4,
+    /** The system restarted, which elevation allows. */
+    Restart = 5,
 }
 
 /** A request of one of the session's programs, for the user to answer. */
@@ -83,6 +87,8 @@ Response :: union {
     Chosen(Choice),
     /** Ask's answer for an account: the account made, by its name, as UTF-8. */
     AccountMade(slop_os.Relative[u8]),
+    /** Ask's answer for a shutdown or a restart: the administrator allowed it, and it's under way. */
+    Allowed,
     /** Ask's answer when the user refused, or the account couldn't be made. */
     Refused,
     /** The answer to a request the trusted path doesn't know, as from a newer powerbox; every protocol has it. */
