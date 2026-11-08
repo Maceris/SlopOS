@@ -158,3 +158,49 @@ Five parts, each with an as-built record:
   - Restart, on both architectures: QEMU, without `--allow-reboot`, ends at the reset without an exit code (125).
   - Turning off, on AArch64 alone until P3: PSCI's `SYSTEM_OFF` ends QEMU the same way.
   - The other shutdown tests, under `test_exit` alone, still end with 7.
+
+## As Built, P2 (2026-11-07)
+- **`src/aml`**: an interpreter that runs AML as it reads it, term by term, with no tree built first.
+  - **Loading:** a table's AML runs once, at the root. Its bytecode is kept on the heap, and a method's body is a view
+    into it, run each time the method's called.
+  - **Values:** integers, strings, buffers, packages, and references to named objects, elements, bytes, locals and
+    arguments. A name in a package is kept unresolved until it's used.
+  - **Where values live:** what an evaluation makes is in an arena, emptied when the next one begins. What the
+    namespace keeps is copied onto the heap, each value owned by its one holder and given back when it's replaced.
+    Reading a Name gives its value itself, so Index of it reaches its own elements; storing it into a local copies
+    it.
+  - **Integers** are 32 bits, masked, until a DSDT of revision 2 or more says 64.
+  - **Objects a method makes** are removed when it returns.
+- **The host** (`aml.Host`): what AML reaches outside itself, given as functions and the host's own state as an
+  address, so the library holds no pointer of a type it doesn't know:
+  - region reads and writes, by space;
+  - Sleep and Stall, each capped, and the timer;
+  - Notify, and the debug object.
+
+  A PCI_Config region's function comes from its device's `_ADR` and the nearest `_BBN` and `_SEG`, found once.
+- **What it doesn't do:** Load, LoadTable and Unload fail as Unsupported, and a DataTableRegion's fields fail as out
+  of range. One thread evaluates, so Acquire always gets the mutex, Wait times out unless already signaled, and the
+  global lock is taken as free.
+- **`_OSI`** answers true for the Windows versions firmware asks after, as Linux does, and for interfaces its user
+  names.
+- **Bounds** (`aml.Limits`), each failing with its own error:
+  - each evaluation: 2,000,000 steps and 1 MiB of arena;
+  - 32 calls deep and 256 terms nested;
+  - the namespace: 4 MiB;
+  - a field: at most 2^20 bits.
+
+  Every read of the bytecode is checked against its end, and every index against what it indexes, which Hemera's
+  bounds proofs require anyway.
+- **For the host's log**: where the innermost term that failed starts, its first 16 bytes, and the last name not
+  found.
+- **Tests** (`src/aml/test`, 21):
+  - **Assembled tables:** a small assembler in the tests writes tables term by term. They cover control flow, scopes
+    and searching, temporary objects, CondRefOf, packages and Index, strings and conversions, 32-bit integers, fields
+    with their update rules, index fields, buffer fields, PCI_Config regions, Notify, Debug, `_OSI`, every bound, and
+    a table's header checks.
+  - **QEMU's q35 DSDT:** 8,445 bytes, saved from a boot's firmware tables. It loads; `\_S5` gives sleep type 0;
+    `\_SB.PCI0` is PNP0A08, and its `_CRS` a resource template. Every method in it runs given zeros as arguments, but
+    the eight `_SRS` and the `_OSC`, which need buffers.
+  - **Fuzzing:** random bytes, a rich assembled table with bytes changed, and QEMU's DSDT with bytes changed, are
+    loaded and every method they define run. Nothing faulted across some 600,000 cases, run while building it.
+- **Found on the way**: QEMU's DSDT starts with `Scope (\)`, a root prefix and the null name, which names the root.
