@@ -229,7 +229,8 @@ create_thread :: fn(kernel: ptr[mut Kernel], owner: u64, space #escaping : ptr[m
 
 /**
  * Start a new thread: make it ready on the next CPU in turn that its budget has, and count it among its process's
- * live threads, so the process ends when the last goes.
+ * live threads, so the process ends when the last goes. An intercept with STOP_THREAD_START stops it first, before
+ * its first instruction, and it's made ready once it's let go.
  *
  * @param kernel The kernel, whose next_start_cpu is advanced, and the chosen CPU's run-queue lock taken.
  * @param thread The thread, made by create_thread and not yet started; started again, it isn't counted twice.
@@ -241,7 +242,12 @@ start_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
         _ = intrinsics.interlocked_increment_u32(&cast[ptr[mut Process]](owner).live_threads)
     }
     cpus :: if thread.budget != 0 { intrinsics.atomic_load_u64_acquire(&cast[ptr[mut CpuTime]](thread.budget).cpus) } else { ~cast[u64](0) }
-    make_ready(kernel, thread, next_cpu_of(kernel, &kernel.next_start_cpu, cpus))
+    cpu :: next_cpu_of(kernel, &kernel.next_start_cpu, cpus)
+    intrinsics.atomic_store_u32_release(&thread.cpu, cpu)
+    if stop_thread(kernel, thread, .ThreadStart, 0, 0, false) {
+        return void
+    }
+    make_ready(kernel, thread, cpu)
 }
 
 /**

@@ -268,6 +268,7 @@ stop_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], point: slop_
         case .SyscallEntry => intercept.points & slop_os.STOP_SYSCALL_ENTRY != 0 && wants_call(intercept, number)
         case .SyscallExit => intercept.points & slop_os.STOP_SYSCALL_EXIT != 0 && wants_call(intercept, number)
         case .Fault => intercept.points & slop_os.STOP_FAULT != 0
+        case .ThreadStart => intercept.points & slop_os.STOP_THREAD_START != 0
     }
     if !wanted {
         return false

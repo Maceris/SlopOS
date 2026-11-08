@@ -358,6 +358,12 @@ call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, E
     if tree.text == "jobs" {
         return list_jobs(shell, tree)
     }
+    if tree.text == "record" {
+        return record_program(shell, tree)
+    }
+    if tree.text == "replay" {
+        return replay_program(shell, tree)
+    }
     if tree.text == "debug" {
         return debug_program(shell, tree)
     }

@@ -104,7 +104,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 38 | `thread_resume` | process, thread ID | nothing: a suspended thread goes on. Needs `RIGHT_PROCESS_WRITE_STATE` |
 | 39 | `thread_read_registers` | process, thread ID, registers (a slice of at least `THREAD_REGISTERS`) | nothing: a stopped or suspended thread's `THREAD_REGISTERS` registers (one suspended while it waits too, as it began the wait), as u64s, written at registers. Needs `RIGHT_PROCESS_INSPECT` |
 | 40 | `thread_write_registers` | process, thread ID, registers (a slice of at least `THREAD_REGISTERS`) | nothing: a stopped or suspended thread's registers, set from registers. Needs `RIGHT_PROCESS_WRITE_STATE` |
-| 41 | `intercept_attach` | process, port, key, calls, points | an owning handle to an intercept of the process's subtree, paid for by the caller's process's budget: its threads stop at the entry or exit (`STOP_SYSCALL_ENTRY`, `STOP_SYSCALL_EXIT`) of the calls whose bit is set in calls, or every call with `STOP_ALL_CALLS`, and at faults (`STOP_FAULT`); with `STOP_FAULT_LIMITED` too, a fault stop not let go within a second ends its process. Needs `RIGHT_PROCESS_INTERCEPT` and `RIGHT_PORT_BIND` |
+| 41 | `intercept_attach` | process, port, key, calls, points | an owning handle to an intercept of the process's subtree, paid for by the caller's process's budget: its threads stop at the entry or exit (`STOP_SYSCALL_ENTRY`, `STOP_SYSCALL_EXIT`) of the calls whose bit is set in calls, or every call with `STOP_ALL_CALLS`, at faults (`STOP_FAULT`), and at a new thread's start (`STOP_THREAD_START`); with `STOP_FAULT_LIMITED` too, a fault stop not let go within a second ends its process. Needs `RIGHT_PROCESS_INTERCEPT` and `RIGHT_PORT_BIND` |
 | 42 | `intercept_next` | intercept, stop (a pointer) | nothing: the next stop not yet reported, a `StopInfo`, written at stop |
 | 43 | `intercept_resume` | intercept, thread ID, action | nothing: a thread the intercept stopped goes on: `Continue`, `Skip` (at an entry only) or `Kill` |
 | 44 | `process_kill` | process | nothing: the process is destroyed, with its subtree. Needs `RIGHT_PROCESS_KILL` |
@@ -271,7 +271,7 @@ exception port. Each stop adds one to the count in the intercept's `Stop` packet
 | `StopInfo` field | |
 |---|---|
 | `thread: u64` | The thread's ID |
-| `point: StopPoint` (u32) | `SyscallEntry` (1), `SyscallExit` (2), `Fault` (3) |
+| `point: StopPoint` (u32) | `SyscallEntry` (1), `SyscallExit` (2), `Fault` (3), `ThreadStart` (4): a new thread before its first instruction, with `STOP_THREAD_START` |
 | `number: u32` | The call's number; for a fault, its kind: `FAULT_READ` (0), `FAULT_WRITE` (1) and `FAULT_EXECUTE` (2) for a page fault, or `FAULT_INVALID_INSTRUCTION` (3), `FAULT_BREAKPOINT` (4), `FAULT_SINGLE_STEP` (5), `FAULT_ARITHMETIC` (6), `FAULT_ALIGNMENT` (7), `FAULT_PROTECTION` (8), `FAULT_FLOATING_POINT` (9), `FAULT_WATCHPOINT` (10), at the address accessed, `FAULT_COUNTER` (11), the value a trapped counter read gave |
 | `address: u64` | For a page fault, the address it touched; 0 for the other kinds |
 

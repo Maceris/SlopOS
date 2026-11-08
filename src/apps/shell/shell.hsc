@@ -5,6 +5,7 @@
  */
 package shell
 
+import recording from "../../recording"
 import runtime from "base"
 import language from "../../shell_language"
 import os from "std"
@@ -68,6 +69,10 @@ Shell :: struct {
     next_key : u64,
     /** The crash reports of the programs it's started, oldest first, at most MAX_CRASHES; each its own. */
     crashes : Crash[..],
+    /** The last recording record made, which replay replays; null before one. */
+    recording : ptr[mut recording.Recording]?,
+    /** Every system call's shape, for recordings, worked out the first time one's made; empty before. */
+    call_shapes : recording.CallShape[],
 }
 
 /**

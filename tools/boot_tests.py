@@ -676,6 +676,21 @@ TESTS = [
         "--expect-console-line=called with debugged, 2, loud false, speed none, wait none, tags none, place none",
         "--expect-console-line=test_shell_calls ended with 0",
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
+    # Record and replay (decisions/0183, 12c): test_replay's threads, recorded one at a time, replayed exactly from
+    # the recording with its seeds; and replayed with another count, which diverges, where it's said
+    ("records a program of several threads and replays it exactly, and says where a changed one diverges", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wrecord test_replay 20\\r\\p\\p\\preplay test_replay 20\\r\\p\\p\\preplay test_replay 21\\r\\p\\p\\ptest_shell_calls 3 after\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-line=[user] shell: reading commands",
+        "--expect-console-start=test_replay: 20 turns, total 0x",
+        "--expect-console-start=test_replay was recorded: ",
+        "--expect-console-start=test_replay was replayed exactly: ",
+        "--expect-console-start=test_replay diverged after ",
+        "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
     # Shell functions, errors and the shell's directory (decisions/0171): a function's parameters matched and read by
     # their types, try/catch with the error as a record, ? passing a function's error to its caller where one without
     # is fatal, return, and cd beneath the home

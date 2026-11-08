@@ -33,6 +33,8 @@ BUILTINS :: Builtin.[
     Builtin.{name = "exit", summary = "End the shell, and the session with it."},
     Builtin.{name = "jobs", summary = "List the jobs in the background, started with & after a command."},
     Builtin.{name = "wait", summary = "Wait for a job to end, and give what it gave: wait n, or wait alone for the newest."},
+    Builtin.{name = "record", summary = "Run a program recorded, its calls kept for replay: record name arguments."},
+    Builtin.{name = "replay", summary = "Run the last recording's program again from it, and say if it went the same: replay name arguments."},
     Builtin.{name = "debug", summary = "Run a program under the debugger, stopped before it begins: debug name arguments; help there lists its commands."},
     Builtin.{name = "crashes", summary = "Show the crash reports of the programs the shell started: the fault, and the stack."},
     Builtin.{name = "stop", summary = "Stop a job, killing it if it hasn't stopped in 2 seconds: stop n, or the newest."},

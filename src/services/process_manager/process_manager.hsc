@@ -149,10 +149,10 @@ MAX_EXECUTABLE : u64 : 4 << 20
  *
  * @param manager The manager, whose entropy connection may be dialed again.
  * @param request The Load, whose handles are all gone from this process when it returns.
- * @return Loaded with the first thread's ID and the image's address; or NotLoaded with BadRequest for more than MAX_GRANTS grants or an
- *     executable that's empty, larger than MAX_EXECUTABLE, or can't be read (its memory gone), NoRandom when the
- *     entropy service doesn't answer even when dialed again, NoMemory when the heap can't hold its copy or the build
- *     ran out, NotAProgram when it isn't an
+ * @return Loaded with the first thread's ID, the image's address and the seeds; or NotLoaded with BadRequest for
+ *     more than MAX_GRANTS grants or an executable that's empty, larger than MAX_EXECUTABLE, or can't be read (its
+ *     memory gone), NoRandom when the entropy service, asked when the Load gives no seeds, doesn't answer even when
+ *     dialed again, NoMemory when the heap can't hold its copy or the build ran out, NotAProgram when it isn't an
  *     executable the loader takes, and Failed for any other failure building it.
  */
 load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.Response {
@@ -162,9 +162,9 @@ load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.R
         return .NotLoaded(.BadRequest)
     }
     name :: service_kit.text_of_label(&request.name)
-    // The program's own seed, and one for where its parts go
-    seeds : u8[64]
-    if !draw(manager, seeds) {
+    // The program's own seed, and one for where its parts go: the Load's, for a replay, or drawn
+    seeds : u8[64] = request.seeds
+    if !request.seeded && !draw(manager, seeds) {
         log_line.write(manager.log, "process manager: no randomness for %", name)
         return .NotLoaded(.NoRandom)
     }
@@ -206,7 +206,7 @@ load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.R
         &manager.staging) {
         case Ok(built) => {
             log_line.write(manager.log, "process manager: started %", name)
-            return .Loaded(protocol.Started.{thread = built.thread, image = built.image})
+            return .Loaded(protocol.Started.{thread = built.thread, image = built.image, seeds = seeds})
         }
         case Error(error) => {
             log_line.write(manager.log, "process manager: % didn't start: %", name, error)
