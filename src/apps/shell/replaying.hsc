@@ -81,10 +81,10 @@ replay_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Resul
 }
 
 /**
- * Make the call record or replay runs: its first child's program, the rest its arguments.
+ * Make the call record, replay or profile runs: its first child's program, the rest its arguments.
  *
  * @param shell The shell.
- * @param tree The Call node of record or replay.
+ * @param tree The Call node of record, replay or profile.
  * @param command Its name, for the error.
  * @return The call, prepared, the caller's to end.
  */
