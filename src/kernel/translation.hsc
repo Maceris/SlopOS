@@ -537,6 +537,46 @@ remap_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], device: ptr[Device],
     if !registered.remapping {
         return message
     }
+    return remap_entry(kernel, registered, irq, path, hardware_id, id, false)
+}
+
+/**
+ * Route a wired line's IRQ through the interrupt remapping of the IOMMU its controller's interrupts reach the CPU
+ * through (decisions/0182): an entry of the IOMMU's, raised only by the controller's requester ID.
+ *
+ * @param kernel The kernel, whose IOMMU covering source is used; that IOMMU's lock is taken.
+ * @param irq The IRQ; its remap_iommu and remap_index are set.
+ * @param source The controller's requester ID with its segment.
+ * @param hardware_id The hardware ID of the CPU it goes to.
+ * @param id The interrupt ID on that CPU.
+ * @param level Whether the line's level-triggered.
+ * @return The remapped interrupt's message, which the controller's entry is programmed from; null if no IOMMU covers
+ *     source, it doesn't remap, or every remapped interrupt on it is taken.
+ */
+remap_wired :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], source: u32, hardware_id: u64, id: arch_interface.InterruptId, level: bool)
+    -> arch_interface.MsiMessage? {
+    path :: iommu_path(kernel, source)
+    registered :: translating_iommu(kernel, path.iommu) or_return null
+    if !registered.remapping {
+        return null
+    }
+    return remap_entry(kernel, registered, irq, path, hardware_id, id, level)
+}
+
+/**
+ * Take an entry of an IOMMU's interrupt remapping for an IRQ, and point it at a CPU's interrupt.
+ *
+ * @param kernel The kernel.
+ * @param registered The IOMMU, remapping; its lock is taken.
+ * @param irq The IRQ; its remap_iommu and remap_index are set.
+ * @param path The IOMMU and the stream that may raise it.
+ * @param hardware_id The hardware ID of the CPU it goes to.
+ * @param id The interrupt ID on that CPU.
+ * @param level Whether it's level-triggered.
+ * @return The message that raises it; null if every remapped interrupt on the IOMMU is taken.
+ */
+remap_entry :: fn(kernel: ptr[mut Kernel], registered: ptr[mut RegisteredIommu], irq: ptr[mut Irq], path: IommuPath, hardware_id: u64,
+    id: arch_interface.InterruptId, level: bool) -> arch_interface.MsiMessage? {
     lock_at(&registered.lock, .Iommu)
     defer unlock_at(&registered.lock, .Iommu)
     index := registered.interrupt_limit
@@ -552,7 +592,7 @@ remap_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], device: ptr[Device],
     if index == registered.interrupt_limit {
         return null
     }
-    remapped :: iommu_unit.remap_interrupt(&registered.unit, index, path.stream, hardware_id, cast[u32](id))
+    remapped :: iommu_unit.remap_interrupt(&registered.unit, index, path.stream, hardware_id, cast[u32](id), level)
     irq.remap_iommu = path.iommu
     irq.remap_index = index
     return arch_interface.MsiMessage.{address = remapped.address, data = remapped.data}
@@ -573,7 +613,7 @@ repoint_msi :: fn(kernel: ptr[mut Kernel], irq: ptr[Irq], device: ptr[Device], h
     registered :: translating_iommu(kernel, irq.remap_iommu) or_return void
     path :: iommu_path(kernel, device.address)
     lock_at(&registered.lock, .Iommu)
-    _ = iommu_unit.remap_interrupt(&registered.unit, irq.remap_index, path.stream, hardware_id, cast[u32](id))
+    _ = iommu_unit.remap_interrupt(&registered.unit, irq.remap_index, path.stream, hardware_id, cast[u32](id), false)
     unlock_at(&registered.lock, .Iommu)
 }
 

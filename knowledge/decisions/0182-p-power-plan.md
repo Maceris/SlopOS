@@ -255,3 +255,43 @@ Five parts, each with an as-built record:
   It gives them even when there are none, so the platform service needn't wait out its 5 s.
 - **On QEMU's q35:** 3 windows. The bus-numbering test's BARs behind a root port are placed in them, and the claim
   waiting for them is answered after.
+
+## As Built, P3c (2026-11-07): the SCI and the power button
+- **I/O APIC lines through VT-d's interrupt remapping** (chosen with the project's owner: `0082` left it for "a driver
+  that needs a wired line behind VT-d", and the SCI is the first). The kernel used to refuse every wired line once an
+  IOMMU remapped interrupts. Now:
+  - **The I/O APIC's requester ID:** the platform service reads the DMAR's I/O APIC device scopes and registers each
+    as a range of one with its IOMMU, which QEMU's DRHD, listing its scopes rather than including every device,
+    needs. It gives the kernel the I/O APIC's requester ID with the new `controller_set_source` (call 81).
+  - **The routing:** a wired IRQ on such a controller takes an entry of the IOMMU's remapping table, raised only from
+    that ID, level-triggered as the line is (`remap_interrupt` gains its trigger mode).
+  - **The entry:** the arch layer writes the I/O APIC entry in the remappable format, its handle from the remapped
+    message and its vector the delivered one, so a level-triggered line's EOI reaches it (`route_wired_remapped`).
+  - **Without a requester ID**, a wired line is still refused.
+- **Wired interrupts in the platform service** (`interrupts.hsc`):
+  - interrupt controllers registered with the kernel the first time a line of one is wanted;
+  - the SCI made when ACPI is claimed: the FADT's SCI_INT, routed by the MADT's interrupt source overrides to an I/O
+    APIC's line, level-triggered and active-low unless an override says otherwise (q35's: GSI 9, level, active-high).
+- **The ACPI service:**
+  - **Enabling:** it enables the power button's fixed event, unless the FADT says the button's a device, and every GPE
+    with an `_Lxx` or `_Exx` method under `\_GPE`, clearing what's pending first.
+  - **On each SCI:** it handles the fixed event, and runs each pending, enabled GPE's method, clearing an
+    edge-triggered one's status before it and a level-triggered one's after.
+  - **A press**, the fixed event or a `Notify` of 0x80 on a PNP0C0C device, is told to the supervisor once, as the
+    power protocol's new `PowerButton`.
+- **AArch64's power button** (`src/drivers/power_button`), started by the supervisor with a platform connection of its
+  own:
+  - It claims the button with the platform protocol's new `ClaimPowerButton`: the devicetree's `gpio-keys` key with
+    KEY_POWER, the PL061 its `gpios` names, and that PL061's SPI on the GIC.
+  - It takes the pin's rising edge as a press. Where there's no such button, as on x86-64, it ends with 0 and isn't
+    started again; likewise the ACPI service on AArch64.
+- **The supervisor** serves three power connections: the terminal service's, the ACPI service's, and the button
+  driver's. Each is replaced when what it's for starts again. A `PowerButton` shuts down as P on the secure attention
+  key's screen does.
+- **Tests:** `boot.py --power-button-after` sends QEMU's `system_powerdown` once a serial line's written. The power
+  button test sees the system shut down and the machine turned off on both architectures. The I/O APIC test, the
+  devices' tests and chaos still pass.
+- **Found on the way:**
+  - A GIC line is its SPI's number, which the kernel adds 32 to, not the interrupt ID.
+  - A program on a 1 MiB budget gets a log ring small enough that its first records were dropped at boot, so the
+    button driver has 2 MiB.

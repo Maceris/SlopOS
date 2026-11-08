@@ -442,6 +442,21 @@ route_wired : fn(
     polarity: Polarity,
 ) : ---
 
+/*
+ * Deliver line through an IOMMU's interrupt remapping, still masked: its entry names the remapped interrupt message
+ * gives, which delivers id (decisions/0182). x86-64's I/O APIC writes the remappable format, the handle from the
+ * message and id as the vector, so a level-triggered line's EOI reaches it; AArch64's GIC, which no IOMMU remaps, does
+ * nothing.
+ */
+route_wired_remapped : fn(
+    controller: ptr[mut InterruptController],
+    line: u32,
+    message: MsiMessage,
+    id: InterruptId,
+    trigger: Trigger,
+    polarity: Polarity,
+) : ---
+
 mask_wired : fn(controller: ptr[mut InterruptController], line: u32) : ---
 unmask_wired : fn(controller: ptr[mut InterruptController], line: u32) : ---
 ```

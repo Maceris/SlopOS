@@ -1961,6 +1961,24 @@ sys_power_end_with :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, ac
     return set_power_end(per_cpu().kernel, cast[u32](action))
 }
 
+/**
+ * Keep the requester ID an interrupt controller's interrupts come from, so its lines are routed through interrupt
+ * remapping once an IOMMU remaps (irqs.hsc, decisions/0182).
+ *
+ * @param thread The calling thread, the CPU's current one, which doesn't block here.
+ * @param platform The platform capability's handle, of any rights, which is the call's authority.
+ * @param controller The controller's number.
+ * @param source Its requester ID with its segment.
+ * @error InvalidHandle The platform isn't a handle in the caller's table.
+ * @error ObjectGone The platform was destroyed.
+ * @error WrongKind Not the platform's handle.
+ * @error NoSuchController No controller is registered with that number.
+ */
+sys_controller_set_source :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, controller: u32, source: u32) -> Result[void, slop_os.DeviceError] {
+    _ = platform_of(thread, platform)?
+    return set_controller_source(per_cpu().kernel, controller, source)
+}
+
 // ---- Process control (control.hsc, intercepts.hsc): rights on a process cover its subtree (decisions/0017)
 
 /**

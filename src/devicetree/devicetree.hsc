@@ -134,7 +134,7 @@ find_phandle :: fn(tree: ptr[Tree], phandle: u32) -> Node? {
 }
 
 /**
- * Find the first node, in the tree's order, that matches a compatible string or a phandle.
+ * Find the first node, in the tree's order, that matches a compatible string, a phandle, or a property's first cell.
  *
  * It walks the structure block once, keeping each depth's #address-cells and #size-cells so the node it gives knows
  * its reg's cells.
@@ -143,10 +143,13 @@ find_phandle :: fn(tree: ptr[Tree], phandle: u32) -> Node? {
  * @param compatible A compatible string the node's compatible property lists, or "" not to match by it.
  * @param phandle The node's phandle property, or 0 not to match by it.
  * @param even_disabled Whether a node with status "disabled" is found too; false skips them.
+ * @param cell_name A property whose first cell is cell_value, as gpio-keys' "linux,code", or "" not to match by one.
+ * @param cell_value The value cell_name's first cell has to be.
  * @return The first matching node, or null if none matches, or the walk meets a malformed token, the structure
  *     block's end, or nesting deeper than MAX_DEPTH first.
  */
-find_node :: fn(tree: ptr[Tree], compatible: string, phandle: u32, even_disabled: bool = false) -> Node? {
+find_node :: fn(tree: ptr[Tree], compatible: string, phandle: u32, even_disabled: bool = false, cell_name: string = "",
+    cell_value: u32 = 0) -> Node? {
     // The cells each depth gives its children: 2 and 1 by default
     address_cells : u32[MAX_DEPTH]
     size_cells : u32[MAX_DEPTH]
@@ -209,6 +212,9 @@ find_node :: fn(tree: ptr[Tree], compatible: string, phandle: u32, even_disabled
                 matched = true
             }
             else if name == "phandle" && phandle != 0 && length == 4 && big_endian_u32(value.address) == phandle {
+                matched = true
+            }
+            else if cell_name != "" && name == cell_name && length >= 4 && big_endian_u32(value.address) == cell_value {
                 matched = true
             }
             else if name == "status" && lists(value, "disabled") {

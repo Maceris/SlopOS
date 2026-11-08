@@ -156,6 +156,8 @@ TABLE_SIZE_FIELD : u64 : 7
 TABLE_EXTENDED_MODE : u64 : 1 << 11
 /** An interrupt remapping entry's present bit. */
 ENTRY_PRESENT : u64 : 1 << 0
+/** An entry's TM: the interrupt's level-triggered, as a wired line remapped may be. */
+ENTRY_LEVEL : u64 : 1 << 4
 /** Where an interrupt remapping entry's vector is, bits 23:16. */
 ENTRY_VECTOR_SHIFT : u64 : 16
 /** Where an interrupt remapping entry's destination is, bits 63:32. */
@@ -352,17 +354,20 @@ enable :: fn(iommu: ptr[mut Iommu], memory: iommu_interface.PhysicalAddress, dir
  * @param cpu_hardware_id The CPU's APIC ID: its x2APIC ID in extended interrupt mode, otherwise its xAPIC ID, of
  *     which the low 8 bits are used.
  * @param vector The vector, an InterruptId; the low 8 bits are used.
- * @return The message stream's device writes to raise it: a remappable-format address carrying index as its handle,
+ *  * @param level Whether it's level-triggered: the entry's TM, for a wired line's.
+ @return The message stream's device writes to raise it: a remappable-format address carrying index as its handle,
  *     and data 0.
  */
-remap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32) -> iommu_interface.MsiMessage {
+remap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32, level: bool)
+    -> iommu_interface.MsiMessage {
     // One index for the entry, its invalidation and its handle, so they never disagree
     slot :: index % INTERRUPT_ENTRIES
     entry :: iommu.remapping + cast[u64](slot) * 16
     // SVT 1, SQ 0: the requester ID must be stream's
     store(iommu, entry + 8, cast[u64](stream & 0xffff) | ENTRY_VERIFY_SOURCE)
     destination :: if iommu.extended_mode { cpu_hardware_id & 0xffffffff } else { (cpu_hardware_id & 0xff) << 8 }
-    store(iommu, entry, destination << ENTRY_DESTINATION_SHIFT | cast[u64](vector & 0xff) << ENTRY_VECTOR_SHIFT | ENTRY_PRESENT)
+    trigger :: if level { ENTRY_LEVEL } else { cast[u64](0) }
+    store(iommu, entry, destination << ENTRY_DESTINATION_SHIFT | cast[u64](vector & 0xff) << ENTRY_VECTOR_SHIFT | trigger | ENTRY_PRESENT)
     invalidate_interrupt(iommu, slot)
     handle :: cast[u64](slot)
     return iommu_interface.MsiMessage.{address = MESSAGE_BASE | (handle & 0x7fff) << 5 | MESSAGE_REMAPPABLE | ((handle >> 15) & 1) << 2,

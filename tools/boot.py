@@ -363,6 +363,36 @@ class Keyboard:
                 self.key("shift", False)
 
 
+class PowerButton(Keyboard):
+    """
+    The machine's power button, pressed through QEMU's machine protocol (system_powerdown) once the serial output has a
+    line: an ACPI power button event on x86-64's q35, a GPIO key on AArch64's virt (decisions/0182, P3).
+    """
+
+    def __init__(self, serial: Path, after: str):
+        super().__init__()
+        self.serial = serial
+        self.after = after
+        self.thread = threading.Thread(target=self.press_when_ready, daemon=True)
+
+    def qemu_arguments(self) -> list[str]:
+        return ["-qmp", f"tcp:127.0.0.1:{self.port},server=on,wait=off"]
+
+    def press_when_ready(self) -> None:
+        while True:
+            written = self.serial.read_text(errors="replace").splitlines() if self.serial.exists() else []
+            if self.after in written:
+                break
+            time.sleep(0.2)
+        try:
+            # A second for what follows the line, as the system settles
+            time.sleep(1)
+            if self.connect():
+                self.command("system_powerdown")
+        except OSError:
+            pass
+
+
 class ConsoleLink:
     """
     A virtio console whose other end is a TCP socket QEMU serves on the loopback (a file can't be typed into on
@@ -755,7 +785,7 @@ def fat32_volume(sectors: int, files: list) -> bytes:
 BOOT_DISK_SECTORS = 206848
 # The programs the bootloader loads from the boot disk, enough to reach the system volume, which holds every program; the rest
 # come from it (src/system_config's boot_set, decisions/0089)
-BOOT_SET = ["root_task", "entropy", "process_manager", "scheduler", "platform", "supervisor", "events_service", "bundle_store_service", "clock", "acpi_service", "virtio_blk", "storage_manager", "partition_server",
+BOOT_SET = ["root_task", "entropy", "process_manager", "scheduler", "platform", "supervisor", "events_service", "bundle_store_service", "clock", "acpi_service", "power_button", "virtio_blk", "storage_manager", "partition_server",
             "fat_server", "container_service", "volume_server"]
 # The system configuration, which the build writes beside the programs
 SYSTEM_RECORDS = "system.records"
@@ -917,6 +947,9 @@ def main() -> int:
     parser.add_argument("--shut-down-when-done", action="store_true",
                         help="once every --expect-console-line is shown and every --console-input typed, type the secure "
                         "attention key and P, which shuts the system down (decisions/0180), rather than waiting out its settle")
+    parser.add_argument("--power-button-after",
+                        help="press the machine's power button, through QEMU's machine protocol, once the serial output has "
+                        "this line (decisions/0182)")
     parser.add_argument("--restart-when-done", action="store_true",
                         help="as --shut-down-when-done, but R, which restarts the system (decisions/0182); with test_power on "
                         "the command line the machine resets, which QEMU, without --allow-reboot, takes as its end")
@@ -1031,6 +1064,10 @@ def main() -> int:
         elif arguments.disk is not None:
             make_disk(disk, arguments.disk)
             extra += ["-drive", f"file={disk},if=none,id=disk,format=raw", "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on"]
+        if arguments.power_button_after is not None:
+            button = PowerButton(serial, arguments.power_button_after)
+            extra += button.qemu_arguments()
+            button.thread.start()
         keyboard = None
         if arguments.keyboard_input or arguments.screen_after:
             keyboard = Keyboard()

@@ -137,6 +137,22 @@ Platform :: struct {
     deferred : Deferred[MAX_DEFERRED],
     /** How many are waiting. */
     deferred_count : usize,
+    /** The interrupt controllers registered with the kernel, the first controller_count of them. */
+    controllers : Controller[MAX_CONTROLLERS],
+    /** How many are registered. */
+    controller_count : usize,
+    /** The requester IDs of the I/O APICs the DMAR names, the first io_apic_source_count of them. */
+    io_apic_sources : IoApicSource[MAX_CONTROLLERS],
+    /** How many there are. */
+    io_apic_source_count : usize,
+}
+
+/** An I/O APIC's requester ID, as the DMAR's device scope for it gives it (decisions/0182). */
+IoApicSource :: struct {
+    /** Its I/O APIC ID. */
+    id : u8,
+    /** Its requester ID with its segment, as slop_os.device_address makes it. */
+    source : u32,
 }
 
 /** A Claim or Reissue waiting for the BARs to be placed. */
@@ -853,7 +869,8 @@ serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
                 response^ = claim_framebuffer(to, platform, state, index)
                 _ = protocol.send_response(end, port, &out)
             }
-            case ClaimAcpi => answer(end, port, claim_acpi(to, state, index, state.tables, state.tables_size))
+            case ClaimAcpi => answer(end, port, claim_acpi(to, platform, state, index, state.tables, state.tables_size))
+            case ClaimPowerButton => answer(end, port, claim_power_button(to, platform, state))
             case Ports(range) => answer(end, port, give_ports(platform, state, index, range))
             case PhysicalMemory(range) => answer(end, port, give_memory(platform, state, index, range))
             case ConfigRead(access) => answer(end, port, config_read(state, index, access))

@@ -83,6 +83,7 @@ import system_records from "../../system_records"
 import hello from "../../apps/hello"
 import clock_service from "../clock"
 import acpi_service from "../acpi_service"
+import power_button from "../../drivers/power_button"
 import events_service from "../events_service"
 import bundle_store_service from "../bundle_store_service"
 import config_service from "../config_service"
@@ -143,6 +144,12 @@ SYSTEM_GENERATIONS : u64 : 1000
 SYSTEM_RETRY_KEY : u64 : 5000
 /** The port key of the supervisor's end of the terminal service's power connection (decisions/0180). */
 POWER_KEY : u64 : 6000
+/** The terminal service's power connection's slot, under POWER_KEY + it. */
+CONSOLE_POWER : u32 : 0
+/** The ACPI service's power connection's slot. */
+ACPI_POWER : u32 : 1
+/** The GPIO power button's driver's power connection's slot. */
+GPIO_POWER : u32 : 2
 /** How long after a failed try to open a lost system volume again the next is made, in nanoseconds: 100 ms. */
 SYSTEM_RETRY : u64 : 100_000_000
 /**
@@ -231,6 +238,16 @@ ClockGrants :: struct {
 AcpiGrants :: struct {
     /** A connection to the platform service of its own, on which it claims ACPI. */
     platform_service : os.Channel[platform.Platform],
+    /** The button's power connection, which it says the power button was pressed on; null if it couldn't be made. */
+    power : os.Channel[power_protocol.Power]?,
+}
+
+/** What the GPIO power button's driver is given (power_button.main); its handles move to it at its launch. */
+PowerButtonGrants :: struct {
+    /** A connection to the platform service of its own, on which it claims the button. */
+    platform_service : os.Channel[platform.Platform],
+    /** Its power connection, which it says the button was pressed on; null if it couldn't be made. */
+    power : os.Channel[power_protocol.Power]?,
 }
 
 /** What the events service is given (events_service.main); its handles move to the service at its launch. */
@@ -527,6 +544,8 @@ Modules :: struct {
     clock : slop_os.Memory?,
     /** The ACPI service's module. */
     acpi : slop_os.Memory?,
+    /** The GPIO power button's driver's module. */
+    power_button : slop_os.Memory?,
     /** hello's module. */
     hello : slop_os.Memory?,
     /** The terminal service's module. */
@@ -595,6 +614,8 @@ Started :: struct {
     clock : bool,
     /** Whether it's the ACPI service, started again with start_acpi, with a platform connection of its own. */
     acpi : bool,
+    /** Whether it's the GPIO power button's driver, started again with start_power_button. */
+    power_button : bool,
     /**
      * Its program's memory budget, the supervisor's handle, closed once it's ended so what it had comes back;
      * NO_HANDLE once closed.
@@ -718,6 +739,12 @@ Supervisor :: struct {
      * terminal service starts; null before it has, or once the terminal service's end is gone.
      */
     power : slop_os.Channel?,
+    /**
+     * Its ends of the power connections of what brings the power button (decisions/0182): the ACPI service's, bound
+     * under POWER_KEY + ACPI_POWER, and the GPIO button's driver's, under POWER_KEY + GPIO_POWER; NONE before one's
+     * started, or once it's gone. Each is replaced when what it's for starts again.
+     */
+    buttons : slop_os.Channel[2],
     /** Whether a shutdown's been asked for, so it's done once. */
     shutting_down : bool,
     /** Whether the system volume is being opened, which handles what arrives on the port meanwhile. */
@@ -955,6 +982,7 @@ MAX_LOADED :: 32
  * @param update_module The update service's program.
  * @param last_panic The boot before's panic record, given on to the terminal service to show; null if there's none.
  * @param acpi_module The ACPI service's program.
+ * @param power_button_module The GPIO power button's driver's program.
  * @return Only if it can't start: 10 if the system configuration doesn't check, 99 if it can't be copied, 2 if no port
  *     can be made for root, 3 if the supervisor's port can't be made, and 1 if the process manager can't be dialed.
  *     Otherwise it never returns.
@@ -967,7 +995,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     fat_server_module: slop_os.Memory?, container_service_module: slop_os.Memory?, volume_server_module: slop_os.Memory?,
     command_line: slop_os.Memory?, scheduler: os.Channel[connector.Connector]?, clock_module: slop_os.Memory?,
     events_module: slop_os.Memory?, bundle_store_module: slop_os.Memory?, config_module: slop_os.Memory?, system: slop_os.Memory,
-    update_module: slop_os.Memory?, last_panic: slop_os.Memory?, acpi_module: slop_os.Memory?) -> int {
+    update_module: slop_os.Memory?, last_panic: slop_os.Memory?, acpi_module: slop_os.Memory?, power_button_module: slop_os.Memory?) -> int {
     startup :: slop_os.startup_block()
     // The system configuration, which the root task checked, checked again
     records :: match service_kit.read_records(startup, system) {
@@ -987,7 +1015,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, terminal = NOWHERE, input = NOWHERE, accounts = NOWHERE, sessions = NOWHERE, config_users = NONE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
         events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE),
         launched_lifecycle = NONE, last_panic = last_panic}
-    supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, acpi = acpi_module, hello = hello_module, terminal = terminal_module, echo = echo_module, sessions = sessions_module, input = input_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
+    supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, acpi = acpi_module, power_button = power_button_module, hello = hello_module, terminal = terminal_module, echo = echo_module, sessions = sessions_module, input = input_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
         container_service = container_service_module, volume_server = volume_server_module}
@@ -1066,6 +1094,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     supervisor.clock_page = slop_os.memory_create(startup.budget, PAGE) or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
     start_clock(&supervisor, NOWHERE)
     start_acpi(&supervisor, NOWHERE)
+    start_power_button(&supervisor, NOWHERE)
     if test_clock && supervisor.clock_setting != NONE {
         if !clock_setting.set(supervisor.clock_setting, supervisor.clock_setting_port, TEST_CLOCK_TIME) {
             log_line.write(supervisor.log, "supervisor: test_clock: the clock service didn't set the time")
@@ -1350,21 +1379,27 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
  *
  * @param supervisor The supervisor, whose entry at index is launched into, relaunching being index meanwhile; its port
  *     isn't handled while it waits for budget.
- * @param index Its index in started, which the caller has checked is in range.
+ * @param index Its index in started; out of range does nothing.
  * @param budget The program's budget, in bytes, as the system configuration has it; 0 waits for none.
  */
 start_again :: fn(supervisor: ptr[mut Supervisor], index: usize, budget: u64) {
+    if index >= supervisor.started.count {
+        return void
+    }
     entry :: &supervisor.started[index]
     wait_for_budget(supervisor, budget)
     // The last process's binding still has the key, though it fired: the next is watched under it from its launch
     _ = slop_os.port_unbind(supervisor.port, cast[u64](index))
-    if !entry.driver || entry.clock || entry.acpi {
+    if !entry.driver || entry.clock || entry.acpi || entry.power_button {
         supervisor.relaunching = index
         if entry.clock {
             start_clock(supervisor, index)
         }
         else if entry.acpi {
             start_acpi(supervisor, index)
+        }
+        else if entry.power_button {
+            start_power_button(supervisor, index)
         }
         else {
             restart_service(supervisor, index)
@@ -3639,7 +3674,7 @@ start_acpi :: fn(supervisor: ptr[mut Supervisor], again: usize) {
         return void
     }
     channel :: dial_through(supervisor, supervisor.platform_connector) or_return void
-    grants :: AcpiGrants.{platform_service = os.Channel[platform.Platform].{end = channel}}
+    grants :: AcpiGrants.{platform_service = os.Channel[platform.Platform].{end = channel}, power = power_connection(supervisor, ACPI_POWER)}
     launched := cast[slop_os.Process](slop_os.NO_HANDLE)
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
         acpi_service.main, grants, options_for(supervisor, service.name)) {
@@ -3657,6 +3692,40 @@ start_acpi :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     entry :: &supervisor.started[slot]
     entry.driver = true
     entry.acpi = true
+}
+
+/**
+ * Start the GPIO power button's driver (decisions/0182, P3), with a platform connection of its own, on which it claims
+ * the button, and its power connection. Where there's no such button, it ends at once, and isn't started again.
+ *
+ * @param supervisor The supervisor, which needs the platform service's connector; its entry is marked a driver and the
+ *     button's.
+ * @param again The entry it's started again into, or NOWHERE for a first start.
+ */
+start_power_button :: fn(supervisor: ptr[mut Supervisor], again: usize) {
+    service :: service_named(supervisor, "power_button") or_return void
+    if supervisor.platform_connector == NONE {
+        return void
+    }
+    channel :: dial_through(supervisor, supervisor.platform_connector) or_return void
+    grants :: PowerButtonGrants.{platform_service = os.Channel[platform.Platform].{end = channel}, power = power_connection(supervisor, GPIO_POWER)}
+    launched := cast[slop_os.Process](slop_os.NO_HANDLE)
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
+        power_button.main, grants, options_for(supervisor, service.name)) {
+        case Ok(made) => launched = kept(supervisor, made)
+        case Error(error) => {
+            failed(supervisor, service.name, error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](channel))
+            return void
+        }
+    }
+    slot :: place(supervisor, "power_button", launched, again)
+    if slot >= supervisor.started.count {
+        return void
+    }
+    entry :: &supervisor.started[slot]
+    entry.driver = true
+    entry.power_button = true
 }
 
 /**
@@ -3692,6 +3761,7 @@ module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory
         else if name == "sessions" { modules.sessions }
         else if name == "disk_check" { modules.disk_check }
         else if name == "hello" { modules.hello } else if name == "clock" { modules.clock } else if name == "acpi" { modules.acpi }
+        else if name == "power_button" { modules.power_button }
         else if name == "events" { modules.events } else if name == "bundle_store" { modules.bundle_store }
         else if name == "config" { modules.config } else if name == "update" { modules.update }
         else { cast[slop_os.Memory?](null) }
@@ -4476,42 +4546,92 @@ connector_to :: fn(supervisor: ptr[mut Supervisor], target: usize) -> os.Channel
 }
 
 /**
- * Make the terminal service's power connection (decisions/0180): the supervisor's end, in place of the last one's,
- * bound under POWER_KEY.
+ * Make a power connection (decisions/0180, 0182): the terminal service's, or that of what brings the power button,
+ * the supervisor's end in place of the last one's, bound under POWER_KEY plus its slot.
  *
- * @param supervisor The supervisor, whose power end is replaced, the one before closed.
- * @return The terminal service's end, which moves to it at its launch; null if the channel or binding couldn't be had,
- *     and then the supervisor has none.
+ * @param supervisor The supervisor, whose end in that slot is replaced, the one before closed.
+ * @param slot CONSOLE_POWER, the terminal service's; ACPI_POWER; or GPIO_POWER.
+ * @return The other end, which moves to whoever it's for at its launch; null if the channel or binding couldn't be
+ *     had, and then the supervisor has none.
  */
-power_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[power_protocol.Power]? {
-    match supervisor.power {
+power_connection :: fn(supervisor: ptr[mut Supervisor], slot: u32 = CONSOLE_POWER) -> os.Channel[power_protocol.Power]? {
+    key :: POWER_KEY + cast[u64](slot)
+    match power_end(supervisor, slot) {
         case Some(old) => {
-            _ = slop_os.port_unbind(supervisor.port, POWER_KEY)
+            _ = slop_os.port_unbind(supervisor.port, key)
             _ = slop_os.handle_close(cast[slop_os.Handle](old))
-            supervisor.power = null
         }
         case None => {}
     }
+    set_power_end(supervisor, slot, null)
     pair :: os.channel_for[power_protocol.Power](supervisor.block.budget, 0) or_return null
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if slop_os.port_bind(supervisor.port, cast[slop_os.Handle](pair.b), signals, POWER_KEY, .Persistent) is_error {
+    if slop_os.port_bind(supervisor.port, cast[slop_os.Handle](pair.b), signals, key, .Persistent) is_error {
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         return null
     }
-    supervisor.power = pair.b
+    set_power_end(supervisor, slot, pair.b)
     return os.Channel[power_protocol.Power].{end = pair.a}
 }
 
 /**
- * Answer what the terminal service asks on its power connection, until it's empty: ShutDown and Restart have the
- * storage manager commit every volume, then are passed on to the root task, and answered Done, or Refused if they
- * couldn't be; once either's asked, both are Done. A connection whose channel failed is closed.
+ * The supervisor's end of a power connection.
  *
- * @param supervisor The supervisor, whose power end is read, and closed and set to null once it's gone.
+ * @param supervisor The supervisor.
+ * @param slot CONSOLE_POWER, ACPI_POWER or GPIO_POWER.
+ * @return The end; null for none.
+ */
+power_end :: fn(supervisor: ptr[Supervisor], slot: u32) -> slop_os.Channel? {
+    if slot == CONSOLE_POWER {
+        return supervisor.power
+    }
+    at :: cast[usize](slot - 1)
+    if slot == 0 || at >= supervisor.buttons.count || supervisor.buttons[at] == NONE {
+        return null
+    }
+    return supervisor.buttons[at]
+}
+
+/**
+ * Keep, or forget, the supervisor's end of a power connection.
+ *
+ * @param supervisor The supervisor.
+ * @param slot CONSOLE_POWER, ACPI_POWER or GPIO_POWER.
+ * @param end The end; null to forget it.
+ */
+set_power_end :: fn(supervisor: ptr[mut Supervisor], slot: u32, end: slop_os.Channel?) {
+    if slot == CONSOLE_POWER {
+        supervisor.power = end
+        return void
+    }
+    at :: cast[usize](slot - 1)
+    if slot != 0 && at < supervisor.buttons.count {
+        supervisor.buttons[at] = end or_else NONE
+    }
+}
+
+/**
+ * Answer what's asked on both power connections, the terminal service's and the button's.
+ *
+ * @param supervisor The supervisor.
  */
 serve_power :: fn(supervisor: ptr[mut Supervisor]) {
-    end :: supervisor.power or_return void
+    for slot in u32.[CONSOLE_POWER, ACPI_POWER, GPIO_POWER] {
+        serve_power_on(supervisor, slot)
+    }
+}
+
+/**
+ * Answer what's asked on a power connection, until it's empty: ShutDown, PowerButton and Restart have the storage
+ * manager commit every volume, then are passed on to the root task, and answered Done, or Refused if they couldn't
+ * be; once any's asked, all are Done. A connection whose channel failed is closed.
+ *
+ * @param supervisor The supervisor, whose end is read, and closed and forgotten once it's gone.
+ * @param slot CONSOLE_POWER, ACPI_POWER or GPIO_POWER.
+ */
+serve_power_on :: fn(supervisor: ptr[mut Supervisor], slot: u32) {
+    end :: power_end(supervisor, slot) or_return void
     into := os.Incoming.{}
     loop {
         match power_protocol.receive_request(end, supervisor.port, &into, false) {
@@ -4522,17 +4642,22 @@ serve_power :: fn(supervisor: ptr[mut Supervisor]) {
                 continue
             }
             case _ => {
-                _ = slop_os.port_unbind(supervisor.port, POWER_KEY)
+                _ = slop_os.port_unbind(supervisor.port, POWER_KEY + cast[u64](slot))
                 _ = slop_os.handle_close(cast[slop_os.Handle](end))
-                supervisor.power = null
+                set_power_end(supervisor, slot, null)
                 return void
             }
         }
         out := os.Outgoing.{}
         response :: os.begin[power_protocol.Response](&out)
-        restart :: match os.message_of[power_protocol.Request](&into)^ {
-            case ShutDown => false
+        asked :: os.message_of[power_protocol.Request](&into)^
+        restart :: match asked {
             case Restart => true
+            case _ => false
+        }
+        pressed :: match asked {
+            case PowerButton => true
+            case _ => false
         }
         // Once: committing waits, handling the port, which can read this connection again
         if supervisor.shutting_down {
@@ -4541,7 +4666,8 @@ serve_power :: fn(supervisor: ptr[mut Supervisor]) {
             continue
         }
         supervisor.shutting_down = true
-        log_line.write(supervisor.log, if restart { "supervisor: the console asked to restart" } else { "supervisor: the console asked to shut down" })
+        log_line.write(supervisor.log, if pressed { "supervisor: the power button was pressed" } else if restart { "supervisor: the console asked to restart" }
+            else { "supervisor: the console asked to shut down" })
         // What the volumes have changed committed first, so nothing done before it's lost
         if is_running(supervisor, supervisor.storage_slot) {
             match ask_storage_once(supervisor, supervisor.storage_slot, .CommitAll) {

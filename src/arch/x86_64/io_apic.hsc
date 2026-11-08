@@ -117,6 +117,43 @@ route_wired :: fn(
 }
 
 /**
+ * Route a line through VT-d's interrupt remapping, in its entry's remappable format, still masked
+ * (arch_interface.route_wired_remapped): the handle from the remapped message, the vector as the entry delivers it, so
+ * a level-triggered line's EOI reaches it.
+ *
+ * @param controller The I/O APIC.
+ * @param line The line, below the controller's lines; not checked.
+ * @param message The remappable-format message the IOMMU gave: its handle's low 15 bits in address bits 5 to 19, its
+ *     16th in bit 2.
+ * @param id The vector the remapped interrupt delivers.
+ * @param trigger Whether the line is edge or level triggered.
+ * @param polarity Whether the line is active high or active low.
+ */
+//SPEC: Intel Virtualization Technology for Directed I/O, §5.1.5.1 (I/O xAPIC programming in remappable format)
+route_wired_remapped :: fn(
+    controller: ptr[mut InterruptController],
+    line: u32,
+    message: arch_interface.MsiMessage,
+    id: arch_interface.InterruptId,
+    trigger: arch_interface.Trigger,
+    polarity: arch_interface.Polarity,
+) {
+    handle :: cast[u32]((message.address >> 5) & 0x7fff) | (cast[u32]((message.address >> 2) & 1) << 15)
+    low := (cast[u32](id) & 0xff) | REDIRECTION_MASKED | (((handle >> 15) & 1) << 11)
+    if trigger == .Level {
+        low |= REDIRECTION_LEVEL
+    }
+    if polarity == .ActiveLow {
+        low |= REDIRECTION_ACTIVE_LOW
+    }
+    // The upper half: bit 48, the remappable format, then the handle's low 15 bits from 49
+    high :: (cast[u32](1) << 16) | ((handle & 0x7fff) << 17)
+    write_io_apic(controller, redirection_low(line), REDIRECTION_MASKED)
+    write_io_apic(controller, redirection_high(line), high)
+    write_io_apic(controller, redirection_low(line), low)
+}
+
+/**
  * Mask a line, so its interrupts aren't delivered, keeping the rest of its entry.
  *
  * @param controller The I/O APIC.

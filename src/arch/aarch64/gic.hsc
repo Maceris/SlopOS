@@ -438,6 +438,27 @@ init_interrupt_controller :: fn(
 }
 
 /**
+ * Route a line as route_wired does (arch_interface.route_wired_remapped): no IOMMU here remaps a GIC's lines, so the
+ * message is unused.
+ *
+ * @param controller The distributor.
+ * @param line The SPI line.
+ * @param message Unused.
+ * @param id The kernel's device interrupt ID, on the CPU route_wired was last given for it.
+ * @param trigger Edge or level.
+ * @param polarity Ignored, as route_wired ignores it.
+ */
+route_wired_remapped :: fn(
+    controller: ptr[mut InterruptController],
+    line: u32,
+    message: arch_interface.MsiMessage,
+    id: arch_interface.InterruptId,
+    trigger: arch_interface.Trigger,
+    polarity: arch_interface.Polarity,
+) {
+}
+
+/**
  * Deliver a line to a CPU as the kernel's ID there, still masked (arch_interface.route_wired).
  *
  * The line is masked, its trigger set in GICD_ICFGR, and GICD_IROUTER pointed at the CPU; the route replaces any

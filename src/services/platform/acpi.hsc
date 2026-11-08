@@ -23,13 +23,16 @@ MOST_ACPI_MEMORY : u64 : 16 * 1024 * 1024
  * Give the client asking the firmware tables, as ACPI's claimer from now on.
  *
  * @param to The debug log; the claim is logged.
+ * @param platform The platform capability, which the SCI's IRQ is made with.
  * @param state The platform service's state, whose acpi_claimer is set.
  * @param client The client asking, by its index.
  * @param tables Where the firmware tables' copy is mapped.
  * @param size Its bytes.
- * @return ClaimedAcpi with a read-only copy of the tables; NoDevice without a FADT and a DSDT, or if it can't be copied.
+ * @return ClaimedAcpi with a read-only copy of the tables and the SCI's IRQ, NO_HANDLE if it can't be made; NoDevice
+ *     without a FADT and a DSDT, or if they can't be copied.
  */
-claim_acpi :: fn(to: slop_os.DebugLog, state: ptr[mut Platform], client: usize, tables: u64, size: u64) -> protocol.Response {
+claim_acpi :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], client: usize, tables: u64, size: u64)
+    -> protocol.Response {
     if (pci.firmware_table(tables, size, "FACP") is_none) || (pci.firmware_table(tables, size, "DSDT") is_none) {
         return .NoDevice
     }
@@ -38,7 +41,7 @@ claim_acpi :: fn(to: slop_os.DebugLog, state: ptr[mut Platform], client: usize, 
     state.acpi_claimed = true
     state.acpi_claimer = client
     log_line.write(to, "platform: ACPI claimed")
-    return .ClaimedAcpi(protocol.AcpiHardware.{tables = cast[slop_os.Memory](copy), sci = cast[slop_os.Irq](slop_os.NO_HANDLE)})
+    return .ClaimedAcpi(protocol.AcpiHardware.{tables = cast[slop_os.Memory](copy), sci = sci_irq(to, platform, state)})
 }
 
 /**

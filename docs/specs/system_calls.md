@@ -144,6 +144,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 78 | `power_set_off` | platform, PM1a control, PM1b control, PM1a sleep type, PM1b sleep type | nothing: how x86-64 turns off, ACPI's PM1 control ports (PM1b 0 for none) and `\_S5`'s sleep types, 0 to 7, replacing what was set; `InvalidArgument` on an architecture that turns off by itself, through PSCI (`0182`) |
 | 79 | `power_set_reset` | platform, port, value | nothing: the FADT's reset register, an I/O port, and the byte that resets, replacing what was set; without it x86-64 resets through 0xcf9 (`0182`) |
 | 80 | `power_end_with` | platform, action | nothing: what the kernel does once the root task ends, a `PowerAction`: `Halt`, `Off` or `Restart`, done after every other CPU has stopped and the objects left are logged; under `test_exit`, only with `test_power` too (`0182`) |
+| 81 | `controller_set_source` | platform, controller, source | nothing: the requester ID, with its segment, a controller's interrupts come from, as the IOMMU that remaps them sees it; once an IOMMU remaps, a controller's lines are routed through it with one, and `irq_create` refuses them without (`NoController`) (`0182`) |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the
@@ -221,7 +222,8 @@ MSI-X entry, and its interrupts arrive as any IRQ's do. They're edge-triggered, 
 x86-64 the message goes to a CPU's local APIC, through VT-d's interrupt remapping where the device is behind a unit
 that has it (`0082`): the message is then a handle to an entry of the device's own, which the unit takes only from the
 device's requester ID, and messages in the old format are blocked, so a device raises only its own IRQs. A wired
-line's IRQ can't be made once remapping is on (`NoController`), as its I/O APIC entries aren't remapped yet. On
+line's IRQ, once remapping is on, is remapped too, its I/O APIC entry in the remappable format, raised only from the
+I/O APIC's requester ID, which `controller_set_source` gave; without it, the IRQ can't be made (`NoController`). On
 AArch64, the message goes to the GICv3's ITS, which takes it only as an event its device ID was given, and turns it
 into an LPI on the CPU's redistributor. Closing the device destroys its IRQs.
 
@@ -456,5 +458,5 @@ Devices, MSIs and DMA memory fail with `slop_os.DeviceError` too:
 
 ## Not Yet
 
-I/O APIC lines through interrupt remapping when a driver needs one (`0082`); writable memory-mapped files; a paged memory's waiting threads woken when its pager's binding goes. Process memory is read and written through the
+Writable memory-mapped files; a paged memory's waiting threads woken when its pager's binding goes. Process memory is read and written through the
 page tables, so a memory object's pages no thread has touched yet can't be.

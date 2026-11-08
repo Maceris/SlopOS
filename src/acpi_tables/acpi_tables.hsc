@@ -105,6 +105,113 @@ block :: fn(table: u8[], field: u64, extended: u64) -> u16 {
     return if address <= 0xffff { cast[u16](address) } else { 0 }
 }
 
+/** The most I/O APICs and interrupt source overrides parse_madt keeps. */
+MAX_MADT_ENTRIES :: 16
+
+/** An I/O APIC, as the MADT gives it. */
+IoApic :: struct {
+    /** Its I/O APIC ID, which a DMAR's device scope names it by. */
+    id : u8,
+    /** Its registers' physical address. */
+    address : u64,
+    /** The first GSI its lines are. */
+    gsi_base : u32,
+}
+
+/** An interrupt source override: an ISA IRQ routed to another GSI, or signaled otherwise than ISA's default. */
+Override :: struct {
+    /** The ISA IRQ. */
+    source : u8,
+    /** The GSI it's routed to. */
+    gsi : u32,
+    /** MPS INTI flags: polarity in bits 0 and 1, trigger mode in 2 and 3; 0 in either conforms to the bus. */
+    flags : u16,
+}
+
+/** What the MADT says of the I/O APICs and how ISA IRQs reach them (ACPI 6.5 §5.2.12). */
+Madt :: struct {
+    /** The I/O APICs, the first io_apic_count of them. */
+    io_apics : IoApic[MAX_MADT_ENTRIES],
+    /** How many there are. */
+    io_apic_count : usize,
+    /** The overrides, the first override_count of them. */
+    overrides : Override[MAX_MADT_ENTRIES],
+    /** How many there are. */
+    override_count : usize,
+}
+
+/**
+ * Read the MADT's I/O APICs and interrupt source overrides; its other entries are passed over.
+ *
+ * @param table The MADT, header and all.
+ * @return What it says, up to MAX_MADT_ENTRIES of each; null for one shorter than its header.
+ */
+parse_madt :: fn(table: u8[]) -> Madt? {
+    if table.count < 44 {
+        return null
+    }
+    made := Madt.{}
+    at : u64 = 44
+    total :: cast[u64](table.count)
+    loop {
+        if at + 2 > total {
+            break
+        }
+        kind :: little(table, at, 1)
+        length :: little(table, at + 1, 1)
+        if length < 2 || at + length > total {
+            break
+        }
+        if kind == 1 && length >= 12 && made.io_apic_count < made.io_apics.count {
+            made.io_apics[made.io_apic_count] = IoApic.{id = cast[u8](little(table, at + 2, 1)), address = little(table, at + 4, 4),
+                gsi_base = cast[u32](little(table, at + 8, 4))}
+            made.io_apic_count += 1
+        }
+        if kind == 2 && length >= 10 && made.override_count < made.overrides.count {
+            made.overrides[made.override_count] = Override.{source = cast[u8](little(table, at + 3, 1)),
+                gsi = cast[u32](little(table, at + 4, 4)), flags = cast[u16](little(table, at + 8, 2))}
+            made.override_count += 1
+        }
+        at += length
+    }
+    return made
+}
+
+/** How an interrupt signals: whether it's level-triggered, and whether it's active-low. */
+Signaling :: struct {
+    /** The GSI. */
+    gsi : u32,
+    /** Whether it's level-triggered; edge-triggered if not. */
+    level : bool,
+    /** Whether it's active-low; active-high if not. */
+    low : bool,
+}
+
+/**
+ * Where an ISA IRQ goes, and how it signals: an override's GSI and flags, or the same GSI, signaled as the bus's
+ * default says where nothing overrides it.
+ *
+ * @param madt The MADT.
+ * @param irq The ISA IRQ, or a GSI past 15.
+ * @param level Whether it's level-triggered where nothing says: true for the SCI, false for ISA's.
+ * @param low Whether it's active-low where nothing says: true for the SCI, false for ISA's.
+ * @return The GSI and how it signals.
+ */
+route_isa :: fn(madt: ptr[Madt], irq: u32, level: bool, low: bool) -> Signaling {
+    for override, i in madt.overrides {
+        if i >= madt.override_count {
+            break
+        }
+        if cast[u32](override.source) == irq && irq < 16 {
+            polarity :: override.flags & 3
+            trigger :: (override.flags >> 2) & 3
+            return Signaling.{gsi = override.gsi, level = if trigger == 0 { level } else { trigger == 3 },
+                low = if polarity == 0 { low } else { polarity == 3 }}
+        }
+    }
+    return Signaling.{gsi = irq, level = level, low = low}
+}
+
 /**
  * Read a little-endian integer from a table.
  *

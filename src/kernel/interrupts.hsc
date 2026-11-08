@@ -67,6 +67,13 @@ WiredController :: struct {
     physical : u64,
     /** How many lines it has, numbered from 0. */
     lines : u32,
+    /**
+     * The requester ID its interrupts come from, with its segment, as the IOMMU that remaps them sees it
+     * (controller_set_source, decisions/0182); meaningful only with has_source.
+     */
+    source : u32,
+    /** Whether source is set, so its lines can be routed through interrupt remapping. */
+    has_source : bool,
 }
 
 /** Where one of a CPU's device interrupt IDs comes from. */

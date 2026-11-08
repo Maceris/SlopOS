@@ -133,6 +133,19 @@ AcpiHardware :: struct {
     sci : slop_os.Irq,
 }
 
+/**
+ * The power button, where a GPIO controller's pin is wired to it (decisions/0182, P3): on AArch64's virt, gpio-keys'
+ * KEY_POWER on a PL061. Its handles move to the client, its driver.
+ */
+PowerButton :: struct {
+    /** The PL061's registers, 4 KiB of device memory. */
+    registers : slop_os.Memory,
+    /** The PL061's IRQ. */
+    irq : slop_os.Irq,
+    /** The pin the button's on, 0 to 7. */
+    pin : u32,
+}
+
 /** I/O ports the ACPI service asks for: first to first + count - 1. */
 PortRange :: struct {
     /** The first port, below 65536. */
@@ -259,6 +272,11 @@ Request :: union {
      * Given once the BARs are placed, as by an ACPI service started again, they're kept but don't move what's placed.
      */
     HostWindows(BridgeWindows),
+    /**
+     * Claim the power button, where a GPIO controller's pin is wired to it, made anew each time. Answered with
+     * ClaimedPowerButton, or NoDevice where there's none, as where ACPI's SCI brings the button instead.
+     */
+    ClaimPowerButton,
 }
 
 /** What the platform service answers. */
@@ -288,6 +306,8 @@ Response :: union {
     Done,
     /** The answer to a request of the ACPI service's that's refused, as each says. */
     Refused,
+    /** ClaimPowerButton's answer: the GPIO controller and pin, whose handles move to the client. */
+    ClaimedPowerButton(PowerButton),
 }
 
 /**
@@ -311,6 +331,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case ConfigWrite(_) => true
         case GiveSleepTypes(_) => true
         case HostWindows(_) => true
+        case ClaimPowerButton => true
     }
 }
 

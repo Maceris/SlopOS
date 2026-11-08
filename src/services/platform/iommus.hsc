@@ -28,8 +28,44 @@ DRHD_INCLUDE_PCI_ALL : u8 : 1 << 0
 SCOPE_ENDPOINT : u8 : 1
 /** A device scope's type for a PCI bridge, which covers everything behind it too. */
 SCOPE_BRIDGE : u8 : 2
+/** A device scope's type for an I/O APIC, whose enumeration ID is its I/O APIC ID. */
+SCOPE_IO_APIC : u8 : 3
 /** An iommu-map entry's cells: requester ID base, the IOMMU's phandle, stream ID base, length. */
 IOMMU_MAP_CELLS : u64 : 4
+
+/**
+ * Keep the requester IDs a DRHD's I/O APIC scopes give, for routing their lines through interrupt remapping
+ * (decisions/0182): a scope's path of one step is its start bus, device and function; a longer one, through bridges,
+ * isn't followed.
+ *
+ * @param state The platform service's state, whose io_apic_sources grow.
+ * @param unit Where the DRHD is, in the mapped DMAR.
+ * @param length The DRHD's bytes.
+ */
+keep_io_apic_sources :: fn(state: ptr[mut Platform], unit: u64, length: u64) {
+    segment :: pci.read_u16(unit, 6)
+    at : u64 = 16
+    loop {
+        if at + 8 > length {
+            break
+        }
+        kind :: pci.read_u8(unit, at)
+        size :: cast[u64](pci.read_u8(unit, at + 1))
+        if size < 6 || at + size > length {
+            break
+        }
+        at_source :: state.io_apic_source_count
+        if kind == SCOPE_IO_APIC && size == 8 && at_source < state.io_apic_sources.count {
+            bus :: pci.read_u8(unit, at + 5)
+            device :: pci.read_u8(unit, at + 6)
+            function :: pci.read_u8(unit, at + 7)
+            state.io_apic_sources[at_source] = IoApicSource.{id = pci.read_u8(unit, at + 4),
+                source = slop_os.device_address(segment, bus, device, function)}
+            state.io_apic_source_count = at_source + 1
+        }
+        at += size
+    }
+}
 
 /**
  * Register every IOMMU the firmware tables describe with the kernel, each with the ranges of requester IDs it covers.
@@ -82,6 +118,7 @@ from_dmar :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut
         }
         if kind == DRHD && length >= 16 {
             unit :: dmar.address + at
+            keep_io_apic_sources(state, unit, length)
             flags :: pci.read_u8(unit, 4)
             pages :: cast[u64](1) << cast[u64](pci.read_u8(unit, 5) & 0xf)
             segment :: pci.read_u16(unit, 6)
@@ -129,6 +166,11 @@ register_scopes :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: p
         scope_length :: cast[u64](pci.read_u8(unit, at + 1))
         if scope_length < 6 || at + scope_length > length {
             break
+        }
+        // An I/O APIC's scope is its own requester ID, which its remapped interrupts come from (decisions/0182)
+        if kind == SCOPE_IO_APIC && scope_length == 8 {
+            address :: slop_os.device_address(segment, pci.read_u8(unit, at + 5), pci.read_u8(unit, at + 6), pci.read_u8(unit, at + 7))
+            registered += register(to, platform, .VtD, registers, size, address, 1, address & 0xffff)
         }
         if (kind == SCOPE_ENDPOINT || kind == SCOPE_BRIDGE) && scope_length >= 8 && segment == host.segment {
             bus := pci.read_u8(unit, at + 5)

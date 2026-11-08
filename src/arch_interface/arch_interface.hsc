@@ -623,6 +623,27 @@ route_wired : fn(
 ) : ---
 
 /**
+ * Route a wired line through an IOMMU's interrupt remapping (decisions/0182), leaving it masked: its entry names the
+ * remapped interrupt the IOMMU gave, which delivers id to its CPU.
+ *
+ * @param controller The controller, set up by init_interrupt_controller.
+ * @param line The line, below the count init_interrupt_controller returned.
+ * @param message The message the IOMMU gave for the remapped interrupt (iommu_interface.remap_interrupt), which says
+ *     its handle.
+ * @param id The interrupt it arrives as, which the remapped interrupt delivers.
+ * @param trigger How the line signals.
+ * @param polarity Which level is active.
+ */
+route_wired_remapped : fn(
+    controller: ptr[mut InterruptController],
+    line: u32,
+    message: MsiMessage,
+    id: InterruptId,
+    trigger: Trigger,
+    polarity: Polarity,
+) : ---
+
+/**
  * Mask a wired line, so it raises no interrupt.
  *
  * @param controller The controller from init_interrupt_controller (an I/O APIC, or a GIC distributor), its

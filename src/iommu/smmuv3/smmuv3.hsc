@@ -605,9 +605,11 @@ next_fault :: fn(iommu: ptr[mut Iommu]) -> iommu_interface.DmaFault? {
  * @param stream The stream, unused.
  * @param cpu_hardware_id The CPU's hardware ID, unused.
  * @param vector The interrupt ID, unused.
- * @return An empty message.
+ *  * @param level Unused.
+ @return An empty message.
  */
-remap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32) -> iommu_interface.MsiMessage {
+remap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32, level: bool)
+    -> iommu_interface.MsiMessage {
     return iommu_interface.MsiMessage.{}
 }
 

@@ -563,6 +563,14 @@ TESTS = [
         "--console-input-after=  Log in", "--expect-console-line=SlopOS shell",
         "--expect-line=[user] supervisor: the console asked to shut down",
         "--expect-line=[user] root task: shutting down, as the console asked", "--expect-line=[info] turning the machine off"])),
+    # The power button (decisions/0182, P3): pressed through QEMU once the system's healthy, it reaches the supervisor
+    # through the ACPI service's SCI on x86-64 or the PL061's driver on AArch64, and shuts the system down, turning the
+    # machine off; which ends QEMU without an exit code
+    ("shuts down and turns off when the power button's pressed", 125,
+     with_before_qemu([argument.replace("test_services", "test_services test_power test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [f"--power-button-after={HEALTHY_LINE.removeprefix('--expect-line=')}",
+        "--expect-line=[user] supervisor: the power button was pressed",
+        "--expect-line=[user] root task: shutting down, as the console asked", "--expect-line=[info] turning the machine off"])),
     # Calls through manifests (decisions/0170): test_shell_calls given values by position and by --name, a bool alone, an
     # enum's member, a duration, a list, a directory beneath the home and the terminal unasked; then its exit code as an
     # error, and errors found before anything starts: a value missing, a word that isn't a number, a member that isn't

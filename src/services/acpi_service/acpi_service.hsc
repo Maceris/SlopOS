@@ -18,6 +18,7 @@ import text_buffer from "std"
 import aml from "../../aml"
 import acpi_tables from "../../acpi_tables"
 import platform from "../../protocols/platform"
+import power_protocol from "../../protocols/power"
 
 /** The most ranges of I/O ports kept, each as the platform service gave it. */
 MAX_PORT_GRANTS :: 64
@@ -78,6 +79,14 @@ Acpi :: struct {
     present : u32,
     /** _INIs run, and those that failed. */
     initialized : u32,
+    /** The SCI's IRQ; NO_HANDLE without one. */
+    sci : slop_os.Irq,
+    /** The power connection the power button's pressing is told on; NO_HANDLE without one. */
+    power : slop_os.Channel,
+    /** A port bound to power alone. */
+    power_port : slop_os.Port,
+    /** Whether the power button's been reported pressed, so it's told once. */
+    pressed : bool,
     /** _INIs that failed. */
     failed : u32,
 }
@@ -86,11 +95,13 @@ Acpi :: struct {
  * Run the firmware's AML, then wait, for the supervisor to stop.
  *
  * @param platform_service A connection to the platform service of its own, on which ACPI is claimed.
+ * @param power The power connection the power button's pressing is told on (decisions/0182); without one, it's only
+ *     logged.
  * @return 0 where there's no ACPI, so it isn't started again; on failing to start, 1 without a port, 2 if ACPI can't be
  *     claimed, 3 if the tables can't be read, 4 without a FADT, 5 without memory for the interpreter, 6 if the DSDT
  *     doesn't load.
  */
-main :: fn(platform_service: os.Channel[platform.Platform]) -> int {
+main :: fn(platform_service: os.Channel[platform.Platform], power: os.Channel[power_protocol.Power]?) -> int {
     block :: slop_os.startup_block()
     made, error :: runtime.new_aligned(Acpi, align_of(Acpi))
     if error != null {
@@ -100,6 +111,14 @@ main :: fn(platform_service: os.Channel[platform.Platform]) -> int {
     service.platform = platform_service.end
     service.platform_port = os.port_for(block.budget, platform_service.end) or_return 1
     service.sleeper = slop_os.port_create(block.budget) or_return 1
+    service.power = cast[slop_os.Channel](slop_os.NO_HANDLE)
+    match power {
+        case Some(connection) => {
+            service.power = connection.end
+            service.power_port = os.port_for(block.budget, connection.end) or_return 1
+        }
+        case None => {}
+    }
     hardware := platform.AcpiHardware.{}
     match ask(service, .ClaimAcpi) {
         case Some(response) => match response {
@@ -121,6 +140,7 @@ main :: fn(platform_service: os.Channel[platform.Platform]) -> int {
         return 3
     }
     _ = slop_os.handle_close(cast[slop_os.Handle](hardware.tables))
+    service.sci = hardware.sci
     service.fadt = acpi_tables.parse_fadt(acpi_tables.first_table(tables, "FACP")) or_return 4
 
     host :: aml.Host.{state = cast[u64](service), read = host_read, write = host_write, sleep = host_sleep, stall = host_stall,
@@ -162,12 +182,232 @@ main :: fn(platform_service: os.Channel[platform.Platform]) -> int {
         case Some(found) => count_routes(service, found)
         case None => {}
     }
+    // The SCI: the power button's fixed event, and the GPEs with methods, each enabled
+    events :: slop_os.port_create(block.budget) or_return 1
+    if cast[slop_os.Handle](service.sci) != slop_os.NO_HANDLE {
+        if slop_os.port_bind(events, cast[slop_os.Handle](service.sci), cast[slop_os.Signals](0), SCI_KEY, .Persistent) is_error {
+            runtime.log_error("the SCI can't be waited for")
+        }
+        enable_events(service)
+    }
+    else {
+        runtime.log_error("there's no SCI, so no power button")
+    }
     runtime.log_info("serving")
     loop {
-        packets : slop_os.Packet[1]
-        _ = slop_os.port_wait(service.sleeper, packets, slop_os.NO_DEADLINE)
+        packets : slop_os.Packet[4]
+        taken :: slop_os.port_wait(events, packets, slop_os.NO_DEADLINE) or_else 0
+        for packet, i in packets {
+            if i < cast[usize](taken) && packet.kind == .Irq && packet.key == SCI_KEY {
+                handle_sci(service)
+                _ = slop_os.irq_ack(service.sci)
+            }
+        }
     }
 }
+
+/** The port key the SCI's interrupts come under. */
+SCI_KEY : u64 : 1
+/** PM1's status and enable registers' power button bit. */
+POWER_BUTTON : u64 : 1 << 8
+/** EisaId ("PNP0C0C"), a power button device. */
+POWER_BUTTON_DEVICE : u64 : 0x0c0cd041
+/** The value a power button device is notified with when it's pressed. */
+BUTTON_PRESSED : u64 : 0x80
+
+/**
+ * Read an I/O port, for the SCI's registers.
+ *
+ * @param service The service.
+ * @param port The port; 0 reads 0.
+ * @param width The bits: 8 or 16.
+ * @return What it read; 0 if it couldn't.
+ */
+read_port :: fn(service: ptr[mut Acpi], port: u64, width: u32) -> u64 {
+    if port == 0 {
+        return 0
+    }
+    return host_read(cast[u64](service), cast[u8](aml.RegionSpace.SystemIo), port, width) or_else 0
+}
+
+/**
+ * Write an I/O port, for the SCI's registers.
+ *
+ * @param service The service.
+ * @param port The port; 0 writes nothing.
+ * @param width The bits: 8 or 16.
+ * @param value What's written.
+ */
+write_port :: fn(service: ptr[mut Acpi], port: u64, width: u32, value: u64) {
+    if port != 0 {
+        _ = host_write(cast[u64](service), cast[u8](aml.RegionSpace.SystemIo), port, width, value)
+    }
+}
+
+/**
+ * Enable the SCI's events: the power button's fixed event, unless the FADT says the button's a device, which notifies
+ * instead; and every GPE that has an _Lxx or _Exx method under \_GPE. What's pending already is cleared first.
+ *
+ * @param service The service.
+ */
+enable_events :: fn(service: ptr[mut Acpi]) {
+    fadt :: service.fadt
+    half :: cast[u64](fadt.pm1_event_length / 2)
+    if fadt.flags & acpi_tables.POWER_BUTTON_IS_DEVICE == 0 && half >= 2 {
+        for block in u64.[cast[u64](fadt.pm1a_event), cast[u64](fadt.pm1b_event)] {
+            if block != 0 {
+                write_port(service, block, 16, POWER_BUTTON)
+                write_port(service, block + half, 16, read_port(service, block + half, 16) | POWER_BUTTON)
+            }
+        }
+        runtime.log_info("the power button's fixed event is enabled")
+    }
+    enabled : u32 = 0
+    gpes :: aml.find(service.interpreter, "\\_GPE") or_return void
+    child := gpes.first_child
+    loop {
+        method :: child or_break
+        child = method.next
+        if method.kind != .Method {
+            continue
+        }
+        match gpe_register(service, gpe_number(method.name)) {
+            case Some(at) => {
+                write_port(service, at.status, 8, at.bit)
+                write_port(service, at.enable, 8, read_port(service, at.enable, 8) | at.bit)
+                enabled += 1
+            }
+            case None => {}
+        }
+    }
+    runtime.log_info("% GPEs with methods enabled", enabled)
+}
+
+/** Where a GPE's status and enable bits are. */
+GpeRegister :: struct {
+    /** Its status register's port. */
+    status : u64,
+    /** Its enable register's port. */
+    enable : u64,
+    /** Its bit in them. */
+    bit : u64,
+}
+
+/**
+ * A GPE's number from its method's name, _Lxx or _Exx, xx in hex.
+ *
+ * @param name The method's name, a segment.
+ * @return The number; 256 for a name that isn't one.
+ */
+gpe_number :: fn(name: u32) -> u64 {
+    underscore :: name & 0xff
+    kind :: (name >> 8) & 0xff
+    high :: aml.digit_value(cast[u8]((name >> 16) & 0xff))
+    low :: aml.digit_value(cast[u8]((name >> 24) & 0xff))
+    if underscore != 0x5f || (kind != 0x4c && kind != 0x45) || high >= 16 || low >= 16 {
+        return 256
+    }
+    return high * 16 + low
+}
+
+/**
+ * Whether a GPE's method is level-triggered, _Lxx, rather than edge-triggered, _Exx.
+ *
+ * @param name The method's name.
+ * @return True for _Lxx.
+ */
+is_level :: fn(name: u32) -> bool {
+    return (name >> 8) & 0xff == 0x4c
+}
+
+/**
+ * Where a GPE's bits are, in GPE0's block or GPE1's.
+ *
+ * @param service The service, whose FADT says where the blocks are.
+ * @param number The GPE.
+ * @return Its registers and bit; null for one in neither block.
+ */
+gpe_register :: fn(service: ptr[mut Acpi], number: u64) -> GpeRegister? {
+    fadt :: service.fadt
+    half0 :: cast[u64](fadt.gpe0_length / 2)
+    if fadt.gpe0 != 0 && number < half0 * 8 {
+        return GpeRegister.{status = cast[u64](fadt.gpe0) + number / 8, enable = cast[u64](fadt.gpe0) + half0 + number / 8,
+            bit = cast[u64](1) << (number % 8)}
+    }
+    half1 :: cast[u64](fadt.gpe1_length / 2)
+    base :: cast[u64](fadt.gpe1_base)
+    if fadt.gpe1 != 0 && number >= base && number - base < half1 * 8 {
+        index :: number - base
+        return GpeRegister.{status = cast[u64](fadt.gpe1) + index / 8, enable = cast[u64](fadt.gpe1) + half1 + index / 8,
+            bit = cast[u64](1) << (index % 8)}
+    }
+    return null
+}
+
+/**
+ * Handle an SCI: the power button's fixed event if it's pending, and each GPE pending and enabled, its method run, an
+ * edge-triggered one's status cleared before it, a level-triggered one's after.
+ *
+ * @param service The service.
+ */
+handle_sci :: fn(service: ptr[mut Acpi]) {
+    fadt :: service.fadt
+    half :: cast[u64](fadt.pm1_event_length / 2)
+    for block in u64.[cast[u64](fadt.pm1a_event), cast[u64](fadt.pm1b_event)] {
+        if block == 0 || half < 2 {
+            continue
+        }
+        status :: read_port(service, block, 16)
+        enabled :: read_port(service, block + half, 16)
+        if status & enabled & POWER_BUTTON != 0 {
+            write_port(service, block, 16, POWER_BUTTON)
+            press(service)
+        }
+    }
+    gpes :: aml.find(service.interpreter, "\\_GPE") or_return void
+    child := gpes.first_child
+    loop {
+        method :: child or_break
+        child = method.next
+        if method.kind != .Method {
+            continue
+        }
+        at :: gpe_register(service, gpe_number(method.name)) or_else GpeRegister.{}
+        if at.bit == 0 || read_port(service, at.status, 8) & read_port(service, at.enable, 8) & at.bit == 0 {
+            continue
+        }
+        level :: is_level(method.name)
+        if !level {
+            write_port(service, at.status, 8, at.bit)
+        }
+        if aml.evaluate_node(service.interpreter, method, view_of(cast[ptr[aml.Value]](null), 0)) is_error {
+            runtime.log_error("a GPE's method failed: %", service.interpreter.failed_at)
+        }
+        if level {
+            write_port(service, at.status, 8, at.bit)
+        }
+    }
+}
+
+/**
+ * Tell the supervisor the power button was pressed, once, on the power connection; without one, only log it.
+ *
+ * @param service The service.
+ */
+press :: fn(service: ptr[mut Acpi]) {
+    runtime.log_info("the power button was pressed")
+    if service.pressed || cast[slop_os.Handle](service.power) == slop_os.NO_HANDLE {
+        return void
+    }
+    service.pressed = true
+    out := os.Outgoing.{}
+    request :: os.begin[power_protocol.Request](&out)
+    request^ = .PowerButton
+    if power_protocol.send_request(service.power, service.power_port, &out) != null {
+        runtime.log_error("the supervisor couldn't be told")
+    }
+}
+
 
 /**
  * Ask the platform service something and wait for its answer.
@@ -386,12 +626,46 @@ host_timer :: fn(state: u64) -> u64 {
     return (slop_os.clock_monotonic() or_else 0) / 100
 }
 
-/** A notification, for the AML interpreter: logged, until the power button's handled (P3c). */
+/**
+ * A notification, for the AML interpreter: a power button device's 0x80 is its pressing, told the supervisor; anything
+ * else is logged.
+ */
 host_notify :: fn(state: u64, node: ptr[aml.Node], value: u64) {
+    service :: cast[ptr[mut Acpi]](state)
+    if value == BUTTON_PRESSED {
+        match aml.child_of(node, aml.segment_of("_HID")) {
+            case Some(hid) => {
+                if is_power_button(service, hid) {
+                    press(service)
+                    return void
+                }
+            }
+            case None => {}
+        }
+    }
     storage : u8[64]
     path := text_buffer.make(storage)
     aml.write_path(&path, node)
     runtime.log_info("% notified with %", text_buffer.as_string(&path), value)
+}
+
+/**
+ * Tell whether a _HID is a power button's, PNP0C0C, as an EisaId or a string. It's evaluated where it's a name's value,
+ * not called: a method's _HID would be run inside the evaluation that notified.
+ *
+ * @param service The service.
+ * @param hid The device's _HID.
+ * @return True for PNP0C0C.
+ */
+is_power_button :: fn(service: ptr[mut Acpi], hid: ptr[aml.Node]) -> bool {
+    if hid.kind != .Name {
+        return false
+    }
+    match hid.value {
+        case Integer(number) => return number == POWER_BUTTON_DEVICE
+        case String(text) => return aml.text_of(text.data) == "PNP0C0C"
+        case _ => return false
+    }
 }
 
 /** What AML stores to the debug object, for the AML interpreter: logged. */

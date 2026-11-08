@@ -5,14 +5,14 @@ import slop_os from "std/os"
 
 /*
  * Asking for the system to shut down or restart (decisions/0180, 0182): the supervisor serves it, to the terminal
- * service, whose secure attention key's screen asks it for the person at the console, and passes it on to the root
- * task, which has the kernel turn the machine off or reset it once it ends, and with it everything. Only who holds a
- * connection can ask.
+ * service, whose secure attention key's screen asks it for the person at the console, and to what brings the power
+ * button, the ACPI service or a GPIO controller's driver; and passes it on to the root task, which has the kernel turn
+ * the machine off or reset it once it ends, and with it everything. Only who holds a connection can ask.
  */
 
 /**
- * The power protocol, for the channel between the supervisor and the terminal service: the terminal service sends the
- * requests, and the supervisor answers them.
+ * The power protocol, for the channels between the supervisor and the terminal service, and what brings the power
+ * button: they send the requests, and the supervisor answers them.
  */
 Power :: struct {}
 
@@ -22,7 +22,7 @@ Power :: struct {}
  */
 PROTOCOL :: slop_os.Protocol.{name = "power", major_version = 1, lending = .Server}
 
-/** What the terminal service asks the supervisor. */
+/** What the terminal service, or what brings the power button, asks the supervisor. */
 Request :: union {
     /**
      * Shut the system down: the root task is told, and ends, ending everything, and the machine is turned off where
@@ -35,13 +35,15 @@ Request :: union {
      * either is asked, the other is answered Done and changes nothing.
      */
     Restart,
+    /** The power button was pressed: shut the system down, as ShutDown does (decisions/0182). Answered as it is. */
+    PowerButton,
 }
 
 /** What the supervisor answers. */
 Response :: union {
-    /** ShutDown's and Restart's answer: the root task's been told. */
+    /** ShutDown's, Restart's and PowerButton's answer: the root task's been told. */
     Done,
-    /** ShutDown's or Restart's answer when the root task couldn't be told, as when its channel's gone. */
+    /** Their answer when the root task couldn't be told, as when its channel's gone. */
     Refused,
     /** The answer to a request the supervisor doesn't know, as from a newer client; every protocol has it. */
     Unsupported,

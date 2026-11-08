@@ -141,6 +141,11 @@ Seven parts, before P, each with an as-built record:
     process with its last thread). `test_memory`'s writer that faults is a copy of the test now, whose end it watches.
   - **Programs from the bundle store are got again** once the store is started again (`forget_stored`): the
     supervisor kept the old store's memory, gone with it, and couldn't launch them (BadGrants).
+  - **A service the store paged can end before the store's own end is handled**, and then was started again from the
+    dead store's memory, BadGrants, the root task ending on the account service not starting: `loaded_module` checks
+    a kept program from the store can still be duplicated (`is_alive`) and gets it again, from the system volume if the
+    store isn't back yet. And a restart whose launch fails is tried again 200 ms later (`retry_restarts`), counting as
+    a restart, rather than reported to the root task as not started while it has restarts left.
   - **No service maps memory another process owns** (decided with the project's owner, extending `0098`): a client
     or a driver that ended took down the server touching its memory (killing the events service ended the system
     volume's server, which was writing its records from a buffer the events service lent it). `memory_read` reads any

@@ -116,10 +116,26 @@ create_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, controller: u
     irq.line = line
     irq.trigger = trigger
     irq.slot = cast[u32](MAX_DEVICE_INTERRUPTS)
-    // Its interrupts would be blocked as a forged message would (translation.hsc)
-    if intrinsics.atomic_load_u32_acquire(&kernel.wired_lines_blocked) != 0 {
-        release_object(kernel, object)
-        return .Error(.NoController)
+    /*
+     * Once an IOMMU remaps interrupts, a line's would be blocked as a forged message would be (translation.hsc), unless
+     * it's remapped too, from its controller's requester ID (decisions/0182)
+     */
+    remapped :: intrinsics.atomic_load_u32_acquire(&kernel.wired_lines_blocked) != 0
+    source := cast[u32](0)
+    if remapped {
+        match controller_at(kernel, controller) {
+            case Some(wired) => {
+                if !wired.has_source {
+                    release_object(kernel, object)
+                    return .Error(.NoController)
+                }
+                source = wired.source
+            }
+            case None => {
+                release_object(kernel, object)
+                return .Error(.NoSuchController)
+            }
+        }
     }
     cpus :: if owner != 0 { cpus_of(kernel, cast[ptr[Process]](owner)) } else { ~cast[u64](0) }
     cpu :: next_cpu_of(kernel, &kernel.next_irq_cpu, cpus)
@@ -128,6 +144,11 @@ create_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, controller: u
         case Ok(id) => {
             irq.cpu = cpu
             irq.slot = cast[u32](id) - cast[u32](first)
+            if remapped && !route_remapped(kernel, irq, source, polarity, id) {
+                destroy_irq(kernel, irq)
+                release_object(kernel, object)
+                return .Error(.NoFreeInterrupt)
+            }
         }
         case Error(error) => {
             release_object(kernel, object)
@@ -152,6 +173,48 @@ create_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, controller: u
         arch.test_device_interrupts(true)
     }
     return .Ok(irq)
+}
+
+/**
+ * Route a wired IRQ's line through interrupt remapping, in place of the route route_line made: an entry of the
+ * IOMMU's, and the controller's entry naming it, still masked.
+ *
+ * @param kernel The kernel; the IOMMU's lock, then the controller's, are taken.
+ * @param irq The IRQ, routed by route_line to its CPU and slot.
+ * @param source The controller's requester ID.
+ * @param polarity Whether the line's active high or low.
+ * @param id The interrupt ID route_line gave.
+ * @return False if no IOMMU remaps the controller's interrupts, or it has no entry free.
+ */
+route_remapped :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], source: u32, polarity: arch_interface.Polarity, id: arch_interface.InterruptId)
+    -> bool {
+    cpus :: kernel.cpus
+    if cast[usize](irq.cpu) >= cpus.count {
+        return false
+    }
+    message :: remap_wired(kernel, irq, source, cpus[irq.cpu].hardware_id, id, irq.trigger == .Level) or_return false
+    wired :: controller_at(kernel, irq.controller) or_return false
+    lock_at(&wired.lock, .Wired)
+    arch.route_wired_remapped(&wired.controller, irq.line, message, id, irq.trigger, polarity)
+    unlock_at(&wired.lock, .Wired)
+    return true
+}
+
+/**
+ * Keep a controller's requester ID, so its lines are routed through interrupt remapping (decisions/0182).
+ *
+ * @param kernel The kernel, whose controllers change under interrupts_lock.
+ * @param controller The controller's index.
+ * @param source Its requester ID with its segment.
+ * @error NoSuchController No controller is registered at that index.
+ */
+set_controller_source :: fn(kernel: ptr[mut Kernel], controller: u32, source: u32) -> Result[void, slop_os.DeviceError] {
+    wired :: controller_at(kernel, controller) or_return .Error(.NoSuchController)
+    lock_at(&kernel.interrupts_lock, .Interrupts)
+    wired.source = source
+    wired.has_source = true
+    unlock_at(&kernel.interrupts_lock, .Interrupts)
+    return .Ok
 }
 
 /**
@@ -204,6 +267,7 @@ destroy_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
         }
         mask_line(kernel, irq.controller, irq.line)
         unroute(kernel, irq.cpu, irq.slot)
+        unremap_msi(kernel, irq)
     }
     lock_at(&irq.lock, .Irq)
     binding :: irq.binding

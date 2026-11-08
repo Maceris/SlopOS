@@ -258,9 +258,10 @@ next_fault : fn(iommu: ptr[mut Iommu]) -> DmaFault? : ---
  * @param stream The only stream that may raise it.
  * @param cpu_hardware_id The hardware ID of the CPU it's delivered to.
  * @param vector The vector it's delivered as, an InterruptId.
- * @return The message the stream's device writes to raise it.
+ * @param level Whether it's level-triggered, as a wired line remapped may be; a message is edge-triggered.
+ * @return The message the stream's device writes to raise it; a wired line's controller is programmed from it.
  */
-remap_interrupt : fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32) -> MsiMessage : ---
+remap_interrupt : fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32, level: bool) -> MsiMessage : ---
 
 /**
  * Make a remapped interrupt raise nothing, leaving nothing the IOMMU cached of it, by the time this returns.

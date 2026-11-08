@@ -206,17 +206,20 @@ next_fault : fn(iommu: ptr[mut Iommu]) -> DmaFault? : ---
 
 ```
 /*
- * Remapped interrupt index made to deliver vector, an InterruptId, to the CPU with this hardware ID, from stream only:
- * the message stream's device writes to raise it. The IOMMU uses it once this returns.
+ * Remapped interrupt index made to deliver vector, an InterruptId, to the CPU with this hardware ID, from stream only,
+ * level-triggered if level says so: the message stream's device writes to raise it, or a wired controller's entry is
+ * programmed from. The IOMMU uses it once this returns.
  */
-remap_interrupt : fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32) -> MsiMessage : ---
+remap_interrupt : fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32, level: bool) -> MsiMessage : ---
 
 // Remapped interrupt index raising nothing, and nothing the IOMMU cached of it left, when this returns.
 unmap_interrupt : fn(iommu: ptr[mut Iommu], index: u32) : ---
 ```
 
 L2 gives each message-signaled IRQ of a device behind an IOMMU that remaps (`info.interrupts` non-zero) an index of
-its own there, and the message `remap_interrupt` gives is the one `irq_message` gives the driver.
+its own there, and the message `remap_interrupt` gives is the one `irq_message` gives the driver. A wired line's IRQ,
+once an IOMMU remaps, gets an index too, raised only from its controller's requester ID (`controller_set_source`), and
+the architecture programs the controller's entry from the message (`route_wired_remapped`, decisions/0182).
 
 ## VT-d
 
@@ -234,7 +237,7 @@ its own there, and the message `remap_interrupt` gives is the one `irq_message` 
 | `invalidate` | A domain-selective IOTLB invalidation, waited for; after mapping, only in caching mode (`CAP_REG.CM`), or a write buffer flush where `CAP_REG.RWBF` asks for one |
 | `release_domain` | The deepest tables first, each cleared from its parent |
 | Faults | `route_faults` programs `FEDATA`, `FEADDR` and `FEUADDR` and unmasks `FECTL`; `next_fault` takes the next fault recording register with its F bit set, from where the last was found, and clears it; reasons 0x20 to 0x2f are interrupts', with the index in place of the address |
-| Interrupt remapping | Where `ECAP_REG.IR` is set: 256 entries in `enable`'s fourth page, with x2APIC destinations where `ECAP_REG.EIM` is (`IRTA_REG.EIME`), the table pointer set, the interrupt entry cache invalidated, and remapping on, compatibility format left off (`GCMD_REG.CFI` clear). `remap_interrupt` writes a remapped entry: fixed, edge, physical destination, the vector, the CPU's APIC ID, and source validation of the requester ID (SVT 1, SQ 0), then invalidates its cached copy; its message is the remappable format with the index as handle and no subhandle |
+| Interrupt remapping | Where `ECAP_REG.IR` is set: 256 entries in `enable`'s fourth page, with x2APIC destinations where `ECAP_REG.EIM` is (`IRTA_REG.EIME`), the table pointer set, the interrupt entry cache invalidated, and remapping on, compatibility format left off (`GCMD_REG.CFI` clear). `remap_interrupt` writes a remapped entry: fixed, edge or level (TM) as asked, physical destination, the vector, the CPU's APIC ID, and source validation of the requester ID (SVT 1, SQ 0), then invalidates its cached copy; its message is the remappable format with the index as handle and no subhandle |
 | Caches | Where `ECAP_REG.C` is clear, as QEMU's is, every table entry and descriptor written is flushed with `clflush`, then `mfence` |
 | Streams | A device's requester ID |
 

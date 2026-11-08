@@ -15,6 +15,7 @@ import os from "std"
 import system_records from "../system_records"
 import clock_service from "../services/clock"
 import acpi_service from "../services/acpi_service"
+import power_button from "../drivers/power_button"
 import events_service from "../services/events_service"
 import bundle_store_service from "../services/bundle_store_service"
 import config_service from "../services/config_service"
@@ -227,6 +228,9 @@ SERVICES :: Service.[
      */
     Service.{name = "acpi", boot_set = true, module = "acpi_service.elf", starter = .Supervisor, by_manager = true, budget = 12 * MIB,
         entry = type_of(acpi_service.main)},
+    // The power button where a GPIO controller's pin is wired to it, as on AArch64's virt (decisions/0182, P3)
+    Service.{name = "power_button", boot_set = true, module = "power_button.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
+        entry = type_of(power_button.main)},
     // The seat's keyboards, the console's terminal, and its reader until sessions (decisions/0136)
     Service.{name = "input", module = "input_service.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(input_service.main), cpu = TRUSTED_PATH_CPU},

@@ -126,6 +126,8 @@ SupervisorGrants :: struct {
     clock_module : slop_os.Memory?,
     /** The ACPI service's module. */
     acpi_module : slop_os.Memory?,
+    /** The GPIO power button's driver's module. */
+    power_button_module : slop_os.Memory?,
     /** The events service's module. */
     events_module : slop_os.Memory?,
     /** The bundle store's module. */
@@ -508,6 +510,7 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         scheduler = if root.scheduler != NO_CHANNEL { connector_to(root, .Scheduler) } else { null },
         clock_module = module_copy(root, "clock", program_rights),
         acpi_module = module_copy(root, "acpi", program_rights),
+        power_button_module = module_copy(root, "power_button", program_rights),
         events_module = module_copy(root, "events", program_rights),
         bundle_store_module = module_copy(root, "bundle_store", program_rights),
         config_module = module_copy(root, "config", program_rights),
