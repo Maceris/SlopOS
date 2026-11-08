@@ -62,6 +62,26 @@ AdoptOf :: struct {
     ring : slop_os.Memory,
 }
 
+/** A source's budget to set. */
+BudgetOf :: struct {
+    /**
+     * The source, as Open is given it: 1 to the service's NAME_BYTES lowercase letters, digits and underscores; made a
+     * source if it isn't one.
+     */
+    source : slop_os.Relative[u8],
+    /**
+     * The most bytes of its records kept where Store keeps them, from MIN_BUDGET up: past it, the oldest are dropped.
+     */
+    bytes : u64,
+}
+
+/** The smallest budget a source can have, in bytes: 1 KiB. */
+MIN_BUDGET : u64 : 1024
+/** A source's budget until one's set: 4 MiB, the system's services' (decisions/0183). */
+SERVICE_BUDGET : u64 : 4 << 20
+/** The budget a session's program is given: 1 MiB (decisions/0183). */
+SESSION_BUDGET : u64 : 1 << 20
+
 /** A record found by a Query. */
 Found :: struct {
     /** Its number among the source's this boot, from 0; the next Query for more asks from one past it. */
@@ -109,21 +129,27 @@ Request :: union {
      * Answered with Done, or Refused.
      */
     Adopt(AdoptOf),
+    /**
+     * Set how many bytes of a source's records are kept, its owner's budget for them (decisions/0183): SERVICE_BUDGET
+     * until it's set. Answered with Done, or Refused for a name that isn't one, no room for another source, or bytes
+     * below MIN_BUDGET.
+     */
+    Budget(BudgetOf),
 }
 
 /** What the events service answers. */
 Response :: union {
     /** Open's answer: the ring and the doorbell, which move to the client, to keep the ring and give the rest on. */
     Opened(Source),
-    /** Store's, Retire's or Adopt's answer: it's done. */
+    /** Store's, Retire's, Adopt's or Budget's answer: it's done. */
     Done,
     /** Query's answer: the record. */
     Found(Found),
     /** Query's answer when there's no record at or after its from, or no such source, and it doesn't wait. */
     End,
     /**
-     * Open's or Adopt's answer when there's no room for another source or ring, the name is empty, too long or not of
-     * the letters it takes, or the ring couldn't be made or read.
+     * Open's, Adopt's or Budget's answer when there's no room for another source or ring, the name is empty, too long
+     * or not of the letters it takes, the ring couldn't be made or read, or a budget is below MIN_BUDGET.
      */
     Refused,
     /** The answer to a request the events service doesn't know, as from a newer client; every protocol has it. */
@@ -134,8 +160,8 @@ Response :: union {
  * Tell whether a request may be sent again, after a reconnect, without doing more than sending it once did.
  *
  * @param request The request, which isn't changed.
- * @return False for Open, which opens another ring, and Retire and Adopt, whose handles were given; true for Store,
- *     which again changes nothing, Query, which only reads, and Connect.
+ * @return False for Open, which opens another ring, and Retire and Adopt, whose handles were given; true for Store
+ *     and Budget, which again change nothing, Query, which only reads, and Connect.
  */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
@@ -145,6 +171,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Connect(_) => true
         case Retire(_) => false
         case Adopt(_) => false
+        case Budget(_) => true
     }
 }
 
@@ -195,5 +222,25 @@ open :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> os.LaunchE
     return match ask(end, port, &out, &into) {
         case Opened(source) => os.LaunchEvents.{ring = source.ring, doorbell = source.doorbell}
         case _ => null
+    }
+}
+
+/**
+ * Set a source's budget, and wait for the answer.
+ *
+ * @param end A connection to the events service, kept by the caller.
+ * @param port A port bound to end, waited on for the answer.
+ * @param name The source's name, as Open is given it.
+ * @param bytes The most bytes of its records kept, from MIN_BUDGET up.
+ * @return True once it's set; false if the service refused, or couldn't be asked.
+ */
+set_budget :: fn(end: slop_os.Channel, port: slop_os.Port, name: string, bytes: u64) -> bool {
+    out := os.Outgoing.{}
+    request :: os.begin[Request](&out)
+    request^ = .Budget(BudgetOf.{source = os.append(&out, string_bytes(name)), bytes = bytes})
+    into := os.Incoming.{}
+    return match ask(end, port, &out, &into) {
+        case Done => true
+        case _ => false
     }
 }

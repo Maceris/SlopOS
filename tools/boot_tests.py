@@ -999,12 +999,14 @@ TESTS = [
         "--expect-line=[user] account_service: made the account admin, the administrator",
         "--expect-line=[user] account_service: admin recovered with its recovery code",
         f"--expect-line={tests_passed('supervisor: test_accounts', 4)}"])),
-    ("keeps every program's log records on the system volume once it's there", 7, with_before_qemu(
+    ("keeps every program's log records on the system volume once it's there, each source's to its budget", 7, with_before_qemu(
         [argument.replace("test_services", "test_services test_events") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] events: serving",
         "--expect-line=[user] supervisor: test_events: the waiting query got hello's record 0: heap working, random numbers working",
         "--expect-line=[user] supervisor: test_events: hello's record 0 read back from the system volume: heap working, random numbers working",
-        "--expect-line=[user] supervisor: test_events: clock's record 1 read back from the system volume: serving"])),
+        "--expect-line=[user] supervisor: test_events: clock's record 1 read back from the system volume: serving",
+        # The clock service's source given the smallest budget, which its restarts pass, dropping its oldest records (decisions/0183)
+        "--expect-line=[user] supervisor: test_events: the clock service's oldest records were dropped past its budget"])),
     ("starts the events service, the clock service and the storage manager again when they're killed", 7, with_before_qemu(
         # Not the FAT server's FSInfo line or hello's config line, which the kills may come before
         [argument.replace("test_services", "test_services test_restart_services test_storage_restart") for argument in BOOT_DISK_BASE

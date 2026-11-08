@@ -1111,6 +1111,8 @@ prepare :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> Prepared
     if sessions.events_end != NONE {
         match events.open(sessions.events_end, sessions.events_port, name) {
             case Some(opened) => {
+                // A session's program's records kept to its budget (decisions/0183)
+                _ = events.set_budget(sessions.events_end, sessions.events_port, name, events.SESSION_BUDGET)
                 ring_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE)
                     | cast[u32](slop_os.RIGHT_TRANSFER))
                 match slop_os.handle_duplicate(cast[slop_os.Handle](opened.ring), ring_rights) {

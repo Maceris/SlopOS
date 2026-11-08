@@ -9,7 +9,9 @@
  * Each record is shown on the debug log as it's read, rendered (std's schema.render) after its source's name, so
  * serial shows what it did before. Records are kept in memory, as they'd be stored, until Store gives a directory;
  * from then on each source's are in its file there, "<source>.events", and what memory had is written first. A file
- * past FILE_BYTES is moved to "<source>.old", replacing the one there, and a new one started. What's stored is entries
+ * past half its source's budget (events.SERVICE_BUDGET, or what Budget set) is moved to "<source>.old", replacing the
+ * one there, and a new one started: so a source keeps its budget's worth, its oldest records dropped first
+ * (decisions/0183). What's stored is entries
  * as they are in the ring, each batch after a StoredInstance saying which of the source's rings it's from, and each
  * boot's after a StoredStart; a new file starts with every format string and schema its records could need.
  *
@@ -50,8 +52,6 @@ RING_BYTES : u64 : runtime.SLOP_OS_EVENTS_RING_BYTES
  * aside; records past it are dropped, and counted as dropped.
  */
 PENDING_BYTES :: 32768
-/** The bytes a source's file holds before it's moved to its .old file and a new one started. */
-FILE_BYTES : u64 : 256 * 1024
 /** The most bytes of a record's rendered text a query gives; the rest is cut off. */
 TEXT_LIMIT :: 1024
 /** No index: a free ring's source, a free waiting query's client, or a source or record not found. */
@@ -138,6 +138,8 @@ Source :: struct {
     pending : u8[..],
     /** How many bytes its file holds, as the service has written it. */
     file_bytes : u64,
+    /** The most bytes of its records kept, in its file and its .old file together; 0 for events.SERVICE_BUDGET. */
+    budget : u64,
     /** Whether its file's started this boot; false, the next write starts one, with a file header. */
     filed : bool,
 }
@@ -391,6 +393,16 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
                 out := os.Outgoing.{}
                 response :: os.begin[events.Response](&out)
                 response^ = if adopt(service, os.items(into, adopted.source), adopted.ring) { .Done } else { .Refused }
+                _ = events.send_response(end, service.port, &out)
+            }
+            case Budget(budget) => {
+                out := os.Outgoing.{}
+                response :: os.begin[events.Response](&out)
+                index :: if budget.bytes >= events.MIN_BUDGET { source_named(service, os.items(into, budget.source)) } else { NOWHERE }
+                if index != NOWHERE {
+                    service.sources[index % MAX_SOURCES].budget = budget.bytes
+                }
+                response^ = if index != NOWHERE { .Done } else { .Refused }
                 _ = events.send_response(end, service.port, &out)
             }
         }
@@ -873,14 +885,16 @@ level_name :: fn(level: u8) -> string {
  */
 keep :: fn(service: ptr[mut Service], source: ptr[mut Source], entries: u8[], first: u64) {
     if service.storing {
-        // What memory has first, then these
+        // What memory has first, then these; a file past its budget's half moved aside first, so each starts whole
         if source.pending.count > 0 {
+            rotate_if_full(service, source)
             if !write_file(service, source, source.pending) {
                 add_pending(source, entries, first)
                 return void
             }
             runtime.array_reset(&source.pending)
         }
+        rotate_if_full(service, source)
         if !source.filed {
             // A new file: from a StoredStart, with every format string and schema its records could need
             header : u8[..]
@@ -1037,10 +1051,32 @@ pad :: fn(into: ptr[mut u8[..]]) {
 }
 
 /**
- * Add bytes to the end of a source's file, which they start if there's none.
+ * Move a source's file to its .old file, replacing the one there, once it holds half the source's budget
+ * (events.SERVICE_BUDGET, or what Budget set): so the next write starts another, with a file header, and the source
+ * keeps its budget's worth, the oldest dropped first. If the move fails, the file grows on.
  *
- * Once the file holds FILE_BYTES, it's moved to its .old file, replacing the one there, and the next write starts
- * another; if the move fails, the file grows on.
+ * @param service The events service's state, its directory given by Store.
+ * @param source The source, whose file's noted as not started once it's moved.
+ */
+rotate_if_full :: fn(service: ptr[mut Service], source: ptr[mut Source]) {
+    budget :: if source.budget != 0 { source.budget } else { events.SERVICE_BUDGET }
+    if !source.filed || source.file_bytes < budget / 2 {
+        return void
+    }
+    path_storage : u8[64]
+    old_storage : u8[64]
+    old :: path_of(source, ".old", &old_storage)
+    // Gone first, in case the file server's Rename doesn't replace what's there; one that isn't there is no matter
+    _ = os.delete_file_in(service.store, old)
+    if os.rename_in(service.store, path_of(source, ".events", &path_storage), old) == null {
+        source.filed = false
+        source.file_bytes = 0
+    }
+}
+
+/**
+ * Add bytes to the end of a source's file, which they start if there's none (rotate_if_full moves a full one aside
+ * first).
  *
  * @param service The events service's state, its directory given by Store.
  * @param source The source; its file's size is counted, and the file noted as started.
@@ -1061,13 +1097,6 @@ write_file :: fn(service: ptr[mut Service], source: ptr[mut Source], bytes: u8[]
     }
     source.filed = true
     source.file_bytes += cast[u64](bytes.count)
-    if source.file_bytes >= FILE_BYTES {
-        old_storage : u8[64]
-        if os.rename_in(service.store, path, path_of(source, ".old", &old_storage)) == null {
-            source.filed = false
-            source.file_bytes = 0
-        }
-    }
     return true
 }
 

@@ -1159,6 +1159,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     waiting := Waiting.{end = NONE}
     if test_events {
         waiting = wait_for_hello(&supervisor)
+        // The smallest budget for the clock service's records, which check_events makes it pass, so its oldest are dropped
+        if !events.set_budget(supervisor.events_end, supervisor.events_port, "clock", events.MIN_BUDGET) {
+            log_line.write(supervisor.log, "supervisor: test_events: the clock service's budget wasn't set")
+        }
     }
     // Then every other driver, and the services that use them, each with connectors to what it uses
     start_drivers(&supervisor, false)
@@ -3638,8 +3642,9 @@ wait_for_hello :: fn(supervisor: ptr[mut Supervisor]) -> Waiting {
 }
 
 /**
- * Finish test_events, once everything has started, logging what's found: the held query's answer, and hello's first
- * record and the clock service's second, read back from where the events service stores them.
+ * Finish test_events, once everything has started, logging what's found: the held query's answer; hello's first
+ * record and the clock service's second, read back from where the events service stores them; and, the clock service
+ * started again past its source's smallest budget, that its oldest records were dropped.
  *
  * @param supervisor The supervisor, whose events service is queried, waiting without handling its port.
  * @param waiting The connection wait_for_hello made, whose answer is waited for; with an end of NONE, it's skipped.
@@ -3672,7 +3677,30 @@ check_events :: fn(supervisor: ptr[mut Supervisor], waiting: Waiting) {
             case _ => log_line.write(supervisor.log, "supervisor: test_events: no record of %", source)
         }
     }
+    /*
+     * The clock service started again BUDGET_RESTARTS times, past its source's smallest budget, a pause after each for
+     * the events service to store what it wrote apart: so its file's moved aside more than once, and its oldest records
+     * are dropped
+     */
+    for round in 0..<BUDGET_RESTARTS {
+        _ = kill_and_wait(supervisor, "clock", "test_events")
+        pause(supervisor, BUDGET_PAUSE)
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[events.Request](&out)
+    request^ = .Query(events.QueryOf.{source = bytes_of(&out, "clock"), from = 0, level = 0})
+    into := os.Incoming.{}
+    match events.ask(supervisor.events_end, supervisor.events_port, &out, &into) {
+        case Found(found) => log_line.write(supervisor.log, "supervisor: test_events: the clock service's oldest records %",
+            if found.number > 0 { "were dropped past its budget" } else { "were kept, though past its budget" })
+        case _ => log_line.write(supervisor.log, "supervisor: test_events: no record of the clock service")
+    }
 }
+
+/** How many times test_events starts the clock service again past its budget: RESTARTS, so it's started each time. */
+BUDGET_RESTARTS :: 3
+/** How long test_events waits after each, for the events service to store what it wrote, in nanoseconds: 50 ms. */
+BUDGET_PAUSE : u64 : 50_000_000
 
 /**
  * Append a string's bytes to an outgoing message, for a field that refers to them.
