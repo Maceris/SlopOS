@@ -338,10 +338,8 @@ set_breakpoint :: fn(session: ptr[mut Debugging], name: string) {
     // On the heap, with its newline, as the symbols program takes names
     names :: message("%\n", name)
     answer : u8[DEBUG_ANSWER_BYTES]
-    // One offset, its line skipped: an entry value that's an empty list reads as missing (base's schema_read_value)
-    count :: ask_symbols(session.shell, session.call.executable, offsets, names, answer)
+    count :: ask_symbols(session.shell, session.call.executable, offsets[0..<0], names, answer)
     at : usize = 0
-    _ = next_line(answer, count, &at)
     line :: next_line(answer, count, &at)
     found :: number_of(line) or_else 0
     if found == 0 {

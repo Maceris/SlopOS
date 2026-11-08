@@ -168,7 +168,7 @@ Four parts, each with an as-built record:
   bundle store doesn't keep it; `print` shows 8 bytes as a number. Fibers aren't listed, only threads. Breakpoints are
   given to the stopped thread, not to every thread. Attaching to a process the shell didn't start, through the
   powerbox, isn't built: `debug` debugs what it starts. Each stays for a later stage.
-- **Found on the way.** An entry value that's an empty string or list reads as missing, ending the program with 126:
-  `symbols`' names are optional, and a lookup sends one offset more than it needs, until Hemera's fixed.
+- **Found on the way.** An entry value that's an empty string or list, pointing somewhere, read as missing, ending the
+  program with 126: its writer gave a distance past what it wrote. Hemera's schema reader takes an empty one as null now.
 - **Tests.** `test_control` drives a thread through a hardware breakpoint, a step and a watchpoint on both
   architectures; a boot test debugs `test_shell_calls`: a breakpoint on its main, a step, its stack, and its end.
