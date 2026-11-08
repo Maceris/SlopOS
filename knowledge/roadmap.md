@@ -402,6 +402,10 @@ In four stages: **12a** crash reports and symbols; **12b** the debugger; **12c**
 and profiling. From the catch-up (`decisions/0101`): in 12b, a debugger reading pages nothing has touched yet
 (`0056`); in 12d, the per-thread page shared with the kernel (`0041`).
 
+Planned 2026-11-08 (`decisions/0183`), with the project's owner: DWARF and Hemera's schemas beside it; replay exact
+for several carriers too, through a deterministic mode in Hemera's `std`; the events service keeping a budget per
+source. 12a takes lockup detection and the budgets too; 12d the boot timeline and what was lent to each process.
+
 Specs: DWARF 5.
 Stresses: the compiler's debug information, reflection over arbitrary values, fibers seen from outside.
 
@@ -507,4 +511,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | M11 | done 2026-11-06 (`decisions/0162` to `0180`): the shell, its language, calls through manifests, pipelines, interactive use, and the tools and scripts |
 | Before P | done 2026-11-07 (`decisions/0181`), in seven parts, F1 to F7: what M10, M11, R and B left, with what the chaos tests found fixed |
 | P | done 2026-11-07 (`decisions/0182`), in five parts, P1 to P5: turning off and restarting, AML, the ACPI service and the power button, a graceful shutdown, the hardware watchdog |
-| M12–M16, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
+| M12 | planned 2026-11-08 (`decisions/0183`), in four stages, 12a to 12d; not started |
+| M13–M16, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |

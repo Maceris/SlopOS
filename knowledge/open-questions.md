@@ -100,10 +100,11 @@ functions local to them; and entries taking typed values from an `arguments` pag
 
 ## Observability
 
-Open, from `design/observability.md` (2026-10-24):
+Answered 2026-11-08 (`decisions/0183`):
 
-- **Replay's promise**: exact for a process on one carrier, best effort for several (`observability.md` §5).
-- **Debug information**: DWARF alone, or Hemera's schemas beside it for the debugger's view of values.
+- **Replay's promise**: exact for several carriers too, through a deterministic mode in Hemera's `std`; one carrier
+  at a time, switched only at system calls.
+- **Debug information**: DWARF, and Hemera's schemas beside it, for the debugger's view of values.
 
 ## Networking
 
