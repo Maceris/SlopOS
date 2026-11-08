@@ -232,7 +232,8 @@ rings (`RING_BYTES`):
   executable (with `RIGHT_MEMORY_READ`, and `RIGHT_MEMORY_EXECUTE` to share its code); and up to 32 grants (16
   before version 2, 24 before 9c3), each with its label. The requester makes the process,
   its space and its budget, so the result is never the manager's. The answer is `Loaded` with the first thread's
-  ID, or `NotLoaded` with a `LoadStatus`; either way the manager keeps none of the handles.
+  ID and where the image was loaded (`Started`), or `NotLoaded` with a `LoadStatus`; either way the manager keeps
+  none of the handles.
 - `Connect`: a `Channel[ProcessManager]`, which becomes another client.
 
 ## Protocols

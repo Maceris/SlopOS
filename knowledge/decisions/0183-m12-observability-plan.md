@@ -1,6 +1,6 @@
 # 0183: M12, Observability and Debugging, Planned
 
-Status: accepted, chosen with the project's owner; not started
+Status: accepted, chosen with the project's owner; 12a built
 Date: 2026-11-08
 Related: `0009` (replay through system calls), `0017` and `0056` (process control and intercepts), `0024` (replay is
 opt-in), `0041` (the per-thread page), `0053` (kernel-copied channel access), `0093` (the events service), `0134` (the
@@ -101,3 +101,45 @@ Four parts, each with an as-built record:
 - `../open-questions.md`' observability questions are answered.
 - Hemera gains the deterministic mode in 12c. It's `std`'s, so it's tested in Hemera too.
 - The build package keeps each program's DWARF and schemas, and the generation builder puts them in the bundle store.
+
+## As Built: 12a
+- **Fault kinds.** A fault stop's `number` is a `FAULT_` kind (`std/os/slop_os`): read, write and execute for a page
+  fault, and invalid instruction, breakpoint, single step, arithmetic, alignment, protection and floating point for
+  the rest, with `fault_name` to name one. Before, every fault that wasn't a page fault said `0xff`.
+- **A launch's fault intercept.** `os.LaunchOptions.faults` attaches an intercept of the program's faults between
+  making its process and loading it, so even its first instruction's fault is caught. `os.Launched` gives the
+  intercept, a rightless handle to the program's address space (`process_read_memory` needs none), and where its
+  image is: the process manager's `Loaded` now carries a `Started`, the first thread and the image's address.
+- **`STOP_FAULT_LIMITED`.** Found while wiring the supervisor: a holder stops being an exception port and becomes a
+  hazard if it's waiting on the crashed process when it faults, as the supervisor's thirty-odd synchronous asks
+  can. With this point bit, which launches use, a fault stop not let go within a second ends its process as F6 would,
+  through a timer on the thread (`fire_fault_stop`). A debugger (12b) leaves it out.
+- **Reports.** `src/crash_reports` makes a report of a fault stop: the fault, the thread's registers, up to 32 frames
+  walked through frame pointers (Hemera keeps them in every function) with `process_read_memory`, and the image's
+  address; logs it as a typed record, `crash: %` with the `CrashReport`; and lets the thread go, killed, before the
+  holder kills the process. Memory isn't dumped: nothing asks for it yet.
+- **Holders.** The shell for its programs, polling its jobs' intercepts while it waits on their output too; the
+  supervisor for the system's services, which are then started again as any that ended; the session manager for a
+  session's programs. Each logs `<name> crashed: <fault>`.
+- **Symbols.** `symbols`, a program that holds the crashed program's file and nothing else, names offsets by the
+  file's `.symtab`: a function and the offset into it. The shell keeps each crash's program file, and its `crashes`
+  built-in shows the reports, oldest first, each frame named through `symbols`. Lines from DWARF wait for 12b, where
+  the debugger needs them anyway; so do schemas in the bundle store. The supervisor's and session manager's reports
+  are logged with offsets in the image, unnamed; a tool to read them back needs a typed query of the events service,
+  which 12a doesn't add.
+- **Lockups.** `lockups.hsc`: each CPU's tick notes its heartbeat and checks every other ticking CPU's is within 5
+  seconds. A stuck CPU on x86-64 is sent an NMI (`arch_interface.send_nmi`), which notes the program counter it
+  interrupted, logged as an offset in the kernel; then the kernel stops with `Lockup` (8), which the panic record
+  keeps. The registers and stack aren't written to the panic record: that one address is logged. AArch64 has no
+  NMI without pseudo-NMIs, so it reports which CPU, and stops. A CPU waking from tickless idle renews its heartbeat
+  before it counts as ticking, or another sees it stale.
+- **Retention.** A source keeps its budget of records: 4 MiB by default (the system's services), 1 MiB for a
+  session's programs, which the session manager sets with the events protocol's new `Budget`. A source's file is
+  moved to `.old` before a write once it holds half its budget, so each new file starts whole. Found on the way: the
+  file server's `Rename` doesn't replace, so every source's file grew after its first move; `.old` is deleted first
+  now. The configuration doesn't raise budgets yet.
+- **Tests.** The shell's `test_shell_calls 2 crash` traps, is reported, `crashes` names `main` and `hemera_entry`,
+  and the shell goes on; `test_crash` crashes the update service, which the supervisor reports and starts again;
+  `test_installations` crashes the counter last; `test_control` checks a launch's intercept, a report's frames and
+  `STOP_FAULT_LIMITED`; `test_lockup` spins CPU 1 with interrupts off; `test_events` drops a source's oldest records
+  past the smallest budget. On both architectures.

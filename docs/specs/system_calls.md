@@ -104,7 +104,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 38 | `thread_resume` | process, thread ID | nothing: a suspended thread goes on. Needs `RIGHT_PROCESS_WRITE_STATE` |
 | 39 | `thread_read_registers` | process, thread ID, registers (a slice of at least `THREAD_REGISTERS`) | nothing: a stopped or suspended thread's `THREAD_REGISTERS` registers, as u64s, written at registers. Needs `RIGHT_PROCESS_INSPECT` |
 | 40 | `thread_write_registers` | process, thread ID, registers (a slice of at least `THREAD_REGISTERS`) | nothing: a stopped or suspended thread's registers, set from registers. Needs `RIGHT_PROCESS_WRITE_STATE` |
-| 41 | `intercept_attach` | process, port, key, calls, points | an owning handle to an intercept of the process's subtree, paid for by the caller's process's budget: its threads stop at the entry or exit (`STOP_SYSCALL_ENTRY`, `STOP_SYSCALL_EXIT`) of the calls whose bit is set in calls, and at faults (`STOP_FAULT`). Needs `RIGHT_PROCESS_INTERCEPT` and `RIGHT_PORT_BIND` |
+| 41 | `intercept_attach` | process, port, key, calls, points | an owning handle to an intercept of the process's subtree, paid for by the caller's process's budget: its threads stop at the entry or exit (`STOP_SYSCALL_ENTRY`, `STOP_SYSCALL_EXIT`) of the calls whose bit is set in calls, and at faults (`STOP_FAULT`); with `STOP_FAULT_LIMITED` too, a fault stop not let go within a second ends its process. Needs `RIGHT_PROCESS_INTERCEPT` and `RIGHT_PORT_BIND` |
 | 42 | `intercept_next` | intercept, stop (a pointer) | nothing: the next stop not yet reported, a `StopInfo`, written at stop |
 | 43 | `intercept_resume` | intercept, thread ID, action | nothing: a thread the intercept stopped goes on: `Continue`, `Skip` (at an entry only) or `Kill` |
 | 44 | `process_kill` | process | nothing: the process is destroyed, with its subtree. Needs `RIGHT_PROCESS_KILL` |
@@ -186,7 +186,8 @@ one. Mappings of the same memory share its frames. `memory_map` maps nothing at 
 that overlaps another mapping or a channel's rings; `channel_map` refuses a range a mapping holds.
 
 A fault in user mode outside any mapping, or an access a mapping doesn't allow (a write to a read-only
-one, running code from one that isn't executable), destroys the faulting thread. Closing a memory object
+one, running code from one that isn't executable), stops the faulting thread for an intercept of its process's
+subtree that takes faults; without one, it ends the whole process (`0181`'s F6). Closing a memory object
 unmaps it from every address space; destroying an address space takes down what's mapped in it.
 
 - **Device memory** (`memory_create_physical`) is a range of physical addresses that isn't RAM the kernel
@@ -268,8 +269,12 @@ exception port. Each stop adds one to the count in the intercept's `Stop` packet
 |---|---|
 | `thread: u64` | The thread's ID |
 | `point: StopPoint` (u32) | `SyscallEntry` (1), `SyscallExit` (2), `Fault` (3) |
-| `number: u32` | The call's number; for a fault, the access: 0 read, 1 write, 2 execute |
-| `address: u64` | For a fault, the address it touched |
+| `number: u32` | The call's number; for a fault, its kind: `FAULT_READ` (0), `FAULT_WRITE` (1) and `FAULT_EXECUTE` (2) for a page fault, or `FAULT_INVALID_INSTRUCTION` (3), `FAULT_BREAKPOINT` (4), `FAULT_SINGLE_STEP` (5), `FAULT_ARITHMETIC` (6), `FAULT_ALIGNMENT` (7), `FAULT_PROTECTION` (8), `FAULT_FLOATING_POINT` (9) |
+| `address: u64` | For a page fault, the address it touched; 0 for the other kinds |
+
+With `STOP_FAULT_LIMITED` among the points, a thread stopped at a fault that isn't let go within a second ends its
+process, as a fault without an intercept does: a holder that makes crash reports (`0183`), busy waiting on that
+very process, can't keep it stopped for good. A debugger leaves it out.
 
 `intercept_resume` lets a stopped thread go on. `Continue` at an entry makes the call, with any registers the
 debugger changed (it doesn't stop at that entry again); at an exit, returns to user mode; at a fault,
