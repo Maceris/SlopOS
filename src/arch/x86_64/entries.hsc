@@ -49,7 +49,7 @@ kernel_entry_point #calling_convention(.entry) :: fn(frame: ptr[mut x86_64.Regis
         cpu.carrier.stack_limit = cpu.critical_stack_limits[cast[u8](arch_interface.CriticalEvent.Nmi)]
         intrinsics.set_carrier(cpu.carrier)
         push_context entry from cpu.context^ {
-            kernel_entry.nmi()
+            kernel_entry.nmi(frame.rip)
         }
         cpu.carrier.stack_limit = saved_limit
         return void

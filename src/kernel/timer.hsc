@@ -72,6 +72,9 @@ handle_timer :: fn() -> bool {
         cpu.next_tick = if cpu.next_tick + period > now { cpu.next_tick + period } else { now + period }
     }
     program_deadline(cpu)
+    if tick {
+        check_lockups(kernel, cpu, now)
+    }
     if !tick || cpu.index != 0 {
         return tick
     }

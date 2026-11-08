@@ -659,3 +659,15 @@ write_u32 :: fn(base: u64, offset: u64, value: u32) {
 write_u64 :: fn(base: u64, offset: u64, value: u64) {
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](base + offset), value)
 }
+
+/**
+ * Send another CPU an NMI (arch_interface.send_nmi): AArch64 has none without pseudo-NMIs through the GIC's
+ * priorities (decisions/0065), which aren't set up, so nothing's sent and a lockup's report goes without where the
+ * stuck CPU was.
+ *
+ * @param cpu_hardware_id Unused.
+ * @return False.
+ */
+send_nmi :: fn(cpu_hardware_id: u64) -> bool {
+    return false
+}

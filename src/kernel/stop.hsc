@@ -38,6 +38,11 @@ StopReason :: enum #backed_by(u8) {
      * once it has logged the objects left.
      */
     RootTaskEnded = 7,
+    /**
+     * A CPU made no progress for LOCKUP_SECONDS, not being idle, as one spinning with interrupts off would
+     * (lockups.hsc, decisions/0183).
+     */
+    Lockup = 8,
 }
 
 /**

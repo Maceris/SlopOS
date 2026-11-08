@@ -342,7 +342,8 @@ go_idle :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu]) #never_returns {
      * only for its own timers, and it counts as quiescent until an interrupt wakes it. Not the boot CPU, whose ticks
      * keep the kernel's own time for stopping and its tests. A thread made ready here wakes it (make_ready).
      */
-    if cpu.index != 0 && intrinsics.atomic_load_u32_acquire(&cpu.run_queue.count) == 0 && cpu.limbo == 0 {
+    if cpu.index != 0 && !kernel.options.test_lockup && intrinsics.atomic_load_u32_acquire(&cpu.run_queue.count) == 0 &&
+        cpu.limbo == 0 {
         intrinsics.atomic_store_u32_release(&cpu.tickless, 1)
         intrinsics.atomic_store_u64(&cpu.quiescent_epoch, IDLE_EPOCH)
         program_deadline(cpu)

@@ -991,6 +991,14 @@ power_off : fn(method: u8) : ---
  */
 test_nmi : fn() : ---
 
+/**
+ * Send another CPU an NMI, for lockup detection (decisions/0183), which interrupts it even with interrupts off.
+ *
+ * @param cpu_hardware_id The CPU's hardware ID.
+ * @return True if it was sent; false where the architecture has no NMI to send (AArch64, until pseudo-NMIs).
+ */
+send_nmi : fn(cpu_hardware_id: u64) -> bool : ---
+
 /** A device the emulator always has that raises a wired interrupt: its controller, and its line there. */
 TestDevice :: struct {
     /** The kind of controller its line is on. */

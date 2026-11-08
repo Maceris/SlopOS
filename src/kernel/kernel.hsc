@@ -165,6 +165,10 @@ Kernel :: struct {
     root_ended : u32,
     /** The boot CPU's tick the kernel stops at once the root task has ended, set when root_ended goes to 2. */
     root_stop_tick : u64,
+    /** 1 once a lockup's been seen, so only one CPU reports it (lockups.hsc); compare-exchanged. */
+    lockup : u32,
+    /** The stuck CPU's index plus one, whose NMI notes where it was; 0 before a lockup (lockups.hsc). */
+    lockup_target : u32,
     /** The counter next_cpu_of turns from, so IRQs are routed to the CPUs in turn (irqs.hsc, devices.hsc). */
     next_irq_cpu : u32,
     /** Held while changing the list of devices from first_device (devices.hsc). */
@@ -246,6 +250,12 @@ PerCpu :: struct #align(64) {
     timer_ticks : u64,
     /** How many NMIs this CPU has handled; written atomically by the NMI handler. */
     nmi_count : u32,
+    /** When this CPU last ticked, in counter ticks, for lockup detection (lockups.hsc); written atomically. */
+    heartbeat : u64,
+    /** Where a lockup's NMI found this CPU: the interrupted program counter (lockups.hsc). */
+    lockup_pc : u64,
+    /** 1 once lockup_pc is written, read atomically. */
+    lockup_seen : u32,
     /** CPU_WAITING while the boot CPU starts this one, then CPU_ONLINE or CPU_ABANDONED (cpus.hsc). */
     start_state : u32,
     /** Whether an interrupt has taken this CPU to its kernel stack, off its boot stack for good. */
@@ -418,6 +428,10 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         }
         if kernel.options.test_nmi {
             test_nmi(kernel, cpu)
+        }
+        if kernel.options.test_lockup {
+            // Running until lockup detection stops it, with Lockup
+            kernel.stop_after_ticks = 0xffffffffffffffff
         }
         if kernel.options.test_fibers {
             test_fibers(kernel)

@@ -140,6 +140,17 @@ test_nmi :: fn() {
 }
 
 /**
+ * Send another CPU an NMI (arch_interface.send_nmi), physical destination.
+ *
+ * @param cpu_hardware_id The CPU's x2APIC ID.
+ * @return True: x86-64 always has NMIs to send.
+ */
+send_nmi :: fn(cpu_hardware_id: u64) -> bool {
+    x86_64.wrmsr(X2APIC_ICR, (cpu_hardware_id << 32) | ICR_DELIVERY_NMI)
+    return true
+}
+
+/**
  * Tell whether an interrupt is waiting in the calling CPU's local APIC, for preemption points.
  *
  * @return True if any bit of the 8 interrupt request registers is set: an interrupt accepted but not yet delivered,

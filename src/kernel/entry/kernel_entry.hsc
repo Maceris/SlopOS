@@ -178,12 +178,16 @@ access_name :: fn(access: arch_interface.Access) -> string {
 /**
  * Handle an NMI, which can arrive at any time, kernel code included; returns to the interrupted code.
  *
- * Counts it in the CPU's nmi_count (for test_nmi), and does nothing else: an NMI can interrupt this CPU while it holds
- * any lock, the console's included, so it takes none, and doesn't log.
+ * Counts it in the CPU's nmi_count (for test_nmi), and notes where it interrupted if a lockup's report asked
+ * (kernel.note_lockup); nothing else: an NMI can interrupt this CPU while it holds any lock, the console's included, so
+ * it takes none, and doesn't log.
+ *
+ * @param pc The interrupted program counter.
  */
-nmi :: fn() {
+nmi :: fn(pc: u64) {
     cpu :: kernel.per_cpu()
     intrinsics.atomic_store_u32_release(&cpu.nmi_count, cpu.nmi_count + 1)
+    kernel.note_lockup(cpu.kernel, cpu, pc)
 }
 
 /**

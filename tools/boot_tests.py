@@ -1180,6 +1180,9 @@ TESTS = [
         "--expect-line=[info] objects left: only the kernel's own", "--", "-smp", "2"]),
     program_test("controls a process from a debugger in user mode", "test_control", 2),
     ("resumes after an NMI", 0, ["--command-line=test_exit test_nmi", "--expect-line=[info] test_nmi: back from the NMI"]),
+    # A CPU spinning with interrupts off is caught by another's tick, and the kernel stops with Lockup (decisions/0183)
+    ("catches a CPU that stops making progress", 8, ["--command-line=test_exit test_lockup",
+        "--expect-line=[info] test_lockup: CPU 1 spins with interrupts off", "--", "-smp", "2"]),
     ("switches between fibers", 0, ["--command-line=test_exit test_fibers",
                                     "--expect-line=[info] test_fibers: 2 tests: 2 passed, 0 failed"]),
     ("shares fiber pools between CPUs", 0, ["--command-line=test_exit test_pool",
