@@ -506,5 +506,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | M10 | done 2026-11-02 (`decisions/0136` to `0161`): the terminal and input services and the trusted path, accounts, login and sessions, the powerbox and sharing |
 | M11 | done 2026-11-06 (`decisions/0162` to `0180`): the shell, its language, calls through manifests, pipelines, interactive use, and the tools and scripts |
 | Before P | done 2026-11-07 (`decisions/0181`), in seven parts, F1 to F7: what M10, M11, R and B left, with what the chaos tests found fixed |
-| P | planned 2026-11-07 (`decisions/0182`), in five parts, P1 to P5: P1 and P2 done 2026-11-07 |
+| P | planned 2026-11-07 (`decisions/0182`), in five parts, P1 to P5: P1 to P3 done 2026-11-07 |
 | M12–M16, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
