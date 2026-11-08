@@ -1,6 +1,6 @@
 # 0183: M12, Observability and Debugging, Planned
 
-Status: accepted, chosen with the project's owner; built, 12a to 12d
+Status: accepted, chosen with the project's owner; built, 12a to 12d; what it left planned in `0185`
 Date: 2026-11-08
 Related: `0009` (replay through system calls), `0017` and `0056` (process control and intercepts), `0024` (replay is
 opt-in), `0041` (the per-thread page), `0053` (kernel-copied channel access), `0093` (the events service), `0134` (the
@@ -202,7 +202,7 @@ Four parts, each with an as-built record:
 - **Not yet.** Handles received on a channel can't be replayed, as the replay doesn't have them; channels aren't given
   without `map`, so a program mapping one isn't replayable; the recording isn't kept past the shell.
 - **Found on the way.** `port_wait` with an empty packet buffer seemed not to keep its deadline; the test pauses on a
-  port of its own now, and the kernel's behaviour is left to look into.
+  port of its own now. It was the pause that didn't wait, not `port_wait`: an empty wait is refused now (`0184`).
 - **Tests.** `test_control` traps a counter read and changes its value; a boot test records `test_replay`'s threads,
   replays them exactly, and replays them with another count, which diverges, and says where. On both architectures.
 

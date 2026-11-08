@@ -413,6 +413,13 @@ Hemera's deterministic mode; the kernel's trace, the boot timeline, and the shel
 from DWARF and values through schemas, fibers listed, attaching through the powerbox, a recording kept as a file, an
 administrator's `trace` tool, what was lent to each process, and the per-thread page.
 
+What it left, planned 2026-11-08 (`decisions/0185`), with the project's owner, in four more stages: **12e** debug
+information (full DWARF variables and types, linked to schemas, in a debug file in the bundle store; lines and values
+in the debugger and crash reports); **12f** the debugger's reach (process-wide breakpoints, fibers listed, attaching
+through the powerbox); **12g** recordings as files, received handles replayed, the administrator's `trace`, system
+reports read back, budgets from the configuration; **12h** the per-thread page, what services spent on each
+process's behalf, and a lockup's registers, with pseudo-NMIs on AArch64.
+
 Specs: DWARF 5.
 Stresses: the compiler's debug information, reflection over arbitrary values, fibers seen from outside.
 
@@ -518,5 +525,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | M11 | done 2026-11-06 (`decisions/0162` to `0180`): the shell, its language, calls through manifests, pipelines, interactive use, and the tools and scripts |
 | Before P | done 2026-11-07 (`decisions/0181`), in seven parts, F1 to F7: what M10, M11, R and B left, with what the chaos tests found fixed |
 | P | done 2026-11-07 (`decisions/0182`), in five parts, P1 to P5: turning off and restarting, AML, the ACPI service and the power button, a graceful shutdown, the hardware watchdog |
-| M12 | planned 2026-11-08 (`decisions/0183`), in four stages, 12a to 12d; not started |
+| M12 | 12a to 12d built 2026-11-08 (`decisions/0183`); 12e to 12h, what they left, planned (`decisions/0185`) |
 | M13–M16, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
