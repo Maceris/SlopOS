@@ -494,6 +494,22 @@ TESTS = [
         "--expect-line=[user] sessions: a session for bob, in en-US",
         "--refuse-console-line=correct horse battery staple", "--refuse-console-line=another good passphrase",
         "--refuse-console-line=not the password"])),
+    # The hardware watchdog (decisions/0182, P5): QEMU's i6300esb, armed for 4 seconds once the supervisor's start is
+    # done, and reset while the services answer, through 20 seconds of settling, so the run ends as it would without
+    # it; and with test_watchdog_hang not reset, so it resets the machine, which QEMU, without --allow-reboot, takes as
+    # its end, without an exit code
+    ("keeps a hardware watchdog from resetting the machine while the services answer", 7,
+     with_before_qemu([argument.replace("test_services", "test_services watchdog=4 test_settle=20").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [
+        "--expect-line=[user] i6300esb: armed, 4 seconds", "--expect-line=[user] supervisor: the watchdog's armed, 4 seconds"])
+     + ["-device", "i6300esb"]),
+    ("lets the hardware watchdog reset a machine whose supervisor stops resetting it", 125,
+     with_before_qemu([argument.replace("test_services", "test_services watchdog=4 test_watchdog_hang test_settle=60")
+                       .replace("--timeout=120", "--timeout=180") for argument in BOOT_DISK_BASE
+                       if not argument.startswith("--expect-line=") or argument == HEALTHY_LINE], [
+        "--expect-line=[user] i6300esb: armed, 4 seconds",
+        "--expect-line=[user] supervisor: test_watchdog_hang: the watchdog isn't reset"])
+     + ["-device", "i6300esb"]),
     # Shutting down from the shell (decisions/0182, P4): shut-down asks the session's powerbox, the secure attention key
     # brings up the administrator's name and password on the trusted path, a wrong password is refused, and the right
     # one has the system shut down, gracefully, and the machine turned off; no password shows on the console

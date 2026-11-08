@@ -16,6 +16,7 @@ import system_records from "../system_records"
 import clock_service from "../services/clock"
 import acpi_service from "../services/acpi_service"
 import power_button from "../drivers/power_button"
+import i6300esb from "../drivers/i6300esb"
 import events_service from "../services/events_service"
 import bundle_store_service from "../services/bundle_store_service"
 import config_service from "../services/config_service"
@@ -284,6 +285,10 @@ SERVICES :: Service.[
     Service.{name = "disk_check", module = "disk_check.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(disk_check.main), not_restarted = true},
     // A modern virtio entropy device (virtio's device ID 4, as PCI device 0x1040 + 4)
+    // The hardware watchdog, Intel's 6300ESB, as QEMU has it (decisions/0182, P5): the supervisor its one client
+    Service.{name = "i6300esb", module = "i6300esb.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
+        entry = type_of(i6300esb.main), devices = platform_protocol.DeviceMatch.{vendor = 0x8086, device = 0x25ab,
+        class = platform_protocol.ANY_CLASS}},
     Service.{name = "virtio_rng", module = "virtio_rng.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(virtio_rng.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1044,
         class = platform_protocol.ANY_CLASS}, trusted_with_dma = true},

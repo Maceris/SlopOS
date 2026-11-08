@@ -29,6 +29,8 @@ KILL_WAIT : u64 : 500_000_000
 stop_everything :: fn(supervisor: ptr[mut Supervisor]) {
     started_at :: slop_os.clock_monotonic() or_else 0
     deadline :: started_at + SHUTDOWN_DEADLINE
+    // The watchdog first, so a long shutdown isn't cut short (watchdog.hsc)
+    disarm_watchdog(supervisor)
     committed := false
     stopped : u32 = 0
     killed : u32 = 0

@@ -469,7 +469,8 @@ read_object :: fn(root: ptr[uefi.File], hash: bundle.Hash, memory_kind: u32) -> 
  * Write the kernel's command line into the handoff.
  *
  * It's the generation's command line, then " generation=" and its number in decimal, " recovery" for the recovery
- * generation, and " store_root=" and the store's root hash in hex when it has one. What doesn't fit in
+ * generation, " development" for one built for development, which the supervisor gives the watchdog a longer timeout
+ * for (decisions/0182), and " store_root=" and the store's root hash in hex when it has one. What doesn't fit in
  * handoff.command_line with a zero after it is cut off.
  *
  * @param handoff The handoff, its command_line zeroed beforehand; the bytes after the line are left zero.
@@ -484,6 +485,9 @@ write_command_line :: fn(handoff: ptr[mut boot_protocol.Handoff], generation: pt
     append(&line, generations.decimal(generation.number, &digits))
     if generation.state == generations.STATE_RECOVERY {
         append(&line, " recovery")
+    }
+    if generation.development == 1 {
+        append(&line, " development")
     }
     if !bundle.same(generation.store_root, bundle.Hash.{}) {
         hex_storage : u8[64]
