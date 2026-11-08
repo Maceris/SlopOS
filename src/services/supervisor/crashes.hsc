@@ -2,7 +2,6 @@ package supervisor
 
 import os from "std"
 import slop_os from "std/os"
-import lifecycle from "std/os/slop_os"
 import log_line from "../../log_line"
 import crash_reports from "../../crash_reports"
 
@@ -82,19 +81,13 @@ forget_launched_faults :: fn(supervisor: ptr[mut Supervisor]) {
     }
 }
 
-/** The number test_crash's ping carries, which a service's answer echoes and the supervisor ignores. */
-TEST_CRASH_PING : u32 : 0x7e57
-/** How many times, a millisecond apart, test_crash tries to read a suspended thread's registers. */
-TEST_CRASH_ATTEMPTS :: 100
-
 /**
- * Make a service crash, for test_crash: its first thread suspended, woken by a ping if it waits, its program counter
- * sent to its own stack, which can't be run, and resumed, so it faults there at once; then wait for its crash to be
- * reported and for it to be started again.
+ * Make a service crash, for test_crash (crash_reports.make_crash), then wait for its crash to be reported and for it
+ * to be started again.
  *
  * @param supervisor The supervisor, whose port is handled meanwhile.
  * @param name The service's name, as started has it.
- * @return True once it's running again; false if nothing was running under name, its thread couldn't be changed, or
+ * @return True once it's running again; false if nothing was running under name, it couldn't be made to crash, or
  *     it's done for good.
  */
 crash_and_wait :: fn(supervisor: ptr[mut Supervisor], name: string) -> bool {
@@ -107,40 +100,15 @@ crash_and_wait :: fn(supervisor: ptr[mut Supervisor], name: string) -> bool {
     if index >= supervisor.started.count {
         return false
     }
-    process :: supervisor.started[index].process
     restarts :: supervisor.started[index].restarts
-    ids : u64[1]
-    if (slop_os.process_threads(process, ids) or_else 0) == 0 {
-        return false
-    }
     log_line.write(supervisor.log, "supervisor: test_crash: crashing %", name)
-    slop_os.thread_suspend(process, ids[0]) or_return false
-    // One waiting is suspended once it wakes, which a ping on its lifecycle channel makes it do
-    if supervisor.started[index].lifecycle != NONE {
-        _ = lifecycle.ping(supervisor.started[index].lifecycle, TEST_CRASH_PING)
-    }
-    registers : u64[slop_os.THREAD_REGISTERS]
-    // A thread running on another CPU is suspended once it leaves it, so its registers are read when they can be
-    read := false
-    for attempt in 0..<TEST_CRASH_ATTEMPTS {
-        if slop_os.thread_read_registers(process, ids[0], registers) is_ok {
-            read = true
-            break
+    ping : slop_os.Channel? = if supervisor.started[index].lifecycle != NONE { supervisor.started[index].lifecycle } else { null }
+    match crash_reports.make_crash(supervisor.started[index].process, ping) {
+        case Ok => {}
+        case Error(error) => {
+            log_line.write(supervisor.log, "supervisor: test_crash: % couldn't be made to crash: %", name, error)
+            return false
         }
-        pause(supervisor, 1_000_000)
-    }
-    changed :: read && cast[usize](crash_reports.PC_REGISTER) < registers.count
-    if changed {
-        registers[crash_reports.PC_REGISTER] = registers[crash_reports.STACK_REGISTER] & ~cast[u64](15)
-    }
-    wrote : Result[void, slop_os.ControlError] = .Error(.NotStopped)
-    if changed {
-        wrote = slop_os.thread_write_registers(process, ids[0], registers)
-    }
-    _ = slop_os.thread_resume(process, ids[0])
-    if !(wrote is_ok) {
-        log_line.write(supervisor.log, "supervisor: test_crash: %'s thread couldn't be sent elsewhere: read %, wrote %", name, read, wrote)
-        return false
     }
     loop {
         wait_and_handle(supervisor)

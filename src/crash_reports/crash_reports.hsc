@@ -17,6 +17,7 @@ package crash_reports
 import runtime from "base"
 import slop_os from "std/os"
 import os from "std"
+import lifecycle from "std/os/slop_os"
 import text_buffer from "std"
 
 /** The most frames a report's stack holds, the faulting one included; a deeper stack is cut. */
@@ -211,4 +212,49 @@ describe :: fn(report: ptr[CrashReport], into: ptr[mut text_buffer.TextBuffer]) 
             text_buffer.append_format(into, "\n  #% %{#x}", i, address)
         }
     }
+}
+
+/** The number a ping that wakes a program to crash it carries (make_crash). */
+CRASH_PING : u32 : 0x7e57
+/** How many times, a millisecond apart, make_crash tries to read a suspended thread's registers. */
+CRASH_ATTEMPTS :: 100
+
+/**
+ * Make a program crash, for tests of its crash reports: its first thread suspended, woken by a ping on its lifecycle
+ * channel in case it waits, its program counter sent to its own stack, which can't be run, and resumed, so it faults
+ * there at once, an execute fault.
+ *
+ * @param process The program's process, with RIGHT_PROCESS_INSPECT and RIGHT_PROCESS_WRITE_STATE.
+ * @param ping The launcher's end of its lifecycle channel, pinged so a thread that waits wakes and is suspended; null
+ *     for none, when a waiting thread isn't crashed.
+ * @return Ok once it's been sent to its stack; the error otherwise, when it's resumed as it was: NoSuchThread if it
+ *     has none, NotStopped if it wasn't suspended within CRASH_ATTEMPTS milliseconds, or what the calls gave.
+ */
+make_crash :: fn(process: slop_os.Process, ping: slop_os.Channel?) -> Result[void, slop_os.ControlError] {
+    ids : u64[1]
+    if (slop_os.process_threads(process, ids)?) == 0 {
+        return .Error(.NoSuchThread)
+    }
+    slop_os.thread_suspend(process, ids[0])?
+    defer slop_os.thread_resume(process, ids[0])
+    match ping {
+        case Some(end) => _ = lifecycle.ping(end, CRASH_PING)
+        case None => {}
+    }
+    // Suspended once it's off its CPU, or once it wakes if it waits
+    waiter :: slop_os.port_create(slop_os.startup_block().budget) or_return .Error(.NotStopped)
+    defer slop_os.handle_close(cast[slop_os.Handle](waiter))
+    registers : u64[slop_os.THREAD_REGISTERS]
+    for attempt in 0..<CRASH_ATTEMPTS {
+        if slop_os.thread_read_registers(process, ids[0], registers) is_ok {
+            if PC_REGISTER >= registers.count || STACK_REGISTER >= registers.count {
+                return .Error(.BadBuffer)
+            }
+            registers[PC_REGISTER] = registers[STACK_REGISTER] & ~cast[u64](15)
+            return slop_os.thread_write_registers(process, ids[0], registers)
+        }
+        packets : slop_os.Packet[1]
+        _ = slop_os.port_wait(waiter, packets, (slop_os.clock_monotonic() or_else 0) + 1_000_000)
+    }
+    return .Error(.NotStopped)
 }

@@ -1042,8 +1042,8 @@ TESTS = [
         "--expect-disk-text=hello: ended for good"])),
     # Installations run in sessions (decisions/0153): the administrator's, once they've logged in, runs the counter
     # with its data in their home and its settings theirs, and the session manager updates it, uninstalls it and
-    # installs it again
-    ("runs installations in a session with their data and settings, updates one keeping its data, and uninstalls it", 7,
+    # installs it again, then makes it crash, which it reports (decisions/0183)
+    ("runs installations in a session with their data and settings, updates one keeping its data, uninstalls it, and reports its crash", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_installations test_settle=30") for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
@@ -1053,7 +1053,9 @@ TESTS = [
         "--expect-line=[user] counter: run 2, version 2",
         "--expect-line=[user] config: forgot user:admin:counter's values",
         "--expect-line=[user] sessions: test_installations: an update to list's bundle refused, updated to counter_next and run, "
-        "uninstalled whole, installed again and run"])),
+        "uninstalled whole, installed again and run",
+        "--expect-line=[user] sessions: counter crashed: execute fault",
+        "--expect-line=[user] sessions: test_installations: the counter crashed and ended"])),
     # SlopOS's own bootloader (roadmap B2, decisions/0133), which starts the other CPUs
     ("boots a disk through SlopOS's own bootloader, every CPU started", 7, with_before_qemu(BOOT_DISK_BASE, [
         "--expect-line=[info] bootloader: booting generation 1",

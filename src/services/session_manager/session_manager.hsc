@@ -29,6 +29,7 @@ import lifecycle from "std/os/slop_os"
 import process_manager from "std/os/slop_os"
 import terminal from "std/os/slop_os"
 import schema from "std"
+import strings from "std"
 import echo from "../../apps/echo"
 import shell from "../../apps/shell"
 import programs from "../../protocols/programs"
@@ -46,11 +47,17 @@ import powerbox from "../../protocols/powerbox"
 import prompt from "../../protocols/prompt"
 import session from "../../protocols/session"
 import service_kit from "../../libraries/service_kit"
+import crash_reports from "../../crash_reports"
 
 /** No channel: what a channel field is when there's none. */
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 /** The port key a program's end is watched under, plus its index among the programs. */
 PROGRAM_KEY : u64 : 1000
+/**
+ * The port key a program's faults' intercept reports under, plus its index among the programs (decisions/0183): its
+ * stops come as packets of kind Stop.
+ */
+CRASH_KEY : u64 : 2000
 /** The port key the session manager's budget's pressure is bound under. */
 PRESSURE_KEY : u64 : 900
 /** The port key a session's shell's programs connection is bound under, plus the session's number. */
@@ -207,6 +214,10 @@ Program :: struct {
     running : bool,
     /** Whether it's one of the system's installations, not the session's first program. */
     installation : bool,
+    /** Its faults' intercept and address space, the session manager's, closed once it's ended; null without them. */
+    faults : os.LaunchedFaults?,
+    /** Where its image is in its address space, for its crash reports. */
+    image : u64,
 }
 
 /**
@@ -463,6 +474,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], ech
  */
 ended_in :: fn(sessions: ptr[mut Manager], packets: slop_os.Packet[], taken: usize) {
     for packet, i in packets {
+        if i < taken && packet.kind == .Stop && packet.key >= CRASH_KEY && packet.key < CRASH_KEY + cast[u64](MAX_PROGRAMS) {
+            crashed(sessions, cast[usize](packet.key - CRASH_KEY))
+            continue
+        }
         if i >= taken || packet.kind != .Signal || packet.key < PROGRAM_KEY {
             continue
         }
@@ -478,7 +493,42 @@ ended_in :: fn(sessions: ptr[mut Manager], packets: slop_os.Packet[], taken: usi
                 cast[slop_os.Handle](program.lifecycle)] {
                 _ = slop_os.handle_close(handle)
             }
+            match program.faults {
+                case Some(faults) => {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](faults.intercept))
+                    _ = slop_os.handle_close(cast[slop_os.Handle](faults.space))
+                }
+                case None => {}
+            }
+            program.faults = null
         }
+    }
+}
+
+/**
+ * Take a session program's fault stops: report each, logged as a typed record, and kill the program, whose end then
+ * comes as any other's (decisions/0183).
+ *
+ * @param sessions The session manager, whose program at index is reported on.
+ * @param index The program's index among the programs; one not running, or without a faults' intercept, is left.
+ */
+crashed :: fn(sessions: ptr[mut Manager], index: usize) {
+    if index >= sessions.count || index >= sessions.programs.count || !sessions.programs[index].running {
+        return void
+    }
+    program :: &sessions.programs[index]
+    faults :: program.faults or_return void
+    storage := crash_reports.Storage.{}
+    // A copy on the heap, for the reports to point to
+    name :: strings.clone(name_of(program)) or_return void
+    defer strings.free_string(name)
+    reports :: crash_reports.take(program.process, faults, program.image, name, &storage)
+    for &report in reports {
+        crash_reports.log(report^)
+    }
+    if reports.count > 0 {
+        runtime.log_info("% crashed: %", name_of(program), slop_os.fault_name(reports[0].fault))
+        _ = slop_os.process_kill(program.process)
     }
 }
 
@@ -1052,7 +1102,8 @@ prepare :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> Prepared
     }
     ends :: lifecycle.make(slop_os.startup_block().budget) or_return null
     prepared := Prepared.{index = index, lifecycle = ends.a, ring = cast[slop_os.Memory](slop_os.NO_HANDLE)}
-    prepared.options = os.LaunchOptions.{watch = os.LaunchWatch.{port = sessions.port, key = PROGRAM_KEY + cast[u64](index)}}
+    prepared.options = os.LaunchOptions.{watch = os.LaunchWatch.{port = sessions.port, key = PROGRAM_KEY + cast[u64](index)},
+        faults = os.LaunchFaults.{port = sessions.port, key = CRASH_KEY + cast[u64](index)}}
     prepared.options.lifecycle = ends.b
     if cast[usize](number) < sessions.sessions.count {
         prepared.options.locale = locale_page(&sessions.sessions[cast[usize](number)])
@@ -1097,7 +1148,7 @@ placed :: fn(sessions: ptr[mut Manager], number: u32, name: string, prepared: Pr
     match result {
         case Ok(launched) => {
             program := Program.{session = number, process = launched.process, budget = launched.budget, lifecycle = prepared.lifecycle,
-                ring = prepared.ring, running = true, installation = installation}
+                ring = prepared.ring, running = true, installation = installation, faults = launched.faults, image = launched.image}
             for byte, i in string_bytes(name) {
                 if i < program.name.count {
                     program.name[i] = byte
@@ -1929,8 +1980,8 @@ joined_path :: fn(a: string, b: string, storage: ptr[mut u8[256]]) -> string {
 /**
  * Run test_installations, in the first session with a user, once it's been answered for: the counter, once it's
  * counted, refused an update to hello's bundle, whose entry isn't the installations'; updated to counter_next's, which
- * counts on from its data; uninstalled, its data and settings with it; and installed again, counting from 1. What
- * happened is logged.
+ * counts on from its data; uninstalled, its data and settings with it; installed again, counting from 1; and made to
+ * crash, which is reported, and ends it. What happened is logged.
  *
  * It takes the counter to be the list's first installation.
  *
@@ -1974,6 +2025,43 @@ check_installations :: fn(sessions: ptr[mut Manager], number: u32) {
     runtime.log_info("test_installations: an update to list's bundle %, updated to counter_next %, uninstalled %, installed again %",
         if refused { "refused" } else { "taken" }, if updated { "and run" } else { "not run" }, if removed { "whole" } else { "not whole" },
         if reinstalled { "and run" } else { "not run" })
+    // Crashed (decisions/0183): its fault reported, and it ended
+    runtime.log_info("test_installations: the counter crashed %", if crash_installation(sessions, number, "counter") { "and ended" } else { "but didn't end" })
+}
+
+/**
+ * Make an installation crash, for test_installations (crash_reports.make_crash), and wait up to STOP_GRACE for it to
+ * end, its crash reported meanwhile (crashed).
+ *
+ * @param sessions The session manager, whose port is waited on.
+ * @param number The session the installation runs in.
+ * @param name The installation's name.
+ * @return True once it's ended; false if it wasn't running, couldn't be made to crash, or didn't end in time.
+ */
+crash_installation :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> bool {
+    index := cast[usize](MAX_PROGRAMS)
+    for i in 0..<sessions.count {
+        if i < sessions.programs.count && sessions.programs[i].running && sessions.programs[i].session == number
+            && name_of(&sessions.programs[i]) == name {
+            index = i
+        }
+    }
+    if index >= sessions.programs.count {
+        return false
+    }
+    if !(crash_reports.make_crash(sessions.programs[index].process, sessions.programs[index].lifecycle) is_ok) {
+        return false
+    }
+    deadline :: (slop_os.clock_monotonic() or_else 0) + STOP_GRACE
+    loop {
+        if !sessions.programs[index].running || (slop_os.clock_monotonic() or_else 0) >= deadline {
+            break
+        }
+        packets : slop_os.Packet[8]
+        taken :: slop_os.port_wait(sessions.port, packets, deadline) or_else 0
+        ended_in(sessions, packets, cast[usize](taken))
+    }
+    return !sessions.programs[index].running
 }
 
 /**
