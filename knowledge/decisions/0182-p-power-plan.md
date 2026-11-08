@@ -295,3 +295,32 @@ Five parts, each with an as-built record:
   - A GIC line is its SPI's number, which the kernel adds 32 to, not the interrupt ID.
   - A program on a 1 MiB budget gets a log ring small enough that its first records were dropped at boot, so the
     button driver has 2 MiB.
+
+## As Built, P4 (2026-11-07): a graceful shutdown, and the shell's
+- **Services stop when asked:** `service_kit` gains `watch_stop`, which has a Stop on the lifecycle channel wake a
+  service's port, and `stopping`. Every service and driver the supervisor starts checks for it before it waits again,
+  and ends with 0. That's what it was doing finished, as each serves one request at a time. hello's wait for the
+  process manager's end, for its test, wakes for it too.
+- **The supervisor's shutdown** (`shutdown.hsc`): ShutDown, Restart and PowerButton stop everything it started.
+  - **Order:** the last started first.
+  - **Each one:** sent Stop, and given 2 s to end, all of them 20 s.
+  - **Overstaying:** what doesn't end is killed, and the log names it.
+  - **The volumes** are committed just before the storage manager's asked to stop, once everything that writes to
+    them has stopped. The storage manager's servers end with it.
+  - **What's stopped is marked done**, so it isn't started again, and the log says how many stopped, in how long, and
+    how many were killed.
+  - **Speed:** a shutdown's services stop in tens of milliseconds, nothing killed.
+  - **Not ordered by dependency**, as planned: the start order is that already. The root task's own services, the
+    entropy service, the process manager, the scheduler and the platform service, end with it, as before.
+- **The shell's `shut-down` and `restart`** (chosen with the project's owner: an administrator, through elevation):
+  - **The shell:** it asks its session's powerbox (`RequestPower`), which asks the trusted path with the prompt
+    protocol's new kinds `ShutDown` and `Restart`.
+  - **The trusted path:** the secure attention key brings up the elevation screen with only the administrator's name
+    and password. The account service checks them (`CheckAdministrator`), counting a wrong one as a login's.
+  - **Once they're right**, the terminal service answers `Allowed` and asks the supervisor itself, on the power
+    connection it already holds, as P and R do. No power capability leaves the trusted path.
+- **Tests:**
+  - From the shell: a wrong password is refused, the right one shuts down and turns the machine off, and no password
+    shows, on both architectures.
+  - The power button test runs with `test_ignore_stop=update`, a test word that has the supervisor not ask the
+    update service to stop, as if it didn't listen; it's killed and named.
