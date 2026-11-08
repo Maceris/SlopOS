@@ -295,6 +295,7 @@ run :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Thread]
     intrinsics.atomic_store_u32_release(&cpu.current_level, thread.level)
     cpu.run_start = now
     arch.restore_vector_state(cast[ptr[arch.VectorState]](thread.vector))
+    arch.debug_on(&thread.debug, &thread.registers)
     arch.return_to_user(&thread.registers)
 }
 
@@ -317,6 +318,7 @@ go_on :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Threa
     pass_quiescent(kernel, cpu, epoch)
     thread.level = level
     intrinsics.atomic_store_u32_release(&cpu.current_level, level)
+    arch.debug_on(&thread.debug, &thread.registers)
     arch.return_to_user(&thread.registers)
 }
 

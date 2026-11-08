@@ -2,6 +2,7 @@ package arch_aarch64
 
 import aarch64 from "base/intrinsics"
 import arch_interface from "../../arch_interface"
+import slop_os from "std/os"
 
 /*
  * User-mode registers (arch_interface, User State): a thread's RegisterFrame, as the entry function saves it
@@ -174,4 +175,185 @@ set_user_register :: fn(registers: ptr[mut UserRegisters], index: u32, value: u6
  */
 return_to_user :: fn(registers: ptr[UserRegisters]) #never_returns {
     aarch64.return_to_user(&registers.frame, cast[rawptr](current_cpu().kernel_stack_top))
+}
+
+// The self-hosted debug registers (decisions/0183, 12b), by their encodings, which take n in CRm
+//SPEC: Arm ARM (DDI 0487) D2 (AArch64 self-hosted debug), D19.3 (debug registers)
+/** MDSCR_EL1.SS (bit 0): software step on. */
+MDSCR_SS : u64 : 1 << 0
+/** MDSCR_EL1.MDE (bit 15): breakpoints and watchpoints on. */
+MDSCR_MDE : u64 : 1 << 15
+/** SPSR_EL1.SS (bit 21): step the one instruction an eret returns to. */
+SPSR_SS : u64 : 1 << 21
+/** A DBGBCR's or DBGWCR's enable (bit 0), and its privilege, EL0 only (bits 1 and 2: 0b10). */
+DEBUG_ENABLE_EL0 : u64 : 1 | (2 << 1)
+/** A DBGBCR's byte address select (bits 5 to 8), every byte of the instruction. */
+BREAKPOINT_BYTES : u64 : 0xf << 5
+
+/** Unlock the OS lock and turn breakpoints and watchpoints on, all of them still disabled, at a CPU's start. */
+init_debug :: fn() {
+    // OSLAR_EL1: 0 unlocks
+    aarch64.write_system_register_encoded(2, 0, 1, 0, 4, 0)
+    aarch64.write_system_register_encoded(2, 0, 0, 2, 2, MDSCR_MDE)
+}
+
+/**
+ * A thread's debugging state (arch_interface.DebugRegisters): its breakpoints' and watchpoints' value and control
+ * registers, slot n the breakpoint or watchpoint register n, and whether it steps.
+ */
+DebugRegisters :: struct {
+    /** DBGBVR0 to 3: the breakpoints' addresses. */
+    breakpoints : u64[4],
+    /** DBGBCR0 to 3; 0 for one that's off. */
+    breakpoint_controls : u64[4],
+    /** DBGWVR0 to 3: the watchpoints' doublewords. */
+    watchpoints : u64[4],
+    /** DBGWCR0 to 3; 0 for one that's off. */
+    watchpoint_controls : u64[4],
+    /** Whether it steps. */
+    step : bool,
+    /** Whether any of it is set, so debug_on has something to load. */
+    used : bool,
+}
+
+/**
+ * Set a thread's debugging state (arch_interface.set_debug): an Execute slot n is breakpoint n, a data slot n
+ * watchpoint n, for EL0 alone, a watchpoint's bytes selected within its doubleword.
+ *
+ * @param debug The thread's state, replaced whole.
+ * @param registers Not changed here: debug_on marks them to step as it returns.
+ * @param step Whether it single-steps.
+ * @param slots At most four.
+ * @return False, changing nothing, for a slot past the CPU's breakpoints or watchpoints, an address outside user
+ *     memory, or a data slot whose size isn't 1, 2, 4 or 8 or whose address isn't a multiple of it.
+ */
+set_debug :: fn(debug: ptr[mut DebugRegisters], registers: ptr[mut UserRegisters], step: bool, slots: slop_os.DebugSlot[]) -> bool {
+    made := DebugRegisters.{step = step, used = step}
+    features :: aarch64.read_system_register_encoded(3, 0, 0, 5, 0)
+    breakpoint_count :: ((features >> 12) & 0xf) + 1
+    watchpoint_count :: ((features >> 20) & 0xf) + 1
+    low, high :: user_address_range()
+    for slot, i in slots {
+        if slot.kind == .Off {
+            continue
+        }
+        if i >= made.breakpoints.count || slot.address < cast[u64](low) || slot.address >= cast[u64](high) {
+            return false
+        }
+        if slot.kind == .Execute {
+            if cast[u64](i) >= breakpoint_count || slot.address & 3 != 0 {
+                return false
+            }
+            made.breakpoints[i] = slot.address
+            made.breakpoint_controls[i] = DEBUG_ENABLE_EL0 | BREAKPOINT_BYTES
+        }
+        else {
+            size :: cast[u64](slot.size)
+            if cast[u64](i) >= watchpoint_count || (size != 1 && size != 2 && size != 4 && size != 8) || slot.address % size != 0 {
+                return false
+            }
+            accesses : u64 = if slot.kind == .Write { 2 } else { 3 }
+            bytes :: ((cast[u64](1) << size) - 1) << (slot.address & 7)
+            made.watchpoints[i] = slot.address & ~cast[u64](7)
+            made.watchpoint_controls[i] = DEBUG_ENABLE_EL0 | (accesses << 3) | (bytes << 5)
+        }
+        made.used = true
+    }
+    debug^ = made
+    return true
+}
+
+/**
+ * Load a thread's breakpoints, watchpoints and stepping as it returns to user mode (arch_interface.debug_on).
+ *
+ * @param debug The thread's state; with nothing set, nothing's loaded.
+ * @param registers Its registers, whose SPSR.SS is set so the eret steps one instruction, when it steps.
+ */
+debug_on :: fn(debug: ptr[DebugRegisters], registers: ptr[mut UserRegisters]) {
+    if !debug.used {
+        return void
+    }
+    for i in cast[usize](0)..<4 {
+        if i < debug.breakpoints.count {
+            write_breakpoint(i, debug.breakpoints[i], debug.breakpoint_controls[i])
+            write_watchpoint(i, debug.watchpoints[i], debug.watchpoint_controls[i])
+        }
+    }
+    if debug.step {
+        aarch64.write_system_register_encoded(2, 0, 0, 2, 2, MDSCR_MDE | MDSCR_SS)
+        registers.frame.spsr |= SPSR_SS
+    }
+    aarch64.isb()
+    current_cpu().debug_loaded = true
+}
+
+/** Turn a thread's breakpoints, watchpoints and stepping off at an entry from user mode (arch_interface.debug_off). */
+debug_off :: fn() {
+    cpu :: current_cpu()
+    if !cpu.debug_loaded {
+        return void
+    }
+    for i in cast[usize](0)..<4 {
+        write_breakpoint(i, 0, 0)
+        write_watchpoint(i, 0, 0)
+    }
+    aarch64.write_system_register_encoded(2, 0, 0, 2, 2, MDSCR_MDE)
+    aarch64.isb()
+    cpu.debug_loaded = false
+}
+
+/**
+ * Write breakpoint n's value and control registers, DBGBVRn_EL1 and DBGBCRn_EL1.
+ *
+ * @param n Which, 0 to 3.
+ * @param value Its address.
+ * @param control Its control; 0 turns it off.
+ */
+write_breakpoint :: fn(n: usize, value: u64, control: u64) {
+    match n {
+        case 0 => {
+            aarch64.write_system_register_encoded(2, 0, 0, 0, 4, value)
+            aarch64.write_system_register_encoded(2, 0, 0, 0, 5, control)
+        }
+        case 1 => {
+            aarch64.write_system_register_encoded(2, 0, 0, 1, 4, value)
+            aarch64.write_system_register_encoded(2, 0, 0, 1, 5, control)
+        }
+        case 2 => {
+            aarch64.write_system_register_encoded(2, 0, 0, 2, 4, value)
+            aarch64.write_system_register_encoded(2, 0, 0, 2, 5, control)
+        }
+        case _ => {
+            aarch64.write_system_register_encoded(2, 0, 0, 3, 4, value)
+            aarch64.write_system_register_encoded(2, 0, 0, 3, 5, control)
+        }
+    }
+}
+
+/**
+ * Write watchpoint n's value and control registers, DBGWVRn_EL1 and DBGWCRn_EL1.
+ *
+ * @param n Which, 0 to 3.
+ * @param value Its doubleword's address.
+ * @param control Its control; 0 turns it off.
+ */
+write_watchpoint :: fn(n: usize, value: u64, control: u64) {
+    match n {
+        case 0 => {
+            aarch64.write_system_register_encoded(2, 0, 0, 0, 6, value)
+            aarch64.write_system_register_encoded(2, 0, 0, 0, 7, control)
+        }
+        case 1 => {
+            aarch64.write_system_register_encoded(2, 0, 0, 1, 6, value)
+            aarch64.write_system_register_encoded(2, 0, 0, 1, 7, control)
+        }
+        case 2 => {
+            aarch64.write_system_register_encoded(2, 0, 0, 2, 6, value)
+            aarch64.write_system_register_encoded(2, 0, 0, 2, 7, control)
+        }
+        case _ => {
+            aarch64.write_system_register_encoded(2, 0, 0, 3, 6, value)
+            aarch64.write_system_register_encoded(2, 0, 0, 3, 7, control)
+        }
+    }
 }

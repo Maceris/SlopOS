@@ -52,6 +52,7 @@ InterruptSource :: union {
  *     arguments among them; copied into the thread.
  */
 syscall #never_returns :: fn(registers: ptr[mut arch.UserRegisters]) {
+    arch.debug_off()
     kernel.left_boot_stack()
     kernel.handle_syscall(registers)
 }
@@ -67,6 +68,7 @@ syscall #never_returns :: fn(registers: ptr[mut arch.UserRegisters]) {
  */
 //TODO(claude): faults in user threads (M4 to M6)
 user_fault #never_returns :: fn(registers: ptr[mut arch.UserRegisters], fault: arch_interface.Fault) {
+    arch.debug_off()
     kernel.left_boot_stack()
     kernel.handle_user_fault(registers, fault)
 }
@@ -89,7 +91,10 @@ user_fault #never_returns :: fn(registers: ptr[mut arch.UserRegisters], fault: a
 interrupt #never_returns :: fn(from: Interrupted, source: InterruptSource) {
     kernel.left_boot_stack()
     match from {
-        case User(registers) => kernel.save_user_registers(registers)
+        case User(registers) => {
+            arch.debug_off()
+            kernel.save_user_registers(registers)
+        }
         // One idle without ticking records the epoch first (decisions/0128)
         case Idle => kernel.leave_idle()
     }
@@ -156,6 +161,10 @@ append_fault :: fn(line: ptr[mut text_buffer.TextBuffer], fault: arch_interface.
         case SingleStep => text_buffer.append(line, "single step")
         case Arithmetic => text_buffer.append(line, "arithmetic error")
         case Alignment => text_buffer.append(line, "misaligned access")
+        case Watchpoint(address) => {
+            text_buffer.append(line, "watchpoint at ")
+            text_buffer.append_address(line, address)
+        }
         case Protection => text_buffer.append(line, "protection fault")
         case FloatingPoint => text_buffer.append(line, "floating-point error")
     }

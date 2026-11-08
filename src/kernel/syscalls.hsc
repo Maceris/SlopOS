@@ -106,6 +106,10 @@ handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interfac
         case SingleStep => access = cast[u64](slop_os.FAULT_SINGLE_STEP)
         case Arithmetic => access = cast[u64](slop_os.FAULT_ARITHMETIC)
         case Alignment => access = cast[u64](slop_os.FAULT_ALIGNMENT)
+        case Watchpoint(watched) => {
+            access = cast[u64](slop_os.FAULT_WATCHPOINT)
+            address = watched
+        }
         case Protection => access = cast[u64](slop_os.FAULT_PROTECTION)
         case FloatingPoint => access = cast[u64](slop_os.FAULT_FLOATING_POINT)
     }
@@ -2189,7 +2193,7 @@ sys_thread_resume :: fn(thread: ptr[mut Thread], process: slop_os.Process, id: u
  * @error MissingRight The handle lacks RIGHT_PROCESS_INSPECT.
  * @error NoSuchThread No live thread with that ID in the subtree.
  * @error BadBuffer Fewer than slop_os.THREAD_REGISTERS words, or not writable user memory.
- * @error NotStopped The thread isn't parked: stopped or suspended, and off its CPU.
+ * @error NotStopped The thread isn't parked, stopped or suspended and off its CPU, nor suspended while it waits.
  */
 sys_thread_read_registers :: fn(thread: ptr[mut Thread], process: slop_os.Process, id: u64, registers: slop_os.UserBuffer) -> Result[void, slop_os.ControlError] {
     found :: subtree_thread(thread, process, slop_os.RIGHT_PROCESS_INSPECT, id)?
@@ -2198,7 +2202,9 @@ sys_thread_read_registers :: fn(thread: ptr[mut Thread], process: slop_os.Proces
     }
     lock_at(&found.control, .ThreadControl)
     defer unlock_at(&found.control, .ThreadControl)
-    if !found.parked {
+    // A thread suspended while it waits is held off its CPU too: its registers are as it entered the wait
+    waiting :: found.held & HELD_SUSPEND != 0 && found.state == .Blocked
+    if !found.parked && !waiting {
         return .Error(.NotStopped)
     }
     if !read_registers(per_cpu().kernel, found, thread.space, registers.address) {
@@ -2688,5 +2694,58 @@ sys_io_port_write :: fn(thread: ptr[mut Thread], ports: slop_os.IoPortRange, off
     if !arch.port_write(port, width, value) {
         return .Error(.InvalidArgument)
     }
+    return .Ok
+}
+
+/**
+ * Set a parked thread's debugging state: single-stepping, and its hardware breakpoints and watchpoints
+ * (arch.set_debug, decisions/0183).
+ *
+ * Takes the thread's control lock while it sets them.
+ *
+ * @param thread The calling thread, from whose memory the state is read.
+ * @param process The process, which needs RIGHT_PROCESS_WRITE_STATE.
+ * @param id The thread's ID, as process_threads gives it.
+ * @param debug Where the slop_os.ThreadDebug is in the caller's memory.
+ * @error InvalidHandle The process isn't a handle in the caller's table.
+ * @error ObjectGone The process was destroyed.
+ * @error WrongKind Not a process's handle.
+ * @error MissingRight The handle lacks RIGHT_PROCESS_WRITE_STATE.
+ * @error NoSuchThread No live thread with that ID in the subtree.
+ * @error BadBuffer debug isn't readable user memory.
+ * @error NotStopped The thread isn't parked: stopped or suspended, and off its CPU.
+ * @error BadRegisters A slot the CPU can't set (arch.set_debug).
+ */
+sys_thread_set_debug :: fn(thread: ptr[mut Thread], process: slop_os.Process, id: u64, debug: u64) -> Result[void, slop_os.ControlError] {
+    found :: subtree_thread(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE, id)?
+    given := slop_os.ThreadDebug.{}
+    if !copy_from_user(per_cpu().kernel, thread.space, debug, cast[u64](&given), cast[u64](size_of(slop_os.ThreadDebug))) {
+        return .Error(.BadBuffer)
+    }
+    lock_at(&found.control, .ThreadControl)
+    defer unlock_at(&found.control, .ThreadControl)
+    if !found.parked {
+        return .Error(.NotStopped)
+    }
+    if !arch.set_debug(&found.debug, &found.registers, given.step, given.slots) {
+        return .Error(.BadRegisters)
+    }
+    return .Ok
+}
+
+/**
+ * Change where an intercept stops threads; those stopped already stay so.
+ *
+ * @param thread The calling thread, whose handle table the intercept is looked up in.
+ * @param intercept The intercept; no right is needed.
+ * @param calls The system calls it stops at from now, a bit per call number below 64.
+ * @param points slop_os.STOP_ bits: where it stops threads from now.
+ * @error InvalidHandle The intercept isn't a handle in the caller's table.
+ * @error ObjectGone The intercept was destroyed.
+ * @error WrongKind Not an intercept's handle.
+ */
+sys_intercept_set :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept, calls: u64, points: u32) -> Result[void, slop_os.ControlError] {
+    found :: intercept_of_handle(thread, intercept)?
+    set_intercept(found, calls, points)
     return .Ok
 }

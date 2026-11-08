@@ -126,6 +126,8 @@ ArchCpu :: struct #align(64) {
     xcr0 : u64,
     /** Whether the CPU has XSAVEOPT, which saving vector state then uses (vector.hsc). */
     xsaveopt : bool,
+    /** Whether a thread's breakpoints are in the debug registers (debug_on), so an entry turns them off. */
+    debug_loaded : bool,
 }
 
 /** State shared by every CPU (arch_interface.ArchSystem): the IDT. Must not move after init_system. */

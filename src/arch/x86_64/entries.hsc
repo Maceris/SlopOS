@@ -130,14 +130,14 @@ dispatch :: fn(frame: ptr[mut x86_64.RegisterFrame]) #never_returns {
  *
  * @param vector The exception's vector, below 32.
  * @param error_code The error code the CPU pushed, or 0 where it pushes none; only a page fault's is used.
- * @return Arithmetic for divide error and overflow, SingleStep for debug, Breakpoint, InvalidInstruction,
+ * @return Arithmetic for divide error and overflow, what decode_debug says for debug, Breakpoint, InvalidInstruction,
  *     FloatingPoint for device-not-available, x87 and SIMD errors, Page with what decode_page_fault says, Alignment,
  *     and Protection for every other vector, the segment and protection faults among them.
  */
 decode_fault :: fn(vector: u64, error_code: u64) -> arch_interface.Fault {
     return match vector {
         case 0 => .Arithmetic
-        case 1 => .SingleStep
+        case 1 => decode_debug()
         case 3 => .Breakpoint
         case 4 => .Arithmetic
         case 6 => .InvalidInstruction

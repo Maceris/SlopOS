@@ -109,6 +109,8 @@ Thread :: struct #align(16) {
     wait_sequence : u64,
     /** The timer that ends its wait at wait_deadline (timers.hsc). */
     wait_timer : TimerEntry,
+    /** Its debugging state, which a debugger sets (thread_set_debug) and returning to user mode loads; none at first. */
+    debug : arch.DebugRegisters,
     /**
      * The timer that ends its process if it stays stopped at a fault past FAULT_STOP_LIMIT, under an intercept with
      * STOP_FAULT_LIMITED (intercepts.hsc).
@@ -204,6 +206,7 @@ create_thread :: fn(kernel: ptr[mut Kernel], owner: u64, space #escaping : ptr[m
     // A CpuTime of its own, as the kernel's tests give, or its process's budget once it's adopted
     thread.budget = budget
     thread.wait_timer = make_timer()
+    thread.debug = arch.DebugRegisters.{}
     thread.fault_timer = make_timer()
     thread.id = intrinsics.interlocked_increment_u64(&kernel.next_thread_id) + 1
     match adopt(owner, object) {

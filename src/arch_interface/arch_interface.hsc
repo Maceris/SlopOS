@@ -33,6 +33,12 @@ VectorState :: struct {}
 /** One CPU's architecture state, like x86-64's GDT and TSS. Must not move after init_cpu. */
 ArchCpu :: struct {}
 
+/**
+ * A thread's debugging state (decisions/0183, 12b): whether it single-steps, and its hardware breakpoints and
+ * watchpoints, in the form the CPU's debug registers take them. All zero is none, what a thread starts with.
+ */
+DebugRegisters :: struct {}
+
 /** State shared by every CPU, like x86-64's IDT. Must not move after init_system. */
 ArchSystem :: struct {}
 
@@ -795,6 +801,36 @@ get_user_register : fn(registers: ptr[UserRegisters], index: u32) -> u64 : ---
 set_user_register : fn(registers: ptr[mut UserRegisters], index: u32, value: u64) -> bool : ---
 
 /**
+ * Set a thread's debugging state from what a debugger asks (thread_set_debug), and its saved registers for stepping.
+ *
+ * Each slot that isn't Off is checked: its address a user address, and a data slot's size 1, 2, 4 or 8 with the
+ * address a multiple of it; on x86-64 also with no more than four slots in all, and on AArch64 no more breakpoints or
+ * watchpoints than the CPU has. A hit is reported as a fault: Breakpoint for an Execute slot, Watchpoint for a data
+ * slot, SingleStep after a step.
+ *
+ * @param debug The thread's state, replaced whole.
+ * @param registers The thread's saved registers, off its CPU, whose flags say whether it steps.
+ * @param step Whether it stops after each instruction it runs in user mode.
+ * @param slots The breakpoints and watchpoints, slop_os.DEBUG_SLOTS of them at most.
+ * @return True once it's set; false, with nothing changed, if a slot is one the CPU can't set.
+ */
+set_debug : fn(debug: ptr[mut DebugRegisters], registers: ptr[mut UserRegisters], step: bool, slots: slop_os.DebugSlot[]) -> bool : ---
+
+/**
+ * Load a thread's debugging state into the calling CPU, as it returns to user mode; one with none loads nothing.
+ *
+ * @param debug The thread's state.
+ * @param registers The thread's registers, about to be loaded, which AArch64 marks to step one instruction.
+ */
+debug_on : fn(debug: ptr[DebugRegisters], registers: ptr[mut UserRegisters]) : ---
+
+/**
+ * Turn the calling CPU's breakpoints and watchpoints off, if a thread's are loaded, as it enters the kernel from user
+ * mode: so the kernel's own accesses to user memory don't hit them, and the next thread doesn't have them.
+ */
+debug_off : fn() : ---
+
+/**
  * Return to user mode, on the calling CPU's active page table.
  *
  * @param registers The thread's registers, loaded into the CPU.
@@ -871,6 +907,8 @@ Fault :: union {
     Arithmetic,
     /** A misaligned access, where the architecture traps on it. */
     Alignment,
+    /** A hardware watchpoint (set_debug) was hit: the address accessed. */
+    Watchpoint(u64),
     /** A privileged instruction, or an address the architecture rejects outright. */
     Protection,
     /** A floating-point or vector exception that's unmasked. */

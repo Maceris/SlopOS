@@ -558,3 +558,98 @@ a_launch_reports_faults_and_ends_a_program_left_stopped #test :: fn(t: ptr[mut t
     _ = slop_os.handle_close(cast[slop_os.Handle](copy.launched.budget))
     return .Ok
 }
+
+/**
+ * Check what a debugger does with a thread's debugging state (thread_set_debug, decisions/0183's 12b): E, a copy that
+ * spins reading its page's SLOT_GO, is suspended and given a hardware breakpoint at the instruction it was at, which it
+ * stops at as it runs it again; then it steps one instruction, which stops it after; then a watchpoint on SLOT_GO,
+ * which its next read stops it at, reported at that address. Without them, it's told to end, and does.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if main wasn't given the process manager or its module, or E, its report, the port
+ *     or the intercept couldn't be had.
+ */
+a_debugger_breaks_steps_and_watches #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
+    manager :: testing.require_some(t, given.manager, "the root task grants the process manager")?
+    program :: testing.require_some(t, given.program, "the root task grants the program's own module")?
+    manager_port :: testing.require_some(t, os.port_for(block.budget, manager.end), "a port for the process manager's replies")?
+    copy :: testing.require_some(t, launch_copy(given.log, manager, manager_port, program, "test_control E", ROLE_EXITING), "E is launched and told its role")?
+    target :: copy.launched.process
+    found := TargetReport.{}
+    space_handles : slop_os.Handle[1]
+    testing.require_ok(t, os.receive(copy.end, copy.port, os.mut_bytes_of(&found), space_handles), "E reports where its page is, with its address space")?
+    space :: cast[slop_os.AddressSpace](space_handles[0])
+    port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for E's stops and end")?
+    intercept :: testing.require_ok(t, slop_os.intercept_attach(target, port, CONTROL_KEY, 0, slop_os.STOP_FAULT), "D intercepts E's faults")?
+    _ = slop_os.port_bind(port, cast[slop_os.Handle](target), slop_os.SIGNAL_TERMINATED, EXIT_WATCH_KEY, .Once)
+    ids : u64[2]
+    testing.require(t, (slop_os.process_threads(target, ids) or_else 0) == 1, "E has its one thread")?
+    thread :: ids[0]
+    registers : u64[slop_os.THREAD_REGISTERS]
+    // Suspended once it leaves its CPU, which it's spinning on
+    testing.expect_ok(t, slop_os.thread_suspend(target, thread), "D suspends E's thread")
+    read := false
+    for attempt in 0..<1000 {
+        if slop_os.thread_read_registers(target, thread, registers) is_ok {
+            read = true
+            break
+        }
+        pause : slop_os.Packet[1]
+        _ = slop_os.port_wait(port, pause[0..<0], (slop_os.clock_monotonic() or_else 0) + 1_000_000)
+    }
+    testing.require(t, read, "E's thread is suspended, and its registers read")?
+    spinning_at :: registers[crash_reports.PC_REGISTER]
+    debug := slop_os.ThreadDebug.{}
+    debug.slots[0] = slop_os.DebugSlot.{address = spinning_at, kind = .Execute}
+    testing.expect_ok(t, slop_os.thread_set_debug(target, thread, &debug), "D sets a breakpoint where E's spinning")
+    testing.expect_ok(t, slop_os.thread_resume(target, thread), "D resumes E")
+    stop := slop_os.StopInfo.{}
+    next_stop(port, intercept, &stop)
+    testing.expect_eq(t, stop.number, slop_os.FAULT_BREAKPOINT, "E stops at the breakpoint")
+    _ = slop_os.thread_read_registers(target, thread, registers)
+    testing.expect_eq(t, registers[crash_reports.PC_REGISTER], spinning_at, "before the instruction it's at")
+    // One instruction stepped, the breakpoint gone
+    debug = slop_os.ThreadDebug.{step = true}
+    testing.expect_ok(t, slop_os.thread_set_debug(target, thread, &debug), "D has E step, its breakpoint gone")
+    testing.expect_ok(t, slop_os.intercept_resume(intercept, thread, .Continue), "D lets E go on")
+    next_stop(port, intercept, &stop)
+    testing.expect_eq(t, stop.number, slop_os.FAULT_SINGLE_STEP, "E stops after a step")
+    _ = slop_os.thread_read_registers(target, thread, registers)
+    testing.expect(t, registers[crash_reports.PC_REGISTER] != spinning_at, "past the instruction it was at")
+    // A watchpoint on what it reads as it spins
+    watched :: found.page + SLOT_GO * 8
+    debug = slop_os.ThreadDebug.{}
+    debug.slots[1] = slop_os.DebugSlot.{address = watched, kind = .ReadWrite, size = 8}
+    testing.expect_ok(t, slop_os.thread_set_debug(target, thread, &debug), "D watches what E reads")
+    testing.expect_ok(t, slop_os.intercept_resume(intercept, thread, .Continue), "D lets E go on again")
+    next_stop(port, intercept, &stop)
+    testing.expect_eq(t, stop.number, slop_os.FAULT_WATCHPOINT, "E stops at the watchpoint")
+    testing.expect_eq(t, stop.address, watched, "reading what's watched")
+    // Nothing set, told to end
+    debug = slop_os.ThreadDebug.{}
+    testing.expect_ok(t, slop_os.thread_set_debug(target, thread, &debug), "D clears E's debugging state")
+    one : u64 = 1
+    testing.expect_ok(t, slop_os.process_write_memory(target, space, watched, os.bytes_of(&one)), "D tells E to end")
+    testing.expect_ok(t, slop_os.intercept_resume(intercept, thread, .Continue), "D lets E go")
+    ended := false
+    for attempt in 0..<100 {
+        packets : slop_os.Packet[4]
+        taken :: slop_os.port_wait(port, packets, (slop_os.clock_monotonic() or_else 0) + 50_000_000) or_else 0
+        for packet, i in packets {
+            if cast[u64](i) < taken && packet.kind == .Signal && packet.key == EXIT_WATCH_KEY {
+                ended = true
+            }
+        }
+        if ended {
+            break
+        }
+    }
+    testing.expect(t, ended, "E ends once told, its debugging state cleared")
+    for handle in slop_os.Handle.[cast[slop_os.Handle](intercept), cast[slop_os.Handle](space), cast[slop_os.Handle](port)] {
+        _ = slop_os.handle_close(handle)
+    }
+    testing.expect(t, test_kit.wait_for_budget(copy.launched.budget, 0, 2_000_000_000), "E's budget is back to nothing once it has ended")
+    return .Ok
+}

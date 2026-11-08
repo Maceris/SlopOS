@@ -44,9 +44,12 @@ Intercept :: struct #align(16) {
     process : u64,
     /** The process's generation when it was made, so a destroyed process isn't taken for it. */
     process_generation : u32,
-    /** The system calls it stops at, a bit per call number below 64. */
+    /** The system calls it stops at, a bit per call number below 64; written atomically by set_intercept. */
     calls : u64,
-    /** Where it stops threads: slop_os.STOP_* bits, for a call's entry and exit, and faults. */
+    /**
+     * Where it stops threads: slop_os.STOP_* bits, for a call's entry and exit, and faults; written atomically by
+     * set_intercept.
+     */
     points : u32,
     /** The binding's generation when it was made, which changes once the port drops it. */
     binding_generation : u32,
@@ -535,4 +538,17 @@ unlink_stopped :: fn(intercept: ptr[mut Intercept], thread: ptr[mut Thread]) {
         intercept.last_stopped = thread.stop_previous
     }
     thread.stop_linked = false
+}
+
+/**
+ * Change where an intercept stops threads (intercept_set). Each is written atomically, and read without a lock as a
+ * thread reaches a point, so a thread there as they change may stop by either.
+ *
+ * @param intercept The intercept.
+ * @param calls The system calls it stops at, a bit per call number below 64.
+ * @param points slop_os.STOP_ bits.
+ */
+set_intercept :: fn(intercept: ptr[mut Intercept], calls: u64, points: u32) {
+    intrinsics.atomic_store_u64_release(&intercept.calls, calls)
+    intrinsics.atomic_store_u32_release(&intercept.points, points)
 }

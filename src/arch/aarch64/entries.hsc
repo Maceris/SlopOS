@@ -36,6 +36,10 @@ ESR_CLASS_FP_EXCEPTION : u64 : 0x2c
 ESR_CLASS_SOFTWARE_STEP_LOWER : u64 : 0x32
 /** ESR_EL1.EC 0x33: a software step at the same exception level; decoded as SingleStep. */
 ESR_CLASS_SOFTWARE_STEP : u64 : 0x33
+/** ESR_EL1.EC 0x30: a hardware breakpoint from a lower exception level; decoded as Breakpoint. */
+ESR_CLASS_HARDWARE_BREAKPOINT_LOWER : u64 : 0x30
+/** ESR_EL1.EC 0x34: a watchpoint from a lower exception level; decoded as Watchpoint at FAR_EL1. */
+ESR_CLASS_WATCHPOINT_LOWER : u64 : 0x34
 // An abort's fault status code (ISS bits 0 to 5): permission faults at levels 0 to 3, and alignment
 /** An abort's fault status code for a permission fault, its low two bits the level (0 to 3) masked off. */
 FAULT_STATUS_PERMISSION : u64 : 0b001100
@@ -124,7 +128,8 @@ dispatch :: fn(frame: ptr[mut aarch64.RegisterFrame]) #never_returns {
  * @param address FAR_EL1, the faulting virtual address, which only an abort's result uses.
  * @return For an instruction or data abort, Alignment for an alignment fault, or else a Page fault at address,
  *     Execute, Write or Read, present only for a permission fault (translation and access flag faults aren't).
- *     For other classes: InvalidInstruction, Breakpoint, SingleStep, Alignment or FloatingPoint as the class says,
+ *     For other classes: InvalidInstruction, Breakpoint, SingleStep, Watchpoint at address, Alignment or
+ *     FloatingPoint as the class says,
  *     and Protection for every other class, like an illegal execution state or a trapped system instruction.
  */
 decode_fault :: fn(class: u64, syndrome: u64, address: u64) -> arch_interface.Fault {
@@ -145,6 +150,8 @@ decode_fault :: fn(class: u64, syndrome: u64, address: u64) -> arch_interface.Fa
     return match class {
         case ESR_CLASS_UNKNOWN => .InvalidInstruction
         case ESR_CLASS_BREAKPOINT => .Breakpoint
+        case ESR_CLASS_HARDWARE_BREAKPOINT_LOWER => .Breakpoint
+        case ESR_CLASS_WATCHPOINT_LOWER => .Watchpoint(address)
         case ESR_CLASS_SOFTWARE_STEP => .SingleStep
         case ESR_CLASS_SOFTWARE_STEP_LOWER => .SingleStep
         case ESR_CLASS_PC_ALIGNMENT => .Alignment

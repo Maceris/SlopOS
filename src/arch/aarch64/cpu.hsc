@@ -48,6 +48,8 @@ ArchCpu :: struct #align(64) {
     active_interrupt : u32,
     /** Whether the CPU is still on the bootloader's page tables, until the first activate flushes its TLB. */
     bootloader_tables : bool,
+    /** Whether a thread's breakpoints or stepping are in the debug registers (debug_on), so an entry turns them off. */
+    debug_loaded : bool,
 }
 
 /**
@@ -309,5 +311,6 @@ init_cpu :: fn(
     aarch64.write_system_register(.CPACR_EL1, CPACR_FP_ON)
     init_paging(system)
     init_cpu_interface(system, cpu)
+    init_debug()
     aarch64.isb()
 }

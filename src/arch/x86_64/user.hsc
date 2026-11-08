@@ -3,6 +3,7 @@ package arch_x86_64
 import x86_64 from "base/intrinsics"
 import runtime from "base"
 import arch_interface from "../../arch_interface"
+import slop_os from "std/os"
 
 /*
  * User-mode registers (arch_interface, User State): a thread's RegisterFrame, as entries save it and
@@ -204,4 +205,136 @@ set_user_register :: fn(registers: ptr[mut UserRegisters], index: u32, value: u6
  */
 return_to_user :: fn(registers: ptr[UserRegisters]) #never_returns {
     x86_64.return_to_user(&registers.frame)
+}
+
+/** RFLAGS.TF (bit 8): trap after each instruction, single-stepping. */
+TRAP_FLAG : u64 : 1 << 8
+/** DR7 with every breakpoint off: bit 10 is always set. */
+DR7_OFF : u64 : 0x400
+/** DR6 with nothing reported: its reserved bits as they read, the status bits clear. */
+DR6_CLEAR : u64 : 0xffff0ff0
+/** DR6.BS (bit 14): the debug exception was a single step. */
+DR6_SINGLE_STEP : u64 : 1 << 14
+
+/**
+ * A thread's debugging state (arch_interface.DebugRegisters): DR0 to DR3 and the DR7 bits that enable them.
+ *
+ * SPEC: Intel SDM Vol. 3B §18.2 (debug registers).
+ */
+DebugRegisters :: struct {
+    /** DR0 to DR3, each slot's address. */
+    addresses : u64[4],
+    /** DR7's bits past DR7_OFF: each used slot's local enable (bit 2n), condition (bits 16 + 4n) and length. */
+    control : u64,
+}
+
+/**
+ * Set a thread's debugging state (arch_interface.set_debug): slot n is DRn, an Execute slot's condition 00 and length
+ * 1, a Write slot's 01 and a ReadWrite slot's 11, with its size's length; stepping is RFLAGS.TF.
+ *
+ * @param debug The thread's state, replaced whole.
+ * @param registers The thread's saved registers, whose TF is set or cleared.
+ * @param step Whether it single-steps.
+ * @param slots At most four.
+ * @return False, changing nothing, for more than four slots, an address outside user memory, or a data slot whose
+ *     size isn't 1, 2, 4 or 8 or whose address isn't a multiple of it.
+ */
+set_debug :: fn(debug: ptr[mut DebugRegisters], registers: ptr[mut UserRegisters], step: bool, slots: slop_os.DebugSlot[]) -> bool {
+    made := DebugRegisters.{}
+    low, high :: user_address_range()
+    for slot, i in slots {
+        if slot.kind == .Off {
+            continue
+        }
+        if i >= made.addresses.count || slot.address < cast[u64](low) || slot.address >= cast[u64](high) {
+            return false
+        }
+        condition : u64 = 0
+        length : u64 = 0
+        if slot.kind != .Execute {
+            condition = if slot.kind == .Write { 1 } else { 3 }
+            match slot.size {
+                case 1 => length = 0
+                case 2 => length = 1
+                case 4 => length = 3
+                case 8 => length = 2
+                case _ => return false
+            }
+            if slot.address % cast[u64](slot.size) != 0 {
+                return false
+            }
+        }
+        made.addresses[i] = slot.address
+        shift :: 16 + 4 * cast[u64](i)
+        made.control |= (1 << (2 * cast[u64](i))) | (condition << shift) | (length << (shift + 2))
+    }
+    debug^ = made
+    if step {
+        registers.frame.rflags |= TRAP_FLAG
+    }
+    else {
+        registers.frame.rflags &= ~TRAP_FLAG
+    }
+    return true
+}
+
+/**
+ * Load a thread's breakpoints into DR0 to DR3 and DR7 as it returns to user mode (arch_interface.debug_on); stepping is
+ * already in its RFLAGS.
+ *
+ * @param debug The thread's state; with no slot used, nothing's loaded.
+ * @param registers Not used: TF is in the saved flags.
+ */
+debug_on :: fn(debug: ptr[DebugRegisters], registers: ptr[mut UserRegisters]) {
+    if debug.control == 0 {
+        return void
+    }
+    x86_64.write_dr0(debug.addresses[0])
+    x86_64.write_dr1(debug.addresses[1])
+    x86_64.write_dr2(debug.addresses[2])
+    x86_64.write_dr3(debug.addresses[3])
+    x86_64.write_dr7(DR7_OFF | debug.control)
+    current_cpu().debug_loaded = true
+}
+
+/**
+ * Turn the breakpoints off at an entry from user mode, if a thread's are loaded (arch_interface.debug_off): DR7's
+ * enables apply in the kernel too.
+ */
+debug_off :: fn() {
+    cpu :: current_cpu()
+    if cpu.debug_loaded {
+        x86_64.write_dr7(DR7_OFF)
+        cpu.debug_loaded = false
+    }
+}
+
+/**
+ * Decode a debug exception (vector 1) by DR6, which is cleared: a breakpoint slot that matched, as Breakpoint for an
+ * Execute slot and Watchpoint at its address for a data slot, or else SingleStep.
+ *
+ * SPEC: Intel SDM Vol. 3B §18.2.3 (debug status register), §18.2.4 (debug control register).
+ *
+ * @return The fault.
+ */
+decode_debug :: fn() -> arch_interface.Fault {
+    status :: x86_64.read_dr6()
+    x86_64.write_dr6(DR6_CLEAR)
+    control :: x86_64.read_dr7()
+    for i in cast[u64](0)..<4 {
+        if status & (1 << i) == 0 {
+            continue
+        }
+        if (control >> (16 + 4 * i)) & 3 == 0 {
+            return .Breakpoint
+        }
+        address :: match i {
+            case 0 => x86_64.read_dr0()
+            case 1 => x86_64.read_dr1()
+            case 2 => x86_64.read_dr2()
+            case _ => x86_64.read_dr3()
+        }
+        return .Watchpoint(address)
+    }
+    return .SingleStep
 }
