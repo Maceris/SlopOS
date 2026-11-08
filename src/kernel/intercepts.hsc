@@ -288,8 +288,53 @@ stop_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], point: slop_
     thread.stop_reported = false
     unlock_at(&thread.control, .ThreadControl)
     link_stopped(intercept, thread)
+    // Under STOP_FAULT_LIMITED, its process ends if it's still stopped here past FAULT_STOP_LIMIT (fire_fault_stop)
+    if point == .Fault && intercept.points & slop_os.STOP_FAULT_LIMITED != 0 {
+        thread.fault_stops += 1
+        thread.fault_timer.kind = .FaultStop
+        thread.fault_timer.owner = cast[u64](thread)
+        thread.fault_timer.owner_generation = (cast[u64](thread.header.generation) << 32) | cast[u64](thread.fault_stops)
+        thread.fault_timer.port = 0
+        _ = arm_timer(&thread.fault_timer, arch.counter() + FAULT_STOP_LIMIT_MILLISECONDS * kernel.counter_frequency / 1000)
+    }
     report_stop(kernel, intercept)
     return true
+}
+
+/** How long a thread may stay stopped at a fault under STOP_FAULT_LIMITED before its process ends, in milliseconds. */
+FAULT_STOP_LIMIT_MILLISECONDS : u64 : 1000
+
+/**
+ * End the process of a thread still stopped at a fault its limit after it stopped (STOP_FAULT_LIMITED), as a fault
+ * without an intercept ends it (decisions/0181's F6); one let go, destroyed or stopped again since is left alone.
+ *
+ * Runs from the timer interrupt of the CPU it was armed on (fire_timers), with no lock held; takes the intercept's
+ * lock, and destroys the process once this CPU isn't destroying something else (destroy_later).
+ *
+ * @param kernel The kernel.
+ * @param fired A copy of the fault timer's entry: its owner is the thread, its owner_generation the thread's
+ *     generation in the high 32 bits and its count of fault stops in the low.
+ */
+fire_fault_stop :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
+    thread :: cast[ptr[mut Thread]](fired.owner)
+    address :: thread.stop_intercept
+    if address == 0 {
+        return void
+    }
+    intercept :: cast[ptr[mut Intercept]](address)
+    lock_at(&intercept.lock, .Intercept)
+    expected :: (cast[u64](thread.header.generation) << 32) | cast[u64](thread.fault_stops)
+    still :: expected == fired.owner_generation && thread.stop_linked && thread.stop_intercept == address
+        && thread.stop_point == cast[u32](slop_os.StopPoint.Fault)
+    owner :: thread.header.owner
+    generation :: if owner != 0 { intrinsics.atomic_load_u32_acquire(&cast[ptr[ObjectHeader]](owner).generation) } else { 0 }
+    id :: thread.id
+    unlock_at(&intercept.lock, .Intercept)
+    if !still || owner == 0 {
+        return void
+    }
+    runtime.log_info("thread % stayed stopped at a fault, so its process ends", id)
+    destroy_later(kernel, owner, generation)
 }
 
 /**
@@ -402,6 +447,7 @@ intercept_resume :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], i
     }
     unlink_stopped(intercept, found)
     unlock_at(&intercept.lock, .Intercept)
+    _ = cancel_timer(kernel, &found.fault_timer)
     let_go(kernel, found, action)
     return null
 }
@@ -444,6 +490,7 @@ forget_stop :: fn(thread: ptr[mut Thread]) {
     lock_at(&intercept.lock, .Intercept)
     unlink_stopped(intercept, thread)
     unlock_at(&intercept.lock, .Intercept)
+    _ = cancel_timer(per_cpu().kernel, &thread.fault_timer)
 }
 
 /**

@@ -1026,6 +1026,13 @@ TESTS = [
         "--expect-line=[user] supervisor: test_store: with 64 KiB of pages kept, read hello's program back whole twice, the rest given back "
         "under pressure",
         "--expect-line=[user] supervisor: test_store: hello's bundle's manifest is its entry's schema"])),
+    # Crash reports (decisions/0183, 12a): the update service's thread is sent where nothing's mapped, so it faults; the
+    # supervisor, holding the intercept of its faults, reports it, kills it, and starts it again
+    ("reports a service's crash, and starts it again", 7, with_before_qemu(
+        [argument.replace("test_services", "test_services test_crash") for argument in BOOT_DISK_BASE], [
+        "--expect-line=[user] supervisor: test_crash: crashing update",
+        "--expect-line=[user] supervisor: update crashed: execute fault",
+        "--expect-line=[user] supervisor: update ended"])),
     ("boots degraded, with a record of why, when a service the system needs ends for good", 7, with_before_qemu(
         # hello's own lines too, which it may not get to before it's killed
         [argument.replace("test_services", "test_services test_degraded") for argument in BOOT_DISK_BASE
@@ -1197,7 +1204,7 @@ TESTS = [
     ("refuses a typed library whose export's type changed", 7, [WITH_PROGRAMS, "--command-line=test_exit test_changed_library test_program=test_libraries",
         "--expect-line=[user] root task: test_libraries ended with 1, and its budget is back to nothing",
         "--expect-line=[info] objects left: only the kernel's own", "--", "-smp", "2"]),
-    program_test("controls a process from a debugger in user mode", "test_control", 2),
+    program_test("controls a process from a debugger in user mode, and a launch's intercept of its faults", "test_control", 3),
     ("resumes after an NMI", 0, ["--command-line=test_exit test_nmi", "--expect-line=[info] test_nmi: back from the NMI"]),
     # A CPU spinning with interrupts off is caught by another's tick, and the kernel stops with Lockup (decisions/0183)
     ("catches a CPU that stops making progress", 8, ["--command-line=test_exit test_lockup",

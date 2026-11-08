@@ -638,6 +638,13 @@ Started :: struct {
     ring : slop_os.Memory,
     /** Whether it's ended and isn't to be started again. */
     done : bool,
+    /**
+     * Its faults' intercept and address space (crashes.hsc), the supervisor's, closed once it's ended; null without
+     * them.
+     */
+    faults : os.LaunchedFaults?,
+    /** Where its image is in its address space, for its crash reports. */
+    image : u64,
     /** The code it last ended with, 0 while it hasn't. */
     code : u64,
     /** The supervisor's end of its lifecycle channel (decisions/0139), closed once it's ended; NONE without one. */
@@ -729,6 +736,10 @@ Supervisor :: struct {
     launched_budget : slop_os.MemoryBudget,
     /** The log ring of the program launched last, from options_for until its entry takes it; NO_HANDLE between. */
     launched_ring : slop_os.Memory,
+    /** The faults' intercept of the program launched last, from kept until its entry takes it; null between. */
+    launched_faults : os.LaunchedFaults?,
+    /** Where the image of the program launched last is, from kept until its entry takes it. */
+    launched_image : u64,
     /** The lifecycle channel's end of the program launched last, until its entry takes it; NONE between. */
     launched_lifecycle : slop_os.Channel,
     /** The boot before's panic record, read-only, for the terminal service to show; null if there's none. */
@@ -967,7 +978,7 @@ MAX_LOADED :: 32
  * driver and the services that use them, each with what it needs, and starts again whatever ends badly. Words on the
  * kernel's command line turn on its tests (test_restart, test_dma_fault, test_clock, test_events,
  * test_restart_services, test_store, test_system_config, test_degraded, test_substitution, test_lending,
- * test_unassessed, test_accounts), skip the disk check (no_disk_check), boot the recovery generation (recovery), and
+ * test_unassessed, test_accounts, test_crash), skip the disk check (no_disk_check), boot the recovery generation (recovery), and
  * say the generation booted (generation=, store_root=). Once everything has started it assesses the boot, tells the
  * update service and the root task, and then serves its connectors for good.
  *
@@ -1082,6 +1093,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     test_store := false
     test_system_config := false
     test_degraded := false
+    test_crash := false
     test_substitution := false
     test_lending := false
     // A boot that never tells the update service how it went, as one that hangs or resets before it's assessed would
@@ -1105,6 +1117,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
             test_store = service_kit.has_word(text, "test_store")
             test_system_config = service_kit.has_word(text, "test_system_config")
             test_degraded = service_kit.has_word(text, "test_degraded")
+            test_crash = service_kit.has_word(text, "test_crash")
             test_substitution = service_kit.has_word(text, "test_substitution")
             test_lending = service_kit.has_word(text, "test_lending")
             test_unassessed = service_kit.has_word(text, "test_unassessed")
@@ -1258,6 +1271,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
         _ = ask_substitute(&supervisor, read_substitutions(&supervisor))
     }
     tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))
+    // A crash once everything has started, of a service that runs for good (crashes.hsc)
+    if test_crash {
+        _ = crash_and_wait(&supervisor, "update")
+    }
     // Chaos once everything has started, so sessions run and programs work meanwhile (chaos.hsc)
     if test_chaos > 0 {
         run_chaos(&supervisor, test_chaos, test_chaos_seed)
@@ -1318,6 +1335,9 @@ wait_and_handle_until :: fn(supervisor: ptr[mut Supervisor], deadline: u64) {
         if packet.kind == .Signal && packet.key >= ROOT_SERVICE_KEY && packet.key < ROOT_SERVICE_KEY + 3 {
             _ = dial_root_service(supervisor, cast[usize](packet.key - ROOT_SERVICE_KEY))
         }
+        if packet.kind == .Stop && packet.key >= CRASH_KEY && packet.key < CRASH_KEY + cast[u64](MAX_STARTED) {
+            crashed(supervisor, cast[usize](packet.key - CRASH_KEY))
+        }
         faulted :: cast[usize](packet.key - FAULT_KEY)
         if packet.kind == .Signal && packet.key >= FAULT_KEY && faulted < supervisor.started_count && faulted < supervisor.started.count {
             dma_fault(supervisor, faulted, packet.data[1])
@@ -1371,6 +1391,7 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
     }
     retire_ring(supervisor, entry.ring)
     entry.ring = cast[slop_os.Memory](slop_os.NO_HANDLE)
+    forget_faults(entry)
     if entry.lifecycle != NONE {
         _ = slop_os.handle_close(cast[slop_os.Handle](entry.lifecycle))
         entry.lifecycle = NONE
@@ -1596,7 +1617,8 @@ restart_service :: fn(supervisor: ptr[mut Supervisor], index: usize) {
 /**
  * Record a program just launched, in a new entry or, for a restart, its old one, and tell the root task it started.
  *
- * The entry takes the budget, ring and lifecycle channel kept for the program launched last, and is marked running.
+ * The entry takes the budget, ring, lifecycle channel and faults' intercept kept for the program launched last, and is
+ * marked running.
  *
  * @param supervisor The supervisor, whose launched_budget, launched_ring and launched_lifecycle move to the entry, and
  *     whose started_count grows by one for a new one.
@@ -1618,6 +1640,8 @@ place :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process: s
     entry.budget = take_budget(supervisor)
     entry.ring = take_ring(supervisor)
     entry.lifecycle = take_lifecycle(supervisor)
+    entry.faults = take_faults(supervisor)
+    entry.image = supervisor.launched_image
     entry.running = true
     entry.done = false
     entry.ended_on_request = false
@@ -2264,6 +2288,8 @@ start_driver :: fn(supervisor: ptr[mut Supervisor], index: usize, device: platfo
     if again != NOWHERE {
         entry.budget = take_budget(supervisor)
         entry.ring = take_ring(supervisor)
+        entry.faults = take_faults(supervisor)
+        entry.image = supervisor.launched_image
     }
     entry.running = true
     entry.listener = listener
@@ -2500,6 +2526,8 @@ options_for :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.LaunchOpt
     }
     // Its end watched from before it starts, under the key of the entry it's to have: one that ends at once is seen to
     options.watch = os.LaunchWatch.{port = supervisor.port, key = cast[u64](next_slot(supervisor))}
+    // Its faults reported from before it starts, likewise (crashes.hsc)
+    options.faults = os.LaunchFaults.{port = supervisor.port, key = CRASH_KEY + cast[u64](next_slot(supervisor))}
     if cast[slop_os.Handle](supervisor.clock_page) != slop_os.NO_HANDLE {
         rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
         match slop_os.handle_duplicate(cast[slop_os.Handle](supervisor.clock_page), rights) {
@@ -5044,7 +5072,8 @@ started :: fn(supervisor: ptr[mut Supervisor], name #escaping : string, process:
         return MAX_STARTED
     }
     supervisor.started[index] = Started.{name = name, process = process, running = true, listener = NONE, budget = take_budget(supervisor),
-        ring = take_ring(supervisor), lifecycle = take_lifecycle(supervisor)}
+        ring = take_ring(supervisor), lifecycle = take_lifecycle(supervisor), faults = take_faults(supervisor),
+        image = supervisor.launched_image}
     supervisor.started_count = index + 1
     return index
 }
@@ -5081,17 +5110,22 @@ failed :: fn(supervisor: ptr[mut Supervisor], name: string, error: os.LaunchErro
 }
 
 /**
- * Keep a launched program's budget for the entry it's placed in (take_budget), and give its process.
+ * Keep a launched program's budget, faults' intercept and image's address for the entry it's placed in (take_budget,
+ * take_faults), and give its process.
  *
  * The budget lasts as long as a handle to it, and goes back to the supervisor's once the entry's is closed as the
  * program ends.
  *
- * @param supervisor The supervisor, whose launched_budget it replaces.
+ * @param supervisor The supervisor, whose launched_budget, launched_faults and launched_image it replaces.
  * @param launched What the launch gave.
  * @return Its process, for the caller to place.
  */
 kept :: fn(supervisor: ptr[mut Supervisor], launched: os.Launched) -> slop_os.Process {
     supervisor.launched_budget = launched.budget
+    // One the entry before it didn't take, as when a launch's placing failed
+    forget_launched_faults(supervisor)
+    supervisor.launched_faults = launched.faults
+    supervisor.launched_image = launched.image
     return launched.process
 }
 

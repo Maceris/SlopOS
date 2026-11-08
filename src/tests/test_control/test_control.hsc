@@ -28,6 +28,7 @@ import testing from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
 import test_kit from "../../test_kit"
+import crash_reports from "../../crash_reports"
 
 /** The test's name, which starts each line it logs. */
 NAME :: "test_control"
@@ -55,6 +56,16 @@ RESUME_NANOSECONDS : u64 : 200_000_000
 ROLE_TARGET : u64 : 1
 /** What D tells E, in the first message on its peer channel: end yourself when told. */
 ROLE_EXITING : u64 : 2
+/** What D tells F, in the first message on its peer channel: fault at once, writing where nothing's mapped. */
+ROLE_FAULTING : u64 : 3
+/** Where F writes, which nothing maps: the first page, kept unmapped. */
+FAULTING_ADDRESS : u64 : 16
+/** The key F's faults are reported under. */
+FAULTS_KEY : u64 : 24
+/** The key D's watch for F's end queues under. */
+FAULTING_WATCH_KEY : u64 : 25
+/** How long D waits at most for F to end once its fault stop isn't let go, in nanoseconds: 5 s. */
+FAULTING_END_NANOSECONDS : u64 : 5_000_000_000
 /** The slot of a copy's page, a u64 by index, D writes to start it. */
 SLOT_GO :: 0
 /** The slot T2, and the thread D starts in T, count in. */
@@ -181,6 +192,10 @@ run_copy :: fn(peer: slop_os.Channel) -> int {
         return 3
     }
     page :: &pages[0]
+    if role == ROLE_FAULTING {
+        intrinsics.volatile_store_u64(cast[ptr[mut u64]](FAULTING_ADDRESS), 1)
+        slop_os.process_exit(0)
+    }
     if role == ROLE_EXITING {
         // Ends itself, once D writes to its page
         report := TargetReport.{page = cast[u64](page)}
@@ -236,17 +251,19 @@ Copy :: struct {
  * @param manager_port D's port for the manager connection.
  * @param program The test's own module, which the copy runs.
  * @param name The copy's process name.
- * @param role ROLE_TARGET or ROLE_EXITING, sent on the peer channel.
+ * @param role ROLE_TARGET, ROLE_EXITING or ROLE_FAULTING, sent on the peer channel.
+ * @param options What the launch does beyond its grants; none by default.
  * @return The copy, or null if any step failed, leaving behind whatever it had made.
  */
 launch_copy :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessManager], manager_port: slop_os.Port,
-    program: slop_os.Memory, name: string, role: u64) -> Copy? {
+    program: slop_os.Memory, name: string, role: u64, options: os.LaunchOptions = os.LaunchOptions.{}) -> Copy? {
     block :: slop_os.startup_block()
     pair :: slop_os.channel_create(block.budget, 0, 0) or_return null
     log_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     log_copy :: cast[slop_os.DebugLog](slop_os.handle_duplicate(cast[slop_os.Handle](log), log_rights) or_return null)
     copy := Copy.{end = pair.a}
-    copy.launched = os.launch(manager, manager_port, name, program, 4 << 20, main, CopyGrants.{log = log_copy, peer = pair.b}) or_return null
+    copy.launched = os.launch(manager, manager_port, name, program, 4 << 20, main, CopyGrants.{log = log_copy, peer = pair.b}, options)
+        or_return null
     copy.port = os.port_for(block.budget, pair.a) or_return null
     told := role
     none : slop_os.Handle[1]
@@ -479,5 +496,65 @@ a_process_ending_itself_gives_its_code #test :: fn(t: ptr[mut testing.T]) -> tes
     _ = slop_os.handle_close(cast[slop_os.Handle](exit_port))
     _ = test_kit.wait_for_budget(copy.launched.budget, 0, 2_000_000_000)
     testing.expect_eq(t, test_kit.used(copy.launched.budget), 0, "E's budget is back to nothing once it has ended")
+    return .Ok
+}
+
+/**
+ * Check a launch's intercept of a program's faults (os.LaunchOptions.faults, decisions/0183): F, a copy, faults at
+ * once, which stops it there, reported as a write fault at the address it wrote; a crash report of it has its
+ * registers and its faulting instruction in its image. Its stop isn't let go, so it ends within a few seconds
+ * (STOP_FAULT_LIMITED), and what it had comes back.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if main wasn't given the process manager or its module, or the port, F or its faults'
+ *     intercept couldn't be had.
+ */
+a_launch_reports_faults_and_ends_a_program_left_stopped #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
+    manager :: testing.require_some(t, given.manager, "the root task grants the process manager")?
+    program :: testing.require_some(t, given.program, "the root task grants the program's own module")?
+    manager_port :: testing.require_some(t, os.port_for(block.budget, manager.end), "a port for the process manager's replies")?
+    port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for F's stops and end")?
+    options := os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = FAULTING_WATCH_KEY},
+        faults = os.LaunchFaults.{port = port, key = FAULTS_KEY}}
+    copy :: testing.require_some(t, launch_copy(given.log, manager, manager_port, program, "test_control F", ROLE_FAULTING, options),
+        "F is launched with its faults intercepted, and told its role")?
+    faults :: testing.require_some(t, copy.launched.faults, "the launch gives F's faults' intercept and its address space")?
+    testing.expect(t, copy.launched.image != 0, "the launch says where F's image is")
+    stop := slop_os.StopInfo.{}
+    next_stop(port, faults.intercept, &stop)
+    testing.expect_eq(t, stop.point, slop_os.StopPoint.Fault, "F stops at a fault")
+    testing.expect_eq(t, stop.number, slop_os.FAULT_WRITE, "it's a write fault")
+    testing.expect_eq(t, stop.address, FAULTING_ADDRESS, "at the address F wrote")
+    report :: crash_reports.make(copy.launched.process, faults.space, copy.launched.image, "test_control F", stop)
+    testing.expect(t, report.frame_count >= 1, "a report of the fault has at least its faulting frame")
+    testing.expect(t, report.frames[0] >= copy.launched.image, "the faulting instruction is in F's image")
+    // Not let go: F ends within the limit, as if nothing intercepted it
+    deadline :: (slop_os.clock_monotonic() or_else 0) + FAULTING_END_NANOSECONDS
+    ended := false
+    loop {
+        packets : slop_os.Packet[4]
+        taken :: slop_os.port_wait(port, packets, deadline) or_else 0
+        if taken == 0 {
+            break
+        }
+        for packet, i in packets {
+            if cast[u64](i) < taken && packet.kind == .Signal && packet.key == FAULTING_WATCH_KEY {
+                ended = true
+            }
+        }
+        if ended {
+            break
+        }
+    }
+    testing.expect(t, ended, "F, its fault stop not let go, ends within a few seconds")
+    for handle in slop_os.Handle.[cast[slop_os.Handle](faults.intercept), cast[slop_os.Handle](faults.space),
+        cast[slop_os.Handle](copy.launched.process), cast[slop_os.Handle](copy.end), cast[slop_os.Handle](copy.port),
+        cast[slop_os.Handle](port)] {
+        _ = slop_os.handle_close(handle)
+    }
+    testing.expect(t, test_kit.wait_for_budget(copy.launched.budget, 0, 1_000_000_000), "F's budget is back to nothing once it has ended")
+    _ = slop_os.handle_close(cast[slop_os.Handle](copy.launched.budget))
     return .Ok
 }

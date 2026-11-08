@@ -109,6 +109,13 @@ Thread :: struct #align(16) {
     wait_sequence : u64,
     /** The timer that ends its wait at wait_deadline (timers.hsc). */
     wait_timer : TimerEntry,
+    /**
+     * The timer that ends its process if it stays stopped at a fault past FAULT_STOP_LIMIT, under an intercept with
+     * STOP_FAULT_LIMITED (intercepts.hsc).
+     */
+    fault_timer : TimerEntry,
+    /** Counts its stops at a fault, so a fault timer from an earlier one doesn't end a later one. */
+    fault_stops : u32,
     /** Process control's lock (control.hsc), at rank ThreadControl: guards held, parked, its stop and watchers. */
     control : concurrency.SpinLock,
     /** What holds it, HELD_* bits (control.hsc): it doesn't run while any is set. */
@@ -197,6 +204,7 @@ create_thread :: fn(kernel: ptr[mut Kernel], owner: u64, space #escaping : ptr[m
     // A CpuTime of its own, as the kernel's tests give, or its process's budget once it's adopted
     thread.budget = budget
     thread.wait_timer = make_timer()
+    thread.fault_timer = make_timer()
     thread.id = intrinsics.interlocked_increment_u64(&kernel.next_thread_id) + 1
     match adopt(owner, object) {
         case Ok => {}

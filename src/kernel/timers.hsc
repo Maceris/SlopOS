@@ -32,6 +32,8 @@ TimerKind :: enum #backed_by(u8) {
     PortTimer,
     /** A thread waiting on a port with a deadline: it's woken (ports.hsc, fire_wait_timeout). */
     WaitTimeout,
+    /** A thread stopped at a fault for too long: its process ends (intercepts.hsc, fire_fault_stop). */
+    FaultStop,
 }
 
 /**
@@ -47,11 +49,11 @@ TimerEntry :: struct {
     cpu : u32,
     /** What it's for, which says what owner is. */
     kind : TimerKind,
-    /** What it's for, as an address: a Binding for PortTimer, a Thread for WaitTimeout. Set by whoever arms it. */
+    /** What it's for, as an address: a Binding for PortTimer, a Thread for WaitTimeout and FaultStop. Set by whoever arms it. */
     owner : u64,
     /**
      * What owner was when it was armed, so firing can tell it changed since: a binding's generation, or a thread's
-     * generation in the high 32 bits and its wait's sequence number in the low.
+     * generation in the high 32 bits and its wait's sequence number, or its fault stops' count, in the low.
      */
     owner_generation : u64,
     /** The Port it's for, as an address. */
@@ -188,6 +190,7 @@ fire_timers :: fn(kernel: ptr[mut Kernel], now: u64) {
         match fired.kind {
             case .PortTimer => fire_port_timer(kernel, &fired)
             case .WaitTimeout => fire_wait_timeout(kernel, &fired)
+            case .FaultStop => fire_fault_stop(kernel, &fired)
         }
     }
 }
