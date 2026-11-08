@@ -158,7 +158,8 @@ take_prompts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 each.ask = kept
                 each.asking = true
                 runtime.log_info("% asks for a %", bytes_text(first_of(kept.requester[0..<kept.requester.count], kept.requester_count)),
-                    if kept.kind == .Directory { "directory" } else if kept.kind == .Account { "new account" } else { "file" })
+                    if kept.kind == .Directory { "directory" } else if kept.kind == .Account { "new account" }
+                    else if kept.kind == .ShutDown { "shutdown" } else if kept.kind == .Restart { "restart" } else { "file" })
                 if i == service.active && !service.attention && service.setup == .Off {
                     use_active(service)
                     update_status(service)
@@ -178,7 +179,7 @@ append_asking :: fn(status: ptr[mut text_buffer.TextBuffer], asked: ptr[Asked]) 
     text_buffer.append(status, " │ ")
     text_buffer.append(status, bytes_text(first_of(asked.requester[0..<asked.requester.count], asked.requester_count)))
     text_buffer.append(status, if asked.kind == .Directory { " asks for a directory" } else if asked.kind == .Account { " asks to make an account" }
-        else { " asks for a file" })
+        else if asked.kind == .ShutDown { " asks to shut down" } else if asked.kind == .Restart { " asks to restart" } else { " asks for a file" })
     text_buffer.append(status, ": Ctrl+Alt+Delete")
 }
 

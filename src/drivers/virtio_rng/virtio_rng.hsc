@@ -9,6 +9,7 @@ package virtio_rng
 import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
+import service_kit from "../../libraries/service_kit"
 import driver_kit from "../../driver_kit"
 import pci from "../../pci"
 import entropy from "../../protocols/entropy"
@@ -116,12 +117,13 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
         case None => _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
     }
     runtime.log_info("serving, a source of the entropy service's")
+    _ = service_kit.watch_stop(driver.port)
     serve(&driver, pair.b)
     return 0
 }
 
 /**
- * Answer every Read on a channel, until its other end is gone.
+ * Answer every Read on a channel, until its other end is gone, or the driver's asked to stop.
  *
  * Each Read is answered with Bytes, as many as the device gave, up to the count asked and rng.MAX_BYTES; an unknown
  * request is answered Unsupported, and anything else is skipped. It waits on the driver's port between them.
@@ -135,6 +137,10 @@ serve :: fn(driver: ptr[mut Driver], end: slop_os.Channel) {
         match rng.receive_request(end, driver.port, &into, false) {
             case Received => {}
             case Empty => {
+                // Asked to stop, as the system shuts down (decisions/0182)
+                if service_kit.stopping() {
+                    return void
+                }
                 packets : slop_os.Packet[4]
                 _ = slop_os.port_wait(driver.port, packets, slop_os.NO_DEADLINE)
                 continue

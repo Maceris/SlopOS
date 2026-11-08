@@ -121,6 +121,12 @@ Request :: union {
      */
     CreateBy(Elevated),
     /**
+     * Check an administrator's name and password, for an act elevation allows that isn't making an account, as shutting
+     * the system down (decisions/0182). Answered with Done; WrongCredentials when they don't open the administrator's
+     * home or the account isn't the administrator's, which counts as a wrong login does; or RateLimited.
+     */
+    CheckAdministrator(Credentials),
+    /**
      * Share a volume with a member, made the first time, its owner its first member, the volume's secret sealed to
      * the member's public key. Answered with Shared, NameRefused, AlreadyExists for a member already in it or the
      * owner, NoSuchAccount, Refused when the volume isn't the owner's, or Failed.
@@ -161,7 +167,7 @@ Response :: union {
     Created(RecoveryText),
     /** OpenHome's answer: a connection to the home volume's root, which moves to the client. */
     OpenedHome(os.Channel[dir.Dir]),
-    /** ChangePassword's or Recover's answer: the password's replaced. */
+    /** ChangePassword's or Recover's answer: the password's replaced; CheckAdministrator's: they're the administrator's. */
     Done,
     /**
      * The answer when the password's refused, why as account_records.PasswordProblem: 1 too short, 2 too long, 3
@@ -211,6 +217,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Describe => true
         case Create(_) => false
         case CreateBy(_) => false
+        case CheckAdministrator(_) => true
         case Share(_) => false
         case Unshare(_) => false
         case OpenHome(_) => true

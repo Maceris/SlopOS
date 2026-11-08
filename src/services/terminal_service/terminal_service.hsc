@@ -452,6 +452,7 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
         case None => {}
     }
     service.port = slop_os.port_create(startup.budget) or_return 2
+    _ = service_kit.watch_stop(service.port)
     service.layout = keymaps.US.name
     connected :: &service.connected
     if !service_kit.add_client(connected, service.port, clients.end) {
@@ -497,6 +498,10 @@ main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?
         read_more(service)
         pump(service)
         draw_framebuffer(service)
+        // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done
+        if service_kit.stopping() {
+            return 0
+        }
         packets : slop_os.Packet[8]
         _ = slop_os.port_wait(service.port, packets, slop_os.NO_DEADLINE)
     }
@@ -1220,7 +1225,7 @@ enter_attention :: fn(service: ptr[mut Service]) {
     update_status(service)
     // What's waiting for the user first: the powerbox's request
     if view(service).asking {
-        if view(service).ask.kind == .Account {
+        if is_elevation(view(service).ask.kind) {
             enter_elevation(service)
         }
         else {
@@ -2230,6 +2235,11 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 say(service, text_buffer.as_string(&text))
                 setup_step(service, if service.elevating { SetupStep.AdminName } else { SetupStep.LoginPassword })
             }
+            case Done => {
+                if service.elevating && is_power(view(service).ask.kind) {
+                    power_allowed(service)
+                }
+            }
             case Created(shown) => {
                 service.code = shown.text
                 if !service.elevating {
@@ -2699,6 +2709,11 @@ setup_enter :: fn(service: ptr[mut Service]) {
             }
             service.admin_password_count = typed.count
             say(service, "")
+            // Shutting down or restarting needs nothing more than the administrator's say (decisions/0182)
+            if service.elevating && is_power(view(service).ask.kind) {
+                check_administrator(service)
+                return void
+            }
             setup_step(service, .Name)
         }
         case .LoginName => {

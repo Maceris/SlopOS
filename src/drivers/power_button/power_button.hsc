@@ -12,6 +12,7 @@ import intrinsics from "base"
 import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
+import service_kit from "../../libraries/service_kit"
 import platform from "../../protocols/platform"
 import power_protocol from "../../protocols/power"
 
@@ -78,12 +79,17 @@ main :: fn(platform_service: os.Channel[platform.Platform], power: os.Channel[po
     write(registers, CLEAR, bit)
     write(registers, ENABLE, read(registers, ENABLE) | bit)
     events :: slop_os.port_create(block.budget) or_return 1
+    _ = service_kit.watch_stop(events)
     if slop_os.port_bind(events, cast[slop_os.Handle](button.irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent) is_error {
         return 3
     }
     runtime.log_info("serving, the power button on pin %", button.pin)
     told := false
     loop {
+        // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done
+        if service_kit.stopping() {
+            return 0
+        }
         packets : slop_os.Packet[4]
         taken :: slop_os.port_wait(events, packets, slop_os.NO_DEADLINE) or_else 0
         for packet, i in packets {

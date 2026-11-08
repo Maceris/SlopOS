@@ -162,6 +162,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     driver.block_count = virtio.read_u32(driver.transport.device, CAPACITY) | (cast[u64](virtio.read_u32(driver.transport.device, CAPACITY + 4)) << 32)
 
     driver.port = slop_os.port_create(block_of_startup.budget) or_return 5
+    _ = service_kit.watch_stop(driver.port)
     irq :: slop_os.irq_create_msi(device, block_of_startup.budget) or_return 6
     message :: slop_os.irq_message(irq) or_return 6
     if !virtio.set_vector(&driver.transport, 0, message.address, message.data) {
@@ -196,6 +197,10 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
         }
         while i < driver.clients.count
         finish(driver)
+        // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done
+        if service_kit.stopping() {
+            return 0
+        }
         packets : slop_os.Packet[8]
         _ = slop_os.port_wait(driver.port, packets, slop_os.NO_DEADLINE)
     }

@@ -206,6 +206,13 @@ serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
                     case None => continue
                 }
             }
+            case RequestPower(asked) => {
+                kind :: if asked.restart { prompt.Kind.Restart } else { prompt.Kind.ShutDown }
+                match ask(box, index, kind, false, os.items(into, asked.purpose), u8.[], u8.[]) {
+                    case Some(answer) => response^ = answer
+                    case None => continue
+                }
+            }
         }
         _ = powerbox.send_response(end, box.port, &out)
     }
@@ -298,7 +305,8 @@ ask :: fn(box: ptr[mut Box], index: usize, kind: prompt.Kind, write: bool, purpo
     box.has_waiting = true
     who :: name_of(box, index)
     runtime.log_info("% asks for a %", if who.count > 0 { string_of(&who[0], who.count) } else { "a program" },
-        if kind == .Account { "new account" } else if kind == .File { if write { "file to write" } else { "file to read" } }
+        if kind == .Account { "new account" } else if kind == .ShutDown { "shutdown" } else if kind == .Restart { "restart" }
+        else if kind == .File { if write { "file to write" } else { "file to read" } }
         else { if write { "directory to write in" } else { "directory to read" } })
     return null
 }
@@ -328,6 +336,10 @@ take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
         case _ => return void
     }
     match os.message_of[prompt.Response](into)^ {
+        case Allowed => {
+            runtime.log_info("the administrator allowed a %", if box.waiting.kind == .Restart { "restart" } else { "shutdown" })
+            answer(box, .Allowed)
+        }
         case AccountMade(made) => {
             name :: os.items(into, made)
             who :: name_of(box, box.waiting.client)

@@ -159,6 +159,7 @@ main :: fn(log: slop_os.DebugLog?, storage_service: os.Channel[connector.Connect
     block :: slop_os.startup_block()
     service := Service.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)}
     service.port = slop_os.port_create(block.budget) or_return 1
+    _ = service_kit.watch_stop(service.port)
     dialing :: storage_service or_else os.Channel[connector.Connector].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     if cast[slop_os.Handle](dialing.end) == slop_os.NO_HANDLE {
         log_line.write(service.log, "account_service: no storage manager")
@@ -186,6 +187,10 @@ main :: fn(log: slop_os.DebugLog?, storage_service: os.Channel[connector.Connect
             i += 1
         }
         while i < connected.count
+        // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done
+        if service_kit.stopping() {
+            return 0
+        }
         packets : slop_os.Packet[8]
         _ = slop_os.port_wait(service.port, packets, slop_os.NO_DEADLINE)
     }
@@ -318,6 +323,11 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                     os.items(into, elevated.administrator.password), os.items(into, elevated.creation.name), os.items(into, elevated.creation.password),
                     elevated.creation.now)
             }
+            case CheckAdministrator(credentials) => {
+                administrator :: os.items(into, credentials.name)
+                response^ = limited(service, index, administrator) or_else check_administrator(service, index, administrator,
+                    os.items(into, credentials.password))
+            }
             case OpenHome(credentials) => {
                 name :: os.items(into, credentials.name)
                 response^ = limited(service, index, name) or_else open_home(service, index, name, os.items(into, credentials.password), &out)
@@ -397,6 +407,27 @@ create_by :: fn(service: ptr[mut Service], client: usize, administrator: u8[], a
     }
     succeeded(service, client, administrator)
     return made_account(service, name, password, now, false)
+}
+
+/**
+ * Check an administrator's name and password, for an act elevation allows (decisions/0182): they have to open the
+ * administrator's home, as create_by's do. A name that isn't an account's takes as long as a wrong password.
+ *
+ * @param service The service, whose administrator's record is read, and whose counts of wrong attempts change.
+ * @param client The client index of who asked, which a wrong attempt counts against.
+ * @param administrator The administrator's account name.
+ * @param password Their password; the home secret it unseals is wiped at once.
+ * @return Done; WrongCredentials for a wrong name or password, or an account that isn't the administrator's.
+ */
+check_administrator :: fn(service: ptr[mut Service], client: usize, administrator: u8[], password: u8[]) -> accounts.Response {
+    record := read_record(service, administrator) or_else dummy_record()
+    home := account_records.unlock_home(&record, password) or_return failed(service, client, administrator)
+    account_records.zero_key(&home)
+    if !account_records.is_administrator(&record) {
+        return failed(service, client, administrator)
+    }
+    succeeded(service, client, administrator)
+    return .Done
 }
 
 /**

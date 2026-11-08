@@ -47,6 +47,8 @@ BUILTINS :: Builtin.[
     Builtin.{name = "uninstall", summary = "Remove an installation of yours and its data, after a snapshot recover can use: uninstall tally."},
     Builtin.{name = "installations", summary = "List the installations your sessions run: the system's and yours."},
     Builtin.{name = "grants", summary = "List the grants kept through the powerbox, or revoke one: grants --revoke 3."},
+    Builtin.{name = "restart", summary = "Restart the system, once an administrator allows it on the trusted path."},
+    Builtin.{name = "shut-down", summary = "Shut the system down, once an administrator allows it on the trusted path."},
 ]
 
 /**

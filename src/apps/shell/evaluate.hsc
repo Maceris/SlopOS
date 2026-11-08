@@ -386,6 +386,9 @@ call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, E
     if tree.text == "grants" {
         return kept_grants(shell, tree)
     }
+    if tree.text == "shut-down" || tree.text == "restart" {
+        return power_down(shell, tree, tree.text == "restart")
+    }
     if is_stage(tree) {
         return error_at(tree.at, message("% works on what comes before it in a pipeline", tree.text))
     }

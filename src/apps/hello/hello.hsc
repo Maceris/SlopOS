@@ -7,6 +7,7 @@ import random from "std"
 import text_buffer from "std"
 import time from "std"
 import slop_os from "std/os"
+import service_kit from "../../libraries/service_kit"
 import terminal from "std/os/slop_os"
 import process_manager from "std/os/slop_os"
 import config from "../../protocols/config"
@@ -84,8 +85,13 @@ main :: fn(manager: os.Channel[process_manager.ProcessManager]?, console: os.Cha
         case Some(connection) => {
             port :: slop_os.port_create(slop_os.startup_block().budget) or_return 3
             slop_os.port_bind(port, cast[slop_os.Handle](connection.end), slop_os.SIGNAL_PEER_CLOSED, 0, .Once) or_return 4
+            // Or until it's asked to stop, as the system shuts down (decisions/0182)
+            _ = service_kit.watch_stop(port)
             packets : slop_os.Packet[1]
             _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_return 5
+            if service_kit.stopping() {
+                return code
+            }
             runtime.log_info("still running after the process manager ended")
         }
         case None => {}

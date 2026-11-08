@@ -201,14 +201,14 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 71 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 74 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 5 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
         "--expect-line=[user] process manager: started supervisor", "--expect-line=[user] process manager: started hello",
         "--expect-line=[user] hello: heap working, random numbers working",
         "--expect-line=[user] hello: the entropy service gave 32 random bytes", "--expect-line=[user] root task: the supervisor started hello",
-        "--expect-line=[user] platform: serving", "--expect-line=[user] root task: the supervisor started all 6 of its services",
+        "--expect-line=[user] platform: serving", "--expect-line=[user] root task: the supervisor started all 8 of its services",
         HEALTHY_LINE,
         "--expect-line=[info] root task ended with code 0"]),
     # The IOMMU the platform service found in the firmware tables, which the kernel identified
@@ -494,6 +494,43 @@ TESTS = [
         "--expect-line=[user] sessions: a session for bob, in en-US",
         "--refuse-console-line=correct horse battery staple", "--refuse-console-line=another good passphrase",
         "--refuse-console-line=not the password"])),
+    # The hardware watchdog (decisions/0182, P5): QEMU's i6300esb, armed for 4 seconds once the supervisor's start is
+    # done, and reset while the services answer, through 20 seconds of settling, so the run ends as it would without
+    # it; and with test_watchdog_hang not reset, so it resets the machine, which QEMU, without --allow-reboot, takes as
+    # its end, without an exit code
+    ("keeps a hardware watchdog from resetting the machine while the services answer", 7,
+     with_before_qemu([argument.replace("test_services", "test_services watchdog=4 test_settle=20").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [
+        "--expect-line=[user] i6300esb: armed, 4 seconds", "--expect-line=[user] supervisor: the watchdog's armed, 4 seconds"])
+     + ["-device", "i6300esb"]),
+    ("lets the hardware watchdog reset a machine whose supervisor stops resetting it", 125,
+     with_before_qemu([argument.replace("test_services", "test_services watchdog=4 test_watchdog_hang test_settle=60")
+                       .replace("--timeout=120", "--timeout=180") for argument in BOOT_DISK_BASE
+                       if not argument.startswith("--expect-line=") or argument == HEALTHY_LINE], [
+        "--expect-line=[user] i6300esb: armed, 4 seconds",
+        "--expect-line=[user] supervisor: test_watchdog_hang: the watchdog isn't reset"])
+     + ["-device", "i6300esb"]),
+    # Shutting down from the shell (decisions/0182, P4): shut-down asks the session's powerbox, the secure attention key
+    # brings up the administrator's name and password on the trusted path, a wrong password is refused, and the right
+    # one has the system shut down, gracefully, and the machine turned off; no password shows on the console
+    ("shuts down from the shell once the administrator allows it on the trusted path", 125,
+     with_before_qemu([argument.replace("test_services", "test_services test_power test_settle=90").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wshut-down\\r\\w\\p\\e[3;7~"
+        "\\wadmin\\rnot the password\\r"
+        "\\wadmin\\rcorrect horse battery staple\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--console-input-after=Press Ctrl+Alt+Delete: an administrator's name and password allow it.",
+        "--console-input-after=  Shut the system down",
+        "--console-input-after=  That's not the administrator's name and password. Type them again.",
+        "--expect-line=[user] powerbox: shell asks for a shutdown",
+        "--expect-line=[user] terminal: elevation: shell asks to shut down",
+        "--expect-line=[user] terminal: elevation: the administrator allowed a shutdown",
+        "--expect-line=[user] supervisor: the console asked to shut down",
+        "--expect-line=[user] root task: shutting down, as the console asked", "--expect-line=[info] turning the machine off",
+        "--refuse-console-line=correct horse battery staple", "--refuse-console-line=not the password"])),
     # Shared volumes (decisions/0158): the administrator has bob's account made, then shares a volume, team, with bob
     # from the secure attention key's screen (H), which links shared/team in their home; bob, logged in to another
     # session, finds it in theirs; back in the administrator's, bob is taken out, every link into team revoked, and
@@ -565,11 +602,15 @@ TESTS = [
         "--expect-line=[user] root task: shutting down, as the console asked", "--expect-line=[info] turning the machine off"])),
     # The power button (decisions/0182, P3): pressed through QEMU once the system's healthy, it reaches the supervisor
     # through the ACPI service's SCI on x86-64 or the PL061's driver on AArch64, and shuts the system down, turning the
-    # machine off; which ends QEMU without an exit code
+    # machine off; which ends QEMU without an exit code. The shutdown is graceful (P4): every service asked to stop, the
+    # last started first, but the update service, which test_ignore_stop has the supervisor not ask, as if it didn't
+    # listen, so it's killed and named
     ("shuts down and turns off when the power button's pressed", 125,
-     with_before_qemu([argument.replace("test_services", "test_services test_power test_settle=60").replace("--timeout=120", "--timeout=180")
-                       for argument in BOOT_DISK_BASE], [f"--power-button-after={HEALTHY_LINE.removeprefix('--expect-line=')}",
+     with_before_qemu([argument.replace("test_services", "test_services test_power test_ignore_stop=update test_settle=60")
+                       .replace("--timeout=120", "--timeout=180") for argument in BOOT_DISK_BASE],
+                      [f"--power-button-after={HEALTHY_LINE.removeprefix('--expect-line=')}",
         "--expect-line=[user] supervisor: the power button was pressed",
+        "--expect-line=[user] supervisor: killed update, which didn't stop when asked",
         "--expect-line=[user] root task: shutting down, as the console asked", "--expect-line=[info] turning the machine off"])),
     # Calls through manifests (decisions/0170): test_shell_calls given values by position and by --name, a bool alone, an
     # enum's member, a duration, a list, a directory beneath the home and the terminal unasked; then its exit code as an
@@ -1070,7 +1111,7 @@ TESTS = [
         "--expect-line=[user] storage_manager: restarted the partition server for disk 0"])),
     ("keeps the kernel's share of memory out of the root budget", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services kernel_reserve=24",
         "--expect-line=[info] memory: 24 MiB kept out of the root budget for the kernel's own",
-        "--expect-line=[user] root task: the supervisor started all 6 of its services"]),
+        "--expect-line=[user] root task: the supervisor started all 8 of its services"]),
     ("doesn't start the root task with no_root_task", 0, [WITH_PROGRAMS, "--command-line=test_exit no_root_task",
         "--expect-line=[info] boot memory reclaimed"]),
     ("reports a kernel fault", 1, ["--command-line=test_exit test_fault"]),

@@ -22,7 +22,7 @@ bug or compromise there can break the guarantees of `security.md`.
 | Service | Layer | Does | Holds | TCB |
 |---|---|---|---|---|
 | **Platform service** | L3 | Parses the static firmware tables (ACPI or devicetree), enumerates PCIe, registers interrupt controllers and IOMMUs with the kernel, starts drivers with only their own device's capabilities (`0039`) | Device memory, IRQs, I/O ports for all devices until handed out; the capability to register platform hardware | yes |
-| **ACPI service** | L3 | Later: runs ACPI's AML (legacy interrupt routing, power management, battery, embedded controller) for the platform service (`0039`) | The ACPI namespace's device memory and I/O ports | partly |
+| **ACPI service** | L3 | Runs the firmware's AML (`0039`, `0182`): S5's sleep types for the kernel, the host bridge's windows for the platform service, the SCI's power button and GPEs; batteries and the embedded controller later | The firmware tables; its regions' ports, device memory and configuration space, each asked of the platform service; the SCI | partly |
 | **Drivers** | L3 | One per device; implement device-class protocols | Their own device's MMIO, IRQs, DMA buffers in an IOMMU domain | no (confined by the IOMMU) |
 | **Clock** | L3/L4 | Wall-clock time: RTC (M9), later NTP with NTS (`0009`, `networking.md` §5) | RTC device, a narrowed network connection | no |
 | **Entropy** | L3/L4 | Random bytes for seeding `std` generators (`0009`) | Hardware RNG device, boot seed | partly (keys depend on it) |
