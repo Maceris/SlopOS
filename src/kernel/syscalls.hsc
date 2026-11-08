@@ -652,8 +652,8 @@ sys_port_unbind :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64) -> 
  *
  * @param thread The calling thread, which may leave its CPU here; its result is then written when the wait is over.
  * @param port The port, which needs RIGHT_PORT_WAIT.
- * @param packets Where packets go in the caller's memory: at most slop_os.MAX_PACKETS_PER_WAIT of them, however big it
- *     is; empty, the call returns 0 at once.
+ * @param packets Where packets go in the caller's memory: at least one, and at most slop_os.MAX_PACKETS_PER_WAIT of
+ *     them are taken, however big it is.
  * @param deadline When to give up, in monotonic nanoseconds, or slop_os.NO_DEADLINE to wait for as long as it takes.
  * @return How many packets were written at the start of packets: at least 1, or 0 when the deadline came first. When
  *     the thread blocks, the 0 returned here isn't written; complete_wait writes the result.
@@ -661,6 +661,7 @@ sys_port_unbind :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64) -> 
  * @error ObjectGone The port was destroyed, or is being, before or during the wait.
  * @error WrongKind Not a port's handle.
  * @error MissingRight The handle lacks RIGHT_PORT_WAIT.
+ * @error BufferTooSmall The packets are empty: a wait that could take nothing is refused, not waited (decisions/0184).
  * @error BadBuffer The packets aren't mapped writable user memory; packets taken when writing them failed are lost.
  */
 sys_port_wait :: fn(thread: ptr[mut Thread], port: slop_os.Port, packets: slop_os.UserBuffer, deadline: u64) -> Result[u32, slop_os.PortError] {
@@ -1060,6 +1061,7 @@ sys_channel_take_handles :: fn(thread: ptr[mut Thread], end: slop_os.Channel, ba
  * @error WrongKind A handle of another kind.
  * @error MissingRight The port lacks RIGHT_PORT_WAIT.
  * @error PeerClosed The other end is closed; nothing is waited for.
+ * @error BufferTooSmall The packets are empty, as port_wait's; nothing is raised or waited for.
  * @error BadBuffer The packets aren't writable user memory.
  */
 sys_channel_notify_and_wait :: fn(thread: ptr[mut Thread], end: slop_os.Channel, signals: slop_os.Signals, port: slop_os.Port,
@@ -1067,6 +1069,10 @@ sys_channel_notify_and_wait :: fn(thread: ptr[mut Thread], end: slop_os.Channel,
     kernel :: per_cpu().kernel
     found :: end_of(thread, end, cast[slop_os.Rights](0))?
     waited :: object_of[slop_os.ChannelError](process_of(thread), cast[slop_os.Handle](port), slop_os.ObjectKind.Port, slop_os.RIGHT_PORT_WAIT)?
+    // Refused before the notify, so a call that can't wait doesn't raise anything either
+    if packets.count == 0 {
+        return .Error(.BufferTooSmall)
+    }
     cpu :: per_cpu()
     cpu.handoff = true
     notified :: channel_notify(kernel, found, signals)

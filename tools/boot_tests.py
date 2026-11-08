@@ -1208,7 +1208,7 @@ TESTS = [
         "--expect-line=[user] root task: test_affinity ended with 0, and its budget is back to nothing", "--", "-smp", "2"]),
     program_test("runs threads of its own, each preempted and with its own vector state", "test_threads", 1),
     program_test("takes system calls on handles", "test_syscalls", 3),
-    program_test("waits on ports, wakes them and sets their timers", "test_ports", 3),
+    program_test("waits on ports, wakes them and sets their timers, and refuses a wait with no room", "test_ports", 4),
     program_test("passes handles and messages over channels", "test_channels", 3),
     # And counts who holds a memory object, and says when no one does (decisions/0178)
     program_test("maps memory objects, paid for by budgets, and counts who holds them", "test_memory", 6),

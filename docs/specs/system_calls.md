@@ -76,7 +76,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 10 | `port_wake` | port, key, bits | nothing: key's wake binding's packet, with bits ORed into it; needs `RIGHT_PORT_BIND` |
 | 11 | `port_set_timer` | port, key, deadline | nothing: a timer packet for key at deadline (monotonic nanoseconds), binding key if it isn't yet; setting it again moves it. Needs `RIGHT_PORT_BIND` |
 | 12 | `port_unbind` | port, key | nothing: the binding goes, with a packet it had queued; needs `RIGHT_PORT_BIND` |
-| 13 | `port_wait` | port, packets (a slice), deadline | how many packets it wrote into packets, up to its count and 64: at once if any are queued, otherwise once one is, or 0 at deadline (`NO_DEADLINE` for none). Needs `RIGHT_PORT_WAIT` |
+| 13 | `port_wait` | port, packets (a slice), deadline | how many packets it wrote into packets, up to its count and 64: at once if any are queued, otherwise once one is, or 0 at deadline (`NO_DEADLINE` for none). Empty packets are refused with `BufferTooSmall`. Needs `RIGHT_PORT_WAIT` |
 | 14 | `channel_create` | budget, ring bytes, tag | owning handles to a new channel's two ends; rings of ring bytes each way, a power of two from 1 KiB to 128 KiB, 0 for the default 1 KiB; tag, the protocol both ends speak, kept and never interpreted (`0040`, `0071`) |
 | 15 | `channel_map` | end, address space, address | nothing: the channel's memory, `channel_memory_size` bytes, mapped read/write at address, page-aligned. Needs `RIGHT_CHANNEL_MAP` and `RIGHT_SPACE_MAP`; one mapping per end |
 | 16 | `channel_unmap` | end | nothing: the end's mapping, unmapped |
@@ -381,6 +381,7 @@ Calls on a port fail with `slop_os.PortError`, whose tags mean the same where th
 | 9 | `NoSuchKey` | No binding has that key, or not one of that kind |
 | 10 | `BadBuffer` | Packets would go where the thread can't write; nothing was taken |
 | 11 | `TooManyBindings` | The object has as many bindings as it takes |
+| 16 | `BufferTooSmall` | `port_wait`'s packets are empty: a wait that could take nothing is refused, not waited (decisions/0184) |
 
 Calls on a channel fail with `slop_os.ChannelError`, the same where tags are shared:
 
@@ -391,7 +392,7 @@ Calls on a channel fail with `slop_os.ChannelError`, the same where tags are sha
 | 13 | `Full` | No room in the ring for the message |
 | 14 | `Empty` | No message in the ring |
 | 15 | `TooBig` | A payload bigger than `channel_max_payload`, or more than 64 handles |
-| 16 | `BufferTooSmall` | The message, or the batch, doesn't fit; its size, or its count, goes where the call's pointer says |
+| 16 | `BufferTooSmall` | The message, or the batch, doesn't fit; its size, or its count, goes where the call's pointer says. For `channel_notify_and_wait`, its packets are empty, as `port_wait`'s, and nothing is raised |
 | 17 | `Mapped` | The end's rings are mapped already, or it can't be sent while they are |
 | 18 | `BadAddress` | Not a page-aligned user address, something is mapped there, or (`channel_unmap`) nothing is |
 | 19 | `BatchInUse` | The batch already holds handles not yet taken |

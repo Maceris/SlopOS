@@ -5,6 +5,8 @@
  *   its key twice and takes one packet with both bits;
  * - a timer 20 ms off blocks A until it fires; a wait with nothing to take and a 15 ms deadline gives
  *   nothing, no sooner; packets for memory A can't write are refused (BadBuffer);
+ * - a wait with no room for a packet is refused at once (BufferTooSmall, decisions/0184), leaving a queued
+ *   packet for the next wait;
  * - B, started by A, wakes it through the port, likely from another CPU, and waits for A to have the
  *   packet, since any waiter on the port may take it; A unbinds the key, after which waking it fails;
  * - B waits on the port, and A closes it: B wakes with ObjectGone;
@@ -41,6 +43,8 @@ TIMER_KEY : u64 : 9
 TIMER_NANOSECONDS : u64 : 20_000_000
 /** How far off a wait's deadline is set, in nanoseconds: 15 ms. */
 DEADLINE_NANOSECONDS : u64 : 15_000_000
+/** The deadline of a wait with no room for a packet, which is refused well before it: 50 ms. */
+EMPTY_DEADLINE_NANOSECONDS : u64 : 50_000_000
 
 /** What main was given that the tests use. */
 Given :: struct {
@@ -133,6 +137,38 @@ timers_and_deadlines_end_waits_no_sooner #test :: fn(t: ptr[mut testing.T]) -> t
     closed :: slop_os.handle_close(cast[slop_os.Handle](port))
     testing.expect_ok(t, closed, "the port closes")
     testing.expect(t, test_kit.wait_for_budget(budget, 0, 1_000_000_000), "the budget is back to nothing once the port and its timer are gone")
+    return .Ok
+}
+
+/**
+ * Check that a wait with no room for a packet is refused at once (decisions/0184), with nothing queued and with a
+ * packet queued, which it leaves for the next wait.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the budget or the port couldn't be made.
+ */
+an_empty_wait_is_refused_at_once #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    block :: slop_os.startup_block()
+    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for the port")?
+    port :: testing.require_ok(t, slop_os.port_create(budget), "a port is made under the budget")?
+    packets : slop_os.Packet[1]
+    // Nothing queued: refused, not a pause until the deadline
+    started :: test_kit.clock_now()
+    nothing :: slop_os.port_wait(port, packets[0..<0], started + EMPTY_DEADLINE_NANOSECONDS)
+    after :: test_kit.clock_now()
+    testing.expect_error(t, nothing, slop_os.PortError.BufferTooSmall, "a wait with no room for a packet is refused")
+    testing.expect_lt(t, after - started, EMPTY_DEADLINE_NANOSECONDS, "it's refused at once, not at its deadline")
+    // A packet queued: refused, and the packet stays for the next wait
+    _ = slop_os.port_bind_wake(port, PORT_KEY)
+    _ = slop_os.port_wake(port, PORT_KEY, 1)
+    queued :: slop_os.port_wait(port, packets[0..<0], slop_os.NO_DEADLINE)
+    testing.expect_error(t, queued, slop_os.PortError.BufferTooSmall, "a wait with no room is refused with a packet queued too")
+    taken :: slop_os.port_wait(port, packets, 0)
+    testing.expect_eq(t, taken or_else 0, 1, "the packet stays queued for a wait with room for it")
+    testing.expect_eq(t, packets[0].key, PORT_KEY, "it's the woken key's packet")
+    closed :: slop_os.handle_close(cast[slop_os.Handle](port))
+    testing.expect_ok(t, closed, "the port closes")
+    testing.expect(t, test_kit.wait_for_budget(budget, 0, 1_000_000_000), "the budget is back to nothing once the port and its binding are gone")
     return .Ok
 }
 
