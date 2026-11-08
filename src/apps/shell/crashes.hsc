@@ -179,29 +179,23 @@ SymbolsGrants :: struct {
     program : slop_os.Memory,
     /** Its end of the channel it sends the names on. */
     reply : slop_os.Channel,
-    /** The frames' offsets in the image. */
+    /** The offsets in the image to name. */
     offsets : u64[],
+    /** Functions to find the offsets of, each ending in a newline, after the offsets' names; none for none. */
+    names : string?,
 }
 
 /**
- * Name a crash's frames through the symbols program (decisions/0183), a process that reads the crashed program's file
- * holding nothing else, and wait for its answer.
+ * Name a crash's frames through the symbols program (ask_symbols).
  *
- * @param shell The shell, whose programs connection finds the symbols program, and whose process manager starts it.
+ * @param shell The shell, which asks.
  * @param crash The crash, whose file is copied for it; its frames below the image are named "?".
  * @param into Where the names go: a line per frame, in order.
- * @return How many bytes of into are the names; 0 if there's no symbols program, the crash has no file, or it
- *     couldn't be started or didn't answer.
+ * @return How many bytes of into are the names; 0 if the crash has no file, or ask_symbols gave nothing.
  */
 name_frames :: fn(shell: ptr[mut Shell], crash: ptr[Crash], into: mut u8[]) -> usize {
-    manager :: shell.manager or_return 0
     if cast[slop_os.Handle](crash.executable) == slop_os.NO_HANDLE {
         return 0
-    }
-    found :: find_program(shell, "symbols") or_return 0
-    defer {
-        _ = slop_os.handle_close(cast[slop_os.Handle](found.executable))
-        _ = slop_os.handle_close(cast[slop_os.Handle](found.manifest))
     }
     offsets : u64[crash_reports.MAX_FRAMES]
     count :: if crash.count <= crash_reports.MAX_FRAMES { cast[usize](crash.count) } else { cast[usize](crash_reports.MAX_FRAMES) }
@@ -209,6 +203,29 @@ name_frames :: fn(shell: ptr[mut Shell], crash: ptr[Crash], into: mut u8[]) -> u
         if i < offsets.count && i < crash.frames.count {
             offsets[i] = if crash.frames[i] >= crash.image { crash.frames[i] - crash.image } else { 0 }
         }
+    }
+    return ask_symbols(shell, crash.executable, view_of(&offsets[0], count), null, into)
+}
+
+/**
+ * Ask the symbols program (decisions/0183), a process that reads a program's file holding nothing else, to name
+ * offsets in the program's image and find functions' offsets, and wait for its answer.
+ *
+ * @param shell The shell, whose programs connection finds the symbols program, and whose process manager starts it.
+ * @param executable The program's file, copied, read-only, for it; it stays the caller's.
+ * @param offsets Offsets in the image to name, at most symbols.MAX_OFFSETS.
+ * @param names Functions to find the offsets of, each ending in a newline; null for none.
+ * @param into Where the answer goes: a line per offset, its function's name and the offset into it, then a line per
+ *     name, its function's offset, each "?" where there's none.
+ * @return How many bytes of into are the answer; 0 if there's no symbols program, or it couldn't be started or didn't
+ *     answer.
+ */
+ask_symbols :: fn(shell: ptr[mut Shell], executable: slop_os.Memory, offsets: u64[], names: string?, into: mut u8[]) -> usize {
+    manager :: shell.manager or_return 0
+    found :: find_program(shell, "symbols") or_return 0
+    defer {
+        _ = slop_os.handle_close(cast[slop_os.Handle](found.executable))
+        _ = slop_os.handle_close(cast[slop_os.Handle](found.manifest))
     }
     block :: slop_os.startup_block()
     pair :: slop_os.channel_create(block.budget, 0, 0) or_return 0
@@ -220,12 +237,12 @@ name_frames :: fn(shell: ptr[mut Shell], crash: ptr[Crash], into: mut u8[]) -> u
     }
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
-    program :: slop_os.handle_duplicate(cast[slop_os.Handle](crash.executable), rights) or_else slop_os.NO_HANDLE
+    program :: slop_os.handle_duplicate(cast[slop_os.Handle](executable), rights) or_else slop_os.NO_HANDLE
     if program == slop_os.NO_HANDLE {
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         return 0
     }
-    grants :: SymbolsGrants.{program = cast[slop_os.Memory](program), reply = pair.b, offsets = view_of(&offsets[0], count)}
+    grants :: SymbolsGrants.{program = cast[slop_os.Memory](program), reply = pair.b, offsets = offsets, names = names}
     launched :: match os.launch(manager, shell.manager_port, "symbols", found.executable, SYMBOLS_BUDGET, symbols.main, grants) {
         case Ok(made) => made
         case Error(error) => {

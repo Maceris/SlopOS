@@ -3,6 +3,8 @@
  * program's symbols, holding nothing else (design/lessons.md §9.4): given the program's file and offsets in its image,
  * it finds the function each offset is in among the file's symbol table (.symtab), and sends one line per offset on its
  * reply channel, as the function's name and the offset into it, "main+0x1c", or "?" for an offset no function holds.
+ * Given functions' names too, for a debugger's breakpoints (12b), it sends a line for each after them: the function's
+ * offset in the image, as "0x1c40", or "?" for a name no function has.
  */
 package symbols
 
@@ -35,10 +37,12 @@ SYMBOL_SIZE : u64 : 24
  *     cut at REPLY_BYTES.
  * @param offsets Offsets in the program's image, as a crash report's frames less its image's address; at most
  *     MAX_OFFSETS are named.
+ * @param names Functions' names, as the symbol table has them ("program.main"), each ending in a newline, each
+ *     answered with its offset after the offsets' lines; at most MAX_OFFSETS. None for none.
  * @return 0 once the names are sent; 1 if the file couldn't be read, 2 if it isn't an ELF64 file with a symbol table,
  *     3 if the reply couldn't be sent.
  */
-main :: fn(log: slop_os.DebugLog?, program: slop_os.Memory, reply: slop_os.Channel, offsets: u64[]) -> int {
+main :: fn(log: slop_os.DebugLog?, program: slop_os.Memory, reply: slop_os.Channel, offsets: u64[], names: string?) -> int {
     size :: slop_os.memory_size(program) or_return 1
     if size == 0 || size > MAX_FILE {
         return 1
@@ -58,6 +62,23 @@ main :: fn(log: slop_os.DebugLog?, program: slop_os.Memory, reply: slop_os.Chann
         }
         name_at(file, table, offset, &text)
         text_buffer.append(&text, "\n")
+    }
+    // Each name, up to its newline
+    bytes :: string_bytes(names or_else "")
+    start : usize = 0
+    asked : usize = 0
+    for i in cast[usize](0)..<bytes.count {
+        if bytes[i] != 0x0a {
+            continue
+        }
+        if i > start && start < bytes.count && asked < MAX_OFFSETS {
+            match offset_of(file, table, string_of(&bytes[start], i - start)) {
+                case Some(offset) => text_buffer.append_format(&text, "%{#x}\n", offset)
+                case None => text_buffer.append(&text, "?\n")
+            }
+            asked += 1
+        }
+        start = i + 1
     }
     port :: os.port_for(slop_os.startup_block().budget, reply) or_return 3
     none : slop_os.Handle[1]
@@ -152,6 +173,27 @@ name_at :: fn(file: u8[], table: SymbolTable, offset: u64, into: ptr[mut text_bu
     name :: word(file, best, 4)
     text_buffer.append(into, name_in(file, table, name))
     text_buffer.append_format(into, "+%{#x}", offset - best_start)
+}
+
+/**
+ * Find a function's offset in the image by its name.
+ *
+ * @param file The whole file.
+ * @param table Its symbol table.
+ * @param name The function's name, as the table has it, compared byte for byte.
+ * @return The first function symbol of that name's value, its offset in the image; null if none has it.
+ */
+offset_of :: fn(file: u8[], table: SymbolTable, name: string) -> u64? {
+    for i in cast[u64](0)..<table.count {
+        symbol :: table.symbols + i * SYMBOL_SIZE
+        if cast[u8](word(file, symbol + 4, 1)) & 0xf != SYMBOL_FUNCTION {
+            continue
+        }
+        if name_in(file, table, word(file, symbol, 4)) == name {
+            return word(file, symbol + 8, 8)
+        }
+    }
+    return null
 }
 
 /**

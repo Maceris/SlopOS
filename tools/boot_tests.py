@@ -656,6 +656,26 @@ TESTS = [
         # Its frames named by the symbols program: the trap in main, called from the entry Hemera made for it
         "--expect-console-start=  #0 test_shell_calls.main+0x", "--expect-console-start=  #1 hemera_entry+0x",
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
+    # The debugger (decisions/0183, 12b): debug runs a program stopped before it begins; a breakpoint on main, found
+    # through the symbols program, stops it there; a step, its stack, and with the breakpoint deleted it runs to its end
+    ("debugs a program from the shell: a breakpoint by function, a step and its stack", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wdebug test_shell_calls 2 debugged\\r\\p\\pbreak test_shell_calls.main\\r\\p\\pcontinue\\r\\p\\pstep\\r\\p\\pwhere\\r\\p\\p"
+        "delete 1\\r\\p\\pcontinue\\r\\p\\ptest_shell_calls 3 after\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-line=[user] shell: reading commands",
+        "--expect-console-line=test_shell_calls stopped before it began; break, watch, step, continue, where, registers, threads, "
+        "print, quit",
+        "--expect-console-line=breakpoint 1 at test_shell_calls.main",
+        "--expect-console-line=stopped at test_shell_calls.main+0x0: breakpoint",
+        "--expect-console-start=stopped at test_shell_calls.main+0x", "--expect-console-start=  #0 test_shell_calls.main+0x",
+        "--expect-console-line=deleted 1",
+        "--expect-console-line=called with debugged, 2, loud false, speed none, wait none, tags none, place none",
+        "--expect-console-line=test_shell_calls ended with 0",
+        "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
     # Shell functions, errors and the shell's directory (decisions/0171): a function's parameters matched and read by
     # their types, try/catch with the error as a record, ? passing a function's error to its caller where one without
     # is fatal, return, and cd beneath the home
