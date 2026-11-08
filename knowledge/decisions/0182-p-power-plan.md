@@ -204,3 +204,37 @@ Five parts, each with an as-built record:
   - **Fuzzing:** random bytes, a rich assembled table with bytes changed, and QEMU's DSDT with bytes changed, are
     loaded and every method they define run. Nothing faulted across some 600,000 cases, run while building it.
 - **Found on the way**: QEMU's DSDT starts with `Scope (\)`, a root prefix and the null name, which names the root.
+
+## As Built, P3a (2026-11-07): the ACPI service, and x86-64 turned off
+- **`src/acpi_tables`**: the FADT's fixed hardware, and the firmware copy's tables by signature, for the platform
+  service and the ACPI service:
+  - the SCI;
+  - the SMI command port and ACPI_ENABLE;
+  - the PM1 and GPE blocks, taken as I/O ports from their 32-bit fields or, where those are 0, from their Generic
+    Address Structures;
+  - the reset register.
+- **The platform protocol** gains requests for the ACPI service:
+  - `ClaimAcpi`, which gives a read-only copy of the firmware tables, the SCI's IRQ to come in P3c. The client asking
+    is the claimer from then on, so one started again claims it again. Only the supervisor hands out platform
+    connections, and it starts one ACPI service.
+  - The claimer's alone:
+    - `Ports`, refusing the PCI configuration ports 0xcf8 to 0xcff;
+    - `PhysicalMemory`, refusing RAM the kernel owns, the ECAM, and more than 16 MiB at once;
+    - `ConfigRead` and `ConfigWrite`, through the ECAM, refusing writes to a type 0 header's command register, BARs and
+      ROM;
+    - `GiveSleepTypes`, which the platform service passes to the kernel's `power_set_off` with the FADT's PM1 control
+      ports.
+- **The ACPI service** (`src/services/acpi_service`), in the boot set, is started by the supervisor right after the
+  clock, with a platform connection of its own.
+  - **Starting:** it copies the tables into its heap rather than mapping them (`0098`), loads the DSDT and each SSDT,
+    and enters ACPI mode if it isn't in it. It then runs `\_SB._INI`, and each device's `_STA` and `_INI`, parents
+    first, skipping beneath what's neither present nor functional. It gives `\_S5`'s sleep types and logs the host
+    bridge's `_PRT`.
+  - **Its AML's regions:** ports and memory are asked for as they're first used and kept, and configuration space is
+    asked for at each access.
+  - **Without ACPI**, as on AArch64, it ends with 0 and isn't started again.
+  - **On QEMU's q35:** 38 devices present, `\_S5` 0 and 0 by PM1 control port 0x604, and 128 `_PRT` routes.
+- **Tests**: turning the machine off when the console shuts it down runs on both architectures now. x86-64's QEMU
+  ends at S5, where before this it halted.
+- **Found on the way**: the chaos test sometimes fails when it kills the bundle store: the account service can't be
+  started again (BadGrants), and the root task ends. It's F6's area, not P3's, and is left for a task of its own.

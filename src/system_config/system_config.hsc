@@ -14,6 +14,7 @@ import text_buffer from "std"
 import os from "std"
 import system_records from "../system_records"
 import clock_service from "../services/clock"
+import acpi_service from "../services/acpi_service"
 import events_service from "../services/events_service"
 import bundle_store_service from "../services/bundle_store_service"
 import config_service from "../services/config_service"
@@ -220,6 +221,12 @@ SERVICES :: Service.[
      */
     Service.{name = "clock", boot_set = true, module = "clock.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(clock_service.main)},
+    /*
+     * The firmware's AML, where there's ACPI (decisions/0182, P3): its interpreter's namespace takes up to 4 MiB, an
+     * evaluation 1 MiB, and the tables are copied in
+     */
+    Service.{name = "acpi", boot_set = true, module = "acpi_service.elf", starter = .Supervisor, by_manager = true, budget = 12 * MIB,
+        entry = type_of(acpi_service.main)},
     // The seat's keyboards, the console's terminal, and its reader until sessions (decisions/0136)
     Service.{name = "input", module = "input_service.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(input_service.main), cpu = TRUSTED_PATH_CPU},

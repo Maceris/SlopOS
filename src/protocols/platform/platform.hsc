@@ -122,7 +122,55 @@ Framebuffer :: struct {
     layout : slop_os.Memory,
 }
 
-/** What a client, the supervisor or the clock or terminal service, asks the platform service. */
+/**
+ * What the ACPI service is given when it claims ACPI (decisions/0182, P3): the firmware tables, and the SCI's IRQ.
+ * Everything in it moves to the client.
+ */
+AcpiHardware :: struct {
+    /** A read-only copy of the firmware tables' copy (slop_os.FirmwareTables), its DSDT, SSDTs and FADT among them. */
+    tables : slop_os.Memory,
+    /** The SCI's IRQ, routed as the FADT and the MADT say; NO_HANDLE without one. */
+    sci : slop_os.Irq,
+}
+
+/** I/O ports the ACPI service asks for: first to first + count - 1. */
+PortRange :: struct {
+    /** The first port, below 65536. */
+    first : u32,
+    /** How many, at least 1. */
+    count : u32,
+}
+
+/** Physical memory the ACPI service asks for, for a SystemMemory region. */
+MemoryRange :: struct {
+    /** Its first byte's physical address. */
+    address : u64,
+    /** Its bytes, at least 1. */
+    size : u64,
+}
+
+/** An access to a PCI function's configuration space, for a PCI_Config region. */
+ConfigAccess :: struct {
+    /**
+     * The function and offset: the segment in bits 32 to 47, the bus in 24 to 31, the device in 19 to 23, the function
+     * in 16 to 18 and the offset in 0 to 15, as aml.pci_address makes it.
+     */
+    address : u64,
+    /** The bits read or written: 8, 16 or 32. */
+    width : u32,
+    /** What's written; ignored for a read. */
+    value : u64,
+}
+
+/** S5's sleep types, `\_S5`'s first two elements, for turning the machine off (decisions/0182). */
+SleepTypes :: struct {
+    /** PM1a's, 0 to 7. */
+    a : u8,
+    /** PM1b's, 0 to 7, ignored without a PM1b block. */
+    b : u8,
+}
+
+/** What a client, the supervisor or the clock, terminal or ACPI service, asks the platform service. */
 Request :: union {
     /**
      * Claim the next device that matches and nothing has claimed, which nothing else will. Answered with Claimed,
@@ -148,6 +196,39 @@ Request :: union {
     ClaimClock,
     /** Claim the first framebuffer, as ClaimClock claims the clock. Answered with ClaimedFramebuffer, or NoDevice. */
     ClaimFramebuffer,
+    /**
+     * Claim ACPI, for the ACPI service: the firmware tables, and the SCI. The client asking is the claimer from then
+     * on, so an ACPI service started again claims it again; the requests after are the claimer's alone. Answered with
+     * ClaimedAcpi, or NoDevice where the firmware tables have no FADT or no DSDT.
+     */
+    ClaimAcpi,
+    /**
+     * I/O ports for an AML region, made anew. Answered with GivenPorts, or Refused for a client that hasn't claimed
+     * ACPI, or for ports past 65535 or among the PCI configuration mechanism's, 0xcf8 to 0xcff.
+     */
+    Ports(PortRange),
+    /**
+     * Device memory for an AML region, its pages made anew. Answered with GivenMemory, of the whole pages the range is
+     * in; or Refused for a client that hasn't claimed ACPI, a range over 16 MiB, or one overlapping RAM the kernel
+     * owns or the host bridge's configuration space.
+     */
+    PhysicalMemory(MemoryRange),
+    /**
+     * Read a PCI function's configuration space, for a PCI_Config region. Answered with ConfigValue, or Refused for a
+     * client that hasn't claimed ACPI, a function the host bridge doesn't reach, or an access past its 4 KiB.
+     */
+    ConfigRead(ConfigAccess),
+    /**
+     * Write a PCI function's configuration space. Answered with Done, or Refused as ConfigRead is, and for a write to
+     * a type 0 header's command register or BARs, which only the platform service sets.
+     */
+    ConfigWrite(ConfigAccess),
+    /**
+     * S5's sleep types, which the platform service gives the kernel with the FADT's PM1 control registers
+     * (power_set_off), so the machine can be turned off. Answered with Done, or Refused for a client that hasn't
+     * claimed ACPI, a machine without PM1a's control block, or the kernel refusing them.
+     */
+    GiveSleepTypes(SleepTypes),
 }
 
 /** What the platform service answers. */
@@ -165,14 +246,26 @@ Response :: union {
     ClaimedClock(RealTimeClock),
     /** ClaimFramebuffer's answer: the framebuffer, with its memory made anew, which moves to the client. */
     ClaimedFramebuffer(Framebuffer),
+    /** ClaimAcpi's answer: the firmware tables and the SCI, which move to the client. */
+    ClaimedAcpi(AcpiHardware),
+    /** Ports' answer: the ports, which move to the client. */
+    GivenPorts(slop_os.IoPortRange),
+    /** PhysicalMemory's answer: the device memory, its first byte at the range's address rounded down to a page. */
+    GivenMemory(slop_os.Memory),
+    /** ConfigRead's answer: what was read, its upper bits 0. */
+    ConfigValue(u64),
+    /** ConfigWrite's and GiveSleepTypes' answer: it's done. */
+    Done,
+    /** The answer to a request of the ACPI service's that's refused, as each says. */
+    Refused,
 }
 
 /**
  * Tell whether a request may be sent again, after a reconnect, without doing more than sending it once did.
  *
  * @param request The request, which isn't changed.
- * @return False for Claim, which sent again would claim another device, and Reissue; true for Connect, ClaimClock and
- *     ClaimFramebuffer, which the same client is given again.
+ * @return False for Claim, which sent again would claim another device, and Reissue; true for the others, which
+ *     the same client is given again, or which do what they did once more.
  */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
@@ -181,6 +274,12 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Reissue(_) => false
         case ClaimClock => true
         case ClaimFramebuffer => true
+        case ClaimAcpi => true
+        case Ports(_) => true
+        case PhysicalMemory(_) => true
+        case ConfigRead(_) => true
+        case ConfigWrite(_) => true
+        case GiveSleepTypes(_) => true
     }
 }
 

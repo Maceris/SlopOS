@@ -547,6 +547,17 @@ TESTS = [
         "--console-input-after=  Log in", "--expect-console-line=SlopOS shell",
         "--expect-line=[user] supervisor: the console asked to restart",
         "--expect-line=[user] root task: restarting, as the console asked", "--expect-line=[info] restarting the machine"])),
+    # Turning the machine off when the console shuts it down (decisions/0182): by PSCI's SYSTEM_OFF on AArch64, and on
+    # x86-64 by S5's sleep types, which the ACPI service read from \_S5 for the kernel (P3); either ends QEMU without an
+    # exit code, where a machine that only halted would time out
+    ("turns the machine off when the console shuts it down", 125,
+     with_before_qemu([argument.replace("test_services", "test_services test_power test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--expect-console-line=SlopOS shell",
+        "--expect-line=[user] supervisor: the console asked to shut down",
+        "--expect-line=[user] root task: shutting down, as the console asked", "--expect-line=[info] turning the machine off"])),
     # Calls through manifests (decisions/0170): test_shell_calls given values by position and by --name, a bool alone, an
     # enum's member, a duration, a list, a directory beneath the home and the terminal unasked; then its exit code as an
     # error, and errors found before anything starts: a value missing, a word that isn't a number, a member that isn't
@@ -1146,19 +1157,7 @@ def aarch64_tests(tests: list) -> list:
     return adapted + [("AArch64: refuses a CPU below ARMv8.2-A with LSE", 2, ["--cpu=cortex-a57"])]
 
 
-# Turning the machine off when the console shuts it down (decisions/0182), by PSCI's SYSTEM_OFF, which ends QEMU without
-# an exit code. AArch64's alone until x86-64's ACPI service gives the kernel \_S5 (P3)
-AARCH64_TURNS_OFF = ("AArch64: turns the machine off when the console shuts it down", 125, with_before_qemu(
-    [argument.replace("test_services", "test_services test_power test_settle=60").replace("--timeout=120", "--timeout=180")
-     for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
-        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r",
-        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
-        "--console-input-after=  Log in", "--expect-console-line=SlopOS shell",
-        "--expect-line=[user] supervisor: the console asked to shut down",
-        "--expect-line=[user] root task: shutting down, as the console asked", "--expect-line=[info] turning the machine off"]))
-
-
-AARCH64_TESTS = aarch64_tests(TESTS) + [AARCH64_TURNS_OFF]
+AARCH64_TESTS = aarch64_tests(TESTS)
 
 AARCH64_MORESTACK_TESTS = aarch64_tests(MORESTACK_TESTS)[:-1]
 

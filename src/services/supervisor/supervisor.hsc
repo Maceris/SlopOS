@@ -82,6 +82,7 @@ import substitution from "../../substitution"
 import system_records from "../../system_records"
 import hello from "../../apps/hello"
 import clock_service from "../clock"
+import acpi_service from "../acpi_service"
 import events_service from "../events_service"
 import bundle_store_service from "../bundle_store_service"
 import config_service from "../config_service"
@@ -220,6 +221,12 @@ ClockGrants :: struct {
     clock_page : slop_os.Memory,
     /** The listener the supervisor sets the time through; the supervisor keeps its other end. */
     clients : os.Listener[clock_setting.ClockSetting],
+}
+
+/** What the ACPI service is given (acpi_service.main); its handles move to it at its launch. */
+AcpiGrants :: struct {
+    /** A connection to the platform service of its own, on which it claims ACPI. */
+    platform_service : os.Channel[platform.Platform],
 }
 
 /** What the events service is given (events_service.main); its handles move to the service at its launch. */
@@ -514,6 +521,8 @@ Modules :: struct {
     update : slop_os.Memory?,
     /** The clock service's module. */
     clock : slop_os.Memory?,
+    /** The ACPI service's module. */
+    acpi : slop_os.Memory?,
     /** hello's module. */
     hello : slop_os.Memory?,
     /** The terminal service's module. */
@@ -580,6 +589,8 @@ Started :: struct {
     watch : slop_os.Handle,
     /** Whether it's the clock service, a driver whose device is the real-time clock, started again with start_clock. */
     clock : bool,
+    /** Whether it's the ACPI service, started again with start_acpi, with a platform connection of its own. */
+    acpi : bool,
     /**
      * Its program's memory budget, the supervisor's handle, closed once it's ended so what it had comes back;
      * NO_HANDLE once closed.
@@ -934,6 +945,7 @@ MAX_LOADED :: 32
  * @param system The system configuration, as the root task checked it; it's checked again.
  * @param update_module The update service's program.
  * @param last_panic The boot before's panic record, given on to the terminal service to show; null if there's none.
+ * @param acpi_module The ACPI service's program.
  * @return Only if it can't start: 10 if the system configuration doesn't check, 99 if it can't be copied, 2 if no port
  *     can be made for root, 3 if the supervisor's port can't be made, and 1 if the process manager can't be dialed.
  *     Otherwise it never returns.
@@ -946,7 +958,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     fat_server_module: slop_os.Memory?, container_service_module: slop_os.Memory?, volume_server_module: slop_os.Memory?,
     command_line: slop_os.Memory?, scheduler: os.Channel[connector.Connector]?, clock_module: slop_os.Memory?,
     events_module: slop_os.Memory?, bundle_store_module: slop_os.Memory?, config_module: slop_os.Memory?, system: slop_os.Memory,
-    update_module: slop_os.Memory?, last_panic: slop_os.Memory?) -> int {
+    update_module: slop_os.Memory?, last_panic: slop_os.Memory?, acpi_module: slop_os.Memory?) -> int {
     startup :: slop_os.startup_block()
     // The system configuration, which the root task checked, checked again
     records :: match service_kit.read_records(startup, system) {
@@ -966,7 +978,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, terminal = NOWHERE, input = NOWHERE, accounts = NOWHERE, sessions = NOWHERE, config_users = NONE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
         events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE),
         launched_lifecycle = NONE, last_panic = last_panic}
-    supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, hello = hello_module, terminal = terminal_module, echo = echo_module, sessions = sessions_module, input = input_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
+    supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, acpi = acpi_module, hello = hello_module, terminal = terminal_module, echo = echo_module, sessions = sessions_module, input = input_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
         container_service = container_service_module, volume_server = volume_server_module}
@@ -1044,6 +1056,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     start_events(&supervisor, NOWHERE)
     supervisor.clock_page = slop_os.memory_create(startup.budget, PAGE) or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
     start_clock(&supervisor, NOWHERE)
+    start_acpi(&supervisor, NOWHERE)
     if test_clock && supervisor.clock_setting != NONE {
         if !clock_setting.set(supervisor.clock_setting, supervisor.clock_setting_port, TEST_CLOCK_TIME) {
             log_line.write(supervisor.log, "supervisor: test_clock: the clock service didn't set the time")
@@ -1317,10 +1330,13 @@ ended :: fn(supervisor: ptr[mut Supervisor], index: usize, code: u64) {
     wait_for_budget(supervisor, budget)
     // The last process's binding still has the key, though it fired: the next is watched under it from its launch
     _ = slop_os.port_unbind(supervisor.port, cast[u64](index))
-    if !entry.driver || entry.clock {
+    if !entry.driver || entry.clock || entry.acpi {
         supervisor.relaunching = index
         if entry.clock {
             start_clock(supervisor, index)
+        }
+        else if entry.acpi {
+            start_acpi(supervisor, index)
         }
         else {
             restart_service(supervisor, index)
@@ -3555,6 +3571,41 @@ start_clock :: fn(supervisor: ptr[mut Supervisor], again: usize) {
 }
 
 /**
+ * Start the ACPI service (decisions/0182, P3), with a connection of its own to the platform service, dialed through
+ * the root task's connector, on which it claims ACPI. Without a platform service it isn't started; where there's no
+ * ACPI, it ends at once, and isn't started again.
+ *
+ * @param supervisor The supervisor, which needs the platform service's connector; its entry is marked a driver and the
+ *     ACPI service.
+ * @param again The entry it's started again into, or NOWHERE for a first start.
+ */
+start_acpi :: fn(supervisor: ptr[mut Supervisor], again: usize) {
+    service :: service_named(supervisor, "acpi") or_return void
+    if supervisor.platform_connector == NONE {
+        return void
+    }
+    channel :: dial_through(supervisor, supervisor.platform_connector) or_return void
+    grants :: AcpiGrants.{platform_service = os.Channel[platform.Platform].{end = channel}}
+    launched := cast[slop_os.Process](slop_os.NO_HANDLE)
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, service.name), service.budget,
+        acpi_service.main, grants, options_for(supervisor, service.name)) {
+        case Ok(made) => launched = kept(supervisor, made)
+        case Error(error) => {
+            failed(supervisor, service.name, error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](channel))
+            return void
+        }
+    }
+    slot :: place(supervisor, "acpi", launched, again)
+    if slot >= supervisor.started.count {
+        return void
+    }
+    entry :: &supervisor.started[slot]
+    entry.driver = true
+    entry.acpi = true
+}
+
+/**
  * Find a service's program.
  *
  * One outside the boot set comes from the bundle store or the system volume, read once and kept, once the storage
@@ -3586,7 +3637,7 @@ module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory
         else if name == "terminal" { modules.terminal } else if name == "echo" { modules.echo } else if name == "input" { modules.input }
         else if name == "sessions" { modules.sessions }
         else if name == "disk_check" { modules.disk_check }
-        else if name == "hello" { modules.hello } else if name == "clock" { modules.clock }
+        else if name == "hello" { modules.hello } else if name == "clock" { modules.clock } else if name == "acpi" { modules.acpi }
         else if name == "events" { modules.events } else if name == "bundle_store" { modules.bundle_store }
         else if name == "config" { modules.config } else if name == "update" { modules.update }
         else { cast[slop_os.Memory?](null) }

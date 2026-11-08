@@ -116,6 +116,16 @@ Platform :: struct {
     framebuffer_claimed : bool,
     /** The client that claimed the framebuffer, by its index; meaningful only once claimed. */
     framebuffer_claimer : usize,
+    /** The firmware tables' copy, as the root task gave it, which ACPI's claimer is given a read-only copy of. */
+    firmware : slop_os.Memory,
+    /** Where the firmware tables' copy is mapped, readable, for the service's life. */
+    tables : u64,
+    /** The copy's bytes. */
+    tables_size : u64,
+    /** Whether a client has claimed ACPI (decisions/0182, P3). */
+    acpi_claimed : bool,
+    /** The client that claimed ACPI last, by its index, whose requests for ports, memory and the like are answered. */
+    acpi_claimer : usize,
 }
 
 /**
@@ -155,6 +165,9 @@ main :: fn(log: slop_os.DebugLog?, platform: slop_os.Platform, firmware: slop_os
     tables_size :: slop_os.memory_size(firmware) or_return 2
     tables :: runtime.reserve_addresses(cast[usize](tables_size)) or_return 2
     slop_os.memory_map(firmware, space, tables, 0, tables_size, read) or_return 2
+    state.firmware = firmware
+    state.tables = tables
+    state.tables_size = tables_size
     state.clock = find_clock(tables, tables_size)
     state.framebuffer = find_framebuffer(tables, tables_size)
     give_reset(to, platform, tables, tables_size)
@@ -681,8 +694,28 @@ serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
                 response^ = claim_framebuffer(to, platform, state, index)
                 _ = protocol.send_response(end, port, &out)
             }
+            case ClaimAcpi => answer(end, port, claim_acpi(to, state, index, state.tables, state.tables_size))
+            case Ports(range) => answer(end, port, give_ports(platform, state, index, range))
+            case PhysicalMemory(range) => answer(end, port, give_memory(platform, state, index, range))
+            case ConfigRead(access) => answer(end, port, config_read(state, index, access))
+            case ConfigWrite(access) => answer(end, port, config_write(state, index, access))
+            case GiveSleepTypes(types) => answer(end, port, give_sleep_types(to, platform, state, index, types, state.tables, state.tables_size))
         }
     }
+}
+
+/**
+ * Send a client a response.
+ *
+ * @param end The client's end.
+ * @param port The port it's bound to.
+ * @param response The response; what it holds moves to the client.
+ */
+answer :: fn(end: slop_os.Channel, port: slop_os.Port, response #escaping : protocol.Response) {
+    out := os.Outgoing.{}
+    made :: os.begin[protocol.Response](&out)
+    made^ = response
+    _ = protocol.send_response(end, port, &out)
 }
 
 /**
