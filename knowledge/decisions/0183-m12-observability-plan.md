@@ -1,6 +1,6 @@
 # 0183: M12, Observability and Debugging, Planned
 
-Status: accepted, chosen with the project's owner; 12a and 12b built
+Status: accepted, chosen with the project's owner; 12a, 12b and 12c built
 Date: 2026-11-08
 Related: `0009` (replay through system calls), `0017` and `0056` (process control and intercepts), `0024` (replay is
 opt-in), `0041` (the per-thread page), `0053` (kernel-copied channel access), `0093` (the events service), `0134` (the
@@ -172,3 +172,36 @@ Four parts, each with an as-built record:
   program with 126: its writer gave a distance past what it wrote. Hemera's schema reader takes an empty one as null now.
 - **Tests.** `test_control` drives a thread through a hardware breakpoint, a step and a watchpoint on both
   architectures; a boot test debugs `test_shell_calls`: a breakpoint on its main, a step, its stack, and its end.
+
+## As Built: 12c
+- **One thread at a time, by the recorder.** The recorder (`src/recording`) holds an intercept of every call at its
+  entry and exit (`STOP_ALL_CALLS`, new: calls 64 and up couldn't stop before) and of every new thread before its first
+  instruction (`STOP_THREAD_START`, new). It lets one thread run its own code at a time, from a start or a call's end to
+  its next call, and records each decision: a thread started, entered a call (its number, its argument words, the bytes
+  of the buffers it reads), left it (its result and the bytes it wrote), was let run, read the counter. The replayer
+  walks the same events in the same order, so the threads interleave as recorded: a program of several carriers is
+  replayed exactly, as chosen, without a token in `std`.
+- **The deterministic mode in Hemera** is what makes that safe: base's `runtime.deterministic_turn`, which
+  `wait_on_value`, `std`'s spin lock and its fiber pools' idle spins call, makes a system call in the mode, so a thread
+  waiting for another without one still comes to a call, where the recorder can let the other run. A launch turns it on
+  with a grant `deterministic`. A program's own spin on memory, without a call, would still hold the others back.
+- **What's answered, what runs again.** A replay answers from the recording every call on a channel or a port, the
+  clock's and the kernel log's; the rest, which change only the program's own objects, run again, their results checked.
+  Each call's shape (which words are buffers, read or written) comes from `std`'s table's type descriptions at run
+  time. The program is built with the recording's seeds (the process manager's `Load` takes them now, and `Started`
+  says them), so its layout, its handles and its `context.random` are the same, and argument words compare exactly.
+- **The counter.** `process_set_traps` with `TRAP_COUNTER` traps a process's counter reads (x86-64's CR4.TSD, AArch64's
+  CNTKCTL_EL1); the kernel runs the read and stops the thread at `FAULT_COUNTER` with the value, which the recorder
+  keeps and the replayer puts in the instruction's register.
+- **The divergence report** is the first event that doesn't happen as recorded: a call's number, argument words or read
+  bytes, an executed call's result, or a thread that did something else, said as what it did instead ("thread 2 was to
+  read the counter, but made call clock_monotonic"), or nothing within five seconds.
+- **The shell.** `record name arguments` and `replay name arguments`; the recording is kept in the shell's memory, the
+  last one, not written to a file as a typed recording yet. A recording isn't given the clock page, which is shared
+  memory, not a call; nor a log ring.
+- **Not yet.** Handles received on a channel can't be replayed, as the replay doesn't have them; channels aren't given
+  without `map`, so a program mapping one isn't replayable; the recording isn't kept past the shell.
+- **Found on the way.** `port_wait` with an empty packet buffer seemed not to keep its deadline; the test pauses on a
+  port of its own now, and the kernel's behaviour is left to look into.
+- **Tests.** `test_control` traps a counter read and changes its value; a boot test records `test_replay`'s threads,
+  replays them exactly, and replays them with another count, which diverges, and says where. On both architectures.
