@@ -9,10 +9,10 @@
  * target's budget, each at a random place, and go to the process with its address space, its handles to
  * itself and its budget, and its grants; then its first thread starts. The builder keeps none of it.
  *
- * Given the memory object the file is in (source), a read-only segment whose place in the file and in the image agree
- * within a page, and which takes no more than the file has of it, is mapped from it rather than from the image, where
- * the handle allows executing it: so every process running a program from the bundle store shares its code
- * (decisions/0094). Relocations only ever go to writable segments (elf_loader).
+ * Every segment is mapped from the image, the process's own: none from the memory its file is in, which its bundle
+ * store's memory would be, so a store that ends takes no process's code with it (decisions/0186's chaos finding, as
+ * 0181's F6 asks of every service).
+
  *
  * The startup block says the kernel's ABI version, unless a test asks for another (abi_version), to see a program
  * refuse it.
@@ -177,8 +177,6 @@ staged :: fn(staging: ptr[mut Staging]?, area: usize, size: u64) -> u64? {
  * @param seed The 32 bytes that go in the startup block, for the process's context.random (decisions/0068); they
  *     should be secret and random.
  * @param random The stream the parts' places are drawn from, moved on by each draw; the layout is as random as it.
- * @param source The memory object file is in, for read-only segments to be mapped from it and shared (decisions/0094),
- *     where the handle allows; null maps every segment from the image.
  * @param abi_version The ABI version the startup block says: the kernel's, unless a test asks for another to see a
  *     program refuse it.
  * @param staging Where the builder stages, kept from build to build by a caller that builds many processes over its
@@ -192,7 +190,7 @@ staged :: fn(staging: ptr[mut Staging]?, area: usize, size: u64) -> u64? {
  * @error Failed A handle couldn't be duplicated or inspected, the staging couldn't be unmapped, the handles couldn't
  *     go to the process, or the thread couldn't be started.
  */
-build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: ptr[mut random_stream.Stream], source: slop_os.Memory? = null,
+build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: ptr[mut random_stream.Stream],
     abi_version: u32 = slop_os.ABI_VERSION, staging: ptr[mut Staging]? = null) -> Result[Built, BuildError] {
     if grants.count > MAX_GRANTS {
         return .Error(.TooManyGrants)
@@ -220,7 +218,7 @@ build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: p
     slop_os.memory_unmap(own, image_staging) or_return .Error(.Failed)
     loaded or_return .Error(.NotAProgram)
     relocated or_return .Error(.NotAProgram)
-    map_segments(&executable, image, space, layout.image, source)?
+    map_segments(&executable, image, space, layout.image)?
 
     stack :: memory(&made, target.budget, STACK_SIZE)?
     slop_os.memory_map(stack, space, layout.stack, 0, STACK_SIZE, read_write) or_return .Error(.NoMemory)
@@ -351,19 +349,17 @@ memory :: fn(made: ptr[mut Made], budget: slop_os.MemoryBudget, size: u64) -> Re
  * Map the image's segments in an address space, each with its protection, and its RELRO pages read-only.
  *
  * Each segment takes whole pages, from the page its start is on to the page its end is on. In a writable segment,
- * the RELRO range's pages, its start rounded down and its end rounded down, are mapped read only. A read-only
- * segment with all its bytes in the file is mapped from source, shared, if source is given and that mapping can be
- * made; otherwise from the image.
+ * the RELRO range's pages, its start rounded down and its end rounded down, are mapped read only. Every segment is
+ * mapped from the image.
  *
  * @param executable The executable the image was loaded from; not changed.
  * @param image The memory object holding the loaded, relocated image, its byte 0 the image's base.
  * @param space The address space to map in, with RIGHT_SPACE_MAP.
  * @param base Where the image's base goes in space, page-aligned.
- * @param source The memory object holding the executable's file, or null to map everything from image.
  * @error NoMemory A mapping from image couldn't be made; segments before it stay mapped.
  */
-map_segments :: fn(executable: ptr[elf_loader.Executable], image: slop_os.Memory, space: slop_os.AddressSpace, base: u64,
-    source: slop_os.Memory?) -> Result[void, BuildError] {
+map_segments :: fn(executable: ptr[elf_loader.Executable], image: slop_os.Memory, space: slop_os.AddressSpace, base: u64)
+    -> Result[void, BuildError] {
     relro_start :: executable.relro_address & ~(PAGE - 1)
     relro_end :: (executable.relro_address + executable.relro_size) & ~(PAGE - 1)
     for i in 0..<executable.segment_count {
@@ -383,18 +379,6 @@ map_segments :: fn(executable: ptr[elf_loader.Executable], image: slop_os.Memory
             map_part(image, space, base, middle_start, middle_end, slop_os.PROTECTION_READ)?
             map_part(image, space, base, middle_end, end, protection)?
             continue
-        }
-        // Read-only, straight from the file's memory, shared, where it can be
-        if !writable && segment.memory_size == segment.file_size && segment.offset % PAGE == segment.address % PAGE && end > start {
-            match source {
-                case Some(file) => {
-                    file_start :: segment.offset & ~(PAGE - 1)
-                    if slop_os.memory_map(file, space, base + start, file_start, end - start, protection) is_ok {
-                        continue
-                    }
-                }
-                case None => {}
-            }
         }
         map_part(image, space, base, start, end, protection)?
     }

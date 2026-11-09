@@ -804,7 +804,7 @@ load_with_loader :: fn(root: ptr[mut Root], service: Service, target: process_bu
         count += 1
     }
     given :: if count <= all.count { all[0..<count] } else { all[0..<0] }
-    match process_builder.build(target, file, given, seed, &root.stream, cast[slop_os.Memory](module), slop_os.ABI_VERSION, &root.staging) {
+    match process_builder.build(target, file, given, seed, &root.stream, slop_os.ABI_VERSION, &root.staging) {
         case Ok(thread) => return null
         case Error(error) => return "its loader failed"
     }

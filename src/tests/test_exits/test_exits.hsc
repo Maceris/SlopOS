@@ -114,7 +114,7 @@ a_copy_told_another_abi_version_ends_with_125 #test :: fn(t: ptr[mut testing.T])
     random_stream.fill(&stream, seed)
     target :: process_builder.Target.{process = process, space = space, budget = budget}
     no_grants : process_builder.Grant[1]
-    built :: process_builder.build(target, file, view_of(&no_grants[0], 0), seed, &stream, null, slop_os.ABI_VERSION + 1)
+    built :: process_builder.build(target, file, view_of(&no_grants[0], 0), seed, &stream, slop_os.ABI_VERSION + 1)
     testing.require_ok(t, built, "the process builder builds the copy, its startup block saying another ABI version")?
     testing.expect_eq(t, ended_with(port), cast[u64](slop_os.EXIT_WRONG_ABI), "a copy told an ABI version that isn't the kernel's ends with EXIT_WRONG_ABI before its entry runs")
     _ = slop_os.memory_unmap(block.space, address)

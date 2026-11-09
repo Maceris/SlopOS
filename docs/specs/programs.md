@@ -229,7 +229,8 @@ program it launches one.
 rings (`RING_BYTES`):
 - `Load`: the program's name; the process (with `RIGHT_PROCESS_THREADS`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`),
   its address space (owning), its budget (with `RIGHT_BUDGET_CHARGE`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`) and the
-  executable (with `RIGHT_MEMORY_READ`, and `RIGHT_MEMORY_EXECUTE` to share its code); and up to 32 grants (16
+  executable (with `RIGHT_MEMORY_READ`), which the image is copied from, none of it mapped, so a bundle store that
+  ends takes no process's code with it (`0186`); and up to 32 grants (16
   before version 2, 24 before 9c3), each with its label. The requester makes the process,
   its space and its budget, so the result is never the manager's. The answer is `Loaded` with the first thread's
   ID, where the image was loaded and the seeds it was built with (`Started`), or `NotLoaded` with a `LoadStatus`; a

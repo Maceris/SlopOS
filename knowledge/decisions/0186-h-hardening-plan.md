@@ -197,3 +197,14 @@ through its machine protocol), which caught one:
   while it's read. It measures up to three times now, failing only if large pages never save anything.
 - The earlier note that the lockup test is timing-sensitive is withdrawn: with these, the suites ran without a flaky test.
 
+## Found in Hc: Code Mapped From the Bundle Store
+The chaos test, at seed 6163708234096652301 (`test_chaos_seed`), killed `bundle_store` and then `clock`, and five
+services crashed at once with execute faults in their own images. `0094` had the process builder map a program's
+read-only segments straight from the memory its file is in, shared between processes; for a program from the bundle
+store that's the store's paged memory, so once the store had ended, a page of code not touched yet couldn't be paged in.
+It broke `0181`'s F6, that no service maps memory another process owns. Chosen with the owner: every segment is mapped
+from the process's own image now. That costs nothing: the image held every segment already, as `elf_loader.load`
+copies them all, and was charged for them; sharing only left those pages unmapped. Typed libraries are still mapped
+from their grants, but those are the root task's boot modules, which the kernel owns. The same seed passes on both
+architectures.
+

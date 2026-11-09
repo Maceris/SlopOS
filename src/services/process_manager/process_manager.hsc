@@ -202,8 +202,7 @@ load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.R
         }
     }
     target :: process_builder.Target.{process = request.process, space = request.space, budget = request.budget}
-    match process_builder.build(target, file, view_of(&grants[0], grant_count), seed, &stream, request.executable, slop_os.ABI_VERSION,
-        &manager.staging) {
+    match process_builder.build(target, file, view_of(&grants[0], grant_count), seed, &stream, slop_os.ABI_VERSION, &manager.staging) {
         case Ok(built) => {
             log_line.write(manager.log, "process manager: started %", name)
             return .Loaded(protocol.Started.{thread = built.thread, image = built.image, seeds = seeds})
