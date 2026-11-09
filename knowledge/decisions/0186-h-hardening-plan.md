@@ -1,6 +1,6 @@
 # 0186: H, Hardening, Planned
 
-Status: accepted, chosen with the project's owner; built, Ha and Hb
+Status: accepted, chosen with the project's owner; built, Ha to Hc
 Date: 2026-11-09
 Related: `0003` (the CPU baseline), `0013` (the threat model), `0019` (AES detected at boot), `0023` (cheap threads,
 user space owns stacks), `0096` (robustness), `0097` (lessons adopted: the transient-execution boot log), `0088` and
@@ -207,4 +207,41 @@ from the process's own image now. That costs nothing: the image held every segme
 copies them all, and was charged for them; sharing only left those pages unmapped. Typed libraries are still mapped
 from their grants, but those are the root task's boot modules, which the kernel owns. The same seed passes on both
 architectures.
+
+## As Built: Hc
+- **Faults.** `FAULT_SHADOW_STACK`, `FAULT_LANDING_PAD` and `FAULT_AUTHENTICATION`, decoded from x86-64's control
+  protection exception (its error code saying which) and AArch64's GCS, BTI and FPAC exceptions, named in crash reports.
+- **Pointer authentication (AArch64).** Each process has a random key, loaded as its threads return to user mode; the
+  kernel has its own, loaded as each CPU first goes idle. Both are loaded where no frame below returns: a key or
+  `SCTLR_EL1.EnIA` changed under a signed frame fails it, which the first try did, in the helper that loaded them.
+  The kernel runs with the user's key after an entry from user mode until Hd. Stack walks strip authentication codes:
+  the kernel's samples and lockup reports, crash reports and the debugger.
+- **Branch target identification (AArch64).** The ELF loader reads a program's property note (`PT_GNU_PROPERTY`), and
+  maps its code with `PROTECTION_GUARDED`, AArch64's GP bit, when it has landing pads. Typed libraries' code isn't
+  guarded: base's loader doesn't read their notes.
+- **Shadow stacks.** `thread_create` starts a thread at once, and `thread_create_in` has no argument words left, so a
+  shadow stack can't be given with either. Instead a process says what its code was built for and gives a region of its
+  address space (`process_set_control_flow`, call 93), which the process manager and the root task's loader do from the
+  note, from the top of the free range; each thread made in it from then on gets a shadow stack there before its first
+  instruction, 64 KiB under a guard page, made and mapped by the kernel, given back when the thread ends. Its memory is
+  found through its mapping, not kept in the thread, which keeps `Thread` under 1 KiB on AArch64. Its pointer is read
+  as the thread enters the kernel and loaded as it leaves. A shadow stack's pages map on any absent read or write, as not
+  every architecture says the access was the shadow stack's, and refuse ordinary writes once mapped.
+  - x86-64: `CR4.CET` (with `CR0.WP`), `IA32_U_CET` and `IA32_PL3_SSP`, pages read-only and dirty. Under KVM, every
+    program runs on shadow stacks and a tampered return is refused. Indirect branch tracking (`ENDBR_EN`) is set where
+    the CPU has it, which no machine here has: built, not boot-tested.
+  - AArch64: the Guarded Control Stack needs its pages marked through permission indirection (FEAT_S1PIE), so every
+    mapping moved to it: `PIR_EL1` and `PIRE0_EL1` give each index `leaf_entry` makes its permissions, writable entries
+    set DBM (an index bit), GCS pages are index 0xb, and `TCR2_EL1.PIE` goes on as a CPU first switches to the
+    kernel's own tables. `GCSPR_EL0` and `GCSCRE0_EL1` (with `nTR`, as the fiber switches read the pointer) per thread.
+    A GCS page needs AP[2] clear, which the first try left set. Every program runs on a GCS; a write to it is refused.
+- **Budgets.** A shadow stack is charged to its thread's budget: 64 KiB, its memory object's bookkeeping (some 8.6 KB)
+  and, for the first, up to three pages of page tables. So a program has what it was given for itself, its launcher
+  adds `slop_os.shadow_stacks_budget` to the budget it splits off (`launch_given`, the root task's loader): for its
+  first thread, and for the runtime's lifecycle thread where it's given a lifecycle channel, which every supervised
+  service is. That second thread was missed at first, and on AArch64 `disk_check` ran out of budget partway through
+  reading a clone back; threads a program makes itself are its own to pay for.
+- **Tests.** `test_control`'s copies tamper with a return address, branch into a function's middle, and write to their
+  shadow stack: refused on AArch64 by PAC, BTI and GCS, skipped under TCG's x86-64; under KVM, the tampered return is
+  refused by the shadow stack. The chaos test found the bundle store's shared code (above).
 

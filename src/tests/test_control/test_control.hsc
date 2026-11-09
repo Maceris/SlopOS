@@ -84,6 +84,11 @@ ROLE_TAMPERING : u64 : 5
  * whose entry test_kit.branch_into_the_middle is (decisions/0186).
  */
 ROLE_BRANCHING : u64 : 6
+/**
+ * What D tells S, in the first message on its peer channel: write to its shadow stack with an ordinary store, on a
+ * thread of its own whose entry test_kit.write_own_shadow_stack is (decisions/0186).
+ */
+ROLE_WRITING_SHADOW_STACK : u64 : 7
 /** The key P's or B's faults are reported under (refused_in_role). */
 TAMPERING_FAULTS_KEY : u64 : 26
 /** The key D's watch for P's or B's end queues under. */
@@ -234,9 +239,16 @@ run_copy :: fn(peer: slop_os.Channel) -> int {
         intrinsics.volatile_store_u64(cast[ptr[mut u64]](FAULTING_ADDRESS), 1)
         slop_os.process_exit(0)
     }
-    if role == ROLE_TAMPERING || role == ROLE_BRANCHING {
+    if role == ROLE_TAMPERING || role == ROLE_BRANCHING || role == ROLE_WRITING_SHADOW_STACK {
         // A thread whose entry it is, so it's never inlined: tampering returns through its own frame
-        thread :: runtime.thread_create(if role == ROLE_TAMPERING { test_kit.tamper_with_return } else { test_kit.branch_into_the_middle })
+        entry := test_kit.tamper_with_return
+        if role == ROLE_BRANCHING {
+            entry = test_kit.branch_into_the_middle
+        }
+        if role == ROLE_WRITING_SHADOW_STACK {
+            entry = test_kit.write_own_shadow_stack
+        }
+        thread :: runtime.thread_create(entry)
         if runtime.thread_start(thread) {
             runtime.thread_join(thread)
         }
@@ -667,11 +679,34 @@ a_branch_to_no_landing_pad_is_caught #test :: fn(t: ptr[mut testing.T]) -> testi
 }
 
 /**
+ * Check that a shadow stack refuses an ordinary write (decisions/0186): S, a copy, writes where its shadow-stack pointer
+ * says, which stops it at a write fault: on AArch64, where the Guarded Control Stack is on. x86-64's is checked by a
+ * tampered return, as its pointer takes an instruction Hemera has no intrinsic for; it's skipped there, and where the
+ * CPU has neither.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error as refused_in_role's.
+ */
+a_shadow_stack_refuses_ordinary_writes #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    block :: slop_os.startup_block()
+    expected := cast[u32](0)
+    #if TARGET_ARCH == .arm64 {
+        if slop_os.has_feature(&block.cpu_features, .Aarch64Gcs) {
+            expected = slop_os.FAULT_WRITE
+        }
+    }
+    if expected == 0 {
+        return testing.skip(t, "no Guarded Control Stack on this CPU, to refuse an ordinary write to it")
+    }
+    return refused_in_role(t, ROLE_WRITING_SHADOW_STACK, "test_control S", expected, "its write to its shadow stack is refused")
+}
+
+/**
  * Launch a copy in a role whose control flow the hardware refuses, with its faults intercepted, and check it stops at
  * the fault expected; then kill it, and check what it had comes back.
  *
  * @param t The test's state.
- * @param role ROLE_TAMPERING or ROLE_BRANCHING.
+ * @param role ROLE_TAMPERING, ROLE_BRANCHING or ROLE_WRITING_SHADOW_STACK.
  * @param name The copy's name, for the process manager.
  * @param expected The fault it's to stop at: a FAULT_ constant.
  * @param what What the check of the fault says.

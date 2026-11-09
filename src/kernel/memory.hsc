@@ -1070,8 +1070,13 @@ resolve_fault_locked :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]?, sp
         case .Write => protection & cast[u32](slop_os.PROTECTION_WRITE) != 0
         case .Execute => protection & cast[u32](slop_os.PROTECTION_EXECUTE) != 0
     }
-    // A shadow stack's own accesses only on its pages, which nothing else may write (decisions/0186)
-    allowed :: if fault.shadow_stack { protection & SHADOW_STACK_PROTECTION != 0 } else { by_access }
+    /*
+     * A shadow stack's pages map on any read or write that finds them absent, as not every architecture says the access
+     * was the shadow stack's (decisions/0186): mapped, they refuse an ordinary write, which then faults with the page
+     * there. A shadow stack's access to any other mapping is refused.
+     */
+    shadow_stack :: protection & SHADOW_STACK_PROTECTION != 0
+    allowed :: if shadow_stack { fault.access != .Execute } else if fault.shadow_stack { false } else { by_access }
     // Pages are mapped with the mapping's protection, so a fault on one that's there broke it
     if !allowed || fault.present {
         return .Failed

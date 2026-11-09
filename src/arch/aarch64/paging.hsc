@@ -44,6 +44,11 @@ ENTRY_ACCESSED : u64 : 1 << 10
 ENTRY_NOT_GLOBAL : u64 : 1 << 11
 /** PXN (bit 53): EL1 never executes the page. */
 ENTRY_PRIVILEGED_EXECUTE_NEVER : u64 : 1 << 53
+/**
+ * DBM (bit 51): with hardware dirty-state management off, as it is, nothing; set on every writable entry, as permission
+ * indirection reads it as PIIndex[1] (decisions/0186).
+ */
+ENTRY_WRITABLE_INDEX : u64 : 1 << 51
 /** GP (bit 50): a guarded page, where an indirect branch may land only on a BTI (FEAT_BTI). */
 ENTRY_GUARDED : u64 : 1 << 50
 /** UXN (bit 54): EL0 never executes the page. */
@@ -570,6 +575,10 @@ activate :: fn(table: ptr[PageTable]) {
     aarch64.isb()
     if cpu.bootloader_tables {
         cpu.bootloader_tables = false
+        // Permission indirection, now that every entry is one leaf_entry made, before the flush (decisions/0186)
+        if table.kernel {
+            enable_permission_indirection(current_system())
+        }
         flush_everything()
     }
 }
@@ -858,6 +867,14 @@ leaf_entry :: fn(physical: u64, mapping: arch_interface.Mapping, level: u64) -> 
     if mapping.protection == .Read {
         entry |= ENTRY_READ_ONLY
     }
+    if mapping.protection == .ReadWrite {
+        entry |= ENTRY_WRITABLE_INDEX
+    }
+    // A Guarded Control Stack's page: PIIndex 0xb, user, never executed, written only by GCS's own accesses (decisions/0186)
+    if mapping.shadow_stack && mapping.user {
+        // AP[2] clear, as permission indirection still refuses writes, GCS's own too, through a read-only entry
+        return (entry & ~ENTRY_READ_ONLY) | ENTRY_USER | ENTRY_NOT_GLOBAL | ENTRY_USER_EXECUTE_NEVER | ENTRY_WRITABLE_INDEX
+    }
     executable :: mapping.protection == .ReadExecute
     if executable {
         entry |= ENTRY_READ_ONLY
@@ -910,6 +927,12 @@ mapping_of :: fn(entry: u64) -> arch_interface.Mapping {
     attribute :: (entry & ENTRY_ATTRIBUTE) >> ATTRIBUTE_SHIFT
     mapping.cache = if attribute == ATTRIBUTE_WRITE_BACK { .WriteBack } else if attribute == ATTRIBUTE_NON_CACHEABLE { .WriteCombining } else { .Device }
     mapping.global = entry & ENTRY_NOT_GLOBAL == 0
+    // A Guarded Control Stack's page, as leaf_entry makes one
+    index_bits :: ENTRY_USER | ENTRY_WRITABLE_INDEX | ENTRY_PRIVILEGED_EXECUTE_NEVER | ENTRY_USER_EXECUTE_NEVER
+    if entry & index_bits == ENTRY_USER | ENTRY_WRITABLE_INDEX | ENTRY_USER_EXECUTE_NEVER {
+        mapping.shadow_stack = true
+        mapping.protection = .Read
+    }
     return mapping
 }
 

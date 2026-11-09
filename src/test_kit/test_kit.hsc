@@ -24,6 +24,9 @@ package test_kit
 
 import intrinsics from "base"
 import runtime from "base"
+#if TARGET_ARCH == .arm64 {
+    import aarch64 from "base/intrinsics"
+}
 import slop_os from "std/os"
 import testing from "std"
 import log_line from "../log_line"
@@ -352,6 +355,22 @@ landing_target : runtime.ThreadFunction : fn(data #escaping : any) {
     count : u64 = 0
     for i in 0..<16 {
         count = intrinsics.volatile_load_u64(&count) + 1
+    }
+}
+
+/**
+ * Write to this thread's own shadow stack with an ordinary store, which its pages refuse (decisions/0186): on AArch64,
+ * where GCSPR_EL0 says where its Guarded Control Stack is; nothing elsewhere, or without one.
+ *
+ * @param data Nothing.
+ */
+write_own_shadow_stack : runtime.ThreadFunction : fn(data #escaping : any) {
+    #if TARGET_ARCH == .arm64 {
+        // GCSPR_EL0 (S3_3_C2_C5_1), which EL0 reads where its GCS is on
+        pointer :: aarch64.read_system_register_encoded(3, 3, 2, 5, 1)
+        if pointer != 0 {
+            intrinsics.volatile_store_u64(cast[ptr[mut u64]](cast[rawptr](cast[uintptr](pointer))), 0)
+        }
     }
 }
 

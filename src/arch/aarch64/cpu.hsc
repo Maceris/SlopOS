@@ -74,6 +74,11 @@ ArchSystem :: struct {
     vectors : u64,
     /** The kernel's pointer authentication key (set_kernel_pointer_key), which idle loads. */
     kernel_key : u64[2],
+    /**
+     * Whether permission indirection and the Guarded Control Stack are on, for user threads' shadow stacks
+     * (enable_permission_indirection, decisions/0186): set by the boot CPU, every CPU being alike.
+     */
+    gcs : bool,
     /** The early console's registers, through the direct map, or 0 without one. */
     console : u64,
     /** Whether the CPU has 16-bit ASIDs, which init_cpu turns on; 8-bit ones otherwise. */

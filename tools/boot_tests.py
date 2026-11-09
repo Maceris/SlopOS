@@ -116,10 +116,11 @@ AARCH64_CRASH_LINE = "error: test_shell_calls crashed: breakpoint; crashes shows
 CRASH_REPORT_LINE = "test_shell_calls: invalid instruction"
 AARCH64_CRASH_REPORT_LINE = "test_shell_calls: breakpoint"
 AARCH64_CLOCK_LINE = "[user] platform: the real-time clock (Pl031) claimed"
-# test_control's tests (decisions/0186): a tampered return and a branch to no landing pad are refused on AArch64, with
-# pointer authentication and branch target identification, and skipped on x86-64 under TCG, which has no CET
-X86_CONTROL_TESTS = "7 tests: 5 passed, 0 failed, 2 skipped"
-AARCH64_CONTROL_TESTS = "7 tests: 7 passed, 0 failed"
+# test_control's tests (decisions/0186): a tampered return, a branch to no landing pad and a write to the shadow stack
+# are refused on AArch64, with pointer authentication, branch target identification and the Guarded Control Stack, and
+# skipped on x86-64 under TCG, which has no CET
+X86_CONTROL_TESTS = "8 tests: 5 passed, 0 failed, 3 skipped"
+AARCH64_CONTROL_TESTS = "8 tests: 8 passed, 0 failed"
 # What QEMU's max CPU has against exploits (decisions/0186): TCG gives x86-64 no CET, and AArch64 all three
 X86_HARDENING_LINE = "[boot] cpu: control-flow integrity: shadow stacks no, indirect branch tracking no"
 AARCH64_HARDENING_LINE = ("[boot] cpu: control-flow integrity: branch target identification yes, pointer authentication yes, "
@@ -1451,7 +1452,7 @@ KVM_HOST = os.environ.get("SLOPOS_KVM_HOST")
 KVM_TESTS = [
     ("KVM: has CET's shadow stacks", 0, ["--expect-line=[boot] cpu: control-flow integrity: shadow stacks yes, indirect branch tracking no"]),
     # A tampered return refused by the shadow stack (decisions/0186); a branch to no landing pad is skipped, with no IBT
-    program_test("KVM: refuses a tampered return through the shadow stack", "test_control", "7 tests: 6 passed, 0 failed, 1 skipped"),
+    program_test("KVM: refuses a tampered return through the shadow stack", "test_control", "8 tests: 6 passed, 0 failed, 2 skipped"),
 ]
 
 AARCH64_MORESTACK_TESTS = aarch64_tests(MORESTACK_TESTS)[:-1]

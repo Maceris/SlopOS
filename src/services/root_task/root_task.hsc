@@ -723,7 +723,8 @@ start_itself :: fn(root: ptr[mut Root], name #escaping : string, grants: process
  */
 start_with_loader :: fn(root: ptr[mut Root], name: string, grants: process_builder.Grant[]) -> Result[slop_os.Process, string] {
     service :: service_of(root, name) or_return .Error("the system configuration doesn't have it")
-    budget :: slop_os.memory_budget_create(root.block.budget, service.budget) or_return .Error("no budget")
+    // With its first thread's shadow stack's on top, where the CPU gives one (decisions/0186)
+    budget :: slop_os.memory_budget_create(root.block.budget, service.budget + slop_os.shadow_stacks_budget(1)) or_return .Error("no budget")
     process :: match slop_os.process_create(budget) {
         case Ok(made) => made
         case Error(error) => {
