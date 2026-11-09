@@ -813,7 +813,9 @@ memory_map :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], space: ptr[mu
     writable :: protection & cast[u32](slop_os.PROTECTION_WRITE) != 0
     executable :: protection & cast[u32](slop_os.PROTECTION_EXECUTE) != 0
     guarded :: protection & cast[u32](slop_os.PROTECTION_GUARDED) != 0
-    if protection & 7 == 0 || protection & ~cast[u32](15) != 0 || (writable && executable) || (guarded && !executable) {
+    shadow_stack :: protection & SHADOW_STACK_PROTECTION != 0
+    if protection & 7 == 0 || protection & ~(cast[u32](15) | SHADOW_STACK_PROTECTION) != 0 || (writable && executable)
+        || (guarded && !executable) || (shadow_stack && (writable || executable)) {
         return slop_os.MemoryError.BadProtection
     }
     // A window, only as its parent's handle allowed; guarding takes nothing more
@@ -905,6 +907,30 @@ memory_unmap :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], addres
         take_down(kernel, cast[ptr[mut MemoryMapping]](found))
     }
     return null
+}
+
+/**
+ * Find the memory object mapped at an address of a space, by the mapping that starts there.
+ *
+ * @param space The address space; its lock is taken, at LockRank Space, while its mappings are looked through.
+ * @param address The mapping's first address.
+ * @return The memory object, as an address, and its generation then; 0 for none.
+ */
+memory_mapped_at :: fn(space: ptr[mut AddressSpace], address: u64) -> (u64, u32) {
+    lock_at(&space.lock, .Space)
+    defer unlock_at(&space.lock, .Space)
+    mapping := space.first_mapping
+    loop {
+        if mapping == 0 {
+            return 0, 0
+        }
+        found :: cast[ptr[MemoryMapping]](mapping)
+        if found.address == address {
+            memory :: found.memory
+            return memory, intrinsics.atomic_load_u32_acquire(&cast[ptr[Memory]](memory).header.generation)
+        }
+        mapping = found.space_next
+    }
 }
 
 /**
@@ -1039,11 +1065,13 @@ resolve_fault_locked :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]?, sp
         return .Failed
     }
     protection :: found.protection
-    allowed :: match fault.access {
+    by_access :: match fault.access {
         case .Read => true
         case .Write => protection & cast[u32](slop_os.PROTECTION_WRITE) != 0
         case .Execute => protection & cast[u32](slop_os.PROTECTION_EXECUTE) != 0
     }
+    // A shadow stack's own accesses only on its pages, which nothing else may write (decisions/0186)
+    allowed :: if fault.shadow_stack { protection & SHADOW_STACK_PROTECTION != 0 } else { by_access }
     // Pages are mapped with the mapping's protection, so a fault on one that's there broke it
     if !allowed || fault.present {
         return .Failed
@@ -1159,7 +1187,9 @@ mapping_for :: fn(protection: u32, cache: arch_interface.CacheMode) -> arch_inte
         kind = .ReadExecute
     }
     guarded :: protection & cast[u32](slop_os.PROTECTION_GUARDED) != 0
-    return arch_interface.Mapping.{protection = kind, cache = cache, user = true, global = false, guarded = guarded}
+    shadow_stack :: protection & SHADOW_STACK_PROTECTION != 0
+    return arch_interface.Mapping.{protection = kind, cache = cache, user = true, global = false, guarded = guarded,
+        shadow_stack = shadow_stack}
 }
 
 /**

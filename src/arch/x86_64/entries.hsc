@@ -177,6 +177,8 @@ decode_page_fault :: fn(error_code: u64) -> arch_interface.PageFault {
         address = cast[arch_interface.VirtualAddress](x86_64.read_cr2()),
         access = access,
         present = error_code & 1 == 1,
+        // Bit 6 (SS): the shadow stack's own access
+        shadow_stack = (error_code >> 6) & 1 == 1,
     }
 }
 

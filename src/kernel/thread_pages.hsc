@@ -52,11 +52,13 @@ running_fiber_of :: fn(kernel: ptr[mut Kernel], thread: ptr[Thread]) -> u64 {
  */
 bind_from_page :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     page :: thread_page_of(kernel, thread) or_return void
-    binding :: intrinsics.volatile_load_u64(&page.budget)
-    if binding == thread.page_seen {
+    // A binding that isn't a handle, wider than one, is its process's own, as 0 is
+    read :: intrinsics.volatile_load_u64(&page.budget)
+    binding :: if read <= 0xffffffff { read } else { cast[u64](0) }
+    if binding == cast[u64](thread.page_seen) {
         return void
     }
-    thread.page_seen = binding
+    thread.page_seen = cast[u32](binding)
     process :: process_of(thread)
     target := process.cpu_budget
     if binding != 0 && binding <= 0xffffffff {

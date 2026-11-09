@@ -62,9 +62,16 @@ Thread :: struct #align(16) {
     /** The memory object the page is part of, as an address: the page is read only while it's live at page_generation. */
     page_memory : u64,
     /** The budget handle the page held when it was last resolved, 0 for its process's own (bind_from_page). */
-    page_seen : u64,
+    page_seen : u32,
     /** page_memory's generation when the page was given. */
     page_generation : u32,
+    /**
+     * Its shadow stack's slot in its process's region plus 1, 0 for none (shadow_stacks.hsc, decisions/0186); its memory
+     * is what's mapped there.
+     */
+    shadow_slot : u32,
+    /** Its shadow-stack pointer in user mode, kept while it's out of it. */
+    shadow_pointer : u64,
     /** Where it is in the scheduler: ready, running, blocked or stopped. */
     state : ThreadState,
     /**
@@ -233,6 +240,16 @@ create_thread :: fn(kernel: ptr[mut Kernel], owner: u64, space #escaping : ptr[m
         _ = destroy_object(kernel, object)
         return .Error(.OwnerGone)
     }
+    // Its shadow stack before its first instruction, where its process asks for them (decisions/0186)
+    if owner != 0 {
+        match give_shadow_stack(kernel, thread, cast[ptr[mut Process]](owner), memory_budget) {
+            case Some(error) => {
+                _ = destroy_object(kernel, object)
+                return .Error(error)
+            }
+            case None => {}
+        }
+    }
     link_thread(kernel, thread)
     if budget == 0 && owner != 0 {
         join_process_budget(kernel, thread, cast[ptr[Process]](owner))
@@ -276,6 +293,7 @@ start_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
  * @param thread The thread, already dying, its generation advanced.
  */
 destroy_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
+    release_shadow_stack(kernel, thread)
     leave_thread_budget(kernel, thread)
     cancel_wait(kernel, thread)
     cancel_fault_wait(thread)

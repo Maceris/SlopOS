@@ -34,6 +34,8 @@ KERNEL_HALF_COUNT :: 256
 ENTRY_PRESENT : u64 : 1 << 0
 /** Entry bit 5 (A): set by the hardware as the page, or a table, is touched, and cleared only by software. */
 ENTRY_ACCESSED : u64 : 1 << 5
+/** Entry bit 6 (D), in a leaf: set by the hardware as the page is written; with R/W clear, a shadow-stack page. */
+ENTRY_DIRTY : u64 : 1 << 6
 /** Entry bit 1 (R/W): writes allowed. */
 ENTRY_WRITABLE : u64 : 1 << 1
 /** Entry bit 2 (U/S): user mode may access it. */
@@ -704,6 +706,10 @@ may_map :: fn(table: ptr[PageTable], address: u64, bytes: u64, user: bool) -> bo
  */
 leaf_entry :: fn(physical: u64, mapping: arch_interface.Mapping, large: bool) -> u64 {
     entry := physical | ENTRY_PRESENT | protection_bits(mapping.protection) | cache_bits(mapping.cache, large)
+    // A shadow stack's page: read-only and dirty, which only its own accesses write (decisions/0186)
+    if mapping.shadow_stack {
+        entry = (entry & ~ENTRY_WRITABLE) | ENTRY_DIRTY | ENTRY_NO_EXECUTE
+    }
     if mapping.user {
         entry |= ENTRY_USER
     }

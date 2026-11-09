@@ -68,10 +68,10 @@ Executable :: struct {
     relro_size : u64,
     /**
      * What hardware control-flow integrity the code was built for, as its property note's features say
-     * (decisions/0186): FEATURE_LANDING_PADS, FEATURE_SIGNED_RETURNS and FEATURE_SHADOW_STACK, for this architecture;
-     * 0 without a note. With landing pads, its executable segments are guarded (PROTECTION_GUARDED).
+     * (decisions/0186): slop_os.CONTROL_FLOW_ bits, for process_set_control_flow; 0 without a note. With landing pads,
+     * its executable segments are guarded (PROTECTION_GUARDED).
      */
-    control_flow : u64,
+    control_flow : u32,
 }
 
 /** Why an executable can't be loaded. */
@@ -231,9 +231,10 @@ page_up :: fn(value: u64) -> u64? {
  * @param file The whole file.
  * @param offset Where the note starts in the file, in bytes.
  * @param size Its size in bytes.
- * @return FEATURES_PROPERTY's bits; 0 for a note that isn't one, or is cut short, or doesn't have it.
+ * @return FEATURES_PROPERTY's bits as slop_os.CONTROL_FLOW_ bits; 0 for a note that isn't one, or is cut short, or
+ *     doesn't have it.
  */
-control_flow_of :: fn(file: u8[], offset: u64, size: u64) -> u64 {
+control_flow_of :: fn(file: u8[], offset: u64, size: u64) -> u32 {
     if size < 16 || offset > cast[u64](file.count) || size > cast[u64](file.count) - offset {
         return 0
     }
@@ -254,7 +255,18 @@ control_flow_of :: fn(file: u8[], offset: u64, size: u64) -> u64 {
         property :: read_le(file, at, 4) or_return 0
         data_size :: read_le(file, at + 4, 4) or_return 0
         if property == FEATURES_PROPERTY && data_size == 4 {
-            return read_le(file, at + 8, 4) or_return 0
+            features :: read_le(file, at + 8, 4) or_return 0
+            portable := cast[u32](0)
+            if features & FEATURE_LANDING_PADS != 0 {
+                portable |= slop_os.CONTROL_FLOW_LANDING_PADS
+            }
+            if features & FEATURE_SHADOW_STACK != 0 {
+                portable |= slop_os.CONTROL_FLOW_SHADOW_STACK
+            }
+            if FEATURE_SIGNED_RETURNS != 0 && features & FEATURE_SIGNED_RETURNS != 0 {
+                portable |= slop_os.CONTROL_FLOW_SIGNED_RETURNS
+            }
+            return portable
         }
         // The next, after this one's data padded to 8 bytes
         at += 8 + ((data_size + 7) & ~cast[u64](7))
@@ -441,7 +453,7 @@ read :: fn(file: u8[]) -> Result[Executable, LoadError] {
         end = page_up(address + memory_size) or_return .Error(.ImageTooLarge)
     }
     // With landing pads, its code where indirect branches may land only on them (decisions/0186)
-    if executable.control_flow & FEATURE_LANDING_PADS != 0 {
+    if executable.control_flow & slop_os.CONTROL_FLOW_LANDING_PADS != 0 {
         for i in 0..<segment_count {
             if i < executable.segments.count && cast[u32](executable.segments[i].protection) & cast[u32](slop_os.PROTECTION_EXECUTE) != 0 {
                 executable.segments[i].protection = cast[slop_os.Protection](cast[u32](executable.segments[i].protection)

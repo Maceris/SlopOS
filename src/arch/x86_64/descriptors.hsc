@@ -163,6 +163,7 @@ init_cpu :: fn(
     cpu.xcr0 = XCR0_BASE
     features :: detect_features()
     cpu.xsaveopt = has(&features, .X86Xsaveopt)
+    enable_control_flow(cpu, &features)
     init_paging(cpu)
     enable_system_calls()
     // The gs base after load_segments, which resets it

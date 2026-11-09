@@ -126,6 +126,10 @@ ArchCpu :: struct #align(64) {
     xcr0 : u64,
     /** Whether the CPU has XSAVEOPT, which saving vector state then uses (vector.hsc). */
     xsaveopt : bool,
+    /** Whether init_cpu turned on CET's shadow stacks for user mode (decisions/0186). */
+    shadow_stacks : bool,
+    /** Whether init_cpu turned on CET's indirect branch tracking for user mode. */
+    indirect_branch_tracking : bool,
     /** Whether a thread's breakpoints are in the debug registers (debug_on), so an entry turns them off. */
     debug_loaded : bool,
     /** Whether CR4.TSD is set, so user mode's RDTSC traps (set_counter_trap). */

@@ -54,6 +54,7 @@ InterruptSource :: union {
 syscall #never_returns :: fn(registers: ptr[mut arch.UserRegisters]) {
     arch.debug_off()
     kernel.left_boot_stack()
+    kernel.note_user_control_flow()
     kernel.handle_syscall(registers)
 }
 
@@ -70,6 +71,7 @@ syscall #never_returns :: fn(registers: ptr[mut arch.UserRegisters]) {
 user_fault #never_returns :: fn(registers: ptr[mut arch.UserRegisters], fault: arch_interface.Fault) {
     arch.debug_off()
     kernel.left_boot_stack()
+    kernel.note_user_control_flow()
     kernel.handle_user_fault(registers, fault)
 }
 
@@ -94,6 +96,7 @@ interrupt #never_returns :: fn(from: Interrupted, source: InterruptSource) {
     match from {
         case User(registers) => {
             arch.debug_off()
+            kernel.note_user_control_flow()
             kernel.save_user_registers(registers)
             from_user = true
         }

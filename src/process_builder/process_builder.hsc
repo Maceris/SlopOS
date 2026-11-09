@@ -31,6 +31,11 @@ PAGE : u64 : 4096
 STACK_SIZE : u64 : 256 * 1024
 /** The free range's size, in bytes: 1 TiB of addresses, none of them mapped at the start. */
 FREE_SIZE : u64 : 1 << 40
+/**
+ * The region its threads' shadow stacks go in, from the top of its free range, which is that much smaller: room for 256
+ * slots, each a guard page and slop_os.SHADOW_STACK_BYTES (decisions/0186).
+ */
+SHADOW_REGION_SIZE : u64 : 256 * (slop_os.SHADOW_STACK_BYTES + PAGE)
 // User addresses, on both architectures (src/arch/*/paging.hsc).
 /** The lowest user address a part is placed at: 64 KiB, the architectures' lowest user address. */
 USER_LOW : u64 : 0x10000
@@ -260,7 +265,7 @@ build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: p
     block.budget = cast[slop_os.MemoryBudget](given[2])
     block.grant_count = cast[u32](grants.count)
     block.free_base = layout.free
-    block.free_size = FREE_SIZE
+    block.free_size = FREE_SIZE - SHADOW_REGION_SIZE
     block.stack_base = layout.stack
     block.stack_size = STACK_SIZE
     block.grants = grants_at
@@ -274,6 +279,9 @@ build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: p
             grant.handle = given[OWN_HANDLES + i]
         }
     }
+    // What its code was built for, and its shadow stacks' region, before its first thread (decisions/0186)
+    slop_os.process_set_control_flow(target.process, executable.control_flow, layout.free + FREE_SIZE - SHADOW_REGION_SIZE,
+        SHADOW_REGION_SIZE) or_return .Error(.Failed)
     // As a call leaves it: 8 below a multiple of 16
     thread :: slop_os.thread_create_in(target.process, target.budget, space, layout.image + executable.entry, layout.stack + STACK_SIZE - 8,
         layout.block) or_return .Error(.Failed)

@@ -288,13 +288,16 @@ handle_at :: fn[H](word: u64) -> H #no_context {
 
 /** How many words tamper_with_return looks through, up from a local, for its saved return address. */
 TAMPERING_REACH :: 64
+/** How far above a frame record its caller's may be, in bytes, for tamper_with_return to take it as one. */
+TAMPERING_FRAME_REACH : u64 : 64 * 1024
 
 /**
  * Change this function's own saved return address, where its frame keeps it, and return through it, which the
  * hardware's control-flow integrity refuses (decisions/0186). On AArch64 a bit of its pointer authentication code is
  * flipped, so it fails to authenticate; on x86-64 the address is moved on by one, which the shadow stack doesn't hold.
  * Its return address is found with capture_stack_trace, which gives it without its authentication code, and its saved
- * copy by looking up from a local for the word whose address bits match.
+ * copy by looking up from a local for the word whose address bits match, in a frame record: after a frame pointer to a
+ * little further up, its caller's, so a copy of the address among its locals isn't taken for it.
  *
  * @param data Nothing.
  */
@@ -306,10 +309,13 @@ tamper_with_return : runtime.ThreadFunction : fn(data #escaping : any) {
     target :: cast[u64](cast[uintptr](addresses[0]))
     local : u64 = 0
     from :: cast[u64](cast[uintptr](&local))
-    for i in cast[u64](0)..<TAMPERING_REACH {
-        slot :: cast[ptr[mut u64]](cast[rawptr](cast[uintptr](from + i * 8)))
+    for i in cast[u64](1)..<TAMPERING_REACH {
+        at :: from + i * 8
+        slot :: cast[ptr[mut u64]](cast[rawptr](cast[uintptr](at)))
         value :: intrinsics.volatile_load_u64(slot)
-        if value & 0x0000ffffffffffff == target {
+        // In a frame record, after the caller's frame pointer, a little further up: not a copy of it among the locals
+        saved :: intrinsics.volatile_load_u64(cast[ptr[u64]](cast[rawptr](cast[uintptr](at - 8))))
+        if value & 0x0000ffffffffffff == target && saved > at && saved - at < TAMPERING_FRAME_REACH {
             #if TARGET_ARCH == .arm64 {
                 intrinsics.volatile_store_u64(slot, value ~ (cast[u64](1) << 53))
             }

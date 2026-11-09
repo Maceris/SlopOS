@@ -160,6 +160,11 @@ Mapping :: struct {
      * AArch64's guarded pages; ignored elsewhere.
      */
     guarded : bool = false,
+    /**
+     * A shadow stack's pages (decisions/0186), with protection Read: x86-64's shadow-stack pages (read-only and dirty),
+     * which only shadow-stack accesses write.
+     */
+    shadow_stack : bool = false,
 }
 
 /** The size of one page a mapping maps, a level of the page tables. */
@@ -915,6 +920,8 @@ PageFault :: struct {
     access : Access,
     /** A mapping exists, and the access broke its protection. */
     present : bool,
+    /** The access was the shadow stack's own, as a call pushing a return address there (decisions/0186). */
+    shadow_stack : bool = false,
 }
 
 /** A fault user mode took, for L2 to handle. */
@@ -1107,6 +1114,29 @@ set_kernel_pointer_key : fn(system: ptr[mut ArchSystem], key: u64[2]) : ---
  * @param key The key's 128 bits.
  */
 set_user_pointer_key : fn(key: u64[2]) : ---
+
+/**
+ * Tell whether the calling CPU gives user threads shadow stacks (decisions/0186): x86-64's CET shadow stacks.
+ *
+ * @return True if a thread can have one.
+ */
+has_user_shadow_stacks : fn() -> bool : ---
+
+/**
+ * Set the calling CPU's user-mode control-flow integrity for the thread about to return to user mode: landing pads
+ * checked or not, and its shadow-stack pointer, 0 for none (decisions/0186). Where the CPU has neither, nothing.
+ *
+ * @param landing_pads Whether its indirect branches must land on landing pads.
+ * @param shadow_stack Its shadow-stack pointer; 0 for no shadow stack.
+ */
+load_user_control_flow : fn(landing_pads: bool, shadow_stack: u64) : ---
+
+/**
+ * Read the calling CPU's user-mode shadow-stack pointer, as a thread that has a shadow stack enters the kernel.
+ *
+ * @return The pointer.
+ */
+read_user_shadow_stack : fn() -> u64 : ---
 
 /** A device the emulator always has that raises a wired interrupt: its controller, and its line there. */
 TestDevice :: struct {

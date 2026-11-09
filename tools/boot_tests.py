@@ -1450,6 +1450,8 @@ AARCH64_TESTS = aarch64_tests(TESTS)
 KVM_HOST = os.environ.get("SLOPOS_KVM_HOST")
 KVM_TESTS = [
     ("KVM: has CET's shadow stacks", 0, ["--expect-line=[boot] cpu: control-flow integrity: shadow stacks yes, indirect branch tracking no"]),
+    # A tampered return refused by the shadow stack (decisions/0186); a branch to no landing pad is skipped, with no IBT
+    program_test("KVM: refuses a tampered return through the shadow stack", "test_control", "7 tests: 6 passed, 0 failed, 1 skipped"),
 ]
 
 AARCH64_MORESTACK_TESTS = aarch64_tests(MORESTACK_TESTS)[:-1]

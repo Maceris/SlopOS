@@ -134,3 +134,32 @@ set_user_pointer_key :: fn(key: u64[2]) {
 has_pointer_authentication :: fn() -> bool {
     return aarch64.read_system_register(.ID_AA64ISAR1_EL1) & 0xff0 != 0
 }
+
+/**
+ * Tell whether the calling CPU gives user threads shadow stacks (arch_interface.has_user_shadow_stacks): not yet on
+ * AArch64, whose Guarded Control Stack needs its pages marked through permission indirection.
+ *
+ * @return False.
+ */
+has_user_shadow_stacks :: fn() -> bool {
+    return false
+}
+
+/**
+ * Set user mode's control-flow integrity for a thread (arch_interface.load_user_control_flow): nothing on AArch64,
+ * where landing pads are checked by page (PROTECTION_GUARDED) and shadow stacks aren't given yet.
+ *
+ * @param landing_pads Unused.
+ * @param shadow_stack Unused.
+ */
+load_user_control_flow :: fn(landing_pads: bool, shadow_stack: u64) {}
+
+/**
+ * Read user mode's shadow-stack pointer (arch_interface.read_user_shadow_stack): none on AArch64 yet.
+ *
+ * @return 0.
+ */
+read_user_shadow_stack :: fn() -> u64 {
+    return 0
+}
+

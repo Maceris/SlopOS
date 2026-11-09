@@ -209,3 +209,79 @@ set_kernel_pointer_key :: fn(system: ptr[mut ArchSystem], key: u64[2]) {}
  */
 set_user_pointer_key :: fn(key: u64[2]) {}
 
+// CET for user mode (decisions/0186): CR4.CET on each CPU, and per thread IA32_U_CET and IA32_PL3_SSP
+/** CR4.CET (bit 23): CET's shadow stacks and indirect branch tracking can be turned on. */
+CR4_CET : u64 : 1 << 23
+/** CR0.WP (bit 16): the kernel can't write read-only pages, which CR4.CET needs. */
+CR0_WRITE_PROTECT : u64 : 1 << 16
+/** User mode's CET: SH_STK_EN (bit 0) and ENDBR_EN (bit 2). */
+IA32_U_CET : u32 : 0x6a0
+/** U_CET's SH_STK_EN: shadow stacks on. */
+U_CET_SHADOW_STACK : u64 : 1 << 0
+/** U_CET's ENDBR_EN: indirect branch tracking on. */
+U_CET_LANDING_PADS : u64 : 1 << 2
+/** User mode's shadow-stack pointer. */
+IA32_PL3_SSP : u32 : 0x6a7
+
+/**
+ * Turn on CR4.CET on the calling CPU where it has CET's shadow stacks or indirect branch tracking, with CR0.WP, which it
+ * needs, and note which, for load_user_control_flow. Called by init_cpu, on each CPU.
+ *
+ * @param cpu The CPU's state, whose shadow_stacks and indirect_branch_tracking are set.
+ * @param features The CPU's features.
+ */
+enable_control_flow :: fn(cpu: ptr[mut ArchCpu], features: ptr[slop_os.CpuFeatures]) {
+    cpu.shadow_stacks = has(features, .X86ShadowStack)
+    cpu.indirect_branch_tracking = has(features, .X86Ibt)
+    if !cpu.shadow_stacks && !cpu.indirect_branch_tracking {
+        return void
+    }
+    x86_64.write_cr0(x86_64.read_cr0() | CR0_WRITE_PROTECT)
+    x86_64.write_cr4(x86_64.read_cr4() | CR4_CET)
+    x86_64.wrmsr(IA32_U_CET, 0)
+}
+
+/**
+ * Tell whether the calling CPU gives user threads shadow stacks (arch_interface.has_user_shadow_stacks).
+ *
+ * @return True where init_cpu turned CET's on.
+ */
+has_user_shadow_stacks :: fn() -> bool {
+    return current_cpu().shadow_stacks
+}
+
+/**
+ * Set user mode's CET for the thread about to return to it (arch_interface.load_user_control_flow): IA32_U_CET, and
+ * IA32_PL3_SSP where it has a shadow stack.
+ *
+ * @param landing_pads Whether its indirect branches must land on endbr64, where the CPU has indirect branch tracking.
+ * @param shadow_stack Its shadow-stack pointer; 0 for none.
+ */
+load_user_control_flow :: fn(landing_pads: bool, shadow_stack: u64) {
+    cpu :: current_cpu()
+    if !cpu.shadow_stacks && !cpu.indirect_branch_tracking {
+        return void
+    }
+    enables := cast[u64](0)
+    if shadow_stack != 0 && cpu.shadow_stacks {
+        x86_64.wrmsr(IA32_PL3_SSP, shadow_stack)
+        enables |= U_CET_SHADOW_STACK
+    }
+    if landing_pads && cpu.indirect_branch_tracking {
+        enables |= U_CET_LANDING_PADS
+    }
+    x86_64.wrmsr(IA32_U_CET, enables)
+}
+
+/**
+ * Read user mode's shadow-stack pointer (arch_interface.read_user_shadow_stack).
+ *
+ * @return IA32_PL3_SSP; 0 where the CPU has no shadow stacks.
+ */
+read_user_shadow_stack :: fn() -> u64 {
+    if !current_cpu().shadow_stacks {
+        return 0
+    }
+    return x86_64.rdmsr(IA32_PL3_SSP)
+}
+

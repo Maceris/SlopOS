@@ -613,8 +613,8 @@ a_launch_reports_faults_and_ends_a_program_left_stopped #test :: fn(t: ptr[mut t
 
 /**
  * Check that a tampered return address is caught (decisions/0186): P, a copy, changes its own on a thread of its own and
- * returns through it, which stops it at a fault: on AArch64 with pointer authentication, its authentication failing.
- * Where the CPU has none of it, the test is skipped.
+ * returns through it, which stops it at a fault: on AArch64 with pointer authentication, its authentication failing; on
+ * x86-64 with CET's shadow stacks, the shadow stack's. Where the CPU has none of it, the test is skipped.
  *
  * @param t The test's state.
  * @return Ok once it's run; Error if main wasn't given the process manager or its module, or the port, P or its
@@ -626,6 +626,11 @@ a_tampered_return_is_caught #test :: fn(t: ptr[mut testing.T]) -> testing.Outcom
     #if TARGET_ARCH == .arm64 {
         if slop_os.has_feature(&block.cpu_features, .Aarch64PointerAuthentication) {
             expected = slop_os.FAULT_AUTHENTICATION
+        }
+    }
+    #else {
+        if slop_os.has_feature(&block.cpu_features, .X86ShadowStack) {
+            expected = slop_os.FAULT_SHADOW_STACK
         }
     }
     if expected == 0 {
@@ -647,6 +652,11 @@ a_branch_to_no_landing_pad_is_caught #test :: fn(t: ptr[mut testing.T]) -> testi
     expected := cast[u32](0)
     #if TARGET_ARCH == .arm64 {
         if slop_os.has_feature(&block.cpu_features, .Aarch64Bti) {
+            expected = slop_os.FAULT_LANDING_PAD
+        }
+    }
+    #else {
+        if slop_os.has_feature(&block.cpu_features, .X86Ibt) {
             expected = slop_os.FAULT_LANDING_PAD
         }
     }

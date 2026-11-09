@@ -1259,6 +1259,10 @@ sys_memory_map :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, space: slo
     protection: slop_os.Protection) -> Result[void, slop_os.MemoryError] {
     process :: process_of(thread)
     bits :: cast[u32](protection)
+    // A shadow stack's protection is the kernel's to give (decisions/0186)
+    if bits & SHADOW_STACK_PROTECTION != 0 {
+        return .Error(.BadProtection)
+    }
     needed := cast[u32](slop_os.RIGHT_MEMORY_READ)
     if bits & cast[u32](slop_os.PROTECTION_WRITE) != 0 {
         needed |= cast[u32](slop_os.RIGHT_MEMORY_WRITE)
@@ -2795,7 +2799,7 @@ sys_memory_budget_others :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBu
  * @error BadBuffer debug isn't memory the caller can read.
  * @error BadRegisters step is set, or a slot the architecture can't set.
  */
-// sys_thread_set_page, system call 92, is in thread_pages.hsc
+// sys_thread_set_page, system call 92, is in thread_pages.hsc; sys_process_set_control_flow, 93, in shadow_stacks.hsc
 
 sys_process_set_debug :: fn(thread: ptr[mut Thread], process: slop_os.Process, debug: u64) -> Result[void, slop_os.ControlError] {
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE)?

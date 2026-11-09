@@ -39,6 +39,8 @@ import robustness from "../robustness"
 ROOT_STACK_SIZE : u64 : 256 * 1024
 /** The bytes of the free range the root task's runtime maps its own memory in: 1 TiB. */
 ROOT_FREE_SIZE : u64 : 1 << 40
+/** The root task's shadow stacks' region, from the top of its free range, as the process manager gives programs one. */
+ROOT_SHADOW_REGION_SIZE : u64 : 256 * SHADOW_STACK_STRIDE
 /** The most grants the root task is given: its own, and one for every boot module after the first. */
 MAX_ROOT_GRANTS :: 128
 /** A page's bytes, a frame's: 4 KiB. */
@@ -167,6 +169,10 @@ start_in :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule, process: p
         stack_pointer = cast[arch_interface.VirtualAddress](layout.stack + ROOT_STACK_SIZE - 8),
         argument = layout.block,
     }
+    // What its code was built for, and its shadow stacks' region, before its first thread (decisions/0186)
+    process.control_flow = executable.control_flow
+    process.shadow_region = layout.free + ROOT_FREE_SIZE - ROOT_SHADOW_REGION_SIZE
+    process.shadow_slots = MAX_SHADOW_STACKS
     thread := cast[ptr[mut Thread]](0)
     match create_thread(kernel, cast[u64](process), space, &start, arch_interface.VectorConfig.{extended = false}, 0, budget) {
         case Ok(made) => thread = made
@@ -411,7 +417,7 @@ write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], sp
     block.budget = cast[slop_os.MemoryBudget](handle_for(kernel, process, kernel.root_budget, .MemoryBudget, false)
         or_return "no handle to the root budget")
     block.free_base = layout.free
-    block.free_size = ROOT_FREE_SIZE
+    block.free_size = ROOT_FREE_SIZE - ROOT_SHADOW_REGION_SIZE
     block.stack_base = layout.stack
     block.stack_size = ROOT_STACK_SIZE
     block.seed = kernel.boot_seed

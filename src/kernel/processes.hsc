@@ -43,6 +43,14 @@ Process :: struct #align(16) {
     run_time : u64,
     /** Its pointer authentication key, random, which its threads return to user mode with (decisions/0186). */
     pointer_key : u64[2],
+    /** What control-flow integrity its code was built for: slop_os.CONTROL_FLOW_ bits, read and written atomically. */
+    control_flow : u32,
+    /** Where its threads' shadow stacks go (shadow_stacks.hsc), page-aligned; 0 until process_set_control_flow. */
+    shadow_region : u64,
+    /** How many slots the region has, at most MAX_SHADOW_STACKS. */
+    shadow_slots : u64,
+    /** Which slots are taken, a bit each, changed atomically. */
+    shadow_used : u64[4],
     /** Held, at rank Watchers, while watchers is read or changed. */
     watch_lock : concurrency.SpinLock,
     /** Bindings watching for it to end, raised with SIGNAL_TERMINATED and its exit code; empty slots are 0. */
