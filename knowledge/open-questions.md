@@ -45,7 +45,9 @@ no C callbacks for now (`0038`), and AArch64 right after M3 (`0022`).
   cover exploit mitigations yet. Likely its own decision. Deferred (2026-10-13): nothing before
   M4 needs it, and kernel shadow stacks would also need the entry paths to switch them
   (`hemera-proposals/kernel-entry.md`, *Open Questions*).
-  Planned as roadmap track H, after M11 (2026-10-24).
+  Planned as roadmap track H, after M11 (2026-10-24). Answered 2026-11-09 (`decisions/0186`): every mechanism the
+  hardware has, for user space and the kernel, detected at boot; shadow stacks and GCSs made by the kernel at
+  `thread_create`, one per thread, fibers sharing their carrier's.
   Related on the Hemera side: return addresses of suspended fibers (Hemera
   `docs/multitasking.md`, *Open Questions*).
 

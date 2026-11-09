@@ -442,6 +442,13 @@ Stresses: the compiler's debug information, reflection over arbitrary values, fi
 Stresses: the compiler emitting `endbr64`/`bti` and shadow-stack-aware fiber switches in freestanding code.
 Any time after M11.
 
+Planned 2026-11-09 (`decisions/0186`), with the owner: every mechanism the hardware has, for user space and the kernel
+(AArch64's BTI, PAC and GCS; x86-64's IBT and shadow stacks), each detected at boot; x86-64's tested through WHPX if a
+guest sees CET there; all four fuzzers coverage-guided. In five stages: **Ha** the x86-64 test path, the features
+detected, and the transient-execution log; **Hb** Hemera's landing pads, signed returns, property notes, and fiber and
+entry sequences to match; **Hc** user space, with kernel-made shadow stacks and GCSs at `thread_create`; **Hd** the
+kernel; **He** the fuzzers, the system call table's on a kernel with coverage counters.
+
 ## Before M13 — What Was Promised and Not Built
 
 A catch-up stage, in three parts: what earlier plans promised and nothing yet schedules.
@@ -567,5 +574,6 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | Before P | done 2026-11-07 (`decisions/0181`), in seven parts, F1 to F7: what M10, M11, R and B left, with what the chaos tests found fixed |
 | P | done 2026-11-07 (`decisions/0182`), in five parts, P1 to P5: turning off and restarting, AML, the ACPI service and the power button, a graceful shutdown, the hardware watchdog |
 | M12 | done 2026-11-09: 12a to 12d (`decisions/0183`), and 12e to 12h, what they left (`decisions/0185`); a child CPU budget for each shell job waits for session programs to get CPU budgets (Before M13's C1) |
+| H | planned 2026-11-09 (`decisions/0186`), in five stages, Ha to He: the x86-64 test path and the boot log, Hemera, user space, the kernel, the fuzzers |
 | Before M13 | planned 2026-11-09, in three parts: C1 sessions' CPU budgets, split from the scheduler's for each session and the shell's for each job; C2 Hemera's atomics intercepted in a test build, with a model checker in `std/testing`; C3 R6's schedule exploration of the kernel's lock-free code on it |
 | M13–M16, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
