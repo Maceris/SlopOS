@@ -23,7 +23,10 @@ for what any later architecture note needs to cover.
   `IA32_SPEC_CTRL` on each CPU where `IBRS_ALL` says it's there, which costs close to nothing. No KPTI, no per-entry
   IBRS or buffer clearing.
 - **Control-flow integrity** (`../decisions/0186`): CET's shadow stacks and IBT, detected with `CPUID` leaf 7.
-  QEMU's TCG emulates neither; shadow stacks are boot-tested through KVM (`tools/boot.py --kvm`).
+  QEMU's TCG emulates neither; shadow stacks are boot-tested through KVM (`tools/boot.py --kvm`). User threads get
+  both; the kernel gets IBT (`IA32_S_CET.ENDBR_EN`), untested, as no machine here has it. Supervisor shadow stacks
+  wait for FRED: every entry goes through the interrupt stack table, whose shadow-stack tokens would be busy when a
+  fault comes in kernel code, making it a double fault.
 
 ## Boot Path
 

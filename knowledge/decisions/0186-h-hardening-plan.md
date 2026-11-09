@@ -1,6 +1,6 @@
 # 0186: H, Hardening, Planned
 
-Status: accepted, chosen with the project's owner; built, Ha to Hc
+Status: accepted, chosen with the project's owner; built, Ha to Hd
 Date: 2026-11-09
 Related: `0003` (the CPU baseline), `0013` (the threat model), `0019` (AES detected at boot), `0023` (cheap threads,
 user space owns stacks), `0096` (robustness), `0097` (lessons adopted: the transient-execution boot log), `0088` and
@@ -214,7 +214,7 @@ architectures.
 - **Pointer authentication (AArch64).** Each process has a random key, loaded as its threads return to user mode; the
   kernel has its own, loaded as each CPU first goes idle. Both are loaded where no frame below returns: a key or
   `SCTLR_EL1.EnIA` changed under a signed frame fails it, which the first try did, in the helper that loaded them.
-  The kernel runs with the user's key after an entry from user mode until Hd. Stack walks strip authentication codes:
+  The kernel ran with the user's key after an entry from user mode until Hd. Stack walks strip authentication codes:
   the kernel's samples and lockup reports, crash reports and the debugger.
 - **Branch target identification (AArch64).** The ELF loader reads a program's property note (`PT_GNU_PROPERTY`), and
   maps its code with `PROTECTION_GUARDED`, AArch64's GP bit, when it has landing pads. Typed libraries' code isn't
@@ -244,4 +244,28 @@ architectures.
 - **Tests.** `test_control`'s copies tamper with a return address, branch into a function's middle, and write to their
   shadow stack: refused on AArch64 by PAC, BTI and GCS, skipped under TCG's x86-64; under KVM, the tampered return is
   refused by the shadow stack. The chaos test found the bundle store's shared code (above).
+
+## As Built: Hd
+- **AArch64.**
+  - *Signed returns with the kernel's own key*: `exception_entry` loads it on every entry from user mode, in its body,
+    and puts the user's back, read from the registers as they were, before it returns on the one path that does (a
+    pseudo-NMI from user mode): its own frame was signed with the user's key.
+  - *Landing pads*: the kernel image's code is mapped guarded (GP) where the CPU has BTI, GP being reserved without it.
+  - *A Guarded Control Stack for each CPU's kernel stack*, 16 KiB in the kernel window between guard pages,
+    permission indirection's index 0xa (`PIR_EL1`'s GCS). The kernel never returns into frames it left, so as SP_EL1
+    starts again from its top in idle and `return_to_user`, so does `GCSPR_EL1`, and `GCSCR_EL1.PCRSEL` goes on
+    there; exceptions push nothing. The kernel's fibers share it, as Hb's switches pop their entries.
+- **x86-64: indirect branch tracking only**, `IA32_S_CET.ENDBR_EN` where the CPU has IBT, built and not tested, as no
+  machine here has it. Supervisor shadow stacks were left for FRED, chosen with the owner: SYSCALL's entry and
+  `return_to_user`, Hemera's assembly, would need `SETSSBSY`, unwinding to the token and `CLRSSBSY`; every entry goes
+  through the interrupt stack table, whose token is busy while the kernel runs, so a fault in kernel code would become
+  a double fault, losing its name; and KVM here doesn't set `CET_SSS`, which says they're safe in a virtual machine.
+- **Tests**, on the command line at the boot CPU's second tick, after it's gone idle: `test_tamper` (a tampered
+  return), `test_branch` (a branch into a function's middle) and `test_shadow_write` (an ordinary write to the kernel's
+  shadow stack) each stop the kernel with the fault named on AArch64 (`--expect-line-start`, new in `boot.py`), and
+  say they're skipped on x86-64 under TCG and KVM.
+- **Found on the way: the kernel window could overlap the direct map.** It kept clear of the direct map's offset plus
+  how many bytes of RAM it maps, but QEMU's AArch64 virt has RAM from 1 GiB, so the direct map reaches further. Without
+  KASLR the window always overlapped it; with KASLR now and then. Nothing was mapped in the window early enough to
+  show it until the kernel's shadow stacks were. It now keeps clear of the highest physical address mapped.
 

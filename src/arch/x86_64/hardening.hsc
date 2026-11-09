@@ -223,10 +223,16 @@ U_CET_SHADOW_STACK : u64 : 1 << 0
 U_CET_LANDING_PADS : u64 : 1 << 2
 /** User mode's shadow-stack pointer. */
 IA32_PL3_SSP : u32 : 0x6a7
+/**
+ * The kernel's CET, laid out as IA32_U_CET: only ENDBR_EN is set, as supervisor shadow stacks wait for FRED, which
+ * takes the place of the interrupt stack table their tokens don't fit (decisions/0186, Hd).
+ */
+IA32_S_CET : u32 : 0x6a2
 
 /**
  * Turn on CR4.CET on the calling CPU where it has CET's shadow stacks or indirect branch tracking, with CR0.WP, which it
- * needs, and note which, for load_user_control_flow. Called by init_cpu, on each CPU.
+ * needs, and note which, for load_user_control_flow. With indirect branch tracking, the kernel's own is turned on too
+ * (IA32_S_CET), as every indirect branch in it lands on endbr64 (decisions/0186, Hd). Called by init_cpu, on each CPU.
  *
  * @param cpu The CPU's state, whose shadow_stacks and indirect_branch_tracking are set.
  * @param features The CPU's features.
@@ -240,20 +246,23 @@ enable_control_flow :: fn(cpu: ptr[mut ArchCpu], features: ptr[slop_os.CpuFeatur
     x86_64.write_cr0(x86_64.read_cr0() | CR0_WRITE_PROTECT)
     x86_64.write_cr4(x86_64.read_cr4() | CR4_CET)
     x86_64.wrmsr(IA32_U_CET, 0)
+    x86_64.wrmsr(IA32_S_CET, if cpu.indirect_branch_tracking { U_CET_LANDING_PADS } else { cast[u64](0) })
 }
 
 /**
  * Say what control-flow integrity the kernel's code runs under on the calling CPU (arch_interface.kernel_control_flow):
- * none yet.
+ * landing pads where enable_control_flow turned the kernel's indirect branch tracking on; no shadow stack, as
+ * supervisor shadow stacks wait for FRED.
  *
- * @return Nothing on.
+ * @return Each that's on.
  */
 kernel_control_flow :: fn() -> arch_interface.KernelControlFlow {
-    return arch_interface.KernelControlFlow.{}
+    return arch_interface.KernelControlFlow.{landing_pads = current_cpu().indirect_branch_tracking}
 }
 
 /**
- * Tell whether the kernel's code runs on shadow stacks (arch_interface.has_kernel_shadow_stacks): not yet.
+ * Tell whether the kernel's code runs on shadow stacks (arch_interface.has_kernel_shadow_stacks): not on x86-64, whose
+ * supervisor shadow stacks wait for FRED (decisions/0186, Hd).
  *
  * @return False.
  */
@@ -262,7 +271,7 @@ has_kernel_shadow_stacks :: fn() -> bool {
 }
 
 /**
- * Give a CPU its kernel shadow stack (arch_interface.set_kernel_shadow_stack): never called, as there are none yet.
+ * Give a CPU its kernel shadow stack (arch_interface.set_kernel_shadow_stack): never called, as there are none.
  *
  * @param cpu Unused.
  * @param base Unused.

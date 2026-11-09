@@ -640,6 +640,32 @@ nmi_register_name : fn(index: usize) -> string : ---
 // and the mitigations on (0186, 0097).
 log_hardening : fn(features: ptr[slop_os.CpuFeatures]) : ---
 
+/*
+ * Hardware control-flow integrity (0186). Pointer authentication keys, the kernel's once at boot and each thread's
+ * process's before it returns to user mode, loaded where no frame signed before returns; ignored without it.
+ */
+set_kernel_pointer_key : fn(system: ptr[mut ArchSystem], key: u64[2]) : ---
+set_user_pointer_key : fn(key: u64[2]) : ---
+
+// Whether user threads can have shadow stacks; then each thread's, loaded as it returns and read as it enters.
+has_user_shadow_stacks : fn() -> bool : ---
+load_user_control_flow : fn(landing_pads: bool, shadow_stack: u64) : ---
+read_user_shadow_stack : fn() -> u64 : ---
+
+/*
+ * The kernel's own: whether its stacks have shadow stacks, which L2 maps in the kernel window and gives each CPU
+ * before it first goes idle; and what it runs under now, for test_tamper, test_branch and test_shadow_write.
+ */
+has_kernel_shadow_stacks : fn() -> bool : ---
+set_kernel_shadow_stack : fn(cpu: ptr[mut ArchCpu], base: u64, size: u64) : ---
+KernelControlFlow :: struct {
+    landing_pads : bool,
+    signed_returns : bool,
+    shadow_stack : bool,
+    shadow_stack_pointer : u64,
+}
+kernel_control_flow : fn() -> KernelControlFlow : ---
+
 // A device the emulator always has that raises a wired interrupt: its controller, and its line there.
 TestDevice :: struct {
     kind : ControllerKind,
