@@ -1047,6 +1047,9 @@ def main() -> int:
     parser.add_argument("--expect", type=int, help="the exit code the kernel should write; exits 0 if it does")
     parser.add_argument("--expect-line", action="append", default=[],
                         help="a line the serial output should contain, with --expect; may be repeated")
+    parser.add_argument("--expect-line-start", action="append", default=[],
+                        help="the start of a line the serial output should contain, for a line part of which changes from "
+                        "boot to boot, with --expect; may be repeated")
     parser.add_argument("--timeout", type=float, default=30, help="seconds before giving up")
     parser.add_argument("--arch", choices=["x86_64", "aarch64"], default="x86_64", help="the architecture to build and boot for")
     parser.add_argument("--no-kaslr", action="store_true", help="the same addresses every boot: no random kernel base or direct map")
@@ -1280,6 +1283,10 @@ def main() -> int:
         missing = [line for line in arguments.expect_line if line not in lines]
         for line in missing:
             print(f"boot.py: the serial output has no line {line!r}", file=sys.stderr)
+        missing_starts = [start for start in arguments.expect_line_start if not any(line.startswith(start) for line in lines)]
+        for start in missing_starts:
+            print(f"boot.py: the serial output has no line starting {start!r}", file=sys.stderr)
+        missing += missing_starts
         missing += failed_tests(output)
         shown = console.lines() if console is not None else []
         missing_shown = [line for line in arguments.expect_console_line if line not in shown]

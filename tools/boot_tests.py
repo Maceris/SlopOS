@@ -1331,6 +1331,13 @@ TESTS = [
         "--expect-line=[info] boot memory reclaimed"]),
     ("reports a kernel fault", 1, ["--command-line=test_exit test_fault"]),
     ("reports a failed assertion", 3, ["--command-line=test_exit test_assert"]),
+    # The kernel's own control-flow integrity (decisions/0186, Hd): skipped under TCG's x86-64, which has no CET
+    ("skips a tampered return in the kernel without signed returns or a shadow stack", 0, ["--command-line=test_exit test_tamper",
+        "--expect-line=[info] test_tamper: skipped: the kernel has neither signed returns nor a shadow stack on this CPU"]),
+    ("skips a branch to no landing pad in the kernel without landing pads", 0, ["--command-line=test_exit test_branch",
+        "--expect-line=[info] test_branch: skipped: the kernel's indirect branches aren't checked for landing pads on this CPU"]),
+    ("skips a write to the kernel's shadow stack without one", 0, ["--command-line=test_exit test_shadow_write",
+        "--expect-line=[info] test_shadow_write: skipped: the kernel has no shadow stack on this CPU"]),
     ("refuses a CPU below x86-64-v3", 2, ["--cpu=qemu64"]),
     ("starts every CPU", 0, ["--expect-line=[info] 4 of 4 CPUs online", "--expect-line=[info] boot memory reclaimed",
                              "--", "-smp", "4"]),
@@ -1422,14 +1429,20 @@ MORESTACK_TESTS = [
 
 # Every test again on AArch64 (tools/boot.py --arch aarch64, always through UEFI), but those that can't apply there:
 # x86-64's baseline, and the NMI, which AArch64 has no counterpart for yet (knowledge/decisions/0065)
-AARCH64_LEFT_OUT = {"refuses a CPU below x86-64-v3", "resumes after an NMI"}
+AARCH64_LEFT_OUT = {"refuses a CPU below x86-64-v3", "resumes after an NMI",
+                    "skips a tampered return in the kernel without signed returns or a shadow stack",
+                    "skips a branch to no landing pad in the kernel without landing pads",
+                    "skips a write to the kernel's shadow stack without one"}
 AARCH64_NAMES = {
     "routes a device's interrupts through the I/O APIC": "routes a device's interrupts through the GIC",
 }
 
 
-def aarch64_tests(tests: list) -> list:
-    """The tests for AArch64, named so, with AArch64's own baseline check and IOMMU among them."""
+def aarch64_tests(tests: list, own: bool = True) -> list:
+    """
+    The tests for AArch64, named so, with AArch64's own baseline check and IOMMU among them; and with own, its own tests,
+    which have no x86-64 counterpart.
+    """
     lines = {f"--expect-line={X86_IOMMU_LINE}": f"--expect-line={AARCH64_IOMMU_LINE}",
              f"--expect-line={X86_TRANSLATING_LINE}": f"--expect-line={AARCH64_TRANSLATING_LINE}",
              f"--expect-line={X86_CLOCK_LINE}": f"--expect-line={AARCH64_CLOCK_LINE}",
@@ -1440,7 +1453,21 @@ def aarch64_tests(tests: list) -> list:
              f"--expect-console-line={CRASH_REPORT_LINE}": f"--expect-console-line={AARCH64_CRASH_REPORT_LINE}"}
     adapted = [(f"AArch64: {AARCH64_NAMES.get(name, name)}", expected, [lines.get(argument, argument) for argument in arguments])
                for name, expected, arguments in tests if name not in AARCH64_LEFT_OUT]
-    return adapted + [("AArch64: refuses a CPU below ARMv8.2-A with LSE", 2, ["--cpu=cortex-a57"])]
+    if not own:
+        return adapted
+    return adapted + [
+        # The kernel's own control-flow integrity (decisions/0186, Hd): pointer authentication and BTI refuse each
+        ("AArch64: stops at a tampered return in the kernel", 1, ["--command-line=test_exit test_tamper",
+            "--expect-line=[info] test_tamper: returning through a tampered return address",
+            "--expect-line-start=[fatal] kernel fault: failed authentication at "]),
+        ("AArch64: stops at a branch to no landing pad in the kernel", 1, ["--command-line=test_exit test_branch",
+            "--expect-line=[info] test_branch: branching into the middle of a function",
+            "--expect-line-start=[fatal] kernel fault: branch to no landing pad at "]),
+        # And the kernel's Guarded Control Stack an ordinary write
+        ("AArch64: refuses a write to the kernel's shadow stack", 1, ["--command-line=test_exit test_shadow_write",
+            "--expect-line=[info] test_shadow_write: writing to the kernel's shadow stack",
+            "--expect-line-start=[fatal] kernel fault: page fault, write breaking the protection at "]),
+        ("AArch64: refuses a CPU below ARMv8.2-A with LSE", 2, ["--cpu=cortex-a57"])]
 
 
 AARCH64_TESTS = aarch64_tests(TESTS)
@@ -1455,7 +1482,7 @@ KVM_TESTS = [
     program_test("KVM: refuses a tampered return through the shadow stack", "test_control", "8 tests: 6 passed, 0 failed, 2 skipped"),
 ]
 
-AARCH64_MORESTACK_TESTS = aarch64_tests(MORESTACK_TESTS)[:-1]
+AARCH64_MORESTACK_TESTS = aarch64_tests(MORESTACK_TESTS, own=False)
 
 
 # Where a failed build's output is kept, since a run's own output may be cut short or filtered

@@ -875,6 +875,10 @@ leaf_entry :: fn(physical: u64, mapping: arch_interface.Mapping, level: u64) -> 
         // AP[2] clear, as permission indirection still refuses writes, GCS's own too, through a read-only entry
         return (entry & ~ENTRY_READ_ONLY) | ENTRY_USER | ENTRY_NOT_GLOBAL | ENTRY_USER_EXECUTE_NEVER | ENTRY_WRITABLE_INDEX
     }
+    // A kernel Guarded Control Stack's page: PIIndex 0xa, never executed, written only by GCS's own accesses (decisions/0186)
+    if mapping.shadow_stack {
+        return (entry & ~ENTRY_READ_ONLY) | ENTRY_USER_EXECUTE_NEVER | ENTRY_WRITABLE_INDEX
+    }
     executable :: mapping.protection == .ReadExecute
     if executable {
         entry |= ENTRY_READ_ONLY
@@ -894,8 +898,22 @@ leaf_entry :: fn(physical: u64, mapping: arch_interface.Mapping, level: u64) -> 
         if !executable {
             entry |= ENTRY_PRIVILEGED_EXECUTE_NEVER
         }
+        // The kernel's own code, guarded where the CPU has BTI, as GP is reserved without it (decisions/0186, Hd)
+        if executable && mapping.guarded && has_branch_target_identification() {
+            entry |= ENTRY_GUARDED
+        }
     }
     return entry
+}
+
+/**
+ * Tell whether the calling CPU has branch target identification: ID_AA64PFR1_EL1.BT (bits 0 to 3).
+ *
+ * @return True if it has FEAT_BTI, so a page's GP bit guards it.
+ */
+has_branch_target_identification :: fn() -> bool {
+    // ID_AA64PFR1_EL1 (S3_0_C0_C4_1)
+    return aarch64.read_system_register_encoded(3, 0, 0, 4, 1) & 0xf != 0
 }
 
 /**
@@ -927,9 +945,9 @@ mapping_of :: fn(entry: u64) -> arch_interface.Mapping {
     attribute :: (entry & ENTRY_ATTRIBUTE) >> ATTRIBUTE_SHIFT
     mapping.cache = if attribute == ATTRIBUTE_WRITE_BACK { .WriteBack } else if attribute == ATTRIBUTE_NON_CACHEABLE { .WriteCombining } else { .Device }
     mapping.global = entry & ENTRY_NOT_GLOBAL == 0
-    // A Guarded Control Stack's page, as leaf_entry makes one
-    index_bits :: ENTRY_USER | ENTRY_WRITABLE_INDEX | ENTRY_PRIVILEGED_EXECUTE_NEVER | ENTRY_USER_EXECUTE_NEVER
-    if entry & index_bits == ENTRY_USER | ENTRY_WRITABLE_INDEX | ENTRY_USER_EXECUTE_NEVER {
+    // A Guarded Control Stack's page, a user's or the kernel's, as leaf_entry makes one
+    index_bits :: ENTRY_WRITABLE_INDEX | ENTRY_PRIVILEGED_EXECUTE_NEVER | ENTRY_USER_EXECUTE_NEVER
+    if entry & index_bits == ENTRY_WRITABLE_INDEX | ENTRY_USER_EXECUTE_NEVER {
         mapping.shadow_stack = true
         mapping.protection = .Read
     }

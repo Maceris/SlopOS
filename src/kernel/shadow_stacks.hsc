@@ -3,6 +3,7 @@ package kernel
 import intrinsics from "base"
 import slop_os from "std/os"
 import frames from "frames"
+import arch_interface from "../arch_interface"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -69,6 +70,30 @@ sys_process_set_control_flow :: fn(thread: ptr[mut Thread], process: slop_os.Pro
     }
     intrinsics.atomic_store_u32_release(&found.control_flow, known)
     return .Ok
+}
+
+/** The bytes of each CPU's kernel shadow stack: as many as its kernel stack, a return address for every 8 bytes. */
+KERNEL_SHADOW_STACK_SIZE : u64 : 16 * 1024
+
+/**
+ * Give a CPU the shadow stack its kernel stack runs with, where the kernel's code runs on them (decisions/0186, Hd):
+ * zeroed frames, mapped in the kernel window between guard pages as a kernel shadow stack, owned by the kernel for
+ * good. Called before the CPU first goes idle, once the window's there.
+ *
+ * @param kernel The kernel, whose frames and window are used.
+ * @param cpu The CPU, not yet idle.
+ * @return Whether it has one now, or needs none; false if frames or the window's addresses ran out, which the caller
+ *     reports.
+ */
+give_kernel_shadow_stack :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu]) -> bool {
+    if !arch.has_kernel_shadow_stacks() {
+        return true
+    }
+    physical :: frames.allocate_zeroed(&kernel.frames, frames.order_for(KERNEL_SHADOW_STACK_SIZE)) or_return false
+    mapping :: arch_interface.Mapping.{protection = .Read, cache = .WriteBack, user = false, global = true, shadow_stack = true}
+    base :: map_guarded_in_window(kernel, cast[u64](physical), KERNEL_SHADOW_STACK_SIZE, mapping) or_return false
+    arch.set_kernel_shadow_stack(&cpu.arch, base, KERNEL_SHADOW_STACK_SIZE)
+    return true
 }
 
 /**

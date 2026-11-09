@@ -83,6 +83,25 @@ exception_entry #calling_convention(.entry) :: fn(frame: ptr[mut aarch64.Registe
         }
         interrupt = take_interrupt()
     }
+    /*
+     * From user mode, with pointer authentication on, the kernel's key, so the kernel's frames are signed with a key
+     * user space never has (decisions/0186, Hd). Loaded here, in the body, where no frame below this one returns until
+     * it's put back: this function's own frame was signed with the user's key, which it's returned with, for the
+     * pseudo-NMI, the one way back from user mode that comes through here rather than return_to_user.
+     */
+    user_key_low := cast[u64](0)
+    user_key_high := cast[u64](0)
+    switching_keys :: frame.vector & ~cast[u64](3) == aarch64.VECTOR_LOWER_AARCH64
+        && aarch64.read_system_register(.SCTLR_EL1) & SCTLR_ENABLE_IA != 0
+    if switching_keys {
+        kernel_key :: cast[ptr[ArchSystem]](cpu.system).kernel_key
+        // APIAKeyLo_EL1 and APIAKeyHi_EL1 (S3_0_C2_C1_0 and S3_0_C2_C1_1)
+        user_key_low = aarch64.read_system_register_encoded(3, 0, 2, 1, 0)
+        user_key_high = aarch64.read_system_register_encoded(3, 0, 2, 1, 1)
+        aarch64.write_system_register_encoded(3, 0, 2, 1, 0, kernel_key[0])
+        aarch64.write_system_register_encoded(3, 0, 2, 1, 1, kernel_key[1])
+        aarch64.isb()
+    }
     mask_for_kernel()
     cpu.carrier.stack_limit = cpu.kernel_stack_limit
     intrinsics.set_carrier(cpu.carrier)
@@ -97,6 +116,11 @@ exception_entry #calling_convention(.entry) :: fn(frame: ptr[mut aarch64.Registe
     // Back to what the NMI interrupted, with its mask: IRQs masked in PSTATE first, so none comes before the eret
     aarch64.daif_set(aarch64.DAIF_IRQ | aarch64.DAIF_FIQ)
     aarch64.write_system_register(.ICC_PMR_EL1, interrupted_mask)
+    // The user's key back, which this frame's return authenticates with
+    if switching_keys {
+        aarch64.write_system_register_encoded(3, 0, 2, 1, 0, user_key_low)
+        aarch64.write_system_register_encoded(3, 0, 2, 1, 1, user_key_high)
+    }
     aarch64.isb()
 }
 

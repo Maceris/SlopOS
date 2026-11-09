@@ -1138,6 +1138,47 @@ load_user_control_flow : fn(landing_pads: bool, shadow_stack: u64) : ---
  */
 read_user_shadow_stack : fn() -> u64 : ---
 
+/**
+ * Tell whether the kernel's own code runs on shadow stacks on the calling CPU's kind (decisions/0186, Hd): AArch64's GCS
+ * at EL1, x86-64's supervisor shadow stacks. Where it does, L2 gives each CPU one (set_kernel_shadow_stack) before it
+ * first goes idle; called after the CPU has switched to the kernel's own tables (activate).
+ *
+ * @return True if a CPU's kernel stack has a shadow stack.
+ */
+has_kernel_shadow_stacks : fn() -> bool : ---
+
+/**
+ * Give a CPU the shadow stack its kernel stack runs with (decisions/0186, Hd): mapped by L2 in the kernel window as a
+ * kernel shadow stack (Mapping.shadow_stack, not user), between unmapped guard pages, and owned by L2 for good. The CPU
+ * starts on it, empty, from its top, as its kernel stack starts from its top: as it first goes idle, and each time it
+ * returns to user mode or idles. Called before the CPU first goes idle, on any CPU.
+ *
+ * @param cpu The CPU's own state.
+ * @param base The shadow stack's lowest kernel virtual address, page aligned.
+ * @param size Its size in bytes, a multiple of a page.
+ */
+set_kernel_shadow_stack : fn(cpu: ptr[mut ArchCpu], base: u64, size: u64) : ---
+
+/** What hardware control-flow integrity the kernel's own code runs under (decisions/0186, Hd). */
+KernelControlFlow :: struct {
+    /** Its indirect branches land only on landing pads: AArch64's guarded pages, x86-64's supervisor IBT. */
+    landing_pads : bool,
+    /** Its return addresses are signed with the kernel's own key: AArch64's pointer authentication. */
+    signed_returns : bool,
+    /** Its returns are checked against a shadow stack: AArch64's GCS at EL1, x86-64's supervisor shadow stacks. */
+    shadow_stack : bool,
+    /** Where the calling CPU's shadow stack's latest entry is, with shadow_stack; 0 without. */
+    shadow_stack_pointer : u64,
+}
+
+/**
+ * Say what hardware control-flow integrity the kernel's code runs under on the calling CPU, now (decisions/0186, Hd):
+ * for the kernel's tests of it, test_tamper and test_branch.
+ *
+ * @return Each mechanism that's on; signed returns only once the CPU has first gone idle, which turns them on.
+ */
+kernel_control_flow : fn() -> KernelControlFlow : ---
+
 /** A device the emulator always has that raises a wired interrupt: its controller, and its line there. */
 TestDevice :: struct {
     /** The kind of controller its line is on. */

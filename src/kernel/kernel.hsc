@@ -403,6 +403,9 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     arch.log_hardening(&features)
     runtime.log_info("boot CPU set up: its entries and its own state")
     start_address_space(kernel, info)
+    if !give_kernel_shadow_stack(kernel, cpu) {
+        out_of_memory(&options, "no memory for the boot CPU's kernel shadow stack")
+    }
     start_framebuffer_console(kernel, info)
     push_context cpu_context from cpu.context {
         start_timer(kernel, info.counter_frequency_hint)

@@ -26,6 +26,22 @@ Options :: struct {
      * the boot after its panic, which has its record.
      */
     test_lockup : bool,
+    /**
+     * test_tamper: once the boot CPU has gone idle, return through a tampered return address in the kernel, which its
+     * signed returns or shadow stack refuse, stopping it with the fault named (decisions/0186, Hd); skipped, said so,
+     * where the CPU has neither.
+     */
+    test_tamper : bool,
+    /**
+     * test_branch: once the boot CPU has gone idle, branch into the middle of a kernel function, which its landing
+     * pads refuse, stopping it with the fault named (decisions/0186, Hd); skipped, said so, where the CPU has none.
+     */
+    test_branch : bool,
+    /**
+     * test_shadow_write: once the boot CPU has gone idle, write to its kernel shadow stack with an ordinary store, which
+     * its pages refuse, stopping the kernel with a page fault (decisions/0186, Hd); skipped, said so, where it has none.
+     */
+    test_shadow_write : bool,
     /** trace_boot: the trace is on from the kernel's start, for a boot's timeline (decisions/0183, tracing.hsc). */
     trace_boot : bool,
     /** test_fibers: once booted, run two fibers taking turns, to check fibers suspend and resume. */
@@ -154,6 +170,15 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_lockup" {
         options.test_lockup = true
+    }
+    if word == "test_tamper" {
+        options.test_tamper = true
+    }
+    if word == "test_branch" {
+        options.test_branch = true
+    }
+    if word == "test_shadow_write" {
+        options.test_shadow_write = true
     }
     if word == "trace_boot" {
         options.trace_boot = true

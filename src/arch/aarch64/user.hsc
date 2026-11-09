@@ -184,8 +184,15 @@ return_to_user :: fn(registers: ptr[UserRegisters]) #never_returns {
         aarch64.write_system_register(.SCTLR_EL1, aarch64.read_system_register(.SCTLR_EL1) | SCTLR_ENABLE_IA)
         aarch64.isb()
     }
+    cpu :: current_cpu()
+    // The kernel's Guarded Control Stack from its top, as SP_EL1 is, and on (decisions/0186, Hd): GCSPR_EL1 (S3_0_C2_C5_1), GCSCR_EL1 (S3_0_C2_C5_0)
+    if cpu.kernel_shadow_top != 0 {
+        aarch64.write_system_register_encoded(3, 0, 2, 5, 1, cpu.kernel_shadow_top)
+        aarch64.write_system_register_encoded(3, 0, 2, 5, 0, GCSCR_ON)
+        aarch64.isb()
+    }
     unmask_for_return()
-    aarch64.return_to_user(&registers.frame, cast[rawptr](current_cpu().kernel_stack_top))
+    aarch64.return_to_user(&registers.frame, cast[rawptr](cpu.kernel_stack_top))
 }
 
 // The self-hosted debug registers (decisions/0183, 12b), by their encodings, which take n in CRm

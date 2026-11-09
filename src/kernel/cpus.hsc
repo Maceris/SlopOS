@@ -58,6 +58,14 @@ start_cpus :: fn(kernel #escaping : ptr[mut Kernel], info: ptr[boot_info.BootInf
             case Ok(made) => allocated = made
             case Error(error) => runtime.log_warn("no memory for CPU %, so it and the ones after it are left out", index)
         }
+        // Its kernel shadow stack, where the kernel's code runs on them (decisions/0186, Hd)
+        match allocated {
+            case Some(made) => if !give_kernel_shadow_stack(kernel, made) {
+                runtime.log_warn("no memory for CPU %'s kernel shadow stack, so it and the ones after it are left out", index)
+                allocated = null
+            }
+            case None => {}
+        }
         cpu :: allocated or_break
         start_cpu(&cpus[index], &cpu.carrier, cpu_started)
         deadline :: arch.counter() + timeout

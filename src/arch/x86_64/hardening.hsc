@@ -3,6 +3,7 @@ package arch_x86_64
 import runtime from "base"
 import x86_64 from "base/intrinsics"
 import slop_os from "std/os"
+import arch_interface from "../../arch_interface"
 
 /*
  * What the CPU has against exploits and transient execution (decisions/0186, 0097, 0013): which control-flow integrity
@@ -240,6 +241,34 @@ enable_control_flow :: fn(cpu: ptr[mut ArchCpu], features: ptr[slop_os.CpuFeatur
     x86_64.write_cr4(x86_64.read_cr4() | CR4_CET)
     x86_64.wrmsr(IA32_U_CET, 0)
 }
+
+/**
+ * Say what control-flow integrity the kernel's code runs under on the calling CPU (arch_interface.kernel_control_flow):
+ * none yet.
+ *
+ * @return Nothing on.
+ */
+kernel_control_flow :: fn() -> arch_interface.KernelControlFlow {
+    return arch_interface.KernelControlFlow.{}
+}
+
+/**
+ * Tell whether the kernel's code runs on shadow stacks (arch_interface.has_kernel_shadow_stacks): not yet.
+ *
+ * @return False.
+ */
+has_kernel_shadow_stacks :: fn() -> bool {
+    return false
+}
+
+/**
+ * Give a CPU its kernel shadow stack (arch_interface.set_kernel_shadow_stack): never called, as there are none yet.
+ *
+ * @param cpu Unused.
+ * @param base Unused.
+ * @param size Unused.
+ */
+set_kernel_shadow_stack :: fn(cpu: ptr[mut ArchCpu], base: u64, size: u64) {}
 
 /**
  * Tell whether the calling CPU gives user threads shadow stacks (arch_interface.has_user_shadow_stacks).

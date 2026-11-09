@@ -35,6 +35,11 @@ ArchCpu :: struct #align(64) {
     kernel_stack_top : u64,
     /** The pointer authentication key return_to_user loads, the thread's process's (set_user_pointer_key). */
     user_key : u64[2],
+    /**
+     * The top of the CPU's kernel Guarded Control Stack, one past its highest address, where GCSPR_EL1 starts as SP_EL1
+     * does (set_kernel_shadow_stack, decisions/0186); 0 for none.
+     */
+    kernel_shadow_top : u64,
     /** The early console's registers, a virtual address through the direct map, or 0 without one (misc.hsc). */
     console : u64,
     /** The ArchSystem, as an address: L2 owns it, and it outlives every CPU (current_system). */

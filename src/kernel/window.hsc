@@ -78,16 +78,17 @@ Window :: struct {
  *
  * @param kernel The kernel, whose window is set and whose options say whether no_kaslr is on.
  * @param info The boot information: the direct map's offset, and the bootloader's entropy for the choice.
- * @param direct_bytes How many bytes the direct map covers from its offset, which the window stays clear of.
+ * @param direct_end The physical address just past the highest the direct map covers: the window stays clear of the
+ *     direct map's offset up to its offset plus that, whatever isn't RAM below it.
  */
-start_window :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo], direct_bytes: u64) {
+start_window :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo], direct_end: u64) {
     direct_start :: info.direct_map_offset & ~(WINDOW_ALIGNMENT - 1)
-    direct_end :: frames.round_up(info.direct_map_offset + direct_bytes, WINDOW_ALIGNMENT)
+    direct_last :: frames.round_up(info.direct_map_offset + direct_end, WINDOW_ALIGNMENT)
     below :: if direct_start >= KERNEL_HALF_LOW + WINDOW_SIZE { (direct_start - KERNEL_HALF_LOW - WINDOW_SIZE) / WINDOW_ALIGNMENT + 1 } else { cast[u64](0) }
-    above :: if KERNEL_IMAGE_REGION >= direct_end + WINDOW_SIZE { (KERNEL_IMAGE_REGION - direct_end - WINDOW_SIZE) / WINDOW_ALIGNMENT + 1 } else { cast[u64](0) }
+    above :: if KERNEL_IMAGE_REGION >= direct_last + WINDOW_SIZE { (KERNEL_IMAGE_REGION - direct_last - WINDOW_SIZE) / WINDOW_ALIGNMENT + 1 } else { cast[u64](0) }
     runtime.assert(below + above > 0, "the kernel half has room for the window beside the direct map")
     choice :: if kernel.options.no_kaslr { cast[u64](0) } else { random_seed(info) % (below + above) }
-    base :: if choice < below { KERNEL_HALF_LOW + choice * WINDOW_ALIGNMENT } else { direct_end + (choice - below) * WINDOW_ALIGNMENT }
+    base :: if choice < below { KERNEL_HALF_LOW + choice * WINDOW_ALIGNMENT } else { direct_last + (choice - below) * WINDOW_ALIGNMENT }
     kernel.window.base = base
     kernel.window.count = 1
     kernel.window.free[0] = Extent.{base, WINDOW_SIZE}
@@ -181,6 +182,31 @@ map_in_window :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64, mapping: 
     mapper : Mapper
     mapper.pages_1g = arch.supports_page_size(.Size1G)
     // Page by page: a window's mappings are small, and unmapping takes them page by page too
+    for offset in 0..<size / frames.FRAME_SIZE {
+        map_page(kernel, address + offset * frames.FRAME_SIZE, physical + offset * frames.FRAME_SIZE, .Size4K, mapping, &mapper)
+    }
+    give_back_tables(kernel, &mapper.tables)
+    return .Ok(address)
+}
+
+/**
+ * Map a physical range into the kernel window between two unmapped guard pages, a 4 KiB page at a time, for good: a
+ * kernel shadow stack, which overflowing or underflowing faults.
+ *
+ * Locks and frames as map_in_window.
+ *
+ * @param kernel The kernel, whose window and page table are used.
+ * @param physical The range's physical address, page aligned.
+ * @param size Its size in bytes, a multiple of a page.
+ * @param mapping How every page is mapped.
+ * @return The kernel virtual address the range starts at, page aligned, a page above its addresses' start.
+ * @error OutOfAddresses No free range of the window is big enough; nothing is mapped.
+ */
+map_guarded_in_window :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64, mapping: arch_interface.Mapping) -> Result[u64, WindowError] {
+    guarded :: take_addresses(&kernel.window, size + 2 * frames.FRAME_SIZE) or_return .Error(.OutOfAddresses)
+    address :: guarded + frames.FRAME_SIZE
+    mapper : Mapper
+    mapper.pages_1g = arch.supports_page_size(.Size1G)
     for offset in 0..<size / frames.FRAME_SIZE {
         map_page(kernel, address + offset * frames.FRAME_SIZE, physical + offset * frames.FRAME_SIZE, .Size4K, mapping, &mapper)
     }

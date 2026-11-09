@@ -42,8 +42,13 @@ Mapper :: struct {
     tables : arch_interface.TableFrames,
     /** Whether 1 GiB pages may be used; 2 MiB and 4 KiB pages always may. */
     pages_1g : bool,
-    /** Bytes the direct map covers, for the log and for placing the window. */
+    /** Bytes the direct map covers, for the log. */
     direct_bytes : u64,
+    /**
+     * The physical address just past the highest the direct map covers, for placing the window: more than direct_bytes
+     * where RAM doesn't start at 0, as on QEMU's AArch64 virt, at 1 GiB.
+     */
+    direct_end : u64,
 }
 
 /**
@@ -80,7 +85,7 @@ start_address_space :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]
     arch.activate(&kernel.page_table)
     runtime.log_info("kernel page tables active: % MiB of RAM in the direct map at %{#018x}, the image in % segments",
         mapper.direct_bytes >> 20, info.direct_map_offset, info.kernel_image.segments.count)
-    start_window(kernel, info, mapper.direct_bytes)
+    start_window(kernel, info, mapper.direct_end)
 }
 
 /**
@@ -124,12 +129,15 @@ map_direct :: fn(kernel: ptr[mut Kernel], memory_map: boot_info.MemoryRegion[], 
  * @param start The run's first physical address.
  * @param end The physical address just past the run; at or below start maps nothing.
  * @param mapping How the whole run is mapped.
- * @param mapper The mapping state, whose direct_bytes grows by the run's size.
+ * @param mapper The mapping state, whose direct_bytes grows by the run's size, and whose direct_end is at least its end.
  */
 map_direct_run :: fn(kernel: ptr[mut Kernel], offset: u64, start: u64, end: u64, mapping: arch_interface.Mapping, mapper: ptr[mut Mapper]) {
     if end > start {
         map_range(kernel, offset + start, start, end - start, mapping, mapper)
         mapper.direct_bytes += end - start
+        if end > mapper.direct_end {
+            mapper.direct_end = end
+        }
     }
 }
 
@@ -205,7 +213,9 @@ map_image :: fn(kernel: ptr[mut Kernel], image: ptr[boot_info.KernelImage], mapp
         else {
             arch_interface.Protection.Read
         }
-        mapping :: arch_interface.Mapping.{protection = protection, cache = .WriteBack, user = false, global = true}
+        // Its code guarded, as it's built with landing pads (decisions/0186, Hd)
+        mapping :: arch_interface.Mapping.{protection = protection, cache = .WriteBack, user = false, global = true,
+            guarded = segment.executable}
         map_range(kernel, start, physical_base + (start - image_base), end - start, mapping, mapper)
     }
 }
