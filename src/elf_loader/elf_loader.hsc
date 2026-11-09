@@ -66,6 +66,12 @@ Executable :: struct {
     relro_address : u64,
     /** How many bytes from relro_address are read-only once relocated; 0 when there's none. */
     relro_size : u64,
+    /**
+     * What hardware control-flow integrity the code was built for, as its property note's features say
+     * (decisions/0186): FEATURE_LANDING_PADS, FEATURE_SIGNED_RETURNS and FEATURE_SHADOW_STACK, for this architecture;
+     * 0 without a note. With landing pads, its executable segments are guarded (PROTECTION_GUARDED).
+     */
+    control_flow : u64,
 }
 
 /** Why an executable can't be loaded. */
@@ -112,12 +118,24 @@ ET_DYN : u64 : 3
 #if TARGET_ARCH == .arm64 {
     /** The ELF machine (e_machine) programs are for: EM_AARCH64. */
     MACHINE : u64 : 183
+    /** The property note's control-flow features (GNU_PROPERTY_AARCH64_FEATURE_1_AND). */
+    FEATURES_PROPERTY : u64 : 0xc0000000
+    /** Its bits: BTI (landing pads), PAC (signed returns) and GCS (a shadow stack). */
+    FEATURE_LANDING_PADS : u64 : 1
+    FEATURE_SIGNED_RETURNS : u64 : 2
+    FEATURE_SHADOW_STACK : u64 : 4
     /** The only relocation type read (r_info, with symbol 0): R_AARCH64_RELATIVE, base plus addend. */
     RELATIVE_RELOCATION : u64 : 1027
 }
 #else {
     /** The ELF machine (e_machine) programs are for: EM_X86_64. */
     MACHINE : u64 : 62
+    /** The property note's control-flow features (GNU_PROPERTY_X86_FEATURE_1_AND). */
+    FEATURES_PROPERTY : u64 : 0xc0000002
+    /** Its bits: IBT (landing pads) and SHSTK (a shadow stack); x86-64 has no signed returns. */
+    FEATURE_LANDING_PADS : u64 : 1
+    FEATURE_SHADOW_STACK : u64 : 2
+    FEATURE_SIGNED_RETURNS : u64 : 0
     /** The only relocation type read (r_info, with symbol 0): R_X86_64_RELATIVE, base plus addend. */
     RELATIVE_RELOCATION : u64 : 8
 }
@@ -133,6 +151,10 @@ PT_TLS : u64 : 7
 PT_GNU_STACK : u64 : 0x6474e551
 /** Program header type (GNU): what's made read-only once it's relocated. */
 PT_GNU_RELRO : u64 : 0x6474e552
+/** Program header type (GNU): the property note, which says what control-flow integrity the code was built for. */
+PT_GNU_PROPERTY : u64 : 0x6474e553
+/** The property note's type, NT_GNU_PROPERTY_TYPE_0, under the name "GNU". */
+NOTE_GNU_PROPERTY : u64 : 5
 /** Program header flag: executable. */
 PF_X : u64 : 1
 /** Program header flag: writable. */
@@ -200,6 +222,43 @@ page_up :: fn(value: u64) -> u64? {
         return null
     }
     return (value + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1)
+}
+
+/**
+ * Read a property note's control-flow features (decisions/0186): an ELF note of type NOTE_GNU_PROPERTY named "GNU",
+ * whose properties, each a type, a size and its data padded to 8 bytes, include FEATURES_PROPERTY's 4 bytes.
+ *
+ * @param file The whole file.
+ * @param offset Where the note starts in the file, in bytes.
+ * @param size Its size in bytes.
+ * @return FEATURES_PROPERTY's bits; 0 for a note that isn't one, or is cut short, or doesn't have it.
+ */
+control_flow_of :: fn(file: u8[], offset: u64, size: u64) -> u64 {
+    if size < 16 || offset > cast[u64](file.count) || size > cast[u64](file.count) - offset {
+        return 0
+    }
+    name_size :: read_le(file, offset, 4) or_return 0
+    description_size :: read_le(file, offset + 4, 4) or_return 0
+    kind :: read_le(file, offset + 8, 4) or_return 0
+    name :: read_le(file, offset + 12, 4) or_return 0
+    // "GNU" and its terminator, little-endian
+    if name_size != 4 || kind != NOTE_GNU_PROPERTY || name != 0x00554e47 || description_size > size - 16 {
+        return 0
+    }
+    at := offset + 16
+    end :: offset + 16 + description_size
+    loop {
+        if at + 8 > end {
+            return 0
+        }
+        property :: read_le(file, at, 4) or_return 0
+        data_size :: read_le(file, at + 4, 4) or_return 0
+        if property == FEATURES_PROPERTY && data_size == 4 {
+            return read_le(file, at + 8, 4) or_return 0
+        }
+        // The next, after this one's data padded to 8 bytes
+        at += 8 + ((data_size + 7) & ~cast[u64](7))
+    }
 }
 
 /**
@@ -347,6 +406,9 @@ read :: fn(file: u8[]) -> Result[Executable, LoadError] {
             executable.relro_address = address
             executable.relro_size = memory_size
         }
+        if kind_of == PT_GNU_PROPERTY {
+            executable.control_flow = control_flow_of(file, offset, file_size)
+        }
         if kind_of != PT_LOAD {
             continue
         }
@@ -377,6 +439,15 @@ read :: fn(file: u8[]) -> Result[Executable, LoadError] {
         segment_count += 1
         executable.segment_count = segment_count
         end = page_up(address + memory_size) or_return .Error(.ImageTooLarge)
+    }
+    // With landing pads, its code where indirect branches may land only on them (decisions/0186)
+    if executable.control_flow & FEATURE_LANDING_PADS != 0 {
+        for i in 0..<segment_count {
+            if i < executable.segments.count && cast[u32](executable.segments[i].protection) & cast[u32](slop_os.PROTECTION_EXECUTE) != 0 {
+                executable.segments[i].protection = cast[slop_os.Protection](cast[u32](executable.segments[i].protection)
+                    | cast[u32](slop_os.PROTECTION_GUARDED))
+            }
+        }
     }
     executable.size = end
     if executable.segment_count == 0 {

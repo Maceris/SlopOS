@@ -812,11 +812,12 @@ memory_map :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], space: ptr[mu
     size: u64, protection: u32) -> slop_os.MemoryError? {
     writable :: protection & cast[u32](slop_os.PROTECTION_WRITE) != 0
     executable :: protection & cast[u32](slop_os.PROTECTION_EXECUTE) != 0
-    if protection == 0 || protection & ~cast[u32](7) != 0 || (writable && executable) {
+    guarded :: protection & cast[u32](slop_os.PROTECTION_GUARDED) != 0
+    if protection & 7 == 0 || protection & ~cast[u32](15) != 0 || (writable && executable) || (guarded && !executable) {
         return slop_os.MemoryError.BadProtection
     }
-    // A window, only as its parent's handle allowed
-    if protection & ~memory.allowed != 0 {
+    // A window, only as its parent's handle allowed; guarding takes nothing more
+    if protection & 7 & ~memory.allowed != 0 {
         return slop_os.MemoryError.MissingRight
     }
     if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || offset & (frames.FRAME_SIZE - 1) != 0 || offset > memory.size
@@ -1157,7 +1158,8 @@ mapping_for :: fn(protection: u32, cache: arch_interface.CacheMode) -> arch_inte
     else if protection & cast[u32](slop_os.PROTECTION_EXECUTE) != 0 {
         kind = .ReadExecute
     }
-    return arch_interface.Mapping.{protection = kind, cache = cache, user = true, global = false}
+    guarded :: protection & cast[u32](slop_os.PROTECTION_GUARDED) != 0
+    return arch_interface.Mapping.{protection = kind, cache = cache, user = true, global = false, guarded = guarded}
 }
 
 /**

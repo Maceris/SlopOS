@@ -79,9 +79,14 @@ ROLE_COUNTING : u64 : 4
  * entry test_kit.tamper_with_return is, which then returns through it (decisions/0186).
  */
 ROLE_TAMPERING : u64 : 5
-/** The key P's faults are reported under. */
+/**
+ * What D tells B, in the first message on its peer channel: branch into a function's middle, on a thread of its own
+ * whose entry test_kit.branch_into_the_middle is (decisions/0186).
+ */
+ROLE_BRANCHING : u64 : 6
+/** The key P's or B's faults are reported under (refused_in_role). */
 TAMPERING_FAULTS_KEY : u64 : 26
-/** The key D's watch for P's end queues under. */
+/** The key D's watch for P's or B's end queues under. */
 TAMPERING_WATCH_KEY : u64 : 27
 /** What D puts in C's register in place of the counter it read. */
 GIVEN_COUNTER : u64 : 0x1234_5678_9abc
@@ -229,9 +234,9 @@ run_copy :: fn(peer: slop_os.Channel) -> int {
         intrinsics.volatile_store_u64(cast[ptr[mut u64]](FAULTING_ADDRESS), 1)
         slop_os.process_exit(0)
     }
-    if role == ROLE_TAMPERING {
-        // A thread whose entry it is, so it's never inlined, and returns through its own frame
-        thread :: runtime.thread_create(test_kit.tamper_with_return)
+    if role == ROLE_TAMPERING || role == ROLE_BRANCHING {
+        // A thread whose entry it is, so it's never inlined: tampering returns through its own frame
+        thread :: runtime.thread_create(if role == ROLE_TAMPERING { test_kit.tamper_with_return } else { test_kit.branch_into_the_middle })
         if runtime.thread_start(thread) {
             runtime.thread_join(thread)
         }
@@ -616,7 +621,6 @@ a_launch_reports_faults_and_ends_a_program_left_stopped #test :: fn(t: ptr[mut t
  *     faults' intercept couldn't be had.
  */
 a_tampered_return_is_caught #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
-    given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
     expected := cast[u32](0)
     #if TARGET_ARCH == .arm64 {
@@ -627,28 +631,67 @@ a_tampered_return_is_caught #test :: fn(t: ptr[mut testing.T]) -> testing.Outcom
     if expected == 0 {
         return testing.skip(t, "no pointer authentication or shadow stack on this CPU, to refuse a tampered return")
     }
+    return refused_in_role(t, ROLE_TAMPERING, "test_control P", expected, "its tampered return is refused, as the hardware refuses it")
+}
+
+/**
+ * Check that a branch to no landing pad is caught (decisions/0186): B, a copy, branches into a function's middle on a
+ * thread of its own, which stops it at a fault: on AArch64 with branch target identification, as its program's code is
+ * guarded. Where the CPU has none of it, the test is skipped.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error as refused_in_role's.
+ */
+a_branch_to_no_landing_pad_is_caught #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    block :: slop_os.startup_block()
+    expected := cast[u32](0)
+    #if TARGET_ARCH == .arm64 {
+        if slop_os.has_feature(&block.cpu_features, .Aarch64Bti) {
+            expected = slop_os.FAULT_LANDING_PAD
+        }
+    }
+    if expected == 0 {
+        return testing.skip(t, "no branch target identification or indirect branch tracking on this CPU, to refuse a branch")
+    }
+    return refused_in_role(t, ROLE_BRANCHING, "test_control B", expected, "its branch to no landing pad is refused, as the hardware refuses it")
+}
+
+/**
+ * Launch a copy in a role whose control flow the hardware refuses, with its faults intercepted, and check it stops at
+ * the fault expected; then kill it, and check what it had comes back.
+ *
+ * @param t The test's state.
+ * @param role ROLE_TAMPERING or ROLE_BRANCHING.
+ * @param name The copy's name, for the process manager.
+ * @param expected The fault it's to stop at: a FAULT_ constant.
+ * @param what What the check of the fault says.
+ * @return Ok once it's run; Error if main wasn't given the process manager or its module, or the port, the copy or its
+ *     faults' intercept couldn't be had.
+ */
+refused_in_role :: fn(t: ptr[mut testing.T], role: u64, name #escaping : string, expected: u32, what: string) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
     manager :: testing.require_some(t, given.manager, "the root task grants the process manager")?
     program :: testing.require_some(t, given.program, "the root task grants the program's own module")?
     manager_port :: testing.require_some(t, os.port_for(block.budget, manager.end), "a port for the process manager's replies")?
     defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
-    port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for P's stops and end")?
+    port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for the copy's stops and end")?
     options := os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = TAMPERING_WATCH_KEY},
         faults = os.LaunchFaults.{port = port, key = TAMPERING_FAULTS_KEY}}
-    copy :: testing.require_some(t, launch_copy(given.log, manager, manager_port, program, "test_control P", ROLE_TAMPERING, options),
-        "P is launched with its faults intercepted, and told its role")?
-    faults :: testing.require_some(t, copy.launched.faults, "the launch gives P's faults' intercept")?
+    copy :: testing.require_some(t, launch_copy(given.log, manager, manager_port, program, name, role, options),
+        "the copy is launched with its faults intercepted, and told its role")?
+    faults :: testing.require_some(t, copy.launched.faults, "the launch gives the copy's faults' intercept")?
     stop := slop_os.StopInfo.{}
     next_stop(port, faults.intercept, &stop)
-    testing.expect_eq(t, stop.point, slop_os.StopPoint.Fault, "P stops at a fault")
-    testing.expect_eq(t, stop.number, expected, "its tampered return is refused, as the hardware refuses it")
-    // Not let go: P ends within the limit
+    testing.expect_eq(t, stop.point, slop_os.StopPoint.Fault, "the copy stops at a fault")
+    testing.expect_eq(t, stop.number, expected, what)
     _ = slop_os.process_kill(copy.launched.process)
     for handle in slop_os.Handle.[cast[slop_os.Handle](faults.intercept), cast[slop_os.Handle](faults.space),
         cast[slop_os.Handle](copy.launched.process), cast[slop_os.Handle](copy.end), cast[slop_os.Handle](copy.port),
         cast[slop_os.Handle](port)] {
         _ = slop_os.handle_close(handle)
     }
-    testing.expect(t, test_kit.wait_for_budget(copy.launched.budget, 0, 1_000_000_000), "P's budget is back to nothing once it has ended")
+    testing.expect(t, test_kit.wait_for_budget(copy.launched.budget, 0, 1_000_000_000), "the copy's budget is back to nothing once it has ended")
     _ = slop_os.handle_close(cast[slop_os.Handle](copy.launched.budget))
     return .Ok
 }

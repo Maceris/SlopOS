@@ -155,6 +155,11 @@ Mapping :: struct {
     user : bool,
     /** Kept in the TLB across address-space switches. Kernel mappings only. */
     global : bool,
+    /**
+     * Executable pages indirect branches may land in only on landing pads (slop_os.PROTECTION_GUARDED, decisions/0186):
+     * AArch64's guarded pages; ignored elsewhere.
+     */
+    guarded : bool = false,
 }
 
 /** The size of one page a mapping maps, a level of the page tables. */

@@ -116,10 +116,10 @@ AARCH64_CRASH_LINE = "error: test_shell_calls crashed: breakpoint; crashes shows
 CRASH_REPORT_LINE = "test_shell_calls: invalid instruction"
 AARCH64_CRASH_REPORT_LINE = "test_shell_calls: breakpoint"
 AARCH64_CLOCK_LINE = "[user] platform: the real-time clock (Pl031) claimed"
-# test_control's tests (decisions/0186): a tampered return is refused on AArch64, with pointer authentication, and skipped
-# on x86-64 under TCG, with no shadow stacks
-X86_CONTROL_TESTS = "6 tests: 5 passed, 0 failed, 1 skipped"
-AARCH64_CONTROL_TESTS = "6 tests: 6 passed, 0 failed"
+# test_control's tests (decisions/0186): a tampered return and a branch to no landing pad are refused on AArch64, with
+# pointer authentication and branch target identification, and skipped on x86-64 under TCG, which has no CET
+X86_CONTROL_TESTS = "7 tests: 5 passed, 0 failed, 2 skipped"
+AARCH64_CONTROL_TESTS = "7 tests: 7 passed, 0 failed"
 # What QEMU's max CPU has against exploits (decisions/0186): TCG gives x86-64 no CET, and AArch64 all three
 X86_HARDENING_LINE = "[boot] cpu: control-flow integrity: shadow stacks no, indirect branch tracking no"
 AARCH64_HARDENING_LINE = ("[boot] cpu: control-flow integrity: branch target identification yes, pointer authentication yes, "

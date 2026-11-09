@@ -320,3 +320,32 @@ tamper_with_return : runtime.ThreadFunction : fn(data #escaping : any) {
         }
     }
 }
+
+/** How many bytes into landing_target branch_into_the_middle branches: past its landing pad and the instruction after. */
+MIDDLE_OFFSET : u64 : 8
+
+/**
+ * Branch, through a function value, into the middle of landing_target, where there's no landing pad, which the
+ * hardware's control-flow integrity refuses (decisions/0186): AArch64's branch target identification on its guarded
+ * pages, or x86-64's indirect branch tracking. Without them, what it runs is undefined, so only where they're on.
+ *
+ * @param data Nothing.
+ */
+branch_into_the_middle : runtime.ThreadFunction : fn(data #escaping : any) {
+    middle :: cast[runtime.ThreadFunction](cast[rawptr](cast[uintptr](cast[u64](landing_target) + MIDDLE_OFFSET)))
+    middle(data)
+}
+
+/**
+ * What branch_into_the_middle branches into the middle of: a function that does a little, so it's more than its landing
+ * pad and return.
+ *
+ * @param data Nothing.
+ */
+landing_target : runtime.ThreadFunction : fn(data #escaping : any) {
+    count : u64 = 0
+    for i in 0..<16 {
+        count = intrinsics.volatile_load_u64(&count) + 1
+    }
+}
+

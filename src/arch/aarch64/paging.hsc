@@ -44,6 +44,8 @@ ENTRY_ACCESSED : u64 : 1 << 10
 ENTRY_NOT_GLOBAL : u64 : 1 << 11
 /** PXN (bit 53): EL1 never executes the page. */
 ENTRY_PRIVILEGED_EXECUTE_NEVER : u64 : 1 << 53
+/** GP (bit 50): a guarded page, where an indirect branch may land only on a BTI (FEAT_BTI). */
+ENTRY_GUARDED : u64 : 1 << 50
 /** UXN (bit 54): EL0 never executes the page. */
 ENTRY_USER_EXECUTE_NEVER : u64 : 1 << 54
 /** AttrIndx (bits 2 to 4) in a page or block descriptor: which of MAIR_EL1's attributes the memory has. */
@@ -864,6 +866,10 @@ leaf_entry :: fn(physical: u64, mapping: arch_interface.Mapping, level: u64) -> 
         entry |= ENTRY_USER | ENTRY_NOT_GLOBAL | ENTRY_PRIVILEGED_EXECUTE_NEVER
         if !executable {
             entry |= ENTRY_USER_EXECUTE_NEVER
+        }
+        // Branch target identification on it, for code built with landing pads (decisions/0186)
+        if executable && mapping.guarded {
+            entry |= ENTRY_GUARDED
         }
     }
     else {
