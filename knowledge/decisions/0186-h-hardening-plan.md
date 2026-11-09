@@ -109,3 +109,24 @@ In five stages, each with an as-built record here:
 - A Hemera program that's suspended stores signed return addresses; debuggers and crash reports strip them.
 - The open question on hardware control-flow integrity (`../open-questions.md`) is answered here.
 - AArch64's kernel tests run with BTI, PAC and GCS on, as QEMU's `max` CPU has them; x86-64's depend on Ha's finding.
+
+## The x86-64 Test Path, Found (2026-11-09)
+Ha's first step, done with the owner before the rest of Ha:
+- **WHPX doesn't give CET.** With Windows' Hypervisor Platform on, QEMU's WHPX guest is refused `cet-ss` and `cet-ibt`
+  ("host doesn't support requested feature"): Hyper-V on Windows 10 gives guests no CET. It also put VMware on Hyper-V,
+  where VMware's guests lose CET too, so it was turned off again.
+- **VMware gives its guests shadow stacks, not IBT.** The i9-12900K has both (VMware's log: the host's CPUID leaf 7
+  with both bits), but VMware clears IBT from every guest's CPUID, even with a `featMask` asking for it.
+- **Nested KVM gives a guest shadow stacks.** The Linux test VM, with VMware's nested virtualization on
+  (`vhv.enable`), a backports kernel (7.2: KVM offers guests `cet_ss` and the CET state; Debian's 6.12 doesn't), and
+  QEMU 11.1 from backports (10.0 has no CET), runs a guest with `-cpu host,+cet-ss,enforce`; SlopOS boots there to a
+  healthy system.
+
+So, chosen with the owner:
+- **x86-64's shadow stacks are boot-tested through QEMU with KVM in the Linux VM**: `boot.py` gains a remote mode, as
+  `linux_tests.py` has, which copies the image there and boots it with `-accel kvm -cpu host`. The CET boot tests run
+  there; the rest of the suites stay on TCG.
+- **x86-64's IBT is built, and not boot-tested**: Hemera emits `endbr64` (a no-op without IBT), and SlopOS detects IBT
+  and enables it where it's there, sharing BTI's design, which is boot-tested on AArch64. A bare-metal check on a
+  machine with IBT is left for later, recorded in the as-built record.
+
