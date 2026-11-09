@@ -195,6 +195,9 @@ Then for 12g (2026-11-08, `0185`): base's `slop_os_adopt_events_ring`, for a pro
 started. A protocol message's 4 KiB limit and a typed file's plain-data lists shaped the recording file: it's laid out
 by hand on the heap, its events as a plain struct. A build once stopped in the compiler's JIT (`RuntimeDyld`'s
 `resolveRelocation`, COFF x86-64, a fatal error), and didn't again; not chased further.
+Then for 12h (2026-11-09, `0185`): base's `CarrierBlock.thread_page`, `Fiber.cpu_budget`, `runtime.note_running_fiber`
+and `runtime.bind_cpu_budget`, no-ops but on SlopOS, where they write the per-thread page; std's fiber scheduler calls
+the first around each turn. `HemeraTest` embeds base as `hemera` does, so both are rebuilt after a base change.
 
 ## 4. Features That Look Like a Strong Fit
 

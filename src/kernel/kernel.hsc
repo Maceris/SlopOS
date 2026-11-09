@@ -258,6 +258,14 @@ PerCpu :: struct #align(64) {
     trace_ring : u64,
     /** Where a lockup's NMI found this CPU: the interrupted program counter (lockups.hsc). */
     lockup_pc : u64,
+    /** The interrupted code's registers then, in the order arch.nmi_register_name names them. */
+    lockup_registers : u64[LOCKUP_REGISTERS],
+    /** How many of lockup_registers are the architecture's. */
+    lockup_register_count : u32,
+    /** The return addresses on the interrupted code's stack then, innermost first, as its frame pointers chain them. */
+    lockup_frames : u64[LOCKUP_FRAMES],
+    /** How many of lockup_frames were found. */
+    lockup_frame_count : u32,
     /** 1 once lockup_pc is written, read atomically. */
     lockup_seen : u32,
     /** CPU_WAITING while the boot CPU starts this one, then CPU_ONLINE or CPU_ABANDONED (cpus.hsc). */
@@ -437,6 +445,10 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         if kernel.options.test_nmi {
             test_nmi(kernel, cpu)
         }
+        // Not again on the boot after its panic, which the bootloader hands its record (decisions/0134, 0185)
+        if kernel.options.test_lockup && has_last_panic(info) {
+            kernel.options.test_lockup = false
+        }
         if kernel.options.test_lockup {
             // Running until lockup detection stops it, with Lockup
             kernel.stop_after_ticks = 0xffffffffffffffff
@@ -492,6 +504,22 @@ memory_tests :: fn(kernel: ptr[mut Kernel]) {
 }
 
 /**
+ * Tell whether the bootloader handed over the last panic's record (decisions/0134).
+ *
+ * @param info The boot information, whose modules are searched for boot_info.LAST_PANIC_MODULE; it has to still be
+ *     in boot memory.
+ * @return True if it did.
+ */
+has_last_panic :: fn(info: ptr[boot_info.BootInfo]) -> bool {
+    for module in info.modules {
+        if module.name == boot_info.LAST_PANIC_MODULE {
+            return true
+        }
+    }
+    return false
+}
+
+/**
  * Fail an assertion, which stops the kernel, unless the bootloader handed over the last panic's record
  * (decisions/0134): so the boot after the panic, which has it, goes on.
  *
@@ -499,10 +527,8 @@ memory_tests :: fn(kernel: ptr[mut Kernel]) {
  *     in boot memory.
  */
 test_panic_once :: fn(info: ptr[boot_info.BootInfo]) {
-    for module in info.modules {
-        if module.name == boot_info.LAST_PANIC_MODULE {
-            return void
-        }
+    if has_last_panic(info) {
+        return void
     }
     runtime.log_info("test_panic_once: failing an assertion")
     runtime.assert(false, "test_panic_once")

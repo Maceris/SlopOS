@@ -803,16 +803,20 @@ TESTS = [
         "--expect-console-line=kept in passed.recording", "--expect-console-start=test_replay: 5 turns, total 0x",
         "--expect-console-start=error: nothing.recording isn't a recording that reads: ",
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
-    # Profiling (decisions/0183, 12d): test_profile spins in spin_here, which a profile of it finds most of its samples in
-    ("profiles a program, its samples named by function", 7,
+    # Profiling (decisions/0183, 12d): test_profile spins in spin_here, which a profile of it finds most of its samples in;
+    # then on a fiber, whose samples are said by fiber (0185, 12h)
+    ("profiles a program, its samples named by function and by fiber", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wprofile test_profile 500\\r\\p\\p\\p\\ptest_shell_calls 3 after\\r",
+        "\\wprofile test_profile 500\\r\\p\\p\\p\\pprofile test_profile 500 1\\r\\p\\p\\p\\ptest_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-line=[user] shell: reading commands",
         "--expect-console-start=profile of test_profile: ", "--expect-console-start=  1. test_profile.spin_here: ",
+        # On a fiber (decisions/0185, 12h): its samples said by fiber, through its thread's per-thread page
+        "--expect-console-start=  1. test_profile.spin_on_fiber: ", "--expect-console-line=by fiber:",
+        "--expect-console-contains=samples, most in test_profile.spin_on_fiber",
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
     # Shell functions, errors and the shell's directory (decisions/0171): a function's parameters matched and read by
     # their types, try/catch with the error as a record, ? passing a function's error to its caller where one without
@@ -1045,7 +1049,7 @@ TESTS = [
         "--expect-console-line=error: list: its program needs its here, which an installation isn't given: only a data directory, settings, the clock and the locale",
         "--expect-console-line=error: tally: an installation has that name already; give another with --as",
         "--expect-console-line=name   directory  snapshot", "--expect-console-line=no kept grants",
-        "--expect-console-line=error: there's no kept grant 7",
+        "--expect-console-line=error: there's no kept grant 7", "--expect-console-contains=  cpu  ",
         "--expect-line=[user] sessions: installed tally (counter) for admin",
         "--expect-line=[user] sessions: ending tally as its session's shell asked",
         "--expect-line=[user] sessions: uninstalled tally for admin",
@@ -1302,7 +1306,9 @@ TESTS = [
     # On one CPU, where requests wait for the volume server rather than it waiting for them
     ("serves a volume's clients by the priority of the CPU budgets they lend it", 7, with_before_qemu(
         one_cpu([argument.replace("test_services", "test_services use_echo test_lending") for argument in BOOT_DISK_BASE]), [
-        "--expect-line=[user] supervisor: test_lending: a request lent echo's budget was answered ahead of the backlogs lent hello's"])),
+        "--expect-line=[user] supervisor: test_lending: a request lent echo's budget was answered ahead of the backlogs lent hello's",
+        # What the volume server ran on hello's budget, in hello's attribution (decisions/0185, 12h)
+        "--expect-line=[user] supervisor: test_lending: echo's budget shows what the volume server ran on it"])),
     ("starts a disk's partition server again when it's killed, and serves its volumes through the new one", 7, with_before_qemu(
         [argument.replace("test_services", "test_services test_storage_restart") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] storage_manager: test_storage_restart: killing the partition server for disk 0",
@@ -1383,6 +1389,14 @@ TESTS = [
     # A CPU spinning with interrupts off is caught by another's tick, and the kernel stops with Lockup (decisions/0183)
     ("catches a CPU that stops making progress", 8, ["--command-line=test_exit test_lockup",
         "--expect-line=[info] test_lockup: CPU 1 spins with interrupts off", "--", "-smp", "2"]),
+    # Its registers and stack, from its NMI, kept in the panic record for the next boot (decisions/0185, 12h)
+    ("keeps a stuck CPU's registers and stack in the panic record", 7, with_before_qemu(
+        [argument.replace("test_services", "test_services panic_reset test_lockup") for argument in BOOT_DISK_BASE], [
+        "--allow-reboot", "--expect-line=[info] test_lockup: CPU 1 spins with interrupts off",
+        "--expect-line=[info] resetting, the panic record kept",
+        "--expect-disk-text=lockup: CPU 1 was at kernel+", "--expect-disk-text=lockup: CPU 1's registers:",
+        "--expect-disk-text=lockup: CPU 1's stack:", "--expect-disk-text=  at kernel+",
+        "--expect-line=[user] root task: the boot before stopped for a fault: [fatal] lockup: CPU 1 made no progress for 5 seconds"])),
     ("switches between fibers", 0, ["--command-line=test_exit test_fibers",
                                     "--expect-line=[info] test_fibers: 2 tests: 2 passed, 0 failed"]),
     ("shares fiber pools between CPUs", 0, ["--command-line=test_exit test_pool",

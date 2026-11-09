@@ -65,7 +65,8 @@ list_processes :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, Ev
             for each in os.items(&into, running) {
                 name :: copied_first(each.name[0..<each.name.count], cast[usize](each.name_bytes))
                 state :: if each.responding != 0 { "running" } else { "not responding" }
-                runtime.array_add(&made.items, process_record(name, "session", state, each.memory, each.memory_limit))
+                runtime.array_add(&made.items, process_record(name, "session", state, each.memory, each.memory_limit, each.cpu_ns,
+                    each.lent_ns, each.charged))
             }
         }
         case _ => return error_at(tree.at, "the session manager couldn't be asked")
@@ -82,7 +83,14 @@ list_processes :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, Ev
                 case Error(_) => {}
             }
             state :: if has_ended(shell, call) { "ended" } else { "running" }
-            runtime.array_add(&made.items, process_record(message("% (job %)", call.tree.text, job.number), "shell", state, used, limit))
+            cpu := slop_os.ProcessCpu.{}
+            match slop_os.process_cpu_info(call.launched.process) {
+                case Ok(read) => cpu = read
+                case Error(error) => {}
+            }
+            charged :: slop_os.memory_budget_others(call.launched.budget) or_else 0
+            runtime.array_add(&made.items, process_record(message("% (job %)", call.tree.text, job.number), "shell", state, used, limit,
+                cpu.run_ns, cpu.lent_ns, charged))
         }
     }
     return .Ok(.List(made))
@@ -96,15 +104,22 @@ list_processes :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, Ev
  * @param state How it is.
  * @param memory Its budget's bytes in use.
  * @param limit Its budget's limit.
+ * @param cpu Its threads' CPU time, in nanoseconds.
+ * @param lent The time services ran on its CPU budget for it, lent it, in nanoseconds (decisions/0185, 12h).
+ * @param charged The bytes services' objects charged to its memory budget.
  * @return The record.
  */
-process_record :: fn(name #escaping : string, parent #escaping : string, state #escaping : string, memory: u64, limit: u64) -> Value {
+process_record :: fn(name #escaping : string, parent #escaping : string, state #escaping : string, memory: u64, limit: u64, cpu: u64,
+    lent: u64, charged: u64) -> Value {
     record :: new_record()
     set_field(record, "name", .Text(name))
     set_field(record, "parent", .Text(parent))
     set_field(record, "state", .Text(state))
     set_field(record, "memory", .Size(memory))
     set_field(record, "limit", .Size(limit))
+    set_field(record, "cpu", .Duration(cast[i64](cpu)))
+    set_field(record, "lent", .Duration(cast[i64](lent)))
+    set_field(record, "charged", .Size(charged))
     return .Record(record)
 }
 

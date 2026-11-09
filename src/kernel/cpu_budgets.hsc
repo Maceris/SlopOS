@@ -65,6 +65,11 @@ CpuBudget :: struct #align(16) {
     sibling_next : u64,
     /** The previous child of its parent, as an address, 0 for the first. */
     sibling_previous : u64,
+    /**
+     * The CPU time run on it by threads of processes that aren't on it, in counter ticks: what services did on the
+     * loans it was lent as (decisions/0185, 12h). Added to atomically.
+     */
+    run_by_others : u64,
 }
 
 /**
@@ -644,7 +649,8 @@ release_cpu_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget]) {
 }
 
 /**
- * Fill in what cpu_budget_info gives, in its order: priority, period_ns, time_ns, share, children's share, and CPUs.
+ * Fill in what cpu_budget_info gives, in its order: priority, period_ns, time_ns, share, children's share, CPUs, and
+ * the time run on it by others, in nanoseconds (decisions/0185, 12h).
  *
  * Takes kernel.cpu_budgets_lock, so the words are of one moment.
  *
@@ -657,7 +663,9 @@ release_cpu_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget]) {
 cpu_budget_words :: fn(kernel: ptr[mut Kernel], budget: ptr[CpuBudget], words: mut u64[]) {
     lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
-    values :: u64.[cast[u64](budget.time.priority), budget.period_ns, budget.time_ns, budget.share, budget.children_share, budget.time.cpus]
+    lent :: nanoseconds_of(kernel, intrinsics.atomic_load_u64(&budget.run_by_others))
+    values :: u64.[cast[u64](budget.time.priority), budget.period_ns, budget.time_ns, budget.share, budget.children_share, budget.time.cpus,
+        lent]
     for value, i in values {
         if i < words.count {
             words[i] = value

@@ -181,7 +181,7 @@ take_sample :: fn(kernel: ptr[mut Kernel]) {
     if intrinsics.atomic_load_u32_acquire(&intercept.sampling) == 0 || ring_address == 0 {
         return void
     }
-    sample := slop_os.Sample.{thread = thread.id, count = 1}
+    sample := slop_os.Sample.{thread = thread.id, fiber = running_fiber_of(kernel, thread), count = 1}
     sample.frames[0] = cast[u64](arch.instruction_pointer(&thread.registers))
     frame := arch.get_user_register(&thread.registers, SAMPLE_FRAME_REGISTER)
     for depth in cast[usize](1)..<sample.frames.count {

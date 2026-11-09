@@ -39,7 +39,9 @@ check compares it like the rest of the signature.
 
 These rules are what keep the interface small.
 
-- **The kernel runs with interrupts disabled.** They're enabled only while a CPU is idle (`idle`).
+- **The kernel runs with interrupts disabled.** They're enabled only while a CPU is idle (`idle`). An NMI still
+  reaches it: x86-64's, or on AArch64 a pseudo-NMI, an SGI whose priority alone passes the GIC's priority mask, which
+  is how AArch64 masks interrupts in the kernel (`0185`).
   Long operations reach preemption points (`0023`), which check `interrupt_pending` and, if one
   is pending, record a continuation and go back to the scheduler. So every interrupt arrives
   from user mode or from idle, and no handler ever returns into kernel code. The only
@@ -631,6 +633,9 @@ test_nmi : fn() : ---
  */
 send_nmi : fn(cpu_hardware_id: u64) -> bool : ---
 
+// Name a register of those the NMI entry passes kernel_entry.nmi, for a lockup's report (0185); "?" past them.
+nmi_register_name : fn(index: usize) -> string : ---
+
 // A device the emulator always has that raises a wired interrupt: its controller, and its line there.
 TestDevice :: struct {
     kind : ControllerKind,
@@ -684,8 +689,9 @@ interrupt #never_returns : fn(from: Interrupted, source: InterruptSource) : ---
 // A fault in kernel code, which is a bug. The kernel stops with a stack trace.
 kernel_fault #never_returns : fn(fault: arch_interface.Fault, instruction_pointer: arch_interface.VirtualAddress) : ---
 
-// An NMI, at any time. Returns to the interrupted code.
-nmi : fn() : ---
+// An NMI, at any time, with the interrupted code's program counter, frame pointer and registers (nmi_register_name's
+// order). Returns to the interrupted code.
+nmi : fn(pc: u64, frame_pointer: u64, registers: u64[]) : ---
 
 // A machine check or double fault, at any time. The kernel stops with a stack trace.
 fatal_critical #never_returns : fn(event: arch_interface.CriticalEvent) : ---
@@ -744,6 +750,7 @@ How `arch/x86_64` meets the interface (`../../knowledge/design/arch-x86-64.md`):
 | `power_off` | None: `can_power_off` is false, and L2 writes ACPI's PM1 control registers with `\_S5`'s sleep types, as `power_set_off` gave them |
 | `test_nmi` | An NMI IPI to the CPU's own x2APIC ID |
 | `send_nmi` | An NMI IPI to the CPU's x2APIC ID |
+| `nmi_register_name` | `rax`, `rbx`, `rcx`, `rdx`, `rsi`, `rdi`, `rbp`, `rsp`, `r8` to `r15`, `rip` and `rflags` |
 | `test_device` | QEMU's I/O APIC at `0xfec00000` (the MP specification's default) and its PIT, ISA IRQ 0, on line 2, edge triggered and active high, as QEMU's MADT says; `test_device_interrupts` runs PIT channel 0 at about 1 kHz, or stops it |
 
 ## AArch64
@@ -779,7 +786,9 @@ virtual timer's interrupt and the PL011.
 | `test_device` | SPI line 100 of the distributor, which nothing on QEMU `virt` uses, edge-triggered; `test_device_interrupts` pends it through `GICD_ISPENDR`, and again each time it's acknowledged and at every timer interrupt, until it's stopped |
 | `msi_doorbell` | The page of the ITS's `GITS_TRANSLATER`, which an SMMU maps into each domain |
 | MSIs | Through the GICv3's ITS, found in the device tree (`arm,gic-v3-its`): `init_msi` gives it flat device and collection tables and a command queue, and every redistributor the one LPI property table and a pending table of its own, with LPIs on; each redistributor is a collection. `add_msi_device` maps a device's translation table (`MAPD`); `route_msi` gives the event an LPI of its own (8192 of them, from 8192), enabled, mapped to the CPU's collection (`MAPTI`, `INV`), and routes it to the kernel's ID as an SPI is. The message is the event's number, to `GITS_TRANSLATER` |
-| `send_nmi` | Nothing: false, without pseudo-NMIs, so a lockup's report says no more than which CPU |
+| Interrupt masking | In the kernel, `ICC_PMR_EL1` at `0x80` with PSTATE's I clear, so only the pseudo-NMI's priority (`0x20`) passes; in user mode and idle, `0xf0`, letting every interrupt's (`0xa0`) through. Each exception takes an IRQ's ID from `ICC_IAR1_EL1` first, which the kernel's mask would hide, then sets that mask and clears I; every `eret` to user mode or idle sets I and the mask back to `0xf0` first (`0185`) |
+| `send_nmi` | SGI 4, the pseudo-NMI, at priority `0x20`; its entry returns to what it interrupted, kernel code included, the interrupted mask restored |
+| `nmi_register_name` | `x0` to `x30`, `sp`, `pc` and `pstate` |
 | Not yet | `test_nmi`, which needs pseudo-NMIs or FEAT_NMI |
 
 ## Not Covered

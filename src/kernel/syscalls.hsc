@@ -2751,6 +2751,34 @@ sys_thread_set_debug :: fn(thread: ptr[mut Thread], process: slop_os.Process, id
 }
 
 /**
+ * Say a process's CPU time and what was run on its budget by others (decisions/0185, 12h).
+ *
+ * @param thread The calling thread.
+ * @param process The process, with RIGHT_PROCESS_INSPECT.
+ * @return Its threads' time, and the time run on its CPU budget by threads of processes not on it, in nanoseconds.
+ */
+sys_process_cpu_info :: fn(thread: ptr[mut Thread], process: slop_os.Process) -> Result[slop_os.ProcessCpu, slop_os.ControlError] {
+    target :: target_of(thread, process, slop_os.RIGHT_PROCESS_INSPECT)?
+    kernel :: per_cpu().kernel
+    own :: intrinsics.atomic_load_u64(&target.run_time)
+    budget :: target.cpu_budget
+    lent :: if budget != 0 { intrinsics.atomic_load_u64(&cast[ptr[CpuBudget]](budget).run_by_others) } else { cast[u64](0) }
+    return .Ok(slop_os.ProcessCpu.{run_ns = nanoseconds_of(kernel, own), lent_ns = nanoseconds_of(kernel, lent)})
+}
+
+/**
+ * Say what's charged to a memory budget by objects of processes not on it (decisions/0185, 12h).
+ *
+ * @param thread The calling thread.
+ * @param budget The budget; no right is needed.
+ * @return The bytes.
+ */
+sys_memory_budget_others :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget) -> Result[u64, slop_os.HandleError] {
+    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](budget), slop_os.ObjectKind.MemoryBudget, cast[slop_os.Rights](0))?
+    return .Ok(charged_by_others(cast[ptr[mut MemoryBudget]](object)))
+}
+
+/**
  * Set a process's breakpoints and watchpoints, which every thread of its, now and later, loads as it returns to user
  * mode, unless it's single-stepping (thread_set_debug), when it loads its own.
  *
@@ -2760,6 +2788,8 @@ sys_thread_set_debug :: fn(thread: ptr[mut Thread], process: slop_os.Process, id
  * @error BadBuffer debug isn't memory the caller can read.
  * @error BadRegisters step is set, or a slot the architecture can't set.
  */
+// sys_thread_set_page, system call 92, is in thread_pages.hsc
+
 sys_process_set_debug :: fn(thread: ptr[mut Thread], process: slop_os.Process, debug: u64) -> Result[void, slop_os.ControlError] {
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE)?
     given := slop_os.ThreadDebug.{}

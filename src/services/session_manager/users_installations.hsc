@@ -183,6 +183,18 @@ running_programs :: fn(sessions: ptr[mut Manager], number: u32, out: ptr[mut os.
         installed :: index < sessions.programs.count && sessions.programs[index].installation
         running[made] = programs.RunningProgram.{name = each.name, name_bytes = each.name_bytes, responding = each.responding,
             installation = if installed { cast[u8](1) } else { cast[u8](0) }, memory = each.memory, memory_limit = each.memory_limit}
+        // What it ran and what services ran and charged for it (decisions/0185, 12h)
+        if index < sessions.programs.count {
+            program :: &sessions.programs[index]
+            match slop_os.process_cpu_info(program.process) {
+                case Ok(cpu) => {
+                    running[made].cpu_ns = cpu.run_ns
+                    running[made].lent_ns = cpu.lent_ns
+                }
+                case Error(error) => {}
+            }
+            running[made].charged = slop_os.memory_budget_others(program.budget) or_else 0
+        }
         made += 1
     }
     if made > running.count {

@@ -79,11 +79,19 @@ REDISTRIBUTOR_STRIDE : u64 : 0x20000
 
 /** ICC_SRE_EL1 with SRE, DFB and DIB set: the system register interface on, with FIQ and IRQ bypass off. */
 SRE_ENABLE : u64 : 0x7
-// Every interrupt one priority, which the mask lets through
+/*
+ * Every interrupt one priority, which the mask lets through, but the pseudo-NMI's (decisions/0185, 12h): the kernel
+ * runs with IRQs unmasked in PSTATE and the priority mask at KERNEL_PRIORITY_MASK, which only SGI_NMI's priority
+ * passes, so a lockup's NMI reaches a CPU stuck in the kernel; user mode and idle run with it at PRIORITY_MASK.
+ */
 /** The priority every interrupt is given, lower numbers being higher priority. */
 INTERRUPT_PRIORITY : u8 : 0xa0
-/** ICC_PMR_EL1's value: interrupts of a priority below 0xf0, as INTERRUPT_PRIORITY is, are let through. */
+/** SGI_NMI's priority, above every other's, so it preempts one being handled too. */
+NMI_PRIORITY : u8 : 0x20
+/** ICC_PMR_EL1's value in user mode and idle: interrupts of a priority below 0xf0, as INTERRUPT_PRIORITY is, are let through. */
 PRIORITY_MASK : u64 : 0xf0
+/** ICC_PMR_EL1's value in the kernel: only priorities below 0x80, NMI_PRIORITY's, are let through. */
+KERNEL_PRIORITY_MASK : u64 : 0x80
 
 // Interrupt IDs: SGIs, PPIs, SPIs, and the special ones from 1020
 /** The first PPI's interrupt ID; SGIs are 0 to 15. */
@@ -99,6 +107,8 @@ SGI_RESCHEDULE : u32 : 1
 SGI_TLB_FLUSH : u32 : 2
 /** The SGI for IpiKind.Stop. */
 SGI_STOP : u32 : 3
+/** The SGI a lockup's report sends as an NMI (send_nmi), of NMI_PRIORITY. */
+SGI_NMI : u32 : 4
 // The virtual and the physical timer's PPIs where the device tree doesn't say
 /** The virtual timer's PPI where the device tree doesn't say: 27. */
 DEFAULT_TIMER_INTERRUPT : u32 : 27
@@ -192,6 +202,7 @@ init_cpu_interface :: fn(system: ptr[ArchSystem], cpu: ptr[mut ArchCpu]) {
         for i in 0..<32 {
             write_u8(sgi, GICR_IPRIORITYR + cast[u64](i), INTERRUPT_PRIORITY)
         }
+        write_u8(sgi, GICR_IPRIORITYR + cast[u64](SGI_NMI), NMI_PRIORITY)
         write_u32(sgi, GICR_ISENABLER0, 0xffff | (cast[u32](1) << system.timer_interrupt) | (cast[u32](1) << system.test_timer_interrupt))
     }
     aarch64.write_system_register(.ICC_SRE_EL1, SRE_ENABLE)
@@ -243,21 +254,31 @@ affinity_of_this_cpu :: fn() -> u64 {
 }
 
 /**
- * Take the IRQ the calling CPU is entering for, from ICC_IAR1_EL1, and say what raised it.
+ * Take the IRQ the calling CPU is entering for, from ICC_IAR1_EL1, before the kernel's priority mask hides it: the GIC
+ * gives only an interrupt the mask lets through.
+ *
+ * @return Its interrupt ID; a special one (1020 to 1023) if there's none.
+ */
+take_interrupt #no_context :: fn() -> u32 {
+    return cast[u32](aarch64.read_system_register(.ICC_IAR1_EL1) & 0xffffff)
+}
+
+/**
+ * Say what raised an IRQ the calling CPU took (take_interrupt).
  *
  * The timer, IPIs and interrupts with no route are acknowledged here; a routed device interrupt is the kernel's to
  * acknowledge (end_of_interrupt), and a spurious one isn't acknowledged at all. The virtual timer is disabled until
  * the next deadline, so the level it holds doesn't raise it again; the physical timer, the test device's clock,
  * pends the test line and rearms while the test device is on, and is disabled otherwise.
  *
+ * @param interrupt Its interrupt ID, as take_interrupt gave it.
  * @return Device with the kernel's ID for a routed SPI or LPI; Timer for the virtual timer; Ipi for the SGIs
  *     send_ipi raises; Spurious for a special ID, an SPI or LPI with no route on this CPU, the test device's
  *     clock, or any other SGI or PPI.
  */
-interrupt_source :: fn() -> kernel_entry.InterruptSource {
+interrupt_source :: fn(interrupt: u32) -> kernel_entry.InterruptSource {
     cpu :: current_cpu()
     system :: current_system()
-    interrupt :: cast[u32](aarch64.read_system_register(.ICC_IAR1_EL1) & 0xffffff)
     if interrupt >= FIRST_SPECIAL && interrupt < FIRST_LPI {
         return .Spurious
     }
@@ -374,6 +395,16 @@ send_ipi :: fn(cpu_hardware_id: u64, kind: arch_interface.IpiKind) {
         case .TlbFlush => SGI_TLB_FLUSH
         case .Stop => SGI_STOP
     }
+    send_sgi(cpu_hardware_id, interrupt)
+}
+
+/**
+ * Raise an SGI on a CPU through ICC_SGI1R_EL1, memory written before visible to it first.
+ *
+ * @param cpu_hardware_id The target CPU's MPIDR, its affinity fields, as affinity_of_this_cpu gives them.
+ * @param interrupt The SGI, 0 to 15.
+ */
+send_sgi :: fn(cpu_hardware_id: u64, interrupt: u32) {
     affinity_0 :: cpu_hardware_id & 0xff
     value := cast[u64](1) << (affinity_0 % 16)
     value |= ((cpu_hardware_id >> 8) & 0xff) << 16
@@ -661,13 +692,13 @@ write_u64 :: fn(base: u64, offset: u64, value: u64) {
 }
 
 /**
- * Send another CPU an NMI (arch_interface.send_nmi): AArch64 has none without pseudo-NMIs through the GIC's
- * priorities (decisions/0065), which aren't set up, so nothing's sent and a lockup's report goes without where the
- * stuck CPU was.
+ * Send another CPU an NMI (arch_interface.send_nmi): a pseudo-NMI, SGI_NMI, whose priority passes the kernel's priority
+ * mask, so it reaches a CPU in the kernel, where IRQs are unmasked in PSTATE (decisions/0185, 12h).
  *
- * @param cpu_hardware_id Unused.
- * @return False.
+ * @param cpu_hardware_id The target CPU's MPIDR, its affinity fields.
+ * @return True: it's sent.
  */
 send_nmi :: fn(cpu_hardware_id: u64) -> bool {
-    return false
+    send_sgi(cpu_hardware_id, SGI_NMI)
+    return true
 }

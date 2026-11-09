@@ -91,6 +91,21 @@ ticks_of :: fn(kernel: ptr[Kernel], nanoseconds: u64) -> u64 {
 }
 
 /**
+ * Convert counter ticks to nanoseconds, whole seconds apart from the rest, so the multiplication doesn't overflow.
+ *
+ * @param kernel The kernel, for its counter_frequency, in ticks per second.
+ * @param ticks The time, in counter ticks.
+ * @return The time in nanoseconds, rounded down.
+ */
+nanoseconds_of :: fn(kernel: ptr[Kernel], ticks: u64) -> u64 {
+    frequency :: kernel.counter_frequency
+    if frequency == 0 {
+        return 0
+    }
+    return ticks / frequency * runtime.NANOSECONDS_PER_SECOND + ticks % frequency * runtime.NANOSECONDS_PER_SECOND / frequency
+}
+
+/**
  * Tell whether a budget has time left, replenishing it first with what's come back by now.
  *
  * Takes the budget's lock, at LockRank CpuTime, unless it's unlimited.

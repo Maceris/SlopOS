@@ -21,7 +21,10 @@ Options :: struct {
     test_assert : bool,
     /** test_nmi: once booted, raise an NMI, so a test can check that the kernel resumes after one. */
     test_nmi : bool,
-    /** test_lockup: CPU 1 spins with interrupts off once booted, which lockup detection catches (decisions/0183). */
+    /**
+     * test_lockup: CPU 1 spins with interrupts off once booted, which lockup detection catches (decisions/0183); not on
+     * the boot after its panic, which has its record.
+     */
     test_lockup : bool,
     /** trace_boot: the trace is on from the kernel's start, for a boot's timeline (decisions/0183, tracing.hsc). */
     trace_boot : bool,

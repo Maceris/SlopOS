@@ -57,6 +57,14 @@ Thread :: struct #align(16) {
     budget_next : u64,
     /** The previous thread on its CPU budget's list, 0 at the start; under kernel.cpu_budgets_lock. */
     budget_previous : u64,
+    /** Its per-thread page's frame, as a physical address, 0 for none (thread_pages.hsc); only its own thread sets it. */
+    page_frame : u64,
+    /** The memory object the page is part of, as an address: the page is read only while it's live at page_generation. */
+    page_memory : u64,
+    /** The budget handle the page held when it was last resolved, 0 for its process's own (bind_from_page). */
+    page_seen : u64,
+    /** page_memory's generation when the page was given. */
+    page_generation : u32,
     /** Where it is in the scheduler: ready, running, blocked or stopped. */
     state : ThreadState,
     /**

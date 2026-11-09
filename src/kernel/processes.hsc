@@ -39,6 +39,8 @@ Process :: struct #align(16) {
     debugging : u32,
     /** Held, at rank ProcessDebug, while debug is read or changed. */
     debug_lock : concurrency.SpinLock,
+    /** The CPU time its threads have run, in counter ticks (decisions/0185, 12h). Added to atomically. */
+    run_time : u64,
     /** Held, at rank Watchers, while watchers is read or changed. */
     watch_lock : concurrency.SpinLock,
     /** Bindings watching for it to end, raised with SIGNAL_TERMINATED and its exit code; empty slots are 0. */

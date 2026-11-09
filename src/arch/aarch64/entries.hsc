@@ -51,20 +51,97 @@ DATA_ABORT_WRITE : u64 : 1 << 6
 /**
  * Take every exception: the one entry function the vector table's generated code calls.
  *
- * None returns: faults in the kernel stop it, and the rest come from user mode or idle, which L2 never goes back
- * to directly. Interrupts are acknowledged as interrupt_source says (gic.hsc). Runs at EL1 on SP_EL1, with the
- * CPU's carrier block and context set up here from its ArchCpu, and its stack limit set to the kernel stack's.
+ * Only a pseudo-NMI returns, to whatever it interrupted, kernel code included (decisions/0185, 12h): faults in the
+ * kernel stop it, and the rest come from user mode or idle, which L2 never goes back to directly. An IRQ's ID is
+ * taken first; then the kernel's priority mask is set and IRQs unmasked in PSTATE, so only SGI_NMI reaches the kernel
+ * from here on. Interrupts are acknowledged as interrupt_source says (gic.hsc). Runs at EL1 on SP_EL1, with the CPU's
+ * carrier block and context set up here from its ArchCpu, and its stack limit set to the kernel stack's.
  *
  * @param frame The interrupted code's registers, saved on SP_EL1 by the generated code, with the vector's offset,
  *     ESR_EL1 and FAR_EL1; for an entry from user mode, the thread's UserRegisters, which kernel_entry may change.
  */
-exception_entry #calling_convention(.entry) :: fn(frame: ptr[mut aarch64.RegisterFrame]) #never_returns {
+exception_entry #calling_convention(.entry) :: fn(frame: ptr[mut aarch64.RegisterFrame]) {
     cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](aarch64.read_system_register(.TPIDR_EL1))
+    kind :: frame.vector & 3
+    interrupt := NO_INTERRUPT
+    if kind == cast[u64](aarch64.ExceptionKind.Irq) || kind == cast[u64](aarch64.ExceptionKind.Fiq) {
+        interrupt = take_interrupt()
+    }
+    interrupted_mask :: aarch64.read_system_register(.ICC_PMR_EL1)
+    mask_for_kernel()
     cpu.carrier.stack_limit = cpu.kernel_stack_limit
     intrinsics.set_carrier(cpu.carrier)
     push_context entry from cpu.context^ {
-        dispatch(frame)
+        if interrupt == SGI_NMI {
+            take_nmi(frame)
+        }
+        else {
+            dispatch(frame, interrupt)
+        }
     }
+    // Back to what the NMI interrupted, with its mask: IRQs masked in PSTATE first, so none comes before the eret
+    aarch64.daif_set(aarch64.DAIF_IRQ | aarch64.DAIF_FIQ)
+    aarch64.write_system_register(.ICC_PMR_EL1, interrupted_mask)
+    aarch64.isb()
+}
+
+/** An IRQ's ID for an exception that isn't one. */
+NO_INTERRUPT : u32 : 0xffffffff
+
+/**
+ * Let only SGI_NMI reach the calling CPU, in the kernel: the priority mask at KERNEL_PRIORITY_MASK, then IRQs unmasked
+ * in PSTATE. A write to ICC_PMR_EL1 masks what it masks once it's executed (IHI 0069, §12.1.6), so nothing else
+ * comes between.
+ */
+mask_for_kernel #no_context :: fn() {
+    aarch64.write_system_register(.ICC_PMR_EL1, KERNEL_PRIORITY_MASK)
+    aarch64.isb()
+    aarch64.daif_clear(aarch64.DAIF_IRQ)
+}
+
+/**
+ * Let every interrupt reach the calling CPU again once it erets to user mode or idle: IRQs masked in PSTATE until the
+ * eret, which restores PSTATE from SPSR_EL1, then the priority mask at PRIORITY_MASK.
+ */
+unmask_for_return :: fn() {
+    aarch64.daif_set(aarch64.DAIF_IRQ | aarch64.DAIF_FIQ)
+    aarch64.write_system_register(.ICC_PMR_EL1, PRIORITY_MASK)
+    aarch64.isb()
+}
+
+/**
+ * Handle a pseudo-NMI: kernel_entry.nmi with the interrupted registers and frame pointer, then acknowledge it.
+ *
+ * @param frame The interrupted code's registers: x0 to x30, then its stack pointer (SP_EL0 from user mode, else where
+ *     SP_EL1 was before the frame), the program counter and PSTATE, as nmi_register_name names them.
+ */
+take_nmi :: fn(frame: ptr[mut aarch64.RegisterFrame]) {
+    registers : u64[34]
+    for value, i in frame.x {
+        if i < registers.count {
+            registers[i] = value
+        }
+    }
+    registers[31] = if from_user_mode(frame) { frame.sp_el0 } else { cast[u64](frame) + cast[u64](size_of(aarch64.RegisterFrame)) }
+    registers[32] = frame.elr
+    registers[33] = frame.spsr
+    kernel_entry.nmi(frame.elr, frame.x[29], registers[0..<registers.count])
+    acknowledge(SGI_NMI)
+}
+
+/**
+ * Name a register of those take_nmi passes kernel_entry.nmi (arch_interface.nmi_register_name).
+ *
+ * @param index Its place: x0 to x30, sp, pc, then pstate.
+ * @return Its name, a constant; "?" past them.
+ */
+nmi_register_name :: fn(index: usize) -> string {
+    names :: string.["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16",
+        "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29", "x30", "sp", "pc", "pstate"]
+    if index >= names.count {
+        return "?"
+    }
+    return names[index]
 }
 
 /**
@@ -86,8 +163,9 @@ from_user_mode :: fn(frame: ptr[aarch64.RegisterFrame]) -> bool {
  * otherwise.
  *
  * @param frame The saved registers, as exception_entry has them.
+ * @param interrupt An IRQ's or FIQ's ID, as exception_entry took it; NO_INTERRUPT for other exceptions.
  */
-dispatch :: fn(frame: ptr[mut aarch64.RegisterFrame]) #never_returns {
+dispatch :: fn(frame: ptr[mut aarch64.RegisterFrame], interrupt: u32) #never_returns {
     kind :: frame.vector & 3
     source :: frame.vector & ~cast[u64](3)
     instruction :: cast[arch_interface.VirtualAddress](frame.elr)
@@ -100,8 +178,8 @@ dispatch :: fn(frame: ptr[mut aarch64.RegisterFrame]) #never_returns {
         kernel_entry.fatal_critical(.MachineCheck)
     }
     if kind != cast[u64](aarch64.ExceptionKind.Synchronous) {
-        // IRQs and FIQs, through the GIC. The kernel only unmasks them in user mode and idle
-        source :: interrupt_source()
+        // IRQs and FIQs, through the GIC. The kernel only lets them through in user mode and idle, but the NMI
+        source :: interrupt_source(interrupt)
         if from_user_mode(frame) {
             kernel_entry.interrupt(.User(cast[ptr[mut UserRegisters]](frame)), source)
         }

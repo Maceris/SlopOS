@@ -1,6 +1,6 @@
 # 0185: What M12 Left, Planned
 
-Status: accepted, chosen with the project's owner; built, 12e to 12g
+Status: accepted, chosen with the project's owner; built, 12e to 12h
 Date: 2026-11-08
 Related: `0011` (memory budgets), `0017` and `0056` (process control and intercepts), `0026` (the carrier register),
 `0037` (scheduling and lending), `0041` (the per-thread page), `0134` (the panic record), `0160` (elevation), `0182`
@@ -239,4 +239,38 @@ In four stages, each with an as-built record here:
   file and replayed from it exactly; a file that isn't there is refused. A trace through elevation lists services'
   switches. `crashes system`, once the administrator allows it, shows the update service's crash that `test_crash`
   caused, its frames named. On both architectures.
+
+## As Built: 12h
+- **The per-thread page** is a page of the thread's own memory, which it gives the kernel (`thread_set_page`, call
+  92), rather than one `thread_create` maps: most threads never need one, so base makes it the first time a fiber runs
+  on the thread or a budget is bound (`runtime.note_running_fiber`, `runtime.bind_cpu_budget`), a page of its own
+  mapped as `map_pages` maps any, and given back when the thread ends. Its layout is `slop_os.ThreadPage`, checked
+  against base's `SlopOsThreadPage`: the budget binding, a handle, and the running fiber. The kernel reads it through
+  the direct map, only while its memory object lives, and never writes it.
+- **The binding** is resolved in the scheduler's pass at each entry, once the thread is charged, when it changed since
+  the last: the handle's CPU budget if it's one with `RIGHT_CPU_BUDGET_BIND`, else the process's own. For a server
+  that's its next system call. `thread_use_cpu_budget` still works, holding until the page's binding changes. std's
+  fiber scheduler notes each fiber as it resumes it, with the budget it's bound to (`Fiber.cpu_budget`), and nothing
+  once it's back; the volume server binds each connection's loan through the page instead of a system call.
+- **The fiber** goes into each sample (`Sample.fiber`) and each switch in the trace (`TraceKind.Switch`'s other).
+  `profile` says samples by fiber after its functions: each fiber's count and the function of its most sampled place.
+- **Attribution:** each process counts its threads' time; each CPU budget, the time threads of processes not on it ran
+  on it, a loan's (`process_cpu_info`, call 90, and `cpu_budget_describe`'s new `lent`); and a memory budget's objects
+  owned by processes not on it are added up on request (`memory_budget_others`, call 91). `processes` shows each
+  process's `cpu`, `lent` and `charged`. Hello's budget is the scheduler's default, which the volume server is on too,
+  so what it runs for hello isn't another's: the lending test checks echo's budget, which is its own.
+- **Not built: a child CPU budget for each shell job.** Session programs have no CPU budget handle of their own (they
+  run on the session manager's), so the shell has none to split; each job's own time is counted per process anyway.
+  It waits for session programs to get CPU budgets.
+- **Lockups:** the NMI keeps the stuck CPU's registers and the return addresses its frame pointers chain, walked only
+  within its kernel stack, each further up; the reporting CPU logs them as fatal lines, which the panic record keeps.
+  On AArch64 the kernel masks interrupts with GICv3's priority mask: `0x80` in the kernel, with PSTATE's I clear, which
+  only SGI 4's priority (`0x20`) passes; `0xf0` in user mode and idle. The GIC gives `ICC_IAR1_EL1` only what the mask
+  lets through, so each exception takes an IRQ's ID before setting it; and every `eret` to user mode or idle sets I
+  first, then the mask back. The entry returns for the NMI, to kernel code too, the interrupted mask restored. `test_nmi`
+  stays x86-64's: the boot code it runs in has I set.
+- **Tests:** `test_profile 500 1` spins on a fiber, and its profile says those samples by fiber; the lending test sees
+  the volume server's time on echo's budget, through the page's binding; and `test_lockup` with `panic_reset` keeps the
+  stuck CPU's registers and stack in the record the next boot finds (and doesn't lock up again on that boot). On both
+  architectures. `processes` shows the new columns in the installations test.
 

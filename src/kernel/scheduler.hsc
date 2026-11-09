@@ -190,6 +190,8 @@ schedule :: fn(tick: bool) #never_returns {
         current_level := IDLE_LEVEL
         if current != 0 {
             account(cpu, cast[ptr[mut Thread]](current), now)
+            // Its per-thread page's binding, if it changed: the loan its fiber scheduler put it on (thread_pages.hsc)
+            bind_from_page(kernel, cast[ptr[mut Thread]](current))
             current_level = level_of(cast[ptr[Thread]](current), now)
         }
         // Its budget's CPUs changed while it ran, and this isn't one: made ready on one that is
@@ -250,6 +252,15 @@ account :: fn(cpu: ptr[mut PerCpu], thread: ptr[mut Thread], now: u64) {
     if thread.budget != 0 {
         charge(cast[ptr[mut CpuTime]](thread.budget), cpu.run_start, used, now)
     }
+    // Its process's time, and its budget's run by others, a loan's, for attribution (decisions/0185)
+    owner :: thread.header.owner
+    if owner != 0 {
+        process :: cast[ptr[mut Process]](owner)
+        _ = intrinsics.interlocked_exchange_add_u64(&process.run_time, used)
+        if thread.budget_object != 0 && process.cpu_budget != thread.budget_object {
+            _ = intrinsics.interlocked_exchange_add_u64(&cast[ptr[mut CpuBudget]](thread.budget_object).run_by_others, used)
+        }
+    }
     cpu.run_start = now
 }
 
@@ -292,7 +303,7 @@ run :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Thread]
     }
     pass_quiescent(kernel, cpu, epoch)
     thread.state = .Running
-    trace_event(kernel, .Switch, thread.id, 0)
+    trace_event(kernel, .Switch, thread.id, running_fiber_of(kernel, thread))
     intrinsics.atomic_store_u32_release(&thread.cpu, cpu.index)
     cpu.current = cast[u64](thread)
     intrinsics.atomic_store_u32_release(&cpu.current_level, thread.level)

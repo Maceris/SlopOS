@@ -523,6 +523,32 @@ budget_info :: fn(budget: ptr[mut MemoryBudget]) -> (limit: u64, used: u64) {
 }
 
 /**
+ * Add up what's charged to a budget by objects of processes not on it (decisions/0185, 12h): a server's, made for a
+ * client and charged to the client's budget. A process's own slot, made by its creator, isn't counted.
+ *
+ * @param budget The budget; its lock is taken, at LockRank MemoryBudget, while its list is walked.
+ * @return The bytes.
+ */
+charged_by_others :: fn(budget: ptr[mut MemoryBudget]) -> u64 {
+    lock_at(&budget.lock, .MemoryBudget)
+    defer unlock_at(&budget.lock, .MemoryBudget)
+    total : u64 = 0
+    at := budget.first_charged
+    loop {
+        if at == 0 {
+            break
+        }
+        header :: cast[ptr[ObjectHeader]](at)
+        owner :: header.owner
+        if header.kind != .Process && owner != 0 && cast[ptr[Process]](owner).header.budget != cast[u64](budget) {
+            total += header.charge
+        }
+        at = header.charged_next
+    }
+    return total
+}
+
+/**
  * Link an object first onto a budget's list of what's charged to it.
  *
  * @param budget The budget, its lock held by the caller.

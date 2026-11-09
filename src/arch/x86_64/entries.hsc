@@ -49,7 +49,9 @@ kernel_entry_point #calling_convention(.entry) :: fn(frame: ptr[mut x86_64.Regis
         cpu.carrier.stack_limit = cpu.critical_stack_limits[cast[u8](arch_interface.CriticalEvent.Nmi)]
         intrinsics.set_carrier(cpu.carrier)
         push_context entry from cpu.context^ {
-            kernel_entry.nmi(frame.rip)
+            registers :: u64.[frame.rax, frame.rbx, frame.rcx, frame.rdx, frame.rsi, frame.rdi, frame.rbp, frame.rsp, frame.r8, frame.r9,
+                frame.r10, frame.r11, frame.r12, frame.r13, frame.r14, frame.r15, frame.rip, frame.rflags]
+            kernel_entry.nmi(frame.rip, frame.rbp, registers[0..<registers.count])
         }
         cpu.carrier.stack_limit = saved_limit
         return void
@@ -232,5 +234,35 @@ fill_idt :: fn(system: ptr[mut ArchSystem]) {
             stack = IST_MACHINE_CHECK
         }
         system.idt[vector] = gate(points.addresses[vector], stack)
+    }
+}
+
+/**
+ * Name a register of those an NMI passes kernel_entry.nmi (arch_interface.nmi_register_name).
+ *
+ * @param index Its place: rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8 to r15, rip, then rflags.
+ * @return Its name, a constant; "?" past them.
+ */
+nmi_register_name :: fn(index: usize) -> string {
+    return match index {
+        case 0 => "rax"
+        case 1 => "rbx"
+        case 2 => "rcx"
+        case 3 => "rdx"
+        case 4 => "rsi"
+        case 5 => "rdi"
+        case 6 => "rbp"
+        case 7 => "rsp"
+        case 8 => "r8"
+        case 9 => "r9"
+        case 10 => "r10"
+        case 11 => "r11"
+        case 12 => "r12"
+        case 13 => "r13"
+        case 14 => "r14"
+        case 15 => "r15"
+        case 16 => "rip"
+        case 17 => "rflags"
+        case _ => "?"
     }
 }

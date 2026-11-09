@@ -1052,9 +1052,17 @@ test_nmi : fn() : ---
  * Send another CPU an NMI, for lockup detection (decisions/0183), which interrupts it even with interrupts off.
  *
  * @param cpu_hardware_id The CPU's hardware ID.
- * @return True if it was sent; false where the architecture has no NMI to send (AArch64, until pseudo-NMIs).
+ * @return True if it was sent; false where the architecture has no NMI to send, or none set up.
  */
 send_nmi : fn(cpu_hardware_id: u64) -> bool : ---
+
+/**
+ * Name a register of those the architecture's NMI entry passes kernel_entry.nmi, for a lockup's report.
+ *
+ * @param index The register's place among them, from 0.
+ * @return Its name, a constant, like "rax" or "x29"; "?" past them.
+ */
+nmi_register_name : fn(index: usize) -> string : ---
 
 /** A device the emulator always has that raises a wired interrupt: its controller, and its line there. */
 TestDevice :: struct {

@@ -421,7 +421,9 @@ reports read back, budgets from the configuration; **12h** the per-thread page, 
 process's behalf, and a lockup's registers, with pseudo-NMIs on AArch64. Built: 12e, every program's debug file in the bundle store when the system is built with them,
 and the debugger's lines and values; 12f, process-wide breakpoints, fibers listed, and attaching through the powerbox;
 12g, recordings as files, received handles replayed, `trace` and `crashes system` through elevation, and budgets from
-the configuration (`decisions/0185`'s as-built records).
+the configuration; 12h, the per-thread page, attribution in `processes`, and a lockup's registers and stack, with
+pseudo-NMIs on AArch64 (`decisions/0185`'s as-built records). M12 is done, but a child CPU budget for each shell job,
+which waits for session programs to get CPU budgets.
 
 Specs: DWARF 5.
 Stresses: the compiler's debug information, reflection over arbitrary values, fibers seen from outside.
@@ -528,5 +530,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | M11 | done 2026-11-06 (`decisions/0162` to `0180`): the shell, its language, calls through manifests, pipelines, interactive use, and the tools and scripts |
 | Before P | done 2026-11-07 (`decisions/0181`), in seven parts, F1 to F7: what M10, M11, R and B left, with what the chaos tests found fixed |
 | P | done 2026-11-07 (`decisions/0182`), in five parts, P1 to P5: turning off and restarting, AML, the ACPI service and the power button, a graceful shutdown, the hardware watchdog |
-| M12 | 12a to 12d built 2026-11-08 (`decisions/0183`); 12e to 12h, what they left, planned (`decisions/0185`), 12e to 12g built |
+| M12 | done 2026-11-09: 12a to 12d (`decisions/0183`), and 12e to 12h, what they left (`decisions/0185`); a child CPU budget for each shell job waits for session programs to get CPU budgets |
 | M13–M16, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |

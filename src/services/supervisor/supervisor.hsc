@@ -3210,6 +3210,25 @@ lend :: fn(supervisor: ptr[mut Supervisor], directory: os.Channel[dir.Dir], budg
     }
 }
 
+/**
+ * For test_lending: see the volume server's time on echo's budget, lent it, in the budget's attribution
+ * (cpu_budget_describe's lent, decisions/0185, 12h). Echo's is a budget of its own, which the volume server isn't on;
+ * hello's is the default, which the server is on too, so what it runs on hello's loans isn't another's.
+ *
+ * @param supervisor The supervisor, whose scheduler service gives echo's budget.
+ */
+check_lent_time :: fn(supervisor: ptr[mut Supervisor]) {
+    budget :: scheduler_protocol.budget_for(supervisor.scheduler_end, supervisor.scheduler_port, "echo") or_return void
+    defer _ = slop_os.handle_close(cast[slop_os.Handle](budget))
+    info :: slop_os.cpu_budget_describe(budget) or_return void
+    if info.lent > 0 {
+        log_line.write(supervisor.log, "supervisor: test_lending: echo's budget shows what the volume server ran on it")
+    }
+    else {
+        log_line.write(supervisor.log, "supervisor: test_lending: echo's budget shows nothing run on it by others")
+    }
+}
+
 /** How many connections test_lending makes of the lower priority, each lent hello's budget. */
 LENDING_LOW :: 6
 /** How many requests test_lending queues through each connection of the lower priority. */
@@ -3250,6 +3269,7 @@ check_lending :: fn(supervisor: ptr[mut Supervisor]) {
         // Perhaps one the server had started on, and one more each for the time between the two through the high one
         if outcome.waiting >= LENDING_LOW && outcome.ahead <= 3 && outcome.total == LENDING_LOW * LENDING_BACKLOG + 2 {
             log_line.write(supervisor.log, "supervisor: test_lending: a request lent echo's budget was answered ahead of the backlogs lent hello's")
+            check_lent_time(supervisor)
             return void
         }
     }

@@ -825,7 +825,7 @@ serve_one :: fn(server: ptr[mut Server], into: ptr[mut os.Incoming]) -> bool {
         server.serving = best
         serve(server, best, into)
         if server.on_loan {
-            _ = slop_os.thread_use_cpu_budget(cast[slop_os.CpuBudget](slop_os.NO_HANDLE))
+            _ = runtime.bind_cpu_budget(0)
             server.on_loan = false
         }
         if server.handled {
@@ -837,7 +837,8 @@ serve_one :: fn(server: ptr[mut Server], into: ptr[mut os.Incoming]) -> bool {
 
 /**
  * Mark a client's request received, the one served this time, and run the thread on the connection's loan, if it has
- * one, while it's served.
+ * one, while it's served: bound through its per-thread page (runtime.bind_cpu_budget, decisions/0185), which the
+ * kernel reads at its next scheduling point, the next system call, so no call of its own is made.
  *
  * @param server The server, whose handled, and on_loan if the loan could be used, are set.
  * @param index The connection's slot, whose loan, if it has one, the thread runs on; one past them sets only handled.
@@ -845,7 +846,7 @@ serve_one :: fn(server: ptr[mut Server], into: ptr[mut os.Incoming]) -> bool {
 received :: fn(server: ptr[mut Server], index: usize) {
     server.handled = true
     if index < server.connections.count && cast[slop_os.Handle](server.connections[index].loan) != slop_os.NO_HANDLE {
-        server.on_loan = slop_os.thread_use_cpu_budget(server.connections[index].loan) is_ok
+        server.on_loan = runtime.bind_cpu_budget(cast[u64](server.connections[index].loan))
     }
 }
 

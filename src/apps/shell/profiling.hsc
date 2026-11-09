@@ -10,7 +10,8 @@ import lifecycle from "std/os/slop_os"
  * The profiler (decisions/0183, 12d): profile name arguments runs a program as a call would, its intercept sampling
  * it at each tick (intercept_sample), and once it's ended, says where its samples were: the functions they're in,
  * named through the symbols program, the most first. A program the shell starts is the shell's to profile; nothing
- * more is needed.
+ * more is needed. Samples taken while a fiber ran, as its thread's per-thread page says (decisions/0185, 12h), are
+ * said by fiber too: each fiber's samples, and the function most of them were in.
  */
 
 /** The key a profiled program's stops come under, on a port of its own. */
@@ -21,13 +22,27 @@ PROFILE_END_KEY : u64 : 2
 PROFILE_TOP :: 5
 /** How many distinct program counters are named, the most sampled; the rest count as elsewhere. */
 PROFILE_PLACES :: 64
+/** How many fibers a profile names, the most sampled. */
+PROFILE_FIBERS :: 8
 
-/** A program counter sampled, and how often. */
+/** A program counter sampled on a fiber, or on none, and how often. */
 Place :: struct {
     /** The program counter. */
     address : u64,
+    /** The fiber running, its runtime.Fiber's address in the program; 0 for none. */
+    fiber : u64,
     /** How many samples had it. */
     count : u64,
+}
+
+/** A fiber sampled, how often, and where most. */
+SampledFiber :: struct {
+    /** The fiber, its runtime.Fiber's address in the program. */
+    fiber : u64,
+    /** How many samples were taken while it ran. */
+    count : u64,
+    /** The function of its most sampled program counter, as say_hot named it; "elsewhere" for one not named. */
+    most : string,
 }
 
 /** A function sampled, and how often. */
@@ -82,7 +97,10 @@ profile_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Resu
         return .Ok(.Null)
     }
     sort_places(places[0..<places.count])
-    say_hot(shell, call, &places, total)
+    names : string[..]
+    defer runtime.array_free(&names)
+    say_hot(shell, call, &places, total, &names)
+    say_fiber_samples(shell, &places, &names)
     return .Ok(.Null)
 }
 
@@ -139,7 +157,7 @@ take_samples :: fn(intercept: slop_os.Intercept, places: ptr[mut Place[..]]) -> 
             if cast[u32](i) >= taken {
                 break
             }
-            count_place(places, sample.frames[0])
+            count_place(places, sample.frames[0], sample.fiber)
         }
         total += cast[u64](taken)
         if taken < 64 {
@@ -149,19 +167,62 @@ take_samples :: fn(intercept: slop_os.Intercept, places: ptr[mut Place[..]]) -> 
 }
 
 /**
- * Count one more sample at a program counter.
+ * Count one more sample at a program counter, on a fiber or none.
  *
  * @param places The program counters counted.
  * @param address The program counter.
+ * @param fiber The fiber running, 0 for none.
  */
-count_place :: fn(places: ptr[mut Place[..]], address: u64) {
+count_place :: fn(places: ptr[mut Place[..]], address: u64, fiber: u64) {
     for &place in places^ {
-        if place.address == address {
+        if place.address == address && place.fiber == fiber {
             place.count += 1
             return void
         }
     }
-    runtime.array_add(places, Place.{address = address, count = 1})
+    runtime.array_add(places, Place.{address = address, fiber = fiber, count = 1})
+}
+
+/**
+ * Say the fibers most sampled, each with its samples and the function of its most sampled program counter, after a
+ * line saying so; nothing if no sample was taken on a fiber.
+ *
+ * @param shell The shell, which says them.
+ * @param places The program counters sampled, on which fibers, the most first.
+ * @param names Each place's function, as say_hot named it, in places' order; a place past them is "elsewhere".
+ */
+say_fiber_samples :: fn(shell: ptr[mut Shell], places: ptr[Place[..]], names: ptr[string[..]]) {
+    named :: names^
+    fibers : SampledFiber[..]
+    defer runtime.array_free(&fibers)
+    for place, i in places^ {
+        if place.fiber == 0 {
+            continue
+        }
+        found := false
+        for &each in fibers {
+            if each.fiber == place.fiber {
+                each.count += place.count
+                found = true
+            }
+        }
+        // Places are the most sampled first, so a fiber's first is its most sampled, whose function is said
+        if !found {
+            name :: if i < named.count { named[i] } else { "elsewhere" }
+            runtime.array_add(&fibers, SampledFiber.{fiber = place.fiber, count = place.count, most = name})
+        }
+    }
+    if fibers.count == 0 {
+        return void
+    }
+    sort_sampled(fibers[0..<fibers.count])
+    say(shell, "by fiber:")
+    for each, i in fibers {
+        if i >= PROFILE_FIBERS {
+            break
+        }
+        say(shell, message("  fiber %{#x}: % samples, most in %", each.fiber, each.count, each.most))
+    }
 }
 
 /**
@@ -171,8 +232,9 @@ count_place :: fn(places: ptr[mut Place[..]], address: u64) {
  * @param call The profiled program's call, whose file names its functions.
  * @param places The program counters sampled, and how often, the most first.
  * @param total How many samples there were in all.
+ * @param names Where each named place's function goes, in places' order, on the heap: the first PROFILE_PLACES.
  */
-say_hot :: fn(shell: ptr[mut Shell], call: ptr[Call], places: ptr[mut Place[..]], total: u64) {
+say_hot :: fn(shell: ptr[mut Shell], call: ptr[Call], places: ptr[mut Place[..]], total: u64, names: ptr[mut string[..]]) {
     image :: call.launched.image
     offsets : u64[PROFILE_PLACES]
     count : usize = 0
@@ -195,6 +257,7 @@ say_hot :: fn(shell: ptr[mut Shell], call: ptr[Call], places: ptr[mut Place[..]]
         }
         line :: next_line(answer, named, &at)
         name :: function_of(line)
+        runtime.array_add(names, name)
         found := false
         for &each in hot {
             if each.name == name {
@@ -255,6 +318,30 @@ sort_places :: fn(places: mut Place[]) {
             held :: places[j]
             places[j] = places[before]
             places[before] = held
+            j = before
+        }
+    }
+}
+
+/**
+ * Sort fibers by how often they were sampled, the most first.
+ *
+ * @param fibers The fibers, sorted in place.
+ */
+sort_sampled :: fn(fibers: mut SampledFiber[]) {
+    for i in cast[usize](1)..<fibers.count {
+        j := i
+        loop {
+            if j == 0 || j >= fibers.count {
+                break
+            }
+            before :: j - 1
+            if before >= fibers.count || fibers[before].count >= fibers[j].count {
+                break
+            }
+            held :: fibers[j]
+            fibers[j] = fibers[before]
+            fibers[before] = held
             j = before
         }
     }

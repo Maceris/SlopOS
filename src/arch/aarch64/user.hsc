@@ -169,11 +169,13 @@ set_user_register :: fn(registers: ptr[mut UserRegisters], index: u32, value: u6
 /**
  * Return to user mode with registers, by eret, on the calling CPU's active page table (arch_interface.return_to_user).
  *
- * SP_EL1 is set to the kernel stack's top, so the next entry from user mode starts there.
+ * SP_EL1 is set to the kernel stack's top, so the next entry from user mode starts there; every interrupt's priority is
+ * let through again (unmask_for_return).
  *
  * @param registers The thread's registers, restored whole.
  */
 return_to_user :: fn(registers: ptr[UserRegisters]) #never_returns {
+    unmask_for_return()
     aarch64.return_to_user(&registers.frame, cast[rawptr](current_cpu().kernel_stack_top))
 }
 

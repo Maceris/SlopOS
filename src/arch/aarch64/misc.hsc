@@ -238,10 +238,11 @@ power_off :: fn(method: u8) {
 /**
  * Tell whether the calling CPU takes interrupts now.
  *
- * @return True if DAIF's I bit (IRQs) is clear; FIQs aren't looked at.
+ * @return True if DAIF's I bit (IRQs) is clear and the priority mask lets every interrupt through; FIQs aren't looked
+ *     at. The kernel's mask, which lets only the pseudo-NMI through, is taken as interrupts off.
  */
 interrupts_enabled :: fn() -> bool {
-    return aarch64.read_system_register(.DAIF) & 0x80 == 0
+    return aarch64.read_system_register(.DAIF) & 0x80 == 0 && aarch64.read_system_register(.ICC_PMR_EL1) == PRIORITY_MASK
 }
 
 /** Stop the calling CPU for good, with IRQs, FIQs and SErrors masked, waiting for interrupts forever. */
@@ -257,13 +258,22 @@ spin_hint :: fn() {
     intrinsics.spin_hint()
 }
 
-/** Stop the calling CPU taking IRQs and FIQs, setting DAIF's I and F (arch_interface.mask_interrupts). */
+/**
+ * Stop the calling CPU taking interrupts but the pseudo-NMI (arch_interface.mask_interrupts): the priority mask at
+ * KERNEL_PRIORITY_MASK, DAIF as it is.
+ */
 mask_interrupts :: fn() {
-    aarch64.daif_set(aarch64.DAIF_IRQ | aarch64.DAIF_FIQ)
+    aarch64.write_system_register(.ICC_PMR_EL1, KERNEL_PRIORITY_MASK)
+    aarch64.isb()
 }
 
-/** Let the calling CPU take IRQs and FIQs again, clearing DAIF's I and F (arch_interface.unmask_interrupts). */
+/**
+ * Let the calling CPU take every interrupt again (arch_interface.unmask_interrupts): the priority mask at PRIORITY_MASK,
+ * and DAIF's I and F clear.
+ */
 unmask_interrupts :: fn() {
+    aarch64.write_system_register(.ICC_PMR_EL1, PRIORITY_MASK)
+    aarch64.isb()
     aarch64.daif_clear(aarch64.DAIF_IRQ | aarch64.DAIF_FIQ)
 }
 
@@ -292,6 +302,7 @@ idle :: fn() #never_returns {
     frame : aarch64.RegisterFrame
     frame.elr = cast[u64](idle_wait)
     frame.spsr = SPSR_EL1H | SPSR_PAN
+    unmask_for_return()
     aarch64.return_to_user(&frame, cast[rawptr](cpu.kernel_stack_top))
 }
 

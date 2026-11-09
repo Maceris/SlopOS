@@ -180,6 +180,12 @@ RunningProgram :: struct {
     memory : u64,
     /** Its memory budget's limit, in bytes; 0 if the budget couldn't be read. */
     memory_limit : u64,
+    /** Its threads' CPU time, in nanoseconds (decisions/0185, 12h); 0 if it couldn't be read. */
+    cpu_ns : u64,
+    /** The time services ran on its CPU budget, lent it, in nanoseconds; 0 if it couldn't be read. */
+    lent_ns : u64,
+    /** The bytes charged to its memory budget by other processes' objects, as services' made for it. */
+    charged : u64,
 }
 
 /** An installation to make: its name, and the program it runs, from the boot root. */
